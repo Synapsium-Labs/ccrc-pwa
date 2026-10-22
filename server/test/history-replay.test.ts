@@ -3044,7 +3044,7 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
     'node:child_process': '{ spawn }',
     'node:crypto': '{ randomBytes }',
     '../ccd/history/store.mjs': '{ StoreError, openReader, userVersion }',
-    '../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, holdingCopyOf }',
+    '../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf }',
     '../ccd/history/recall.mjs': '{ expandEntryBody }',
     '../ccd/history/cli.mjs': '{ pairIndexOf }',
     '../ccd/history/sweep.mjs': '{ ftsTextOfBlob }',
@@ -6392,5 +6392,332 @@ describe('W2-5a Task 2: fact mining, the producer and the redaction screen', () 
       '/home/u/.claude', '/home/u/.cx-a', '/home/u/.ext-a', '/home/u/.ext-n', '/home/u/.gen-a', '/home/u/.gen-d',
       '/home/u/.gen-h', '/home/u/.gen-m', '/home/u/.gen-o', '/home/u/.gen-r', '/home/u/.gen-s', '/home/u/.gen-u',
     ]);
+  });
+});
+
+// ── W2-5a Task 3: boundary admission (W2-D66; spec §10.2 RP5 with the straddle and two-copy CONTROLs; D-5771) ──────
+// In-process only: no case spawns a child, so no claude, ccrc or gh is reached, and no account or roster is read. The
+// pure cases build copies in memory; the store cases plant a store with store.mjs's own createStore under a mkTmp
+// HOME, close the writer, and hand admission a handle from store.mjs's openReader, the route W2-D51 names. Models:
+// claude-fixture-4 (anthropic), gpt-fixture-5 (a gateway) and Claude Code's own `<synthetic>`.
+// The W5A3_ and w5a3 declarations are MODULE-LEVEL: later W2-5a tasks build their copies and stores with them.
+import * as w5a3Drv from '../../deploy/history-replay.mjs';
+import * as w5a3Store from '../../ccd/history/store.mjs';
+import * as w5a3Lib from '../../ccd/history/lib.mjs';
+import { mkTmp as w5a3MkTmp } from './tmpHelpers.js';
+
+const W5A3_CLAUDE = 'claude-fixture-4';
+const W5A3_GATEWAY = 'gpt-fixture-5';
+const W5A3_SYNTH = '<synthetic>';
+/** One copy row with the columns admission reads (entries joined through memberships, in file order). */
+type W5a3Row = { uuid: string; type: string; model: string | null; provenance: string; is_compact_summary: number };
+/** A uuid in the fixture shape: an 8-hex seed, then a 12-hex counter. */
+const w5a3Uid = (seed: number, n: number): string => `${seed.toString(16).padStart(8, '0')}-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+const w5a3Op = (uuid: string): W5a3Row => ({ uuid, type: 'user', model: null, provenance: 'operator', is_compact_summary: 0 });
+const w5a3Asst = (uuid: string, model: string | null): W5a3Row => ({ uuid, type: 'assistant', model, provenance: 'model', is_compact_summary: 0 });
+interface W5a3Copy { rows: W5a3Row[]; boundary: string; summary: string; bi: number; si: number }
+/** One copy in the manual shape, reduced to what admission reads. It holds an operator row before each `before`
+ *  model's assistant row, the operator's /compact row, the boundary, its summary (the anchor), then an operator row
+ *  before each `after` model's assistant row. The head, up to the summary, is minted from `seed`. The rows after the
+ *  summary are minted from `tailSeed`, counted from 0x1001. So two copies of one transcript share their head
+ *  (boundary and summary included) and part after the summary. `noSummary` leaves the summary row out: the anchor then
+ *  names a uuid the copy does not hold (DM25's shape). */
+function w5a3Copy(before: Array<string | null>, after: Array<string | null>,
+  o: { seed?: number; tailSeed?: number; noSummary?: boolean } = {}): W5a3Copy {
+  const seed = o.seed ?? 0xa3;
+  const tailSeed = o.tailSeed ?? seed;
+  const rows: W5a3Row[] = [];
+  let n = 0;
+  let m = 0;
+  const head = (): string => { n += 1; return w5a3Uid(seed, n); };
+  const tail = (): string => { m += 1; return w5a3Uid(tailSeed, 0x1000 + m); };
+  for (const model of before) {
+    rows.push(w5a3Op(head()));
+    rows.push(w5a3Asst(head(), model));
+  }
+  rows.push(w5a3Op(head()));
+  const boundary = head();
+  rows.push({ uuid: boundary, type: 'system', model: null, provenance: 'harness', is_compact_summary: 0 });
+  const summary = head();
+  if (o.noSummary !== true) rows.push({ uuid: summary, type: 'user', model: null, provenance: 'summary', is_compact_summary: 1 });
+  for (const model of after) {
+    rows.push(w5a3Op(tail()));
+    rows.push(w5a3Asst(tail(), model));
+  }
+  return { rows, boundary, summary, bi: rows.findIndex((r) => r.uuid === boundary), si: rows.findIndex((r) => r.uuid === summary) };
+}
+
+interface W5a3PlantSession { pk: number; ccrcId: string; generation: string; mergedInto?: number; epochs: Array<{ ccUuid: string; confirmed: boolean }> }
+interface W5a3PlantTranscript {
+  pk: number; ccUuid: string; agentId?: string; files: Array<{ fileId: number; sourceKey?: string; rows: W5a3Row[] }>;
+  boundary: string; anchor: string; tsNull?: boolean; unheld?: boolean;
+}
+/** A store made by store.mjs's createStore under a fresh mkTmp HOME, planted in one transaction, and closed. It
+ *  answers the HOME and the db file. Each transcript has one boundary (ord 1). A uuid is one entry per transcript, and every file
+ *  that lists it is a membership at its row's line (1-based), so two copies share their head entries. `tsNull` stores
+ *  the boundary's ts_ms as NULL. `unheld` leaves the boundary row's membership out of every file, so no copy holds
+ *  it. Every other entry is stamped 1 s after the one before. The sessions' epochs take seq 1, 2, … in list order. */
+function w5a3PlantStore(sessions: W5a3PlantSession[], transcripts: W5a3PlantTranscript[]): { home: string; dbFile: string } {
+  const home = w5a3MkTmp('ccrc-replay-w5a3-');
+  w5a3Store.createStore(home);
+  const dbFile = w5a3Lib.historyPaths(home).dbFile;
+  const db = w5a3Store.openWriter(dbFile);
+  try {
+    db.exec('BEGIN');
+    db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 0xa3), Buffer.from([0]));
+    const ses = db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms, merged_into) VALUES (?, ?, ?, 'demo', 1, ?)");
+    const ep = db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, ?, ?, 'startup', 'hook', ?)");
+    for (const s of sessions) ses.run(s.pk, s.ccrcId, s.generation, s.mergedInto ?? null);
+    for (const s of sessions) s.epochs.forEach((e, i) => { ep.run(s.pk, i + 1, e.ccUuid, e.confirmed ? 1 : null); });
+    const tr = db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid, agent_id) VALUES (?, ?, ?)');
+    const file = db.prepare("INSERT INTO ingest_files (file_id, dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, 1, ?, ?, ?, 'live', 1)");
+    const ent = db.prepare('INSERT INTO entries (uuid, transcript_pk, type, model, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms, is_compact_summary) VALUES (?, ?, ?, ?, ?, 1, 0, 0, 1, ?, ?)');
+    const mem = db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+    const bnd = db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, anchor_uuid) VALUES (?, ?, 1, ?)');
+    let ts = 1_000;
+    for (const t of transcripts) {
+      tr.run(t.pk, t.ccUuid, t.agentId ?? '');
+      const ids = new Map<string, number>();
+      for (const f of t.files) {
+        file.run(f.fileId, 9000 + f.fileId, f.sourceKey ?? '', t.pk);
+        f.rows.forEach((r, i) => {
+          let id = ids.get(r.uuid);
+          if (id === undefined) {
+            ts += 1000;
+            const stamp = t.tsNull === true && r.uuid === t.boundary ? null : ts;
+            id = Number(ent.run(r.uuid, t.pk, r.type, r.model, r.provenance, stamp, r.is_compact_summary).lastInsertRowid);
+            ids.set(r.uuid, id);
+          }
+          if (!(t.unheld === true && r.uuid === t.boundary)) mem.run(f.fileId, id, i + 1);
+        });
+      }
+      bnd.run(ids.get(t.boundary)!, t.pk, t.anchor);
+    }
+    db.exec('COMMIT');
+  } finally {
+    w5a3Store.closeWriter(db);
+  }
+  return { home, dbFile };
+}
+
+describe('W2-5a Task 3: RP5 over one copy, admitBoundary (W2-D66)', () => {
+  const CL = W5A3_CLAUDE;
+  const GW = W5A3_GATEWAY;
+  const SY = W5A3_SYNTH;
+  const verdictOf = (c: W5a3Copy) => w5a3Drv.admitBoundary(c.rows, c.bi, c.si);
+  const ADMITTED = { admitted: true, reason: null, before: 'anthropic', after: 'anthropic' };
+
+  it('CONTROL: anthropic rows on both sides are admitted', () => {
+    expect(verdictOf(w5a3Copy([CL, CL], [CL]))).toEqual(ADMITTED);
+  });
+
+  it('RP5: a gateway row as the last real assistant row before the boundary is not admitted, whatever came before it', () => {
+    expect(verdictOf(w5a3Copy([CL, GW], [CL]))).toEqual({ admitted: false, reason: 'before-other', before: 'other', after: 'anthropic' });
+  });
+
+  it('RP5: the anthropic-to-gateway straddle, anthropic rows before and a gateway row after the summary, is not admitted', () => {
+    expect(verdictOf(w5a3Copy([CL, CL], [GW, CL]))).toEqual({ admitted: false, reason: 'after-other', before: 'anthropic', after: 'other' });
+  });
+
+  it('RP5: a synthetic row before the boundary is skipped, and the boundary is judged by the real row before it', () => {
+    expect(verdictOf(w5a3Copy([CL, SY], [CL]))).toEqual(ADMITTED);
+    expect(verdictOf(w5a3Copy([GW, SY], [CL]))).toEqual({ admitted: false, reason: 'before-other', before: 'other', after: 'anthropic' });
+  });
+
+  it('RP5: a synthetic row after the summary is skipped, and the boundary is judged by the real row after it', () => {
+    expect(verdictOf(w5a3Copy([CL], [SY, CL]))).toEqual(ADMITTED);
+    expect(verdictOf(w5a3Copy([CL], [SY, GW]))).toEqual({ admitted: false, reason: 'after-other', before: 'anthropic', after: 'other' });
+  });
+
+  it('a model-less assistant row is skipped on either side, as lib.backendOf reads it unknown', () => {
+    expect(verdictOf(w5a3Copy([CL, null], [null, CL]))).toEqual(ADMITTED);
+  });
+
+  it('with no real assistant row on a side, that side is unknown and the boundary is not admitted', () => {
+    expect(verdictOf(w5a3Copy([], [CL]))).toEqual({ admitted: false, reason: 'before-unknown', before: 'unknown', after: 'anthropic' });
+    expect(verdictOf(w5a3Copy([CL], [SY]))).toEqual({ admitted: false, reason: 'after-unknown', before: 'anthropic', after: 'unknown' });
+  });
+
+  it('both sides failing: the reason names the before side, tested first', () => {
+    expect(verdictOf(w5a3Copy([GW], [GW]))).toEqual({ admitted: false, reason: 'before-other', before: 'other', after: 'other' });
+  });
+
+  it('only assistant rows are witnesses before the boundary, as lib.producerOfCopy reads after it', () => {
+    const c = w5a3Copy([CL], [CL]);
+    const rows = c.rows.map((r, i) => (i === c.bi - 1 ? { ...r, model: GW } : r));
+    expect(rows[c.bi - 1]!.type, 'CONTROL: the row carrying a gateway model is the operator\'s /compact row').toBe('user');
+    expect(w5a3Drv.admitBoundary(rows, c.bi, c.si)).toEqual(ADMITTED);
+  });
+
+  it('the after side starts at the summary row, as derive.mjs leafFields reads the producer: a gateway row between the boundary and its summary is no witness', () => {
+    const c = w5a3Copy([CL], [CL]);
+    const rows = [...c.rows.slice(0, c.bi + 1), w5a3Asst(w5a3Uid(0xa3, 0x2001), GW), ...c.rows.slice(c.bi + 1)];
+    expect(rows[c.si + 1]!.is_compact_summary, 'CONTROL: the summary moved one row down').toBe(1);
+    expect(w5a3Drv.admitBoundary(rows, c.bi, c.si + 1)).toEqual(ADMITTED);
+  });
+
+  it('an index outside the copy is a defect: TypeError, never a verdict', () => {
+    const c = w5a3Copy([CL], [CL]);
+    for (const [b, s] of [[-1, c.si], [c.bi, c.rows.length], [1.5, c.si], [c.bi, Number.NaN]] as Array<[number, number]>) {
+      expect(() => w5a3Drv.admitBoundary(c.rows, b, s), `${b}, ${s}`).toThrow(TypeError);
+    }
+  });
+});
+
+describe('W2-5a Task 3: the summary row is lib.summaryRowFor\'s pick, summaryIndexOf (W2-D66)', () => {
+  const CL = W5A3_CLAUDE;
+  const summaryLike = (uuid: string, provenance: string): W5a3Row => ({ uuid, type: 'user', model: null, provenance, is_compact_summary: 1 });
+
+  it('the anchored summary row: its index in the copy', () => {
+    const c = w5a3Copy([CL], [CL]);
+    expect(w5a3Drv.summaryIndexOf(c.rows, c.boundary, c.summary)).toBe(c.si);
+  });
+
+  it('an anchor the copy does not hold is -1, though a compact summary row follows the boundary', () => {
+    const c = w5a3Copy([CL], [CL]);
+    const rows = c.rows.map((r) => (r.uuid === c.summary ? summaryLike(w5a3Uid(0xa3, 0x3001), 'summary') : r));
+    expect(rows.some((r, i) => i > c.bi && r.is_compact_summary === 1), 'CONTROL: a compact summary row follows the boundary').toBe(true);
+    expect(w5a3Drv.summaryIndexOf(rows, c.boundary, c.summary)).toBe(-1);
+  });
+
+  it('an anchor that names a harness echo row is -1, as derive.mjs copyPlan marks an echo', () => {
+    const c = w5a3Copy([CL], [CL]);
+    const rows = c.rows.map((r) => (r.uuid === c.summary ? { ...r, provenance: 'harness' } : r));
+    expect(w5a3Drv.summaryIndexOf(rows, c.boundary, c.summary)).toBe(-1);
+  });
+
+  it('an anchor naming the boundary itself takes the first compact summary row after it that is no echo', () => {
+    const c = w5a3Copy([CL], [CL]);
+    const rows = [...c.rows.slice(0, c.bi + 1), summaryLike(w5a3Uid(0xa3, 0x3002), 'harness'), ...c.rows.slice(c.bi + 1)];
+    expect(w5a3Drv.summaryIndexOf(rows, c.boundary, c.boundary)).toBe(c.si + 1);
+  });
+});
+
+describe('W2-5a Task 3: the population over a planted store, admitStoreBoundaries (W2-D66)', () => {
+  const CL = W5A3_CLAUDE;
+  const GW = W5A3_GATEWAY;
+  const cc = (k: number): string => w5a3Uid(0xcc, k);
+  const gen = (k: number): string => w5a3Uid(0x5e5, k);
+  const T3_HELD = w5a3Copy([CL, CL], [GW], { seed: 3, tailSeed: 0x31 });
+  const T3_LONG = w5a3Copy([CL, CL], [CL, CL, CL], { seed: 3, tailSeed: 0x32 });
+  const T4_HELD = w5a3Copy([CL], [CL], { seed: 4, tailSeed: 0x41 });
+  const T4_LONG = w5a3Copy([CL], [GW, GW, GW], { seed: 4, tailSeed: 0x42 });
+  const T10_RETIRED = w5a3Copy([CL], [CL], { seed: 0xa, tailSeed: 0xa1 });
+  const T10_LIVE = w5a3Copy([CL], [GW], { seed: 0xa, tailSeed: 0xa2 });
+  const one = (pk: number, c: W5a3Copy, fileId: number, extra: Partial<W5a3PlantTranscript> = {}): W5a3PlantTranscript =>
+    ({ pk, ccUuid: cc(pk), files: [{ fileId, rows: c.rows }], boundary: c.boundary, anchor: c.summary, ...extra });
+  const SESSIONS: W5a3PlantSession[] = [
+    ...[1, 2, 3, 4, 5, 8, 10, 11].map((k) => ({ pk: k, ccrcId: `claude-a-p${k}`, generation: gen(k), epochs: [{ ccUuid: cc(k), confirmed: true }] })),
+    { pk: 6, ccrcId: 'claude-a-p6', generation: gen(6), epochs: [{ ccUuid: cc(6), confirmed: false }] },
+    { pk: 9, ccrcId: 'claude-a-p9', generation: gen(9), mergedInto: 1, epochs: [{ ccUuid: cc(9), confirmed: true }] },
+    { pk: 12, ccrcId: 'claude-a-other', generation: gen(12), epochs: [{ ccUuid: cc(1), confirmed: true }] },
+  ];
+  const TRANSCRIPTS: W5a3PlantTranscript[] = [
+    one(1, w5a3Copy([CL, CL], [CL], { seed: 1 }), 1),
+    one(2, w5a3Copy([CL, GW], [CL], { seed: 2 }), 2),
+    { pk: 3, ccUuid: cc(3), files: [{ fileId: 3, rows: T3_HELD.rows }, { fileId: 4, rows: T3_LONG.rows }], boundary: T3_HELD.boundary, anchor: T3_HELD.summary },
+    { pk: 4, ccUuid: cc(4), files: [{ fileId: 5, rows: T4_HELD.rows }, { fileId: 6, rows: T4_LONG.rows }], boundary: T4_HELD.boundary, anchor: T4_HELD.summary },
+    one(5, w5a3Copy([CL], [CL], { seed: 5 }), 7, { tsNull: true }),
+    one(6, w5a3Copy([CL], [CL], { seed: 6 }), 8),
+    one(7, w5a3Copy([CL], [CL], { seed: 7 }), 9, { ccUuid: cc(1), agentId: 'a3sub' }),
+    one(8, w5a3Copy([CL], [CL], { seed: 8, noSummary: true }), 10),
+    one(9, w5a3Copy([CL], [CL], { seed: 9 }), 11),
+    { pk: 10, ccUuid: cc(10), files: [{ fileId: 12, sourceKey: 'retired-fixture', rows: T10_RETIRED.rows }, { fileId: 13, rows: T10_LIVE.rows }], boundary: T10_LIVE.boundary, anchor: T10_LIVE.summary },
+    one(11, w5a3Copy([CL], [CL], { seed: 0xb }), 14, { unheld: true }),
+  ];
+  type Result = ReturnType<typeof w5a3Drv.admitStoreBoundaries>;
+  let memo: { dbFile: string; res: Result } | null = null;
+  /** The planted store and admission's answer over it, through Task 1's store opener as a subcommand opens it, made once;
+   *  a throw leaves it unmade, so every case reds. */
+  function planted(): { dbFile: string; res: Result } {
+    if (memo === null) {
+      const { home, dbFile } = w5a3PlantStore(SESSIONS, TRANSCRIPTS);
+      const rs = w5a3Drv.openReplayStore(home);
+      try {
+        memo = { dbFile, res: w5a3Drv.admitStoreBoundaries(rs) };
+      } finally {
+        rs.close();
+      }
+    }
+    return memo;
+  }
+  const rowOf = (pk: number) => planted().res.boundaries.find((b) => b.transcript_pk === pk)!;
+  /** W1's measure: a copy's membership rows after the boundary row (the window's longest-copy rule, W2-D15). */
+  function afterCount(fileId: number, uuid: string): number {
+    const db = w5a3Store.openReader(planted().dbFile);
+    try {
+      return Number((db.prepare(`SELECT count(*) AS n FROM memberships m JOIN memberships mb ON mb.file_id = m.file_id
+        JOIN entries e ON e.entry_id = mb.entry_id WHERE m.file_id = ? AND e.uuid = ? AND m.line > mb.line`).get(fileId, uuid) as { n: number }).n);
+    } finally {
+      db.close();
+    }
+  }
+
+  it('every main boundary once, in transcript order, with its family and verdict; a subagent transcript\'s boundary is outside the population', () => {
+    expect(planted().res.boundaries.map((b) => [b.transcript_pk, b.ccrc_id, b.reason, b.admitted, b.file_id])).toEqual([
+      [1, 'claude-a-p1', null, true, 1],
+      [2, 'claude-a-p2', 'before-other', false, 2],
+      [3, 'claude-a-p3', 'after-other', false, 3],
+      [4, 'claude-a-p4', null, true, 5],
+      [5, 'claude-a-p5', 'ts-null', false, null],
+      [6, null, 'no-epoch', false, null],
+      [8, 'claude-a-p8', 'summary-absent', false, 10],
+      [9, null, 'no-epoch', false, null],
+      [10, 'claude-a-p10', 'after-other', false, 13],
+      [11, 'claude-a-p11', 'boundary-uncopied', false, null],
+    ]);
+    expect(typeof rowOf(1).summary_entry_id, 'R3: the admitted row names the summary row it judged').toBe('number');
+    expect(rowOf(5).summary_entry_id, 'a boundary judged before its copy names none').toBeNull();
+  });
+
+  it('the counts: admitted and every RECON_DISCARDS word, zeros included', () => {
+    const zero = Object.fromEntries(['admitted', ...w5a3Drv.RECON_DISCARDS].map((w) => [w, 0]));
+    expect(planted().res.counts).toEqual({
+      ...zero, admitted: 2, 'no-epoch': 2, 'ts-null': 1, 'boundary-uncopied': 1, 'summary-absent': 1, 'before-other': 1, 'after-other': 2,
+    });
+  });
+
+  it('two copies, the straddle CONTROL: the holding copy (live, smaller file_id) straddles and is not admitted, though the copy with the most rows after the boundary is anthropic throughout', () => {
+    const t3 = rowOf(3);
+    expect(t3).toMatchObject({
+      uuid: T3_HELD.boundary, ccrc_id: 'claude-a-p3', generation: gen(3), admitted: false, reason: 'after-other',
+      file_id: 3, boundary_index: T3_HELD.bi, summary_index: T3_HELD.si, before: 'anthropic', after: 'other',
+    });
+    expect(typeof t3.ts_ms).toBe('number');
+    expect(afterCount(4, T3_HELD.boundary), 'CONTROL: W1\'s longest-copy rule would read file 4').toBeGreaterThan(afterCount(3, T3_HELD.boundary));
+    expect(w5a3Drv.admitBoundary(T3_LONG.rows, T3_LONG.bi, T3_LONG.si).admitted, 'CONTROL: file 4 alone would be admitted').toBe(true);
+  });
+
+  it('two copies, reversed: the holding copy is anthropic on both sides and admitted, though the copy with the most rows after the boundary reaches a gateway', () => {
+    expect(rowOf(4)).toMatchObject({
+      admitted: true, reason: null, file_id: 5, boundary_index: T4_HELD.bi, summary_index: T4_HELD.si, before: 'anthropic', after: 'anthropic',
+    });
+    expect(afterCount(6, T4_HELD.boundary), 'CONTROL: W1\'s longest-copy rule would read file 6').toBeGreaterThan(afterCount(5, T4_HELD.boundary));
+    expect(w5a3Drv.admitBoundary(T4_LONG.rows, T4_LONG.bi, T4_LONG.si).admitted, 'CONTROL: file 6 alone would not be admitted').toBe(false);
+  });
+
+  it('two copies, a live copy is read before a retired copy with a smaller file_id (lib.pickHoldingCopy: live first)', () => {
+    expect(rowOf(10)).toMatchObject({ admitted: false, reason: 'after-other', file_id: 13, before: 'anthropic', after: 'other' });
+    expect(afterCount(12, T10_LIVE.boundary), 'CONTROL: neither length nor file order picks file 13').toBe(afterCount(13, T10_LIVE.boundary));
+    expect(w5a3Drv.admitBoundary(T10_RETIRED.rows, T10_RETIRED.bi, T10_RETIRED.si).admitted, 'CONTROL: the retired copy alone would be admitted').toBe(true);
+  });
+
+  it('RP5 in a store: an Anthropic-wrapper session (claude-a-p2) whose last real assistant row before the boundary is a gateway row is not admitted, and no roster is read', () => {
+    expect(rowOf(2)).toMatchObject({ ccrc_id: 'claude-a-p2', admitted: false, reason: 'before-other', before: 'other', after: 'anthropic', file_id: 2 });
+    expect(w5a3Drv.admitStoreBoundaries.length, 'one parameter, the store handle: no HOME, so no roster').toBe(1);
+  });
+
+  it('the family is derive.mjs epochOfUuid\'s: a confirmed epoch of an unmerged session, the smallest session_pk', () => {
+    expect([rowOf(1).ccrc_id, rowOf(1).generation], 'session 1, not session 12, which holds a later epoch of the same uuid').toEqual(['claude-a-p1', gen(1)]);
+    expect([rowOf(6).ccrc_id, rowOf(6).reason], 'an unconfirmed epoch').toEqual([null, 'no-epoch']);
+    expect([rowOf(9).ccrc_id, rowOf(9).reason], 'a confirmed epoch of a merged session').toEqual([null, 'no-epoch']);
+  });
+
+  it('CONTROL (R5): this task\'s six words are appended to RECON_DISCARDS after Task 2\'s, none is a DRIVER_REASONS word, and every reason a verdict carries is a RECON_DISCARDS word', () => {
+    expect(w5a3Drv.RECON_DISCARDS.slice(18, 24)).toEqual(['no-epoch', 'ts-null', 'before-other', 'before-unknown', 'after-other', 'after-unknown']);
+    expect(w5a3Drv.RECON_DISCARDS.filter((w) => (w5a3Drv.DRIVER_REASONS as readonly string[]).includes(w))).toEqual([]);
+    const reasons = new Set(planted().res.boundaries.map((b) => b.reason).filter((r) => r !== null));
+    for (const r of reasons) expect(w5a3Drv.RECON_DISCARDS).toContain(r);
+    expect(reasons.size, 'CONTROL: the planted store reaches six reasons').toBe(6);
   });
 });

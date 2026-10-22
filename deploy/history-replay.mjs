@@ -33,9 +33,9 @@ import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { EXIT, SCHEMA_ADDED, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, historyPaths, isHistoryCommand, isSyntheticModel, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
+import { EXIT, SCHEMA_ADDED, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, historyPaths, isHistoryCommand, isSyntheticModel, producerOf, producerOfCopy, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
 import { StoreError, openReader, userVersion } from '../ccd/history/store.mjs';
-import { blobReadStmts, bodyOf, holdingCopyOf } from '../ccd/history/derive.mjs';
+import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
 import { expandEntryBody } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { ftsTextOfBlob } from '../ccd/history/sweep.mjs';
@@ -2561,6 +2561,7 @@ export const RECON_DISCARDS = Object.freeze([
   'member-tombstone', 'member-over-cap', 'member-undecodable',
   'over-decode-cap', 'leaf-absent',
   'span-unparseable', 'span-tombstone', 'span-over-cap', 'span-undecodable',
+  'no-epoch', 'ts-null', 'before-other', 'before-unknown', 'after-other', 'after-unknown',
   'body-unrenderable',
 ]);
 /** expandEntryBody's three body-less words (D-6238), each mapped to a discard word of its own. entryBodyOf throws on any
@@ -3128,6 +3129,110 @@ export function screenCandidate(c, { idx, baselineText, memo = null }) {
   if (early !== null) return { state: 'drop', reason: early };
   const late = screenBaseline(c, baselineText);
   return late === null ? { state: 'pass' } : { state: 'drop', reason: late };
+}
+
+// ── W2-5a Task 3: boundary admission (W2-D66; spec §10.2 RP5; the producer's copy rule, D-5771) ─────────────────
+// A boundary enters the quiz's population only when the backend on BOTH sides of it is anthropic (RP5):
+//   before  lib.producerOf over the models of the assistant rows before the boundary, nearest first: the last real
+//           assistant row before it, a `<synthetic>` or model-less row skipped (lib.backendOf reads both 'unknown');
+//   after   lib.producerOfCopy from the summary row: the first real assistant row after it, the witness
+//           derive.mjs#leafFields reads for the leaf's producer.
+// Both sides read ONE copy, Task 1's boundaryCopyOf over derive.mjs's holdingCopyOf: lib.pickHoldingCopy over every
+// file of the transcript (live first, then the smallest file_id), the copy the leaf is derived from and the gate's
+// producer stratum reads (D-5771), never W1's longest copy, which only the window reads (W2-D15). The summary row is
+// Task 1's summaryIndexOf: lib.summaryRowFor's pick over the meta derive.mjs's copyPlan builds. Nothing here reads an
+// account, a wrapper or a roster: a boundary is judged by its rows' model names alone, so an Anthropic-wrapper session
+// whose last real row before the boundary came from a gateway is not admitted.
+// The population: every main-transcript boundary (agent_id '') whose session uuid has a family under derive.mjs's
+// epochOfUuid (a confirmed epoch of an unmerged session, the smallest session_pk: the family its leaf is derived
+// under), with a non-null ts_ms and a summary row in its holding copy. W2-D71's family eligibility (pilot and control
+// exclusions) is the sampler's. A drop is counted by its RECON_DISCARDS word (R5), never refused.
+// The store is the caller's ReplayStore (Task 1's openReplayStore: a read-only openReader handle, W2-D51): this section
+// opens nothing, writes nothing and spawns nothing.
+
+/** A drop decided before both sides were read: no side measured. */
+const unjudged = (reason) => ({ admitted: false, reason, file_id: null, boundary_index: null, summary_index: null, summary_entry_id: null, before: null, after: null });
+
+/** RP5 over one copy's rows in file order (W2-D66). `before` folds the assistant rows before the boundary, nearest
+ *  first, through lib.producerOf; `after` is lib.producerOfCopy from the summary row. Admitted iff both are
+ *  'anthropic'. `reason` names the failing side, the before side first, as `before-<backend>` or `after-<backend>`;
+ *  null when admitted. An index outside the copy is the caller's defect: TypeError, never a verdict.
+ *  @param {Array<{type: string, model: string|null}>} copyRows
+ *  @param {number} boundaryIndex
+ *  @param {number} summaryIndex
+ *  @returns {{admitted: boolean, reason: string|null, before: 'anthropic'|'other'|'unknown', after: 'anthropic'|'other'|'unknown'}} */
+export function admitBoundary(copyRows, boundaryIndex, summaryIndex) {
+  if (!Array.isArray(copyRows)) throw new TypeError('admitBoundary: copyRows must be an array');
+  for (const [name, i] of [['boundaryIndex', boundaryIndex], ['summaryIndex', summaryIndex]]) {
+    if (!Number.isInteger(i) || i < 0 || i >= copyRows.length) throw new TypeError(`admitBoundary: ${name} ${String(i)} is not a row of the copy`);
+  }
+  const nearestFirst = [];
+  for (let i = boundaryIndex - 1; i >= 0; i -= 1) if (copyRows[i].type === 'assistant') nearestFirst.push(copyRows[i].model);
+  const before = producerOf(nearestFirst);
+  const after = producerOfCopy(copyRows, summaryIndex);
+  const reason = before !== 'anthropic' ? `before-${before}` : after !== 'anthropic' ? `after-${after}` : null;
+  return { admitted: before === 'anthropic' && after === 'anthropic', reason, before, after };
+}
+
+const ADMISSION_STMTS = new WeakMap();
+
+/** The reads admission adds to Task 1's, prepared once per handle: every main-transcript boundary, in (transcript_pk,
+ *  entry_id) order (agent_id '', as derive.mjs's todo reads them), and a family's generation. A boundary's copy and
+ *  its rows are Task 1's boundaryCopyOf, the one holding-copy reader. */
+function admissionStmts(db) {
+  let s = ADMISSION_STMTS.get(db);
+  if (s !== undefined) return s;
+  s = {
+    boundaries: db.prepare(`SELECT b.entry_id AS entry_id, e.uuid AS uuid, e.ts_ms AS ts_ms, b.transcript_pk AS transcript_pk,
+        t.cc_session_uuid AS cc_uuid
+      FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id JOIN transcripts t ON t.transcript_pk = b.transcript_pk
+      WHERE t.agent_id = '' ORDER BY b.transcript_pk, b.entry_id`),
+    generation: db.prepare('SELECT generation FROM sessions WHERE session_pk = ?'),
+  };
+  ADMISSION_STMTS.set(db, s);
+  return s;
+}
+
+/** One boundary that has a family and a time, judged in Task 1's holding copy. A boundary no copy holds is
+ *  boundary-uncopied, one whose copy has no summary row summary-absent; an admitted row names its summary row
+ *  (summary_entry_id), so Baseline B can check the copy it reads again is this one. */
+function admitHeld(rs, b) {
+  const copy = boundaryCopyOf(rs, Number(b.entry_id));
+  if (copy.state !== 'copy') {
+    if (copy.why === 'boundary-uncopied') return unjudged('boundary-uncopied');
+    throw new TypeError(`admitStoreBoundaries: boundary ${String(b.entry_id)} answered ${copy.why}`);
+  }
+  if (copy.summaryIndex === null) return { ...unjudged('summary-absent'), file_id: copy.fileId, boundary_index: copy.boundaryIndex };
+  return { ...admitBoundary(copy.rows, copy.boundaryIndex, copy.summaryIndex), file_id: copy.fileId, boundary_index: copy.boundaryIndex,
+    summary_index: copy.summaryIndex, summary_entry_id: Number(copy.rows[copy.summaryIndex].entry_id) };
+}
+
+/** Every main-transcript boundary in the store behind `rs`, each with its family and its W2-D66 verdict, and the count
+ *  of each outcome: 'admitted' and every RECON_DISCARDS word, zeros included. In order: no family under derive.mjs's
+ *  epochOfUuid is no-epoch, a NULL boundary ts_ms is ts-null, then the holding copy (boundary-uncopied, summary-absent)
+ *  and RP5. `rs` is the caller's ReplayStore (Task 1), which the caller closes.
+ *  @param {ReplayStore} rs
+ *  @returns {{boundaries: Array<{entry_id: number, uuid: string, transcript_pk: number, ts_ms: number|null,
+ *    ccrc_id: string|null, generation: string|null, admitted: boolean, reason: string|null, file_id: number|null,
+ *    boundary_index: number|null, summary_index: number|null, summary_entry_id: number|null, before: string|null,
+ *    after: string|null}>, counts: Record<string, number>}} */
+export function admitStoreBoundaries(rs) {
+  const s = admissionStmts(rs.db);
+  const counts = Object.fromEntries(['admitted', ...RECON_DISCARDS].map((w) => [w, 0]));
+  const boundaries = [];
+  for (const b of s.boundaries.all()) {
+    const ep = epochOfUuid(rs.db, b.cc_uuid);
+    const v = ep === null ? unjudged('no-epoch') : b.ts_ms === null ? unjudged('ts-null') : admitHeld(rs, b);
+    const key = v.reason ?? 'admitted';
+    if (!Object.hasOwn(counts, key)) throw new TypeError(`admitStoreBoundaries: ${key} is not a RECON_DISCARDS word`);
+    counts[key] += 1;
+    boundaries.push({
+      entry_id: Number(b.entry_id), uuid: b.uuid, transcript_pk: Number(b.transcript_pk), ts_ms: b.ts_ms === null ? null : Number(b.ts_ms),
+      ccrc_id: ep === null ? null : ep.ccrc_id, generation: ep === null ? null : s.generation.get(ep.session_pk).generation,
+      ...v,
+    });
+  }
+  return { boundaries, counts };
 }
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised

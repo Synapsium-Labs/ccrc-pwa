@@ -3312,7 +3312,7 @@ describe('W2-5a Task 3: the population over a planted store, admitStoreBoundarie
 (cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5a Task 3')
 ```
 
-Expected (predicted): `19 failed | 4 passed`. The first describe fails on `TypeError: w5a3Drv.admitBoundary is not a function`, and the third on `w5a3Drv.admitStoreBoundaries is not a function` from `planted()`. The second describe's four cases pass: `summaryIndexOf` is Task 1's, and they pin it here, where admission reads it; mutants M8 and M9 measure their red. The store is planted, and opened through `openReplayStore`, before that throw, so the planter itself runs and must not fail. A failure inside `w5a3PlantStore` (a constraint, a missing column) is a fixture defect: fix it before Step 4.
+Expected: `18 failed | 5 passed` (measured; predicted `19 failed | 4 passed`). The first describe fails on `TypeError: w5a3Drv.admitBoundary is not a function`, and the third on `w5a3Drv.admitStoreBoundaries is not a function` from `planted()`. The one exception is the first describe's "an index outside the copy is a defect" case: it passes while `admitBoundary` is undefined, because calling `undefined` throws a `TypeError` too, and M7 is what measures its real red. The second describe's four cases pass: `summaryIndexOf` is Task 1's, and they pin it here, where admission reads it; mutants M8 and M9 measure their red. The store is planted, and opened through `openReplayStore`, before that throw, so the planter itself runs and must not fail. A failure inside `w5a3PlantStore` (a constraint, a missing column) is a fixture defect: fix it before Step 4.
 
 - [ ] **Step 4: Implement.**
 
@@ -3320,7 +3320,7 @@ Expected (predicted): `19 failed | 4 passed`. The first describe fails on `TypeE
 
 (b) Task 1's derive.mjs line becomes `import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';`, and in `server/test/history-replay.test.ts` Task 1's `EXACT_NAMES` entry `'../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, holdingCopyOf }',` becomes `'../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf }',`.
 
-(c) In `RECON_DISCARDS`, replace `  'span-unparseable', 'span-tombstone', 'span-over-cap', 'span-undecodable',` with:
+(c) In `RECON_DISCARDS`, replace `  'span-unparseable', 'span-tombstone', 'span-over-cap', 'span-undecodable',` with the two lines below. The list's next line, `'body-unrenderable'` (D-6302), stays after them as its last word, so the new words are `RECON_DISCARDS.slice(18, 24)` and the list does not end with them:
 
 ```js
   'span-unparseable', 'span-tombstone', 'span-over-cap', 'span-undecodable',
