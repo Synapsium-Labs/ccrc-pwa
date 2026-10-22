@@ -11,7 +11,8 @@
 // D-6325: this is the ONE renderer of Claude's own question now. `askSource` hands it the questions from the hook's
 // envelope (`from: 'hook'`) or, once that has aged out, the transcript's copy (`from: 'transcript'`), which carries an
 // option's `preview` too; the scraped sheet that used to take over is gone (an unreadable ask says so, and offers the
-// terminal). The review screen is rendered by `DialogSheet` for every source of copy, so it is not here.
+// terminal). The review screen is rendered by `DialogSheet` for every source of copy, so it is not here, and `TerminalCta`'s
+// callers are now this sheet's dead end and `DialogSheet`'s `ask-unreadable` and `terminal-only` surfaces.
 //
 // `TerminalCta` travels here because BOTH halves render it (the controller's
 // unparsed-scrape branch and this sheet's ungated one) and its own docstring

@@ -527,9 +527,10 @@ export function MultiPick({
   multi: DialogMulti;
   /** The live dialog's id: a call committed to another question shows nothing of its set here. */
   dialogId: string;
-  /** The envelope's copy for the boxes, by position (`questionCorresponds` matched them one for one); the pane's own
-   *  labels and descriptions otherwise. */
-  copy?: StructuredQuestion['options'];
+  /** Claude's own copy for the boxes, by position (`questionCorresponds` matched them one for one, so the counts are
+   *  equal). Required (D-6325): the label and description shown are this copy's, and a box with no description shows
+   *  none, never the pane's sub-text under it. */
+  copy: StructuredQuestion['options'];
   picks: Picks;
   /** Another send is in flight (an option's answer, or own words). */
   locked: boolean;
@@ -545,15 +546,15 @@ export function MultiPick({
     <>
       <div className="opts">
         {multi.options.map((o, k) => {
-          const c = copy?.[k];
+          const c = copy[k]!; // `questionCorresponds`: one copy per box
           return (
             <OptionRow
               key={`${dialogId}:${o.index}`}
               {...keyed(keys, o.index)}
               checked={ticked.includes(o.index)}
               index={o.index}
-              label={c?.label ?? o.label}
-              sublabel={c?.description || o.description}
+              label={c.label}
+              sublabel={c.description}
               disabled={busy || locked}
               onClick={() => onToggle(o.index)}
             />
