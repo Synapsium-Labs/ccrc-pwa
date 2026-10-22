@@ -24,11 +24,35 @@ export function askKey(ask: HookAsk | null): string | null {
   return createHash('sha256').update(material).digest('hex').slice(0, 16);
 }
 
-/** What a stream's last pane reading shows of the menu on screen: the transcript-aligned question (`Dialog.ask`) and,
- *  for an unparsed multiSelect menu, its labels (`Dialog.multi`). `sessionws.ts`'s `DialogSeen` satisfies it. */
+/** What a stream's last pane reading shows of the menu on screen: the transcript-aligned question (`Dialog.ask`), for
+ *  an unparsed multiSelect menu its labels (`Dialog.multi`), whether it is the review screen of a multi-question call
+ *  (`reviewRows`), and the raw pane of an UNPARSED capture (null for a parsed menu or none). `sessionws.ts`'s
+ *  `DialogSeen` satisfies it. */
 export interface MenuEvidence {
   ask: DialogAsk | null;
   multi?: DialogMulti;
+  review?: boolean;
+  raw: string | null;
+}
+
+/** The questions of an aged envelope the stream may keep: the session's own (`current`), `waiting`, a questions
+ *  envelope. Null for every other raw read. The eligibility half of `keepAgedAsk`. */
+function agedQuestions(raw: HookStateRawRead): HookAskQuestion[] | null {
+  if (!raw.ok || raw.identity !== 'current' || raw.state.state !== 'waiting') return null;
+  const ask = raw.state.ask;
+  return ask !== null && 'questions' in ask ? ask.questions : null;
+}
+
+/** The correspondence half: is the pane's parsed or multi menu question `q`? */
+function showsQuestion(menu: MenuEvidence, q: HookAskQuestion): boolean {
+  if (menu.ask !== null) {
+    const shown = menu.ask;
+    return shown.question === q.question && shown.options.length === q.options.length
+      && shown.options.every((o, i) => o === null || o.label === q.options[i]!.label);
+  }
+  const multi = menu.multi;
+  return multi !== undefined && multi.options.length === q.options.length
+    && multi.options.every((o, i) => pairMatches(o.label, q.options[i]!.label));
 }
 
 /**
@@ -36,29 +60,41 @@ export interface MenuEvidence {
  *
  * `foldHookStateRead` drops an envelope older than `HOOKSTATE_FRESH_MS`, which cleared the sheet's structured copy at
  * 30 minutes under a question still on screen. True only when the raw read is the current session's, `waiting`, a
- * questions envelope, and SOME question of it is the menu on screen (every question, not only the first that `askKey`
- * hashes: the pane may be on the second): a parsed menu by its question text and option labels (a `null` entry is a row
- * the transcript alignment already forgave), an unparsed multi menu by its labels through `pairMatches`.
+ * questions envelope, and the pane shows it: SOME question of it is the menu on screen (every question, not only the
+ * first that `askKey` hashes: the pane may be on the second), a parsed menu by its question text and option labels or
+ * an unparsed multi menu by its labels through `pairMatches`; or the pane is on the review screen of a call with more
+ * than one question (no question is aligned to the `Submit answers` / `Cancel` rows, but it is the same call).
  *
- * Legitimately different from the 30-minute cut every other reader of the envelope keeps (the fleet card, the push
- * body, the coordinator hold, `answerAsk`'s read): only the per-session stream holds a live menu measurement and its
- * transcript alignment in the same tick. Raising `HOOKSTATE_FRESH_MS` instead would widen all of them, the key-based
- * answer gate included.
+ * The parsed arm trusts `alignAsk`'s forgiveness: it receives only alignments `alignAsk` produced, where a `null`
+ * entry is a row it forgave under its own bound (one miss, from four options up), and keeps no second bound of its own.
+ *
+ * Legitimately different from the 30-minute cut that holds for every reader that DISPLAYS or ANSWERS the envelope (the
+ * fleet card, the push body, the coordinator hold, `answerAsk`'s read): only the per-session stream holds a live menu
+ * measurement and its transcript alignment in the same tick. The one existing unaged reader is the stall watch's
+ * `stallHookAskOf` (`watch.ts`), whose answer is a run verdict and never a surface. Raising `HOOKSTATE_FRESH_MS`
+ * instead would widen all of them, the key-based answer gate included.
  */
 export function keepAgedAsk(raw: HookStateRawRead, menu: MenuEvidence): boolean {
-  if (!raw.ok || raw.identity !== 'current' || raw.state.state !== 'waiting') return false;
-  const ask = raw.state.ask;
-  if (ask === null || !('questions' in ask)) return false;
-  return ask.questions.some((q) => {
-    if (menu.ask !== null) {
-      const shown = menu.ask;
-      return shown.question === q.question && shown.options.length === q.options.length
-        && shown.options.every((o, i) => o === null || o.label === q.options[i]!.label);
-    }
-    const multi = menu.multi;
-    return multi !== undefined && multi.options.length === q.options.length
-      && multi.options.every((o, i) => pairMatches(o.label, q.options[i]!.label));
-  });
+  const questions = agedQuestions(raw);
+  if (questions === null) return false;
+  if (menu.review === true) return questions.length > 1;
+  return questions.some((q) => showsQuestion(menu, q));
+}
+
+/** The stream's keep decision and how many consecutive mid-redraw captures it has seen (`nextAgedKeep`). */
+export interface AgedKeep { kept: boolean; redraws: number }
+export const NO_AGED_KEEP: AgedKeep = { kept: false, redraws: 0 };
+
+/**
+ * D-6324: the stream's next keep decision. An unparsed capture that carries no `multi` is a menu grabbed mid-redraw
+ * (`parseDialog` gives it a new pane-hash id and no alignment), so the FIRST such tick keeps the previous decision while
+ * the envelope is still eligible, and the envelope does not flap `ask_cleared` / `ask`. A second consecutive one, a
+ * parsed menu that does not correspond, and no menu decide as `keepAgedAsk` does.
+ */
+export function nextAgedKeep(prev: AgedKeep, raw: HookStateRawRead, menu: MenuEvidence): AgedKeep {
+  const redraws = menu.raw !== null && menu.multi === undefined ? prev.redraws + 1 : 0;
+  const kept = redraws === 1 ? prev.kept && agedQuestions(raw) !== null : keepAgedAsk(raw, menu);
+  return { kept, redraws };
 }
 
 /**

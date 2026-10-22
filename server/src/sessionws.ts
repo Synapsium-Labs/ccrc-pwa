@@ -16,7 +16,7 @@ import { readTasks } from './tasks/read.js';
 import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
 import { workflowsFrame, type Proc } from './workflows/model.js';
 import { foldHookStateRead, readHookStateRawMeasured } from './hookstate.js';
-import { askKey, keepAgedAsk } from './askkey.js';
+import { askKey, nextAgedKeep, NO_AGED_KEEP, type AgedKeep } from './askkey.js';
 import type { Dialog, DialogAsk, DialogMulti, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 import { reviewRows } from '../../shared/ask-menu.js';
 
@@ -82,6 +82,8 @@ export class SessionStream {
   private status: SessionStatus | null = null;
   /** What the client last saw of the pane menu — see nextDialogFrame. */
   private seenDialog: DialogSeen = { id: null, ask: null, raw: null };
+  /** `checkHookAsk`'s keep decision for an aged envelope (D-6324). */
+  private agedKeep: AgedKeep = NO_AGED_KEEP;
   /** Failed captures in a row since the last reading of the pane (decision `ask-failed-capture-holds`). */
   private failedCaptures = 0;
   /** Bumped on every `answered:<id>` this stream handles; a poll reading taken under an older value read the pane
@@ -649,7 +651,7 @@ export class SessionStream {
   /** Read this session's hookstate once and send `ask` / `ask_cleared` when the hook-sourced envelope appears,
    *  changes (JSON-compare), or goes away. The envelope is the fresh, current-session one (`foldHookStateRead`: a
    *  missing, foreign or malformed file reads as none), or, past the 30-minute cut, the aged one while this tick's
-   *  menu (`seenDialog`, set by `checkDialog` just before) is that envelope's call (`keepAgedAsk`, D-6324). */
+   *  menu (`seenDialog`, set by `checkDialog` just before) is that envelope's call (`nextAgedKeep`, D-6324). */
   private async checkHookAsk(uuid: string): Promise<void> {
     if (this.stopped) return;
     const raw = await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, this.id, uuid);
@@ -657,7 +659,8 @@ export class SessionStream {
     const read = foldHookStateRead(raw, Date.now());
     const hs = read.ok ? read.state : null;
     this.hookWorkflowBackground = hs?.background?.kinds.includes('workflow') === true;
-    const ask = hs?.ask ?? (raw.ok && this.seenDialog.id !== null && keepAgedAsk(raw, this.seenDialog) ? raw.state.ask : null);
+    this.agedKeep = nextAgedKeep(this.agedKeep, raw, this.seenDialog);
+    const ask = hs?.ask ?? (raw.ok && this.agedKeep.kept ? raw.state.ask : null);
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;
     this.lastAskJson = json;
@@ -1093,6 +1096,8 @@ export interface DialogSeen {
   raw: string | null;
   /** An unparsed multiSelect menu's labels (`Dialog.multi`), the evidence `keepAgedAsk` reads (D-6324). */
   multi?: DialogMulti;
+  /** The pane is the review screen of a multi-question call (`reviewRows`), the same evidence's third arm (D-6324). */
+  review?: boolean;
 }
 
 /**
@@ -1134,7 +1139,7 @@ export function nextDialogFrame(
   const repainted = !dialog.parsed && prev.raw !== dialog.raw;
   if (!isNew && !upgraded && !repainted) return { seen: prev, msg: null };
   return {
-    seen: { id: dialog.id, ask, raw: dialog.parsed ? null : dialog.raw, multi: dialog.multi },
+    seen: { id: dialog.id, ask, raw: dialog.parsed ? null : dialog.raw, multi: dialog.multi, review: reviewRows(dialog) !== null ? true : undefined },
     msg: { type: 'dialog', dialog: ask === null ? dialog : { ...dialog, ask } },
   };
 }
