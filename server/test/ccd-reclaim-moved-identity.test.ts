@@ -11,7 +11,11 @@
 // FIXTURE HOME ONLY (`makePrHarness`): every repository, worktree, registry row, field and tombstone lives under the
 // harness's HOME. The unit and the pane are stubbed (`CHILD_STUBS`), the expiry ladder reads the fake process root
 // `FAKE_PROC_SELF`, and nothing runs ccd against the live HOME. One case (B2) runs the real reclaim verb's tail, whose
-// post-kill wait walks the real `/proc` (`PROC_SPY` counts it), so CLAUDE.md lists this file as a load flake.
+// post-kill wait walks the real `/proc` twice a pass: by `_ws_path_users` (`PROC_SPY` counts it) and by the
+// working-directory probe, `_ws_cwd_users`. So CLAUDE.md lists this file as a load flake. The wait only waits, and B2
+// refuses at the tail's first ownership check, before any standing forced removal asks the probe, so a walk past its
+// bound, or the probe's unmeasured answer under process churn (`the processes of this box could not be measured
+// (/proc, exit 3)`), only lengthens the wait: under load B2 fails as vitest's `Test timed out in <n>ms`.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';

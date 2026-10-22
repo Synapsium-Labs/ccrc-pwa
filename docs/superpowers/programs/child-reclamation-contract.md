@@ -4266,7 +4266,8 @@ the spec, never this contract.
   migration, capability word, ccd verb, refusal token, journal act, probe word, sanctioned `die` line, agent grant or
   exec-whitelist entry.
 - In remote mode the reclaim, expiry and collect verbs run only on the fleet box. So the mount table's device match was
-  measured there before the first edit, and on CI's real table.
+  measured there before the first edit, and a CONTROL case of `ccd-reclaim-idwalk.test.ts` re-measures it on the real
+  table of every Linux run of that file, CI's included.
 
 **R94 as built (process state may only refuse).**
 - R94 amended R31's bullet that begins "Process state never grants deletion consent. A pane's cwd". That bullet reads
@@ -4275,8 +4276,9 @@ the spec, never this contract.
 - The one refusal-only probe is `_ws_cwd_users`. A process is in use when its cwd's string meets the tree's physical
   spelling, OR its cwd's device and inode ancestry meets the tree. It skips a process only on ENOENT or ESRCH of that
   process's own cwd link or stat file, or on the ruled EACCES exception. An ENOENT on opening the link after a
-  successful read is confirmed through the stat file, or by a second readlink that answers ENOENT. Any other failure
-  answers unmeasured. Darwin keeps ws-expire's lsof arm. Its bound is `WS_CWD_USERS_SCAN_S` (10 s).
+  successful read is confirmed through the stat file, or by a second readlink that answers ENOENT (a release is then
+  asked through its threads). Any other failure answers unmeasured. Darwin keeps ws-expire's lsof arm. Its bound is
+  `WS_CWD_USERS_SCAN_S` (10 s).
 - `cwd-probe-adopts-the-path-users-walk`: the probe also adopts `_ws_path_users`' fixed point, its leader-thread walk
   and its own-chain exclusion, and it owns the physical resolve of its argument. ws-expire's probe moved onto it.
 - `cwd-probe-confirms-a-vanished-link-by-a-second-read`: a process whose own link vanished at its first read, or was
@@ -4284,7 +4286,7 @@ the spec, never this contract.
   walk accepts a vanished, reaped or outside answer only on a pass whose `task/` listing named no tid not asked before.
   `cwd-probe-read-once-more-answers-eacces-for-a-reaped-pid`: at that per-pass read only, EACCES followed by a stat file
   that is gone counts as the pid's release. `cwd-probe-holds-a-double-slash-physical-root`: a `//`-leading physical root
-  holds the probe, unmeasured. Spec §4.12 says each in full.
+  holds ws-expire's own probe, through its adapter's gate, unmeasured. Spec §4.12 says each in full.
 - `cwd-wait-only-waits`: inside the post-kill wait the probe only waits. It refuses at step 3 and step 4, before each
   `keep_of` and each standing forced removal.
 - `cwd-refusal-reuses-worktree-remove-failed`: an in-use or unmeasured answer there fails as `worktree-remove-failed`,
@@ -4334,19 +4336,24 @@ the spec, never this contract.
 - The field: `reg-purge-inventory-omits-workdirid`, `legacy-row-count-has-no-doctor-line`,
   `workdirid-temp-leaks-on-sigkill`, `workdirid-pending-unwritable-keeps-the-old-field`,
   `failed-pending-write-reads-legacy`, `workdirid-fifo-swap-after-type-check`,
-  `fish-spawn-cd-reads-backslash-escapes`, `workdirid-physical-control-byte-stays-pending` and
-  `relative-workdir-second-cd-does-not-enter`.
+  `fish-spawn-cd-reads-backslash-escapes` (on Linux the launch command's earlier tool-child assignment, `${…-}`, is
+  not fish syntax, so a fish pane there parses nothing and every row stays `pending`; the backslash case is the Darwin
+  arm's alone), `workdirid-physical-control-byte-stays-pending`, `relative-workdir-second-cd-does-not-enter` and
+  `entry-field-identity-does-not-survive-a-device-renumbering`.
 - The rung: `rows-rung-git-reads-unbounded`, `repointed-alias-for-legacy-rows-until-respawn`,
   `other-mount-namespaces-fuse-views-and-overlay`, `ancestry-stands-alone-on-darwin`,
-  `moved-check-misses-a-subdirectory-of-a-moved-tree` and `record-ef-has-no-deadline`.
+  `moved-check-misses-a-subdirectory-of-a-moved-tree`, `record-ef-has-no-deadline`,
+  `record-ef-unstattable-stanza-reads-as-another-tree` and
+  `gone-row-with-pending-field-holds-despite-its-release-arms`.
 - The probe: `human-gated-removals-ask-no-cwd` (forwarded to workspace lifecycle), `cwd-probe-sees-no-open-fds`,
   `cwd-probe-sees-a-session-only-while-it-runs`, `surviving-background-job-holds-the-reclaim`,
   `cwd-probe-can-wait-on-a-hung-network-cwd`, `darwin-cwd-parse-unbounded-as-today`,
   `cwd-probe-pure-bash-watcher-sleep-reads-as-a-user`, `cwd-probe-per-thread-cwd-unasked`,
   `cwd-probe-pid-handoff-between-reads` and `cwd-probe-task-listing-can-skip-a-tid`. The probe also states pid and tid
   reuse as a limit, with no slug.
-- The tail window: `reask-identity-is-per-attempt`, `reask-to-opendir-window`, `tail-reasks-can-outrun-the-act-row`,
-  `identity-found-after-the-kill-repeats` and `worktree-ask-to-force-window`, narrowed.
+- The tail window: `reask-identity-is-per-attempt`, `reask-to-opendir-window`, `cwd-ask-to-opendir-window`,
+  `tail-reasks-can-outrun-the-act-row`, `identity-found-after-the-kill-repeats` and `worktree-ask-to-force-window`,
+  narrowed.
 - Unmeasured: `git-mount-crossing-unmeasured` and `exdev-class-moot-under-pi5-a`. The operator may measure either on a
   throwaway box of their own choosing.
 - W2's, standing: `human-gated-removals-ask-no-mounts` and `vanished-checkout-arms-ask-no-mounts`.
@@ -4367,8 +4374,8 @@ entry defines them.
 - Task 0: `growth-check-armed-reds-w3s-ccd-growth`.
 - Task 5: `fixture-volume-at-the-ws-add-disk-floor` and `gate-chunk-8-outruns-the-foreground-bound`.
 
-Main's growth check reds a pull request that grows `ccd/ccd` by more than its net-line limit, and the operator exempted
-this wave for `ccd/ccd`, so that one row is the expected red on the pull request. The volume the fixtures sit on holds
-less free space than ws-add's 10 GB floor, so every gate ran with `CCD_DISK_FLOOR_GB=1`, ccd's own refuse-only
-override, and nothing was edited for it. One chunk of the gate list, which holds the doctor suite, runs past the 600 s a
-foreground call allows, so it ran once, alone, in the background.
+Main's growth check, which reds a pull request that grows `ccd/ccd` by more than its net-line limit, reds this wave's
+`ccd/ccd` row until the operator's exemption lands; this wave edits neither the check nor its data. The volume the
+fixtures sit on holds less free space than ws-add's 10 GB floor, so every gate ran with `CCD_DISK_FLOOR_GB=1`, ccd's
+own refuse-only override, and nothing was edited for it. One chunk of the gate list, which holds the doctor suite,
+runs past the 600 s a foreground call allows, so it ran once, alone, in the background.

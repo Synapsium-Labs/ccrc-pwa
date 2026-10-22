@@ -80,7 +80,7 @@ export const PANE_EXEC = (shell: string): string => `sleep() { :; };
 /** path-identity W3, Task 5 (R8): the pane's entry-identity writer exactly as `_spawn_start` splices it between a
  *  command string's first `cd '<workdir>' && ` and its `true; cd '<workdir>' && exec env` (R60), read from ccd's
  *  own `_plat_workdirid_pane` (one definition, read twice) and never typed. It ends in a space, which the harness's trim would cut, so it is read
- *  bracketed. `os` composes it as a snippet that sets `CCD_OS=<os>` does (a forced arm); without it, the host's arm.
+ *  bracketed. With `os`, it is composed after `CCD_OS=<os>` is set (a forced arm); without it, on the host's arm.
  *  It is '' when the composer will not quote the input, as the spawn then splices nothing. */
 export const paneFragment = (h: { sh(snippet: string): string }, id: string, workdir: string,
   os?: 'linux' | 'darwin'): string =>

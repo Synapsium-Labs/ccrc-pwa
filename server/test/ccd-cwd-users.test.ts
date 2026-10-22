@@ -535,7 +535,7 @@ describe.skipIf(!LINUX)('a cwd link that vanished: confirmed by a second read, i
     expect(logOf('timed-error')).toEqual([]);
   }, 60_000);
 
-  it('V4: the pid changes hands after the walk (its thread, asked outside the tree, moved in by another mount and ran execve, so the leader’s pid names it): the last read of the leader’s link finds it, by device and inode', () => {
+  it('V4: the pid changes hands after pass 1 asked its thread (that thread, asked outside the tree, moved in by another mount and ran execve, so the leader’s pid names it): the read of the leader’s link after pass 1 finds it, by device and inode', () => {
     const d = aliased();
     fs.mkdirSync(path.join(h.home, 'elsewhere'));
     const a = ask(d, `${lead}${thread('4243', '$HOME/elsewhere')}` + timed([

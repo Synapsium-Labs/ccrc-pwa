@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=03c18a6713e3e95c4aabe68d3c6c8eb74d9d13e0ac65087ff93faa2fd951194b
+# ccrc:generated 1 sha256=5bd26089978d72fbb4628c18103343c3c554a18b2251b70f4b9320d694a9c2b6
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23755,7 +23755,10 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
 # every workdir `.workdir` accepts, a backslash included, so a restart
 # clears that hold, save under a fish pane shell, whose `cd` reads a doubled
 # or a trailing backslash inside single quotes as an escape and so never
-# enters such a workdir (`fish-spawn-cd-reads-backslash-escapes`). THE
+# enters such a workdir (`fish-spawn-cd-reads-backslash-escapes`); on Linux
+# the launch command's earlier tool-child assignment (`${…-}`) is not fish
+# syntax, so a fish pane there parses nothing and every row stays pending;
+# the backslash case is the Darwin arm's alone. THE
 # WRITER NEVER GATES THE EXEC: each command string is
 # `cd '<wd>' && <fragment>true; cd '<wd>' && exec env …`, with no braces, so
 # a writer that fails still leaves the second `cd` and the `exec` to run,
@@ -23763,7 +23766,9 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
 # that `cd` enters the same directory, so the transcript path does not
 # move. A relative one resolves against the first `cd`, so its pane execs
 # nothing, or execs elsewhere (`relative-workdir-second-cd-does-not-enter`).
-# A `cd` that fails execs nothing, as before.
+# A failed first `cd` skips the writer and leaves the parent's `pending`; the
+# `exec` runs exactly when the second `cd` succeeds, so a `cd` that fails
+# both times execs nothing.
 # THE LINE is the grammar's pending form, the body alone with no trailing
 # newline: `v1<TAB>pending<TAB><at_ms><TAB>-<TAB><logical>`, where `<logical>`
 # is the workdir `_spawn_start` read, byte for byte.
@@ -24726,7 +24731,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # Here it runs once, in a subshell that entered the workdir as the pane does
   # (`CDPATH=` and `builtin cd`, the logical spelling), so the row carries a valid value from its first start; a
   # seed that cannot write leaves what stood, and never stops the start. It sits after the live-pane return above,
-  # so a start that spawns nothing never rewrites a live pane's record.
+  # so a start that finds the pane alive never rewrites its record; a start racing the unit's own respawn may
+  # re-measure it.
   # THE COMPOSER IS ONE LINE, in place of the platform block's blank line after `_plat_epoch_ms`, because the
   # block lies wholly above the highest line the frozen compaction-card corpus cites, and a line added there
   # would move every cite below it; its call sites carry its contract. `ws-add`'s seed is the same statement,
@@ -29634,9 +29640,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # while the compared path came from an ambient `cd` placed the row wherever
   # `set -P` or an imported `cd` sent it (measured: reclaimable, a live row
   # at the child's own path). No `_ws_realpath` answer places a row or the
-  # child here: a gone row's arms (`_ws_reclaim_recorded`) read one only through
+  # child here: a gone row's arms (`_ws_reclaim_recorded`) read one through
   # `_ws_reclaim_record`'s string match, where device and inode may only refuse
-  # (path-identity spec §4.8). A child
+  # (path-identity spec §4.8), and through `_ws_reclaim_admin_entries`, whose
+  # match of git's admin entries gives the count the git arm's
+  # `_ws_reclaim_log_of` call requires to be one. A child
   # whose own workdir cannot be resolved has no canonical to compare with, so
   # every row not literally at or below it is collected as for a `//` child
   # (`unmine`) — never compared with a fallback; with no such row there is
@@ -29776,8 +29784,10 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # no new one. The child is a target only when its own spelling resolved
   # `complete` and its tree stands: a vanished child is the eval's vanished
   # fork, unchanged, and the collector's moved leaf has nothing here to ask.
-  # EVERY ROW SPELLED ABSOLUTE IS ALSO WALKED FOR A LINK INTO `/proc` (m1): a
-  # link whose raw target is `/proc` behind any number of `/`, or a walk whose
+  # EVERY ROW SPELLED ABSOLUTE IS ALSO WALKED FOR A LINK INTO `/proc` (m1),
+  # save one whose spelling opens with exactly two slashes (`//x`), which is
+  # collected `unplaced` before its walk is asked: a link whose raw target is
+  # `/proc` behind any number of `/`, or a walk whose
   # physical position enters `/proc` through a relative one, names the reading
   # process's own cwd exactly as the literal row above does, and is collected
   # with it (`unproc`). AND THE CHILD'S TREE IS HELD WHERE A MOUNT COULD GIVE IT
@@ -30294,7 +30304,7 @@ _ws_reclaim_moved_check() {   # nested -> rc 0 when no checkout in nested (resol
   # checkout whose identity cannot be measured, or an answer of the rule other
   # than equal or not equal (a recorded identity that does not parse), is
   # unmeasured, unless another checkout or recorded identity proves a moved
-  # tree: a measure failure never pre-empts a proof (P21). Its
+  # tree: an identity measure failure never pre-empts a proof (P21). Its
   # limit, a stated residual (`moved-check-misses-a-subdirectory-of-a-moved-tree`):
   # a row that entered a SUBDIRECTORY of a moved tree recorded that
   # subdirectory, which is no checkout's root, so it matches nothing here.
@@ -30410,7 +30420,9 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
   # edited, and no placement on this path reads it: `_ws_reclaim_record` matches
   # its answer as one of two strings, and the ladder's and `_ws_reclaim_owned`'s
   # main-checkout compares read it beside a compare of device and inode, which
-  # may only refuse (path-identity spec §4.8). `-d` is false on EACCES as on
+  # may only refuse (path-identity spec §4.8), and `_ws_reclaim_admin_entries`
+  # also reads it, matching git's admin entries for the count the git arm's
+  # `_ws_reclaim_log_of` call requires to be one. `-d` is false on EACCES as on
   # ENOENT, so a component that stands but cannot be followed (a link across
   # an unsearchable directory, or one that cannot be looked at) stops the
   # walk as if it were missing and fails the absence proof. Never resolvable:
@@ -33043,7 +33055,7 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   # settle, and `_ws_reclaim_reask` asks it again, whole, directly before each
   # standing nested checkout's and the child's keep and again before each
   # forced removal. Each call re-lists the registry, re-reads every row and
-  # makes its own identity walk and its own read of the mount table; nothing
+  # makes its own identity walk and (on Linux) its own read of the mount table; nothing
   # an earlier call answered is read. The two identities it measures last are
   # what the tail records from its first call, and what each re-ask compares
   # its own fresh measures with.
@@ -33183,7 +33195,7 @@ _ws_reclaim_reask() {   # id workdir main wdid mainid [cpath cid] -> 0 nothing r
   # `_ws_reclaim_keep_of`, and again before each forced removal, each time
   # directly before the site's mount question, and stops on any answer but 0.
   # - OWNED, WHOLE AND FRESH. The registry is re-listed and every row re-read,
-  #   with one new identity walk and one new read of the mount table
+  #   with one new identity walk and (on Linux) one new read of the mount table
   #   (`_ws_reclaim_workdir_shared` keeps its maps for one call only); the
   #   record and the main checkout are asked again. Nothing an earlier call
   #   answered is read. Its 1 is a PROOF and stays 1, which the tail prints
@@ -33615,8 +33627,9 @@ _ws_cwd_users() {   # dir [say] -> 0 no process has its working directory at dir
   #   begins with it followed by `/` (a sibling `<tree>2` is not inside). That spelling is the parent's physical
   #   path, resolved WHOLE here, with the leaf's own name appended and never followed: a cwd link and lsof print
   #   kernel-resolved paths that never go through a link, so a tree spelled through a linked root (a worktrees
-  #   root that is a symbolic link, or macOS's /var) would otherwise never match its own spelling. This arm alone
-  #   sees a cwd whose directory was removed (the kernel's ` (deleted)` suffix), and on Darwin it is the only one.
+  #   root that is a symbolic link, or macOS's /var) would otherwise never match its own spelling. This arm sees a
+  #   cwd whose directory was removed (the kernel's ` (deleted)` suffix); the identity arm sees one too, through the
+  #   removed directory's `..`; and on Darwin this arm is the only one.
   # - THE IDENTITY ARM (Linux): the directory the cwd link names is opened (O_PATH, which follows the link as the
   #   kernel resolves it) and its chain of `..` walked to the root, each step's st_dev and st_ino compared with the
   #   tree's, read by lstat (a link leaf matches nothing here, as it matches nothing by string). It sees a process

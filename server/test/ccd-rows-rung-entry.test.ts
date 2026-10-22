@@ -358,6 +358,17 @@ describe('a pending or unmeasured field holds, by row id', () => {
     answers(evalOf(h), 'unmeasured', `registry row(s) demo-dirfield ${UNFIELD}`);
   }, 90_000);
 
+  it('CHARACTERIZATION (gone-row-with-pending-field-holds-despite-its-release-arms): a gone row that git’s record releases holds the child once its field reads pending — unmeasured, by row id, with the pending clause', () => {
+    const c = makeChild(h);
+    const s = sibling();
+    fs.rmSync(s.wt, { recursive: true, force: true });
+    expect(stanza(c.main, s.wt), 'the CONTROL: git keeps the record, prunable').toContain('\nprunable');
+    placed(evalOf(h), 'the CONTROL: git’s record releases the gone sibling');
+    writeField(h, SIB, pendingField(s.wt));
+    expect(fieldState(SIB, s.wt), 'the CONTROL: the field reads pending').toBe('pending');
+    answers(evalOf(h), 'unmeasured', `registry row(s) ${SIB} ${PENDING}`);
+  }, 120_000);
+
   it('outranked: a pending field beside a row inside the child is containment-unproven, never a retry', () => {
     const c = makeChild(h);
     const elsewhere = mk('elsewhere');
@@ -395,6 +406,32 @@ describe('birth times (P20): read only where identities are compared across time
     const r = evalOf(h, { pre: BTIME_FAILS_AT(cur) });
     answers(r, 'unmeasured', `${UNWALK} demo-recycled`);
     expect(r.detail, 'the mismatch rule was never asked').not.toContain(UNREC);
+  }, 90_000);
+
+  it('the CHILD’s birth time unreadable holds a gone row that git’s record released, whose valid field records the child’s identity — unmeasured, naming the walk, never reclaimable', () => {
+    const c = makeChild(h);
+    const s = sibling();
+    fs.rmSync(s.wt, { recursive: true, force: true });
+    placed(evalOf(h), 'the CONTROL: git’s record releases the gone sibling, and its seed adds nothing');
+    writeField(h, SIB, field(identOf(c.wt), gone(), s.wt));
+    expect(fieldState(SIB, s.wt), 'the CONTROL: the field reads valid').toBe('valid');
+    answers(evalOf(h), 'containment-unproven', SHARED_BY(SIB),
+      'the CONTROL: readable, its recorded identity is the child’s');
+    const r = evalOf(h, { pre: BTIME_FAILS_AT(fs.realpathSync(c.wt)) });
+    answers(r, 'unmeasured', `${UNWALK} ${SIB} (the birth time of the child could not be read)`);
+  }, 120_000);
+
+  it('the RECORDED path’s birth time unreadable under the mismatch rule holds as a walk that did not answer, never as a row that entered elsewhere — unmeasured', () => {
+    const { cur } = recycledRow();
+    const rec = fs.realpathSync(mk('rec'));
+    writeField(h, 'demo-recycled', field(identOf(rec), rec, cur));
+    expect(fieldState('demo-recycled', cur), 'the CONTROL: the field reads valid').toBe('valid');
+    const control = evalOf(h);
+    expect(control.verdict, `the CONTROL: where it entered still stands with its recorded identity — ${control.detail}`)
+      .toBe('reclaimable');
+    const r = evalOf(h, { pre: BTIME_FAILS_AT(rec) });
+    answers(r, 'unmeasured', `${UNWALK} demo-recycled (the birth time of where it entered could not be read)`);
+    expect(r.detail, 'never read as a row that entered elsewhere').not.toContain(UNREC);
   }, 90_000);
 
   const DASH: Array<[string, (di: string) => string, string]> = [
