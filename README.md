@@ -745,16 +745,18 @@ Design: `docs/superpowers/specs/2026-08-21-stage4-release-design.md`. Runbook st
 install and update verbs in this section.
 
 **The pipeline.** Every push to `main` runs `.github/workflows/release-main.yml`, thin like its
-siblings: `deploy/release-main.sh prepare` derives the next patch tag from the highest `vX.Y.Z`. A
-`decide` step first asks `deploy/release-scope.mjs` what changed between that tag's tree and HEAD's, and
-asks the tag's own copy of the helper too. When every changed path is on its `NOT_SHIPPED` list (`docs/`,
-the root's `*.md` and `LICENSE`, `server/test/`, `server/test-e2e/`, `agent/test/`), both copies agree,
-and that tag is a published release, the run builds nothing: no toolchain, no tag, no build, no
-attestation, and one line in the log and the job summary says so. Anything else, including an answer it
-cannot read, releases. Where it releases, `prepare` tags that version LOCALLY and runs
-`deploy/build-release.sh` (the one builder — refuses a dirty tree and an untagged HEAD);
-`actions/attest-build-provenance` then signs the tarball's digest with the workflow's own OIDC identity
-(keyless — the repo holds no signing secret); and `release-main.sh publish` pushes the tag and
+siblings: `deploy/release-main.sh prepare` derives the next patch tag from the highest `vX.Y.Z`, tags
+it LOCALLY and runs `deploy/build-release.sh` (the one builder — refuses a dirty tree and an untagged
+HEAD) into a candidate directory. `release-main.sh compare` then downloads the newest release HEAD
+contains, checks it against its own `SHA256SUMS`, and compares the two tarballs entry by entry: path,
+type, mode, size, content and link target, setting aside only `build.json`'s `sha`, `builtAt` and
+`version` and MANIFEST's line for `build.json`. When every entry matches, the merge cuts no release:
+the local tag is dropped, nothing is attested, pushed or published, and one line in the log and the
+job summary reads `built unchanged: <N> entries identical to vX.Y.Z`. Anything else releases, and the
+line names the first entry that differs, or why it could not compare; a merge that changes
+`release-main.yml` or `release-main.sh` always releases, so the comparer never approves its own change.
+Where it releases, `actions/attest-build-provenance` signs the tarball's digest with the workflow's own
+OIDC identity (keyless — the repo holds no signing secret); and `release-main.sh publish` pushes the tag and
 publishes the tarball, `SHA256SUMS` and the bundle `ccrc-<tag>.tar.gz.sigstore.json` with `gh release
 create --verify-tag --prerelease`, deleting the tag again if the publish never completes (nothing
 reaches origin before that push). A hand-pushed `vX.Y.0`/`vX.0.0` tag rides `release.yml` instead —
@@ -775,8 +777,8 @@ why there is no linear-history rule), which runs `release-stable.yml`. `main`'s 
 release now, so push a release's own commit (`git push origin vX.Y.Z^{commit}:refs/heads/stable`), not
 `main`'s head. When that commit is not the head the daily run tested, the gate runs the full suite on it
 first. A push of an untagged head is refused after its gate, and the refusal names the newest release it
-contains and whether anything that ships changed since; `stable` then stays on that head until a release
-cut from a descendant of it is pushed. Its
+contains and points at the release-main run for that head, which says `built unchanged` or what differed;
+`stable` then stays on that head until a release cut from a descendant of it is pushed. Its
 `gate` job first looks for a green `full-suite` job on that commit from a trusted run — `ci.yml`'s daily or manual
 full run on `main`, or an earlier stable gate, never a pull request's — and, finding none, runs `ci.yml` in full
 mode; only then does `deploy/release-stable.sh` run (a red gate leaves the branch moved and no flag flipped, which
