@@ -113,9 +113,13 @@ derive_tags() {
 scope_ask() {
   local helper="$1" base="$2" label="$3" out rc=0
   CHANGE=unmeasured; CHANGE_N=""; CHANGE_FIRST=""; CHANGE_WHY=""
-  # The helpers run without the job's token or its workflow-command files: a
-  # first-party module, and a base tag's older copy, need none of them (D-6405).
-  out="$(env -u GH_TOKEN -u GITHUB_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_OUTPUT -u GITHUB_STEP_SUMMARY node "$helper" --repo "$ROOT" --base "$base")" || rc=$?
+  # The job's token and its workflow-command files (GITHUB_ENV, GITHUB_PATH,
+  # GITHUB_OUTPUT, GITHUB_STATE, GITHUB_STEP_SUMMARY) are not passed to the
+  # helper's environment: a first-party module, and a base tag's older copy,
+  # need none of them (D-6405). That is a courtesy to the helper, not a wall:
+  # a child can still read its parent's /proc environment, and the checkout's
+  # credential sits in .git/config.
+  out="$(env -u GH_TOKEN -u GITHUB_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_OUTPUT -u GITHUB_STATE -u GITHUB_STEP_SUMMARY node "$helper" --repo "$ROOT" --base "$base")" || rc=$?
   if [ "$rc" -ne 0 ]; then
     CHANGE_WHY="$label exited $rc"
   elif [[ "$out" == *$'\n'* ]]; then
@@ -161,7 +165,9 @@ node_floor_ok() {
 # release-scope.mjs, then the base tag's own copy. A merge that changes the
 # classifier changes deploy/, so the old copy answers `changed` whatever HEAD's
 # says. Always returns 0; CHANGE_BY_BASE is 1 when only the base's copy
-# answered `changed`.
+# answered `changed`. The base copy is run only after HEAD's own classifier
+# answered `unchanged` against that tag, and since deploy/ ships, its bytes
+# then equal HEAD's: the old copy is never run on a tree that changed it.
 measure_change() {
   local base="$1" d
   CHANGE_BY_BASE=0
@@ -308,7 +314,7 @@ prepare() {
       say "release-main.sh: releasing $next — $DECISION records neither 'release' nor 'same-as $highest'; a merge whose change cannot be measured is released"
     fi
   else
-    say "release-main.sh: releasing $next — no decision was recorded in $DECISION (release-main.sh decide did not run); a merge whose change cannot be measured is released"
+    say "release-main.sh: releasing $next — no decision was recorded in $DECISION (release-main.sh decide did not run, or it failed after clearing the old one); a merge whose change cannot be measured is released"
   fi
 
   # Tag LOCALLY (build-release.sh names the artifact by the tag at HEAD), build,

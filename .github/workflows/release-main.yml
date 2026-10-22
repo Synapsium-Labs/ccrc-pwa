@@ -58,7 +58,9 @@ jobs:
       # does: does this merge change what ships? GH_TOKEN serves only the
       # published-base check, and the helpers run without it. This step
       # installs nothing. A merge that changes nothing that ships skips the
-      # toolchain and its cache below (D-6401). The checkout's persisted
+      # toolchain and its cache below (D-6401). The base tag's own classifier
+      # runs only after HEAD's answered unchanged against that tag, and since
+      # deploy/ ships, its bytes then equal HEAD's (D-6402). The checkout's persisted
       # credential and the job's OIDC request token still reach every step,
       # as before this wave (D-6405). The step continues on error: a decide that
       # crashes must not block a code merge's release, so its output is then

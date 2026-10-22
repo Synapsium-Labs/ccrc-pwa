@@ -198,7 +198,7 @@ const L = {
   unpublished: (next: string, hi: string, why: string): string =>
     `release-main.sh: releasing ${next} — ${hi} is not a published release (${why}), so nothing is measured against it`,
   noDecision: (next: string, file: string): string =>
-    `release-main.sh: releasing ${next} — no decision was recorded in ${file} (release-main.sh decide did not run); a merge whose change cannot be measured is released`,
+    `release-main.sh: releasing ${next} — no decision was recorded in ${file} (release-main.sh decide did not run, or it failed after clearing the old one); a merge whose change cannot be measured is released`,
   malformed: (next: string, file: string, hi: string): string =>
     `release-main.sh: releasing ${next} — ${file} records neither 'release' nor 'same-as ${hi}'; a merge whose change cannot be measured is released`,
 };
@@ -706,6 +706,47 @@ describe('release-main.sh: decide — a merge that changes nothing that ships cu
     expect(readFileSync(join(out, 'release-main.state'), 'utf8')).toBe('built true\ntag v0.0.2\n');
   });
 
+  it('W25-R26: a node exactly at the engines floor is trusted — the fall-through of the field-by-field compare passes', () => {
+    const home = mkTmp('ccrc-relmain-w25r26-');
+    const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly });
+    const floor = /^>=(\d+\.\d+\.\d+)$/.exec(REAL_ENGINES.node ?? '')?.[1];
+    expect(floor, 'server/package.json names a >=X.Y.Z engines floor').toBeDefined();
+    const shim = join(home, 'shim');
+    mkdirSync(shim, { recursive: true });
+    // Prints exactly the floor for --version; every other call goes to the real node.
+    writeFileSync(join(shim, 'node'), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo v${floor}; exit 0; fi\nexec '${process.execPath}' "$@"\n`, { mode: 0o755 });
+    const out = join(home, 'out');
+    const env = { PATH: `${shim}:${join(home, 'bin')}:${process.env.PATH ?? ''}` };
+    const { d, p } = decideThenPrepare(root, home, out, {}, env);
+    expect(d.code, d.stderr).toBe(0);
+    expect(d.stdout).toContain(L.skip('v0.0.1', 2, 'v0.0.2'));
+    expect(readFileSync(join(out, 'release-main.decision'), 'utf8')).toBe('same-as v0.0.1\n');
+    expect(p.code, p.stderr).toBe(0);
+    expect(readFileSync(join(out, 'release-main.state'), 'utf8')).toBe('built unchanged\nsame-as v0.0.1\n');
+  });
+
+  it('W25-R25: the base tag\'s copy runs only after HEAD\'s answered unchanged — a higher tag off main is never executed on a tree that changed it', () => {
+    const home = mkTmp('ccrc-relmain-w25r25-');
+    const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly });
+    // v0.0.9 sits on a side branch from the first commit, contained in no HEAD, and its
+    // helper would write a canary and vouch for everything if it were ever run.
+    const first = git(root, 'rev-list', '--max-parents=0', 'HEAD');
+    git(root, 'checkout', '-q', '-b', 'side', first);
+    writeFileSync(join(root, 'deploy', 'release-scope.mjs'),
+      "import { writeFileSync } from 'node:fs';\nwriteFileSync(`${process.env.HOME}/canary`, 'ran\\n');\nprocess.stdout.write('unchanged 0\\n');\n");
+    git(root, 'add', '-A');
+    git(root, 'commit', '-q', '-m', 'an off-main release');
+    git(root, 'tag', 'v0.0.9');
+    git(root, 'checkout', '-q', 'main');
+    const out = join(home, 'out');
+    const { d, p } = decideThenPrepare(root, home, out);
+    expect(d.code, d.stderr).toBe(0);
+    expect(d.stdout).toContain(L.changed('v0.0.10', 'v0.0.9', 1, '"deploy/release-scope.mjs"'));
+    expect(existsSync(join(home, 'canary')), 'the base copy was run on a tree that changed it').toBe(false);
+    expect(p.code, p.stderr).toBe(0);
+    expect(readFileSync(join(out, 'release-main.state'), 'utf8')).toBe('built true\ntag v0.0.10\n');
+  });
+
   it('W25-R19: the measure arm answers one line and writes nothing', () => {
     const home = mkTmp('ccrc-relmain-w25r19a-');
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly });
@@ -757,7 +798,7 @@ describe('release-main.sh: decide — a merge that changes nothing that ships cu
     expect(p.stderr).toMatch(/refusing a dirty tree/);
   });
 
-  it('W25-R24: the helpers never see the job\'s token or its workflow-command files', () => {
+  it('W25-R24: the token and the workflow-command files are not passed to the helper\'s environment', () => {
     const home = mkTmp('ccrc-relmain-w25r24-');
     const leak = "process.stdout.write(process.env.GH_TOKEN || process.env.GITHUB_OUTPUT ? 'changed 1 \"leak\"\\n' : 'unchanged 0\\n');";
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, scope: leak });
@@ -811,7 +852,7 @@ describe('release-main.sh: source pins', () => {
     const code = src().split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     expect(code).not.toMatch(/\bdocs\/|test-e2e|server\/test|agent\/test|\*\.md|['"]LICENSE['"]/);
   });
-  it('W25-P4: prepare makes no gh call and holds no token — the step that installs makes no network ask', () => {
+  it('W25-P4: prepare has no gh call and no token (it still runs git ls-remote)', () => {
     const body = /^prepare\(\) \{\n[\s\S]*?\n\}$/m.exec(src())?.[0] ?? '';
     expect(body.length, 'prepare\'s body was not found').toBeGreaterThan(200);
     expect(body).not.toMatch(/\bgh /);
