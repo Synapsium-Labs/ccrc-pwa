@@ -2183,8 +2183,8 @@ describe('W2-1 recall-off: the writer through the shim (W2-D27, W2-D28)', () => 
     expect(names(dir)).toEqual([ID, LEGACY].sort());
   }, 60_000);
 
-  // [what, $REG/<id>.generation ('<dir>': a directory, which no read opens; '<link>': a link to a file holding G1, which the
-  // registry read follows, as the sweep's readSmall does; CLI and hook refuse; null: absent), extra argv, rc, reason, the file after (null: none)]
+  // [what, $REG/<id>.generation ('<dir>': a directory, which no read opens; '<link>': a link to a file holding G1, which the writer's readSmall
+  // follows, as the sweep's registry reads do (the CLI and the hook refuse one); null: absent), extra argv, rc, reason, the file after (null: none)]
   const TABLE: ReadonlyArray<readonly [string, string | null, readonly string[], number, string | undefined, string | null]> = [
     ['unreadable, no --generation', '<dir>', [], 2, 'generation-unreadable', null],
     ['unreadable, --generation G1', '<dir>', ['--generation', G1], 2, 'generation-unreadable', null],
