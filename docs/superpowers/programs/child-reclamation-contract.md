@@ -4339,7 +4339,8 @@ the spec, never this contract.
   `cwd-probe-read-once-more-answers-eacces-for-a-reaped-pid`.
 - The tail window: `reask-words-follow-the-owned-call`, `reappeared-tree-refuses` and
   `reask-re-proves-the-nested-checkouts-path` (a nested checkout's path is proven a second time in the re-ask, so a
-  checkout moved out with a link left in its parent path is refused; the race is narrowed, not closed).
+  checkout moved out with a link left in its parent path is refused; the race is narrowed, not closed; `ws-expire`
+  shares the check, and a refusal there is the resumable `worktree-remove-failed`).
 - The suites: `darwin-prefixes-take-the-identity-shims`, `audit-document-key-pins-outside-the-boundary` and
   `r77-cases-time-their-race-through-a-python3-shim`.
 - Decided by what was built: none.

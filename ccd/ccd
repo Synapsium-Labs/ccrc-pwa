@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d674cffd38c9decd3d62f1513a20da69b18c68db4947ec45598bbb9c72c24157
+# ccrc:generated 1 sha256=33fa011c202e67c5d7f9ca4a0a3094ba296703bdb0e965c0cc4cbe2599fe40e4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29891,11 +29891,14 @@ _ws_reclaim_record() {   # main path -> git's worktree record for path, read fro
   # §4.12). Identity never makes a hit, so when git's main stanza names the
   # tree only under another spelling (a bind spelling, for example) and no
   # stanza matches by string, RECLAIM_REC_MAIN is set and `hit` is not: the
-  # reader answers 1 at `(( hit )) || return 1`. The ladder then refuses, with
-  # the terminal `no-worktree-record` where `_ws_reclaim_no_record` finds
-  # every admin entry readable and none naming the tree (its detail, "has no
-  # worktree record", is false), or with the retryable `unmeasured` where an
-  # admin entry cannot be read. It never reaches its own MAIN refusal or its
+  # reader answers 1 at `(( hit )) || return 1`. The ladder then refuses. The
+  # common-directory check before its record branch can refuse first, with
+  # `containment-unproven` (what git answers for a bind spelling there is
+  # unmeasured). Past it, the refusal is the terminal `no-worktree-record`
+  # where `_ws_reclaim_no_record` finds every admin entry readable and none
+  # naming the tree (its detail, "has no worktree record", is false), or the
+  # retryable `unmeasured` where an admin entry cannot be read or names the
+  # tree. It never reaches its own MAIN refusal or its
   # `-ef` compare of the project directory, which stand behind a string hit
   # alone; `_ws_reclaim_owned` answers 2 (`worktree-remove-failed`) before it
   # reads MAIN. The shape is refused either way, and nothing grants on it.
@@ -35671,7 +35674,9 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # mount question, `_ws_reclaim_reask` asks `_ws_reclaim_owned` whole and
   # fresh, then compares the project directory, the child's tree and the
   # checkout with the identities the act recorded: the checkout's as
-  # `_ws_reclaim_nested_proven` proved it in this iteration (`cid`). Owned's
+  # `_ws_reclaim_nested_proven` proved it in this iteration (`cid`), and then
+  # proves the checkout's path a second time on the tree's fresh physical
+  # root (`reask-re-proves-the-nested-checkouts-path`). Owned's
   # proof fails `containment-refuted`; anything else fails
   # `worktree-remove-failed`; either leaves the breadcrumb and the checkout
   # standing, and both reasons are cut to one journal line

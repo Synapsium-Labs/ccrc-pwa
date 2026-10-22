@@ -1355,8 +1355,8 @@ into a pass.
 - The `unproc` clause reads "name a workdir under /proc, or one reached through a link into /proc".
 - `pending-hold-remedy-stops-then-starts`: the pending clause's remedy reads "stop and start that session (ccd stop
   <id>, then ccd start <id>), or purge its row once its session has ended", because `ccd start` answers "already
-  running" for a live session and changes nothing, and a live pane is the commonest pending case. No other remedy and
-  no refusal word changed.
+  running" for a live session and changes nothing, and a live pane is the commonest pending case. C3 changed no other
+  remedy and no refusal word (the `unfield` remedy's change is its own, below).
 - `unfield-remedy-restarts-without-a-stop`: the `unfield` clause's remedy, for a field that is not a regular file or
   cannot be read, read "remove what stands at that field and restart that session", which names no stop for a live
   pane. It reads "remove what stands at that field, then stop and start that session (ccd stop <id>, then ccd start
@@ -1373,7 +1373,9 @@ into a pass.
   window, answers 2 (`worktree-remove-failed`), and the first proof's results, which the tail reads after the removal, are
   restored on every exit. The call arguments and order of the tail are as before, and the re-ask without a checkout
   asks nothing more. This narrows the race and does not close it: the second proof is one instant, not an atomic
-  proof, and `reask-to-opendir-window` stands.
+  proof, and `reask-to-opendir-window` stands. `ws-expire` reaches the same check, because its tail is the shared one
+  and passes the checkout's path to the same re-ask. A refusal there is the same `worktree-remove-failed`, printed
+  past the breadcrumb (`crumb` true), which the server reads as a failed but resumable attempt, never a final one.
 
 **The suites.**
 - `darwin-prefixes-take-the-identity-shims`: on a Linux host, a forced-Darwin full tail now measures identities, and GNU
@@ -1551,11 +1553,13 @@ into a pass.
   names the tree only by `-ef` (a bind spelling, for example), with no stanza matching by string, sets
   `RECLAIM_REC_MAIN` and no hit.
   - The record reader answers 1, where a string hit would have answered 0.
-  - The ladder then refuses. It does so with the terminal `no-worktree-record` where `_ws_reclaim_no_record` finds every
-    admin entry readable and none naming the tree, and then its detail ("has no worktree record") is false, because git
-    does record the tree; where an admin entry cannot be read, it refuses with the retryable `unmeasured` instead. It
-    never reaches its own main-checkout refusal or its `-ef` compare of the project directory
-    (`ladder-main-checkout-ef`), which stand behind a string hit alone.
+  - The ladder then refuses. The common-directory check before its record branch can refuse first, with
+    `containment-unproven`; what git answers there for a bind spelling is unmeasured. Past it, the ladder refuses with
+    the terminal `no-worktree-record` where `_ws_reclaim_no_record` finds every admin entry readable and none naming
+    the tree, and then its detail ("has no worktree record") is false, because git does record the tree. Where an
+    admin entry cannot be read, or one names the tree, it refuses with the retryable `unmeasured` instead. It never
+    reaches its own main-checkout refusal or its `-ef` compare of the project directory (`ladder-main-checkout-ef`),
+    which stand behind a string hit alone.
   - `_ws_reclaim_owned` answers 2 (`worktree-remove-failed`), before it reads `RECLAIM_REC_MAIN`.
   - The shape is refused either way, and nothing grants on it: no token is minted and nothing is removed. No code
     changed to cure it.
