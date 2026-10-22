@@ -8659,7 +8659,7 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 
     },
   });
   type Exclude = { pilotFamilies: Array<Record<string, string>>; assignment: Array<Record<string, string>> };
-  async function source(mode: 'quiz' | 'pilot', asked: Asked[], exclude: Exclude = { pilotFamilies: [], assignment: [] }, box: W6SourceBox = sb): Promise<{ r: Sourced; out: string; storeId: string }> {
+  async function source(mode: 'quiz' | 'pilot', asked: Asked[], exclude: Exclude = { pilotFamilies: [], assignment: [] }, box: W6SourceBox = sb, prefix: 7 | 40 = 7): Promise<{ r: Sourced; out: string; storeId: string }> {
     const rs = replay.openReplayStore(box.box.home) as unknown as { storeId: string; close(): void };
     try {
       const out = replay.prepareOut(join(mkTmp('ccrc-w5a6-out-'), 'out'));
@@ -8670,7 +8670,7 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 
         mode, rs, home: box.box.home, out, writer: fakeWriter(asked), seedHex: 'ab'.repeat(32),
         exclude: { pilotFamilies: [...exclude.pilotFamilies], assignment: [{ store_id: OTHER_STORE, ccrc_id: 'claude-a-elsewhere', generation: box.gen, arm: 'control' }, ...exclude.assignment] },
         plan: mode === 'quiz' ? { target: 5, caps } : { n_fidelity: 1, n_usage: 5, caps },
-        configDirs: [], top: box.box.home,
+        configDirs: [], shaMinPrefix: prefix, top: box.box.home,
       } as never) as unknown as Sourced;
       return { r, out, storeId: rs.storeId };
     } finally {
@@ -8800,7 +8800,7 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 
         const r = await replay.sourceQuiz({
           mode: 'quiz', rs, home: qb.box.home, out, writer: through(rs.idx, asked, tamper), seedHex: 'ab'.repeat(32),
           exclude: { pilotFamilies: [], assignment: [] }, plan: { target: 5, caps: { family: 5, boundary: 3, kind_per_family: 2 } },
-          configDirs: [], top: qb.box.home,
+          configDirs: [], shaMinPrefix: 7, top: qb.box.home,
         } as never) as unknown as Sourced;
         return { r, asked };
       } finally {
@@ -8814,6 +8814,21 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 
     const lost = await run(true);
     expect(lost.r.entries).toEqual([]);
     expect(lost.r.counts.drops.writer, 'counted').toEqual({ 'writer-fact-unplaced': 1 });
+  }, 600_000);
+
+  // D-6312 (W2-D63's sampling half): at a sha_min_prefix of 40 only a 40-character sha can score correct (the gate's labelCorrect).
+  it('D-6312: at sha_min_prefix 40 a 12-character sha fact is dropped sha-short before sampling and a 40-character one is kept; CONTROL: at 7 both are kept', async () => {
+    const short = '1f2a3b4c5d6e';
+    const long = '9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b';
+    const sb2 = w6SourceBox('ccrc-w5a6-source-sha-', `git diff ${short} ${long}`);
+    const at7 = await source('quiz', [], { pilotFamilies: [], assignment: [] }, sb2, 7);
+    expect(at7.r.entries.filter((e) => e.kind === 'sha').map((e) => e.fact).sort(), 'CONTROL: at 7 both are asked').toEqual([short, long].sort());
+    expect(at7.r.counts.mined['sha-short']).toBe(0);
+    const at40 = await source('quiz', [], { pilotFamilies: [], assignment: [] }, sb2, 40);
+    expect(at40.r.entries.filter((e) => e.kind === 'sha').map((e) => e.fact), 'at 40 only the 40-character sha is asked').toEqual([long]);
+    expect(at40.r.counts.mined['sha-short'], 'the short one is counted, not hidden').toBe(1);
+    expect(at40.r.entries.map((e) => e.kind).sort(), 'the command fact is not a sha').toEqual(['command', 'sha']);
+    await expect(source('quiz', [], { pilotFamilies: [], assignment: [] }, sb2, 12 as never), 'the prefix is one of the two the gate signs').rejects.toThrow(/shaMinPrefix 12 is not one of 7, 40/);
   }, 600_000);
 
   // D-6310: a family from before generations (generation '') has no qid and no place in either walk; it is excluded and counted.
@@ -8853,7 +8868,7 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 
         return await replay.sourceQuiz({
           mode: 'quiz', rs, home: sb.box.home, out, writer: writerOf(r), seedHex: 'ab'.repeat(32),
           exclude: { pilotFamilies: [], assignment: [] }, plan: { target: 5, caps: { family: 5, boundary: 3, kind_per_family: 2 } },
-          configDirs: [], top: sb.box.home,
+          configDirs: [], shaMinPrefix: 7, top: sb.box.home,
         } as never) as unknown as Sourced;
       } finally {
         rs.close();
@@ -9029,21 +9044,21 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     code_shas: SHAS(root), release_stamp: STAMP, budget: 100_000, spend: 600,
   });
   /** pilot-source's output, as this task writes it, measured under `root`'s code. */
-  const pilot7 = (root: string): R7 => ({
+  const pilot7 = (root: string, prefix = 7): R7 => ({
     kind: r7drv.PILOT_SOURCE_KIND, v: 1, store_id: STORE_A, seed: hex('pilot seed'), n_fidelity: 5, n_usage: 5,
     families: [PILOT_FAMILY], fidelity: [{ ...PILOT_FAMILY, boundary_uuid: gen(901) }], frozen_sha256: hex('pilot frozen'), writer_model: OPUS,
-    used: { labeller: { ...r7gate.LABELLER, path_forms: [...r7gate.LABELLER.path_forms] }, sha_min_prefix: 7, writer_input: 'excerpt', baseline_files: 'v1',
+    used: { labeller: { ...r7gate.LABELLER, path_forms: [...r7gate.LABELLER.path_forms] }, sha_min_prefix: prefix, writer_input: 'excerpt', baseline_files: 'v1',
       writer_prompt_sha256: r7gate.WRITER_PROMPT_SHA256, answer_protocol_sha256: r7gate.ANSWER_PROTOCOL_SHA256 },
     code_shas: SHAS(root), release_stamp: STAMP, budget: 3_000_000, spend: 900_000, counts: {},
   });
   /** Part 1 over nodes A and B, through the driver's own buildDraft, the seed injected (W2-D19: no flag takes one).
    *  Q18 is kept cheap (sims 2, a 0.45 grid) and the floor low, so the five-question fixture quiz passes it. */
-  function draft7(root: string, home: string, over: R7 = {}, account = 'up-a', wrapper: string | null = null): R7 {
+  function draft7(root: string, home: string, over: R7 = {}, account = 'up-a', wrapper: string | null = null, prefix = 7): R7 {
     const s0 = { ...step0a7(root, home), account, wrapper_sha256: wrapper };
     return r7drv.buildDraft({
       nodes: [{ label: 'node-a', store_id: STORE_A }, { label: 'node-b', store_id: STORE_B }],
       step0a: [{ ...s0, label: 'node-a', store_id: STORE_A }, { ...s0, label: 'node-b', store_id: STORE_B }],
-      pilot: pilot7(root), account, models: { arm: ARM, writer: OPUS, judge: OPUS },
+      pilot: pilot7(root, prefix), account, models: { arm: ARM, writer: OPUS, judge: OPUS },
       gateCode: { release_tag: STAMP, files: SHAS(root) }, seedHex: SEED, nowMs: T0 - 30 * DAY,
       overrides: { q18_settings: { sims: 2, grid_step: 0.45 }, quiz: { halt_floor: { questions: 4, families: 2 } }, ...over }, supersedes: null,
     }) as R7;
@@ -9101,8 +9116,8 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
   /** Everything open --finalize reads, built through the driver's own builders (part 1, the census and verify outputs, the
    *  assembled census and its assignment, two nodes' sourced lists, the frozen list and its meta, the power output, a
    *  pilot result), and the part 2 buildFinal makes from them. */
-  function chain7(home: string, draftOver: R7 = {}, account = 'up-a', wrapper: string | null = null): R7 {
-    const draft = draft7(R7_REPO, home, draftOver, account, wrapper);
+  function chain7(home: string, draftOver: R7 = {}, account = 'up-a', wrapper: string | null = null, prefix = 7): R7 {
+    const draft = draft7(R7_REPO, home, draftOver, account, wrapper, prefix);
     const d = save7(draft, 'part1.json');
     const cA = save7(census7(STORE_A, FAMS_A), 'census-a.json');
     const cB = save7(census7(STORE_B, FAMS_B), 'census-b.json');
@@ -9646,6 +9661,8 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect(calls).toHaveLength(1);
       r7expect([calls[0]!.mode, calls[0]!.seedHex, calls[0]!.rs.storeId, Object.hasOwn(calls[0]!, 'families'), calls[0]!.writer.launch.accountId])
         .toEqual(['pilot', PILOT_SEED, STORE_A, false, 'up-a']);
+      r7expect(calls[0]!.shaMinPrefix, 'D-6312: the prefix is sourceQuiz\'s own argument, the flag\'s default, and not in the plan').toBe(7);
+      r7expect(Object.hasOwn(calls[0]!.plan, 'shaMinPrefix') || Object.hasOwn(calls[0]!.plan, 'sha_min_prefix')).toBe(false);
       r7expect(calls[0]!.plan).toEqual({ n_fidelity: 5, n_usage: 5, caps: { family: 5, boundary: 3, kind_per_family: 2 } });
       r7expect(calls[0]!.exclude).toEqual({ pilotFamilies: [], assignment: [] });
       r7expect(printRuns(home), 'the writer handle preflighted with --version only: no writer spawn').toEqual([]);
@@ -9661,6 +9678,34 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const rec = r7drv.buildDraft({ nodes: [{ label: 'node-a', store_id: STORE_A }], step0a: [{ ...s, label: 'node-a', store_id: STORE_A }], pilot: o,
         account: 'up-a', models: { arm: ARM, writer: OPUS, judge: OPUS }, gateCode: { release_tag: STAMP, files: SHAS(R7_REPO) }, seedHex: SEED, nowMs: T0 });
       r7expect(r7gate.validateOpenRecord(rec, { draft: null, predecessor: null, frozen: null })).toEqual({ ok: true });
+    });
+
+    r7it('D-6312: pilot-source hands --sha-min-prefix to sourceQuiz as its own argument and records it in the output', async () => {
+      const home = home7(STORE_A);
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const out = outDir();
+      const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS, '--sha-min-prefix', '40', ...inp('step0a', s0)]) as R7;
+      const calls: R7[] = [];
+      const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+        { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED } as never));
+      r7expect(r.refusal).toBeNull();
+      r7expect(calls[0]!.shaMinPrefix).toBe(40);
+      r7expect(JSON.parse(r7fs.readFileSync(r7path.join(out, r7drv.PILOT_SOURCE_FILE), 'utf8')).used.sha_min_prefix).toBe(40);
+    });
+
+    r7it('D-6312: quiz-source hands part 1\'s labeller.sha_min_prefix to sourceQuiz as its own argument: 40 when the pilot used 40, 7 otherwise', async () => {
+      const prefixOf = async (prefix: number): Promise<unknown> => {
+        const home = home7(STORE_A);
+        const c = chain7(home, {}, 'up-a', null, prefix);
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, outDir()) as never, envOf(home) as never,
+          { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }) } as never));
+        r7expect(r.refusal).toBeNull();
+        r7expect(c.draft.labeller.sha_min_prefix, 'CONTROL: the record carries it').toBe(prefix);
+        return calls[0]!.shaMinPrefix;
+      };
+      r7expect(await prefixOf(40)).toBe(40);
+      r7expect(await prefixOf(7), 'CONTROL').toBe(7);
     });
 
     r7it('pilot-source refuses code-changed against step 0a, and an account other than step 0a\'s, before any writer spawn', async () => {
@@ -9714,6 +9759,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect((input.exclude.assignment as R7[]).filter((a) => a.arm === 'control').map((a) => a.ccrc_id)).toEqual(r7expect.arrayContaining(['a-c1', 'b-c1']));
       r7expect([input.mode, input.seedHex, input.rs.storeId, input.writer.launch.accountId]).toEqual(['quiz', SEED, STORE_A, 'up-a']);
       r7expect(input.plan).toEqual(c.draft.quiz);
+      r7expect(input.shaMinPrefix, 'D-6312: part 1\'s labeller.sha_min_prefix, its own argument and not inside the signed plan').toBe(c.draft.labeller.sha_min_prefix);
       // R10 (C1): the census's kept list feeds the assignment only; sourceQuiz walks the store's own admitted families.
       r7expect(Object.hasOwn(input, 'families'), 'no family list: never assembled.kept (W2-D71, W2-D73)').toBe(false);
       r7expect((c.assembled.kept as R7[]).length, 'CONTROL: the census did make a kept list, which the assignment read').toBeGreaterThan(0);

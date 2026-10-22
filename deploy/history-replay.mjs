@@ -2928,7 +2928,7 @@ export const FACT_DROP_REASONS = Object.freeze([
   'path-no-cwd', 'path-tilde', 'path-config-dir', 'command-recall', 'command-length', 'error-no-line', 'error-length',
   'duplicate', 'redact-fact', 'redact-leaf', 'result-unpaired', 'producer-other', 'producer-unknown', 'baseline-hit',
   'unanswerable', 'unanswerable-untimed',
-  'writer-input-over-cap', 'writer-input-unrenderable', 'writer-fact-unplaced',
+  'writer-input-over-cap', 'writer-input-unrenderable', 'writer-fact-unplaced', 'sha-short',
 ]);
 /** The span-row provenances mining reads. Operator, summary, harness, ccrc-injected and recall-echo rows never are. */
 const MINED_PROVENANCE = Object.freeze(['model', 'tool']);
@@ -4558,11 +4558,13 @@ function sourceStmts(db) {
  *    writer: { ask: (section: string, item: object) => Promise<WriterAnswer> }, seedHex: string,
  *    exclude: { pilotFamilies: Array<{store_id: string, ccrc_id: string, generation: string}>, assignment: Array<object> },
  *    plan: { target?: number, n_fidelity?: number, n_usage?: number, caps: { family: number, boundary: number, kind_per_family: number } },
- *    configDirs: readonly string[], top?: string }} input
+ *    configDirs: readonly string[], shaMinPrefix: 7 | 40, top?: string }} input
  *  @returns {Promise<{ entries: Array<FrozenEntry & { rank: [string | number, number] }>, fidelity: Array<object>, counts: object,
  *    asof_same_ms_hits: Record<string, unknown> }>} */
-export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude, plan, configDirs, top }) {
+export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude, plan, configDirs, shaMinPrefix, top }) {
   if (!WRITER_SECTIONS.includes(mode)) throw new TypeError(`sourceQuiz: mode ${JSON.stringify(mode)} is not one of ${WRITER_SECTIONS.join(', ')}`);
+  // D-6312: the labeller's sha_min_prefix is this function's own argument, never a field of the signed plan.
+  if (!SHA_MIN_PREFIXES.includes(shaMinPrefix)) throw new TypeError(`sourceQuiz: shaMinPrefix ${JSON.stringify(shaMinPrefix)} is not one of ${SHA_MIN_PREFIXES.join(', ')}`);
   const storeId = rs.storeId;
   const admission = admitStoreBoundaries(rs);
   const local = new Map();
@@ -4596,7 +4598,14 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
       if (m.state !== 'mined') { discard(m.why); continue; }
       for (const [w, n] of Object.entries(m.counts)) counts.mined[w] += n;
       byBoundary.set(b.uuid, { row: b, spanEntryIds: span.rows.map((r) => Number(r.entry_id)) });
-      mined.push(m);
+      // D-6312 (W2-D63): at a sha_min_prefix of 40 only a 40-character sha can score correct, so a shorter one is dropped
+      // here, counted, before deduplication, sampling and the caps: the quotas count eligible facts only.
+      const eligible = m.candidates.filter((c) => {
+        if (c.kind !== 'sha' || c.fact.length >= shaMinPrefix) return true;
+        noteDrop(counts.mined, 'sha-short');
+        return false;
+      });
+      mined.push({ ...m, candidates: eligible });
     }
     return dedupeFamily(mined, counts.mined).map((c) => ({ ...c, id: qidOf(c) }));
   };
@@ -5405,6 +5414,7 @@ export async function pilotSourceCommand(flags, driverEnv, deps = { sourceQuiz, 
       const sourced = await deps.sourceQuiz({
         mode: 'pilot', rs, home, out, writer, seedHex, exclude: { pilotFamilies: [], assignment: [] },
         plan: { n_fidelity: nFidelity, n_usage: nUsage, caps: pilotCaps() }, configDirs: rosterConfigDirs(readRoster(home).roster, home),
+        shaMinPrefix,
       });
       warnFailedRuns(sourced.counts);
       const frozenSha = writeFrozenList(out, 'pilot', frozenListText('pilot',
@@ -5464,6 +5474,7 @@ export async function quizSourceCommand(flags, driverEnv, deps = { sourceQuiz })
         mode: 'quiz', rs, home, out, writer, seedHex: rec.record.bootstrap.seed,
         exclude: { pilotFamilies: copyJson(rec.record.pilot.families), assignment: copyJson(assignment.list) },
         plan: copyJson(rec.record.quiz), configDirs: rosterConfigDirs(readRoster(home).roster, home),
+        shaMinPrefix: rec.record.labeller.sha_min_prefix,
       });
       warnFailedRuns(sourced.counts);
       const inputs = assembled.nodes.map((n) => ({ store_id: n.store_id, census_sha256: n.census_sha256, verify_sha256: n.verify_sha256 }));
