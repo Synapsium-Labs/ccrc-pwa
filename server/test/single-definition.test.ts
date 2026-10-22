@@ -6489,7 +6489,8 @@ describe("one 'tmux unreachable' sentence (design-system wave)", () => {
 // D-5089 (plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 1). APPENDED at the very end, for the reason
 // the note above the 'tmux unreachable' block states: `session-hook.test.ts` cites this file by line. The sheet tells
 // AskUserQuestion's review screen by its last line ("Ready to submit your answers?") and its two rows, and reads its
-// summary up to that line (`pwa/src/session/askLive.ts`'s `isAskReview` and `reviewSummary`). Those are screen facts,
+// summary up to that line (`pwa/src/session/askLive.ts`'s `isAskReview` and `reviewSummary`; D-6325 deleted the
+// summary reader, and the sheet's review prints Claude's headers instead). Those are screen facts,
 // so each is ONE rule in `shared/ask-menu.ts` beside the server half's four, and the sheet imports them. A second
 // spelling that drifts would let one reader call a screen the review that the other does not. Code lines only
 // (`stallCode`): prose names the screen in quotes. KNOWN WIDTH: `Cancel` is common copy and is not scanned, and nor is
@@ -6511,17 +6512,21 @@ describe('the review screen\'s rows and last line are spelled once, in shared/as
     expect(holders(READY)).toEqual(['shared/ask-menu.ts']);
   });
 
-  it('the Submit answers row is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
-    expect(holders(SUBMIT)).toEqual(['shared/ask-menu.ts']);
+  it('the Submit answers row is spelled on a code line in shared/ask-menu.ts, and the sheet\'s fixed label beside it and nowhere else', () => {
+    // D-6325: the pane's row is still told by ONE rule (`REVIEW_SUBMIT_ROW_RE`). The review the sheet draws no longer
+    // prints the pane's label for it: its word is the sheet's own, `SUBMIT_ANSWERS` in `askLive.ts` (which the
+    // transcript's Answer control reads too), so that one pwa file spells it, as a label to show and not a rule to match.
+    expect(holders(SUBMIT)).toEqual(['pwa/src/session/askLive.ts', 'shared/ask-menu.ts']);
   });
 
   it('the sheet reads the L0 rules: askLive.ts imports and tests each review rule', () => {
     const live = stallCode(path.join(ccrcRoot, 'pwa/src/session/askLive.ts'));
     const fromL0 = (name: string): RegExp =>
       new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)+shared/ask-menu(?:\\.js)?'`);
+    // D-6325: `reviewSummary`, the one reader of the ready line and the heading in the sheet, is deleted (the review's
+    // summary is Claude's headers now), so askLive.ts reads the review only through `reviewRows`, below.
     for (const name of ['REVIEW_READY_RE', 'REVIEW_HEADING_RE']) {
-      expect(live, `askLive.ts does not import ${name} from L0`).toMatch(fromL0(name));
-      expect(live, `askLive.ts does not test ${name}`).toMatch(new RegExp(`\\b${name}\\.test\\(`));
+      expect(live, `askLive.ts spells ${name} again`).not.toMatch(new RegExp(`\\b${name}\\b`));
     }
     // Decision `ask-review-lenient-arm`: the two rows are told by ONE L0 reader, `reviewRows`, which the sheet and the
     // server's frame log both call, so neither spells the row rules again. It tests each of them; askLive imports it.
