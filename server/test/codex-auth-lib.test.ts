@@ -1702,11 +1702,12 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
     });
   });
 
-  it('a config-error met on the unsaved record\'s own refresh bars every later call, the unsaved reading included', async () => {
+  // The same two failed commits, the second refresh refused as invalid_client; the disk then recovers, so the record
+  // (which holds the only live refresh token: the file's was spent by the first refresh) must reach the disk.
+  it('a config-error met on the unsaved record\'s own refresh keeps the record: the recovered disk writes it, the config-error stands, and no request follows', async () => {
     const home = mkTmp('codex-auth-unsaved-client-');
     const dir = laneDir(home);
     const t = plantBackendCredential(dir, { expiresIn: -120 });
-    const old = readFileSync(credPath(dir), 'utf8');
     const a1 = issuedAnswer();
     await withAuth({ token: [{ status: 200, body: a1 }, { status: 400, body: { error: 'invalid_client' } }, { status: 200, body: issuedAnswer() }] }, async (srv) => {
       const forced = { op: 'ensure_fresh', withinS: 100000 };
@@ -1714,9 +1715,66 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
       expect(r.lines[0], r.stderr).toMatchObject({ credential: 'present', access_token: (a1.access_token as string).length });
       expect(r.lines.slice(1).map((l) => l.error), r.stderr).toEqual(['config-error', 'config-error', 'config-error']);
       expect(srv.requests, 'a config-error is never retried under the same config').toHaveLength(2);
-      expect(readFileSync(credPath(dir), 'utf8')).toBe(old);
-      expect(statusOf(dir)).toMatchObject({ state: 'config-error', lastErrorCode: 'invalid_client' });
+      expect(fileRecord(dir), 'the recovered disk holds the record').toMatchObject({ access_token: a1.access_token, refresh_token: a1.refresh_token });
+      expect(statusOf(dir)).toMatchObject({ state: 'config-error', lastErrorCode: 'invalid_client', unsaved: false });
+      expect(statusIdentity(statusText(dir)), 'the config-error binds the written file').toEqual(fileIdentity(dir));
+      expect(r.stderr, 'the record is never dropped').not.toContain('dropped an unsaved credential');
       expectStatusClean(dir, [...tokensOf(t), ...tokensOf(a1)]);
+    });
+  });
+
+  it('while the disk stays full, a config-error bars the unsaved record\'s refresh, keeps the record, and still serves it unexpired', async () => {
+    const home = mkTmp('codex-auth-unsaved-client-full-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const old = readFileSync(credPath(dir), 'utf8');
+    const a1 = issuedAnswer();
+    await withAuth({ token: [{ status: 200, body: a1 }, { status: 400, body: { error: 'invalid_client' } }, { status: 200, body: issuedAnswer() }] }, async (srv) => {
+      const forced = { op: 'ensure_fresh', withinS: 100000 };
+      const r = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh' }, forced, forced, forced, { op: 'ensure_fresh' }], { faults: ['enospc-writes:50'] });
+      expect(r.lines.slice(1, 4).map((l) => l.error), r.stderr).toEqual(['config-error', 'config-error', 'config-error']);
+      expect(r.lines[4], 'the unexpired record is served past the config-error').toMatchObject({ credential: 'present', access_token: (a1.access_token as string).length });
+      expect(srv.requests, 'a config-error is never retried under the same config').toHaveLength(2);
+      expect(readFileSync(credPath(dir), 'utf8'), 'the disk never took the record').toBe(old);
+      expect(statusOf(dir)).toMatchObject({ state: 'config-error', lastErrorCode: 'invalid_client', unsaved: true });
+      expect(r.stderr, 'the record is never dropped').not.toContain('dropped an unsaved credential');
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(a1)]);
+    });
+  });
+
+  // Another process (C, holding no record) met a needs-signin on the file the unsaved record replaces. This process's
+  // own refresh of the record then fails transiently, or succeeds but cannot commit: neither may clear C's bar.
+  it.each([
+    ['a transient failure', (): Record<string, unknown> => ({ status: 503, body: {} }), 'refresh-failed'],
+    ['a refresh that cannot commit', (): Record<string, unknown> => ({ status: 200, body: issuedAnswer() }), undefined],
+  ] as Array<[string, () => Record<string, unknown>, string | undefined]>)('a needs-signin measured on the replaced file stands when the unsaved record meets %s, so a process with no record sends no request', async (_label, answerOf, error) => {
+    const home = mkTmp('codex-auth-unsaved-standing-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const a1 = issuedAnswer();
+    const second = answerOf();
+    const barrier = join(home, 'checked');
+    let planted = '';
+    await withAuth({ token: [{ status: 200, body: a1 }, second as never, { status: 400, body: { error: 'invalid_grant' } }] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base, [
+        { op: 'ensure_fresh' }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'ensure_fresh', withinS: 100000 },
+      ], { faults: ['enospc-writes:50'] }, {
+        onLine: (l) => {
+          if (l.op !== 'ensure_fresh' || existsSync(barrier)) return;
+          planted = statusText(dir).replace('"state": "ok"', '"state": "needs-signin"')
+            .replace('"lastErrorCode": null', '"lastErrorCode": "refresh_token_reused"');
+          writeFileSync(statusPath(dir), planted);
+          writeFileSync(barrier, '');
+        },
+      });
+      expect(planted, 'the planted status is a needs-signin').toContain('"state": "needs-signin"');
+      expect(r.lines[2].error, r.stdout + r.stderr).toBe(error);
+      expect(srv.requests, 'the record\'s refresh was sent').toHaveLength(2);
+      expect(statusText(dir), 'the needs-signin stands').toBe(planted);
+      const c = await runFresh(home, dir, srv.base);
+      expect(c.lines[0].error, c.stdout + c.stderr).toBe('needs-signin');
+      expect(srv.requests, 'C never sends the dead refresh token').toHaveLength(2);
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(a1), ...tokensOf((second.body ?? {}) as Record<string, unknown>)]);
     });
   });
 
@@ -2046,17 +2104,22 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
   it.each([
     ['a 200', (): Record<string, unknown> => ({ status: 200, body: issuedAnswer() }), 'ok'],
     ['a 400', (): Record<string, unknown> => ({ status: 400, body: { error: 'invalid_grant' } }), 'needs-signin'],
-  ] as Array<[string, () => Record<string, unknown>, string]>)('a request id that echoes the submitted refresh token is never stored (%s)', async (_label, answerOf, state) => {
+    ['a 302', (elsewhere: string): Record<string, unknown> => ({ status: 302, headers: { location: elsewhere + AUTH_ROUTES.token } }), 'ok'],
+  ] as Array<[string, (elsewhere: string) => Record<string, unknown>, string]>)('a request id that echoes the submitted refresh token is never stored (%s)', async (_label, answerOf, state) => {
     const home = mkTmp('codex-auth-echo-rid-');
     const dir = laneDir(home);
     const t = plantBackendCredential(dir, { expiresIn: -120, refresh: `rtok-Fixture-${mixedCase(randomBytes(16).toString('hex'))}` });
-    const a = answerOf();
-    await withAuth({ token: [{ ...a, headers: { 'x-request-id': t.refresh } } as never] }, async (srv) => {
-      const r = await runFresh(home, dir, srv.base);
-      expect(srv.requests).toHaveLength(1);
-      expect(statusOf(dir), r.stdout + r.stderr).toMatchObject({ state, lastRequestId: null });
-      expectNowhere(r, dir, tokensOf(t));
-      expectStatusClean(dir, [...tokensOf(t), ...tokensOf((a.body ?? {}) as Record<string, unknown>)]);
+    await withAuth({ token: [{ status: 200, body: issuedAnswer() }] }, async (elsewhere) => {
+      const a = answerOf(elsewhere.base);
+      const headers = { ...((a.headers ?? {}) as Record<string, string>), 'x-request-id': t.refresh };
+      await withAuth({ token: [{ ...a, headers } as never] }, async (srv) => {
+        const r = await runFresh(home, dir, srv.base);
+        expect(srv.requests).toHaveLength(1);
+        expect(elsewhere.requests, 'a Location is never fetched').toHaveLength(0);
+        expect(statusOf(dir), r.stdout + r.stderr).toMatchObject({ state, lastRequestId: null });
+        expectNowhere(r, dir, tokensOf(t));
+        expectStatusClean(dir, [...tokensOf(t), ...tokensOf((a.body ?? {}) as Record<string, unknown>)]);
+      });
     });
   });
 
