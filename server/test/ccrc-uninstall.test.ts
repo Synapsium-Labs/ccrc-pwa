@@ -985,7 +985,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     }
   });
 
-  // The GPT lane's FOUR placed executables (`plantInstalledBox` plants them),
+  // The GPT lane's FIVE placed executables (`plantInstalledBox` plants them),
   // and never a bare `ccgpt` — on a live fleet box that name is another
   // repository's launcher (D-3478). Another repository's
   // `ccgpt-usage@.{service,timer}` pair is the other half of this case since
@@ -995,7 +995,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
   // them would delete a live unit ccrc never wrote. They must survive byte for
   // byte, their enabled instance's wants link too, and no systemctl verb may
   // name them. `itLinux`, as every other systemd-argv assertion in this file.
-  itLinux('uninstall removes the four GPT-lane executables and ccrc\'s own usage pair and instance, and leaves a ccgpt-usage@ pair and instance it never placed alone (Plan 3a Task 7)', () => {
+  itLinux('uninstall removes the five GPT-lane executables and ccrc\'s own usage pair and instance, and leaves a ccgpt-usage@ pair and instance it never placed alone (Plan 3a Task 7)', () => {
     const home = mkTmp('ccrc-uninst-ccgpt-');
     plantInstalledBox(home);
     const bin = join(home, '.local', 'bin');

@@ -15377,11 +15377,12 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   local lane_bins="" lane_note=" (no GPT-lane executables: a server box converges nothing per account)"
   local hist_bin=""
   if [ "$INST_ROLE" != server ]; then
+    _inst_atomic "$tree/ccd/ccgpt-auth.py"   "$bin/ccgpt-auth.py"   755
     _inst_atomic "$tree/ccd/ccgpt-proxy.py"  "$bin/ccgpt-proxy.py"  755
     _inst_atomic "$tree/ccd/ccgpt-usage.py"  "$bin/ccgpt-usage.py"  755
     _inst_atomic "$tree/ccd/ccgpt-runtime"   "$bin/ccgpt-runtime"   755
     _inst_atomic "$tree/ccd/ccrc-codex"      "$bin/ccrc-codex"      755
-    lane_bins=", ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex" lane_note=""
+    lane_bins=", ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex" lane_note=""
   fi
   # `ccd-cap-scopes` FINDS UNCAPPED tmux pane CGROUP SCOPES and caps them.
   # macOS has neither cgroups nor scopes, and `_inst_units`' Darwin arm
@@ -25201,11 +25202,11 @@ _uninst_tree_bins() {
   # prevent) and the
   # usage sweep's PAIR — `ccd-usage-sweep` and its Python engine
   # `ccd-usage-sweep.py`, which `_inst_bins` installs as two files and which
-  # must therefore be removed as two. The GPT lane's four placed executables
+  # must therefore be removed as two. The GPT lane's five placed executables
   # follow the same rule: `ccgpt-proxy.py` and `ccgpt-usage.py` (Plan 2b-1),
-  # and the runtime builder `ccgpt-runtime` and the launcher `ccrc-codex`
-  # (Plan 2b-2, which added them here in the commit that placed them).
-  # `_inst_bins` places all four on both platform arms and on every role but
+  # the runtime builder `ccgpt-runtime` and the launcher `ccrc-codex` (Plan 2b-2),
+  # and the auth library `ccgpt-auth.py` (codex bridge Stage 1), each added here in the commit that placed it.
+  # `_inst_bins` places all five on both platform arms and on every role but
   # server, so this census removes them on every platform and every role — on
   # a server box that is a no-op, never an error. NOT `ccgpt`, and never: a box
   # may still carry that name as another repository's launcher (the fleet box's
@@ -25245,7 +25246,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-tool-adj" \
     "$HOME/.local/bin/ccd-history-sweep" \
     "$HOME/.local/bin/ccd-update-sync" \
-    "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
+    "$HOME/.local/bin/ccgpt-auth.py" "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
     "$HOME/.local/bin/ccgpt-runtime" "$HOME/.local/bin/ccrc-codex" \
     "$HOME/.local/bin/ccrc-api" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
@@ -25255,7 +25256,7 @@ _uninst_tree_bins() {
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" \
     || _ccrc_die "removing ccd's body from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the

@@ -120,7 +120,7 @@ if (/['\n]/.test(DOCS_PROBE + DOCS_READY_LINE)) {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 
-/** The GPT lane's four as `_inst_bins`' closing line names them — FLANKED, so
+/** The GPT lane's five as `_inst_bins`' closing line names them — FLANKED, so
  *  a longer sibling containing one never satisfies it — derived from the one
  *  test-side list rather than typed again (final review F4). */
 const LANE_BINS_IN_LINE = `(?<![\\w-])${GPT_LANE_BINS.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(', ')}(?![\\w-])`;
@@ -1493,7 +1493,7 @@ describe('ccrc install: the fixture tree', () => {
     expect(read(join(REPO, 'deploy', 'accounts.default.json'))).toBe(DEFAULT_SEED);
   });
 
-  it('the fixture tree carries the four GPT-lane executables the repository ships, and no `ccgpt`', () => {
+  it('the fixture tree carries the five GPT-lane executables the repository ships, and no `ccgpt`', () => {
     // Plan 2b-2 wrote `ccgpt-runtime` and the launcher `ccrc-codex` unplaced,
     // because a file may land before its install line but never after it.
     // Both then joined `_inst_bins` and this fixture in one commit, so all
@@ -1512,7 +1512,7 @@ describe('ccrc install: the fixture tree', () => {
       const p = join(root, rel);
       expect(existsSync(p), `${rel} missing from the fixture tree`).toBe(true);
       expect(readFileSync(p), `${rel} is not the repository's bytes`).toEqual(readFileSync(join(REPO, rel)));
-      // 0o111 — all four are placed 755 by `_inst_bins`, and copied at the repo's mode.
+      // 0o111 — all five are placed 755 by `_inst_bins`, and copied at the repo's mode.
       expect(statSync(p).mode & 0o111, `${rel} is not executable`).toBeGreaterThan(0);
     }
     expect(existsSync(join(REPO, 'ccd', 'ccgpt')),
@@ -1524,7 +1524,7 @@ describe('ccrc install: the fixture tree', () => {
     // The ONE test-side list the install and uninstall suites share. The
     // product's two spellings of it, both inside the `!= server` gate: the
     // `_inst_atomic` calls, and the `lane_bins=` literal the closing line
-    // carries. A fifth executable, a rename or a new order in either reds
+    // carries. A sixth executable, a rename or a new order in either reds
     // here, before any case written from the constant can drift.
     const src = read(join(REPO, 'ccd', 'ccrc'));
     const fn = /^_inst_bins\(\) \{[^\n]*\n[\s\S]*?\n\}\n/m.exec(src)?.[0] ?? '';
@@ -2168,7 +2168,7 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
-  it('places the four GPT-lane executables on PATH, 755 — both platform arms', () => {
+  it('places the five GPT-lane executables on PATH, 755 — both platform arms', () => {
     // Unlike the three darwin-gated cases above, none of these is a timer-only
     // tool reserved to the systemd arm. `ccrc-codex` is the launcher every
     // generated Codex wrapper execs and `ccgpt-runtime` builds the runtime its
@@ -2193,7 +2193,7 @@ describe('ccrc install: the executables and files it installs', () => {
     }
   });
 
-  itLinux('the DARWIN arm of _inst_bins, forced on Linux (OSTYPE=darwin23): the four GPT-lane executables on both and fleet, none on server', () => {
+  itLinux('the DARWIN arm of _inst_bins, forced on Linux (OSTYPE=darwin23): the five GPT-lane executables on both and fleet, none on server', () => {
     // Final review F-8 (DAR-1): the two-arm placement and the Darwin closing
     // line were pinned only by `itDarwin`/`process.platform` branches, and no
     // CI leg runs those. `ccd/ccrc` takes its arm from `$OSTYPE` first
@@ -2217,7 +2217,7 @@ describe('ccrc install: the executables and files it installs', () => {
       expect(r.stdout, `--role ${role}: the Darwin arm was not taken\n${r.stderr}`)
         .toMatch(/^install: units: .* in \$HOME\/Library\/LaunchAgents \(launchd\)$/m);
       const lane: string[] = role === 'server' ? [] : [...GPT_LANE_BINS];
-      // wave 17 (D-5313): `ccrc-api` is on the Darwin arm too, off server only, like the lane's four.
+      // wave 17 (D-5313): `ccrc-api` is on the Darwin arm too, off server only, like the lane's five.
       const api: string[] = role === 'server' ? [] : ['ccrc-api'];
       const bins = readdirSync(join(home, '.local', 'bin'))
         .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify').sort();
@@ -6208,9 +6208,9 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=fleet$/m);
   });
 
-  it('places the four GPT-lane executables, and the closing line names them — the role a lane runs under', async () => {
+  it('places the five GPT-lane executables, and the closing line names them — the role a lane runs under', async () => {
     // Final review F-2 (spec §11): `_inst_bins` gates them `!= server`, on
-    // both platform arms, so a fleet box gets all four. The server-role case
+    // both platform arms, so a fleet box gets all five. The server-role case
     // in the next describe pins the other side of that gate.
     const { home, r } = await fleet();
     for (const name of GPT_LANE_BINS) {
