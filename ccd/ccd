@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=049f559220ab90c1a7bf92b0db718b9d72d39ae7556c4dea6b39eddd6e3b3796
+# ccrc:generated 1 sha256=83bcc5a762bb82a88ab73bc53829eb141fa1f4736542f89a617234b301691772
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24121,7 +24121,9 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
 # a writer that fails still leaves the second `cd` and the `exec` to run,
 # and for an absolute workdir (the only form `cmd_start` and ws-add store)
 # that `cd` enters the same directory, so the transcript path does not
-# move. A relative one resolves against the first `cd`, so its pane execs
+# move, unless a link in the workdir is re-pointed between the two `cd`s (a
+# window of about 7 ms): the field then names the first directory entered
+# (`repointed-alias-for-legacy-rows-until-respawn`). A relative one resolves against the first `cd`, so its pane execs
 # nothing, or execs elsewhere (`relative-workdir-second-cd-does-not-enter`).
 # A failed first `cd` skips the writer and leaves the parent's `pending`; the
 # `exec` runs exactly when the second `cd` succeeds, so a `cd` that fails
@@ -30253,9 +30255,12 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # system that keeps none) compares device and inode alone (`_ws_ident_eq`);
   # a birth time that could not be read leaves rule (a) or (d) unasked, and
   # that holds. So a row with a valid field is placed where it entered, the
-  # re-pointed alias the projection paragraph above names included; a LEGACY
-  # row keeps that residual until a spawn records its field (path-identity
-  # spec §4.4).
+  # re-pointed alias the projection paragraph above names included, but for
+  # one window: a link re-pointed between the launch command's two `cd`s, and
+  # pointed back, leaves the field naming the first directory entered while
+  # the process lives in the second (`repointed-alias-for-legacy-rows-until-respawn`).
+  # A LEGACY row keeps that residual until a spawn records its field
+  # (path-identity spec §4.4).
   # NO FIELD RELEASES A ROW. A gone row is released only by the git-record and
   # breadcrumb arms (`_ws_reclaim_recorded`), as before: a recorded path
   # outside the child is negative evidence, never a licence, so a blank admin
@@ -33732,8 +33737,9 @@ _ws_reclaim_reask() {   # id workdir main wdid mainid [cpath cid] -> 0 nothing r
   #   Each re-ask's walk is bounded
   #   (`WS_RECLAIM_WALK_S`), but its git reads are not
   #   (`rows-rung-git-reads-unbounded`, and owned's own worktree list, as
-  #   before). An act makes two re-asks per standing tree, so together they can
-  #   outrun the runner's act row. A kill there lands at a step the breadcrumb
+  #   before). An act makes two re-asks per standing tree, each site also runs a
+  #   cwd walk before its re-ask and the post-kill wait runs more, so together
+  #   they can outrun the runner's act row. A kill there lands at a step the breadcrumb
   #   resumes, and the next attempt re-proves from its start
   #   (`tail-reasks-can-outrun-the-act-row`).
   local id="$1" wd="$2" main="$3" wdid="$4" mainid="$5" cpath="${6-}" cid="${7-}" rc
@@ -34142,8 +34148,11 @@ _ws_cwd_users() {   # dir [say] -> 0 no process has its working directory at dir
   # - THE IDENTITY ARM (Linux): the directory the cwd link names is opened (O_PATH, which follows the link as the
   #   kernel resolves it) and its chain of `..` walked to the root, each step's st_dev and st_ino compared with the
   #   tree's, read by lstat (a link leaf matches nothing here, as it matches nothing by string). It sees a process
-  #   that entered through another mount or an alias of the tree, whose string names no part of it. Identities
-  #   read in one walk compare dev:ino alone: one inode is one directory at one instant.
+  #   that entered through an alias of the tree, or through a mount of the tree itself, whose string names no part of
+  #   it. A bind whose source lies strictly inside the tree is NOT reached: a cwd on it climbs its own mount's chain,
+  #   which never meets the tree. In ccd's own namespace the rows rung's mount hold refuses the child while such a
+  #   bind stands, so nothing is removed. Identities read in one walk compare dev:ino alone: one inode is one
+  #   directory at one instant.
   # A PROCESS IS SKIPPED ONLY ON PROOF IT VANISHED, or on the one ruled exception, as the expiry probe always
   # required. Vanished: its cwd link or its stat file answers ENOENT/ESRCH; a cwd link that read but whose open
   # then answers ENOENT is gone when its stat file answers so too (no task bears that pid any more: a process gone
@@ -34169,12 +34178,16 @@ _ws_cwd_users() {   # dir [say] -> 0 no process has its working directory at dir
   # unborne, and a group leader is released only once its group is empty, de_thread's release of the old leader
   # excepted). EPERM, any other errno, or a stat file that reads, is unmeasured: a live group that turned
   # non-dumpable answers EACCES there too, and its stat file reads. That proof holds on a /proc mounted without
-  # hidepid=invisible (2) or hidepid=ptraceable (4), in the probe's own pid namespace; under either, a task this
-  # uid may not ptrace answers ENOENT at every path and falls inside NOT SEEN, below. These kernel facts are
+  # hidepid=invisible (2) or hidepid=ptraceable (4), in the probe's own pid namespace. Under either, a task this
+  # uid may not ptrace is hidden and its paths answer ENOENT; under hidepid=noaccess (1), or an LSM denial, they
+  # answer EPERM. Both fall inside NOT SEEN, below, at the first read; an EPERM at the per-pass read, or in a
+  # thread's stat file, is unmeasured. These kernel facts are
   # v6.8's, read by function: do_exit (exit_files, then exit_fs), de_thread (exchange_tids, then release_task of
   # the old leader), release_task and exit_notify (a leader released last), proc_pid_readlink and
-  # proc_fd_access_allowed. The exception: a cwd link that answers EACCES at its first read (another uid's
-  # process, or a SAME-user NON-DUMPABLE one: ssh-agent, a setuid or setgid exec) is NOT SEEN, the stated limit,
+  # proc_fd_access_allowed. The exception: a cwd link that answers EACCES or EPERM at its first read (python's
+  # PermissionError: another uid's process, or a SAME-user one the kernel will not let this process follow: a
+  # NON-DUMPABLE one such as ssh-agent, a setuid or setgid exec, or a process that turned non-dumpable; an exec of an
+  # unreadable binary; an LSM denial) is NOT SEEN, the stated limit,
   # because refusing on every unreadable link would refuse every removal for ever. Every
   # OTHER failure is UNMEASURED, never a skip: a `..` that cannot be walked (a directory on the chain with no
   # search permission), an open that answers anything but ENOENT, a stat file that does not parse. So one
@@ -34192,6 +34205,8 @@ _ws_cwd_users() {   # dir [say] -> 0 no process has its working directory at dir
   # no finite schedule of reads closes it (cwd-probe-pid-handoff-between-reads). And one listing of `task/` that
   # spans more than one getdents buffer while threads exit can skip a tid, which the passes narrow and do not
   # close (cwd-probe-task-listing-can-skip-a-tid).
+  # NEVER ASKED AT ALL, as on main and in `_ws_path_users`: `/proc/<pid>/root`. A process in a chroot inside the
+  # tree, with its cwd outside it, is not seen (`cwd-probe-asks-no-process-root`).
   # THE WALK IS `_ws_path_users`' DISCIPLINE (Linux): a fixed point, never one snapshot (the table is listed again
   # until a listing names no pid this walk has not read; the pass that finds a user ends it); a thread-group
   # leader whose own cwd reads as vanished is asked through `task/<tid>`, and a thread entry unreadable for any
@@ -34211,7 +34226,9 @@ _ws_cwd_users() {   # dir [say] -> 0 no process has its working directory at dir
   # command the pure-bash arm of `_plat_timeout` puts in the background. python3 runs with -I, so no module in the
   # caller's working directory is imported. The bounds are not absolute: a process in uninterruptible kernel wait
   # (a hung network mount on a cwd's chain) outlives TERM and KILL, and the caller waits for it, the reap lock
-  # held; the answer is still never "nobody".
+  # held; the answer is still never "nobody". Nor are the parent's resolve (`_ws_dir_physical`) and the absence
+  # stat bounded, and both run before the walk: a hung network mount under either hangs the probe as well
+  # (`cwd-probe-can-wait-on-a-hung-network-cwd`), a hang only.
   # THE RECORDS ARE JSON AT THEIR SOURCE: one json.dumps line per user, at most five, the pid an integer and every
   # string as read; then one "#" line, the sentence, and one "=" line, every user's pid. json.dumps escapes every
   # control character, so a newline in a path or a command never starts a second record. An answer that names a
@@ -35587,7 +35604,11 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # fails every retry until it is gone. `cpath` is physical by then
   # (`_ws_reclaim_nested_proven` resolved it in this iteration), so the ask
   # enters nothing. A checkout PROVEN gone is not asked: its arm clears a
-  # record, with no force flag, over nothing that stands. And the child's
+  # record, with no force flag, over nothing that stands. Such an arm asks no
+  # cwd or identity question either (`vanished-checkout-arms-ask-no-cwd`,
+  # beside W2's `vanished-checkout-arms-ask-no-mounts`), so a tree that stands
+  # again, clean or holding only ignored files, is removed by its no-force
+  # `git worktree remove`; the child's own vanished arm is the same. And the child's
   # whole tree is asked before this loop, by the rows rung's mount hold at
   # the owned call, and again at each re-ask below: a mount that appears
   # after the last of those, outside every nested checkout, is step (4)'s

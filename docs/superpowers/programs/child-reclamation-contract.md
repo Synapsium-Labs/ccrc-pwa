@@ -4358,11 +4358,11 @@ the spec, never this contract.
   `cwd-probe-sees-a-session-only-while-it-runs`, `surviving-background-job-holds-the-reclaim`,
   `cwd-probe-can-wait-on-a-hung-network-cwd`, `darwin-cwd-parse-unbounded-as-today`,
   `cwd-probe-pure-bash-watcher-sleep-reads-as-a-user`, `cwd-probe-per-thread-cwd-unasked`,
-  `cwd-probe-pid-handoff-between-reads` and `cwd-probe-task-listing-can-skip-a-tid`. The probe also states pid and tid
-  reuse as a limit, with no slug.
+  `cwd-probe-pid-handoff-between-reads`, `cwd-probe-task-listing-can-skip-a-tid` and `cwd-probe-asks-no-process-root`.
+  The probe also states pid and tid reuse as a limit, with no slug.
 - The tail window: `reask-identity-is-per-attempt`, `reask-to-opendir-window`, `cwd-ask-to-opendir-window`,
   `tail-reasks-can-outrun-the-act-row`, `identity-found-after-the-kill-repeats` and `worktree-ask-to-force-window`,
-  narrowed.
+  narrowed, and `vanished-checkout-arms-ask-no-cwd`.
 - Unmeasured: `git-mount-crossing-unmeasured` and `exdev-class-moot-under-pi5-a`. The operator may measure either on a
   throwaway box of their own choosing.
 - W2's, standing: `human-gated-removals-ask-no-mounts` and `vanished-checkout-arms-ask-no-mounts`.

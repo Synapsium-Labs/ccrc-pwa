@@ -1117,8 +1117,11 @@ into a pass.
   first `cd` skips the writer and leaves the parent's `pending`; the `exec` runs exactly when the second `cd` succeeds,
   so a `cd` that fails both times execs nothing. For an absolute `.workdir`, the only form `cmd_start` and ws-add
   store, both `cd`s enter the same directory, so no transcript path changed, and the exec'd process's `OLDPWD` now
-  names the workdir; a relative one is `relative-workdir-second-cd-does-not-enter`, below. A re-point between the two
-  `cd`s can only leave a field that adds a hold.
+  names the workdir; a relative one is `relative-workdir-second-cd-does-not-enter`, below. A link in the workdir
+  re-pointed between the two `cd`s, a window measured at about 7 ms (the whole fragment), leaves a field that names
+  the first directory entered while the process lives in the second. The row is placed at both while the link stands
+  re-pointed. If the link is then pointed back, it is placed at the first only, and the second is seen by the cwd probe
+  alone, while a process lives there (`repointed-alias-for-legacy-rows-until-respawn`, below).
 - The same composer writes the two seeds: `start` writes a valid field directly after its `.workdir` write, and ws-add
   appends the same statement to its `.workdir` line in place. The pending line has the one writer above.
 - `_reg_purge`'s loop already unlinks the field, so purging needed no code. Its inventory comment was not edited.
@@ -1257,9 +1260,14 @@ into a pass.
     and lsof print physical paths, so a tree spelled through a linked root would otherwise never match by string.
   - Beyond §4.6, the probe adopts `_ws_path_users`' fixed-point relisting, its leader-thread walk and its own-chain
     exclusion, and has its own bound, `WS_CWD_USERS_SCAN_S` (10 s).
+  - The identity arm walks the `..` chain of the directory a cwd link names, so it sees a process that entered through
+    an alias of the tree, or through a mount of the tree itself. A bind whose source lies strictly inside the tree is
+    not reached by that walk, because a cwd on the bind climbs its own mount's chain. In ccd's own namespace the rows
+    rung's mount hold refuses the child while such a bind stands, so nothing is removed.
   - It skips a process only on ENOENT or ESRCH of that process's own cwd link or stat file, or on the ruled EACCES
-    exception (a link that answers EACCES at its first read, another user's process or a same-user non-dumpable one, is
-    not seen). An ENOENT on opening the link after a successful read is confirmed through the stat file (the process is
+    exception (a link that answers EACCES or EPERM at its first read is not seen: another user's process, or a
+    same-user one the kernel will not let this process follow, such as a non-dumpable process, an exec of an unreadable
+    binary, or an LSM denial). An ENOENT on opening the link after a successful read is confirmed through the stat file (the process is
     gone, and is skipped), or by a second readlink of that link that answers ENOENT (the task let go of that cwd since
     its link was read; ENOENT alone there: EACCES, any other errno or a path answers unmeasured). A process whose own
     link vanished at its first read, or was let go of in that sense, is not skipped for that alone: the walk asks it
@@ -1294,10 +1302,11 @@ into a pass.
   readlink failing with EACCES exactly (not EPERM) counts as the pid's release when the stat file, read after it,
   answers ENOENT or ESRCH, because the kernel answers EACCES there for a pid reaped mid-call. It is still subject to the
   settled-listing rule. A stat file that reads, a zombie included, answers unmeasured, as does every other errno. The
-  first top-level read's EACCES stays the ruled not-seen skip, and the second readlink of the open's ENOENT route still
-  answers unmeasured on EACCES. The proof holds on a `/proc` mounted without hidepid=invisible or hidepid=ptraceable, in
-  the probe's own pid namespace: under either, a task this user may not ptrace answers ENOENT at every path and falls
-  inside the not-seen limit.
+  first top-level read's EACCES or EPERM stays the ruled not-seen skip, and the second readlink of the open's ENOENT
+  route still answers unmeasured on EACCES. The proof holds on a `/proc` mounted without hidepid=invisible or
+  hidepid=ptraceable, in the probe's own pid namespace. Under either, a task this user may not ptrace is hidden and its
+  paths answer ENOENT; under hidepid=noaccess, or an LSM denial, they answer EPERM. Both fall inside the not-seen limit
+  at the first read, and an EPERM at the per-pass read answers unmeasured.
 - `cwd-probe-holds-a-double-slash-physical-root`: `_ws_dir_physical` answers a `//`-leading physical path for a
   directory reached through a link whose target begins with `//` (and for `//` or `//tmp` given directly). ws-expire's
   adapter, `_ws_expire_cwd_users`, resolves the tree's parent before it asks and hands the probe that `//` spelling,
@@ -1408,11 +1417,15 @@ into a pass.
 - `reask-to-opendir-window`: the window from the last identity compare, through W2's mount read, to git's own opendir
   (§4.7). The cwd probe's bounded walk comes before the re-ask, outside that window.
 - `cwd-ask-to-opendir-window`: the cwd ask's own window. The probe is asked before the re-ask, so a process that enters
-  the tree after it, during the re-ask, W2's mount read or git's own run, is not asked. The probe also measures the
-  tree at its path as it walks, and never compares that measure with the identity the act recorded, so a tree moved
-  away during its walk and moved back before the re-ask is probed as whatever stood at the path.
-- `tail-reasks-can-outrun-the-act-row`: a tail with N standing nested checkouts makes 2N+2 bounded re-asks against the
-  act's 240 s runner row. A kill there fails closed at a breadcrumbed step, and a timed-out re-ask answers unmeasured.
+  the tree after it, during the re-ask, W2's mount read or git's own run, is not asked. Each process's window opens at
+  its own read inside the walk, not when the probe ends. The probe also measures the tree at its path as it walks, and
+  never compares that measure with the identity the act recorded. So a tree moved away during its walk and moved back
+  before the re-ask is probed as whatever stood at the path, and a tree moved away at the probe's absence check
+  answers "nobody" with no walk at all and, moved back before the re-ask, passes it on equal identity.
+- `tail-reasks-can-outrun-the-act-row`: a tail with N standing nested checkouts makes 2N+2 re-asks against the act's
+  240 s runner row. Each site also runs a cwd walk before its re-ask, the post-kill wait adds more, and the git reads
+  inside each re-ask have no bound of their own, so the row can be outrun. A kill there fails closed at a breadcrumbed
+  step, and a timed-out re-ask answers unmeasured.
 - `identity-found-after-the-kill-repeats`: an identity, cwd or row refusal found at step 3 or step 4 comes after the
   pane kill, so every retry fails the same way until the cause is gone, as W2's `mount-found-after-the-kill-repeats`.
 - `worktree-ask-to-force-window`: narrowed by the re-ask, not closed.
@@ -1422,7 +1435,10 @@ into a pass.
 - `exdev-class-moot-under-pi5-a`: the EXDEV class belongs to closing the window (PI5 B), which was not ruled. The
   operator may measure it on the same terms.
 - `repointed-alias-for-legacy-rows-until-respawn`: a legacy row's re-pointed alias stays unseen until that session
-  respawns and records its entry. The cwd probe covers it while a process lives inside.
+  respawns and records its entry. The cwd probe covers it while a process lives inside. A row with a valid field has
+  the same hole through the launch command's two `cd`s: a link in its workdir re-pointed between them (a window of
+  about 7 ms), and later pointed back, leaves a field that names the first directory entered while the process lives in
+  the second, and none of the placement rules fire, so the row is placed at the first only until that session respawns.
 - `other-mount-namespaces-fuse-views-and-overlay`: §4.5's out-of-scope set stands.
 - `ancestry-stands-alone-on-darwin`: Darwin has no mount table, so ancestry is its one identity arm.
 - `moved-check-misses-a-subdirectory-of-a-moved-tree`: a gone row whose field records a subdirectory of a moved tree is
@@ -1473,7 +1489,9 @@ into a pass.
   `legacy-absent` (today's rule) until a later spawn's writes succeed.
 - `workdirid-fifo-swap-after-type-check`: a FIFO swapped in between the reader's type check and its open blocks the
   open. It is the registry reader's own window.
-- `cwd-probe-can-wait-on-a-hung-network-cwd`: a child in uninterruptible sleep outlives the bound's TERM.
+- `cwd-probe-can-wait-on-a-hung-network-cwd`: a child in uninterruptible sleep outlives the bound's TERM. The probe's
+  parent resolve and its absence stat also run before the walk with no bound of their own, so a hung network mount
+  under either hangs the probe too. A hang only, never a release.
 - `darwin-cwd-parse-unbounded-as-today`: on Darwin the probe parses lsof's listing directly, as ws-expire did, and never
   under `_plat_timeout`, so that parse has no bound of its own.
 - `fish-spawn-cd-reads-backslash-escapes`: under a fish pane shell, the launch command's own `cd '<wd>'`, which W3 did
@@ -1522,8 +1540,14 @@ into a pass.
   fs before the next read. No finite read schedule closes it, and it is narrower than main.
 - `cwd-probe-task-listing-can-skip-a-tid`: one listing of `task/` that spans more than one getdents buffer while
   threads exit can skip a tid. The passes narrow this and do not close it.
+- `cwd-probe-asks-no-process-root`: the probe never asks `/proc/<pid>/root`, so a process in a chroot inside the tree,
+  with its cwd outside it, is not seen. It is the same on main and in `_ws_path_users`.
 - Pid and tid reuse, a limit with no slug: a pid or a tid is asked once per walk, keyed by number, so a task that takes
   a reused number after that read, or takes the pid after the stat file's answer, is not asked.
+- `vanished-checkout-arms-ask-no-cwd`: the vanished arms' `git worktree remove` without force, a nested checkout's and
+  the child's own, asks no cwd or identity question, beside W2's `vanished-checkout-arms-ask-no-mounts`. So a tree that
+  stands again, clean or holding only ignored files, after its absence was proven, is removed. It is the same on main,
+  and the tail's own comment says so.
 - W2's standing set, unchanged: `human-gated-removals-ask-no-mounts`, `vanished-checkout-arms-ask-no-mounts` and the
   rest of §3.10's list, but for the carries closed or narrowed below.
 
