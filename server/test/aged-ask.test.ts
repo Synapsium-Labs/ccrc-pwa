@@ -46,8 +46,10 @@ const multiMenu = (labels: string[]): MenuEvidence => ({
   multi: { options: labels.map((label, i) => ({ index: i + 1, label, checked: false })), freeText: null, commit: 'Next', cursor: 1 },
 });
 const NO_MENU: MenuEvidence = { ask: null, raw: null };
-/** The pane's review screen (`Submit answers` / `Cancel`): a parsed menu no question is aligned to. */
-const REVIEW: MenuEvidence = { ask: null, review: true, raw: null };
+/** The pane's review screen (`Submit answers` / `Cancel`): a parsed menu no question is aligned to. `review` carries
+ *  the question texts the screen lists (`reviewQuestions`). */
+const reviewOf = (...listed: string[]): MenuEvidence => ({ ask: null, review: listed, raw: null });
+const REVIEW: MenuEvidence = reviewOf('Which colour?', 'Which size?');
 /** An unparsed capture with no multi: a menu grabbed mid-redraw. */
 const REDRAW: MenuEvidence = { ask: null, raw: 'half-painted pane' };
 
@@ -127,8 +129,9 @@ describe('keepAgedAsk: the multi menu\'s length and the review screen (D-6324)',
     expect(keepAgedAsk(raw(), REVIEW)).toBe(true);
   });
 
-  it("does not keep an aged one-question envelope on the review screen", () => {
-    expect(keepAgedAsk(raw({ ask: MULTI_ASK }), REVIEW)).toBe(false);
+  it('keeps a one-question multiSelect envelope on its own review screen', () => {
+    // Claude Code paints a review after a one-question multiSelect ask too (`cc300-ask-review-1q-multiselect`).
+    expect(keepAgedAsk(raw({ ask: MULTI_ASK }), reviewOf('Which tools?'))).toBe(true);
   });
 
   it('does not keep an ineligible envelope on the review screen', () => {
