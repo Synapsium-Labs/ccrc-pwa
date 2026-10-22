@@ -6,22 +6,23 @@
 
 **Plans it stands on:** the W2 shells plan `docs/superpowers/plans/2026-10-18-ccrc-skins-w2-shells.md` (its Global constraints, Review focus and door table bind here unchanged), the W3 screens plan `2026-10-19-ccrc-skins-w3-screens.md`, the sheet desktop-arm plan `2026-10-20-sheet-desktop-arm-and-session-workflow-controls-.md` (its P3-4 arm is what the ask sheet uses at the desk today), the ask-sheet-half plan `2026-10-15-ask-sheet-half.md` (its cause 8, the hook envelope's 30-minute age-out, is reversed for the session stream by T1a) and the paste-chip send plan `2026-10-15-paste-chip-send.md` (B1 and B2 close two of its "Out of scope" items). This plan cites their numbers and never redefines them.
 
-**Status:** rev 2 (2026-10-22), after two adversarial reviews recorded in §Review log: rev 0's (three lenses and a refute pass, 54 findings) and rev 1's (two lenses, 46 findings), all applied. Task T0 is this plan's docs PR.
+**Status:** rev 3 (2026-10-22). Rev 2 landed after two adversarial reviews (rev 0's three lenses and a refute pass, 54 findings; rev 1's two lenses, 46 findings). Rev 3 adds the operator's later notes and was read by one more (§Review log). Task T0 is this plan's docs PR.
 
-**Why this wave exists.** The operator reviewed the desktop experience (Refined, about 2000 px wide, a child session waiting on a question) and was "not super happy". They accepted this defect list in this order ("Order accepted, please proceed"). Most of what they saw is data and vocabulary, not styling: the screen shows scraped terminal output and internal words to the operator. While the plan was being written they added three more: "I still have bugs with Return not being pressed in the console", "new sessions creation is super slow, I see for a long time delayed loading screen", and "the real estate screen use in desktop mode on instrument scheme is currently suboptimal". The first two are Track B; the third is T2e.
+**Why this wave exists.** The operator reviewed the desktop experience (Refined, about 2000 px wide, a child session waiting on a question) and was "not super happy". They accepted this defect list in this order ("Order accepted, please proceed"). Most of what they saw is data and vocabulary, not styling: the screen shows scraped terminal output and internal words to the operator. While the plan was being written they added three more: "I still have bugs with Return not being pressed in the console", "new sessions creation is super slow, I see for a long time delayed loading screen", and "the real estate screen use in desktop mode on instrument scheme is currently suboptimal". The first two are Track B; the third is T2e. Later the same day they added more: the gauges sorted most free first in a full-width row (T2c), a way to dismiss "update available" until a newer release (T2a part (b)), a way to hide the right-side panel (T3e), colour in the chat (T4a), Instrument on a desk and Refined on a phone by default (W2's S18, brought forward), Working below Done when grouped by status (T3f), and "all UI functions feel super sluggish" (Track C).
 
 **Operator rulings this plan builds on (2026-10-22):**
 1. **The order:** Step 1, the ask ("Claude is asking"), then Step 2, calmer chrome, then Step 3, the fleet list, the session header and the inspector.
 2. **The ask renders the STRUCTURED question and options** (header, question, label and description, multiSelect, Other), **never pane text**. It says who is asking (the session and its project), in plain words. **At 900 px and wider it is answered inline in the session pane, one card with one scroll region, instead of a modal; a phone keeps the sheet.** Coordinator-first routing and the answer path stay unchanged.
 3. **Calmer chrome:** the update banner becomes one quiet line or indicator; no floating `+` at desk widths (New session lives in the top bar); the top-bar lane gauges are legible or move out of the nav; the Inbox and Runs counts show only what needs the operator.
 4. **Plain words:** no internal terms in the fleet list ("15 mixed", "no pool", "hot-file claims", "Coordinator row"); no "Done 5 4" double count; "Dead 35" is not prominent; full session names where the column has room; fewer per-row "⋯" controls; the session header names the SESSION; the chips line is never cut off; the icon-only boxes (">_", "⋯", "PR") carry their words; the inspector hides empty sections and shows ONE honest routing line, what actually runs.
-5. **Standing:** every width works (no desktop-only interim). A card is a glance and its header a superset (D-5545). Each worker renders at 360, 390, 1280 and 1920 × Refined and Instrument × dark and light, against `origin/main`. Each PR is reviewed adversarially before it lands.
+5. **Later notes (2026-10-22), each ruled where its task says:** the gauges (Q1, ruled: most free first, a full-width row under Refined's bar); dismiss a waiting release until a newer one; hide the right-side panel; colour in the chat; the device default ("it doesn't auto-set instruments on my mac and refined on my mobile. That's annoying"); Working below Done; the console's responsiveness; and two notes on Instrument's desk (its list column "is duplicating the other access buttons" on the rail, and the desk's duplicate `+`).
+6. **Standing:** every width works (no desktop-only interim). A card is a glance and its header a superset (D-5545). Each worker renders at 360, 390, 1280 and 1920 × Refined and Instrument × dark and light, against `origin/main`. Each PR is reviewed adversarially before it lands.
 
 **Base:** `origin/main` `11b7096d3` (2026-10-22); this plan's branch has absorbed it. Code is cited by file and by function, constant or selector, with a line hint (`≈:n`) measured at the base. Step 0 of each task re-grounds every citation by content before any edit, on the tree the task starts from.
 
-**Deploy class:** server lane. The PWA bundle ships inside the server's release. T1a, B1, B2, B3, B4 and B5 change the server (`server/src/sessionws.ts`, `askkey.ts`, `hookstate.ts`, `transcript/ask.ts`, `transcript/resolve.ts`, `inject/send.ts`, `server.ts`, `pty.ts`, `remote/pty.ts`). B2 adds one optional field to the `/prompt` request body, and B5 an optional `unprompted` to the session stream's `backlog` frame (`shared/api.ts`); both are additive and absence-permits, each has one reader, and neither bumps `FLEET_PROTO`. No task touches the agent, `ccd`, `deploy/`, a unit or a hook.
+**Deploy class:** server lane. The PWA bundle ships inside the server's release. T1a, B1, B2, B3, B4, B5 and C1 change the server (`server/src/sessionws.ts`, `askkey.ts`, `hookstate.ts`, `transcript/ask.ts`, `transcript/resolve.ts`, `inject/send.ts`, `server.ts`, `pty.ts`, `remote/pty.ts`, `registry.ts`). B2 adds one optional field to the `/prompt` request body, and B5 an optional `unprompted` to the session stream's `backlog` frame (`shared/api.ts`); both are additive and absence-permits, each has one reader, and neither bumps `FLEET_PROTO`. No task touches the agent, `ccd`, `deploy/`, a unit or a hook.
 
-**Names.** Tasks **T0** to **T3d** follow the operator's steps (T1a to T1c are Step 1, T2a to T2f Step 2, T3a to T3d Step 3); **B1** to **B5** are Track B. W2's tasks are cited as S1 to S18, W3's as P1a to P9, the sheet plan's as P3-1 to P3-9. "Desk" is ≥900 (`useDesk()`, `ui/src/lib/use-media-query.ts`), "wide" ≥1600, "phone" <900.
+**Names.** Tasks **T0** to **T3d** follow the operator's steps (T1a to T1c are Step 1, T2a to T2f Step 2, T3a to T3d Step 3); **B1** to **B5** are Track B; **T3e** and **T3f** join Step 3, **T4a** is the chat's colour, **C0** and **C1** are Track C, and **S18** is W2's task, brought forward. W2's tasks are cited as S1 to S18, W3's as P1a to P9, the sheet plan's as P3-1 to P3-9. "Desk" is ≥900 (`useDesk()`, `ui/src/lib/use-media-query.ts`), "wide" ≥1600, "phone" <900.
 
 **Goal, PR by PR.**
 
@@ -33,7 +34,7 @@
 | T1c | at ≥900 the ask is a card in the session pane; the transcript's card points at it; a phone keeps the sheet | the same (shared) |
 | T2a | the update banner is gone; one quiet "↑ vX available" door in the bar (desk) or one row in the fleet column (phone) opens Settings › Updates | the door in the status bar |
 | T2b | unchanged (#1116 already removes Refined's desk FAB) | no FAB at ≥900; the round `+` stays below 900 until S11 |
-| T2c | the gauges always print a number and name their window; no empty or invisible bar | the LED meters read the same |
+| T2c | the gauges sort most free first in a full-width row under the bar; each prints a number with its window; no empty or invisible bar | the LED meters sort and read the same |
 | T2d | the Inbox and Runs badges count only what waits on the operator, and hide at zero | the same wherever a badge shows |
 | T2e | unchanged | no empty fourth column; no second wordmark or repeated doors in the list column; dense two-line rows under a fine pointer |
 | T2f | unchanged | no runs row at the desk; the class chooser on the toggle's row in project mode |
@@ -45,6 +46,11 @@
 | B2 | Retry after a stuck send presses Enter on our own text instead of answering "draft present" | the same |
 | B3 | the terminal drawer re-attaches when its pty dies; a stale drawer's keys never reach another session; a phone keyboard's Return is Enter | the same |
 | B4 | a new or foreign-HOME session's first open finds its transcript in seconds, not about a minute | the same |
+| T3e | the right-side inspector hides and shows (header toggle or `i`), remembered per device | none until S12, which reuses the toggle |
+| T3f | unchanged (its cards already order Done above Working) | Done above Working in status mode |
+| T4a | tool boxes on the code palette, inline code in a well chip, a failed call says so | the same (shared) |
+| C1 | registry reads make a fraction of today's agent requests, so the fleet's views answer faster | the same |
+| S18 (W2) | a phone or tablet still boots Refined | a desktop with a mouse boots Instrument |
 | B5 | New session opens the new session at once; the project list shows without a wait; an unprompted session says "No messages yet" | the same |
 
 ---
@@ -84,11 +90,16 @@ Each row was located by a code reader and checked by a second, independent reade
 | T1c | T1b merged | the same files (`DialogSheet.tsx`, `EnvelopeSheet.tsx`, `AskParts.tsx`, `chat.css`) |
 | T2a | Step 1 merged; **#1116 merged**; Q2 or its default | #1116 rewrites `refined-shell.test.tsx` ≈:231-238 inside the banner case T2a must change, and moves the phone fleet column's chrome into Refined's `PhoneHeader` |
 | T2b | Step 1 merged; **#1116 merged** | Instrument's `Fab` part is #1116's `SkinSet` field (`skins/types.ts`); without it the only removal is a CSS hide, which `skin-boundary.test.ts` (j) refuses |
-| T2c | Step 1 merged; Q1 or its default | — |
+| T2c | T0 (ruled by the operator, Q1; out of the step order) | — |
 | T2d | Step 1 merged; **#1116 merged** | `PhoneHeader.tsx` (#1116's) reads the same badge functions T2d renames |
-| T2e | Step 1 merged | none of #1116's files (`frame.tsx`, `FleetColumn.tsx`, `ListColumn.tsx`, `instrument.css`, `FleetTable.tsx`) |
+| T2e | T0 (the operator's notes on Instrument's desk take it out of the step order) | none of #1116's files (`frame.tsx`, `FleetColumn.tsx`, `ListColumn.tsx`, `instrument.css`, `FleetTable.tsx`) |
 | T2f | T2d merged; Q5 or its default | `FleetScreen.tsx`'s runs row and chooser (≈:232-289), after #1116's hunk at ≈:230 and T2d's edit of the same row |
 | T3a, T3b, T3c, T3d | Step 2 merged | — |
+| T3e | T3c, T3d, T2e and #1116 merged | `SessionChrome.tsx`, `InspectorRail.tsx`, `SessionScreen.tsx`, `frame.tsx`; the icons behind #1116 |
+| T3f | T0 (a small fix the operator asked for; out of the step order) | — |
+| T4a | T1c merged; Q8 or its default | `ChatList.tsx`, `tool-card.tsx` |
+| C0, C1 | T0 | — |
+| S18 (W2) | T0 (ruled ahead of W2's S17 by the operator's note) | — |
 | B1, B2, B3, B4, B5 | T0; Q6 or its default (Track B runs beside Step 1) | B2 after B1 (the same functions in `send.ts`); B5 after B4 (its empty state reads the search's answer) and after T1a (both edit `sessionws.ts`) |
 
 **What "Step N merged" means.** The operator's order is a landing order. A Step N+1 task is DISPATCHED once every Step N task has reached a verified wave-done (its PR is in review), so no worker idles; it LANDS only after every Step N PR has merged. **A task held only by #1116** (T2a, T2b, T2d, T2f) does not hold Step 3: Step 3 lands once T2c and T2e have merged, and the #1116-held tasks land when #1116 does. A Step N+1 PR that conflicts with a Step N merge absorbs `main` with `git merge` (never a rebase of a pushed branch) and re-runs its suites. Track B is not part of the step order: it lands as its reviews clear.
@@ -124,7 +135,11 @@ T2c (gauges)   T2e (Instrument's desk)   T2a (update line; after #1116)   T2b (n
 T2d (counts; after #1116) ── T2f (Instrument's runs row; after T2d)
 
 --- Step 3: plain words (dispatched once Step 2 is in review; lands after T2c and T2e) ---
-T3a (fleet words, bucket chips)   T3b (names, ⋯)   T3c (header)   T3d (inspector)
+T3a (fleet words, bucket chips)   T3b (names, ⋯)   T3c (header)   T3d (inspector) ── T3e (the inspector hides; after T3c, T3d, T2e, #1116)
+
+--- ahead of the step order, as slots free (the operator's later notes) ---
+T2e (Instrument's desk)   T2c (gauges, ruled)   T3f (Done above Working)   S18 (W2; the device default)   C0 (responsiveness, research)   C1 (registry reads)
+T4a (colour in the chat; after T1c)
 ```
 
 Within a step the tasks run in parallel workspaces. They meet in a few files: `FleetScreen.tsx` (T2a `FleetBanners` ≈:367-454; T2d the runs line ≈:252-259 and the mail door's count ≈:186-187; T2f the same runs row and the chooser ≈:232-289, after T2d; T3a ≈:289 and ≈:325), `fleet.css` (T2a ≈:3196, T2c ≈:3405-3460, T3a ≈:170-187, T3b ≈:1561-1590 and ≈:3382-3390), `AppBar.tsx` (T2a the indicator slot, T2d the badge reads), `SessionScreen.tsx` (T1b ≈:664; T1c the keyed children ≈:509-664, which overlap B5's empty state ≈:560-606; T3c ≈:504; T3d ≈:299-307), `sessionws.ts` (T1a `checkHookAsk`, B5 the backlog, each under its own budget), `server.ts` (B1 and B2 the `/prompt` route ≈:2178-2208, B3 the pty bridge ≈:2029-2050), `send.ts` (B1, then B2) and `NewSessionSheet.tsx` (B5 ≈:152-337, T3a ≈:506). Where two ranges overlap, the later PR absorbs `main` and re-runs its suites.
@@ -229,7 +244,7 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
 ### Task T0: this plan (the docs PR)
 
 - [x] This plan, `docs/superpowers/plans/2026-10-22-desktop-polish.md`, and the programme ledger `docs/superpowers/programs/desktop-polish.md`.
-- [x] D-6324 to D-6335 and D-6366 to D-6371 defined once, in §Deviations and decisions; none issued and unused.
+- [x] D-6324 to D-6335, D-6366 to D-6371 and D-6385 to D-6388 defined once, in §Deviations and decisions; 6389 issued and unused.
 - [x] Revised after an adversarial review (§Review log).
 - [x] The server doc suites pass on this branch: `deviation-refs` (after `git fetch origin main`), `dtbd`, `topology-clean` and `single-definition`.
 
@@ -425,7 +440,7 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
 
 **Rollback.** A plain revert returns the desk to T1b's centred dialog; the phone is unchanged either way. Revert T1c before T1b (§Rollback).
 
-### Task T2a: the update banner becomes one quiet line (D-6327) — after Step 1 and #1116 merge
+### Task T2a: the update banner becomes one quiet line, which can be dismissed until a newer release (D-6327) — after Step 1 and #1116 merge
 
 **Routing:** band 2. **Needs:** Step 1; #1116; Q2 or its default. **Frozen files touched:** `refined-shell.test.tsx` and `PhoneHeader.tsx` (free once #1116 has merged). **Lane:** PWA.
 
@@ -471,6 +486,29 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
 
 **Rollback.** A plain revert restores the banner and the old module layout; no state.
 
+**Part (b), the dismissal (operator, 2026-10-22: "a way to dismiss 'update available' notifications (they should still pop back up with every NEW update)").** Part of T2a's PR, after part (a)'s commits.
+- **Files:** Create `pwa/src/fleet/releaseDismissal.ts` and `pwa/test/release-dismissal.test.ts`. Modify `pwa/src/fleet/releaseWaiting.ts` (the pure show rule), `UpdateIndicator.tsx` (the × in every form, the focus repair, one toast), `fleet.css` (the ×). Tests: `release-waiting.test.ts`, `update-indicator.test.tsx`, `section-status.test.ts`, `update-indicator.browser.test.ts`. No server or push change: the OS notification for a release (`FleetWatcher.pushRelease`, `server/src/watch.ts` ≈:2039-2087) is already sent once per new tag (D-3317) and governed by Settings › Notifications.
+- **The memory.** `releaseDismissal.ts` keeps `ccrc-release-dismissed` in `localStorage`: a release tag, counted only when it is a well-formed tag; absent, malformed or unreadable storage dismisses nothing; reads and writes in try/catch; a dismissal applies for the page even when storage refuses, and never lowers the mark (it re-reads storage first, so two tabs agree). `useDismissedRelease()` subscribes through `useSyncExternalStore`.
+- **The rule** (pure, in `releaseWaiting.ts`): the line shows iff a release waits and nothing is dismissed or the waiting tag is newer than the dismissed one (`compareReleaseTags`, `semver.ts` ≈:52-62). A high-water mark: the same tag stays hidden, a newer tag shows, an older tag after a withdrawn release stays hidden, as the push does.
+- **The control.** A `Button` with `Icon x` beside the indicator in every form (bar, status bar, phone row), named "Dismiss vX", titled "Hidden until a newer release; Settings › Updates still lists it", at least 24 px under a fine pointer and `--tap-min` under touch. After a dismiss focus moves to the main landmark, never the body, and one info toast says what happened.
+- **What a dismissal never hides:** Settings › Updates and its index line, `BuildLine`'s arrow, the push, and the halt banner. A dismissed line draws no stale words; the screen's one stale announcement still speaks.
+- **Red cases:** `release-waiting.test.ts`: "a dismissed tag hides; a newer one shows; the same and an older one stay hidden (v0.0.10 shows after v0.0.9)"; "nothing dismissed shows the waiting tag; nothing waiting shows nothing". `release-dismissal.test.ts`: "absent, malformed or unreadable storage dismisses nothing"; "a dismissal storage refuses still hides for this page"; "a dismissal never lowers the mark, read fresh from storage"; "the mark survives a reload". `update-indicator.test.tsx`: "dismiss hides the indicator in the bar and the phone row alike"; "a newer waiting release shows it again"; "dismissing moves focus to the main landmark and toasts once"; "the dismiss control is named for its tag"; "a halt banner stands whatever the dismissal". `section-status.test.ts`: "Settings › Updates' index line shows the waiting release while it is dismissed". `update-indicator.browser.test.ts`: "the × fits the bar at 900 with six lanes, nothing clipped"; "at least 24 px under a fine pointer, 44 px under touch".
+- **Mutation table, RUN:**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | equality instead of the mark | release-waiting | "…the same and an older one stay hidden…" |
+  | tags compared as strings | release-waiting | "…v0.0.10 shows after v0.0.9" |
+  | the indicator ignores the dismissal | update-indicator | "dismiss hides the indicator in the bar and the phone row alike" |
+  | the dismissal kept in component state | release-dismissal | "the mark survives a reload" |
+  | a malformed value treated as a mark, or the read without try/catch | release-dismissal | "absent, malformed or unreadable storage dismisses nothing" |
+  | `dismissRelease` overwrites a newer mark | release-dismissal | "a dismissal never lowers the mark…" |
+  | Settings' index line reads the dismissal | section-status | "…shows the waiting release while it is dismissed" |
+  | the focus repair removed | update-indicator | "dismissing moves focus to the main landmark…" |
+
+- **Renders:** the fleet and a session with a release waiting, then dismissed, then a newer tag, at T2a's widths × both skins × dark and light. Verify adds `test/release-dismissal.test.ts` to T2a's first line.
+
+
 ### Task T2b: no floating `+` at the desk in Instrument (D-6328) — after Step 1 and #1116 merge
 
 **Routing:** band 1. **Needs:** Step 1; #1116. **Frozen files touched:** none once #1116 has merged. **Lane:** PWA.
@@ -498,41 +536,46 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
 
 **Acceptance.** One New session door per width in both skins. **Rollback.** A plain revert.
 
-### Task T2c: the lane gauges always print a number, name their window and never draw an empty bar (D-6329) — after Step 1 merges
+### Task T2c: the lane gauges sort most free first, take their own full-width row under Refined's bar, always print a number with its window, and never draw an empty bar (D-6329) — dispatched ahead of the step order
 
-**Routing:** band 2 (band 3 if Step 0 needs a palette value). **Needs:** Step 1; Q1 or its default. **Frozen files touched:** none. **Lane:** PWA/UI.
+**Routing:** band 2 (band 3 if Step 0 needs a palette value). **Needs:** T0. The operator's ruling of 2026-10-22 (Q1, below) takes it out of the step order. **Frozen files touched:** none (`refined.css` is edited above #1116's appended block, never at its end; `fleet.css`'s gauge block ≈:3405-3460 is disjoint from #1116's ≈:231-233). **Lane:** PWA/UI.
 
-**Files:** Modify `pwa/src/fleet/CompactGauges.tsx`, `pwa/src/fleet/fleet.css` (the gauge block ≈:3405-3460), `ui/src/primitives/meter.tsx` and `meter.stories.tsx` if Step 0 needs them, `pwa/design/contrast-check.mjs` (the track pair; its stale `off` comment ≈:277-283), `pwa/test/contrast.test.ts` (the pair's labels in "token pairs the gate must keep measuring", ≈:899), and only if Step 0 chooses a palette value, `ui/design/make-themes.mjs` and the generated block of `ui/src/styles/tokens.css` (`npm run themes`). Modify, each intended change in its own commit: `pwa/test/fleet-pieces.test.tsx` (≈:295, "…reset when the binding window rolled over, — never measured"), `pwa/browser/compact-gauges.browser.test.tsx`.
+**Files:** Create `pwa/src/fleet/laneOrder.ts` (pure: `lanesByFree`) and `pwa/test/lane-order.test.ts`. Modify `pwa/src/fleet/CompactGauges.tsx` (every arrangement draws `lanesByFree`'s order; a `row` arrangement whose fit is measured from its width), `pwa/src/skins/refined/AppBar.tsx` (the gauges leave the bar's line for a second line of its own), `pwa/src/skins/refined/refined.css` (≈:135-221: the frame's first row grows to hold the bar's two lines; the gauge row's rules), `pwa/src/fleet/fleet.css` (the gauge block ≈:3405-3460), `ui/src/primitives/meter.tsx` and `meter.stories.tsx` if Step 0 needs them, `pwa/design/contrast-check.mjs` (the track pair; its stale `off` comment ≈:277-283), `pwa/test/contrast.test.ts` (the pair's labels in "token pairs the gate must keep measuring", ≈:899), and only if Step 0 chooses a palette value, `ui/design/make-themes.mjs` and the generated block of `ui/src/styles/tokens.css` (`npm run themes`). Modify, each intended change in its own commit: `pwa/test/fleet-pieces.test.tsx` (≈:248-350, the compact gauges, and ≈:295 "…reset when the binding window rolled over, — never measured"), `pwa/test/refined-shell.test.tsx` (≈:82-103, the bar's order: the gauges door moves to the row), `pwa/browser/compact-gauges.browser.test.tsx`, `pwa/browser/refined-bar.browser.test.ts`.
 
-**The shape (Q1 default A: they stay in the bar, legible).**
+**The shape (Q1, ruled by the operator 2026-10-22).** The operator: "at least we should sort the accounts we show by most free first, as this will give a good indication as to remaining accounts with remaining capacity. Right now hiding the other 13 accounts provides absolutely 0 value to the user… descend that line BELOW the menu (fleet inbox runs etc.) so that we use full width."
+- **Most free first, one function.** `lanesByFree(lanes)` orders lanes by their binding window's use, lowest first; ties keep roster order; a lane never read, and a lane whose sign-in has expired, go last. Every arrangement draws it: Refined's row, Instrument's LED meters and the phone grid. "+n" counts the lanes past the fit, which are the fullest.
+- **Refined's gauges get the full width.** At ≥900 `AppBar` draws two lines: the bar as today (wordmark, tabs, bell, search, settings, `+ New session`) and, under it, a full-width row of gauges, the whole row one door to `/accounts` (`commandDoor('go-accounts')`). The row shows as many lanes as fit its measured width, then "+n". Instrument keeps its LED meters in its top bar, sorted. A phone keeps #1116's grid, sorted.
 - **Always a number.** A rolled-over binding window reads "0%" (the server inferred it, `fiveRolledOver`/`sevenRolledOver`); the accessible name says the window reset and 0% is inferred. A lane never read reads "no reading", never 0%.
 - **Its window named.** The reading carries the binding window, "5h 62%" or "7d 80%", from `bindingPct`'s choice.
-- **No empty bar.** A lane with no reading draws no meter at all. A 0% meter's track (or its outline) is visible: at least 3:1 against the bar's ground (`--bg-surface` in Refined's bar, the top bar's ground in Instrument) in all twelve palettes, gated as a contract pair in `contrast-check.mjs`. Step 0 measures the candidates: an existing edge token as an outline, or `--limit-track` fitted by the generator (then Dracula and GitHub Light join the renders).
-- **Legible.** The reading at the skin's `--fs-meta` (12 px Refined, 11 px Instrument), in `--ink-secondary` or stronger; the lane name whole up to the roster's longest at the desk, cut with its full name in `title` only below that. S4b's overflow order (collapse to the first lane and "+n", then "+n") is kept.
-- **Q1's B** instead: the gauges leave the bar for the fleet sidebar's head (Refined) and the list column's head (Instrument), still one door to Accounts; the bar keeps a lane-trouble lamp only.
+- **No empty bar.** A lane with no reading draws no meter. A 0% meter's track (or its outline) is visible: at least 3:1 against its ground (the bar's `--bg-surface` in Refined, the top bar's ground in Instrument) in all twelve palettes, gated as a contract pair in `contrast-check.mjs`. Step 0 measures the candidates: an existing edge token as an outline, or `--limit-track` fitted by the generator (then Dracula and GitHub Light join the renders).
+- **Legible.** The reading at the skin's `--fs-meta` (12 px Refined, 11 px Instrument), in `--ink-secondary` or stronger; the lane name whole in the row, cut with its full name in `title` only where a lane's cell cannot hold it.
 
-- [ ] **Step 0: Measure.** The track and edge candidates against each bar ground in the twelve palettes (`pwa/design/audit.mjs`'s maths); the bar's width at 900 with six lanes at the new size.
-- [ ] **Step 1: Red.** `fleet-pieces.test.tsx`: "a rolled-over binding window reads 0% with its window, never a bare reset"; "a lane never read reads 'no reading' and draws no meter"; "the reading names the binding window". `contrast.test.ts`: the new pair's dark and light labels added to "token pairs the gate must keep measuring" (≈:899).
+- [ ] **Step 0: Measure.** The track and edge candidates against each ground in the twelve palettes (`pwa/design/audit.mjs`'s maths); the row's lane count at 900, 1280 and 1920 with seventeen lanes; the bar's height before and after.
+- [ ] **Step 1: Red.** `lane-order.test.ts`: "lanes sort by binding use, lowest first, ties in roster order"; "a never-read lane and an expired sign-in sort last". `fleet-pieces.test.tsx`: "every arrangement draws lanesByFree's order" (bar row, LED and grid over one fixture); "+n counts the fullest lanes past the fit"; "a rolled-over binding window reads 0% with its window, never a bare reset"; "a lane never read reads 'no reading' and draws no meter"; "the reading names the binding window". `refined-shell.test.tsx`: "at ≥900 the gauges are a full-width row under the bar's line, one door to /accounts". `contrast.test.ts`: the new pair's dark and light labels in "token pairs the gate must keep measuring" (≈:899). `refined-bar.browser.test.ts`: "at 1280 and 1920 the gauge row spans the bar's width and shows more lanes than the bar did".
 - [ ] **Step 2: Green.** Run alone `contrast.test.ts`, `limit-off-band.test.ts`, `node design/contrast-check.mjs`; in `ui/`, `npm run themes:check` if a value moved.
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
+  | roster order kept | lane-order, fleet-pieces | "lanes sort by binding use, lowest first…", "every arrangement draws lanesByFree's order" |
+  | a never-read lane sorted first (null as 0) | lane-order | "a never-read lane and an expired sign-in sort last" |
+  | the grid or the LED meters sorted on their own | fleet-pieces | "every arrangement draws lanesByFree's order" |
+  | the gauges left in the bar's line | refined-shell | "at ≥900 the gauges are a full-width row under the bar's line…" |
   | `compactReading` back to `reset` | fleet-pieces | "a rolled-over binding window reads 0% with its window, never a bare reset" |
   | a never-read lane draws a `Meter` | fleet-pieces | "a lane never read reads 'no reading' and draws no meter" |
-  | the reading without its window | fleet-pieces | "the reading names the binding window" |
   | the track pair removed from the contract | contrast | "token pairs the gate must keep measuring" (the pair's labels) |
 
-- [ ] **Step 4: Per width × skin × mode.** The bar with six lanes (one rolled over, one never read, one at 0%, one critical) at 899, 900, 1280 and 1920, and the phone grid (#1116's, if merged) at 360 and 390, × both skins × dark and light (plus Dracula and GitHub Light if a value moved).
+- [ ] **Step 4: Per width × skin × mode.** The bar with seventeen lanes (one rolled over, one never read, one at 0%, one critical, one signed out) at 899, 900, 1280 and 1920, and the phone grid at 360 and 390, × both skins × dark and light (plus Dracula and GitHub Light if a value moved), before and after.
 - [ ] **Step 5: Verify.**
 
-      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/fleet-pieces.test.tsx test/limit-off-band.test.ts test/refined-shell.test.tsx test/instrument-shell.test.tsx test/app.test.tsx
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/lane-order.test.ts test/fleet-pieces.test.tsx test/limit-off-band.test.ts test/refined-shell.test.tsx test/instrument-shell.test.tsx test/app.test.tsx
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/contrast.test.ts && node design/contrast-check.mjs
       cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/compact-gauges.browser.test.tsx browser/refined-bar.browser.test.ts
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/pwa-rings.test.ts
       cd ui && ./node_modules/.bin/tsc --noEmit
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
 
-**Acceptance.** No gauge without a number; every meter visible; the pair gated. **Rollback.** A plain revert (and `npm run themes` in `ui/` if a value moved; the generator is the only writer of that block).
+**Acceptance.** The freest lanes first, in a full-width row at the desk; no gauge without a number; every meter visible; the pair gated. **Rollback.** A plain revert (and `npm run themes` in `ui/` if a value moved; the generator is the only writer of that block).
 
 ### Task T2d: the Inbox and Runs counts show only what waits on the operator (D-6330) — after Step 1 and #1116 merge
 
@@ -569,20 +612,20 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
 
 **Acceptance.** Badges only for what waits on the operator. **Rollback.** A plain revert.
 
-### Task T2e: Instrument's desk uses its space — no empty column, no second head in the list column, dense rows under a fine pointer (D-6335) — after Step 1 merges
+### Task T2e: Instrument's desk uses its space — no empty column, no second head in the list column, dense rows under a fine pointer (D-6335) — dispatched ahead of the step order
 
-**Routing:** band 2. **Needs:** Step 1. **Frozen files touched:** none (`frame.tsx`, `FleetColumn.tsx`, `ListColumn.tsx`, `instrument.css` and `FleetTable.tsx` are not #1116's; T2e makes no `FleetScreen.tsx` edit, which is T2f's). **Lane:** PWA.
+**Routing:** band 2. **Needs:** T0 (the operator's notes on Instrument's desk take it out of the step order). **Frozen files touched:** none (`frame.tsx`, `FleetColumn.tsx`, `ListColumn.tsx`, `instrument.css` and `FleetTable.tsx` are not #1116's; T2e makes no `FleetScreen.tsx` edit, which is T2f's). **Lane:** PWA.
 
 **Files:** Modify `pwa/src/skins/frame.tsx` (≈:85-124, a frame attribute when the set has an `Inspector` part), `pwa/src/screens/FleetColumn.tsx` (≈:18-36, the head's chrome and the banners become two flags), `pwa/src/skins/instrument/ListColumn.tsx` (≈:7), `pwa/src/skins/instrument/instrument.css` (≈:13, ≈:55-59, ≈:258-273, ≈:295-314), `pwa/src/skins/instrument/FleetTable.tsx` (the toggle ≈:114-134, only if CSS cannot size it). Create `pwa/browser/instrument-desk.browser.test.ts`. Modify, each intended change in its own commit: `instrument-shell.test.tsx`, `instrument-list.test.tsx`.
 
 **The shape** (measured in Chrome at 1280×800 to 1920×1080; §What the operator saw, row 2e).
 - **No empty fourth column.** Instrument's grid adds its 320 px fourth track at ≥1600 only when the frame's set has an `Inspector` part: `ShellFrame` sets an attribute on its root from `set.Inspector !== null` (a part fact, never a skin-id comparison), and `instrument.css` keys the track on it. S12 sets the part, and the track appears with what fills it. At 1600 the reading column is then 860, not 808, and the detail reaches the viewport's edge.
-- **No second head in the list column.** `FleetColumn`'s one `barHoldsChrome` flag splits into a head-chrome flag and a banners flag. Instrument's `ListColumn` passes `headChrome={false}` at the desk: the column's wordmark and its Docs, Accounts, Settings, Inbox and Bell doors go (the top bar, the rail and the status bar hold them), while `FleetHead`'s count line and its pool-lag readout, which it draws outside its chrome gate (`FleetHead.tsx` ≈:35-42), stay until the status bar carries both. The banner stack stays (Instrument's `Banners` part is `null`). Below 900 nothing changes until S11.
+- **No second head in the list column.** `FleetColumn`'s one `barHoldsChrome` flag splits into a head-chrome flag and a banners flag. Instrument's `ListColumn` passes `headChrome={false}` at the desk: the column's wordmark and its Docs, Accounts, Settings, Inbox and Bell doors go (the top bar, the rail and the status bar hold them), and so does `FleetHead`'s count line, which the status bar's `fleetSummary` already shows (the operator's screenshot, 2026-10-22). Its pool-lag readout, drawn outside the chrome gate (`FleetHead.tsx` ≈:35-42), stays in the column, shown only when the epochs differ, until the status bar carries it. The banner stack stays (Instrument's `Banners` part is `null`). Below 900 nothing changes until S11.
 - **Dense rows under a fine pointer, by CSS only.** At ≥900 under `(pointer: fine)`, in `instrument.css` under `.ins-row`: an Instrument status row is two lines (the name with its state word, then its context), about 40 px, with no fact dropped (D-5545); its `.sess-body` floor follows `--row-h` instead of `--tap-min` there; the group heads and the toggle sit at `--row-h`. Under a coarse pointer every row and control keeps `--tap-min`. If Step 0 finds the two-line row needs markup, `SessionLine.tsx` joins Files, and T3b, which edits it next, absorbs the change.
 
 - [ ] **Step 0: Measure.** Reproduce the layout table (grid tracks; the first row's offset in the column; open rows fully visible) at 1280×800, 1440×900, 1599×900, 1600×900 and 1920×1080 on `/` and a session route against the fixture fleet of row 2e, before any edit, and list the height each change removes (the head's chrome; each row's and group head's density), which sets the first-row budget below.
 - [ ] **Step 1: Red.**
-  - `instrument-shell.test.tsx`: "the fourth-track attribute follows the set's Inspector part, whatever its id" (`ShellFrame` rendered with Instrument's set plus a stub `Inspector`, and with Refined's set and `Inspector: null`; the attribute asserted each way); "at 900, 1280 and 1920 the frame holds one wordmark, and one each of the Docs, Accounts, Settings, Inbox and Bell doors"; "the pool-lag readout shows once at the desk when the epochs differ"; "one banner stack at any width" (unchanged, kept green).
+  - `instrument-shell.test.tsx`: "the fourth-track attribute follows the set's Inspector part, whatever its id" (`ShellFrame` rendered with Instrument's set plus a stub `Inspector`, and with Refined's set and `Inspector: null`; the attribute asserted each way); "at 900, 1280 and 1920 the frame holds one wordmark, and one each of the Docs, Accounts, Settings, Inbox and Bell doors"; "the pool-lag readout shows once at the desk when the epochs differ"; "no count line in the column at the desk; the status bar's count is the one"; "one banner stack at any width" (unchanged, kept green).
   - `instrument-desk.browser.test.ts` (fine pointer): "at 1600 the session's reading column is 860 and the detail reaches the viewport's right edge"; "at 1280×800 the first row starts at least <Step 0's measured savings> px higher than on origin/main" (the number written into the case from Step 0's table); "a status row without an ask is at most two lines and 42 px, with its name, state word and context visible"; under touch emulation, "every row and control is at least 44 px".
 - [ ] **Step 2: Green.** Run alone `contrast.test.ts`, `tap-targets.test.tsx`, `skin-boundary.test.ts`, `skin-identity.test.ts`, `skin-switch.test.tsx`.
 - [ ] **Step 3: Mutation table, RUN.**
@@ -593,7 +636,8 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
   | the attribute set from the skin id | instrument-shell | "…whatever its id" (the stub `Inspector` on Instrument's set, `null` on Refined's) |
   | `ListColumn` keeps the head chrome | instrument-shell | "…holds one wordmark, and one each of…" |
   | the banners tied to the head flag | instrument-shell | "one banner stack at any width" |
-  | the count line and pool lag dropped with the chrome | instrument-shell | "the pool-lag readout shows once at the desk when the epochs differ" |
+  | the pool lag dropped with the chrome | instrument-shell | "the pool-lag readout shows once at the desk when the epochs differ" |
+  | the count line kept in the column | instrument-shell | "no count line in the column at the desk; the status bar's count is the one" |
   | the dense floor outside `(pointer: fine)` | instrument-desk | "under touch emulation, every row and control is at least 44 px" |
 
 - [ ] **Step 4: Per width × skin × mode.** The fleet and a session at 360, 390, 899, 900, 1280, 1440, 1599, 1600 and 1920 × both skins × both modes, before and after, with Step 0's table re-measured after: Instrument's first row higher by the budget, no empty column, the 860 column at 1600; Refined unchanged.
@@ -958,6 +1002,169 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
 
 **Acceptance.** The new session is on screen without a hunt or a misleading banner. **Rollback.** A plain revert; an older client ignores the field.
 
+### Task T3e: the right-side inspector hides and shows, remembered per device (D-6385) — after T3c, T3d, T2e and #1116 merge
+
+**Routing:** band 2. **Needs:** T3c and T3d (`SessionChrome.tsx`, `InspectorRail.tsx`, `SessionScreen.tsx`); T2e (`frame.tsx`); #1116 (`ui/design/make-icons.mjs`, `ui/src/icons/lucide.ts`). **Frozen files touched:** none once those have merged. **Lane:** PWA.
+
+**Files:** Create `pwa/src/inspector/inspectorShown.ts`, `pwa/src/inspector/InspectorToggle.tsx`, `pwa/test/inspector-hide.test.tsx`, `pwa/browser/inspector-hide.browser.test.ts`. Modify `pwa/src/skins/refined/InspectorRail.tsx` (gates on `useInspectorShown()`; publishes the placeable target), `pwa/src/screens/SessionScreen.tsx` (≈:492: the strips rule reads `useInspectorShown()`), `pwa/src/skins/frame.tsx` (≈:116: `INSPECTOR_ID` on the aside; T2e's attribute becomes `set.Inspector !== null && shown`), `pwa/src/skins/refined/SessionChrome.tsx` (≈:32, the toggle after `HeaderDoors`), `pwa/src/command/registry.ts`, `commands.ts` and `CommandLayer.tsx` (≈:118-128, the context's `inspector` target), `ui/design/make-icons.mjs` and `ui/src/icons/lucide.ts` (`panel-right-close`, `panel-right-open`). Modify, in its own commit: `pwa/test/command-registry.test.ts` (≈:69-83 the id list gains `toggle-inspector`; ≈:87-90 the context literal gains `inspector: null`).
+
+**The shape** (measured in Chrome: Refined at 1600 and 1920 with the rail shown and hidden).
+- **One per-device choice.** `inspectorShown.ts` keeps `ccrc-inspector` in `localStorage`: only the exact value `'hidden'` hides; absent, unknown or unreadable storage means shown; reads and writes sit in try/catch; the choice applies in memory before it is written, so storage that refuses still toggles for the page. `useInspectorHidden()` subscribes through `useSyncExternalStore`.
+- **One shown fact.** `useInspectorShown() = useMediaQuery(INSPECTOR_QUERY) && !hidden`. The rail, `SessionScreen`'s strips rule and T2e's frame attribute all read it, so a hidden rail brings the task and mail strips back into the column: nothing is lost, and each is mounted once at any width.
+- **The command and its door.** A registry command `toggle-inspector` ("Show or hide the inspector", key `i`, group Appearance), offered only while a part publishes an inspector target; its `run` is null-safe because single keys skip the `when` check (`useShortcuts.ts` ≈:110). `InspectorRail` publishes `{ shown, toggle }` while placeable (≥1600, on a session route), shown or hidden, as `SessionFlows` publishes its target (≈:144-161). `InspectorToggle` is a `commandDoor('toggle-inspector')`, mounted only while the target is published (never hidden by CSS), named "Inspector" in both states, with `aria-expanded`, `aria-controls` naming the aside, `aria-keyshortcuts="i"` and a title that says what a tap does. Refined places it in the session header, rightmost; Instrument places none until S12, which reuses this command, choice and toggle.
+- **The reading column stays the measure.** Hiding re-centres the 820 px column and brings the strips back (measured: about 138 px of transcript height in the fixture); it does not widen the text.
+- **Focus.** Hiding with focus inside the rail moves focus to the toggle, never to the page body.
+- **The door table changes.** W2's `toggle-inspector` row: Refined desk at ≥1600 becomes "the session header's Inspector toggle (T3e)"; 900 to 1599 stays `SKIN_ASYMMETRY` (Refined places no inspector there).
+
+- [ ] **Step 0: Re-ground.** The rail's gate, the strips rule, the frame's aside, `SessionFlows`' target pattern, the command registry's pinned id list, the `i` key's routes.
+- [ ] **Step 1: Red.** `inspector-hide.test.tsx`: "the stored choice: only 'hidden' hides; absent, unknown and unreadable storage read shown"; "a choice storage refuses still applies for this page"; "hidden at 1600 and 1920: the rail renders nothing and the column renders the task and mail strips"; "the toggle is mounted in Refined's session header at 1600 and 1920, not at 1599, 390 or off a session route, and is a door to toggle-inspector"; "the toggle says its state: aria-expanded follows the rail, aria-controls names the aside, its name is 'Inspector' either way"; "toggle-inspector is offered only while a part places an inspector; i on the page body flips it, i in the composer stays text, i where nothing is placed does nothing"; "hiding with focus inside the rail puts focus on the toggle"; "Instrument places no inspector: no toggle and no command". `skin-switch.test.tsx`: "the inspector's hidden choice survives a switch and a switch back". `inspector-hide.browser.test.ts`: "Refined at 1600 and 1920, shown: three tracks; hidden: two tracks, the reading column still 820 and centred, the strips above the composer"; "hiding at the newest turn keeps the reader at the newest turn"; "no sideways page scroll either way"; "under touch emulation at 1600 the toggle is at least 44 px".
+- [ ] **Step 2: Green.** Run alone `contrast.test.ts`, `tap-targets.test.tsx`, `skin-boundary.test.ts`, `command-layer.test.tsx`.
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | the rail gated on `INSPECTOR_QUERY` alone | inspector-hide | "hidden at 1600 and 1920: the rail renders nothing…" |
+  | the strips rule ignores the choice | inspector-hide | the same case (its strips half) |
+  | the door always mounted, hidden by CSS below 1600 | inspector-hide | "the toggle is mounted … not at 1599…" |
+  | the door with its own `onClick` | inspector-hide | "…and is a door to toggle-inspector" |
+  | an unknown stored value read as hidden, or the read without try/catch | inspector-hide | "the stored choice: only 'hidden' hides…" |
+  | `aria-expanded` dropped or inverted | inspector-hide | "the toggle says its state…" |
+  | the focus repair removed | inspector-hide | "hiding with focus inside the rail puts focus on the toggle" |
+  | the choice kept in component state | skin-switch | "…survives a switch and a switch back" |
+  | `run` without the null guard | inspector-hide | "…i where nothing is placed does nothing" |
+  | the target published only while shown | inspector-hide | "the toggle is mounted … at 1600 and 1920…" |
+
+- [ ] **Step 4: Per width × skin × mode.** Refined and Instrument × dark and light × 360, 390, 1280, 1599, 1600 and 1920, the rail shown and hidden, before and after.
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/inspector-hide.test.tsx test/inspector.test.tsx test/skin-switch.test.tsx test/command-registry.test.ts test/command-layer.test.tsx test/skin-boundary.test.ts test/tap-targets.test.tsx
+      cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/inspector-hide.browser.test.ts
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/pwa-rings.test.ts
+      cd ui && ./node_modules/.bin/tsc --noEmit
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
+
+**Acceptance.** The panel hides and shows by a header button or `i`, the choice survives a reload, and its tasks and mail are never lost. **Rollback.** A plain revert; the orphaned `ccrc-inspector` key is read by nothing.
+
+### Task T3f: Working sits below Done in the status grouping (D-6386) — after T0
+
+**Routing:** band 1. **Needs:** T0. **Frozen files touched:** none. **Lane:** PWA.
+
+**Files:** Modify `pwa/src/fleet/statusGroups.ts` (≈:52-60, the groups' order). Modify, in its own commit: `pwa/test/status-groups.test.ts`, `pwa/test/instrument-list.test.tsx` (≈:121, "status mode renders the groups in groupByStatus's order, the last four folded").
+
+**The shape** (operator, 2026-10-22: "the WORKING should be BELOW the Done, as the user will want to instruct Done further and let WORKING work"). `STATUS_GROUPS`' order becomes Needs you, Done, Working, then the folded Idle, Cleanup, Archived and Dead; `groupByStatus` follows it. Refined is already right: its cards order rows by `RANK` (`sortFleet.ts` ≈:7-14: attention, done, idle, working …), and its bucket chips follow `RANK` too. T3a, which renames these groups' words later, absorbs this order.
+
+- [ ] **Step 0: Re-ground.** Every reader of `STATUS_GROUPS`' order (`groupByStatus`, `FleetTable`, the folds).
+- [ ] **Step 1: Red.** `status-groups.test.ts`: "the open groups are ordered Needs you, Done, Working; the folded four follow". `instrument-list.test.tsx`: "status mode shows Done above Working".
+- [ ] **Step 2: Green.**
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | Working back above Done | status-groups, instrument-list | "the open groups are ordered Needs you, Done, Working…", "status mode shows Done above Working" |
+  | a folded group moved among the open ones | status-groups | "…the folded four follow" |
+
+- [ ] **Step 4: Per width × skin × mode.** Instrument's status mode with every group populated at 360, 390, 1280 and 1920 × both skins × dark and light, before and after (Refined unchanged).
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/status-groups.test.ts test/instrument-list.test.tsx test/fleet-screen.test.tsx
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/pwa-rings.test.ts
+      cd pwa && ./node_modules/.bin/tsc --noEmit
+
+**Acceptance.** Done is above Working wherever the fleet is grouped by status. **Rollback.** A plain revert.
+
+### Task T4a: colour where the machine speaks — tool boxes on the code palette, inline code in a well, a failed call says so, every well hue gated (D-6387) — after T1c merges
+
+**Routing:** band 2. **Needs:** T1c (`ChatList.tsx`, `tool-card.tsx`); Q8 or its default. **Frozen files touched:** none. **Lane:** PWA/UI. No palette value changes and no new dependency.
+
+**Files:**
+- Create `pwa/src/lib/ansi.ts` (pure: SGR runs, the hue classes, control-sequence stripping), `pwa/src/session/toolWell.ts` (pure: `toolWellPlan(use, part, text)`), `pwa/src/session/ToolWellText.tsx`, and tests `pwa/test/ansi.test.ts`, `pwa/test/tool-well-plan.test.ts`, `pwa/test/tool-well.test.tsx`, `pwa/browser/tool-well-colour.browser.test.ts`.
+- Modify `ui/src/components/tool-card.tsx` (an optional `renderWell?(part, text)` used by `GenericToolCard`'s two wells ≈:405, ≈:413, absent meaning today's text; the word "failed" on a failed call's row), `tool-card.css` (`.tool-fail`; `.well .ansi-*`), `tool-card.stories.tsx`, `ui/src/components/prose.css` (each `.msg-assist .hljs-*` rule ≈:393-415 gains a `.well .hljs-*` arm; under Q8's default, `.md-code` ≈:224-232 becomes a well chip), `pwa/src/lib/markdown.tsx` (`boundedHighlight(raw, lang)` extracted from `CodeBlock` ≈:359-375, byte-identical), `pwa/src/session/ChatList.tsx` (≈:73, passes `renderWell`), `pwa/design/contrast-check.mjs` (the nine `--syn-*` hues paired with the well in every palette), `pwa/design/audit.mjs` (`INHERITED_GROUNDS` for the hljs and ANSI rules on `var(--bg-well)`, `.tool-fail` on `var(--bg-surface)`).
+- Modify, each in its own commit: `pwa/test/contrast.test.ts` (`GRANDFATHERED_UNCOVERED` loses the 13 hljs keys ≈:281-293, now measured), `pwa/test/role-census.test.ts` (≈:278-280, `.tool-fail: META`).
+
+**The shape** (measured in Chrome over the production build: about 9% of a realistic transcript's characters carry colour, almost all inside fenced code blocks, which 0 of 3,047 sampled assistant blocks contained; 78% of tool calls are Bash, whose boxes are one ink; ANSI codes show as literal debris).
+- **Colour lives in the dark wells, as the identity core already says** (spec §3.1: terminals and code sit in wells that stay dark in every palette). The accent (commit, selection, life) and the lane hues are never borrowed, no glow is added, and the code hues are never put on the page's light grounds, where they measure as low as 1.49:1.
+- **Tool boxes.** `toolWellPlan` answers `plain`, `code(lang, text)`, `diff(text)` or `ansi`. A Bash input reads as a shell snippet (its description as a comment, every other field as a `# key: value` comment, then the command); an Edit input as one `-`/`+` hunk (MultiEdit, one per edit); a Write input as its path comment and its content in its file's language; any other parseable input as JSON; an input that does not parse stays plain. A result with SGR codes is `ansi`; one headed by a unified diff is `diff`; anything else is plain and renders exactly today's text node. One highlighter: `boundedHighlight`, with `CodeBlock`'s bounds and grammars.
+- **ANSI.** Colour codes become classes on palette tokens (red `--diff-del`, green `--diff-add`, yellow `--syn-number`, blue `--syn-type`, magenta `--syn-keyword`, cyan `--syn-function`, grey and dim `--syn-comment`), matching the drawer's `GLASS_ANSI[1..7]`; backgrounds, reverse video and colours beyond the first 16 fall back to the well's ink; every other control sequence and lone ESC byte is removed. No ANSI value reaches a `style` attribute. Legitimately different from the drawer's reader: the drawer paints xterm's parsed buffer as the pane shows it, a transcript record is static text in a gated well.
+- **Inline code (Q8 default A).** Inline code, in 47% of sampled assistant messages, renders as a small well chip (`--bg-well` with `--ink-on-well`, an existing gated pair), so code reads as code at rest. Under Q8's B it stays as today.
+- **A failed call says so.** A failed tool call's row carries the word "failed" in `--status-dead-text` beside its dot, at rest, in both skins and at every width.
+- **The gate measures every well hue.** The nine `--syn-*` hues become token pairs on the well in all twelve palettes (they pass today, the lowest 5.24:1), and the 13 hljs rules leave the grandfathered blind spot.
+
+- [ ] **Step 0: Re-ground.** `CodeBlock`'s bounds, the 13 hljs rules, the contrast contract's well pairs, `GLASS_ANSI`, the tool card's wells, the markdown goldens.
+- [ ] **Step 1: Red.** `ansi.test.ts`: "a run with no escape is one plain run, byte for byte"; "31–36 and 91–96 map to the six hues; 30, 90 and 2 to the muted ink; 37, 39 and 0 to the well's ink"; "a background code paints nothing"; "38;5;n below 16 maps as its basic hue; any other 256 or truecolour value takes the default ink"; "no ESC byte survives: cursor and erase sequences, OSC, and a lone ESC are removed"; "the hue table matches GLASS_ANSI[1..7]". `tool-well-plan.test.ts`: "a Bash input reads as its description as a comment, then its command"; "every field of a parseable input is shown"; "an Edit input is one hunk; MultiEdit one per edit"; "a Write input is its path comment and content in its grammar; an unregistered extension is plain"; "an input that does not parse is plain"; "a result with SGR is ansi; one headed by a unified diff is diff; any other is plain". `tool-well.test.tsx`: "a plain result renders today's DOM: one text node in the well"; "a tool well carries no style attribute"; "a failed call's row says 'failed'; an ok or running call's does not"; "a block over CodeBlock's bound renders plain"; "inline code renders as a well chip" (Q8 A). `contrast.test.ts`: "every --syn-* is a gated pair on the well in every palette"; "the transcript's well hues are measured, not left in the blind spot". `tool-well-colour.browser.test.ts`: "an expanded Bash card shows its command and output in palette hues on the well, no escape byte visible, no sideways scroll", at 360, 390, 1280 and 1920 × both skins × both modes.
+- [ ] **Step 2: Green.** Run alone `contrast.test.ts`, `role-census.test.ts`, `markdown-golden.test.tsx` (byte-identical through the extraction), `chat.test.tsx`, `transcript-rows.test.tsx`, `shape-census.test.ts`, `design-system-boundary.test.ts`.
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | ESC kept in a run's text | ansi | "no ESC byte survives…" |
+  | a background code mapped to a hue | ansi | "a background code paints nothing" |
+  | magenta mapped to another token | ansi | "the hue table matches GLASS_ANSI[1..7]" |
+  | the Bash mapper drops `description` or an unknown field | tool-well-plan | "every field of a parseable input is shown" |
+  | a truncated input tried as JSON | tool-well-plan | "an input that does not parse is plain" |
+  | a plain result wrapped in a span | tool-well | "a plain result renders today's DOM…" |
+  | a run's colour written to `style` | tool-well | "a tool well carries no style attribute" |
+  | `ToolWellText` skips `boundedHighlight` | tool-well | "a block over CodeBlock's bound renders plain" |
+  | the failed word on every row, or on none | tool-well | "a failed call's row says 'failed'…" |
+  | the `--syn-*` well pairs deleted | contrast | "every --syn-* is a gated pair on the well…" |
+  | an ANSI rule grandfathered instead of registered | contrast | "…measured, not left in the blind spot" |
+
+- [ ] **Step 4: Per width × skin × mode.** A transcript with Markdown (a heading, a list, bold, inline code, a fenced TypeScript block and a fenced diff), a Bash call with ANSI output, an Edit, a failed call and a user prompt, as seen and opened, at 360, 390, 1280 and 1920 × Refined and Instrument × dark and light, before and after, plus Dracula and GitHub Light at 1280.
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/ansi.test.ts test/tool-well-plan.test.ts test/tool-well.test.tsx test/markdown-golden.test.tsx test/chat.test.tsx test/transcript-rows.test.tsx
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/contrast.test.ts test/role-census.test.ts test/shape-census.test.ts test/design-system-boundary.test.ts && node design/contrast-check.mjs
+      cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/tool-well-colour.browser.test.ts browser/tool-group-fit.browser.test.ts
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/pwa-rings.test.ts
+      cd ui && ./node_modules/.bin/tsc --noEmit
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
+
+**Acceptance.** Tool boxes, code and failures read in colour in both skins and both modes; every new colour is measured by the gate. **Rollback.** A plain revert.
+
+### Task S18 (W2), brought forward: Instrument `preview: false`, so a desktop boots Instrument and a phone Refined (D-5096; D-5479) — after T0
+
+**Routing:** band 2. **Needs:** T0. W2's own gates are met except S17: F12b (the picker, #632), F3b (axe in both skins, #702) and the Sheet's desktop arm (P3-4, #956). **Lane:** PWA/UI.
+
+**The task is W2's Task S18, as written** in `docs/superpowers/plans/2026-10-18-ccrc-skins-w2-shells.md` (its Files, Steps, mutation table and renders bind), with two departures, ruled here:
+- **It lands before S17, the parity test** (operator, 2026-10-22: "it doesn't auto-set Instrument on my Mac and Refined on my mobile. That's annoying"). The operator already runs Instrument by hand, and anyone the default moves can move back in Settings › Appearance (F12b). S17 still runs when its own gates open and proves parity on the flipped default.
+- **Its Verify drops `test/skin-parity.test.tsx`**, which S17 creates and which does not exist yet.
+
+### Task C0: measure the console's responsiveness (research, no PR) — after T0
+
+**Routing:** band 2. **Needs:** T0. **Lane:** PWA and server, read-only. A research wave: it opens no PR and defines no number; its report becomes the next tasks.
+
+**The question** (operator, 2026-10-22: "all UI functions feel super sluggish and slow non-responsive"). Measure, never guess, where a tap waits:
+- **The server.** Time the console's read routes from the fleet box (read-only `ccrc-api` calls and `GET`s; measured 2026-10-22: peers 7.1 s and asks 4.2 s, against 0.1 to 0.8 s for routes that read no registry), and count the agent requests behind each (a registry read is about 3,000 serial requests, `server/src/registry.ts` ≈:798, ≈:1255; `/api/projects` about 280).
+- **The PWA.** In Chrome over the production build with a fixture fleet the operator's size (80 sessions, 17 lanes) and a long transcript: long tasks on each fleet frame, renders per frame, input latency for a tap that opens a sheet, a route change, and a session switch, in both skins.
+- **The report** ranks each cause by the time it costs a tap, with its code, and proposes tasks. It is mail to the coordinator, and no file is committed.
+
+### Task C1: a registry read costs a bounded number of agent requests (D-6388) — after T0
+
+**Routing:** band 3 (the registry reader under every fleet view). **Needs:** T0. **Frozen files touched:** none. **Lane:** server.
+
+**Files:** Modify `server/src/registry.ts` (`readRegistryMeasured` ≈:1255, the row loop; `buildRecord` ≈:798, the field reads). Tests: the registry suites Step 0 names, with a request-counting fake `FleetIO`.
+
+**The shape.** Today a registry read walks the rows one at a time and reads about 35 field files per row whether or not they exist (measured: about 3,000 agent requests per read on the fleet box, at a 24 ms round trip each). C1 reads rows with bounded concurrency (about 8 in flight) and reads only the field files the registry listing shows present (an absent field is absent without a request). The answers are exactly today's, absent and unreadable kept apart (`readFileMeasured`'s distinctions, D-114): a field the listing shows but whose read fails stays unreadable, never absent.
+
+- [ ] **Step 0: Measure.** The request count and wall time of one registry read today with a counting fake over a fixture of 80 rows; the registry's suites; every caller of `readRegistryMeasured`.
+- [ ] **Step 1: Red.** "a registry read of 80 rows makes at most <today's present-field count + the listing> requests"; "the bounded read answers exactly what the serial read answers, every row and every field, absent and unreadable included"; "never more than the bound in flight"; "a field the listing shows but whose read fails is unreadable, not absent".
+- [ ] **Step 2: Green.**
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | every field read regardless of the listing | the registry suite | "…makes at most … requests" |
+  | rows read serially | the registry suite | the wall-time case of Step 0's fixture |
+  | an unbounded `Promise.all` | the registry suite | "never more than the bound in flight" |
+  | a failed read of a listed field folded to absent | the registry suite | "…is unreadable, not absent" |
+
+- [ ] **Step 4: Renders.** None (server only). The PR body carries Step 0's request count and wall time before and after.
+- [ ] **Step 5: Verify.**
+
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 <the registry suites Step 0 names> test/sessionws.test.ts test/routes.test.ts
+      cd server && ./node_modules/.bin/tsc --noEmit
+
+**Acceptance.** The same registry, read with a fraction of today's requests. **Rollback.** A plain revert.
+
 ---
 
 ## Acceptance (the matrix, per PR)
@@ -966,18 +1173,21 @@ Each rendered task's PR body carries a table: rows Refined and Instrument × dar
 
 ## Rollback
 
-Every task is a plain revert of its squash commit, and none persists state: T1a's and B1's decisions are per call, T1b's `askFrameSeen` per connection, T3b's reveal pure CSS, B2's field is optional, and no task writes `localStorage` (T2e keeps `FleetTable`'s existing mode key), `coord.db` or a registry file. Notes:
+Every task is a plain revert of its squash commit, and none persists state: T1a's and B1's decisions are per call, T1b's `askFrameSeen` per connection, T3b's reveal pure CSS, B2's field is optional, and no task writes `coord.db` or a registry file. Two keep a per-device choice in `localStorage` (T2a part (b)'s `ccrc-release-dismissed`, T3e's `ccrc-inspector`); a revert leaves an orphaned key that nothing reads. Notes:
 - **T1c before T1b.** Reverting T1b alone while T1c is merged leaves T1c's container around the old content; revert T1c first.
 - **B2 before B1.** B2's whole-box resume sits on B1's proof; revert B2 first.
 - **T2c's palette value.** If T2c moved a generated value, its revert is followed by `npm run themes` and `npm run themes:check` in `ui/`.
 
 ## Operator questions (pending; each task builds its default until ruled)
 
-- **Q1, the gauges (T2c).** A: they stay in the bar, made legible (a number with its window, no empty bar, the track gated at 3:1, larger text). B: they leave the bar for the fleet column's head; the bar keeps a lane-trouble lamp only. **Recommended: A.** The spec places them in both bars, and every defect is fixable in place.
+- **Q1, the gauges (T2c). Ruled by the operator, 2026-10-22:** most free first in every arrangement, and Refined's gauges in their own full-width row under the menu bar, as many as fit, then "+n" (T2c's shape).
 - **Q2, the update line (T2a).** A: a quiet "↑ vX available" door in Refined's bar, Instrument's status bar and one phone row, each opening Settings › Updates. B: nothing in the bars; the Settings index and the fleet column's build line only. **Recommended: A.** A waiting release is worth one quiet line; B makes it findable only by looking.
 - **Q3, a menu that is not an AskUserQuestion (T1b).** A: a plan approval or another menu keeps its parsed option labels and a one-line title, under "Claude needs a choice", with no preamble or raw pane. B: such a menu shows only "Answer it in the terminal". **Recommended: A.** B would stop a phone from approving a plan.
 - **Q4, the phone's ⋯ and header doors (T3b, T3c).** A: on touch every row keeps one ⋯ (touch has no hover) and the header keeps its three glyph doors, each with its word in the More sheet; the desk gets the hover reveal and visible words. B: drop the row's ⋯ on a phone (the session's own menu holds its actions) and fold Terminal and the PR door into More. **Recommended: A.** B costs a tap for every row action on a phone.
 - **Q5, Instrument's runs row at the desk (T2f).** A: no "Runs · n" row (the rail's Runs and the status bar's count are its doors); the class chooser on the toggle's row in project mode only. B: keep the row. **Recommended: A.** It frees 56 px of the list column and the chooser does nothing in status mode.
+- **Q7, the fleet's worker cap.** With the fleet box at load 66 to 77 on 16 CPUs, 14 concurrent workers is part of why the console feels slow. A: lower the cap to about 8 while the box is this loaded (the operator's setting). B: keep 14. **Recommended: A.**
+- **Q8, inline code in the chat (T4a).** A: inline code renders as a small dark well chip (`--bg-well` with `--ink-on-well`, an existing gated pair; code sits in wells in every palette, spec §3.1), the one at-rest change the identity rules allow in prose, in 47% of assistant messages. B: unchanged. **Recommended: A.**
+- **Q9, colour for headings and bold.** A: a new palette colour for them (a new token family in all twelve palettes and a §3 amendment). B: no; they stay ink, and colour stays where the machine speaks. **Recommended: B.** The accent and the lane hues already mean something.
 - **Q6, Track B's place (B1 to B5).** A: beside Step 1, now; its files are disjoint from the ask's. B: after Step 3. **Recommended: A.** A send that sits unsent and a one-minute first open hurt every day; the polish does not wait on them, nor they on it.
 
 ## Carried into the skins plans
@@ -986,7 +1196,10 @@ What the not-yet-started skins tasks inherit from this plan, so they build on it
 - **S6** (Refined's filter rail) uses T3a's words ("Needs you", "Exited", "N new"), its quiet Exited and `markSeen.ts`.
 - **S11** (Instrument's phone) replaces T2b's `PhoneFab` with its top bar's `+`, keeps T2a's phone row, and inherits T2e's split column flags.
 - **S12** (Instrument's session and inspector) places T1c's inline ask unchanged, T3c's header view and doors, and T3d's sections and routing line; setting `Inspector` brings back T2e's fourth track, filled. Off a session route at ≥1600 it shows no second "Select a session" beside the detail's.
-- **S17** (parity) counts T3b's ⋯ under hover and T1c's inline ask as the session's answer door at the desk.
+- **S12** also reuses T3e's `toggle-inspector` command, its per-device choice and `InspectorToggle` (at ≥1600 the toggle hides the permanent inspector; from 900 to 1599 it opens S12's overlay), and its strips table gains a "≥1600, hidden: rendered" row.
+- **S16**'s facts chip, "where the inspector is not on screen", reads `useInspectorShown()`.
+- **S17** (parity) counts T3b's ⋯ under hover and T1c's inline ask as the session's answer door at the desk; it runs after S18 (brought forward), on the flipped default.
+- **W2's door table**, the `toggle-inspector` row: Refined desk at ≥1600 is the session header's Inspector toggle (T3e); 900 to 1599 stays `SKIN_ASYMMETRY`.
 - **W3 P1a** registers Instrument's trimmed column (T2e), never `FleetTable` alone, which would drop the banner stack, the claims strip and the archived row.
 - **W3 P2** (reason tags) edits `sessionFacts.ts` after T3b's fit rule.
 
@@ -994,20 +1207,20 @@ What the not-yet-started skins tasks inherit from this plan, so they build on it
 
 ### Issued 2026-10-22 and defined here
 
-`POST /api/ledger/deviations` issued this wave a block of twelve, D-6324 to 6335, and then, for Track B, a block of six, D-6366 to 6371 (each upper bound written without the prefix, so it seeds no floor). All eighteen are defined here, once.
+`POST /api/ledger/deviations` issued this wave a block of twelve, D-6324 to 6335, then, for Track B, a block of six, D-6366 to 6371, and, for rev 3, a block of five, D-6385 to 6389 (each upper bound written without the prefix, so it seeds no floor). Twenty-two are defined here, once.
 
 - **D-6324** — `ask-outlives-the-age-cut` (Task T1a): the session stream keeps the hook's structured ask past `HOOKSTATE_FRESH_MS` while its identity is current, its state `waiting`, and the pane's menu corresponds to its call (`checkDialog`'s aligned copy, or the multi menu's labels), through the pure `keepAgedAsk` and one hookstate read per tick; `readPendingAsk` stops counting a trailing block of the ask's own message as conversation. Legitimately different from every other envelope reader, which keeps the cut. Reverses the ask-sheet-half plan's cause 8 for the session stream only.
 - **D-6325** — `the-ask-is-claudes-own-question` (Task T1b): an ask surface renders only what `askSource` allows; an AskUserQuestion is never rendered from pane text, including its review screen (superseding D-5089's raw summary) and its tab labels; a multiSelect with no structured copy is `ask-unreadable` (D-5091's phone answer for it is the accepted loss); the header names the session, the project and a coordinator's hold; `(Recommended)` becomes a tag; Other is a row; one scroll region through `Sheet`'s opt-in `titleScroll`; the plain-words census. Q3's default (A) applies to non-ask menus until ruled.
 - **D-6326** — `answer-inline-at-the-desk` (Task T1c): the operator's ruling of 2026-10-22 brings the session pane's inline answer forward from the two-skins spec's W4 F2 (§6, §10); F2's other homes stay W4. One controller, two containers chosen by `useDesk()`; inline keys act only inside the card and never auto-focus; the interrupt stands down while an inline ask is mounted; the transcript's live card points at the inline card through `askBelow`; the composer refuses locally while a question is up.
-- **D-6327** — `update-is-a-quiet-line` (Task T2a): an available release is not a banner; `bannerRelease` moves to `releaseWaiting.ts`; one indicator, one instance per width, its words `releaseWaitingWords`, its stale words per R24(b), a door to Settings › Updates. Q2's default (A) until ruled.
+- **D-6327** — `update-is-a-quiet-line` (Task T2a): an available release is not a banner; `bannerRelease` moves to `releaseWaiting.ts`; one indicator, one instance per width, its words `releaseWaitingWords`, its stale words per R24(b), a door to Settings › Updates. Part (b): a per-device dismissal, a high-water mark on the release tag (`ccrc-release-dismissed`), so the same release stays hidden and a newer one shows; Settings, the build line, the push and the halt banner ignore it. Q2's default (A) until ruled.
 - **D-6328** — `no-fab-at-the-desk` (Task T2b): Instrument's FAB mounts below 900 only, through #1116's `Fab` part, until S11 replaces it.
-- **D-6329** — `gauges-say-a-number` (Task T2c): a compact reading is always a number with its window or "no reading"; no meter for an unread lane; the track or its outline gated at 3:1 on the bar's ground. Q1's default (A) until ruled.
+- **D-6329** — `gauges-say-a-number` (Task T2c): `lanesByFree` orders every arrangement most free first, never-read and signed-out lanes last; Refined's gauges take their own full-width row under the bar at the desk (the operator's ruling of Q1); a compact reading is always a number with its window or "no reading"; no meter for an unread lane; the track or its outline gated at 3:1 on its ground.
 - **D-6330** — `counts-are-what-needs-you` (Task T2d): the Inbox badge counts the sessions waiting on the operator (`operatorAsk`) and says "waiting for you"; the Runs badge counts open runs whose worker or coordinator waits on the operator; no badge at zero or before its frame; the Inbox's unread marks keep D-5431's one predicate; "active" means `ACTIVE_RUN_STATES`.
 - **D-6331** — `fleet-words-are-plain` (Task T3a): the words table; "Needs you" and "Exited" are the one bucket vocabulary, derived from `STATUS_GROUPS`; the unseen count says "new"; Exited quiet; the bucket bar renders where the list part draws no counts (Refined, and Instrument's project mode), so Instrument's status mode draws its counts once, with Mark all seen on its group heads through `markSeen.ts`; the untagged pool chip keeps ruling 3's flag and door with the word "Set pool".
 - **D-6332** — `names-whole-where-they-fit` (Task T3b): the row's name, programme and branch render whole when they fit the measured track; ⋯ revealed by hover, focus or selection under a fine pointer, mounted and focusable always, visible on touch (Q4's default A).
 - **D-6333** — `the-header-names-the-session` (Task T3c): the header's title is the row's session name and its crumb the project, drawn crumb first (a main checkout keeps the project); `branchDuplicatesTitle`; the fallback derives the label; no chip cut at any width (the desk wraps, the phone scrolls sideways); the doors' words at the desk, glyphs with titles and the More sheet's words on a phone (Q4's default A).
 - **D-6334** — `inspector-shows-what-is-there` (Task T3d): sections render only with content; `routingLine` says what runs and asks only what it can measure, by `accountProvider`, the one reader of `RosterWire.provider`, where absent means not measurable; `routeView` takes the same provider.
-- **D-6335** — `instrument-uses-its-desk` (Task T2e): Instrument's fourth track only with an `Inspector` part, keyed on a frame attribute; the list column's head chrome and banners on two flags, the chrome (the wordmark and the doors) dropped at the desk while the count line and the pool lag stay; dense two-line rows, group heads and toggle under a fine pointer at the desk, by CSS.
+- **D-6335** — `instrument-uses-its-desk` (Task T2e): Instrument's fourth track only with an `Inspector` part, keyed on a frame attribute; the list column's head chrome and banners on two flags, the chrome (the wordmark and the doors) and the count line dropped at the desk (the status bar carries the count), the pool-lag line kept, shown only when the epochs differ; dense two-line rows, group heads and toggle under a fine pointer at the desk, by CSS.
 - **D-6366** — `the-echo-wait-fits-a-loaded-box` (Task B1): each echo loop waits at least `ECHO_TRIES` polls and at least `ECHO_BUDGET_MS`, spent as the larger of wall time and injected sleep, so no caller waits less than today; `ECHO_TRIES` and `ECHO_POLL_MS` stay for the answer routes; a failed Enter press is followed by the proof's box reads instead of ending it, with no new refusal word, so every reader of `enter-ignored` keeps its meaning; one log line per refused send, never the text.
 - **D-6367** — `retry-resumes-our-own-text` (Task B2): an optional `resume` on the `/prompt` body, sent by Retry only when the refusal left our text in the box; `resumeIfOwn: 'whole'` presses Enter only on a box that renders exactly the composed text, answers `nothing-to-submit` over an empty box and never retypes. A mode of `resumeIfOwn`, not a third path to Enter.
 - **D-6368** — `the-drawer-follows-its-pty` (Task B3): `PtyLike`'s optional `onExit`; the bridge closes the drawer's socket with 4000 on pty exit, the synthesized link-drop exit and a failed open included; the drawer re-attaches once on 4000 and otherwise shows Reconnect; a closed `RemotePty` writes nothing and releases its listener, so a stale id never reaches another session; a soft keyboard's lone line feed inside an insertion window is Enter, once Step 0 shows that path.
@@ -1015,7 +1228,12 @@ What the not-yet-started skins tasks inherit from this plan, so they build on it
 - **D-6370** — `a-new-session-opens-at-once` (Task B5): the New session sheet navigates to the new session (by the answer's id, or when `startedSessionFor` finds its row, bounded, never after a dismissal); its project list renders from the cache; the stream's `backlog` carries an optional `unprompted` when the search finds nothing, the row is live and the turn marker measures absent, and the screen then shows "No messages yet" without the can't-find banner.
 - **D-6371** — `instrument-desk-runs-row` (Task T2f): at the desk Instrument shows no runs row (the rail and the status bar are its doors), and the class chooser, one shared `ClassChooser`, sits on the toggle's row in project mode only; D-2's "only door to /runs" comment names the rail. Q5's default (A) until ruled.
 
-Issued and unused: none. A further departure takes a number from the ledger.
+- **D-6385** — `inspector-hides` (Task T3e): one per-device choice (`ccrc-inspector`, only `'hidden'` hides); `useInspectorShown()` the one fact behind the rail, the strips rule and the frame's track, so hidden tasks and mail return to the column; the `toggle-inspector` command and its header door, offered only while a part places an inspector; W2's door table and S12 amended to match.
+- **D-6386** — `done-above-working` (Task T3f): `STATUS_GROUPS` orders Needs you, Done, Working, then the folded four.
+- **D-6387** — `colour-where-the-machine-speaks` (Task T4a): tool boxes on the code palette through one pure plan and one bounded highlighter; ANSI colour as classes on palette tokens, every other control sequence removed; inline code as a well chip (Q8's default A); a failed call's row says "failed"; every well hue gated. No colour on the page's grounds, no accent or lane hue borrowed.
+- **D-6388** — `registry-reads-bounded` (Task C1): registry rows read with bounded concurrency and only the field files the listing shows, the same answers with absent and unreadable kept apart.
+
+Issued and unused: 6389, the wave's spare. W2's S18, brought forward, keeps its own D-5096 and D-5479; its two departures (landing before S17, its Verify without S17's suite) are ruled in its section here.
 
 ## Out of scope
 
