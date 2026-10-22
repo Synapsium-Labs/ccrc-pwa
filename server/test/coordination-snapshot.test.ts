@@ -3175,4 +3175,146 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
       expect(dirListing(d3), why).toEqual(AFTER);
     }
   });
+
+  it('W23-T24-own (D-6363, fix round 2): an own whose lstat fails ends the run before the walk, and own and every walked data set are left; an own that is not a directory is not counted', () => {
+    const legacyAt = (home: string, ts: string): string => {
+      const dir = path.join(home, 'ccrc-backups', ts);
+      mkdirSync(dir, { recursive: true });
+      plantDb(path.join(dir, 'coord.db'), { tables: ['claims'] });
+      addCode(dir);
+      return dir;
+    };
+    const home = mkHome();
+    const own = legacyAt(home, stamp(9));
+    const dirs = [8, 7, 6].map((n) => legacyAt(home, stamp(n)));
+    const fs = { ...H.realFs, lstat(p: string) { if (p === own) throw Object.assign(new Error('EIO: i/o error, lstat'), { code: 'EIO' }); return H.realFs.lstat(p); } };
+    const failed = run({ own, dirs, keep: 2, by: 'update', fs });
+    expect(failed.r).toEqual({ kept: 0, thinned: 0, left: 4, refused: 1, stopped: false });
+    expect(failed.lines.at(-1)).toBe('coordination data sets: 0 kept, 0 thinned this run, 4 left as they are');
+    const file = mkHome();
+    const notDir = path.join(file, 'ccrc-backups', stamp(9));
+    mkdirSync(path.dirname(notDir), { recursive: true });
+    writeFileSync(notDir, 'not a backup\n');
+    const fileDirs = [8, 7, 6].map((n) => legacyAt(file, stamp(n)));
+    const plain = run({ own: notDir, dirs: fileDirs, keep: 2, by: 'update', fs: H.realFs });
+    expect(plain.r).toEqual({ kept: 0, thinned: 0, left: 3, refused: 1, stopped: false });
+    for (const d of fileDirs) expect(dirListing(d)).toContain('coord.db');
+  });
+
+  // D-6464 (the coordinator's ruling F6b on mail 8134): the update path's time budget, `--until`.
+  const BUDGET_LINE = (n: number): string => `thinning stopped at its time budget; ${n} left as they are; the next update continues`;
+  const MEMBERS = /(coord\.db|delegation-events\.log|delegation-checkpoint\.json)$/;
+
+  it('W23-T27 (D-6464): a time budget already past: thin starts no full verification, every candidate is left, one line says so, and the exit is 0', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const own = clone(home, tpl, stamp(9));
+    const dirs = [8, 7, 6].map((n) => clone(home, tpl, stamp(n)));
+    const before = dirs.map(treeDigest);
+    const r = thinCli(home, [...argv({ keep: 2, own, dirs }), '--until', '1']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r.stdout)).toEqual([BUDGET_LINE(3), 'coordination data sets: 1 kept, 0 thinned this run, 3 left as they are']);
+    expect(dirs.map(treeDigest)).toEqual(before);
+    const { fs, opened } = countingFs();
+    const { r: inProcess } = run({ own, dirs, keep: 2, by: 'update', until: 1, fs });
+    expect(inProcess).toEqual({ kept: 1, thinned: 0, left: 3, refused: 0, stopped: false });
+    expect(opened.filter((p) => MEMBERS.test(p) && dirs.some((d) => p.startsWith(`${d}/`))), 'no walked dir was verified').toEqual([]);
+  });
+
+  it('W23-T28 (D-6464): a budget that admits exactly one full verification starts one: the first is estimated at 150 s, the next at the longest measured; one second less starts none', () => {
+    const T0 = 1_800_000_000;
+    const build = (): { own: string; dirs: string[] } => {
+      const home = mkHome();
+      const tpl = template(home, '20260101-000000');
+      return { own: clone(home, tpl, stamp(9)), dirs: [8, 7, 6, 5].map((n) => clone(home, tpl, stamp(n))) };
+    };
+    /** A clock each verification moves on by 100 s: the first open of a dir's journal, which only a full verification reads. */
+    const timed = (): { fs: any; now: () => Date; journals: string[] } => {
+      let t = T0;
+      const journals: string[] = [];
+      const fs = {
+        ...H.realFs,
+        openRead(p: string) {
+          if (p.endsWith('delegation-events.log') && !journals.includes(p)) { journals.push(p); t += 100; }
+          return H.realFs.openRead(p);
+        },
+      };
+      return { fs, now: () => new Date(t * 1000), journals };
+    };
+    const a = build();
+    const ca = timed();
+    const one = run({ own: a.own, dirs: a.dirs, keep: 3, by: 'update', until: T0 + 150, fs: ca.fs, now: ca.now });
+    expect(ca.journals, 'exactly one full verification').toHaveLength(1);
+    expect(one.r).toEqual({ kept: 2, thinned: 0, left: 3, refused: 0, stopped: false });
+    expect(one.lines).toContain(BUDGET_LINE(3));
+    const b = build();
+    const cb = timed();
+    const none = run({ own: b.own, dirs: b.dirs, keep: 3, by: 'update', until: T0 + 149, fs: cb.fs, now: cb.now });
+    expect(cb.journals, 'the first is estimated at 150 s').toHaveLength(0);
+    expect(none.r).toEqual({ kept: 1, thinned: 0, left: 4, refused: 0, stopped: false });
+  });
+
+  it('W23-T29 (D-6464): an interrupted thinning is finished whatever the budget, since it verifies nothing, and the walk stops at the next verification', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const own = clone(home, tpl, stamp(9));
+    const interrupted = clone(home, tpl, stamp(8));
+    writeFileSync(path.join(interrupted, RECORD), `${H.canonicalJson({
+      format: 'ccrc-coordination-thinned', version: 1, thinnedAt: '2026-10-01T00:00:00.000Z', by: 'update',
+      rule: { knob: 'CCRC_BACKUP_DATA_KEEP', keep: 3 }, source: 'v1', capturedAt: tpl.manifest.capturedAt, dropped: droppedOf(tpl),
+    })}\n`);
+    rmSync(path.join(interrupted, 'coord.db'));
+    expect(H.quickState(H.realFs, interrupted).word).toBe('interrupted');
+    const dirs = [interrupted, clone(home, tpl, stamp(7)), clone(home, tpl, stamp(6))];
+    const r = thinCli(home, [...argv({ keep: 2, own, dirs }), '--until', '1']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(linesOf(r.stdout)).toEqual([
+      `thinned ${stamp(8)}: finished an interrupted thinning (0M); coordination-thinned.json records when and why`,
+      BUDGET_LINE(2),
+      'coordination data sets: 1 kept, 1 thinned this run, 2 left as they are',
+    ]);
+    expect(dirListing(interrupted)).toEqual(AFTER);
+  });
+
+  it('W23-T31 (D-6464): the pre-migration keep\'s verification waits on the budget too: past it, the candidate and every older dir are left, never thinned unverified', () => {
+    const T0 = 1_800_000_000;
+    const home = mkHome();
+    const cur = template(home, '20260101-000000', 3);
+    const own = clone(home, cur, stamp(9));
+    const d8 = clone(home, cur, stamp(8));
+    const old = template(home, '20260101-000001', 2);
+    const candidate = clone(home, old, stamp(7));
+    const older = clone(home, old, stamp(6));
+    let t = T0;
+    const journals: string[] = [];
+    const fs = {
+      ...H.realFs,
+      openRead(p: string) {
+        if (p.endsWith('delegation-events.log') && !journals.includes(p)) { journals.push(p); t += 100; }
+        return H.realFs.openRead(p);
+      },
+    };
+    const { r, lines } = run({ own, dirs: [d8, candidate, older], keep: 2, by: 'update', until: T0 + 150, fs, now: () => new Date(t * 1000) });
+    expect(journals, 'only the count\'s one verification').toEqual([path.join(d8, 'delegation-events.log')]);
+    expect(r).toEqual({ kept: 2, thinned: 0, left: 2, refused: 0, stopped: false });
+    expect(lines).toContain(BUDGET_LINE(2));
+    for (const d of [candidate, older]) expect(dirListing(d)).toContain('coord.db');
+  });
+
+  it('W23-T30 (D-6464): an --until that is not a whole number of unix seconds, or given twice, is a usage error (exit 70) and touches nothing', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const own = clone(home, tpl, stamp(9));
+    const dirs = [8, 7, 6].map((n) => clone(home, tpl, stamp(n)));
+    const before = dirs.map(treeDigest);
+    for (const bad of [['0'], ['-1'], ['1.5'], ['1e3'], ['x'], [''], ['007'], ['9007199254740993'], ['1', '--until', '1']]) {
+      const r = thinCli(home, [...argv({ keep: 2, own, dirs }), '--until', ...bad]);
+      expect(r.status, bad.join(' ')).toBe(70);
+      expect(r.stderr, bad.join(' ')).toMatch(/^usage: node coordination-snapshot\.mjs .*\[--until <unix seconds>\]/);
+      expect(r.stdout, bad.join(' ')).toBe('');
+    }
+    expect(dirs.map(treeDigest)).toEqual(before);
+  });
 });

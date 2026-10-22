@@ -44,7 +44,8 @@
 // before any live mutation (a `thinned` source is refused as `source-thinned`). `recover`: finishes an interrupted restore, 0 / 1 / 2 the same way. `thin --keep <n> --by <update|backup> ...`: drops the
 // data set of the backup directories past the newest `n` valid ones, writing each directory's record before it deletes the four snapshot files (D-6346, D-6348): 0 every directory was handled,
 // 3 one or more was refused or the verification budget stopped the walk (the others were still handled; 3, not 1, because node itself exits 1 when it cannot load this file). 70: usage, or the helper itself
-// failed (an exception it did not name).
+// failed (an exception it did not name). `--until <unix seconds>` is the update path's time budget (D-6464): a walk that reaches it ends
+// there and still exits 0, its untouched dirs left for the next update.
 import { createHash, randomBytes } from 'node:crypto';
 import nodeFs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -562,6 +563,9 @@ const asBytes = (text) => new TextEncoder().encode(text);
 // ── SQLite: read-only checks of a snapshot ──────────────────────────────────────────────────────────────────────────────
 
 const SQLITE_MAGIC = 'SQLite format 3\u0000';
+/** The estimate of one full verification before a run has timed one (D-6464): Step 7's largest per-set figure, 750 s weighted by the
+ *  journal's record count over five sets, at the server box's sizes. */
+const VERIFY_ESTIMATE_S = 150;
 
 /**
  * Whether a file is a readable SQLite database, and whether it holds a `delegation_*` table. A header check first (a text
@@ -1145,9 +1149,13 @@ function finishOne(fs, dir, t) {
  * only for a helper failure. The `verified` dir is never thinned (D-6362). `left` counts the dirs that still hold a data set and were left
  * as they are (damaged, invalid, refused, untouched past a stop); a thinned dir, a dir with no data set and a path that is not a directory are not counted (D-6363).
  * A `verified` dir that reads as anything but whole, stale or empty (an interrupted thinning, a thinned dir, a damaged one) is refused, never finished (D-6362).
+ * `until` (unix seconds, `null` for none) is the time budget on the update path (D-6464): a full verification is started only when `now` plus
+ * the longest one this run has measured (VERIFY_ESTIMATE_S until one has run) is not past it. Otherwise the walk ends there, every dir it did not
+ * reach that holds a data set is left, one line says so, and `stopped` stays false: it is not a refusal. Nothing else waits on the budget,
+ * so an interrupted thinning the walk reaches is finished, and a record is never written without its deletes.
  * @returns {{kept: number, thinned: number, left: number, refused: number, stopped: boolean}}
  */
-export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = realFs, now = () => new Date(), out }) {
+export function thinBackups({ own = null, verified = null, dirs, keep, by, until = null, fs = realFs, now = () => new Date(), out }) {
   if (!Number.isSafeInteger(keep) || keep < 2 || keep > 9999) refuse('thin-usage', 'keep is not a whole number from 2 to 9999');
   if (by !== 'update' && by !== 'backup') refuse('thin-usage', 'by is neither update nor backup');
   const ownP = own === null ? null : path.resolve(own);
@@ -1161,10 +1169,10 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
   const mib = (bytes) => Math.floor(bytes / 1048576);
   const sum = (dropped) => dropped.reduce((s, d) => s + d.bytes, 0);
   let counted = 0; let preMigration = 0; let thinned = 0; let left = 0; let refused = 0; let spent = 0;
-  let stopped = false; let refUv = null; let ownQ = null;
+  let stopped = false; let timedOut = false; let refUv = null; let ownQ = null; let longest = null;
   const result = () => ({ kept: counted + preMigration, thinned, left, refused, stopped });
   const summary = () => {
-    if (thinned > 0 || refused > 0 || stopped) out(`coordination data sets: ${counted + preMigration} kept, ${thinned} thinned this run, ${left} left as they are`);
+    if (thinned > 0 || refused > 0 || stopped || timedOut) out(`coordination data sets: ${counted + preMigration} kept, ${thinned} thinned this run, ${left} left as they are`);
   };
   const warn = (dir, why) => { out(`WARN: could not thin ${path.basename(dir)}: ${why} — it is left as it is`); refused++; };
   /** A node error's message already begins with its code (`EIO: i/o error, …`), so the code is added only when the message lacks it. */
@@ -1176,18 +1184,23 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
   const hasDb = (q) => q.source === 'legacy' || q.manifest.members.coordDb.present;
   /** The schema version the pre-migration check compares against: the first counted set that has a coord.db. */
   const noteCounted = (dir, q) => { if (refUv === null && hasDb(q)) refUv = dbUserVersion(fs, path.join(dir, DB_FILE)); };
-  /** One full verification, or false when the budget is spent. */
+  const secs = () => now().getTime() / 1000;
+  /** Whether a full verification started now could pass `until` (D-6464). */
+  const late = () => until !== null && secs() + (longest ?? VERIFY_ESTIMATE_S) > until;
+  /** One full verification, timed: the longest so far is the next one's estimate. */
   const verify = (dir) => {
     if (dir === verP) return true;
     spent++;
+    const t0 = secs();
     const v = classify({ from: dir, fs });
+    longest = Math.max(longest ?? 0, secs() - t0);
     return (v.kind === 'v1' && v.data === true) || v.kind === 'legacy';
   };
   /** Whether a dir still holds something of a data set; a `none` or a `thinned` dir does not. */
   const holdsData = (q) => q.word !== 'none' && q.word !== 'thinned';
-  /** The walk ends here: `rest` (this dir and every older one) is untouched, and each that still holds a data set is left as it is. */
-  const stop = (rest) => {
-    stopped = true;
+  /** The walk ends here: `rest` (this dir and every older one) is untouched, and each that still holds a data set is left as it is; how many. */
+  const leaveRest = (rest) => {
+    const before = left;
     for (const d of rest) {
       try {
         const st = fs.lstat(d);
@@ -1198,16 +1211,30 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
         left++;
       }
     }
+    return left - before;
+  };
+  const stop = (rest) => {
+    stopped = true;
+    leaveRest(rest);
     out(`thinning stopped: ${spent} full verifications spent before the walk ended — every older backup is untouched until a later run`);
   };
+  /** The time budget's end (D-6464): not a refusal, so the exit stays 0. */
+  const timeUp = (rest) => {
+    timedOut = true;
+    out(`thinning stopped at its time budget; ${leaveRest(rest)} left as they are; the next update continues`);
+  };
 
+  const reads = new Map();
   if (ownP !== null) {
     try {
       const st = fs.lstat(ownP);
       if (st === null || !st.isDirectory()) refuse('thin-not-a-dir', `${path.basename(ownP)} is not a directory`);
     } catch (err) {
       if (!(err instanceof SnapError) && !hasCode(err)) throw err;
+      // The run ends before the walk, so own (unless it is not a directory) and every walked dir that holds a data set are left (D-6363).
       warn(ownP, whyOf(err));
+      if (err.code !== 'thin-not-a-dir') left++;
+      leaveRest(walk);
       summary();
       return result();
     }
@@ -1222,7 +1249,6 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
 
   // When the dirs that can be counted number at most `keep`, nothing can be thinned, so nothing is verified (D-6350, review 794 F6):
   // each is counted on presence and size, no `user_version` is read and no budget is spent. A reading that throws or is not `full` or `stale` does not count.
-  const reads = new Map();
   let countable = ownQ?.word === 'full' ? 1 : 0;
   for (const dir of walk) {
     try {
@@ -1275,13 +1301,14 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
       if (counted < keep) {
         if (sparse) { counted++; continue; }
         if (dir !== verP && spent >= budget) { stop(walk.slice(at)); break; }
+        if (dir !== verP && late()) { timeUp(walk.slice(at)); break; }
         // Counted only after everything the count reads has been read, so a dir is never both counted and left (D-6363).
         if (verify(dir)) { noteCounted(dir, q); counted++; } else left++;
         continue;
       }
-      // Sparse means the quick pass saw nothing past the count. The walk reads again only a dir whose quick reading threw in the pass,
-      // and a stale dir once its record goes (which can only lower the count), so a dir that reaches here is one the pass could not
-      // read. It was never verified, nor were the dirs counted before it, so it is left as it is, never thinned. Outside sparse mode a
+      // Sparse means the quick pass saw nothing past the count. The walk reads again only a dir the pass could not read (its quick
+      // reading threw, or its lstat did not show a directory) and a stale dir once its record goes (which can only lower the count), so a
+      // dir that reaches here is one the pass could not read. It was never verified, nor were the dirs counted before it, so it is left as it is, never thinned. Outside sparse mode a
       // dir past the count is thinned on the reading the pass took, before the count's verifications ran (minutes, under the lock):
       // harmless, because nothing else of ccrc's writes a backup dir while the lock is held (review 806 F8).
       if (sparse) { left++; continue; }
@@ -1289,6 +1316,7 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
         const uv = dbUserVersion(fs, path.join(dir, DB_FILE));
         if (uv !== null && uv < refUv) {
           if (dir !== verP && spent >= budget) { stop(walk.slice(at)); break; }
+          if (dir !== verP && late()) { timeUp(walk.slice(at)); break; }
           if (verify(dir)) {
             preMigration++;
             out(`kept ${name}: its coord.db predates a schema migration (user_version ${uv} < ${refUv}), so it is the one data set kept from before it`);
@@ -1620,7 +1648,7 @@ export function recover(opts) {
 
 // ── The command line ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const USAGE = 'usage: node coordination-snapshot.mjs capture --dir <timestamp dir> | classify --from <timestamp-directory> | validate --from <timestamp-directory> | restore --from <timestamp-directory> | recover | thin --keep <n> --by <update|backup> [--prefix <text>] [--own <dir>] [--verified <dir>] --dir <dir> [--dir <dir> ...]';
+const USAGE = 'usage: node coordination-snapshot.mjs capture --dir <timestamp dir> | classify --from <timestamp-directory> | validate --from <timestamp-directory> | restore --from <timestamp-directory> | recover | thin --keep <n> --by <update|backup> [--prefix <text>] [--own <dir>] [--verified <dir>] [--until <unix seconds>] --dir <dir> [--dir <dir> ...]';
 
 function argValue(argv, flag) {
   const i = argv.indexOf(flag);
@@ -1628,15 +1656,16 @@ function argValue(argv, flag) {
   return argv[i + 1];
 }
 
-/** The `thin` command line: `--keep` and `--by` once each, `--dir` one or more times, `--own`, `--verified` and `--prefix` at most once.
- *  `null` for anything else (an unknown flag, a missing value, a repeat, a stray word, a `--keep` that is not 2 to 9999). */
+/** The `thin` command line: `--keep` and `--by` once each, `--dir` one or more times, `--own`, `--verified`, `--prefix` and `--until` at most once.
+ *  `null` for anything else (an unknown flag, a missing value, a repeat, a stray word, a `--keep` that is not 2 to 9999, an `--until` that is
+ *  not a whole number of seconds). */
 function parseThinArgs(rest) {
-  const o = { keep: null, by: null, prefix: null, own: null, verified: null, dirs: [] };
+  const o = { keep: null, by: null, prefix: null, own: null, verified: null, until: null, dirs: [] };
   if (rest.length % 2 !== 0) return null;
   for (let i = 0; i < rest.length; i += 2) {
     const flag = rest[i];
     const v = rest[i + 1];
-    if (!['--keep', '--by', '--prefix', '--own', '--verified', '--dir'].includes(flag) || v.startsWith('--') || (v === '' && flag !== '--prefix')) return null;
+    if (!['--keep', '--by', '--prefix', '--own', '--verified', '--until', '--dir'].includes(flag) || v.startsWith('--') || (v === '' && flag !== '--prefix')) return null;
     if (flag === '--dir') { o.dirs.push(v); continue; }
     const key = flag.slice(2);
     if (o[key] !== null) return null;
@@ -1644,6 +1673,7 @@ function parseThinArgs(rest) {
   }
   if (o.keep === null || !/^[0123456789]{1,4}$/.test(o.keep) || Number(o.keep) < 2) return null;
   if (o.by !== 'update' && o.by !== 'backup') return null;
+  if (o.until !== null && !(/^[123456789][0123456789]{0,15}$/.test(o.until) && Number.isSafeInteger(Number(o.until)))) return null;
   return o.dirs.length === 0 ? null : o;
 }
 
@@ -1666,7 +1696,8 @@ export function main(argv, env = process.env, io = { out: (s) => process.stdout.
       const lead = o.prefix === null || o.prefix === '' ? '' : `${o.prefix} `;
       const r = thinBackups({
         own: o.own === null ? null : path.resolve(o.own), verified: o.verified === null ? null : path.resolve(o.verified),
-        dirs: o.dirs.map((d) => path.resolve(d)), keep: Number(o.keep), by: o.by, out: (line) => io.out(`${lead}${line}\n`),
+        dirs: o.dirs.map((d) => path.resolve(d)), keep: Number(o.keep), by: o.by, until: o.until === null ? null : Number(o.until),
+        out: (line) => io.out(`${lead}${line}\n`),
       });
       return r.refused > 0 || r.stopped ? 3 : 0;
     }
