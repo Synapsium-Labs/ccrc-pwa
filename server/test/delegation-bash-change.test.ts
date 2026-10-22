@@ -561,9 +561,11 @@ describe('D-6267 a second PreToolUse of one call, and ageing beside other holds'
   // GREEN at the base by design (there the Pre opens a row and holds nothing); mutant MA-shared-map-sweep (ageing sweeps the agent
   // candidates too) reds it.
   it('A21: ageing a pending Pre removes only the Bash hold: a bare agent occurrence stays held, and its meta still opens the agent', () => {
+    // The bare occurrence is accepted at the Pre's own instant, so a sweep that also aged agent candidates by the bound would reach it
+    // (MA-shared-map-sweep); a later acceptance would leave it younger than the bound and the row could not tell.
     const records = chainAt([
       [bashPre(1, 'toolu_z', ['main-wt']), T0],
-      [bareTool(2, AGENT), T0 + 1000],
+      [bareTool(2, AGENT), T0],
       [sessionStart(3, { sessionId: OTHER }), T0 + BOUND],
     ]);
     const b = DelegationCheckpointBuilder.from(emptyDelegationCheckpoint());

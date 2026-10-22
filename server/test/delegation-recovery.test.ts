@@ -5048,6 +5048,11 @@ describe('run 762: workflow runs end on their task notification, start-less stop
       expect(y?.activityId, `${name}: Y\'s ID is derived from that record`).toBe(expectedId);
       expect(report.state.checkpoint.activityIdsByNaturalKey, `${name}: the mapping`).toEqual(expectedMap);
     }
+    // (iii) again, over r1-r2 alone: nothing is replayed, so only the COVERED record at A0 + H can age the stop (a replayed join would
+    // age it itself, before naming, whatever the observe pass did).
+    const covered = recoverDelegation(routes[2]![1], records.slice(0, 2));
+    expect(covered.failure, '(iii) over r1-r2: recovery is ready').toBeNull();
+    expect(covered.state.checkpoint.pruningHolds.filter((x) => x.reason === 'identity-candidate'), '(iii) over r1-r2: the covered record aged the stale stop').toEqual([]);
   });
 
   it('D-SC8: the applier ages a start-less stop at the horizon: one identity-candidate hold on disk after the first application, none after the one at A0 + H', async () => {
@@ -5197,6 +5202,10 @@ describe('run 762: workflow runs end on their task notification, start-less stop
       expect(b.h.store.readDelegationProjection(), `${step}: the five tables, by primary key`).toEqual(a.h.store.readDelegationProjection());
       expect(eventsOf(b.h.store), `${step}: delegation_events without id`).toEqual(eventsOf(a.h.store));
       expect(canon(delta.state().checkpoint), `${step}: the checkpoints`).toBe(canon(full.state().checkpoint));
+      // Each twin against its OWN checkpoint too: a mutant that skips the projection runs in both twins, so their agreement alone is
+      // blind to it (ME3).
+      expect(canon(b.h.store.readDelegationProjection()), `${step}: the delta store equals its checkpoint's view`)
+        .toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(delta.state().checkpoint as DelegationCheckpointV1)));
     };
     same('after the open');
     expect((await doorOf(full)()).retired).toBe(3);
