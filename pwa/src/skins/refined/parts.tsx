@@ -15,9 +15,10 @@ import { SessionChrome } from './SessionChrome';
 import { TranscriptRow } from './TranscriptRow';
 import './refined.css';
 
-/** The sidebar (W2 Task S4b): today's fleet column, whose doors and banners the bar holds at a desk. S6 redesigns it. */
+/** The sidebar (W2 Task S4b): today's fleet column, whose doors and banners the bar holds at a desk. S6 redesigns it.
+ *  Both flags are off here since the column's one `barHoldsChrome` split in two (W2 desk polish T2e, D-6335). */
 function Sidebar(): ReactNode {
-  return <FleetColumn barHoldsChrome />;
+  return <FleetColumn headChrome={false} banners={false} />;
 }
 
 export const REFINED_SET: SkinSet = {

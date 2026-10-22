@@ -20,6 +20,9 @@
 // MUTATION TABLE (plan Task T2e Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
 //   the fourth track unconditional ..................... "the fourth-track attribute follows the set's Inspector part, whatever its id"
 //   the attribute set from the skin id ................. "the fourth-track attribute follows the set's Inspector part, whatever its id"
+//   `ListColumn` keeps the head chrome ................. "at 900, 1280 and 1920 the frame holds one wordmark, and one each of …"
+//   the banners tied to the head flag .................. "one banner stack at any width"
+//   the pool lag dropped with the chrome ............... "the pool-lag readout shows once at the desk when the epochs differ"
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
@@ -28,6 +31,12 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+
+// The bell renders only where the browser can push; this one can, so the doors' census counts it (T2e).
+vi.mock('../src/lib/push', () => ({
+  pushSupported: () => true,
+  pushEnabled: async () => false,
+}));
 
 const { App } = await import('../src/app');
 const { navigate } = await import('../src/lib/router');
@@ -332,6 +341,21 @@ function stubAt(width: number): void {
   });
 }
 
+/** The frame's doors, counted by what each one IS (its name), never by a class: the rail's and the list head's doors
+ *  carry different names for one destination, and the meters' door to /accounts is not a second Accounts door. */
+function doorCounts(): Record<string, number> {
+  const named = [...document.querySelectorAll<HTMLElement>('[aria-label]')];
+  const count = (re: RegExp): number => named.filter((el) => re.test(el.getAttribute('aria-label') ?? '')).length;
+  return {
+    wordmark: document.querySelectorAll('[data-wordmark], .wordmark').length,
+    docs: count(/^Docs\b/),
+    accounts: count(/^(Accounts|Your sign-in and accounts)$/),
+    settings: count(/^Settings\b/),
+    inbox: count(/^(Inbox|Mail\b)/),
+    bell: count(/^Notifications (on|off)$/),
+  };
+}
+
 describe('the desk (T2e): no second head in the list column, no empty fourth column', () => {
   it("the fourth-track attribute follows the set's Inspector part, whatever its id", () => {
     function Stub(): ReactNode { return <p>an inspector</p>; }
@@ -357,5 +381,49 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
       .toMatch(/grid-template-columns:\s*52px 420px minmax\(0, 1fr\) 320px/);
     for (const media of [null, '(min-width: 900px)'] as const) expect(declsOf('.ins-frame', media), String(media)).not.toMatch(/\b320px/);
     expect(declsOf('.ins-frame', '(min-width: 1600px)')).not.toMatch(/\b320px/);
+  });
+
+  it('at 900, 1280 and 1920 the frame holds one wordmark, and one each of the Docs, Accounts, Settings, Inbox and Bell doors', () => {
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, bell: 1 });
+      // The list column's head keeps its readouts and drops its chrome.
+      expect(document.querySelector('.shell-nav .fleet-head'), `${width}px`).not.toBeNull();
+      expect(document.querySelector('.shell-nav .fleet-head .wordmark'), `${width}px`).toBeNull();
+      expect(document.querySelector('.shell-nav .fleet-count'), `${width}px: the count line stays`).not.toBeNull();
+      cleanup();
+    }
+    // Below 900 nothing changed: the head holds its chrome, and the rail and the bar are not mounted.
+    stubAt(899);
+    mount('/');
+    expect(doorCounts(), '899px').toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, bell: 1 });
+    expect(document.querySelector('.shell-nav .fleet-head .wordmark')).not.toBeNull();
+  });
+
+  it('the pool-lag readout shows once at the desk when the epochs differ', () => {
+    act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 3 } }));
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      expect(screen.getAllByTestId('pool-epoch-lag'), `${width}px`).toHaveLength(1);
+      expect(screen.getByTestId('pool-epoch-lag')).toHaveTextContent('epoch 5 / observed 3');
+      cleanup();
+    }
+    act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5 } }));
+    stubAt(1280);
+    mount('/');
+    expect(screen.queryByTestId('pool-epoch-lag')).toBeNull();
+  });
+
+  it('one banner stack at any width', () => {
+    for (const width of [899, 900, 1280, 1920]) {
+      stubAt(width);
+      act(() => useFleetStore.setState({ conn: 'down', sessions: [S] }));
+      navigate('/');
+      render(<App />);
+      expect(document.querySelectorAll('[data-banner="offline"]').length, `${width}px: banner stacks`).toBe(1);
+      cleanup();
+    }
   });
 });
