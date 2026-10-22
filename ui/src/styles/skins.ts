@@ -26,9 +26,11 @@
 // this device"), which resolves by PRIMARY INPUT: a hover-and-fine pointer is a
 // desk and gets Instrument; a phone or a tablet (coarse) gets Refined (spec §12,
 // O1). Resizing never flips it, and the app reads the device ONCE per page load
-// (O2). While Instrument is a `preview`, AUTO is Refined on every device: the
-// rule exists in code from W0 and changes nobody's screen until the W2 PR that
-// lands Instrument's shell sets the flag false.
+// (O2). Instrument is no longer a `preview` (S18 set the flag false, D-6389), so
+// AUTO is Instrument at a desk and Refined on a phone or a tablet. The rule
+// existed in code from W0 and changed nobody's screen until that flip; it still
+// answers Refined on every device while a skin is a `preview`, which is how a
+// skin can be offered in the picker before its shell has landed.
 
 /** Skin A: roomy and touch-first, today's console evolved. `:root`. */
 export const REFINED = 'refined' as const;
@@ -57,14 +59,15 @@ export interface SkinChoice {
   /** One line on what it is, shown under the name. */
   readonly note: string;
   /** Selectable, but its shell has not landed: the picker says so, and the
-   *  per-device default never chooses it (D-5096). W2 sets Instrument false. */
+   *  per-device default never chooses it (D-5096). No skin is a preview today:
+   *  Instrument was one until S18 (D-6389). */
   readonly preview: boolean;
 }
 
 export const SKINS: readonly SkinChoice[] = [
   { id: REFINED, label: 'Refined', preview: false,
     note: 'Roomy and touch-first: cards, a reading column and a one-row phone header.' },
-  { id: INSTRUMENT, label: 'Instrument', preview: true,
+  { id: INSTRUMENT, label: 'Instrument', preview: false,
     note: 'Dense and keyboard-first: a rail, a grouped table, an inspector and a status bar.' },
 ];
 
@@ -193,18 +196,18 @@ export function skinPreference(
  *
  *  An explicit id is itself, on every device. Everything else is AUTO, which
  *  is INSTRUMENT only on a desk (`deviceIsDesk`: DEVICE_QUERY's answer, read
- *  once per load by the caller) AND only once Instrument is no longer a
- *  preview; otherwise REFINED. So while Instrument is a preview AUTO is
- *  Refined everywhere, and the W2 flip of `preview` is the one change that
- *  turns the desktop default on. Leaving an unknown id stamped would render
+ *  once per load by the caller) AND only when Instrument is not a preview;
+ *  otherwise REFINED. So with Instrument a preview AUTO is Refined everywhere,
+ *  and `preview` is the one flag that turns the desktop default on or off (S18
+ *  set it false). Leaving an unknown id stamped would render
  *  `:root` (no block answers it) while the app's own state claimed a skin it
  *  is not showing. Unreadable storage never reaches here: the caller catches
  *  the throw and passes nothing.
  *
  *  `deviceIsDesk` defaults to false — a caller that has not read the device
  *  (Storybook, whose toolbar names a skin explicitly) gets the touch answer.
- *  `skins` is injectable so a test can see the world W2's flip makes. Both
- *  are beyond the plan's two-argument shape (D-5246). */
+ *  `skins` is injectable so a test can see the world in which Instrument is a
+ *  preview. Both are beyond the plan's two-argument shape (D-5246). */
 export function resolveSkin(
   stored: string | null | undefined,
   deviceIsDesk = false,
