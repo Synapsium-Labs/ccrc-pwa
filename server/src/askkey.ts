@@ -101,8 +101,9 @@ export const NO_AGED_KEEP: AgedKeep = { kept: false, redraws: 0 };
  * (`parseDialog` gives it a new pane-hash id and no alignment), so the FIRST such capture keeps the previous decision
  * while the envelope is still eligible, and the envelope does not flap `ask_cleared` / `ask`. A second consecutive one,
  * a parsed menu that does not correspond, and no menu decide as `keepAgedAsk` does. A tick with no `reading` (its
- * capture failed, so `seenDialog` is the previous capture's) leaves the count alone: a redraw then a failed capture is
- * not two redraws. The envelope's eligibility is re-checked either way.
+ * capture failed and the stream held the menu, so `seenDialog` is the previous capture's) leaves the count alone: a
+ * redraw then a failed capture is not two redraws. The envelope's eligibility is re-checked either way. Once enough
+ * captures fail in a row for the stream to clear the menu (`FAILED_CAPTURES_CLEAR`), that tick is a reading of no menu.
  */
 export function nextAgedKeep(prev: AgedKeep, raw: HookStateRawRead, menu: MenuEvidence, reading: boolean): AgedKeep {
   if (!reading) return { kept: prev.kept && agedQuestions(raw) !== null, redraws: prev.redraws };

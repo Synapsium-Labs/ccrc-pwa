@@ -86,6 +86,8 @@ export class SessionStream {
   private agedKeep: AgedKeep = NO_AGED_KEEP;
   /** Failed captures in a row since the last reading of the pane (decision `ask-failed-capture-holds`). */
   private failedCaptures = 0;
+  /** This tick's capture failed and `checkDialog` held the menu (under FAILED_CAPTURES_CLEAR): no reading (D-6324). */
+  private captureHeld = false;
   /** Bumped on every `answered:<id>` this stream handles; a poll reading taken under an older value read the pane
    *  from before that answer and is dropped (decision `ask-stale-poll-dropped`). */
   private answeredGen = 0;
@@ -387,13 +389,15 @@ export class SessionStream {
     // hold one forever. A session the registry reports gone never reaches here (`tick` returns early).
     if (pane === null) {
       this.failedCaptures += 1;
-      if (this.failedCaptures >= FAILED_CAPTURES_CLEAR) {
+      this.captureHeld = this.failedCaptures < FAILED_CAPTURES_CLEAR;
+      if (!this.captureHeld) {
         this.askProbe = null;
         this.frame(null, 'poll');
       }
       return;
     }
     this.failedCaptures = 0;
+    this.captureHeld = false;
     // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
     // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
     // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
@@ -659,7 +663,7 @@ export class SessionStream {
     const read = foldHookStateRead(raw, Date.now());
     const hs = read.ok ? read.state : null;
     this.hookWorkflowBackground = hs?.background?.kinds.includes('workflow') === true;
-    this.agedKeep = nextAgedKeep(this.agedKeep, raw, this.seenDialog, this.failedCaptures === 0);
+    this.agedKeep = nextAgedKeep(this.agedKeep, raw, this.seenDialog, !this.captureHeld);
     const ask = hs?.ask ?? (raw.ok && this.agedKeep.kept ? raw.state.ask : null);
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;
