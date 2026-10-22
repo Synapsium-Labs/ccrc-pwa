@@ -140,9 +140,9 @@ describe('D-6181: the per-account slot and the fleet-wide slot', () => {
     const out = h.sh(`
       eval "$(declare -f _file_read_to | sed '1s/^_file_read_to/_frt_orig/')"
       _file_read_to() { _frt_orig "$@"; local r=$?; sleep 0.3; return $r; }
-      for t in claude claude-b; do
-        ( _affinity_slot_take $t 5000 && echo "won $t" ) &
-        ( _affinity_slot_take $t 5000 && echo "won $t" ) &
+      for t in claude:5000 claude-b:6000; do   # apart by more than the fleet spacing
+        ( _affinity_slot_take "\${t%%:*}" "\${t#*:}" && echo "won \${t%%:*}" ) &
+        ( _affinity_slot_take "\${t%%:*}" "\${t#*:}" && echo "won \${t%%:*}" ) &
         wait
       done`);
     expect(out.split('\n').filter((l) => l === 'won claude')).toHaveLength(1);
