@@ -6167,3 +6167,381 @@ describe.skipIf(process.platform === 'darwin')('W2-D36: hidden means absent at e
     expect(src.match(/\basOfBinds\(/g) ?? [], 'one binding point, cutBinds').toHaveLength(1);
   });
 });
+
+// ── W2-2a Task 3 (W2-D35, W2-D36): the node cut ─────────────────────────────────────────────────────────────────────
+// The as-of cut (lib's asOfCut, Task 1) rides on rc.scope.cut. W2-2a turns no CCRC_RECALL_* variable into a cut (W2-2b's
+// W2-D40 does), so every case here runs in-process over a ReadContext built by GRX.rc, with a cut this describe measures
+// from the store by W2-D38's own fields. One box:
+//   - family A: eight manual compactions, so eight leaves and the parent over them, and a reply with no timestamp inside
+//     leaf 1's span (hidden under every cut, W2-D34);
+//   - written by hand after derivation, with no sweep after it: two crafted leaves of A that share 19 hex digits (VIS, bound
+//     to boundary 1, and HID, bound to boundary 8, whose id sorts below every derived leaf's and which also covers u(1), a
+//     row leaf 1 covers), a condensed node of A with no leaf under it (EMPTY), also listed as a child of the parent (a
+//     damaged store, R4), a second epoch of A whose transcript holds only rows stamped after both cuts, and two crafted
+//     leaves of family B, out of A's scope (OUT_VIS on boundary 1, OUT_HID on boundary 8);
+//   - refs written by hand (R8, SEC-2): one mined ref (origin tool_use) each on leaf 1, leaf 7 and the parent, and one
+//     summary ref (origin model) each on leaf 1 and the parent.
+// Cut 7 is ASOF = boundary 7; cut 8 is ASOF = boundary 8, each measured by this describe's cutAt; case 1 checks that
+// Task 2's store half, asOfCutOf, measures the same two cuts (R2).
+describe.skipIf(process.platform === 'darwin')('W2-D35: the as-of cut hides nodes, epochs and their ids at every read door (W2-2a Task 3)', () => {
+  type W35Cut = Readonly<{
+    asof: string; tsCut: number; boundaryEntryId: number; summaryEntryId: number | null; keptUuids: readonly string[];
+    holdingFileId: number; boundaryLine: number;
+  }>;
+  type W35Rc = GrepRc & { gen: string | null; scopeArgs: string[]; scope: GrepRc['scope'] & { cut?: W35Cut | null } };
+  type W35Recall = {
+    runGrep(rc: W35Rc, a: RGrepArgs): GrepVerbResult;
+    runTree(rc: W35Rc, a: { depth: number; json: boolean }): GrepVerbResult;
+    runDescribe(rc: W35Rc, a: { target: string; full: boolean; cursor: string | null; json: boolean }): GrepVerbResult;
+    runExpand(rc: W35Rc, a: { target: string; around: null; before: number; after: number; cursor: null; json: boolean }): GrepVerbResult;
+    leafHeads(rc: W35Rc, ids: string[]): Map<string, { node_id: string; gist: string | null }>;
+    asOfCutOf(rc: { db: RDatabaseSync }, asof: string): unknown;
+  };
+  type W35Derive = {
+    blobReadStmts(db: RDatabaseSync): Record<string, unknown>;
+    keptOf(s: Record<string, unknown>, blobId: number | null, budget: { bytes: number }): Set<string>;
+  };
+  const A = 'claude-a-w2d35';
+  const B = 'claude-b-w2d35';
+  const TXA = '2d35aaaa-0000-4000-8000-000000000001';
+  const TXB = '2d35bbbb-0000-4000-8000-000000000002';
+  const GA = '0189abcd-1234-4678-9abc-00000000d351';
+  const GB = '0189abcd-1234-4678-9abc-00000000d352';
+  const T0W = Date.UTC(2026, 9, 2, 10, 0, 0);
+  const ts = (k: number): string => new Date(T0W + k * 1000).toISOString();
+  const ms = (k: number): number => T0W + k * 1000;
+  /** Row uuids. Cycle c: u(5c-4) the ask, u(5c-3) the reply, u(5c-2) the kept follow-up, u(5c-1) the boundary, u(5c) the summary. */
+  const u = (i: number): string => `2d35eeee-0000-4000-8000-${i.toString(16).padStart(12, '0')}`;
+  const bnd = (c: number): string => u(5 * c - 1);
+  const kept = (c: number): string => u(5 * c - 2);
+  const hex20 = (head: string, last: string): string => `${head}${'0'.repeat(20 - head.length - last.length)}${last}`;
+  const VIS = `L${hex20('000001', '2')}`;
+  const HID = `L${hex20('000001', '1')}`;   // the lower of the two, and below every derived leaf's id
+  const EMPTY = `N${hex20('e0e0e0', '1')}`;
+  const OUT_VIS = `L${hex20('d00d00', '1')}`;
+  const OUT_HID = `L${hex20('d00d01', '1')}`;
+  /** The shortest display prefix any read verb prints for an id: its letter and NODE_ID_DISPLAY_MIN (6) hex digits. */
+  const pre7 = (id: string): string => id.slice(0, 7);
+  const all = (r: GrepVerbResult): string => JSON.stringify(r);
+  const ans = (r: GrepVerbResult): unknown[] => [r.exit, r.reason];
+
+  let box: rH.HistoryBox;
+  let R: W35Recall;
+  let L: string[] = [];   // L[c - 1] is leaf c, found by its boundary
+  let P = '';
+  let parentCreatedMs = 0;
+  let cut7: W35Cut;
+  let cut8: W35Cut;
+
+  function rowsA(): rFx.Row[] {
+    const rows: rFx.Row[] = [];
+    const base = { sessionId: TXA, cwd: '/home/u/worktrees/p/quiet-basin' };
+    for (let c = 1; c <= 8; c += 1) {
+      rows.push(rFx.userRow({ ...base, uuid: u(5 * c - 4), ts: ts(5 * c), text: `zqw2d35ask${c} fixture request` }));
+      const reply = rFx.assistantRow({ ...base, uuid: u(5 * c - 3), ts: ts(5 * c + 1), text: `zqw2d35reply${c} fixture answer`,
+        requestId: `req_w2d35_${c}`, msgId: `msg_w2d35_${c}` });
+      if (c === 1) delete reply['timestamp'];   // leaf 1's NULL-ts row: hidden under every cut (W2-D34)
+      rows.push(reply);
+      rows.push(rFx.userRow({ ...base, uuid: kept(c), ts: ts(5 * c + 2), text: `zqw2d35kept${c} fixture follow-up` }));
+      rows.push(rFx.boundaryRow({ ...base, uuid: bnd(c), ts: ts(5 * c + 3), trigger: 'manual', headUuid: kept(c), anchorUuid: u(5 * c),
+        tailUuid: kept(c), allUuids: [kept(c)] }));
+      rows.push(rFx.summaryRow({ ...base, uuid: u(5 * c), ts: ts(5 * c + 4), text: [
+        'This session is being continued from a previous conversation. The summary below covers the earlier portion.',
+        '<summary>', '1. Primary Request and Intent:', `   The fixture request ${c}.`,
+        '8. Current Work:', `   Wrote zqw2d35gist${c} of the fixture.`,
+        '9. Optional Next Step:', `   Continue past zqw2d35gist${c}.`, '</summary>',
+      ].join('\n') }));
+    }
+    return rows;
+  }
+
+  /** W2-D38's fields for ASOF = `boundaryUuid`, measured from the store: the boundary's own stamp (every boundary here has
+   *  one), its holding copy by lib's pickHoldingCopy rule (a live copy first, then the lowest file_id) and its line there,
+   *  the summary row its anchor names, and kept(N) through derive.mjs's keptOf. */
+  function cutAt(db: RDatabaseSync, d: W35Derive, boundaryUuid: string): W35Cut {
+    const b = db.prepare(`SELECT e.entry_id AS entry_id, e.ts_ms AS ts_ms, e.transcript_pk AS tpk, b.anchor_uuid AS anchor,
+        b.kept_blob_id AS kept FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id WHERE e.uuid = ?`).get(boundaryUuid) as
+      { entry_id: number; ts_ms: number; tpk: number; anchor: string; kept: number | null };
+    const hold = db.prepare(`SELECT f.file_id AS file_id, m.line AS line FROM ingest_files f
+        JOIN memberships m ON m.file_id = f.file_id AND m.entry_id = ?
+      WHERE f.transcript_pk = ? ORDER BY (f.source_key = '') DESC, f.file_id LIMIT 1`).get(b.entry_id, b.tpk) as { file_id: number; line: number };
+    const summary = db.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(b.anchor) as { entry_id: number };
+    const keptSet = d.keptOf(d.blobReadStmts(db), b.kept === null ? null : Number(b.kept), { bytes: 0 });
+    return Object.freeze({
+      asof: boundaryUuid, tsCut: Number(b.ts_ms), boundaryEntryId: Number(b.entry_id), summaryEntryId: Number(summary.entry_id),
+      keptUuids: Object.freeze([...keptSet].sort()), holdingFileId: Number(hold.file_id), boundaryLine: Number(hold.line),
+    });
+  }
+
+  /** A ReadContext for A's family with `cut` on its scope; undefined leaves the key out, as every pre-W2-2a context does. */
+  async function rcOf(cut: W35Cut | null | undefined): Promise<W35Rc> {
+    const rc = await GRX.rc(box, A);
+    return { ...rc, gen: rc.scope.generation, scopeArgs: [], scope: { ...rc.scope, ...(cut === undefined ? {} : { cut }) } };
+  }
+  /** `f` over a fresh read handle carrying `cut`, closed after. */
+  async function under<T>(cut: W35Cut | null | undefined, f: (rc: W35Rc) => T): Promise<T> {
+    const rc = await rcOf(cut);
+    try { return f(rc); } finally { rc.db.close(); }
+  }
+  const describeOf = (target: string) => (rc: W35Rc): GrepVerbResult => R.runDescribe(rc, { target, full: false, cursor: null, json: true });
+  const expandOf = (target: string) => (rc: W35Rc): GrepVerbResult =>
+    R.runExpand(rc, { target, around: null, before: 5, after: 5, cursor: null, json: true });
+  const treeOf = (rc: W35Rc): GrepVerbResult => R.runTree(rc, { depth: 2, json: true });
+  const treeIds = (r: GrepVerbResult): string[] => r.items.map((i) => String(i['node_id'])).sort();
+
+  beforeAll(async () => {
+    box = rH.makeHistoryBox('ccrc-hist-w2d35-');
+    rH.seedFamily(box, { id: A, project: 'demo', uuid: TXA, generation: GA, rows: rowsA() });
+    rH.seedFamily(box, { id: B, project: 'demo', uuid: TXB, generation: GB, accountId: 'claude-b',
+      rows: [rFx.userRow({ uuid: u(100), ts: ts(100), sessionId: TXB, text: 'zqw2d35other family row' })] });
+    for (let i = 0; i < 2; i += 1) { const s = rH.runSweep(box); expect(s.code, s.stderr).toBe(0); }   // derivation shares the run budget
+    const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+    try {
+      const leaves = w.prepare(`SELECT n.node_id AS node_id, e.uuid AS b FROM nodes n JOIN entries e ON e.entry_id = n.boundary_entry_id
+        WHERE n.kind <> 'condensed'`).all() as { node_id: string; b: string }[];
+      L = [1, 2, 3, 4, 5, 6, 7, 8].map((c) => leaves.find((r) => r.b === bnd(c))?.node_id ?? '');
+      const parents = w.prepare("SELECT node_id, created_ms FROM nodes WHERE kind = 'condensed'").all() as { node_id: string; created_ms: number }[];
+      P = parents.length === 1 ? parents[0]!.node_id : '';
+      parentCreatedMs = parents.length === 1 ? Number(parents[0]!.created_ms) : 0;
+      type Home = { session_pk: number; epoch_seq: number; transcript_pk: number };
+      const a = w.prepare('SELECT session_pk, epoch_seq, transcript_pk FROM nodes WHERE node_id = ?').get(L[0]!) as Home;
+      const b = w.prepare(`SELECT s.session_pk AS session_pk, e.seq AS epoch_seq, t.transcript_pk AS transcript_pk FROM sessions s
+          JOIN epochs e ON e.session_pk = s.session_pk JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid
+        WHERE s.ccrc_id = ? AND e.confirmed_ms IS NOT NULL`).get(B) as Home;
+      const entryOf = (uuid: string): number => Number((w.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(uuid) as { entry_id: number }).entry_id);
+      const ins = w.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics,
+        summary_blob_id, boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars,
+        directive_flag, capped, parser_version, created_ms)
+        VALUES (?, ?, ?, ?, ?, ?, 'fixture', ?, NULL, NULL, ?, NULL, ?, ?, 0, 0, 0, 0, 0, 1, ?)`);
+      const now = Date.now();
+      ins.run(VIS, a.session_pk, a.epoch_seq, a.transcript_pk, 'native_leaf', 0, 'zqw2d35craftvis gist', entryOf(bnd(1)), ms(8), ms(8), now);
+      ins.run(HID, a.session_pk, a.epoch_seq, a.transcript_pk, 'native_leaf', 0, 'zqw2d35crafthid gist', entryOf(bnd(8)), ms(43), ms(43), now);
+      ins.run(EMPTY, a.session_pk, a.epoch_seq, a.transcript_pk, 'condensed', 1, 'zqw2d35craftempty gist', null, ms(8), ms(8), now);
+      ins.run(OUT_VIS, b.session_pk, b.epoch_seq, b.transcript_pk, 'native_leaf', 0, 'zqw2d35outvis gist', entryOf(bnd(1)), ms(8), ms(8), now);
+      ins.run(OUT_HID, b.session_pk, b.epoch_seq, b.transcript_pk, 'native_leaf', 0, 'zqw2d35outhid gist', entryOf(bnd(8)), ms(43), ms(43), now);
+      // EMPTY is also a child of the parent (a damaged store, R4): the parent stays visible by its leaves, EMPTY never is.
+      w.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)').run(P, EMPTY, 8);
+      // HID also covers u(1), which leaf 1 covers: two in-scope leaves share one row, and HID's id is the lower.
+      w.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, ?)').run(HID, entryOf(u(1)), 0);
+      const ref = w.prepare("INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, 'path', ?, 'model')");
+      ref.run(VIS, '/home/u/tree/zqw2d35refvis');
+      ref.run(HID, '/home/u/tree/zqw2d35refhid');
+      // R8 (SEC-2): refs a derivation mines from source rows (origin tool_use). Leaf 1 holds u(2), hidden under every cut, so
+      // its mined ref may come from that row; leaf 7 (leaf N under cut 7) holds no hidden row; the parent holds u(2) through
+      // leaf 1. The model refs beside them stand for what the summary written at N names, and stay.
+      const mined = w.prepare("INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, 'path', ?, 'tool_use')");
+      mined.run(L[0]!, '/home/u/tree/zqw2d35minedrow1');
+      mined.run(L[6]!, '/home/u/tree/zqw2d35minedrow7');
+      mined.run(P, '/home/u/tree/zqw2d35minedparent');
+      ref.run(L[0]!, '/home/u/tree/zqw2d35modelrow1');
+      ref.run(P, '/home/u/tree/zqw2d35modelparent');
+      const seq = Number((w.prepare('SELECT max(seq) AS m FROM epochs WHERE session_pk = ?').get(a.session_pk) as { m: number }).m) + 1;
+      w.prepare('INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, started_ms, confirmed_ms) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(a.session_pk, seq, TXB, 'clear', 'fixture', ms(99), ms(99));
+      const d = (await import('../../ccd/history/derive.mjs')) as unknown as W35Derive;
+      cut7 = cutAt(w, d, bnd(7));
+      cut8 = cutAt(w, d, bnd(8));
+    } finally { w.close(); }
+    R = (await import('../../ccd/history/recall.mjs')) as unknown as W35Recall;
+  }, 4 * HEAVY);
+
+  it('the fixture: eight leaves by their boundaries, one parent over them formed after both cuts, a NULL-ts reply in leaf 1, kept(7) in leaf 8', () => {
+    expect(L.every((id) => /^L[0-9a-f]{20}$/.test(id)), L.join(' ')).toBe(true);
+    expect(P).toMatch(/^N[0-9a-f]{20}$/);
+    const db = rH.openStoreRO(box);
+    try {
+      const kids = (db.prepare('SELECT child_id FROM node_children WHERE node_id = ?').all(P) as { child_id: string }[]).map((r) => r.child_id);
+      expect(kids.sort(), 'the parent condenses the eight leaves, and (crafted) the leafless EMPTY').toEqual([...L, EMPTY].sort());
+      const a1 = db.prepare('SELECT ts_ms FROM entries WHERE uuid = ?').get(u(2)) as { ts_ms: number | null } | undefined;
+      expect(a1, 'the reply without a timestamp is stored').toBeDefined();
+      expect(a1!.ts_ms).toBeNull();
+      const src = (leaf: string): string[] => (db.prepare(`SELECT e.uuid AS uuid FROM node_sources ns JOIN entries e ON e.entry_id = ns.entry_id
+        WHERE ns.node_id = ? ORDER BY ns.ord`).all(leaf) as { uuid: string }[]).map((r) => r.uuid);
+      expect(src(L[0]!), 'leaf 1 holds the NULL-ts reply').toEqual([u(1), u(2)]);
+      expect(src(L[7]!), 'kept(7) belongs to leaf 8 (G12)').toEqual([kept(7), u(36), u(37)]);
+      expect([src(HID), L.every((id) => HID < id)], 'u(1) is shared: HID covers it too, and HID\'s id is below every derived leaf\'s').toEqual([[u(1)], true]);
+      expect(R.asOfCutOf({ db }, bnd(7)), 'CONTROL: the store half (Task 2) measures cut 7').toEqual({ ok: true, cut: cut7 });
+      expect(R.asOfCutOf({ db }, bnd(8)), 'CONTROL: and cut 8').toEqual({ ok: true, cut: cut8 });
+    } finally { db.close(); }
+    expect([cut7.tsCut, cut7.keptUuids], 'cut 7 is boundary 7\'s stamp and kept(7)').toEqual([ms(38), [kept(7)]]);
+    expect(cut8.tsCut).toBe(ms(43));
+    expect(parentCreatedMs, 'the parent was formed after both boundaries; its visibility never reads that').toBeGreaterThan(cut8.tsCut);
+  });
+
+  it('C31: under ASOF=N a grep hit on a kept(N) row groups under the live tail, and neither leaf N+1\'s id nor its gist prints; a row a hidden lower-id leaf shares groups under its visible leaf (coveringLeaves)', async () => {
+    const a = await GRX.grepArgs(['zqw2d35kept7']);
+    const open = await under(undefined, (rc) => R.runGrep(rc, a));
+    expect(open.exit, all(open)).toBe(0);
+    expect(open.items.map((i) => [i['entry_uuid'], i['node_id']]), 'CONTROL: with no cut the kept(7) row groups under leaf 8').toEqual([[kept(7), L[7]]]);
+    expect(open.blocks.join('\n'), 'CONTROL: leaf 8\'s header carries its gist').toContain('zqw2d35gist8');
+    const r = await under(cut7, (rc) => R.runGrep(rc, a));
+    expect(r.exit, all(r)).toBe(0);
+    expect(r.items.map((i) => [i['entry_uuid'], i['node_id']]), 'the kept(7) row is visible; its only covering leaf is not').toEqual([[kept(7), null]]);
+    expect(r.blocks[0]!.split('\n')[0]).toBe('── live tail (rows no leaf covers yet)');
+    expect(all(r), 'no display of leaf 8\'s id').not.toContain(pre7(L[7]!));
+    expect(all(r), 'leaf 8\'s gist').not.toContain('zqw2d35gist8');
+    // u(1) has two in-scope covering leaves: leaf 1 (visible under cut 7) and HID (boundary 8, hidden), whose id is the
+    // lower. Hidden leaves are dropped BEFORE the lower id is taken, so u(1) groups under leaf 1, never the live tail.
+    const ask = await GRX.grepArgs(['zqw2d35ask1']);
+    const shared = await under(undefined, (rc) => R.runGrep(rc, ask));
+    expect(shared.items.map((i) => [i['entry_uuid'], i['node_id']]), 'CONTROL: with no cut u(1) groups under the lower id, HID').toEqual([[u(1), HID]]);
+    const sharedCut = await under(cut7, (rc) => R.runGrep(rc, ask));
+    expect(sharedCut.items.map((i) => [i['entry_uuid'], i['node_id']]), 'the visible leaf that covers it').toEqual([[u(1), L[0]]]);
+    expect(all(sharedCut), 'HID\'s id').not.toContain(HID);
+    expect(all(sharedCut), 'HID\'s gist').not.toContain('zqw2d35crafthid');
+  }, HEAVY);
+
+  it('leafHeads answers no head for a leaf the cut hides (a test seam: no read verb reaches it with an id coveringLeaves has not cut)', async () => {
+    const open = await under(undefined, (rc) => [...R.leafHeads(rc, [L[6]!, L[7]!]).keys()].sort());
+    expect(open, 'CONTROL').toEqual([L[6]!, L[7]!].sort());
+    const cut = await under(cut7, (rc) => [...R.leafHeads(rc, [L[6]!, L[7]!]).keys()]);
+    expect(cut).toEqual([L[6]]);
+  });
+
+  it('tree under ASOF=7: a hidden leaf, its parent, a hidden crafted leaf, a leafless node and an epoch with no visible row are absent; N counts the visible', async () => {
+    const open = await under(undefined, treeOf);
+    expect(open.exit, all(open)).toBe(0);
+    expect(treeIds(open), 'CONTROL').toEqual([...L, P, VIS, HID, EMPTY].sort());
+    expect(open.total).toBe(12);
+    expect(open.items.find((i) => i['node_id'] === L[0])?.['parent_id'], 'CONTROL: leaf 1 sits under the parent').toBe(P);
+    expect(open.blocks.some((l) => /^ {2}epoch \d+ clear started=\S+ session=2d35bbbb$/.test(l)), 'CONTROL: the second epoch is listed').toBe(true);
+    expect(open.blocks.some((l) => l.startsWith(`    ${VIS} native_leaf depth=0 `)), 'CONTROL: HID beside it makes VIS\'s prefix its whole id').toBe(true);
+    const r = await under(cut7, treeOf);
+    expect(r.exit, all(r)).toBe(0);
+    expect(treeIds(r)).toEqual([...L.slice(0, 7), VIS].sort());
+    expect(r.total, 'N counts the visible nodes only').toBe(8);
+    for (const i of r.items) expect(i['parent_id'], `${String(i['node_id'])}: a hidden parent is no parent`).toBeNull();
+    expect(r.blocks.some((l) => /^ {2}epoch \d+ startup /.test(l)), 'the epoch with visible rows stays').toBe(true);
+    expect(r.blocks.some((l) => l.includes('session=2d35bbbb')), 'the epoch whose transcript holds only hidden rows').toBe(false);
+    expect(r.blocks.some((l) => l.startsWith(`    ${pre7(VIS)} native_leaf depth=0 `)), 'hidden HID no longer lengthens VIS\'s prefix').toBe(true);
+    for (const h of [L[7]!, P, EMPTY]) expect(all(r), h).not.toContain(pre7(h));
+    expect(all(r)).not.toContain(HID);
+    for (const g of ['zqw2d35gist8', 'zqw2d35crafthid', 'zqw2d35craftempty']) expect(all(r), g).not.toContain(g);
+  }, HEAVY);
+
+  it('tree under ASOF=8: the parent shows once every leaf under it does, whenever it was formed; a node with no leaf under it stays hidden', async () => {
+    const r = await under(cut8, treeOf);
+    expect(r.exit, all(r)).toBe(0);
+    expect(treeIds(r)).toEqual([...L, P, VIS, HID].sort());
+    expect(r.total).toBe(11);
+    expect(r.items.find((i) => i['node_id'] === L[0])?.['parent_id']).toBe(P);
+    expect(all(r), 'the leafless condensed node, fail closed').not.toContain(pre7(EMPTY));
+    expect(r.blocks.some((l) => l.includes('session=2d35bbbb'))).toBe(false);
+  }, HEAVY);
+
+  it('a hidden node answers exit 3 at describe, grep --node and expand, never out-of-scope, and its refs never print; a visible out-of-scope node stays 2', async () => {
+    const node = await GRX.grepArgs(['--node', L[7]!, 'zqw2d35ask8']);
+    const grepNode = (rc: W35Rc): GrepVerbResult => R.runGrep(rc, node);
+    const opened: Array<[string, (rc: W35Rc) => GrepVerbResult]> = [
+      ['describe leaf 8', describeOf(L[7]!)], ['describe the parent', describeOf(P)], ['describe HID', describeOf(HID)],
+      ['describe the leafless node', describeOf(EMPTY)], ['expand leaf 8', expandOf(L[7]!)], ['grep --node leaf 8', grepNode],
+    ];
+    for (const [name, f] of opened) {
+      const r = await under(undefined, f);
+      expect(r.exit, `CONTROL, ${name}: ${all(r)}`).toBe(0);
+    }
+    expect(all(await under(undefined, describeOf(HID))), 'CONTROL: HID\'s refs print with no cut').toContain('zqw2d35refhid');
+    expect(ans(await under(undefined, describeOf(OUT_HID))), 'CONTROL: B\'s leaf is out of scope with no cut').toEqual([2, 'out-of-scope']);
+    const hidden: Array<[string, (rc: W35Rc) => GrepVerbResult]> = [
+      ...opened, ['describe leaf 8 by its prefix', describeOf(pre7(L[7]!))], ['describe B\'s hidden leaf', describeOf(OUT_HID)],
+      ['expand the parent', expandOf(P)],
+    ];
+    for (const [name, f] of hidden) {
+      const r = await under(cut7, f);
+      expect(ans(r), name).toEqual([3, undefined]);
+      expect(all(r), name).not.toContain('zqw2d35refhid');
+    }
+    expect(ans(await under(cut7, describeOf(OUT_VIS))), 'a visible node of another family is still out of scope').toEqual([2, 'out-of-scope']);
+  }, 2 * HEAVY);
+
+  it('a hidden id never makes a prefix ambiguous, and display prefixes are computed over the visible nodes only (resolveNodeInScope, scopePrefixes)', async () => {
+    const open = await under(undefined, describeOf(pre7(VIS)));
+    expect(ans(open), 'CONTROL: with no cut both crafted leaves match the prefix').toEqual([2, 'bad-args']);
+    expect(open.hint ?? '').toContain(HID);
+    const openVis = await under(undefined, describeOf(VIS));
+    expect(openVis.blocks[0], 'CONTROL: HID makes VIS\'s display prefix its whole id').toMatch(new RegExp(`^node ${VIS} native_leaf `));
+    const r = await under(cut7, describeOf(pre7(VIS)));
+    expect(r.exit, all(r)).toBe(0);
+    expect(r.items[0]!['node_id']).toBe(VIS);
+    expect(r.blocks[0]).toMatch(new RegExp(`^node ${pre7(VIS)} native_leaf `));
+    expect(all(r)).not.toContain(HID);
+    expect(all(r), 'a visible node\'s refs still print').toContain('zqw2d35refvis');
+  }, HEAVY);
+
+  it('describe drops a hidden parent, a hidden source row, a hidden witness of its producer and a hidden child, and keeps each one the cut shows', async () => {
+    type Item = { parent_id: string | null; sources: Array<{ uuid: string }>; sources_total: number; producer: string };
+    const item = (r: GrepVerbResult): Item => r.items[0] as unknown as Item;
+    const shape = (r: GrepVerbResult): unknown[] => [item(r).parent_id, item(r).sources.map((s) => s.uuid), item(r).sources_total];
+    expect(shape(await under(undefined, describeOf(L[0]!))), 'CONTROL').toEqual([P, [u(1), u(2)], 2]);
+    const r1 = await under(cut7, describeOf(L[0]!));
+    expect(r1.exit, all(r1)).toBe(0);
+    expect(shape(r1)).toEqual([null, [u(1)], 1]);
+    expect(r1.blocks.some((l) => l.startsWith('parent ')), 'no parent line').toBe(false);
+    expect(all(r1), 'no display of the hidden parent').not.toContain(pre7(P));
+    expect(all(r1), 'the NULL-ts reply\'s uuid').not.toContain(u(2));
+    expect(item(await under(cut8, describeOf(L[0]!))).parent_id, 'under ASOF=8 the parent is visible, so it is named').toBe(P);
+    expect(item(await under(undefined, describeOf(L[6]!))).producer, 'CONTROL: leaf 7\'s producer is the reply after its summary').toBe('anthropic');
+    expect(item(await under(cut7, describeOf(L[6]!))).producer, 'under ASOF=7 that reply is hidden').toBe('unknown');
+    expect(item(await under(cut8, describeOf(L[6]!))).producer, 'under ASOF=8 it is visible again').toBe('anthropic');
+    // childRowsOf: under R4 a visible parent holds a hidden child only in a damaged store (EMPTY, a leafless condensed child).
+    type Kids = { children: Array<{ id: string }>; children_total: number };
+    const kids = (r: GrepVerbResult): unknown[] => { const k = r.items[0] as unknown as Kids; return [k.children.map((c) => c.id).sort(), k.children_total]; };
+    expect(kids(await under(undefined, describeOf(P))), 'CONTROL: with no cut the leafless child is listed and counted').toEqual([[...L, EMPTY].sort(), 9]);
+    const p8 = await under(cut8, describeOf(P));
+    expect(p8.exit, all(p8)).toBe(0);
+    expect(kids(p8), 'under ASOF=8 the parent is visible, and its hidden child is neither listed nor counted').toEqual([[...L].sort(), 8]);
+    expect(all(p8), 'no display of the hidden child').not.toContain(pre7(EMPTY));
+  }, HEAVY);
+
+  it('nodes_fts has no reader on the read path, so node text reaches a read verb only through its node', () => {
+    const src = (f: string): string => fs.readFileSync(path.join(REPO, 'ccd', 'history', f), 'utf8');
+    for (const f of ['recall.mjs', 'regex-worker.mjs', 'cli.mjs']) expect(src(f).match(/\bnodes_fts\b/g) ?? [], f).toEqual([]);
+    expect(src('derive.mjs'), 'CONTROL: the writer spells the table name the scan looks for').toMatch(/\bnodes_fts\b/);
+  });
+
+  it('W2-D45: with no cut, or a null one, no read verb prepares a cut statement; under a cut each of the three is prepared', async () => {
+    const MARKS: Record<string, RegExp> = { nodes: /\basof_down\b/, epochs: /:asof_epochs\b/, entries: /:asof_entries\b/ };
+    const grep = await GRX.grepArgs(['zqw2d35kept7']);
+    const prepared = async (cut: W35Cut | null | undefined): Promise<string[]> => {
+      const rc = await rcOf(cut);
+      const calls: string[] = [];
+      const spied: W35Rc = { ...rc, db: GRX.spyDb(rc.db, calls) };
+      try {
+        expect(R.runTree(spied, { depth: 2, json: true }).exit).toBe(0);
+        expect(R.runDescribe(spied, { target: L[0]!, full: false, cursor: null, json: true }).exit).toBe(0);
+        expect(R.runGrep(spied, grep).exit).toBe(0);
+      } finally { rc.db.close(); }
+      return calls;
+    };
+    for (const cut of [undefined, null]) {
+      const calls = await prepared(cut);
+      for (const [k, re] of Object.entries(MARKS)) expect(calls.filter((s) => re.test(s)), `${String(cut)}: ${k}`).toEqual([]);
+    }
+    const withCut = await prepared(cut7);
+    for (const [k, re] of Object.entries(MARKS)) expect(withCut.some((s) => re.test(s)), `CONTROL: the cut prepares its ${k} statement`).toBe(true);
+  }, HEAVY);
+
+  it('R8 (SEC-2): describe drops the refs mined from source rows (origin tool_use), and the files derived from them, of a node with a hidden source row, its own or a descendant leaf\'s; the summary\'s refs stay, and so do the mined refs of a node whose rows are all visible', async () => {
+    type Refs = { refs: Array<{ value: string; origin: string }>; refs_total: number; files: string[]; files_total: number };
+    const refs = (r: GrepVerbResult): Refs => r.items[0] as unknown as Refs;
+    // Leaf 1: its NULL-ts reply u(2) is hidden under every cut, and a ref mined from its rows may name that row.
+    const open1 = await under(undefined, describeOf(L[0]!));
+    expect(open1.exit, all(open1)).toBe(0);
+    expect(refs(open1).refs.some((x) => x.value.includes('zqw2d35minedrow1') && x.origin === 'tool_use'), 'CONTROL: with no cut leaf 1\'s mined ref prints').toBe(true);
+    expect(refs(open1).files.some((f) => f.includes('zqw2d35minedrow1')), 'CONTROL: and its path is among the files').toBe(true);
+    const cut1 = await under(cut7, describeOf(L[0]!));
+    expect(cut1.exit, all(cut1)).toBe(0);
+    expect(all(cut1), 'the hidden-row path, in refs, files and every line').not.toContain('zqw2d35minedrow1');
+    expect(all(cut1), 'the summary\'s ref stays (R6)').toContain('zqw2d35modelrow1');
+    expect([refs(cut1).refs_total, refs(cut1).files_total], 'neither count holds it')
+      .toEqual([refs(open1).refs_total - 1, refs(open1).files_total - 1]);
+    // Leaf 7 is leaf N under cut 7, and every source row of it is visible: its mined ref stays.
+    expect(all(await under(cut7, describeOf(L[6]!))), 'leaf N\'s mined ref, every row under it visible').toContain('zqw2d35minedrow7');
+    // The parent holds u(2) through leaf 1. It is visible under cut 8: its mined ref goes, its summary's ref stays.
+    expect(all(await under(undefined, describeOf(P))), 'CONTROL: the parent\'s mined ref with no cut').toContain('zqw2d35minedparent');
+    const p8 = await under(cut8, describeOf(P));
+    expect(p8.exit, all(p8)).toBe(0);
+    expect(all(p8), 'a hidden descendant source drops the parent\'s mined ref').not.toContain('zqw2d35minedparent');
+    expect(all(p8), 'the parent\'s summary ref stays (R6)').toContain('zqw2d35modelparent');
+  }, HEAVY);
+});

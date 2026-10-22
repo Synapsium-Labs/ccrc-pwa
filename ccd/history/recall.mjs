@@ -85,6 +85,56 @@ const marks = (xs) => xs.map(() => '?').join(', ');
 /** A time at minute precision, locale-free. */
 const isoOf = (ms) => (ms === null || ms === undefined ? 'unknown' : `${new Date(Number(ms)).toISOString().slice(0, 16)}Z`);
 
+// ── The as-of cut's reads (W2-2a Task 3; W2-D35, W2-D36, W2-D38) ────────────────────────────────────────────────────
+// The cut (lib's asOfCut) rides on rc.scope.cut, read through cutOf and bound through cutBinds (both below bindFor, Task
+// 2). Each helper here asks one of lib's statements and answers a set (cutHidesASource answers whether cutVisibleEntries'
+// set misses a row under a node). With no cut they prepare nothing, so a read with
+// nothing set prepares exactly the statements it prepared before W2-2a (W2-D45).
+// A node, epoch or row the cut hides is ABSENT (W2-D36): each site filters it before scope, so it is never out of scope,
+// never one of an ambiguous prefix's candidates and never counted.
+
+/** Of `ids`, the node ids the cut hides, by lib's asOfHiddenNodesSql: a leaf by its boundary entry, any other node by every
+ *  leaf under it, whenever it was formed. An empty set with no cut. */
+function cutHiddenNodes(rc, ids) {
+  const cut = cutOf(rc);
+  if (cut === null || ids.length === 0) return new Set();
+  const sql = xlib.asOfHiddenNodesSql();
+  const rows = rc.db.prepare(sql).all(bindFor(sql, { ...cutBinds(rc), asof_nodes: JSON.stringify([...new Set(ids)]) }));
+  return new Set(rows.map((r) => r.node_id));
+}
+
+/** Of these epochs' session uuids, the ones the cut shows (one of their transcripts holds a row it shows). null with no
+ *  cut, which shows every epoch. */
+function cutVisibleEpochs(rc, uuids) {
+  const cut = cutOf(rc);
+  if (cut === null) return null;
+  if (uuids.length === 0) return new Set();
+  const sql = xlib.asOfVisibleEpochsSql();
+  const rows = rc.db.prepare(sql).all(bindFor(sql, { ...cutBinds(rc), asof_epochs: JSON.stringify([...new Set(uuids)]) }));
+  return new Set(rows.map((r) => r.cc_session_uuid));
+}
+
+/** Of these entry ids, the ones the cut shows (lib's asOfVisibleEntriesSql, W2-D34's rule). null with no cut. */
+function cutVisibleEntries(rc, entryIds) {
+  const cut = cutOf(rc);
+  if (cut === null) return null;
+  if (entryIds.length === 0) return new Set();
+  const sql = xlib.asOfVisibleEntriesSql();
+  const ids = JSON.stringify([...new Set(entryIds.map(Number))]);
+  const rows = rc.db.prepare(sql).all(bindFor(sql, { ...cutBinds(rc), asof_entries: ids }));
+  return new Set(rows.map((r) => Number(r.entry_id)));
+}
+
+/** Whether the as-of cut hides a source row under node `id`: its own (a leaf) or any descendant leaf's (a parent), listed
+ *  by store.mjs's lineageEntries and judged by cutVisibleEntries (lib's asOfVisibleEntriesSql). false with no cut, and
+ *  then nothing is read (W2-D45). describe drops the node's tool_use refs when it answers true (R8). */
+function cutHidesASource(rc, id) {
+  if (cutOf(rc) === null) return false;
+  const ids = lineageEntries(rc.db, id).map((x) => x.entryId);
+  const shown = cutVisibleEntries(rc, ids);
+  return ids.some((e) => !shown.has(e));
+}
+
 const FAMILY_BY_KEY_SQL = 'SELECT session_pk, ccrc_id, generation, first_seen_ms, merged_into FROM sessions WHERE ccrc_id = ? AND generation = ?';
 const FAMILY_BY_PK_SQL = 'SELECT session_pk, ccrc_id, generation, first_seen_ms, merged_into FROM sessions WHERE session_pk = ?';
 const NEWEST_FAMILY_SQL = 'SELECT session_pk, ccrc_id, generation, first_seen_ms, merged_into FROM sessions '
@@ -240,14 +290,22 @@ export function runTree(rc, a) {
   const db = rc.db;
   const head = scopeHeader(rc);
   const cols = selectColumns(rc.version, 'nodes', NODE_COLS, rc.schema);
-  const nodes = [];
+  const stored = [];
   for (const part of inParts(rc.scope.sessionPks)) {
-    nodes.push(...db.prepare(`SELECT ${cols} FROM nodes n WHERE n.session_pk IN (${marks(part)}) AND EXISTS (SELECT 1 FROM epochs e WHERE e.session_pk = n.session_pk AND e.seq = n.epoch_seq AND e.confirmed_ms IS NOT NULL)`).all(...part));
+    stored.push(...db.prepare(`SELECT ${cols} FROM nodes n WHERE n.session_pk IN (${marks(part)}) AND EXISTS (SELECT 1 FROM epochs e WHERE e.session_pk = n.session_pk AND e.seq = n.epoch_seq AND e.confirmed_ms IS NOT NULL)`).all(...part));
   }
+  // W2-D35: a node the as-of cut hides is absent (W2-D36): not listed, not counted in N, and no display prefix below is
+  // measured against it.
+  const hiddenTree = cutHiddenNodes(rc, stored.map((n) => n.node_id));
+  const nodes = hiddenTree.size === 0 ? stored : stored.filter((n) => !hiddenTree.has(n.node_id));
   const byId = new Map(nodes.map((n) => [n.node_id, n]));
   const prefixes = displayPrefixes([...byId.keys()]);
   const show = (id) => prefixes.get(id) ?? id;
-  const parentById = new Map(nodes.map((n) => [n.node_id, parentOf(db, n.node_id)]));
+  // A parent the cut hides is no parent: its visible children are then roots of their epoch, as they were before it formed.
+  const parentById = new Map(nodes.map((n) => {
+    const p = parentOf(db, n.node_id);
+    return [n.node_id, p !== null && hiddenTree.has(p) ? null : p];
+  }));
   const rootsByEpoch = new Map();
   for (const n of nodes) {
     if (parentById.get(n.node_id) !== null) continue;
@@ -268,7 +326,11 @@ export function runTree(rc, a) {
   };
   for (const f of rc.scope.families) {
     out.push({ text: `family ${f.ccrcId} generation=${f.generation === '' ? '(none)' : f.generation} first-seen=${isoOf(f.firstSeenMs)}`, node: null });
-    for (const e of epochs.all(f.sessionPk)) {
+    const listed = epochs.all(f.sessionPk);
+    // W2-D35: an epoch shows iff one of its transcripts holds a row the as-of cut shows; null with no cut shows them all.
+    const shownEpochs = cutVisibleEpochs(rc, listed.map((e) => e.cc_session_uuid));
+    for (const e of listed) {
+      if (shownEpochs !== null && !shownEpochs.has(e.cc_session_uuid)) continue;
       out.push({ text: `  epoch ${e.seq} ${e.cause} started=${isoOf(e.started_ms)} session=${String(e.cc_session_uuid).slice(0, 8)}`, node: null });
       const roots = (rootsByEpoch.get(`${f.sessionPk}:${e.seq}`) ?? [])
         .sort((x, y) => (Number(x.earliest_ms ?? 0) - Number(y.earliest_ms ?? 0)) || (x.node_id < y.node_id ? -1 : 1));
@@ -517,8 +579,12 @@ function iso(ms) {
  *  RV19). A node outside it is exit 2 out-of-scope, never 3; prefix uniqueness is computed among the scope's
  *  nodes. Node ids are hex after the kind letter, so `wanted + 'g'` bounds the prefix range on the primary key. */
 export function resolveNodeInScope(rc, wanted) {
-  const rows = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'session_pk'], rc.schema)} FROM nodes
+  const stored = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'session_pk'], rc.schema)} FROM nodes
     WHERE node_id >= ? AND node_id < ?`).all(wanted, `${wanted}g`);
+  // W2-D36: a node the as-of cut hides is absent BEFORE scope, so it is neither in scope nor out of it. It answers 3, never
+  // out-of-scope, and never makes a prefix ambiguous. One filter for describe, grep --node and expand's node target.
+  const hiddenHere = cutHiddenNodes(rc, stored.map((x) => x.node_id));
+  const rows = hiddenHere.size === 0 ? stored : stored.filter((x) => !hiddenHere.has(x.node_id));
   const mine = new Set(rc.scope.sessionPks);
   const verdict = resolveScopedId({
     wanted,
@@ -730,33 +796,56 @@ function grepArgv(rc, a, cursor) {
 }
 
 /** Display prefixes for every node of the scope (§6.1): unique within the scope, never shorter than
- *  NODE_ID_DISPLAY_MIN. */
+ *  NODE_ID_DISPLAY_MIN. Under an as-of cut, computed over the visible nodes only (W2-D35), so a hidden neighbour never
+ *  lengthens a visible node's prefix. */
 function scopePrefixes(rc) {
   const ids = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id'], rc.schema)} FROM nodes
     WHERE session_pk IN (SELECT value FROM json_each(?))`).all(JSON.stringify(rc.scope.sessionPks)).map((r) => r.node_id);
-  return displayPrefixes(ids);
+  const hiddenPre = cutHiddenNodes(rc, ids);
+  return displayPrefixes(hiddenPre.size === 0 ? ids : ids.filter((id) => !hiddenPre.has(id)));
 }
 
 /** Each entry's covering leaf, through node_sources_entry (§8.4). node_sources holds leaf edges only (§6.3). Two
  *  fork leaves can hold one shared row (DM36, DM37); it groups under the lower node_id, deterministically. Only a
  *  leaf of the scope's own families counts: an entry is store-global, so another family's leaf can hold the same
- *  row, and that leaf is not this scope's to show. */
+ *  row, and that leaf is not this scope's to show. Under an as-of cut only a VISIBLE leaf counts (W2-D35), and the
+ *  hidden ones are dropped BEFORE the lower id is taken: a row a hidden leaf and a visible one share groups under the
+ *  visible one, and a row only a hidden leaf covers (kept(N) under ASOF=N, leaf N+1's) has none, so renderHits groups
+ *  it under the live tail and no hidden leaf's id or gist prints (C31). */
 function coveringLeaves(rc, entryIds) {
   if (entryIds.length === 0) return new Map();
-  const rows = rc.db.prepare(`SELECT ns.entry_id AS entry_id, min(ns.node_id) AS node_id
+  if (cutOf(rc) === null) {
+    const rows = rc.db.prepare(`SELECT ns.entry_id AS entry_id, min(ns.node_id) AS node_id
       FROM ${versioned(rc, 'node_sources', 'ns', ['node_id', 'entry_id'])}
       JOIN ${versioned(rc, 'nodes', 'n', ['node_id', 'session_pk'])} ON n.node_id = ns.node_id
       WHERE ns.entry_id IN (SELECT value FROM json_each(?)) AND n.session_pk IN (SELECT value FROM json_each(?))
       GROUP BY ns.entry_id`).all(JSON.stringify(entryIds), JSON.stringify(rc.scope.sessionPks));
-  return new Map(rows.map((r) => [r.entry_id, r.node_id]));
+    return new Map(rows.map((r) => [r.entry_id, r.node_id]));
+  }
+  const pairs = rc.db.prepare(`SELECT ns.entry_id AS entry_id, ns.node_id AS node_id
+      FROM ${versioned(rc, 'node_sources', 'ns', ['node_id', 'entry_id'])}
+      JOIN ${versioned(rc, 'nodes', 'n', ['node_id', 'session_pk'])} ON n.node_id = ns.node_id
+      WHERE ns.entry_id IN (SELECT value FROM json_each(?)) AND n.session_pk IN (SELECT value FROM json_each(?))`)
+    .all(JSON.stringify(entryIds), JSON.stringify(rc.scope.sessionPks));
+  const hiddenLeaves = cutHiddenNodes(rc, pairs.map((r) => r.node_id));
+  const out = new Map();
+  for (const r of pairs) {
+    if (hiddenLeaves.has(r.node_id)) continue;
+    const had = out.get(r.entry_id);
+    if (had === undefined || r.node_id < had) out.set(r.entry_id, r.node_id);   // ASCII ids: SQLite's BINARY min
+  }
+  return out;
 }
 
-/** The time range and gist of each group's leaf. */
-function leafHeads(rc, ids) {
+/** The time range and gist of each group's leaf. A leaf the as-of cut hides has no head (W2-D35), so neither its range nor
+ *  its gist can print. Exported as a test seam (the describePageEnd precedent): renderHits hands it only ids coveringLeaves
+ *  has already cut, so no read verb can show this guard red on its own. */
+export function leafHeads(rc, ids) {
   if (ids.length === 0) return new Map();
   const rows = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'earliest_ms', 'latest_ms', 'gist'], rc.schema)}
     FROM nodes WHERE node_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids));
-  return new Map(rows.map((r) => [r.node_id, r]));
+  const hiddenHeads = cutHiddenNodes(rc, ids);
+  return new Map(rows.filter((r) => !hiddenHeads.has(r.node_id)).map((r) => [r.node_id, r]));
 }
 
 /** One page of hits (§8.3, §8.4), grouped under their covering leaves plus a live tail.
@@ -995,19 +1084,27 @@ function refsOf(rc, id) {
     WHERE node_id = ? ORDER BY kind, value`).all(id);
 }
 
-/** A leaf's sources in order, each with its blob's raw length. */
+/** A leaf's sources in order, each with its blob's raw length. Under an as-of cut a source row the cut hides (a NULL-ts
+ *  row, W2-D34) is absent from the list and from its count (W2-D36). */
 function sourcesOf(rc, id) {
-  return rc.db.prepare(`SELECT e.uuid AS uuid, e.type AS type, e.role AS role, b.raw_len AS raw_len
+  const cutSet = cutOf(rc) !== null;
+  const rows = rc.db.prepare(`SELECT e.uuid AS uuid, e.type AS type, e.role AS role, b.raw_len AS raw_len${cutSet ? ', e.entry_id AS entry_id' : ''}
       FROM ${versioned(rc, 'node_sources', 'ns', ['node_id', 'entry_id', 'ord'])}
         JOIN ${versioned(rc, 'entries', 'e', ['entry_id', 'uuid', 'type', 'role', 'blob_id'])} ON e.entry_id = ns.entry_id
         JOIN ${versioned(rc, 'blobs', 'b', ['blob_id', 'raw_len'])} ON b.blob_id = e.blob_id
       WHERE ns.node_id = ? ORDER BY ns.ord`).all(id);
+  const shownRows = cutVisibleEntries(rc, cutSet ? rows.map((r) => r.entry_id) : []);
+  return shownRows === null ? rows : rows.filter((r) => shownRows.has(Number(r.entry_id)));
 }
 
 /** A condensed node's children in order (Task 9's node_children, parent → children). */
 function childRowsOf(rc, id) {
   const st = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', DESCRIBE_NODE_COLS, rc.schema)} FROM nodes WHERE node_id = ?`);
-  return childrenOf(rc.db, id).slice().sort((x, y) => x.ord - y.ord).map((c) => st.get(c.childId)).filter((r) => r !== undefined);
+  const kids = childrenOf(rc.db, id).slice().sort((x, y) => x.ord - y.ord).map((c) => st.get(c.childId)).filter((r) => r !== undefined);
+  // W2-D36: a child the as-of cut hides is absent, from the list and from children_total. Under the parent rule a visible
+  // parent holds one only in a damaged store: a condensed child with no leaf under it (R4).
+  const hiddenKids = cutHiddenNodes(rc, kids.map((k) => k.node_id));
+  return hiddenKids.size === 0 ? kids : kids.filter((k) => !hiddenKids.has(k.node_id));
 }
 
 /** The line of a leaf's summary row in its holding copy `at` ({ file_id, line: the boundary's }), picked as lib's
@@ -1051,12 +1148,17 @@ function producerOfLeaf(rc, n) {
   if (held === null) return 'unknown';
   const at = copies.find((c) => Number(c.file_id) === held);
   const from = summaryLine(rc, n.boundary_entry_id, at) ?? at.line;
-  const after = rc.db.prepare(`SELECT e.model AS model
+  const witnessCut = cutOf(rc) !== null;
+  const after = rc.db.prepare(`SELECT e.model AS model${witnessCut ? ', e.entry_id AS entry_id' : ''}
       FROM ${versioned(rc, 'memberships', 'mb', ['file_id', 'entry_id', 'line'])}
         JOIN ${versioned(rc, 'entries', 'e', ['entry_id', 'type', 'model'])} ON e.entry_id = mb.entry_id
       WHERE mb.file_id = ? AND mb.line > ? AND e.type = 'assistant' ORDER BY mb.line`);
   function* models() {
-    for (const r of after.iterate(at.file_id, from)) yield r.model;
+    for (const r of after.iterate(at.file_id, from)) {
+      // W2-D36: a witness the as-of cut hides is absent, so a leaf's producer never names the model of a hidden reply.
+      if (witnessCut && !cutVisibleEntries(rc, [r.entry_id]).has(Number(r.entry_id))) continue;
+      yield r.model;
+    }
   }
   return producerOf(models());
 }
@@ -1175,7 +1277,9 @@ export function runDescribe(rc, a, deps = {}) {
   if (n === undefined) return notFound();
   const pre = scopePrefixes(rc);
   const disp = (x) => pre.get(x) ?? x;
-  const parent = parentOf(rc.db, id);
+  // W2-D35: a parent the as-of cut hides is absent: no parent line, and parent_id is null.
+  const storedParent = parentOf(rc.db, id);
+  const parent = storedParent !== null && cutHiddenNodes(rc, [storedParent]).has(storedParent) ? null : storedParent;
   const producer = producerOfNode(rc, n);
   const sm = summaryOf(rc, n);
   const summary = sm.state === 'text' ? sm.text : null;
@@ -1230,7 +1334,12 @@ export function runDescribe(rc, a, deps = {}) {
 
   const gistAll = n.gist === null ? null : redactForDisplay(n.gist, rc.pairIdx);
   const topicsAll = topicsOfColumn(n.topics).map((t) => redactForDisplay(t, rc.pairIdx));
-  const refsAll = refsOf(rc, id).map((r) => ({ kind: r.kind, value: redactForDisplay(r.value, rc.pairIdx), origin: r.origin }));
+  // R8: under an as-of cut, a ref mined from source rows (origin tool_use) is dropped when a source row under this node,
+  // its own or a descendant leaf's, is one the cut hides: node_refs names no row, so it may come from that row. Refs of
+  // origin model and meta come from the summary written at N and stay (R6). files are read from refsAll, so they follow.
+  const minedHidden = cutHidesASource(rc, id);
+  const refsAll = refsOf(rc, id).filter((r) => !(minedHidden && r.origin === 'tool_use'))
+    .map((r) => ({ kind: r.kind, value: redactForDisplay(r.value, rc.pairIdx), origin: r.origin }));
   const filesAll = refsAll.filter((r) => r.kind === 'path').map((r) => r.value);
   const excerptMax = summary === null ? 0 : Math.min(summary.length, pairSafeEnd(summary, 0, DESCRIBE_EXCERPT));
   const label = n.depth > 0 ? 'children' : 'sources';

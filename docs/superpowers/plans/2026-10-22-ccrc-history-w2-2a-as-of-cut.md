@@ -2148,8 +2148,8 @@ describe.skipIf(process.platform === 'darwin')('W2-D35: the as-of cut hides node
   const bnd = (c: number): string => u(5 * c - 1);
   const kept = (c: number): string => u(5 * c - 2);
   const hex20 = (head: string, last: string): string => `${head}${'0'.repeat(20 - head.length - last.length)}${last}`;
-  const VIS = `L${hex20('000000', '2')}`;
-  const HID = `L${hex20('000000', '1')}`;   // the lower of the two, and below every derived leaf's id
+  const VIS = `L${hex20('000001', '2')}`;
+  const HID = `L${hex20('000001', '1')}`;   // the lower of the two, and below every derived leaf's id
   const EMPTY = `N${hex20('e0e0e0', '1')}`;
   const OUT_VIS = `L${hex20('d00d00', '1')}`;
   const OUT_HID = `L${hex20('d00d01', '1')}`;
@@ -2492,7 +2492,7 @@ Expected (predicted before the code): `9 failed | 2 passed`.
 - leafHeads: `R.leafHeads is not a function` (it is not exported yet).
 - both tree cases: the item ids still hold leaf 8, the parent, HID and EMPTY.
 - the exit-3 case: `describe leaf 8` answers `[ 0, undefined ]` under the cut.
-- the prefix case: `describe L000000` answers `[ 2, 'bad-args' ]` under the cut.
+- the prefix case: `describe L000001` answers `[ 2, 'bad-args' ]` under the cut (measured: with the ids as first written, `hex20('000000', …)`, the shared prefix `L000000` is all zeros, which `extractNodeId` refuses before any lookup (`a node id cannot be all zeros: L000000`), so the case failed at its no-cut CONTROL; the crafted ids now start `000001`, still below every derived leaf's id (predicted: `000000`)). The run measured `9 failed | 2 passed`, as predicted.
 - the describe case: `parent_id` is still the parent under cut 7.
 - W2-D45: its two no-cut halves pass; its CONTROL fails, because no cut statement exists yet.
 - the R8 case: its CONTROLs pass, then `expected '…' not to contain 'zqw2d35minedrow1'`: describe of leaf 1 under cut 7 still prints every ref.
@@ -2985,7 +2985,7 @@ restore
 mut ccd/history/recall.mjs '  return displayPrefixes(hiddenPre.size === 0 ? ids : ids.filter((id) => !hiddenPre.has(id)));' '  return displayPrefixes(ids);'
 (cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t "$F")
 restore
-# Expected RED (predicted): 1 failed | 10 passed, the prefix case: describe's node line under cut 7 shows VIS's whole id, not L000000.
+# Expected RED (predicted): 1 failed | 10 passed, the prefix case: describe's node line under cut 7 shows VIS's whole id, not L000001.
 ```
 
 ```bash
@@ -2995,6 +2995,7 @@ mut ccd/history/recall.mjs '  const nodes = hiddenTree.size === 0 ? stored : sto
 (cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t "$F")
 restore
 # Expected RED (predicted): 2 failed | 9 passed, both tree cases (leaf 8, the parent, HID and EMPTY listed under cut 7; EMPTY under cut 8).
+# Measured: 3 failed | 8 passed. The W2-D45 case reds too: with the node list unfiltered, the cut tree reads `readEnvelope: shown 16 of 12 is not a count` (predicted: 2 failed | 9 passed).
 ```
 
 ```bash
@@ -3022,7 +3023,7 @@ mut ccd/history/recall.mjs '  const rows = hiddenHere.size === 0 ? stored : stor
 (cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t "$F")
 restore
 # Expected RED (predicted): 2 failed | 9 passed: the exit-3 case ('describe leaf 8': [0, undefined]; 'describe HID' prints zqw2d35refhid;
-# 'describe B's hidden leaf': [2, 'out-of-scope']) and the prefix case (describe L000000: [2, 'bad-args']).
+# 'describe B's hidden leaf': [2, 'out-of-scope']) and the prefix case (describe L000001: [2, 'bad-args']).
 ```
 
 ```bash
@@ -3091,6 +3092,7 @@ restore
 # Expected RED (predicted): the W2-D45 case, whose no-cut halves now see an asof_down statement. With no cut cutBinds answers {}, so
 # the statement's asof_ parameters read NULL and every node reads hidden: other cases' no-cut CONTROLs red too. Write the measured
 # failing names in the run's notes; the W2-D45 case must be among them.
+# Measured: 8 failed | 3 passed. Red: C31, leafHeads, tree under ASOF=7, the exit-3 case, the prefix case, the describe case, W2-D45 and the R8 case; green: the fixture, tree under ASOF=8 and the nodes_fts case.
 ```
 
 ```bash

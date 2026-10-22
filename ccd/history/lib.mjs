@@ -4443,6 +4443,48 @@ export function asOfBinds(cut) {
   };
 }
 
+// ── The as-of cut's node, epoch and entry statements (W2-2a Task 3; W2-D35, W2-D36, W2-D38) ─────────────────────────
+// Each is ONE statement text, built on asOfEntrySql, so a node, an epoch and a row are judged by the same entry rule, and
+// recall.mjs and W2-5b's card parent (W2-D75) ask the same question. Each binds by name only: asOfBinds(cut)'s parameters
+// plus one JSON array of candidates. None is run without a cut: recall.mjs prepares nothing then (W2-D45).
+
+/** W2-D35's node rule. Of the node ids bound as a JSON array at `:asof_nodes`, the ones the cut hides (column `node_id`):
+ *  - a leaf (any kind but `condensed`) is hidden when its boundary entry is not stored or asOfEntrySql hides it (W2-D34);
+ *  - any node is hidden when a leaf under it is hidden, whenever the node was formed: the walk goes down node_children
+ *    (UNION, so a cycle ends it) and never reads `created_ms`;
+ *  - a `condensed` node with no leaf under it is hidden too, fail closed: "every leaf under it is visible" would hold
+ *    vacuously there, and only a damaged store has one (W2-D35 as amended).
+ *  An id that names no node answers nothing. */
+export function asOfHiddenNodesSql() {
+  return `WITH RECURSIVE asof_down(top, node_id) AS (
+    SELECT value, value FROM json_each(:asof_nodes)
+    UNION
+    SELECT d.top, c.child_id FROM asof_down d JOIN node_children c ON c.node_id = d.node_id
+  )
+  SELECT d.top AS node_id
+    FROM asof_down d
+    JOIN nodes asof_n ON asof_n.node_id = d.node_id
+    LEFT JOIN entries asof_b ON asof_b.entry_id = asof_n.boundary_entry_id
+    GROUP BY d.top
+    HAVING sum(asof_n.kind <> 'condensed') = 0
+      OR sum(asof_n.kind <> 'condensed' AND NOT coalesce(asof_b.entry_id IS NOT NULL AND (${asOfEntrySql('asof_b')}), 0)) > 0`;
+}
+
+/** W2-D35's epoch rule. Of the epoch session uuids bound as a JSON array at `:asof_epochs`, the ones the cut shows (column
+ *  `cc_session_uuid`): one of the epoch's transcripts (any agent_id) holds a row asOfEntrySql shows. */
+export function asOfVisibleEpochsSql() {
+  return `SELECT j.value AS cc_session_uuid FROM json_each(:asof_epochs) AS j
+    WHERE EXISTS (SELECT 1 FROM transcripts asof_t JOIN entries asof_e ON asof_e.transcript_pk = asof_t.transcript_pk
+      WHERE asof_t.cc_session_uuid = j.value AND (${asOfEntrySql('asof_e')}))`;
+}
+
+/** Of the entry ids bound as a JSON array at `:asof_entries`, the ones the cut shows (column `entry_id`): W2-D34's rule, for
+ *  a read that lists rows a node holds (describe's sources, a producer's witnesses). */
+export function asOfVisibleEntriesSql() {
+  return `SELECT asof_e.entry_id AS entry_id FROM entries asof_e
+    WHERE asof_e.entry_id IN (SELECT value FROM json_each(:asof_entries)) AND (${asOfEntrySql('asof_e')})`;
+}
+
 // derived from lossless-claw src/tools/lcm-describe-id.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
 const NODE_BARE_RE = /^[LN][0-9a-f]{6,20}…?$/;
 const NODE_TOKEN_RE = /(?<![A-Za-z0-9])[LN][0-9a-f]{6,20}(?![A-Za-z0-9])/g;
@@ -8605,7 +8647,7 @@ export const VERB_TABLES = Object.freeze({
   grep: Object.freeze([...READ_CONTEXT_TABLES, 'blobs', 'entry_variants', 'sidecars', 'nodes', 'node_sources', 'node_children', 'memberships']),
   describe: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'node_sources', 'node_children', 'blobs', 'boundaries', 'memberships']),
   expand: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'node_sources', 'blobs', 'entry_variants', 'sidecars', 'memberships']),
-  tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children']),
+  tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'memberships']),
 });
 
 /** The tables a store at `version` has: every SCHEMA_ADDED entry at or below it. A newer store has all this

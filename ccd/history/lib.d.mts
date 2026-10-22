@@ -561,6 +561,13 @@ export function asOfEntrySql(alias: string): string;
 export function asOfBinds(cut: AsOfCut): {
   asof_ts: number; asof_file: number; asof_line: number; asof_boundary: number; asof_summary: number | null; asof_kept: string;
 };
+// --- W2-2a Task 3: the as-of cut's node, epoch and entry statements (W2-D35, W2-D36, W2-D38). Each binds asOfBinds' names plus one JSON array.
+/** Of the node ids at :asof_nodes, those the cut hides (column node_id): a leaf by its boundary entry, any node by every leaf under it. */
+export function asOfHiddenNodesSql(): string;
+/** Of the epoch session uuids at :asof_epochs, those one of whose transcripts holds a row the cut shows (column cc_session_uuid). */
+export function asOfVisibleEpochsSql(): string;
+/** Of the entry ids at :asof_entries, those the cut shows (column entry_id). */
+export function asOfVisibleEntriesSql(): string;
 export function extractNodeId(raw: string): { ok: true; id: string } | { ok: false; error: string; hint?: string };
 export function recallOffPath(home: string, id: string): string;
 export function decideRecallOff(i: { file: Presence<string>; generation: string }): 'off' | 'stale' | 'none';
