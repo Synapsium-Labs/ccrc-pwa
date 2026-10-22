@@ -21,6 +21,7 @@ const { useFleetStore } = await import('../src/stores/fleet');
 const { DOOR_EVENT } = await import('../src/command/door');
 const { BANNER_ORDER } = await import('../src/fleet/BannerStack');
 const { UpdateIndicator } = await import('../src/fleet/UpdateIndicator');
+const { dismissRelease, readDismissed, resetDismissalForTests } = await import('../src/fleet/releaseDismissal');
 const { UPDATES_STALE_TEXT } = await import('../src/fleet/useUpdatesView');
 
 const MIN = 60_000;
@@ -71,11 +72,15 @@ const until = async (check: () => void): Promise<void> => {
 };
 
 beforeEach(() => {
+  window.localStorage.clear();
+  resetDismissalForTests();
   vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
 });
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
+  resetDismissalForTests();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   act(() => { navigate('/'); });
@@ -226,5 +231,141 @@ describe('UpdateIndicator (D-6327)', () => {
     // The title is the banner's sentence from its one owner, never rebuilt here.
     expect(code).toMatch(/updateBannerText\(/);
     expect(code).not.toMatch(/is out on/);
+  });
+});
+
+const DISMISS = 'Dismiss v0.0.9';
+const TITLE = 'Hidden until a newer release; Settings › Updates still lists it';
+const waitingAt = (tag: string): UpdatesView => ({
+  ...waiting(), nodes: [nodeOf('fleet', { desiredTag: tag }), nodeOf('server', { desiredTag: tag })],
+});
+
+describe('UpdateIndicator — dismissed until a newer release (D-6327, part b)', () => {
+  it('the dismiss control is named for its tag', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(waiting());
+    for (const form of ['bar', 'status', 'row'] as const) {
+      const { container } = renderFleet(<UpdateIndicator form={form} />);
+      const x = await screen.findByRole('button', { name: DISMISS });
+      expect(x, `${form}: beside the door, in the same line`).toBe(container.querySelector('.update-indicator')!.querySelector('button[aria-label="Dismiss v0.0.9"]'));
+      expect(x, form).toHaveAttribute('title', TITLE);
+      expect(x.querySelector('svg'), `${form}: the vendored x icon`).not.toBeNull();
+      expect(screen.getByRole('button', { name: NAME }), `${form}: the door is still the door`).toBeInTheDocument();
+      cleanup();
+    }
+    // The tag is the waiting one: v0.0.10 names itself, not v0.0.9.
+    vi.spyOn(api, 'updates').mockResolvedValue(waitingAt('v0.0.10'));
+    renderFleet(<UpdateIndicator form="row" />);
+    expect(await screen.findByRole('button', { name: 'Dismiss v0.0.10' })).toBeInTheDocument();
+    // Its size is the stylesheet's: 24px under a fine pointer, the tap floor otherwise.
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const base = /\.update-indicator-dismiss\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(base).toMatch(/min-width:\s*var\(--tap-min\)/);
+    expect(base).toMatch(/min-height:\s*var\(--tap-min\)/);
+    const fine = /@media \(pointer: fine\)\s*\{[^@]*?\.update-indicator-dismiss\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(fine).toMatch(/min-width:\s*24px/);
+    expect(fine).toMatch(/min-height:\s*24px/);
+  });
+
+  it('dismiss hides the indicator in the bar and the phone row alike', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(waiting());
+    for (const [skin, width, form] of [
+      [REFINED, 900, 'bar'], [INSTRUMENT, 900, 'status'], [REFINED, 899, 'row'], [INSTRUMENT, 899, 'row'],
+    ] as const) {
+      window.localStorage.clear();
+      resetDismissalForTests();
+      setSkin(skin);
+      atWidth(width);
+      act(() => useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id: 'lane-a-project-a', project: 'project-a' })] }));
+      render(<App />);
+      const at = `${skin} ${width}`;
+      await until(() => expect(indicators().length, `${at}: shown first`).toBe(1));
+      expect(indicators()[0]).toHaveAttribute('data-form', form);
+      fireEvent.click(screen.getByRole('button', { name: DISMISS }));
+      await until(() => expect(indicators(), `${at}: hidden`).toHaveLength(0));
+      expect(screen.queryByRole('button', { name: NAME }), at).toBeNull();
+      expect(screen.queryByRole('button', { name: DISMISS }), at).toBeNull();
+      expect(document.body.textContent, `${at}: no stale words, nothing of the line`).not.toContain(WORDS);
+      expect(readDismissed()).toBe('v0.0.9');
+      cleanup();
+    }
+  });
+
+  it('a dismissal survives a remount', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(waiting());
+    const first = renderFleet(<UpdateIndicator form="row" />);
+    fireEvent.click(await screen.findByRole('button', { name: DISMISS }));
+    await until(() => expect(first.container.innerHTML).toBe(''));
+    cleanup();
+    // A new mount, with a fresh poll that names the same release: still hidden.
+    const second = renderFleet(<UpdateIndicator form="row" />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+    expect(second.container.innerHTML).toBe('');
+    expect(window.localStorage.getItem('ccrc-release-dismissed')).toBe('v0.0.9');
+    // And in the next page load, which keeps storage and loses the page's own mark.
+    cleanup();
+    resetDismissalForTests();
+    const third = renderFleet(<UpdateIndicator form="bar" />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+    expect(third.container.innerHTML).toBe('');
+  });
+
+  it('a newer waiting release shows it again', async () => {
+    act(() => { dismissRelease('v0.0.9'); });
+    // The same tag and an older one stay hidden.
+    vi.spyOn(api, 'updates').mockResolvedValue(waiting());
+    const same = renderFleet(<UpdateIndicator form="row" />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+    expect(same.container.innerHTML).toBe('');
+    cleanup();
+    // A newer one (v0.0.10 sorts before v0.0.9 as a string) shows, with its own dismiss.
+    vi.spyOn(api, 'updates').mockResolvedValue(waitingAt('v0.0.10'));
+    renderFleet(<UpdateIndicator form="row" />);
+    expect(await screen.findByText('↑ v0.0.10 available')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dismiss v0.0.10' })).toBeInTheDocument();
+    // Dismissing the newer one hides it too, and the older tag, which the fleet cannot be asked about, stays hidden.
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss v0.0.10' }));
+    await until(() => expect(screen.queryByText('↑ v0.0.10 available')).toBeNull());
+    expect(readDismissed()).toBe('v0.0.10');
+  });
+
+  it('dismissing moves focus to the main landmark and toasts once', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(waiting());
+    setSkin(REFINED);
+    atWidth(900);
+    act(() => useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id: 'lane-a-project-a', project: 'project-a' })] }));
+    render(<App />);
+    await until(() => expect(indicators().length).toBe(1));
+    const x = screen.getByRole('button', { name: DISMISS });
+    x.focus();
+    expect(document.activeElement).toBe(x);
+    fireEvent.click(x);
+    await until(() => expect(indicators()).toHaveLength(0));
+    const main = document.getElementById('content');
+    expect(main, 'the main landmark exists').not.toBeNull();
+    expect(document.activeElement, 'focus lands on the main landmark, never the body').toBe(main);
+    const toasts = [...document.querySelectorAll('[role="status"].toast')];
+    expect(toasts, 'exactly one toast').toHaveLength(1);
+    expect(toasts[0]!.textContent).toBe('v0.0.9 is hidden until a newer release. Settings › Updates still lists it.');
+    // A second tap cannot happen (the control is gone), and nothing re-toasts on a re-render.
+    await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+    expect(document.querySelectorAll('[role="status"].toast')).toHaveLength(1);
+  });
+
+  it('a halt banner stands whatever the dismissal', async () => {
+    const halted = (): UpdatesView => ({
+      ...waiting(),
+      nodes: [nodeOf('fleet', { update: { state: 'failed', target: 'v0.0.9', startedAt: 1, detail: 'gate: unit not up' } }), nodeOf('server')],
+    });
+    vi.spyOn(api, 'updates').mockResolvedValue(halted());
+    setSkin(REFINED);
+    atWidth(899);
+    act(() => useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id: 'lane-a-project-a', project: 'project-a' })] }));
+    render(<App />);
+    await until(() => expect(indicators().length).toBe(1));
+    expect(document.querySelector('.halt-banner'), 'the halt shows with the line').not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: DISMISS }));
+    await until(() => expect(indicators()).toHaveLength(0));
+    expect(document.querySelector('.halt-banner'), 'and stands after the line is dismissed').not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeInTheDocument();
   });
 });

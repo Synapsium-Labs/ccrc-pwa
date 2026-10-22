@@ -3209,6 +3209,22 @@ button.proj-card-pool::before {
   color: var(--ink-tertiary);
   font-size: var(--fs-meta);
 }
+/* The dismiss × (part b): the tap floor under touch, 24px under a fine pointer (the status bar is 24px there). Layout
+   only, so it needs no colour registration; the borderless square keeps the line quiet. */
+.update-indicator-dismiss {
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0;
+  border: 0;
+}
+@media (pointer: fine) {
+  .update-indicator-dismiss {
+    min-width: 24px;
+    min-height: 24px;
+    width: 24px;
+    height: 24px;
+  }
+}
 /* The phone's row is one tap tall and spans the column it sits in. */
 .update-indicator[data-form='row'] {
   display: flex;
