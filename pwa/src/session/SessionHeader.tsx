@@ -16,7 +16,7 @@ import type { FleetSession, RosterWire, RouteField, SessionStatus } from '../../
 import {
   BackButton, Chip, Icon, Keycap, StatusDot, TypedLabel, cn, useNow,
 } from '@ccrc/ui';
-import { commandDoor } from '../command/door';
+import { commandDoor, doorMark } from '../command/door';
 import { useMediaQuery } from '../lib/useMediaQuery';
 // main's TypedLabel import is dropped, not lost: the component lives in
 // @ccrc/ui now and the line above already carries it.
@@ -109,7 +109,7 @@ function chipOf<K extends HeaderChip['kind']>(view: SessionHeaderView, kind: K):
 /** Back to the fleet: a phone's way out (the desk hides every `.back-btn` in the detail pane). */
 export function HeaderBack({ onBack }: { onBack: () => void }): ReactNode {
   return (
-    <BackButton className="chat-back" aria-label="Back to fleet" onClick={onBack}>
+    <BackButton className="chat-back" aria-label="Back to fleet" onClick={onBack} {...doorMark('go-fleet')}>
       ‹
     </BackButton>
   );

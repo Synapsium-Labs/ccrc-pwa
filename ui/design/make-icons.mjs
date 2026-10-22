@@ -57,6 +57,9 @@ const NAMES = [
   'workflow',
   'archive',
   'plus',
+  // Refined's phone header (W2 Task S5, D-5471): the Inbox and Runs doors.
+  'inbox',
+  'list-checks',
 ];
 
 const TAGS = new Set(['path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse']);

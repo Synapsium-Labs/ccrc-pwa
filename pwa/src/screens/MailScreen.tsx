@@ -17,6 +17,7 @@ import type { NotifyEvent, RunSummary } from '../../../shared/api';
 import { eventRunId, interruptLine, raisesUnread, recordKey, reviveNotifyEvents } from '../lib/feed';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
+import { backToFleet } from '../command/door';
 import { ack, acksSnapshot, FEED_ACK_KEY, isUnseenAt, subscribeAcks } from '../lib/seen';
 import { Button, EmptyState, MAIL_GLYPH, PageScaffold, SETTINGS_GLYPH, useNow } from '@ccrc/ui';
 import { formatAge } from '../fleet/formatReset';
@@ -180,7 +181,7 @@ export function MailScreen({
     // The page scaffold (D-5102): Back, the caret and the title, the Digest door at the header's right.
     <PageScaffold
       title="Mail"
-      back={{ label: 'Back to fleet', onClick: () => navigate('/'), className: 'mail-back' }}
+      back={backToFleet('mail-back')}
       actions={
         // The digest's standing door (D-5300, D-5493 (5)): the daily push opens it too, but a missed push must lose nothing.
         <Button variant="ghost" size="fit" className="mail-digest" onClick={() => navigate('/digest')}>Digest</Button>

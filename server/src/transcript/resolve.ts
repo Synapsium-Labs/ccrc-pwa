@@ -232,8 +232,39 @@ export function pickNewest(hits: readonly GlobHit[]): GlobHit | null {
 }
 
 /**
+ * How many of rung 5's and rung 6's calls may be in flight at once, ACROSS every home one search touches (D-6369).
+ * The search used to stat each project directory in turn: on a fleet with thousands of them, at tens of
+ * milliseconds a call, a new session waited about a minute for its first frame. The agent link has no in-flight
+ * cap of its own, so this is the only bound on ONE search, a courtesy to the link rather than a limit it imposes;
+ * searches running at once (one per session stream) each hold their own.
+ */
+export const GLOB_STAT_CONCURRENCY = 32;
+
+/** Runs a call once a slot is free: at most `max` in flight, the rest waiting in arrival order. */
+type Limit = <T>(call: () => Promise<T>) => Promise<T>;
+
+/** A promise limiter (D-6369). The slot is released in `finally`, so a call that rejects still frees it, and a
+ *  freed slot is handed straight to the longest waiter, so the count never dips below the bound while any wait. */
+const limiter = (max: number): Limit => {
+  let active = 0;
+  const waiting: (() => void)[] = [];
+  return async (call) => {
+    if (active < max) active += 1;
+    else await new Promise<void>((go) => { waiting.push(go); });   // the slot arrives already counted
+    try { return await call(); }
+    finally {
+      const next = waiting.shift();
+      if (next === undefined) active -= 1; else next();
+    }
+  };
+};
+
+/**
  * `<configDir>/projects/*​/<uuid>.jsonl`, existence-checked. `complete: false`
  * means the directory could not be MEASURED — never that it held nothing.
+ * Every io call goes through `limit`, the one limiter the whole `ladder` call
+ * shares (D-6369), and only the leaf call does: a limited call never waits on
+ * another, so the bound cannot deadlock.
  *
  * A null `readdir(root)` is ambiguous by construction (`FleetIO`'s contract,
  * §5.5): "missing", "forbidden" and "disconnected agent" all collapse to the
@@ -282,7 +313,7 @@ export function pickNewest(hits: readonly GlobHit[]): GlobHit | null {
  * account after the own-account glob returned `complete: true`, which happens
  * only via a non-null `readdir` of `<own>/projects` or a non-null `stat` of
  * `<own>` — both of which establish that `<own>` EXISTS. So a null stat of it
- * one call later is about the connection, never about the directory. The own
+ * later in the same search is about the connection, never about the directory. The own
  * account itself gets no witness (`null`): the only path above it is `$HOME`,
  * which the agent read whitelist deliberately excludes (`underClaudeGlob`
  * requires a first segment starting `.claude`), and widening that whitelist to
@@ -296,21 +327,24 @@ export function pickNewest(hits: readonly GlobHit[]): GlobHit | null {
  */
 async function globByUuid(
   io: FleetIO, configDir: string, uuid: string, account: string | null, order: number,
-  livenessWitness: string | null,
+  livenessWitness: string | null, limit: Limit,
 ): Promise<{ hits: GlobHit[]; complete: boolean }> {
   const root = path.join(configDir, 'projects');
-  const names = await io.readdir(root);
+  const names = await limit(() => io.readdir(root));
   if (names === null) {
-    if ((await io.stat(configDir)) !== null) return { hits: [], complete: true };
+    if ((await limit(() => io.stat(configDir))) !== null) return { hits: [], complete: true };
     if (livenessWitness === null) return { hits: [], complete: false };
-    return { hits: [], complete: (await io.stat(livenessWitness)) !== null };
+    return { hits: [], complete: (await limit(() => io.stat(livenessWitness))) !== null };
   }
+  // The per-directory stats go out together, `limit` holding them to the bound. `hits` is then built in `names`
+  // order from the per-index answers, so a completion order that differs from the issue order changes nothing
+  // `pickNewest` sees. A null stat is folded to absent, as it always was (see the choice recorded above).
+  const paths = names.map((name) => path.join(root, name, `${uuid}.jsonl`));
+  const stats = await Promise.all(paths.map((p) => limit(() => io.stat(p))));
   const hits: GlobHit[] = [];
-  for (const name of names) {
-    const p = path.join(root, name, `${uuid}.jsonl`);
-    const st = await io.stat(p);
-    if (st !== null) hits.push({ path: p, size: st.size, mtimeMs: st.mtimeMs, account, order });
-  }
+  stats.forEach((st, i) => {
+    if (st !== null) hits.push({ path: paths[i]!, size: st.size, mtimeMs: st.mtimeMs, account, order });
+  });
   return { hits, complete: true };
 }
 
@@ -343,7 +377,10 @@ async function globByUuid(
  * COST (§5.4): rungs 5 and 6 run only when 1-4 have all missed, so a healthy
  * session pays one realpath walk and one or two stats — what today already
  * costs. Only a session with nothing at any exact path pays for a search, and
- * `TranscriptResolver` below is what stops it paying every two seconds.
+ * `TranscriptResolver` below is what stops it paying every two seconds. That
+ * search is one stat per project directory per account, run with at most
+ * `GLOB_STAT_CONCURRENCY` calls in flight across all accounts (D-6369), so
+ * its wall time is about the calls divided by the bound, not their sum.
  *
  * Remote mode has no resolver (`io.realpath` answers null unconditionally), so
  * rungs 1 and 3 collapse into 2 and 4 — today's documented behavior, unchanged.
@@ -401,7 +438,9 @@ async function ladder(io: FleetIO, o: ResolveOpts): Promise<Laddered> {
     }
   }
 
-  const own = await globByUuid(io, o.configDir, o.uuid, null, 0, null);
+  // ONE limiter for the whole search, so the bound holds across homes, not per home (D-6369).
+  const limit = limiter(GLOB_STAT_CONCURRENCY);
+  const own = await globByUuid(io, o.configDir, o.uuid, null, 0, null, limit);
   const bestOwn = pickNewest(own.hits);
   if (bestOwn !== null) return at({ kind: 'found', path: bestOwn.path, rung: 'uuid-glob', account: null, uuid: o.uuid });
 
@@ -447,12 +486,15 @@ async function ladder(io: FleetIO, o: ResolveOpts): Promise<Laddered> {
   // searched (own.complete, just confirmed) and still missed.
   const pooled: GlobHit[] = [];
   let complete = true;
-  for (const [order, acct] of (o.foreign ?? []).entries()) {
-    // `o.configDir` is the liveness witness: `own.complete` was just confirmed
-    // true, which is only possible if this io answered non-null ABOUT that
-    // directory, so it exists — see `globByUuid`'s own doc for why that makes
-    // a later null stat of it evidence about the connection and not the disk.
-    const g = await globByUuid(io, acct.configDir, o.uuid, acct.account, order, o.configDir);
+  // `o.configDir` is the liveness witness: `own.complete` was just confirmed
+  // true, which is only possible if this io answered non-null ABOUT that
+  // directory, so it exists — see `globByUuid`'s own doc for why that makes
+  // a later null stat of it evidence about the connection and not the disk.
+  // The accounts are searched together under the shared `limit` (D-6369) and
+  // pooled in roster order, so `pickNewest` sees what the serial search gave it.
+  const globs = await Promise.all((o.foreign ?? []).map(
+    (acct, order) => globByUuid(io, acct.configDir, o.uuid, acct.account, order, o.configDir, limit)));
+  for (const g of globs) {
     if (!g.complete) complete = false;
     pooled.push(...g.hits);
   }

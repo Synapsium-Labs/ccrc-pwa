@@ -17,6 +17,7 @@ import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner'
 import { PasskeyNotice, passkeyNoticeShows, usePasskeyStatus } from '../fleet/PasskeyNotice';
 import { BannerStack } from '../fleet/BannerStack';
 import { fleetSummary } from '../fleet/fleetSummary';
+import { poolLagText } from '../fleet/poolLag';
 import { unreadMailCount } from '../fleet/navBadges';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { FleetCards } from '../fleet/FleetCards';
@@ -134,7 +135,12 @@ export function FleetScreen({
   // deviations are argued; the chrome calls it once.
   const projects = chrome.projects;
   // The skin's own fleet list, when it has one (Instrument's table, W2 Task S10); none outside a frame or in Refined.
-  const FleetList = useFrameSet()?.FleetList ?? null;
+  const set = useFrameSet();
+  const FleetList = set?.FleetList ?? null;
+  // The skin's own head where this column holds the chrome (Refined's phone header, W2 Task S5), with the lane gauges
+  // under it, so the strip below steps aside: one readout of the lanes at any width. And its own New session door.
+  const Head = headChrome ? set?.Head ?? null : null;
+  const Fab = set?.Fab ?? null;
 
   // Once, not three times in one interpolation: the footer's count and its
   // size must describe the same pass over the same list.
@@ -196,10 +202,7 @@ export function FleetScreen({
   // equal here forever — a false "in sync". `observedEpoch` now refreshes on
   // the server's own watcher tick, so an equal pair here is a genuinely
   // current fact, not a stale first impression.
-  const poolLag =
-    epoch !== undefined && observedEpoch !== undefined && observedEpoch !== epoch
-      ? `epoch ${epoch} / observed ${observedEpoch === null ? 'never synced' : observedEpoch}`
-      : null;
+  const poolLag = poolLagText(epoch, observedEpoch);
 
   // Task 4: which card each run belongs on — the card its WORKER renders on —
   // is decided with every row's card by `fleetTree` (D-5527), from the whole
@@ -208,12 +211,14 @@ export function FleetScreen({
 
   return (
     <section aria-label="Fleet" className="fleet" data-conn={conn}>
-      <FleetHead
-        countLine={sessions.length > 0 ? countLine : null}
-        poolLag={poolLag}
-        unreadMail={unreadMail}
-        chrome={headChrome}
-      />
+      {Head !== null ? <Head /> : (
+        <FleetHead
+          countLine={sessions.length > 0 ? countLine : null}
+          poolLag={poolLag}
+          unreadMail={unreadMail}
+          chrome={headChrome}
+        />
+      )}
       {/* The global banners (W2 Task S2c's stack), here unless the skin's frame places them under its bar at a desk
           (Refined, W2 Task S4b): `banners` is false then, so one stack is mounted at any width. */}
       {banners && <FleetBanners />}
@@ -227,7 +232,7 @@ export function FleetScreen({
           hits first. It is not the only door any more (the header control
           above, D-161); the rule that a door must never render nothing is
           unchanged. */}
-      {showAccounts && <AccountsStrip />}
+      {showAccounts && Head === null && <AccountsStrip />}
 
       {/* The only door to /runs (fix, review finding 20) — moved OUT of the
           populated arm for the identical reason `AccountsStrip` was, three
@@ -353,9 +358,11 @@ export function FleetScreen({
         </>
       )}
 
-      <button type="button" className="fab" aria-label="New session" onClick={newSession}>
-        <span aria-hidden="true">+</span>
-      </button>
+      {Fab !== null ? <Fab /> : (
+        <button type="button" className="fab" aria-label="New session" onClick={newSession}>
+          <span aria-hidden="true">+</span>
+        </button>
+      )}
 
       {/* Wave 19, D-5124: the four surfaces show the stale sentence; this one region announces it, once. */}
       <div className="sr-only" role="status">{stale ? UPDATES_STALE_TEXT : null}</div>

@@ -229,8 +229,10 @@
   display: grid;
   gap: var(--sp-3);
   /* The FAB is position:fixed 56px at bottom-right and sat on top of the last
-     card's content in every viewport and both themes. */
-  padding-bottom: calc(56px + var(--sp-6) + var(--safe-bottom));
+     card's content in every viewport and both themes. A FAB that measures itself
+     publishes its height and margin as --phone-nav-h (W2 Task S5, D-5471); the
+     round `+` does not, so 56px stays the floor. */
+  padding-bottom: calc(max(56px, var(--phone-nav-h)) + var(--sp-6) + var(--safe-bottom));
 }
 /* Offline / cold-start hydration used to fade the whole card list here:
      .fleet[data-conn='down'] .fleet-list,
