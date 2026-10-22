@@ -14,8 +14,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
-  collapseHits, continuesInto, GLOB_STAT_CONCURRENCY, MAX_CONTINUATION_HOPS, MEMO_MAX, pickNewest, resolveTranscript, RESOLVER_BACKOFF_MS,
-  resumedPastMarker, RUNG_ORDER, rungRank, transcriptPath, TranscriptResolver, type GlobHit, type ResolveOpts,
+  collapseHits, continuesInto, GLOB_STAT_CONCURRENCY, MAX_CONTINUATION_HOPS, MEMO_MAX, pickNewest, resolveTranscript,
+  RESOLVER_BACKOFF_MS, resumedPastMarker, RUNG_ORDER, rungRank, transcriptPath, TranscriptResolver, type GlobHit,
+  type ResolveOpts,
 } from '../src/transcript/resolve.js';
 import { CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
 import { mkTmp } from './tmpHelpers.js';
