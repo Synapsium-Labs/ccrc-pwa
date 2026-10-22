@@ -419,25 +419,27 @@ describe('the tab strip (decision ask-tab-strip)', () => {
     expect(tab).toHaveBeenCalledWith(SESSION_ID, { dialogId: review().id, to: 2 });
   });
 
-  it('the scraped sheet (the envelope aged out) knows its tab by the transcript\'s header, and sends it as from', () => {
-    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+  // D-6325, R3: a strip's chips carry Claude's own headers and are drawn only when the pane's tab row has exactly one tab
+  // per question. Once the envelope has aged out the copy is the transcript's ONE question, so a two-tab row gets no
+  // strip (the accepted loss: the envelope keeps the strip while it lasts), and a pane with no copy at all is
+  // unreadable and draws nothing of its tab row. The strip's own behaviour is pinned above, over the envelope.
+  it('the aged-out sheet draws no strip over a two-tab row: one question\'s copy cannot label two tabs', () => {
     const second = CC296_LONG.questions[1]!;
     const enriched: Dialog = {
       ...q2(),
       ask: { question: second.question, header: second.header, multiSelect: false, options: second.options },
     };
     renderAsk(enriched, null);
-    expect(screen.getByRole('button', { name: /^Go to Table supply/ })).toHaveAttribute('aria-current', 'step');
-    fireEvent.click(screen.getByRole('button', { name: /^Go to Water rota/ }));
-    expect(tab).toHaveBeenCalledWith(SESSION_ID, { dialogId: q2().id, to: 1, from: 2 });
+    expect(screen.getByRole('heading', { name: second.question })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Questions in this ask' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Go to / })).toBeNull();
   });
 
-  it('the scraped sheet with no header to place it: question chips wait, Submit still goes', () => {
-    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+  it('with no copy of the question there is no strip, and none of the tab row is shown', () => {
     renderAsk(q2(), null);
-    expect(screen.getByRole('button', { name: /^Go to Water rota/ })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Go to Submit' }));
-    expect(tab).toHaveBeenCalledWith(SESSION_ID, { dialogId: q2().id, to: 'submit' });
+    expect(screen.queryByRole('group', { name: 'Questions in this ask' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Go to / })).toBeNull();
+    expect(screen.getByRole('heading', { name: "Claude is asking a question this screen can't read yet." })).toBeInTheDocument();
   });
 
   it('the chip of the screen showing is scrolled into the strip\'s view, and again when the screen changes', async () => {

@@ -26,7 +26,7 @@ import { api } from '../src/lib/api';
 import { ChatListInner } from '../src/session/ChatList';
 import { ASK_GLYPH, ASK_WORD, askState, type ToolResultEvent } from '@ccrc/ui';
 import { DialogSheet } from '../src/session/DialogSheet';
-import { answerControlLabel } from '../src/session/askLive';
+import { SUBMIT_ANSWERS, answerControlLabel } from '../src/session/askLive';
 import { pane } from './askPanes';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { declValue, norm, ruleIn, stripComments } from './cssRule';
@@ -279,6 +279,12 @@ describe('the Answer control on the review says Submit answers', () => {
     expect(answerControlLabel(pane('cc296-ask-2q-long-review'))).toBe('Submit answers');
     expect(answerControlLabel(pane('cc296-ask-2q-long-q2'))).toBeUndefined();
     expect(answerControlLabel(null)).toBeUndefined();
+  });
+
+  it('the label is the fixed word, never the pane\'s own spelling of it (D-6325)', () => {
+    const review = pane('cc296-ask-2q-long-review');
+    const shouted = { ...review, options: review.options.map((o) => (o.index === 1 ? { ...o, label: ' SUBMIT ANSWERS ' } : o)) };
+    expect(answerControlLabel(shouted)).toBe(SUBMIT_ANSWERS);
   });
 
   it('the card renders the label it is given, and Answer without one; either only raises the sheet', () => {
