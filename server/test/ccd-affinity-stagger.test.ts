@@ -83,3 +83,170 @@ describe('D-6181 characterization: the undelayed return home', () => {
     expect(swapLog()).toMatch(/auto-home s-aaaa: claude-a -> claude/);
   });
 });
+
+// ── D-6181: the slots ───────────────────────────────────────────────────────
+
+/** `_affinity_slot_take <target> <now>`'s rc, from a fresh shell each call:
+ *  every supervisor is its own process, so nothing may be kept in memory. */
+const take = (target: string, now: number): number =>
+  Number(h.sh(`_affinity_slot_take ${target} ${now}; echo $?`));
+
+describe('D-6181: the per-account slot and the fleet-wide slot', () => {
+  it('of four sessions returning to one home on one tick, exactly one dispatches', () => {
+    const ids = ['s-aaaa', 's-bbbb', 's-cccc', 's-dddd'];
+    for (const id of ids) seed(id);
+    sessionJson();
+    ticks(ids);
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
+  });
+
+  it('a lost slot logs stand-down stagger', () => {
+    for (const id of ['s-aaaa', 's-bbbb']) seed(id);
+    sessionJson();
+    ticks(['s-aaaa', 's-bbbb']);
+    expect(swapLog()).toMatch(/stand-down s-bbbb: stagger/);
+    expect(swapLog()).not.toMatch(/stand-down s-aaaa: stagger/);
+  });
+
+  it('dispatches at t=179 and t=180 onto one home: the second waits until t=359', () => {
+    expect(take('claude', 179)).toBe(0);
+    expect(take('claude', 180)).toBe(1);
+    expect(take('claude', 358)).toBe(1);
+    expect(take('claude', 359)).toBe(0);
+  });
+
+  it('releases onto 5 different homes on one tick: dispatches at least AFFINITY_FLEET_SPACING apart', () => {
+    // Each home retried every second from the previous grant, at most 60
+    // tries, in ONE shell (bounded, so a missing helper is red, not a hang).
+    const out = h.sh(`t=1000000; for home in home-a home-b home-c home-d home-e; do
+        n=0; until _affinity_slot_take "$home" "$t"; do t=$((t + 1)); n=$((n + 1)); (( n > 60 )) && break; done
+        echo "$t"; done`);
+    const granted = out.split('\n').map(Number);
+    expect(granted).toHaveLength(5);
+    for (let i = 1; i < granted.length; i++) expect(granted[i]! - granted[i - 1]!).toBe(30);
+  });
+
+  it('two sessions with two homes on one tick: one dispatches (the fleet-wide slot)', () => {
+    seed('s-aaaa', 'claude'); seed('s-bbbb', 'claude-b');
+    sessionJson();
+    ticks(['s-aaaa', 's-bbbb']);
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
+    expect(swapLog()).toMatch(/stand-down s-bbbb: stagger/);
+  });
+
+  it('two ticks racing for one slot: exactly one wins', () => {
+    // The race is forced open: every slot read sleeps after reading, so two
+    // takers that do not hold the lock both read the old grant and both win.
+    const out = h.sh(`
+      eval "$(declare -f _file_read_to | sed '1s/^_file_read_to/_frt_orig/')"
+      _file_read_to() { _frt_orig "$@"; local r=$?; sleep 0.3; return $r; }
+      for t in claude claude-b; do
+        ( _affinity_slot_take $t 5000 && echo "won $t" ) &
+        ( _affinity_slot_take $t 5000 && echo "won $t" ) &
+        wait
+      done`);
+    expect(out.split('\n').filter((l) => l === 'won claude')).toHaveLength(1);
+    expect(out.split('\n').filter((l) => l === 'won claude-b')).toHaveLength(1);
+  });
+
+  it('an unwritable slot file: the move dispatches and one stagger-unwritable line is written', () => {
+    seed('s-aaaa'); sessionJson();
+    fs.writeFileSync(reg('.affslot'), 'not a directory');
+    ticks(['s-aaaa']);
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
+    expect(swapLog().match(/stand-down s-aaaa: stagger-unwritable/g)).toHaveLength(1);
+  });
+
+  it('a lock held past HOME_RETURN_SPACING is broken: the move fails open', () => {
+    const dir = reg('.affslot');
+    fs.mkdirSync(dir, { recursive: true });
+    const out = h.sh(`
+      printf '%s\\n' 1000 > "$REG/.affslot/.lock"
+      flock "$REG/.affslot/.lock" sleep 4 & sleep 0.3
+      _affinity_slot_take claude 1181; echo "rc=$?"; kill %1 2>/dev/null; wait 2>/dev/null; true`);
+    expect(out).toMatch(/^rc=2$/m);
+  });
+
+  it('a lock held by a live, recent taker is "held": the slot is lost', () => {
+    const dir = reg('.affslot');
+    fs.mkdirSync(dir, { recursive: true });
+    const out = h.sh(`
+      printf '%s\\n' 1000 > "$REG/.affslot/.lock"
+      flock "$REG/.affslot/.lock" sleep 4 & sleep 0.3
+      _affinity_slot_take claude 1010; echo "rc=$?"; kill %1 2>/dev/null; wait 2>/dev/null; true`);
+    expect(out).toMatch(/^rc=1$/m);
+  });
+});
+
+describe('D-6181: what the guards never touch', () => {
+  /** A slot helper that only records, and always says "lost". */
+  const SPY = '_affinity_slot_take() { echo "slot $*" >> "$HOME/ccd-calls"; return 1; };';
+
+  it('a rescue never reads the slots', () => {
+    seed('s-aaaa'); sessionJson();
+    ticks(['s-aaaa'], `${STUBS('API Error: 429 Too Many Requests\n❯ ')}
+      _session_hard_blocked() { HARD_BLOCK_VIA=pane; return 0; }; ${SPY}`);
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude rescue']);
+    expect(h.calls().filter((l) => l.startsWith('slot '))).toEqual([]);
+  });
+
+  it('a ceiling-leave never reads the slots', () => {
+    seed('s-aaaa'); sessionJson();
+    ticks(['s-aaaa'], `${STUBS()} _avail() { [[ "$1" != claude-a ]]; }; ${SPY}`);
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
+    expect(h.calls().filter((l) => l.startsWith('slot '))).toEqual([]);
+  });
+
+  it('a pool leave (auto-pool) never reads the slots', () => {
+    seed('s-aaaa'); sessionJson();
+    ticks(['s-aaaa'], `${STUBS()} _pool_ok() { return 1; }; ${SPY}`);
+    expect(h.calls().filter((l) => l.startsWith('slot '))).toEqual([]);
+  });
+
+  it('a return home onto a cur that cannot serve the class is a leave, never guarded', () => {
+    seed('s-aaaa'); sessionJson();
+    ticks(['s-aaaa'], `${STUBS()} _class_gate() { [[ "$1" == claude-a ]] && return 1; return 0; }; ${SPY}`);
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
+    expect(h.calls().filter((l) => l.startsWith('slot '))).toEqual([]);
+  });
+});
+
+describe('D-6181: the draft', () => {
+  it('an idle pane with a draft takes no return home and logs stand-down draft', () => {
+    seed('s-aaaa'); sessionJson();
+    ticks(['s-aaaa'], STUBS(DRAFT));
+    expect(dispatches()).toEqual([]);
+    expect(swapLog()).toMatch(/stand-down s-aaaa: draft/);
+    // The draft stand-down takes no slot: the next return onto that home is not delayed by it.
+    expect(fs.existsSync(path.join(reg('.affslot'), 'claude'))).toBe(false);
+  });
+
+  it('a ceiling-leave over a draft still dispatches (the draft guards a non-forced move only)', () => {
+    seed('s-aaaa'); sessionJson();
+    ticks(['s-aaaa'], `${STUBS(DRAFT)} _avail() { [[ "$1" != claude-a ]]; };`);
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
+  });
+});
+
+describe('D-6181: the off marker', () => {
+  it('swap-stagger-off restores the undelayed dispatch', () => {
+    fs.writeFileSync(reg('swap-stagger-off'), '');
+    const ids = ['s-aaaa', 's-bbbb', 's-cccc', 's-dddd'];
+    for (const id of ids) seed(id);
+    sessionJson();
+    ticks(ids, STUBS(DRAFT));
+    expect(dispatches()).toEqual(ids.map((id) => `dispatch ${id} -> claude affinity`));
+    expect(swapLog()).not.toMatch(/stand-down \S+: (stagger|draft)/);
+  });
+});
+
+describe('D-6181: the constants', () => {
+  it('HOME_RETURN_SPACING is above SWAP_JITTER, and the fleet slot is 30 s', () => {
+    const [home, jitter, fleet, ttl] = h.sh('echo "$HOME_RETURN_SPACING $SWAP_JITTER $AFFINITY_FLEET_SPACING $SWAP_PIN_TTL"')
+      .split(' ').map(Number);
+    expect(home).toBe(180);
+    expect(home!).toBeGreaterThan(jitter!);
+    expect(fleet).toBe(30);
+    expect(ttl).toBe(86400);
+  });
+});
