@@ -2773,10 +2773,9 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
   // here is a width to measure again.
   const MEASURED_PX: Readonly<Record<string, number>> = {
     // D-6325: `Type your answer` replaced `…or answer in your own words` (the field now opens under an `Other` row, so
-    // "…or" had nothing to continue). Measured in Chromium on Linux, in the same font and size: 140.7px against the old
-    // string's 246.8px there, 57% of it; the old string's recorded 218.5 on the measuring machine scales to 125 (rounded
-    // up), and the new string fits wherever the old one did.
-    'Type your answer': 125, // `.dlg-reply-input`: 16px (`--fs-input`), weight 400
+    // "…or" had nothing to continue). MEASURED in Chrome in the field's real font (Geist, 16px, weight 400): 128.4px,
+    // against the old string's 218.5px recorded on the measuring machine, so it fits wherever the old one did.
+    'Type your answer': 128.4, // `.dlg-reply-input`: 16px (`--fs-input`), weight 400
     Send: 31.6, // `.dlg-reply-send`: 13px (`--fs-sm`), weight 500
   };
   const PHONE_FLOOR = 360;
