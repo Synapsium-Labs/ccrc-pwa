@@ -23,7 +23,7 @@ never links work by a name, a path, a time or a working directory.
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
 | 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **merged** 2026-10-13 as `4967dc495`, a plain merge of exact head `823efd3eb` (fix round 5, which absorbed `main`), adding history only; its content first reached `main` inside #340's squash `081636389` on 2026-10-10, byte-identical to `e183237e5`, the tip review 334 accepted; run 306 closed `done` |
-| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597, #681, #698, #711, #736, #832, #1068, #1097, #1115 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299`; follow-up 2 #681 merged 2026-10-19 as `c44bea401`, run 627 closed `done`; follow-up 3 #698 merged 2026-10-19 as `da2610662`, run 629 closed `done`; follow-up 4 #711 merged 2026-10-19 as `2f7e88cdd`, run 632 closed `done`, and its docs fix #736 merged the same day as `2e0dd3ede`; follow-up 5 #832 merged 2026-10-21 as `69aac52f5`, run 645 closed `done`; follow-up 6 #1068 merged 2026-10-21 as `7da6498a7`, run 728 closed `done`; follow-up 7 #1097 merged 2026-10-22 as `bc231bbcb`, run 740 closed `done`; follow-up 7b #1115 merged 2026-10-22 as `bb1a9478d`, run 762 closed `done`; follow-up 8 (run 768, #1120) dispatched 2026-10-22 |
+| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597, #681, #698, #711, #736, #832, #1068, #1097, #1115, #1120 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299`; follow-up 2 #681 merged 2026-10-19 as `c44bea401`, run 627 closed `done`; follow-up 3 #698 merged 2026-10-19 as `da2610662`, run 629 closed `done`; follow-up 4 #711 merged 2026-10-19 as `2f7e88cdd`, run 632 closed `done`, and its docs fix #736 merged the same day as `2e0dd3ede`; follow-up 5 #832 merged 2026-10-21 as `69aac52f5`, run 645 closed `done`; follow-up 6 #1068 merged 2026-10-21 as `7da6498a7`, run 728 closed `done`; follow-up 7 #1097 merged 2026-10-22 as `bc231bbcb`, run 740 closed `done`; follow-up 7b #1115 merged 2026-10-22 as `bb1a9478d`, run 762 closed `done`; follow-up 8 #1120 merged 2026-10-22 as `3fe68e1de`, run 768 closed `done` |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
@@ -1409,11 +1409,28 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     own, both runs only append, and #1115 lands first, then one land-sync for run 768.
   - Wave-done 7869 (`suite: unrun`, no full dispatch, by the brief), PR #1120, CI green: R = 1.5. The shipped band
     1.160-1.285 over 30 runs; the two-extra-jq-fork mutant 1.749-1.951; a 17% margin each side. One extra fork
-    (1.463-1.628) does not separate, about 7%, so the row cannot see a single extra fork; the brief allowed the
-    smallest regression that separates. The row 15 of 15 green, the mutant 15 of 15 red; the whole file 709/709.
-  - After #1115 merged, the coordinator asked for the land-sync (7876); the review follows at the synced tip.
+    (1.463-1.628) does not separate, about 7%; the brief allowed the smallest regression that separates. The row 15 of
+    15 green, the mutant 15 of 15 red; the whole file 709/709.
+  - After #1115 merged, the coordinator asked for the land-sync (7876). Its merge commit `f271ddb03` had one conflict,
+    the plan's end-of-file append, resolved with `main`'s plan as an exact byte prefix (measured); the PR still
+    changed only its two files.
   - The three sibling rows at an absolute 150 ms (the base pin and two rows of another plan) have also failed on full
     runs, at 150-233 ms. They are other plans' rows, not this programme's, and were raised with the operator.
+- **2026-10-22 — review 770 (`ccrc-pwa-keen-cove`, at `f271ddb03`), and #1120 merged.** Panel complete: 21 agents, 0
+  errors; 6 findings, 5 upheld (merging into three) and 1 refuted 3/3; 0 unexamined. The row is correct: one payload
+  builder for both arms, the directory moved outside the timed region and restored in `try … finally`, median over
+  median. Measured at the tip: the row 5 of 5 green (1.179-1.297 at load 15.6-17.7), the two-fork mutant red (1.963),
+  and a spool-never-written mutant red on the line assertion. Suites green.
+  - The three findings are wording in the row's comment and in D-6321, with no assertion touched. F1: both arms run
+    the same no-spool path, so a shared regression masks the two-fork mutant only at about 50% (best case) or 72%
+    (mean) of the absent median; only a gate-off-branch slowdown is denominator-only (17%/24%), so the stated window
+    over-states the blind spot. F2: one extra fork fails most runs (the reviewer's 1 of 1 at 1.605, the lens's 13 of
+    15), just not reliably, so a red near 1.5-1.65 is a signal, not load noise. F3: "15%" is about 14% (1.463/1.285).
+  - Ruled LAND NOW, F1-F3 carried to wave 4's first PR: the old absolute row could eject any queued PR, and a fix round
+    would have added about an hour.
+  - `gh pr merge 1120 --match-head-commit f271ddb03…` queued it, and it merged at 09:01:35Z as `3fe68e1de`, its squash
+    patch-id equal to the branch's diff from `bb1a9478d`. Run 768 closed `done`. D-6321 is defined; D-6322 and D-6323
+    are unused.
 
 ## Carried constraints
 
@@ -1554,9 +1571,8 @@ change the spec or convert O1–O5 into prior requirements.
 **Wave 3's remaining follow-ups (2026-10-22).** Both runs of the operator's "Split: attempt fix first" have landed:
 run 740 (follow-up 7, the attempt key and the collapse) as #1097, `bc231bbcb`, live since `v0.0.555`; and run 762
 (follow-up 7b, "the checkpoint stops growing") as #1115, `bb1a9478d`, prerelease `v0.0.557` (decisions above).
-Follow-up 8 (run 768, `ccrc-pwa-soft-harbor`, PR #1120), the spool's hook-cost row as a same-run ratio, is in flight:
-a land-sync onto #1115's `main`, then a review. The soak has not started; its start, and the rollout of `v0.0.557`,
-are the operator's.
+Follow-up 8 (run 768, the spool's hook-cost row as a same-run ratio) landed as #1120, `3fe68e1de`. No wave-3 run is
+open. The soak has not started; its start, and the rollout of `v0.0.557` or later, are the operator's.
 - Added to wave 4's list since #597:
   - the restart verdict effect: after a restart, slice windows carry a null repository (run 627);
   - shape 2, building the index and the held/lost split once per pass in the caller (review 628 F9);
@@ -1572,6 +1588,10 @@ are the operator's.
     "equal pair" in the `computeHolds` comment, and spec §5.12's reason clause scoped to a call the checkpoint does
     not map; F5, RB-CLONE's `isCollection` treating any non-null object as a collection; F6, the RB25 cell's messages;
     F7, RB9b's in-row positive control;
+  - from review 770, for the same PR (D-6321's row comment and plan text, no assertion): F1, the masking window
+    restated for a shared no-spool regression (about 50%/72% of the absent median) against a gate-off-branch one
+    (17%/24%), with the "re-argued together" advice; F2, one extra fork fails most runs but not reliably, so a red
+    near 1.5-1.65 is a signal; F3, "15%" to about 14%;
   - from review 740, recorded with no code: a collapse refused before its write is retried on every ready pass,
     unlatched; a latch is owed if a guard on attempts is ever added.
 - Raised with the operator, on no run: the three sibling 150 ms absolute timing rows in `session-hook.test.ts` (the
