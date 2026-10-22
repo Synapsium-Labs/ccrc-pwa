@@ -253,3 +253,89 @@ describe('an ask at a desk opens at its top too (D-6325)', () => {
     expect(errors).toEqual([]);
   }, 90_000);
 });
+
+// The ask holds through a reconnect (D-6325, decision `the-ask-holds-through-a-reconnect`), re-running the review's
+// measurement in Chrome: fixture 1 open, the routed session socket closed by its handler ~3 s in, the page's own
+// reconnect opening a second routed connection that sends `dialog` at once and `ask` two seconds later. The sheet is
+// sampled in the page every 250 ms from the drop until the `ask` frame and half a second more. Before the hold the sheet
+// was absent from ~2250 ms after the drop until the `ask` frame (the whole connect pipeline), replaying its entrance and
+// closing a phone's keyboard; now it is present at every sample, read-only with one status line, and live again after.
+describe('a reconnect keeps the open ask on screen (D-6325)', () => {
+  const view: AppView = { skin: REFINED, theme: PHOSPHOR, width: 390 };
+  const DROP_AFTER_MS = 3_000;
+  const ASK_AFTER_MS = 2_000;
+  const SAMPLE_MS = 250;
+  const RECONNECTING = 'Reconnecting. Answers wait until the session is back.';
+
+  interface Sample { at: number; present: boolean; status: string | null; panelId: string | null }
+
+  it(`${named(view)}: present at every sample from the drop to the new connection's ask frame, with the status line`, async () => {
+    const opened = await openApp(browser!, view, FIXTURE);
+    try {
+      let dropAt = 0;
+      let askAt = 0;
+      let connections = 0;
+      await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        connections += 1;
+        if (connections === 1) {
+          for (const frame of FRAMES(false)) ws.send(JSON.stringify(frame));
+          setTimeout(() => { dropAt = Date.now(); void ws.close(); }, DROP_AFTER_MS);
+          return;
+        }
+        // The new connection: its dialog at once, the envelope after the rest of the connect pipeline.
+        const { frames } = askFixture(1);
+        const dialog = frames.find((f) => f.type === 'dialog')!;
+        const ask = FRAMES(false).find((f) => (f as { type?: string }).type === 'ask')!;
+        ws.send(JSON.stringify(dialog));
+        setTimeout(() => { askAt = Date.now(); ws.send(JSON.stringify(ask)); }, ASK_AFTER_MS);
+      });
+      await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
+      await opened.page.waitForSelector('.sheet-panel .ask-who', { timeout: 30_000 });
+      await opened.page.waitForTimeout(800);
+      // The sampler lives in the page and stamps each sample with the clock this file reads.
+      await opened.page.evaluate((ms) => {
+        const w = window as unknown as { __samples: unknown[] };
+        w.__samples = [];
+        let seq = 0;
+        const panelIds = new WeakMap<Element, string>();
+        setInterval(() => {
+          const who = document.querySelector('.sheet-panel .ask-who');
+          const panel = who?.closest('.sheet-panel') ?? null;
+          if (panel !== null && !panelIds.has(panel)) panelIds.set(panel, `panel-${seq++}`);
+          w.__samples.push({
+            at: Date.now(),
+            present: panel !== null,
+            status: panel?.querySelector('[role="status"]')?.textContent ?? null,
+            panelId: panel === null ? null : panelIds.get(panel)!,
+          });
+        }, ms);
+      }, SAMPLE_MS);
+
+      // Wait for the drop, the reconnect, and the ask frame, then half a second more.
+      await expect.poll(() => askAt, { timeout: 30_000, interval: 100 }).toBeGreaterThan(0);
+      await opened.page.waitForTimeout(500 + SAMPLE_MS);
+      const samples = await opened.page.evaluate(() => (window as unknown as { __samples: Sample[] }).__samples);
+
+      expect(dropAt, 'the route handler dropped the first connection').toBeGreaterThan(0);
+      expect(connections, 'the page reconnected on its own').toBe(2);
+      const after = samples.filter((s) => s.at >= dropAt);
+      const gap = after.filter((s) => s.at < askAt);
+      // The gap is the new connection's connect pipeline, and the sampling reaches the review's 2250 ms mark.
+      expect(askAt - dropAt, 'the gap is long enough to reach the review\'s measurement').toBeGreaterThanOrEqual(2_250);
+      expect(gap.some((s) => s.at - dropAt >= 2_000 && s.at - dropAt <= 2_500), 'a sample near 2250 ms after the drop').toBe(true);
+      expect(gap.length).toBeGreaterThanOrEqual(8);
+      // Present at every sample, and always the same panel (no remount, so no new entrance).
+      expect(after.filter((s) => !s.present).map((s) => s.at - dropAt), 'samples with the sheet absent').toEqual([]);
+      expect(new Set(samples.filter((s) => s.present).map((s) => s.panelId)).size, 'the panel was replaced').toBe(1);
+      // The status line through the gap (the first sample may precede the close event reaching the page), gone after.
+      const settled = gap.filter((s) => s.at - dropAt >= SAMPLE_MS * 2);
+      expect(settled.map((s) => s.status), 'the status line through the gap').toEqual(settled.map(() => RECONNECTING));
+      const live = after.filter((s) => s.at >= askAt + 200);
+      expect(live.length).toBeGreaterThan(0);
+      expect(live.map((s) => s.status), 'the status line after the ask frame').toEqual(live.map(() => null));
+      expect(opened.errors).toEqual([]);
+    } finally {
+      await opened.ctx.close();
+    }
+  }, 90_000);
+});
