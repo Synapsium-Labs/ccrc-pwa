@@ -2960,7 +2960,7 @@ function pathFactOf(raw, cwd, configDirs) {
 /** Mine one boundary's candidates (W2-D61, W2-D65). Pure: it reads the rows it is handed and calls `pick` once for
  *  each row it mines, never for any other row. The family (`storeId`, `ccrcId`, `generation`) is carried onto every
  *  candidate, so the candidate is the writer's item (R4). A mined body nested too deep to render (a RangeError from
- *  renderEntryText or from the paired tool_use's JSON.stringify, caught by renderOrNull) discards the boundary under
+ *  renderEntryText, caught by renderOrNull) discards the boundary under
  *  `body-unrenderable`, the word D-6302 gives reconstruction (D-6303).
  *  @param {{ storeId: string, ccrcId: string, generation: string, boundaryUuid: string, boundaryTsMs: number,
  *    rows: readonly SpanRow[], pick: (row: SpanRow) => PickedBody, cwd: string | null, cwdReal: string | null,
@@ -3005,9 +3005,8 @@ export function mineBoundary({ storeId, ccrcId, generation, boundaryUuid, bounda
     const addShas = (leaf, leafKey, pair) => {
       for (const run of shaRunsOf(leaf)) add('sha', run.toLowerCase(), run, leaf, leafKey, pair);
     };
-    let unrenderable = false;
     blocks.forEach((b, bi) => {
-      if (unrenderable || !sjObject(b)) return;
+      if (!sjObject(b)) return;
       const key = `${row.entry_id}:${bi}`;
       if (row.provenance === 'model') {
         if (b.type === 'text' && typeof b.text === 'string') addShas(b.text, key, null);
@@ -3035,12 +3034,9 @@ export function mineBoundary({ storeId, ccrcId, generation, boundaryUuid, bounda
       const text = sjResultText(b.content);
       if (text === null) return;
       const answered = typeof b.tool_use_id === 'string' ? uses.get(b.tool_use_id) : undefined;
-      let pair = null;
-      if (answered?.block !== undefined) {
-        const input = renderOrNull(() => JSON.stringify(answered.block.input ?? null));
-        if (input === null) { unrenderable = true; return; }
-        pair = { name: typeof answered.block.name === 'string' ? answered.block.name : '', input: storedField(input) };
-      }
+      // The input needs no guard: that tool_use row's own renderEntryText, guarded above, already stringified it whole.
+      const pair = answered?.block === undefined ? null
+        : { name: typeof answered.block.name === 'string' ? answered.block.name : '', input: storedField(JSON.stringify(answered.block.input ?? null)) };
       if (b.is_error === true) {
         const line = text.split('\n').find((l) => {
           const c = collapseWs(l);
@@ -3055,7 +3051,6 @@ export function mineBoundary({ storeId, ccrcId, generation, boundaryUuid, bounda
       }
       addShas(text, key, pair);
     });
-    if (unrenderable) return { state: 'discard', boundaryUuid, why: 'body-unrenderable', counts };
   }
   Object.freeze(span);
   return { state: 'mined', boundaryUuid, boundaryTsMs, candidates, counts };
