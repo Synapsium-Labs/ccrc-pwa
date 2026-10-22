@@ -83,12 +83,14 @@ const AT_NPROOF = 'eval "_t_nproof_real()$(declare -f _ws_reclaim_nested_proven 
   + ' _ws_reclaim_nested_proven() { local r; _t_nproof_real "$@"; r=$?;'
   + ' if (( r == 0 && ! _WS_NPROOF_GONE )) && [[ -f "$HOME/at-nproof.sh" && ! -e "$HOME/at-nproof-ran" ]]; then'
   + ' : > "$HOME/at-nproof-ran"; . "$HOME/at-nproof.sh"; fi; return "$r"; };';
-/** `_ws_dir_physical`, wrapped: when the RE-ASK itself asks it (`FUNCNAME[1]`: the second nested proof's root, asked
- *  directly after the checkout's identity compare and directly before that proof), sources `$HOME/at-phys.sh` ONCE, then
- *  asks the real one. A fixture's wrap of a real ccd function, never a seam of the shipped code. */
+/** `_ws_dir_physical`, wrapped: counts the RE-ASK's own asks of it (`FUNCNAME[1]`: the second nested proof's root, asked
+ *  directly after the checkout's identity compare and directly before that proof) in `$HOME/at-phys-n`, and at the SECOND
+ *  such ask, the re-ask directly before the checkout's forced removal, sources `$HOME/at-phys.sh` ONCE, then asks the real
+ *  one. A fixture's wrap of a real ccd function, never a seam of the shipped code. */
 const AT_PHYS = 'eval "_t_phys_real()$(declare -f _ws_dir_physical | tail -n +2)";'
   + ' _ws_dir_physical() { if [[ "${FUNCNAME[1]-}" == _ws_reclaim_reask && -f "$HOME/at-phys.sh" && ! -e "$HOME/at-phys-ran" ]]; then'
-  + ' : > "$HOME/at-phys-ran"; . "$HOME/at-phys.sh"; fi; _t_phys_real "$@"; };';
+  + ' local n=0; [[ ! -f "$HOME/at-phys-n" ]] || n=$(cat "$HOME/at-phys-n"); n=$((n + 1)); printf \'%s\' "$n" > "$HOME/at-phys-n";'
+  + ' if (( n == 2 )); then : > "$HOME/at-phys-ran"; . "$HOME/at-phys.sh"; fi; fi; _t_phys_real "$@"; };';
 /** `_ws_reclaim_owned`, wrapped: logs its `$2` to `$HOME/owned-calls`, runs the real one, and after that FIRST answer
  *  (the tail's own call: the ladder never asks owned) sources `$HOME/after-owned.sh` ONCE. */
 const OWNED_HOOK = 'eval "_t_owned_real()$(declare -f _ws_reclaim_owned | tail -n +2)";'
@@ -288,16 +290,17 @@ describe.skipIf(!LINUX)('the tail re-proves the tree, the rows and the main chec
     failedPairAgrees(r);
   }, 120_000);
 
-  it('I6: a nested checkout that vanishes between the re-ask’s identity compare and its second proof: worktree-remove-failed, nothing kept', () => {
+  it('I6: a nested checkout that vanishes between the pre-removal re-ask’s identity compare and its second proof: worktree-remove-failed, and its branch stands', () => {
     const c = makeChild(h);
     const realInner = fs.realpathSync(nested(c));
     hook('at-phys.sh', `rm -rf "${realInner}";\n`);
     const r = childReclaimVerb(h, reclaimToken(), { pre: `${WAIT} ${KEEP_HOOK} ${AT_PHYS}` });
-    expect(fs.existsSync(path.join(h.home, 'at-phys-ran')), 'the CONTROL: the checkout vanished inside the re-ask').toBe(true);
+    expect(fs.existsSync(path.join(h.home, 'at-phys-ran')), 'the CONTROL: the checkout vanished inside the re-ask before its forced removal').toBe(true);
+    expect(fs.readFileSync(path.join(h.home, 'at-phys-n'), 'utf8'), 'the CONTROL: it was the re-ask’s second ask').toBe('2');
     expect(fs.existsSync(realInner), 'the CONTROL: it is gone').toBe(false);
     stoppedAt(r, R(c), 'worktree-remove-failed', 'children', `the checkout at ${realInner} vanished after its identity was compared`);
     expect(h.git(c.main, 'branch', '--list', 'ws/nested'), 'its branch stands').toContain('ws/nested');
-    expect(keptFor(realInner), 'keep_of was never asked of the checkout').toEqual([]);
+    expect(keptFor(realInner), 'keep_of was asked of the checkout once, before the vanish, and not again').toHaveLength(1);
     failedPairAgrees(r);
   }, 120_000);
 
