@@ -311,18 +311,18 @@ event, with no `message_stop`. "State" is what the bridge records through `recor
 
 | Upstream | Before commit | After commit | State | Footing |
 |---|---|---|---|---|
-| `context_length_exceeded` (`response.failed`, or an HTTP 400 whose code is that or whose message says "context window") | 400 `invalid_request_error`, message exactly `prompt is too long: N tokens > M maximum` | the same | — (the refusal goes to the stats file) | spec §2.4; N, M: D-TBD-overflow-n-and-m-are-estimates |
-| `usage_limit_reached` (HTTP 429 `error.type`), a quota code | 429 `billing_error`, `retry-after: <s>` from `resets_at` when known, `x-should-retry: false` | `billing_error` | `limit-paused` | D-TBD-usage-limit-is-billing-error |
-| `rate_limit_exceeded`, `slow_down` (which arrives as an HTTP 503, `codex-api/src/api_bridge.rs:101-115`), any other 429 | 429 `rate_limit_error`, the upstream `retry-after` passed through | `rate_limit_error` | — | D-TBD-transient-rate-limit-row |
+| `context_length_exceeded` (`response.failed`, or an HTTP 400 whose code is that or whose message says "context window") | 400 `invalid_request_error`, message exactly `prompt is too long: N tokens > M maximum` | the same | — (the refusal goes to the stats file) | spec §2.4; N, M: D-6415 |
+| `usage_limit_reached` (HTTP 429 `error.type`), a quota code | 429 `billing_error`, `retry-after: <s>` from `resets_at` when known, `x-should-retry: false` | `billing_error` | `limit-paused` | D-6412 |
+| `rate_limit_exceeded`, `slow_down` (which arrives as an HTTP 503, `codex-api/src/api_bridge.rs:101-115`), any other 429 | 429 `rate_limit_error`, the upstream `retry-after` passed through | `rate_limit_error` | — | D-6413 |
 | `usage_not_included` | 403 `permission_error`, `x-should-retry: false` | `permission_error` | `ineligible` | spec §2.4 |
-| `cyber_policy`, `bio_policy`, `invalid_prompt`, `misalignment_policy_violation` | 400 `policy_blocked`, `x-should-retry: false` | `policy_blocked` | — | D-TBD-policy-refusal-is-policy-blocked |
+| `cyber_policy`, `bio_policy`, `invalid_prompt`, `misalignment_policy_violation` | 400 `policy_blocked`, `x-should-retry: false` | `policy_blocked` | — | D-6411 |
 | `server_is_overloaded`, `flex_unavailable` | 529 `overloaded_error` | `overloaded_error` | — | spec §2.4 |
 | other 5xx, a Cloudflare 403, a transport error, a stream that closes before a terminal event, the 300 s idle bound, an unknown `response.failed` code | 503 `api_error` | `api_error` | — | spec §2.4 ("529 or 503") |
 | any other 4xx | the same status, `invalid_request_error`, message names the upstream code only (never the body) | `invalid_request_error` | — | spec §2.4 |
 | 401 after one library refresh and one retry | 401 `authentication_error`, `x-should-retry: false` | — | the library's | spec §2.4 |
 | an `AuthError` that leaves the credential unusable: `needs-signin`, `not-logged-in`, `config-error`, `foreign-family`, `credential-unusable`, `auth-endpoint-refused`; and `auth-library-absent`, which the bridge raises itself when `CCRC_CODEX_AUTH_LIB` does not load (it is not a library word) | 401 `authentication_error`, `x-should-retry: false`, message `<word>: <the library's sentence, which names the remedy>` (`auth-library-absent`: `ccrc update`) | — | the library's | spec §2.4 (401 after a refresh); Stage 1's word set |
 | a transient `AuthError`: `refresh-failed` (network, timeout, a redirect, a rejection `classify_error` calls transient) and `auth-lock-busy` (`LOCK_WAIT_S` passed behind another holder) | 503 `api_error`, no `x-should-retry`, so Claude Code retries twice | — | the library's | spec §2.4 ("Upstream unavailable") |
-| a request feature the bridge does not map | 400 `invalid_request_error`, message `capability_rejected: <class>` | — | — | D-TBD-capability-rejected-token |
+| a request feature the bridge does not map | 400 `invalid_request_error`, message `capability_rejected: <class>` | — | — | D-6414 |
 | a `model` not in the lane catalogue | 404 `not_found_error`, `x-should-retry: false`; never sent upstream | — | — | Routes above |
 
 `classify_http` reads the body's `error.code` (and `error.type`) BEFORE the HTTP status, so a code's row wins over its
@@ -343,7 +343,7 @@ carrying zero usage and the **requested** model id.
 **Stop reasons** (R13, `reducer.stop_reason`): a `tool_use` block emitted → `tool_use`; else the refusal flag →
 `refusal`; `response.incomplete` `max_output_tokens` → `max_tokens`; `content_filter` → `refusal`; `interrupted`, and
 any `end_turn: false`, → continuation (below); an unknown incomplete reason → an `api_error` failure; otherwise
-`end_turn`. `pause_turn` is never emitted (D-TBD-end-turn-false-continues-in-bridge).
+`end_turn`. `pause_turn` is never emitted (D-6410).
 
 **Continuation.** A reply that ends with `end_turn: false` (or `interrupted`) and emitted no `tool_use` is continued
 upstream inside the same Anthropic message: the bridge sends the same input plus that response's output items, at
@@ -355,7 +355,7 @@ cache_write), cache_read_input_tokens: cached, cache_creation_input_tokens: cach
 where `input` is the upstream `input_tokens`, `cached` its `input_tokens_details.cached_tokens` and `cache_write` its
 `input_tokens_details.cache_write_tokens` (0 when absent). So the three input fields Claude Code sums equal the
 upstream `input_tokens` exactly, and proactive compaction fires at the measured window minus 33k
-(D-TBD-usage-sum-equals-upstream-input). On a continued message, the input fields come from the last response and
+(D-6416). On a continued message, the input fields come from the last response and
 `output_tokens` is the sum.
 
 ---
@@ -552,7 +552,7 @@ headers and `state`:
     text).hexdigest()` (spec §2.5: "a hash of the assistant text"; scoped to the session so two sessions' equal
     replies never share reasoning); `call_key(call_id: str) -> str` = `"call:" + call_id`. No key holds text.
   - `BILLING_PREFIX = "x-anthropic-billing-header:"`; `COMPACTION_MARKER = "CRITICAL: Respond with TEXT ONLY"`;
-    `IMAGE_TOKENS = 1600` (the fixed allowance per image, D-TBD-image-allowance-is-fixed).
+    `IMAGE_TOKENS = 1600` (the fixed allowance per image, D-6427).
 - The mapping, each row one test (spec §2.3, with the measured shapes):
 
 | Anthropic | Neutral / Responses | Counted as |
@@ -571,12 +571,12 @@ headers and `state`:
 | `tool_choice` (never sent by 2.1.308) | `auto`→`"auto"`, `any`→`"required"`, `tool`→`{"type":"function","name":cut_name}`, `none`→`"none"` | — |
 | `disable_parallel_tool_use` | `parallel_tool_calls = not it`; default `true` (Codex's plain path) | — |
 | `reasoning.effort` (set by the shim's `_apply_effort`, Task 8, which also pops `output_config` and `thinking`) | `effort` | — |
-| `output_config.format` `{"type":"json_schema","schema":<object>}` (handed in as `output_config`) | `output_format` = `{"type":"json_schema","strict":true,"schema":<schema>,"name":"ccrc_output_schema"}`, sent as the Responses `text.format`, Codex's own shape (`codex-api/src/common.rs:196-223, 392-410` @ `092d3ac`) | `requestField:output_config.format` (D-TBD-structured-output-is-text-format) |
+| `output_config.format` `{"type":"json_schema","schema":<object>}` (handed in as `output_config`) | `output_format` = `{"type":"json_schema","strict":true,"schema":<schema>,"name":"ccrc_output_schema"}`, sent as the Responses `text.format`, Codex's own shape (`codex-api/src/common.rs:196-223, 392-410` @ `092d3ac`) | `requestField:output_config.format` (D-6425) |
 | `output_config.format` of any other `type`, or a non-object `schema` | `capability_rejected: structured_outputs_unsupported` | `unsupportedField:output_config.format` |
 | every other `output_config` key but `effort` | dropped | `requestField:output_config.<key>` |
 | `x-claude-code-session-id`, `x-claude-code-agent-id` | `session_id`; `cache_key` | — |
-| `max_tokens`, `temperature`, `top_p`, `top_k`, `metadata`, `stop_sequences`, `service_tier`, `mcp_servers`, `container` | dropped, on the backend route too (D-TBD-backend-route-drops-sampling-fields) | `requestField:<name>` |
-| `context_management` | dropped; each edit's `type` counted; `clear_thinking_20251015` with `keep:"all"` is a no-op by construction | `contextEdit:<type>` (D-TBD-context-management-counted-not-applied) |
+| `max_tokens`, `temperature`, `top_p`, `top_k`, `metadata`, `stop_sequences`, `service_tier`, `mcp_servers`, `container` | dropped, on the backend route too (D-6426) | `requestField:<name>` |
+| `context_management` | dropped; each edit's `type` counted; `clear_thinking_20251015` with `keep:"all"` is a no-op by construction | `contextEdit:<type>` (D-6417) |
 | `anthropic-beta` values | consumed | `betaValue:<value>` |
 | any other top-level key | dropped | `requestField:<name>` |
 | `stream` | `stream` (a `false` is folded, Task 8) | — |
@@ -705,7 +705,7 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
   folded result (`blocks: [{type, text?|name?, input?}]`, `stop` or `error: {type, status}`, `usage`, `reasoning`
   count, `counted` names). A test checks the committed files equal the generator's output, so a stream is never
   hand-edited. The 32 ported streams, by name (8 rebuilt from shapes in this repository, 24 synthetic until the
-  operator's recordings replace them, D-TBD-corpus-synthetic-until-recordings):
+  operator's recordings replace them, D-6430):
 
 | # | Stream | Shape | Expected |
 |---|---|---|---|
@@ -1021,16 +1021,20 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
     `_apply_effort` itself is unchanged and `litellm` mode stays byte for byte.
   - `server.serve(cfg: BridgeConfig, hooks: Hooks) -> int`.
   - `server.load_auth_lib(path: str) -> module` — the one load of Stage 1's library (`spec_from_file_location`),
-    cached for the process; every library call the bridge makes goes through the module it returned.
+    cached for the process; every library call the bridge makes goes through the module it returned. A load that
+    fails raises, and the request path answers it as 401 `auth-library-absent` (the contract's error table).
   - **`driver.py`'s `serve` op** (`{"op": "serve"}`, the last op of its action; it prints no op line and exits with
     `serve`'s return). In order: it loads `ccd/ccgpt-proxy.py` by path, unchanged (`spec_from_file_location` under a
     module name other than `__main__`, so its `__main__` block, `ccd/ccgpt-proxy.py:1554`, does not run; the
     contract's environment carries the three variables its top level reads, `:962-964`), and takes the five hooks
     from that module, copying none: `Hooks(m._read_request_body, m._content_encoding, m._decode_body, <apply_effort>,
-    m._Server)`, where `<apply_effort>` is Task 9's two-line wrapper over `m._apply_effort`; it calls
-    `server.load_auth_lib(os.environ["CCRC_CODEX_AUTH_LIB"])`; it sets each `ccgpt_auth.<NAME>` const on the module
-    that call returned, and each `<module>.<NAME>` const on the package's module, as before; then it calls
-    `server.serve(config_from_env(os.environ), hooks)`.
+    m._Server)`, where `<apply_effort>` is the op's own two-line wrapper, the one stated copy (Task 9's lives inside
+    `_run_direct`, and Task 9 is built after this task): `oc = data.get("output_config"); return
+    m._apply_effort(data), oc`, which reads `output_config` before the call that pops it. Only when `consts` carries
+    a `ccgpt_auth.<NAME>` key, it calls `server.load_auth_lib(os.environ["CCRC_CODEX_AUTH_LIB"])` and sets each such
+    const on the module that call returned; otherwise the bridge loads the library at its first request, so an absent
+    library is the bridge's own 401 `auth-library-absent`, not a driver crash. It sets each `<module>.<NAME>` const on
+    the package's module, as before, then calls `server.serve(config_from_env(os.environ), hooks)`.
   - `spawnBridge(home: string, lane: string, o?: {env?: Record<string, string>; consts?: Record<string, unknown>;
     timeoutMs?: number}): Promise<{port: number; key: string; proc: ChildProcess; stderr(): string; stop(signal?:
     NodeJS.Signals): Promise<{code: number | null; signal: string | null}>}>` — runs `python3 -I driver.py` with
@@ -1067,7 +1071,7 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
   `context_length_exceeded`, at either point, the answer is `overflow(N, M)` with `N = estimate(countable_bytes, ratio,
   image_count)` and `M = min(window, floor(N × 0.9 / 1000) × 1000)`, where `window` is the lane's
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` read from `<configDir>/settings.json` at that moment, 200000 when absent; so `N > M`
-  always, and `stats.refusal("backend", model, N, window)` records it (D-TBD-overflow-n-and-m-are-estimates).
+  always, and `stats.refusal("backend", model, N, window)` records it (D-6415).
 - `stream:false` runs the same pipeline into `fold` and answers one JSON message, or the HTTP error (counted
   `streamFalse`). `count_tokens` runs `inbound.from_anthropic` (with the store's `lookup`) and answers
   `{"input_tokens": estimate(countable_bytes, ratio, image_count)}` locally, never upstream, never 501.
@@ -1077,7 +1081,7 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
 - **Every handler is wrapped**: an exception anywhere in a request answers `api_error` (a 503 before the commit
   point, an `error` event after it) and logs one stderr line, `ccgpt-proxy: direct: <class name> <code>` with the
   code bounded by `CODE_RE`, never the exception's text, an argument or a traceback.
-- **The drain** (SIGTERM; D-TBD-drain-is-bounded). Open streams are kept in a lock-guarded registry with an in-flight
+- **The drain** (SIGTERM; D-6429). Open streams are kept in a lock-guarded registry with an in-flight
   counter. The signal handler only sets `stopping` and starts a thread that calls `httpd.shutdown()` (a
   `ThreadingHTTPServer`'s `serve_forever` cannot be shut down from its own thread, and its handler threads are
   daemon threads, so leaving them to the interpreter's exit would drop them). When `serve_forever` returns on the
@@ -1392,7 +1396,9 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
   direct lane) → 1; L13 (nohup wait below the sum) → 1; L14 (`_codex_tier_is_other_mode` answers no: the other
   mode's rc 2 read as foreign) → at least 2 (start, status and stop on a healthy direct lane …; a litellm lane's
   running shim …); L15 (the runtime read before the `bridge` arm) → 1 (a direct lane starts and reads not-stale …);
-  L16 (`_uninst_codex` keeps `(shim litellm)`) → 1 (uninstall stops a direct lane's bridge).
+  L16 (`_uninst_codex` keeps `(shim litellm)`) → 1 (uninstall stops a direct lane's bridge); L17 (on rc 1, stop and
+  uninstall skip the lane) → 2 (a lane.json with no bridge key still has its running shim and LiteLLM tiers stopped;
+  uninstall with an unreadable lane mode still stops a running bridge).
 - [ ] **Step 6: Commit** — `ccrc codex: the bridge tier (… Task 11)`.
 
 ### Task 11b: the hourly auto-advance on a `direct` lane
@@ -1459,7 +1465,8 @@ starts a tier.
 - [ ] **Steps 2-4.** - [ ] **Step 5: Mutation rows** — N1 (readiness walks `litellm shim` on every lane) → 1 (the
   advance step moves a class on a direct lane …); N2 (`laneOf` accepts the `shim` shape only) → at least 2 (… moves a
   class on a direct lane …; a direct lane's canary passes …); N3 (`laneOf` takes the direct shape's lane without
-  comparing it) → 1 (the canary refuses a listener that answers as another lane …).
+  comparing it) → 1 (the canary refuses a listener that answers as another lane …); N4 (the render asks its tier
+  question on a direct lane) → 1 (the hourly refresh on a direct lane renders litellm.yaml and starts no tier).
 - [ ] **Step 6: Commit** — `models: auto-advance on a direct lane (… Task 11b)`.
 
 ### Task 12: `ccrc codex switch <id> litellm|direct`
@@ -1568,12 +1575,12 @@ starts a tier.
   2. **The floor of real usage:** `to` is raised to `ceil(promptTokensMax / 1000) × 1000` of that route and model,
      the largest prompt the model accepted in real usage (Task 5), because `tokens` is an estimate (D24) and an
      under-estimate would otherwise lower the lane below what it has served
-     (D-TBD-lowering-floored-at-accepted-prompt).
+     (D-6428).
   3. A model no class names and no catalogue entry lists → skipped `not-a-lane-model` (never a failure).
   4. With an entry: only when the refusal's `at` is later than the entry's `setAt`, and `to` is smaller; otherwise
      skipped `not-lower` or `older-than-entry`, so a deliberate `set-window` after a refusal is never undone.
   5. With no entry: `to` is capped at the lane's current `contextWindowFor(...).tokens`, so the lane's window never
-     rises (D-TBD-first-lowering-capped-at-lane-window).
+     rises (D-6421).
   6. Writes `{tokens: to, setAt: now, source: "refusal", refusedTokensEstimate: tokens}` (the name says the refused
      size is the bridge's estimate; unknown keys are tolerated by `parseWindows`) and records the refusal it applied,
      `refusalsApplied["<upstream>/<model>"] = at`, in the same write, then re-materialises, once, after all models.
@@ -1716,7 +1723,7 @@ first live step uses: recordings with a scrubber, and a bounded live probe.
   string[], lastWalked: string | null): Array<[string, string]>` is exported for the test.
 - [ ] **Step 1: Write the failing tests** — `'it reports the removal of the instructions field'` and `'it reports the
   removal of the compaction endpoint constant'` (synthetic excerpts shaped like the two upstream changes, 0.162.0
-  and 0.155.0, D-TBD-wire-watch-tested-on-synthetic-excerpts); `'an unchanged pair reports nothing'`; `'three
+  and 0.155.0, D-6424); `'an unchanged pair reports nothing'`; `'three
   releases since the last walk give three consecutive pairs, oldest first'`, `'no report yet, two releases since the
   last walk give both pairs'` and `'with no state yet, the newest pair'` (`nextPairs`); `'a fetch failure on the
   second of three pairs leaves the state at the first pair's newer tag'` (and the job exits non-zero); and in
@@ -1725,7 +1732,8 @@ first live step uses: recordings with a scrubber, and a bounded live probe.
   bridge test reads the whole package through `load_all()`, so the traced selection runs the replay corpus on every
   bridge change, and the daily full run backs it.
 - [ ] Steps 2-6. Mutation rows G1 (ignore removed fields) → 1; G2 (open an issue on an unchanged pair) → 1; G3
-  (`nextPairs`: the newest pair only) → 2 (three releases since the last walk …; no report yet, two releases …).
+  (`nextPairs`: the newest pair only) → 2 (three releases since the last walk …; no report yet, two releases …); G4
+  (advance the state past a pair that could not be compared) → 1 (a fetch failure on the second of three pairs …).
 
 ---
 
@@ -1834,8 +1842,8 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 ## Known limits and Later
 
 - `clear_tool_uses_20250919` is counted, not applied: Claude Code 2.1.308 sends it only when a flag-gated idle
-  feature is on (D-TBD-context-management-counted-not-applied); the doctor's WARN names it the first time.
-- The canary (D5, D26) needs consent (D22), so it is Stage 3's (D-TBD-canary-after-consent).
+  feature is on (D-6417); the doctor's WARN names it the first time.
+- The canary (D5, D26) needs consent (D22), so it is Stage 3's (D-6423).
 - A Claude Code drift watch (re-running the offline stub on each Claude Code release) is Later: no CI job can run
   the binary.
 - The trimming of what Claude Code re-attaches after a compaction stays the spec's Later.
@@ -1856,7 +1864,7 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 
 1. **N and M in the overflow text.** The backend's overflow message carries no counts, so N is the bridge's
    estimate and M the lower of the lane's window and 0.9 N. Claude Code trims by them; one real overflow recording
-   will show whether the trim is sensible (D-TBD-overflow-n-and-m-are-estimates).
+   will show whether the trim is sensible (D-6415).
 2. **The window the backend enforces** moves over time. It was measured once: on 2026-10-15 every class model
    accepted about 511k through one lane on the backend route, with no refusal (spec §1.2, D7); the lanes are told
    400k. D25 is the standing learner from here, so the first live step stays at six tiny requests and probes no
@@ -1876,7 +1884,7 @@ Every entry is unnumbered: the controller issues the numbers and replaces each s
 comment that cites it. A further departure found while executing is written `D-TBD-<slug>` and named in the task's
 report.
 
-### D-TBD-end-turn-false-continues-in-bridge — `end_turn:false` is continued upstream, never `pause_turn`
+### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
 
 - **Departs from:** spec §2.4, "A reply the model marks as not finished (`end_turn:false`) becomes `pause_turn`", and
   "an interruption a normal stop".
@@ -1887,7 +1895,7 @@ report.
   `interrupted` to `end_turn:false` (`codex-api/src/sse/responses.rs:418-455`), so the spec's two sentences collide.
 - **Cost if wrong:** up to three more upstream requests for one reply, counted; an unbounded need ends `end_turn`.
 
-### D-TBD-policy-refusal-is-policy-blocked — 400 `policy_blocked` with `x-should-retry: false`
+### D-6411 — 400 `policy_blocked` with `x-should-retry: false`
 
 - **Departs from:** spec §2.4, "Policy refusal | 400, not retried", which names no error type or header.
 - **What changed:** `error.type` `policy_blocked`, header `x-should-retry: false`, before and after commit.
@@ -1895,7 +1903,7 @@ report.
   contract names this shape.
 - **Cost if wrong:** a client older than the contract may read `policy_blocked` as an unknown type; it still sees 400.
 
-### D-TBD-usage-limit-is-billing-error — 429 `billing_error`, `retry-after`, `x-should-retry: false`
+### D-6412 — 429 `billing_error`, `retry-after`, `x-should-retry: false`
 
 - **Departs from:** spec §2.4, "Usage limit (`…_usage_limit_exceeded`) | 429 `rate_limit_error`".
 - **What changed:** the backend's code is `usage_limit_reached` (HTTP only) plus the quota codes; the answer is 429
@@ -1904,7 +1912,7 @@ report.
   embedded contract names `billing_error` for a plan limit and keeps `rate_limit_error` for throttling.
 - **Cost if wrong:** a session fails its turn at once on a limit instead of after the retries; that is the intent.
 
-### D-TBD-transient-rate-limit-row — throttling is a row of its own
+### D-6413 — throttling is a row of its own
 
 - **Departs from:** spec §2.4's table, which has no row for `rate_limit_exceeded`, `slow_down` or another 429.
 - **What changed:** 429 `rate_limit_error`, the upstream `retry-after` passed through, no `x-should-retry`, so Claude
@@ -1913,7 +1921,7 @@ report.
   `billing_error` to a plan limit; a throttle is worth a retry, a plan limit is not.
 - **Cost if wrong:** two retries a turn on a lane, as today.
 
-### D-TBD-capability-rejected-token — an unmapped feature is `capability_rejected: <class>`
+### D-6414 — an unmapped feature is `capability_rejected: <class>`
 
 - **Departs from:** spec §2.4, "Unsupported capability | 400 naming the field".
 - **What changed:** the message is `capability_rejected: <class>` from Claude Code's class table (`document_block`,
@@ -1922,7 +1930,7 @@ report.
 - **Why:** Claude Code self-heals only on those tokens; a field name alone gets the generic degrade retries.
 - **Cost if wrong:** none on the backend route today: no such request was seen.
 
-### D-TBD-overflow-n-and-m-are-estimates — where the prompt-too-long numbers come from
+### D-6415 — where the prompt-too-long numbers come from
 
 - **Departs from:** spec §2.4, which gives the text and not its numbers, and its "Claude Code 2.1.300 parses that
   text" (2.1.308's match is a loose substring, measured).
@@ -1932,7 +1940,7 @@ report.
 - **Why:** the backend's overflow message has no counts (`codex-api/src/sse/responses.rs:1137` @ `092d3ac`).
 - **Cost if wrong:** Claude Code trims by the pair; an over-estimate drops more history before its summary.
 
-### D-TBD-usage-sum-equals-upstream-input — `cache_write_tokens` is reported as cache creation
+### D-6416 — `cache_write_tokens` is reported as cache creation
 
 - **Departs from:** spec §2.4, "Input is reported net of cached tokens, and cached tokens as cache reads", which says
   nothing of cache writes.
@@ -1944,7 +1952,7 @@ report.
 - **Cost if wrong:** if `cache_write_tokens` is not inside `input_tokens`, the count is low by it; the first live step
   reads a non-zero one (step 2.5).
 
-### D-TBD-context-management-counted-not-applied — no `clear_tool_uses` in the bridge
+### D-6417 — no `clear_tool_uses` in the bridge
 
 - **Departs from:** spec §2.3, "`context_management` | applied by the bridge itself (`clear_tool_uses`)".
 - **What changed:** every edit type is counted; none is applied.
@@ -1953,7 +1961,7 @@ report.
 - **Cost if wrong:** if that flag turns on, tool results are not cleared on a `direct` lane (LiteLLM polyfilled the
   edit); the doctor names the edit the first day it arrives.
 
-### D-TBD-drift-counters-in-stats-file — D3's names go to the stats file
+### D-6418 — D3's names go to the stats file
 
 - **Departs from:** spec §2.9 D3, "They go to the status file".
 - **What changed:** names, counts and the unexplained list live in `bridge.stats.json`; the status file keeps the
@@ -1962,7 +1970,7 @@ report.
   hold that lock in the request path.
 - **Cost if wrong:** one more non-secret file per lane, reaped with the lane.
 
-### D-TBD-bridge-package-runs-from-the-tree — the package is imported from the installed tree
+### D-6419 — the package is imported from the installed tree
 
 - **Departs from:** D18, "a stdlib package beside" the shim.
 - **What changed:** the package stays at `<tree>/ccd/codexbridge/`; the shim, placed in `~/.local/bin`, imports it from
@@ -1971,7 +1979,7 @@ report.
   box's code (`ccrc` runs `deploy/models-op.mjs` from it, `ccd/ccrc:1326`), and on the release lane it is immutable.
 - **Cost if wrong:** a `deploy.sh` push rewrites the tree in place; a running bridge imported everything at start.
 
-### D-TBD-instructions-switch-is-a-marker — D11's per-lane switch
+### D-6420 — D11's per-lane switch
 
 - **Departs from:** D11, which names a per-lane switch and no mechanism.
 - **What changed:** a marker file, `bridge-instructions`, in the lane directory, with no writer in the tree; with it,
@@ -1980,7 +1988,7 @@ report.
   additive change to two validators, the mirror and the README, made once it is known to be needed.
 - **Cost if wrong:** the operator touches a file instead of a roster field; a later stage may promote it.
 
-### D-TBD-first-lowering-capped-at-lane-window — D25 on a model with no entry
+### D-6421 — D25 on a model with no entry
 
 - **Departs from:** D25, "sets that model's window to R × 0.9 … never raises", read per entry.
 - **What changed:** a first automatic entry is capped at the lane's current window, and a refusal older than an
@@ -1989,7 +1997,7 @@ report.
   and an old refusal would undo a deliberate `set-window`.
 - **Cost if wrong:** a window learned from a refusal can end below what the backend accepts; raising is `set-window`.
 
-### D-TBD-library-third-status-writer — the bridge writes upstream states into the status file
+### D-6422 — the bridge writes upstream states into the status file
 
 - **Departs from:** Stage 1's contract: the status file "is written only under the lock, by `ensure_fresh` and
   `sign_in_device`".
@@ -1998,7 +2006,7 @@ report.
 - **Why:** spec §2.4 puts `limit-paused`, `ineligible` and the upstream request id in the lane's status.
 - **Cost if wrong:** a two-second lock wait at most, best effort, after a reply is sent.
 
-### D-TBD-canary-after-consent — no canary in Stage 2
+### D-6423 — no canary in Stage 2
 
 - **Departs from:** D26 ("during the soak … the canary runs `ccrc codex switch <id> litellm`").
 - **What changed:** no canary runs in Stage 2, so the soak has no automatic flip back.
@@ -2006,7 +2014,7 @@ report.
   operator's (runbook step 6).
 - **Cost if wrong:** a bad day on lane-b is caught by the doctor and the operator, not by a canary.
 
-### D-TBD-wire-watch-tested-on-synthetic-excerpts — D1's own test
+### D-6424 — D1's own test
 
 - **Departs from:** D1, "Its own test checks that it reports the 0.162.0 move of `instructions` and the 0.155.0
   removal of the compaction endpoint", read as the real files.
@@ -2015,7 +2023,7 @@ report.
 - **Why:** tests run offline, and no upstream source is copied into this repository.
 - **Cost if wrong:** a real-file shape the excerpts miss is found by the first real run, which opens an issue.
 
-### D-TBD-structured-output-is-text-format — `output_config.format` becomes the Responses `text.format`
+### D-6425 — `output_config.format` becomes the Responses `text.format`
 
 - **Departs from:** spec §2.3, which has no structured-output row ("Anything unknown | passed or dropped by rule").
 - **What changed:** the shim's effort hook pops `output_config` before inbound sees the body
@@ -2031,7 +2039,7 @@ report.
 - **Cost if wrong:** a schema the backend's strict mode rejects comes back as a 400, which reaches Claude Code as the
   generic 4xx row; the first one names the code in the stats file.
 
-### D-TBD-backend-route-drops-sampling-fields — the sampling fields are dropped on the backend route too
+### D-6426 — the sampling fields are dropped on the backend route too
 
 - **Departs from:** spec §2.3, "`max_tokens`, `temperature`, `top_p`, `top_k`, `metadata`, `stop_sequences` | dropped
   on `siwc`; counted".
@@ -2042,7 +2050,7 @@ report.
 - **Cost if wrong:** no output cap and no sampling control on a `direct` lane; Claude Code sends no sampling field
   (`stub.md`, the body-keys row) and its `max_tokens` is 32000 for a GPT id.
 
-### D-TBD-image-allowance-is-fixed — an image counts a fixed 1,600 tokens in D24
+### D-6427 — an image counts a fixed 1,600 tokens in D24
 
 - **Departs from:** D24, "a running bytes-to-tokens ratio per route and model", which says nothing of images.
 - **What changed:** `countable_bytes` is the bytes the bridge sends, image data excluded; each image adds
@@ -2052,7 +2060,7 @@ report.
 - **Cost if wrong:** the allowance is unmeasured on this route; an image-heavy request is estimated off by the
   difference per image.
 
-### D-TBD-lowering-floored-at-accepted-prompt — D25 never lowers below a prompt the model accepted
+### D-6428 — D25 never lowers below a prompt the model accepted
 
 - **Departs from:** D25, "A refusal at size R sets that model's window to R × 0.9, rounded down to 1k".
 - **What changed:** R is the bridge's estimate, recorded as `refusedTokensEstimate`; the new window is at least the
@@ -2063,7 +2071,7 @@ report.
 - **Cost if wrong:** after a real shrink of the backend's limit below a size served earlier, the lane keeps a window
   above the new limit until the operator lowers it; each refusal still compacts through the prompt-too-long text.
 
-### D-TBD-drain-is-bounded — a restart cuts a stream longer than `DRAIN_S`
+### D-6429 — a restart cuts a stream longer than `DRAIN_S`
 
 - **Departs from:** spec §2.4, "On restart the bridge stops taking requests and finishes the streams in flight".
 - **What changed:** the drain lasts `DRAIN_S = 5.0` s; a stream still open then gets one `error` event `api_error`,
@@ -2075,7 +2083,7 @@ report.
 - **Cost if wrong:** a long stream in flight at a restart is re-sent whole (one more upstream turn), and a request
   landing in the gap can fail its turn; holding the port across a restart is a Known limit.
 
-### D-TBD-corpus-synthetic-until-recordings — the 24 synthetic streams stay until recordings replace them
+### D-6430 — the 24 synthetic streams stay until recordings replace them
 
 - **Departs from:** spec §2.4 and §5, "the operator's trial recordings replace the other 24" (the reducer tests
   "re-based on the operator's trial recordings").
@@ -2085,7 +2093,7 @@ report.
 - **Cost if wrong:** until then the corpus holds shapes no recording vouches for; a real shape they miss is found by
   the drift counters and the first recording.
 
-### D-TBD-stream-false-one-counter — one `streamFalse` counter, not one per feature
+### D-6431 — one `streamFalse` counter, not one per feature
 
 - **Departs from:** D12, "with a counter per feature".
 - **What changed:** `stream:false` requests are counted once, `outcomes.streamFalse`.
