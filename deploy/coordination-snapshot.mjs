@@ -565,10 +565,11 @@ const SQLITE_MAGIC = 'SQLite format 3\u0000';
 
 /**
  * Whether a file is a readable SQLite database, and whether it holds a `delegation_*` table. A header check first (a text
- * placeholder is not a database), then a read-only open, `quick_check`, and the table list. Never writes.
+ * placeholder is not a database), then a read-only open, `quick_check`, and the table list. Never writes. `quickCheck: false` leaves
+ * out the one step that scans the whole database (the thin walk's reading of a legacy dir, D-6364); the header and the table list stay.
  * @returns {{ok: true, delegationTables: string[]} | {ok: false, why: string}}
  */
-export function inspectDb(p) {
+export function inspectDb(p, { quickCheck = true } = {}) {
   let head;
   try {
     const fd = nodeFs.openSync(p, C.O_RDONLY | C.O_NOFOLLOW);
@@ -583,8 +584,10 @@ export function inspectDb(p) {
   let db;
   try {
     db = new sqlite.DatabaseSync(p, { readOnly: true });
-    const check = db.prepare('PRAGMA quick_check').all();
-    if (check.length !== 1 || check[0].quick_check !== 'ok') return { ok: false, why: 'quick_check failed' };
+    if (quickCheck) {
+      const check = db.prepare('PRAGMA quick_check').all();
+      if (check.length !== 1 || check[0].quick_check !== 'ok') return { ok: false, why: 'quick_check failed' };
+    }
     const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
     return { ok: true, delegationTables: names.filter((n) => n.startsWith('delegation_')) };
   } catch (err) {
@@ -956,9 +959,19 @@ function classifyRaw({ from, fs = realFs }) {
       const v = classifyBody({ from, fs });
       return { ...v, reason: `${v.reason} (${THINNED_FILE} beside it is a thinning that never started; the next thin removes it)` };
     }
-    const left = SNAPSHOT_NAMES.find((n) => fs.lstat(path.join(from, n)) !== null);
-    if (left !== undefined) {
-      return { kind: 'invalid', reason: `a thinning did not finish: ${left} is still beside ${THINNED_FILE} (the next completed update or ccrc backup finishes it)`, manifest: null };
+    const present = SNAPSHOT_NAMES.filter((n) => fs.lstat(path.join(from, n)) !== null);
+    if (present.length > 0) {
+      // The promise that a later run finishes this dir is made only when `finishOne` would: every leftover is its `dropped` entry (D-6349).
+      let foreign;
+      try { foreign = present.find((n) => !isDroppedLeftover(fs, from, t, n)); } catch (err) {
+        if (err instanceof SnapError) foreign = present[0];
+        else if (hasCode(err)) return { kind: 'invalid', reason: `unreadable (${err.code})`, manifest: null };
+        else throw err;
+      }
+      if (foreign !== undefined) {
+        return { kind: 'invalid', reason: `a thinning did not finish and cannot be finished: ${foreign} beside ${THINNED_FILE} differs from what the record says was dropped (thin refuses it as thin-foreign, and it stays as evidence)`, manifest: null };
+      }
+      return { kind: 'invalid', reason: `a thinning did not finish: ${present[0]} is still beside ${THINNED_FILE} (the next completed update or ccrc backup finishes it)`, manifest: null };
     }
     return { kind: 'thinned', reason: `thinned ${t.thinnedAt} by ccrc ${t.by} (CCRC_BACKUP_DATA_KEEP=${t.rule.keep}): its coordination data set was dropped by design`, manifest: null, data: false, thinned: t };
   }
@@ -1025,19 +1038,13 @@ function quickBody(fs, dir) {
   const db = fs.lstat(path.join(dir, DB_FILE));
   if (db === null) return { word: 'none', detail: 'no manifest, no sidecars and no coord.db' };
   if (!db.isFile()) return bad('coord.db is not a regular file');
-  // The one read a legacy dir costs (D-6361): thinning cannot be undone and a damaged dir is never thinned, so a file that is not
-  // SQLite is damage and stays as it is, never a data set dropped "by design".
-  let magic;
-  try {
-    const h = fs.openRead(path.join(dir, DB_FILE));
-    if (h === null) return bad('coord.db could not be read');
-    try { magic = h.size < SQLITE_MAGIC.length ? null : Buffer.from(h.read(0, SQLITE_MAGIC.length)).toString('latin1'); } finally { h.close(); }
-  } catch (err) {
-    if (hasCode(err)) return bad(`unreadable (${err.code})`);
-    throw err;
-  }
-  if (magic !== SQLITE_MAGIC) return bad('coord.db is not a SQLite database (bad header)');
-  return { word: 'full', source: 'legacy', detail: 'a coord.db with no manifest and the SQLite header' };
+  // Thinning cannot be undone and a damaged dir is never thinned (D-6364), so a coord.db that is not SQLite, cannot be opened or holds a
+  // delegation_ table (a refused capture's remains) is damage and stays as it is, never a data set dropped "by design". The same check
+  // classify makes, minus quick_check, which scans the whole database (past the count presence and size decide, D-6350).
+  const state = inspectDb(path.join(dir, DB_FILE), { quickCheck: false });
+  if (!state.ok) return bad(`coord.db ${state.why}`);
+  if (state.delegationTables.length > 0) return bad(`coord.db holds ${state.delegationTables[0]} and has no manifest`);
+  return { word: 'full', source: 'legacy', detail: 'a coord.db with no manifest that opens read-only and holds no delegation_ table' };
 }
 
 /**
@@ -1102,17 +1109,24 @@ function thinOne(fs, dir, q, { keep, by, now }) {
   return dropped;
 }
 
-/** Finishes an interrupted thinning: each leftover is deleted only when it measures equal (bytes and SHA-256) to its `dropped` entry,
+/** Whether the leftover `n` of an interrupted thinning is the file the record says was dropped: a regular file that the record lists, with
+ *  that entry's bytes and SHA-256. The one spelling of the rule, so `classify`'s promise that a run finishes a dir is `finishOne`'s own test. */
+function isDroppedLeftover(fs, dir, t, n) {
+  const p = path.join(dir, n);
+  const st = fs.lstat(p);
+  const d = t.dropped.find((x) => x.filename === n);
+  if (st === null || d === undefined || !st.isFile()) return false;
+  const got = measureFile(fs, p);
+  return got !== null && got.bytes === d.bytes && got.sha256 === d.sha256;
+}
+
+/** Finishes an interrupted thinning: each leftover is deleted only when it is its `dropped` entry (`isDroppedLeftover`),
  *  and any other leftover refuses the dir before anything is deleted. Returns the figure the record gives for the whole set. */
 function finishOne(fs, dir, t) {
   const todo = [];
   for (const n of SNAPSHOT_NAMES) {
-    const p = path.join(dir, n);
-    const st = fs.lstat(p);
-    if (st === null) continue;
-    const d = t.dropped.find((x) => x.filename === n);
-    const got = d !== undefined && st.isFile() ? measureFile(fs, p) : null;
-    if (got === null || got.bytes !== d.bytes || got.sha256 !== d.sha256) refuse('thin-foreign', `${n} beside ${THINNED_FILE} is not the file the record lists, so it is left in place`);
+    if (fs.lstat(path.join(dir, n)) === null) continue;
+    if (!isDroppedLeftover(fs, dir, t, n)) refuse('thin-foreign', `${n} beside ${THINNED_FILE} is not the file the record lists, so it is left in place`);
     todo.push(n);
   }
   for (const d of t.dropped) if (todo.includes(d.filename)) fs.unlink(path.join(dir, d.filename));
@@ -1124,7 +1138,8 @@ function finishOne(fs, dir, t) {
  * Keeps the newest `keep` backup directories that carry a verified coordination data set and thins the rest (D-6350):
  * `own` first and never thinned, then `dirs` newest first. `verified` (one of `dirs`) was verified by the caller in this same run.
  * A dir is verified in full only when it is about to be counted, within a budget of `keep + 2` verifications; past the count a dir is
- * read by presence and size, and one pre-migration data set is kept (D-6358). `out(line)` is called once per line, as it happens.
+ * read by presence and size, and one pre-migration data set is kept (D-6358). When no more dirs can be counted than `keep`, nothing can be
+ * thinned and nothing is verified (D-6350's amendment). `out(line)` is called once per line, as it happens.
  * It throws a SnapError only for a call that is wrong in itself (a `dirs` list not strictly newest first by name, D-6362, included), and anything else
  * only for a helper failure. The `verified` dir is never thinned (D-6362). `left` counts the dirs that still hold a data set and were left
  * as they are (damaged, invalid, refused, untouched past a stop); a thinned dir, a dir with no data set and a path that is not a directory are not counted (D-6363).
@@ -1145,7 +1160,7 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
   const mib = (bytes) => Math.floor(bytes / 1048576);
   const sum = (dropped) => dropped.reduce((s, d) => s + d.bytes, 0);
   let counted = 0; let preMigration = 0; let thinned = 0; let left = 0; let refused = 0; let spent = 0;
-  let stopped = false; let refUv = null;
+  let stopped = false; let refUv = null; let ownQ = null;
   const result = () => ({ kept: counted + preMigration, thinned, left, refused, stopped });
   const summary = () => {
     if (thinned > 0 || refused > 0 || stopped) out(`coordination data sets: ${counted + preMigration} kept, ${thinned} thinned this run, ${left} left as they are`);
@@ -1196,8 +1211,34 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
       return result();
     }
     try {
-      const q = quickState(fs, ownP);
-      if (q.word === 'full') { counted++; noteCounted(ownP, q); }
+      ownQ = quickState(fs, ownP);
+    } catch (err) {
+      if (!(err instanceof SnapError) && !hasCode(err)) throw err;
+      warn(ownP, whyOf(err));
+    }
+  }
+
+  // When the dirs that can be counted number at most `keep`, nothing can be thinned, so nothing is verified (D-6350, review 794 F6):
+  // each is counted on presence and size, no `user_version` is read and no budget is spent. A reading that throws or is not `full` or `stale` does not count.
+  const reads = new Map();
+  let countable = ownQ?.word === 'full' ? 1 : 0;
+  for (const dir of walk) {
+    try {
+      const st = fs.lstat(dir);
+      if (st === null || !st.isDirectory()) continue;
+      const q = quickState(fs, dir);
+      reads.set(dir, q);
+      if (q.error === undefined && (q.word === 'full' || q.word === 'stale')) countable++;
+    } catch (err) {
+      if (!(err instanceof SnapError) && !hasCode(err)) throw err;
+    }
+  }
+  const sparse = countable <= keep;
+
+  if (ownQ?.word === 'full') {
+    try {
+      if (!sparse) noteCounted(ownP, ownQ);
+      counted++;
     } catch (err) {
       if (!(err instanceof SnapError) && !hasCode(err)) throw err;
       warn(ownP, whyOf(err));
@@ -1209,7 +1250,7 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
     try {
       const st = fs.lstat(dir);
       if (st === null || !st.isDirectory()) refuse('thin-not-a-dir', `${name} is not a directory`);
-      let q = quickState(fs, dir);
+      let q = reads.get(dir) ?? quickState(fs, dir);
       if (q.error !== undefined) throw q.error;
       if (dir === verP && q.word !== 'full' && q.word !== 'stale' && q.word !== 'none') {
         refuse('thin-verified-not-whole', `the verified directory reads as ${q.word} (${q.detail}), which a verification does not leave behind, so it is not touched`);
@@ -1228,8 +1269,10 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
       }
       if (q.word !== 'full') { if (holdsData(q)) left++; continue; }
       if (counted < keep) {
+        if (sparse) { counted++; continue; }
         if (dir !== verP && spent >= budget) { stop(walk.slice(at)); break; }
-        if (verify(dir)) { counted++; noteCounted(dir, q); } else left++;
+        // Counted only after everything the count reads has been read, so a dir is never both counted and left (D-6363).
+        if (verify(dir)) { noteCounted(dir, q); counted++; } else left++;
         continue;
       }
       if (preMigration === 0 && refUv !== null && hasDb(q)) {

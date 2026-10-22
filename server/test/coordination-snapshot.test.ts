@@ -2295,6 +2295,32 @@ describe('W23: a thinned backup is its own word (D-6348, D-6349)', () => {
     expect(H.classify({ from: two }).reason).toBe('a thinning did not finish: coordination-snapshot.json is still beside coordination-thinned.json (the next completed update or ccrc backup finishes it)');
   });
 
+  it('W23-H2b (D-6363, review 794 F7): a leftover that differs from what the record says was dropped is invalid, and the reason does not promise that the next run finishes it', () => {
+    const full = fullSnap();
+    let n = 0;
+    for (const name of FOUR) {
+      const dir = assembled(full, `20261014-17000${n++}`, [name]);
+      const b = readFileSync(path.join(dir, name));
+      b[0] = (b[0] ?? 0) ^ 1; // the same length, one bit changed: the size alone would pass
+      writeFileSync(path.join(dir, name), b);
+      const v = H.classify({ from: dir });
+      expect(v, name).toMatchObject({ kind: 'invalid' });
+      expect(v.reason, name).toBe(`a thinning did not finish and cannot be finished: ${name} beside coordination-thinned.json differs from what the record says was dropped (thin refuses it as thin-foreign, and it stays as evidence)`);
+      expect(v.reason, name).not.toContain('finishes it');
+      expect(classifyCli(dir), name).toMatchObject({ status: 2, stdout: 'invalid\n' });
+    }
+    // Two leftovers, the first one matching and the second not: the one that differs is named, not the first present.
+    const two = assembled(full, '20261014-180000', ['coord.db', 'coordination-snapshot.json']);
+    const mf = readFileSync(path.join(two, 'coordination-snapshot.json'));
+    mf[0] = (mf[0] ?? 0) ^ 1;
+    writeFileSync(path.join(two, 'coordination-snapshot.json'), mf);
+    expect(H.classify({ from: two }).reason).toMatch(/^a thinning did not finish and cannot be finished: coordination-snapshot\.json beside /);
+    // A leftover that is a symlink or a directory is not a file the record lists.
+    const link = assembled(full, '20261014-190000', []);
+    symlinkSync(path.join(full.dir, 'coord.db'), path.join(link, 'coord.db'));
+    expect(H.classify({ from: link }).reason).toMatch(/^a thinning did not finish and cannot be finished: coord\.db beside /);
+  });
+
   describe('W23-H3: a record that is not one is invalid, never thinned', () => {
     const cases: Array<[string, (dir: string, v: any) => void]> = [
       ['not JSON', (d) => writeFileSync(path.join(d, RECORD), 'nope\n')],
@@ -2332,7 +2358,7 @@ describe('W23: a thinned backup is its own word (D-6348, D-6349)', () => {
   it('W23-H8: the reason carries the JSON defect that findJsonDefect names, not a fixed phrase', () => {
     const dup = recordDir();
     const text = H.canonicalJson(dup.value);
-    writeFileSync(path.join(dup.dir, RECORD), `${text.replace('{', '{"by":"update",')}\n`);
+    writeFileSync(path.join(dup.dir, RECORD), `${'{"by":"update",' + text.slice(1)}\n`);
     expect(H.classify({ from: dup.dir }).reason).toMatch(/^the thinning record is unreadable: .*duplicate-key/);
     const deep = recordDir();
     writeFileSync(path.join(deep.dir, RECORD), `${'['.repeat(70)}${']'.repeat(70)}\n`);
@@ -2993,5 +3019,81 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     expect(r2.status).toBe(0);
     expect(existsSync(path.join(stale, RECORD))).toBe(false);
     expect(H.classify({ from: stale })).toMatchObject({ kind: 'v1', data: true });
+  });
+
+  it('W23-T22 (D-6364): a manifest-less dir past the count whose coord.db holds a delegation_ table is damaged: left byte-identical, never thinned as legacy, and it still classifies invalid', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const own = clone(home, tpl, stamp(9));
+    const d1 = clone(home, tpl, stamp(8));
+    const damaged = path.join(home, 'ccrc-backups', stamp(7));
+    mkdirSync(damaged, { recursive: true });
+    const db = new DatabaseSync(path.join(damaged, 'coord.db'));
+    db.exec('CREATE TABLE delegation_sessions (id INTEGER PRIMARY KEY)');
+    db.close();
+    addCode(damaged);
+    const older = clone(home, tpl, stamp(6));
+    expect(H.quickState(H.realFs, damaged)).toMatchObject({ word: 'damaged', detail: 'coord.db holds delegation_sessions and has no manifest' });
+    expect(H.classify({ from: damaged })).toMatchObject({ kind: 'invalid', reason: 'coord.db holds delegation_sessions and has no manifest' });
+    const before = treeDigest(damaged);
+    const r = thinCli(home, argv({ keep: 2, own, dirs: [d1, damaged, older] }));
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(treeDigest(damaged)).toEqual(before);
+    expect(existsSync(path.join(damaged, RECORD))).toBe(false);
+    expect(H.classify({ from: damaged }).kind).toBe('invalid');
+    expect(linesOf(r.stdout)).toEqual([thinnedLine(stamp(6), 2), 'coordination data sets: 2 kept, 1 thinned this run, 1 left as they are']);
+  });
+
+  it('W23-T23 (D-6350, review 794 F6): when no more dirs can be counted than the keep, nothing is verified: no classify, no user_version read, no budget, nothing thinned', () => {
+    for (const keep of [3, 9999]) {
+      const home = mkHome();
+      const tpl = template(home, '20260101-000000', 3);
+      const [own, d1, d2] = [9, 8, 7].map((n) => clone(home, tpl, stamp(n))) as [string, string, string];
+      const before = [own, d1, d2].map(treeDigest);
+      const c = countingFs();
+      const { r, lines } = run({ own, dirs: [d1, d2], keep, by: 'update', fs: c.fs });
+      expect(r, String(keep)).toEqual({ kept: 3, thinned: 0, left: 0, refused: 0, stopped: false });
+      expect(lines, String(keep)).toEqual([]);
+      const members = c.opened.map((p) => path.basename(p)).filter((n) => n !== 'coordination-snapshot.json');
+      expect(members, String(keep)).toEqual([]);
+      [own, d1, d2].forEach((d, i) => expect(treeDigest(d), d).toEqual(before[i]));
+    }
+    // A stale record counts as a dir that can be counted; the walk still removes it, and the dir is then counted on presence and size.
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const [own, stale] = [9, 8].map((n) => clone(home, tpl, stamp(n))) as [string, string];
+    writeFileSync(path.join(stale, RECORD), `${H.canonicalJson({
+      format: 'ccrc-coordination-thinned', version: 1, thinnedAt: '2026-10-01T00:00:00.000Z', by: 'update',
+      rule: { knob: 'CCRC_BACKUP_DATA_KEEP', keep: 3 }, source: 'v1', capturedAt: tpl.manifest.capturedAt, dropped: droppedOf(tpl),
+    })}\n`);
+    const c = countingFs();
+    const { r } = run({ own, dirs: [stale], keep: 2, by: 'update', fs: c.fs });
+    expect(r).toMatchObject({ kept: 2, thinned: 0, refused: 0 });
+    expect(existsSync(path.join(stale, RECORD))).toBe(false);
+    expect(c.opened.filter((p) => path.basename(p) !== 'coordination-snapshot.json')).toEqual([]);
+  });
+
+  it('W23-T24 (D-6363, review 794 F8): a dir whose user_version cannot be read is left and not counted: it is never both kept and left', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000', 3);
+    const [d1, d2, d3, d4] = [9, 8, 7, 6].map((n) => clone(home, tpl, stamp(n))) as [string, string, string, string];
+    const target = path.join(d1, 'coord.db');
+    // Only the 100-byte header read at offset 0 fails; classify reads the whole file in chunks, so d1 verifies and the failure comes after it.
+    const fs = {
+      ...H.realFs,
+      openRead(p: string) {
+        const h = H.realFs.openRead(p);
+        if (h === null || p !== target) return h;
+        return { size: h.size, read(at: number, n: number) { if (at === 0 && n === 100) throw Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO' }); return h.read(at, n); }, close() { h.close(); } };
+      },
+    };
+    const { r, lines } = run({ dirs: [d1, d2, d3, d4], keep: 2, by: 'update', fs });
+    expect(lines).toContain(`WARN: could not thin ${stamp(9)}: EIO: i/o error, read — it is left as it is`);
+    expect(r).toEqual({ kept: 2, thinned: 1, left: 1, refused: 1, stopped: false });
+    expect(lines.at(-1)).toBe('coordination data sets: 2 kept, 1 thinned this run, 1 left as they are');
+    expect(dirListing(d1)).toContain('coord.db');
+    expect(dirListing(d3)).toContain('coord.db');
+    expect(dirListing(d4)).toEqual(AFTER);
   });
 });
