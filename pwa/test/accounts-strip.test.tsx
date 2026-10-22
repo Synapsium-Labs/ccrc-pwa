@@ -3,6 +3,7 @@ import path from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { AccountUsage } from '../../shared/api';
+import { CommandLayer } from '../src/command/CommandLayer';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
@@ -71,9 +72,10 @@ describe('AccountsStrip', () => {
   // Losing the gauges is fine — losing the one way to REACH the screen that
   // explains why the gauges are gone is the bug.
   describe('never disappears, even with nothing to gauge (Task 6 review fix)', () => {
+    // These two click the strip, a command door now (desktop-polish S5a): they mount the layer that navigates.
     it('stays a tappable link when every reporting lane is disabled', async () => {
       stubAccounts([acct({ wrapper: 'claude', disabled: true }), acct({ wrapper: 'claude9', disabled: true })]);
-      render(<AccountsStrip />);
+      render(<><CommandLayer openNewSession={() => {}} /><AccountsStrip /></>);
       const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
       expect(screen.getByText(/all lanes disabled/i)).toBeInTheDocument();
       fireEvent.click(link);
@@ -82,7 +84,7 @@ describe('AccountsStrip', () => {
 
     it('stays a tappable link when the poll resolves with zero accounts (fresh host)', async () => {
       stubAccounts([]);
-      render(<AccountsStrip />);
+      render(<><CommandLayer openNewSession={() => {}} /><AccountsStrip /></>);
       const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
       expect(screen.getByText(/no accounts reporting/i)).toBeInTheDocument();
       fireEvent.click(link);
@@ -111,10 +113,13 @@ describe('AccountsStrip', () => {
   // desktop top bar + mobile fleet list, but there's one component to make
   // tappable). It was a plain `<div role="group">` before this; a real
   // interactive element earns the tap-target gate.
+  //
+  // The strip is the `go-accounts` command door now (desktop-polish S5a): a tap asks the command layer, which navigates, so the two
+  // nav cases mount the layer beside it.
   describe('nav affordance (Task 6)', () => {
     it('is a link to /accounts, reachable by tap or keyboard', async () => {
       stubAccounts([acct({ wrapper: 'claude' })]);
-      render(<AccountsStrip />);
+      render(<><CommandLayer openNewSession={() => {}} /><AccountsStrip /></>);
       const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
       fireEvent.click(link);
       expect(location.pathname).toBe('/accounts');
@@ -122,7 +127,7 @@ describe('AccountsStrip', () => {
 
     it('activates on Enter (keyboard-only reachable, not just tap)', async () => {
       stubAccounts([acct({ wrapper: 'claude' })]);
-      render(<AccountsStrip />);
+      render(<><CommandLayer openNewSession={() => {}} /><AccountsStrip /></>);
       const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
       fireEvent.keyDown(link, { key: 'Enter' });
       expect(location.pathname).toBe('/accounts');

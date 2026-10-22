@@ -1,10 +1,10 @@
 // Refined's phone header (W2 Task S5, D-5471; spec §5.3, Fleet and Shell, phone rows), the fleet column's head on a
 // phone. One row: the wordmark, then four icon doors (Inbox, Runs, Docs, Settings), each a registry command
 // (`commandDoor`, the plan's door table), each named by its word, a badged one by its count too ("Inbox, 3 unread").
-// Under it one mono readout, `fleetSummary`'s, and then the lane gauges as a grid, the whole grid one door to
-// /accounts, in place of the phone's accounts strip.
+// Under it one mono readout, `fleetSummary`'s, and then the full accounts strip: each lane's 5h and 7d rows, a meter
+// and the reset countdown, two columns, the whole strip one door to /accounts (the `go-accounts` door).
 //
-// DOCS, NOT ACCOUNT, among the four doors: the gauges grid is already the door to /accounts, one tap away, and a phone
+// DOCS, NOT ACCOUNT, among the four doors: the accounts strip is already the door to /accounts, one tap away, and a phone
 // must keep Docs within two taps (S17). The bell is Settings' (its notifications section renders it), one tap from the
 // Settings door. Every count comes from a shared function (`fleetSummary`, `useNavBadges`, `poolLagText`); this file
 // holds markup and its own class names only.
@@ -65,7 +65,7 @@ export function PhoneHeader(): ReactNode {
           {lag !== null && <PoolLag text={lag} />}
         </p>
       )}
-      <AccountsStrip compact="grid" />
+      <AccountsStrip />
     </header>
   );
 }
