@@ -241,6 +241,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   const [dismissedScreen, setDismissedScreen] = useState<string | null>(null);
   // D-5090: the own-words text and its call, one value so the two change together (see `WordsCall`).
   const [own, setOwn] = useState(NO_WORDS);
+  // D-6325, R5: the question whose `Other` row the operator chose, so its field is open. The text and call above keep it
+  // open too (`OwnWords`); this is the choice itself, before anything is typed. Ended with the send that landed.
+  const [otherFor, setOtherFor] = useState<string | null>(null);
   // D-5091: a multiSelect question's set and its commit, one value for the same reason (see `PickCall`).
   const [pick, setPick] = useState(NO_PICK);
   // Decision `ask-dialog-tab-route`: a tab move (the arrow keys, or a tab-strip chip) is under way. It is a send like
@@ -258,6 +261,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   useEffect(() => {
     setAnswering(null);
     setOwn((o) => (o.call?.state === 'landed' && !showsSent(dialog, o.call, o.text) ? NO_WORDS : o));
+    if (own.call?.state === 'landed' && !showsSent(dialog, own.call, own.text)) setOtherFor(null);
     setPick((p) => (p.call?.state === 'flight' ? p : NO_PICK));
     // `dialog` is read at the id it belongs to; a repaint under the same id is not a new screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -373,6 +377,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
       const now = useStore.getState().dialog;
       const waiting = now !== null && (now.id === current.id || showsSent(now, { ...call, state: 'landed' }, kept));
       setOwn(waiting ? { text: kept, call: { ...call, state: 'landed' } } : NO_WORDS);
+      if (!waiting) setOtherFor(null);
     } catch (err) {
       setOwn({ text: kept, call: { ...call, state: 'refused' } });
       toast(dialogTextRefusal(err), 'error');
@@ -381,6 +386,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   const words: Words = {
     text: own.text,
     call: own.call,
+    otherFor,
+    onOpen: setOtherFor,
     onText: (text) => setOwn((o) => ({ ...o, text })),
     onSend: (row) => void sendWords(row),
   };
@@ -495,7 +502,14 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
       ? source.summary.map((q) => ({ header: q.header, answered: q.answered === true }))
       : null;
     return (
-      <Sheet open={open} onClose={close} onEscapeKeyDown={escapeHidesOnly} eyebrow={<AskHeader asker={asker} />} title={REVIEW_TITLE}>
+      <Sheet
+        open={open}
+        onClose={close}
+        onEscapeKeyDown={escapeHidesOnly}
+        eyebrow={<AskHeader asker={asker} />}
+        title={REVIEW_TITLE}
+        titleScroll={false}
+      >
         <div
           data-source={envelope !== null ? 'hook' : dialog.ask !== undefined ? 'transcript' : undefined}
           className="ask-envelope"
@@ -536,6 +550,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
         onEscapeKeyDown={escapeHidesOnly}
         eyebrow={<AskHeader asker={asker} />}
         title="Claude is asking a question this screen can't read yet."
+        titleScroll={false}
       >
         <TerminalCta
           onOpen={() => {
@@ -557,6 +572,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
         onEscapeKeyDown={escapeHidesOnly}
         eyebrow={<AskHeader kicker="Claude is waiting" asker={asker} />}
         title="Claude is waiting on the terminal."
+        titleScroll={false}
       >
         <TerminalCta
           onOpen={() => {
@@ -579,6 +595,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
       onEscapeKeyDown={escapeHidesOnly}
       eyebrow={<AskHeader kicker="Claude needs a choice" asker={asker} />}
       title={source.title || 'Claude needs a choice'}
+      titleScroll={false}
     >
       <div ref={keys.root} hidden />
       <div className="opts">

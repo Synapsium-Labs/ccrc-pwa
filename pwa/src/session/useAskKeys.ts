@@ -28,6 +28,9 @@ export interface AskKeysOptions {
   readonly onAnswer: (index: number) => void;
   readonly onToggle?: (index: number) => void;
   readonly onTab?: (to: 'prev' | 'next') => void;
+  /** The free-text row's digit was pressed (D-6325, R5): the sheet chooses `Other`, which opens the field. The row (or the
+   *  field, once open) is focused first; the sheet puts the cursor in the field when it opens. */
+  readonly onWords?: () => void;
 }
 
 export interface AskKeys {
@@ -94,8 +97,10 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
       const target = e.target instanceof Element ? e.target : null;
       const onPage = target === null || target === document.body || target === document.documentElement;
       if (!onPage && (dialog === null || !dialog.contains(target))) return;
+      // `words` is the `Other` row while the field is closed and the field once it is open (D-6325, R5): only the field is
+      // text, so only the field keeps the keys a caret and a digit need.
       const wordsEl = els.current.get('words');
-      const inWords = target !== null && wordsEl !== undefined && target === wordsEl;
+      const inWords = target !== null && wordsEl !== undefined && target === wordsEl && typingInto(wordsEl);
       if (!inWords && target !== null && typingInto(target)) return;
       // Where the highlight is, as the keyboard sees it: the focused row, else nothing focused in the sheet yet.
       let focused: string | null = null;
@@ -114,7 +119,10 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
       if (action.type === 'answer') o.onAnswer(action.index);
       else if (action.type === 'toggle') o.onToggle?.(action.index);
       else if (action.type === 'tab') o.onTab?.(action.to);
-      else if (action.type === 'words') focusRow('words');
+      else if (action.type === 'words') {
+        focusRow('words');
+        o.onWords?.();
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);

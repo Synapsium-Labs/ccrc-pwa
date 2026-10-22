@@ -27,10 +27,11 @@ import { Button, OptionRow, Sheet, toast } from '@ccrc/ui';
 import { api, ApiError, failedTo } from '../lib/api';
 // C1's correspondence check lives in `askLive.ts` (D-5089), beside the rules that choose which question is live:
 // `liveQuestion` applies it to EVERY question of the envelope, and the title only breaks a tie.
-import { chatRow, freeTextSlot, liveQuestion, namedQuestion, tabChips, type AskQuestions } from './askLive';
+import { chatRow, freeTextSlot, liveQuestion, namedQuestion, optionCopy, tabChips, type AskQuestions } from './askLive';
 import {
-  AskHeader, AskTabs, ChatRow, MultiPick, OptionPreview, OtherQuestions, OwnWords, SEVERAL_ANSWERS, escapeHidesOnly,
-  keyed, lit, ownWordsRow, picksBusy, wordsBusy, type Asker, type Picks, type Words,
+  AskHeader, AskTabs, ChatRow, FOOT_PLAIN, FOOT_WITH_OTHER, MultiPick, OptionPreview, OtherQuestions, OwnWords,
+  SEVERAL_ANSWERS, escapeHidesOnly, keyed, lit, ownWordsRow, picksBusy, recommendedTag, wordsBusy, type Asker,
+  type Picks, type Words,
 } from './AskParts';
 import { keyTabs, multiKeys, questionKeys, rowKey, type KeyScreen } from './askKeys';
 import { useAskKeys } from './useAskKeys';
@@ -282,6 +283,8 @@ export function EnvelopeSheet({
     onAnswer: onSelectOption,
     onToggle: picks.onToggle,
     onTab: (to) => onTab?.(to),
+    // The free-text row's digit chooses `Other` (D-6325, R5): the field opens under it.
+    onWords: () => words.onOpen(questions === null ? '' : questions.questions[shown]!.question),
   });
   // D-6325, R3: the chips carry Claude's own headers, the pane's tab row only the count and the marks; no strip unless
   // the pane paints one tab per question (a transcript copy of one question therefore draws one only on a one-tab row).
@@ -301,13 +304,19 @@ export function EnvelopeSheet({
     const { tool, summary } = ask.approval;
     const allowing = answering === 1;
     return (
-      <Sheet open={open} onClose={close} onEscapeKeyDown={escapeHidesOnly} eyebrow={<AskHeader asker={asker} />} title={tool}>
+      <Sheet
+        open={open}
+        onClose={close}
+        onEscapeKeyDown={escapeHidesOnly}
+        eyebrow={<AskHeader asker={asker} />}
+        title={tool}
+        titleScroll={false}
+      >
         <div data-source="hook" className="ask-envelope">
           <p className="dlg-copy">{summary}</p>
           {!canAnswer && (
             <p className="dlg-copy">
-              This can't be matched to what's on the terminal pane yet — Allow can't be sent
-              until it does.
+              This can't be matched to what's on the terminal yet — Allow can't be sent until it does.
             </p>
           )}
           <div className="dlg-actions">
@@ -360,7 +369,14 @@ export function EnvelopeSheet({
   );
 
   return (
-    <Sheet open={open} onClose={close} onEscapeKeyDown={escapeHidesOnly} eyebrow={eyebrow} title={q.question}>
+    <Sheet
+      open={open}
+      onClose={close}
+      onEscapeKeyDown={escapeHidesOnly}
+      eyebrow={eyebrow}
+      title={q.question}
+      titleScroll={false}
+    >
       <div data-source={from} className="ask-envelope" ref={keys.root}>
         {strip}
         {/* Three different dead ends, and the copy must not confuse them. An
@@ -385,10 +401,10 @@ export function EnvelopeSheet({
         {!canAnswer && (
           <p className="dlg-copy">
             {noOptions
-              ? 'This envelope carries no options, so there is nothing to tap here — answer it on the terminal pane.'
+              ? 'This question has no options to choose from. Answer it in the terminal.'
               : severalAnswers
                 ? SEVERAL_ANSWERS
-                : "This can't be matched to what's on the terminal pane yet — answer it there, or wait for it to catch up."}
+                : "This can't be matched to what's on the terminal yet — answer it there, or wait for it to catch up."}
           </p>
         )}
         {/* A multiSelect question is never answered by one tap: answerDialog
@@ -421,6 +437,8 @@ export function EnvelopeSheet({
                 // The keyboard's highlight wears the cursor, as on the pane (decision `ask-sheet-keyboard-model`); a
                 // question the sheet cannot answer shows none.
                 const selected = keyScreen !== null && lit(keys, idx);
+                // `(Recommended)` leaves the label for a tag after it (D-6325); the answer still goes by the printed index.
+                const { label, recommended } = optionCopy(o.label);
                 return (
                   // The preview is keyed by its question's text, so a new question opens its own previews instead of
                   // inheriting the last one's folded state (the scraped rows keyed it by the pane's dialog id).
@@ -431,7 +449,8 @@ export function EnvelopeSheet({
                       glyph={keyScreen === null ? undefined : selected ? '❯' : ''}
                       enter={!waiting && selected ? '↵' : undefined}
                       index={idx}
-                      label={o.label}
+                      label={label}
+                      tag={recommendedTag(recommended)}
                       sublabel={o.description}
                       disabled={!canAnswer || answering !== null || sendingWords || picking || tabbing}
                       busy={waiting}
@@ -443,18 +462,19 @@ export function EnvelopeSheet({
                   </Fragment>
                 );
               })}
+              {/* `Other`, through the pane's free-text row (D-5090, D-6325): the last row of the list, the field and Send
+                  under it once chosen. A send under way stays on screen even if the pane stops matching mid-call. */}
+              {(pane !== null || sendingWords) && (
+                <OwnWords
+                  slot={slot}
+                  chat={chat !== undefined}
+                  words={words}
+                  question={q.question}
+                  locked={answering !== null || picking || tabbing}
+                  keys={keyScreen === null ? undefined : keys}
+                />
+              )}
             </div>
-            {/* Own words, through the pane's free-text row (D-5090), then the pane's Chat row, saying what it does. A
-                send under way stays on screen even if the pane stops matching mid-call. */}
-            {(pane !== null || sendingWords) && (
-              <OwnWords
-                slot={slot}
-                chat={chat?.label ?? null}
-                words={words}
-                locked={answering !== null || picking || tabbing}
-                keys={keyScreen === null ? undefined : keys}
-              />
-            )}
             {chat && (
               <ChatRow
                 row={chat}
@@ -468,6 +488,13 @@ export function EnvelopeSheet({
         )}
         {terminalCta}
         <OtherQuestions questions={ask.questions} shown={shown} />
+        {/* The foot line says what a tap does, and names Other only where the row is offered (a pick-several question
+            says in its own line how to add an answer). Nothing is said under a question the sheet cannot answer. */}
+        {canAnswer && (
+          <p className="sheet-foot">
+            {boxes === undefined && ownWordsRow(slot, words.text, words.call) !== null ? FOOT_WITH_OTHER : FOOT_PLAIN}
+          </p>
+        )}
       </div>
     </Sheet>
   );

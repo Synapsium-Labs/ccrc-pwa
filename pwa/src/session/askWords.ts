@@ -36,11 +36,11 @@ export const DIALOG_TEXT_REFUSE_TEXT: Readonly<Record<DialogTextRefuseCode, stri
   // The composer's own sentence for the same fact, read rather than spelled again.
   'not-alive': sendErrorText('not-alive'),
   'stale-dialog': `${MOVED_ON}, so nothing was typed. ${TEXT_KEPT}`,
-  'not-free-text': "The terminal's own-words row holds something else, so nothing was typed. Finish or clear it there.",
+  'not-free-text': "The answer box in the terminal holds something else, so nothing was typed. Finish or clear it there.",
   // The footer's edit hint is one of the focus proofs, and a box where no external editor resolves never paints it
   // (D-5047), so a refusal that repeats is the terminal's to answer.
   'focus-failed':
-    "The terminal didn't show its own-words row ready for typing, so nothing was typed. If this repeats, answer in the terminal.",
+    "The terminal didn't show its answer box ready for typing, so nothing was typed. If this repeats, answer in the terminal.",
   // The row may be left holding all of the text, part of it, or none. The sheet then says which, under the field
   // (`OwnWords`): all of it is the stranded retry (the server's retry arm submits exactly that text without typing it
   // again), part of it is the terminal's to clear first, none of it is an ordinary Send.
@@ -102,14 +102,14 @@ export function ownWordsCount(text: string): string | null {
   if (n < OWN_WORDS_COUNT_FROM) return null;
   const count = `${n} of ${DIALOG_TEXT_MAX} characters`;
   return n > DIALOG_TEXT_MAX
-    ? `${count} — the terminal's own-words row takes at most ${DIALOG_TEXT_MAX}, so Send waits until it's shorter. Or answer in the terminal.`
+    ? `${count} — the terminal's answer box takes at most ${DIALOG_TEXT_MAX}, so Send waits until it's shorter. Or answer in the terminal.`
     : `${count}.`;
 }
 
 /** The free-text box of a multiSelect question is ticked (typing into its row ticks it), so Tab would commit it with the
  *  boxes, and the route refuses (`free-text-ticked`). Own words inside a multiSelect question are the terminal's in v1
  *  (D-5048). */
-export const MULTI_FREE_TEXT_TICKED = "The terminal's own-words box is ticked on this question — finish it there.";
+export const MULTI_FREE_TEXT_TICKED = "The terminal's answer box is ticked on this question — finish it there.";
 
 /** The pane's cursor is not on one of the question's boxes: there a digit types into the own-words row, and Tab after a
  *  walk through it was swallowed (measured, D-5048), so the route presses nothing (`cursor-not-on-option`). `place`
@@ -121,7 +121,7 @@ export const cursorOffOptions = (place: string): string =>
  *  free-text row, or neither (`Chat about this`, or no cursor on screen). */
 export function cursorPlace(multi: DialogMulti): string {
   if (multi.cursor === 'commit') return `on the ${multi.commit.trim()} row`;
-  if (multi.freeText !== null && multi.cursor === multi.freeText.index) return 'on the own-words row';
+  if (multi.freeText !== null && multi.cursor === multi.freeText.index) return 'on the answer box';
   return 'off the options';
 }
 
@@ -178,7 +178,7 @@ export const DIALOG_REFUSE_TEXT: Readonly<Record<DialogRefuseCode, string>> = {
   // The scraped sheet offers no row it knows to be the free-text one; this is a row holding text typed in the
   // terminal on a pane the transcript could not match, which only the server could tell (D-5045).
   'free-text-row':
-    "That row holds the question's own words, so nothing was pressed. Finish it in the terminal, or clear it there and answer here.",
+    "That row is the answer box, so nothing was pressed. Finish it in the terminal, or clear it there and answer here.",
   'unparsed-dialog': "The terminal's menu couldn't be read just now, so nothing was pressed. Try again, or answer there.",
 };
 
@@ -204,7 +204,7 @@ export const DIALOG_TAB_REFUSE_TEXT: Readonly<Record<DialogTabRefuseCode, string
   'stale-dialog': `${MOVED_ON}, so the terminal wasn't moved.`,
   'no-tabs': 'This ask has no other questions to move to.',
   'unparsed-dialog': "The terminal's menu couldn't be read just now, so it wasn't moved. Try again, or move it there.",
-  'walk-failed': "The terminal's cursor didn't leave the own-words row, so it wasn't moved. Try again.",
+  'walk-failed': "The terminal's cursor didn't leave the answer box, so it wasn't moved. Try again.",
   'no-move': "The terminal didn't move to another question.",
   'menu-gone': "The terminal's question went away while moving — check it there.",
 };
