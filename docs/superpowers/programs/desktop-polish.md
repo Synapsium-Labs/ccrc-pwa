@@ -77,7 +77,9 @@ pressed in the console") and the slow first open of a new session. One task is o
   fenced code blocks that rarely appear); Instrument by default on a desk (W2's S18, brought forward ahead of S17 on
   the operator's note); Done above Working (T3f); the console's responsiveness (Track C: C0 measures, C1 bounds the
   registry read, measured at about 3,000 serial agent requests). T2e and T2c are dispatched ahead of the step order on
-  the operator's notes. D-6385 to 6389 were allocated for rev 3.
+  the operator's notes. D-6385 to 6389 were allocated for rev 3; 6389 went to S18's bring-forward (`flip-before-parity`). Rev 3's
+  review moved Instrument's count line from T2e to T2f, which waits on #1116's content, and T2e's queued brief was
+  corrected before dispatch.
 - **R9 (2026-10-22)**, #1116 (W2 S5) has no run, claim or live session and has been red since 02:14Z; it blocks
   T2a, T2b, T2d and T2f and the operator's duplicate desk `+`. The coordinator takes it over: run 787 builds on its
   branch, fixes its reds and lands a superseding PR; #1116 is closed pointing at it once that merges.
