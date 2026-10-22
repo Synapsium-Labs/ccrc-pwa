@@ -243,11 +243,12 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `node:sqlite` unconditionally (below 22.13 the server fails to boot), and below 22.16 that `node:sqlite` has no
   FTS5 (no history search). If absolute assertion 3 or 4 is red while (1–2) are green, **RAISE engines — never lower them.**
 - **Deploy = release + rollout** (design `docs/superpowers/specs/2026-09-18-release-rollout-design.md`). Every merge to
-  `main` that changes what ships becomes a GitHub **prerelease** within about a minute (`.github/workflows/release-main.yml` →
-  `deploy/release-main.sh prepare` → `build-release.sh` → `actions/attest-build-provenance` → `release-main.sh publish`;
-  patch per released merge, and a merge whose every changed path `deploy/release-scope.mjs`'s `NOT_SHIPPED` covers, by
-  HEAD's copy and the base tag's, cuts none, so `stable` promotes a release's own commit, never such an untagged head;
-  a hand-pushed `vX.Y.0` tag for a minor rides `release.yml`; both attest the tarball keylessly and
+  `main` that changes what ships becomes a GitHub **prerelease** within about a minute
+  (`.github/workflows/release-main.yml` → `deploy/release-main.sh prepare` → `build-release.sh` →
+  `actions/attest-build-provenance` → `release-main.sh publish`; patch per released merge, and a merge whose every
+  changed path `deploy/release-scope.mjs`'s `NOT_SHIPPED` covers, by HEAD's copy and the base tag's, cuts none, so
+  `stable` promotes a release's own commit, never such an untagged head; a hand-pushed `vX.Y.0` tag for a minor rides
+  `release.yml`; both attest the tarball keylessly and
   publish the bundle beside it). A prerelease is the `dev` channel; **`stable` is a promotion, never a rebuild**: a
   fast-forward push of a released commit to the `stable` branch runs `release-stable.yml` → `deploy/release-stable.sh`
   (only once the commit has a green `full-suite`, above), which flips the existing release's flag and makes it
