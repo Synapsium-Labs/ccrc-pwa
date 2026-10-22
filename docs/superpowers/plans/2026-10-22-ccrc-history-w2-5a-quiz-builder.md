@@ -2918,7 +2918,6 @@ git commit -m "feat(history-replay): mine quiz facts and screen them by redactio
 **Fix-round tests and mutants (Task 2's code).**
 - MA (D-6303): the span render without `renderOrNull`; the D-6303 case (10,000 levels deep discards `body-unrenderable`, CONTROL 2,000 deep mines) reds. MB: `body-unrenderable` moved before the span words; the list pin reds. MC: a word appended after it; the last-word pin reds.
 - FW-A5 (D-6308): `screenRedaction` without the `repo_roots` check; the repo-root case reds. FW-A3 and FW-A4 (D-6308): the span and the pair input mined with their `body` and `value` beside their text; the end-to-end and writer-input cases red when the writer redacts them as text, and when object keys are not masked.
-- FW-E1 (D-6312): the `sha-short` drop removed from `sourceQuiz`'s mining step; the D-6312 case reds (Task 6 owns that step).
 
 ### Task 3: RP5 boundary admission over the holding copy, with the straddle and two-copy CONTROLs (W2-D66)
 
@@ -8039,15 +8038,15 @@ cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --
 ```
 
 Expected:
-- The first filter is green, `49 passed` (measured after the final fix wave; the first build measured 43 and fix round 1 46; on darwin, `39 passed | 10 skipped`, the sourceQuiz describe being skipped):
+- The first filter is green, `50 passed` (measured after the residual round; the first build measured 43 and fix round 1 46; on darwin, `39 passed | 11 skipped`, the sourceQuiz describe being skipped):
   - 12 writer-input cases, the F6 bearer case (R10) among them, and the case that a fact absent from its text is `windowExcerpt`'s `TypeError` and `writerInputOf`'s counted `writer-fact-unplaced` (D-6309);
   - 16 writer-spawn cases, two of them RP1-writer and four RP3-writer, two of the gate before a later writer batch (W2-D55's budget, the limits row), and fix round 1's print-mode-exit case (D-6305);
   - 7 frozen-list cases;
   - 4 fidelity cases;
-  - 10 cases in the `sourceQuiz` describe: quiz mode, pilot mode, the store-backed `fidelityStdins` case, the quiz population case with its CONTROL (R10), the W2-D67 redaction-stage case over a second box whose command is key-shaped, fix round 1's D-6305 and D-6306 cases, and the final wave's D-6309 (a quoted command placed by its escaped spelling), D-6310 (a legacy family) and D-6312 (`sha_min_prefix` 40) cases.
+  - 11 cases in the `sourceQuiz` describe: quiz mode, pilot mode, the store-backed `fidelityStdins` case, the quiz population case with its CONTROL (R10), the W2-D67 redaction-stage case over a second box whose command is key-shaped, fix round 1's D-6305 and D-6306 cases, and the final wave's D-6309 (a quoted command and a path with a backslash, each placed by its escaped spelling), D-6310 (a legacy family) and D-6312 (`sha_min_prefix` 40) cases.
   Each spawning case runs the stub one to three times in print mode, in well under a second; the sourceQuiz box runs the sweep a few times once, and the W2-D67 case's own box a few times more.
 - The re-expected W2-4 case is green.
-- The whole file is green: every earlier case plus these 49. That includes W2-4 Task 5's env scan, Task 1's import pin (unchanged: this task adds names to the gate's braces only, which `EXACT_NAMES` does not pin), and W2-4 Task 4's `redactDisplayWindow` scan.
+- The whole file is green: every earlier case plus these 50. That includes W2-4 Task 5's env scan, Task 1's import pin (unchanged: this task adds names to the gate's braces only, which `EXACT_NAMES` does not pin), and W2-4 Task 4's `redactDisplayWindow` scan.
 - tsc prints nothing. A line that names only `agent/src/` or a module that is not installed comes from the worktree's install, not from this task.
 
 - [ ] **Step 6: Measure every new guard red, then green.** From the repository root. Each block makes one exact replacement, which must match exactly once, runs one filter and shows it red, then restores the file with `cp`. The python body is a quoted heredoc.
@@ -10743,6 +10742,7 @@ export async function freezeCommand(flags, env) {
   recheckCode(rec.record);   // W2-D24 (freeze)
   const lists = loadInputs(flags, 'sourced');
   const stores = new Set();
+  const qids = new Set();
   let assignmentSha = null;
   for (const l of lists) {
     const bad = sourcedError(l.value);
@@ -10757,6 +10757,9 @@ export async function freezeCommand(flags, env) {
     for (const e of s.entries) {
       if (e.store_id !== s.store_id) refuse('input-invalid', `sourced entry ${e.qid} names another store`);
       if (qidOf(e) !== e.qid) refuse('input-invalid', `sourced entry ${e.qid} qid-mismatch`);
+      // A repeated qid (two ranks, one question) would reach frozenListText's "is repeated" TypeError: refuse it here.
+      if (qids.has(e.qid)) refuse('input-invalid', `sourced qid-duplicate ${e.qid}`);
+      qids.add(e.qid);
     }
   }
   // W2-D71's population is the families on the NAMED nodes: one list per node, or the merge freezes a subset.
@@ -11335,7 +11338,7 @@ git commit -m "feat(history-replay): the record subcommands, pilot-source, quiz-
 **Fix-round tests and mutants (Task 7's code).**
 - M46 (the git-tree case): `insideGitTree` accepting a directory only, red when `.git` is a file. M47: the leaf-span writer input unredacted, red under `leaf-span` only. M35: B's text into the counts, red under both writer inputs. Mx1 and Mx2: a write into HOME by `verifyRegistry` and into the presence directory by `verifyAb`, red at the read-only pins; Mx3a and Mx3b: a stray file beside the store, red at the `snapshot7` listing of its directory.
 - M48 and M49 (D-6307): the early `refuseWriterAdmission` call removed from `pilot-source` and from `quiz-source`, red on `--out` existing and not on the word; M50 to M53: the helper without each of its checks (the wrapper, the limits row, the account, the roster).
-- FW-D1 to FW-D3 (D-6311): the early `preflightFiles` call removed (9 red, on `--out` existing), the store opened after `--out`, and `preflight` composing the files before the version (W2-4's order pins red). FW-F1 to FW-F4 (D-6313): the pinned seed ignored, never pinned, mode 0644, and read leniently. FW-G5 (the minors): a write into HOME in `power`, in `open --draft` and in `open --finalize`, red at the new `snapshot7` pins, whose CONTROL plants a write; FW-G6 to FW-G8: freeze's meta unsorted, an empty string and an empty repo root accepted.
+- FW-D1 to FW-D3 (D-6311): the early `preflightFiles` call removed (9 red, on `--out` existing), the store opened after `--out`, and `preflight` composing the files before the version (W2-4's order pins red). FW-F1 to FW-F4 (D-6313): the pinned seed ignored, never pinned, mode 0644, and read leniently. FW-G5 (the minors): a write into HOME in `power`, in `open --draft` and in `open --finalize`, red at the new `snapshot7` pins, whose CONTROL plants a write; FW-G6 to FW-G8: freeze's meta unsorted, an empty string and an empty repo root accepted; FW-R3: a repeated qid under distinct ranks reaching `frozenListText`'s `TypeError` instead of the `input-invalid` refusal.
 
 ### Task 8: the departures, the whole-PR checks and the PR
 
@@ -11515,7 +11518,7 @@ Expected:
 - then nineteen lines, the W2 block of 19 numbers: `1` for every number except W2-2b's three (decisions §7 names them), which read `0` until W2-2b's plan merges, and then their path is that PR's plan, never this one. D-5765 and D-5766 read `1`: W2-2a's plan defines them, merged in the same docs PR as this one.
 
 Two outcomes are findings to report to the coordinator, never something to fix here:
-- a second path for any of the five, or any count above 1;
+- a second path for any of the eighteen, or any count above 1;
 - a `first-citing` that differs from `entry-task`. The fix is the owning task's citation, or the entry's task number, whichever the coordinator rules.
 
 - [ ] **Step 2: The spec is untouched, and W2-5b's three sentences stand.** From the repository root:
