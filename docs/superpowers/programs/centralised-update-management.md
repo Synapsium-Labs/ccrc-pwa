@@ -5359,6 +5359,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     data set from older backups, not the database alone.
   - **Run 775** is open (wave 23), with deviation block 6346 to 6365, bare until defined. The plan is drafted by
     workflow `wf_c23f5de9-7ee`: two scouts, a drafter, three attack lenses and a reviser, on `main` at `e990cc46d`.
+  - **10:50 UTC, a second operator ruling, through the broker's coordinator (mail 7918): keep 5 backups and a 10 GB
+    stop line for the broker's soak.** The operator sets `CCRC_BACKUP_KEEP=5` in the server's user manager, which a
+    console move reads; the first tap after it should free about 7.5G. The probe now reads that value, notes a count
+    over it until that tap, and raises an ANOMALY under 10240M free. Wave 23 is the structural half: at 5 kept, keeping
+    the data set in the newest two would save about another 5.5G.
 
 ## Carried constraints
 
