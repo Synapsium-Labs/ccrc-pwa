@@ -101,6 +101,11 @@ Each row was located by a code reader and checked by a second, independent reade
 | C0, C1 | T0 | — |
 | S18 (W2) | T0 (ruled ahead of W2's S17 by the operator's note) | — |
 | B1, B2, B3, B4, B5 | T0; Q6 or its default (Track B runs beside Step 1) | B2 after B1 (the same functions in `send.ts`); B5 after B4 (its empty state reads the search's answer) and after T1a (both edit `sessionws.ts`) |
+| C2, C5, C6, C10 | T0 (Track C, from C0's report; out of the step order) | — |
+| C3, C4 | C1 merged | `server/src/bounded.ts`'s `mapBounded`; C1's registry read; C1 rewrites census comments in `watch.ts` |
+| C8 | C6 merged | C6's `sameJson` and memoised `FleetChrome` value |
+| C7 | C6, C8 and T1c merged | the same `ChatList.tsx` and `SessionScreen.tsx` lines as T1c; C6's narrowed screen; C8's equal roster |
+| C9 | C6 and C8 merged | kept rows, stable chrome and `sameJson`; C8 removes `FleetCards`' own `projected` poll |
 
 **What "Step N merged" means.** The operator's order is a landing order. A Step N+1 task is DISPATCHED once every Step N task has reached a verified wave-done (its PR is in review), so no worker idles; it LANDS only after every Step N PR has merged. **A task held only by #1116** (T2a, T2b, T2d, T2f) does not hold Step 3: Step 3 lands once T2c and T2e have merged, and the #1116-held tasks land when #1116 does. A Step N+1 PR that conflicts with a Step N merge absorbs `main` with `git merge` (never a rebase of a pushed branch) and re-runs its suites. Track B is not part of the step order: it lands as its reviews clear.
 
@@ -115,6 +120,8 @@ Measured 2026-10-22 with `gh pr list --state open`, `gh pr view <n> --json files
 | Dependency bumps (#948, #738, #424, #423, #422, #375, #373) | `ui/package*.json`, `pwa/package*.json` | none: no task adds a dependency |
 
 **#1116's content.** Every gate on #1116 means #1116's content merged: #1116 itself, or the PR run 787 lands to supersede it (the programme ledger's R9). The disjoint hunks above were measured against #1116 at `644d5c87c`; before T2a, T2b, T2d, T2f or T3e dispatches, the coordinator re-measures them against the PR that landed.
+
+**Rev 4 (2026-10-22): #1116's content has merged.** #1139 superseded #1116 and merged as `f0e873c5d`; #1116 is closed. Every gate on "#1116's content" is met. Before T2a, T2b, T2d, T2f or T3e dispatches, the coordinator re-measures the hunks named above against `main`.
 
 **Planned but not started** (no branch, worktree or claim exists, measured): W2 S6, S11, S12, S14 to S18; W3 P1a to P9 but P4a and P5a; sheet P3-6b, P3-8, P3-9. This plan lands first and each of them builds on it (§Carried into the skins plans).
 
@@ -142,9 +149,16 @@ T3a (fleet words, bucket chips)   T3b (names, ⋯)   T3c (header)   T3d (inspect
 --- ahead of the step order, as slots free (the operator's later notes) ---
 T2e (Instrument's desk)   T2c (gauges, ruled)   T3f (Done above Working)   S18 (W2; the device default)   C0 (responsiveness, research)   C1 (registry reads)
 T4a (colour in the chat; after T1c)
+
+--- Track C, the console's responsiveness (C0's report; rev 4), as slots free ---
+C5 (a wheel over a code block scrolls the transcript; first)   C10 (the Runs board folds finished runs)   C2 (one row for commands and PR; the bounded commands read)
+C1 (registry reads; the one bounded pool) ──┬── C3 (the tick: one registry read, bounded captures)
+                                             └── C4 (/api/projects from the watcher's fresh listing; a cached walk)
+C6 (the fleet store's fan-out) ── C8 (one accounts poll) ──┬── C9 (the fleet list memo)
+                                                            └── C7 (the chat's rows and highlight cache; after T1c too)
 ```
 
-Within a step the tasks run in parallel workspaces. They meet in a few files: `FleetScreen.tsx` (T2a `FleetBanners` ≈:367-454; T2d the runs line ≈:252-259 and the mail door's count ≈:186-187; T2f the same runs row and the chooser ≈:232-289, after T2d; T3a ≈:289 and ≈:325), `fleet.css` (T2a ≈:3196, T2c ≈:3405-3460, T3a ≈:170-187, T3b ≈:1561-1590 and ≈:3382-3390), `AppBar.tsx` (T2a the indicator slot, T2c the gauge row, T2d the badge reads), `refined.css` (T2c the frame's rows ≈:135-221, T3c after `.ref-session-head`), `instrument-list.test.tsx` (T2e, T3f, T2f), `SessionScreen.tsx` (T1b ≈:664; T1c the keyed children ≈:509-664, which overlap B5's empty state ≈:560-606; T3c ≈:504; T3d ≈:299-307), `sessionws.ts` (T1a `checkHookAsk`, B5 the backlog, each under its own budget), `server.ts` (B1 and B2 the `/prompt` route ≈:2178-2208, B3 the pty bridge ≈:2029-2050), `send.ts` (B1, then B2) and `NewSessionSheet.tsx` (B5 ≈:152-337, T3a ≈:506). Where two ranges overlap, the later PR absorbs `main` and re-runs its suites.
+Within a step the tasks run in parallel workspaces. They meet in a few files: `FleetScreen.tsx` (T2a `FleetBanners` ≈:367-454; T2d the runs line ≈:252-259 and the mail door's count ≈:186-187; T2f the same runs row and the chooser ≈:232-289, after T2d; T3a ≈:289 and ≈:325), `fleet.css` (T2a ≈:3196, T2c ≈:3405-3460, T3a ≈:170-187, T3b ≈:1561-1590 and ≈:3382-3390), `AppBar.tsx` (T2a the indicator slot, T2c the gauge row, T2d the badge reads), `refined.css` (T2c the frame's rows ≈:135-221, T3c after `.ref-session-head`), `instrument-list.test.tsx` (T2e, T3f, T2f), `SessionScreen.tsx` (T1b ≈:664; T1c the keyed children ≈:509-664, which overlap B5's empty state ≈:560-606; T3c ≈:504; T3d ≈:299-307), `sessionws.ts` (T1a `checkHookAsk`, B5 the backlog, each under its own budget), `server.ts` (B1 and B2 the `/prompt` route ≈:2178-2208, B3 the pty bridge ≈:2029-2050), `send.ts` (B1, then B2) and `NewSessionSheet.tsx` (B5 ≈:152-337, T3a ≈:506). Where two ranges overlap, the later PR absorbs `main` and re-runs its suites. Track C adds: `watch.ts` (C1's census claims, C3, C4), `server.ts` (C1's claims, C2, C4, beside B1 to B3), `registry.ts` (C1), `registry-refused-census.test.ts` (C2, C3), `resolve.ts` (C1's move, B5's comment), `SessionScreen.tsx` (C6 ≈:188-193, C7 ≈:621-625), `stores/fleet.ts` and `useUpdatesView.ts` (C6, C8), `FleetCards.tsx` (C8, C9), `FleetTable.tsx` (C9, beside T2e and T3f), `markdown.tsx` and `ChatList.tsx` (C7, T1c, T4a), and `prose.css` and `tool-card.css` (C5, T4a).
 
 ## Global constraints
 
@@ -174,7 +188,7 @@ Every task's requirements include this section and the W2 plan's Global constrai
   10. **boxed-placeholder:** a parsed ask whose free-text row carries box characters and whose capture shows no Chat row, no `ask` field, then `ask_cleared`; its evidence is the placeholder matched once box-drawing characters are stripped (which also closes defect 1b's first cause);
   11. **held-idle:** fixture 6's row with `bucket: 'idle'` and `withCoordinator` kept (the held words must not show).
   Every case asserts positive content as well as absence: what the surface DOES show, beside the debris strings it must not.
-- **The growth check.** `server/src/sessionws.ts`, `server/src/server.ts` and `pwa/src/lib/api.ts` are watched god files (`GROWTH_FILES`, `server/test/growth-check.test.ts` ≈:57-67; `GROWTH_LIMIT = 40` net code lines, `growthCheck.ts` ≈:46). T1a keeps `sessionws.ts` under 40 by putting its decision in `askkey.ts`; B1 and B3 each keep `server.ts` under 40; B2 keeps `api.ts` under 40. A task that must pass 40 adds its own entry to `server/test/growth-waivers.json` in its PR, citing its D-number, and says so in its report. Local run: `cd server && GROWTH_CHECK=1 ./node_modules/.bin/vitest run test/growth-check.test.ts`.
+- **The growth check.** `server/src/sessionws.ts`, `server/src/server.ts` and `pwa/src/lib/api.ts` are watched god files (`GROWTH_FILES`, `server/test/growth-check.test.ts` ≈:57-67; `GROWTH_LIMIT = 40` net code lines, `growthCheck.ts` ≈:46). T1a keeps `sessionws.ts` under 40 by putting its decision in `askkey.ts`; B1 and B3 each keep `server.ts` under 40; B2 keeps `api.ts` under 40. A task that must pass 40 adds its own entry to `server/test/growth-waivers.json` in its PR, citing its D-number, and says so in its report. Local run: `cd server && GROWTH_CHECK=1 ./node_modules/.bin/vitest run test/growth-check.test.ts`. `server/src/watch.ts`, `server/src/coord/routes.ts` and `server/src/coord/store.ts` are watched too: C3 and C4 budget `watch.ts`, and C2 and C4 budget `server.ts`.
 - **SAFETY.** Server tests use fake `Tmux` runners and fixture HOMEs only (`makeCcdHarness`, `server/test/ccdWsHelpers.ts`); no task runs a tmux command, a state-changing `ccd` verb or a test against the live `$HOME`, and no task reads the live fleet's panes.
 - **Public repository.** Fixtures, screenshots, PR bodies and commit messages use neutral names only. No host, account or lane name, session slug, other project's name, email or private tracker id. A non-Anthropic model is "a non-Anthropic model id", never its name.
 - **Branch and landing discipline.** Commit on the workspace's own branch. The coordinator lands each PR by the coordinator skill's landing route after a review run (today the merge queue: `gh pr merge <n> --match-head-commit <sha>`; the queue's method is squash).
@@ -242,6 +256,30 @@ Every task's requirements include this section and the W2 plan's Global constrai
 | `server/src/registry.ts` | Modify | registry reads bounded | C1 |
 | `ui/src/styles/skins.ts`, `pwa/index.html` | Modify | Instrument's `preview: false` | S18 (W2) |
 | `pwa/src/fleet/NewSessionSheet.tsx`, `pwa/src/screens/SessionScreen.tsx`, `pwa/src/stores/session.ts`, `server/src/sessionws.ts` (watched), `shared/api.ts` (the `backlog` frame's `unprompted`) | Modify | open the new session at once; the cached project list; "No messages yet" for an unprompted session | B5 |
+| `server/src/bounded.ts` | **Create** | the server's one bounded pool: B4's `limiter`, moved unchanged, and `mapBounded` on top | C1 (used by C3, C4) |
+| `server/test/bounded-pool.test.ts` | **Create** | pins the limiter (characterization) and `mapBounded` | C1 |
+| `server/src/transcript/resolve.ts` | Modify | imports the limiter from `bounded.ts` (C1); the order-independence comment (B5) | C1, B5 |
+| `server/src/commands.ts` | Modify | one row through `readSessionRecord`; the most recent full skill listing from a bounded backward read | C2 |
+| `server/src/server.ts` (`prTasks`, `GET /api/sessions/:id/pr`) | Modify (watched) | one row for the task read, started beside pr-state | C2 |
+| `server/src/watch.ts` | Modify (watched) | `sweepTasks` takes the tick's records and captures go through the pool (C3); the tick's registry-listing stamp (C4) | C3, C4 |
+| `server/test/tick-concurrency.test.ts` | **Create** | C3's red suite | C3 |
+| `server/src/lifecycle.ts`, `server/src/server.ts` (`GET /api/projects`) | Modify | the registry half from a fresh listed tick; the walk concurrent and cached | C4 |
+| `server/test/projects-route-cache.test.ts` | **Create** | C4's red suite | C4 |
+| `ui/src/components/prose.css` (`.msg-assist pre`), `ui/src/primitives/well.tsx` (`WELL`), `ui/src/components/tool-card.css` (`.tool-ask-a`), `pwa/src/styles/base.css` (comment) | Modify | no y-axis overscroll containment inside the transcript; x-only where a box scrolls sideways | C5 |
+| `pwa/test/wheel-chain.test.ts`, `pwa/browser/wheel-chain.browser.test.ts` | **Create** | each transcript box's containment, and the wheel chaining to `.chat-scroller` | C5 |
+| `pwa/src/lib/sameJson.ts` | **Create** | structural equality over plain JSON values, the one equality | C6 (read by C8, C9) |
+| `pwa/src/fleet/keepRows.ts` | **Create** | a frame's rows keep their previous objects while equal | C6 |
+| `pwa/src/stores/fleet.ts` (the `fleet` frame, the snapshot throttle), `pwa/src/app.tsx`, `pwa/src/fleet/FleetChrome.tsx` and its planes, `pwa/src/screens/SessionScreen.tsx` (≈:193, ≈:270-276) | Modify | a fleet frame reaches only what reads a changed row | C6 |
+| `pwa/browser/app.ts`, `pwa/browser/frame-cost.browser.test.ts` (**Create**) | Modify | test code: `frameCost`, `fleetFixture`, `send`; the frame-cost row | C6 (reused by C7, C9) |
+| `pwa/src/session/sameRow.ts`, `pwa/src/lib/highlightCache.ts` | **Create** | a transcript row's equality; a bounded highlight cache | C7 |
+| `pwa/src/session/ChatList.tsx` (`MeasuredItem`, `ChatScroller`), `MessageBubble.tsx`, `pwa/src/lib/markdown.tsx`, `pwa/src/screens/SessionScreen.tsx` (≈:621-625) | Modify | a re-render does no work for unchanged rows | C7 |
+| `pwa/src/stores/fleet.ts` (`readAccounts`, `projected`), `pwa/src/fleet/AccountsStrip.tsx`, `useProjectedHome.ts`, `pwa/src/screens/AccountsScreen.tsx`, `pwa/src/fleet/FleetCards.tsx` (≈:44), `useFleetHealth.ts`, `useUpdatesView.ts` | Modify | one `/api/accounts` reader; an equal answer keeps the previous value | C8 |
+| `pwa/test/accounts-one-poll.test.tsx`, `pwa/test/use-fleet-health.test.tsx` | **Create** | C8's red suites | C8 |
+| `pwa/src/fleet/lineProps.ts`, `pwa/src/fleet/openers.ts` | **Create** | `SessionLine` and `ProjectCard` prop equality; the one session opener and `OPEN_RUNS` | C9 |
+| `pwa/src/fleet/FleetCards.tsx`, `useRollupClock.ts`, `ProjectCard.tsx`, `ProjectCardHead.tsx`, `SessionLine.tsx`, `pwa/src/skins/instrument/FleetTable.tsx` (`StatusTable`), `pwa/src/screens/FleetScreen.tsx` (≈:129) | Modify | the list is memoised; the one-second clock is a leaf | C9 |
+| `pwa/src/screens/RunsScreen.tsx`, `pwa/src/screens/RunRow.tsx`, `pwa/src/fleet/runWords.ts` | Modify | the Finished group folds to 20 behind Show more; finished rows memoised on a 30 s clock | C10 |
+| `pwa/test/runs-finished-fold.test.tsx` | **Create** | C10's red suite | C10 |
+| `pwa/src/lib/api.ts` (watched; `projects`) | Modify | a malformed project list rejects at the adapter | B5 |
 
 Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refined-phone.test.tsx` (both #1116's). Step 0 of each task re-checks both lists on its own base.
 
@@ -1014,6 +1052,49 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
 
 **Acceptance.** The new session is on screen without a hunt or a misleading banner. **Rollback.** A plain revert; an older client ignores the field.
 
+#### B5 additions (rev 4)
+
+Two items join Task B5: (a) comes from C0, and (b) from B4's review (the ledger's R12). Their mutants join B5's table.
+
+**B5's Files line gains:**
+- `pwa/src/lib/api.ts` (watched; `projects` ≈:1033-1035);
+- `pwa/test/api.test.ts`;
+- `pwa/test/fleet-screen.test.tsx`;
+- `server/src/transcript/resolve.ts` (a comment only);
+- `server/test/transcript-ladder.test.ts`.
+
+**(a) A malformed `/api/projects` answer must not take the app down.** This item is red first.
+
+C0 measured it with the fixture. A 200 answer of `{}` turned the New session tap into a full-screen "ccrc could not draw this screen", with `TypeError: h is not iterable` at the sheet's sort: `NewSessionSheet.tsx` ≈:171-173 stores `r.projects`, and ≈:222 spreads it. `useProjectRows.ts` ≈:192-195 publishes the same `undefined` into the store's `projects`, which B5's cached list then reads.
+
+The check belongs in the adapter, `api.ts`'s `projects` ≈:1033-1035, and costs a few net lines. It resolves only an answer whose `projects` is an array. Any other 200 answer throws a plain `Error` ("The server's project list could not be read."), which both callers already catch:
+- the sheet shows it through `apiErrorText` (`api.ts` ≈:357-384, whose last arm is `err.message`);
+- `useProjectRows` keeps its last good rows, or answers `failed` (≈:197-200).
+
+The red cases:
+- `api.test.ts`: "a 200 /api/projects answer without a projects array rejects with a plain error";
+- `new-session-sheet.test.tsx`: "an /api/projects answer without a projects array shows the sheet's error line and the app stays drawn";
+- `fleet-screen.test.tsx`: "a malformed /api/projects answer never reaches the store's projects".
+
+The mutant: "`projects` returns the body unchecked", red in all three.
+
+Other changes to B5:
+- B5's Step 2 growth check now names `api.ts` beside `sessionws.ts`.
+- B5's first Verify line gains `test/api.test.ts` and `test/fleet-screen.test.tsx`.
+- If T1b has merged, B5 adds its new sentence to `plain-words.test.ts`'s `api.ts` entries and re-runs it; otherwise nothing scans it.
+
+Fences:
+- B2 edits `api.ts`'s `prompt` ≈:1179, which is line-disjoint. Each PR has its own 40-line budget.
+- T2a edits `api.test.ts` ≈:1403. The later PR absorbs `main` and re-runs it.
+- T2a, T2d and T3a also edit `fleet-screen.test.tsx`. The later PR absorbs `main` and re-runs it.
+
+**(b) From B4's review (R12).** B4 has merged (#1136), so these anchors are measured on `origin/main`.
+- **The case.** Add one `transcript-ladder.test.ts` case beside "never more than the bound in flight" (≈:1550): "a stat that rejects under the limiter rejects the search, drains the queue, and never puts more than the bound in flight". Its fake `FleetIO` rejects one `stat` in the first batch. The case is green on the base, so it is a regression pin, held by the mutant below.
+- **The mutant.** "the limiter's release moved out of `finally`", red on the new case. It sits at `resolve.ts` ≈:248-260 today, and in `server/src/bounded.ts` once C1's move lands.
+- **The comment.** Amend `resolve.ts`'s comment ≈:339-341 to give the real reason the answer does not depend on completion order: `pickNewest` (≈:222-232) is a total order (mtime, then roster order, then path), and so is `collapseHits`'s choice of survivor (≈:207-217).
+- **Verify.** `transcript-ladder.test.ts` joins B5's server Verify line.
+- **Fence.** C1 moves the limiter, unchanged, into `server/src/bounded.ts`. Whichever lands second absorbs `main`. If B5 is second, its mutant targets `bounded.ts`. If C1 is second, its move carries B5's case unchanged, and the comment stays in `resolve.ts`.
+
 ### Task T3e: the right-side inspector hides and shows, remembered per device (D-6385) — after T3c, T3d, T2e and #1116 merge
 
 **Routing:** band 2. **Needs:** T3c and T3d (`SessionChrome.tsx`, `InspectorRail.tsx`, `SessionScreen.tsx`); T2e (`frame.tsx`); #1116 (`ui/design/make-icons.mjs`, `ui/src/icons/lucide.ts`). **Frozen files touched:** none once those have merged. **Lane:** PWA.
@@ -1181,6 +1262,657 @@ These three departures from D-5479 (`flip-after-parity`) are D-6389.
 
 **Acceptance.** The same registry, read with a fraction of today's requests. **Rollback.** A plain revert.
 
+**C1 correction (rev 4, from C0 and the coordinator's pool ruling).**
+- **One bounded pool, B4's.** B4 landed a private promise limiter in `server/src/transcript/resolve.ts` (`Limit` and `limiter`, ≈:243-260 on `main`). C1 moves it unchanged into a new `server/src/bounded.ts` and adds `mapBounded(items, limit, fn)` on top of it. `resolve.ts` imports it and keeps `GLOB_STAT_CONCURRENCY` (≈:234-241). The work is three commits:
+  1. **Characterization.** `resolve.ts` exports the limiter as it stands. A new `server/test/bounded-pool.test.ts` pins four cases, all green on the base: "at most max in flight", "waiters start in arrival order", "a rejecting call frees its slot" and "a freed slot passes straight to the longest waiter".
+  2. **The move.** The limiter goes to `bounded.ts`; only the imports change, in `resolve.ts` and in the test. `transcript-ladder.test.ts` stays green, untouched.
+  3. **`mapBounded`.** It answers in input order, keeps at most `limit` calls in flight, and rejects as `Promise.all` does, while every started call still frees its slot. Its red cases are "mapBounded answers in input order when calls finish in reverse" and "mapBounded never exceeds limit in flight".
+
+  | Mutant | Expected red |
+  |---|---|
+  | `mapBounded` answers in completion order | "mapBounded answers in input order when calls finish in reverse" |
+  | `mapBounded` runs an unbounded `Promise.all` | "mapBounded never exceeds limit in flight" |
+  | the limiter's release moved out of `finally` | "a rejecting call frees its slot" |
+  | the limiter serves waiters last in, first out | "waiters start in arrival order" |
+
+  `bounded.ts` imports nothing, so it is L1. Its docstring carries `resolve.ts`' deadlock rule: a call under a bound never awaits another call under the same bound. C1's row read, C3's captures and C4's walk all use `mapBounded`; there is no second pool. C1's Files gains `bounded.ts` and `bounded-pool.test.ts` (Create) and `resolve.ts` (Modify). Its first Verify line gains `test/bounded-pool.test.ts test/transcript-ladder.test.ts`, and a new line runs `test/rings/outward-edges.test.ts test/rings/host-imports.test.ts`.
+
+  **Fence with B5 (b).** B5 (b)'s rejecting-stat case drives the limiter through the ladder, and its comment change sits at ≈:339-341. Neither is in the moved lines. Whichever of C1 and B5 lands second absorbs `main` and re-runs both suites. If the move lands first, B5 (b)'s mutant is applied in `bounded.ts`.
+- **The census claims C1 rewrites, measured.** They sit in:
+  - `registry.ts` ≈:66, ≈:460, ≈:671-672, ≈:759 and ≈:1333-1335;
+  - `fleet.ts` ≈:386 and ≈:535;
+  - `server.ts` ≈:2139 and ≈:2162;
+  - `watch.ts` ≈:2663-2665 and ≈:4060;
+  - `coord/childBind.ts` ≈:31 (`[registry-read-census:single]`), which C1's Files line did not name.
+- **Serial by row, not by request.**
+  - **The requests.** About 3,000 requests per read is right: the listing, plus 31 field reads that every row pays and up to 6 that are read only when listed (`buildRecord` ≈:805-849), over 92 rows. Each row's reads go out together, but the rows run one after another, so a read is 92 serial rounds.
+  - **The round time.** A live round costs about 55 to 85 ms, not 24 ms. `peers list` took 4.9 to 8.4 s, with a median of about 6 s.
+  - **The gain.** At 8 rows in flight, a read takes about 12 rounds: about 1 s instead of about 6 s (derived, not measured). Reading only listed fields cuts requests and the agent's CPU (about 1 s per sweep, measured), not rounds.
+  - **The measurement.** Step 0 measures the rounds with a gated fake and the round time from a read-only live route. The PR body reports both, before and after.
+
+### Task C2: the commands and PR routes read one row, and the commands route never reads a whole transcript (D-6434) — after T0
+
+**Routing:** band 2. **Needs:** T0. **Frozen files touched:** none. **Lane:** server. `server/src/server.ts` is a watched god file; C2 adds about 3 net lines to it.
+
+**Files:**
+- Modify `server/src/commands.ts`: the import ≈:2; `lastSkillListing` ≈:35-48, which is replaced; and `sessionCommands` ≈:51-78, which holds the registry sweep (≈:52-53) and the whole-file `io.readFile` (≈:74).
+- Modify `server/src/server.ts`: `prTasks` ≈:3737-3742 and `GET /api/sessions/:id/pr` ≈:3744-3759.
+- Tests: `server/test/commands.test.ts` and `server/test/pr-routes.test.ts`, with fixture HOMEs and a request-counting `localIO` wrapper (as in `knownid-registry-id.test.ts` ≈:44-60).
+- Modify, in its own commit, `server/test/registry-refused-census.test.ts`:
+  - `EXPECTED_SITES` (≈:124-150) loses `commands.ts | sessionCommands | readRegistry | knownId` and `server.ts | prTasks | readRegistry | knownId`;
+  - "exactly these 25 sites" (≈:202-205) becomes 23;
+  - `sitesOf('server.ts', 'readRegistry')` (≈:377) becomes empty;
+  - the `readRegistry` count (≈:381) drops from 7 to 5.
+
+  Both `[registry-refused:knownId]` tags go with their calls. `knownId` stays in `WORDS`.
+
+**The shape** (C0: a registry sweep on the fleet box takes 4.9 to 8.4 s).
+- **One row.** `sessionCommands` and `prTasks` read `readSessionRecord(io, cfg, id)` (`registry.ts` ≈:1367). A `found` row proceeds. Any other answer gives the built-ins with no skills, or `null` from `prTasks`, exactly as today. Nothing is narrowed:
+  - `readRegistry` already folds `unlistable` into "no row";
+  - `knownId` refuses a `bad-id` first;
+  - both consumers treat every answer other than `found` alike.
+
+  `SingleRead` is not widened.
+- **The task read runs beside pr-state.** After the `ccdCan` check passes, the route starts `prTasks(id)`, then awaits `runCcd(prStateSession)`. When `ccdCan` is false, the route still runs nothing.
+  - A failed pr-state answers `unknownView(...)`, and the task promise is dropped behind a no-op `catch`.
+  - A good pr-state awaits the tasks, as today.
+- **The most recent full listing, from a bounded read.** This is an intended behaviour change, in its own commit. Measured on eight transcripts of 23 to 315 MB: listings recur through the file, and no listing line is over about 40 KB. A full listing (`isInitial: true`) names 47 to 55 skills. The last listing is often a delta naming 1 to 4.
+  - **The scan.** `statMeasured` gives the file size. Then `readFileFromBytesMeasured` reads backward from the end, at most 4 chunks of `READ_FROM_MAX_BYTES` (256 KiB each, about 1 MiB in all; `shared/agent-protocol.ts` ≈:800).
+  - **Cut lines.** The scan splits on the newline byte and decodes each whole line with a fatal `TextDecoder`. A line that will not decode is skipped. A chunk's cut first piece is joined to the next chunk back, so a line is parsed only when it is whole. The oldest chunk's cut piece is never parsed, unless that chunk starts at offset 0, where its first line is whole.
+  - **One walker.** `workflows/read.ts`' `lastTokensOf` (≈:326-345) already walks backward this way. The PR extracts one walker for both, or records why it keeps two.
+  - **The answer.** The most recent full listing in the window, then the deltas after it, in order. A delta's names follow the full listing's; a repeated name keeps its place and takes the newer description. Step 0 measures whether a delta can remove a skill. A listing with no `isInitial` counts as full.
+  - **Fallback.** With no full listing in the window, the head (one chunk at offset 0, cut at its last newline unless it reached EOF) answers with its last full listing and the deltas after it (the coordinator's ruling for a head that holds two). A file of 4 chunks or fewer is already read whole, so no head read follows. With no full listing anywhere, the answer is the built-ins only. Any read that is not `ok` also gives no skills.
+- **Out of scope** (slug `attribution-single-row`): `attributionVerdict` (`coord/routes.ts` ≈:641-672), the mail ingress (≈:857) and the mail ack (≈:1089). When built, that work widens `SingleRead` with two distinct kinds that keep D-1144's distinction, never one: a dropped listed row is a live session mid-write, and the reconfirm's retirement is a death.
+
+- [ ] **Step 0: Measure.**
+  - Requests and serial rounds of `GET /commands` and `GET /pr` today, over 8 and 80 rows.
+  - From local transcripts: what a delta carries (`names`, `skillCount`, `content`) and whether it can remove a skill; whether listings without `isInitial` exist; how often a full listing sits in the last 1 MiB.
+  - Whether the deployed agent answers `dataB64`.
+- [ ] **Step 1: Red.**
+  - `commands.test.ts`:
+    - "commands: 8 rows cost what 80 do";
+    - "commands: a transcript over 1 MiB costs at most six bounded reads";
+    - "a full listing then a delta answers both, full first";
+    - "a delta before the latest full listing is ignored";
+    - "a full listing across a chunk boundary is found whole";
+    - "a multibyte character split by a chunk boundary still parses";
+    - "no full listing in four chunks: the head's first answers" (a different full listing sits in chunk five);
+    - "deltas and no full listing: built-ins only";
+    - "a failed chunk read: built-ins only" (the listing sits in an older chunk);
+    - "a full listing on the file's first line is found".
+
+    The existing cases (≈:29, ≈:67, ≈:113, ≈:171) carry no `isInitial` and stay green as regression pins.
+  - `pr-routes.test.ts`:
+    - "pr: 8 rows cost what 80 do";
+    - "pr: the task read starts before pr-state resolves" (a gated `runCcd`);
+    - "pr: a rejecting task read never breaks a failed pr-state's answer".
+- [ ] **Step 2: Green.** Commit in this order: census, one row, the PR route, the listing rule. Run alone: `knownid-registry-id.test.ts`, `id-argv-census.test.ts` (it pins the PR route's `prStateSession` builder, ≈:433), `registry-refused-callers.test.ts` and `routes.test.ts`, plus `workflows-read.test.ts` if the walker is extracted. Run the growth check for `server.ts`.
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | `sessionCommands` sweeps the registry | commands | "commands: 8 rows cost what 80 do" |
+  | `prTasks` sweeps the registry | pr-routes | "pr: 8 rows cost what 80 do" |
+  | the task read awaits pr-state | pr-routes | "pr: the task read starts before pr-state resolves" |
+  | `Promise.all` over pr-state and the tasks | pr-routes | "pr: a rejecting task read never breaks a failed pr-state's answer" |
+  | the transcript read whole | commands | "commands: a transcript over 1 MiB costs at most six bounded reads" |
+  | the last listing of any kind (today's rule) | commands | "a full listing then a delta answers both, full first" |
+  | the deltas dropped | commands | "a full listing then a delta answers both, full first" |
+  | every delta in the window applied | commands | "a delta before the latest full listing is ignored" |
+  | `isInitial === true` required | commands | "returns builtins + skills parsed from the session transcript" |
+  | chunks parsed alone, with the carried piece dropped | commands | "a full listing across a chunk boundary is found whole" |
+  | a chunk decoded whole, its cut bytes included | commands | "a multibyte character split by a chunk boundary still parses" |
+  | a fifth chunk read | commands | "no full listing in four chunks: the head's first answers" |
+  | no head fallback | commands | "no full listing in four chunks: the head's first answers" |
+  | a delta answers when there is no full listing | commands | "deltas and no full listing: built-ins only" |
+  | a failed chunk skipped | commands | "a failed chunk read: built-ins only" |
+  | the offset-0 chunk's first line skipped | commands | "a full listing on the file's first line is found" |
+
+- [ ] **Step 4: Renders.** None. The PR body carries Step 0's counts and rounds, before and after.
+- [ ] **Step 5: Verify.**
+
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/commands.test.ts test/pr-routes.test.ts test/registry-refused-census.test.ts test/registry-refused-callers.test.ts test/knownid-registry-id.test.ts test/id-argv-census.test.ts test/routes.test.ts
+      cd server && GROWTH_CHECK=1 ./node_modules/.bin/vitest run --maxWorkers=2 test/growth-check.test.ts
+      cd server && ./node_modules/.bin/tsc --noEmit
+
+**Fences.**
+- In `server.ts`, C2's ≈:3737-3759 is line-disjoint from B3 (≈:2029-2050), C1 (≈:2139, ≈:2162), B1 and B2 (≈:2178-2208) and C4 (≈:2859-2880).
+- In the census test, C3 changes one word (≈:148) and adds a pin (≈:249-263). Whichever of C2 and C3 lands second absorbs `main` and re-runs it.
+- No other task edits `server/src/commands.ts` or C2's two test files (T3e's `pwa/src/command/commands.ts` is another file).
+
+**Acceptance.** The slash menu and the PR sheet each cost one row's reads, whatever the fleet's size. The menu shows the session's full skill list, and no transcript crosses the link whole. **Rollback.** A plain revert; no wire change.
+
+### Task C3: the watcher's tick reads the registry once and captures panes with bounded concurrency (D-6435) — after C1
+
+**Routing:** band 3 (the fleet's own tick). **Needs:** C1 merged (`bounded.ts`'s `mapBounded`, and the registry read these measurements stand on). **Frozen files touched:** none. **Lane:** server. `server/src/watch.ts` is a watched god file; C3 adds about 12 net lines to it.
+
+**Files:**
+- Modify `server/src/watch.ts`:
+  - `DIALOG_CAPTURE_CONCURRENCY = 8`, beside `TASK_SWEEP_MS` (≈:226).
+  - The tick's call at ≈:2580 becomes `this.sweepTasks(records)`. The (s, c) comment at ≈:2562-2575 drops its "sequentially, each capture an agent round trip".
+  - `sweepTasks` (≈:3586-3640) takes `records?: SessionRecord[]`, as `sweepHookStates` does (≈:3501-3515). Its own read (≈:3605-3607) becomes the no-records fallback, tagged `[registry-refused:tests-only]`. The comment at ≈:3589-3604 is rewritten to keep its D-refs and its fail-shut argument.
+  - `detectDialogs` (≈:8657-8664) runs `mapBounded(recs, DIALOG_CAPTURE_CONCURRENCY, (r) => this.deps.tmux.capture(r.id))` before its loop. The loop then runs in registry order, each row with its own capture.
+- Create `server/test/tick-concurrency.test.ts`: a real `FleetWatcher.tick()` on a fixture HOME, with a request-counting `FleetIO`, a gated fake tmux `Runner` and a fixed clock.
+- Modify, in its own commit, `server/test/registry-refused-census.test.ts`:
+  - `watch.ts | sweepTasks | readRegistryMeasured | omits` (≈:148) becomes `… | tests-only`;
+  - "tick() passes its records to sweepTasks(" joins the pins at ≈:249-263;
+  - the counts are unchanged.
+- `dialog.test.ts` is unchanged. Its cases at ≈:396, ≈:454 and ≈:609 call `sweepTasks()` with no records, so they exercise the fallback.
+
+**The shape** (C0, S4). At 60 ms a request over 92 rows, a tick takes 18 to 23 s. `sweepTasks` costs 6.0 to 7.6 s of that and `detectDialogs` 5.5 s. Past 10 s a tick, the task sweep runs on every tick.
+- **The tick's records.** The "never shared with tick()'s" comment gives one reason: the slower clock. But `TASK_SWEEP_MS` gates how often task files are read, not where the registry comes from. The fail-shut argument holds without the separate read, because the tick returns before any lane when the registry does not list (≈:2522-2546). Retain-don't-erase and pruning are unchanged, and so are the task-file reads.
+- **Captures through the pool.** At most `DIALOG_CAPTURE_CONCURRENCY` are in flight, through `mapBounded`. It is a separate bound from C1's for a recorded reason: a capture spawns a tmux process, not a file read. The loop body is untouched, so every emission, push, statusline merge, `tryHold` and `pending` entry comes out in today's order with today's values. If a capture can reject (Step 0 checks), the captures are settled first and the loop rethrows at that row.
+- **The result.** Hook states still sweep before dialogs, and captures now land nearer that read, so the (s, c) window narrows. C0 derives a tick of about 2 to 4 s with C1, against 14 to 20 s today.
+
+- [ ] **Step 0: Measure.** On C1's base, at 24 ms and 60 ms per request and exec, over 80 and 92 rows, measure the tick's wall time and its phases, with and without a task sweep. Check:
+  - whether an agent `exec` has an in-flight cap (B4 found none for requests);
+  - whether `tmux.capture` (`exec.ts` ≈:145) or its `Runner` can reject;
+  - that no loop body writes to a later row's pane before that row's capture.
+- [ ] **Step 1: Red.** First, in its own commit on the base: the frames of one fixture, recorded as literals, green on the serial code. The fixture has dialogs on two rows, a statusline on each row and task lists on two rows. Then add these cases to `tick-concurrency.test.ts`:
+  - "a due task sweep adds no uuid read" (today it adds one per row). `sweepPr`, `sweepNames` and `sweepMail` each read the registry themselves and fire on the first tick, so the case pre-stamps `lastPrSweep`, `lastNameSweep` and `lastMailSweep`. It then counts only the difference between a tick with the sweep due and one without.
+  - "a second capture is issued before the first resolves".
+  - "never more than the capture bound in flight".
+  - "dialog frames equal the recorded ones, in registry order" (captures resolving in reverse order).
+  - "fleet, statuslines and task progress equal the recorded ones".
+  - Regression pins, green on the base, each with a mutant: "task files are read at most once per TASK_SWEEP_MS" and "an unlistable tick reads no task file and keeps progress".
+
+  In the census test: "tick() passes its records to sweepTasks(", red on the base.
+- [ ] **Step 2: Green.** Run alone: `dialog.test.ts`, `asks-sweep.test.ts`, `asks-mint.test.ts`, `ctx-pressure.test.ts`, `idle-compact-nudge-lane.test.ts`, `tick-refused-lanes.test.ts` and `registry-refused-callers.test.ts`. Run the growth check for `watch.ts`.
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | `sweepTasks` reads the registry itself | tick-concurrency, census | "a due task sweep adds no uuid read", "tick() passes its records to sweepTasks(" |
+  | captures serial | tick-concurrency | "a second capture is issued before the first resolves" |
+  | an unbounded `Promise.all` | tick-concurrency | "never more than the capture bound in flight" |
+  | rows processed in completion order | tick-concurrency | "dialog frames equal the recorded ones, in registry order" |
+  | a row handed the next row's capture | tick-concurrency | "fleet, statuslines and task progress equal the recorded ones" |
+  | the `TASK_SWEEP_MS` gate dropped | tick-concurrency | "task files are read at most once per TASK_SWEEP_MS" |
+  | the task sweep moved above the unlistable return | tick-concurrency | "an unlistable tick reads no task file and keeps progress" |
+
+- [ ] **Step 4: Renders.** None. The PR body carries Step 0's tick phases, before and after.
+- [ ] **Step 5: Verify.**
+
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/tick-concurrency.test.ts test/dialog.test.ts test/asks-sweep.test.ts test/asks-mint.test.ts test/ctx-pressure.test.ts test/idle-compact-nudge-lane.test.ts
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/tick-refused-lanes.test.ts test/registry-refused-census.test.ts test/registry-refused-callers.test.ts test/registry.test.ts test/bounded-pool.test.ts test/sessionws.test.ts
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/outward-edges.test.ts test/rings/host-imports.test.ts
+      cd server && GROWTH_CHECK=1 ./node_modules/.bin/vitest run --maxWorkers=2 test/growth-check.test.ts
+      cd server && ./node_modules/.bin/tsc --noEmit
+
+**Fences** (measured by grep).
+- **C1.** `watch.ts` carries `[registry-read-census:*]` claims at ≈:2663-2665 and ≈:4060, and C1 rewrites them. C3 lands after C1 by its gate, absorbs `main`, and re-runs `registry.test.ts`.
+- **C4.** C4 edits `watch.ts` at ≈:2522-2546, ≈:2938-2942 and ≈:2118-2126. Those lines are disjoint from C3's ≈:226, ≈:2562-2580, ≈:3586-3607 and ≈:8657-8664, but no gate orders the two. Whichever lands second absorbs `main` and re-runs both tasks' suites.
+- **C2.** C2 edits other rows of the census test. Whichever lands second absorbs `main` and re-runs it.
+- **The answer path.** `tryHold` and `hold` are not edited.
+
+**Acceptance.** One registry read per tick, and a pane sweep a fraction of today's length, with the same answers. **Rollback.** A plain revert.
+
+### Task C4: /api/projects answers from the watcher's listed tick and a cached project walk (D-6436) — after C1
+
+**Routing:** band 2. **Needs:** C1 merged (`bounded.ts`'s `mapBounded`). **Frozen files touched:** none. **Lane:** server. `server.ts` and `watch.ts` are watched god files; C4 adds about 4 and 10 net lines.
+
+**Files:**
+- Modify `server/src/watch.ts`. It gains one fact with one writer, the tick: `registryTick: { listed: boolean; at: number } | null`, where `at` is when the tick's registry read began.
+  - The unlistable arm (≈:2522-2546) writes `listed: false`.
+  - A listed tick writes `listed: true` after it assembles the fleet, just before the `json === this.lastJson` compare (≈:2938-2942), so `lastFleet` reflects that listing whether or not it changed.
+  - A new accessor beside `currentFleet` (≈:2118-2126), `currentFleetListing(): { sessions: FleetSession[]; listedAt: number } | null`, answers `null` unless the latest tick listed and a fleet has been broadcast.
+- Modify `server/src/lifecycle.ts`:
+  - `listProjects` (≈:152-179) takes optional `rows?: readonly { project: string; workdir: string }[]`;
+  - a new pure function beside it, `fleetRowsUsable(listing, nowMs, boundMs)`, decides whether those rows may stand in;
+  - the root walk (≈:156-166) and the union's probes (≈:168-173) run through `mapBounded`;
+  - a new `ProjectWalkCache`, with an injected clock, holds the walk;
+  - `isLinkedWorktree` (≈:125-134) is unchanged.
+- Modify `server/src/server.ts`: `GET /api/projects` (≈:2860-2880) passes the usable rows, and the route's one cache, built beside it, into `listProjects` (≈:2879).
+- Create `server/test/projects-route-cache.test.ts`, with a counting `FleetIO`, a gated fake, a fake clock and a stub watcher.
+- Modify `server/test/registry-refused-callers.test.ts`: a watcher-fed case beside the one at ≈:358. `lifecycle.test.ts` (≈:565-640) passes no rows and stays green unchanged.
+- Only if Step 0 measures the serial reads of `readLimits` (`limits.ts` ≈:493-495) or `readProjectPools` (`pools.ts` ≈:249) above 0.5 s: that file goes through `mapBounded` too, with a red case ("reads its files concurrently, the answer unchanged") and a serial mutant. `limits.test.ts` or `pools.test.ts` then joins Verify.
+
+**The shape** (C0, S5). Today the route makes about 50 serial requests to walk 25 directories. It then sweeps the registry (about 6 s) and serially probes each registry workdir outside the root. Nothing is cached.
+- **The registry half comes from the watcher, but only while it is current.** The route uses `currentFleetListing()`'s rows only when the latest tick listed and `listedAt` is younger than `FLEET_ROWS_MAX_AGE_MS`. Step 0 sets that bound at about two measured ticks.
+  - With those rows, `listProjects` reads no session field file and answers `registry: 'listed'`.
+  - Otherwise `listProjects` makes its own `readRegistryMeasured`, exactly as today. That covers the time before the first broadcast, a tick that could not list, and a listing past the bound. An unlistable registry still answers `'unlistable'`, and the `[registry-refused:reports]` site (`lifecycle.ts` ≈:168) stays.
+  - The answer never says `'listed'` from a stale or unlistable tick. The stamp is its own fact because `lastFleet` is retained through unlistable ticks and changes only when its JSON does.
+  - Each `FleetSession` carries its record's `project` and `workdir` verbatim, one per record, refused rows excluded (`fleet.ts` ≈:595, ≈:764). `lifecycle.ts` never imports `watch.ts`.
+- **The walk is concurrent and cached.**
+  - It runs at most 8 reads in flight, through `mapBounded`, never a second pool. Precedence is today's, whatever order the reads finish in: root rows first, then registry rows in record order, and the first holder of a workdir keeps it.
+  - `ProjectWalkCache` keeps the root walk and each probe's verdict for `PROJECT_WALK_TTL_MS` (30 s). A failed root listing is never cached.
+  - Pools, limits, shares, readiness and repo cells are never cached, so a pool write shows on the next request.
+- **Beyond B5:** every caller gains with no PWA change (B5's refresh, `StartProgramSheet.tsx` ≈:141, `useProjectRows.ts` ≈:159-215, the cold load).
+
+- [ ] **Step 0: Measure.**
+  - Over 80 rows and 25 directories, the route's requests and serial rounds today, split into walk, registry, probes, pools and limits.
+  - The tick's wall time on C1's base, which sets the bound.
+  - That `lastFleet` holds one row per record, and that no listed tick skips the compare.
+  - Every `api.projects` caller.
+- [ ] **Step 1: Red.**
+  - First, in its own commit on the base, record today's answer for one fixture as a literal, green on the serial code. The fixture holds:
+    - a root directory, and a registry row on the same workdir under another name;
+    - two registry rows sharing a workdir outside the root;
+    - a linked worktree, reached through both doors;
+    - a registry-only project.
+  - Then, in `projects-route-cache.test.ts`:
+    - "a fresh listed tick: no session field read";
+    - "after an unlistable tick: own read, registry 'unlistable'";
+    - "a listed tick past the bound is not used";
+    - "before the first broadcast: own read, as today";
+    - "the second readdir is issued before the first resolves";
+    - "never more than the bound in flight";
+    - "the answer equals the recorded one" (reads finishing in reverse order, from the watcher's rows and from the route's own read);
+    - "within the TTL nothing is walked; after it, a new directory appears";
+    - "an unlistable projects root is not cached";
+    - "a pool write shows on the next request".
+  - In `registry-refused-callers.test.ts`: "with a fresh listed tick, GET /api/projects is 'listed' and carries no --actor workdir".
+- [ ] **Step 2: Green.** Run alone: `lifecycle.test.ts`, `lifecycle-linked-worktree.test.ts`, `projects-route-class.test.ts`, `projects-route-placement.test.ts`, `project-pool-route.test.ts`, `registry-migrated-callers.test.ts` and `registry-refused-callers.test.ts`. Run the growth check for `server.ts` and `watch.ts`.
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | the route sweeps despite the watcher's rows | projects-route-cache | "a fresh listed tick: no session field read" |
+  | `currentFleet()` used whatever the latest tick listed | projects-route-cache | "after an unlistable tick: own read, registry 'unlistable'" |
+  | no age check | projects-route-cache | "a listed tick past the bound is not used" |
+  | an empty registry half before the first broadcast | projects-route-cache | "before the first broadcast: own read, as today" |
+  | the walk serial | projects-route-cache | "the second readdir is issued before the first resolves" |
+  | an unbounded `Promise.all` | projects-route-cache | "never more than the bound in flight" |
+  | rows inserted in completion order | projects-route-cache | "the answer equals the recorded one" |
+  | the cache never expires | projects-route-cache | "within the TTL nothing is walked; after it, a new directory appears" |
+  | a failed root listing cached | projects-route-cache | "an unlistable projects root is not cached" |
+  | the pools cached with the walk | projects-route-cache | "a pool write shows on the next request" |
+
+- [ ] **Step 4: Renders.** None. The PR body carries Step 0's counts, cold and within the TTL, before and after.
+- [ ] **Step 5: Verify.**
+
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/projects-route-cache.test.ts test/lifecycle.test.ts test/lifecycle-linked-worktree.test.ts test/projects-route-class.test.ts test/projects-route-placement.test.ts test/project-pool-route.test.ts
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/registry-refused-callers.test.ts test/registry-refused-census.test.ts test/registry-migrated-callers.test.ts test/routes.test.ts test/bounded-pool.test.ts
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/tick-refused-lanes.test.ts test/dialog.test.ts test/rings/outward-edges.test.ts test/rings/host-imports.test.ts
+      cd server && GROWTH_CHECK=1 ./node_modules/.bin/vitest run --maxWorkers=2 test/growth-check.test.ts
+      cd server && ./node_modules/.bin/tsc --noEmit
+
+**Fences.**
+- In `server.ts`, C4's ≈:2859-2880 is line-disjoint from B3 (≈:2029-2050), C1 (≈:2139, ≈:2162), B1 and B2 (≈:2178-2208) and C2 (≈:3737-3759).
+- In `watch.ts`, C1's census comments (≈:2663-2665, ≈:4060) land first, by the gate. C3's hunks are line-disjoint from C4's, but nothing gates one on the other, so whichever lands second absorbs `main` and re-runs both tasks' suites.
+- No other task edits `lifecycle.ts` or the case at `registry-refused-callers.test.ts` ≈:358.
+- B5 reads this route, whose answer keeps its shape.
+
+**Acceptance.** `GET /api/projects` answers today's rows from the watcher's current listing and a 30 s walk cache. It does no registry sweep while the watcher is current, and it never claims a listing it does not have. **Rollback.** A plain revert.
+
+### Task C5: a wheel over a code block scrolls the transcript (D-6437) — after T0
+
+**Routing:** band 1. **Needs:** T0. **Frozen files touched:** none. **Lane:** UI/PWA.
+
+**Files:** Modify `ui/src/components/prose.css` (`.msg-assist pre` ≈:247-257, its `overscroll-behavior: contain` ≈:256), `ui/src/primitives/well.tsx` (`WELL` ≈:50-54, its `overscroll-contain` ≈:51), `ui/src/components/tool-card.css` (`.tool-ask-a` ≈:152-171, its `overscroll-behavior: contain` ≈:170) and `pwa/src/styles/base.css` (the comment ≈:61-62, "each sets `overscroll-behavior: contain`"). Create `pwa/test/wheel-chain.test.ts` and `pwa/browser/wheel-chain.browser.test.ts`. `pwa/src/session/chat.css` does not change. Its eight `contain` rules are either the scroller itself or boxes outside the transcript's content: ≈:495 `.chat-scroller`, ≈:916 the composer, ≈:1366, ≈:1406 and ≈:1473 the terminal, ≈:1699 the slash menu, and the x-only rules ≈:1430 and ≈:1862.
+
+**The shape** (C0, Chrome, both skins at 1920: a wheel over a code block moved the transcript 0 px; over prose, or over the block with `overscroll-behavior: auto` injected, it moved it 600 px). A code block is a scroll container. Its `contain` stops chaining on both axes even when it has nothing to scroll (C0: `scrollHeight` 161 = `clientHeight` 161), so a wheel over any block never reaches `.chat-scroller`.
+- **One rule.** A box inside the transcript never keeps a y-axis containment, and keeps an x-axis one only if it can scroll sideways.
+  - `.msg-assist pre` has the default `white-space: pre`, so it can scroll sideways. It takes `overscroll-behavior-x: contain`, the rule `.md-table-wrap` (`prose.css` ≈:265) already follows.
+  - `WELL` (`whitespace-pre-wrap wrap-anywhere`) and `.tool-ask-a` (`overflow-wrap: anywhere`) cannot scroll sideways, so both lose the rule entirely.
+- **C0 named only part of it.** `Well` renders every tool card's wells (`tool-card.tsx` ≈:179, ≈:405, ≈:413) and every mail card's body. Its users outside the transcript (`DialogSheet`'s `dlg-raw` and `opt-preview`, the composer's `draft-well`) chain to the sheet body's own `overscroll-contain` (`sheet.tsx` ≈:327) or to `body`'s `overscroll-behavior: none` (`base.css` ≈:63). Both stay unchanged.
+- **No behavioural x-axis claim.** A sideways chain from a block reaches `.chat-scroller`, whose own `contain` stops it, so no test can see what the x-rule adds. The rule is kept for consistency and pinned statically only.
+- **Nothing else moves.** No story text names the containment (`well.stories.tsx`), so no story changes; Step 0 re-checks.
+
+- [ ] **Step 0: Re-ground.**
+  - Every `overscroll` rule in `ui/src` and `pwa/src`, in CSS and in class strings.
+  - Which of those boxes sit inside `.chat-scroller`, `collapsible-strip.css` ≈:82 and `fleet.css` ≈:602 included. Any that does follows the rule in this PR.
+  - How `tool-group-fit.browser.test.ts` opens a tool card in each skin, so its fixture can be reused.
+- [ ] **Step 1: Red.**
+  - `wheel-chain.test.ts` (static; it uses `test/cssRule.ts`'s `ruleIn` and `declValue`): "each transcript box carries exactly its containment". `.msg-assist pre` has `overscroll-behavior-x: contain` and no `overscroll-behavior`; `WELL`'s class string and `.tool-ask-a` carry none.
+  - `wheel-chain.browser.test.ts`: at 1280 and 1920 × both skins × dark and light, with the pointer over the element and Playwright's `page.mouse.wheel`. Fixture: a three-line fenced block, a block with one 300-character line, a 60-line block, prose between them, and an opened Bash card with a two-line result.
+    - "a wheel over a code block whose content fits moves .chat-scroller" (red on main: 0 px);
+    - "a wheel over a tool card's well whose content fits moves .chat-scroller" (red on main);
+    - "a wheel over a code block taller than --well-max scrolls the block first, then the transcript" (its second half is red on main);
+    - "a sideways wheel over a code block that overflows moves the block's scrollLeft and not the scroller's scrollTop". This is a regression pin, green on the base and held by the last mutant below.
+- [ ] **Step 2: Green.** Run these alone:
+  - `contrast.test.ts`;
+  - `design-system-boundary.test.ts`;
+  - `sheet-footer.test.tsx`, which pins the sheet's own `overscroll-contain` (it stays);
+  - `ask-keys.test.tsx`, whose ≈:483 pins `.ask-tabs`' x-rule.
+- [ ] **Step 3: Mutation table, RUN.** Each row is measured red before it is listed; none is equivalent.
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | `.msg-assist pre` back to `overscroll-behavior: contain` | wheel-chain, wheel-chain (browser) | "each transcript box carries exactly its containment", "a wheel over a code block whose content fits moves .chat-scroller" |
+  | `.msg-assist pre` loses `overscroll-behavior-x: contain` | wheel-chain | "each transcript box carries exactly its containment" |
+  | `WELL` back to `overscroll-contain` | wheel-chain, wheel-chain (browser) | "each transcript box…", "a wheel over a tool card's well whose content fits moves .chat-scroller" |
+  | `WELL` takes `overscroll-x-contain` | wheel-chain | "each transcript box carries exactly its containment" |
+  | `.tool-ask-a` keeps `overscroll-behavior: contain` | wheel-chain | "each transcript box carries exactly its containment" |
+  | `.msg-assist pre` set to `overflow-y: hidden` | wheel-chain (browser) | "a wheel over a code block taller than --well-max scrolls the block first…" |
+  | `.msg-assist pre` set to `overflow-x: hidden` | wheel-chain (browser) | "a sideways wheel over a code block that overflows moves the block's scrollLeft…" |
+
+- [ ] **Step 4: Per width × skin × mode.** The fixture transcript at 360, 390, 1280 and 1920 × both skins × dark and light, before and after. Each pair looks the same.
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/wheel-chain.test.ts test/sheet-footer.test.tsx test/ask-keys.test.tsx test/design-system-boundary.test.ts test/contrast.test.ts test/chat.test.tsx
+      cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/wheel-chain.browser.test.ts browser/tool-group-fit.browser.test.ts
+      cd ui && ./node_modules/.bin/tsc --noEmit
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
+
+**Fences.**
+- **T4a.** No gate orders it against C5. It edits `prose.css` ≈:224-232 and ≈:393-415, adds rules to `tool-card.css`, and edits `tool-card.tsx` ≈:405 and ≈:413. All of that is line-disjoint from C5's hunks, and C5 keeps the `well` class that T4a's `.well .hljs-*` arms key on. Whichever lands second absorbs `main` and re-runs `tool-well-colour.browser.test.ts` and `wheel-chain.browser.test.ts`.
+- **T1c** edits `tool-card.tsx` and `chat.css`; C5 edits neither.
+- **Other tasks:** none edits `well.tsx` or `base.css`.
+- **Watched god files:** none.
+
+**Acceptance.** In both skins, a wheel over any code block or tool well moves the transcript once the box has nothing left to scroll. **Rollback.** A plain revert.
+
+### Task C6: the fleet store keeps unchanged rows and the shell subscribes narrowly (D-6438) — after T0
+
+**Routing:** band 3 (the store under every view). **Needs:** T0. **Frozen files touched:** none. **Lane:** PWA. No watched god file.
+
+**Files:**
+- Create `pwa/src/lib/sameJson.ts` (pure L1, imports nothing): `sameJson(a, b)`, structural equality over plain JSON values, the one equality C8 and C9 import. Create `pwa/src/fleet/keepRows.ts` (L1; `sameJson` and `import type`): `keepRows(prev, next)` answers `prev` when every row is `sameJson` in the same order, else a new array keeping `prev`'s object for each id whose row is `sameJson`.
+- Modify `pwa/src/stores/fleet.ts`: the `fleet` frame (≈:481-489) runs `keepRows` before its one `set` (D-1138), with no `set` when the array is kept and `fleetFrameSeen` is true; a 30 s snapshot throttle beside it, flushed on a hidden page (`onVisible` ≈:323-325), on `pagehide` (beside ≈:538-539) and in `disconnect()` (≈:542-551). `readAccounts` is C8's.
+- Modify `pwa/src/app.tsx`: drop `sessions` (≈:60); the archive arm (≈:139) renders a local `ArchiveRoute` that subscribes.
+- Modify `pwa/src/fleet/FleetChrome.tsx` (value ≈:63-67 under `useMemo`) and make each plane stable: `useActionsSheet.ts` ≈:48-57, `useProjectRows.ts` ≈:320-350 (`knownProjects` ≈:322 inside the memo), `ArchiveAllPlane.tsx` ≈:39-73 (`run` a `useCallback`), `useUpdatesView.ts` ≈:265.
+- Modify `pwa/src/fleet/FleetFlows.tsx`: `useFleetFlows` (≈:28-42) memoises its doors and reads `chrome.store.getState().sessions` in `openActions`, so its subscription (≈:30) goes; `FleetFlows` (≈:49) keeps its own.
+- Modify `pwa/src/screens/SessionScreen.tsx`: `fleetSessions` (≈:193) becomes a `parent` selector (the row `parentIdOf(live, activeRuns)` names, or null), and ≈:270-276 look up over `parent` alone (`fleetTree.ts` ≈:92-98 and ≈:164-180 read no other row).
+- Modify `pwa/browser/app.ts` (test code only): `OpenedApp.send(path, frame)` to that path's newest socket; export `fleetFixture(n)` (C0's shape: 15 projects, 17 lanes, neutral names) and `frameCost(app, path, frames, gapMs)`, CDP `Performance.getMetrics` `TaskDuration`/`ScriptDuration` per frame window and one idle window, which C7 and C9 reuse.
+- Tests: create `same-json.test.ts`, `keep-rows.test.ts`, `render-fanout.test.tsx`, `pwa/browser/frame-cost.browser.test.ts`; add cases to `stores.test.ts`. Modify, each in its own commit: `stores.test.ts` cases reading the snapshot after a second frame (Step 0 lists them); `app.test.tsx` if a case passes `sessions` to the archive arm.
+
+**Fences.** `SessionScreen.tsx`: T1b ≈:664, T1c ≈:509-664, T3c ≈:504, T3d ≈:299-307, T3e ≈:492, B5 ≈:336 and ≈:560-606, C7 ≈:616-626, none overlapping C6's ≈:188-193 and ≈:266-283. **C8** follows in `stores/fleet.ts` (≈:20-56, ≈:337-358, ≈:381-387, ≈:392-414) and `useUpdatesView.ts` (≈:233-240). `stores.test.ts` is shared with C8, T1b, B2 and B5. The later PR absorbs `main` and re-runs.
+
+**The shape.** C0: nothing stops a frame spreading. Rows keep identity while `sameJson` (an extra key is a change, so a revived snapshot row takes the live object, as today); the shell, the chrome value and `SessionScreen` change only when what they draw does. The snapshot is written at most once per 30 s: the first frame at once (current pins stay green), the newest pending one when the window closes, on a hidden page, `pagehide` or `disconnect()`; `saveFleetSnapshot`'s refusals (`offline.ts` ≈:96-110) are unchanged, and the throttle, a scheduler, lives in the store (L4).
+
+- [ ] **Step 0: Measure.** Every mounted `s.sessions` subscriber; the 14 `useFleetChrome()` sites; the snapshot-after-second-frame tests; `frameCost` on `origin/main`.
+- [ ] **Step 1: Red.** Fixtures `ws-a`, `ws-b`, `lane-a`; counts from `<Profiler onRender>` or a stand-in inside the test.
+  - `same-json`: "equal nested values are equal"; "a nested change is a change"; "key order does not matter"; "an extra key is a change".
+  - `keep-rows`: "an unchanged row keeps its object"; "an identical frame keeps the array"; "a changed row is new, its neighbours kept"; "a reordered frame keeps each object"; "an added or removed row gives a new array".
+  - `stores` (fake timers): "an identical frame keeps the array"; "ten frames write the snapshot at most once in 30 s"; "the newest frame is written when the window closes"; "a hidden page writes the pending snapshot at once".
+  - `render-fanout`: "another session's row change does not re-render SessionScreen"; "the coordinator's row change does"; "a fleet frame re-renders no useFleetChrome consumer while no plane changed" (a probe passed as the provider's `children`); "a changed fleet frame does not re-render the shell root" (`ToastHost` stubbed, the real `@ccrc/ui` spread); "useFleetFlows' doors keep their identity"; "openActions opens the newest row" (a pin, green on the base).
+  - `frame-cost.browser`: "a fleet frame of 80 rows on `/` costs under the ceiling", 1920, both skins; Step 4 sets the ceiling near twice the after-measurement on CI's runner, below the before (else it is a ceiling only, said in the PR, with no mutant row).
+- [ ] **Step 2: Green.** Step 5's suites, the touched ones each alone first.
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | `sameJson`, in turn: fields by `===`; `a`'s keys only; any two arrays equal | same-json | "equal nested…"; "an extra key…"; "a nested change…" |
+  | `keepRows` answers `next` on an identical frame | keep-rows | "an identical frame keeps the array" |
+  | the store sets `msg.sessions` raw | stores, render-fanout | "an identical frame…", "another session's row change…" |
+  | `SessionScreen` subscribes to `s.sessions` | render-fanout | "another session's row change…" |
+  | the `parent` lookup reads `[live]` | render-fanout | "the coordinator's row change does" |
+  | the value inline; then each plane unmemoised in turn (`useActionsSheet`, `useProjectRows`, `knownProjects`, `useArchiveAll`, `useUpdatesView`) | render-fanout | "…no useFleetChrome consumer…" |
+  | `App` subscribes to `sessions` | render-fanout | "…the shell root" |
+  | `useFleetFlows`' doors inline | render-fanout | "useFleetFlows' doors…" |
+  | a write per frame; no write at the window's end; no hidden-page flush | stores | each snapshot case in turn |
+  | C6's `src` reverted (only with a ceiling below before) | frame-cost | "a fleet frame of 80 rows…" |
+
+- [ ] **Step 4: Per width × skin × mode, and the frame cost.** The fleet and a session at 360, 390, 1280, 1920 × both skins × dark and light, before and after: nothing changes. `frameCost` over `fleetFixture(80)`: 15 frames 2 s apart, each changing about 9 rows, then one identical frame, on `/` and a long session, both skins at 1920 and 390. The PR body tables it beside C0's baseline (ms per frame against idle: Refined 1920 100/19, Instrument 1920 79/17, Refined 390 112/22, a desktop session 117-157; an identical frame 11 ms of script).
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/same-json.test.ts test/keep-rows.test.ts test/render-fanout.test.tsx test/stores.test.ts test/offline.test.ts test/offline-snapshot-keys.test.ts test/app.test.tsx test/fleet-flows.test.tsx test/archive-screen.test.tsx
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/header.test.tsx test/stale-run-attribution.test.tsx test/fleet-screen.test.tsx test/skin-switch.test.tsx test/use-updates-view.test.tsx test/project-rows-add.test.tsx test/session-actions-sheet.test.tsx test/archive-all-guard.test.tsx test/command-layer.test.tsx
+      cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/frame-cost.browser.test.ts
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/pwa-rings.test.ts
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
+
+**Acceptance.** A fleet frame re-renders only what reads a changed row, with per-frame time before and after in the PR. **Rollback.** A plain revert; nothing persisted changes shape.
+
+### Task C7: the chat's rows are memoised, and markdown and highlighting are cached (D-6439) — after C6, C8 and T1c merge
+
+**Routing:** band 2. **Needs:** C6 (SessionScreen narrowed); C8 (an equal accounts answer no longer writes `roster`); T1c (the same `ChatList` and `SessionScreen` lines). **Frozen files touched:** none. **Lane:** PWA. No watched god file.
+
+**Files:**
+- Create `pwa/src/session/sameRow.ts` (L1, `import type` only): `sameTranscriptItem(a, b)`, same kind and key and every own field `Object.is`, except fields derived from the item's event, compared through `event` alone (`mail`'s `envelope`, `chatItems.ts` ≈:117 and ≈:180; `task`'s `notification` ≈:150), and a `tool-group`'s `entries`, element by element; `sameRowProps(a, b)`: the item by `sameTranscriptItem`, other props `Object.is`.
+- Create `pwa/src/lib/highlightCache.ts` (L1, imports nothing): `createLru<V>(maxEntries, maxWeight, weigh)`.
+- Modify `pwa/src/session/ChatList.tsx`: `MeasuredItem` (≈:448-469) takes the row's props in place of `children`, renders `TranscriptRowView` and is `memo(…, sameRowProps)`; `computeItemKey` (≈:770) and `itemContent` (≈:771-787) become `useCallback`s.
+- Modify `pwa/src/session/MessageBubble.tsx` (≈:149): `memo` on `event`, `id`, `streaming`.
+- Modify `pwa/src/lib/markdown.tsx`: `CodeBlock`'s highlight (≈:373-375) reads a module-scope `createLru` keyed by `lang` and `raw`, after every bound; the plugins (≈:596) a module constant; `ChatMarkdown` (≈:623-627) `memo`.
+- Modify `pwa/src/screens/SessionScreen.tsx`: `onRetry`, `onDiscard`, `onAnswer` (≈:621-625) become `useCallback`s.
+- Tests: create `same-row.test.ts`, `highlight-cache.test.ts`, `chat-memo.test.tsx`; add cases to `markdown-highlight.test.tsx` and `chat-scroller.test.tsx`.
+
+**Fences.** `SessionScreen.tsx`: T3c ≈:504, T3d ≈:299-307 and T3e ≈:492 are disjoint from C7's ≈:621-625; the later PR absorbs `main` and re-runs. T1c (`ChatList.tsx` ≈:47-191, ≈:771-787; `SessionScreen.tsx` ≈:509-664) lands first; C7 carries `askBelow` as one more `Object.is` prop. **T4a** (`ChatList.tsx` ≈:73, `markdown.tsx` ≈:359-375 `boundedHighlight`): the later absorbs `main`, the cache sits inside `boundedHighlight` either way, T4a's `renderWell` is stable, and T4a re-runs `chat-memo.test.tsx`. B5 (≈:560-606) is disjoint. C0's fanout-9 stays out (T1c's hook; under 0.01 ms).
+
+**The shape.** C0: each SessionScreen re-render re-runs react-markdown and `hljs.highlight` for every mounted message (about 4.3 ms each with a 2.2 KB block; 46.5 ms for one 60 KB JSON block). `buildChatItems` rebuilds items per `events` frame while events keep identity (`dedupeAppend`), so rows compare by field and a frame re-renders only the streaming turn, a new row or a call whose result arrived. `ignoreIllegals: true` makes highlighting deterministic, and `markdown-golden.test.tsx` already pins the output as recorded files, so no characterization commit is needed. Cache bounds (about 256 entries, 4,000,000 output characters) come from Step 0; Docs' `CodeBlock` (`DocsLeaf.tsx` ≈:117) shares it. The plugins constant is tidying, pinned by the golden suite.
+
+- [ ] **Step 0: Measure.** On the base after T1c: `ChatScroller`'s props and row tree; every field of every `TranscriptItem` kind and which derive from the event; output sizes of `pwa/test/markdownCorpus.ts`'s code blocks; C0's jsdom bench (1 and 8 messages).
+- [ ] **Step 1: Red.** Counts from stand-ins in the test (`vi.mock`, real module spread). `chat-memo` mocks `react-virtuoso` as `chat.test.tsx` does, over a TypeScript block, a Bash call and a mail item:
+  - "a parent re-render with unchanged items renders no MessageBubble" (`ChatMarkdown` counted); "…renders no transcript row" (`ToolCard` counted); "an events frame that appends one message renders only the new row"; "MessageBubble with the same props renders no markdown"; "ChatMarkdown with the same text pre-scans once" (`prescanMarkdown` counted); "a roster change re-renders SessionScreen and no transcript row".
+  - `same-row`: "a rebuilt item with the same event is the same row"; "a rebuilt mail item is the same row"; "a rebuilt tool group with the same entries is the same row"; "a tool item whose result arrived is a different row"; "a group with one changed entry is a different row".
+  - `chat-scroller`: "itemContent and computeItemKey keep their identity across a parent re-render".
+  - `markdown-highlight`: "hljs.highlight runs once per (lang, code)" (`vi.spyOn` on `highlight.js/lib/core`); "a block the bounds refuse is highlighted never and cached never".
+  - `highlight-cache`: "it keeps its entry and size bounds, dropping the least recently used"; "an over-size entry is not kept".
+- [ ] **Step 2: Green.** Step 5's suites, the touched ones each alone first.
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | `MeasuredItem`'s `memo` removed; its row as `children` again | chat-memo | "…renders no transcript row" |
+  | `sameRowProps` compares the item by identity | chat-memo, same-row | "an events frame that appends…", "a rebuilt item…" |
+  | `mail` compared by `envelope` identity | same-row | "a rebuilt mail item…" |
+  | `entries` by array identity; `entries` ignored | same-row | "a rebuilt tool group…"; "a group with one changed entry…" |
+  | `result` ignored | same-row | "a tool item whose result arrived…" |
+  | `MessageBubble`'s `memo` removed; then with `MeasuredItem`'s | chat-memo | "MessageBubble with the same props…"; "…renders no MessageBubble" |
+  | `ChatMarkdown`'s `memo` removed | chat-memo | "ChatMarkdown with the same text…" |
+  | `itemContent` or `computeItemKey` inline | chat-scroller | its identity case |
+  | `onRetry` inline | chat-memo | "a roster change…" |
+  | cache bypassed; lookup before the bounds | markdown-highlight | "…runs once…"; "a block the bounds refuse…" |
+  | no eviction; an over-size entry kept | highlight-cache | each case in turn |
+
+- [ ] **Step 4: Per width × skin × mode, and the cost.** A transcript with Markdown, a TypeScript block, a diff, a Bash call, a mail item and a failed send at 360, 390, 1280, 1920 × both skins × dark and light, before and after: nothing changes; scroll to the top and back; copy a block. C6's `frameCost` on a long session at 1920 and 390, both skins: per `/ws/session/<id>` events frame and per fleet frame; plus Step 0's jsdom bench, before and after.
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/chat-memo.test.tsx test/same-row.test.ts test/highlight-cache.test.ts test/markdown-highlight.test.tsx test/chat-scroller.test.tsx test/markdown-golden.test.tsx test/chat.test.tsx test/transcript-rows.test.tsx
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/chat-item-boundary.test.tsx test/chat-scroll.test.tsx test/jump-latest.test.tsx test/docs-markdown.test.tsx test/markdown-bounds.test.tsx test/session-screen-refusals.test.tsx test/skin-switch.test.tsx
+      cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/tool-group-fit.browser.test.ts browser/frame-cost.browser.test.ts
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/pwa-rings.test.ts
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
+
+**Acceptance.** A session-screen re-render does no markdown or highlight work for unchanged rows; the transcript is byte-identical. **Rollback.** A plain revert; the cache dies with the page.
+
+### Task C8: one accounts poll, and an equal answer keeps the previous value (D-6440) — after C6 merges
+
+**Routing:** band 2. **Needs:** C6, for two things: its pure L1 `sameJson` (in `pwa/src/lib/sameJson.ts`, or under the general name C6 lands with) and its memoised `FleetChrome` value. **Frozen files touched:** none: #1116's content has merged (#1139), so `pwa/src/screens/AccountsScreen.tsx` is free; Step 0 re-measures the hunks. **Lane:** PWA.
+
+**Files:**
+- Modify `pwa/src/stores/fleet.ts`:
+  - `FleetState` ≈:20-56: its roster docstring ≈:24-40, and a new `projected` field;
+  - `readAccounts` ≈:337-358;
+  - the initial state ≈:381-387;
+  - the poll's comment ≈:392-414, which argues for the duplicate polls.
+- Modify these readers:
+  - `pwa/src/fleet/AccountsStrip.tsx` (≈:35-71);
+  - `pwa/src/fleet/useProjectedHome.ts` (≈:9-12, ≈:32-71, ≈:98-105, ≈:129-158);
+  - `pwa/src/screens/AccountsScreen.tsx` (`useAccountsPoll` ≈:115-160; the comments ≈:9-11 and ≈:107-108);
+  - `pwa/src/fleet/FleetCards.tsx` (≈:44);
+  - `pwa/src/fleet/useFleetHealth.ts` (≈:17);
+  - `pwa/src/fleet/useUpdatesView.ts` (≈:233-240).
+- Create `pwa/test/accounts-one-poll.test.tsx` and `pwa/test/use-fleet-health.test.tsx`. Add cases to `stores.test.ts` (beside "the roster poll" ≈:1244) and `use-updates-view.test.tsx` (≈:408).
+- Modify, one commit per file, every case that assumed a component's own poll. Step 0 lists them. Known so far: `accounts-strip`, `useProjectedHome`, `fleet-pieces` (its `stub` ≈:240), `swap-sheet`, `abandon-sheet` (its fetch counts), `start-program`, `add-workspace-sheet`, `add-workspace-door`, `project-card` and `accounts-screen`.
+
+**The shape** (C0's P4, confirmed in the code). `api.accounts()` is called from five places in four modules: `fleet.ts` ≈:340, `AccountsStrip.tsx` ≈:50, `useProjectedHome.ts` ≈:63 and ≈:139, and `AccountsScreen.tsx` ≈:126. Each runs on its own 20 s timer. The strip alone is mounted four times: `FleetScreen.tsx` ≈:235, `AppBar.tsx` ≈:57, `TopBar.tsx` ≈:42 and `PhoneHeader.tsx` ≈:68 (#1139). Every answer is written as new objects, so every reader re-renders every 20 s.
+- **One reader.** The store is the only caller; its poll and `refreshAccounts()` stay as they are. The store gains `projected: ProjectedHome | null | undefined`. It is `undefined` until an answer carries an object or `null`, and is never folded into the server's `null`.
+- **The readers subscribe.** Each hook takes an optional `store` that defaults to `useFleetStore`, the idiom `RunsScreen` uses at ≈:85; `FleetCards` passes `chrome.store`. Each keeps its signature and its inactive answer: `undefined` for `useProjectedHome`, `null` for `useAccountUsage`. No reader refreshes when a sheet opens. That was ruled; `useAccountUsage`'s docstring ≈:90-96 already argues it.
+- **An equal answer keeps the previous value.**
+  - `readAccounts` writes each of `roster`, `usage`, `lanes`, `accountsConnect` and `projected` only when it is not `sameJson` with the current value.
+  - `useFleetHealth` keeps `prev` when the answer is equal.
+  - `useUpdatesView` keeps `prev.view` when the view is equal, but still sets `seq: mine`. `HaltBanner` reads `seq` as the issue number of the last good read (D-4273), so it must advance on every good read.
+- **One reader, one rule.** This is an intended change, in its own commit, and the PR body says so. Every reader now follows the store's rule: a non-array `roster` or `accounts`, or a `projected` that is neither an object nor `null`, keeps the last good value. Today the strip falls back to its placeholder, `useAccountUsage` to `null`, and `useProjectedHome` to `undefined`.
+
+- [ ] **Step 0: Measure.**
+  - The five call sites.
+  - Requests per minute on the fleet screen at 390 and 1280, in each skin.
+  - `sameJson`'s home, and its cost on a 17-lane answer.
+  - Every reader of `updates.seq`.
+  - Every existing case that goes red with the change.
+  - Any `pwa-rings.data.ts` row for an edge C8 removes.
+- [ ] **Step 1: Red.**
+  - `accounts-one-poll.test.tsx` (`<App />`, a counting fetch stub, fake timers advanced 59 s):
+    - "the fleet screen makes 3 /api/accounts requests in 60 s at 390 and at 1280, in both skins";
+    - "no module but stores/fleet.ts calls api.accounts", a source scan;
+    - "a malformed answer leaves the strip's and the sheets' last good rows standing".
+  - `stores.test.ts`:
+    - "an equal answer leaves roster, usage, lanes, accountsConnect and projected unchanged (===)";
+    - "a changed answer replaces only the field that changed";
+    - "projected is undefined before an answer, the server's null after one, and kept across a failed or malformed poll".
+  - `use-fleet-health.test.tsx`: "an equal health answer keeps the previous object (===)".
+  - `use-updates-view.test.tsx`: "an equal answer keeps view (===) and still advances seq".
+  - Kept green, now over the store: `useProjectedHome.test.ts` "renders undefined while inactive — never the server's own null, which it never asked for".
+- [ ] **Step 2: Green.**
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | `AccountsStrip` or `useProjectedHome` polls again | accounts-one-poll | "the fleet screen makes 3…", "no module but stores/fleet.ts calls api.accounts" |
+  | `readAccounts` writes `roster`, `usage` or `projected` unconditionally | stores | "an equal answer leaves … unchanged (===)" |
+  | `sameJson` replaced by `() => true` at the call | stores | "a changed answer replaces only the field that changed" |
+  | `projected` starts at `null` | stores | "projected is undefined before an answer…" |
+  | a malformed `accounts` written as `null` | accounts-one-poll | "a malformed answer leaves … last good rows standing" |
+  | `useFleetHealth` sets every answer | use-fleet-health | "an equal health answer keeps…" |
+  | `useUpdatesView` keeps `prev.seq`, or replaces an equal view | use-updates-view | "an equal answer keeps view (===) and still advances seq" |
+
+- [ ] **Step 4: Per width × skin × mode.** The fleet screen with the gauges and the `+`'s projected home, the Accounts screen, and the swap sheet open. Fixture: seventeen lanes, one signed out, one rolled over. At 360, 390, 1280 and 1920 × both skins × dark and light, before and after; the content is the same in each pair. The PR body carries the requests per minute, before and after.
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/accounts-one-poll.test.tsx test/stores.test.ts test/use-fleet-health.test.tsx test/use-updates-view.test.tsx test/accounts-strip.test.tsx test/useProjectedHome.test.ts test/fleet-pieces.test.tsx
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/swap-sheet.test.tsx test/abandon-sheet.test.tsx test/start-program.test.tsx test/add-workspace-sheet.test.tsx test/add-workspace-door.test.tsx test/project-card.test.tsx test/accounts-screen.test.tsx
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/halt-banner.test.tsx test/fleet-screen.test.tsx test/offline.test.ts test/inspector.test.tsx test/refined-shell.test.tsx test/instrument-shell.test.tsx test/refined-phone.test.tsx
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/pwa-rings.test.ts
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
+
+**Fences.** Where two ranges meet, the later PR absorbs `main` and re-runs the file.
+- **C6** lands first, by the gate. It edits `fleet.ts` ≈:323-326, ≈:482-489 and ≈:538-550, `FleetChrome.tsx` ≈:63-66 and `useUpdatesView.ts` ≈:264, and leaves `readAccounts` to C8. All of that is line-disjoint from C8's hunks.
+- **C9** lands after C8. It edits `FleetCards.tsx` ≈:43, ≈:56, ≈:65-66, ≈:103-109, ≈:152 and ≈:157, next to C8's ≈:44.
+- **T2c** edits `CompactGauges.tsx`, `AppBar.tsx` and `fleet-pieces.test.tsx` ≈:248-350. Its rename of `bar` to `row` reaches `AccountsStrip`'s `compact` prop (≈:35, ≈:113) and `AppBar.tsx` ≈:57. C8 keeps the `lanes={live}` hand-off, and re-runs `fleet-pieces` and `refined-shell`.
+- **Shared test files:**
+  - `stores.test.ts`: C6, T1b (≈:1471), B2 (≈:426-558) and B5;
+  - `fleet-pieces.test.tsx`: T2a (≈:97-128, ≈:159-167) and T2c.
+- **B5** edits `NewSessionSheet.tsx`; C8 edits no line of it.
+- **Watched god files:** none.
+
+**Acceptance.** One `/api/accounts` poll per tab. An unchanged answer changes no `roster`, `usage`, `lanes`, `accountsConnect`, `projected`, health or updates `view` reference; `seq` still advances (D-4273). **Rollback.** A plain revert.
+
+### Task C9: the fleet list is memoised and its one-second clock moves to a leaf (D-6441) — after C6 and C8 merge
+
+**Routing:** band 2. **Needs:** C6 (kept rows, stable chrome and doors, `sameJson`); C8 (it removes `FleetCards`' `useProjectedHome` poll ≈:44 and keeps `projected` equal). **Frozen files touched:** none (`FleetScreen.tsx` ≈:128 is disjoint from #1116). **Lane:** PWA. No watched god file.
+
+**Files:**
+- Create `pwa/src/fleet/lineProps.ts` (L1; `sameJson` and `import type`): `sameLineProps`, every `SessionLine` prop `Object.is` but `childRun` by `sameJson` (`childRunContext` builds it per call, `fleetTree.ts` ≈:92-98); `sameCardProps`, every `ProjectCard` prop `Object.is` but `placement` by `sameJson` (`placementOfRow` builds it per call). No second equality.
+- Modify `pwa/src/fleet/FleetCards.tsx`: drop `useNow(1_000, …)` (≈:56) and `nowMs` (≈:152); memoise `activeRuns` (≈:43), `tree` (≈:65, on `[sessions, projects.knownProjects, activeRuns, acks]`) and `rollup` (≈:66, on `[tree, rollupPrefs, selectedId, wake]`); `onToggle` (≈:103-107, newest rollup from a ref), `onToggleChildren`, `onActions` (≈:108-109) and `coordOf` (≈:157, an id-to-row `Map`) stable.
+- Modify `pwa/src/fleet/useRollupClock.ts` (≈:9-20): it also answers `wake`, which changes only at a window's end.
+- Modify `pwa/src/fleet/ProjectCard.tsx`: `PendingSpawn` (≈:62-83) runs its own `useNow(1_000)` unless a test clock is passed; the `nowMs = Date.now()` default (≈:106) goes, so leaves get `undefined` unless a test passes a clock (`SessionLine.tsx`'s `now ?? tick`, ≈:117-119); `openRunFor` (≈:279-280) answers a module constant `OPEN_RUNS`; export `memo(…, sameCardProps)`.
+- Modify `pwa/src/fleet/ProjectCardHead.tsx` (≈:113-123, ≈:174-176): "active … ago" becomes a leaf `LastActive` on `useNow(30_000)`; the `now = Date.now()` default (≈:123) goes.
+- Modify `pwa/src/fleet/SessionLine.tsx`: `SessionLine` (≈:53) becomes `SessionLineView`; after ≈:244, `export const SessionLine = memo(SessionLineView, sameLineProps)`.
+- Modify `pwa/src/skins/instrument/FleetTable.tsx`, `StatusTable` (≈:150-192): memoise `activeRuns`, `groups` (≈:161), `cards` (≈:166), `tree` (≈:167-168); `lookup` (≈:169) an id-to-row `Map`; `onActions` (≈:184) a `useCallback`; `onOpenRun` (≈:187) `OPEN_RUNS`.
+- Modify `pwa/src/screens/FleetScreen.tsx` (≈:129, re-measured after #1139): `open = onOpen ?? openSession`, stable across the frames it re-renders on (≈:100). `openSession` (today `FleetTable.tsx` ≈:142) and `OPEN_RUNS` are exported from one new module, `pwa/src/fleet/openers.ts` (L4); `FleetScreen.tsx` and `FleetTable.tsx` import both, so there is one session opener, never two.
+- Tests: create `line-props.test.ts`, `fleet-list-memo.test.tsx`.
+
+**Fences** (all line-disjoint; the later PR absorbs `main` and re-runs). `FleetTable.tsx`: T3f ≈:80-81, T2e/T2f ≈:114-134, T3a ≈:135-137, ≈:221-233. `ProjectCardHead.tsx`: T3a ≈:38-43, ≈:84-87, ≈:143-145. `SessionLine.tsx`: T3b ≈:205-241; T3b's `sessionFacts.ts` (≈:53-85, ≈:359-381) feeds C9's probe, so the second re-checks one call per render. `FleetScreen.tsx`: #1116 ≈:137, T2d ≈:186-187, ≈:252-259, T2f ≈:211-216, ≈:232-289, T3a ≈:289, ≈:325, T2a ≈:367-454. No CSS.
+
+**The shape.** C0: 10.8 ms median render (16.1 with commit) for a one-row frame at 80 rows (jsdom); the whole list re-renders each second while a dispatch is pending (≈:56); Instrument's lookup is O(N²). The 1 s clock reaches only a pending spawn's readout; the rollup keys on its own timer's wake. A one-row frame rebuilds the tree, so cards re-render, but one `SessionLine` only; a chrome change with the same fleet re-renders no card. The `Map` answers what `sessions.find` did, pinned by `instrument-list.test.tsx` as it stands (recorded answers; no characterization commit needed).
+
+- [ ] **Step 0: Measure.** Every prop `FleetScreen`, `FleetCards` and `StatusTable` pass down, and which are stable after C6 and C8; every reader of `nowMs`/`now` below `FleetCards`; `useRollupClock`'s callers; C0's jsdom bench (80 rows, one changed).
+- [ ] **Step 1: Red.** `fleet-list-memo` renders `FleetScreen` (Refined) and `FleetTable` in status mode over 20 rows (`ws-a`…`ws-t`, `project-a`…`project-d`, `lane-a`, several with active runs) in a `FleetChromeProvider`; counts from `vi.mock` stand-ins calling the real `sessionFacts` (once per `SessionLine` render) and `ProjectCardHead`:
+  - "the 1 s countdown re-renders no SessionLine" (fake timers, 3 s: the readout advanced, the count did not); "…no ProjectCard";
+  - "a one-row frame re-renders one SessionLine" (through `FleetScreen`, and through `StatusTable`);
+  - "a chrome change with the same fleet re-renders no ProjectCard" (the New session sheet opened through the chrome);
+  - "a folded card's 'active … ago' advances with no fleet frame" (3 minutes).
+  - `line-props`: "an equal childRun is the same props; another run or coordinator is not"; "an equal placement is the same; another pool or kind is not"; "any other prop compares by identity".
+  - Pins kept green: `fleet-screen.test.tsx` "…ticks its clock every second" (≈:2421); `fleet-rollup-render.test.tsx` "active 3h ago" (≈:80); `project-card.test.tsx`'s `nowMs` cases.
+- [ ] **Step 2: Green.** Step 5's suites, the touched ones each alone first.
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | `SessionLine`'s `memo` removed | fleet-list-memo | "…no SessionLine", "a one-row frame…" |
+  | `childRun` by identity | fleet-list-memo, line-props | "a one-row frame…", "an equal childRun…" |
+  | `FleetScreen`'s `open` inline | fleet-list-memo | "a one-row frame…" (`FleetScreen`) |
+  | `onOpenRun` fresh (`ProjectCard`, then `StatusTable`) | fleet-list-memo | "a one-row frame…" |
+  | `StatusTable`'s `onActions` inline | fleet-list-memo | "a one-row frame…" (status) |
+  | the 1 s clock back in `FleetCards` as `nowMs` | fleet-list-memo | "…no ProjectCard" |
+  | `PendingSpawn` without its clock; the `Date.now()` default kept | fleet-screen | "…ticks its clock every second" |
+  | `LastActive` reads the card's clock | fleet-list-memo | "a folded card's…" |
+  | `ProjectCard`'s `memo` removed; `tree` or `rollup` unmemoised | fleet-list-memo | "a chrome change…" |
+  | `placement` by identity | fleet-list-memo, line-props | "a chrome change…", "an equal placement…" |
+
+- [ ] **Step 4: Per width × skin × mode, and the cost.** The fleet with a pending dispatch, a folded quiet card and an orphaned worker at 360, 390, 1280, 1920 × Refined and Instrument (both modes) × dark and light, before and after: nothing changes, and the readout still advances each second. C6's `frameCost` at 1920 and 390, both skins: per 1 s tick during a dispatch and per fleet frame; plus Step 0's jsdom bench.
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/fleet-list-memo.test.tsx test/line-props.test.ts test/project-card.test.tsx test/session-line.test.tsx test/instrument-list.test.tsx test/fleet-rollup-render.test.tsx test/fleet-screen.test.tsx
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/stale-run-attribution.test.tsx test/account-pool-chip.test.tsx test/card-header-facts.test.tsx test/lifecycle-ui.test.tsx test/skin-switch.test.tsx
+      cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/frame-cost.browser.test.ts browser/row-fit.browser.test.ts
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/pwa-rings.test.ts
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
+
+**Acceptance.** A one-row frame re-renders one row, and a pending dispatch's tick one readout, in both skins. **Rollback.** A plain revert.
+
+### Task C10: the Runs board folds its finished runs (D-6442) — after T0
+
+**Routing:** band 2. **Needs:** T0. **Frozen files touched:** none: #1116's content has merged (#1139), so `pwa/src/screens/RunsScreen.tsx` is free; Step 0 re-measures the hunks. **Lane:** PWA only.
+
+**Files:**
+- Modify `pwa/src/screens/RunsScreen.tsx`:
+  - the React import ≈:35;
+  - `finished` ≈:185-187, moved into a `useMemo` on `cold`;
+  - `rowFor` ≈:249-260, which gives a finished row the finished clock;
+  - the Finished group ≈:362-368: its first `shown` rows and the Show more door.
+- Modify `pwa/src/screens/RunRow.tsx`: `RunRow` ≈:30 is wrapped in `memo`.
+- Modify `pwa/src/fleet/runWords.ts` (pure, L1): `FINISHED_FOLD = 20`, `finishedMoreLabel(next, hidden)` and `finishedClock(nowMs)`.
+- Modify `pwa/src/fleet/fleet.css` (`.runs-group` ≈:2415-2424) only if the door needs a rule.
+- Create `pwa/test/runs-finished-fold.test.tsx`.
+- Modify, in its own commit, any `runs-screen.test.tsx` case with more than 20 finished runs. Step 0 counts them.
+
+**The shape** (C0's P6, graded a hypothesis there; in jsdom with dev React, 500 finished `RunRow`s mounted in about 500 ms, and a re-render cost about 33 ms at the median and 116 ms at p90). The Finished group renders every closed run the cold read returns. That is up to 500, because the server's read defaults to `closedLimit ?? 500` (`server/src/coord/store.ts` ≈:3231). While a dispatch is pending, the board ticks every second (≈:179) and hands every row a new `nowMs`. `finished` is re-filtered and re-sorted on every render, and no row is memoised.
+- **The fold.**
+  - The group mounts the newest 20 finished runs, in `finished`'s existing order (newest close first). A quiet "Show more" door under the list adds the next 20.
+  - The door's accessible name comes from `finishedMoreLabel`: "Show 20 more finished runs, 480 not shown", and on the last batch "Show 7 more finished runs".
+  - The group's name keeps the total: `finished (500)`.
+  - Folded rows are not mounted. The fold is screen state, so it resets when the board remounts.
+  - Nothing is removed: an older row's Resume door (`RunRow.tsx` ≈:315) is one Show more away.
+  - When the last batch shows, the door unmounts and focus moves to the Finished heading (`tabIndex={-1}`), never to the body.
+- **Re-renders.** `RunRow` is `memo`.
+  - A finished row takes `finishedClock(now)`: `now` floored to 30 s. It is derived from the board's one `useNow`, with no second timer, so `cadenceOf` still sees one interval.
+  - Every clock read on a finished row is minute-grained: `formatAge` over `dispatchedAt` (≈:157), `resumeNote`'s title (≈:119, `runWords.ts` ≈:376-380) and `childReclaimTitle` (≈:215). `runWarnings` draws nothing for a closed run (`runWords.ts` ≈:584).
+  - The row's other props stay stable between ticks: store session objects, booleans and state setters.
+  - A fleet frame still re-renders a row whose session changed. C6 owns row reuse.
+- **Unchanged.** `ChildReclaimBanner` (≈:295) and `MailScreen` still read the archive whole. `isRunClosed`, `runClosedAt` and the `coldFailed` arms are untouched.
+- **The server stays as it is.** C0 measured `GET /api/runs?closed=1` at 438 to 539 ms for 504 KB. A paged read is a follow-up slug, `closed-runs-paged`, reported only if Step 0 measures that read itself as the larger cost after the fold. It would touch three watched files, and it would have to keep `MailScreen`'s and `ChildReclaimBanner`'s reads whole.
+
+- [ ] **Step 0: Measure.**
+  - Mount and re-render times with 500 closed runs and one pending dispatch, before and after. Measure them with a React `Profiler` written in `runs-finished-fold.test.tsx`, so the measuring code is committed; the numbers go to the PR body.
+  - The cold read's wall time beside them.
+  - Every reader of `RunRow`.
+  - Every existing case with more than 20 finished runs.
+- [ ] **Step 1: Red.**
+  - First, in its own commit and green on the base, a characterization case over a 25-run fixture, with the ids recorded as values: "the first 20 finished rows are today's newest 20, in today's order".
+  - `runs-finished-fold.test.tsx`:
+    - "500 closed runs mount at most 20 RunRow", counted as `li.run-row` in the Finished group;
+    - "Show more reveals the next 20";
+    - "the Finished group's name keeps the total";
+    - "a 1 s tick re-renders no finished RunRow". Setup: a pending dispatch, a fake clock that starts 1 s past a 30 s boundary, and `runWarnings` spied through a partial `vi.mock` of `runWords.ts`, counting calls for closed runs;
+    - "the last Show more moves focus to the Finished heading, never the body";
+    - "finishedMoreLabel names the next batch and what stays hidden";
+    - "finishedClock floors to 30 s".
+  - Kept green as regression pins, in `runs-screen.test.tsx`:
+    - "moves the in-flight clock every second — the readout the operator watches actually advances" (≈:881);
+    - "asks for the slow cadence when no row is spawning — both directions, or it is not a gate" (≈:903).
+- [ ] **Step 2: Green.**
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | every finished row mounted | runs-finished-fold | "500 closed runs mount at most 20 RunRow" |
+  | the fold takes the oldest 20 | runs-finished-fold | "the first 20 finished rows are today's newest 20…" |
+  | Show more adds everything left, or one row | runs-finished-fold | "Show more reveals the next 20" |
+  | the group's name counts the shown rows | runs-finished-fold | "the Finished group's name keeps the total" |
+  | `memo` removed from `RunRow` | runs-finished-fold | "a 1 s tick re-renders no finished RunRow" |
+  | finished rows handed the 1 s `now` | runs-finished-fold | "a 1 s tick re-renders no finished RunRow" |
+  | the finished clock as a second `useNow(30_000)` | runs-screen | "asks for the slow cadence when no row is spawning…" |
+  | focus left where the door was | runs-finished-fold | "the last Show more moves focus to the Finished heading…" |
+  | the label's hidden count off by one batch | runs-finished-fold | "finishedMoreLabel names the next batch…" |
+
+- [ ] **Step 4: Per width × skin × mode.** The board with 500 finished runs, two active programmes and one pending dispatch, then again after Show more. At 360, 390, 1280 and 1920 × both skins × dark and light, before and after. The PR body carries Step 0's numbers.
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/runs-finished-fold.test.tsx test/runs-screen.test.tsx test/mail-screen.test.tsx test/start-program.test.tsx test/abandon-sheet.test.tsx
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/pwa-rings.test.ts
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
+
+**Fences.**
+- **#1139** (S5, merged) edited `RunsScreen.tsx`'s import and back button; C10's hunks (≈:35, ≈:185-187, ≈:249-260, ≈:362-368) were measured before it merged, so Step 0 re-measures them on `main`.
+- **T2d** counts open runs in `navBadges.ts`, `AppBar.tsx`, `PhoneHeader.tsx` and `FleetScreen.tsx`. C10 edits none of them, and neither task changes `isRunClosed`, `ACTIVE_RUN_STATES` or the cold read.
+- **Other tasks:** none edits `RunRow.tsx` or `runWords.ts`.
+- **Watched god files:** none.
+
+**Acceptance.** The Runs board mounts at most 20 finished rows until asked, and a one-second tick re-renders no finished row. **Rollback.** A plain revert.
+
 ---
 
 ## Acceptance (the matrix, per PR)
@@ -1250,7 +1982,18 @@ What the not-yet-started skins tasks inherit from this plan, so they build on it
 - **D-6388** — `registry-reads-bounded` (Task C1): registry rows read with bounded concurrency and only the field files the listing shows, the same answers with absent and unreadable kept apart.
 - **D-6389** — `flip-before-parity` (Task S18 (W2), brought forward): on the operator's note of 2026-10-22, W2's S18 lands before S17's parity test, on an Instrument whose S11, S12 and S14 to S16 are unbuilt; its Verify runs without S17's suite, and its narrowed-desktop render checks today's Instrument below 900. S17 still runs when its gates open, on the flipped default. S18 keeps D-5096 and D-5479 otherwise.
 
-Issued and unused: none. A further departure takes a number from the ledger.
+- **D-6434** — `commands-and-pr-read-one-row` (Task C2): `sessionCommands` and `prTasks` read one registry row, the PR route reads its tasks beside pr-state, and the commands route reads the most recent full skill listing from a bounded backward read, never the whole transcript (an intended change: today's last listing is often a 1 to 4 skill delta). `attributionVerdict` and the mail lanes are left for `attribution-single-row`.
+- **D-6435** — `the-tick-reads-the-registry-once` (Task C3): the watcher's task sweep takes the tick's records, and `detectDialogs` captures panes through `mapBounded`; a tests-only fallback read stays.
+- **D-6436** — `projects-from-the-watchers-listing` (Task C4): `/api/projects` takes its registry half from the watcher's latest listed tick while it is fresh, never from a stale or unlistable one, and walks and caches the projects root concurrently.
+- **D-6437** — `a-wheel-over-code-scrolls-the-transcript` (Task C5): no y-axis overscroll containment on a box inside the transcript; x-only where a box scrolls sideways.
+- **D-6438** — `the-fleet-store-keeps-unchanged-rows` (Task C6): a frame keeps unchanged rows and arrays (`sameJson`, one pure equality), the shell subscribes narrowly, `FleetChrome`'s value is memoised and the snapshot is throttled; `frameCost` joins the browser harness as test code.
+- **D-6439** — `the-chat-rows-are-memoised` (Task C7): one row barrier in `MeasuredItem`, stable `ChatList` callbacks, a bounded highlight cache and hoisted markdown plugins.
+- **D-6440** — `one-accounts-poll` (Task C8): the fleet store is the one `/api/accounts` reader; an equal answer keeps the previous value, and every reader keeps its last good value on a malformed answer (an intended change).
+- **D-6441** — `the-fleet-list-is-memoised` (Task C9): the fleet list's trees and rows are memoised, the one-second clock reaches only its leaves, and one session opener serves both skins.
+- **D-6442** — `the-runs-board-folds-finished-runs` (Task C10): the Runs board mounts the newest 20 finished runs behind Show more, on a 30-second clock for finished rows.
+- **D-6443** — `s5-landed-with-two-departures` (W2 Task S5, landed by #1139): S5 as landed edits `FleetHead.tsx` (the pool-lag readout moves into `poolLag.tsx` so `PhoneHeader` shares it), against Task S5's "does not edit FleetHead.tsx", and `--phone-nav-h` pads the fleet route only. The other five slugs in #1139's body are implementation choices within S5's text (the programme ledger's R13).
+
+C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issued and unused: none. A further departure takes a number from the ledger.
 
 ## Out of scope
 
@@ -1259,6 +2002,8 @@ Issued and unused: none. A further departure takes a number from the ledger.
 - The push notification's answer buttons and the coordinator's `/api/asks` routes (the ask's answer path is unchanged).
 - Typing a whole message as one bracketed paste (the paste-chip plan's open measurement), the mail lanes' stash racing a human in the drawer, the `ccd` settle poll, `ws-add`'s fetch, a `ws-add` that returns before its settle, and registry reads in parallel: each needs its own measurement on Linux and its own plan.
 - Any change to how `ccd` stamps routing, or to the hook.
+- Track C's follow-ups, each named by slug for a later plan: `attribution-single-row` (`attributionVerdict`, the mail ingress and the mail ack read one row, widening `SingleRead` with two kinds that keep D-1144's distinction); `retire-single-read-resplits` (the four hand re-splits move onto those kinds); `stream-unbuilt-is-unmeasurable` (the session stream's resolve answers a listed but unbuildable row as unmeasured); `closed-runs-paged` (a paged closed-runs read, only if C10's Step 0 measures the read itself as the cost).
+- C0's causes not proposed until measured: the breathing dots' cost on a real GPU; an agent-link priority lane; skipping the view transition; replying to a dialog answer before its settle.
 
 ## Review log
 
@@ -1364,3 +2109,10 @@ The held-out panel read T1a's PR #1133 at `2e4713b87` and confirmed nine finding
 | F4 | minor | "every other reader keeps the 30-minute cut" missed the stall watch's unaged read | the sentence names the readers that display or answer the envelope, and the stall watch's run verdict apart |
 
 F2's one-tick hold is recorded beside F1 in "The decider". No number was needed: both stay under D-6324.
+
+### Rev 4: Track C from C0's report
+
+C0 ran as the coordinator's own read-only measurement (the programme ledger's R11): four finders (the server's read routes, its push paths, the PWA in Chrome over the production build with a fixture fleet of 80 sessions and 17 lanes, and the PWA's render fan-out), each checked by a refuter. Its ranked causes became C2 to C10 (D-6434 to 6442), and C1 gained a correction: a registry read is serial by row (92 rounds of about 55 to 85 ms), not by request, and C1 moves B4's limiter into one shared bounded pool.
+
+Three Opus drafters wrote the sections; three Opus lenses (grounding, fences and rings, executability) found 47 issues, and a Sonnet refute pass upheld all 47. The coordinator ruled on the cross-cutting ones before a revision round: one bounded pool (`server/src/bounded.ts`, not a name beside the account pools' `pools.ts`); C2 narrowed to the commands and PR routes, leaving `attributionVerdict` to `attribution-single-row` rather than fold D-1144's two conditions into one answer; the most recent full skill listing from a bounded backward read; C8 the one `/api/accounts` reader and C6 the owner of `sameJson`; C4 never answering from a stale or unlistable tick; C7 after C6, C8 and T1c, and C9 after C6 and C8. A cross-task check of the revision found 13 contradictions (a chunk-size slip, a cut-line rule that would drop a file's first line, a census missing from C2's Verify, fences against T2a, T3c, T3d and T3e, #1139's fourth strip mount, a second session opener), all applied here.
+
