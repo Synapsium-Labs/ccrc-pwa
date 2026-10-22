@@ -1443,3 +1443,164 @@ describe('status recall_off: the presence record, counts only (W2-D31; W2-1 Task
     expect(blockOf(s.env)).toEqual({ seen_ms: null, files: 0, unreadable: 0 });
   });
 });
+
+// ── W2-2a Task 5 (W2-D39, W2-D45): the seam variables inside a pane are refused before any tmux spawn ─────────────
+// Spec §8.2: the headless seam is honoured only when TMUX_PANE is unset; inside a pane the answer is exit 2
+// headless-in-pane (C4's in-pane half; C31's "set inside a pane"). W2-2a refuses; it reads no value beyond whether it is
+// empty. The env identity, ARM, ASOF and the marker are W2-2b's. The pure describe runs everywhere.
+describe('W2-D39: decideSeamInPane refuses the seam variables inside a pane (W2-2a Task 5)', () => {
+  const lib = async () => await import('../../ccd/history/lib.mjs');
+  const NONE: { session: string | null; arm: string | null; asof: string | null } = { session: null, arm: null, asof: null };
+  const ASOF = 'd4d4d4d4-4444-4444-8444-444444444444';
+  const IN_PANE = { ok: false, rc: 2, reason: 'headless-in-pane' };
+
+  it('the seam is engaged iff one of its three values is non-empty (W2-D45)', async () => {
+    const { recallSeamEngaged } = await lib();
+    expect(recallSeamEngaged(NONE)).toBe(false);
+    expect(recallSeamEngaged({ session: '', arm: '', asof: '' }), 'an empty variable is unset').toBe(false);
+    expect(recallSeamEngaged({ ...NONE, session: ID })).toBe(true);
+    expect(recallSeamEngaged({ ...NONE, arm: 'fixture-arm' })).toBe(true);
+    expect(recallSeamEngaged({ ...NONE, asof: ASOF })).toBe(true);
+    expect(recallSeamEngaged({ session: '', arm: '', asof: 'not-a-uuid' }), 'no value is checked here').toBe(true);
+  });
+
+  it('a pane with any seam value is 2 headless-in-pane; no pane, or no seam value, passes to the tmux path', async () => {
+    const { decideSeamInPane, REASONS, EXIT } = await lib();
+    expect(REASONS['headless-in-pane'], 'the W1 word, not a new one').toBe(EXIT.REFUSED);
+    const engaged = [{ ...NONE, session: ID }, { ...NONE, arm: 'fixture-arm' }, { ...NONE, asof: ASOF }, { session: ID, arm: 'fixture-arm', asof: ASOF }];
+    for (const recall of engaged) {
+      expect(decideSeamInPane({ pane: '%1', recall }), JSON.stringify(recall)).toEqual(IN_PANE);
+      expect(decideSeamInPane({ pane: null, recall }), `no pane: ${JSON.stringify(recall)}`).toEqual({ ok: true });
+    }
+    expect(decideSeamInPane({ pane: '%1', recall: NONE }), 'CONTROL: a pane and no seam is today\'s path').toEqual({ ok: true });
+    expect(decideSeamInPane({ pane: '%1', recall: { session: '', arm: '', asof: '' } }), 'CONTROL: empty values are no seam').toEqual({ ok: true });
+  });
+
+  it('TMUX_PANE set means defined: an empty or malformed pane is still a pane', async () => {
+    const { decideSeamInPane } = await lib();
+    for (const pane of ['', '-x', '%', 'not a pane']) {
+      expect(decideSeamInPane({ pane, recall: { ...NONE, asof: ASOF } }), JSON.stringify(pane)).toEqual(IN_PANE);
+      expect(decideSeamInPane({ pane, recall: NONE }), `CONTROL: ${JSON.stringify(pane)} with no seam`).toEqual({ ok: true });
+    }
+  });
+});
+
+// The same rule, spawned, on one seeded family: in a pane every read verb and the --regex door answer
+// headless-in-pane with no tmux call, no counter line and nothing recalled; the CONTROL is the same pane with no seam
+// variable, which derives the identity and recalls the family's word.
+describe('W2-D39: the read verbs refuse the seam variables inside a pane, before any tmux spawn (C4, C31; W2-2a Task 5)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const SP_T = 'c3c3c3c3-3333-4333-8333-333333333333';
+  const SP_ROW = 'c3c3c3c3-0000-4000-8000-000000000001';
+  const WORD = 'zqseampane';
+  const ASOF = 'd4d4d4d4-4444-4444-8444-444444444444';
+  const SEAM: ReadonlyArray<readonly [string, Record<string, string>]> = [
+    ['CCRC_RECALL_SESSION alone', { CCRC_RECALL_SESSION: ID }],
+    ['CCRC_RECALL_ARM alone', { CCRC_RECALL_ARM: 'fixture-arm' }],
+    ['CCRC_RECALL_ASOF alone (C31)', { CCRC_RECALL_ASOF: ASOF }],
+    ['all three', { CCRC_RECALL_SESSION: ID, CCRC_RECALL_ARM: 'fixture-arm', CCRC_RECALL_ASOF: ASOF }],
+  ];
+  /** Every read verb and the --regex child's door, each with argv that parses; the refusal comes before the store. */
+  const VERBS: ReadonlyArray<readonly string[]> = [
+    ['grep', WORD, '--json'], ['grep', '--regex', 'zqseam(pane|none)', '--json'], ['describe', SP_ROW, '--json'],
+    ['expand', SP_ROW, '--json'], ['tree', '--json'],
+  ];
+  type Run = ReturnType<typeof healthHh.runCli>;
+  const ans = (r: Run): unknown[] => [r.code, r.json?.['reason']];
+  const calls = (box: HistoryBox): string => path.join(box.home, 'tmux-calls');
+  const spool = (box: HistoryBox): string => {
+    const p = hist(box, 'spool', `${ID}.jsonl`);
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+  };
+  const ENVELOPE_KEYS = ['scope', 'indexed_through_ms', 'lag_s', 'items', 'shown', 'total', 'next', 'store_id'] as const;
+  let seeded: HistoryBox | null = null;
+  /** One family, one question and its answer, both carrying WORD; captured once for the describe. */
+  async function seededBox(): Promise<HistoryBox> {
+    if (seeded !== null) return seeded;
+    const fx = await import('./historyFixtures.js');
+    const box = makeHistoryBox('ccrc-hist-cli-seampane-', { role: 'fleet', shim: true });
+    const base = { sessionId: SP_T, cwd: '/home/u/tree/demo' };
+    healthHh.seedFamily(box, { id: ID, project: 'demo', uuid: SP_T, generation: G1, rows: [
+      fx.userRow({ ...base, uuid: SP_ROW, ts: '2026-10-01T10:00:01.000Z', text: `${WORD} the question` }),
+      fx.assistantRow({ ...base, uuid: 'c3c3c3c3-0000-4000-8000-000000000002', ts: '2026-10-01T10:00:02.000Z',
+        text: `${WORD} the answer`, requestId: 'req_seampane_1', msgId: 'msg_seampane_1' }),
+    ] });
+    seeded = box;
+    return box;
+  }
+
+  it('C4 and C31, in-pane half: each seam variable in a pane is 2 headless-in-pane for every read verb, with no tmux call, no counter line and nothing recalled; CONTROL: the same pane without it reads the family', async () => {
+    const box = await seededBox();
+    const pane = healthHh.withPane(box, ID);
+    fs.rmSync(calls(box), { force: true });
+    // CONTROL: the same pane and family, no seam variable. Every verb derives the identity from tmux, and the family's
+    // text, counts and a counter line are there to be hidden.
+    for (const argv of VERBS) {
+      const r = healthHh.runCli(box, [...argv], { env: pane });
+      const what = `CONTROL ${argv.join(' ')}: ${r.stderr}`;
+      expect(r.json?.['reason'], what).not.toBe('headless-in-pane');
+      if (argv[0] === 'grep' || argv[0] === 'expand') {
+        expect(r.code, what).toBe(0);
+        expect(r.stdout, `${what} the family's text is recalled`).toContain(WORD);
+      }
+      if (argv[0] === 'tree') {
+        expect(r.code, what).toBe(0);
+        expect(r.json?.['scope'], `${what} the header counts the transcript`).toMatchObject({ transcripts: 1 });
+      }
+    }
+    expect(fs.readFileSync(calls(box), 'utf8').trim().split('\n'), 'CONTROL: tmux was asked once per verb').toHaveLength(VERBS.length);
+    const counted = spool(box);
+    expect(counted, 'CONTROL: a read with an identity writes a counter line').not.toBe('');
+    fs.rmSync(calls(box), { force: true });
+    for (const [label, seam] of SEAM) {
+      for (const argv of VERBS) {
+        const r = healthHh.runCli(box, [...argv], { env: { ...pane, ...seam } });
+        const what = `${label}, ${argv.join(' ')}`;
+        expect(ans(r), `${what}: ${r.stderr}${r.stdout}`).toEqual([2, 'headless-in-pane']);
+        expect(`${r.stdout}${r.stderr}`, `${what}: nothing recalled`).not.toContain(WORD);
+        expect(ENVELOPE_KEYS.map((k) => r.json?.[k]), `${what}: no scope, count, cursor or store id`)
+          .toEqual([null, null, null, [], 0, 0, null, null]);
+      }
+      const human = healthHh.runCli(box, ['grep', WORD], { env: { ...pane, ...seam } });
+      expect(human.code, label).toBe(2);
+      expect(human.stdout.trim(), `${label}: the human refusal line`).toMatch(/^exit 2 headless-in-pane: /);
+      expect(human.stdout, label).not.toContain(WORD);
+    }
+    expect(fs.existsSync(calls(box)), 'no tmux spawn under any seam variable').toBe(false);
+    expect(spool(box), 'no counter line: no identity was derived').toBe(counted);
+  }, 240_000);
+
+  it('CONTROL, no pane: the seam variables change nothing, and every read verb still answers 2 no-identity with no tmux call (C4, no-pane half)', async () => {
+    const box = await seededBox();
+    healthHh.withPane(box, ID);   // a working tmux IS on PATH; the env below carries no TMUX_PANE
+    fs.rmSync(calls(box), { force: true });
+    for (const [label, seam] of SEAM) {
+      for (const argv of VERBS) {
+        const r = healthHh.runCli(box, [...argv], { env: seam });
+        expect(ans(r), `${label}, ${argv.join(' ')}: ${r.stderr}${r.stdout}`).toEqual([2, 'no-identity']);
+        expect(r.stdout, label).not.toContain(WORD);
+      }
+    }
+    expect(fs.existsSync(calls(box))).toBe(false);
+  }, 240_000);
+
+  it('an empty or malformed TMUX_PANE is a pane; an empty seam variable, or a CCRC_RECALL_ name outside the three, is no seam (W2-D45)', async () => {
+    const box = await seededBox();
+    const pane = healthHh.withPane(box, ID);
+    fs.rmSync(calls(box), { force: true });
+    for (const p of ['', '-x']) {
+      const r = healthHh.runCli(box, ['grep', WORD, '--json'], { env: { ...pane, TMUX_PANE: p, CCRC_RECALL_ASOF: ASOF } });
+      expect(ans(r), `TMUX_PANE=${JSON.stringify(p)}: ${r.stderr}`).toEqual([2, 'headless-in-pane']);
+      const control = healthHh.runCli(box, ['grep', WORD, '--json'], { env: { ...pane, TMUX_PANE: p } });
+      expect(ans(control), `CONTROL: TMUX_PANE=${JSON.stringify(p)} with no seam is today's answer`).toEqual([2, 'no-identity']);
+    }
+    expect(fs.existsSync(calls(box)), 'neither pane is %<n>, so tmux is never asked').toBe(false);
+    const empty = healthHh.runCli(box, ['grep', WORD, '--json'],
+      { env: { ...pane, CCRC_RECALL_SESSION: '', CCRC_RECALL_ARM: '', CCRC_RECALL_ASOF: '' } });
+    expect(ans(empty), `three empty variables are no seam: ${empty.stderr}`).toEqual([0, undefined]);
+    expect(empty.stdout).toContain(WORD);
+    const other = healthHh.runCli(box, ['grep', WORD, '--json'], { env: { ...pane, CCRC_RECALL_OTHER: ASOF } });
+    expect(ans(other), `a name outside the three is not read: ${other.stderr}`).toEqual([0, undefined]);
+    expect(other.stdout).toContain(WORD);
+  }, 240_000);
+});

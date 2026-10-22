@@ -4224,6 +4224,22 @@ function refuseScope(reason) {
   return { ok: false, rc: EXIT.REFUSED, reason };
 }
 
+/** W2-D45's rule, spelled once: the headless seam (§8.2) is engaged iff at least one of its three values is
+ *  non-empty. The values are what the CLI read from CCRC_RECALL_SESSION, CCRC_RECALL_ARM and CCRC_RECALL_ASOF, each
+ *  null when the variable is undefined; an empty variable reads as unset. No value's grammar is checked here. */
+export function recallSeamEngaged({ session, arm, asof }) {
+  return [session, arm, asof].some((v) => typeof v === 'string' && v !== '');
+}
+
+/** W2-D39, the CLI half of §8.2's "Inside a pane: exit 2 headless-in-pane" (C4, C31). The read verbs run it after
+ *  §8.3's Darwin and role rows and before any tmux spawn. TMUX_PANE is set iff it is defined (W2-D45), so an empty or
+ *  malformed pane is still a pane, and a seam value inside one is refused. Anything else passes to the tmux path
+ *  unchanged, which answers no-identity when there is no pane. */
+export function decideSeamInPane({ pane, recall }) {
+  if (typeof pane === 'string' && recallSeamEngaged(recall)) return refuseScope('headless-in-pane');
+  return { ok: true };
+}
+
 /** The session's id from tmux (§8.2, D-4675 (history-identity-from-tmux)). The
  *  caller ran `tmux display-message -p -t "$TMUX_PANE" '#S'` bounded at
  *  TMUX_DEADLINE_MS, ALWAYS with `-t`, and passes what came back; `tmux` is

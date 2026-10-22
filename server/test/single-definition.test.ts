@@ -5461,10 +5461,10 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     expect(m![1]!.split(',').map((s) => s.trim().replace(/^'|'$/g, '')).sort()).toEqual(kinds.sort());
   });
 });
-describe('ccrc history: process.env is read by name, from a four-name allow-list (spec 2026-10-05 §10.1 Seams)', () => {
-  // D-4247: no env var arms a seam in the shipped modules. A test's faults arrive through
-  // a NODE_OPTIONS preload it writes itself, and `process.env` is read only for these four names.
-  const ALLOWED = ['CCRC_SESSION_GENERATION', 'CLAUDECODE', 'HOME', 'TMUX_PANE'];
+describe('ccrc history: process.env is read by name, from an allow-list (spec 2026-10-05 §10.1 Seams)', () => {
+  // D-4247: no env var arms a test seam in the shipped modules. A test's faults arrive through a NODE_OPTIONS
+  // preload it writes itself, and `process.env` is read only for these names; W2-2a adds §8.2's three (W2-D39).
+  const ALLOWED = ['CCRC_RECALL_ARM', 'CCRC_RECALL_ASOF', 'CCRC_RECALL_SESSION', 'CCRC_SESSION_GENERATION', 'CLAUDECODE', 'HOME', 'TMUX_PANE'];
   const READS = /process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*(['"])([A-Za-z_][A-Za-z0-9_]*)\2\s*\])?/g;
   const envReads = (code: string): string[] => [...code.matchAll(READS)].map((m) => m[1] ?? m[3] ?? '<not by name>');
 
@@ -8465,5 +8465,32 @@ describe('ccrc history: the as-of cut is defined once, in lib.mjs (W2-D38; W2-2a
 
   it('asOfCut, asOfEntrySql and asOfBinds are each defined in lib.mjs alone', () => {
     for (const name of ['asOfCut', 'asOfEntrySql', 'asOfBinds']) expect(definers(name), name).toEqual(['ccd/history/lib.mjs']);
+  });
+});
+
+// ── W2-2a Task 5 (W2-D39): the three seam names, read once each, by name, in cli.mjs alone ─────────────────────────
+// APPENDED after the file's last describe, for the reason the blocks above state: session-hook.test.ts's citation audit
+// cites this file by line. The allow-list describe holds every read to a name it lists. This one holds the three seam
+// names to their exact holders (spec §10.1, "pinned in exact-holders form"), so a second read, a read in another
+// module, a computed read, a bracketed read or a quoted name each go red here.
+describe('ccrc history W2-2a Task 5: the three CCRC_RECALL_ seam names are each read once, by name, in cli.mjs alone (W2-D39)', () => {
+  const SEAM_NAME = /(process\.env\.)?(CCRC_RECALL_[A-Za-z0-9_]*)/g;
+  const seamUses = (code: string): string[] =>
+    [...code.matchAll(SEAM_NAME)].map((m) => `${m[1] === undefined ? 'named' : 'read'} ${m[2]}`);
+
+  it('CONTROL: the needle tells a dotted read from a bare, bracketed or quoted name, and sees no comment line', () => {
+    expect(seamUses('const a = process.env.CCRC_RECALL_ASOF ?? null;')).toEqual(['read CCRC_RECALL_ASOF']);
+    expect(seamUses("const k = 'CCRC_RECALL_ARM'; const v = process.env[k];")).toEqual(['named CCRC_RECALL_ARM']);
+    expect(seamUses("const s = process.env['CCRC_RECALL_SESSION'];")).toEqual(['named CCRC_RECALL_SESSION']);
+    expect(seamUses(stallCodeText('  // CCRC_RECALL_ASOF is read below\n * CCRC_RECALL_ARM\nconst x = 1;'))).toEqual([]);
+  });
+
+  it('cli.mjs reads CCRC_RECALL_SESSION, CCRC_RECALL_ARM and CCRC_RECALL_ASOF once each, dotted, and no other history module names one', () => {
+    const uses = HISTORY_MJS.flatMap((f) => seamUses(stallCode(f)).map((u) => `${rel(f)}: ${u}`)).sort();
+    expect(uses).toEqual([
+      'ccd/history/cli.mjs: read CCRC_RECALL_ARM',
+      'ccd/history/cli.mjs: read CCRC_RECALL_ASOF',
+      'ccd/history/cli.mjs: read CCRC_RECALL_SESSION',
+    ]);
   });
 });

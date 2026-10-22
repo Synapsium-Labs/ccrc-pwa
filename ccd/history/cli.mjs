@@ -56,7 +56,7 @@ import { spawnSync } from 'node:child_process';
 import {
   REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinalJson, redactFinalText, redactFinalLines, makeBelt, beltUnits,
   REDACT_SOURCES_META, parseRedactSources,
-  decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, paneOk,
+  decideSeamInPane, decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, paneOk,
   decideRecallOff, parseSpoolLine,
   readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
@@ -454,6 +454,7 @@ export function render(env) {
 //     1. the argument whitelist (parseReadArgs; READ_OPTIONS is the one list per verb);
 //     2. §8.3's Darwin and recorded-role rows (decideCliStore): 9 before any identity, so a server box needs no
 //        pane;
+//     2a. the seam variables inside a pane (decideSeamInPane, W2-D39): 2 headless-in-pane, before any tmux spawn;
 //     3. the identity (decideIdentity over a bounded `tmux display-message -p -t "$TMUX_PANE" '#S'`);
 //     4. the harness (decideHarness over $REG/<id>.harness: unsupported and unreadable are refusals, never 6);
 //     5. the generation (resolveGeneration: CCRC_SESSION_GENERATION, then $REG/<id>.generation, then newest);
@@ -688,6 +689,17 @@ async function readContextIn(home, verb, parsed, nowMs, seen) {
     return refusal(d.exit, d.reason, null, null, null);
   }
   const pane = process.env.TMUX_PANE ?? null;
+  // W2-D39: the seam variables inside a pane are 2 headless-in-pane, decided before any tmux spawn (C4, C31). Each of
+  // the three is read here, by name and once; lib decides what set means (W2-D45).
+  const inPane = decideSeamInPane({
+    pane,
+    recall: {
+      session: process.env.CCRC_RECALL_SESSION ?? null,
+      arm: process.env.CCRC_RECALL_ARM ?? null,
+      asof: process.env.CCRC_RECALL_ASOF ?? null,
+    },
+  });
+  if (!inPane.ok) return refusal(inPane.rc, inPane.reason, null, null, null);
   const who = decideIdentity({ pane, tmux: paneOk(pane) ? tmuxSession(pane) : null });
   if (!who.ok) return refusal(who.rc, who.reason, null, null, null);
   const id = who.id;

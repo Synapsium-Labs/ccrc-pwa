@@ -518,6 +518,10 @@ export interface ScopeRefusal<R extends string> { ok: false; rc: 2; reason: R }
 export interface TmuxRead { settled: boolean; status: number | null; stdout: string }
 export function decideIdentity(i: { pane: string | null; tmux: TmuxRead | null }):
   { ok: true; id: string } | ScopeRefusal<'no-identity' | 'bad-id'>;
+/** The headless seam's three values as the CLI read them (§8.2; W2-D39, W2-D45): null when the variable is undefined. */
+export interface RecallSeamValues { session: string | null; arm: string | null; asof: string | null }
+export function recallSeamEngaged(recall: RecallSeamValues): boolean;
+export function decideSeamInPane(i: { pane: string | null; recall: RecallSeamValues }): { ok: true } | ScopeRefusal<'headless-in-pane'>;
 export interface GenerationChoice { value: string | null; via: 'env' | 'registry' | 'newest' }
 export function resolveGeneration(i: { envGen: string | null; regGen: Presence<string> }): GenerationChoice;
 export function decideHarness(p: Presence<string>):
