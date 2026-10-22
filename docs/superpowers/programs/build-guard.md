@@ -3,8 +3,8 @@
 Spec: `docs/superpowers/specs/2026-10-18-claude-binary-lifecycle-design.md` §7.6 and invariant 11   Plan: `docs/superpowers/plans/2026-10-20-build-guard-878-follow-up.md` (lands with the wave's PR)   Workspace: a fresh child (one PR)
 Home project: `ccrc-pwa`   Coordinator: the ccrc-history programme's coordinator, by the operator's ruling of 2026-10-20
 A one-wave follow-up to `claude-binary-lifecycle`'s CB1b (#878).
-**Status: wave 1's wave-done accepted 2026-10-20** (run 697, #967, at `a2b60a743`). Review run 703 is briefed and
-waits on the daily dispatch cap.
+**Status: landed and retired.** #967 merged on 2026-10-20 as `2e3a0959d`, at `659321646` (run 697), after three
+reviews and two fix rounds. The programme has no open run. The fleet gets the arm through the operator's rollout.
 
 **What this program is.** #878 (CB1b of claude-binary-lifecycle, merged as `4deebe5b3`) gave the session hook's deny
 arm a `build` class: a child session never installs, updates or selects a Claude Code build. Three security findings
@@ -21,7 +21,7 @@ the hook's deny arm is the guard that binds them. This programme closes the gaps
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | The hook's `build` deny arm, in deny mode only: the CLI arm, build-path writes, the files the launcher, the roll and the guard trust, and the upstream id read from the children's deny file (plan Tasks 1-4); CLAUDE.md's SAFETY bullet on builds and the W1 plan's pointer sentences (Task 5) | #967 | run 697, wave-done accepted at `a2b60a743`; review 703 waits on the dispatch cap |
+| 1 | The hook's `build` deny arm, in deny mode only: the CLI arm, build-path writes, the files the launcher, the roll and the guard trust, and the upstream id read from the children's deny file (plan Tasks 1-4); CLAUDE.md's SAFETY bullet on builds and the W1 plan's pointer sentences (Task 5) | #967 | **merged** 2026-10-20 as `2e3a0959d` at `659321646` (run 697; reviews 703, 712 and 715; two fix rounds) |
 
 ## Decisions & deviations
 
@@ -64,6 +64,34 @@ the hook's deny arm is the guard that binds them. This programme closes the gaps
     entries say, that nothing a child controls turns the arm off where `main`'s would still deny, and that no
     top-level session is denied anything `main` allows. For each residual it says whether a child's ordinary work
     would plausibly produce it or only a deliberate evasion, and which must be fixed before merge.
+- **Review 703 (the wave) ran in the coordinator's session, by the operator's instruction** ("do the review here").
+  Review run 703 was briefed but never dispatched while the daily cap held it, so it was closed as abandoned, with no
+  fleet act, and the same held-out panel ran in the coordinator's own session: four Opus lenses (one on fail-open
+  paths and false positives) and a residual judge, with three Sonnet refuters per finding. It confirmed 28 minor
+  findings and refuted 3, and no lens was unverified. The judge sorted the residuals into 26 classes and found none
+  that must be fixed before merge. Its first probe batch was stopped by Claude Code's own removal check and was not
+  re-issued, so the removal spellings were judged by class, not measured.
+- **Fix round 1 (ruling 7313, the coordinator's):** text and tests only, with no regex change and no new number: a
+  pin for the deny file's byte cap under a multi-byte locale, a pin for the pair rule's `update` half, the plan's
+  entries, CLAUDE.md's residual list and the PR body made to agree, every repetition the wave adds stated as bounded,
+  the bare `cd` named as a residual, and the inherited cost route (a very long command that makes jq give up) added
+  to the cost line.
+- **Review 712 (fix round 1):** 2 minor findings. **Fix round 2 (ruling 7337):** the byte-cap pin now reds through its
+  own logic (a valid deny file over the cap in bytes and within it in characters), not through the argument-size
+  limit, and the bare-`cd` wording is corrected.
+- **Review 715 (fix round 2):** 4 minor findings, none in code or test behaviour; ruled merge without a third round.
+  Two were text in the plan's entries, corrected in place by the ledger PR that records this: D-6066's amended
+  sentence (a broken join, and a commit citation that named the wrong measurement) and D-6064's bare-`cd` sentence,
+  which named only one of the two forms that let an earlier bare `cd` reach later segments (the safe direction:
+  more denies). The wave-done's exact padding counts were wrong (the test asserts bounds, which hold), and one green
+  measurement was the reviewer's, not in the worker's evidence.
+- **2026-10-20 — landed.** #967 merged as `2e3a0959d` at `659321646`; run 697 closed and the programme retired. It
+  defines D-6063, D-6064, D-6065 and D-6066, each in the plan.
+- **Follow-up candidates (the coordinator's, from the reviews; none is planned):**
+  - match a redirection with no space before its target, the cheapest of the named residual classes;
+  - anchor the bare `cd` (D-6064's residual);
+  - cap a child's command length in deny mode, which closes both the route where jq gives up and the hook timeout;
+  - fold `..` in path normalisation.
 - **Waiting on the operator** (unchanged on 2026-10-20). The PR body asks both; neither is the PR's to answer.
   1. Top-level sessions. Spec invariant 11 says these acts are "denied to sessions and children", but the routing
      spec's children-only ruling (`2026-10-17-coordinator-first-routing-design.md` §6.6, "Top-level sessions keep
@@ -91,6 +119,5 @@ the hook's deny arm is the guard that binds them. This programme closes the gaps
 
 Wave 1 was dispatched on 2026-10-20 as run 697. Its brief named the plan (committed unchanged as the branch's first
 commit), the verifiers' and checkers' evidence, the claims it edits under, the four numbers, the gates and the PR's
-title. Its wave-done was accepted at `a2b60a743`. Next is review run 703, when the dispatch cap allows; its brief
-holds the plan and ruling 7221 as the bar. No second wave is planned. An operator answer to either question above
-that widens the deny opens one, with its own plan.
+title. It landed as #967. No second wave is planned: the follow-up candidates above, or an operator answer to either
+question above that widens the deny, would open one, with its own plan. The rollout of #967 is the operator's.

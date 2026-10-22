@@ -604,7 +604,9 @@ export function deriveDelegationLineageId(parts: DelegationLineageIdParts): stri
  * The mapping-first rule, written INTO the caller's own mapping (D-5833). It reads the mapping first by an OWN property
  * only: a natural key with a mapping ALWAYS gets its mapped ID back, whatever journalId the caller now holds, and the
  * mapping is left as it was (a key never mints a second activity, and an ID is never re-hashed from a later event because
- * the original naming record was pruned: O4). Only a missing mapping allocates, and that needs the `identityJournalId` of
+ * the original naming record was pruned: O4; a zero-delta Bash call's key, retired under the O4 amendment, has no mapping, and while both of its
+ * records are retained neither is a qualifying join, so nothing allocates it again; wave 4's compaction must keep a listing-carrying Bash
+ * call's PreToolUse and PostToolUse together, D-6267, D-6268). Only a missing mapping allocates, and that needs the `identityJournalId` of
  * an accepted qualifying retained record: it throws `identity-journal-id-required` without one and
  * `bad-identity-journal-id` for a malformed one, and a refusal writes nothing. An allocation sets `mapping[encoded]` and
  * returns the ID. The encoded key is length-prefixed, so it can never be an inherited name and the assignment is an own
@@ -1379,6 +1381,17 @@ export function collapseDelegationAttempts(attempts: readonly DelegationAttemptR
   return { attempts: attempts.filter((a) => keep.has(a.attemptId)), removed: attempts.length - kept.size };
 }
 
+/** D-6267: whether two Bash worktree listings name the same admin records. SET semantics: order and duplicates are ignored. This is
+ *  exactly correlation's zero delta (`listingDeltaOf`, delegation-correlation.ts), so every window rung 4 can call `mine`
+ *  is an unequal one. The ONE definition: rule A's decision and the retirement fact both call it. */
+export function delegationListingsEqual(before: readonly string[], after: readonly string[]): boolean {
+  const b = new Set(before);
+  const a = new Set(after);
+  if (a.size !== b.size) return false;
+  for (const n of a) if (!b.has(n)) return false;
+  return true;
+}
+
 // ── THE OBSERVATION HEALTH (wave 3, Task 13; spec §7 stage 2) ─────────────────────────────────────────────────────────
 //
 // Pure arithmetic from the CHECKPOINT's `observationIntervals` and nothing else. The interval rows are checkpoint-owned: SQLite carries
@@ -1589,8 +1602,10 @@ export function isDelegationHealthKebab(v: string): boolean {
 // ── Cursor retention (R58, D-4654) ────────────────────────────────────────────────────────────────────────────────────
 //
 // A bucket cursor is checkpoint-owned state the lane needs for as long as the bucket can still be READ, and not a moment longer; kept
-// for ever it is the checkpoint's one unbounded member, and every application rewrites the whole checkpoint. Two horizons, one
-// derivation:
+// for ever it would be one more unbounded member of a checkpoint that every application rewrites whole. It is not the only one: the
+// activities and their natural-key map, the sessions, the attempts (bounded per decision since run 740's D-6190, not in decisions), the leases
+// and the lineage are kept for ever too (O4; D-6268 retires one class of activity, and wave 4 owns the general bound; D-6272). Two
+// horizons, one derivation:
 //   * THE READ HORIZON is `DELEGATION_SPOOL_LOOKBACK_HOURS` (24 h, the hook's own retention): the lane reads no bucket older than that,
 //     whoever it belongs to, through `delegationBucketReadable` and nothing else.
 //   * THE RETENTION is the read horizon plus a day: a cursor older than `DELEGATION_CURSOR_RETENTION_HOURS` (48 h) is retired, and only
@@ -1602,6 +1617,12 @@ export function isDelegationHealthKebab(v: string): boolean {
 
 /** The cursor retention: the read horizon plus 24 hours. */
 export const DELEGATION_CURSOR_RETENTION_HOURS = DELEGATION_SPOOL_LOOKBACK_HOURS + 24;
+/** D-6270: how long a start-less stop stays identity evidence: the cursor retention, i.e. the read horizon plus a day, so no line
+ *  written before the stop can still be accepted after it. Measured on journal `acceptedAt`, never a clock read. */
+export const DELEGATION_STOP_CANDIDATE_HORIZON_MS = DELEGATION_CURSOR_RETENTION_HOURS * DELEGATION_HOUR_MS;
+/** D-6267: how long a listing-carrying Bash PreToolUse waits for its PostToolUse before it is forgotten. Measured on journal
+ *  `acceptedAt`, never a clock read. */
+export const DELEGATION_BASH_PENDING_MS = 3_600_000;
 
 /** Whether a bucket's hour (epoch milliseconds, on an hour boundary) may be READ at `nowMs`: from the spool lookback up to the open
  *  hour. An hour older than that, a future hour and an instant that is not an hour boundary are never read. */

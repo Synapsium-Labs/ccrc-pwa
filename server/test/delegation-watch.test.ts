@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
-import type { FleetSession } from '../../shared/api.js';
+import type { DelegationEventEnvelopeV1, FleetSession } from '../../shared/api.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
@@ -33,10 +33,12 @@ import {
   DELEGATION_CHECKPOINT_FILE,
   DelegationDurability,
   decodeDelegationCheckpoint,
+  encodeDelegationCheckpoint,
   mergeDelegationObservationInterval,
 } from '../src/coord/delegation-checkpoint.js';
 import {
-  DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, DelegationJournalWriter, nodeDelegationFilePort, type DelegationFilePort,
+  DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, DelegationJournalWriter, buildDelegationJournalRecord, encodeDelegationJournalRecord, nodeDelegationFilePort,
+  type DelegationFilePort,
 } from '../src/coord/delegation-journal.js';
 import {
   DELEGATION_EVENTS_CAP,
@@ -52,9 +54,12 @@ import {
   type DelegationAttemptRow,
   type DelegationCensusRecord,
   type DelegationCheckpointV1,
+  type DelegationJournalRecordV1,
 } from '../src/coord/delegation-model.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';
+import { callsIn, symbolOf } from './scan/symbols.js';
 
 const NOW = Date.UTC(2026, 9, 15, 10, 30, 0);                       // 2026-10-15T10:30Z; the hour 10:00 is open
 const INC = '0189abcd-1234-5678-9abc-0123456789ab';
@@ -4766,5 +4771,138 @@ describe('R91 and R94: the never-listed gap, pinned as it is today, and two inca
     expect(of([absent], [cursor]), 'incarnation 1 had a cursor row: incarnation 2\'s directory-absent hour vetoes').toEqual([hourWindow]);
     expect(of([absent, measuredHour], []), 'incarnation 1 had a measured hour: the same').toEqual([hourWindow]);
     expect(of([absent], []), 'CONTROL: no spool under any incarnation: the carve-out').toEqual([]);
+  });
+});
+
+// ── run 762 (D-6268): the lane's hourly call of the zero-delta retirement door ────────────────────────────────────────────
+
+describe('the zero-delta retirement in the lane (D-6268): one call of the applier\'s door per UTC hour', () => {
+  /** The B fixture, trimmed to what the lane rows need: a generated, neutral journal of owner `demo-a`, covered by LEGACY stock (the old rule
+   *  opened every listed Bash call), every record accepted inside the hour before the first pass.
+   *  K1 Pre [main-wt, wt-raw] then Post [wt-raw, main-wt] (zero-delta, ended); K2 Pre [main-wt] then Post [main-wt, wt-x] (delta, ended);
+   *  K3 Pre [main-wt], no Post (active); K6 Post [main-wt] before Pre [main-wt]; one agent (SubagentStart then SubagentStop). */
+  const OWNER = 'demo-a';
+  const T0 = Date.UTC(2026, 9, 15, 10, 0, 0);
+  const evOf = (n: number, acceptedAt: number, over: Record<string, unknown>): DelegationEventEnvelopeV1 => ({
+    v: 1, observedAt: iso(acceptedAt - 1000), sessionId: OWNER, parentIncarnation: INC, claudeSessionId: CLAUDE,
+    eventId: delegationSha256Hex(`b-fixture-event-${n}`), bucket: BUCKET10, startOffset: n * 100, endOffset: n * 100 + 99, ...over,
+  } as DelegationEventEnvelopeV1);
+  /** ONE helper shape for every chain: events with the instant each is ACCEPTED at (journal time, never a clock read). */
+  const chainAt = (entries: ReadonlyArray<readonly [DelegationEventEnvelopeV1, number]>): DelegationJournalRecordV1[] => {
+    const out: DelegationJournalRecordV1[] = [];
+    let previous: string | null = null;
+    entries.forEach(([event, acceptedAt], i) => {
+      const r = buildDelegationJournalRecord({ sequence: i + 1, acceptedAt: iso(acceptedAt), previousDigest: previous, entry: { kind: 'evidence-accepted', event } });
+      out.push(r);
+      previous = r.digest;
+    });
+    return out;
+  };
+  const bashEv = (n: number, kind: 'PreToolUse' | 'PostToolUse', toolUseId: string, listing: string[], acceptedAt: number): DelegationEventEnvelopeV1 =>
+    evOf(n, acceptedAt, { eventKind: kind, toolName: 'Bash', toolUseId, listing, ...(kind === 'PostToolUse' ? { outcome: 'completed' } : {}) });
+  const bFixture = (): DelegationJournalRecordV1[] => {
+    const t = (k: number): number => T0 + 600_000 + k * 20_000;
+    return chainAt([
+      [evOf(1, t(0), { eventKind: 'SessionStart', source: 'startup' }), t(0)],
+      [bashEv(2, 'PreToolUse', 'toolu_k1', ['main-wt', 'wt-raw'], t(1)), t(1)],
+      [bashEv(3, 'PostToolUse', 'toolu_k1', ['wt-raw', 'main-wt'], t(2)), t(2)],
+      [bashEv(4, 'PreToolUse', 'toolu_k2', ['main-wt'], t(3)), t(3)],
+      [bashEv(5, 'PostToolUse', 'toolu_k2', ['main-wt', 'wt-x'], t(4)), t(4)],
+      [bashEv(6, 'PreToolUse', 'toolu_k3', ['main-wt'], t(5)), t(5)],
+      [bashEv(7, 'PostToolUse', 'toolu_k6', ['main-wt'], t(6)), t(6)],
+      [bashEv(8, 'PreToolUse', 'toolu_k6', ['main-wt'], t(7)), t(7)],
+      [evOf(9, t(8), { eventKind: 'SubagentStart', agentId: 'agent-aaa111', agentType: null }), t(8)],
+      [evOf(10, t(9), { eventKind: 'SubagentStop', agentId: 'agent-aaa111', agentType: null, agentTranscriptPath: null }), t(9)],
+    ]);
+  };
+  /** The files a restart would find: the journal, and the LEGACY checkpoint covering it (the old rule's rows, from the one helper). */
+  const seedStock = (w: World, journal: readonly DelegationJournalRecordV1[]): void => {
+    mkdirSync(w.ccrcDir, { recursive: true });
+    writeFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), Buffer.concat(journal.map((r) => Buffer.from(encodeDelegationJournalRecord(r)))));
+    writeFileSync(path.join(w.ccrcDir, DELEGATION_CHECKPOINT_FILE), encodeDelegationCheckpoint(oldRuleCheckpoint(journal)));
+  };
+  const rowOf = (cp: DelegationCheckpointV1 | null, toolUseId: string) => cp?.activities.find((a) => a.sourceKind === 'bash-worktree' && a.upstreamId === toolUseId);
+  const mappedOf = (cp: DelegationCheckpointV1 | null, toolUseId: string): boolean =>
+    Object.keys(cp?.activityIdsByNaturalKey ?? {}).some((k) => k.includes(toolUseId));
+
+  type Door = (this: DelegationDurability) => Promise<{ retired: number; applied: unknown }>;
+  const DOOR = 'retireZeroDeltaBashActivities';
+  const doorMember = (): unknown => (DelegationDurability.prototype as unknown as Record<string, unknown>)[DOOR];
+  /** A spy on the door that calls through and logs what it returned and the revision either side of it. The row asserts the member
+   *  first, so at a tree without it the row fails on that assertion and never reaches `vi.spyOn`. */
+  function watchDoor() {
+    const proto = DelegationDurability.prototype as unknown as { retireZeroDeltaBashActivities: Door };
+    const real = proto.retireZeroDeltaBashActivities;
+    const log: Array<{ out: { retired: number; applied: unknown }; revisionBefore: number; revisionAfter: number; changes: number }> = [];
+    const calls = durableCalls();
+    const spy = vi.spyOn(proto, DOOR).mockImplementation(async function (this: DelegationDurability) {
+      const revisionBefore = this.state().checkpoint.revision;
+      const changesBefore = calls.applyCheckpointChange.mock.calls.length;
+      const out = await real.call(this);
+      log.push({ out, revisionBefore, revisionAfter: this.state().checkpoint.revision, changes: calls.applyCheckpointChange.mock.calls.length - changesBefore });
+      return out;
+    });
+    return { spy, log, calls };
+  }
+  const DOOR_EXISTS = 'DelegationDurability.prototype.retireZeroDeltaBashActivities is the applier\'s retirement door';
+
+  // The lane is never primed here: with the stock on disk the lane's very first pass is also its first pass in its UTC hour (the hour 10
+  // of NOW), and that pass is the one whose hourly slot retires; `primed()` would spend the slot at PRIMED_AT in NOW's hour first.
+  it('RB21: the lane calls the door once per UTC hour: on its first pass in the hour and again in the next hour, never twice in one; pass 1 retires K1, pass 3 retires nothing and moves no revision', async () => {
+    expect(typeof doorMember(), DOOR_EXISTS).toBe('function');
+    const w = world();
+    seedStock(w, bFixture());
+    expect(rowOf(disk(w.home).checkpoint, 'toolu_k1'), 'fixture sanity: the legacy stock holds K1 before any pass').toBeDefined();
+    const door = watchDoor();
+    await censusPass(w, NOW, { demo: [] });                                                       // pass 1: the lane's first pass in hour 10
+    const afterFirst = disk(w.home).checkpoint;
+    const callsAfter1 = door.spy.mock.calls.length;
+    await censusPass(w, NOW + 5 * 60_000, { demo: [] });                                          // pass 2: the same UTC hour
+    const callsAfter2 = door.spy.mock.calls.length;
+    await censusPass(w, NOW + 3_600_000, { demo: [] });                                           // pass 3: the next UTC hour
+    expect([callsAfter1, callsAfter2, door.spy.mock.calls.length], 'the door was called on passes 1 and 3 only').toEqual([1, 1, 2]);
+    expect(door.log[0]!.out.retired, 'pass 1 retired K1, the one zero-delta call of the fixture').toBe(1);
+    expect(rowOf(afterFirst, 'toolu_k1'), 'after pass 1 the disk checkpoint lacks K1\'s row').toBeUndefined();
+    expect(mappedOf(afterFirst, 'toolu_k1'), 'and K1\'s natural-key mapping').toBe(false);
+    for (const kept of ['toolu_k2', 'toolu_k3', 'toolu_k6']) expect(rowOf(afterFirst, kept), `${kept} is not a zero-delta call: kept`).toBeDefined();
+    expect(door.log[1]!.out, 'pass 3 retired nothing and wrote nothing').toEqual({ retired: 0, applied: null });
+    expect(door.log[1]!.revisionAfter, 'and moved no revision').toBe(door.log[1]!.revisionBefore);
+    expect(rowOf(disk(w.home).checkpoint, 'toolu_k1'), 'K1 does not come back').toBeUndefined();
+  });
+
+  it('RB22: a door that throws is warned once, the pass goes on to its reconcile, and the hour is spent: the next pass in the same hour does not call it', async () => {
+    expect(typeof doorMember(), DOOR_EXISTS).toBe('function');
+    const w = world();
+    seedStock(w, bFixture());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const plan = vi.spyOn(policy, 'planDelegationReconciliation');
+    const spy = vi.spyOn(DelegationDurability.prototype as unknown as { retireZeroDeltaBashActivities: Door }, DOOR).mockRejectedValue(new Error('disk full'));
+    const failed = (): string[] => warn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith('ccrc-server: the delegation zero-delta retirement failed'));
+    await censusPass(w, NOW, { demo: [] });
+    expect(spy, 'pass 1 called the door').toHaveBeenCalledTimes(1);
+    expect(failed(), 'one warn line names the failure').toHaveLength(1);
+    expect(failed()[0]!, 'and carries its reason').toContain('disk full');
+    expect(plan.mock.calls.length, 'the pass went on: its reconcile ran after the failed retirement').toBeGreaterThanOrEqual(1);
+    await censusPass(w, NOW + 5 * 60_000, { demo: [] });
+    expect(spy, 'a failed retirement is retried at most once per UTC hour: pass 2 did not call the door').toHaveBeenCalledTimes(1);
+    expect(failed(), 'and warned no second time').toHaveLength(1);
+  });
+
+  it('RE9: the retirement reaches the applier through its own door, never through a checkpoint-only change: the door is called once, applyCheckpointChange not during it, and the lane method\'s calls name the door and not applyCheckpointChange', async () => {
+    expect(typeof doorMember(), DOOR_EXISTS).toBe('function');
+    const w = world();
+    seedStock(w, bFixture());
+    const door = watchDoor();
+    await censusPass(w, NOW, { demo: [] });
+    expect(door.spy, 'the pass that retires called the door once').toHaveBeenCalledTimes(1);
+    expect(door.log[0]!.out.retired, 'and it retired').toBeGreaterThan(0);
+    expect(door.log[0]!.changes, 'applyCheckpointChange (the O4-guarded door) was not called during the retirement').toBe(0);
+    // An ARRAY compare over the lane method's calls, by symbol (not a literal pin over watch.ts's text).
+    let names: string[] | null = null;
+    let why = '';
+    try { names = callsIn(symbolOf('server/src/watch.ts', 'DelegationLane.retireZeroDelta')).map((c) => c.name ?? c.callee); } catch (err) { why = err instanceof Error ? err.message : String(err); }
+    expect(names, `DelegationLane.retireZeroDelta is a method of the lane (${why})`).not.toBeNull();
+    expect(names, 'the lane method calls the applier\'s door').toContain(DOOR);
+    expect(names, 'and never applyCheckpointChange').not.toContain('applyCheckpointChange');
   });
 });
