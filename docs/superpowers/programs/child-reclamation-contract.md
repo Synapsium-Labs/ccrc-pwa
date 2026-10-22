@@ -4238,8 +4238,8 @@ the spec, never this contract.
 **R93 (the programme's shape).**
 - W3 was dispatched after W2 merged and W2's run closed. It ships as one pull request from a fresh child, and it is the
   programme's last scheduled wave. Its `ccd/ccd` edits went in series, one task at a time, and each was restamped with
-  the repository's own tool. `main` moved during the wave. It is absorbed once, with `git merge`, right before the pull request, and the commit that
-  absorbs it records the absorption here.
+  the repository's own tool. `main` moved during the wave, and it was merged in once, with `git merge`, right before
+  the pull request. Its one conflict was `ccd/ccd`'s stamp line, which took one side and was restamped the same way.
 - Workspace lifecycle's coordinator consented to the edits that ws-expire reaches through shared code:
   - the rows rung, with its walk, its field reader and its identity helpers;
   - the mount table, in its new role as the rung's second reader;
