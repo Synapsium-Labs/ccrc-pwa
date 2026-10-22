@@ -2555,3 +2555,70 @@ describe('C-R: a treatment-arm run on a live A/B family writes a non-null arm, a
     expect(gate.splitAtFirstExit8(all).upTo.at(-1)?.[1], 'CONTROL: the unfiltered split stops at the control arm\'s exit 8').toBe(8);
   }, 240_000);
 });
+
+// ── W2-2b Task 5 (W2-D44, W2-D45, W2-D46, W2-D47, W2-D48): README states the headless seam ────────────────────────────
+// The operator-facing account of the seam, held to lib: every exit-2 word the seam answers (each `headless-*` REASONS
+// word, derived, plus `asof-invalid`) is named, and step 1's words come in W2-D46's order; the marker's path is SWITCHES';
+// its two bounds are HEADLESS_LIST_MAX_BYTES (in KiB) and HEADLESS_LIST_MAX_PAIRS; the arm words are RECALL_ARMS'. A word,
+// a bound or a path that moves in lib reds here until README follows. Pure: it reads README and imports lib, nothing else.
+describe('README states the headless seam: its variables, the marker, the refusal words in their order (W2-2b Task 5)', () => {
+  const SEAM = '**The headless seam';
+  /** The Session history section: its heading to the next `---` rule. */
+  const section = (): string => {
+    const readme = fs.readFileSync(path.join(REPO, 'README.md'), 'utf8');
+    const from = readme.indexOf('### Session history: lossless recall');
+    expect(from, 'README has no Session history section').toBeGreaterThan(-1);
+    const to = readme.indexOf('\n---\n', from);
+    expect(to, 'the Session history section has no end').toBeGreaterThan(from);
+    return readme.slice(from, to);
+  };
+  /** The seam paragraph, whitespace (line breaks included) collapsed to single spaces. */
+  const paragraph = (): string => {
+    const s = section();
+    const at = s.indexOf(SEAM);
+    expect(at, 'the Session history section has no headless seam paragraph').toBeGreaterThan(-1);
+    expect(s.split(SEAM).length - 1, 'the seam paragraph is written more than once').toBe(1);
+    const end = s.indexOf('\n\n', at);
+    return (end < 0 ? s.slice(at) : s.slice(at, end)).replace(/\s+/g, ' ');
+  };
+
+  it('names the three variables, the driver as their one caller, empty as unset, and the verbs that ignore them', () => {
+    const p = paragraph();
+    for (const n of ['CCRC_RECALL_SESSION', 'CCRC_RECALL_ARM', 'CCRC_RECALL_ASOF']) expect(p, `README does not name ${n}`).toContain(`\`${n}\``);
+    expect(p).toContain('`deploy/history-replay.mjs`');
+    expect(p).toContain('Nothing else is meant to set them');
+    expect(p).toContain('A variable counts as set only when it is non-empty');
+    expect(p).toContain('`status`, `doctor` and the operator verbs ignore all three');
+  });
+
+  it('states the marker from lib: its path, its grammar, both bounds and the arm words', async () => {
+    const { SWITCHES, HEADLESS_LIST_MAX_BYTES, HEADLESS_LIST_MAX_PAIRS, RECALL_ARMS } = await import('../../ccd/history/lib.mjs');
+    const p = paragraph();
+    expect(p).toContain(`\`~/${SWITCHES.headlessOn}\``);
+    expect(p).toContain('`store <store_id>`');
+    expect(p).toContain('`<ccrc_id> <generation>`');
+    expect(HEADLESS_LIST_MAX_BYTES % 1024, 'CONTROL: the byte bound is a whole number of KiB').toBe(0);
+    expect(p).toContain(`more than ${HEADLESS_LIST_MAX_BYTES / 1024} KiB`);
+    expect(p).toContain(`more than ${HEADLESS_LIST_MAX_PAIRS.toLocaleString('en-US')} families`);
+    for (const a of RECALL_ARMS) expect(p, `README does not name the arm ${a}`).toContain(`\`${a}\``);
+  });
+
+  it('names every exit-2 word of the seam, each a REASONS word of exit 2, with step 1 in W2-D46 order', async () => {
+    const { REASONS, EXIT } = await import('../../ccd/history/lib.mjs');
+    const p = paragraph();
+    const words = [...Object.keys(REASONS).filter((w) => w.startsWith('headless-')), 'asof-invalid'];
+    expect(words, 'CONTROL: the derivation sees the seam words').toEqual(expect.arrayContaining([
+      'headless-unarmed', 'headless-in-pane', 'headless-unlisted', 'headless-malformed', 'headless-arm-unknown', 'asof-invalid']));
+    for (const w of words) {
+      expect(REASONS[w], `${w} is not an exit-2 word`).toBe(EXIT.REFUSED);
+      expect(p, `README does not name ${w}`).toContain(`\`${w}\``);
+    }
+    const ORDER = ['headless-in-pane', 'headless-unarmed', 'headless-malformed', 'no-identity', 'bad-id',
+      'headless-unlisted', 'headless-arm-unknown', 'asof-invalid'];
+    const at = ORDER.map((w) => p.indexOf(`\`${w}\``));
+    expect(ORDER.filter((_, k) => at[k]! < 0), 'a step-1 word is missing').toEqual([]);
+    expect([...at].sort((a, b) => a - b), 'README states step 1 out of W2-D46 order').toEqual(at);
+    expect(p).toContain('exit 2');
+    expect(p).toContain('exit 8');
+  });
+});

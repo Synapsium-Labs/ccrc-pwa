@@ -5865,6 +5865,35 @@ anything: `generation-mismatch` when `--generation` names another generation or 
 `generation-unreadable` when it cannot be read. `--clear-all` prints how many files it removed and the
 names it skipped (a directory, a FIFO, a socket or a device, or an entry it could not measure or remove), which the operator removes by hand.
 
+**The headless seam (W2's replay eval).** The read verbs have one caller outside any pane: W2's replay
+driver, `deploy/history-replay.mjs`, which runs each eval arm as a headless `claude -p` and sets three
+variables: `CCRC_RECALL_SESSION`, the session's id; `CCRC_RECALL_ARM`, `control` or `treatment`; and
+`CCRC_RECALL_ASOF`, the uuid of the compaction boundary the run replays from. Nothing else is meant to set
+them. A variable counts as set only when it is non-empty; with none set, every verb works exactly as above,
+and `status`, `doctor` and the operator verbs ignore all three. The seam is armed only by
+`~/.ccrc/history/headless-on`, which nothing in ccrc writes: the operator writes it for an eval window, from
+the W2 open record, and removes it when the window closes. Its first line that is not a `#` comment is
+`store <store_id>`, naming this box's store; every later line is empty, a `#` comment, or
+`<ccrc_id> <generation>` for one admitted family, with `-` as the generation of a family that has none.
+A carriage return, a space at either end of a line, any other line, a second store line, more than 64 KiB
+or more than 1,000 families makes the whole file malformed, and it is read only as a regular file, never
+through a link. After a macOS or server-role box's exit 9, the seam's refusals come in this order, each
+exit 2: `headless-in-pane` when any of the three is set inside a pane (`TMUX_PANE` defined, even empty),
+before tmux is asked; `headless-unarmed` with no marker; `headless-malformed` when the marker cannot be
+read or breaks its grammar; `no-identity` with no session id, and `bad-id` for one outside ccd's id
+grammar; `headless-unlisted` for a family the marker does not list, or a marker that lists none;
+`headless-arm-unknown` for an arm that is unset or neither word; and `asof-invalid` for a boundary that
+is unset or not a uuid. Once the store is open, a store line naming another store is `headless-unlisted`
+too, and the boundary must be a boundary on a main transcript of a confirmed epoch of exactly that
+family, or the answer is `asof-invalid`. The family and its generation come from that boundary, never
+from the registry or `CCRC_SESSION_GENERATION`. Then the family answers exit 8 when its recall is
+switched off, and `control` answers exit 8 too. Under `treatment` every verb reads the store as of the
+boundary: rows, nodes and epochs after it are absent; `--project`, `--workspace` and `--session` still
+widen the scope, the cut applies to every family in it, and a family with nothing visible is left out;
+`--workspace` anchors on the working directory of the boundary's epoch; and a family whose stored
+project is not the session's answers exit 2 `cross-project`. A call is counted only once its family is
+admitted, and its counter line carries the arm; under `~/.ccrc/history-off` nothing is counted.
+
 ---
 
 *Everything below is the internals reference — the architecture and the
