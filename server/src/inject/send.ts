@@ -1055,7 +1055,8 @@ async function submitAroundStash(
       return { ok: false, error: 'enter-ignored', pane: (pane ?? '').replace(SGR, '').slice(-PANE_TAIL) };
     }
   }
-  return enterIgnored(d, id, { still, ok: () => verifyRestore(d, id, sleep, stash) });
+  // D-6366: the loop's own classifier decides at the final read too, and only `gone` counts.
+  return enterIgnored(d, id, { still: (p, dr) => stashAwareStill(p, dr) !== 'gone', ok: () => verifyRestore(d, id, sleep, stash) });
 }
 
 function unverifiedRestore(id: string, why: string): SendResult {
