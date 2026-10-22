@@ -18652,7 +18652,8 @@ cmd_update() {
   # deadline and the watchdog's wedged arm both measure from its last write: so it is re-stamped right before the lock is taken
   # again, only while it is still this run's own, with the same `restarting` phase and a detail (D-6356). The restore child is
   # excluded by `gate_passed` already; the UPD_FROM test is a belt with no pin claimed (its inherited-lock early return leaves
-  # UPD_BAK_FLOOR empty, which would only WARN).
+  # UPD_BAK_FLOOR empty, which would only WARN). The re-stamp is a write with no lock held, like the final report below, so it
+  # shares that write's m3 window: a newer run's report landing between `_upd_report_is_mine` and `_upd_phase` is overwritten.
   if [ "$gate_passed" -eq 1 ] && [ "$UPD_FROM" != restore ]; then _upd_report_is_mine && _upd_phase restarting "pruning and thinning ~/ccrc-backups"; _bak_gc update || :; fi
   # Everything from HERE is a WRITE, after the lock was released above (or,
   # on the `--from restore` branch, never taken from this run at all) — a
@@ -23712,7 +23713,7 @@ _bak_thin() {
   [ "${#dirs[@]}" -gt 0 ] || return 0
   [ -f "$helper" ] || { echo "$2 WARN: deploy/coordination-snapshot.mjs is missing from this tree, so nothing was thinned"; return 1; }
   grep -qF -- 'thin --keep' "$helper" || { echo "$2 thinning skipped — this tree's coordination-snapshot helper predates it; nothing was thinned"; return 0; }
-  node --no-warnings "$helper" thin --keep "$BAK_DATA_KEEP" --by "$1" --prefix "$2" "${own[@]}" "${ver[@]}" "${dirs[@]}" || rc=$?
+  node --no-warnings "$helper" thin --keep "$BAK_DATA_KEEP" --by "$1" --prefix "$2" ${own[@]+"${own[@]}"} ${ver[@]+"${ver[@]}"} "${dirs[@]}" || rc=$?
   case "$rc" in 0) return 0 ;; 3) return 1 ;; esac
   echo "$2 WARN: the coordination data set could not be thinned (the helper exited $rc) — every backup it had not reached is untouched"; return 1
 }

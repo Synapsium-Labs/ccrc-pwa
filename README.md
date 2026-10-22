@@ -845,7 +845,8 @@ session stopped on purpose while the sweep walks (its unit settled `inactive` wi
 line of its own, as it does in `deploy.sh agent`'s sweep (a serial loop with no re-check); then the from→to report, and, after a passed gate and a
 finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP` from the process environment, default 10) and the coordination
 data set thinned out of every backup past the newest `CCRC_BACKUP_DATA_KEEP` (default 3, at least 2; the environment, else
-`~/.ccrc/ccrc.env`) that carry one, by an update or `ccrc backup`, never a rollback.
+`~/.ccrc/ccrc.env`) that carry one, by an update or `ccrc backup`, never a rollback by flip (a rollback by re-install
+thins as the update it runs).
 Rolling back is `ccrc rollback` (below), which, like any move below the floor, prints the coord.db restore commands rather than
 auto-restoring. **Across a two-box fleet, `ccrc rollout [--to] [--server-first] [--check] [--force]`** (with `--channel`,
 `--downgrade` and `--allow-unsigned`, below) from a machine holding `~/.ccrc/deploy.env`
@@ -1196,7 +1197,7 @@ newest earlier one that holds data (each chosen on its own, so a newer snapshot 
 with data; `deploy/coordination-snapshot.mjs` decides what is valid, and a classifier that cannot run or answers out of
 its table prunes nothing and says why), and nothing at all, exit 0, while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or
 the lock cannot be measured; hand-made siblings are never touched), as update and rollback do after a passed gate.
-After its prune, and only an update or `ccrc backup` (never a rollback, which takes no backup), the run thins the coordination
+After its prune, and only an update or `ccrc backup` (never a rollback by flip, which takes no backup; a rollback by re-install thins as the update it runs), the run thins the coordination
 data set (D-6346): of the backups that carry one, the newest `CCRC_BACKUP_DATA_KEEP` keep it, counting this run's own first, and
 every older one loses its `coord.db`, delegation journal, checkpoint and manifest and keeps the rest (its code, `memory/`, the
 units). The knob is a whole number from 2 to 9999, default 3, read from the process environment and else from
