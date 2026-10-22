@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --no-warnings
 // deploy/history-replay.mjs: the ccrc history W2 replay driver (spec 2026-10-05 §10.2; W2 decisions W2-D50 to W2-D59).
 //
 // An L4 operator script. The operator runs it by hand, from a shell OUTSIDE tmux, on a named node. It admits one
@@ -6,9 +6,16 @@
 // print, and writes every output under the operator's --out directory. Refusing to run inside a pane is main's first
 // act (W2-D51, W2-D45).
 //
-// Imports: node: built-ins, ../ccd/history/lib.mjs and ../shared/roster-json.mjs only. It never loads node:sqlite in
-// any form: every store read W2 makes opens through store.mjs's read-only openReader (W2-D51), and
-// history-replay.test.ts scans every deploy/history-*.mjs for it.
+// Imports: node: built-ins (node:crypto's randomBytes draws the W2 seeds); ../ccd/history/lib.mjs; the W2-1 exports
+// the quiz reads, from ../ccd/history/store.mjs, ../ccd/history/derive.mjs, ../ccd/history/recall.mjs and
+// ../ccd/history/cli.mjs (W2-D33, W2-D74); the index text and the registry read from ../ccd/history/sweep.mjs, never
+// its recall-off reader (W2-D29); ./history-gate.mjs, the pure gate (W2-D11); and ../shared/roster-json.mjs.
+// history-replay.test.ts pins the exact list and the names each ccd/history module brings in (D-5814). The driver spells
+// no node:sqlite specifier: it loads node:sqlite only through store.mjs, that module's one importer, and every store read
+// opens through store.mjs's read-only openReader (W2-D51); history-replay.test.ts scans every deploy/history-*.mjs for a
+// specifier. Loading it prints Node's experimental-feature warning on stderr before any module body runs, so the driver
+// runs under --no-warnings (its shebang, and every spawn of it), as cli.mjs and sweep.mjs do. Importing cli.mjs sets this
+// process's umask to 0o077 (W2-D33); main sets it again before any file act (W2-D53).
 // Children: spawn with an argv array, never a shell, never a command string, and no env value in one (CodeQL's
 // js/shell-command-injection-from-environment opens a review thread that blocks the merge).
 // Environment: main gets the entry guard's by-name projection {HOME, TMUX_PANE, LANG}; nothing here passes
@@ -25,7 +32,14 @@ import os from 'node:os';
 import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { EXIT, blobOverDecodeCap, canonicalJson, recallOffPath, redactField, sha256Hex } from '../ccd/history/lib.mjs';
+import { randomBytes } from 'node:crypto';
+import { EXIT, SCHEMA_ADDED, UUID_RE, blobOverDecodeCap, canonicalJson, historyPaths, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor } from '../ccd/history/lib.mjs';
+import { StoreError, openReader, userVersion } from '../ccd/history/store.mjs';
+import { blobReadStmts, bodyOf, holdingCopyOf } from '../ccd/history/derive.mjs';
+import { expandEntryBody } from '../ccd/history/recall.mjs';
+import { pairIndexOf } from '../ccd/history/cli.mjs';
+import { ftsTextOfBlob } from '../ccd/history/sweep.mjs';
+import { ANSWER_PROTOCOL, GATE_CODE_FILES } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -49,7 +63,9 @@ import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
  *  same check phase passes its stop check and spawns: lanes that start together end their yields in one check phase, so up
  *  to c children (the batch's concurrency) can start in it, and each is stopped and charged; a signal that arrives after
  *  the batch's last check, when every child has closed, is not handled: the result is written, and the driver exits 0, or
- *  ends by that signal if it comes after main has removed its listeners: D-5984). */
+ *  ends by that signal if it comes after main has removed its listeners: D-5984). The last is W2-5a's (Task 1):
+ *  `store-unreadable`, a store this node cannot open or read (store.mjs's StoreError word, or SQLite's own error as
+ *  store-read-failed), so reconstruction never reads an absent store as an empty one. */
 export const DRIVER_REASONS = Object.freeze([
   'family-unlisted', 'family-recall-off',
   'quiz-unanswerable', 'quiz-sha-mismatch',
@@ -61,6 +77,7 @@ export const DRIVER_REASONS = Object.freeze([
   'args-invalid', 'in-pane', 'roster-invalid', 'account-refused', 'input-invalid',
   'code-unmeasured', 'version-unmeasured', 'tree-unmeasured', 'wrapper-unmeasured',
   'run-live', 'out-in-use', 'interrupted',
+  'store-unreadable',
 ]);
 
 /** A refusal: one DRIVER_REASONS word and its detail. Any other throw is a defect (EXIT.INTERNAL). */
@@ -1883,9 +1900,12 @@ export function batchGate({ out, home, accountId, budget, limits, now = Date.now
 // Every reader keeps its conditions apart: a file that cannot be measured is never hashed as nothing, a stamp that
 // cannot be read is never "no stamp", and a recall-off entry that cannot be lstat'ed is never "absent".
 
-/** The four files whose installed bytes gate_code pins (W2-D24), relative to the tree the driver runs from. The
- *  imports of lib.mjs (recall.mjs, derive.mjs, cli.mjs, store.mjs) are not hashed: the release stamp covers them. */
-export const CODE_SHA_FILES = Object.freeze(['deploy/history-gate.mjs', 'deploy/measure-history.py', 'deploy/history-replay.mjs', 'ccd/history/lib.mjs']);
+/** The four files whose installed bytes gate_code pins (W2-D24), relative to the tree the driver runs from: the gate's
+ *  own GATE_CODE_FILES, so the four paths are spelled once (W2-5a Task 1, closing decisions §7's double spelling). The
+ *  driver's other ccd/history imports (store.mjs, derive.mjs, recall.mjs, cli.mjs) and the modules they load (sweep.mjs,
+ *  card.mjs, ccd/compact-card.mjs, shared/base-url.mjs) are not hashed: the release_tag comparison and the tree-moved
+ *  preflight cover them (W2-D24, W2-D56). */
+export const CODE_SHA_FILES = GATE_CODE_FILES;
 /** The tree this file was loaded from: the installed release on a node, the checkout in a test. */
 export const TREE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 /** Step 0a's output kind and its exact field set (W2-D57): loadStep0a's shape, and the one Task 8 writes. */
@@ -1897,7 +1917,7 @@ const VERSION_TIMEOUT_MS = 60_000;
 const VERSION_STDOUT_MAX = 65_536;
 
 /** The sha256 of each CODE_SHA_FILES member's bytes under `root`, or the first one that cannot be measured. An
- *  absent file (history-gate.mjs before W2-3 lands) is `absent`; any other read failure is `unreadable`. */
+ *  absent file is `absent`; any other read failure is `unreadable`. */
 export function codeShas(root = TREE_ROOT) {
   const files = {};
   for (const rel of CODE_SHA_FILES) {
@@ -2506,6 +2526,266 @@ export async function step0bMechanics({ launch, out, model, settingsMode, lang, 
   return {
     turn_bound: turnBoundHeld(run.facts),
     persistence: { left: left.left, transcripts: left.transcripts, project_dir: left.projectDir },
+  };
+}
+
+// ── W2-5a Task 1: reconstruction reads the store through W2-1's exports (W2-D74, W2-D75, W2-D33, W2-D68 (2), W2-D54) ──
+// Boundary N's payload (spec §10.2 "Reconstruction", items 1 to 3) is built on the node that holds the store, and this
+// file decodes nothing itself (W2-D74):
+//   - the store opens through store.mjs's openReader (read-only, query_only; W2-D51), and the run's pair index is
+//     cli.mjs's pairIndexOf, built once per open (W2-D54, W2-D67);
+//   - N's holding copy is derive.mjs's holdingCopyOf (lib's pickHoldingCopy), and N's summary row is lib's
+//     summaryRowFor over that copy's rows, as derivation picks it: a harness user row (an echo) is never the pick;
+//   - kept(N) is the string members of the blob boundaries.kept_blob_id names, read through derive.mjs's bodyOf over
+//     blobReadStmts: W2-D34's option (a), the membership the as-of cut keeps visible (W2-D38). A NULL id discards N as
+//     kept-absent; a body that is not a list (a tombstone, a damaged or over-cap blob, JSON that is not a list) as
+//     kept-unreadable, never an empty list. derive.mjs's keptOf folds all three into one empty set, so this file never
+//     calls it (W2-D33, W2-D68), and history-replay.test.ts scans every deploy/*.mjs for its name;
+//   - an entry's body is recall.mjs's expandEntryBody, expand's own pick (the unsanitised ccd-sanitize variant when
+//     there is one, DM2b). Of its five words (D-6238), 'body' is read; 'unparseable' (a raw-only row's stored text) is
+//     read as text for a kept member and counted, and discards N for the summary row, whose pointer line cannot be found
+//     in a line that was never parsed; 'tombstone', 'over-cap' and 'undecodable' each discard N under a word of its own,
+//     never folded: a damaged blob is not a pruned one;
+//   - every field passes whole through redactForSpawn, a tool_result through toolResultText, before any cut (W2-D54).
+// A discard is a count by its RECON_DISCARDS word, never a refusal. A store that cannot be opened or read refuses
+// store-unreadable.
+
+/** Every word a boundary is discarded with (R5): reconstruction's (W2-D68, W2-D75, W2-D54), then the words Tasks 2, 3 and
+ *  4 append here in place (mining's span words, admission's verdicts, Baseline B's). Counts, never refusals, and never a
+ *  DRIVER_REASONS or GATE_REASONS word. */
+export const RECON_DISCARDS = Object.freeze([
+  'boundary-absent', 'boundary-uncopied',
+  'summary-absent', 'summary-unparseable', 'summary-tombstone', 'summary-over-cap', 'summary-undecodable',
+  'kept-absent', 'kept-unreadable',
+  'member-tombstone', 'member-over-cap', 'member-undecodable',
+  'over-decode-cap', 'leaf-absent',
+]);
+/** expandEntryBody's three body-less words (D-6238), each mapped to a discard word of its own. */
+const SUMMARY_LOST = Object.freeze({ tombstone: 'summary-tombstone', 'over-cap': 'summary-over-cap', undecodable: 'summary-undecodable' });
+const MEMBER_LOST = Object.freeze({ tombstone: 'member-tombstone', 'over-cap': 'member-over-cap', undecodable: 'member-undecodable' });
+/** What item 1 puts in place of a transcript-pointer line (spec §10.2 "Reconstruction", item 1). */
+export const POINTER_REMOVED = '[pointer removed]';
+/** A transcript-pointer line: a whole line naming a path that ends in .jsonl (D-6277). */
+const POINTER_LINE_RE = /^.*\/\S*\.jsonl(?![A-Za-z0-9_]).*$/gm;
+
+/** @param {string} why a RECON_DISCARDS word  @returns {{ state: 'discard', why: string }} */
+const reconDiscard = (why) => ({ state: 'discard', why });
+
+/** Item 1's pointer rule: each whole line that names a .jsonl path becomes POINTER_REMOVED, and `replaced` counts them. Pure.
+ *  @param {string} text  @returns {{ text: string, replaced: number }} */
+export function removePointerLines(text) {
+  let replaced = 0;
+  const out = text.replace(POINTER_LINE_RE, () => { replaced += 1; return POINTER_REMOVED; });
+  return { text: out, replaced };
+}
+
+/** Items 1 to 3 (W2-D75), joined by one blank line: the summary, each kept member, then the question followed by
+ *  ANSWER_PROTOCOL (W2-D64, D-5776). Pure; the parts and the question come already redacted. An empty question and
+ *  empty parts still carry the protocol: the fidelity pilot's empty-question run composes through here (Task 6).
+ *  @param {{ summary: string, kept: readonly string[] }} parts  @param {string} question  @returns {string} */
+export function composePayload(parts, question) {
+  return [parts.summary, ...parts.kept, `${question}\n\n${ANSWER_PROTOCOL}`].join('\n\n');
+}
+
+/** One tool_use as item 2 and the writer's paired line render it: `[tool_use <name>] <input>`, lib's renderEntryText of
+ *  that one block when `inputText` is the JSON of its input. Pure.
+ *  @param {string} name  @param {string} inputText  @returns {string} */
+export function renderToolUseLine(name, inputText) {
+  return `[tool_use ${name}] ${inputText}`;
+}
+
+/** The summary row of boundary `boundaryUuid` in one copy: lib's summaryRowFor pick over the meta derive.mjs's copyPlan
+ *  builds (a summary is an is_compact_summary row; an echo is a user row of harness provenance, never the pick), as its
+ *  index in `copyRows`. -1 when lib picks none, or names a row this copy does not hold. Pure; the driver's one summary
+ *  pick, which boundaryCopyOf applies for the payload, admission (Task 3) and Baseline B (Task 4).
+ *  @param {Array<{uuid: string, type: string, provenance: string, is_compact_summary: number}>} copyRows
+ *  @param {string} boundaryUuid  @param {string|null} anchorUuid  @returns {number} */
+export function summaryIndexOf(copyRows, boundaryUuid, anchorUuid) {
+  const meta = copyRows.map((r) => ({ uuid: r.uuid, isCompactSummary: r.is_compact_summary === 1, isEcho: r.type === 'user' && r.provenance === 'harness' }));
+  const pick = summaryRowFor({ boundaryUuid, anchorUuid, rows: meta });
+  return pick.uuid === null ? -1 : copyRows.findIndex((r) => r.uuid === pick.uuid);
+}
+
+/** The statements reconstruction reads with, prepared once per open. They read no body: bodies are read only through
+ *  bodyOf and expandEntryBody (W2-D74). */
+function replayStmts(db) {
+  return {
+    boundary: db.prepare(`SELECT b.entry_id AS entry_id, b.transcript_pk AS transcript_pk, b.kept_blob_id AS kept_blob_id,
+        b.anchor_uuid AS anchor_uuid, e.uuid AS uuid
+      FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id WHERE b.entry_id = ?`),
+    copyRows: db.prepare(`SELECT m.line AS line, e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.model AS model,
+        e.provenance AS provenance, e.is_compact_summary AS is_compact_summary, e.ts_ms AS ts_ms, e.blob_id AS blob_id
+      FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? ORDER BY m.line`),
+    keptRows: db.prepare(`SELECT e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.blob_id AS blob_id, m.line AS line
+      FROM entries e LEFT JOIN memberships m ON m.file_id = ? AND m.entry_id = e.entry_id
+      WHERE e.uuid IN (SELECT value FROM json_each(?))
+      ORDER BY m.line IS NULL, m.line, e.entry_id`),
+    span: db.prepare(`SELECT e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.model AS model, e.provenance AS provenance,
+        e.ts_ms AS ts_ms, e.blob_id AS blob_id
+      FROM node_sources s JOIN entries e ON e.entry_id = s.entry_id
+      WHERE s.node_id = (SELECT node_id FROM nodes WHERE boundary_entry_id = ? AND depth = 0 ORDER BY node_id LIMIT 1)
+      ORDER BY s.ord`),
+    storeId: db.prepare("SELECT v FROM meta WHERE k = 'store_id'"),
+  };
+}
+
+/** @typedef {{ db: ReturnType<typeof openReader>, storeId: string, version: number, schema: typeof SCHEMA_ADDED,
+ *    blobs: ReturnType<typeof blobReadStmts>, stmts: ReturnType<typeof replayStmts>,
+ *    idx: import('../ccd/history/lib.mjs').PairIndex, close: () => void }} ReplayStore */
+
+/** This node's store, open for the run (W2-D51, W2-D33, W2-D54): a read-only, query_only handle, this node's store id
+ *  (meta.store_id, read through the same handle), its user_version and SCHEMA_ADDED (the `rc` expandEntryBody reads
+ *  columns by, DM44), the two blob reads bodyOf needs, this section's statements, and the run's pair index, built once
+ *  here through cli.mjs's pairIndexOf. Every subcommand opens the store once, here, and passes it down (R3). A store
+ *  openReader refuses (missing, zero-byte, unmeasured), one with no UUID store id, or one whose first reads fail in
+ *  SQLite, refuses store-unreadable.
+ *  @param {string} home  @returns {ReplayStore} */
+export function openReplayStore(home) {
+  let db;
+  try {
+    db = openReader(historyPaths(home).dbFile);
+  } catch (e) {
+    storeRefusal(e);
+  }
+  try {
+    const stmts = replayStmts(db);
+    const id = stmts.storeId.get();
+    if (id === undefined || !UUID_RE.test(String(id.v))) refuse('store-unreadable', id === undefined ? 'store-id-absent' : 'store-id-unreadable');
+    return { db, storeId: String(id.v), version: userVersion(db), schema: SCHEMA_ADDED, blobs: blobReadStmts(db), stmts, idx: pairIndexOf(db, home), close: () => db.close() };
+  } catch (e) {
+    try { db.close(); } catch { /* the first throw is the signal */ }
+    storeRefusal(e);
+  }
+}
+
+/** A failed open or first read as the driver's word: a StoreError by its word alone (store.mjs: the caller prints the
+ *  word, never the message), SQLite's own error as store-read-failed with its message; anything else is a defect.
+ *  @param {unknown} e  @returns {never} */
+function storeRefusal(e) {
+  if (e instanceof StoreError) refuse('store-unreadable', e.word);
+  if (e !== null && typeof e === 'object' && /** @type {{ code?: unknown }} */ (e).code === 'ERR_SQLITE_ERROR') {
+    refuse('store-unreadable', `store-read-failed: ${/** @type {Error} */ (e).message}`);
+  }
+  throw e;
+}
+
+/** Boundary N and the copy that holds it (§6.1 "The copy"): N's boundaries row, the holding copy through derive.mjs's
+ *  holdingCopyOf, that copy's rows in file order (no body), N's index in them, and N's summary row's index as lib's
+ *  summaryRowFor picks it for derivation (a harness user row, an echo, is never the pick), or null when there is none.
+ *  The admission (W2-D66) and Baseline B (W2-D68) read this same answer.
+ *  @param {ReplayStore} rs  @param {number} boundaryEntryId */
+export function boundaryCopyOf(rs, boundaryEntryId) {
+  const boundary = rs.stmts.boundary.get(boundaryEntryId);
+  if (boundary === undefined) return reconDiscard('boundary-absent');
+  const holding = holdingCopyOf(rs.db, { entry_id: boundary.entry_id, transcript_pk: boundary.transcript_pk });
+  if (holding === null) return reconDiscard('boundary-uncopied');
+  const fileId = Number(holding.file_id);
+  const rows = rs.stmts.copyRows.all(fileId);
+  const boundaryIndex = rows.findIndex((r) => r.entry_id === boundary.entry_id);
+  const at = summaryIndexOf(rows, boundary.uuid, boundary.anchor_uuid);
+  return { state: 'copy', boundary, fileId, rows, boundaryIndex, summaryIndex: at < 0 ? null : at };
+}
+
+/** Leaf N's span (W2-D65): the rows derivation recorded as leaf N's sources (node_sources of N's depth-0 node), in their
+ *  recorded order, which is N's holding copy's file order, each with the entries columns mining reads (R4). No leaf for
+ *  N, or a leaf with no source, is leaf-absent. Never a second span rule over the copy.
+ *  @param {ReplayStore} rs  @param {number} boundaryEntryId */
+export function spanRowsOf(rs, boundaryEntryId) {
+  const rows = rs.stmts.span.all(boundaryEntryId);
+  if (rows.length === 0) return reconDiscard('leaf-absent');
+  return { state: 'span', rows };
+}
+
+/** kept(N) (W2-D68 (2), W2-D34 option (a), W2-D38): the members of the blob boundaries.kept_blob_id names, read through
+ *  bodyOf, deduplicated in first-occurrence order. A NULL id is kept-absent; a body that is not a list of strings
+ *  (bodyOf's null for a tombstone, a damaged, over-cap or non-JSON blob; JSON that is not a list; a list holding
+ *  anything but strings, which lib's boundaryOf never stores) is kept-unreadable. Never an empty list for either: that
+ *  is the fold this file never calls. Baseline B passes its run budget; the payload reads with a fresh one.
+ *  @param {ReplayStore} rs  @param {{ kept_blob_id: number | null }} boundary  @param {{ bytes: number }} [budget] */
+export function keptMembersOf(rs, boundary, budget = { bytes: 0 }) {
+  if (boundary.kept_blob_id === null) return reconDiscard('kept-absent');
+  const v = bodyOf(rs.blobs, boundary.kept_blob_id, budget);
+  if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) return reconDiscard('kept-unreadable');
+  return { state: 'kept', uuids: [...new Set(v)] };
+}
+
+/** The kept members the store holds, in N's holding copy's file order; a member outside that copy comes after, by
+ *  entry_id, and is counted in `offCopy`; a uuid the store does not hold is counted in `absent` (W2-D75 item 2).
+ *  @param {ReplayStore} rs  @param {string[]} uuids  @param {number} fileId */
+export function keptRowsOf(rs, uuids, fileId) {
+  const rows = rs.stmts.keptRows.all(fileId, JSON.stringify(uuids));
+  return { rows, absent: uuids.length - rows.length, offCopy: rows.filter((r) => r.line === null).length };
+}
+
+/** An entry's body as expand picks it (W2-D74; D-6238): 'body' and 'unparseable' carry the pick and the primary's
+ *  decoded length (W2-D54's rawLen; an over-cap blob never decodes, so it is never past the cap here); the three
+ *  body-less words come back as `lost`, each kept apart.
+ *  @param {ReplayStore} rs  @param {{ entry_id: number, blob_id: number }} row */
+export function entryBodyOf(rs, row) {
+  const k = expandEntryBody(rs, { entry_id: row.entry_id, blob_id: row.blob_id });
+  if (k.state === 'body' || k.state === 'unparseable') return { state: k.state, body: k.body, rawLen: k.blob.bytes.length };
+  return { state: 'lost', word: k.state };
+}
+
+/** One kept member as item 2 renders it (W2-D75): each block on its own line. A text block, a bare string block and a
+ *  body that is not a block list are tagged with the row's type (`[user] …`, `[assistant] …`). A tool_use is
+ *  renderToolUseLine (`[tool_use <name>] <input>`, lib's rendering). A tool_result is `[tool_result] ` and its first TOOL_RESULT_CUT code
+ *  points after redaction (toolResultText). Any other block is renderEntryText's `[<type>]`. Every piece is redacted
+ *  whole before any cut (W2-D54).
+ *  @param {{ type: string }} row  @param {{ body: unknown, rawLen: number }} k
+ *  @param {import('../ccd/history/lib.mjs').PairIndex} idx */
+export function renderKeptMember(row, k, idx) {
+  const pieces = Array.isArray(k.body)
+    ? k.body.map((b) => {
+      const type = b !== null && typeof b === 'object' ? b.type : null;
+      const text = type === 'tool_use' ? renderToolUseLine(typeof b.name === 'string' ? b.name : '', JSON.stringify(b.input ?? null)) : renderEntryText([b]);
+      return { type, tagged: typeof b === 'string' || type === 'text', text };
+    })
+    : [{ type: null, tagged: true, text: renderEntryText(k.body) }];
+  const lines = [];
+  for (const p of pieces) {
+    const field = { text: p.text, rawLen: k.rawLen };
+    const r = p.type === 'tool_result' ? toolResultText(field, idx) : redactForSpawn(field, idx);
+    if (r.state !== 'text') return r;
+    lines.push(p.type === 'tool_result' ? `[tool_result] ${r.text}` : p.tagged ? `[${row.type}] ${r.text}` : r.text);
+  }
+  return { state: 'text', text: lines.join('\n') };
+}
+
+/** Boundary N's payload (spec §10.2 "Reconstruction"; W2-D75 items 1 to 3), composed by composePayload:
+ *  1. the summary row's text, redacted whole, its transcript-pointer lines replaced by POINTER_REMOVED;
+ *  2. each kept(N) member the store holds, in N's holding copy's file order, rendered by renderKeptMember;
+ *  3. the question, redacted, then ANSWER_PROTOCOL (W2-D64, D-5776).
+ *  Any failure discards N under its RECON_DISCARDS word; `counts` reports what was read.
+ *  @param {ReplayStore} rs  @param {number} boundaryEntryId  @param {string} question */
+export function reconstructPayload(rs, boundaryEntryId, question) {
+  const copy = boundaryCopyOf(rs, boundaryEntryId);
+  if (copy.state !== 'copy') return copy;
+  if (copy.summaryIndex === null) return reconDiscard('summary-absent');
+  const sum = entryBodyOf(rs, copy.rows[copy.summaryIndex]);
+  if (sum.state === 'lost') return reconDiscard(SUMMARY_LOST[sum.word]);
+  if (sum.state === 'unparseable') return reconDiscard('summary-unparseable');
+  const s1 = redactForSpawn({ text: renderEntryText(sum.body), rawLen: sum.rawLen }, rs.idx);
+  if (s1.state !== 'text') return s1;
+  const item1 = removePointerLines(s1.text);
+  const kept = keptMembersOf(rs, copy.boundary);
+  if (kept.state !== 'kept') return kept;
+  const members = keptRowsOf(rs, kept.uuids, copy.fileId);
+  const rendered = [];
+  let unparseable = 0;
+  for (const row of members.rows) {
+    const k = entryBodyOf(rs, row);
+    if (k.state === 'lost') return reconDiscard(MEMBER_LOST[k.word]);
+    if (k.state === 'unparseable') unparseable += 1;
+    const m = renderKeptMember(row, k, rs.idx);
+    if (m.state !== 'text') return m;
+    rendered.push(m.text);
+  }
+  const q = redactForSpawn({ text: question, rawLen: Buffer.byteLength(question, 'utf8') }, rs.idx);
+  if (q.state !== 'text') return q;
+  return {
+    state: 'payload', text: composePayload({ summary: item1.text, kept: rendered }, q.text),
+    counts: { members: members.rows.length, absent: members.absent, off_copy: members.offCopy, unparseable, pointer_lines: item1.replaced },
   };
 }
 

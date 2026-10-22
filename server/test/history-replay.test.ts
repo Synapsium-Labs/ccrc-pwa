@@ -48,13 +48,26 @@ import { loadConfig as t6LoadConfig } from '../src/config.js';
 import { localIO as t6LocalIO } from '../src/io.js';
 import { rolloverCases as t6RolloverCases } from './fixtures/rollover.js';
 import { DEFAULT_TEST_ROSTER as T6_ROSTER } from './helpers/roster.js';
+// W2-5a Task 1 (W2-D74, W2-D75, W2-D33, W2-D24): w5a1-prefixed bindings, so none collides with a binding above. The
+// fixture store is built by the real sweep in a historyHelpers box (a mkTmp HOME whose PATH holds the poisoned gh) and
+// read here, in process, through the driver's exports.
+import { beforeAll as w5a1BeforeAll } from 'vitest';
+import { DatabaseSync as W5a1Db } from 'node:sqlite';
+import { brotliCompressSync as w5a1Brotli } from 'node:zlib';
+import * as w5a1H from './historyHelpers.js';
+import * as w5a1Fx from './historyFixtures.js';
+import * as w5a1Lib from '../../ccd/history/lib.mjs';
+import * as w5a1Derive from '../../ccd/history/derive.mjs';
+import * as w5a1Recall from '../../ccd/history/recall.mjs';
+import * as w5a1Gate from '../../deploy/history-gate.mjs';
+import * as w5a1Drv from '../../deploy/history-replay.mjs';
 
 const SCRIPT = path.join(REPO, 'deploy', 'history-replay.mjs');
 
 /** One driver run as the operator makes it: node on the script, an argv array, a fixture HOME, the scrubbed env plus
  *  `extraEnv`, and the HOME as cwd so a relative path never lands in the checkout. */
 function runDriver(home: string, args: string[], extraEnv: Record<string, string> = {}): { code: number | null; stdout: string; stderr: string } {
-  const r = spawnSync(process.execPath, [SCRIPT, ...args], {
+  const r = spawnSync(process.execPath, ['--no-warnings', SCRIPT, ...args], {
     cwd: home, encoding: 'utf8', timeout: 60_000,
     env: { ...scrubbedEnv(process.env), HOME: home, ...extraEnv },
   });
@@ -140,12 +153,13 @@ describe('history-replay W2-4 Task 1: the driver words (W2-D59, W2-D12; D-5774)'
     'budget-exhausted', 'record-invalid', 'record-sha-mismatch', 'input-sha-mismatch', 'assignment-mismatch', 'out-refused'];
   const PLAN_CHOSEN = ['args-invalid', 'in-pane', 'roster-invalid', 'account-refused', 'input-invalid', 'code-unmeasured', 'version-unmeasured', 'tree-unmeasured', 'wrapper-unmeasured'];
   const FIX_ROUND_1 = ['run-live', 'out-in-use', 'interrupted'];   // D-5984, D-5985
+  const W2_5A = ['store-unreadable'];   // W2-5a Task 1: a store this node cannot open or read (W2-D59, its owner PR's word)
 
-  it('DRIVER_REASONS is frozen, duplicate-free, and exactly W2-D59\'s sixteen words in order, then W2-4\'s nine, then fix round 1\'s three', () => {
+  it('DRIVER_REASONS is frozen, duplicate-free, and exactly W2-D59\'s sixteen words in order, then W2-4\'s nine, then fix round 1\'s three, then W2-5a\'s', () => {
     expect(W2_D59).toHaveLength(16);
     expect(Object.isFrozen(replay.DRIVER_REASONS)).toBe(true);
     expect(new Set(replay.DRIVER_REASONS).size, 'a word is listed twice').toBe(replay.DRIVER_REASONS.length);
-    expect([...replay.DRIVER_REASONS]).toEqual([...W2_D59, ...PLAN_CHOSEN, ...FIX_ROUND_1]);
+    expect([...replay.DRIVER_REASONS]).toEqual([...W2_D59, ...PLAN_CHOSEN, ...FIX_ROUND_1, ...W2_5A]);
   });
 
   it('DRIVER_REASONS is disjoint from lib REASONS: no driver word is a CLI word (C-J)', () => {
@@ -266,7 +280,8 @@ describe('history-replay W2-4 Task 1: RP2, the pane refusal comes first (W2-D51,
 describe('history-replay W2-4 Task 1: main answers one stderr line, exit 2 for a word and 1 for a defect', () => {
   /** Runs `fn` with a handler registered under `sub`, and removes it afterwards (HANDLERS is module state). From Task 2
    *  on, main sets process.umask(0o077) before parseArgs, and these cases call main in this test process (vitest's fork
-   *  pool), so the worker's umask is saved first and restored afterwards: no later case inherits 077. */
+   *  pool), so the worker's umask is saved first and restored afterwards. From W2-5a Task 1 importing the driver loads
+   *  cli.mjs, which sets this worker's umask to 077 at import, so the saved value is 077 too. */
   const withHandler = async (sub: string, h: (flags: Record<string, string | number | boolean>, env: Record<string, string | undefined>) => Promise<number>,
     fn: () => Promise<void>): Promise<void> => {
     replay.HANDLERS.set(sub, h);
@@ -319,7 +334,7 @@ describe('history-replay W2-4 Task 1: main answers one stderr line, exit 2 for a
     const link = path.join(home, 'bin', 'replay.mjs');
     symlinkSync(SCRIPT, link);
     // A name no task registers, so this case still holds once Tasks 8 and 9 register step0a and probe.
-    const r = spawnSync(process.execPath, [link, 'no-such-sub'], {
+    const r = spawnSync(process.execPath, ['--no-warnings', link, 'no-such-sub'], {
       cwd: home, encoding: 'utf8', timeout: 60_000, env: { ...scrubbedEnv(process.env), HOME: home },
     });
     expect([r.status, r.stderr]).toEqual([EXIT.REFUSED, refusalLine('args-invalid', 'unknown subcommand "no-such-sub"')]);
@@ -327,8 +342,9 @@ describe('history-replay W2-4 Task 1: main answers one stderr line, exit 2 for a
   });
 });
 
-// ── W2-4 Task 1: W2-D51, no deploy/history-*.mjs loads node:sqlite ────────
-describe('history-replay W2-4 Task 1: no deploy/history-*.mjs loads node:sqlite (W2-D51)', () => {
+// ── W2-4 Task 1: W2-D51, no deploy/history-*.mjs spells a node:sqlite specifier. From W2-5a Task 1 the driver loads it, but only
+// through store.mjs (its one importer), whose openReader is every store read's door; D-5814's import pin names store.mjs.
+describe('history-replay W2-4 Task 1: no deploy/history-*.mjs spells a node:sqlite specifier (W2-D51)', () => {
   /** Any quoted `node:sqlite` specifier: a static import, a dynamic import() and a createRequire call all quote it.
    *  KNOWN WIDTH: a specifier assembled from pieces is not seen; review is the backstop. A quoted mention inside a
    *  comment reds too, which is the safe side. */
@@ -456,7 +472,7 @@ describe('W2-4 Task 2: the --out rule, created 0700 with its marker, reused only
     'try { process.stdout.write("accepted " + d.prepareOut(process.env.MARKER_OUT)); }',
     'catch (e) { if (!(e instanceof d.DriverRefusal)) throw e; process.stdout.write(e.word + " " + e.detail); }',
   ].join('\n');
-  const markerChild = (o: string) => spawnSync(process.execPath, ['--input-type=module', '-e', MARKER_CHILD], {
+  const markerChild = (o: string) => spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', MARKER_CHILD], {
     env: { ...scrubbedEnv(process.env), MARKER_DRIVER_URL: pathToFileURL(T2_SCRIPT).href, MARKER_OUT: o }, encoding: 'utf8', timeout: 10_000,
   });
   it('D-5814: a marker that is a FIFO is refused marker-mismatch without being opened (child with a deadline); a regular marker is accepted by the same child', () => {
@@ -515,7 +531,7 @@ describe('W2-4 Task 2: the --out rule, created 0700 with its marker, reused only
       'd.HANDLERS.set(\'t2-umask\', async (flags) => { const real = d.prepareOut(flags.out); fs.writeFileSync(real + \'/probe\', \'x\'); return 0; });',
       `process.exitCode = await d.main(['t2-umask', '--out', ${JSON.stringify(o)}], { HOME: ${JSON.stringify(b)} });`,
     ].join('\n');
-    const r = t2SpawnSync(process.execPath, ['--input-type=module', '-e', code],
+    const r = t2SpawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', code],
       { encoding: 'utf8', env: { ...t2Scrubbed(process.env), HOME: b }, timeout: 60_000 });
     expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
     expect(modeOf(t2Path.join(o, 'probe')), 'main set no umask 077 before the handler').toBe('0600');
@@ -732,7 +748,7 @@ describe('W2-4 Task 3: account admission from the roster (W2-D52, RP3-admission,
   it('admission never opens a config dir\'s credentials file: planted as FIFOs, admission returns promptly (RP9)', () => {
     const home = admitHome();
     plantCredentialFifos(home);
-    const r = spawnSync(process.execPath, ['--input-type=module', '-e', ADMIT_CHILD], {
+    const r = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', ADMIT_CHILD], {
       env: { ...scrubbedEnv(process.env), HOME: home, ADMIT_DRIVER_URL: pathToFileURL(ADMIT_DRIVER).href },
       encoding: 'utf8', timeout: 15_000,
     });
@@ -2238,7 +2254,7 @@ process.stdin.on('data', (d) => {
       const dead = await deadRecord();
       writeFileSync(lockPath(out), recText(dead.pid, dead.start));
       const racers = [0, 1].map(() => {
-        const c = spawn(process.execPath, [racer, out], { stdio: ['pipe', 'pipe', 'inherit'] });
+        const c = spawn(process.execPath, ['--no-warnings', racer, out], { stdio: ['pipe', 'pipe', 'inherit'] });
         startedChildren.push(c);
         const lines: string[] = [];
         let partial = '';
@@ -2730,7 +2746,7 @@ let said;
 try { D.prepareOut(join(process.argv[2], 'out')); said = 'no refusal'; } catch (e) { said = e.word + ': ' + e.detail; }
 process.stdout.write(said);
 `);
-    const r = spawnSync('/usr/bin/prlimit', ['--fsize=0', process.execPath, script, dir], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const r = spawnSync('/usr/bin/prlimit', ['--fsize=0', process.execPath, '--no-warnings', script, dir], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
     expect(r.signal, r.stderr).toBeNull();
     expect(r.stdout).toBe('out-refused: marker-unwritable EFBIG; --out was created: remove it before a re-run');
     expect(readdirSync(path.join(dir, 'out')), 'the directory was made; the marker was created empty').toEqual([replay.OUT_MARKER]);
@@ -2749,7 +2765,7 @@ let said;
 try { D.claimOut(process.argv[2]); said = 'no refusal'; } catch (e) { said = e?.word ? e.word + ': ' + e.detail : 'RAW ' + (e?.code ?? e); }
 process.stdout.write(said);
 `);
-    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, '--no-warnings', script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
     const r = run(0);
     expect(r.signal, r.stderr).toBeNull();
     expect(r.stdout).toMatch(/^out-refused: \.driver\.lock\.tmp-\d+ unwritable EFBIG$/);
@@ -2769,7 +2785,7 @@ let said;
 try { D.ensurePoisonBin(process.argv[2]); said = 'no refusal'; } catch (e) { said = e?.word ? e.word + ': ' + e.detail : 'RAW ' + (e?.code ?? e); }
 process.stdout.write(said);
 `);
-    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, '--no-warnings', script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
     const r = run(0);
     expect(r.signal, r.stderr).toBeNull();
     expect(r.stdout).toBe('out-refused: poison-bin/gh unwritable EFBIG');
@@ -2795,7 +2811,7 @@ let said;
 try { D.recordSpend(process.argv[2], 'j0', 5); said = 'no refusal'; } catch (e) { said = e?.word ? e.word + ': ' + e.detail : 'RAW ' + (e?.code ?? e); }
 process.stdout.write(said);
 `);
-    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, '--no-warnings', script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
     const r = run(before.length);
     expect(r.signal, r.stderr).toBeNull();
     expect(r.stdout).toBe('out-refused: spend.jsonl unwritable EFBIG');
@@ -2846,7 +2862,7 @@ const results = {};
 ${body}
 process.stdout.write(JSON.stringify(results));
 `);
-    const r = spawnSync(process.execPath, [script, dir], { encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const r = spawnSync(process.execPath, ['--no-warnings', script, dir], { encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
     return { out: r.stdout, err: r.stderr, signal: r.signal, status: r.status };
   }
 
@@ -3014,21 +3030,39 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
     expect(code.filter((l) => /\bshell\s*:|\b(?:exec|execSync|execFile|execFileSync)\s*\(/.test(l))).toEqual([]);
   });
 
-  // D-5814: the import block is exactly the seven modules the plan names, and node:child_process brings in `spawn` only,
-  // so W2-D24's code hash covers the driver's whole scoring path and no later edit widens it unseen.
-  const EXPECTED_IMPORTS = ['node:fs', 'node:os', 'node:path', 'node:child_process', 'node:url', '../ccd/history/lib.mjs', '../shared/roster-json.mjs'];
+  // D-5814, widened by W2-5a Task 1: the import block is exactly the fourteen modules W2-5a's driver loads, every one
+  // added here once (R3). node:child_process brings in `spawn` only, and node:crypto and each ccd/history module beyond
+  // lib.mjs bring in exactly the names the plan's tasks use (W2-D33, W2-D74). A later W2-5a task that adds a name to a
+  // module's braces updates that module's entry here in the same commit. So no edit adds a second reader unseen: keptOf
+  // (W2-D68), sweep.mjs's recall-off content reader (W2-D29, R6) or a decode of its own. W2-D24's code hash covers the
+  // driver and the gate. The other ccd/history modules ride the release tag (W2-D24).
+  const EXPECTED_IMPORTS = ['node:fs', 'node:os', 'node:path', 'node:child_process', 'node:url', 'node:crypto',
+    '../ccd/history/lib.mjs', '../ccd/history/store.mjs', '../ccd/history/derive.mjs', '../ccd/history/recall.mjs',
+    '../ccd/history/cli.mjs', '../ccd/history/sweep.mjs', './history-gate.mjs', '../shared/roster-json.mjs'];
+  const EXACT_NAMES: Record<string, string> = {
+    'node:child_process': '{ spawn }',
+    'node:crypto': '{ randomBytes }',
+    '../ccd/history/store.mjs': '{ StoreError, openReader, userVersion }',
+    '../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, holdingCopyOf }',
+    '../ccd/history/recall.mjs': '{ expandEntryBody }',
+    '../ccd/history/cli.mjs': '{ pairIndexOf }',
+    '../ccd/history/sweep.mjs': '{ ftsTextOfBlob }',
+  };
   const importViolations = (text: string): string[] => {
     const found: string[] = [];
     const froms = [...text.matchAll(/^import\s+([^;]*?)\s*from\s*'([^']+)';/gms)];
     if (JSON.stringify(froms.map((m) => m[2])) !== JSON.stringify(EXPECTED_IMPORTS)) found.push(`imports ${froms.map((m) => m[2]).join(', ')}`);
-    for (const m of froms) if (m[2] === 'node:child_process' && m[1]!.trim() !== '{ spawn }') found.push(`child_process brings in ${m[1]}`);
+    for (const m of froms) {
+      const want = EXACT_NAMES[m[2]!];
+      if (want !== undefined && m[1]!.trim() !== want) found.push(`${m[2]} brings in ${m[1]}`);
+    }
     for (const l of text.split('\n')) {
       if (isComment(l.trim())) continue;
       if (/^import\s*['"]/.test(l) || /\bimport\s*\(/.test(l) || /\brequire\s*\(/.test(l)) found.push(`side-effect or dynamic load ${l.trim()}`);
     }
     return found;
   };
-  it('CONTROL: the import scan sees spawnSync, an import of history-gate.mjs, node:fs/promises, a dynamic import and a missing module', () => {
+  it('CONTROL: the import scan sees spawnSync, a stray history-gate specifier, node:fs/promises, a dynamic import, a missing module, keptOf from derive.mjs and sweep.mjs\'s recall-off reader', () => {
     const real = t5fs.readFileSync(SRC, 'utf8');
     expect(importViolations(real), 'the driver itself').toEqual([]);
     const variants: Array<[string, string]> = [
@@ -3037,13 +3071,16 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
       ['fs/promises', real.replace("import os from 'node:os';", "import os from 'node:os';\nimport { readFile } from 'node:fs/promises';")],
       ['dynamic', real + "\nconst m = await import('node:sqlite');\n"],
       ['missing', real.replace("import os from 'node:os';\n", '')],
+      // The two below edit a module's braces by pattern, so they hold whatever names later tasks add there.
+      ['keptOf', real.replace(/^import \{ ([^}]*) \} from '\.\.\/ccd\/history\/derive\.mjs';$/m, (_m, n: string) => `import { ${n}, keptOf } from '../ccd/history/derive.mjs';`)],
+      ['sweep reader', real.replace(/^import \{ ([^}]*) \} from '\.\.\/ccd\/history\/sweep\.mjs';$/m, (_m, n: string) => `import { ${n}, recallOffPresence as sweepPresence } from '../ccd/history/sweep.mjs';`)],
     ];
     for (const [label, text] of variants) {
       expect(text, `${label}: the variant differs from the driver`).not.toBe(real);
       expect(importViolations(text), label).not.toEqual([]);
     }
   });
-  it('deploy/history-replay.mjs imports exactly its seven modules, and node:child_process brings in spawn only', () => {
+  it('deploy/history-replay.mjs imports exactly its fourteen modules, and node:child_process, node:crypto and each ccd/history module beyond lib.mjs bring in exactly their pinned names', () => {
     expect(importViolations(t5fs.readFileSync(SRC, 'utf8'))).toEqual([]);
   });
 });
@@ -3853,9 +3890,9 @@ t7describe('W2-4 Task 7: preflights, codeShas, the release stamp and recall-off 
 // The subcommand as the operator runs it: a child process with a fixture HOME (t8Run, runDriver's env contract over
 // a driver copy) against Task 5's recording stub. Every rostered id's launcher is a stub and every id has a fresh
 // limits row, so a spawn of ANY account, admitted or not, leaves a log line, and only admission can stop it. Each
-// run uses a fixture tree (t8Tree): a copy of the driver beside fixture bytes for the two gate_code files this PR
-// does not own, so codeShas() is measured whichever of W2-3 and this PR merges first and the recorded shas can be
-// pinned exactly; lib.mjs is copied, and ccd/history's other entries and shared/ are symlinks to this checkout.
+// run uses a fixture tree (t8Tree): a copy of the driver beside the gate's real bytes (the driver imports the gate,
+// W2-5a Task 1) and fixture bytes for measure-history.py, so the recorded shas can be pinned exactly; lib.mjs is
+// copied, and ccd/history's other entries and shared/ are symlinks to this checkout.
 describe('W2-4 Task 8: step0a end to end', () => {
   const T8_SESSION = '00000000-0000-4000-8000-0000000000a8';
   const T8_USAGE = { input_tokens: 100, cache_creation_input_tokens: 20, cache_read_input_tokens: 30, output_tokens: 50 };
@@ -3866,7 +3903,9 @@ describe('W2-4 Task 8: step0a end to end', () => {
     { type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'ready', usage: T8_USAGE, permission_denials: [] },
   ].map((e) => JSON.stringify(e)).join('\n') + '\n';
   const T8_STAMP = 'v9.9.9';
-  const T8_GATE_BYTES = '// fixture bytes for deploy/history-gate.mjs (W2-4 Task 8)\n';
+  /** The gate's real bytes: the driver imports ./history-gate.mjs (W2-5a Task 1), so a tree it runs from carries the gate
+   *  itself, and step 0a records that file's sha. */
+  const T8_GATE_BYTES = readFileSync(path.join(REPO, 'deploy', 'history-gate.mjs'));
   const T8_MEASURE_BYTES = '# fixture bytes for deploy/measure-history.py (W2-4 Task 8)\n';
   const T8_CALLER_ENV = {
     TMUX: '/tmp/fixture-tmux,1,0', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'fixture-session', CCRC_SESSION_GENERATION: 'fixture-generation',
@@ -3909,16 +3948,16 @@ describe('W2-4 Task 8: step0a end to end', () => {
     return home;
   }
 
-  /** A tree the driver runs from: its own bytes copied (so TREE_ROOT is this tree), fixture bytes for the two
-   *  gate_code files this PR does not own (`gate: false` leaves deploy/history-gate.mjs out), lib.mjs copied and
+  /** A tree the driver runs from: its own bytes copied (so TREE_ROOT is this tree), the gate's real bytes (the driver
+   *  imports it), fixture bytes for deploy/measure-history.py (`measure: false` leaves it out), lib.mjs copied and
    *  ccd/history's other entries and shared/ symlinked to this checkout, so every import resolves. */
-  function t8Tree(opts: { gate?: boolean } = {}): string {
+  function t8Tree(opts: { measure?: boolean } = {}): string {
     const repo = path.resolve(path.dirname(SCRIPT), '..');
     const tree = mkTmp('ccrc-w2-t8-tree-');
     mkdirSync(path.join(tree, 'deploy'));
     copyFileSync(SCRIPT, path.join(tree, 'deploy', 'history-replay.mjs'));
-    if (opts.gate !== false) writeFileSync(path.join(tree, 'deploy', 'history-gate.mjs'), T8_GATE_BYTES);
-    writeFileSync(path.join(tree, 'deploy', 'measure-history.py'), T8_MEASURE_BYTES);
+    writeFileSync(path.join(tree, 'deploy', 'history-gate.mjs'), T8_GATE_BYTES);
+    if (opts.measure !== false) writeFileSync(path.join(tree, 'deploy', 'measure-history.py'), T8_MEASURE_BYTES);
     mkdirSync(path.join(tree, 'ccd', 'history'), { recursive: true });
     for (const n of readdirSync(path.join(repo, 'ccd', 'history'))) {
       const from = path.join(repo, 'ccd', 'history', n);
@@ -3931,7 +3970,7 @@ describe('W2-4 Task 8: step0a end to end', () => {
 
   /** runDriver's contract, for the driver copy in `tree`. */
   function t8Run(tree: string, home: string, args: string[], extraEnv: Record<string, string> = {}, timeout = 120_000) {
-    const r = spawnSync(process.execPath, [path.join(tree, 'deploy', 'history-replay.mjs'), ...args],
+    const r = spawnSync(process.execPath, ['--no-warnings', path.join(tree, 'deploy', 'history-replay.mjs'), ...args],
       // SIGKILL at the deadline (D-5986): the driver holds SIGTERM until its event loop turns, so a call blocked on a FIFO would outlive a SIGTERM and hang spawnSync.
       { env: { ...scrubbedEnv(process.env), HOME: home, ...extraEnv }, encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
     return { code: r.status, stdout: r.stdout, stderr: r.stderr };
@@ -4233,9 +4272,10 @@ describe('W2-4 Task 8: step0a end to end', () => {
 
   it('an unmeasured code sha refuses code-unmeasured, and an untagged stamp tree-unmeasured, before any spawn', () => {
     const home = t8Home('ccrc-w2-t8-unmeasured-');
-    const noGate = t8Run(t8Tree({ gate: false }), home, t8Argv(t8Out()));
-    expect(noGate.code).toBe(2);
-    expect(noGate.stderr).toBe('ccrc history-replay: code-unmeasured: deploy/history-gate.mjs is absent\n');
+    // W2-5a Task 1: a tree without the gate cannot load the driver (it imports the gate), so the absent file is the census script.
+    const noMeasure = t8Run(t8Tree({ measure: false }), home, t8Argv(t8Out()));
+    expect(noMeasure.code).toBe(2);
+    expect(noMeasure.stderr).toBe('ccrc history-replay: code-unmeasured: deploy/measure-history.py is absent\n');
     writeFileSync(path.join(home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', dirty: false }));
     const untagged = t8Run(t8Tree(), home, t8Argv(t8Out()));
     expect(untagged.code).toBe(2);
@@ -4543,7 +4583,7 @@ describe('W2-4 Task 8: step0a end to end', () => {
       if (ignoresTerm) writeFileSync(path.join(home, 'ignore-term'), '');
       const tree = t8Tree();
       const out = t8Out();
-      const driver = spawn(process.execPath, [path.join(tree, 'deploy', 'history-replay.mjs'), ...t8Argv(out)],
+      const driver = spawn(process.execPath, ['--no-warnings', path.join(tree, 'deploy', 'history-replay.mjs'), ...t8Argv(out)],
         { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
       startedChildren.push(driver);
       let stdout = '';
@@ -4605,7 +4645,7 @@ describe('W2-4 Task 8: step0a end to end', () => {
       writeFileSync(path.join(home, 'version-sleep'), '');
       const tree = t8Tree();
       const out = t8Out();
-      const driver = spawn(process.execPath, [path.join(tree, 'deploy', 'history-replay.mjs'), ...t8Argv(out)],
+      const driver = spawn(process.execPath, ['--no-warnings', path.join(tree, 'deploy', 'history-replay.mjs'), ...t8Argv(out)],
         { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
       startedChildren.push(driver);
       let stderr = '';
@@ -5335,7 +5375,7 @@ process.stdout.write(stream());`), { mode: 0o700 });
     mkdirSync(join(home, '.cc-limits'), { recursive: true });
     writeFileSync(join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 10, seven: 10, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));
     const out = join(base, 'out');
-    const driver = spawn(process.execPath, [SCRIPT, 'probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'],
+    const driver = spawn(process.execPath, ['--no-warnings', SCRIPT, 'probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'],
       { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
     startedChildren.push(driver);
     let stderr = '';
@@ -5373,7 +5413,7 @@ process.stdout.write(stream());`), { mode: 0o700 });
     mkdirSync(join(home, '.cc-limits'), { recursive: true });
     writeFileSync(join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 10, seven: 10, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));
     const out = join(base, 'out');
-    const driver = spawn(process.execPath, [SCRIPT, 'probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'],
+    const driver = spawn(process.execPath, ['--no-warnings', SCRIPT, 'probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'],
       { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
     startedChildren.push(driver);
     let stderr = '';
@@ -5447,4 +5487,374 @@ setTimeout(() => {}, 25000);`), { mode: 0o700 });
       expect(await until(() => !alive(gc!), 3_000), 'the group member that ignored SIGTERM is dead when the run returns').toBe(true);
     } finally { killAll(allOf(b.home)); }
   }, 120_000);
+});
+
+// ── W2-5a Task 1: reconstruction reads the store through W2-1's exports (W2-D74, W2-D75, W2-D33, W2-D68 (2), W2-D54,
+// W2-D24, W2-D29) ────────────────────────────────────────────────────────────────────────────────────────────────────
+// The scans and pure cases run everywhere. The store cases run on ONE fixture HOME (historyHelpers' makeHistoryBox: a
+// mkTmp HOME whose PATH holds ccrcContainedEnv's poisoned gh, ssh, curl and managers). The real sweep builds its store
+// from planted transcripts, as history-recall's W2-D33 block builds its own: no live store, no model and no claude are
+// touched or spawned. The cases read it in this process through the driver's exports, and change it only through a
+// writer handle on the fixture store, putting every column back in a finally.
+type W5a1Rs = { db: W5a1Db; close: () => void } & Record<string, unknown>;
+type W5a1Payload =
+  | { state: 'payload'; text: string; counts: { members: number; absent: number; off_copy: number; unparseable: number; pointer_lines: number } }
+  | { state: 'discard'; why: string };
+const w5a1 = w5a1Drv as unknown as {
+  openReplayStore(home: string): W5a1Rs;
+  reconstructPayload(rs: W5a1Rs, boundaryEntryId: number, question: string): W5a1Payload;
+  boundaryCopyOf(rs: W5a1Rs, boundaryEntryId: number): { state: string; rows: Array<{ blob_id: number; uuid: string }>; summaryIndex: number | null };
+  spanRowsOf(rs: W5a1Rs, boundaryEntryId: number): { state: 'span'; rows: Array<Record<string, unknown>> } | { state: 'discard'; why: string };
+  composePayload(parts: { summary: string; kept: readonly string[] }, question: string): string;
+  renderToolUseLine(name: string, inputText: string): string;
+  removePointerLines(text: string): { text: string; replaced: number };
+  RECON_DISCARDS: readonly string[];
+  POINTER_REMOVED: string;
+  CODE_SHA_FILES: readonly string[];
+  DRIVER_REASONS: readonly string[];
+  TOOL_RESULT_CUT: number;
+  DriverRefusal: new (word: string, detail: string) => Error & { word: string; detail: string };
+};
+const w5a1D = w5a1Derive as unknown as {
+  blobReadStmts(db: W5a1Db): Record<string, unknown>;
+  bodyOf(s: Record<string, unknown>, blobId: number, budget: { bytes: number }): unknown;
+  keptOf(s: Record<string, unknown>, blobId: number | null, budget: { bytes: number }): Set<string>;
+};
+const w5a1R = w5a1Recall as unknown as {
+  expandEntryBody(rc: unknown, e: { entry_id: number; blob_id: number }): { state: string; body: unknown; primary: unknown; causes: string[] };
+};
+const W5A1_DEPLOY = path.join(REPO, 'deploy');
+const w5a1DeployMjs = (): string[] => readdirSync(W5A1_DEPLOY).filter((f) => f.endsWith('.mjs')).sort();
+/** A deploy file's code lines: a line whose trimmed start is //, * or /* is prose, which may name what the code never calls. */
+const w5a1Code = (f: string): string[] => readFileSync(path.join(W5A1_DEPLOY, f), 'utf8').split('\n').filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l));
+const W5A1_KEPT_OF = /\bkeptOf\b/;
+const W5A1_DECODE = /\bunbrotli(?:Prefix)?\b|\bbrotliDecompress(?:Sync)?\b|\bcreateBrotliDecompress\b|(['"`])node:zlib\1/;
+/** Every word the store cases below answer: each must be a RECON_DISCARDS member. */
+const W5A1_SEEN_DISCARDS = ['boundary-absent', 'boundary-uncopied', 'summary-absent', 'summary-unparseable', 'summary-tombstone',
+  'summary-over-cap', 'summary-undecodable', 'kept-absent', 'kept-unreadable', 'member-tombstone', 'member-over-cap', 'member-undecodable'];
+
+describe('W2-5a Task 1: the driver reads the store only through W2-1 exports', () => {
+  it('CONTROL: the keptOf pattern sees an import, a call, a namespace read and an alias, and not another name; the corpus holds the driver and the gate, and the driver reads kept lists through bodyOf', () => {
+    for (const planted of ["import { bodyOf, keptOf } from '../ccd/history/derive.mjs';", 'const kept = keptOf(s, b.kept_blob_id, budget);',
+      'const v = derive.keptOf(s, id, { bytes: 0 });', "import { keptOf as readKept } from '../ccd/history/derive.mjs';"]) {
+      expect(W5A1_KEPT_OF.test(planted), planted).toBe(true);
+    }
+    expect(W5A1_KEPT_OF.test('const keptOfficial = 1;')).toBe(false);
+    expect(w5a1DeployMjs()).toEqual(expect.arrayContaining(['history-gate.mjs', 'history-replay.mjs']));
+    expect(w5a1Code('history-replay.mjs').some((l) => /\bbodyOf\(/.test(l)), 'CONTROL: the driver does read a kept list, through bodyOf').toBe(true);
+  });
+
+  it('no deploy/*.mjs names keptOf on a code line (W2-D33, W2-D68): a NULL id, a tombstone and a body that is not a list would fold into one empty set', () => {
+    expect(w5a1DeployMjs().filter((f) => w5a1Code(f).some((l) => W5A1_KEPT_OF.test(l)))).toEqual([]);
+  });
+
+  it('no deploy/*.mjs decodes a blob itself (W2-D74): no unbrotli, brotliDecompress or node:zlib on a code line; CONTROL: the pattern sees each', () => {
+    for (const planted of ["import { unbrotli } from '../ccd/history/store.mjs';", 'const b = brotliDecompressSync(z);',
+      "import zlib from 'node:zlib';", 'const s = createBrotliDecompress();']) expect(W5A1_DECODE.test(planted), planted).toBe(true);
+    expect(W5A1_DECODE.test('const body = bodyOf(rs.blobs, id, { bytes: 0 });')).toBe(false);
+    expect(w5a1DeployMjs().filter((f) => w5a1Code(f).some((l) => W5A1_DECODE.test(l)))).toEqual([]);
+  });
+
+  it('CODE_SHA_FILES parity (W2-D24, decisions §7): CODE_SHA_FILES is the gate\'s GATE_CODE_FILES itself, so the four gate_code paths are spelled once', () => {
+    expect(w5a1.CODE_SHA_FILES).toBe(w5a1Gate.GATE_CODE_FILES);
+    expect([...w5a1Gate.GATE_CODE_FILES], 'CONTROL: the four W2-D24 names')
+      .toEqual(['deploy/history-gate.mjs', 'deploy/measure-history.py', 'deploy/history-replay.mjs', 'ccd/history/lib.mjs']);
+    expect(w5a1Code('history-replay.mjs').filter((l) => l.includes("'deploy/measure-history.py'")), 'the driver spells no gate_code path').toEqual([]);
+  });
+
+  it('W2-D29 (R6): the driver\'s recallOffPresence is its own (home, ids) lstat; no driver import binds a recallOffPresence under any name, and cli.mjs re-exports nothing', () => {
+    const IMPORT = /^import\s+([^;]*?)\s*from\s*'([^']+)';/gms;
+    const bindsReader = (i: RegExpMatchArray): boolean => /\brecallOffPresence\b/.test(i[1]!);
+    for (const planted of ["import { recallOffPresence as sweepPresence } from '../ccd/history/sweep.mjs';", "import { ftsTextOfBlob, recallOffPresence } from '../ccd/history/sweep.mjs';"]) {
+      expect([...planted.matchAll(IMPORT)].some(bindsReader), `CONTROL: ${planted}`).toBe(true);
+    }
+    expect([..."import { ftsTextOfBlob } from '../ccd/history/sweep.mjs';".matchAll(IMPORT)].some(bindsReader), 'CONTROL: another sweep.mjs name is not the reader').toBe(false);
+    const src = readFileSync(SCRIPT, 'utf8');
+    const imports = [...src.matchAll(IMPORT)];
+    expect(imports.length, 'CONTROL: the scan read the import block').toBeGreaterThan(5);
+    expect(imports.filter(bindsReader).map((i) => i[0])).toEqual([]);
+    expect(src.split('\n').filter((l) => /^export function recallOffPresence\(/.test(l))).toEqual(['export function recallOffPresence(home, ids) {']);
+    const cli = readFileSync(path.join(REPO, 'ccd', 'history', 'cli.mjs'), 'utf8').split('\n');
+    expect(cli.filter((l) => /^export\s*(?:\*|\{)/.test(l)), 'cli.mjs re-exports nothing, so importing pairIndexOf brings no second reader').toEqual([]);
+    expect(cli.some((l) => l.includes("recallOffPresence } from './sweep.mjs';")), 'CONTROL: cli.mjs imports sweep\'s reader').toBe(true);
+  });
+
+  it('RECON_DISCARDS is frozen, duplicate-free, Task 1\'s fourteen words first, holds every word the store cases answer, and is disjoint from DRIVER_REASONS and GATE_REASONS: a discard is a count, never a refusal (R5)', () => {
+    expect(Array.isArray(w5a1.RECON_DISCARDS) && Object.isFrozen(w5a1.RECON_DISCARDS)).toBe(true);
+    // Tasks 2, 3 and 4 append their boundary words after these, in place, each pinning its own slice.
+    expect(w5a1.RECON_DISCARDS.slice(0, 14)).toEqual(['boundary-absent', 'boundary-uncopied', 'summary-absent', 'summary-unparseable',
+      'summary-tombstone', 'summary-over-cap', 'summary-undecodable', 'kept-absent', 'kept-unreadable', 'member-tombstone',
+      'member-over-cap', 'member-undecodable', 'over-decode-cap', 'leaf-absent']);
+    expect(new Set(w5a1.RECON_DISCARDS).size).toBe(w5a1.RECON_DISCARDS.length);
+    expect(W5A1_SEEN_DISCARDS.filter((w) => !w5a1.RECON_DISCARDS.includes(w))).toEqual([]);
+    expect(w5a1.RECON_DISCARDS.filter((w) => w5a1.DRIVER_REASONS.includes(w))).toEqual([]);
+    expect(w5a1.RECON_DISCARDS.filter((w) => (w5a1Gate.GATE_REASONS as readonly string[]).includes(w))).toEqual([]);
+  });
+
+  it('W2-D75 item 3 and W2-D64: composePayload joins the summary, each kept member and the question by one blank line, the question followed by ANSWER_PROTOCOL; an empty question and empty parts still carry it; renderToolUseLine is lib\'s tool_use rendering', () => {
+    expect(w5a1.composePayload({ summary: 's', kept: ['a', 'b'] }, 'q')).toBe(`s\n\na\n\nb\n\nq\n\n${w5a1Gate.ANSWER_PROTOCOL}`);
+    expect(w5a1.composePayload({ summary: '', kept: [] }, '')).toBe(`\n\n\n\n${w5a1Gate.ANSWER_PROTOCOL}`);
+    const input = { file_path: '/home/u/tree/demo/b.md' };
+    expect(w5a1.renderToolUseLine('Read', JSON.stringify(input))).toBe('[tool_use Read] {"file_path":"/home/u/tree/demo/b.md"}');
+    expect(w5a1.renderToolUseLine('Read', JSON.stringify(input)), 'CONTROL: lib\'s rendering of the same block')
+      .toBe(w5a1Lib.renderEntryText([{ type: 'tool_use', id: 'toolu_01W5A1R', name: 'Read', input }]));
+  });
+
+  it('item 1 (W2-D75): removePointerLines replaces each whole line naming a .jsonl path with [pointer removed], and nothing else', () => {
+    const ptr = 'If you need specific details from before compaction, read the full transcript at: /home/u/.claude/projects/-home-u-tree-demo/abc.jsonl';
+    const text = ['1. Primary Request and Intent:', '   keep /home/u/tree/demo/b.md', ptr, 'Continue from where it left off.'].join('\n');
+    expect(w5a1.removePointerLines(text)).toEqual({
+      text: ['1. Primary Request and Intent:', '   keep /home/u/tree/demo/b.md', '[pointer removed]', 'Continue from where it left off.'].join('\n'), replaced: 1,
+    });
+    expect(w5a1.POINTER_REMOVED).toBe('[pointer removed]');
+    // CONTROL: a .jsonl name with no path, a path ending .jsonlx and a text with no pointer are left alone.
+    for (const keep of ['the file notes.jsonl', 'see /home/u/tree/x.jsonlx', 'no pointer here']) expect(w5a1.removePointerLines(keep)).toEqual({ text: keep, replaced: 0 });
+    expect(w5a1.removePointerLines(`${ptr}\n${ptr}`).replaced, 'every such line').toBe(2);
+  });
+
+  it('openReplayStore refuses store-unreadable with the store\'s own word, never its message: a missing store and a zero-byte one (W2-D51)', () => {
+    const answer = (home: string): [string, string] => {
+      try { w5a1.openReplayStore(home).close(); return ['opened', '']; } catch (e) {
+        expect(e).toBeInstanceOf(w5a1.DriverRefusal);
+        const r = e as { word: string; detail: string };
+        return [r.word, r.detail];
+      }
+    };
+    expect(answer(mkTmp('ccrc-w5a1-nostore-'))).toEqual(['store-unreadable', 'store-missing']);
+    const zero = mkTmp('ccrc-w5a1-zerostore-');
+    const f = w5a1Lib.historyPaths(zero).dbFile;
+    mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
+    writeFileSync(f, '', { mode: 0o600 });
+    expect(answer(zero)).toEqual(['store-unreadable', 'store-zero-byte']);
+    expect(statSync(f).size, 'the open adopted nothing').toBe(0);
+  });
+
+  it('the driver runs under --no-warnings: its shebang passes the flag', () => {
+    expect(readFileSync(SCRIPT, 'utf8').split('\n')[0]).toBe('#!/usr/bin/env -S node --no-warnings');
+  });
+
+  it('importing the driver loads cli.mjs, which sets the importing process\'s umask to 0o077, and runs no main (W2-D33)', () => {
+    const code = ['process.umask(0o022);', `await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});`, 'console.log(String(process.umask(0o022)));'].join('\n');
+    const r = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', code],
+      { encoding: 'utf8', timeout: 60_000, env: { ...scrubbedEnv(process.env), HOME: mkTmp('ccrc-w5a1-umask-') } });
+    expect(r.status, r.stderr).toBe(0);
+    expect([r.stdout, r.stderr], 'the umask is 0o077 after the import, and neither main printed').toEqual([`${0o077}\n`, '']);
+  });
+});
+
+describe.skipIf(process.platform === 'darwin')('W2-5a Task 1: reconstruction from a fixture store', () => {
+  const ID = 'claude-a-w5a1';
+  const GEN = '0189abcd-1234-4678-9abc-0000000005a1';
+  const TAG = 'a5a10001';
+  const u = (i: number): string => `${TAG}-0000-4000-8000-${String(i).padStart(12, '0')}`;
+  const ts = (i: number): string => new Date(Date.UTC(2026, 9, 1, 10, 0, i)).toISOString();
+  const SID = u(0);
+  const HEAVY = 120_000;
+  /** The run's secret: a fixture token under ~/.ccrc, written after every sweep, so only pairIndexOf's read of it redacts it.
+   *  Assembled at run time; no fixture value is key-shaped. */
+  const SECRET = ['zq', 'w5a1', 'plain', 'words', 'value'].join('-');
+  const POINTER = `If you need specific details from before compaction, read the full transcript at: /home/u/.claude/projects/${w5a1H.SEED_SLUG}/${SID}.jsonl`;
+  const SUMMARY = ['<summary>', '1. Primary Request and Intent:', '   zqw5a1 intent', `   zqw5a1 token ${SECRET}`, '9. Optional Next Step:',
+    '   zqw5a1 next step', '</summary>', POINTER, 'Continue from where it left off.'].join('\n');
+  const RESULT = `zqw5a1 result ${SECRET} ${'r '.repeat(2500)}end`;
+  const QUESTION = `Which file did the session read first? ${SECRET}`;
+  // W2-D54: the run's secret sits in every part kind, the summary, a user text block and a tool_use input as well as the
+  // tool_result and the question, so each redaction call is pinned by its own part (mutants M19 and M20).
+  const USER_PART = `[user] zqw5a1 open the app ${w5a1Lib.REDACTED_MARK}`;
+  const READ_LINE = `[tool_use Read] {"file_path":"/home/u/tree/demo/b.md","note":"${w5a1Lib.REDACTED_MARK}"}`;
+  let box: w5a1H.HistoryBox;
+  let dbFile = '';
+  /** Leaf N's rows. Its kept list names u(3), u(1), u(2) out of file order, and u(9), which no copy holds. u(4) is not
+   *  kept. The first text block of u(2) is `fill`: "..." in the copy seeded first, "" in the second, a ccd-sanitize pair. */
+  const rows = (fill: string): object[] => {
+    const read = w5a1Fx.toolUseRow({ uuid: u(2), ts: ts(2), parentUuid: u(1), sessionId: SID, toolUseId: 'toolu_01W5A1', name: 'Read', input: { file_path: '/home/u/tree/demo/b.md', note: SECRET } });
+    const m = read['message'] as { content: unknown[] };
+    m.content = [{ type: 'text', text: fill }, ...m.content];
+    return [
+      w5a1Fx.userRow({ uuid: u(1), ts: ts(1), sessionId: SID, text: `zqw5a1 open the app ${SECRET}` }),
+      read,
+      w5a1Fx.toolResultRow({ uuid: u(3), ts: ts(3), parentUuid: u(2), sessionId: SID, toolUseId: 'toolu_01W5A1', content: RESULT }),
+      w5a1Fx.assistantRow({ uuid: u(4), ts: ts(4), parentUuid: u(3), sessionId: SID, text: 'zqw5a1 not kept' }),
+      w5a1Fx.boundaryRow({ uuid: u(5), ts: ts(5), parentUuid: u(4), sessionId: SID, trigger: 'manual', headUuid: u(4), anchorUuid: u(6),
+        tailUuid: u(4), allUuids: [u(3), u(1), u(2), u(9)] }),
+      w5a1Fx.summaryRow({ uuid: u(6), ts: ts(6), parentUuid: u(5), sessionId: SID, text: SUMMARY }),
+    ];
+  };
+
+  w5a1BeforeAll(() => {
+    box = w5a1H.makeHistoryBox('ccrc-w5a1-');
+    dbFile = w5a1Lib.historyPaths(box.home).dbFile;
+    // The sanitised copy is seeded FIRST, so its entries' primary bodies are the "..." ones (history-recall's DM2b shape),
+    // and one more tick derives leaf N.
+    const seeded = w5a1H.seedFamily(box, { id: ID, project: 'demo', generation: GEN, uuid: SID, rows: rows('...') });
+    const t = w5a1H.runSweep(box);
+    expect(t.code, t.stderr).toBe(0);
+    w5a1H.plantTranscript(box, 'claude-b', path.basename(path.dirname(seeded.transcript)), SID, rows(''));
+    // Two discovery passes (SCAN_INTERVAL_MS) find and ingest the second copy.
+    for (let k = 0; k < 2; k += 1) {
+      const r = w5a1H.runDriver(box, { offsetMs: w5a1Lib.SCAN_INTERVAL_MS + 60_000 });
+      expect(r.code, r.stderr).toBe(0);
+    }
+    writeFileSync(path.join(box.home, '.ccrc', 'w5a1.token'), `${SECRET}\n`, { mode: 0o600 });
+  }, 3 * HEAVY);
+
+  const ro = <T,>(fn: (db: W5a1Db) => T): T => { const db = new W5a1Db(dbFile, { readOnly: true }); try { return fn(db); } finally { db.close(); } };
+  const rw = <T,>(fn: (db: W5a1Db) => T): T => { const db = new W5a1Db(dbFile); try { return fn(db); } finally { db.close(); } };
+  const idOf = (uuid: string): number => ro((db) => Number((db.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(uuid) as { entry_id: number }).entry_id));
+  const blobOf = (uuid: string): number => ro((db) => Number((db.prepare('SELECT blob_id FROM entries WHERE uuid = ?').get(uuid) as { blob_id: number }).blob_id));
+  const keptBlob = (): number => ro((db) => Number((db.prepare('SELECT kept_blob_id AS k FROM boundaries WHERE entry_id = ?').get(idOf(u(5))) as { k: number }).k));
+  /** A read handle through the driver's own open, closed after `fn`. */
+  const withStore = <T,>(fn: (rs: W5a1Rs) => T): T => { const rs = w5a1.openReplayStore(box.home); try { return fn(rs); } finally { rs.close(); } };
+  const payload = (q: string = QUESTION): W5a1Payload => withStore((rs) => w5a1.reconstructPayload(rs, idOf(u(5)), q));
+  const parts = (p: W5a1Payload): string[] => {
+    expect(p.state, JSON.stringify(p).slice(0, 200)).toBe('payload');
+    return (p as { text: string }).text.split('\n\n');
+  };
+  const picked = (uuid: string) => withStore((rs) => w5a1R.expandEntryBody(rs, { entry_id: idOf(uuid), blob_id: blobOf(uuid) }));
+  type BlobCols = { z: Uint8Array | null; raw_len: number; pruned_ms: number | null };
+  /** Sets a blob's stored columns for `fn`, then puts back the three it read. */
+  const withBlob = <T,>(blobId: number, set: Partial<BlobCols>, fn: () => T): T => {
+    const orig = ro((db) => db.prepare('SELECT z, raw_len, pruned_ms FROM blobs WHERE blob_id = ?').get(blobId)) as BlobCols;
+    const put = (v: BlobCols): void => rw((db) => { db.prepare('UPDATE blobs SET z = ?, raw_len = ?, pruned_ms = ? WHERE blob_id = ?').run(v.z, v.raw_len, v.pruned_ms, blobId); });
+    put({ ...orig, ...set });
+    try { return fn(); } finally { put(orig); }
+  };
+  type BoundaryCols = { kept_blob_id: number | null; anchor_uuid: string | null };
+  /** Sets boundary N's kept id or anchor for `fn`, then puts both back. */
+  const withBoundary = <T,>(set: Partial<BoundaryCols>, fn: () => T): T => {
+    const b = idOf(u(5));
+    const orig = ro((db) => db.prepare('SELECT kept_blob_id, anchor_uuid FROM boundaries WHERE entry_id = ?').get(b)) as BoundaryCols;
+    const put = (v: BoundaryCols): void => rw((db) => { db.prepare('UPDATE boundaries SET kept_blob_id = ?, anchor_uuid = ? WHERE entry_id = ?').run(v.kept_blob_id, v.anchor_uuid, b); });
+    put({ ...orig, ...set });
+    try { return fn(); } finally { put(orig); }
+  };
+  /** A body stored as the store stores one: brotli bytes and the raw length. */
+  const stored = (text: string): { z: Uint8Array; raw_len: number } => { const b = Buffer.from(text, 'utf8'); return { z: w5a1Brotli(b), raw_len: b.length }; };
+
+  it('W2-D74: a kept member\'s body is expand\'s pick, the unsanitised side, never the sanitised primary', () => {
+    const k = picked(u(2));
+    expect([k.state, (k.primary as Array<{ text?: string }>)[0]!.text, k.causes], 'CONTROL: the primary is the sanitised copy, seeded first, paired ccd-sanitize')
+      .toEqual(['body', '...', ['ccd-sanitize']]);
+    expect(parts(payload())[2]).toBe(`[assistant] \n${READ_LINE}`);
+  }, HEAVY);
+
+  it('item 1 (W2-D75): the summary row\'s text, redacted whole, with its transcript-pointer line replaced by [pointer removed]', () => {
+    expect(picked(u(6)).body, 'CONTROL: the stored summary names the transcript').toBe(SUMMARY);
+    const p = payload();
+    expect(parts(p)[0]).toBe(SUMMARY.replace(POINTER, '[pointer removed]').replace(SECRET, w5a1Lib.REDACTED_MARK));
+    expect((p as { counts: { pointer_lines: number } }).counts.pointer_lines).toBe(1);
+  }, HEAVY);
+
+  it('item 2 (W2-D75, W2-D68 (2)): kept(N) members present in the store, in the holding copy\'s file order, role-tagged; a row outside kept(N) is not there', () => {
+    const p = payload();
+    const ps = parts(p);
+    expect(ps, 'summary, three members, question, protocol').toHaveLength(6);
+    expect(ps[1]).toBe(USER_PART);
+    expect(ps[3]!.startsWith('[tool_result] zqw5a1 result ')).toBe(true);
+    expect((p as { text: string }).text).not.toContain('zqw5a1 not kept');
+    expect((p as { counts: object }).counts).toEqual({ members: 3, absent: 1, off_copy: 0, unparseable: 0, pointer_lines: 1 });
+    const list = withStore((rs) => w5a1D.bodyOf(w5a1D.blobReadStmts(rs.db), keptBlob(), { bytes: 0 }));
+    expect(list, 'CONTROL: the kept list is stored out of file order, with a uuid no copy holds').toEqual([u(3), u(1), u(2), u(9)]);
+  }, HEAVY);
+
+  it('item 2 (W2-D54): a tool_result is redacted whole over the run\'s pair index (pairIndexOf), then cut to TOOL_RESULT_CUT code points', () => {
+    const tr = parts(payload())[3]!;
+    expect(tr).not.toContain(SECRET);
+    expect(tr.startsWith(`[tool_result] zqw5a1 result ${w5a1Lib.REDACTED_MARK} r r`)).toBe(true);
+    expect(Array.from(tr.slice('[tool_result] '.length))).toHaveLength(w5a1.TOOL_RESULT_CUT);
+    expect(JSON.stringify(picked(u(3)).body), 'CONTROL: the stored row holds the value verbatim').toContain(SECRET);
+    expect(w5a1Lib.redactField(RESULT, w5a1Lib.makePairIndex([])), 'CONTROL: no shape rule redacts it without its pair').toContain(SECRET);
+  }, HEAVY);
+
+  it('W2-D54: the summary, a user text block and a tool_use input are each redacted whole over the run\'s pair index; no part carries the value', () => {
+    const ps = parts(payload());
+    for (const [i, what] of [[0, 'the summary'], [1, 'the user row'], [2, 'the Read tool_use']] as const) {
+      expect(ps[i], what).not.toContain(SECRET);
+      expect(ps[i], what).toContain(w5a1Lib.REDACTED_MARK);
+    }
+    for (const id of [u(6), u(1), u(2)]) {
+      expect(JSON.stringify(picked(id).body), `CONTROL: the stored row ${id} holds the value verbatim`).toContain(SECRET);
+    }
+  }, HEAVY);
+
+  it('item 3 (W2-D75, W2-D64): the question, redacted, then ANSWER_PROTOCOL, last; an empty question still carries it', () => {
+    const ps = parts(payload());
+    expect(ps[4]).toBe(`Which file did the session read first? ${w5a1Lib.REDACTED_MARK}`);
+    expect(ps[5]).toBe(w5a1Gate.ANSWER_PROTOCOL);
+    expect(parts(payload('')).slice(-2)).toEqual(['', w5a1Gate.ANSWER_PROTOCOL]);
+  }, HEAVY);
+
+  it('kept(N) through bodyOf, never keptOf (W2-D68, W2-D33): a NULL kept id is kept-absent; a tombstoned kept blob and one that is not a list are kept-unreadable, never an empty list', () => {
+    const kb = keptBlob();
+    const live = withStore((rs) => [...w5a1D.keptOf(w5a1D.blobReadStmts(rs.db), kb, { bytes: 0 })]);
+    expect(new Set(live), 'CONTROL: on the live blob, keptOf and the payload agree on kept(N)').toEqual(new Set([u(3), u(1), u(2), u(9)]));
+    withBoundary({ kept_blob_id: null }, () => expect(payload()).toEqual({ state: 'discard', why: 'kept-absent' }));
+    withBlob(kb, { z: null, pruned_ms: Date.UTC(2026, 0, 2) }, () => {
+      expect(payload()).toEqual({ state: 'discard', why: 'kept-unreadable' });
+      expect(withStore((rs) => w5a1D.keptOf(w5a1D.blobReadStmts(rs.db), kb, { bytes: 0 }).size), 'CONTROL: keptOf folds the tombstone into an empty set').toBe(0);
+    });
+    withBlob(kb, stored('{"a":1}'), () => expect(payload()).toEqual({ state: 'discard', why: 'kept-unreadable' }));
+    expect(parts(payload())[1], 'CONTROL: every column is back').toBe(USER_PART);
+  }, HEAVY);
+
+  it('expandEntryBody\'s five words (D-6238): an unparseable kept member is read as text and counted; tombstone, over-cap and undecodable each discard under their own word; for the summary row all four discard', () => {
+    const m = blobOf(u(1));
+    const s = blobOf(u(6));
+    const PRUNED = Date.UTC(2026, 0, 2);
+    const OVER = w5a1Lib.BLOB_DECODE_MAX + 1;
+    withBlob(m, { z: null, pruned_ms: PRUNED }, () => expect(payload()).toEqual({ state: 'discard', why: 'member-tombstone' }));
+    withBlob(m, { raw_len: OVER }, () => expect(payload()).toEqual({ state: 'discard', why: 'member-over-cap' }));
+    withBlob(m, { z: null }, () => expect(payload()).toEqual({ state: 'discard', why: 'member-undecodable' }));
+    withBlob(m, stored('zq not json {'), () => {
+      const p = payload();
+      expect(parts(p)[1]).toBe('[user] zq not json {');
+      expect((p as { counts: { unparseable: number } }).counts.unparseable).toBe(1);
+    });
+    withBlob(s, { z: null, pruned_ms: PRUNED }, () => expect(payload()).toEqual({ state: 'discard', why: 'summary-tombstone' }));
+    withBlob(s, { raw_len: OVER }, () => expect(payload()).toEqual({ state: 'discard', why: 'summary-over-cap' }));
+    withBlob(s, { z: null }, () => expect(payload()).toEqual({ state: 'discard', why: 'summary-undecodable' }));
+    withBlob(s, stored('zq not json {'), () => expect(payload()).toEqual({ state: 'discard', why: 'summary-unparseable' }));
+    expect(parts(payload())[1], 'CONTROL: every column is back').toBe(USER_PART);
+  }, HEAVY);
+
+  it('W2-D65: leaf N\'s span is the rows derivation recorded for leaf N, in holding-copy file order, in the store\'s column names; a row that is no boundary is leaf-absent', () => {
+    const b = idOf(u(5));
+    const span = withStore((rs) => w5a1.spanRowsOf(rs, b));
+    expect(span.state).toBe('span');
+    const rows = (span as { rows: Array<Record<string, unknown>> }).rows;
+    const recorded = ro((db) => db.prepare(`SELECT e.uuid AS uuid FROM nodes n JOIN node_sources s ON s.node_id = n.node_id
+      JOIN entries e ON e.entry_id = s.entry_id WHERE n.boundary_entry_id = ? AND n.depth = 0 ORDER BY s.ord`).all(b)) as Array<{ uuid: string }>;
+    expect(recorded.length, 'CONTROL: the sweep recorded leaf N\'s sources').toBeGreaterThan(0);
+    expect(rows.map((r) => r['uuid'])).toEqual(recorded.map((r) => r.uuid));
+    expect(Object.keys(rows[0]!).sort()).toEqual(['blob_id', 'entry_id', 'model', 'provenance', 'ts_ms', 'type', 'uuid']);
+    const copy = withStore((rs) => w5a1.boundaryCopyOf(rs, b));
+    const at = rows.map((r) => copy.rows.findIndex((c) => c.uuid === r['uuid']));
+    expect(at.every((i, k) => i >= 0 && (k === 0 || i > at[k - 1]!)), 'holding-copy file order').toBe(true);
+    expect(withStore((rs) => w5a1.spanRowsOf(rs, idOf(u(1))))).toEqual({ state: 'discard', why: 'leaf-absent' });
+  }, HEAVY);
+
+  it('one store open per run (R3): the open reads this node\'s store id through its own handle', () => {
+    const want = ro((db) => String((db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get() as { v: string }).v));
+    expect(want, 'CONTROL: the fixture store holds a UUID store id').toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(withStore((rs) => rs['storeId'])).toBe(want);
+  }, HEAVY);
+
+  it('boundary N and its summary row: boundary-absent, boundary-uncopied and summary-absent; the summary pick is the row leaf N\'s derivation used', () => {
+    expect(withStore((rs) => w5a1.reconstructPayload(rs, idOf(u(1)), QUESTION))).toEqual({ state: 'discard', why: 'boundary-absent' });
+    withBoundary({ anchor_uuid: u(8) }, () => expect(payload()).toEqual({ state: 'discard', why: 'summary-absent' }));
+    const b = idOf(u(5));
+    const held = ro((db) => db.prepare('SELECT file_id, entry_id, line FROM memberships WHERE entry_id = ?').all(b)) as Array<{ file_id: number; entry_id: number; line: number }>;
+    expect(held.length, 'CONTROL: both copies hold N, so the second copy was ingested').toBe(2);
+    rw((db) => { db.prepare('DELETE FROM memberships WHERE entry_id = ?').run(b); });
+    try {
+      expect(payload()).toEqual({ state: 'discard', why: 'boundary-uncopied' });
+    } finally {
+      rw((db) => { for (const h of held) db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)').run(h.file_id, h.entry_id, h.line); });
+    }
+    const leaf = ro((db) => db.prepare('SELECT summary_blob_id AS s FROM nodes WHERE boundary_entry_id = ? AND depth = 0').get(b)) as { s: number | null } | undefined;
+    expect(leaf?.s, 'CONTROL: the sweep derived leaf N with its summary').toBe(blobOf(u(6)));
+    const pick = withStore((rs) => { const c = w5a1.boundaryCopyOf(rs, b); return c.summaryIndex === null ? null : c.rows[c.summaryIndex]!.blob_id; });
+    expect(pick, 'the payload\'s summary row is the one derivation used').toBe(leaf!.s);
+    expect(parts(payload())[1], 'CONTROL: the memberships are back').toBe(USER_PART);
+  }, HEAVY);
 });
