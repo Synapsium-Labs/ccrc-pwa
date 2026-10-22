@@ -10891,4 +10891,17 @@ describe('lib: the recall-off presence record (W2-D30, W2-D31; W2-1 Task 4)', ()
     expect(roLib.recallOffStatusOf(new Map()), 'no record yet').toEqual({ seen_ms: null, files: 0, unreadable: 0 });
     expect(roLib.recallOffStatusOf(new Map([[K.seen, 'soon']])).seen_ms).toBeNull();
   });
+
+  it('an off-grammar state row whose file is absent changes from \'unobserved\' to \'absent\' with prev_seen_ms null; a well-formed one carries the old seen_ms (r761 F1)', () => {
+    // seenRaw is a valid ms, so prevSeen is 1000, not null: only the off-grammar row's own null can make prev_seen_ms null.
+    const p = plan({ stateRows: [row(X, val(G1)), { id: Y, raw: 'not json' }], files: [] });
+    expect(changeOf(p, Y)).toEqual([{ k: `${K.change}2005:${Y}`, from: 'unobserved', to: 'absent', prev_seen_ms: null }]);
+    expect(p.records.filter((r) => r.fields['id'] === Y)).toEqual([
+      { t: 2005, fields: { rk: 'change', id: Y, from: 'unobserved', to: 'absent', prev_seen_ms: null } },
+    ]);
+    expect(p.del, 'both state rows are deleted, the off-grammar one too').toEqual([`${K.state}${X}`, `${K.state}${Y}`]);
+    expect(p.malformed).toBe(1);
+    // CONTROL: the well-formed row whose file is absent carries the old seen_ms, a real number.
+    expect(changeOf(p, X)).toEqual([{ k: `${K.change}2005:${X}`, from: val(G1), to: 'absent', prev_seen_ms: 1000 }]);
+  });
 });
