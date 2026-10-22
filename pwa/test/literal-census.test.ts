@@ -88,7 +88,7 @@ const HOLE = '';
 /** An import/export specifier, or a `import()` argument — the three positions
  *  where a string names a MODULE rather than saying something. Excluded by
  *  position, not by shape. */
-function isSpecifier(n: ts.Node): boolean {
+export function isSpecifier(n: ts.Node): boolean {
   const p = n.parent as ts.Node | undefined;
   if (p === undefined) return false;
   if (ts.isImportDeclaration(p) || ts.isExportDeclaration(p)) return p.moduleSpecifier === n;
@@ -97,11 +97,17 @@ function isSpecifier(n: ts.Node): boolean {
   return false;
 }
 
+/** Parse one source file the way every walker here reads it (TSX, parent pointers set). Exported with `isSpecifier`
+ *  for `plain-words.test.ts` (D-6325), which walks the same trees for a different question: which words an operator
+ *  reads, rather than which sentences are written twice. */
+export function parseTs(file: string, text: string = readFileSync(file, 'utf8')): ts.SourceFile {
+  return ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+}
+
 function literals(): Map<string, string[]> {
   const found = new Map<string, string[]>();
   for (const [name, file] of FILES) {
-    const src = ts.createSourceFile(
-      file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const src = parseTs(file);
     const visit = (n: ts.Node): void => {
       let text: string | null = null;
       if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) && !isSpecifier(n)) {
