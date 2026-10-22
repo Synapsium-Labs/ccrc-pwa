@@ -604,8 +604,9 @@ export function deriveDelegationLineageId(parts: DelegationLineageIdParts): stri
  * The mapping-first rule, written INTO the caller's own mapping (D-5833). It reads the mapping first by an OWN property
  * only: a natural key with a mapping ALWAYS gets its mapped ID back, whatever journalId the caller now holds, and the
  * mapping is left as it was (a key never mints a second activity, and an ID is never re-hashed from a later event because
- * the original naming record was pruned: O4; a zero-delta Bash call's key, retired under the O4 amendment, has no mapping, and neither of its
- * records is a qualifying join, so nothing allocates it again, D-6268). Only a missing mapping allocates, and that needs the `identityJournalId` of
+ * the original naming record was pruned: O4; a zero-delta Bash call's key, retired under the O4 amendment, has no mapping, and while both of its
+ * records are retained neither is a qualifying join, so nothing allocates it again; wave 4's compaction must keep a listing-carrying Bash
+ * call's PreToolUse and PostToolUse together, D-6267, D-6268). Only a missing mapping allocates, and that needs the `identityJournalId` of
  * an accepted qualifying retained record: it throws `identity-journal-id-required` without one and
  * `bad-identity-journal-id` for a malformed one, and a refusal writes nothing. An allocation sets `mapping[encoded]` and
  * returns the ID. The encoded key is length-prefixed, so it can never be an inherited name and the assignment is an own

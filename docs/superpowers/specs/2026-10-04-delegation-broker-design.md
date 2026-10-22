@@ -189,7 +189,7 @@ Upstream ids: `agent_id`; workflow run id + worker index; `tool_use_id` where pr
 are metadata only.
 For a workflow run id + worker index or a `tool_use_id`, that journal component stays the journal id of
 the first event naming the upstream id.
-A Bash `tool_use_id` opens its activity only at a PostToolUse. If a listing-carrying PreToolUse of the call is still pending, the call opens only when the PostToolUse's listing differs from the PreToolUse's as a set of names, or the PostToolUse carries none, and that PreToolUse is the identity record. A PreToolUse is pending until a PostToolUse decides it, or until a journal record is accepted `DELEGATION_BASH_PENDING_MS` after it, when it is forgotten and opens nothing. A PostToolUse that carries a listing and finds no pending PreToolUse (none was measured, it was shed, or it was forgotten) opens the call with itself as identity record. A call where neither side carries a listing opens nothing (amended 2026-10-21, operator ruling "open only on a change", D-6267; D-4649).
+A Bash `tool_use_id` opens its activity only at a PostToolUse. If a listing-carrying PreToolUse of the call is still pending, the call opens only when the PostToolUse's listing differs from the PreToolUse's as a set of names, or the PostToolUse carries none, and that PreToolUse is the identity record. A PreToolUse is pending until a PostToolUse decides it, or until an evidence record accepted `DELEGATION_BASH_PENDING_MS` or more after it has been folded, when it is forgotten and opens nothing; a PostToolUse at or past the bound still finds its PreToolUse pending, and a record of another kind (a lease's) forgets nothing (corrected 2026-10-22 to the code's wording, the coordinator's ruling on review 767). A PostToolUse that carries a listing and finds no pending PreToolUse (none was measured, it was shed, or it was forgotten) opens the call with itself as identity record. A call where neither side carries a listing opens nothing (amended 2026-10-21, operator ruling "open only on a change", D-6267; D-4649).
 For an activity keyed by `agent_id`, the activity opens only
 once a QUALIFYING join for that id is known: an Agent launch response, a SubagentStart, or a positive
 agent meta read naming it. A meta is a join read by point lookup (§5.4 rung 2), not a hook or spool
@@ -212,11 +212,12 @@ the earliest event the activity id hashes. No reader decides this by whether `ag
 `tool-agent-id-alone-is-unjoined-evidence`).
 A SubagentStop that names an `agent_id` before any qualifying join has opened it, and that no other
 kind of event names (a start-less stop: ledger `post-turn-subagentstop-is-unpaired`), stays identity
-evidence only until a journal record is accepted `DELEGATION_STOP_CANDIDATE_HORIZON_MS` (48 hours:
+evidence only until an evidence record is accepted `DELEGATION_STOP_CANDIDATE_HORIZON_MS` (48 hours:
 the spool's read horizon plus a day) after the last record that named it. From then on it is no
 longer retained evidence for that id, exactly as if it had been pruned, and a later qualifying join
 opens the activity from its own record. A tool event naming the id keeps it ordinary evidence, which
-never expires this way (amended 2026-10-21, D-6270).
+never expires this way (amended 2026-10-21, D-6270; "an evidence record" corrected 2026-10-22 to the code's
+wording, the coordinator's ruling on review 767).
 The selected id is part of checkpointed applied state (§5.12). Reconstruction restores a checkpointed
 activity id verbatim and never re-selects an identity event (the event whose journal id the activity
 id hashes) for that activity from whatever journal suffix remains after pruning. It derives an id by
@@ -538,7 +539,10 @@ hooks never delete; no session invokes these verbs and no skill names them.
   through one dedicated applier door and never through a checkpoint-only change. Its PreToolUse and
   PostToolUse stay in the journal and in `delegation_events` as listing windows (overlap and loss vetoes for
   rung 4). On replay they open nothing, so reconstruction neither refuses them nor derives an id for them.
-  Compaction must never retain such a call's PostToolUse without its PreToolUse.
+  Compaction must never retain the PostToolUse of any listing-carrying Bash call, zero-delta or not,
+  without its PreToolUse: once a PostToolUse has decided its PreToolUse no pruning hold names either
+  record, and a PostToolUse replayed alone would open the call with itself as identity record (widened
+  2026-10-22 from "such a call", the coordinator's ruling on review 767, D-6267).
 - **Retention (proposed):** the journal keeps ≥ 30 days and never drops an event an open lease or
   lineage edge references.
 - **Pruning (amended 2026-10-07, review 328 F1):** whatever the retention, pruning may not pass an

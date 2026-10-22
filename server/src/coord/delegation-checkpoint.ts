@@ -1175,7 +1175,10 @@ export class DelegationCheckpointBuilder {
    *     PENDING Bash call on an unmapped key (D-6267; spec §5.12: its identity event precedes its opening). POSITION IS NOT COVERAGE
    *     (W3-M17). A Workflow run is never a candidate: its launch response is its join (R44).
    * An activity that IS mapped needs no hold: its ID survives pruning in the checkpoint (O4). A retired zero-delta Bash call needs none
-   * either: neither of its records is a qualifying join, so nothing it named can open again (D-6268).
+   * either, but only while both of its records are retained: then neither is a qualifying join, so nothing it named can open again (D-6268).
+   * The same premise covers every consumed rule-A pair, which holds nothing here once its PostToolUse has consumed its PreToolUse: a
+   * PostToolUse kept without its PreToolUse takes the Post-only arm and refuses `fold-refused` on a covered record. So wave 4's compaction
+   * must keep a listing-carrying Bash call's PreToolUse and PostToolUse together (D-6267, D-6268).
    */
   computeHolds(): DelegationPruningHold[] {
     const holds = new Map<string, DelegationPruningHold>();
@@ -2288,7 +2291,8 @@ export class DelegationDurability {
    * no lease and no lineage row names: row and natural-key mapping together (the O4 amendment, D-6268). A checkpoint replacement through the
    * one application path, like `pruneBucketCursors`: no journal record, no new edge. Nothing retirable writes nothing and encodes nothing.
    * Sound only beside the fold rule that a zero-delta call is never a qualifying join (D-6267): recovery then meets no unmapped join for a
-   * retired key. One more `commitLocked` caller beside those the applier's other entries list; it never goes through `applyCheckpointChange`.
+   * retired key while both of the call's records are retained, so wave 4's compaction must keep a listing-carrying Bash call's PreToolUse and
+   * PostToolUse together (D-6267, D-6268). One more `commitLocked` caller beside those the applier's other entries list; it never goes through `applyCheckpointChange`.
    */
   retireZeroDeltaBashActivities(): Promise<{ retired: number; applied: DelegationApplyOutcome | null }> {
     return this.enqueue(async () => {
