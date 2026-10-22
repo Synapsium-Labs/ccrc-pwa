@@ -2372,48 +2372,64 @@ describe('multiSelect boxes (D-5091)', () => {
     expect(screen.getByRole('button', { name: /^Other/ })).toBeDisabled();
   });
 
-  describe('the hand-off: ask_cleared hands the same question to the transcript\'s copy of it', () => {
-    it('the next sheet answers a multiSelect question with the same boxes', () => {
+  // D-6325: the server attaches `Dialog.ask` only behind `dialog.parsed`, and a multiSelect menu is never parsed (its
+  // `options` are empty, its boxes are `Dialog.multi`). So the production hand-off on `ask_cleared` over a multiSelect pane
+  // has no transcript copy to take over with: `askSource` reads the pane's `multi` as ask evidence and the sheet is the
+  // unreadable surface, the terminal door and no boxes (D-5091's phone answer for it is the accepted loss until the
+  // envelope is kept while a multi menu is up). These cases use the recorded panes as they are, with no `Dialog.ask`.
+  describe('the hand-off: after ask_cleared on an unparsed multiSelect pane the sheet is the unreadable surface', () => {
+    const noBoxes = (): void => {
+      // The unreadable surface by its own title (the terminal-only surface also offers the door, but says another thing).
+      expect(screen.getByRole('heading', { name: "Claude is asking a question this screen can't read yet." })).toBeInTheDocument();
+      expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+      expect(screen.queryByRole('button', { name: /^Next/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Review answers/ })).toBeNull();
+      expect(document.querySelector('[data-source="hook"]')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Open terminal to answer' })).toBeInTheDocument();
+    };
+
+    it('the envelope\'s boxes give way to the terminal door, with no boxes and nothing sent', () => {
       const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
-      const digit1 = aged(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'), 1);
+      const digit1 = pane('cc300-ask-multiselect-digit1');
+      expect(digit1.parsed).toBe(false);
+      expect(digit1.ask).toBeUndefined();
       const { store } = renderAsk(DRINK_FEATURES_TOOLS, digit1);
+      expect(ticks()).toEqual(['Logging']);
       act(() => store.getState().apply({ type: 'ask_cleared' }));
 
-      expect(document.querySelector('[data-source="hook"]')).toBeNull();
-      expect(heading('Which features do you want?')).toBeInTheDocument();
-      expect(ticks()).toEqual(['Logging']);
-      expect(screen.queryByRole('button', { name: 'Open terminal to answer' })).toBeNull();
-      fireEvent.click(box('Tracing'));
-      fireEvent.click(commit('Next'));
-      expect(multi).toHaveBeenCalledWith(SESSION_ID, digit1.id, [1, 3]);
+      noBoxes();
+      expect(multi).not.toHaveBeenCalled();
     });
 
-    it('a wrapped multiSelect question is titled whole from the copy, never by the pane\'s last row (D-6325)', () => {
-      // DERIVED: the recorded boxes under a question too long for one row (the pane's title is its last row). The
-      // sheet used to rebuild the whole question from the pane's rows; it titles the transcript's copy now, and the
-      // pane's rows are not shown at all.
+    it('a wrapped multiSelect question shows none of the pane\'s rows, only the terminal door', () => {
+      // DERIVED: the recorded boxes under a question too long for one row (the pane's title is its last row). With no
+      // transcript copy the sheet has no words of its own to title it with, and it shows no pane text in their place.
       const digit1 = pane('cc300-ask-multiselect-digit1');
-      const whole = 'Which of the observability features do you want switched on for the staging cluster?';
-      renderAsk(null, transcribed({
+      const wrapped: Dialog = {
         ...digit1,
         title: '│ do you want switched on for the staging cluster?',
         body: `${digit1.body!.split('\n')[0]}\n\n│ Which of the observability features\n│ do you want switched on for the staging cluster?`,
-      }, { ...DRINK_FEATURES_TOOLS.questions[1]!, question: whole }));
-      expect(heading(whole)).toBeInTheDocument();
-      expect(screen.getAllByRole('checkbox')).toHaveLength(3);
+      };
+      const { store } = renderAsk(DRINK_FEATURES_TOOLS, wrapped);
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+
+      noBoxes();
       expect(screen.queryByText(/│/)).toBeNull();
+      expect(screen.queryByText(/staging cluster/)).toBeNull();
+      expect(screen.queryByText(/observability/)).toBeNull();
     });
 
-    it('a set touched on the envelope sheet survives the hand-off', () => {
+    it('a set touched on the envelope sheet is not sent by the hand-off, and its boxes are gone', () => {
       const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
-      const tools = aged(TOOLS_SIZES, pane('cc300-ask-multiselect-tools-open'), 0);
+      const tools = pane('cc300-ask-multiselect-tools-open');
       const { store } = renderAsk(TOOLS_SIZES, tools);
       fireEvent.click(box('Drill'));
       fireEvent.click(box('Hammer'));
-      act(() => store.getState().apply({ type: 'ask_cleared' }));
       expect(ticks()).toEqual(['Hammer', 'Drill']);
-      fireEvent.click(commit('Next'));
-      expect(multi).toHaveBeenCalledWith(SESSION_ID, tools.id, [3, 1]);
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+
+      noBoxes();
+      expect(multi).not.toHaveBeenCalled();
     });
   });
 });
