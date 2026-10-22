@@ -356,7 +356,8 @@ describe('ws-expire in the record reader’s two rc-2 shapes: answered before th
     const attic = h.git(a.main, 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/${EXP_ID}/`).split('\n').filter(Boolean);
     expect(attic.length ? h.git(a.main, 'rev-list', ...attic).split('\n') : [], 'the branch tip is kept in the attic')
       .toContain(a.tip);
-    expect(linesIn('fake-walks').length, 'the CONTROL: the in-use probe walked the fixture root').toBeGreaterThan(0);
+    // Host-dependent: this fake root is only walked on a host that reads a /proc; a real Darwin host asks lsof instead.
+    expect(linesIn('fake-walks').length > 0, 'the CONTROL: the in-use probe walked the fixture root').toBe(process.platform !== 'darwin');
     expect(linesIn('proc-walks'), 'no walk of the host’s /proc').toEqual([]);
   }, 180_000);
 });
