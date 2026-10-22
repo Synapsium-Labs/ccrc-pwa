@@ -785,7 +785,7 @@ export function AskTabs({
 /** An option's worked example, folded away under its row and opened for the
  *  preselected one. Fixed-width ASCII: it scrolls, it never wraps — the same
  *  rule code blocks follow. Capped at --well-max with internal scroll.
- *  D-6325: moved here from `DialogSheet.tsx`, whose scraped rows it served; the structured rows draw it now. */
+ *  The structured rows draw it, from the question's own example (`preview`); a pane's text is never shown. */
 export function OptionPreview({
   text,
   defaultOpen,
