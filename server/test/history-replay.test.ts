@@ -9832,6 +9832,18 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       await input.writer.ask(section, writerItem7(2));
       return { entries: [], fidelity: [], counts: {} };
     };
+    /** Like twoAsks7, but the two items it asks come from `seedHex` (as the real sourceQuiz's draw does): the same seed asks
+     *  the same two, another seed asks two others, and each answered ask's qid is pushed on `asked` for the case to compare. */
+    const seedAsks7 = (calls: R7[], asked: string[], section: string) => async (input: R7): Promise<R7> => {
+      calls.push(input);
+      const base = 10 + (Number.parseInt((input.seedHex as string).slice(0, 4), 16) % 5000);
+      for (const n of [base, base + 1]) {
+        const item = writerItem7(n);
+        await input.writer.ask(section, item);
+        asked.push(item.qid as string);
+      }
+      return { entries: [], fidelity: [], counts: {} };
+    };
     const writerHome7 = (): string => {
       const home = home7(STORE_A);
       r7fs.writeFileSync(r7path.join(home, STUB_STREAM), w6Reply('QUESTION: Which commit did the fixture step record?'));
@@ -9856,33 +9868,38 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     }, 120_000);
 
     // D-6313: the pilot's seed is drawn once per --out and pinned there, so the batch W2-D55 says can be resumed is resumed.
-    r7it.skipIf(process.platform === 'darwin')('D-6313: a pilot-source stopped by its budget and re-run on the same --out uses the pinned seed, not a new draw: the first ask is reused (one new spawn, not two) and the spend is counted once; CONTROL: a fresh --out draws deps.seed()', async () => {
+    r7it.skipIf(process.platform === 'darwin')('D-6313: a pilot-source stopped by its budget and re-run on the same --out uses the pinned seed, not a new draw: it asks the same two items, so the first ask is reused (one new spawn, not two) and the spend is counted once; CONTROL: a fresh --out draws deps.seed() and asks other items', async () => {
       const SEED_A = hex('pilot seed first');
       const SEED_B = hex('pilot seed second');
       const home = writerHome7();
       const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
       const out = outDir();
-      const run = async (budget: number, seed: string, to = out): Promise<{ refusal: R7 | null; calls: R7[] }> => {
+      const run = async (budget: number, seed: string, to = out): Promise<{ refusal: R7 | null; calls: R7[]; asked: string[] }> => {
         const { flags } = r7drv.parseArgs(['pilot-source', '--out', to, '--account', 'up-a', '--budget', String(budget), '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
         const calls: R7[] = [];
-        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never, { sourceQuiz: twoAsks7(calls, 'pilot'), seed: () => seed } as never));
-        return { refusal: r.refusal, calls };
+        const asked: string[] = [];
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never, { sourceQuiz: seedAsks7(calls, asked, 'pilot'), seed: () => seed } as never));
+        return { refusal: r.refusal, calls, asked };
       };
-      const seedFile = r7path.join(out, r7drv.PILOT_SEED_FILE);
       const first = await run(1, SEED_A);
       r7expect(first.refusal).toMatchObject({ word: 'budget-exhausted' });
       r7expect(first.calls[0]!.seedHex).toBe(SEED_A);
-      r7expect(r7fs.readFileSync(seedFile, 'utf8'), 'the seed is pinned under --out').toBe(`${SEED_A}\n`);
-      r7expect(r7fs.statSync(seedFile).mode & 0o777).toBe(0o600);
+      r7expect(first.asked, 'the first ask spent past the budget, so the second item was never asked').toHaveLength(1);
       r7expect(printRuns(home), 'the first ask spawned and spent past the budget').toHaveLength(1);
+      // The fake's items depend on the seed: the same --out under the other seed would ask other items (the CONTROL below).
       const second = await run(100_000, SEED_B);
       r7expect(second.refusal).toBeNull();
+      r7expect(printRuns(home), 'the first ask was reused: only the second spawned, no respawn under a drawn seed').toHaveLength(2);
+      r7expect(r7fs.readFileSync(r7path.join(out, 'spend.jsonl'), 'utf8').trim().split('\n'), 'two spawns, two ledger lines, none orphaned or counted twice').toHaveLength(2);
+      r7expect(second.asked[0], 'the re-run asks the same first item').toBe(first.asked[0]);
       r7expect(second.calls[0]!.seedHex, 'the re-run reads the pinned seed, not the new draw').toBe(SEED_A);
-      r7expect(printRuns(home), 'the first ask was reused: only the second spawned').toHaveLength(2);
-      r7expect(r7fs.readFileSync(r7path.join(out, 'spend.jsonl'), 'utf8').trim().split('\n'), 'two spawns, two ledger lines, none orphaned').toHaveLength(2);
+      const seedFile = r7path.join(out, r7drv.PILOT_SEED_FILE);
+      r7expect(r7fs.readFileSync(seedFile, 'utf8'), 'the seed is pinned under --out').toBe(`${SEED_A}\n`);
+      r7expect(r7fs.statSync(seedFile).mode & 0o777).toBe(0o600);
       r7expect(JSON.parse(r7fs.readFileSync(r7path.join(out, r7drv.PILOT_SOURCE_FILE), 'utf8')).seed).toBe(SEED_A);
       const fresh = await run(100_000, SEED_B, outDir());
       r7expect(fresh.calls[0]!.seedHex, 'CONTROL: a fresh --out draws deps.seed()').toBe(SEED_B);
+      r7expect(fresh.asked.some((q) => second.asked.includes(q)), 'CONTROL: the seed decides the items, so an unpinned seed would ask others').toBe(false);
     }, 120_000);
 
     r7it.skipIf(process.platform === 'darwin')('D-6313: a pinned seed that is not a seed, or not a regular file, refuses out-refused, as every --out file does', async () => {
