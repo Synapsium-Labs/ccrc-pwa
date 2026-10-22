@@ -94,6 +94,9 @@ interface FakeOpts {
   /** D-6366: the captures after the first Enter (k from 1, counted from that Enter on) this answers true for fail,
    *  as a link drop does. */
   failCapture?: (k: number) => boolean;
+  /** D-6366: the captures after the first Enter (k from 1) that return, but with no box in them (a transcript-only
+   *  pane: an overlay over the composer, the marker row scrolled out). */
+  absentCapture?: (k: number) => boolean;
   /** D-6366: called on every capture, for a test's moving clock. */
   tick?: () => void;
 }
@@ -153,6 +156,7 @@ function fakeCc(o: FakeOpts = {}) {
         sinceFirstEnter++;
         if (pendingLand && sinceFirstEnter === o.landAtCapture) { pendingLand = false; submitNow(); }
         if (o.failCapture?.(sinceFirstEnter)) return { code: 1, stdout: '', stderr: "can't find pane" };
+        if (o.absentCapture?.(sinceFirstEnter)) return { code: 0, stdout: ['⏺ a long transcript row', 'more transcript'].join('\n') + '\n', stderr: '' };
       }
       if (submits > 0) o.afterSubmit?.(++sinceSubmit, s);
       if (enters > 0) o.afterEnter?.(enters, ++sinceEnter, s);
@@ -865,6 +869,47 @@ describe("onDraft: 'stash' (D-5911)", () => {
       const clock = { t: 0 };
       const f = fakeCc({ box: [], stash: [human], landAtCapture: 4, failCapture: BLIND_RUN, tick: () => { clock.t += 200; } });
       const res = await sendPrompt(moving(f, clock), 'lane-a', 'hello from the lane', STASH);
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true });
+    });
+
+    // D-6366 fix round 3. A capture that returns with NO box in it is not a failed capture, but after the last box read it
+    // is no better: the Enter may have landed unseen, with the restored draft drawn nowhere. Same shapes, absent boxes.
+    const ABSENT_ALL = (k: number): boolean => k >= 1 && k <= SUBMIT_TRIES;
+    const ABSENT_AFTER_READ = (k: number): boolean => k >= 2 && k <= SUBMIT_TRIES;
+
+    it('an all-absent first watch (no capture shows a box, the Enter landing at capture 1): one Enter (around our own stash)', async () => {
+      const f = fakeCc({ box: [human], landAtCapture: 1, absentCapture: ABSENT_ALL });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+    });
+
+    it('an all-absent first watch (no capture shows a box, the Enter landing at capture 1): one Enter (over a stash already held)', async () => {
+      const f = fakeCc({ box: [], stash: [human], landAtCapture: 1, absentCapture: ABSENT_ALL });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true });
+    });
+
+    it('one good read, then seven captures with no box, the Enter landing at capture 2: one Enter (around our own stash)', async () => {
+      const f = fakeCc({ box: [human], landAtCapture: 2, absentCapture: ABSENT_AFTER_READ });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+    });
+
+    it('one good read, then seven captures with no box, the Enter landing at capture 2: one Enter (over a stash already held)', async () => {
+      const f = fakeCc({ box: [], stash: [human], landAtCapture: 2, absentCapture: ABSENT_AFTER_READ });
+      const res = await send(f, 'hello from the lane');
       expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
       expect(f.state.history).toEqual(['hello from the lane']);
       expect(f.state.box).toEqual([human]);

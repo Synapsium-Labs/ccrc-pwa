@@ -249,13 +249,14 @@ describe('with every capture failing after 10 s the proof ends within base\'s bo
   });
 });
 
-// D-6366 fix round 2: the blind deadline counts from the first failed capture of the CURRENT blind run, and any
-// capture that returns ends that run. A loaded box (200 ms a capture) must not lose its remaining polls to one blip.
+// D-6366 fix round 2 and 3: the blind deadline counts the blind run as a whole (its failed captures and the sleeps between
+// them, from the first capture's ask) against SUBMIT_BLIND_MS, and any capture that returns ends the run. So a blip keeps
+// the watch's polls for 3 consecutive failures at 200 ms per capture, or 2 at 400 ms.
 describe('a link blip does not cut the post-Enter watch (D-6366)', () => {
-  const CAPTURE_MS = 200;
-  /** Captures after the first Enter fail at the k values in `failAt` (k from 1); the box keeps our text, so every Enter
-   *  is ignored. Answers the captures taken between the first Enter and the retry Enter: the first watch's polls. */
-  async function firstWatchPolls(failAt: ReadonlySet<number>): Promise<number> {
+  /** Captures after the first Enter fail at the k values in `failAt` and show no box at those in `absentAt` (k from 1);
+   *  the box keeps our text, so every Enter is ignored. Answers the captures taken between the first Enter and the
+   *  retry Enter: the first watch's polls. */
+  async function firstWatchPolls(failAt: ReadonlySet<number>, captureMs = 200, absentAt: ReadonlySet<number> = new Set()): Promise<number> {
     let t = 0;
     let typed = false;
     let enters = 0;
@@ -268,8 +269,12 @@ describe('a link blip does not cut the post-Enter watch (D-6366)', () => {
         return { code: 0, stdout: '', stderr: '' };
       }
       if (args[0] === 'capture-pane') {
-        t += CAPTURE_MS;
-        if (enters > 0) { k++; if (failAt.has(k)) return { code: 1, stdout: '', stderr: 'blip' }; }
+        t += captureMs;
+        if (enters > 0) {
+          k++;
+          if (failAt.has(k)) return { code: 1, stdout: '', stderr: 'blip' };
+          if (absentAt.has(k)) return { code: 0, stdout: '⏺ a transcript row\n', stderr: '' };
+        }
         return { code: 0, stdout: typed ? '❯ hello from the lane\n' : '❯ \n', stderr: '' };
       }
       return { code: 0, stdout: '', stderr: '' };
@@ -279,6 +284,7 @@ describe('a link blip does not cut the post-Enter watch (D-6366)', () => {
     expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
     return atRetry;
   }
+  const run = (from: number, n: number): Set<number> => new Set(Array.from({ length: n }, (_, i) => from + i));
 
   it('a link blip at 200 ms per capture still gets the watch\'s remaining polls', async () => {
     expect(await firstWatchPolls(new Set([4]))).toBe(SUBMIT_TRIES);
@@ -286,5 +292,24 @@ describe('a link blip does not cut the post-Enter watch (D-6366)', () => {
 
   it('two blips apart each get their own deadline: the first one\'s run ended at the capture between', async () => {
     expect(await firstWatchPolls(new Set([2, 7]))).toBe(SUBMIT_TRIES);
+  });
+
+  it('at 200 ms per capture a blind run of 3 consecutive failed captures keeps all the watch\'s polls', async () => {
+    expect(await firstWatchPolls(run(2, 3))).toBe(SUBMIT_TRIES);
+  });
+
+  it('at 200 ms per capture a blind run of 4 consecutive failed captures ends the watch at the fourth', async () => {
+    expect(await firstWatchPolls(run(2, 4))).toBe(5);
+  });
+
+  it('at 400 ms per capture a blind run of 2 keeps all the watch\'s polls and a run of 3 ends it at the third', async () => {
+    expect(await firstWatchPolls(run(2, 2), 400)).toBe(SUBMIT_TRIES);
+    expect(await firstWatchPolls(run(2, 3), 400)).toBe(4);
+  });
+
+  // An absent box ends the run on purpose: tmux answered at once, so it is not hung, and a capture that returns is the
+  // reason the deadline exists in the first place.
+  it('a capture with no box between two failed runs restarts the deadline', async () => {
+    expect(await firstWatchPolls(new Set([2, 3, 4, 6, 7, 8]), 200, new Set([5]))).toBe(SUBMIT_TRIES);
   });
 });
