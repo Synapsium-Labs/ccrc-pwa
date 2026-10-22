@@ -9,7 +9,7 @@
 // Fixture: a real one-commit repo (the `--points-at HEAD` question is git's;
 // the script is COPIED into its deploy/ so `${BASH_SOURCE[0]}` resolves
 // there), a stub gh that answers `release view` and `api …/releases/latest`
-// from fixture files and RECORDS every argv, npm/curl poisons. Never the
+// from fixture files and RECORDS every argv, npm/curl/node poisons. Never the
 // network.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
@@ -33,23 +33,13 @@ function git(root: string, ...args: string[]): string {
   return r.stdout.trim();
 }
 
-/** `<home>/repo`, one commit, optionally a tag at HEAD. `scope: true` adds what
- *  the refusal's measurement needs, before the first commit so every tag
- *  carries it: release-main.sh and release-scope.mjs in deploy/, and a
- *  server/package.json holding the real file's engines object (D-6403; read
- *  here, never spelled as a version). */
-function fixture(home: string, opts: { tagHead?: string; scope?: boolean } = {}): string {
+/** `<home>/repo`, one commit, optionally a tag at HEAD. */
+function fixture(home: string, opts: { tagHead?: string } = {}): string {
   const root = join(home, 'repo');
   mkdirSync(join(root, 'deploy'), { recursive: true });
   writeFileSync(join(root, 'README.md'), '# fixture\n');
   copyFileSync(SCRIPT, join(root, 'deploy', 'release-stable.sh'));
   chmodSync(join(root, 'deploy', 'release-stable.sh'), 0o755);
-  if (opts.scope === true) {
-    for (const f of ['release-main.sh', 'release-scope.mjs']) copyFileSync(join(REPO, 'deploy', f), join(root, 'deploy', f));
-    const real = JSON.parse(readFileSync(join(REPO, 'server', 'package.json'), 'utf8')) as { engines: unknown };
-    mkdirSync(join(root, 'server'), { recursive: true });
-    writeFileSync(join(root, 'server', 'package.json'), `${JSON.stringify({ engines: real.engines }, null, 2)}\n`);
-  }
   // The branch name here is documentary only: the script reads the tag at
   // HEAD, never the branch — the `stable`-must-be-fast-forward constraint
   // is the ruleset's job, not this script's.
@@ -60,7 +50,7 @@ function fixture(home: string, opts: { tagHead?: string; scope?: boolean } = {})
   return root;
 }
 
-interface GhOpts { view?: string; viewExit?: number; editExit?: number; latest?: string; latestAfterEdit?: string; realNode?: boolean }
+interface GhOpts { view?: string; viewExit?: number; editExit?: number; latest?: string; latestAfterEdit?: string }
 
 /** The gh stub: `release view` prints `$HOME/gh-view` (the --jq output the
  *  script asked for: "<isPrerelease>\t<isDraft>") unless `$HOME/gh-view-exit`
@@ -88,7 +78,7 @@ function plantBin(home: string, opts: GhOpts): string {
     'esac',
     'echo "fixture gh: unexpected argv: $*" >&2; exit 90',
   ].join('\n') + '\n', { mode: 0o755 });
-  for (const p of opts.realNode === true ? ['npm', 'curl'] : ['npm', 'curl', 'node']) {
+  for (const p of ['npm', 'curl', 'node']) {
     writeFileSync(join(bin, p), `#!/bin/sh\necho "release-stable tests never build or reach the network (${p})" >&2\nexit 97\n`, { mode: 0o755 });
   }
   return bin;
@@ -190,97 +180,84 @@ function commitFiles(root: string, files: Record<string, string>, msg = 'a merge
   git(root, 'commit', '-q', '-m', msg);
 }
 
-const TAIL_UNRELEASED = 'the next release cut from a descendant of ';
-const PUSH_PLACEHOLDER = 'git push origin <tag>^{commit}:refs/heads/stable';
+const REFUSAL_HEAD = 'release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD ';
 
 describe('release-stable.sh: the refusal of a HEAD with no release tag says what is true (W25, D-6398)', () => {
-  /** The refusal is the whole answer: exit 2, nothing on stdout, no gh call. */
+  /** The refusal is the whole answer: exit 2, nothing on stdout, no gh call,
+   *  and ONE line on stderr. The fixture's PATH poisons node, npm and curl. */
   function refused(home: string, r: Result): string {
     expect(r.code, r.stderr).toBe(2);
     expect(r.stdout).toBe('');
     expect(ghArgv(home)).toEqual([]);
-    // Exactly one line on stderr, whatever the measurement printed.
     expect(r.stderr.split('\n').filter((l) => l !== '')).toHaveLength(1);
+    expect(r.stderr.endsWith('\n')).toBe(true);
     return r.stderr;
   }
   const docsOnly = { 'README.md': '# fixture, edited\n', 'docs/a.md': 'a\n' };
 
-  it('W25-T1: an unreleased docs head is refused, and says nothing that ships changed', () => {
+  it('W25-T1: a HEAD past a release is refused in one line naming the release, the full sha and "built unchanged"', () => {
     const home = mkTmp('ccrc-relstable-t1-');
-    const root = fixture(home, { tagHead: 'v1.2.3', scope: true });
+    const root = fixture(home, { tagHead: 'v1.2.3' });
     commitFiles(root, docsOnly);
     const short = git(root, 'rev-parse', '--short', 'HEAD');
-    const err = refused(home, run(root, home, [], { realNode: true }));
+    const full = git(root, 'rev-parse', 'HEAD');
+    const err = refused(home, run(root, home));
     expect(err).toBe(
-      `release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD ${short} carries no vX.Y.Z tag; it sits past v1.2.3, the newest release it contains, and its merges since changed nothing that ships (paths changed: 2), so no release was cut for them). stable now sits past v1.2.3 and cannot move back (fast-forward only): ${TAIL_UNRELEASED}${short} promotes by a fast-forward push of that release's commit (${PUSH_PLACEHOLDER}). Nothing was changed\n`);
-    expect(err).toContain('carries no vX.Y.Z tag; it sits past v1.2.3, the newest release it contains, and its merges since changed nothing that ships (paths changed: 2), so no release was cut for them). stable now sits past v1.2.3 and cannot move back (fast-forward only): the next release cut from a descendant of ');
-    expect(err.endsWith('Nothing was changed\n')).toBe(true);
-  });
-
-  it('W25-T2: a shipped change is refused, and says to check the release-main run', () => {
-    const home = mkTmp('ccrc-relstable-t2-');
-    const root = fixture(home, { tagHead: 'v1.2.3', scope: true });
-    commitFiles(root, { 'deploy/x.sh': '#!/bin/sh\n' });
-    const err = refused(home, run(root, home, [], { realNode: true }));
-    expect(err).toMatch(/stable must fast-forward to a commit released from main; a merge commit has no release to promote/);
-    expect(err).toMatch(/carries no vX\.Y\.Z tag; it sits past v1\.2\.3, the newest release it contains, and it changed what ships \(shipped paths changed: 1; first: "deploy\/x\.sh"\): check the release-main run for its merge/);
-    expect(err).toContain('which should have cut a release). stable now sits past v1.2.3');
+      `${REFUSAL_HEAD}${short} carries no vX.Y.Z tag; the newest release it contains is v1.2.3). A main merge whose build came out unchanged cuts no release either: the release-main run for ${full} printed "built unchanged" or what differed. stable now sits past v1.2.3 and cannot move back (fast-forward only); the next release cut from a descendant of ${short} is the next commit it can promote. Nothing was changed\n`);
+    expect(err).toContain('v1.2.3');
+    expect(err).toContain(full);
+    expect(err).toContain('built unchanged');
   });
 
   it('W25-T3: only a release HEAD contains is named; a tag on a side branch is not', () => {
     const home = mkTmp('ccrc-relstable-t3-');
-    const root = fixture(home, { tagHead: 'v1.2.3', scope: true });
+    const root = fixture(home, { tagHead: 'v1.2.3' });
     git(root, 'checkout', '-q', '-b', 'side', 'v1.2.3');
     commitFiles(root, { 'side.txt': 'side\n' }, 'a side commit');
     git(root, 'tag', 'v9.9.9');
     git(root, 'checkout', '-q', 'stable');
     commitFiles(root, docsOnly);
-    const err = refused(home, run(root, home, [], { realNode: true }));
-    expect(err).toContain('it sits past v1.2.3, the newest release it contains');
+    const err = refused(home, run(root, home));
+    expect(err).toContain('the newest release it contains is v1.2.3)');
     expect(err).not.toContain('v9.9.9');
   });
 
   it('W25-T4: the newest contained release is the highest version, not the last in lexical order', () => {
     const home = mkTmp('ccrc-relstable-t4-');
-    const root = fixture(home, { scope: true });
+    const root = fixture(home);
     git(root, 'commit', '-q', '--allow-empty', '-m', 'one');
     git(root, 'tag', 'v1.9.9');
     git(root, 'commit', '-q', '--allow-empty', '-m', 'two');
     git(root, 'tag', 'v1.9.10');
     commitFiles(root, docsOnly);
-    const err = refused(home, run(root, home, [], { realNode: true }));
-    expect(err).toContain('it sits past v1.9.10, the newest release it contains');
+    const err = refused(home, run(root, home));
+    expect(err).toContain('the newest release it contains is v1.9.10)');
+    expect(err).toContain('stable now sits past v1.9.10 and');
   });
 
-  it('W25-T5: no release anywhere says HEAD contains none, and runs no node', () => {
+  it('W25-T5: no release anywhere says HEAD contains none, and points at the release-main run', () => {
     const home = mkTmp('ccrc-relstable-t5-');
     const root = fixture(home);
     const short = git(root, 'rev-parse', '--short', 'HEAD');
+    const full = git(root, 'rev-parse', 'HEAD');
     const err = refused(home, run(root, home));
     expect(err).toBe(
-      `release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD ${short} carries no vX.Y.Z tag, and it contains no release tag). stable now points at ${short} and cannot move back (fast-forward only): the first release cut from a descendant of ${short} promotes by a fast-forward push of that release's commit (${PUSH_PLACEHOLDER}). Nothing was changed\n`);
-    expect(err).toContain('carries no vX.Y.Z tag, and it contains no release tag). stable now points at');
+      `${REFUSAL_HEAD}${short} carries no vX.Y.Z tag, and it contains no release tag). A main merge whose build came out unchanged cuts no release either: the release-main run for ${full} printed "built unchanged" or what differed. stable now points at ${short} and cannot move back (fast-forward only); the first release cut from a descendant of ${short} is the next commit it can promote. Nothing was changed\n`);
   });
 
-  it('W25-T6: a change that cannot be measured is read as changed, with the reason', () => {
-    const home = mkTmp('ccrc-relstable-t6-');
-    const root = fixture(home, { tagHead: 'v1.2.3', scope: true });
-    git(root, 'rm', '-q', 'deploy/release-scope.mjs');
-    commitFiles(root, docsOnly);
-    const err = refused(home, run(root, home, [], { realNode: true }));
-    expect(err).toContain('whether it changed what ships could not be measured (release-scope.mjs exited 1), so read it as changed: check the release-main run for its merge). stable now sits past v1.2.3');
-    expect(err).not.toContain('changed nothing that ships');
-  });
-
-  it('W25-T7: no rewind, no force, no push of a contained release; the one command is the placeholder', () => {
-    for (const [name, files] of [['t7a', docsOnly], ['t7b', { 'deploy/x.sh': '#!/bin/sh\n' }]] as const) {
+  it('W25-T7: no push, force, reset or tag^{commit} command in the refusal, with or without a contained release', () => {
+    for (const [name, tagHead] of [['t7a', 'v1.2.3'], ['t7b', undefined]] as const) {
       const home = mkTmp(`ccrc-relstable-${name}-`);
-      const root = fixture(home, { tagHead: 'v1.2.3', scope: true });
-      commitFiles(root, files);
-      const err = refused(home, run(root, home, [], { realNode: true }));
-      expect(err).not.toMatch(/--force|push -f|\+refs|git reset|git push origin v[0-9]/);
-      expect(err.split(PUSH_PLACEHOLDER).length - 1).toBe(1);
+      const root = fixture(home, tagHead === undefined ? {} : { tagHead });
+      commitFiles(root, docsOnly);
+      const err = refused(home, run(root, home));
+      expect(err).not.toMatch(/git push|--force|push -f|\+refs|git reset|\^\{commit\}|<tag>/);
     }
+  });
+
+  it('pin: the code (comments aside) calls neither release-main.sh nor node, and measures nothing', () => {
+    const code = readFileSync(SCRIPT, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code).not.toMatch(/deploy\/release-main\.sh|\bnode\b|\bmeasure\b/);
   });
 });
 

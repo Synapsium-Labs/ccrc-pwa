@@ -11,8 +11,9 @@
 # main; a HEAD with no release tag (a merge commit, or a `main` merge that
 # changed nothing that ships, which release-main.sh cuts no release for) is
 # refused here (exit 2), and the refusal names the newest release HEAD
-# contains and whether anything that ships changed since it (D-6398) —
-# "promote a tree nobody built" is unexpressible. THIS script is that guard.
+# contains and points at release-main's run for HEAD's sha, which says
+# whether its build came out unchanged (D-6398) — "promote a tree nobody
+# built" is unexpressible. THIS script is that guard.
 # It never promotes a release HEAD only contains.
 # D-3129: HEAD may carry MORE THAN ONE release-shaped tag (e.g. an
 # auto-tagged patch sitting on the same commit as a hand-cut minor) — a
@@ -66,33 +67,18 @@ if [ "${#TAGS[@]}" -eq 0 ]; then
   SHORT="$(git -C "$ROOT" rev-parse --short HEAD)"
   # The one refusal, spelled once: the prefix, the way forward and the tail
   # are the same whatever the reason. $1 closes the HEAD parenthesis, $2 says
-  # where stable stands now, $3 is "first" or "next". `<tag>` is literal text,
-  # a placeholder for a release not yet cut: no contained release is ever
-  # named as something to push, and no rewind or force command is printed.
+  # where stable stands now, $3 is "first" or "next". No contained release is
+  # ever named as something to push, and no push, rewind or force command is
+  # printed. It measures nothing and runs no build: the release-main run for
+  # this sha says whether its build came out unchanged (D-6398).
   refuse_untagged() {
-    echo "release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD $SHORT carries no vX.Y.Z tag$1). $2 and cannot move back (fast-forward only): the $3 release cut from a descendant of $SHORT promotes by a fast-forward push of that release's commit (git push origin <tag>^{commit}:refs/heads/stable). Nothing was changed" >&2
+    echo "release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD $SHORT carries no vX.Y.Z tag$1). A main merge whose build came out unchanged cuts no release either: the release-main run for $FULL printed \"built unchanged\" or what differed. $2 and cannot move back (fast-forward only); the $3 release cut from a descendant of $SHORT is the next commit it can promote. Nothing was changed" >&2
     exit 2
   }
+  FULL="$(git -C "$ROOT" rev-parse HEAD)"
   NEWEST="$(git -C "$ROOT" tag --merged HEAD | grep -E "$SHAPE" | sort -V | tail -n1)" || NEWEST=""
   [ -n "$NEWEST" ] || refuse_untagged ", and it contains no release tag" "stable now points at $SHORT" first
-  # One classifier, one two-helper rule, one node floor: release-main.sh's own
-  # measure arm; its stderr carries nothing the message needs, so the refusal stays
-  # one line. Its answer only picks the sentence, never the exit (D-6398).
-  RC=0
-  ANSWER="$(bash "$ROOT/deploy/release-main.sh" measure --base "$NEWEST" 2>/dev/null)" || RC=$?
-  if [ "$RC" -ne 0 ]; then
-    WHY="whether it changed what ships could not be measured (release-main.sh measure exited $RC), so read it as changed: check the release-main run for its merge"
-  elif [[ "$ANSWER" =~ ^unchanged\ ([0-9]+)$ ]]; then
-    WHY="its merges since changed nothing that ships (paths changed: ${BASH_REMATCH[1]}), so no release was cut for them"
-  elif [[ "$ANSWER" =~ ^changed\ ([0-9]+)\ (.+)$ ]] && [[ "$ANSWER" != *$'\n'* ]]; then
-    WHY="it changed what ships (shipped paths changed: ${BASH_REMATCH[1]}; first: ${BASH_REMATCH[2]}): check the release-main run for its merge, which should have cut a release"
-  elif [[ "$ANSWER" =~ ^unmeasured\ (.+)$ ]] && [[ "$ANSWER" != *$'\n'* ]]; then
-    WHY="whether it changed what ships could not be measured (${BASH_REMATCH[1]}), so read it as changed: check the release-main run for its merge"
-  else
-    FLAT="${ANSWER//[$'\n\r']/ }"
-    WHY="whether it changed what ships could not be measured (release-main.sh measure answered '${FLAT:0:80}'), so read it as changed: check the release-main run for its merge"
-  fi
-  refuse_untagged "; it sits past $NEWEST, the newest release it contains, and $WHY" "stable now sits past $NEWEST" next
+  refuse_untagged "; the newest release it contains is $NEWEST" "stable now sits past $NEWEST" next
 fi
 if [ "${#TAGS[@]}" -gt 1 ]; then
   echo "release-stable.sh: HEAD carries more than one release tag (${TAGS[*]}) — a promotion names one release; delete the tag that is not the release (git push origin --delete <tag>) and re-push stable. Nothing was changed" >&2
