@@ -16,7 +16,7 @@
 // own node, so this file imports only node:child_process, node:path, node:url and node:process and uses no syntax
 // newer than ES2022.
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
@@ -124,6 +124,8 @@ export function main(argv) {
   return 0;
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Basenames, not paths: argv[1] keeps a symlinked spelling that import.meta.url has resolved, and a mismatch would
+// leave the CLI silent with exit 0, which D-6393 forbids (exit 0 means exactly one line).
+if (process.argv[1] !== undefined && basename(process.argv[1]) === basename(fileURLToPath(import.meta.url))) {
   process.exitCode = main(process.argv.slice(2));
 }

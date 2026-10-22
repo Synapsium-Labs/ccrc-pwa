@@ -10,7 +10,7 @@
 // developer's `diff.renames` cannot change an answer; no network.
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -172,6 +172,15 @@ describe('W25 the CLI over fixture repositories', () => {
     expect([noRepo.status, noRepo.stdout]).toEqual([2, '']);
   });
 
+  it('W25-S13: the helper answers through a symlinked path, one line, never silence', () => {
+    const { home, root } = fixture();
+    commit(root);
+    symlinkSync(join(REPO, 'deploy'), join(home, 'linked'));
+    const r = spawnSync('node', [join(home, 'linked', 'release-scope.mjs'), '--repo', root, '--base', 'v0.0.1'],
+      { env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' });
+    expect([r.status, r.stdout]).toEqual([0, 'unchanged 0\n']);
+  });
+
   it('W25-S11: a path with a space is read whole (NUL-separated output)', () => {
     const a = fixture();
     put(a.root, 'docs/a b.md', 'x\n');
@@ -188,8 +197,12 @@ describe('W25 the CLI over fixture repositories', () => {
 type Read = (rel: string) => string | null;
 interface Derived { inputs: string[]; fileDeps: Map<string, string> } // package name -> repo-relative package dir
 
+const readCache = new Map<string, string | null>();
 const real: Read = (rel) => {
-  try { return readFileSync(join(REPO, rel), 'utf8'); } catch { return null; }
+  if (!readCache.has(rel)) {
+    try { readCache.set(rel, readFileSync(join(REPO, rel), 'utf8')); } catch { readCache.set(rel, null); }
+  }
+  return readCache.get(rel)!;
 };
 
 /** What `npm run build` and npm's own lifecycle run in each package the builder installs: the test's model of the
@@ -251,6 +264,13 @@ function deriveReleaseInputs(read: Read): Derived {
   }
   const archives = code.filter((l) => /git -C "\$ROOT" archive\b/.test(l)).length;
   if (archives !== 1) throw new Error(`build-release.sh has ${archives} git archive lines, the derivation models exactly one`);
+  // The one archive line is pinned to its exact text: its pathspec is PATHSPEC and nothing else.
+  const archiveShape = /^git -C "\$ROOT" archive --format=tar HEAD -- "\$\{PATHSPEC\[@\]\}" \| tar -x -C "\$TOP"$/;
+  for (const line of code) {
+    if (/git -C "\$ROOT" archive\b/.test(line) && !archiveShape.test(line)) {
+      throw new Error(`build-release.sh git archive line differs from the modelled shape: ${line.trim()}`);
+    }
+  }
 
   // 2. The pathspec: its literal tokens, and the per-package additions inside the `for pkg in …` loop.
   const spec = [...text.matchAll(/^PATHSPEC=\(([^)]*)\)/gm)];
@@ -335,16 +355,26 @@ function deriveReleaseInputs(read: Read): Derived {
       }
     }
   }
-  return { inputs: [...inputs].sort(), fileDeps };
+  // One spelling per input: `./docs` is `docs`, and `.` is the repository root, written ''.
+  const norm = (i: string): string => {
+    const n = path.posix.normalize(i).replace(/^\.\//, '').replace(/\/+$/, '');
+    return n === '.' ? '' : n;
+  };
+  return { inputs: [...new Set([...inputs].map(norm))].sort(), fileDeps };
 }
 
-const under = (file: string, input: string): boolean => file === input || file.startsWith(`${input}/`);
+/** `input` is a path or '' for the repository root, which every file is under. */
+const under = (file: string, input: string): boolean => input === '' || file === input || file.startsWith(`${input}/`);
 
 /** Every tracked file at or under a derived input that notShipped claims, plus every input notShipped claims. */
 function shippedViolations(inputs: string[], files: string[]): string[] {
   const out = new Set<string>();
   for (const input of inputs) {
     if (notShipped(input)) out.add(input);
+    // An input that is the root or an ancestor of a tree rule reads the whole of that tree.
+    for (const r of NOT_SHIPPED) {
+      if ('tree' in r && (input === '' || r.tree.startsWith(`${input}/`))) out.add(`${input || '.'} contains ${r.tree}`);
+    }
     for (const f of files) if (under(f, input) && notShipped(f)) out.add(f);
   }
   return [...out].sort();
@@ -415,7 +445,8 @@ function importEscapes(d: Derived, files: string[], read: Read): string[] {
   return [...out].sort();
 }
 
-describe('W25 the guard: no build input is on the NOT_SHIPPED list', () => {
+// Each G5 row scans every tracked source file under a build input; a loaded box needs more than vitest's 20 s.
+describe('W25 the guard: no build input is on the NOT_SHIPPED list', { timeout: 180_000 }, () => {
   const files = execFileSync('git', ['-C', REPO, 'ls-files', '-z'], { encoding: 'utf8', maxBuffer: 1 << 28 })
     .split('\0').filter(Boolean);
   const links = new Map<string, string>();
@@ -456,6 +487,8 @@ describe('W25 the guard: no build input is on the NOT_SHIPPED list', () => {
     ['PATHSPEC gains docs', BUILDER, (t: string) => t.replace('PATHSPEC=(install.sh shared ccd deploy', 'PATHSPEC=(install.sh shared ccd deploy docs')],
     ['PATHSPEC gains server', BUILDER, (t: string) => t.replace('PATHSPEC=(install.sh shared ccd deploy', 'PATHSPEC=(install.sh shared ccd deploy server')],
     ['PATHSPEC gains README.md', BUILDER, (t: string) => t.replace('PATHSPEC=(install.sh shared ccd deploy', 'PATHSPEC=(install.sh shared ccd deploy README.md')],
+    ['PATHSPEC gains the root as .', BUILDER, (t: string) => t.replace('PATHSPEC=(install.sh shared ccd deploy', 'PATHSPEC=(install.sh shared ccd deploy .')],
+    ['PATHSPEC gains ./docs', BUILDER, (t: string) => t.replace('PATHSPEC=(install.sh shared ccd deploy', 'PATHSPEC=(install.sh shared ccd deploy ./docs')],
     ['server tsconfig include gains test', 'server/tsconfig.json', (t: string) => t.replace('"src/**/*.ts",', '"src/**/*.ts", "test/**/*.ts",')],
     ['pwa tsconfig paths reach docs', 'pwa/tsconfig.json', (t: string) => t.replace('"compilerOptions": {', '"compilerOptions": { "paths": { "#d/*": ["../docs/*"] },')],
     ['pwa tsconfig typeRoots reach server/test', 'pwa/tsconfig.json', (t: string) => t.replace('"compilerOptions": {', '"compilerOptions": { "typeRoots": ["../server/test"],')],
@@ -469,6 +502,8 @@ describe('W25 the guard: no build input is on the NOT_SHIPPED list', () => {
     ['a second npm run build line', BUILDER, (t: string) => `${t}\n( cd "$ROOT/x" && npm run build )\n`, /\$ROOT/],
     ['a cp of a root file', BUILDER, (t: string) => `${t}\ncp -a "$ROOT/LICENSE" "$TOP/LICENSE"\n`, /"\$ROOT" in a shape/],
     ['a second git archive', BUILDER, (t: string) => `${t}\ngit -C "$ROOT" archive --format=tar HEAD -- docs | tar -x -C "$TOP"\n`, /git archive/],
+    ['git archive with an extra pathspec', BUILDER, (t: string) => t.replace('"${PATHSPEC[@]}" | tar', '"${PATHSPEC[@]}" docs | tar'), /git archive line differs/],
+    ['an indented ( cd "$ROOT/ line the install parse never sees', BUILDER, (t: string) => `${t}\n  ( cd "$ROOT/docs" && npm ci --no-audit )\n`, /\( cd "\$ROOT\/ lines/],
     ['pwa postbuild reading docs', 'pwa/package.json', withJson((o) => { o['scripts']['postbuild'] = 'node scripts/embed-changelog.mjs ../docs/changelog.md'; }), /pwa\/package.json scripts/],
     ['pwa build with another tsconfig', 'pwa/package.json', withJson((o) => { o['scripts']['build'] = 'tsc --noEmit -p tsconfig.app.json && vite build'; }), /pwa\/package.json scripts/],
     ['ui prepare script', 'ui/package.json', withJson((o) => { o['scripts']['prepare'] = 'node x.mjs'; }), /ui\/package.json scripts/],
