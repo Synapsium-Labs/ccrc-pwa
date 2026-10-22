@@ -869,6 +869,186 @@ whole time, which is the only prevention this ordering rule buys.
 5. Dispatch wave N+1 (§2, step 2) only after the applicable close, closed-row
    proof, release proof, and exact-SHA merge proof above succeed.
 
+### 5b — The landing route, from the repository's own rules
+
+Before every landing, on every project, this session reads the PR's repository
+and lands only by the route its rules give (spec 2026-09-23 §5.7). The reads
+run fresh each time, never from memory, because the operator can change any of
+them between two PRs. They are the block below, the **landing verdict**: run it
+from your own session, in a checkout of the PR's repository, with `<pr>` and
+`<handoffCommit>` filled in. It makes GETs only, prints exactly one line, and
+never merges, enqueues or writes a setting.
+
+```bash
+( # The landing verdict (spec 2026-09-23 §5.7). GETs only: it never merges, enqueues or writes a setting.
+PR=<pr> HC=<handoffCommit>
+BOUND_S=${BOUND_S:-0} POLL_S=${POLL_S:-30} route=
+set -o pipefail
+say() { printf '%s\n' "$1"; exit 0; }
+stop() { say "STOP $1"; }
+
+# Read 1: the base, the head, the state and the review decision, from the PR itself.
+r1=$(gh pr view "$PR" --json baseRefName,headRefOid,state,reviewDecision) || stop "unreadable: read 1"
+base=$(jq -r .baseRefName <<<"$r1") && head=$(jq -r .headRefOid <<<"$r1") && state=$(jq -r .state <<<"$r1") \
+  || stop "unreadable: read 1"
+[[ $base =~ ^[A-Za-z0-9._/-]+$ ]] || stop "unreadable: read 1 gave no usable base"
+[ "$state" = MERGED ] && say "MERGED head=$head"
+[ "$state" = CLOSED ] && stop "not-at-head: the PR is CLOSED"
+[ "$head" = "$HC" ] || stop "not-at-head: the PR head is $head"
+
+# Read 2: every rule of every active ruleset on that base. A type this block does not know is a stop.
+rules=$(gh api --paginate "repos/{owner}/{repo}/rules/branches/$base" | jq -sc 'add // []') \
+  || stop "unreadable: read 2"
+unknown=$(jq -r '[.[].type] - ["pull_request", "merge_queue", "required_status_checks", "required_linear_history",
+  "workflows", "code_scanning", "required_deployments", "required_signatures", "non_fast_forward", "deletion",
+  "creation"] | unique | join(",")' <<<"$rules") || stop "unreadable: read 2"
+[ -z "$unknown" ] || stop "unknown-rule-type: $unknown"
+
+# Read 3: classic protection. A 404 is "not protected" only with exactly that message; a 401 or 403 goes to read 3b.
+r3=$(gh api -i "repos/{owner}/{repo}/branches/$base/protection")
+c3=$(head -n1 <<<"$r3" | cut -d' ' -f2) b3=$(tr -d '\r' <<<"$r3" | sed '1,/^$/d') via=3
+case "$c3" in
+  200) prot=$(jq -c . <<<"$b3") || stop "unreadable: read 3" ;;
+  404) [ "$(jq -r .message <<<"$b3")" = "Branch not protected" ] || stop "unreadable: read 3 answered 404"
+       prot='{}' ;;
+  401|403) via=3b
+       prot=$(gh api "repos/{owner}/{repo}/branches/$base" | jq -c '.protection | if .enabled == true
+         then {required_status_checks} elif .enabled == false then {} else error("no enabled") end') \
+         || stop "unreadable: read 3b, after read 3 answered $c3" ;;
+  *) stop "unreadable: read 3 answered ${c3:-nothing}" ;;
+esac
+
+# Read 4: the merge settings. A missing field is unreadable, never false.
+r4=$(gh api "repos/{owner}/{repo}" | jq -ce '{allow_squash_merge, allow_merge_commit, allow_rebase_merge,
+  allow_auto_merge} as $s | if all($s[]; type == "boolean") then $s else error("missing") end') \
+  || stop "unreadable: read 4"
+
+# The method set (§5.7.2): the settings, intersected with EVERY pull_request rule, minus merge under linear history.
+methods=$(jq -nc --argjson s "$r4" --argjson r "$rules" --argjson p "$prot" '
+  [if $s.allow_squash_merge then "squash" else empty end, if $s.allow_merge_commit then "merge" else empty end,
+   if $s.allow_rebase_merge then "rebase" else empty end]
+  | reduce ($r[] | select(.type == "pull_request")
+      | .parameters.allowed_merge_methods // ["merge", "squash", "rebase"] | map(ascii_downcase)) as $a
+      (.; map(select(IN($a[]))))
+  | if any($r[]; .type == "required_linear_history") or $p.required_linear_history.enabled == true
+    then map(select(. != "merge")) else . end') || stop "unreadable: the method set"
+queues=$(jq -r '[.[] | select(.type == "merge_queue") | (.parameters.merge_method // "unknown") | ascii_downcase]
+  | unique | join(",")' <<<"$rules") || stop "unreadable: read 2"
+if [ -n "$queues" ]; then
+  route=Q method=$queues
+  [[ $queues == *,* ]] && stop "two-queue-methods: $queues"
+  jq -e --arg m "$method" 'any(.[]; . == $m)' <<<"$methods" >/dev/null \
+    || stop "queue-method-not-allowed: the queue merges by $method and the method set is $methods"
+  [ "$(jq -r .allow_auto_merge <<<"$r4")" = true ] || stop "auto-merge-off: a merge_queue rule applies"
+else
+  method=$(jq -r 'if any(.[]; . == "squash") then "squash" elif any(.[]; . == "merge") then "merge"
+    elif length > 0 then "rebase" else "" end' <<<"$methods") || stop "unreadable: the method set"
+  [ -n "$method" ] || stop "method-set-empty: the settings, the pull_request rules and linear history leave none"
+  [ "$method" = rebase ] && stop "rebase-only: rebase is the only method left"
+fi
+
+# Read 3b knows no linear history and no strictness: the merge method is a stop, and on a direct route so is a head
+# behind the base. Route Q needs no strictness (the queue tests the merged group itself), so it reads no compare.
+if [ "$via" = 3b ]; then
+  [ "$method" = merge ] && stop "read-3b-unknowable: read 3 answered $c3 and the method is merge"
+  if [ "$route" != Q ]; then
+    behind=$(gh api "repos/{owner}/{repo}/compare/$base...$HC" | jq -e .behind_by) \
+      || stop "unreadable: the compare read under read 3b"
+    [ "$behind" = 0 ] || stop "read-3b-unknowable: read 3 answered $c3 and the head is $behind behind the base"
+  fi
+fi
+
+# The required set (§5.7.3): every ruleset's required checks, plus classic checks and legacy contexts. A name an App
+# is pinned for keeps its App; the same name unpinned is the same requirement. Then strictness and the other gates.
+req=$(jq -nc --argjson r "$rules" --argjson p "$prot" '
+  [($r[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]?
+     | {context, app: .integration_id}),
+   ($p.required_status_checks.checks[]? | {context, app: (if .app_id == -1 then null else .app_id end)}),
+   ($p.required_status_checks.contexts[]? | {context: ., app: null})]
+  | unique | . as $all
+  | map(select(.app != null or (.context as $c | all($all[]; .context != $c or .app == null))))') \
+  || stop "unreadable: the required set"
+strict=$(jq -nr --argjson r "$rules" --argjson p "$prot" --arg via "$via" '
+  if any($r[]; .type == "required_status_checks" and .parameters.strict_required_status_checks_policy == true)
+     or $p.required_status_checks.strict == true then "yes" elif $via == "3b" then "unknown" else "no" end') \
+  || stop "unreadable: strictness"
+gates=$(jq -nr --argjson r "$rules" --argjson p "$prot" '
+  [($r[] | select(.type | IN("workflows", "code_scanning", "required_deployments", "required_signatures")) | .type),
+   (if $p.required_signatures.enabled == true then "classic required_signatures" else empty end)]
+  | unique | join(",")') || stop "unreadable: the other gates"
+
+# Read 5, judged name by name: the head's check runs and its statuses ARRAY, never the combined state.
+checks() {
+  local cr st
+  cr=$(gh api --paginate "repos/{owner}/{repo}/commits/$HC/check-runs" \
+    | jq -sc '[.[].check_runs[] | {name, status, conclusion, app: (.app | {id, slug})}]') || { echo unreadable; return; }
+  st=$(gh api --paginate "repos/{owner}/{repo}/commits/$HC/status" \
+    | jq -sc '[.[].statuses[] | {context, state}]') || { echo unreadable; return; }
+  jq -nr --argjson q "$req" --argjson cr "$cr" --argjson st "$st" '
+    def runs($x): [$cr[] | select(.name == $x.context and ($x.app == null or .app.id == $x.app))];
+    def sts($x): if $x.app == null then [$st[] | select(.context == $x.context)] else [] end;
+    def judge($x): runs($x) as $r | sts($x) as $s
+      | if $x.app != null and ($r | length) == 0 and any($st[]; .context == $x.context) then "unverifiable"
+        elif any($r[]; .status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))
+          or any($s[]; .state | IN("failure", "error")) then "red"
+        elif any($r[]; .status != "completed") or any($s[]; .state == "pending") then "pending"
+        elif ($r | length) > 0 or any($s[]; .state == "success") then "passing"
+        else "not-reported" end;
+    def kind($x): if any(runs($x)[]; .app.slug == "github-actions") then "github-actions"
+      elif (runs($x) | length) > 0 then "app \(runs($x)[0].app.id)" else "status" end;
+    [$q[] | {x: ., s: judge(.)}] as $j
+    | first(("unverifiable", "red", "pending", "not-reported") as $w | select(any($j[]; .s == $w))
+        | "\($w) " + ([$j[] | select(.s == $w) | .x.context + (if $w == "red" then " [\(kind(.x))]" else "" end)]
+        | join(", "))) // "passing"' || echo unreadable
+}
+v=$(checks) w=${v%% *}
+if [ "$w" = not-reported ] && [ "$BOUND_S" -gt 0 ]; then
+  end=$((SECONDS + BOUND_S))
+  while [ "$w" = not-reported ] && [ "$SECONDS" -lt "$end" ]; do sleep "$POLL_S"; v=$(checks) w=${v%% *}; done
+fi
+case "$w" in
+  passing) ;;
+  unverifiable) stop "unverifiable: ${v#* } shows only as a commit status" ;;
+  red) say "RED ${v#* }" ;;
+  pending) say "WAIT pending: ${v#* }" ;;
+  not-reported) [ "$BOUND_S" -gt 0 ] && stop "not-reported: ${v#* } within ${BOUND_S}s"
+                say "WAIT not-reported: ${v#* }" ;;
+  *) stop "unreadable: read 5" ;;
+esac
+
+# The route (§5.7.4), and the approval licence on a direct route only.
+if [ "$route" != Q ]; then
+  if [ "$req" != "[]" ] || [ -n "$gates" ]; then route=G; else route=U; fi
+fi
+admin=never
+need=$(jq -nr --argjson r "$rules" --argjson p "$prot" --argjson pr "$r1" '
+  (any($r[]; .type == "pull_request" and (.parameters.required_approving_review_count // 0) > 0)
+   or ($p.required_pull_request_reviews.required_approving_review_count // 0) > 0)
+  and $pr.reviewDecision != "APPROVED"') || stop "unreadable: the approval"
+if [ "$route" != Q ] && [ "$need" = true ]; then
+  [ "$via" = 3b ] && stop "read-3b-unknowable: an approval is missing and read 3 answered $c3"
+  [ -z "$gates" ] || stop "licence-fails: an approval is missing and --admin could skip $gates"
+  jq -ne --argjson r "$rules" --argjson p "$prot" 'any($r[]; .type == "pull_request"
+      and .parameters.required_review_thread_resolution == true)
+    or ($p.required_conversation_resolution.enabled == true and $p.enforce_admins.enabled != true) | not' >/dev/null \
+    || stop "licence-fails: an approval is missing and --admin could skip conversation resolution"
+  jq -e '((.required_status_checks.checks // []) + (.required_status_checks.contexts // []) | length) == 0
+    or .enforce_admins.enabled == true' <<<"$prot" >/dev/null \
+    || stop "licence-fails: an approval is missing and enforce_admins is off over the classic checks"
+  # Read 6 for every ruleset carrying required checks. A rule naming no ruleset cannot be asked: able to bypass.
+  ids=$(jq -r '[.[] | select(.type == "required_status_checks") | .ruleset_id]
+    | if all(.[]; type == "number") then unique | .[] else error("no ruleset id") end' <<<"$rules") \
+    || stop "licence-fails: an approval is missing and a required_status_checks rule names no ruleset"
+  for id in $ids; do
+    by=$(gh api "repos/{owner}/{repo}/rulesets/$id" | jq -r .current_user_can_bypass) || by=unreadable
+    [ "$by" = never ] || stop "licence-fails: an approval is missing and ruleset $id answers $by"
+  done
+  admin=licensed
+fi
+say "ROUTE $route method=$method admin=$admin strict=$strict"
+)
+```
+
 ## 6 — Final merge
 
 On a native-queue project the last wave's producer lands BEFORE this close,
