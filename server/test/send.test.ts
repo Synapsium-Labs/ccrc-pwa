@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { sendPrompt, submitEnter, draftOf, draftOfMeasured, isMailResidue } from '../src/inject/send.js';
+import { sendPrompt, submitEnter, answerDialogText, draftOf, draftOfMeasured, isMailResidue, ECHO_TRIES, SUBMIT_TRIES } from '../src/inject/send.js';
+import { parseDialog } from '../src/pane/dialog.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
 
@@ -2210,5 +2211,101 @@ describe('a typed line is never silently dropped (D-5046)', () => {
     expect(res).toEqual({ ok: false, error: 'type-failed' });
     expect(sendKeysCalls(calls)).toEqual([SK('-l', '--', 'hello')]);
     expect(box.lines).toEqual(['']);
+  });
+});
+
+// D-6366: what ends the proof after Enter, and what does not. A reply lost on the way back (a failed `send-keys` exit,
+// a capture that fails) says nothing about the box, so the proof reads the box again instead of giving up unread.
+describe('a lost reply after Enter does not end the proof (D-6366)', () => {
+  const OURS = '❯ hello there\n';
+  const EMPTY = '❯ \n';
+
+  /** A pane that answers by what was done to it: empty, then our text once typed, then `afterEnter` capture by
+   *  capture (the last repeats; `null` is a failed capture) once an Enter was pressed. */
+  function enterRig(o: { enterCode: number; afterEnter: (string | null)[]; before?: string }) {
+    let typed = false;
+    let entered = false;
+    let post = 0;
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'send-keys') {
+        if (args.includes('-l')) typed = true;
+        if (args.at(-1) === 'Enter') { entered = true; return { code: o.enterCode, stdout: '', stderr: '' }; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        if (!entered) return { code: 0, stdout: typed ? OURS : (o.before ?? EMPTY), stderr: '' };
+        const pane = o.afterEnter[Math.min(post++, o.afterEnter.length - 1)] ?? null;
+        return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { tmux: new Tmux(run), calls };
+  }
+  const send = (tmux: Tmux) => sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello there');
+
+  it('a failed Enter press whose box then reads empty is ok', async () => {
+    // The press landed and its reply was lost; the next three captures fail (a link drop), then the box reads empty.
+    const { tmux } = enterRig({ enterCode: 1, afterEnter: [null, null, null, EMPTY] });
+    expect(await send(tmux)).toEqual({ ok: true });
+  });
+
+  it('a box that reads blind through both Enters and then reads without our text is ok', async () => {
+    // The final read after two Enters is the last chance to learn the text left; it asks.
+    const { tmux } = enterRig({ enterCode: 1, afterEnter: [...Array(2 * SUBMIT_TRIES).fill(null), EMPTY] });
+    expect(await send(tmux)).toEqual({ ok: true });
+  });
+
+  it('a failed Enter press whose box still holds our text is enter-ignored', async () => {
+    const { tmux } = enterRig({ enterCode: 1, afterEnter: [OURS] });
+    expect(await send(tmux)).toMatchObject({ ok: false, error: 'enter-ignored', draft: 'hello there', submittable: true });
+  });
+
+  it('a box that reads blind to the end is enter-ignored with no claim about the box', async () => {
+    const { tmux } = enterRig({ enterCode: 1, afterEnter: [null] });
+    const res = await send(tmux);
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+    expect(res).not.toHaveProperty('draft');
+    expect(res).not.toHaveProperty('submittable');
+  });
+
+  it("a box holding someone else's text still refuses", async () => {
+    // A human's draft is in the box before the send; every key press fails. Nothing is pressed or typed over it.
+    const { tmux, calls } = enterRig({ enterCode: 1, afterEnter: [EMPTY], before: '❯ a human mid-sentence\n' });
+    expect(await send(tmux)).toMatchObject({ ok: false, error: 'draft-present', draft: 'a human mid-sentence' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+});
+
+// D-6366: the ask's answer routes keep the fixed poll count; only `sendPrompt`'s two echo loops follow the budget.
+describe("answerDialogText's echo wait (D-6366)", () => {
+  const panes = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
+  const fixture = (name: string): string => readFileSync(path.join(panes, name), 'utf8');
+
+  it("answerDialogText's echo wait is still ECHO_TRIES polls", async () => {
+    const open = fixture('cc300-ask-same-labels-q2.txt');
+    const focused = fixture('cc300-ask-freetext-walk-2-focused.txt');
+    // The typed text never renders: the pane keeps showing the empty free-text row.
+    const calls: string[][] = [];
+    let literal = false;
+    let capturesAfterLiteral = 0;
+    let idx = 0;
+    const script = [open, focused];
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'send-keys' && args.includes('-l')) literal = true;
+      if (args[0] === 'capture-pane') {
+        if (literal) capturesAfterLiteral++;
+        return { code: 0, stdout: script[Math.min(idx++, script.length - 1)]!, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const res = await answerDialogText(
+      { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: noSleep }, 'lane-a:project-a', parseDialog(open)!.id, 3, 'only in staging',
+    );
+    expect(res).toEqual({ ok: false, error: 'echo-failed' });
+    expect(capturesAfterLiteral).toBe(ECHO_TRIES);
+    expect(sendKeysCalls(calls).some((c) => c.at(-1) === 'Enter')).toBe(false);
   });
 });
