@@ -139,7 +139,7 @@
 // sheet.
 import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Dialog, DialogTabTarget, HookAsk } from '../../../shared/api';
+import type { Dialog, DialogTabTarget } from '../../../shared/api';
 import { parseAskTabs, reviewRows } from '../../../shared/ask-menu';
 import { EYEBROW, OptionRow, Sheet, Well, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
@@ -148,7 +148,7 @@ import {
   picksBusy, wordsBusy, type PickCall, type Picks, type Words, type WordsCall,
 } from './AskParts';
 import {
-  askScreen, chatRow, freeTextSlot, headerTab, paneQuestion, paneTicks, picksUncommitted, questionKey,
+  askScreen, chatRow, freeTextSlot, headerTab, isUsableAsk, paneQuestion, paneTicks, picksUncommitted, questionKey,
   slotHolds,
 } from './askLive';
 import { keyTabs, multiKeys, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
@@ -176,23 +176,6 @@ const showsQuestion = (dialog: Dialog | null, call: WordsCall): dialog is Dialog
  *  question. */
 const showsSent = (dialog: Dialog | null, call: WordsCall, text: string): boolean =>
   showsQuestion(dialog, call) && slotHolds(freeTextSlot(dialog, call.row - 1), text);
-
-/**
- * I4: is there anything accessible to actually show? Mirrors the scraped
- * path's own blank-question fallback further down (`ask?.question.trim() ??
- * ''`), but that path still has the PANE's own title/options to fall back
- * to when the transcript's copy is blank — a hook envelope has no such
- * second source of its own, so "blank" here means "treat as absent" rather
- * than "render with an empty title", which would leave the sheet with no
- * accessible name at all (the same failure mode that comment documents).
- * A type guard so the call site gets `hookAsk` narrowed to `HookAsk` for
- * free, rather than a boolean the compiler can't connect back to it.
- */
-function isUsableAsk(a: HookAsk | null): a is HookAsk {
-  if (a === null) return false;
-  if ('approval' in a) return true;
-  return a.questions.length > 0 && a.questions[0]!.question.trim() !== '';
-}
 
 export interface DialogSheetProps {
   id: string;

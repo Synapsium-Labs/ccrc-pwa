@@ -18,7 +18,7 @@
 // - a multiSelect question's boxes are its own options, read into `Dialog.multi` (D-5048), and the answer lists the
 //   boxes in the order they became ticked (`cc300-ask-review-tick-order`); the last question's commit row reads
 //   `Submit` and lands on the review (D-5091).
-import type { Dialog, DialogMulti, HookAskQuestion } from '../../../shared/api';
+import type { Dialog, DialogAsk, DialogMulti, HookAsk, HookAskQuestion } from '../../../shared/api';
 import {
   ASK_TAB_ROW_RE,
   CHAT_ABOUT_ROW_RE,
@@ -26,8 +26,10 @@ import {
   FREE_TEXT_PLACEHOLDER_RE,
   REVIEW_HEADING_RE,
   REVIEW_READY_RE,
+  parseAskTabs,
   reviewRows,
   type AskTab,
+  type ReviewRows,
 } from '../../../shared/ask-menu';
 
 /** The questions of an AskUserQuestion envelope (`HookAsk`'s question arm). */
@@ -222,6 +224,16 @@ function trimBlankEdges(lines: string[]): string[] {
   return lines.slice(a, b);
 }
 
+/** `s` with the box-drawing characters (U+2500 to U+257F) taken out and the ends trimmed (D-6325). A pane can paint a
+ *  row inside its frame (`│ Type something. │`), and `FREE_TEXT_PLACEHOLDER_RE` is anchored at both ends, so the bars
+ *  made an empty free-text row read as an option whose label was the bars (defect 1b's first cause). */
+export function stripBox(s: string): string {
+  return s.replace(/[\u2500-\u257F]/g, '').trim();
+}
+
+/** Is this row label the empty free-text row, with any box characters around it ignored? */
+const isPlaceholderLabel = (label: string): boolean => FREE_TEXT_PLACEHOLDER_RE.test(stripBox(label));
+
 /** The free-text row under a question, as the sheet offers it (D-5090):
  *  - `empty`: the placeholder row, which own words are typed into;
  *  - `held`: a row already holding text, and that text (`rowText`);
@@ -252,12 +264,12 @@ export function rowText(o: { label: string; description?: string }): string {
 export function freeTextSlot(dialog: Dialog, n: number | null): FreeTextSlot {
   if (!dialog.parsed) return { kind: 'none' };
   if (n === null) {
-    const empty = dialog.options.find((o) => FREE_TEXT_PLACEHOLDER_RE.test(o.label));
+    const empty = dialog.options.find((o) => isPlaceholderLabel(o.label));
     return empty === undefined ? { kind: 'none' } : { kind: 'empty', index: empty.index };
   }
   const row = dialog.options.find((o) => o.index === n + 1);
   if (row === undefined || CHAT_ABOUT_ROW_RE.test(row.label)) return { kind: 'none' };
-  if (FREE_TEXT_PLACEHOLDER_RE.test(row.label)) return { kind: 'empty', index: row.index };
+  if (isPlaceholderLabel(row.label)) return { kind: 'empty', index: row.index };
   return { kind: 'held', index: row.index, text: rowText(row) };
 }
 
@@ -331,4 +343,130 @@ export function picksUncommitted(multi: DialogMulti, picked: readonly number[] |
   if (picked === null) return false;
   const pane = paneTicks(multi);
   return picked.length !== pane.length || picked.some((k) => !pane.includes(k));
+}
+
+/**
+ * I4: is there anything accessible to actually show? Mirrors the scraped path's own blank-question fallback, but a hook
+ * envelope has no second source of its own, so "blank" here means "treat as absent" rather than "render with an empty
+ * title", which would leave the sheet with no accessible name at all. A type guard so the call site gets `hookAsk`
+ * narrowed to `HookAsk` for free. Moved here from `DialogSheet.tsx` (D-6325): `askSource` is its first reader now.
+ */
+export function isUsableAsk(a: HookAsk | null): a is HookAsk {
+  if (a === null) return false;
+  if ('approval' in a) return true;
+  return a.questions.length > 0 && a.questions[0]!.question.trim() !== '';
+}
+
+/** One trailing `(Recommended)`, with any space around it: Claude's own mark on the option it prefers. Anchored at the
+ *  end, so a label that says the word anywhere else keeps it. */
+const RECOMMENDED_TAIL_RE = /\s*\(recommended\)\s*$/i;
+
+/**
+ * An option's label split from Claude's own `(Recommended)` mark (D-6325): the row shows the label and a chip reads
+ * "Recommended". ONE trailing tag is taken off (case and the space around it do not matter); `Recommended reading`
+ * and `Use the (Recommended) path` stay whole, and a label that is only the tag keeps itself, since nothing would be
+ * left to read.
+ */
+export function optionCopy(label: string): { label: string; recommended: boolean } {
+  const stripped = label.replace(RECOMMENDED_TAIL_RE, '');
+  return stripped.trim() === '' ? { label, recommended: false } : { label: stripped, recommended: stripped !== label };
+}
+
+/** What an ask surface may show (D-6325): the answer of `askSource`. */
+export type AskSource =
+  /** No menu, or no `ask`/`ask_cleared` frame yet on this connection: nothing to show. */
+  | { kind: 'none' }
+  /** The hook's permission envelope; its summary is already redacted on the wire. */
+  | { kind: 'approval'; approval: { tool: string; summary: string } }
+  /** The pane is on the ask's review screen. `summary` lists each structured question's header and the pane's mark
+   *  (a position fact; null when the tab row does not line up with the questions); never a pane line. */
+  | { kind: 'review'; rows: ReviewRows; summary: { header: string; answered: boolean | null }[] }
+  /** Claude's own question: the hook's envelope, or the transcript's copy when every row aligned. */
+  | { kind: 'structured'; questions: readonly HookAskQuestion[]; from: 'hook' | 'transcript' }
+  /** Ask evidence and no structured copy that fully aligns: the surface says so and offers the terminal. */
+  | { kind: 'ask-unreadable' }
+  /** A menu with no ask evidence (a plan approval, a TUI prompt): the only variant that carries pane text, because no
+   *  structured copy exists for it. */
+  | { kind: 'menu'; title: string; options: Dialog['options'] }
+  /** An unparsed menu with no ask evidence. */
+  | { kind: 'terminal-only' };
+
+export interface AskSourceInput {
+  /** The stream's hook envelope. */
+  ask: HookAsk | null;
+  /** The pane's menu. */
+  dialog: Dialog | null;
+  /** Has an `ask` or `ask_cleared` frame arrived on THIS connection (the store's `askFrameSeen`)? */
+  askFrameSeen: boolean;
+}
+
+/** The transcript's copy of the question as a hook-shaped one, or null while any row did not align (a `null` option)
+ *  or the question is blank. A `preview` is dropped: `HookAskQuestion` has none, and the sheet never showed it. */
+function transcriptQuestion(a: DialogAsk | undefined): HookAskQuestion | null {
+  if (a === undefined || a.question.trim() === '' || a.options.some((o) => o === null)) return null;
+  const q: HookAskQuestion = {
+    question: a.question,
+    multiSelect: a.multiSelect,
+    options: a.options.map((o) => (o!.description === undefined ? { label: o!.label } : { label: o!.label, description: o!.description })),
+  };
+  if (a.header !== undefined) q.header = a.header;
+  return q;
+}
+
+/** Is the pane showing an ask at all (D-6325)? A `Dialog.ask` (even partly aligned), a `Dialog.multi` (a multiSelect
+ *  AskUserQuestion by definition), the free-text row (box characters stripped), the Chat row, or the ask's tab row. The
+ *  fleet row's hook state is NOT evidence: it is gone past the 30-minute cut and cannot tell a question from an approval. */
+function hasAskEvidence(dialog: Dialog): boolean {
+  return dialog.ask !== undefined
+    || dialog.multi !== undefined
+    || freeTextSlot(dialog, null).kind === 'empty'
+    || chatRow(dialog) !== undefined
+    || dialog.raw.split('\n').some((l) => ASK_TAB_ROW_RE.test(l.trim()));
+}
+
+/**
+ * What an ask surface may SHOW, decided once (D-6325, plan T1b). On an AskUserQuestion no string the PWA renders comes
+ * from the pane: the pane supplies facts of position (is a menu up, where is its cursor, which tab is current and
+ * which are answered), and the words come from Claude's own question. The first rule that holds wins:
+ *
+ *  1. no frame on this connection yet: `none` (an `ask` the store holds from before a drop is not current);
+ *  2. a usable approval envelope: `approval`, with or without a menu;
+ *  3. the pane is the ask's review screen: `review`, fixed words and a summary of the structured headers;
+ *  4. a usable question envelope: `structured` from the hook, with or without a menu;
+ *  5. no menu: `none`;
+ *  6. the transcript's copy, every row aligned: `structured` from the transcript;
+ *  7. ask evidence and nothing that aligns: `ask-unreadable`;
+ *  8. a parsed menu with no ask evidence: `menu`, the only variant that carries pane text;
+ *  9. otherwise `terminal-only`.
+ *
+ * PURE: values in, a value out; the store's types are not imported here.
+ */
+export function askSource({ ask, dialog, askFrameSeen }: AskSourceInput): AskSource {
+  if (!askFrameSeen) return { kind: 'none' };
+  const envelope = isUsableAsk(ask) ? ask : null;
+  if (envelope !== null && 'approval' in envelope) return { kind: 'approval', approval: envelope.approval };
+  const hookQuestions = envelope !== null && 'questions' in envelope ? envelope.questions : null;
+  const rows = dialog === null ? null : reviewRows(dialog);
+  if (dialog !== null && rows !== null) {
+    // The questions the summary lists: the envelope's, else the transcript's copy even if partly aligned (its header is
+    // still Claude's own). None at all lists nothing; a raw line is never a substitute.
+    const questions: readonly { header?: string }[] = hookQuestions ?? (dialog.ask === undefined ? [] : [dialog.ask]);
+    const tabs = parseAskTabs(dialog.raw)?.tabs ?? null;
+    const marks = tabs !== null && tabs.length === questions.length ? tabs : null;
+    return {
+      kind: 'review',
+      rows,
+      summary: questions.map((q, i) => ({
+        header: q.header !== undefined && q.header.trim() !== '' ? q.header.trim() : `Question ${i + 1}`,
+        answered: marks === null ? null : marks[i]!.answered,
+      })),
+    };
+  }
+  if (hookQuestions !== null) return { kind: 'structured', questions: hookQuestions, from: 'hook' };
+  if (dialog === null) return { kind: 'none' };
+  const copy = transcriptQuestion(dialog.ask);
+  if (copy !== null) return { kind: 'structured', questions: [copy], from: 'transcript' };
+  if (hasAskEvidence(dialog)) return { kind: 'ask-unreadable' };
+  if (dialog.parsed) return { kind: 'menu', title: (dialog.title.split('\n')[0] ?? '').trim(), options: dialog.options };
+  return { kind: 'terminal-only' };
 }
