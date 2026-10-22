@@ -18654,7 +18654,9 @@ cmd_update() {
   # excluded by `gate_passed` already; the UPD_FROM test is a belt with no pin claimed (its inherited-lock early return leaves
   # UPD_BAK_FLOOR empty, which would only WARN). The re-stamp is a write with no lock held, like the final report below, so it
   # shares that write's m3 window: a newer run's report landing between `_upd_report_is_mine` and `_upd_phase` is overwritten.
-  if [ "$gate_passed" -eq 1 ] && [ "$UPD_FROM" != restore ]; then _upd_report_is_mine && _upd_phase restarting "pruning and thinning ~/ccrc-backups"; _bak_gc update || :; fi
+  # UPD_THIN_AT is the instant the control plane's deadline now runs from (D-6464): the re-stamp's `updatedAt`, read back from the
+  # report it wrote, else the second read just before it, which is never later. `_bak_gc` turns it into `thin`'s time budget.
+  if [ "$gate_passed" -eq 1 ] && [ "$UPD_FROM" != restore ]; then UPD_THIN_AT="$(date +%s)"; _upd_report_is_mine && _upd_phase restarting "pruning and thinning ~/ccrc-backups" && _upd_report_readable && UPD_THIN_AT="$(jq -er '.updatedAt | numbers' -- "$BOX_UPDATE_JSON" 2>/dev/null || printf '%s' "$UPD_THIN_AT")"; _bak_gc update || :; fi
   # Everything from HERE is a WRITE, after the lock was released above (or,
   # on the `--from restore` branch, never taken from this run at all) — a
   # second `ccrc update` may already hold ~/.ccrc/update.json for its own
@@ -23690,14 +23692,17 @@ _bak_ours() {
 # (the set `_box_env_value` trims): a comment (`#` or `;`, the set `_box_env_unit_whole` skips) is skipped; so is another key's
 # line, `[export ]NAME=` with NAME an identifier other than the knob (as D-3823 reads `export OLD_KEY=…`); a line that begins
 # `CCRC_BACKUP_DATA_KEEP=` is the one `_box_env_value` takes; any other line that names the knob as a whole token (no letter,
-# digit or `_` on either side) refuses, `export CCRC_BACKUP_DATA_KEEP=` included. Only an absent file, or one with no such line,
+# digit or `_` on either side) refuses, `export CCRC_BACKUP_DATA_KEEP=` included. A line holding a CR past its lead is never skipped,
+# since systemd ends a line at a bare CR and would read what follows as a line of its own (fix round 2's review); a file holding a
+# NUL byte, which bash's `read` drops and systemd cannot read at all (`_box_env_has_nul`, D-3832), and a scan that answers anything but
+# 0 or 1 (an awk that cannot run, or is killed) could not be scanned, and refuse too. Only an absent file, or one with no such line,
 # falls back to 3. The same fallback is harmless in `_upd_deadline_ms`, whose default deletes nothing.
 _bak_data_keep() {
   local f="$BOX_ENV_FILE" g=0 why=""
   BAK_DATA_KEEP="${CCRC_BACKUP_DATA_KEEP:-}"; BAK_DATA_KEEP_WHY=""
   if [ -z "$BAK_DATA_KEEP" ] && { [ -e "$f" ] || [ -L "$f" ]; }; then
-    if [ -f "$f" ] && [ -r "$f" ]; then LC_ALL=C awk -v k=CCRC_BACKUP_DATA_KEEP '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t) } /^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1) { next } (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]") { f = 1; exit } END { exit !f }' "$f" || g=$?; else g=3; fi
-    case "$g" in 0) why="names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 2) why="could not be scanned" ;; 3) why="is there but cannot be read" ;; esac
+    if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f"; then g=2; else LC_ALL=C awk -v k=CCRC_BACKUP_DATA_KEEP '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t) } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]") { f = 1; exit } END { exit !f }' "$f" || g=$?; fi; else g=3; fi
+    case "$g" in 0) why="names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 1) ;; 3) why="is there but cannot be read" ;; *) why="could not be scanned" ;; esac
     [ -z "$why" ] || { BAK_DATA_KEEP_WHY="CCRC_BACKUP_DATA_KEEP cannot be measured: ${f/#"$HOME"/\~} $why"; return 1; }
     BAK_DATA_KEEP="$(_box_env_value "$f" CCRC_BACKUP_DATA_KEEP)"
   fi
@@ -23706,14 +23711,15 @@ _bak_data_keep() {
   BAK_DATA_KEEP_WHY="$(_keep_why CCRC_BACKUP_DATA_KEEP "$BAK_DATA_KEEP" 2)"; return 1
 }
 
-# `_bak_thin <update|backup> <line prefix>` — thins the coordination data set of the backups past the newest BAK_DATA_KEEP that carry
+# `_bak_thin <update|backup> <line prefix> [<until>]` — thins the coordination data set of the backups past the newest BAK_DATA_KEEP that carry
 # one (D-6346, D-6350): this run's own backup (counted first, never thinned), the keep-set's already-verified data keep, and every
 # listed dir `_bak_ours` does not claim that holds a manifest, a coord.db or a thinning record, newest first, go to the helper's `thin`,
 # which counts, verifies, writes each record first and deletes after it. The classifier is not called here (`_bak_snap_class` is
 # asked in one place), and the pre-filter names no sidecar, so the bash never names the journal. Its caller holds ~/.ccrc/update.lock
 # and has run `_bak_data_keep`, `_bak_list` and `_bak_keepset`. rc 0 nothing refused, a tree whose helper predates `thin`
 # included (D-6355: skipped by name, never a WARN); rc 1 refused or stopped (the helper's own exit 3), an unparsable floor, or the helper
-# missing or failing. It never dies.
+# missing or failing. It never dies. <until>, when not empty, is `thin`'s time budget in unix seconds (`--until`, D-6464); a walk that
+# reaches it ends with exit 0, so it is rc 0 here.
 _bak_thin() {
   local i d rc=0 helper="$CCRC_HERE/../deploy/coordination-snapshot.mjs"
   local -a own=() ver=() dirs=()
@@ -23727,7 +23733,7 @@ _bak_thin() {
   [ "${#dirs[@]}" -gt 0 ] || return 0
   [ -f "$helper" ] || { echo "$2 WARN: deploy/coordination-snapshot.mjs is missing from this tree, so nothing was thinned"; return 1; }
   grep -qF -- 'thin --keep' "$helper" || { echo "$2 thinning skipped — this tree's coordination-snapshot helper predates it; nothing was thinned"; return 0; }
-  node --no-warnings "$helper" thin --keep "$BAK_DATA_KEEP" --by "$1" --prefix "$2" ${own[@]+"${own[@]}"} ${ver[@]+"${ver[@]}"} "${dirs[@]}" || rc=$?
+  node --no-warnings "$helper" thin --keep "$BAK_DATA_KEEP" --by "$1" --prefix "$2" ${3:+--until "$3"} ${own[@]+"${own[@]}"} ${ver[@]+"${ver[@]}"} "${dirs[@]}" || rc=$?
   case "$rc" in 0) return 0 ;; 3) return 1 ;; esac
   echo "$2 WARN: the coordination data set could not be thinned (the helper exited $rc) — every backup it had not reached is untouched"; return 1
 }
@@ -23796,7 +23802,12 @@ _bak_snap_class() {
 # means nothing is pruned. An UPDATE (never a rollback by flip: a flip takes no backup, so it adds no data set to thin, and its tree's
 # helper may predate `thin`, D-6355; a rollback by re-install runs `cmd_update` and thins here as an update) then thins the coordination data set of the backups past the newest CCRC_BACKUP_DATA_KEEP (`_bak_thin`,
 # D-6346), under the same lock; an invalid CCRC_BACKUP_DATA_KEEP stops the prune and the thinning alike (D-6347). It still never
-# writes update.json: `cmd_update` re-stamps the report before it calls this (D-6356).
+# writes update.json: `cmd_update` re-stamps the report before it calls this (D-6356). An update passes `thin` a time budget (D-6464):
+# `--until`, the re-stamp's instant (UPD_THIN_AT) plus `_upd_deadline_ms`, less a margin of 230 s. The margin is 150 s for one full
+# verification `thin` starts just before the bound (Step 7's largest per-set figure, the estimate `thin` itself uses until it has timed
+# one), 70 s for the control plane to read the final report (one inventory minute plus its 10 s budget: its deadline runs on what it last
+# read), and 10 s for what follows `thin` here (the unlock, and `cmd_update`'s final report). The count prune runs before `thin`, inside
+# the window. No UPD_THIN_AT (a direct call) passes no bound; `ccrc backup` passes none, as it holds no lease.
 _bak_gc() {   # <lead word: update|rollback>
   local lead="$1" keep="${CCRC_BACKUP_KEEP:-10}"
   if ! _keep_ok "$keep"; then
@@ -23809,7 +23820,7 @@ _bak_gc() {   # <lead word: update|rollback>
     echo "$lead: backups: WARN: this run's lock time was not recorded, so nothing can say which backups are its own — nothing pruned"
     return 1
   fi
-  local took=0 lrc=0
+  local took=0 lrc=0 until="" margin=230
   [ -n "$UPD_LOCK_FD" ] || took=1
   _ver_lock_try || lrc=$?
   case "$lrc" in
@@ -23838,7 +23849,8 @@ _bak_gc() {   # <lead word: update|rollback>
       rc=1
     fi
   done
-  [ "$lead" != update ] || _bak_thin update "$lead: backups:" || rc=1
+  [[ "${UPD_THIN_AT:-}" =~ ^[1-9][0-9]{0,10}$ ]] && until=$(( 10#$UPD_THIN_AT + $(_upd_deadline_ms) / 1000 - margin ))
+  [ "$lead" != update ] || _bak_thin update "$lead: backups:" "$until" || rc=1
   if [ "$took" -eq 1 ]; then _upd_unlock; fi
   return "$rc"
 }

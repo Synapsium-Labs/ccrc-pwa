@@ -13303,6 +13303,8 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       '    if [ "$3" = thin ] && [ -f "$HOME/.ccrc/update.json" ]; then cp "$HOME/.ccrc/update.json" "$HOME/thin-saw-update.json"; fi',
       // ...and whether ~/.ccrc/update.lock is held as it is asked: a fresh open conflicts with the caller's flock (review 794, F11).
       '    if [ "$3" = thin ]; then if flock -n "$HOME/.ccrc/update.lock" true 2>/dev/null; then echo free; else echo held; fi > "$HOME/thin-lock-state"; fi',
+      // ...and the arguments it was asked with, one a line (D-6464's `--until`).
+      '    if [ "$3" = thin ]; then printf "%s\\n" "$@" > "$HOME/thin-args"; fi',
       '    if [ "$3" = thin ] && [ -n "$FX_THIN_EXIT" ]; then exit "$FX_THIN_EXIT"; fi',
       '    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_FAIL" ]; then exit 70; fi ;;',
       'esac',
@@ -14158,6 +14160,26 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(readFileSync(join(b, 'thin-lock-state'), 'utf8'), 'ccrc backup thins under its lock').toBe('held\n');
     });
 
+    it('W23-B20: an update passes thin a time budget, the re-stamp\'s own instant plus the deadline less the 230 s margin; ccrc backup passes none (D-6464)', () => {
+      const u = box('ccrc-fx-w23-b20-update-');
+      stubUpdate(u);
+      plantFull(u, ['20250101-000000']);
+      const r = runUpdate(u, [], withShim(u, { CCRC_UPDATE_DEADLINE_MS: '900000' }));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      const saw = JSON.parse(readFileSync(join(u, 'thin-saw-update.json'), 'utf8'));
+      expect(saw, 'thin sees the re-stamp').toMatchObject({ phase: 'restarting', detail: 'pruning and thinning ~/ccrc-backups' });
+      const args = readFileSync(join(u, 'thin-args'), 'utf8').split('\n');
+      expect(args.filter((a) => a === '--until'), 'one bound').toHaveLength(1);
+      expect(args[args.indexOf('--until') + 1], 'the re-stamp plus 900 s, less 230').toBe(String(saw.updatedAt + 900 - 230));
+      const b = box('ccrc-fx-w23-b20-backup-');
+      plantFull(b, ['20250101-000000']);
+      const br = runBackup(b, [], withShim(b, { CCRC_UPDATE_DEADLINE_MS: '900000' }));
+      expect(br.code, `stderr: ${br.stderr}\nstdout: ${br.stdout}`).toBe(0);
+      const bargs = readFileSync(join(b, 'thin-args'), 'utf8').split('\n');
+      expect(bargs, 'ccrc backup thins').toContain('thin');
+      expect(bargs, 'with no bound').not.toContain('--until');
+    });
+
     it('W23-B16: _bak_thin with an empty or unparsable floor returns 1 and passes nothing', () => {
       for (const floor of ['', 'garbage', '20250110']) {
         const home = box('ccrc-fx-w23-b16-');
@@ -14202,6 +14224,9 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       ['an export of the knob', bytes(`export ${K}=9999\n`)],
       ['the bare name with no =', bytes(`${K}\n`)],
       ['an odd line beside a plain one', bytes(`${K}=4\nexport ${K}=9999\n`)],
+      // systemd ends a line at a bare CR, so what follows it is a line of its own there (fix round 2's own review).
+      ['a bare CR inside another key\'s line', bytes(`FOO=1\r${K}=9999\n`)],
+      ['a bare CR inside a comment', bytes(`# note\r${K}=9999\n`)],
     ];
     /** Each with the keep it reads: the line's value, or the default 3 where the line is not the knob's. */
     const READ: readonly (readonly [string, Buffer, number])[] = [
@@ -14239,6 +14264,24 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
 
     it.each(READ)('W23-B17: %s reads as before under LC_ALL=C, never refused (D-6365, review 806 F1, F4)', (_shape, text, keep) => {
       expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17a-'), text, 'C')).toBe(`rc 0 keep ${keep} why \n`);
+    });
+
+    it('W23-B17: a ccrc.env that holds a NUL byte, and a scan that cannot run or is killed, could not be scanned: each refuses (D-6365, fix round 2)', () => {
+      const SCANNED = `rc 1 keep  why ${K} cannot be measured: ~/.ccrc/ccrc.env could not be scanned\n`;
+      // bash's `read` drops a NUL, so the line `_box_env_value` reads is not the one in the file.
+      for (const text of [bytes(`export CCRC_BACKUP\u0000_DATA_KEEP=9999\n`), bytes(`${K}=4\nNOTE=\u0000\n`)]) {
+        expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17n-'), text, 'C')).toBe(SCANNED);
+      }
+      for (const [why, body] of [['an awk that cannot run', 'exit 127'], ['an awk that is killed', 'kill -TERM $$']]) {
+        const home = freshUpdateBox('ccrc-fx-w23-b17k-');
+        const bin = join(home, 'awk-shim');
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, 'awk'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+        mkdirSync(join(home, '.ccrc'), { recursive: true });
+        writeFileSync(join(home, '.ccrc', 'ccrc.env'), `export ${K}=9999\n`);
+        const r = sourced(home, '_bak_data_keep; echo "rc $? keep ${BAK_DATA_KEEP} why ${BAK_DATA_KEEP_WHY}"', { LC_ALL: 'C', PATH: `${bin}:${updateEnv(home).PATH ?? ''}` });
+        expect(r.stdout, why).toBe(SCANNED);
+      }
     });
 
     it.skipIf(UTF8 === null)(`W23-B17: under a UTF-8 locale (${UTF8 ?? 'none: locale -a lists neither C.UTF-8 nor en_US.UTF-8, so this half is skipped'}) every shape answers as under LC_ALL=C, because the scan reads bytes (D-3833, D-6365, review 806 F1)`, () => {
