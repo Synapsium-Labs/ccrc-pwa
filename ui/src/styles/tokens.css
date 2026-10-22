@@ -362,6 +362,9 @@
      load-bearing: an unset var() inside calc() invalidates the whole
      declaration, which would cost the fleet screen its toast offset entirely. */
   --composer-h: 0px;
+  /* Whatever is fixed to a phone's bottom edge (W2 Task S5's `+ New`, D-5471),
+     published by it while mounted; 0px for the same reason as above. */
+  --phone-nav-h: 0px;
 
   --r-sm:   6px;    /* inline code, keycaps, badges */
   --r-md:   10px;   /* tool cards, buttons, wells */

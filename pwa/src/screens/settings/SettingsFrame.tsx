@@ -18,6 +18,7 @@ import type { ReactNode } from 'react';
 import { PageScaffold } from '@ccrc/ui';
 import { SETTINGS_INDEX_TEXT } from '../../fleet/settingsText';
 import { navigate, useLocation } from '../../lib/router';
+import { backToFleet } from '../../command/door';
 import { matchRoute, SETTINGS_SECTIONS, type SettingsSectionId } from '../../lib/routes';
 import { AppearanceSection } from './AppearanceSection';
 import { AutomationSection } from './AutomationSection';
@@ -86,7 +87,7 @@ export function SettingsScreen(): ReactNode {
     return (
       <PageScaffold
         title="Settings"
-        back={{ label: 'Back to fleet', onClick: () => navigate('/'), className: 'settings-back' }}
+        back={backToFleet('settings-back')}
       >
         {banner}
         {at.kind === 'unknown' && <p className="settings-note" role="status">{SETTINGS_INDEX_TEXT.notFound}</p>}

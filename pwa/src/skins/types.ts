@@ -27,6 +27,11 @@ export interface SkinSet {
   readonly Nav: Part;
   /** The fleet list a `Nav` places (S6, S10). */
   readonly FleetList: Part;
+  /** The fleet column's head where the column holds the chrome (a phone, for a set whose bar holds it at a desk), with
+   *  the lane gauges under it (S5). Null keeps the shared `FleetHead` and the accounts strip. */
+  readonly Head: Part;
+  /** The fleet's door to New session where no bar holds one (S5). Null keeps the shared round `+`. */
+  readonly Fab: Part;
   /** A session's chrome around the shared transcript and composer (S7c, S12), reached through `useSkinSet()`. */
   readonly SessionChrome: Part;
   /** One transcript row's shell (S13b, S14), reached through `useSkinSet()`. */

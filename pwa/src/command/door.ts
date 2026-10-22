@@ -11,6 +11,8 @@
 // layer, and `commandDoor` is a plain function so a part can build one inline. The layer listens on `window` for
 // `DOOR_EVENT` and runs the command by id; it is mounted once, above the frame, in `app.tsx`. Pure: no store.
 
+import { navigate } from '../lib/router';
+
 /** The event a door dispatches; `CommandLayer` is its one listener. */
 export const DOOR_EVENT = 'ccrc:command';
 
@@ -35,4 +37,10 @@ export function doorMark(id: string): { 'data-command': string } {
 /** The props of a control that opens per-row fleet flow `id` (`open-actions`, `open-pool`, …). */
 export function actionDoor(id: string, fn: () => void): { 'data-action': string; onClick: () => void } {
   return { 'data-action': id, onClick: fn };
+}
+
+/** A page's back to the fleet (W2 Task S5, the door table's `go-fleet` row on a phone): `PageScaffold`'s `back`, marked
+ *  as the `go-fleet` door. A back whose target is not `/` carries no mark. */
+export function backToFleet(className?: string): { label: string; onClick: () => void; className?: string; 'data-command': string } {
+  return { label: 'Back to fleet', onClick: () => navigate('/'), className, ...doorMark('go-fleet') };
 }

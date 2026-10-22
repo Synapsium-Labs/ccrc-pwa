@@ -46,7 +46,7 @@ import { CapsControl } from '../fleet/CapsControl';
 import { ResumeSheet } from '../fleet/ResumeSheet';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { api } from '../lib/api';
-import { navigate } from '../lib/router';
+import { backToFleet } from '../command/door';
 import { Button, EmptyState, PageScaffold, useNow } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -266,7 +266,7 @@ export function RunsScreen({
       data-conn={conn}
       wide
       title="Runs"
-      back={{ label: 'Back to fleet', onClick: () => navigate('/'), className: 'runs-back' }}
+      back={backToFleet('runs-back')}
     >
 
       {/* Review finding 26: `runs`/`runsFrameSeen` are sticky across a socket
