@@ -455,6 +455,23 @@ describe('D-6181: the pin ends at its expiry', () => {
     expect(dispatches()).toEqual([]);   // given an expiry, not ended
   });
 
+  it('a pin minted by the base cmd_swap beside a stale swappinexp gets a fresh legacy expiry', () => {
+    // A revert (or an old supervisor mid-deploy) clears the pin but not its
+    // expiry; the base cmd_swap then mints a one-word pin beside that stale
+    // field. An expiry older than its pin is not that pin's: it reads legacy.
+    seed(); sessionJson();
+    h.sh(`_reg_set ${ID} swappinexp "${epoch() - 60} ttl"; touch -t 202001010000 "$REG/${ID}.swappinexp"
+          _reg_set ${ID} swappin claude-a`);
+    const before = epoch();
+    tick();
+    expect(swapLog()).not.toMatch(/pin-expired/);
+    expect(pin()).toBe('claude-a');
+    expect(dispatches()).toEqual([]);
+    const e = expiry()!;
+    expect(e.why).toBe('ttl');
+    expect(e.at).toBeGreaterThanOrEqual(before + DAY);
+  });
+
   it('legacy pins on 17 rows, read on one tick, get 17 distinct expiries', () => {
     const ids = Array.from({ length: 17 }, (_, i) => `s-${String.fromCharCode(97 + i).repeat(4)}`);
     const T = 2_000_000_000;

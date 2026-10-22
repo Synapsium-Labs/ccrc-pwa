@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=fb96fb11f505ca2a915b8a20bedef7625af9fbfc59aad560920f04833274b877
+# ccrc:generated 1 sha256=b257f19f750174dbe7b41e790cfed651826868b96d47a6caa9c13075daa2c91a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19014,7 +19014,9 @@ _swap_pin_tick() {   # id measured-wrapper — THE PIN FOLLOWS THE TRUTH (D-3099
     # THE PIN ENDS AT ITS EXPIRY (D-6181), as it ends when the truth leaves it.
     _swap_pin_expiry_off && return 0
     _now_s_to now; _reg_get_to exp "$id" swappinexp; at="${exp%% *}"
-    if [[ "$at" =~ ^[0-9]+$ && "${exp#* }" =~ ^(reset|ttl)$ ]]; then
+    # An expiry OLDER than its pin is not that pin's (a revert's or an old
+    # supervisor's clear left it beside a pin minted since): it reads legacy.
+    if [[ "$at" =~ ^[0-9]+$ && "${exp#* }" =~ ^(reset|ttl)$ && ! "$REG/$id.swappinexp" -ot "$REG/$id.swappin" ]]; then
       (( now >= 10#$at )) || return 0
       rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote" "$REG/$id.swappinexp"
       echo "$(date '+%F %T') pin-expired $id: pinned to $pin until ${exp#* }" >> "$REG/swap.log"
@@ -19070,7 +19072,7 @@ _swap_pinned() {   # id measured-wrapper -> 0 iff a manual-swap pin stands for T
   # session the pin holds again once the account recovers), never past expiry.
   _avail "$2" || return 1
   _reg_get_to exp "$1" swappinexp; exp="${exp%% *}"
-  [[ "$exp" =~ ^[0-9]+$ ]] && { _now_s_to now; (( now >= 10#$exp )) && return 1; }
+  [[ "$exp" =~ ^[0-9]+$ && ! "$REG/$1.swappinexp" -ot "$REG/$1.swappin" ]] && { _now_s_to now; (( now >= 10#$exp )) && return 1; }
   return 0
 }
 
