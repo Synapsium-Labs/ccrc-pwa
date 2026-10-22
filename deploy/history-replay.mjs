@@ -3960,6 +3960,32 @@ export function quizFamilyOrderKey(recordSeedHex, family) {
   return sha256Hex(`${sha256Hex(`${recordSeedHex}:quiz-sample`)}:${familyKeyOf(family)}`);
 }
 
+/** Where pilot-source pins its seed under --out (D-6313). */
+export const PILOT_SEED_FILE = 'pilot/seed';
+const SEED_HEX_RE = /^[0-9a-f]{64}$/;
+
+/** pilot-source's seed for this --out, drawn once (D-6313): the pinned `<out>/pilot/seed` (0600, one line of 64 lowercase
+ *  hex) when it is there, else `draw()` written there first. A re-run of a stopped batch (W2-D55: the batch can be
+ *  resumed) then samples the same families and asks the same questions, so the writer inputs it pinned match, the finished
+ *  asks are reused and the spend already charged is not orphaned. Read and written as every --out file is (D-5986): a
+ *  seed that is not a regular file, is unreadable, or is not a seed refuses `out-refused`. No flag takes a seed; `draw`
+ *  stays injectable (a test passes it).
+ *  @param {string} out  @param {() => string} draw  @returns {string} */
+function pinnedPilotSeed(out, draw) {
+  const read = readPlain(path.join(out, PILOT_SEED_FILE), 1024);
+  if (read.state === 'bad') refuse('out-refused', `${PILOT_SEED_FILE} ${badWord(read)}`);
+  if (read.state === 'bytes') {
+    const m = /^([0-9a-f]{64})\n$/.exec(read.bytes.toString('utf8'));
+    if (m === null) refuse('out-refused', `${PILOT_SEED_FILE} is not a seed`);
+    return m[1];
+  }
+  const seed = draw();
+  if (typeof seed !== 'string' || !SEED_HEX_RE.test(seed)) throw new TypeError('pilotSourceCommand: deps.seed answers 64 lowercase hex');
+  ensurePlainDir(out, 'pilot');
+  writePlain(out, PILOT_SEED_FILE, `${seed}\n`);
+  return seed;
+}
+
 /** A fresh seed: 32 bytes from `draw` (crypto's randomBytes), as 64 lowercase hex. pilot-source records it in the pilot
  *  section (W2-D71). No flag ever takes a seed; a test injects `draw`. */
 export function drawSeedHex(draw = randomBytes) {
@@ -5410,7 +5436,7 @@ export async function pilotSourceCommand(flags, driverEnv, deps = { sourceQuiz, 
       // any writer spawn and before every writer batch (Task 6's openWriter).
       const writer = await openWriter({ home, accountId: flags.account, model: writerModel, settingsMode: step0a.settings_mode, writerInput,
         claim, budget: flags.budget, limits: LIMITS_DEFAULTS, expected: step0a, lang: driverEnv.LANG, idx: rs.idx });
-      const seedHex = deps.seed();
+      const seedHex = pinnedPilotSeed(out, deps.seed);   // D-6313: pinned under --out before the first ask
       const sourced = await deps.sourceQuiz({
         mode: 'pilot', rs, home, out, writer, seedHex, exclude: { pilotFamilies: [], assignment: [] },
         plan: { n_fidelity: nFidelity, n_usage: nUsage, caps: pilotCaps() }, configDirs: rosterConfigDirs(readRoster(home).roster, home),

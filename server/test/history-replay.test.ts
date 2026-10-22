@@ -9823,6 +9823,57 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect([low.calls, low.runs], 'refused at open, before sourceQuiz and any writer spawn (the row reads five 10, under the default 70)').toEqual([0, 0]);
     }, 120_000);
 
+    // D-6313: the pilot's seed is drawn once per --out and pinned there, so the batch W2-D55 says can be resumed is resumed.
+    r7it.skipIf(process.platform === 'darwin')('D-6313: a pilot-source stopped by its budget and re-run on the same --out uses the pinned seed, not a new draw: the first ask is reused (one new spawn, not two) and the spend is counted once; CONTROL: a fresh --out draws deps.seed()', async () => {
+      const SEED_A = hex('pilot seed first');
+      const SEED_B = hex('pilot seed second');
+      const home = writerHome7();
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const out = outDir();
+      const run = async (budget: number, seed: string, to = out): Promise<{ refusal: R7 | null; calls: R7[] }> => {
+        const { flags } = r7drv.parseArgs(['pilot-source', '--out', to, '--account', 'up-a', '--budget', String(budget), '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never, { sourceQuiz: twoAsks7(calls, 'pilot'), seed: () => seed } as never));
+        return { refusal: r.refusal, calls };
+      };
+      const seedFile = r7path.join(out, r7drv.PILOT_SEED_FILE);
+      const first = await run(1, SEED_A);
+      r7expect(first.refusal).toMatchObject({ word: 'budget-exhausted' });
+      r7expect(first.calls[0]!.seedHex).toBe(SEED_A);
+      r7expect(r7fs.readFileSync(seedFile, 'utf8'), 'the seed is pinned under --out').toBe(`${SEED_A}\n`);
+      r7expect(r7fs.statSync(seedFile).mode & 0o777).toBe(0o600);
+      r7expect(printRuns(home), 'the first ask spawned and spent past the budget').toHaveLength(1);
+      const second = await run(100_000, SEED_B);
+      r7expect(second.refusal).toBeNull();
+      r7expect(second.calls[0]!.seedHex, 'the re-run reads the pinned seed, not the new draw').toBe(SEED_A);
+      r7expect(printRuns(home), 'the first ask was reused: only the second spawned').toHaveLength(2);
+      r7expect(r7fs.readFileSync(r7path.join(out, 'spend.jsonl'), 'utf8').trim().split('\n'), 'two spawns, two ledger lines, none orphaned').toHaveLength(2);
+      r7expect(JSON.parse(r7fs.readFileSync(r7path.join(out, r7drv.PILOT_SOURCE_FILE), 'utf8')).seed).toBe(SEED_A);
+      const fresh = await run(100_000, SEED_B, outDir());
+      r7expect(fresh.calls[0]!.seedHex, 'CONTROL: a fresh --out draws deps.seed()').toBe(SEED_B);
+    }, 120_000);
+
+    r7it.skipIf(process.platform === 'darwin')('D-6313: a pinned seed that is not a seed, or not a regular file, refuses out-refused, as every --out file does', async () => {
+      const home = writerHome7();
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const out = outDir();
+      const run = async (): Promise<R7 | null> => {
+        const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+          { sourceQuiz: async () => ({ entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED } as never));
+        return r.refusal;
+      };
+      r7expect(await run(), 'CONTROL: the first run pins a seed').toBeNull();
+      const seedFile = r7path.join(out, r7drv.PILOT_SEED_FILE);
+      for (const bad of ['', 'not a seed\n', `${PILOT_SEED.toUpperCase()}\n`, PILOT_SEED, `${PILOT_SEED}\n\n`]) {
+        r7fs.writeFileSync(seedFile, bad, { mode: 0o600 });
+        r7expect(await run(), JSON.stringify(bad)).toEqual({ word: 'out-refused', detail: `${r7drv.PILOT_SEED_FILE} is not a seed` });
+      }
+      r7fs.rmSync(seedFile);
+      r7fs.mkdirSync(seedFile);
+      r7expect(await run()).toEqual({ word: 'out-refused', detail: `${r7drv.PILOT_SEED_FILE} not-regular` });
+    }, 120_000);
+
     r7it.skipIf(process.platform === 'darwin')('pilot-source hands --budget to the writer gate (W2-D55): --budget 1 stops the second writer batch', async () => {
       const home = writerHome7();
       const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
