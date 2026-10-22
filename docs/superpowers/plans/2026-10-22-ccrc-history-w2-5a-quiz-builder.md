@@ -8700,22 +8700,28 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     };
     return ['open', '--finalize', ...Object.values(parts).flatMap((v) => v ?? [])];
   }
-  /** Every entry under `root`, with its mode, size, mtime and (for a file) its bytes' sha256. The store's own directory is
-   *  summarised by its db file's bytes alone: a read-only open of a WAL store may leave SQLite's sidecars there, which
-   *  are SQLite's, not the driver's writes. */
+  /** Every entry under `root`, with its mode, size, mtime and (for a file) its bytes' sha256. The store's own directory
+   *  is listed entry by entry (a stray file the driver wrote there is seen) but for two things: its own mtime, and
+   *  SQLite's `-wal` and `-shm` sidecars, which a read-only open of a WAL store may leave there and which are SQLite's,
+   *  not the driver's writes. The db file itself is its bytes' sha256 alone. */
   function snapshot7(root: string): string[] {
     const out: string[] = [];
     const dbFile = r7Paths(root).dbFile;
+    const storeDir = r7path.dirname(dbFile);
+    const sidecars = [`${r7path.basename(dbFile)}-wal`, `${r7path.basename(dbFile)}-shm`];
     const walk = (dir: string, rel: string): void => {
       for (const n of r7fs.readdirSync(dir).sort()) {
         const p = r7path.join(dir, n);
         const r = rel === '' ? n : `${rel}/${n}`;
-        if (p === r7path.dirname(dbFile)) {   // the store's directory: its db file's bytes alone (its own mtime moves with SQLite's sidecars)
-          out.push(`${r} db ${r7fs.existsSync(dbFile) ? r7Sha(r7fs.readFileSync(dbFile)) : 'absent'}`);
-          continue;
-        }
+        if (dir === storeDir && sidecars.includes(n)) continue;
         const st = r7fs.lstatSync(p);
-        out.push(`${r} ${st.mode} ${st.size} ${st.mtimeMs}${st.isFile() ? ` ${r7Sha(r7fs.readFileSync(p))}` : ''}`);
+        if (p === dbFile) {
+          out.push(`${r} db ${r7Sha(r7fs.readFileSync(p))}`);
+        } else if (p === storeDir) {
+          out.push(`${r} ${st.mode}`);   // the directory's mtime moves with SQLite's sidecars
+        } else {
+          out.push(`${r} ${st.mode} ${st.size} ${st.mtimeMs}${st.isFile() ? ` ${r7Sha(r7fs.readFileSync(p))}` : ''}`);
+        }
         if (st.isDirectory()) walk(p, r);
       }
     };
@@ -8857,13 +8863,20 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect(run7(null, null, bad).stderr).toBe(refusalLine('input-sha-mismatch', `census: expected ${'c'.repeat(64)}, measured ${r7Sha('not json')}`));
     });
 
-    r7it('a record inside a git tree is record-invalid before a byte is read (W2-D25)', () => {
+    r7it('a record inside a git tree, its .git a directory or a file, is record-invalid before a byte is read (W2-D25)', () => {
       const repo = r7MkTmp('ccrc-w2-5a-t7-git-');
       r7fs.mkdirSync(r7path.join(repo, '.git'));
       const p = r7path.join(repo, 'part1.json');
       r7fs.writeFileSync(p, '{}\n');
       r7expect(run7(null, null, ['power', '--record', p, '--record-sha256', r7Sha('{}\n'), '--census', '/c', '--census-sha256', 'a'.repeat(64), '--verify', '/v', '--verify-sha256', 'a'.repeat(64)]).stderr)
         .toBe(refusalLine('record-invalid', `record in-git-tree ${r7fs.realpathSync(repo)}`));
+      // A linked worktree (or a submodule) has `.git` as a FILE naming its git directory: the same refusal, before a byte is read.
+      const linked = r7MkTmp('ccrc-w2-5a-t7-gitfile-');
+      r7fs.writeFileSync(r7path.join(linked, '.git'), 'gitdir: /home/u/elsewhere/.git\n');
+      const q = r7path.join(linked, 'part1.json');
+      r7fs.writeFileSync(q, '{}\n');
+      r7expect(run7(null, null, ['power', '--record', q, '--record-sha256', r7Sha('{}\n'), '--census', '/c', '--census-sha256', 'a'.repeat(64), '--verify', '/v', '--verify-sha256', 'a'.repeat(64)]).stderr)
+        .toBe(refusalLine('record-invalid', `record in-git-tree ${r7fs.realpathSync(linked)}`));
     });
 
     r7it('a final given where a draft is read, and a record the validator refuses, are record-invalid with every error', () => {
@@ -9339,13 +9352,18 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     }, 120_000);
 
     r7it.skipIf(process.platform === 'darwin')('R7, W2-D68: a whole pilot-source run over a fixture store, the real sourceQuiz and the writer stub, leaves no B text anywhere under --out', async () => {
-      const sb = w6SourceBox('ccrc-w2-5a-t7-walk-');
+      // w6SourceBox's optional fourth parameter, `key` (after Task 6's `dropThenDeep`), plants the key in the command row's
+      // tool_use input and in its tool_result, the span the walk sources from; every other caller passes none.
+      const key = w6Akia('WALKKEY');   // a key-shaped value in the span the walk sources from (assembled at runtime, never whole in the tree)
+      const sb = w6SourceBox('ccrc-w2-5a-t7-walk-', undefined, false, key);
       const home = sb.box.home;
       node7(home);   // W2-4's up-a row (the roster pilot-source admits from), its stub, a limits row and a tagged stamp
       r7fs.writeFileSync(r7path.join(home, STUB_STREAM), w6Reply('QUESTION: Which command rebuilt the fixture package?'));
       const out = outDir();
       const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
-      const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+      // --writer-input leaf-span: the writer is handed the whole span, so the key goes as far toward a spawn as it can.
+      const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS,
+        '--writer-input', 'leaf-span', ...inp('step0a', s0)]) as R7;
       // The real sourceQuiz; `top` keeps B's ancestor walk inside the fixture tree (Task 4's seam, no subcommand passes it).
       const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
         { sourceQuiz: (input: R7) => r7drv.sourceQuiz({ ...input, top: home } as never), seed: () => PILOT_SEED } as never));
@@ -9362,6 +9380,21 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const files = walk(out);
       r7expect(files.length, 'CONTROL: the walk reads the run\'s files').toBeGreaterThan(3);
       for (const f of files) r7expect(r7fs.readFileSync(f, 'utf8').includes(sb.sentinel), f).toBe(false);
+      // W2-D54, W2-D67: and no file holds any part of the key of 8 or more characters (every 8-character window of it).
+      const windows = Array.from({ length: key.length - 7 }, (_, i) => key.slice(i, i + 8));
+      for (const f of files) {
+        const text = r7fs.readFileSync(f, 'utf8');
+        for (const w of windows) r7expect(text.includes(w), `${f} holds the key's part ${w}`).toBe(false);
+      }
+      // CONTROL: the key really was in the store's span: the writer's input was masked (the mark is there), and the
+      // seeded transcript the store was swept from holds the key whole.
+      const inputs = files.filter((f) => f.endsWith('.input.json'));
+      r7expect(inputs, 'CONTROL: the writer input is under --out').toHaveLength(1);
+      r7expect(r7fs.readFileSync(inputs[0]!, 'utf8'), 'CONTROL: the span held a key, and the writer saw it masked').toContain(t4Lib.REDACTED_MARK);
+      const seeded = (dir: string): string[] => r7fs.readdirSync(dir, { withFileTypes: true })
+        .flatMap((d) => (d.isDirectory() ? seeded(r7path.join(dir, d.name)) : [r7path.join(dir, d.name)]));
+      r7expect(seeded(home).some((f) => r7fs.statSync(f).size < 1_000_000 && r7fs.readFileSync(f, 'utf8').includes(key)),
+        'CONTROL: the seeded transcript holds the key whole').toBe(true);
     }, 600_000);
 
     r7it('quiz-source refuses on a node the record does not name', async () => {
@@ -10806,7 +10839,7 @@ t 're-checks the code it runs under: power'
 # M11: the assembler's node checks, each removed.
 mut "$F" "    if (!labels.has(sid)) refuse('input-invalid', \`census store-id-unlisted \${sid}\`);" ""
 t 'census assembler checks nodes only'
-# Expected RED: 1 failed. The unlisted census passes, and the next answer is 'input-invalid: verify store-id-unlisted <store>' (measured; not 'verify node-missing').
+# Expected RED: 1 failed. The unlisted census passes, and the next answer is `input-invalid: verify node-missing undefined` (measured: the unlisted census becomes a node with no label, so the label prints `undefined`; `verify store-id-unlisted` cannot fire for a verify output of node A or B).
 mut "$F" "    if (v.value.census_sha256 !== node.census_sha256) refuse('input-invalid', \`verify census-mismatch \${node.store_id}\`);" ""
 t 'census assembler checks nodes only'
 # Expected RED: 1 failed. A verify output bound to another census is accepted (exit 0 with figures).
@@ -10991,6 +11024,19 @@ mut "$F" "    short_of_min_families: families.length < minFamilies, sourced };" 
 t 'reports short_of_min_families'
 # Expected RED: 1 failed. expected [ 3, 2, false, undefined ] to deeply equal [ 3, 2, false, true ]. No other case
 # reads the flag: the first freeze case matches the meta with toMatchObject, and open --finalize never reads it.
+
+# M46 (fix round 1): insideGitTree accepts a `.git` directory only, a linked worktree's `.git` file unseen.
+mut "$F" "    try { lstatSync(dotGit); return { state: 'inside', at: dir }; } catch (e) {" "    try { if (!lstatSync(dotGit).isDirectory()) throw Object.assign(new Error('x'), { code: 'ENOENT' }); return { state: 'inside', at: dir }; } catch (e) {"
+t 'a record inside a git tree'
+# Expected RED: 1 failed (measured). The `.git`-file half answers another refusal where `record in-git-tree <dir>` was expected.
+
+# M47 (fix round 1): the leaf-span writer input is built from the unredacted span.
+mut "$F" "      texts.push(r.text);" "      texts.push(f.text);"
+t 'R7, W2-D68: a whole pilot-source run'
+# Expected RED: 1 failed (measured). `<id>.input.json` under --out holds the key's part `AKIAFIXT`.
+
+# Mx1 to Mx3b (fix round 1): a verify path writes into HOME, the presence directory, or beside the store (`.ccrc/history/db/`).
+# Each adds one `writeFileSync` to verifyRegistry or verifyAb; each is 1 failed (measured), `read-only … expected […(20)] to deeply equal […(19)]`.
 
 cmp "$F" "$SCRATCH/replay.t7.orig" && echo restored
 ```
