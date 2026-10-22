@@ -5533,6 +5533,7 @@ export async function freezeCommand(flags, env) {
   recheckCode(rec.record);   // W2-D24 (freeze)
   const lists = loadInputs(flags, 'sourced');
   const stores = new Set();
+  const qids = new Set();
   let assignmentSha = null;
   for (const l of lists) {
     const bad = sourcedError(l.value);
@@ -5547,6 +5548,9 @@ export async function freezeCommand(flags, env) {
     for (const e of s.entries) {
       if (e.store_id !== s.store_id) refuse('input-invalid', `sourced entry ${e.qid} names another store`);
       if (qidOf(e) !== e.qid) refuse('input-invalid', `sourced entry ${e.qid} qid-mismatch`);
+      // A repeated qid (two ranks, one question) would reach frozenListText's "is repeated" TypeError: refuse it here.
+      if (qids.has(e.qid)) refuse('input-invalid', `sourced qid-duplicate ${e.qid}`);
+      qids.add(e.qid);
     }
   }
   // W2-D71's population is the families on the NAMED nodes: one list per node, or the merge freezes a subset.

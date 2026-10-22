@@ -8584,7 +8584,7 @@ function w6ErrorIf<T extends object>(on: boolean, row: T): T {
  *  site and then discards the whole boundary as `body-unrenderable`. `nl` (D-6308): the tool_use input also carries a
  *  `note` whose lines follow a newline, each a key (`lines`), and the tool_result is an error, so an error fact pairs with it. */
 function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pkg-a', dropThenDeep = false, key: string | null = null,
-  nl: { lines: string[]; token: string; toolName?: string } | null = null, legacy = false): W6SourceBox {
+  nl: { lines: string[]; token: string; toolName?: string } | null = null, legacy = false, readPath: string | null = null): W6SourceBox {
   const box = w5a1H.makeHistoryBox(prefix);
   const cwd = join(box.home, 'tree', 'demo');
   mkdirSync(cwd, { recursive: true });
@@ -8600,7 +8600,7 @@ function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pk
   const DEEP_TEXT = `${'{"a":'.repeat(10_000)}"leaf"${'}'.repeat(10_000)}`;
   const rows = [
     w5a1Fx.userRow({ ...base, uuid: u(1), ts: ts(1), text: 'please rebuild the fixture package' }),
-    w5a1Fx.toolUseRow({ ...base, uuid: u(2), ts: ts(2), parentUuid: u(1), msgId: 'msg_w5a6_2', toolUseId: 'toolu_01W5A6', name: nl?.toolName ?? 'Bash', input: { command: dropThenDeep ? 'ls -la' : cmd, ...(key === null ? {} : { env: `AWS_ACCESS_KEY_ID=${key}` }),
+    w5a1Fx.toolUseRow({ ...base, uuid: u(2), ts: ts(2), parentUuid: u(1), msgId: 'msg_w5a6_2', toolUseId: 'toolu_01W5A6', name: readPath !== null ? 'Read' : nl?.toolName ?? 'Bash', input: readPath !== null ? { file_path: readPath } : { command: dropThenDeep ? 'ls -la' : cmd, ...(key === null ? {} : { env: `AWS_ACCESS_KEY_ID=${key}` }),
       ...(nl === null ? {} : { note: ['first line', ...nl.lines].join('\n') }) } }),
     ...(dropThenDeep ? [w5a1Fx.toolUseRow({ ...base, uuid: u(8), ts: ts(2), parentUuid: u(2), msgId: 'msg_w5a6_8', toolUseId: 'toolu_02W5A6', name: 'Bash', input: { command: cmd, nest: DEEP_MARK } })] : []),
     w6ErrorIf(nl !== null, w5a1Fx.toolResultRow({ ...base, uuid: u(3), ts: ts(3), parentUuid: dropThenDeep ? u(8) : u(2), toolUseId: 'toolu_01W5A6',
@@ -8782,9 +8782,11 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 
   }, 600_000);
 
   // D-6309: the leaf-span base is JSON-rendered, so a command with a quote never occurs verbatim in it.
-  it('D-6309: under leaf-span a quoted command is placed by its JSON-escaped spelling and a question is produced through the real writerInputOf; a fact neither spelling of which occurs is a counted writer-fact-unplaced, never a throw', async () => {
-    const quoted = 'git commit -m "fixture build wip"';
-    const qb = w6SourceBox('ccrc-w5a6-source-quoted-', quoted);
+  it.each([
+    ['a quoted command', 'git commit -m "fixture build wip"', null],
+    ['a path with a backslash', '/home/u/tree/dir\\name.txt', '/home/u/tree/dir\\name.txt'],
+  ] as const)('D-6309: under leaf-span %s is placed by its JSON-escaped spelling and a question is produced through the real writerInputOf; a fact neither spelling of which occurs is a counted writer-fact-unplaced, never a throw', async (_what, quoted, readPath) => {
+    const qb = w6SourceBox('ccrc-w5a6-source-quoted-', quoted, false, null, null, false, readPath);
     const through = (idx: never, asked: Asked[], tamper: boolean) => ({
       ask: async (section: string, item: Record<string, any>) => {
         const fed = tamper ? { ...item, fact_raw: `${item.fact_raw} but never in the text` } : item;
@@ -8811,7 +8813,7 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 
       }
     };
     const ok = await run(false);
-    expect(ok.r.entries.map((e) => e.fact), 'a question is produced for the quoted command').toEqual([quoted]);
+    expect(ok.r.entries.map((e) => e.fact), 'a question is produced for the fact').toEqual([quoted]);
     expect(ok.asked[0]!.item['excerpt'], 'the excerpt holds the escaped spelling').toContain(JSON.stringify(quoted).slice(1, -1));
     expect(ok.asked[0]!.item['excerpt'], 'CONTROL: the raw spelling occurs nowhere in the JSON-rendered span').not.toContain(quoted);
     const lost = await run(true);
@@ -10257,6 +10259,9 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect(freezeRun(c, [forged, c.sB]).stderr).toBe(refusalLine('input-invalid', `sourced entry ${c.sA.value.entries[0].qid} qid-mismatch`));
       const dup = save7({ ...c.sB.value, entries: [{ ...c.sB.value.entries[0], rank: [K7(0), 0] }, c.sB.value.entries[1]] });
       r7expect(freezeRun(c, [c.sA, dup]).stderr).toBe(refusalLine('input-invalid', `sourced rank-duplicate ${K7(0)}:0`));
+      // A repeated qid under distinct ranks is refused here, not as frozenListText's TypeError later (an internal error).
+      const again = save7({ ...c.sB.value, entries: [c.sB.value.entries[0], { ...c.sB.value.entries[0], rank: [K7(1), 9] }] });
+      r7expect(freezeRun(c, [c.sA, again]).stderr).toBe(refusalLine('input-invalid', `sourced qid-duplicate ${c.sB.value.entries[0].qid}`));
       // R10: a quiz entry's family rank is its order key, 64 lowercase hex; the old numeric family rank is refused.
       const numeric = save7({ ...c.sB.value, entries: [{ ...c.sB.value.entries[0], rank: [1, 0] }, c.sB.value.entries[1]] });
       r7expect(freezeRun(c, [c.sA, numeric]).stderr).toBe(refusalLine('input-invalid', 'sourced shape entry rank'));
