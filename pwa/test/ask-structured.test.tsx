@@ -1096,4 +1096,42 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     expect(panel()?.getAttribute('data-state')).toBe('open');
     expect(screen.getAllByRole('checkbox')[0], 'boxes locked by a commit that ended').toBeEnabled();
   });
+
+  // The reset above belongs to the ask ENDING, not to the socket: an answer still landing when the connection drops is
+  // still landing after it (the pane has not moved on, and nothing has said it did), so the gap and the same ask coming
+  // back keep the marker, the disabled rows and the refused dismissal. Releasing them would let a second answer go
+  // while the first is still being typed into the pane.
+  it.each([
+    ['in flight', () => new Promise<never>(() => {})],
+    ['accepted but not yet moved on', () => Promise.resolve({} as never)],
+  ])('a gap keeps an answer %s: the marker, the disabled rows and the refused dismissal, through the reconnect', async (_name, reply) => {
+    holdClosingContent();
+    const answer = vi.spyOn(api, 'answerDialog').mockImplementation(reply);
+    const fx = askFixture(4);
+    const store = connected(fx);
+    mount(store);
+    const rows = (): boolean[] => [...document.querySelectorAll<HTMLButtonElement>('.opts button')].map((r) => r.disabled);
+    const held = (when: string): void => {
+      expect(screen.getByText('answering…'), `the marker at ${when}`).toBeInTheDocument();
+      expect(rows(), `rows at ${when}`).toEqual([true, true, true]);
+      fireEvent.keyDown(document.activeElement ?? panel()!, { key: 'Escape' });
+      expect(panel()?.getAttribute('data-state'), `Escape at ${when} was not refused`).toBe('open');
+    };
+
+    fireEvent.click(screen.getByRole('button', { name: /^Yes, and auto-accept edits/ }));
+    await act(async () => { await Promise.resolve(); });
+    expect(answer).toHaveBeenCalledTimes(1);
+    held('the tap');
+
+    drop();
+    held('the drop');
+    reconnect();
+    held('the reconnect');
+    act(() => {
+      for (const frame of fx.frames) store.getState().apply(frame);
+    });
+    expect(status(), 'the same ask is live again').toBeNull();
+    held('the same ask arriving again');
+    expect(answer).toHaveBeenCalledTimes(1);
+  });
 });
