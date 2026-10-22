@@ -4349,7 +4349,8 @@ the spec, never this contract.
 - The rung: `rows-rung-git-reads-unbounded`, `repointed-alias-for-legacy-rows-until-respawn`,
   `other-mount-namespaces-fuse-views-and-overlay`, `ancestry-stands-alone-on-darwin`,
   `moved-check-misses-a-subdirectory-of-a-moved-tree`, `record-ef-has-no-deadline`,
-  `record-ef-unstattable-stanza-reads-as-another-tree` and
+  `record-ef-unstattable-stanza-reads-as-another-tree`,
+  `record-main-by-another-spelling-reads-no-worktree-record` and
   `gone-row-with-pending-field-holds-despite-its-release-arms`.
 - The probe: `human-gated-removals-ask-no-cwd` (forwarded to workspace lifecycle), `cwd-probe-sees-no-open-fds`,
   `cwd-probe-sees-a-session-only-while-it-runs`, `surviving-background-job-holds-the-reclaim`,

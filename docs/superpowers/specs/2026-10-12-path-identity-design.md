@@ -1225,8 +1225,10 @@ into a pass.
 - `_ws_reclaim_record` uses identity only to refuse. After its string scan, a first (main) stanza that is the tree by
   `-ef` sets `RECLAIM_REC_MAIN`. Any stanza but the first and the string-matched one that is the tree answers 2: "two
   of … worktree records name the tree". `record-main-hit-keeps-the-terminal-refusal`: once the first stanza names the
-  tree, by its string or by `-ef`, no later stanza is asked, so a row naming the main checkout keeps the terminal
-  `not-a-workspace`, and the owned check its proof, rather than weakening to unmeasured.
+  tree by its string, a hit, no later stanza is asked, so a row naming the main checkout keeps the terminal
+  `not-a-workspace`, and the owned check its proof, rather than weakening to unmeasured. That keep is the string hit's
+  alone: a first stanza that names the tree only by `-ef` sets `RECLAIM_REC_MAIN` and stops the pass the same way, but
+  is no hit (`record-main-by-another-spelling-reads-no-worktree-record`, below).
   `record-by-another-spelling-reads-unmeasured`: when only a stanza naming the tree under another spelling records it,
   the reader answers 2, so the ladder answers the retryable `unmeasured` where it answered the terminal
   `no-worktree-record`, whose detail was false (git does record the tree), and the owned check answers 2. Both refuse,
@@ -1467,6 +1469,16 @@ into a pass.
   its string scan alone, as it did before W3 compared any identity there. It is a residual by ruling, not a hold: a
   hold on every stat failure but a proven absence would hold every child of a repository that has one unreadable
   sibling record, and a gone sibling's stanza must match nothing.
+- `record-main-by-another-spelling-reads-no-worktree-record`: identity never makes a hit, so a first (main) stanza that
+  names the tree only by `-ef` (a bind spelling, for example), with no stanza matching by string, sets
+  `RECLAIM_REC_MAIN` and no hit.
+  - The record reader answers 1, where a string hit would have answered 0.
+  - The ladder then refuses with the terminal `no-worktree-record`, and its detail ("has no worktree record") is false,
+    because git does record the tree. The ladder never reaches its own main-checkout refusal or its `-ef` compare of the
+    project directory (`ladder-main-checkout-ef`), which stand behind a string hit alone.
+  - `_ws_reclaim_owned` answers 2 (`worktree-remove-failed`), before it reads `RECLAIM_REC_MAIN`.
+  - The shape is refused either way, and nothing grants on it: no token is minted and nothing is removed. No code
+    changed to cure it.
 - `cwd-probe-pure-bash-watcher-sleep-reads-as-a-user`: on a box with no `timeout` or `gtimeout`, `_plat_timeout`'s
   pure-bash watcher runs `sleep` outside the own chain the probe excludes. With ccd's own cwd inside the tree, that
   `sleep` reads as a user: a false in-use only.

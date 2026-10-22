@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=afd518cc8bb03cfe76f882701fa64899484fbd15c70176f81190a2c15ca669f5
+# ccrc:generated 1 sha256=049f559220ab90c1a7bf92b0db718b9d72d39ae7556c4dea6b39eddd6e3b3796
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29868,16 +29868,26 @@ _ws_reclaim_record() {   # main path -> git's worktree record for path, read fro
   # strings matched, is compared with it by `-ef`: git's FIRST stanza, the main
   # checkout, sets RECLAIM_REC_MAIN=1; any other answers 2, because two records
   # name one tree, or its only record names it under another spelling, so which
-  # record is its own was never settled. Once git's main stanza names the tree,
-  # by its string or by `-ef`, no later stanza is asked: the tree IS the main
+  # record is its own was never settled. Once git's main stanza names the tree
+  # by its STRING, a hit, no later stanza is asked: the tree IS the main
   # checkout, so the ladder's terminal refusal and the owned check's proof stand
-  # rather than weaken to "never settled". A stanza that cannot be stat'd (a
-  # prunable record, or a locked one on a disk that is not mounted) matches
-  # nothing, so a sibling's gone tree never holds this one; and a path that does
-  # not stand asks nothing (the gone-row arms, the vanished arm and the tail's
-  # step 5 ask only of a proven absence). Every rc 2 sets _WS_REC_WHY: the list
+  # rather than weaken to "never settled". That keep is the string hit's alone.
+  # A main stanza that names the tree only by `-ef` sets RECLAIM_REC_MAIN and
+  # stops the pass the same way, but is no hit (see the residual below). A
+  # stanza that cannot be stat'd (a prunable record, or a locked one on a disk
+  # that is not mounted) matches nothing, so a sibling's gone tree never holds
+  # this one; and a path that does not stand asks nothing (the gone-row arms,
+  # the vanished arm and the tail's step 5 ask only of a proven absence).
+  # Every rc 2 sets _WS_REC_WHY: the list
   # failure's reads "could not read $main's worktree list", which its three
   # callers continue as they always have.
+  # RESIDUAL `record-main-by-another-spelling-reads-no-worktree-record` (spec §4.12). Identity never makes a hit, so
+  # when git's main stanza names the tree only under another spelling (a bind spelling, for example) and no stanza
+  # matches by string, RECLAIM_REC_MAIN is set and `hit` is not: the reader answers 1 at `(( hit )) || return 1`.
+  # The ladder then refuses with the terminal `no-worktree-record`, whose detail ("has no worktree record") is
+  # false, and never reaches its own MAIN refusal or its `-ef` compare of the project directory, which stand
+  # behind a string hit alone; `_ws_reclaim_owned` answers 2 (`worktree-remove-failed`) before it reads MAIN. The
+  # shape is refused either way, and nothing grants on it.
   local main="$1" path="$2" real line listing m=0 hit=0 n=0 hitn=0 k
   local -a wts=()
   RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""; RECLAIM_REC_MAIN=0; RECLAIM_REC_PRUNABLE=0; _WS_REC_WHY=''
@@ -31796,8 +31806,11 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # name; no child is ever the main worktree. The vanished arm
   # cannot reach this: `$main` was just resolved, so it exists, and a canonical
   # path that does not exist resolves to no path that does. Asked THREE times:
-  # git's first stanza, by its string or by device and inode
-  # (`_ws_reclaim_record`); the resolved (`pwd -P`) path against `$main`'s — a
+  # git's first stanza (`_ws_reclaim_record`: by its string, or by device and
+  # inode where some stanza hit by string; with no string hit anywhere, a first
+  # stanza that names the tree only by device and inode is no hit, and the
+  # reader answered 1 above: `record-main-by-another-spelling-reads-no-worktree-record`);
+  # the resolved (`pwd -P`) path against `$main`'s — a
   # project directory that is itself a LINKED worktree is not the first stanza,
   # and a row naming it is still the project's own checkout, never a child; and
   # the two directories' device and inode (`-ef`, path-identity spec §4.8),

@@ -158,7 +158,7 @@ const BASE_RESIDUALS = ['reg-purge-inventory-omits-workdirid', 'legacy-row-count
   'record-ef-has-no-deadline', 'cwd-probe-pure-bash-watcher-sleep-reads-as-a-user', 'cwd-probe-per-thread-cwd-unasked',
   'cwd-probe-pid-handoff-between-reads', 'cwd-probe-task-listing-can-skip-a-tid', 'cwd-ask-to-opendir-window',
   'record-ef-unstattable-stanza-reads-as-another-tree', 'entry-field-identity-does-not-survive-a-device-renumbering',
-  'gone-row-with-pending-field-holds-despite-its-release-arms'];
+  'gone-row-with-pending-field-holds-despite-its-release-arms', 'record-main-by-another-spelling-reads-no-worktree-record'];
 
 /** §7 items 1 to 3 and 5 to 8, by slug: closed whatever the code says next. Item 4, `owned-to-worktree-remove-window`,
  *  is narrowed, not closed (its row: "closing is a later wave"), so `carriesAtTheTip` decides it from the re-asks. */
