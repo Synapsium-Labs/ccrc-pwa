@@ -1430,10 +1430,20 @@ into a pass.
 - `entry-field-identity-does-not-survive-a-device-renumbering`: the mismatch rule compares a field's recorded device,
   inode and birth time with today's as raw numbers. A device renumbering (a reboot that orders the disks another way,
   or a volume detached and attached again), or a copy of the worktree volume onto another, which changes every inode
-  too, turns every valid field that no respawn has rewritten into an `unrec` hold. Archived, stopped and held rows keep
-  their old field, so each of them holds every child's reclaim, expiry and collection, ws-expire of an archived row
-  included. It fails closed. The runbook: after such an event, restart or purge every row that is not running; the
-  `unrec` clause names each one by id.
+  too, turns every valid field whose current spelling resolves complete, and that no respawn has rewritten, into an
+  `unrec` hold. Archived, stopped and held rows keep their old field, so each of them holds every child's reclaim,
+  expiry and collection, ws-expire of an archived row included. The mismatch rule fails closed. The moved-check's
+  identity arm does not:
+  - it compares the same recorded numbers raw, so a renumbering disarms it, and no checkout's identity can equal a
+    recorded one;
+  - for a gone row placed by R54's breadcrumb arm it is the only hold, because the git-directory arm is asked only of
+    git-record rows, and a gone row is never asked the mismatch rule;
+  - so a tree moved inside the child for such a row is not held, unless another row's `unrec` holds the child. Once
+    every other row has respawned, which is the runbook's own remedy, none does.
+
+  The runbook: after such an event, restart or purge every row that is not running, and stop and start every pane that
+  kept running across a volume detach and re-attach, because its field was written before the event; the `unrec`
+  clause names each one by id.
 - `gone-row-with-pending-field-holds-despite-its-release-arms`: a gone row whose field reads `pending` holds every
   child, even where R54's git-record or breadcrumb arm would release it, because the field is read before any arm can
   skip a row, and a pending field names a pane that may be entering anywhere. A spawn made while the row's tree is
