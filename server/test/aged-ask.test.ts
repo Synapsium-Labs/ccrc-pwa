@@ -129,6 +129,23 @@ describe('keepAgedAsk: the multi menu\'s length and the review screen (D-6324)',
     expect(keepAgedAsk(raw(), REVIEW)).toBe(true);
   });
 
+  it('keeps an aged envelope on a review screen whose listed questions are all its own', () => {
+    expect(keepAgedAsk(raw(), REVIEW)).toBe(true);
+    // "Every listed", not "all listed": a tall review can lose rows from the capture.
+    expect(keepAgedAsk(raw(), reviewOf('Which size?'))).toBe(true);
+    // A wrapped question lists only its first line, a prefix of the question (the one normalised-prefix rule).
+    expect(keepAgedAsk(raw(), reviewOf('Which col', 'Which size?'))).toBe(true);
+  });
+
+  it('does not keep one on a review screen that lists a question it does not have', () => {
+    expect(keepAgedAsk(raw(), reviewOf('Which colour?', 'Trust this folder?'))).toBe(false);
+    expect(keepAgedAsk(raw(), reviewOf('Which shade?', 'Which weight?'))).toBe(false);
+  });
+
+  it('does not keep one on a review screen that lists no question', () => {
+    expect(keepAgedAsk(raw(), reviewOf())).toBe(false);
+  });
+
   it('keeps a one-question multiSelect envelope on its own review screen', () => {
     // Claude Code paints a review after a one-question multiSelect ask too (`cc300-ask-review-1q-multiselect`).
     expect(keepAgedAsk(raw({ ask: MULTI_ASK }), reviewOf('Which tools?'))).toBe(true);
@@ -149,34 +166,42 @@ describe('nextAgedKeep: one mid-redraw capture holds the previous decision (D-63
   });
 
   it('decides with keepAgedAsk on a parsed menu', () => {
-    expect(nextAgedKeep(NO_AGED_KEEP, raw(), parsedMenu(0))).toEqual({ kept: true, redraws: 0 });
-    expect(nextAgedKeep(KEPT, raw(), multiMenu(['Hammer', 'Saw']))).toEqual({ kept: false, redraws: 0 });
-    expect(nextAgedKeep(KEPT, raw(), parsedMenu(0, ['Red', 'Green', 'Teal']))).toEqual({ kept: false, redraws: 0 });
+    expect(nextAgedKeep(NO_AGED_KEEP, raw(), parsedMenu(0), true)).toEqual({ kept: true, redraws: 0 });
+    expect(nextAgedKeep(KEPT, raw(), multiMenu(['Hammer', 'Saw']), true)).toEqual({ kept: false, redraws: 0 });
+    expect(nextAgedKeep(KEPT, raw(), parsedMenu(0, ['Red', 'Green', 'Teal']), true)).toEqual({ kept: false, redraws: 0 });
+  });
+
+  it('leaves the hold and the count alone on a tick whose capture failed, and still re-checks the envelope', () => {
+    expect(nextAgedKeep({ kept: true, redraws: 1 }, raw(), REDRAW, false)).toEqual({ kept: true, redraws: 1 });
+    expect(nextAgedKeep({ kept: true, redraws: 0 }, raw(), NO_MENU, false)).toEqual({ kept: true, redraws: 0 });
+    expect(nextAgedKeep({ kept: false, redraws: 1 }, raw(), parsedMenu(0), false)).toEqual({ kept: false, redraws: 1 });
+    expect(nextAgedKeep({ kept: true, redraws: 1 }, raw({ identity: 'foreign' }), REDRAW, false)).toEqual({ kept: false, redraws: 1 });
+    expect(nextAgedKeep({ kept: true, redraws: 1 }, { ok: false, reason: 'absent' }, REDRAW, false)).toEqual({ kept: false, redraws: 1 });
   });
 
   it('holds a kept decision across ONE unparsed capture that carries no multi', () => {
-    expect(nextAgedKeep(KEPT, raw(), REDRAW)).toEqual({ kept: true, redraws: 1 });
+    expect(nextAgedKeep(KEPT, raw(), REDRAW, true)).toEqual({ kept: true, redraws: 1 });
   });
 
   it('decides as today on a second consecutive such capture', () => {
-    expect(nextAgedKeep({ kept: true, redraws: 1 }, raw(), REDRAW)).toEqual({ kept: false, redraws: 2 });
+    expect(nextAgedKeep({ kept: true, redraws: 1 }, raw(), REDRAW, true)).toEqual({ kept: false, redraws: 2 });
   });
 
   it('holds nothing it did not already keep', () => {
-    expect(nextAgedKeep(NO_AGED_KEEP, raw(), REDRAW)).toEqual({ kept: false, redraws: 1 });
+    expect(nextAgedKeep(NO_AGED_KEEP, raw(), REDRAW, true)).toEqual({ kept: false, redraws: 1 });
   });
 
   it('holds only while the envelope is still eligible', () => {
-    expect(nextAgedKeep(KEPT, raw({ identity: 'foreign' }), REDRAW).kept).toBe(false);
-    expect(nextAgedKeep(KEPT, raw({ state: 'working' }), REDRAW).kept).toBe(false);
-    expect(nextAgedKeep(KEPT, raw({ ask: APPROVAL }), REDRAW).kept).toBe(false);
-    expect(nextAgedKeep(KEPT, { ok: false, reason: 'absent' }, REDRAW).kept).toBe(false);
+    expect(nextAgedKeep(KEPT, raw({ identity: 'foreign' }), REDRAW, true).kept).toBe(false);
+    expect(nextAgedKeep(KEPT, raw({ state: 'working' }), REDRAW, true).kept).toBe(false);
+    expect(nextAgedKeep(KEPT, raw({ ask: APPROVAL }), REDRAW, true).kept).toBe(false);
+    expect(nextAgedKeep(KEPT, { ok: false, reason: 'absent' }, REDRAW, true).kept).toBe(false);
   });
 
   it('resets the count on a capture that is not a redraw', () => {
-    expect(nextAgedKeep({ kept: true, redraws: 1 }, raw(), parsedMenu(0))).toEqual({ kept: true, redraws: 0 });
-    expect(nextAgedKeep({ kept: true, redraws: 1 }, raw(), NO_MENU)).toEqual({ kept: false, redraws: 0 });
+    expect(nextAgedKeep({ kept: true, redraws: 1 }, raw(), parsedMenu(0), true)).toEqual({ kept: true, redraws: 0 });
+    expect(nextAgedKeep({ kept: true, redraws: 1 }, raw(), NO_MENU, true)).toEqual({ kept: false, redraws: 0 });
     // An unparsed multi menu is a menu the stream can read, not a half-painted one.
-    expect(nextAgedKeep(KEPT, raw({ ask: MULTI_ASK }), multiMenu(['Hammer', 'Saw', 'Drill']))).toEqual({ kept: true, redraws: 0 });
+    expect(nextAgedKeep(KEPT, raw({ ask: MULTI_ASK }), multiMenu(['Hammer', 'Saw', 'Drill']), true)).toEqual({ kept: true, redraws: 0 });
   });
 });

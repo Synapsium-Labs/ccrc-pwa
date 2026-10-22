@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { editHintShown, freeTextRow, hasMenu, parseDialog, paneOptionRows, paneState, turnRunning } from '../src/pane/dialog.js';
-import { reviewRows } from '../../shared/ask-menu.js';
+import { reviewQuestions, reviewRows } from '../../shared/ask-menu.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -1102,6 +1102,42 @@ describe('2.1.300 AskUserQuestion (recorded)', () => {
       expect(parseDialog(fixture('cc300-ask-review-skipped.txt'))!.body).toContain('⚠ You have not answered all questions');
       expect(parseDialog(fixture('cc300-ask-review-multiselect.txt'))!.body)
         .toContain('Which features do you want?\n   → Logging, Tracing');
+    });
+
+    // D-6324: the questions the review screen lists, read once in shared/ask-menu.ts (`reviewQuestions`). Each listed
+    // text is the FIRST line of its question: a long question wraps and lists only a prefix.
+    it('lists the question texts the review screen shows, between its tab row and its ready line', () => {
+      const listed = (f: string): string[] | null => reviewQuestions(parseDialog(fixture(f)));
+      expect(listed('cc300-ask-review-1q-multiselect.txt')).toEqual(['Which tools?']);
+      expect(listed('cc300-ask-review-4q-100col.txt')).toEqual([
+        'Which database engine?', 'Which deployment target?', 'Which monitoring stack?', 'Which licence?',
+      ]);
+      expect(listed('cc296-ask-2q-long-review.txt')).toEqual([
+        'The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would',
+        'The spring seed swap is booked at the village hall on the second Saturday in April. The hall committee now asks every group to bring its own folding tables, since theirs went to the school fete and never came back.',
+      ]);
+      // A review taller than the header climb loses its title and heading from the PARSE; the raw pane still lists all.
+      expect(listed('cc300-ask-review-4q-long.txt')).toEqual([
+        'Should the `ledger` table use **Postgres** or SQLite?',
+        'When the new release is ready, in which order should the two machines be updated, given that the second machine reads files the first machine writes and caches its settings at start-up, so a change that widens a',
+        'Any notes for the reviewer?',
+        'Which region?',
+      ]);
+    });
+
+    it('lists nothing from the scrollback above the review, and is null on a screen that is not a review', () => {
+      const pane = fixture('cc300-ask-review-1q-multiselect.txt');
+      const withBullet = pane.replace('\n←', '\n● A bullet from the scrollback\n←');
+      expect(withBullet).not.toBe(pane);
+      expect(reviewQuestions(parseDialog(withBullet))).toEqual(['Which tools?']);
+      expect(reviewQuestions(parseDialog(fixture('cc296-ask-2q-long-q1.txt')))).toBeNull();
+      expect(reviewQuestions(null)).toBeNull();
+    });
+
+    it('lists no question it cannot trust: a review with neither tab row nor heading in the capture', () => {
+      const lines = fixture('cc300-ask-review-1q-multiselect.txt').split('\n')
+        .filter((l) => !l.trim().startsWith('←') && l.trim() !== 'Review your answers');
+      expect(reviewQuestions(parseDialog(lines.join('\n')))).toEqual([]);
     });
 
     it('Cancel is row 2, the cursor on it keeps the id, and after it no menu is left: the whole ask was declined', () => {

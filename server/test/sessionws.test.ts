@@ -743,6 +743,40 @@ describe('hook ask envelope frames', () => {
       expect(cleared(frames)).toHaveLength(1); // the aged read, on a review that is not its own
     });
 
+    it('an aged one-question multiSelect envelope is kept on its own review screen', async () => {
+      const tools = { questions: [{ question: 'Which tools?', multiSelect: true, options: [{ label: 'Hammer' }, { label: 'Saw' }, { label: 'Drill' }] }] };
+      const review = fixture('cc300-ask-review-1q-multiselect.txt');
+      const { frames } = await streamWith({
+        paneSequence: [review, review], hookstateSequence: [aged({ ask: tools }), aged({ ask: tools })],
+      });
+      expect(frames.some((f) => f.type === 'dialog')).toBe(true);
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('an aged envelope whose questions are the ones the review screen lists is kept', async () => {
+      // The listed text is the first line of each question, a prefix of the full text the envelope carries.
+      const own = { questions: [
+        { question: 'The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?',
+          options: [{ label: 'Split shifts (Recommended)' }, { label: 'Wait for the second tank' }] },
+        { question: 'The spring seed swap is booked at the village hall on the second Saturday in April. The hall committee now asks every group to bring its own folding tables, since theirs went to the school fete and never came back. We own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?',
+          options: [{ label: 'Borrow and transport (Recommended)' }, { label: 'Move the swap outdoors' }, { label: 'Hire five big tables' }] },
+      ] };
+      const review = fixture('cc296-ask-2q-long-review.txt');
+      const { frames } = await streamWith({ paneSequence: [review, review], hookstateSequence: [aged({ ask: own }), aged({ ask: own })] });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('a mid-redraw capture followed by a failed capture is not two redraws', async () => {
+      const redraw = fixture('ask-2col-partial-redraw.txt');
+      const { frames } = await streamWith({
+        paneSequence: [MENU.pane, redraw, null, MENU.pane], transcript: MENU.transcript, hookstate: aged({ ask: ENVELOPE }),
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
     it('one unparsed mid-redraw capture does not clear an aged envelope; two in a row decide as today', async () => {
       const redraw = fixture('ask-2col-partial-redraw.txt');
       const one = await streamWith({
