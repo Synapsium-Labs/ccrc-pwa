@@ -4324,7 +4324,9 @@ the spec, never this contract.
 - The rung: `rows-walk-second-mountinfo-reader`, `unproc-also-by-walked-position`, `w2-mount-asks-shadowed-by-the-reask`,
   `collect-reprove-table-moves-to-the-gap`, `double-slash-rows-placed-by-identity-pins-move`,
   `rows-rung-pass-b-holds-an-unlisted-answer` (an answer word the rung does not list for a row, a target or the table
-  holds the child unmeasured, never no hold) and `pending-hold-remedy-stops-then-starts` (the pending hold's remedy
+  holds the child unmeasured, never no hold), `rows-rung-holds-mask-later-terminal-words` (the rung runs before the
+  ladder's later terminal words, so a child that would have met one answers the retryable word; a refusal either way)
+  and `pending-hold-remedy-stops-then-starts` (the pending hold's remedy
   says to stop and start that session, as `ccd start` changes nothing for a session that is running).
 - The main checkout: `ladder-main-checkout-ef`, `record-main-hit-keeps-the-terminal-refusal`,
   `record-by-another-spelling-reads-unmeasured`, `record-two-spellings-reads-unmeasured` and
@@ -4350,8 +4352,8 @@ the spec, never this contract.
   `other-mount-namespaces-fuse-views-and-overlay`, `ancestry-stands-alone-on-darwin`,
   `moved-check-misses-a-subdirectory-of-a-moved-tree`, `record-ef-has-no-deadline`,
   `record-ef-unstattable-stanza-reads-as-another-tree`,
-  `record-main-by-another-spelling-reads-no-worktree-record` and
-  `gone-row-with-pending-field-holds-despite-its-release-arms`.
+  `record-main-by-another-spelling-reads-no-worktree-record`,
+  `gone-row-with-pending-field-holds-despite-its-release-arms` and `pending-row-holds-every-child-box-wide`.
 - The probe: `human-gated-removals-ask-no-cwd` (forwarded to workspace lifecycle), `cwd-probe-sees-no-open-fds`,
   `cwd-probe-sees-a-session-only-while-it-runs`, `surviving-background-job-holds-the-reclaim`,
   `cwd-probe-can-wait-on-a-hung-network-cwd`, `darwin-cwd-parse-unbounded-as-today`,

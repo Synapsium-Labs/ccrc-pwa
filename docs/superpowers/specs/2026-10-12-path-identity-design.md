@@ -1167,6 +1167,14 @@ into a pass.
   any answer word it does not list for a row, a target or the table, naming the word as read ("unexpected walk answer
   <word>"), where such a word used to fall through as no hold. The walk's own no-hold words (`T ok`, `A ok`, `P clean`
   and `M clear`) keep their meaning, and the walk emits no other word today, so no answer it gives changes.
+- `rows-rung-holds-mask-later-terminal-words`: the rows rung runs before most of the ladder's later rungs, and before
+  `_ws_reclaim_owned`'s later proofs. Its holds `unpend`, `unfield`, `unrec`, `unwalk` and `unmount` answer `unmeasured`
+  at the ladder and 2 at owned, and they answer there first. So a child that would have met a later terminal word
+  (`no-worktree-record`, `not-a-workspace`, the git-directory rung's, `branch-elsewhere` or `tree-unreadable`, or owned's
+  moved-check and identity proofs) answers the retryable word instead. Each is a refusal either way, and this
+  subsection's opening rule, that an identity input may only add a placement or a hold, licenses it. This entry names
+  the rung's position, as `record-two-spellings-reads-unmeasured` does for the record reader. The reach of `unpend` is
+  its own residual, `pending-row-holds-every-child-box-wide`, below.
 - What following links leaves to judgement:
   - that a real bind's `stat` returns the source's device and inode for every path below it, a source on another file
     system included;
@@ -1430,8 +1438,23 @@ into a pass.
   child, even where R54's git-record or breadcrumb arm would release it, because the field is read before any arm can
   skip a row, and a pending field names a pane that may be entering anywhere. A spawn made while the row's tree is
   gone, such as the unit's own respawn, which does not test the workdir first, writes such a field, and the pane's
-  failing `cd` leaves it in place. Two such rows of one repository hold each other's reclaims. It fails closed, and
-  purging the row clears it.
+  failing `cd` leaves it in place. It holds collection as well as reclaim and expiry, and any pending row holds every
+  child on the box, not only those of one repository (`pending-row-holds-every-child-box-wide`, below). It fails
+  closed, and purging the row clears it.
+- `pending-row-holds-every-child-box-wide`: the `unpend` hold has no placement test. A row whose field reads `pending`
+  holds every child's reclaim, expiry and collection, whatever that child's tree, because a pending pane may be
+  entering anywhere. Narrowing it to rows placed by their strings would defeat the field, so it stands. It fails closed,
+  and it reaches three ways:
+  1. Any spawn's pending window can strike a tail in progress, for every spawn writes `pending` first. The tail's
+     re-ask runs the rung again, so its answer becomes `worktree-remove-failed`, after the child's session was
+     stopped. The server retries a reclaim.
+  2. The expiry verb's in-lock verdict prints `probe-unmeasured` with a `crumb` that the server reads before its word
+     rule. A pending window there makes that attempt restart from its audit (a fresh arm, whose restart backs off on the
+     server's restart lane) or stay resumable (a resumed arm). It is final only where the breadcrumb stands but could not
+     be read, so no `crumb` is said, or where ccd is older and says none. Workspace lifecycle weighs this before the
+     expiry lane is armed; W3 changes nothing on the server.
+  3. A row that stays pending for good holds every child until it is purged: fish as the pane shell on Linux, a control
+     byte (`workdirid-physical-control-byte-stays-pending`), or a gone row's respawn, whose pane's `cd` fails every time.
 - `workdirid-temp-leaks-on-sigkill`: a writer killed between its temp write and its rename leaves the dot-leading temp,
   as `_reg_set`'s does.
 - `workdirid-pending-unwritable-keeps-the-old-field`: when both the pending write and its unlink fail, the earlier

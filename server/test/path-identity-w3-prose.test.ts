@@ -141,7 +141,8 @@ const DEPARTURES = ['workdirid-pending-form', 'workdirid-unreadable-holds', 'row
   'moved-check-identity-failure-preempted-a-proof', 'cwd-probe-holds-a-double-slash-physical-root',
   'cwd-probe-confirms-a-vanished-link-by-a-second-read', 'cwd-probe-read-once-more-answers-eacces-for-a-reaped-pid',
   'r77-cases-time-their-race-through-a-python3-shim', 'cwd-probe-collapses-a-double-slash-parent',
-  'rows-rung-pass-b-holds-an-unlisted-answer', 'pending-hold-remedy-stops-then-starts'];
+  'rows-rung-pass-b-holds-an-unlisted-answer', 'pending-hold-remedy-stops-then-starts',
+  'rows-rung-holds-mask-later-terminal-words'];
 
 /** The residuals that stand whatever the code says next. */
 const BASE_RESIDUALS = ['reg-purge-inventory-omits-workdirid', 'legacy-row-count-has-no-doctor-line',
@@ -158,7 +159,8 @@ const BASE_RESIDUALS = ['reg-purge-inventory-omits-workdirid', 'legacy-row-count
   'record-ef-has-no-deadline', 'cwd-probe-pure-bash-watcher-sleep-reads-as-a-user', 'cwd-probe-per-thread-cwd-unasked',
   'cwd-probe-pid-handoff-between-reads', 'cwd-probe-task-listing-can-skip-a-tid', 'cwd-ask-to-opendir-window',
   'record-ef-unstattable-stanza-reads-as-another-tree', 'entry-field-identity-does-not-survive-a-device-renumbering',
-  'gone-row-with-pending-field-holds-despite-its-release-arms', 'record-main-by-another-spelling-reads-no-worktree-record'];
+  'gone-row-with-pending-field-holds-despite-its-release-arms', 'record-main-by-another-spelling-reads-no-worktree-record',
+  'pending-row-holds-every-child-box-wide'];
 
 /** §7 items 1 to 3 and 5 to 8, by slug: closed whatever the code says next. Item 4, `owned-to-worktree-remove-window`,
  *  is narrowed, not closed (its row: "closing is a later wave"), so `carriesAtTheTip` decides it from the re-asks. */
