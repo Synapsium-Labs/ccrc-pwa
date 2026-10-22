@@ -688,6 +688,9 @@ describe('a `//` spelling the strings cannot place: the walk places it NESTED in
   /** The rung's clause for a row pass A's resolved-`//` arm leaves unplaced. */
   const UNPLACED = 'name no plain absolute workdir, or one that resolves to a path opening with //, so ccd cannot place them'
     + ' against this child';
+  /** The remedy that follows it, as `ccd-worktree-identity-wordings.test.ts` pins it: restore a link, never re-point one. */
+  const REMEDY_2 = '— stop and restart each (ccd start <id> stores a plain absolute workdir), restore a link whose target opens'
+    + ' with // to its original target, or stop that session and purge its row; never replace a link to clear this';
   /** The rung's clause for a row its `//`-child arm cannot place, for the row `o`. */
   const UNMINE = (o: string): string => `registry row(s) ${o} cannot be placed against this child: ${CHILD_ID}'s own`
     + ' workdir resolves to a path opening with //';
@@ -749,6 +752,7 @@ describe('a `//` spelling the strings cannot place: the walk places it NESTED in
       expect(r.verdict, r.detail).toBe('unmeasured');
       expect(r.token).toBe('');
       expect(r.detail).toContain(`registry row(s) demo-far ${UNPLACED}`);
+      expect(r.detail, 'the reworded remedy is printed').toContain(REMEDY_2);
     } else {
       expect(r.verdict, `where pwd -P collapses the //, the row resolves plainly outside: ${r.detail}`).toBe('reclaimable');
     }
