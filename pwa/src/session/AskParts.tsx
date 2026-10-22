@@ -1,26 +1,29 @@
-// The parts of an AskUserQuestion sheet that BOTH sheets render (D-5089, plan
-// docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 2): the envelope's (`EnvelopeSheet.tsx`, while the hook's
-// envelope is fresh) and the scraped one (`DialogSheet.tsx`, which takes over when `ask_cleared` arrives). The
-// envelope ages out and `ask_cleared` arrives 30 minutes into an unanswered ask ONLY when no menu corresponding to its
-// call is up (D-6324, Task T1a): while the pane shows such a menu, the review screen of a multi-question ask included,
-// the session stream keeps the aged envelope. Written once here so the hand-off cannot change what the operator sees
-// mid-ask: the same eyebrow, the same review screen, the same sentence for a question the sheet cannot answer yet.
+// The parts of an AskUserQuestion surface (D-5089, plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 2),
+// written once and shared by the structured content (`EnvelopeSheet.tsx`) and the controller's own surfaces
+// (`DialogSheet.tsx`: the review, the menu, the terminal door): the same container, the same eyebrow, the same review
+// screen, the same sentence for a question the sheet cannot answer yet.
+//
+// The hook's envelope ages out and `ask_cleared` arrives 30 minutes into an unanswered ask ONLY when no menu
+// corresponding to its call is up (D-6324, Task T1a): while the pane shows such a menu, the review screen of a
+// multi-question ask included, the session stream keeps the aged envelope. When it does arrive, the source moves to the
+// transcript's copy of the question (`askSource`), and these parts draw it unchanged.
 //
 // What is on the pane is read by `askLive.ts`; this file only renders it. Every row is `@ccrc/ui`'s `OptionRow`, and
 // every class here is one chat.css already grounds (`.dlg-*`, `.opts`, `.ask-envelope-more*`).
 //
-// D-5090 (Task 3) adds the own-words region (`OwnWords`) and the `Chat about this` row (`ChatRow`), which both sheets
-// render under the live question's options. The own-words STATE is not here: it lives in `DialogSheet`, keyed to the
-// call, so a hand-off mid-call (`ask_cleared`) carries the same text and the same call to the scraped sheet.
+// D-5090 (Task 3) adds the own-words region (`OwnWords`) and the `Chat about this` row (`ChatRow`), which the structured
+// content renders under the live question's options. The own-words STATE is not here: it lives in `DialogSheet`, keyed to
+// the call, so a hand-off mid-call (`ask_cleared`) carries the same text and the same call to the surface that follows.
 //
-// D-5091 (Task 4) adds a multiSelect question's boxes (`MultiPick`), which both sheets render in place of the option
-// rows when the pane carries `Dialog.multi`. Their state, the operator's set and the commit's call, lives in
+// D-5091 (Task 4) adds a multiSelect question's boxes (`MultiPick`), which the structured content renders in place of the
+// option rows when the pane carries `Dialog.multi`. Their state, the operator's set and the commit's call, lives in
 // `DialogSheet` for the same reason.
 //
-// D-6325: every surface here renders from `askSource`, so no part draws a string the pane painted. The header names who
-// asks (`AskHeader`, one for every kind of surface), the review is one render for every source of copy (`AskReview`,
-// fixed words over the structured headers), the tab strip's chips carry the structured headers (`AskTabs`), and the
-// option preview (`OptionPreview`) lives here beside the rows it opens under.
+// D-6325: every surface here renders from `askSource`, so no part draws a string the pane painted. One container
+// (`AskSheet`) holds every kind of surface, so moving between kinds never remounts the drawer, and it is the one site T1c
+// swaps. The header names who asks (`AskHeader`, one for every kind of surface), the review is one render for every
+// source of copy (`AskReview`, fixed words over the structured headers), the tab strip's chips carry the structured
+// headers (`AskTabs`), and the option preview (`OptionPreview`) lives here beside the rows it opens under.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { Dialog, DialogMulti } from '../../../shared/api';
 import { Button, Chip, EYEBROW, FOCUS_RING, OptionRow, RESET_LIST, Sheet, Well } from '@ccrc/ui';
@@ -299,8 +302,8 @@ export interface WordsCall {
   /** The free-text row the call typed into (its printed index). */
   readonly row: number;
   /** The question the call was made for (`questionKey` of the pane it was sent against): the call speaks for that
-   *  question only. The scraped sheet reads its free-text row from the call only while the pane shows it, so a
-   *  refused call that outlives its question never hides another question's option. */
+   *  question only. The sheet reads its free-text row from the call only while the pane shows it, so a refused call
+   *  that outlives its question never hides another question's option. */
   readonly question: string;
   readonly state: 'flight' | 'landed' | 'refused';
 }
@@ -311,7 +314,7 @@ export interface Words {
   readonly text: string;
   readonly call: WordsCall | null;
   /** The question whose `Other` row the operator chose (its text, `StructuredQuestion.question`), or null: the field is
-   *  open under that question's row (D-6325, R5). Held here with the text so a hand-off between sheets keeps it open;
+   *  open under that question's row (D-6325, R5). Held here with the text so a change of source keeps it open;
    *  it is also open whenever text is kept, a call is under way, or the pane's row is held (`OwnWords`). */
   readonly otherFor: string | null;
   /** Choose the `Other` row of the question whose text is given: opens the field, sends nothing. */
@@ -328,7 +331,7 @@ export const wordsBusy = (call: WordsCall | null): boolean => call !== null && c
 /** The free-text row the own-words FIELD types into, or null where the region offers no field (a line at most). A
  *  send under way keeps its own row; otherwise the pane's free-text row must be there, and either empty, or holding
  *  text with the operator's own text to keep in view (the stranded retry, part of it, or other text beside it).
- *  `OwnWords` renders by this, and the scraped sheet's foot line names own words only where it is not null. */
+ *  `OwnWords` renders by this, and the structured content's foot line names `Other` only where it is not null. */
 export function ownWordsRow(slot: FreeTextSlot, text: string, call: WordsCall | null): number | null {
   if (call !== null && wordsBusy(call)) return call.row;
   if (slot.kind === 'none') return null;
@@ -700,7 +703,7 @@ export const TABS_HELD = 'Commit your picks with Next first, or untick them, to 
  * answers are positional on the live menu. Each chip is named `Go to …` for a screen reader: `✔ Submit` reaches the
  * review, where `Submit answers` submits, and must not be heard as a submit itself.
  *  - A question chip needs to know which tab is up (`active`), since only colour marks it on the pane; where the sheet
- *    cannot tell (the scraped sheet on an unnamed question), the question chips wait and `✔ Submit` still works.
+ *    cannot tell (a transcript copy whose header no tab carries), the question chips wait and `✔ Submit` still works.
  *  - Every chip waits while a send or a move is under way, and while picks are uncommitted (`TABS_HELD`).
  *  - It replaces nothing: the `n of N` kicker and the other-questions list stay.
  * At every width it is one row; a phone scrolls the chips sideways inside the strip, never the page, and each chip is
@@ -781,7 +784,7 @@ export function AskTabs({
 /** An option's worked example, folded away under its row and opened for the
  *  preselected one. Fixed-width ASCII: it scrolls, it never wraps — the same
  *  rule code blocks follow. Capped at --well-max with internal scroll.
- *  D-6325: moved here from `DialogSheet.tsx`, where the scraped rows it served were; the structured rows draw it now. */
+ *  D-6325: moved here from `DialogSheet.tsx`, whose scraped rows it served; the structured rows draw it now. */
 export function OptionPreview({
   text,
   defaultOpen,

@@ -1,37 +1,33 @@
 // Dialog bottom sheet — where the TUI menu becomes native (DIRECTION.md).
-// Springs up whenever the session stream delivers a dialog. Parsed menus
+// Springs up whenever the session stream delivers a dialog or an ask. Parsed menus
 // render as big tappable rows carrying the same mono index digits ccd's
 // actual TUI answers to; the preselected row wears the ❯ cursor on the
 // accent tint. Tapping shows an optimistic "answering…" and replays the
 // arrow-walk server-side; the sheet only closes when `dialog_cleared`
 // confirms the answer landed. A stale 409 toasts and re-renders from the
-// store. Unparsed panes render raw in a well and point to the terminal.
+// store. A pane nothing could be read off says so and points to the terminal; its text is never shown.
 // Scrim/Esc/swipe merely HIDE the sheet — the header badge and fleet card
 // keep signalling dialogPending — and are refused while an answer is in
 // flight.
 //
-// When the pane menu is an AskUserQuestion the server attaches `ask`: the real
-// question, a header chip, and per-option descriptions/previews the 3-line TUI
-// box had to truncate. That copy is decoration ONLY — enrichment is matched by
-// POSITION, and the option index typed at the pane always comes from the pane.
-// Rows the transcript doesn't cover (the TUI's own "Chat about this") keep
-// their scraped label — and so do rows the server sends as `null`, the
-// positions it matched loosely enough to accept the question but not loosely
-// enough to believe the copy.
+// When the pane menu is an AskUserQuestion the server attaches `ask`: the transcript's copy of the question, a header
+// chip, and per-option descriptions/previews the 3-line TUI box had to truncate. That copy is Claude's own wording and is
+// shown (as the structured surface) only when EVERY option of it lines up with the pane's rows; the option index typed at
+// the pane always comes from the pane, matched by POSITION. A row the server sends as `null`, a position it matched
+// loosely enough to accept the question but not loosely enough to believe the copy, makes the ask unreadable (D-6325).
 //
 // Task 8 (PR C): the session store ALSO carries a hook-sourced envelope
 // (`ask: HookAsk | null`, fed by the `ask`/`ask_cleared` stream frames —
 // shared/api.ts's SessionStreamMsg comment has the transport rationale). It is
-// a DIFFERENT thing from the `Dialog.ask` enrichment above: that one decorates
-// a scraped menu whose OPTIONS still come from the pane; this one is the
-// render content itself, on its own clock, and can exist with no scraped
+// a DIFFERENT thing from the `Dialog.ask` copy above: that one rides the pane's
+// own menu and is only as fresh as it; this one is the
+// render content itself, on its own clock, and can exist with no
 // `dialog` at all (or disagree with one transiently — the two are read
 // independently, see the type's own doc comment). Whenever it is present the
-// sheet renders it INSTEAD of the scraped dialog (`EnvelopeSheet` below),
+// sheet renders it (`EnvelopeSheet`'s content below),
 // tagged `data-source="hook"` for tests; `ask_cleared` empties it and the
-// sheet falls back to whatever scraped dialog is still pending, unchanged
-// from before this task. SEND still goes through the exact same functions the
-// scraped path already uses below: `answer()`'s answerDialog walk for
+// source falls to the transcript's copy of the question (`data-source="transcript"`), else to the unreadable surface
+// (D-6325, `askSource`). SEND goes through the functions below: `answer()`'s answerDialog walk for
 // numbered options (envelope option N calls `answer(N + 1)`, so "Allow" is
 // `answer(1)` — Claude Code's own confirm dialogs put "Yes" first) and
 // `api.interrupt()`'s literal Escape for "Deny" — Claude Code's own hint for
@@ -142,10 +138,12 @@
 //
 // D-6325 (plan docs/superpowers/plans/2026-10-22-desktop-polish.md, Task T1b): every surface below is chosen by ONE pure
 // function, `askSource` (`askLive.ts`), and renders its answer; no string the pane painted reaches an
-// AskUserQuestion. This file stays the one controller and the one sender, and its branches are now: nothing; the
-// approval and the structured question (both `EnvelopeSheet`, the hook's envelope or the transcript's copy of the
-// question); the review (one render here for every source of copy); a question this screen cannot read (it says so and
-// offers the terminal); a menu that is no ask (its parsed rows, `Claude needs a choice`); and an unparsed pane (the
+// AskUserQuestion. This file stays the one controller and the one sender (answers, Deny, own words, picks, tab moves),
+// and it renders ONE container (`AskSheet`, `AskParts.tsx`) for every kind of surface, so moving between them never
+// remounts the drawer and T1c swaps the container at this one site. What goes inside it is now: nothing (no container);
+// the approval and the structured question (`EnvelopeSheet`'s content, the hook's envelope or the transcript's copy of
+// the question); the review (one render here for every source of copy); a question this screen cannot read (it says so
+// and offers the terminal); a menu that is no ask (its parsed rows, `Claude needs a choice`); and an unparsed pane (the
 // terminal). The history above describes the scraped sheet that took over when the envelope aged out; that sheet, its
 // preamble, its raw well and its own-words machinery are gone, and a hand-off on `ask_cleared` now lands on the
 // structured sheet from the transcript's copy, or on the unreadable one. The own-words text, the picks and the senders
@@ -312,7 +310,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   // new id, and must not put a modal back over the terminal the operator is typing in. Only a different question or the
   // review opens it again; a screen the sheet cannot place (no menu, an unparsed grab) never does.
   // Every other surface (the transcript's copy, the review without an envelope, a menu, an unreadable ask, the
-  // terminal) is the pane's, and keeps the pane dialog's id as its identity, as the scraped sheet always did.
+  // terminal) is the pane's, and keeps the pane dialog's id as its identity, as every pane surface always has.
   const envelope = isUsableAsk(hookAsk) ? hookAsk : null;
   const hooked = envelope !== null
     && (source.kind === 'approval' || (source.kind === 'structured' && source.from === 'hook') || source.kind === 'review');

@@ -1,24 +1,18 @@
-// The ASK ENVELOPE's own sheet. The pure helpers that decide
-// whether it may answer moved to `askLive.ts` (D-5089), which both sheets read.
+// The CONTENT of the structured ask surface: an approval, or Claude's own question with its options, its tab strip, its
+// `Other` row, its pick-several boxes and its terminal door. The pure helpers that decide whether it may answer live in
+// `askLive.ts` (D-5089).
 //
-// WHY IT IS ITS OWN FILE. `DialogSheet.tsx` was 843 lines carrying TWO
-// renderings of one question — the pane SCRAPE and this ENVELOPE — and the
-// file header there is about why both exist. This half is the envelope: the
-// sheet and the preview disclosure only it opens.
-// The controller keeps the polling, the dismissal slot and the senders; it
-// imports the two things it still renders itself.
-//
-// D-6325: this is the ONE renderer of Claude's own question now. `askSource` hands it the questions from the hook's
-// envelope (`from: 'hook'`) or, once that has aged out, the transcript's copy (`from: 'transcript'`), which carries an
-// option's `preview` too; the scraped sheet that used to take over is gone (an unreadable ask says so, and offers the
-// terminal). The review screen is rendered by `DialogSheet` for every source of copy, so it is not here, and `TerminalCta`'s
-// callers are now this sheet's dead end and `DialogSheet`'s `ask-unreadable` and `terminal-only` surfaces.
+// D-6325: this is the ONE renderer of Claude's own question. `askSource` hands it the questions from the hook's envelope
+// (`from: 'hook'`) or, once that has aged out, the transcript's copy (`from: 'transcript'`), which carries an option's
+// `preview` too; a question the app cannot read says so and offers the terminal (`DialogSheet`'s `ask-unreadable`), and
+// the scraped sheet that used to take over is gone. It draws no drawer of its own: `DialogSheet` renders `AskSheet`
+// (`AskParts.tsx`) once for every kind of surface, with the header and the title worked out there (`shownQuestion`), and
+// this is what goes inside it. The review screen is rendered by `DialogSheet` for every source of copy, so it is not here.
 //
 // `TerminalCta` is written once, here, and `DialogSheet` imports it for its `ask-unreadable` and `terminal-only` surfaces:
-// its own docstring is about exactly that, copy written twice drifts in a way no type catches.
+// copy written twice drifts in a way no type catches.
 //
-// The classes stay `dlg-*`: chat.css grounds them and these are their only
-// consumers. The shape moves, the ground stays.
+// The classes stay `dlg-*`: chat.css grounds them and these are their only consumers. The shape moves, the ground stays.
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, DialogTabTarget } from '../../../shared/api';
@@ -36,15 +30,13 @@ import { keyTabs, multiKeys, questionKeys, rowKey, type KeyScreen } from './askK
 import { useAskKeys } from './useAskKeys';
 import './chat.css';
 
-/** The way out of a question this app cannot render: open the terminal, or
- *  not now.
+/** The way out of a question this app cannot answer: open the terminal, or not now.
  *
- *  TWO CALL SITES, and the second is not a near-copy — it was the same eight
- *  lines, WORDS INCLUDED. That is the part worth naming: "Open terminal to
- *  answer" and "Not now" are copy, and copy written twice drifts in a way no
- *  type catches. The handlers stay the callers': the unparsed branch hides the
- *  sheet, the parsed one closes it behind a busy gate, and those are two
- *  different things on purpose (see `openTerminal` below). */
+ *  THREE CALL SITES, and none is a near-copy: this content's own dead end (a question that does not match the pane yet,
+ *  an approval it cannot send), and `DialogSheet`'s `ask-unreadable` and `terminal-only` surfaces. "Open terminal to
+ *  answer" and "Not now" are copy, and copy written three times drifts in a way no type catches. The handlers stay the
+ *  callers': this content gates the whole of its handler on a send in flight (see `openTerminal` below), while the
+ *  controller's two surfaces hide the sheet and go, and those are different things on purpose. */
 export function TerminalCta({ onOpen, onLater }: { onOpen: () => void; onLater: () => void }): ReactNode {
   return (
     <div className="dlg-actions">
@@ -59,32 +51,20 @@ export function TerminalCta({ onOpen, onLater }: { onOpen: () => void; onLater: 
 }
 
 /**
- * The hook-sourced envelope's own content — see the file header for why this
- * exists alongside the scraped rendering above instead of replacing it, and
- * for the fix-round-1 summary of what changed here.
+ * The structured ask's own content, in the container `DialogSheet` draws.
  *
- * Dismissal: `open`/`onHide` are wired from the PARENT exactly like the
- * scraped sheet's own `open`/`hide` (same `dismissedKey` slot, see there) —
- * a scrim tap, Esc, or swipe only hides this sheet, refused while a send
- * here (`answering` OR `denying`) is in flight, and never touches the store:
- * the header badge and fleet card keep signalling regardless.
+ * Dismissal: `open` and `onClose` are the controller's own, the same slot and the same machinery as every other surface
+ * (`DialogSheet`'s `dismissedKey`): a scrim tap, Esc, or swipe only hides the container, refused while a send is in
+ * flight, and never touches the store: the header badge and fleet card keep signalling regardless.
  *
- * Fail-visible: `onSelectOption` IS `answer()` from the scraped flow (passed
- * down verbatim, so a tap here walks the live pane exactly as a scraped
- * option tap does) — and that walk needs `dialog` (re-parses the PANE, which
- * the envelope has none of its own). Fix round 3 (Critical): needing `dialog`
- * turned out not to be enough — `dialog` can be non-null and still describe
- * a DIFFERENT question than the envelope (see the file header), so
- * `canAnswer` below is a real correspondence check (`questionCorresponds`
- * for questions, a Yes-first check for approval), not a bare null check. So
- * numbered options and Allow (the same call at index 1) are tappable only
- * when `dialog` is non-null, parsed, AND describes the same thing the
- * envelope does; otherwise they render visibly disabled behind the same
- * "Open terminal to answer"/"Not now" CTA the unparsed-scraped branch above
- * already uses. Deny has no scraped counterpart to reuse and no such
- * dependency either — Escape has no option index to walk to, so it calls
- * `api.interrupt` directly (the same call SessionScreen's stop button makes)
- * and stays enabled regardless of `dialog`.
+ * Fail-visible: `onSelectOption` IS the controller's `answer()`, passed down verbatim, so a tap here walks the live pane
+ * exactly as every other surface's option tap does, and that walk needs `dialog` (it re-parses the PANE, which the
+ * envelope has none of its own). `dialog` can be non-null and still describe a DIFFERENT question than this one, so
+ * `canAnswer` below is a real correspondence check (`questionCorresponds` for questions, a Yes-first check for an
+ * approval), not a bare null check. Numbered options and Allow (the same call at index 1) are tappable only when `dialog`
+ * is non-null, parsed, AND describes the same thing; otherwise they render visibly disabled behind the "Open terminal to
+ * answer"/"Not now" CTA. Deny has no such dependency: Escape has no option index to walk to, so the controller sends
+ * `api.interrupt` for it (the same call SessionScreen's stop button makes), and it stays enabled regardless of `dialog`.
  */
 export function EnvelopeSheet({
   ask,
@@ -112,17 +92,17 @@ export function EnvelopeSheet({
   /** Where the questions came from: the hook's envelope, or the transcript's copy once that has aged out. Only the
    *  wrapper's `data-source` says which; the surface is the same. */
   from?: 'hook' | 'transcript';
-  /** The scraped dialog `answer()` needs to have anything to send against.
-   *  null means the envelope showed up with no matching live pane menu yet
+  /** The pane's menu, which `answer()` needs to have anything to send against.
+   *  null means the question showed up with no matching live pane menu yet
    *  (or it moved on) — read-only until one appears. */
   dialog: Dialog | null;
-  /** The scraped flow's in-flight option index — shared so a numbered-option
-   *  tap here disables the same way a scraped one does. */
+  /** The controller's in-flight option index — shared so every numbered-option
+   *  tap disables the same rows. */
   answering: number | null;
   /** Deny's interrupt is in flight (held by the controller, the one sender). */
   denying: boolean;
   /** D-5090: the own-words text and its call. Held by the PARENT, never here, so an `ask_cleared` mid-call hands the
-   *  same text and call to the scraped sheet when this one unmounts. */
+   *  same text and call to whichever surface the source now chooses (the transcript's copy, or the unreadable one). */
   words: Words;
   /** D-5091: a multiSelect question's set and its commit, held by the PARENT for the same reason as `words`. */
   picks: Picks;
@@ -199,23 +179,16 @@ export function EnvelopeSheet({
       ? dialog !== null && dialog.parsed && /^yes/i.test(dialog.options[0]?.label ?? '')
       : live !== null;
 
-  // The fail-visible CTA (I-critical #2): identical markup to the unparsed
-  // scraped branch above, so a dialog-less envelope reads as "the same kind
-  // of dead end", not a new one. Both buttons route through `close` (not a
-  // raw `onHide`) — stricter than that branch needs to be (nothing there can
-  // ever be `answering`), but Deny here CAN be in flight with `dialog` still
-  // null, and hopping to the terminal mid-Deny would be a second action
-  // landing on top of an unresolved first one.
+  // The fail-visible CTA (I-critical #2): the same markup as the controller's `ask-unreadable` and `terminal-only`
+  // surfaces (`TerminalCta`), so a question this content cannot answer reads as "the same kind of dead end", not a new
+  // one. Both buttons route through `onClose`, which refuses while a send is in flight: Deny CAN be in flight with
+  // `dialog` still null, and hopping to the terminal mid-Deny would be a second action landing on top of an unresolved
+  // first one.
   //
-  // Fix round 2: `close()` alone only refuses to HIDE while busy — it does
-  // not, and must not, stop `onOpenTerminal?.()` from firing right after it,
-  // since `onClick={() => { close(); onOpenTerminal?.(); }}` runs the second
-  // statement UNCONDITIONALLY regardless of what `close()` decided. That
-  // let a busy Deny (dialog can be null while Deny is still in flight — see
-  // above) navigate to the terminal anyway, exactly the "second action
-  // landing on top of an unresolved first one" this comment already claimed
-  // was prevented. `openTerminal` below gates the WHOLE handler on `busy`
-  // itself, once, so both the hide and the navigation are refused together.
+  // Fix round 2: `onClose()` alone only refuses to HIDE while busy — it does not, and must not, stop `onOpenTerminal?.()`
+  // from firing right after it, since a handler that calls both runs the second statement UNCONDITIONALLY regardless of
+  // what the first decided. That let a busy Deny navigate to the terminal anyway. `openTerminal` below gates the WHOLE
+  // handler on `busy` itself, once, so both the hide and the navigation are refused together.
   const openTerminal = (): void => {
     if (busy) return;
     onClose();
@@ -390,7 +363,7 @@ export function EnvelopeSheet({
               const { label, recommended } = optionCopy(o.label);
               return (
                 // The preview is keyed by its question's text, so a new question opens its own previews instead of
-                // inheriting the last one's folded state (the scraped rows keyed it by the pane's dialog id).
+                // inheriting the last one's folded state.
                 <Fragment key={`${shown}:${oi}`}>
                   <OptionRow
                     {...(keyScreen === null ? {} : keyed(keys, idx))}

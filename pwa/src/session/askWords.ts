@@ -171,13 +171,14 @@ export function multiHeld(multi: DialogMulti, wanted: readonly number[]): 'free-
 
 /** What the sheet says when a tapped row's answer (`api.answerDialog`) is refused, by its code (plan, Task 5). Total
  *  over the union, as the other two tables are. Nothing was pressed in any of these: the route refuses before Enter.
- *  `stale-dialog` here is the SCRAPED sheet's sentence, which redraws from the store's menu right after, so "showing
- *  the latest" is true there; under the envelope it is `STALE_UNDER_ENVELOPE` (`dialogRefusal`). */
+ *  `stale-dialog` here is the sentence of a surface that renders straight from the pane's menu (a menu that is no ask),
+ *  which redraws from the store right after, so "showing the latest" is true there; under a structured question it is
+ *  `STALE_UNDER_ENVELOPE` (`dialogRefusal`). */
 export const DIALOG_REFUSE_TEXT: Readonly<Record<DialogRefuseCode, string>> = {
   'not-alive': sendErrorText('not-alive'),
   'stale-dialog': 'That question changed — showing the latest',
   'walk-failed': "The terminal's cursor didn't land on that row, so nothing was pressed. Try again.",
-  // The scraped sheet offers no row it knows to be the free-text one; this is a row holding text typed in the
+  // No sheet offers a row it knows to be the free-text one; this is a row holding text typed in the
   // terminal on a pane the transcript could not match, which only the server could tell (D-5045).
   'free-text-row':
     "That row is the answer box, so nothing was pressed. Finish it in the terminal, or clear it there and answer here.",
