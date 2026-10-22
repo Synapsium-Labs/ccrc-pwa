@@ -9863,7 +9863,8 @@ function renderAskBrief(
 //   THE INTERVALS. Each observed (session, incarnation, UTC hour) has one checkpoint-owned `measured` or `unmeasured` row; unmeasured
 //   is sticky. A session whose spool directory does not exist (a pane older than the spool code, D-4651), a capability the fleet does
 //   not offer, an unreadable directory or range, malformed evidence and a parent whose incarnation is unmeasured are each an
-//   UNMEASURED hour, never a measured-empty one. Only a listing that SUCCEEDED and does not name the bucket is an empty hour. Between
+//   UNMEASURED hour, never a measured-empty one (one exception, D-6471: an `unreadable` incarnation DEFERS its hour, below). Only a
+//   listing that SUCCEEDED and does not name the bucket is an empty hour. Between
 //   two unmeasured words in one hour a LOSS word displaces a CARVE-OUT word (`directory-absent`, `capability-absent`), and a carve-out
 //   word never displaces a loss word (R90): the checkpoint's merge holds that, and the no-op skip re-stages a loss over a carve-out.
 //
@@ -9897,6 +9898,19 @@ function renderAskBrief(
 //       the owner is forgotten once it has no listed hour left: so the memory is bounded by the read horizon (and `lastListed` by the live
 //       sessions). A failed flush is covered by the next recovery's not-ready window; an R82 pre-write refusal of that gap's own bucket
 //       would drop it unrecorded, and nothing known produces one.
+//     - THE HOURS AN `unreadable` INCARNATION DEFERS (D-6471, the operator's "Fix first, then soak"; `owed` on the `(id, null)` owner).
+//       A census pass that reads a session's registry generation `unreadable` (an agent reconnecting reads every live one so) stages no
+//       stand-in gap for the hour when the lane holds the session's prior incarnation P (the last listing, a pending owner, else the
+//       latest interval row inside the horizon) AND the checkpoint held (session, P, hour) at the pass's start; otherwise the gap is
+//       immediate, as are `absent`, `changing` and an hour already listed for a gap. The hour stays OWED (a lost window, never forgotten
+//       by R101) until a later pass's LIVE census read of P covers it durably (R101's gate and R107; a no-op skip counts, a carve-out or
+//       a non-live read does not): discharged, with no row; or a census measures J != P, or a re-listing finds no P or another: the gap
+//       in that pass; or it leaves the read horizon: the gap at expiry. Its gap leaves the memory only once durable. Restart-safe because
+//       the deferral is never what keeps the hour honest: the (session, P, hour) row is, through the checkpoint arm's close read (a
+//       respawn's line in the shared bucket is refused there and makes it unmeasured) and upkeep's `hour-never-closed`. Residue: after a
+//       restart with no listing back in the hour, the hour rests on its P row alone; an outage spanning its close (the arm closes the
+//       row before any live read of P) fails closed, as a loss at expiry. A verdict over a window is final once its last hour has left
+//       the read horizon.
 //
 //   REPORT-ONLY EFFECTS. Attempts are made durable through one checkpoint-only change BEFORE any lease is journaled (so the next pass
 //   sees them), then each lease request goes through `createLease` (which deduplicates on the identity key, so a request re-emitted
@@ -10176,14 +10190,19 @@ interface LaneEvidenceIndex {
   launches: Map<string, { event: DelegationEventEnvelopeV1; journalId: string; dir: string }>;
 }
 /** One owner to observe in a pass. `incarnation: null` is a parent whose incarnation could not be measured (`reason` says why).
- *  `listedHours` are the hours (ms) a pass listed it in and no completed observation has covered yet, inside the read horizon (R89). */
-interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean; listedHours: readonly number[] }
+ *  `listedHours` are the hours (ms) a pass listed it in and no completed observation has covered yet, inside the read horizon (R89).
+ *  `read` (D-6471, lane memory): the hours whose bucket result this observation applied or skipped as unchanged, never refused by name
+ *  and never a carve-out: what may discharge an hour owed under this incarnation. */
+interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean; listedHours: readonly number[]; read?: number[] }
 /** R89: an owner a pass LISTED from the census, and the hours (ms) it was listed in, until one observation of it completes. */
 interface LanePendingOwner {
   id: string; incarnation: string | null; reason: string; hours: Set<number>;
   /** R107 (re-review N1): the sequence of the last pass that LISTED it alive or re-pended it (R102). A pass forgets only an owner no
    *  newer pass has listed: a cut pass's late flush must not erase a later pass's listing of the same hour (the hours are one set). */
   listedBy: number;
+  /** D-6471: the hours of an `(id, null)` owner DEFERRED by an `unreadable` listing, each with the prior incarnation P it waits for. Lane
+   *  memory only, never durable: what keeps the hour honest across a restart is the (id, P, hour) row the deferral required. */
+  owed?: Map<number, string>;
 }
 /** An owner's identity in a pass and in the pending memory: (id, incarnation or null). */
 const laneOwnerKey = (id: string, incarnation: string | null): string => JSON.stringify([id, incarnation]);
@@ -11270,6 +11289,18 @@ class DelegationLane {
       const k = laneOwnerKey(s.id, incarnation);
       // R89: LISTED, so it stays an owner, live or not, until one observation of it completes (the loop in `run` forgets it then).
       const pending = this.pendingOwners.get(k) ?? { id: s.id, incarnation, reason, hours: new Set<number>(), listedBy: pass.seq };
+      // D-6471: an `unreadable` listing DEFERS its hour while the lane holds the prior incarnation P and the checkpoint held (id, P, hour)
+      // at this pass's start; it never defers an hour already listed for a gap, and a re-listing keeps a deferral only under the same P.
+      // Any other listing of a deferred hour ends it (the gap is staged in this pass), and so does a census measuring J != P.
+      if (incarnation === null) {
+        const held = pending.owed?.get(nowHour);
+        const p = reason === 'unreadable' && (held !== undefined || !pending.hours.has(nowHour)) ? this.priorOf(s.id, pass.now, state) : null;
+        if (p !== null && (held !== undefined ? p === held : state.checkpoint.observationIntervals.some((r) => r.sessionId === s.id && r.parentIncarnation === p && r.utcHour === formatDelegationInstant(nowHour)))) (pending.owed ??= new Map()).set(nowHour, p);
+        else pending.owed?.delete(nowHour);
+      } else {
+        const unmeasured = this.pendingOwners.get(laneOwnerKey(s.id, null));
+        for (const [h, p] of unmeasured?.owed ?? []) if (p !== incarnation) { unmeasured!.owed!.delete(h); unmeasured!.listedBy = pass.seq; }
+      }
       pending.reason = reason;
       pending.hours.add(nowHour);
       pending.listedBy = pass.seq;                                       // R107
@@ -11307,11 +11338,26 @@ class DelegationLane {
     }).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   }
 
+  /** D-6471 (§3.1 a): the prior incarnation the lane holds for `id`: the last pass's listing, else a pending owner's, else the incarnation of
+   *  the latest interval row inside the read horizon (the source after a restart). Two candidates in the deciding source hold none. */
+  private priorOf(id: string, nowMs: number, state: DeepReadonly<DelegationRecoveryState>): string | null {
+    for (const l of this.lastListed.values()) if (l.id === id && l.incarnation !== null) return l.incarnation;
+    let found = new Set([...this.pendingOwners.values()].flatMap((p) => (p.id === id && p.incarnation !== null ? [p.incarnation] : [])));
+    let latest = -1;
+    for (const r of found.size > 0 ? [] : state.checkpoint.observationIntervals) {
+      const at = r.sessionId === id && r.parentIncarnation !== DELEGATION_UNMEASURED_INCARNATION ? laneInstantMs(r.utcHour) : null;
+      if (at === null || at < latest || !this.readable(at, nowMs)) continue;
+      if (at > latest) { latest = at; found = new Set(); }
+      found.add(r.parentIncarnation);
+    }
+    return found.size === 1 ? [...found][0]! : null;
+  }
+
   /**
    * R89: a listed hour of a pending owner that has LEFT THE READ HORIZON before any observation of it completed can never be read: it is
    * STAGED as a gap with a LOSS word for the pass's flush, never `directory-absent` or `capability-absent` (nothing measured either),
-   * under the owner's incarnation (the stand-in for an unmeasured one, whose own word it keeps), and leaves the memory as it is staged; an owner
-   * with no listed hour left is forgotten. So the memory is bounded by the read horizon. The two edges: a flush that fails is covered by
+   * under the owner's incarnation (the stand-in for an unmeasured one, whose own word it keeps), and leaves the memory as it is staged (an
+   * hour D-6471 deferred only once its gap is durable: the next pass finds the row); an owner with no listed hour left is forgotten. So the memory is bounded by the read horizon. The two edges: a flush that fails is covered by
    * the next recovery's not-ready window, and an R82 pre-write refusal of that gap's own bucket would drop it unrecorded (nothing known
    * produces one).
    */
@@ -11323,8 +11369,8 @@ class DelegationLane {
         const detail = p.incarnation === null
           ? laneIncarnationGap(p.reason)
           : `${DELEGATION_HOUR_NEVER_CLOSED}: listed in this hour, and never read before the hour left the read horizon`;
-        await this.noteGap(pass, durable, p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs, detail);
-        p.hours.delete(hourMs);
+        // D-6471: a deferred hour stays (owed) until its loss gap is durable: a later pass finds the row and lets it go
+        if (await this.noteGap(pass, durable, p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs, detail) || !p.owed?.has(hourMs)) p.hours.delete(hourMs);
       }
       if (p.hours.size === 0) this.pendingOwners.delete(k);
     }
@@ -11358,6 +11404,7 @@ class DelegationLane {
       // and the hour is a gap under a stand-in incarnation so that it counts. R89: every hour a pass LISTED it in and no completed
       // observation covered, live or not (a live owner's open hour is one: it was listed in this pass).
       for (const hourMs of owner.listedHours) {
+        if (this.pendingOwners.get(laneOwnerKey(owner.id, null))?.owed?.has(hourMs) === true) continue;   // D-6471: deferred, no gap
         await this.noteGap(pass, durable, owner.id, DELEGATION_UNMEASURED_INCARNATION, hourMs, laneIncarnationGap(owner.reason));
       }
       return;
@@ -11372,7 +11419,7 @@ class DelegationLane {
     }
     for (const hourMs of this.hoursOf(pass, durable.state(), owner, inc, listing)) {
       if (pass.signal.aborted) return;
-      await this.observeHour(pass, durable, owner.id, inc, hourMs, listing, capabilityPresent);
+      if (await this.observeHour(pass, durable, owner.id, inc, hourMs, listing, capabilityPresent)) (owner.read ??= []).push(hourMs);
     }
   }
 
@@ -11498,11 +11545,15 @@ class DelegationLane {
     const refusedOwners = new Set([...flushed.refused].map((k) => { const [id, inc] = JSON.parse(k) as [string, string, number]; return JSON.stringify([id, inc]); }));
     for (const owner of done) {
       if (refusedOwners.has(JSON.stringify([owner.id, owner.incarnation ?? DELEGATION_UNMEASURED_INCARNATION]))) continue;
+      // D-6471: a LIVE read of P, durable, discharges the hours deferred for P that it read (R107: unless a newer pass listed them)
+      const deferred = owner.live ? this.pendingOwners.get(laneOwnerKey(owner.id, null)) : undefined;
+      for (const h of deferred !== undefined && deferred.listedBy <= pass.seq ? owner.read ?? [] : []) if (deferred!.owed?.get(h) === owner.incarnation) { deferred!.owed.delete(h); deferred!.hours.delete(h); }
+      if (deferred?.hours.size === 0) this.pendingOwners.delete(laneOwnerKey(owner.id, null));
       const k = laneOwnerKey(owner.id, owner.incarnation);
       const pending = this.pendingOwners.get(k);
       if (pending === undefined) continue;
       if (pending.listedBy > pass.seq) continue;                         // R107: a newer pass listed it; that pass decides
-      for (const hourMs of owner.listedHours) pending.hours.delete(hourMs);
+      for (const hourMs of owner.listedHours) if (pending.owed?.has(hourMs) !== true) pending.hours.delete(hourMs);   // D-6471: owed stays
       if (pending.hours.size === 0) this.pendingOwners.delete(k);
     }
   }
@@ -11535,22 +11586,24 @@ class DelegationLane {
     for (const e of entries) this.refusedBuckets.delete(e.key);
   }
 
-  /** An hour recorded as a gap without a bucket to read: written once. */
-  private async noteGap(pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, detail: string): Promise<void> {
+  /** An hour recorded as a gap without a bucket to read: written once. True when the row is already on file (nothing staged). */
+  private async noteGap(pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, detail: string): Promise<boolean> {
     const hour = formatDelegationInstant(hourMs);
     const prior = durable.state().checkpoint.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === hour);
     // R90: an unmeasured hour is written once, unless this is a loss word over a carve-out word
-    if (prior !== undefined && prior.state === 'unmeasured' && !laneLossOverCarveOut(prior.detail, detail)) { this.skipped += 1; return; }
-    if (pass.signal.aborted) return;
+    if (prior !== undefined && prior.state === 'unmeasured' && !laneLossOverCarveOut(prior.detail, detail)) { this.skipped += 1; return true; }
+    if (pass.signal.aborted) return false;
     await this.stage(pass, durable, {
       accepted: [], cursor: null,
       interval: { sessionId: id, parentIncarnation: inc, utcHour: hour, state: 'unmeasured', detail, recordedAt: formatDelegationInstant(Date.now()) },
     }, this.settledKey(id, inc, hourMs), `${id}/${laneBucketOf(hourMs)}`);
+    return false;
   }
 
+  /** True when a bucket result for the hour was applied or skipped as unchanged, not refused by name and not a carve-out (D-6471). */
   private async observeHour(
     pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, listing: MeasuredDirectoryRead, capabilityPresent: boolean | null,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const bucket = laneBucketOf(hourMs);
     const closing = pass.now >= laneCloseAt(hourMs);
     const row = durable.state().checkpoint.bucketCursors.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.bucket === bucket);
@@ -11558,25 +11611,26 @@ class DelegationLane {
       ownerDir: this.ownerDir(id), sessionId: id, parentIncarnation: inc, bucket, cursor: row?.cursor ?? 0, lastSize: row?.lastSize ?? 0,
       anchorStart: row?.anchor?.start ?? null, capabilityPresent, listing, timeoutMs: DELEGATION_READ_TIMEOUT_MS, signal: pass.signal,
     });
-    if (pass.signal.aborted) return;                                     // a late answer of a cut pass applies nothing
+    if (pass.signal.aborted) return false;                               // a late answer of a cut pass applies nothing
     const state = durable.state();                                       // AT THIS MOMENT, never a copy taken before the read (M5/M6)
-    const seen = { accepted: 0 };
+    const seen = { accepted: 0, read: false };
     const gate = this.gateOf(pass, durable, state, id, inc, hourMs, bucket, seen);
     try {
       if (read.ok) await ingestAndApplyDelegationBucket(read.input, state, gate);
       else await gate.applyBucketResult(unreadableDelegationBucketResult({ sessionId: id, parentIncarnation: inc, bucket }, state, { reason: read.reason, detail: read.detail }));
     } catch (err) {
-      if (err instanceof DelegationIngestError) { console.warn(`ccrc-server: delegation bucket ${id}/${bucket} was refused: ${err.message}`); return; }
+      if (err instanceof DelegationIngestError) { console.warn(`ccrc-server: delegation bucket ${id}/${bucket} was refused: ${err.message}`); return false; }
       throw err;
     }
     // An hour read AFTER it closed, with nothing new in it, is not read again by this process (once the pass's application is durable).
     if (closing && read.ok && seen.accepted === 0) pass.settle.push(this.settledKey(id, inc, hourMs));
+    return seen.read;
   }
 
   /** The durable door for one bucket result: the no-op skip, then Task 8's own adapter (taking note of what it journaled). */
   private gateOf(
     pass: LanePass, durable: DelegationDurability, state: DeepReadonly<DelegationRecoveryState>, id: string, inc: string, hourMs: number, bucket: string,
-    seen: { accepted: number },
+    seen: { accepted: number; read: boolean },
   ): DelegationBucketDurability {
     const hour = formatDelegationInstant(hourMs);
     // Task 8's own adapter maps the result to its batch (and refuses an inapplicable one); the batch is STAGED for the pass (D-4658).
@@ -11587,6 +11641,7 @@ class DelegationLane {
       applyBucketResult: async (result: DelegationBucketResult) => {
         if (!result.applicable) return adapter.applyBucketResult(result);   // refused by name: a result that is not for a bucket applies nothing
         seen.accepted = result.accepted.length;
+        seen.read = !isDelegationHourCarveOut(result.detail);            // D-6471: an applicable result, staged or skipped, may discharge
         const cp = state.checkpoint;
         const row = cp.bucketCursors.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.bucket === bucket);
         const prior = cp.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === hour);

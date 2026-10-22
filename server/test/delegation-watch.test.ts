@@ -48,6 +48,7 @@ import {
   DELEGATION_SPOOL_LOOKBACK_HOURS,
   DELEGATION_UNMEASURED_INCARNATION,
   canonicalDelegationJson,
+  delegationHealthWindowOf,
   delegationSha256Hex,
   emptyDelegationCheckpoint,
   formatDelegationInstant,
@@ -4048,26 +4049,42 @@ describe('R88 (W1 a, coordinator 5512): the lane never links across a stretch it
   });
 });
 
+// D-6471: `cutAt` (from the R89 rows) and `cutWhile` (from the R107 rows) are hoisted to file scope, unchanged, for D-6471's R-D, R-E and R-I.
+/** A pass at `t` that lists `sessions` and is CUT at its budget while `held`'s listing does not answer (owners are visited in id order,
+ *  so every owner after `held` is never reached). Its late answer arrives after the cut, and is discarded. */
+async function cutAt(w: World, t: number, projects: Record<string, CensusView>, sessions: readonly Sess[], incarnations: Record<string, ParentIncarnation>, held: string): Promise<void> {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  let release!: () => void;
+  w.faults.hold.set(held, new Promise<void>((resolve) => { release = resolve; }));
+  const listed = w.calls.listings.filter((o) => o === held).length;
+  setNow(t);
+  setCensus(w, projects, incarnations, t);
+  const cut = pass(w, sessions);
+  await vi.waitFor(() => expect(w.calls.listings.filter((o) => o === held).length, 'the pass reached the held listing').toBe(listed + 1));
+  await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
+  await cut;
+  w.faults.hold.delete(held);
+  release();
+  await vi.advanceTimersByTimeAsync(10);
+  vi.useRealTimers();
+}
+/** A pass at `t` over `sessions` that waits inside `entered` (a read held open) and is CUT at its budget; `release` then lets the late
+ *  answer through, and the pass's late work runs on. */
+async function cutWhile(w: World, t: number, projects: Record<string, CensusView>, sessions: readonly Sess[], held: { reached: () => boolean; release: () => void }): Promise<void> {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  setNow(t);
+  setCensus(w, projects, Object.fromEntries(sessions.map((s) => [s.id, measured()])), t);
+  const cut = pass(w, sessions);
+  await vi.waitFor(() => expect(held.reached(), 'the pass reached the held read').toBe(true));
+  await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
+  await cut;
+  held.release();
+  await vi.advanceTimersByTimeAsync(10);
+  vi.useRealTimers();
+}
+
 describe('R89 (W1 b, coordinator 5512): an owner a pass listed is read once before it is let go, and an hour it cannot be read in is a loss', () => {
   const pair = [sessionOf('demo-a'), sessionOf('demo-x')];
-  /** A pass at `t` that lists `sessions` and is CUT at its budget while `held`'s listing does not answer (owners are visited in id order,
-   *  so every owner after `held` is never reached). Its late answer arrives after the cut, and is discarded. */
-  async function cutAt(w: World, t: number, projects: Record<string, CensusView>, sessions: readonly Sess[], incarnations: Record<string, ParentIncarnation>, held: string): Promise<void> {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    let release!: () => void;
-    w.faults.hold.set(held, new Promise<void>((resolve) => { release = resolve; }));
-    const listed = w.calls.listings.filter((o) => o === held).length;
-    setNow(t);
-    setCensus(w, projects, incarnations, t);
-    const cut = pass(w, sessions);
-    await vi.waitFor(() => expect(w.calls.listings.filter((o) => o === held).length, 'the pass reached the held listing').toBe(listed + 1));
-    await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
-    await cut;
-    w.faults.hold.delete(held);
-    release();
-    await vi.advanceTimersByTimeAsync(10);
-    vi.useRealTimers();
-  }
 
   it('R89: a pass cut before it reaches an owner it listed: the owner, gone by the next census, is read anyway, and rung 4 does not link across its overlapping call', async () => {
     const w = world();
@@ -4205,20 +4222,6 @@ describe('R101, R102 and R106 (review F1, F2, F6): a listed owner leaves only on
 
 describe('R107 to R109 (re-review N1 to N3): a cut pass never forgets what a newer pass listed, and a pass cut before the owners is not ready', () => {
   const trio = [sessionOf('demo-a'), sessionOf('demo-x'), sessionOf('demo-y')];
-  /** A pass at `t` over `sessions` that waits inside `entered` (a read held open) and is CUT at its budget; `release` then lets the late
-   *  answer through, and the pass's late work runs on. */
-  async function cutWhile(w: World, t: number, projects: Record<string, CensusView>, sessions: readonly Sess[], held: { reached: () => boolean; release: () => void }): Promise<void> {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    setNow(t);
-    setCensus(w, projects, Object.fromEntries(sessions.map((s) => [s.id, measured()])), t);
-    const cut = pass(w, sessions);
-    await vi.waitFor(() => expect(held.reached(), 'the pass reached the held read').toBe(true));
-    await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
-    await cut;
-    held.release();
-    await vi.advanceTimersByTimeAsync(10);
-    vi.useRealTimers();
-  }
 
   it('R107 (N1, probe P5): a cut pass\'s late flush, landing after the next pass re-pended the same owner in the same hour, does not forget it: the owner whose next read throws is read again', async () => {
     const w = world();
@@ -4904,5 +4907,327 @@ describe('the zero-delta retirement in the lane (D-6268): one call of the applie
     expect(names, `DelegationLane.retireZeroDelta is a method of the lane (${why})`).not.toBeNull();
     expect(names, 'the lane method calls the applier\'s door').toContain(DOOR);
     expect(names, 'and never applyCheckpointChange').not.toContain('applyCheckpointChange');
+  });
+});
+
+// ── run 816 (D-6471): a registry incarnation that cannot be read defers its hour ─────────────────────────────────────────
+
+describe('D-6471 (wave-3 follow-up 9): an `unreadable` incarnation defers its hour while the checkpoint carries the prior incarnation\'s row', () => {
+  const H = Date.parse(HOUR10);
+  const unreadable: ParentIncarnation = { kind: 'unmeasured', reason: 'unreadable' };
+  const LOSS = 'incarnation-unmeasured: the parent\'s registry incarnation is unreadable';
+  const CLOSED = H + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS + 60_000;          // 11:03: the hour 10 is closed
+  const EXPIRED = H + (DELEGATION_SPOOL_LOOKBACK_HOURS + 1) * DELEGATION_HOUR_MS + 5 * 60_000; // the hour 10 has left the read horizon
+  /** One pass at `t`, its census taken at `t`, listing each session of `incs` live with that incarnation. */
+  const passAt = async (w: World, t: number, incs: Record<string, ParentIncarnation>, projects: Record<string, CensusView> = { demo: [] }): Promise<void> => {
+    setNow(t);
+    setCensus(w, projects, incs, t);
+    await pass(w, Object.keys(incs).map((id) => sessionOf(id)));
+  };
+  const standIn = (w: World, id: string, hour = HOUR10) => intervalFor(w.home, id, hour, DELEGATION_UNMEASURED_INCARNATION);
+  /** Whether hour `hourMs` of `id` is still OWED under the stand-in key: the lane's own lost window for it (`pendingWindows`, private). */
+  const owed = async (w: World, id: string, hourMs = H): Promise<boolean> => {
+    const state = (await w.watcher.delegationApplier())!.state();
+    const lane = (w.watcher as unknown as { delegationLane(): { pendingWindows(s: unknown): Array<{ sessionId: string; parentIncarnation: string; startedAt: string }> } }).delegationLane();
+    const windows = lane.pendingWindows(state);
+    return windows.some((x) => x.sessionId === id && x.parentIncarnation === DELEGATION_UNMEASURED_INCARNATION && x.startedAt === iso(hourMs));
+  };
+  const healthOfH = (w: World) => delegationHealthWindowOf(intervalsOf(w.home), H + DELEGATION_HOUR_MS);
+  const quiet = (): void => { vi.spyOn(console, 'warn').mockImplementation(() => {}); };
+
+  it('R-A (the 17:00Z shape): measured, then one `unreadable` pass, then measured again with nothing new: the hour is discharged, no stand-in row, and it counts measured', async () => {
+    for (const [p2, p3] of [[at(1), at(2)], [H + DELEGATION_HOUR_MS - 30_000, H + DELEGATION_HOUR_MS + 30_000]] as const) {
+      const w = world();
+      makeOwner(w, 'demo-a');
+      makeOwner(w, 'demo-b');
+      await passAt(w, at(0), { 'demo-a': measured(), 'demo-b': measured() });
+      await passAt(w, p2, { 'demo-a': unreadable, 'demo-b': unreadable });
+      for (const id of ['demo-a', 'demo-b']) {
+        expect(standIn(w, id), `${id}: deferred, no stand-in row (pass 2 at ${iso(p2)})`).toBeUndefined();
+        expect(await owed(w, id), `${id}: still owed`).toBe(true);
+      }
+      await passAt(w, p3, { 'demo-a': measured(), 'demo-b': measured() });
+      for (const id of ['demo-a', 'demo-b']) {
+        expect(standIn(w, id), `${id}: discharged with no row (pass 3 at ${iso(p3)})`).toBeUndefined();
+        expect(await owed(w, id), `${id}: no longer owed`).toBe(false);
+        expect(intervalFor(w.home, id), id).toMatchObject({ state: 'measured' });
+      }
+      expect(healthOfH(w)).toMatchObject({ measuredSessionHours: 2, unmeasuredSessionHours: 0 });
+    }
+  });
+
+  it('R-A (correlation): a rung-4 candidate overlapping the owed hour is held while it is owed, and decided once it is discharged', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    makeOwner(w, 'demo-x');
+    await passAt(w, at(-1), { 'demo-a': measured(), 'demo-x': measured() }, BEFORE_TREE);    // ready; demo-x's hour 10 is measured
+    creatorAfter(w, at(0));                                                                   // demo-a creates raw-tree; demo-x makes no call
+    for (let i = 1; i < 4; i++) await passAt(w, at(i), { 'demo-a': measured(), 'demo-x': unreadable }, WITH_TREE);
+    expect(await owed(w, 'demo-x'), 'owed').toBe(true);
+    expect(leasesOf(w.home), 'the owed hour is a lost window: rung 4 holds').toEqual([]);
+    const control = world();                                                                  // CONTROL: demo-x measured throughout links by then
+    makeOwner(control, 'demo-a');
+    makeOwner(control, 'demo-x');
+    await passAt(control, at(-1), { 'demo-a': measured(), 'demo-x': measured() }, BEFORE_TREE);
+    creatorAfter(control, at(0));
+    for (let i = 1; i < 4; i++) await passAt(control, at(i), { 'demo-a': measured(), 'demo-x': measured() }, WITH_TREE);
+    expect(leasedOf(control), 'CONTROL').toEqual([['raw-tree', 'raw', 'demo-a']]);
+    for (let i = 4; i < 9; i++) await passAt(w, at(i), { 'demo-a': measured(), 'demo-x': measured() }, WITH_TREE);
+    expect(await owed(w, 'demo-x'), 'discharged').toBe(false);
+    expect(standIn(w, 'demo-x')).toBeUndefined();
+    expect(leasedOf(w), 'discharged, read whole: the candidate is decided').toEqual([['raw-tree', 'raw', 'demo-a']]);
+  });
+
+  it('R-B: measured, then `unreadable` on every pass until the hour leaves the horizon: the close read of P never discharges it, and it expires as its loss gap', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    for (const t of [at(1), at(2), CLOSED, EXPIRED, EXPIRED + STEP]) await passAt(w, t, { 'demo-a': unreadable });
+    expect(intervalFor(w.home, 'demo-a')!.recordedAt >= iso(H + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS), 'P was close-read').toBe(true);
+    expect(standIn(w, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+
+  it('R-B (second case, M12): an expiry gap whose flush fails at its first byte stays owed, and lands in the first completed pass after the recovery', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    const expiryHour = Math.floor(EXPIRED / DELEGATION_HOUR_MS) * DELEGATION_HOUR_MS;
+    const expiryBucket = iso(expiryHour).replace(/[-:T]/g, '').slice(0, 10);
+    writeBucket(w, 'demo-b', expiryBucket, startLine('demo-b', iso(EXPIRED - 60_000)));        // so the expiry pass's batch journals
+    quiet();
+    vi.spyOn(DelegationJournalWriter.prototype, 'write').mockRejectedValueOnce(new Error('EIO: a fixture fault at the journal write'));
+    await passAt(w, EXPIRED, { 'demo-a': unreadable, 'demo-b': measured() });
+    expect((await w.watcher.delegationApplier())!.failure(), 'failed closed').not.toBeNull();
+    expect(standIn(w, 'demo-a'), 'nothing of the failed pass is durable').toBeUndefined();
+    expect(await owed(w, 'demo-a'), 'the loss gap is not durable, so the hour stays owed').toBe(true);
+    for (let i = 1; i < 8; i++) await passAt(w, EXPIRED + i * STEP, { 'demo-a': unreadable, 'demo-b': measured() });
+    expect(standIn(w, 'demo-a'), 'the gap landed after the recovery').toMatchObject({ state: 'unmeasured', detail: LOSS });
+    expect(await owed(w, 'demo-a'), 'and, durable, it left the memory').toBe(false);
+  });
+
+  it('R-C: a census that measures another incarnation J records the owed hour\'s loss in that pass (one or two unreadable passes before it)', async () => {
+    for (const unreadablePasses of [1, 2]) {
+      const w = world();
+      makeOwner(w, 'demo-a');
+      await passAt(w, at(0), { 'demo-a': measured() });
+      for (let i = 1; i <= unreadablePasses; i++) await passAt(w, at(i), { 'demo-a': unreadable });
+      expect(standIn(w, 'demo-a'), `no stand-in row before J is measured (${unreadablePasses})`).toBeUndefined();
+      await passAt(w, at(unreadablePasses + 1), { 'demo-a': measured(OTHER_INC) });
+      expect(standIn(w, 'demo-a'), `the loss, in the pass that measures J (${unreadablePasses})`).toMatchObject({ state: 'unmeasured', detail: LOSS });
+      expect(await owed(w, 'demo-a')).toBe(false);
+    }
+  });
+
+  it('R-C (iv, M2a): a session listed dead after the `unreadable` pass (R102 does not re-pend the hour again) and then measured as J: the loss in the J pass', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    setNow(at(2));
+    setCensus(w, { demo: [] }, {}, at(2));
+    await pass(w, [sessionOf('demo-a', 'dead')]);                                              // dead: no listing, so `lastListed` empties
+    expect(standIn(w, 'demo-a'), 'still deferred').toBeUndefined();
+    await passAt(w, at(3), { 'demo-a': measured(OTHER_INC) });                                  // respawned as J
+    expect(standIn(w, 'demo-a'), 'the loss, in the pass that measures J').toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+
+  it('R-C (iii, M10): a later `unreadable` listing of the owed hour whose prior incarnation ties (a J row in the same hour) records the loss in that pass', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    expect(standIn(w, 'demo-a'), 'deferred').toBeUndefined();
+    const applier = await w.watcher.delegationApplier();
+    await applier!.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: [...cp.observationIntervals, {
+      sessionId: 'demo-a', parentIncarnation: OTHER_INC, utcHour: HOUR10, state: 'measured', detail: null, recordedAt: iso(at(1) + 10_000),
+    }] }));
+    await passAt(w, at(2), { 'demo-a': unreadable });
+    expect(standIn(w, 'demo-a'), 'the third source holds none: the loss in this pass').toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+
+  it('R-D (i): a pass cut before the session\'s observation completes discharges nothing; the next completed pass does', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    await cutAt(w, at(2), { demo: [] }, [sessionOf('demo-a')], { 'demo-a': measured() }, 'demo-a');
+    expect(await owed(w, 'demo-a'), 'still owed after the cut pass').toBe(true);
+    await passAt(w, at(3), { 'demo-a': measured() });
+    expect(await owed(w, 'demo-a'), 'discharged by the next completed pass').toBe(false);
+    expect(standIn(w, 'demo-a')).toBeUndefined();
+  });
+
+  it('R-D (ii): an observation whose flush fails at its first byte discharges nothing; the first completed pass after the recovery does', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', iso(at(1) + 10_000)));             // so the flush journals
+    quiet();
+    vi.spyOn(DelegationJournalWriter.prototype, 'write').mockRejectedValueOnce(new Error('EIO: a fixture fault at the journal write'));
+    await passAt(w, at(2), { 'demo-a': measured() });
+    expect((await w.watcher.delegationApplier())!.failure(), 'failed closed').not.toBeNull();
+    expect(await owed(w, 'demo-a'), 'still owed after the failed flush').toBe(true);
+    for (let i = 3; i < 9; i++) await passAt(w, at(i), { 'demo-a': measured() });
+    expect(await owed(w, 'demo-a'), 'discharged after the recovery').toBe(false);
+    expect(standIn(w, 'demo-a')).toBeUndefined();
+    expect(disk(w.home).journalLines, 'the line was read after the recovery').toBe(1);
+  });
+
+  it('R-E (i): `absent` and `changing` are never deferred: the gap is written in the pass that lists them', async () => {
+    for (const reason of ['absent', 'changing'] as const) {
+      const w = world();
+      makeOwner(w, 'demo-a');
+      await passAt(w, at(0), { 'demo-a': measured() });
+      await passAt(w, at(1), { 'demo-a': { kind: 'unmeasured', reason } });
+      expect(standIn(w, 'demo-a'), reason).toMatchObject({ state: 'unmeasured', detail: `incarnation-unmeasured: the parent's registry incarnation is ${reason}` });
+    }
+  });
+
+  it('R-E (ii, M9): an hour listed `changing` (its pass cut) and then `unreadable` with P held and P\'s row present is never deferred: the gap is written then', async () => {
+    const w = world();
+    makeOwner(w, 'demo-0');
+    makeOwner(w, 'demo-x');
+    await passAt(w, at(0), { 'demo-0': measured(), 'demo-x': measured() });
+    await cutAt(w, at(1), { demo: [] }, [sessionOf('demo-0'), sessionOf('demo-x')], { 'demo-0': measured(), 'demo-x': { kind: 'unmeasured', reason: 'changing' } }, 'demo-0');
+    expect(standIn(w, 'demo-x'), 'the cut pass never reached it').toBeUndefined();
+    await passAt(w, at(2), { 'demo-0': measured(), 'demo-x': unreadable });
+    expect(standIn(w, 'demo-x'), 'listed `changing` in this hour: the gap now').toMatchObject({ state: 'unmeasured' });
+  });
+
+  it('R-E (iii): an owed hour later listed `changing` in the same hour gets its gap in the `changing` pass', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    expect(standIn(w, 'demo-a'), 'deferred').toBeUndefined();
+    await passAt(w, at(2), { 'demo-a': { kind: 'unmeasured', reason: 'changing' } });
+    expect(standIn(w, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: 'incarnation-unmeasured: the parent\'s registry incarnation is changing' });
+  });
+
+  it('R-F (a): a restart during the deferral, then P measured again in the hour: no stand-in row, the hour is re-read after its close and counts measured', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    const again = world({ home: w.home });
+    for (const t of [at(3), at(4), CLOSED]) await passAt(again, t, { 'demo-a': measured() });
+    expect(standIn(again, 'demo-a')).toBeUndefined();
+    expect(intervalFor(w.home, 'demo-a')!.recordedAt >= iso(H + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS), 'close-read').toBe(true);
+    expect(healthOfH(again)).toMatchObject({ measuredSessionHours: 1, unmeasuredSessionHours: 0 });
+  });
+
+  it('R-F (r1, the accepted residue): a restart, then every listing `unreadable` from H+1 on: the hour rests on its P row, closed by the checkpoint arm, and counts measured', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    const again = world({ home: w.home });
+    for (const t of [H + DELEGATION_HOUR_MS + 30_000, CLOSED, EXPIRED, EXPIRED + STEP]) await passAt(again, t, { 'demo-a': unreadable });
+    expect(standIn(again, 'demo-a'), 'no stand-in row for H').toBeUndefined();
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'measured' });
+    expect(intervalFor(w.home, 'demo-a')!.recordedAt >= iso(H + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS), 'closed by the checkpoint arm').toBe(true);
+    expect(healthOfH(again)).toMatchObject({ measuredSessionHours: 1, unmeasuredSessionHours: 0 });
+  });
+
+  it('R-F (r2, the boot): a restart, then an `unreadable` listing in H: owed again (P from the checkpoint), and with no later read it expires as its loss gap', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    const again = world({ home: w.home });
+    await passAt(again, at(3), { 'demo-a': unreadable });                                      // the first completed pass after the restart
+    expect(standIn(again, 'demo-a'), 'owed again, no stand-in row').toBeUndefined();
+    expect(await owed(again, 'demo-a')).toBe(true);
+    for (const t of [CLOSED, EXPIRED, EXPIRED + STEP]) await passAt(again, t, { 'demo-a': unreadable });
+    expect(standIn(again, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+
+  it('R-F (b, M6b, M6c): P measured only in H-1, so the only (session, P, H) row is the one the unreadable pass\'s own R102 re-read writes: the gap is immediate', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, H - DELEGATION_HOUR_MS + 30 * 60_000, { 'demo-a': measured() });          // 09:30: P is measured in the hour 9 only
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));                                    // P's bucket for H is on disk
+    await passAt(w, at(0), { 'demo-a': unreadable });
+    expect(intervalFor(w.home, 'demo-a'), 'R102 re-read P\'s bucket for H in that pass').toMatchObject({ state: 'measured' });
+    expect(standIn(w, 'demo-a'), 'the row was not on file at the pass\'s start: the gap is immediate').toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+
+  it('R-F (c, M1): a respawn hidden by a restart: J\'s line in H\'s shared bucket makes (session, P, H) unmeasured on P\'s close read, though no stand-in row exists', async () => {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    const again = world({ home: w.home });
+    appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', iso(at(9)), OTHER_INC));
+    quiet();
+    for (const t of [at(10), at(11), CLOSED]) await passAt(again, t, { 'demo-a': measured(OTHER_INC) });
+    expect(standIn(again, 'demo-a'), 'no stand-in row exists').toBeUndefined();
+    expect(intervalFor(w.home, 'demo-a'), 'P\'s close read refused J\'s line').toMatchObject({ state: 'unmeasured', detail: expect.stringContaining('incarnation-mismatch') });
+    expect(healthOfH(again)).toMatchObject({ unmeasuredSessionHours: 1 });
+  });
+
+  it('R-G (M4): a carve-out read of P (its spool directory gone: `directory-absent`) never discharges: the owed hour expires as its loss gap', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    rmSync(spoolDir(w, 'demo-a'), { recursive: true, force: true });
+    await passAt(w, at(2), { 'demo-a': measured() });
+    expect(intervalFor(w.home, 'demo-a'), 'P read `directory-absent`').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^directory-absent/) });
+    for (const t of [CLOSED, EXPIRED, EXPIRED + STEP]) await passAt(w, t, { 'demo-a': measured() });
+    expect(standIn(w, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+
+  it('R-H (M6): a session first listed `unreadable` has no prior incarnation: today\'s immediate stand-in gap', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': unreadable });
+    expect(standIn(w, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+
+  it('R-I (R107, M8): a cut pass\'s late flush of a P read, landing after the next pass deferred the hour, never discharges it: the hour expires as its loss gap', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    makeOwner(w, 'demo-z');
+    await passAt(w, at(0), { 'demo-a': measured(), 'demo-z': measured() });                     // pass N-1: (demo-a, P, H) is durable
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', iso(at(0) + 10_000)));              // so pass N's flush applies something
+    let openFlush!: () => void;
+    const flushGate = new Promise<void>((resolve) => { openFlush = resolve; });
+    let nApplied!: () => void;
+    const nDone = new Promise<void>((resolve) => { nApplied = resolve; });
+    const realApply = DelegationDurability.prototype.applyAcceptedBatch;
+    let gated = true;
+    vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementation(async function (this: DelegationDurability, batches) {
+      if (!gated) return realApply.call(this, batches);
+      gated = false;
+      await flushGate;
+      try { return await realApply.call(this, batches); } finally { nApplied(); }
+    });
+    // pass N (at(1)) reads demo-a whole and is cut on demo-z's held listing; its application is held open
+    let releaseZ!: () => void;
+    w.faults.hold.set('demo-z', new Promise<void>((resolve) => { releaseZ = resolve; }));
+    await cutWhile(w, at(1), { demo: [] }, [sessionOf('demo-a'), sessionOf('demo-z')], {
+      reached: () => w.calls.listings.filter((o) => o === 'demo-z').length >= 2,     // pass N-1 listed it once, unheld
+      release: () => { w.faults.hold.delete('demo-z'); releaseZ(); },
+    });
+    // pass N+1 (at(2)) lists demo-a `unreadable` and defers H; its R102 re-read of (demo-a, P) lets pass N's late flush land first
+    const realRange = w.io.readFileFromBytesMeasured;
+    let armed = true;
+    w.io.readFileFromBytesMeasured = async (p, o, m, t, sig) => {
+      if (armed && p.includes('/spool/demo-a/')) {
+        armed = false;
+        openFlush();
+        await nDone;
+        await new Promise((resolve) => setTimeout(resolve, 20));                                // pass N's forgetting runs after its application resolves
+      }
+      return realRange(p, o, m, t, sig);
+    };
+    await passAt(w, at(2), { 'demo-a': unreadable, 'demo-z': measured() });
+    expect(armed, 'pass N+1 re-read (demo-a, P)').toBe(false);
+    // from here no listing falls in H, so nothing defers H again: only the memory pass N+1 left can carry it to its expiry
+    for (const t of [CLOSED, EXPIRED, EXPIRED + STEP]) await passAt(w, t, { 'demo-a': unreadable, 'demo-z': measured() });
+    expect(standIn(w, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: LOSS });
   });
 });
