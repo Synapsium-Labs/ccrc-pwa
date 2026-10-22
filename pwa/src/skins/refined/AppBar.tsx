@@ -13,7 +13,6 @@ import { commandDoor } from '../../command/door';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
-import { UpdateIndicator } from '../../fleet/UpdateIndicator';
 import { useLocation } from '../../lib/router';
 import { matchRoute, ROUTES } from '../../lib/routes';
 
@@ -58,7 +57,6 @@ export function AppBar(): ReactNode {
         <AccountsStrip compact="bar" />
       </div>
       <div className="ref-bar-doors">
-        <UpdateIndicator form="bar" />
         <NotificationBell />
         <Door {...commandDoor('open-palette')} glyph={<Icon name="search" />} aria-label="Search and commands" className="ref-bar-door">
           <kbd className="ref-bar-key font-mono">⌘K</kbd>

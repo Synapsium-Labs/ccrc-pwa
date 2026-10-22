@@ -17,9 +17,10 @@
 // the shared stale sentence follows the version in tertiary ink. It is `aria-hidden`: the fleet screen's one status
 // region announces it once.
 //
-// ONE INSTANCE PER WIDTH, by who mounts it (never a media query): `bar` in Refined's app bar, `status` in Instrument's
-// status bar (both mounted by the frame at a desk only), `row` under Refined's phone header and in Instrument's fleet
-// column below the desk width. A door runs its command (`commandDoor`), and navigates by nothing of its own.
+// ONE INSTANCE PER WIDTH, by who mounts it (never a media query): `status` in Instrument's status bar (mounted by the
+// frame at a desk only), `row` in Refined's banner slot under the bar at a desk (the ruled departure
+// `refined-desk-indicator-in-a-row-under-the-bar`: the bar has no room for it at 900), under Refined's phone header and
+// in Instrument's fleet column below the desk width. `bar` has no mount now; it stays a form of the type. A door runs its command (`commandDoor`), and navigates by nothing of its own.
 import type { ReactNode } from 'react';
 import { CloseButton, Door, toast } from '@ccrc/ui';
 import { commandDoor } from '../command/door';

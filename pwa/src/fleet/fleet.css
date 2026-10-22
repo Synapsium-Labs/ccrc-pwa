@@ -3226,11 +3226,12 @@ button.proj-card-pool::before {
   min-height: var(--tap-min);
 }
 /* The status bar is 24px under a fine pointer (instrument.css), so the door is compact there; under any other
-   pointer it keeps `Door`'s own tap floor. */
+   pointer it keeps `Door`'s own tap floor. The door reaches the 24px floor a fine pointer asks of a target, and the
+   bar holds it on one line (the bar is 24px tall). */
 @media (pointer: fine) {
   .update-indicator[data-form='status'] .update-indicator-door {
-    min-height: 20px;
-    height: 20px;
+    min-height: 24px;
+    height: 24px;
     padding: 0 var(--sp-1);
   }
 }
