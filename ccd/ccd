@@ -1405,6 +1405,13 @@ SWAP_JITTER=120                 # max seconds of random delay before a dispatche
                                 # concurrent, 17.4 GB) until the box stalled for 9.7 hours.
                                 # Spreading restarts stops a fleet-wide event becoming a herd.
                                 # Set to 0 to dispatch immediately (old behaviour).
+SWAP_PIN_TTL=86400              # D-6181 (D4, "or after 24 h"): the longest a manual-swap pin holds; a pin
+                                # set while a home window was blocked ends at that window's reset when sooner
+HOME_RETURN_SPACING=180         # D-6181 (spec §3.1): min seconds between two non-forced moves onto ONE account.
+                                # Above SWAP_JITTER, so two such moves onto one account never run inside one
+                                # jitter window; a sliding test, never buckets (`_affinity_slot_take`)
+AFFINITY_FLEET_SPACING=30       # D-6181: min seconds between two non-forced moves fleet-wide — at most two
+                                # a minute, whatever their targets; never read by a rescue or a ceiling-leave
 SWAP_BEAT_INTERVAL=30           # seconds between `supervised` re-stamps WHILE a swap carries files
                                 # (§4.2). Well inside `_session_state`'s 120s freshness window, and the
                                 # same cadence `cmd_supervise`'s own watch loop re-stamps on.
@@ -19006,6 +19013,43 @@ _swap_pinned() {   # id measured-wrapper -> 0 iff a manual-swap pin stands for T
   [[ "$pin" == "$2" ]]
 }
 
+# THE AFFINITY SLOTS (D-6181, spec §3.1). A non-forced move while `cur` still
+# serves is the one automatic move that can bring many sessions back at once, so
+# it takes a slot first: none onto its target in the last HOME_RETURN_SPACING,
+# none fleet-wide in the last AFFINITY_FLEET_SPACING. Each file holds the last
+# grant's epoch, and the test is `now - last >= spacing` — sliding, never
+# buckets, so no two grants are ever closer than the spacing. Every supervisor
+# is its own process, so the read and the write happen under one `flock`
+# (`_lc_rotate`'s die-free open: never a `die`, the lock file never unlinked).
+# `.affslot` is a dot-directory, which the registry scanners skip.
+#
+# FAIL OPEN. A broken slot must never freeze the return home: no `flock`, a
+# directory or file that cannot be made or written, or a lock whose holder
+# stamped it more than HOME_RETURN_SPACING ago (a hung taker: the stale lock is
+# broken) all answer 2 — granted, and the caller says `stagger-unwritable`.
+# Only "held" (a live, recent taker) and a grant inside a spacing answer 1.
+_affinity_slot_take() {   # target now -> rc 0 granted | 1 lost | 2 granted, the slot unwritable (fail open)
+  local t="$1" now="$2" d="$REG/.affslot" lfd held="" lt="" lf="" rc=0
+  [[ -n "$t" && "$t" != */* && "$t" != .* && "$now" =~ ^[0-9]+$ ]] || return 2
+  command -v flock >/dev/null 2>&1 || return 2
+  [[ -d "$d" ]] || { mkdir -p -- "$d"; } 2>/dev/null || return 2
+  { exec {lfd}>>"$d/.lock"; } 2>/dev/null || return 2
+  if ! flock -w 2 "$lfd" 2>/dev/null; then
+    { exec {lfd}>&-; } 2>/dev/null
+    _file_read_to held "$d/.lock"
+    [[ "$held" =~ ^[0-9]+$ ]] && (( now - 10#$held >= HOME_RETURN_SPACING )) && return 2
+    return 1
+  fi
+  { printf '%s\n' "$now" > "$d/.lock"; } 2>/dev/null
+  _file_read_to lt "$d/$t"; _file_read_to lf "$d/.fleet"
+  if [[ "$lt" =~ ^[0-9]+$ ]] && (( now - 10#$lt >= 0 && now - 10#$lt < HOME_RETURN_SPACING )); then rc=1
+  elif [[ "$lf" =~ ^[0-9]+$ ]] && (( now - 10#$lf >= 0 && now - 10#$lf < AFFINITY_FLEET_SPACING )); then rc=1
+  else { printf '%s\n' "$now" > "$d/$t" && printf '%s\n' "$now" > "$d/.fleet"; } 2>/dev/null || rc=2
+  fi
+  { exec {lfd}>&-; } 2>/dev/null
+  return "$rc"
+}
+
 _auto_swap_check() {   # id — called each supervise tick. HOME-account affinity:
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
@@ -25365,6 +25409,22 @@ _limit_pick_to() {   # var in text file key -> var and rc as `_limit_json_num_to
   if [[ -n "$2" ]]; then _limit_num_in_to "$1" "$3" "$5"; else _limit_json_num_to "$1" "$4" "$5"; fi
 }
 _limit_field() { local __lfw_v __lfw_rc; _limit_field_to __lfw_v "$@"; __lfw_rc=$?; printf '%s' "$__lfw_v"; return "$__lfw_rc"; }   # the printing form (D-4962)
+
+# D-6181: the RAW reset reader. `_limit_field_to` blanks a window whose reset has
+# passed, because a value nobody re-measured since is not a measurement. The
+# pin's expiry asks a different question — WHEN did (or will) home's blocked
+# window reset — so it needs the reset as written, passed or not. Same source,
+# same one read of the file (`_limit_pick_to`); one definition, which D-6182's
+# "window ended" reader is built on rather than growing a second raw reader.
+_limit_reset_to() {   # var wrapper five|seven -> var = that window's `<field>ResetAt` epoch as written; rc 0 | 1 none (no file, no reset)
+  local __lr_out="$1" __lr_f="$LIMITS_DIR/$2.json" __lr_t='' __lr_in=1 __lr_v=''
+  printf -v "$__lr_out" ''
+  [[ -f "$__lr_f" ]] || return 1
+  _limit_text_to __lr_t "$__lr_f" || __lr_in=
+  _limit_pick_to __lr_v "$__lr_in" "$__lr_t" "$__lr_f" "${3}ResetAt"
+  [[ "$__lr_v" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf -v "$__lr_out" '%s' "$__lr_v"
+}
 
 # D-4962 (tick-diet spec §6.3): `_share_pct`'s memo. `_share_pct` runs python3 on every
 # call, and one `_swap_target` call can ask the same lane's share more than once (home's

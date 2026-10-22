@@ -359,7 +359,7 @@ describe('_limit_reset_to: the raw reset, as written (D-6181)', () => {
   it('reads a reset that has passed, which _limit_field_to blanks', () => {
     const r = now() - 60;
     writeLimits('claude.json', json({ five: 99, fiveResetAt: r, ts: now() - 100 }));
-    expect(sh('_limit_field_to f claude five; echo "[$f]"')).toBe('[]');
+    expect(sh('_limit_field_to pct claude five; echo "[$pct]"')).toBe('[]');
     expect(sh('_limit_reset_to v claude five; echo "$?:$v"')).toBe(`0:${r}`);
   });
 
