@@ -158,8 +158,8 @@ import { parseAskTabs } from '../../../shared/ask-menu';
 import { OptionRow, Sheet, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
 import {
-  AskHeader, AskReview, AskTabs, REVIEW_TITLE, escapeHidesOnly, keyed, lit, picksBusy, wordsBusy, type Asker,
-  type PickCall, type Picks, type Words, type WordsCall,
+  AskHeader, AskReview, AskTabs, KICKER_CHOICE, KICKER_WAITING, REVIEW_TITLE, escapeHidesOnly, keyed, lit, picksBusy,
+  wordsBusy, type Asker, type PickCall, type Picks, type Words, type WordsCall,
 } from './AskParts';
 import {
   askScreen, askSource, freeTextSlot, isUsableAsk, paneTicks, picksUncommitted, questionKey, slotHolds,
@@ -262,6 +262,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
     setAnswering(null);
     setOwn((o) => (o.call?.state === 'landed' && !showsSent(dialog, o.call, o.text) ? NO_WORDS : o));
     if (own.call?.state === 'landed' && !showsSent(dialog, own.call, own.text)) setOtherFor(null);
+    // A chosen Other is spent with its screen: unless text or a call is kept, a new screen starts with the field closed,
+    // so it cannot reopen on returning to the question or on a later question with the same words.
+    else if (own.text === '' && own.call === null) setOtherFor(null);
     setPick((p) => (p.call?.state === 'flight' ? p : NO_PICK));
     // `dialog` is read at the id it belongs to; a repaint under the same id is not a new screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -570,7 +573,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
         open={open}
         onClose={close}
         onEscapeKeyDown={escapeHidesOnly}
-        eyebrow={<AskHeader kicker="Claude is waiting" asker={asker} />}
+        eyebrow={<AskHeader kicker={KICKER_WAITING} asker={asker} />}
         title="Claude is waiting on the terminal."
         titleScroll={false}
       >
@@ -593,8 +596,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
       open={open}
       onClose={close}
       onEscapeKeyDown={escapeHidesOnly}
-      eyebrow={<AskHeader kicker="Claude needs a choice" asker={asker} />}
-      title={source.title || 'Claude needs a choice'}
+      eyebrow={<AskHeader kicker={KICKER_CHOICE} asker={asker} />}
+      title={source.title || KICKER_CHOICE}
       titleScroll={false}
     >
       <div ref={keys.root} hidden />

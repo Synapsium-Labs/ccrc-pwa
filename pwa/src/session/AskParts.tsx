@@ -57,8 +57,14 @@ const CHAT_LABEL = 'Talk it over in the chat instead';
 export const FOOT_WITH_OTHER = 'Choose an option, or Other to type your own';
 export const FOOT_PLAIN = 'Choose an option';
 
+/** The kicker of an ask surface's header (D-6325): the words before the question's chip. Named top-level constants, so
+ *  `plain-words.test.ts` reads them as the sentence constants they are, and the sentence-case spelling lives in one place. */
+export const KICKER_ASKING = 'Claude is asking';
+export const KICKER_WAITING = 'Claude is waiting';
+export const KICKER_CHOICE = 'Claude needs a choice';
+
 /** The `Recommended` tag after an option's label (D-6325): `@ccrc/ui`'s `Chip`, in the header chip's paint (an accent
- *  tint, which the contrast gate already grounds). Null for a label that is not marked. */
+ *  tint, which the contrast gate already grounds). `undefined` (no tag) for a label that is not marked. */
 export function recommendedTag(recommended: boolean): ReactNode {
   return recommended ? <Chip className="dlg-header-chip">Recommended</Chip> : undefined;
 }
@@ -87,7 +93,7 @@ export interface Asker {
  * terminal-only alike, so a surface never forgets to say which session wants an answer.
  */
 export function AskHeader({
-  kicker = 'Claude is asking',
+  kicker = KICKER_ASKING,
   header,
   progress,
   asker,
