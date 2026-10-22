@@ -697,13 +697,20 @@ export function AskTabs({
   busy: boolean;
   onGo: (to: number | 'submit') => void;
 }): ReactNode {
-  // A phone scrolls the chips sideways; the chip of the screen showing is scrolled into the strip's view whenever it
-  // changes, so question 4 of 4 is never the one chip out of sight. `nearest` on both axes: the strip only.
+  // A phone scrolls the chips sideways; the chip of the screen showing is brought into the strip's view whenever it
+  // changes, so question 4 of 4 is never the one chip out of sight. SIDEWAYS ONLY, by the strip's own `scrollLeft`
+  // (D-6325): `scrollIntoView`'s `block: 'nearest'` also scrolls the vertical ancestor, the sheet's one scroller, and
+  // with a long question above the strip it opened the sheet scrolled down to the chip.
   const strip = useRef<HTMLDivElement | null>(null);
   const at = onReview ? 'submit' : active;
   useEffect(() => {
-    const chip = strip.current?.querySelector<HTMLElement>('[aria-current="step"]');
-    chip?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    const row = strip.current;
+    const chip = row?.querySelector<HTMLElement>('[aria-current="step"]');
+    if (!row || !chip) return;
+    const r = row.getBoundingClientRect();
+    const c = chip.getBoundingClientRect();
+    if (c.left < r.left) row.scrollLeft += c.left - r.left;
+    else if (c.right > r.right) row.scrollLeft += c.right - r.right;
   }, [at]);
   // One chip per question, then Submit, drawn by ONE block: the two kinds differ only in what they say and where they go.
   const chips = [

@@ -80,11 +80,13 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
 
   // A new screen (or the sheet opening) puts focus on its highlighted row, under a fine pointer or once the keyboard
   // has been used in the sheet. About a frame on (`FOCUS_DELAY_MS`), so the rows the screen renders are mounted.
+  // `preventScroll` (D-6325, as `Sheet`'s own open-time focus does, D-5610): the sheet has one scroller, and a long
+  // question above the options is not to be scrolled away on open. An arrow key's `focusRow` keeps the normal scroll.
   useEffect(() => {
     if (!open || screen === null || hl === null) return undefined;
     if (!finePointer() && !engaged.current) return undefined;
     const key = hl;
-    const t = setTimeout(() => els.current.get(key)?.focus(), FOCUS_DELAY_MS);
+    const t = setTimeout(() => els.current.get(key)?.focus({ preventScroll: true }), FOCUS_DELAY_MS);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, screenId, screen === null]);
