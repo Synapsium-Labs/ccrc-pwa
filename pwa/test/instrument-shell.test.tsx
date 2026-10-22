@@ -15,8 +15,14 @@
 //   the rail's tooltip on :hover only .................. "…shows on focus-visible"
 //   Wordmark removed from TopBar ....................... skin-boundary (a)
 //   a hex in instrument.css ............................ skin-boundary (c)
+//
+// W2 Task T2e (desk-polish, D-6335): the frame's fourth track, the list column's one head, the pool-lag readout.
+// MUTATION TABLE (plan Task T2e Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
+//   the fourth track unconditional ..................... "the fourth-track attribute follows the set's Inspector part, whatever its id"
+//   the attribute set from the skin id ................. "the fourth-track attribute follows the set's Inspector part, whatever its id"
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
@@ -30,6 +36,9 @@ const { useFleetStore } = await import('../src/stores/fleet');
 const { ROUTES } = await import('../src/lib/routes');
 const { RAIL_ITEMS } = await import('../src/skins/instrument/Rail');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
+const { ShellFrame } = await import('../src/skins/frame');
+const { INSTRUMENT_SET } = await import('../src/skins/instrument/parts');
+const { REFINED_SET } = await import('../src/skins/refined/parts');
 
 const SKIN_DIR = path.join(import.meta.dirname, '..', 'src', 'skins');
 const CSS = readFileSync(path.join(SKIN_DIR, 'instrument', 'instrument.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -306,5 +315,47 @@ describe('one instance per width', () => {
       expect(document.querySelectorAll('footer.shell-status').length, `${at}: status bar`).toBe(desk ? 1 : 0);
       cleanup();
     }
+  });
+});
+
+// ---- Desk polish, T2e (D-6335) ----------------------------------------------------------------------------------
+
+/** The width at which a desk `(min-width: N)` query answers, so one test can stand at 899, 900, 1280 and 1920. */
+function stubAt(width: number): void {
+  vi.stubGlobal('matchMedia', (q: string) => {
+    const min = /min-width:\s*(\d+)px/.exec(q);
+    return {
+      matches: min !== null ? width >= Number(min[1]) : q.includes('pointer: fine'),
+      media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    };
+  });
+}
+
+describe('the desk (T2e): no second head in the list column, no empty fourth column', () => {
+  it("the fourth-track attribute follows the set's Inspector part, whatever its id", () => {
+    function Stub(): ReactNode { return <p>an inspector</p>; }
+    // The frame is driven directly: the sets' own parts read providers this case does not mount.
+    const bare = { Bar: null, Banners: null, Rail: null, Nav: null, StatusBar: null } as const;
+    const attr = (set: Parameters<typeof ShellFrame>[0]['set']): string | null => {
+      const view = render(<ShellFrame set={set} view="fleet" detailRef={{ current: null }}><p>ladder</p></ShellFrame>);
+      const value = view.container.querySelector('.app-shell')!.getAttribute('data-inspector');
+      view.unmount();
+      return value;
+    };
+    stubAt(1920);
+    expect(attr({ ...INSTRUMENT_SET, ...bare, Inspector: Stub })).toBe('placed');
+    expect(attr({ ...INSTRUMENT_SET, ...bare, Inspector: null })).toBe('none');
+    expect(attr({ ...REFINED_SET, ...bare, Inspector: null })).toBe('none');
+    expect(attr({ ...REFINED_SET, ...bare, Inspector: Stub })).toBe('placed');
+    // Instrument's set carries no Inspector part until S12: the attribute reads none for the set as shipped.
+    expect(INSTRUMENT_SET.Inspector).toBeNull();
+    expect(attr({ ...INSTRUMENT_SET, ...bare })).toBe('none');
+    // The sheet keys the 320px track on the attribute and on nothing else.
+    expect(declsOf('.ins-frame', '(min-width: 1600px)')).toMatch(/grid-template-columns:\s*52px 420px minmax\(0, 1fr\)\s*(;|$)/);
+    expect(declsOf(".ins-frame[data-inspector='placed']", '(min-width: 1600px)'))
+      .toMatch(/grid-template-columns:\s*52px 420px minmax\(0, 1fr\) 320px/);
+    for (const media of [null, '(min-width: 900px)'] as const) expect(declsOf('.ins-frame', media), String(media)).not.toMatch(/\b320px/);
+    expect(declsOf('.ins-frame', '(min-width: 1600px)')).not.toMatch(/\b320px/);
   });
 });
