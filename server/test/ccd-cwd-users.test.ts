@@ -428,17 +428,19 @@ describe('the source: one probe, its seams by name, one bounded Linux walk; the 
   });
 });
 
-describe.skipIf(!LINUX)('a cwd link that vanished: confirmed by a second read, its pid asked through its threads until they settle, then read once more', () => {
+describe.skipIf(!LINUX)('a cwd link that vanished: confirmed by a second read, its pid asked through its threads in passes, its link read again after each, accepted only after a settled listing', () => {
   /** A RACE, TIMED TO THE PROBE'S OWN CALLS (test-local: no seam in ccd, and never the real /proc). A fake table cannot
    *  change between two reads the probe makes microseconds apart, and no blocking read lies between a cwd link's read,
    *  its open and its second read (the only reads a FIFO could hold are a stat file's, after a hit). So `python3` on
    *  PATH is a shim, as A15's is: it runs the real python3 on the probe's own text, after a prelude that wraps
-   *  `os.readlink`, `os.open` and `os.listdir`. The wrapper counts each call by its path and, just before the call a
-   *  case names, changes the fake table as the kernel would have changed it at that instant; then it makes the real
-   *  call, so every answer the probe reads is the file system's. `timed-fired` logs each change made, and
-   *  `timed-error` a change that failed. */
+   *  `os.readlink`, `os.open`, `os.listdir` and `os.stat`. The wrapper counts each call by its path and, just before
+   *  the call a case names, changes the fake table as the kernel would have changed it at that instant; then it makes
+   *  the real call, so every answer the probe reads is the file system's. The one exception is an errno no fixture
+   *  file system can answer (ESRCH, EPERM): a step may RETURN that error, and the wrapper raises it IN PLACE of the
+   *  call, a fabricated errno, logged in `timed-fired` as `<call> raised <errno> in place of the call` (R78 (3)).
+   *  `timed-fired` logs each change made, and `timed-error` a change that failed. */
   const PRELUDE = [
-    'import os as _t_os, shutil as _t_sh',
+    'import errno as _t_errno, os as _t_os, shutil as _t_sh',
     '_t_home = _t_os.environ["HOME"]',
     '_t_F = _t_home + "/fp"',
     '_t_seen = {}',
@@ -451,17 +453,22 @@ describe.skipIf(!LINUX)('a cwd link that vanished: confirmed by a second read, i
     '        key = (name, str(path))',
     '        n = _t_seen[key] = _t_seen.get(key, 0) + 1',
     '        try:',
-    '            _t_step(name, key[1], n)',
-    '        except Exception as e:',
+    '            e = _t_step(name, key[1], n)',
+    '        except Exception as x:',
+    '            e = None',
     '            with open(_t_home + "/timed-error", "a") as fh:',
-    '                fh.write("%s %s %d: %r\\n" % (name, key[1], n, e))',
+    '                fh.write("%s %s %d: %r\\n" % (name, key[1], n, x))',
+    '        if isinstance(e, OSError):',
+    '            _t_fired("%s raised %s in place of the call" % (name, _t_errno.errorcode[e.errno]))',
+    '            raise e',
     '        return real(path, *a, **k)',
     '    setattr(_t_os, name, call)',
-    'for _t_n in ("readlink", "open", "listdir"):',
+    'for _t_n in ("readlink", "open", "listdir", "stat"):',
     '    _t_wrap(_t_n)',
   ].join('\n');
-  /** Writes the shim and the case's step (the body of `_t_step(op, path, n)`, `n` the call's count for that path),
-   *  and answers the snippet that puts the shim first on PATH. Any other python3 call runs the real one untouched. */
+  /** Writes the shim and the case's step (the body of `_t_step(op, path, n)`, `n` the call's count for that path; an
+   *  OSError it returns is raised in place of the call), and answers the snippet that puts the shim first on PATH. Any
+   *  other python3 call runs the real one untouched. */
   const timed = (step: readonly string[]): string => {
     fs.mkdirSync(path.join(h.home, 'shim'), { recursive: true });
     fs.writeFileSync(path.join(h.home, 'shim', 'python3'), '#!/bin/sh\n'
@@ -636,4 +643,249 @@ describe.skipIf(!LINUX)('a cwd link that vanished: confirmed by a second read, i
     expect(a.why).toBe(`the walk of ${h.home}/fp did not finish within 1s, so whether a process works inside ${d} was never asked`);
     expect(logOf('timed-error')).toEqual([]);
   }, 60_000);
+
+  // R78: the link of <pid> is read AGAIN after EVERY pass of the thread walk, and a read that answers vanished, reaped
+  // or outside the tree accepts only on a pass whose listing named no tid not asked before, or whose `task/` vanished.
+  // In the fake table 4242's leader tid is `task/4242`, and the pid's link is `fp/4242/cwd`. For a leader whose link
+  // vanished at its first read (`lead`), that read (entries()) is call 1 for the path, the read after pass 1 is call 2,
+  // and the read after pass 2 is call 3.
+
+  /** A tid that `os.listdir` lists AFTER the leader's own 4242 on the file system the fake table lives on, as /proc's
+   *  `task/` lists its leader first. The probe asks a pass's tids in its listing's order, and a fixture directory lists
+   *  in its file system's order (ext4's is a hash order), so a trace that needs the leader asked first takes this tid. */
+  const afterLeader = (): string => {
+    const at = path.join(h.home, 'order');
+    const names = Array.from({ length: 16 }, (_, i) => String(4243 + i));
+    fs.mkdirSync(path.join(at, '4242'), { recursive: true });
+    for (const n of names) fs.mkdirSync(path.join(at, n));
+    const order = h.sh(`python3 -I -c 'import os, sys; print(" ".join(os.listdir(sys.argv[1])))' "${at}"`).trim().split(' ');
+    const t = order.slice(order.indexOf('4242') + 1).find((n) => names.includes(n));
+    expect(t, `the CONTROL: no tid lists after the leader’s on this file system (${order.join(' ')})`).toBeDefined();
+    return t ?? '';
+  };
+
+  it('W1: the reviewer’s DOUBLE EXCHANGE — the leader asked, its thread runs execve and takes the pid and is asked by its old tid (gone); after that listing the pid’s holder starts a thread in the tree and is zapped by that thread’s execve: the read after the pass sends the walk to list `task/` again, which finds it: in use', () => {
+    const d = aliased();
+    const t = afterLeader();
+    const a = ask(d, `${lead}${thread(t, '$HOME/alias/sub')}` + timed([
+      `if op == "readlink" and path == _t_F + "/4242/task/${t}/cwd" and n == 1:`,
+      `    _t_sh.rmtree(_t_F + "/4242/task/${t}")`,
+      '    _t_os.symlink(_t_home + "/alias/sub", _t_F + "/4242/cwd")',
+      '    _t_os.symlink(_t_home + "/alias/sub", _t_F + "/4242/task/4242/cwd")',
+      `    _t_fired("${t} ran execve and took pid 4242")`,
+      'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 2:',
+      '    _t_os.mkdir(_t_F + "/4242/task/4300")',
+      '    _t_os.symlink(_t_home + "/alias/sub", _t_F + "/4242/task/4300/cwd")',
+      '    _t_os.unlink(path)',
+      '    _t_os.unlink(_t_F + "/4242/task/4242/cwd")',
+      '    _t_fired("the holder of pid 4242 started 4300 and was zapped by its execve")',
+    ]));
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe('4242');
+    expect(a.why).toBe(`process 4242 has its working directory at ${h.home}/alias/sub, inside ${d} by device and inode`);
+    expect(fired(), 'the CONTROL: both exchanges were placed').toEqual([`${t} ran execve and took pid 4242`,
+      'the holder of pid 4242 started 4300 and was zapped by its execve']);
+    expect(logOf('timed-error')).toEqual([]);
+  }, 60_000);
+
+  it('W2: the pid handed on between a pass’s read and the next listing, to a thread that listing no longer names (its old tid went with the released leader): the read AFTER that settled listing finds it — a regression pin, mutation-pinned (green before R78 too)', () => {
+    const d = tree();
+    fs.mkdirSync(path.join(h.home, 'elsewhere'));
+    const a = ask(d, `${lead}${thread('4243', '$HOME/elsewhere')}` + timed([
+      'if op == "listdir" and path == _t_F + "/4242/task" and n == 2:',
+      '    _t_sh.rmtree(path + "/4243")',
+      `    _t_os.symlink(${lit(`${real(d)}/sub`)}, _t_F + "/4242/cwd")`,
+      `    _t_os.symlink(${lit(`${real(d)}/sub`)}, path + "/4242/cwd")`,
+      '    _t_fired("a thread started by 4243 ran execve: it took pid 4242, and 4243 was zapped")',
+    ]));
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe('4242');
+    expect(a.why).toBe(`process 4242 has its working directory at ${real(d)}/sub`);
+    expect(fired()).toEqual(['a thread started by 4243 ran execve: it took pid 4242, and 4243 was zapped']);
+    expect(logOf('timed-error')).toEqual([]);
+  }, 60_000);
+
+  it('W3: the NAMED RESIDUAL cwd-probe-pid-handoff-between-reads (one execve and one leader exit, schedule S3) — a thread in the tree starts Q and exits; Q runs execve and takes the pid between a read and the listing after it; then Q starts U in the tree and exits as the group leader before the next read: the walk accepts, nobody. Pinned as the limit the header names, NOT a guard', () => {
+    const d = tree();
+    const sub = `${real(d)}/sub`;
+    const a = ask(d, `${lead}${thread('4243', sub)}` + timed([
+      'if op == "readlink" and path == _t_F + "/4242/task/4243/cwd" and n == 1:',
+      '    _t_sh.rmtree(_t_F + "/4242/task/4243")',
+      '    _t_os.mkdir(_t_F + "/4242/task/4244")',
+      `    _t_os.symlink(${lit(sub)}, _t_F + "/4242/task/4244/cwd")`,
+      '    _t_fired("4243 started 4244 and exited")',
+      'if op == "listdir" and path == _t_F + "/4242/task" and n == 2:',
+      '    _t_sh.rmtree(path + "/4244")',
+      `    _t_os.symlink(${lit(sub)}, _t_F + "/4242/cwd")`,
+      `    _t_os.symlink(${lit(sub)}, path + "/4242/cwd")`,
+      '    _t_fired("4244 ran execve and took pid 4242")',
+      'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 3:',
+      '    _t_os.mkdir(_t_F + "/4242/task/4245")',
+      `    _t_os.symlink(${lit(sub)}, _t_F + "/4242/task/4245/cwd")`,
+      '    _t_os.unlink(path)',
+      '    _t_os.unlink(_t_F + "/4242/task/4242/cwd")',
+      '    _t_fired("the holder of pid 4242 started 4245 and exited as the group leader")',
+    ]));
+    expect(a.rc, `the residual, as named: ${a.why}`).toBe('0');
+    expect(fired()).toEqual(['4243 started 4244 and exited', '4244 ran execve and took pid 4242',
+      'the holder of pid 4242 started 4245 and exited as the group leader']);
+    expect(fs.readlinkSync(path.join(h.home, 'fp', '4242', 'task', '4245', 'cwd')), 'the CONTROL: 4245 works in the tree as the walk accepts').toBe(sub);
+    expect(logOf('timed-error')).toEqual([]);
+  }, 60_000);
+
+  it('W4: a read that finds the pid OUTSIDE the tree waits for a settled listing too — the thread ran execve and took the pid, and its new image started a thread with its own fs in the tree after the listing: another pass finds it, in use', () => {
+    const d = tree();
+    fs.mkdirSync(path.join(h.home, 'elsewhere'));
+    const a = ask(d, `${lead}${thread('4243', '$HOME/elsewhere')}` + timed([
+      'if op == "readlink" and path == _t_F + "/4242/task/4243/cwd" and n == 1:',
+      '    _t_sh.rmtree(_t_F + "/4242/task/4243")',
+      '    _t_os.symlink(_t_home + "/elsewhere", _t_F + "/4242/cwd")',
+      '    _t_os.symlink(_t_home + "/elsewhere", _t_F + "/4242/task/4242/cwd")',
+      '    _t_os.mkdir(_t_F + "/4242/task/4244")',
+      `    _t_os.symlink(${lit(`${real(d)}/sub`)}, _t_F + "/4242/task/4244/cwd")`,
+      '    _t_fired("4243 ran execve and took pid 4242; its new image started 4244 in the tree")',
+    ]));
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe('4242');
+    expect(a.why).toBe(`process 4242 has its working directory at ${real(d)}/sub`);
+    expect(fired()).toEqual(['4243 ran execve and took pid 4242; its new image started 4244 in the tree']);
+    expect(logOf('timed-error')).toEqual([]);
+  }, 60_000);
+
+  it('W9: EPERM at the read after a pass (the hidepid or LSM answer; FABRICATED, as no fixture file system answers EPERM), the stat file gone, is UNMEASURED — only EACCES itself is ever read as a reaped pid', () => {
+    const d = tree();
+    const a = ask(d, lead + timed([
+      'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 2:',
+      '    _t_os.unlink(_t_F + "/4242/stat")',
+      '    _t_fired("the stat file of 4242 is gone")',
+      '    return OSError(_t_errno.EPERM, "fabricated EPERM", path)',
+    ]));
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toBe(`the processes of this box could not be measured (${h.home}/fp, exit 3), so whether one works inside ${d} was never asked`);
+    expect(fired()).toEqual(['the stat file of 4242 is gone', 'readlink raised EPERM in place of the call']);
+    expect(logOf('timed-error')).toEqual([]);
+  }, 60_000);
+
+  it('W11: a top-level link whose open answered ENOENT, its stat file standing, and whose second read answers ESRCH (FABRICATED, as no fixture file system answers ESRCH) is UNMEASURED — ENOENT alone confirms there', () => {
+    const d = aliased();
+    const a = ask(d, `${FAKE} fakep 4242 "$HOME/alias/sub" 1; mkdir -p "$HOME/fp/4242/task/4242";` + timed([
+      'if op == "open" and path == _t_F + "/4242/cwd" and n == 1:',
+      '    _t_os.unlink(path)',
+      '    _t_fired("4242 released its cwd")',
+      'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 2:',
+      '    return OSError(_t_errno.ESRCH, "fabricated ESRCH", path)',
+    ]));
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain('could not be measured');
+    expect(fired()).toEqual(['4242 released its cwd', 'readlink raised ESRCH in place of the call']);
+    expect(logOf('timed-error')).toEqual([]);
+  }, 60_000);
+
+  describe.skipIf(ROOT_USER)('R78’s EACCES rows, made by chmod: NON-ROOT ONLY — root reads straight through a mode, so as root they SKIP, never pass vacuously', () => {
+    /** 4242's directory, whose mode makes its links answer EACCES: restored after each case. */
+    const pidDir = (): string => path.join(h.home, 'fp', '4242');
+    const unlock = (): void => { if (fs.existsSync(pidDir())) fs.chmodSync(pidDir(), 0o755); };
+
+    it('W5: EACCES at the read after a pass (how a pid reaped mid-call answers), the stat file asked AFTER it gone, reads as vanished — and the walk still accepts only after a settled listing', () => {
+      const d = tree();
+      try {
+        const a = ask(d, lead + timed([
+          'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 2:',
+          '    _t_os.chmod(_t_F + "/4242", 0)',
+          '    _t_fired("4242 reaped mid-call: its link answers EACCES")',
+          'if op == "stat" and path == _t_F + "/4242/stat" and n == 1:',
+          '    _t_os.chmod(_t_F + "/4242", 0o755)',
+          '    _t_sh.rmtree(_t_F + "/4242")',
+          '    _t_fired("its stat file is gone")',
+          'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 3:',
+          '    _t_fired("read again after a settled listing")',
+        ]));
+        expect(a.rc, a.why).toBe('0');
+        expect(fired(), 'the CONTROL: the reaped read, its stat, then a read after the settled listing')
+          .toEqual(['4242 reaped mid-call: its link answers EACCES', 'its stat file is gone', 'read again after a settled listing']);
+        expect(logOf('timed-error')).toEqual([]);
+      } finally { unlock(); }
+    }, 60_000);
+
+    it('W5b: the same EACCES, its stat file then answering ESRCH (FABRICATED; gone() reads ENOENT and ESRCH alike), reads as vanished', () => {
+      const d = tree();
+      try {
+        const a = ask(d, lead + timed([
+          'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 2:',
+          '    _t_os.chmod(_t_F + "/4242", 0)',
+          '    _t_fired("4242 reaped mid-call: its link answers EACCES")',
+          'if op == "stat" and path == _t_F + "/4242/stat" and n == 1:',
+          '    _t_os.chmod(_t_F + "/4242", 0o755)',
+          '    _t_sh.rmtree(_t_F + "/4242")',
+          '    return OSError(_t_errno.ESRCH, "fabricated ESRCH", path)',
+          'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 3:',
+          '    _t_fired("read again after a settled listing")',
+        ]));
+        expect(a.rc, a.why).toBe('0');
+        expect(fired()).toEqual(['4242 reaped mid-call: its link answers EACCES', 'stat raised ESRCH in place of the call',
+          'read again after a settled listing']);
+        expect(logOf('timed-error')).toEqual([]);
+      } finally { unlock(); }
+    }, 60_000);
+
+    it('W7: EACCES at the read after a settled listing while the stat file still READS (a live group that turned non-dumpable answers so) is UNMEASURED', () => {
+      const d = tree();
+      try {
+        const a = ask(d, lead + timed([
+          'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 3:',
+          '    _t_os.chmod(_t_F + "/4242", 0)',
+          '    _t_fired("the link of 4242 answers EACCES")',
+          'if op == "stat" and path == _t_F + "/4242/stat" and n == 1:',
+          '    _t_os.chmod(_t_F + "/4242", 0o755)',
+          '    _t_fired("its stat file still reads")',
+        ]));
+        expect(a.rc, a.why).toBe('2');
+        expect(a.why).toBe(`the processes of this box could not be measured (${h.home}/fp, exit 3), so whether one works inside ${d} was never asked`);
+        expect(fired()).toEqual(['the link of 4242 answers EACCES', 'its stat file still reads']);
+        expect(logOf('timed-error')).toEqual([]);
+      } finally { unlock(); }
+    }, 60_000);
+
+    it('W8: EACCES at that read, the stat file then answering ANOTHER errno (ELOOP here) is UNMEASURED', () => {
+      const d = tree();
+      try {
+        const a = ask(d, lead + timed([
+          'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 3:',
+          '    _t_os.chmod(_t_F + "/4242", 0)',
+          '    _t_fired("the link of 4242 answers EACCES")',
+          'if op == "stat" and path == _t_F + "/4242/stat" and n == 1:',
+          '    _t_os.chmod(_t_F + "/4242", 0o755)',
+          '    _t_os.unlink(path)',
+          '    _t_os.symlink("stat", path)',
+          '    _t_fired("its stat file answers ELOOP")',
+        ]));
+        expect(a.rc, a.why).toBe('2');
+        expect(a.why).toContain('could not be measured');
+        expect(fired()).toEqual(['the link of 4242 answers EACCES', 'its stat file answers ELOOP']);
+        expect(logOf('timed-error')).toEqual([]);
+      } finally { unlock(); }
+    }, 60_000);
+
+    it('W10: a top-level link whose open answered ENOENT, its stat file standing, and whose SECOND read answers EACCES is UNMEASURED even when the stat file then answers ENOENT — the reaped-pid reading belongs to the read after a pass alone', () => {
+      const d = aliased();
+      try {
+        const a = ask(d, `${FAKE} fakep 4242 "$HOME/alias/sub" 1; mkdir -p "$HOME/fp/4242/task/4242";` + timed([
+          'if op == "open" and path == _t_F + "/4242/cwd" and n == 1:',
+          '    _t_os.unlink(path)',
+          '    _t_fired("4242 released its cwd")',
+          'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 2:',
+          '    _t_os.chmod(_t_F + "/4242", 0)',
+          '    _t_fired("its link answers EACCES")',
+          'if op == "stat" and path == _t_F + "/4242/stat" and n == 2:',
+          '    _t_os.chmod(_t_F + "/4242", 0o755)',
+          '    _t_sh.rmtree(_t_F + "/4242")',
+          '    _t_fired("its stat file is gone")',
+        ]));
+        expect(a.rc, a.why).toBe('2');
+        expect(a.why).toContain('could not be measured');
+        expect(fired()).toEqual(['4242 released its cwd', 'its link answers EACCES']);
+        expect(logOf('timed-error')).toEqual([]);
+      } finally { unlock(); }
+    }, 60_000);
+  });
 });
