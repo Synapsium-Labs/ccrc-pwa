@@ -528,6 +528,27 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
 
 const pendingPath = (dir: string): string => join(dir, 'auth.pending.json');
 const lockPath = (dir: string): string => join(dir, 'auth.json.lock');
+const statusPath = (dir: string): string => join(dir, 'auth.status.json');
+
+/** The account id every token the fake endpoint issues carries (so a status file can be checked for it). */
+const ISSUED_ACCOUNT_ID = 'acct-fixture-issued';
+
+/** A token answer the fake endpoint gives a refresh: three new tokens, the access token's `exp` `expiresIn` seconds
+ *  from now (default 3600; inside the 60 s skew a refreshed lane is still expiring). Fields set to `undefined` in `o`
+ *  are left out of the answer. */
+function issuedAnswer(o: { expiresIn?: number; omit?: Array<'access_token' | 'refresh_token' | 'id_token'> } = {}): Record<string, unknown> {
+  const now = Math.floor(Date.now() / 1000);
+  const claim = { [ACCOUNT_CLAIM]: { chatgpt_account_id: ISSUED_ACCOUNT_ID } };
+  const answer: Record<string, unknown> = {
+    access_token: syntheticJwt({ exp: now + (o.expiresIn ?? 3600), iat: now, jti: randomBytes(8).toString('hex'), ...claim }),
+    refresh_token: `rtok-fixture-issued-${randomBytes(16).toString('hex')}`,
+    id_token: syntheticJwt({ exp: now + 3600, iat: now, email: 'lane-a@example.invalid', ...claim }),
+    token_type: 'Bearer',
+    expires_in: o.expiresIn ?? 3600,
+  };
+  for (const k of o.omit ?? []) delete answer[k];
+  return answer;
+}
 const modeOf = (p: string): number => lstatSync(p).mode & 0o777;
 const fileRecord = (dir: string): Record<string, unknown> =>
   JSON.parse(readFileSync(credPath(dir), 'utf8')) as Record<string, unknown>;
@@ -570,13 +591,22 @@ const FOREIGN_WRITES = FOREIGN.filter(([name]) => ['codex-cli', 'siwc', 'api-key
 
 describe.skipIf(!PY)('the lock and the commit (codex-bridge spec §2.6, figure 4)', () => {
   it('under a 0277 umask every file is 0600 and a new authDir 0700: credential, checkpoint and lock', async () => {
+    // Task 3 adds the status file to this case: it is named in the last expectation's message, not in the title, so
+    // Task 2's mutation records keep naming the case they named.
     const home = mkTmp('codex-auth-umask-');
     const top = join(home, 'lvl1');
     const dir = join(top, 'lvl2');
+    const srv = await fakeAuthServer({ token: [{ status: 200, body: issuedAnswer() }] });
     try {
       const a = await runAuthDriver(home, { authDir: dir, umask: 0o277, ops: [{ op: 'commit', record: nextRecord() }] });
       expect(a.status, a.stderr).toBe(0);
       expect(driverLines(a.stdout)[0].result).toBe(true);
+      // A refresh (forced by a 10000 s window over a token fresh for 7200 s) writes the status file (Task 3).
+      const s = await runAuthDriver(home, { authDir: dir, umask: 0o277, ops: [{ op: 'ensure_fresh', withinS: 10000 }] },
+        { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(s.status, s.stderr).toBe(0);
+      expect(srv.requests).toHaveLength(1);
+      expect(modeOf(statusPath(dir)), 'the status file').toBe(0o600);
       // The checkpoint left behind by a crash between its fsync and the rename.
       const b = await runAuthDriver(home, {
         authDir: dir, umask: 0o277, faults: ['die-before-rename'], ops: [{ op: 'commit', record: nextRecord('acct-fixture-2') }],
@@ -587,6 +617,7 @@ describe.skipIf(!PY)('the lock and the commit (codex-bridge spec §2.6, figure 4
         lvl1: modeOf(top), lvl2: modeOf(dir),
       }).toEqual({ credential: 0o600, checkpoint: 0o600, lock: 0o600, lvl1: 0o700, lvl2: 0o700 });
     } finally {
+      await srv.close();
       // A mutated `held` leaves the levels without their search bit; the cleanup needs it back.
       for (const d of [top, dir]) { try { chmodSync(d, 0o700); } catch { /* absent */ } }
     }
@@ -1213,6 +1244,544 @@ describe.skipIf(!PY)('the lock and the commit (codex-bridge spec §2.6, figure 4
     expect(lines[0]).toContain(dir);
     for (const piece of secretPieces([...planted, rec.access_token as string, rec.refresh_token as string, rec.id_token as string])) {
       expect(r.stderr).not.toContain(piece);
+    }
+  });
+});
+
+// ── Task 3: the refresh, its error codes and the status file ───────────────────────────────────────────────────
+
+/** The spec's six codes that mean needs-signin (spec §2.6), spelled here as the test's own copy of the contract. */
+const NEEDS_SIGNIN_CODES = [
+  'invalid_grant', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated',
+  'refresh_token_reused',
+];
+
+const statusText = (dir: string): string => readFileSync(statusPath(dir), 'utf8');
+const statusOf = (dir: string): Record<string, any> => JSON.parse(statusText(dir)) as Record<string, any>;
+
+type IdentityKey = { ino: string; mtimeNs: string; size: string };
+
+/** The credential's identity as the status file records it, compared exactly: `mtimeNs` is past 2**53, so each field
+ *  is read from the raw text, never through JSON.parse. `null` when the status records no identity. */
+function statusIdentity(text: string): IdentityKey | null {
+  const m = /"identity":\s*(null|\{[^}]*\})/.exec(text);
+  expect(m, 'the status file names an identity').not.toBeNull();
+  if ((m as RegExpExecArray)[1] === 'null') return null;
+  const body = (m as RegExpExecArray)[1];
+  const field = (k: string): string => (new RegExp(`"${k}":\\s*(\\d+)`).exec(body) as RegExpExecArray)[1];
+  return { ino: field('ino'), mtimeNs: field('mtimeNs'), size: field('size') };
+}
+
+/** The credential file's lstat, in the same exact form. */
+function fileIdentity(dir: string): IdentityKey {
+  const s = lstatSync(credPath(dir), { bigint: true });
+  return { ino: String(s.ino), mtimeNs: String(s.mtimeNs), size: String(s.size) };
+}
+
+/** The three tokens of a token answer (or of a planting). */
+const tokensOf = (o: Record<string, unknown>): string[] =>
+  ['access_token', 'refresh_token', 'id_token', 'access', 'refresh', 'id']
+    .map((k) => o[k]).filter((v): v is string => typeof v === 'string');
+
+// Every status file a Task 3 case left, with the secrets it must not hold; the closing case re-checks them all.
+const STATUS_SCANS: Array<{ dir: string; secrets: string[] }> = [];
+
+/** The status file, if one exists, holds no token, no `.`-separated segment of one and no account id. */
+function expectStatusClean(dir: string, secrets: string[]): void {
+  STATUS_SCANS.push({ dir, secrets });
+  if (!existsSync(statusPath(dir))) return;
+  const text = statusText(dir);
+  for (const piece of secretPieces(secrets)) expect(text, 'the status file holds a token piece').not.toContain(piece);
+  for (const id of [FIXTURE_ACCOUNT_ID, ISSUED_ACCOUNT_ID, 'acct-fixture-1']) {
+    expect(text, 'the status file holds an account id').not.toContain(id);
+  }
+}
+
+/** Run `fn` against a fresh fakeAuthServer, closing it afterwards. */
+async function withAuth<T>(script: Parameters<typeof fakeAuthServer>[0], fn: (srv: Awaited<ReturnType<typeof fakeAuthServer>>) => Promise<T>): Promise<T> {
+  const srv = await fakeAuthServer(script);
+  try {
+    return await fn(srv);
+  } finally {
+    await srv.close();
+  }
+}
+
+/** One driver run of `ops` against `base`; its lines. */
+async function runFresh(
+  home: string, dir: string, base: string, ops: object[] = [{ op: 'ensure_fresh' }], extra: object = {},
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  o: { timeoutMs?: number; onLine?: (line: Record<string, any>) => void } = {},
+): Promise<{ status: number | null; stdout: string; stderr: string; lines: Array<Record<string, any>> }> {
+  const r = await runAuthDriver(home, { authDir: dir, ops, ...extra }, { CCRC_CODEX_AUTH_BASE: base }, o);
+  expect(r.timedOut, r.stderr).toBe(false);
+  return { ...r, lines: driverLines(r.stdout) };
+}
+
+/** A 400 refusal of the refresh, whose kind and stored code a case asserts. */
+async function refusal(body: unknown, status = 400): Promise<{ line: Record<string, any>; st: Record<string, any>; text: string; requests: number; fileId: IdentityKey }> {
+  const home = mkTmp('codex-auth-refusal-');
+  const dir = laneDir(home);
+  const t = plantBackendCredential(dir, { expiresIn: -120 });
+  return withAuth({ token: [{ status, body }] }, async (srv) => {
+    const r = await runFresh(home, dir, srv.base);
+    expectStatusClean(dir, tokensOf(t));
+    return { line: r.lines[0], st: statusOf(dir), text: statusText(dir), requests: srv.requests.length, fileId: fileIdentity(dir) };
+  });
+}
+
+describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
+  it('a valid token is returned with no lock taken and no request made', async () => {
+    const home = mkTmp('codex-auth-valid-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir);
+    await withAuth({ token: [{ status: 200, body: issuedAnswer() }] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.lines[0]).toMatchObject({ credential: 'present', access_token: t.access.length, refresh_token: t.refresh.length });
+      expect(srv.requests).toHaveLength(0);
+      expect(existsSync(lockPath(dir)), 'no lock was taken').toBe(false);
+      expect(existsSync(statusPath(dir)), 'nothing was written').toBe(false);
+    });
+  });
+
+  it('an expiring token is refreshed once: new tokens on disk, status ok with lastRefreshAt and lastRequestId', async () => {
+    const home = mkTmp('codex-auth-refresh-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: 30 });
+    const answer = issuedAnswer();
+    await withAuth({ token: [{ status: 200, body: answer, headers: { 'x-request-id': 'req-fixture-1' } }] }, async (srv) => {
+      const started = Math.floor(Date.now() / 1000);
+      const r = await runFresh(home, dir, srv.base);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stderr).toBe('');
+      expect(r.lines[0]).toMatchObject({
+        credential: 'present', access_token: (answer.access_token as string).length,
+        refresh_token: (answer.refresh_token as string).length, account_id: ISSUED_ACCOUNT_ID,
+      });
+      expect(srv.requests).toHaveLength(1);
+      const q = srv.requests[0];
+      expect([q.method, q.path, q.headers['content-type']]).toEqual(['POST', AUTH_ROUTES.token, 'application/json']);
+      expect(q.form).toMatchObject({ grant_type: 'refresh_token', refresh_token: t.refresh, scope: 'openid profile email' });
+      expect(typeof q.form?.client_id).toBe('string');
+      const exp = payloadOf(answer.access_token as string).exp as number;
+      expect(fileRecord(dir), 'LiteLLM\'s five keys, and no other').toEqual({
+        access_token: answer.access_token, refresh_token: answer.refresh_token, id_token: answer.id_token,
+        expires_at: exp, account_id: ISSUED_ACCOUNT_ID,
+      });
+      const st = statusOf(dir);
+      expect(st).toMatchObject({
+        version: 1, family: 'chatgpt-backend', state: 'ok', expiresAt: exp, lastErrorCode: null,
+        lastRequestId: 'req-fixture-1', consent: null, unsaved: false,
+      });
+      expect(Object.keys(st).sort()).toEqual([
+        'configHash', 'consent', 'expiresAt', 'family', 'identity', 'lastErrorCode', 'lastRefreshAt', 'lastRequestId',
+        'state', 'unsaved', 'updatedAt', 'version',
+      ]);
+      expect(st.lastRefreshAt).toBeGreaterThanOrEqual(started);
+      expect(st.lastRefreshAt).toBeLessThanOrEqual(started + 30);
+      expect(st.configHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(statusIdentity(statusText(dir)), 'the status binds the new file').toEqual(fileIdentity(dir));
+      expect(existsSync(pendingPath(dir))).toBe(false);
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
+  // Both drivers print a `paths` line once loaded, then wait on one barrier file the case writes when it has seen both
+  // lines, so their refreshes start within a poll of each other, well inside the server's 300 ms delay.
+  const raceTwo = (home: string, dir: string, base: string): Promise<Array<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }>> => {
+    const barrier = join(home, 'go');
+    let ready = 0;
+    const one = (): ReturnType<typeof runAuthDriver> => runAuthDriver(home, {
+      authDir: dir, ops: [{ op: 'paths' }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'ensure_fresh' }],
+    }, { CCRC_CODEX_AUTH_BASE: base }, {
+      onLine: (l) => { if (l.op === 'paths' && ++ready === 2) writeFileSync(barrier, ''); },
+    });
+    return Promise.all([one(), one()]);
+  };
+
+  it('two processes racing a refresh make exactly one token request', async () => {
+    const home = mkTmp('codex-auth-race-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const answer = issuedAnswer();
+    await withAuth({ token: [{ status: 200, body: answer, delayMs: 300 }] }, async (srv) => {
+      const runs = await raceTwo(home, dir, srv.base);
+      for (const r of runs) {
+        expect(r.timedOut).toBe(false);
+        expect(r.stdout, 'neither driver saw its refresh token spent').not.toContain('refresh_token_reused');
+        expect(r.status, r.stdout + r.stderr).toBe(0);
+        const last = driverLines(r.stdout)[2];
+        expect(last).toMatchObject({ credential: 'present', access_token: (answer.access_token as string).length });
+      }
+      expect(srv.requests).toHaveLength(1);
+      expect(fileRecord(dir).refresh_token).toBe(answer.refresh_token);
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
+  it('two processes racing into invalid_grant make exactly one token request', async () => {
+    const home = mkTmp('codex-auth-race-grant-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    await withAuth({ token: [{ status: 400, body: { error: 'invalid_grant' }, delayMs: 300 }] }, async (srv) => {
+      const runs = await raceTwo(home, dir, srv.base);
+      for (const r of runs) {
+        expect(r.timedOut).toBe(false);
+        expect(driverLines(r.stdout)[2].error, r.stdout + r.stderr).toBe('needs-signin');
+      }
+      expect(srv.requests).toHaveLength(1);
+      expect(statusOf(dir).state).toBe('needs-signin');
+      expectStatusClean(dir, tokensOf(t));
+    });
+  });
+
+  it('a needs-signin credential answers at once while another process holds the lock', async () => {
+    const home = mkTmp('codex-auth-barred-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const ready = join(home, 'a-holds');
+    await withAuth({ token: [{ status: 400, body: { error: 'invalid_grant' } }] }, async (srv) => {
+      const aRun = runAuthDriver(home, {
+        authDir: dir, ops: [{ op: 'ensure_fresh' }, { op: 'hold', ms: 5000, touch: ready }],
+      }, { CCRC_CODEX_AUTH_BASE: srv.base }, { timeoutMs: 15000 });
+      const bRun = runAuthDriver(home, {
+        authDir: dir, ops: [{ op: 'wait', path: ready, timeoutMs: 10000 }, { op: 'ensure_fresh' }],
+      }, { CCRC_CODEX_AUTH_BASE: srv.base }, { timeoutMs: 15000 });
+      const [a, b] = await Promise.all([aRun, bRun]);
+      expect(driverLines(a.stdout)[0].error, a.stdout + a.stderr).toBe('needs-signin');
+      const answer = driverLines(b.stdout)[1];
+      expect(answer.error, b.stdout + b.stderr).toBe('needs-signin');
+      expect(answer.ms, 'B never waited on A\'s lock').toBeLessThan(1000);
+      expect(srv.requests, 'A\'s request alone').toHaveLength(1);
+      expectStatusClean(dir, tokensOf(t));
+    });
+  });
+
+  it('a crash between the token answer and the commit is recovered from the checkpoint', async () => {
+    const home = mkTmp('codex-auth-refresh-crash-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const answer = issuedAnswer();
+    await withAuth({ token: [{ status: 200, body: answer }] }, async (srv) => {
+      const a = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh' }], { faults: ['die-before-rename'] });
+      expect(a.status, a.stderr).toBe(9);
+      expect(existsSync(pendingPath(dir)), 'the checkpoint survived the crash').toBe(true);
+      const b = await runFresh(home, dir, srv.base);
+      expect(b.status, b.stdout + b.stderr).toBe(0);
+      expect(b.lines[0]).toMatchObject({ credential: 'present', access_token: (answer.access_token as string).length });
+      expect(srv.requests, 'no further request').toHaveLength(1);
+      expect(fileRecord(dir).refresh_token).toBe(answer.refresh_token);
+      expect(existsSync(pendingPath(dir))).toBe(false);
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
+  it('a full disk loses nothing: the refresh is served from memory, written by the next call, and asked for once', async () => {
+    const home = mkTmp('codex-auth-refresh-enospc-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const old = readFileSync(credPath(dir), 'utf8');
+    const answer = issuedAnswer();
+    const barrier = join(home, 'checked');
+    let afterFirst = '';
+    let fileIdAtFirst: IdentityKey | null = null;
+    let fileAtFirst = '';
+    await withAuth({ token: [{ status: 200, body: answer }] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base, [
+        { op: 'ensure_fresh' }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'ensure_fresh' },
+      ], { faults: ['enospc-writes:1'] }, {
+        onLine: (l) => {
+          if (l.op !== 'ensure_fresh' || existsSync(barrier)) return;
+          afterFirst = existsSync(statusPath(dir)) ? statusText(dir) : '';
+          fileIdAtFirst = fileIdentity(dir);
+          fileAtFirst = readFileSync(credPath(dir), 'utf8');
+          writeFileSync(barrier, '');
+        },
+      });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      const [first, , second] = r.lines;
+      const len = (answer.access_token as string).length;
+      expect(first).toMatchObject({ credential: 'present', access_token: len });
+      expect(second).toMatchObject({ credential: 'present', access_token: len });
+      expect(srv.requests, 'one request in total').toHaveLength(1);
+      expect(fileAtFirst, 'the first call could not write').toBe(old);
+      expect(afterFirst, 'the first call wrote its status').not.toBe('');
+      expect(JSON.parse(afterFirst)).toMatchObject({ state: 'ok', unsaved: true });
+      expect(statusIdentity(afterFirst), 'the status binds the file still on disk').toEqual(fileIdAtFirst);
+      expect(fileRecord(dir).refresh_token, 'the second call wrote the record').toBe(answer.refresh_token);
+      expect(existsSync(pendingPath(dir)), 'no checkpoint is left').toBe(false);
+      const st = statusOf(dir);
+      expect(st).toMatchObject({ state: 'ok', unsaved: false });
+      expect(typeof st.lastRefreshAt).toBe('number');
+      expect(statusIdentity(statusText(dir)), 'the status binds the new file').toEqual(fileIdentity(dir));
+      expect(r.stderr).toBe('');
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
+  it('a disk that stays full asks once: every call is answered from memory', async () => {
+    const home = mkTmp('codex-auth-refresh-full-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: 30 });
+    const old = readFileSync(credPath(dir), 'utf8');
+    const answer = issuedAnswer();
+    await withAuth({ token: [{ status: 200, body: answer }, { status: 200, body: issuedAnswer() }] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh' }, { op: 'ensure_fresh' }, { op: 'ensure_fresh' }],
+        { faults: ['enospc-writes:3'] });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.lines.map((l) => l.access_token)).toEqual(Array(3).fill((answer.access_token as string).length));
+      expect(srv.requests, 'one request in total').toHaveLength(1);
+      expect(readFileSync(credPath(dir), 'utf8'), 'the disk stayed full').toBe(old);
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
+  it.each(NEEDS_SIGNIN_CODES)('%s lands in needs-signin, and is never retried', async (code) => {
+    const home = mkTmp('codex-auth-signin-code-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    await withAuth({ token: [{ status: 400, body: { error: code } }, { status: 200, body: issuedAnswer() }] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh', lane: 'codex-a' }, { op: 'ensure_fresh' }]);
+      expect(r.lines.map((l) => l.error), r.stderr).toEqual(['needs-signin', 'needs-signin']);
+      expect(r.lines[0].message).toContain('ccrc codex login codex-a');
+      expect(srv.requests, 'never retried').toHaveLength(1);
+      expect(statusOf(dir)).toMatchObject({ state: 'needs-signin', lastErrorCode: code });
+      expect(statusIdentity(statusText(dir))).toEqual(fileIdentity(dir));
+      expectStatusClean(dir, tokensOf(t));
+    });
+  });
+
+  it('invalid_client lands in config-error, and a changed library config retries once', async () => {
+    const home = mkTmp('codex-auth-client-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const refused = { status: 400, body: { error: 'invalid_client' } };
+    await withAuth({ token: [refused, refused, refused] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh' }, { op: 'ensure_fresh' }]);
+      expect(r.lines.map((l) => l.error), r.stderr).toEqual(['config-error', 'config-error']);
+      expect(srv.requests, 'a second call makes no request').toHaveLength(1);
+      expect(statusOf(dir)).toMatchObject({ state: 'config-error', lastErrorCode: 'invalid_client' });
+      const changed = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh' }, { op: 'ensure_fresh' }],
+        { consts: { CLIENT_ID: 'app_fixture_changed' } });
+      expect(changed.lines.map((l) => l.error), changed.stderr).toEqual(['config-error', 'config-error']);
+      expect(srv.requests, 'the changed config retried exactly once').toHaveLength(2);
+      expect(srv.requests[1].form?.client_id).toBe('app_fixture_changed');
+      expectStatusClean(dir, tokensOf(t));
+    });
+  });
+
+  it.each([
+    ['nested', { error: { code: 'invalid_grant' } }],
+    ['top-level', { code: 'invalid_grant' }],
+  ])('%s: the nested and the top-level code are read as Codex reads them: needs-signin, lastErrorCode invalid_grant', async (_n, body) => {
+    const { line, st } = await refusal(body);
+    expect(line.error).toBe('needs-signin');
+    expect(st).toMatchObject({ state: 'needs-signin', lastErrorCode: 'invalid_grant' });
+  });
+
+  it.each([
+    ['an empty body', '', null],
+    ['server_error', { error: 'server_error' }, 'server_error'],
+  ])('a 401 is needs-signin whatever its code (%s)', async (_n, body, code) => {
+    const { line, st } = await refusal(body, 401);
+    expect(line.error).toBe('needs-signin');
+    expect(st).toMatchObject({ state: 'needs-signin', lastErrorCode: code });
+  });
+
+  it('a 401 carrying invalid_client is config-error', async () => {
+    const { line, st } = await refusal({ error: 'invalid_client' }, 401);
+    expect(line.error).toBe('config-error');
+    expect(st).toMatchObject({ state: 'config-error', lastErrorCode: 'invalid_client' });
+  });
+
+  it('invalid_grant on a 503 is transient, as Codex classifies it', async () => {
+    const { line, st } = await refusal({ error: 'invalid_grant' }, 503);
+    expect(line.error).toBe('refresh-failed');
+    expect(st).toMatchObject({ state: 'ok', lastErrorCode: 'invalid_grant' });
+  });
+
+  it.each([
+    ['129 characters', 'x'.repeat(129)],
+    ['a control character', 'invalid\u0007grant'],
+    ['a space', 'invalid grant'],
+  ])('an error code outside CODE_RE is stored as unrecognised (%s)', async (_n, raw) => {
+    const { line, st, text } = await refusal({ error: raw });
+    expect(line.error).toBe('refresh-failed');
+    expect(st.lastErrorCode).toBe('unrecognised');
+    expect(text).not.toContain(raw);
+    expect(text, 'nor its JSON-escaped form').not.toContain(JSON.stringify(raw).slice(1, -1));
+    expect(line.message).not.toContain(raw);
+  });
+
+  it('a 400 INVALID_GRANT is needs-signin: codes are compared lower-cased, as Codex compares them', async () => {
+    const { line, st } = await refusal({ error: 'INVALID_GRANT' });
+    expect(line.error).toBe('needs-signin');
+    expect(st.lastErrorCode).toBe('invalid_grant');
+  });
+
+  it('an empty error falls through to a top-level code, as Codex skips blank strings', async () => {
+    const { line, st } = await refusal({ error: '', code: 'refresh_token_expired' });
+    expect(line.error).toBe('needs-signin');
+    expect(st.lastErrorCode).toBe('refresh_token_expired');
+  });
+
+  it.each([
+    ['500', { status: 500, body: { error: 'server_error' } }, {}],
+    ['503', { status: 503, body: 'unavailable' }, {}],
+    ['a dropped connection', { status: 500, drop: true }, {}],
+    ['a 1 s delay', { status: 503, delayMs: 1000 }, { TOKEN_TIMEOUT_S: 0.5 }],
+  ] as Array<[string, Record<string, unknown>, Record<string, unknown>]>)('%s is transient: refresh-failed, the state is unchanged and the next call tries again', async (_n, first, consts) => {
+    const home = mkTmp('codex-auth-transient-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const old = readFileSync(credPath(dir), 'utf8');
+    const answer = issuedAnswer();
+    await withAuth({ token: [first as never, { status: 200, body: answer }] }, async (srv) => {
+      const a = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh' }], { consts });
+      expect(a.lines[0].error, a.stderr).toBe('refresh-failed');
+      expect(readFileSync(credPath(dir), 'utf8'), 'the credential is unchanged').toBe(old);
+      expect(statusOf(dir), 'no state recorded against the lane').toMatchObject({ state: 'ok', lastRefreshAt: null });
+      const b = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh' }], { consts });
+      expect(b.status, b.stdout + b.stderr).toBe(0);
+      expect(b.lines[0]).toMatchObject({ credential: 'present', access_token: (answer.access_token as string).length });
+      expect(srv.requests, 'the next call tried again').toHaveLength(2);
+      expect(statusOf(dir)).toMatchObject({ state: 'ok', lastErrorCode: null });
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
+  it('a 302 from the token route is refresh-failed, and its Location receives nothing', async () => {
+    const home = mkTmp('codex-auth-redirect-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const old = readFileSync(credPath(dir), 'utf8');
+    await withAuth({ token: [{ status: 200, body: issuedAnswer() }] }, async (elsewhere) => {
+      await withAuth({ token: [{ status: 302, headers: { location: elsewhere.base + AUTH_ROUTES.token } }] }, async (srv) => {
+        const r = await runFresh(home, dir, srv.base);
+        expect(r.lines[0].error, r.stderr).toBe('refresh-failed');
+        expect(srv.requests).toHaveLength(1);
+        expect(elsewhere.requests, 'the Location was never fetched').toHaveLength(0);
+        expect(readFileSync(credPath(dir), 'utf8')).toBe(old);
+        expectStatusClean(dir, tokensOf(t));
+      });
+    });
+  });
+
+  it('a new credential clears needs-signin', async () => {
+    const home = mkTmp('codex-auth-resignin-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const answer = issuedAnswer();
+    await withAuth({ token: [{ status: 400, body: { error: 'invalid_grant' } }, { status: 200, body: answer }] }, async (srv) => {
+      const a = await runFresh(home, dir, srv.base);
+      expect(a.lines[0].error).toBe('needs-signin');
+      // A sign-in elsewhere: a new credential renamed into place, a new inode.
+      const side = join(home, 'signin');
+      const u = plantBackendCredential(side, { expiresIn: -120 });
+      renameSync(credPath(side), credPath(dir));
+      const b = await runFresh(home, dir, srv.base);
+      expect(b.status, b.stdout + b.stderr).toBe(0);
+      expect(b.lines[0]).toMatchObject({ credential: 'present', access_token: (answer.access_token as string).length });
+      expect(srv.requests).toHaveLength(2);
+      expect(srv.requests[1].form?.refresh_token, 'the new credential\'s refresh token').toBe(u.refresh);
+      expect(statusOf(dir).state).toBe('ok');
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(u), ...tokensOf(answer)]);
+    });
+  });
+
+  it('an answer with no id_token keeps the old one; one with no refresh_token keeps the old one', async () => {
+    const home = mkTmp('codex-auth-merge-');
+    const dirA = join(home, 'lane-a');
+    const dirB = join(home, 'lane-b');
+    const a = plantBackendCredential(dirA, { expiresIn: -120 });
+    const b = plantBackendCredential(dirB, { expiresIn: -120 });
+    const noId = issuedAnswer({ omit: ['id_token'] });
+    const noRefresh = issuedAnswer({ omit: ['refresh_token'] });
+    await withAuth({ token: [{ status: 200, body: noId }, { status: 200, body: noRefresh }] }, async (srv) => {
+      const r = await runFresh(home, dirA, srv.base, [{ op: 'ensure_fresh' }, { op: 'ensure_fresh', authDir: dirB }]);
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.lines.map((l) => l.credential)).toEqual(['present', 'present']);
+      expect(fileRecord(dirA)).toMatchObject({ access_token: noId.access_token, refresh_token: noId.refresh_token, id_token: a.id });
+      expect(fileRecord(dirB)).toMatchObject({ access_token: noRefresh.access_token, refresh_token: b.refresh, id_token: noRefresh.id_token });
+      expectStatusClean(dirA, [...tokensOf(a), ...tokensOf(noId)]);
+      expectStatusClean(dirB, [...tokensOf(b), ...tokensOf(noRefresh)]);
+    });
+  });
+
+  /** The four places a leak would show: driver stdout, its stderr, the error's sentence and the status file. */
+  const expectNowhere = (r: { stdout: string; stderr: string; lines: Array<Record<string, any>> }, dir: string, secrets: string[]): void => {
+    const places = [r.stdout, r.stderr, String(r.lines[0].message ?? ''), existsSync(statusPath(dir)) ? statusText(dir) : ''];
+    for (const piece of secretPieces(secrets)) {
+      for (const place of places) expect(place, 'a token piece leaked').not.toContain(piece);
+    }
+  };
+
+  it('an answer with no access_token is refresh-failed, writes nothing, and names none of the tokens it carried', async () => {
+    const home = mkTmp('codex-auth-noaccess-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const before = lstatKey(credPath(dir));
+    const bytes = readFileSync(credPath(dir));
+    const answer = issuedAnswer({ omit: ['access_token'] });
+    await withAuth({ token: [{ status: 200, body: answer }] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base);
+      expect(r.lines[0].error, r.stderr).toBe('refresh-failed');
+      expect(readFileSync(credPath(dir)).equals(bytes), 'the credential is unchanged').toBe(true);
+      expect(lstatKey(credPath(dir))).toBe(before);
+      expect(existsSync(pendingPath(dir)), 'no checkpoint').toBe(false);
+      expectNowhere(r, dir, [...tokensOf(answer), ...tokensOf(t)]);
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
+  it('a 400 whose body echoes the submitted refresh token leaks it nowhere', async () => {
+    const home = mkTmp('codex-auth-echo-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    // The token is echoed as the error code itself (it fits CODE_RE) and in the description.
+    const body = { error: t.refresh, error_description: `the refresh token ${t.refresh} is not valid`, token: t.access };
+    await withAuth({ token: [{ status: 400, body }] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base);
+      expect(r.lines[0].error, r.stderr).toBe('refresh-failed');
+      expect(statusOf(dir).lastErrorCode, 'an echoed token is never a code').toBe('unrecognised');
+      expectNowhere(r, dir, tokensOf(t));
+      expectStatusClean(dir, tokensOf(t));
+    });
+  });
+
+  it.each(['http://example.invalid', 'https://127.0.0.1.example.invalid'])('a non-loopback CCRC_CODEX_AUTH_BASE is refused before any request (%s)', async (base) => {
+    const home = mkTmp('codex-auth-nonloop-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    await withAuth({ token: [{ status: 200, body: issuedAnswer() }] }, async (srv) => {
+      const r = await runFresh(home, dir, base);
+      expect(r.lines[0].error, r.stderr).toBe('auth-endpoint-refused');
+      expect(srv.requests, 'the fake (bound anyway) saw nothing').toHaveLength(0);
+      expectStatusClean(dir, tokensOf(t));
+    });
+  });
+
+  it('the status file never holds a token, a JWT segment or the account id', async () => {
+    // Run alone (`-t`), the cases above left nothing to re-check: make one ok and one needs-signin status here.
+    if (STATUS_SCANS.length === 0) {
+      const home = mkTmp('codex-auth-scan-');
+      const dirs = [join(home, 'lane-a'), join(home, 'lane-b')];
+      const planted = dirs.map((d) => plantBackendCredential(d, { expiresIn: -120 }));
+      const answer = issuedAnswer();
+      await withAuth({ token: [{ status: 200, body: answer }, { status: 400, body: { error: 'invalid_grant' } }] }, async (srv) => {
+        await runFresh(home, dirs[0], srv.base, [{ op: 'ensure_fresh' }, { op: 'ensure_fresh', authDir: dirs[1] }]);
+      });
+      expectStatusClean(dirs[0], [...tokensOf(planted[0]), ...tokensOf(answer)]);
+      expectStatusClean(dirs[1], tokensOf(planted[1]));
+    }
+    const scans = [...STATUS_SCANS];
+    expect(scans.filter((s) => existsSync(statusPath(s.dir))).length, 'some case left a status file').toBeGreaterThan(0);
+    for (const s of scans) {
+      if (!existsSync(statusPath(s.dir))) continue;
+      const text = statusText(s.dir);
+      for (const piece of secretPieces(s.secrets)) expect(text).not.toContain(piece);
+      for (const id of [FIXTURE_ACCOUNT_ID, ISSUED_ACCOUNT_ID, 'acct-fixture-1']) expect(text).not.toContain(id);
     }
   });
 });
