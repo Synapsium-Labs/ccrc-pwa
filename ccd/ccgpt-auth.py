@@ -40,7 +40,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Dict, Iterator, NamedTuple, Optional, Tuple
+from typing import Dict, Iterator, List, NamedTuple, Optional, TextIO, Tuple
 
 # ── the files ────────────────────────────────────────────────────────────────────────────────────────────────────
 CREDENTIAL_NAME = "auth.json"
@@ -107,6 +107,19 @@ UNRECOGNISED_CODE = "unrecognised"
 KIND_NEEDS_SIGNIN = "needs-signin"
 KIND_CONFIG_ERROR = "config-error"
 KIND_TRANSIENT = "transient"
+
+# ── the device-code sign-in (LiteLLM 1.105.0's protocol, `litellm/llms/chatgpt/authenticator.py:153-299`) ──────────
+DEVICE_TIMEOUT_S = 900  # LiteLLM's DEVICE_CODE_TIMEOUT_SECONDS: the device code's own 15 minutes
+# LiteLLM's DEVICE_CODE_POLL_SLEEP_SECONDS: the poll waits max(interval, this), and this when no interval is given.
+DEVICE_POLL_MIN_S = 5
+# The exchange's redirect_uri, on AUTH_BASE as LiteLLM sends it: a value the endpoint compares, never a URL fetched.
+DEVICE_CALLBACK_PATH = "/deviceauth/callback"
+SIGNIN_COMMIT_TRIES = 3  # a sign-in's commit is tried this many times ...
+SIGNIN_COMMIT_RETRY_S = 0.5  # ... this far apart, then the sign-in fails and nothing is saved
+# The sentence `already-signed-in` carries: in litellm mode a sign-in never refreshes (ruling 1), so a present
+# credential whose refresh token is dead is learnt of only by the lane's next request.
+ALREADY_SIGNED_IN = ("the lane's credential is present; if the lane's refresh token is dead, the lane's next request "
+                     "records needs-signin; run this again then")
 
 # ── the status file ──────────────────────────────────────────────────────────────────────────────────────────────
 STATUS_VERSION = 1
@@ -1351,3 +1364,349 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
             out = out._replace(detail="an unsaved credential for " + p.credential + " is held in memory; the next "
                                "refresh writes it")
         return out
+
+
+# ── the device-code sign-in ──────────────────────────────────────────────────────────────────────────────────────
+def _again(lane: str) -> str:
+    return "nothing was saved; sign in again with ccrc codex login " + lane
+
+
+def _json_object(raw: bytes) -> Optional[dict]:
+    try:
+        obj = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeError, RecursionError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _signin_post(url: str, body: bytes, content_type: str, what: str, lane: str) -> Tuple[int, bytes, Optional[str]]:
+    """One sign-in request: POST `body` to `url`, redirects refused, the answer's body read within TOKEN_TIMEOUT_S of
+    the request's start (`_read_answer`, as the refresh reads). Answers `(status, body, request id)` for any HTTP
+    answer, 2xx or not; a redirect or a transport failure is LoginFailed, naming `what` and never the body."""
+    deadline = time.monotonic() + float(TOKEN_TIMEOUT_S)
+    req = urllib.request.Request(url, data=body, method="POST",
+                                 headers={"Content-Type": content_type, "Accept": "application/json"})
+    opener = urllib.request.build_opener(_RefuseRedirect)
+    try:
+        resp = opener.open(req, timeout=float(TOKEN_TIMEOUT_S))
+    except _Redirected as e:
+        raise LoginFailed("the " + what + " answered a redirect (HTTP " + str(e.status) + "), which ccrc never "
+                          "follows; " + _again(lane))
+    except urllib.error.HTTPError as e:
+        rid = _request_id(e.headers)
+        try:
+            raw = _read_answer(e.fp, deadline) if e.fp is not None else b""
+        except _TRANSPORT_ERRORS:
+            raw = b""
+        finally:
+            e.close()
+        return e.code, raw, rid
+    except _TRANSPORT_ERRORS as e:
+        raise LoginFailed("the " + what + " could not be reached (" + type(e).__name__ + "); " + _again(lane))
+    rid = _request_id(resp.headers)
+    try:
+        with resp:
+            raw = _read_answer(resp, deadline)
+    except _TRANSPORT_ERRORS as e:
+        raise LoginFailed("the " + what + "'s answer could not be read (" + type(e).__name__ + "); " + _again(lane))
+    return resp.status, raw, rid
+
+
+def _poll_interval(value: object) -> float:
+    """The device code's poll interval: the answer's `interval` (a number, or a string of one), never under
+    DEVICE_POLL_MIN_S, which is also what an answer without a usable one gets (LiteLLM's `max(interval, 5)` and its
+    default of 5)."""
+    floor = float(DEVICE_POLL_MIN_S)
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            return floor
+    if not _finite_number(value):
+        return floor
+    return max(float(value), floor)  # type: ignore[arg-type]
+
+
+def _request_device_code(base: str, lane: str) -> Tuple[str, str, float]:
+    """POST DEVICE_CODE_PATH `{client_id}`: answers `(device_auth_id, user_code, poll interval)`."""
+    status, raw, _ = _signin_post(base + DEVICE_CODE_PATH, json.dumps({"client_id": CLIENT_ID}).encode("utf-8"),
+                                  "application/json", "device-code request", lane)
+    if not 200 <= status < 300:
+        raise LoginFailed("the device-code request was refused (HTTP " + str(status) + "); " + _again(lane))
+    data = _json_object(raw) or {}
+    device_auth_id = _nonempty_str(data.get("device_auth_id"))
+    user_code = _nonempty_str(data.get("user_code") or data.get("usercode"))
+    if device_auth_id is None or user_code is None:
+        raise LoginFailed("the device-code answer carried no device_auth_id or no user_code; " + _again(lane))
+    return device_auth_id, user_code, _poll_interval(data.get("interval"))
+
+
+def _poll_device(base: str, device_auth_id: str, user_code: str, interval: float, wait_s: float,
+                 lane: str) -> Tuple[str, str]:
+    """Poll DEVICE_TOKEN_PATH until the operator approves the code: answers `(authorization_code, code_verifier)`. A 403
+    or a 404 is pending, and so is a 2xx answer that lacks any of the three fields LiteLLM requires; each wait is
+    `interval`, cut short at the deadline, `wait_s` from the first poll. Any other answer is LoginFailed."""
+    body = json.dumps({"device_auth_id": device_auth_id, "user_code": user_code}).encode("utf-8")
+    deadline = time.monotonic() + float(wait_s)
+    timed_out = LoginFailed("timed out waiting for the device code to be approved (" + str(wait_s) + " s); "
+                            + _again(lane))
+    while True:
+        if deadline - time.monotonic() <= 0:
+            raise timed_out
+        status, raw, _ = _signin_post(base + DEVICE_TOKEN_PATH, body, "application/json", "device-code poll", lane)
+        if 200 <= status < 300:
+            data = _json_object(raw) or {}
+            code = _nonempty_str(data.get("authorization_code"))
+            challenge = _nonempty_str(data.get("code_challenge"))
+            verifier = _nonempty_str(data.get("code_verifier"))
+            if code is not None and challenge is not None and verifier is not None:
+                return code, verifier
+        elif status not in (403, 404):
+            raise LoginFailed("the device-code poll was refused (HTTP " + str(status) + "); " + _again(lane))
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise timed_out
+        time.sleep(min(interval, left))
+
+
+def _exchange(base: str, code: str, verifier: str, lane: str) -> Tuple[dict, Optional[str]]:
+    """Exchange the authorization code at TOKEN_PATH, form-encoded as LiteLLM sends it. The answer must carry all three
+    tokens (ruling R8: the sign-in exchange only; a refresh keeps the tokens its answer lacks); a refusal names the
+    missing fields' names, never a value. Answers the backend record and the answer's request id."""
+    form = urllib.parse.urlencode({
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": AUTH_BASE + DEVICE_CALLBACK_PATH,
+        "client_id": CLIENT_ID,
+        "code_verifier": verifier,
+    }).encode("ascii")
+    status, raw, rid = _signin_post(base + TOKEN_PATH, form, "application/x-www-form-urlencoded", "token exchange",
+                                    lane)
+    if not 200 <= status < 300:
+        raise LoginFailed("the token exchange was refused (HTTP " + str(status) + "); " + _again(lane))
+    answer = _json_object(raw)
+    if answer is None:
+        raise LoginFailed("the token exchange's answer is not a JSON object; " + _again(lane))
+    missing = [k for k in ("access_token", "refresh_token", "id_token") if _nonempty_str(answer.get(k)) is None]
+    if missing:
+        raise LoginFailed("the token exchange's answer carried no " + " and no ".join(missing) + "; " + _again(lane))
+    return _merge(_empty("absent", ""), None, answer, rid), rid
+
+
+def _refuse_signin(r: Reading) -> None:
+    """A sign-in never writes over a file that reads `unreadable` nor over another family's file, and refuses them
+    before any request, so an operator who cannot keep the result never approves a code."""
+    if r.credential == "unreadable":
+        raise Unreadable("ccrc will not sign in over it: " + r.detail)
+    if r.credential == "foreign-family":
+        raise ForeignFamily(r.detail)
+
+
+def _pending_exists(auth_dir: str) -> bool:
+    """True when something is at the checkpoint path, or the path cannot be measured (the lock and `recover_pending`
+    then name why)."""
+    try:
+        os.lstat(paths_for(auth_dir).pending)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, timeout_s: Optional[float] = None) -> str:
+    """Sign the lane in by LiteLLM's device-code protocol, writing the credential through the library's commit.
+
+    1. `read`, with no lock and nothing written: `unreadable` refuses Unreadable and `foreign-family` ForeignFamily,
+       before any request.
+    2. A checkpoint (any file at its path) is settled under `held` (`recover_pending`, `retry_unsaved`), and the
+       reading taken again; with no checkpoint nothing is locked here, so an abandoned sign-in creates no lock file.
+    3. `"already-signed-in"`, with no network, when the reading is `present` and no current status bars it
+       (needs-signin, or config-error under this config): in litellm mode a sign-in never refreshes (ruling 1).
+    4. Otherwise the device flow: the device code, LiteLLM's four lines on `out` (sys.stdout, read when called), the
+       poll (`timeout_s`, DEVICE_TIMEOUT_S read when called by default), the exchange. NOTHING is written before the
+       exchange answers, so a sign-in abandoned or killed at any point before leaves the authDir as it was.
+    5. Under one `held`: settle a checkpoint and an unsaved record, refuse as in step 1, then commit, tried
+       SIGNIN_COMMIT_TRIES times SIGNIN_COMMIT_RETRY_S apart; a commit that never lands is LoginFailed with the old
+       file unchanged and the sign-in's record not kept; on success the status is `ok`. Answers `"signed-in"`.
+    With CCRC_CODEX_AUTH_BASE set, one stderr line names it and its URL before the first request."""
+    stream = sys.stdout if out is None else out
+    wait = DEVICE_TIMEOUT_S if timeout_s is None else timeout_s
+    r = read(auth_dir)
+    _refuse_signin(r)
+    if _pending_exists(auth_dir):
+        with held(auth_dir):
+            recover_pending(auth_dir)
+            retry_unsaved(auth_dir)
+        r = read(auth_dir)
+        _refuse_signin(r)
+    if r.credential == "present" and not _bars(read_status(auth_dir)):
+        return "already-signed-in"
+    base = auth_base()
+    if auth_base_source() == "override":
+        sys.stderr.write("ccgpt-auth: " + AUTH_BASE_ENV + " is set: every sign-in request goes to " + base
+                         + ", not to the default endpoint\n")
+        sys.stderr.flush()
+    device_auth_id, user_code, interval = _request_device_code(base, lane)
+    stream.write("Sign in with ChatGPT using device code:\n"
+                 "1) Visit " + AUTH_BASE + DEVICE_VERIFY_PATH + "\n"
+                 "2) Enter code: " + user_code + "\n"
+                 "Device codes are a common phishing target. Never share this code.\n")
+    stream.flush()
+    code, verifier = _poll_device(base, device_auth_id, user_code, interval, wait, lane)
+    record, rid = _exchange(base, code, verifier, lane)
+    key = _key(auth_dir)
+    with held(auth_dir) as p:
+        recover_pending(auth_dir)
+        retry_unsaved(auth_dir)
+        _refuse_signin(read(auth_dir))
+        kept = _UNSAVED.get(key)  # an unsaved refresh `retry_unsaved` could not write: it stays as it was
+        saved = False
+        for attempt in range(int(SIGNIN_COMMIT_TRIES)):
+            if attempt:
+                time.sleep(float(SIGNIN_COMMIT_RETRY_S))
+            if commit_record(auth_dir, record):
+                saved = True
+                break
+        if not saved:
+            if kept is None:
+                _UNSAVED.pop(key, None)
+            else:
+                _UNSAVED[key] = kept
+            raise LoginFailed("the credential could not be written after " + str(SIGNIN_COMMIT_TRIES) + " tries: the "
+                              "disk is full; nothing was saved; sign in again once it frees (ccrc codex login "
+                              + lane + ")")
+        write_status(auth_dir, state="ok", expiresAt=record.get("expires_at"), lastRefreshAt=time.time(),
+                     lastErrorCode=None, lastRequestId=rid, identity=_current_identity(p.credential), unsaved=False)
+    return "signed-in"
+
+
+# ── the status report ────────────────────────────────────────────────────────────────────────────────────────────
+def _str_or_none(value: object) -> Optional[str]:
+    return value if isinstance(value, str) else None
+
+
+def status_report(auth_dir: str) -> dict:
+    """The lane's non-secret status, for bash and node callers. Never writes, never touches the network.
+
+    `source` is `"file"` when the status file is current (`read_status`), else `"computed"` from `read` (a
+    credential no library process has written a status for, or one changed since): then `state` is `ok` for a
+    present credential and null otherwise, and the refresh fields are null. `credential` is always `read`'s word.
+    `mode`, `modeOk` (owner-readable, no group or other bits) and `ownerOk` (owned by `os.getuid()`) come from the
+    credential's `lstat`, and are null when nothing is there. Never `account_id`, never a token."""
+    p = paths_for(auth_dir)
+    r = read(auth_dir)
+    status = read_status(auth_dir)
+    try:
+        st = os.lstat(p.credential)  # type: Optional[os.stat_result]
+    except OSError:
+        st = None
+    mode = stat.S_IMODE(st.st_mode) if st is not None else None
+    if status is not None:
+        report = {
+            "source": "file",
+            "family": _str_or_none(status.get("family")),
+            "state": _str_or_none(status.get("state")),
+            "expiresAt": _epoch_or_none(status.get("expiresAt")),
+            "lastRefreshAt": _epoch_or_none(status.get("lastRefreshAt")),
+            "lastErrorCode": _str_or_none(status.get("lastErrorCode")),
+            "lastRequestId": _str_or_none(status.get("lastRequestId")),
+            "unsaved": status.get("unsaved") is True,
+            "updatedAt": _epoch_or_none(status.get("updatedAt")),
+        }  # type: dict
+    else:
+        report = {
+            "source": "computed",
+            "family": r.family,
+            "state": "ok" if r.credential == "present" else None,
+            "expiresAt": _epoch_or_none(r.expires_at),
+            "lastRefreshAt": None,
+            "lastErrorCode": None,
+            "lastRequestId": None,
+            "unsaved": False,
+            "updatedAt": None,
+        }
+    report.update({
+        "credential": r.credential,
+        "mode": format(mode, "04o") if mode is not None else None,
+        "modeOk": (bool(mode & 0o400) and not mode & 0o077) if mode is not None else None,
+        "ownerOk": (st.st_uid == os.getuid()) if st is not None else None,
+        "authBase": auth_base_source(),
+    })
+    return report
+
+
+# ── the command line ─────────────────────────────────────────────────────────────────────────────────────────────
+USAGE = ("usage: ccgpt-auth.py status [--lane <id>] | signin --lane <id> | paths | secret-files, each with --auth-dir "
+         "<absolute>")
+# Each verb's options: (required, optional). Every option takes one value.
+_VERBS = {
+    "status": (frozenset({"--auth-dir"}), frozenset({"--lane"})),
+    "signin": (frozenset({"--auth-dir", "--lane"}), frozenset()),
+    "paths": (frozenset({"--auth-dir"}), frozenset()),
+    "secret-files": (frozenset({"--auth-dir"}), frozenset()),
+}
+
+
+def _usage() -> int:
+    sys.stderr.write(USAGE + "\n")
+    return 2
+
+
+def main(argv: List[str]) -> int:
+    """The command line bash and node callers use. Every verb takes `--auth-dir <absolute>`; a relative one, an
+    unknown verb or option, a repeated or valueless option, or a missing required one is usage: one line on stderr,
+    rc 2. No verb ever prints a token.
+      status [--lane <id>]  one JSON object, `status_report`, rc 0
+      signin --lane <id>    the device lines on stdout, then `ccgpt-auth: <id>: signed-in` or
+                            `ccgpt-auth: <id>: already-signed-in: <ALREADY_SIGNED_IN>`, rc 0; or
+                            `ccgpt-auth: <word>: <sentence>` on stderr, rc 1
+      paths                 {"credential", "pending", "lock", "status", "lockWaitS"}, rc 0
+      secret-files          the credential and checkpoint paths, one per line, rc 0"""
+    if not argv or argv[0] not in _VERBS:
+        return _usage()
+    verb = argv[0]
+    required, optional = _VERBS[verb]
+    opts = {}  # type: Dict[str, str]
+    rest = argv[1:]
+    i = 0
+    while i < len(rest):
+        name = rest[i]
+        if name not in required | optional or name in opts or i + 1 >= len(rest):
+            return _usage()
+        opts[name] = rest[i + 1]
+        i += 2
+    if not required <= set(opts):
+        return _usage()
+    auth_dir = opts["--auth-dir"]
+    if not os.path.isabs(auth_dir):
+        return _usage()
+    out = sys.stdout
+    if verb == "status":
+        out.write(json.dumps(status_report(auth_dir), sort_keys=True) + "\n")
+        return 0
+    if verb == "paths":
+        p = paths_for(auth_dir)
+        out.write(json.dumps({"credential": p.credential, "pending": p.pending, "lock": p.lock, "status": p.status,
+                              "lockWaitS": LOCK_WAIT_S}, sort_keys=True) + "\n")
+        return 0
+    if verb == "secret-files":
+        p = paths_for(auth_dir)
+        out.write(p.credential + "\n" + p.pending + "\n")
+        return 0
+    lane = opts["--lane"]
+    try:
+        result = sign_in_device(auth_dir, lane=lane, out=out)
+    except AuthError as e:
+        out.flush()
+        sys.stderr.write("ccgpt-auth: " + e.word + ": " + str(e) + "\n")
+        return 1
+    line = "ccgpt-auth: " + lane + ": " + result
+    if result == "already-signed-in":
+        line += ": " + ALREADY_SIGNED_IN
+    out.write(line + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
