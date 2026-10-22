@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=83bcc5a762bb82a88ab73bc53829eb141fa1f4736542f89a617234b301691772
+# ccrc:generated 1 sha256=f4cef2d5033ad6d5f57d1514d20f09b096e4692eaa5a8165550952eb60299a78
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24123,8 +24123,9 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
 # that `cd` enters the same directory, so the transcript path does not
 # move, unless a link in the workdir is re-pointed between the two `cd`s (a
 # window of about 7 ms): the field then names the first directory entered
-# (`repointed-alias-for-legacy-rows-until-respawn`). A relative one resolves against the first `cd`, so its pane execs
-# nothing, or execs elsewhere (`relative-workdir-second-cd-does-not-enter`).
+# (`repointed-alias-for-legacy-rows-until-respawn`). A relative one resolves
+# against the first `cd`, so its pane execs nothing, or execs elsewhere
+# (`relative-workdir-second-cd-does-not-enter`).
 # A failed first `cd` skips the writer and leaves the parent's `pending`; the
 # `exec` runs exactly when the second `cd` succeeds, so a `cd` that fails
 # both times execs nothing.
@@ -29871,11 +29872,14 @@ _ws_reclaim_record() {   # main path -> git's worktree record for path, read fro
   # checkout, sets RECLAIM_REC_MAIN=1; any other answers 2, because two records
   # name one tree, or its only record names it under another spelling, so which
   # record is its own was never settled. Once git's main stanza names the tree
-  # by its STRING, a hit, no later stanza is asked: the tree IS the main
-  # checkout, so the ladder's terminal refusal and the owned check's proof stand
-  # rather than weaken to "never settled". That keep is the string hit's alone.
-  # A main stanza that names the tree only by `-ef` sets RECLAIM_REC_MAIN and
-  # stops the pass the same way, but is no hit (see the residual below). A
+  # by its STRING, a hit, no later stanza's answer counts (each is still
+  # compared by `-ef`, so `record-ef-has-no-deadline` reaches it, and then
+  # skipped): the tree IS the main checkout, so the ladder's terminal refusal
+  # and the owned check's proof stand rather than weaken to "never settled".
+  # That keep needs a string hit. A main stanza that names the tree only by
+  # `-ef` sets RECLAIM_REC_MAIN and makes later stanzas count for nothing the
+  # same way, but is no hit: the refusal stands (rc 0, MAIN=1) only where
+  # another stanza hit by string, and with none it is the residual below. A
   # stanza that cannot be stat'd (a prunable record, or a locked one on a disk
   # that is not mounted) matches nothing, so a sibling's gone tree never holds
   # this one; and a path that does not stand asks nothing (the gone-row arms,
@@ -29883,13 +29887,18 @@ _ws_reclaim_record() {   # main path -> git's worktree record for path, read fro
   # Every rc 2 sets _WS_REC_WHY: the list
   # failure's reads "could not read $main's worktree list", which its three
   # callers continue as they always have.
-  # RESIDUAL `record-main-by-another-spelling-reads-no-worktree-record` (spec §4.12). Identity never makes a hit, so
-  # when git's main stanza names the tree only under another spelling (a bind spelling, for example) and no stanza
-  # matches by string, RECLAIM_REC_MAIN is set and `hit` is not: the reader answers 1 at `(( hit )) || return 1`.
-  # The ladder then refuses with the terminal `no-worktree-record`, whose detail ("has no worktree record") is
-  # false, and never reaches its own MAIN refusal or its `-ef` compare of the project directory, which stand
-  # behind a string hit alone; `_ws_reclaim_owned` answers 2 (`worktree-remove-failed`) before it reads MAIN. The
-  # shape is refused either way, and nothing grants on it.
+  # RESIDUAL `record-main-by-another-spelling-reads-no-worktree-record` (spec
+  # §4.12). Identity never makes a hit, so when git's main stanza names the
+  # tree only under another spelling (a bind spelling, for example) and no
+  # stanza matches by string, RECLAIM_REC_MAIN is set and `hit` is not: the
+  # reader answers 1 at `(( hit )) || return 1`. The ladder then refuses, with
+  # the terminal `no-worktree-record` where `_ws_reclaim_no_record` finds
+  # every admin entry readable and none naming the tree (its detail, "has no
+  # worktree record", is false), or with the retryable `unmeasured` where an
+  # admin entry cannot be read. It never reaches its own MAIN refusal or its
+  # `-ef` compare of the project directory, which stand behind a string hit
+  # alone; `_ws_reclaim_owned` answers 2 (`worktree-remove-failed`) before it
+  # reads MAIN. The shape is refused either way, and nothing grants on it.
   local main="$1" path="$2" real line listing m=0 hit=0 n=0 hitn=0 k
   local -a wts=()
   RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""; RECLAIM_REC_MAIN=0; RECLAIM_REC_PRUNABLE=0; _WS_REC_WHY=''
@@ -34179,11 +34188,11 @@ _ws_cwd_users() {   # dir [say] -> 0 no process has its working directory at dir
   # excepted). EPERM, any other errno, or a stat file that reads, is unmeasured: a live group that turned
   # non-dumpable answers EACCES there too, and its stat file reads. That proof holds on a /proc mounted without
   # hidepid=invisible (2) or hidepid=ptraceable (4), in the probe's own pid namespace. Under either, a task this
-  # uid may not ptrace is hidden and its paths answer ENOENT; under hidepid=noaccess (1), or an LSM denial, they
-  # answer EPERM. Both fall inside NOT SEEN, below, at the first read; an EPERM at the per-pass read, or in a
-  # thread's stat file, is unmeasured. These kernel facts are
-  # v6.8's, read by function: do_exit (exit_files, then exit_fs), de_thread (exchange_tids, then release_task of
-  # the old leader), release_task and exit_notify (a leader released last), proc_pid_readlink and
+  # uid may not ptrace is hidden and its paths answer ENOENT; under hidepid=noaccess (1) they answer EPERM, and
+  # an LSM denial answers EACCES or EPERM, as the module chooses. Each of these falls inside NOT SEEN, below, at
+  # the first read; an EPERM at the per-pass read, or in a thread's stat file, is unmeasured. These kernel facts
+  # are v6.8's, read by function: do_exit (exit_files, then exit_fs), de_thread (exchange_tids, then
+  # release_task of the old leader), release_task and exit_notify (a leader released last), proc_pid_readlink and
   # proc_fd_access_allowed. The exception: a cwd link that answers EACCES or EPERM at its first read (python's
   # PermissionError: another uid's process, or a SAME-user one the kernel will not let this process follow: a
   # NON-DUMPABLE one such as ssh-agent, a setuid or setgid exec, or a process that turned non-dumpable; an exec of an

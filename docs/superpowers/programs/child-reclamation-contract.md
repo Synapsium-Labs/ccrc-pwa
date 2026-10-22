@@ -4326,8 +4326,8 @@ the spec, never this contract.
   `rows-rung-pass-b-holds-an-unlisted-answer` (an answer word the rung does not list for a row, a target or the table
   holds the child unmeasured, never no hold), `rows-rung-holds-mask-later-terminal-words` (the rung runs before the
   ladder's later terminal words, so a child that would have met one answers the retryable word; a refusal either way)
-  and `pending-hold-remedy-stops-then-starts` (the pending hold's remedy
-  says to stop and start that session, as `ccd start` changes nothing for a session that is running).
+  and `pending-hold-remedy-stops-then-starts` (the pending hold's remedy says to stop and start that session, as
+  `ccd start` changes nothing for a session that is running).
 - The main checkout: `ladder-main-checkout-ef`, `record-main-hit-keeps-the-terminal-refusal`,
   `record-by-another-spelling-reads-unmeasured`, `record-two-spellings-reads-unmeasured` and
   `moved-check-identity-failure-preempted-a-proof`.

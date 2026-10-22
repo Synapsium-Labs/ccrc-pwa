@@ -1173,8 +1173,8 @@ into a pass.
 - `rows-rung-holds-mask-later-terminal-words`: the rows rung runs before most of the ladder's later rungs, and before
   `_ws_reclaim_owned`'s later proofs. Its holds `unpend`, `unfield`, `unrec`, `unwalk` and `unmount` answer `unmeasured`
   at the ladder and 2 at owned, and they answer there first. So a child that would have met a later terminal word
-  (`no-worktree-record`, `not-a-workspace`, the git-directory rung's, `branch-elsewhere` or `tree-unreadable`, or owned's
-  moved-check and identity proofs) answers the retryable word instead. Each is a refusal either way, and this
+  (`no-worktree-record`, `not-a-workspace`, the git-directory rung's, `branch-elsewhere` or `tree-unreadable`, or
+  owned's moved-check and identity proofs) answers the retryable word instead. Each is a refusal either way, and this
   subsection's opening rule, that an identity input may only add a placement or a hold, licenses it. This entry names
   the rung's position, as `record-two-spellings-reads-unmeasured` does for the record reader. The reach of `unpend` is
   its own residual, `pending-row-holds-every-child-box-wide`, below.
@@ -1236,10 +1236,13 @@ into a pass.
 - `_ws_reclaim_record` uses identity only to refuse. After its string scan, a first (main) stanza that is the tree by
   `-ef` sets `RECLAIM_REC_MAIN`. Any stanza but the first and the string-matched one that is the tree answers 2: "two
   of … worktree records name the tree". `record-main-hit-keeps-the-terminal-refusal`: once the first stanza names the
-  tree by its string, a hit, no later stanza is asked, so a row naming the main checkout keeps the terminal
-  `not-a-workspace`, and the owned check its proof, rather than weakening to unmeasured. That keep is the string hit's
-  alone: a first stanza that names the tree only by `-ef` sets `RECLAIM_REC_MAIN` and stops the pass the same way, but
-  is no hit (`record-main-by-another-spelling-reads-no-worktree-record`, below).
+  tree by its string, a hit, no later stanza's answer counts (each is still compared by `-ef`, so
+  `record-ef-has-no-deadline` reaches it, and is then skipped), so a row naming the main checkout keeps the terminal
+  `not-a-workspace`, and the owned check its proof, rather than weakening to unmeasured. That keep needs a string hit.
+  A first stanza that names the tree only by `-ef` sets `RECLAIM_REC_MAIN` and makes later stanzas count for nothing
+  the same way, but is no hit: the refusal stands (the reader answers 0, with `RECLAIM_REC_MAIN` set) only where
+  another stanza hit by string, and with none it is the residual
+  `record-main-by-another-spelling-reads-no-worktree-record`, below.
   `record-by-another-spelling-reads-unmeasured`: when only a stanza naming the tree under another spelling records it,
   the reader answers 2, so the ladder answers the retryable `unmeasured` where it answered the terminal
   `no-worktree-record`, whose detail was false (git does record the tree), and the owned check answers 2. Both refuse,
@@ -1267,12 +1270,13 @@ into a pass.
   - It skips a process only on ENOENT or ESRCH of that process's own cwd link or stat file, or on the ruled EACCES
     exception (a link that answers EACCES or EPERM at its first read is not seen: another user's process, or a
     same-user one the kernel will not let this process follow, such as a non-dumpable process, an exec of an unreadable
-    binary, or an LSM denial). An ENOENT on opening the link after a successful read is confirmed through the stat file (the process is
-    gone, and is skipped), or by a second readlink of that link that answers ENOENT (the task let go of that cwd since
-    its link was read; ENOENT alone there: EACCES, any other errno or a path answers unmeasured). A process whose own
-    link vanished at its first read, or was let go of in that sense, is not skipped for that alone: the walk asks it
-    through its threads first (`cwd-probe-confirms-a-vanished-link-by-a-second-read`, below). Any other failure answers
-    unmeasured, never "nobody".
+    binary, or an LSM denial). An ENOENT on opening the link after a successful read is confirmed through the stat
+    file (the process is gone, and is skipped), or by a second readlink of that link that answers ENOENT (the task
+    let go of that cwd since its link was read; ENOENT alone there: EACCES, any other errno or a path answers
+    unmeasured). A process whose own link vanished at its first read, or was let go of in that sense, is not skipped
+    for that alone: the walk asks it through its threads first
+    (`cwd-probe-confirms-a-vanished-link-by-a-second-read`, below). Any other failure answers unmeasured, never
+    "nobody".
   - On Darwin it uses ws-expire's lsof arm, `_ws_expire_lsof`, by string alone.
 - ws-expire moved onto it. `_ws_expire_cwd_users` keeps its name, its contract and its parent resolve, and asks the
   shared probe.
@@ -1305,8 +1309,9 @@ into a pass.
   first top-level read's EACCES or EPERM stays the ruled not-seen skip, and the second readlink of the open's ENOENT
   route still answers unmeasured on EACCES. The proof holds on a `/proc` mounted without hidepid=invisible or
   hidepid=ptraceable, in the probe's own pid namespace. Under either, a task this user may not ptrace is hidden and its
-  paths answer ENOENT; under hidepid=noaccess, or an LSM denial, they answer EPERM. Both fall inside the not-seen limit
-  at the first read, and an EPERM at the per-pass read answers unmeasured.
+  paths answer ENOENT; under hidepid=noaccess they answer EPERM, and an LSM denial answers EACCES or EPERM, as the
+  module chooses. Each falls inside the not-seen limit at the first read, and an EPERM at the per-pass read answers
+  unmeasured.
 - `cwd-probe-holds-a-double-slash-physical-root`: `_ws_dir_physical` answers a `//`-leading physical path for a
   directory reached through a link whose target begins with `//` (and for `//` or `//tmp` given directly). ws-expire's
   adapter, `_ws_expire_cwd_users`, resolves the tree's parent before it asks and hands the probe that `//` spelling,
@@ -1476,11 +1481,13 @@ into a pass.
      stopped. The server retries a reclaim.
   2. The expiry verb's in-lock verdict prints `probe-unmeasured` with a `crumb` that the server reads before its word
      rule. A pending window there makes that attempt restart from its audit (a fresh arm, whose restart backs off on the
-     server's restart lane) or stay resumable (a resumed arm). It is final only where the breadcrumb stands but could not
-     be read, so no `crumb` is said, or where ccd is older and says none. Workspace lifecycle weighs this before the
-     expiry lane is armed; W3 changes nothing on the server.
+     server's restart lane) or stay resumable (a resumed arm). It is final only where the breadcrumb stands but could
+     not be read, so no `crumb` is said, or where ccd is older and says none. Workspace lifecycle has received this
+     reading as the pending hold's, not as new scope; it asks no server change and no arming decision, and W3 changes
+     nothing on the server.
   3. A row that stays pending for good holds every child until it is purged: fish as the pane shell on Linux, a control
-     byte (`workdirid-physical-control-byte-stays-pending`), or a gone row's respawn, whose pane's `cd` fails every time.
+     byte (`workdirid-physical-control-byte-stays-pending`), or a gone row's respawn, whose pane's `cd` fails every
+     time.
 - `workdirid-temp-leaks-on-sigkill`: a writer killed between its temp write and its rename leaves the dot-leading temp,
   as `_reg_set`'s does.
 - `workdirid-pending-unwritable-keeps-the-old-field`: when both the pending write and its unlink fail, the earlier
@@ -1524,9 +1531,11 @@ into a pass.
   names the tree only by `-ef` (a bind spelling, for example), with no stanza matching by string, sets
   `RECLAIM_REC_MAIN` and no hit.
   - The record reader answers 1, where a string hit would have answered 0.
-  - The ladder then refuses with the terminal `no-worktree-record`, and its detail ("has no worktree record") is false,
-    because git does record the tree. The ladder never reaches its own main-checkout refusal or its `-ef` compare of the
-    project directory (`ladder-main-checkout-ef`), which stand behind a string hit alone.
+  - The ladder then refuses. It does so with the terminal `no-worktree-record` where `_ws_reclaim_no_record` finds every
+    admin entry readable and none naming the tree, and then its detail ("has no worktree record") is false, because git
+    does record the tree; where an admin entry cannot be read, it refuses with the retryable `unmeasured` instead. It
+    never reaches its own main-checkout refusal or its `-ef` compare of the project directory
+    (`ladder-main-checkout-ef`), which stand behind a string hit alone.
   - `_ws_reclaim_owned` answers 2 (`worktree-remove-failed`), before it reads `RECLAIM_REC_MAIN`.
   - The shape is refused either way, and nothing grants on it: no token is minted and nothing is removed. No code
     changed to cure it.

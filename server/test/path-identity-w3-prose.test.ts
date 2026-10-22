@@ -263,12 +263,16 @@ describe('the path-identity spec records W3 as built (path-identity spec §4.12,
     expect(code, 'the probe resolves no parent').toMatch(/\b_ws_dir_physical\b/);
     expect(code, 'the probe has no Darwin arm').toMatch(/\b_ws_expire_lsof\b/);
     expect(code, 'the probe names no bound of its own').toMatch(/\bWS_CWD_USERS_SCAN_S\b/);
-    for (const e of ['ENOENT', 'ESRCH', 'EACCES']) expect(probe, `the probe has no ${e} rule`).toContain(e);
+    for (const e of ['ENOENT', 'ESRCH', 'EACCES', 'EPERM']) expect(probe, `the probe has no ${e} rule`).toContain(e);
+    expect(code, "the probe's entries() no longer skips a PermissionError (EACCES or EPERM) at the first read")
+      .toMatch(/def entries\(pid\):(?:(?!\ndef )[\s\S])*?except PermissionError:/);
     expect(codeLines(shFunction(ccd, '_ws_expire_cwd_users')).some((l) => /\b_ws_cwd_users\b/.test(l)),
       'ws-expire does not ask the shared probe').toBe(true);
     expect(s).toContain(`\`WS_CWD_USERS_SCAN_S\` (${budget(ccd).cwdS} s)`);
     expect(s).toContain("skips a process only on ENOENT or ESRCH of that process's own cwd link or stat file, or on the "
       + 'ruled EACCES exception');
+    expect(s, 'the spec no longer states EPERM beside EACCES at the first read')
+      .toContain('a link that answers EACCES or EPERM at its first read is not seen');
     expect(s).toContain(q('_ws_dir_physical'));
     expect(s).toContain(q('_ws_expire_lsof'));
   });
@@ -284,6 +288,16 @@ describe('the path-identity spec records W3 as built (path-identity spec §4.12,
     expect(rec.join('\n'), "the record reader's two-records why is gone").toContain('worktree records name the tree at');
     for (const p of [q('ladder-main-checkout-ef'), 'under another spelling', q('RECLAIM_REC_MAIN'),
       'Identity never makes a hit', q('_WS_REC_WHY')]) expect(s, p).toContain(p);
+    // F1's narrowing: a string hit alone keeps the refusal, and a later stanza is still compared by `-ef`.
+    const header = flat(shFunction(ccd, '_ws_reclaim_record')).replace(/ # /g, ' ');
+    for (const [where, text] of [['the spec', s], ["the record reader's header", header]] as const) {
+      expect(text, `${where} says no later stanza is asked`).not.toContain('no later stanza is asked');
+      expect(text, `${where} says an \`-ef\` main stanza stops the pass`).not.toContain('stops the pass the same way');
+      expect(text, `${where} no longer says a later stanza is compared by \`-ef\``)
+        .toContain('each is still compared by `-ef`');
+      expect(text, `${where} no longer says what an \`-ef\`-only main stanza keeps`)
+        .toContain('only where another stanza hit by string');
+    }
   });
 
   it("quotes the restore remedies and the unproc clause, and the rows rung's code says re-point nowhere", () => {
