@@ -21,12 +21,14 @@ function Demo({
   eyebrow,
   full,
   size,
+  titleScroll,
   children,
 }: {
   title?: string;
   eyebrow?: string;
   full?: boolean;
   size?: 'sm' | 'md' | 'lg';
+  titleScroll?: boolean;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(true);
@@ -37,7 +39,7 @@ function Demo({
       </div>
       {full
         ? <Sheet open={open} onClose={() => setOpen(false)} title={title} eyebrow={eyebrow} full>{children}</Sheet>
-        : <Sheet open={open} onClose={() => setOpen(false)} title={title} eyebrow={eyebrow} size={size}>{children}</Sheet>}
+        : <Sheet open={open} onClose={() => setOpen(false)} title={title} eyebrow={eyebrow} size={size} titleScroll={titleScroll}>{children}</Sheet>}
     </div>
   );
 }
@@ -71,6 +73,24 @@ export const LongTitle: Story = {
     <Demo
       eyebrow="claude is asking"
       title="I found three candidate fixes for the stale-tip wedge in server/src/coord/store.ts and each one changes a different seam — which should I take, given the done-fingerprint re-measures the workspace branch?"
+    >
+      <div className="grid gap-2">
+        <Button variant="ghost">Re-measure at close</Button>
+        <Button variant="ghost">Reject the handoff</Button>
+        <Button variant="ghost">Park the delivery</Button>
+      </div>
+    </Demo>
+  ),
+};
+
+/** `titleScroll={false}` (D-6325): the same long title with no cap and no scroller of its own. It grows inside the one
+ *  scrolling body, so the sheet has a single vertical scroller; the ask sheets pass it. */
+export const LongTitleNoTitleScroll: Story = {
+  render: () => (
+    <Demo
+      eyebrow="claude is asking"
+      titleScroll={false}
+      title="I found three candidate fixes for the stale-tip wedge in server/src/coord/store.ts and each one changes a different seam — which should I take, given the done-fingerprint re-measures the workspace branch? The first re-measures at close, the second rejects the handoff outright, and the third parks the delivery until the coordinator rules."
     >
       <div className="grid gap-2">
         <Button variant="ghost">Re-measure at close</Button>
