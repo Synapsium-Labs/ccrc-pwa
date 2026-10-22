@@ -181,9 +181,10 @@ plan's wave 2, because a direct lane assumes no other refresher. "Before Task 1"
 - **Two new WARNs, inside the existing `codex` check only**: the bridge tier's stale row (Task 13, the twin of
   today's shim-stale WARN, `server/test/ccrc-doctor.test.ts:12475`) and the drift row (Task 17). R-O9 closed on
   2026-10-19, so no soak gate allow-lists WARNs by name today; no new doctor check name is added.
-- **Not touched:** the `siwc` route, ccd placement (D21), consent (D22), the canary (`deploy/models-canary.mjs`), the
-  PWA, `agent/src/whitelist.ts`, `shared/api.ts`, `ccd/ccgpt-runtime` and its LiteLLM patch, the LiteLLM environment
-  (kept for `litellm` lanes), Node floor `>=22.16.0`.
+- **Not touched:** the `siwc` route, ccd placement (D21), consent (D22), the canary's request and reader
+  (`deploy/models-canary.mjs`: only its lane probe changes, Task 11b), the PWA, `agent/src/whitelist.ts`,
+  `shared/api.ts`, `ccd/ccgpt-runtime` and its LiteLLM patch, the LiteLLM environment (kept for `litellm` lanes), Node
+  floor `>=22.16.0`.
 - Plan and spec prose at most 120 characters a line (code blocks and table rows exempt). Commit on the workspace's
   own branch, never a separate feature branch.
 
@@ -250,9 +251,10 @@ the task that owns the code.
 | `deploy/models-op.mjs` | `laneManifest` copies the mode and names `bridgeFiles` (T10); `lower-windows` (T15) | 10, 15 |
 | `README.md` | the mirror rows (T10); the Codex-lane and `ccrc models` sections (T16) | 10, 16 |
 | `server/test/roster.test.ts`, `gen-accounts.test.ts`, `roster-exec-parity.test.ts`, `readme-roster-mirror.test.ts`, `models-op.test.ts` | the fields | 10, 15 |
-| `ccd/ccrc` | `_codex_lane_mode` (T10); the `bridge` tier, per-tier identity, the stop's wait, `_inst_codex_lanes` (T11); `switch` (T12); the refresh's lowering pass and `MODELS_WRITE_OPS` (T15) | 10, 11, 12, 15 |
+| `ccd/ccrc` | `_codex_lane_mode`, `_codex_lane_upstream` (T10); the `bridge` tier, per-tier identity, the stop's wait, `_inst_codex_lanes`, `_uninst_codex` (T11); the advance step's readiness (T11b); `switch` (T12); the refresh's lowering pass and `MODELS_WRITE_OPS` (T15) | 10, 11, 11b, 12, 15 |
+| `deploy/models-canary.mjs`, `server/test/models-canary.test.ts`, `server/test/ccrc-models-advance.test.ts` | the lane probe reads the lane's mode; the advance step on a direct lane | 11b |
 | `deploy/account-op.mjs` | the `codex-mode` op | 12 |
-| `server/test/codexLaneFixture.ts`, `ccrc-codex.test.ts`, `ccrc-cli.test.ts`, `ccrc-account.test.ts`, `ccrc-install.test.ts`, `account-ops.test.ts` | the planted `lane.json`'s new keys (T10); direct mode, the switch, the reap, the spine | 10, 11, 12 |
+| `server/test/codexLaneFixture.ts`, `ccrc-codex.test.ts`, `ccrc-cli.test.ts`, `ccrc-account.test.ts`, `ccrc-install.test.ts`, `ccrc-uninstall.test.ts`, `account-ops.test.ts` | the planted `lane.json`'s new keys (T10); direct mode, the switch, the reap, the spine, the uninstall | 10, 11, 12 |
 | `ccd/ccrc-doctor-checks`, `server/test/ccrc-doctor.test.ts` | mode-aware rows (T13); drift WARN (T17) | 13, 17 |
 | `ccd/ccgpt-usage.py`, `server/test/ccgpt-usage.test.ts` | the direct arm | 14 |
 | `server/test/ccrc-models.test.ts`, `ccrc-models-lock.test.ts`, `modelenv.test.ts` | the lowering pass; the write-op lock; the two env facts | 15 |
@@ -390,7 +392,7 @@ From `server/`, run each file the wave touches and keep its `Tests` line. Wave 1
 `ccgpt-harness`, `codex-auth-lib`, `single-definition`, `install-census`. Wave 2: `roster`, `gen-accounts`,
 `roster-exec-parity`, `readme-roster-mirror`, `models-op`, `ccrc-codex`, `ccrc-codex-launcher`, `ccrc-cli`,
 `ccrc-models`, `ccrc-models-lock`, `modelenv`, `single-definition`, `ccgpt-usage`, `account-ops`, `ccrc-account`,
-`ccrc-install`, `ccrc-doctor`. Wave 3: `ccrc-doctor`,
+`ccrc-install`, `ccrc-uninstall`, `ccrc-doctor`, `models-canary`, `ccrc-models-advance`. Wave 3: `ccrc-doctor`,
 `ci-select-tests`, `codex-bridge-replay`.
 
 **Consumed from Stage 1** (its plan's "The library's contract"): `paths_for`, `read -> Reading`, `expired`,
@@ -400,7 +402,9 @@ words: `not-logged-in`, `needs-signin`, `config-error`, `foreign-family`, `crede
 `auth-lock-busy`, `auth-endpoint-refused`, `login-failed`), `Reading.account_id` (from the `chatgpt_account_id`
 claim), `STATES` (which already admits `limit-paused` and `ineligible`), `EXPIRY_SKEW_S`, `LOCK_WAIT_S`; the test
 fixture's
-`fakeAuthServer`, `plantBackendCredential`, `syntheticJwt`, `CLOSED_AUTH_BASE`. **Not provided by Stage 1, and added
+`fakeAuthServer`, `plantBackendCredential` (with its `expiresIn` and `accessClaims` options: `accessClaims` is merged
+over the access token's default claims, which stamp `iat` with the planting time; Stage 1's fixture carries it, while
+its plan's contract names only `expiresIn`), `syntheticJwt`, `CLOSED_AUTH_BASE`. **Not provided by Stage 1, and added
 here (Task 6):** a refresh forced by an upstream 401 whose token is not yet expired; a status write of an upstream
 state (`limit-paused`, `ineligible`, the request id) that merges with the refresher's fields; the half-lifetime the
 designated refresher refreshes at. **Not provided and not needed in Stage 2:** `earliest_refresh_at` (an SIWC field,
@@ -561,11 +565,6 @@ headers and `state`:
 | assistant `thinking`, `redacted_thinking` | dropped | `requestField:thinking-block` |
 | assistant `tool_use` | `{"type":"function_call","call_id":<id unchanged>,"name":cut_name(n),"arguments":json(input)}`; preceded by the stored reasoning items under `call_key(id)` | — |
 | assistant `text` (any turn, with or without calls) | preceded by the stored reasoning items under `text_key(session, text)` | — |
-
-Each stored reasoning item sits under the key of the FIRST item the upstream emitted after it (Task 3's
-`Reducer.reasoning`), so a replayed turn keeps the upstream's order: reasoning, message, reasoning, call. A turn whose
-upstream order was reasoning, message, call replays as reasoning, message, call, never message, reasoning, call
-(Codex replays history in its original order, `core/src/client.rs:1016-1025` @ `092d3ac`).
 | user `tool_result` | `{"type":"function_call_output","call_id","output"}`: a string, or a list of `input_text`/`input_image`; `is_error` dropped, its text kept; a `tool_reference` block becomes the text `Tool loaded: <name>`; no size cap | `requestField:is_error` |
 | `tools` | `{"type":"function","name":cut_name(n),"description","parameters":input_schema,"strict":false}` at top level; `DeferredToolPlaceholder` dropped; `defer_loading` dropped; the cut name joins `tools_required` when `input_schema.required` is a non-empty list | `requestField:defer_loading` |
 | a server tool (`type` other than a custom tool) | `capability_rejected: <type>` is not a CC class, so a plain 400 naming the type with `x-should-retry: false` | `unsupportedField:<type>` |
@@ -582,6 +581,13 @@ upstream order was reasoning, message, call replays as reasoning, message, call,
 | any other top-level key | dropped | `requestField:<name>` |
 | `stream` | `stream` (a `false` is folded, Task 8) | — |
 | the last user turn holding `COMPACTION_MARKER` | `compaction = True` | — |
+
+Each stored reasoning item sits under the key of the FIRST item the upstream emitted after it (Task 3's
+`Reducer.reasoning`), so a replayed turn keeps the upstream's order: reasoning, message, reasoning, call. A turn whose
+upstream order was reasoning, message, call replays as reasoning, message, call, never message, reasoning, call.
+Codex sends its history in the order it recorded it: a turn's `input` is the history's `for_prompt`
+(`core/src/session/turn.rs:1641-1650` @ `092d3ac`), which adds missing call outputs, removes orphan outputs and strips
+unsupported media, and moves no item (`core/src/context_manager/history.rs:600-613, 963-977`).
 
 - `countable_bytes` = the byte length of `json.dumps({"developer": developer, "items": items, "tools": tools},
   separators=(",", ":"))` over what the bridge SENDS, after translation and the reasoning re-insertion, with each
@@ -693,7 +699,7 @@ upstream order was reasoning, message, call replays as reasoning, message, call,
 | R17 | the reducer reports `committable` = first block released or a non-failure terminal seen; a failed terminal with nothing released is not committable; the writer commits (Task 8) | `done-before-created-no-start`, re-pointed: a failure as the first event must stay pre-commit (X12) |
 | R18 | the parser (Task 1) | `crlf-unsupported` (X13), `parser-rescans-too-late` (X14) |
 | R19 | the upstream `call_id` is the `tool_use` id, never the item `id` | — |
-| R20 | the canary's reader still passes: the first non-blank `text_delta` arrives in a text block (`deploy/models-canary.mjs:261-288`) | — |
+| R20 | the canary's reader still passes: the first non-blank `text_delta` arrives in a text block (`deploy/models-canary.mjs:261-288`); its lane probe, which runs first, is Task 11b's | — |
 
 - **The corpus.** `make_streams.py` writes each `.sse` deterministically and `expect.json` holds, per stream, the
   folded result (`blocks: [{type, text?|name?, input?}]`, `stop` or `error: {type, status}`, `usage`, `reasoning`
@@ -824,11 +830,14 @@ upstream order was reasoning, message, call replays as reasoning, message, call,
     `promptTokensMax`, `requests`), `names`, `unexplained`, `outcomes` and `since`; an absent file starts fresh with
     `since = startedAt`; an unreadable, other-version or other-lane file starts fresh and counts `outcomes["stats:
     reset"]`. So a restart (every rollout of a changed package restarts a bridge, Task 11) never loses a refusal the
-    hourly refresh has not read, the D24 calibration, or the 7-day watch's counters. Methods: `name(family: str,
-    value: str)`;
+    hourly refresh has not read, the D24 calibration, or the 7-day watch's counters. At load, and in `name()`, every
+    name now in `known.KNOWN` is dropped from `unexplained`, so a rollout of the change that explains a name clears
+    Task 17's WARN. Methods: `name(family: str, value: str)`;
     `outcome(key: str)`; `request(route: str, model: str, countable_bytes: int)`; `usage(route: str, model: str,
-    countable_bytes: int, input_tokens: int, *, image_count: int)` (updates `promptTokensMax`/`promptTokensLast`
-    always, and the ratio only when `image_count == 0`: a request that carried an image never calibrates it);
+    countable_bytes: int, input_tokens: int, *, image_count: int, continued: bool = False)` (updates
+    `promptTokensMax`/`promptTokensLast` always, and the ratio only when `image_count == 0` and not `continued`: a
+    request that carried an image never calibrates it, and neither does a continued message, whose last response's
+    input tokens count the earlier responses' output items against the first request's bytes);
     `refusal(route: str, model: str, tokens: int, window: int, *, now: float)` (keeps the latest refusal per
     `<route>/<model>`, spec §2.7 "per route and model");
     `usage_headers(headers: Mapping[str, str], *, now: float)` (keeps every header whose lower-cased name starts
@@ -861,11 +870,15 @@ upstream order was reasoning, message, call replays as reasoning, message, call,
   driver); `'a restart keeps unconsumed refusals, the ratio, the counters and the unexplained list'` (a second
   `Stats` on the same path: all carried, `since` unchanged, `startedAt` new); `'an other-lane or other-version file
   starts fresh and counts stats:reset'`; `'an image never moves the ratio'` (`usage(…, image_count=1)` with a skewed
-  sample: ratio unchanged, `promptTokensMax` updated); `'an image adds IMAGE_TOKENS to the estimate'`.
+  sample: ratio unchanged, `promptTokensMax` updated); `'an image adds IMAGE_TOKENS to the estimate'`; `'a continued
+  message never moves the ratio'` (`usage(…, image_count=0, continued=True)` with a skewed sample: ratio unchanged);
+  `'a carried unexplained name that KNOWN now lists is dropped at load'` (a stats file whose `unexplained` holds one
+  name in `known.KNOWN` and one outside it: the second `Stats` keeps only the second).
 - [ ] **Steps 2-4** as above. - [ ] **Step 5: Mutation rows** — C1 (round down) → 1; C2 (no clamp) → 1; C3
-  (calibrate on an image request) → 1; C4 (no image allowance) → 1; T1 (format a value into a name) → 1; T2 (no
-  `fchmod`) → 1; T3 (keep every header) → 1; T4 (no `unexplained`) → 1; T5 (start empty, never load) → 1 (a
-  restart keeps …).
+  (calibrate on an image request) → 1; C4 (no image allowance) → 1; C5 (calibrate on a continued message) → 1; T1
+  (format a value into a name) → 1; T2 (no `fchmod`) → 1; T3 (keep every header) → 1; T4 (no `unexplained`) → 1;
+  T5 (start empty, never load) → 1 (a restart keeps …); T6 (keep a carried name that KNOWN lists) → 1 (a carried
+  unexplained name …).
 - [ ] **Step 6: Commit** — `codex-bridge: the count estimator, the stats file and the known names (… Task 5)`.
 
 ### Task 6: the library's three additions for a direct lane
@@ -1003,29 +1016,39 @@ upstream order was reasoning, message, call replays as reasoning, message, call,
     passes a two-line wrapper that reads `data.get("output_config")` and then calls `_apply_effort(data)`, so
     `_apply_effort` itself is unchanged and `litellm` mode stays byte for byte.
   - `server.serve(cfg: BridgeConfig, hooks: Hooks) -> int`.
+  - `server.load_auth_lib(path: str) -> module` — the one load of Stage 1's library (`spec_from_file_location`),
+    cached for the process; every library call the bridge makes goes through the module it returned.
+  - **How a test constant reaches the library** (`LOCK_WAIT_S`, for example). `spawnBridge` runs the bridge through
+    `driver.py`'s `serve` op, so the driver's `consts` apply to it. A key `ccgpt_auth.<NAME>` names the library: the
+    driver loads it through the bridge's own `load_auth_lib`, then sets each such const on the module that returned,
+    as Stage 1's driver sets each `consts` entry on the module it loaded (Stage 1 plan, Task 1, the `driver.py`
+    bullet), and then serves, so the bridge's later calls reach the same module. The override takes effect because
+    Stage 1's library binds no constant early (the same bullet: every bound argument defaults to `None` and resolves
+    to its module constant when the function is called).
   - Constants, read when called: `PING_S = 15.0`, `HOLD_S = 15.0`, `DRAIN_S = 5.0`, `STOP_MARGIN_S = 5.0`,
     `CONTINUE_MAX = 3`, `REFRESH_TICK_S = 60.0`, `FRESH_TOKEN_S = 300.0`. `DRAIN_S + STOP_MARGIN_S` is at most the
     nohup stop's TERM-to-KILL wait (Task 11), pinned there.
 - **One `/v1/messages` request**, in order: key check; read the body through `hooks.read_body`; `hooks.apply_effort`
-  (one effort resolution, the shim's; it hands back the popped `output_config`); a `model` outside the catalogue →
-  404 (the contract's Routes); `inbound.from_anthropic(…, output_config=<popped>)` (its `BridgeError` → the HTTP
-  answer); the token through `ensure_fresh(auth_dir, lane=lane)` (an `AuthError` → `errors.from_auth`: 401 for a
-  dead word, 503 for `refresh-failed`/`auth-lock-busy`); `backend.post` with `account_id = reading.account_id`; a 401
-  → `refresh_rejected` with that token and one retry, EXCEPT when the rejected token is itself fresh (its `iat` claim,
-  through `claims_of`, within `FRESH_TOKEN_S` of now): then no refresh, 401 at once with the upstream code recorded,
-  counted `refresh-skipped-fresh-token`, so a 401 a refresh cannot cure (an `originator` refusal, D27) never spends a
-  refresh-token rotation per turn; a non-2xx → `classify_http` → the HTTP answer and `record_upstream`; a 2xx → start
-  the `HOLD_S` clock, feed the reducer, release blocks, commit at the commit point, ping on downstream silence, stop
-  reading the moment `Reducer.terminal` is set (never waiting for EOF after `response.failed`), and end with
-  `api_error` when `IDLE_TIMEOUT_S` passes with no PARSED event (keepalive comments do not reset it); a continuation
-  when `needs_continuation`; `finish` with the stop reason and the usage; then `store.remember`, `stats.usage(…,
-  image_count=req.image_count)`, `stats.outcome` (`2xx`, `compactionRequests` when `req.compaction`,
-  `continuations`, and the reducer's `counts`), `record_upstream(state="ok")` only when the status file read
-  `limit-paused` or `ineligible`. On `context_length_exceeded`, at either point, the answer is `overflow(N, M)` with
-  `N = estimate(countable_bytes, ratio, image_count)` and `M = min(window, floor(N × 0.9 / 1000) × 1000)`, where
-  `window` is the lane's `CLAUDE_CODE_MAX_CONTEXT_TOKENS` read from `<configDir>/settings.json` at that moment, 200000
-  when absent; so `N > M` always, and `stats.refusal("backend", model, N, window)` records it
-  (D-TBD-overflow-n-and-m-are-estimates).
+  (one effort resolution, the shim's; it hands back the popped `output_config`); a `model` outside the catalogue → 404
+  (the contract's Routes; the catalogue file is read at each check, never once for the process, so a refresh that adds a
+  model and a class move to it reach a running bridge, Task 11b); `inbound.from_anthropic(…, output_config=<popped>)`
+  (its `BridgeError` → the HTTP answer); the token through `ensure_fresh(auth_dir, lane=lane)` (an `AuthError` →
+  `errors.from_auth`: 401 for a dead word, 503 for `refresh-failed`/`auth-lock-busy`); `backend.post` with `account_id =
+  reading.account_id`; a 401 → `refresh_rejected` with that token and one retry, EXCEPT when the rejected token is
+  itself fresh (its `iat` claim, through `claims_of`, within `FRESH_TOKEN_S` of now): then no refresh, 401 at once with
+  the upstream code recorded, counted `refresh-skipped-fresh-token`, so a 401 a refresh cannot cure (an `originator`
+  refusal, D27) never spends a refresh-token rotation per turn; a non-2xx → `classify_http` → the HTTP answer and
+  `record_upstream`; a 2xx → start the `HOLD_S` clock, feed the reducer, release blocks, commit at the commit point,
+  ping on downstream silence, stop reading the moment `Reducer.terminal` is set (never waiting for EOF after
+  `response.failed`), and end with `api_error` when `IDLE_TIMEOUT_S` passes with no PARSED event (keepalive comments do
+  not reset it); a continuation when `needs_continuation`; `finish` with the stop reason and the usage; then
+  `store.remember`, `stats.usage(…, image_count=req.image_count, continued=<the message was continued>)`,
+  `stats.outcome` (`2xx`, `compactionRequests` when `req.compaction`, `continuations`, and the reducer's `counts`),
+  `record_upstream(state="ok")` only when the status file read `limit-paused` or `ineligible`. On
+  `context_length_exceeded`, at either point, the answer is `overflow(N, M)` with `N = estimate(countable_bytes, ratio,
+  image_count)` and `M = min(window, floor(N × 0.9 / 1000) × 1000)`, where `window` is the lane's
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` read from `<configDir>/settings.json` at that moment, 200000 when absent; so `N > M`
+  always, and `stats.refusal("backend", model, N, window)` records it (D-TBD-overflow-n-and-m-are-estimates).
 - `stream:false` runs the same pipeline into `fold` and answers one JSON message, or the HTTP error (counted
   `streamFalse`). `count_tokens` runs `inbound.from_anthropic` (with the store's `lookup`) and answers
   `{"input_tokens": estimate(countable_bytes, ratio, image_count)}` locally, never upstream, never 501.
@@ -1039,7 +1062,9 @@ upstream order was reasoning, message, call replays as reasoning, message, call,
   counter. The signal handler only sets `stopping` and starts a thread that calls `httpd.shutdown()` (a
   `ThreadingHTTPServer`'s `serve_forever` cannot be shut down from its own thread, and its handler threads are
   daemon threads, so leaving them to the interpreter's exit would drop them). When `serve_forever` returns on the
-  main thread: `httpd.server_close()` (new connections are refused from here), wait on the counter up to `DRAIN_S`,
+  main thread: `httpd.server_close()` (new connections are refused from here, which is up to one poll interval
+  after the signal: `serve_forever` notices the shutdown at its next poll, every 0.5 s by default, and until
+  `server_close` the listening socket keeps accepting into its backlog), wait on the counter up to `DRAIN_S`,
   then `fail(api_error)` every stream still open (counted `drain-cut`), wait up to 1 s for those writes, flush the
   stats file, return 0. Claude Code re-sends a cut stream as `stream:false` at once (`stub.md` runs 06/07), and that
   re-send is served only if the next process listens within Claude Code's retry window (Review Focus 3).
@@ -1068,21 +1093,24 @@ upstream order was reasoning, message, call replays as reasoning, message, call,
     reset the idle bound'` (the fake sends `:` every 0.1 s and no event: `api_error` at about 0.5 s).
   - `'SIGTERM: a short stream finishes, a long one gets api_error at DRAIN_S, a new connection is refused'` (Review
     Focus 3; `DRAIN_S` 0.5): a stream ending in 0.2 s gets its `message_stop`; one held 3 s gets one `error`
-    `api_error` and no `message_stop`; a connect after the signal is refused; the process exits 0 within
+    `api_error` and no `message_stop`; connects sent after the signal, polled, meet a refusal within 1 s of it (one
+    sent at once can be accepted into the backlog and then reset); the process exits 0 within
     `DRAIN_S + 1.5` s; `drain-cut` is 1 in the flushed stats file.
   - `'end_turn false with no call is continued upstream, at most CONTINUE_MAX times'` — the second upstream body is
     the first's input plus the first response's output items; block indexes run on; `end_turn` at the cap, counted.
   - `'the stream:false re-send after a mid-stream error is served'` (Review Focus 4).
   - `'count_tokens is answered locally and never reaches upstream'`; `'/v1/models lists the catalogue'`.
   - `'a 401 upstream refreshes once and retries once; a second 401 is 401 with x-should-retry false'` (the planted
-    token's `iat` older than `FRESH_TOKEN_S`).
+    token's `iat` older than `FRESH_TOKEN_S`: `plantBackendCredential(…, {accessClaims: {iat: now - 600}})`).
   - `'a 401 on a token issued within FRESH_TOKEN_S is not refreshed'` — two consecutive turns, each answered 401
     upstream, on a token whose `iat` is now: zero token requests in total, both 401, `refresh-skipped-fresh-token` 2.
   - `'a needs-signin credential is 401 at once with no upstream request'`; `'an absent library is 401
     auth-library-absent'`.
   - `'a refresh that fails transiently is 503 api_error, retryable'` (a `fakeAuthServer` answering 500 to the
     refresh, on an expired token: 503, no `x-should-retry`, no upstream request); `'a held credential lock is 503
-    api_error'` (another driver holds `held()`, `LOCK_WAIT_S` 0.3).
+    api_error'` (an expired credential, `expiresIn: -120`, so `ensure_fresh` must take the lock, which a fresh one
+    never does (Stage 1 plan, Task 3's `ensure_fresh` text: `not expired(r) and no unsaved record -> return r # no
+    lock, no network`); another driver holds `held()`; `consts` `ccgpt_auth.LOCK_WAIT_S` 0.3, applied as above).
   - `'a model outside the catalogue is 404 and never reaches upstream'`.
   - `'an internal error logs its class only'` — a fault op raises inside the handler with a sentinel in the body and
     in the planted token: the answer is `api_error`; neither sentinel appears on stderr or in the stats file.
@@ -1137,7 +1165,8 @@ upstream order was reasoning, message, call replays as reasoning, message, call,
 # Wave 2 — the lane (one PR)
 
 **What it delivers:** the two roster fields, the `bridge` tier in `ccrc codex start|stop|status`, `ccrc codex
-switch`, the doctor's mode-aware rows, the poller's direct arm, D25, and the docs.
+switch`, the hourly auto-advance on a `direct` lane, the doctor's mode-aware rows, the poller's direct arm, D25, and
+the docs.
 **PR boundary:** cut after wave 1 and Stage 1 wave 2 merged; ends when Task 16 is green.
 **Effect on a live box:** the install spine re-renders each codex lane's files once (every `lane.json` gains
 `bridge`, `upstream` and `bridgeFiles`, Task 11's `_inst_codex_lanes`), under the lane-files lock and before the
@@ -1152,7 +1181,8 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
 - Modify: `shared/roster.ts` (`ExecSpec`'s codex arm `:143-157`, `EXEC_KEYS_CODEX` `:496-501`, the codex parse
   `:746-775`); `shared/roster-json.mjs` (`checkAccount`'s codex arm `:326-362`, its return `:523-535`);
   `shared/roster-json.d.mts`; `deploy/models-op.mjs` (`readRoster` `:212-239`, `laneManifest` `:885-897` and its two
-  callers `:928`, `:1236`); `ccd/ccrc` (`_codex_lane_json_state` `:12127-12143`, a new `_codex_lane_mode`);
+  callers `:928`, `:1236`); `ccd/ccrc` (`_codex_lane_json_state` `:12127-12143`, new `_codex_lane_mode` and
+  `_codex_lane_upstream`);
   `server/test/codexLaneFixture.ts` (its planted `lane.json` gains the three keys); `README.md` (the mirror table,
   `:1534-1541`)
 - Test: `server/test/roster.test.ts`, `gen-accounts.test.ts`, `roster-exec-parity.test.ts`,
@@ -1171,7 +1201,12 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
     validators.
   - Bash: the mode is read from the RENDERED `lane.json` only, by `_codex_lane_mode <id>` → `litellm` | `direct` on
     stdout, rc 0; rc 1 with `lane-mode-unreadable` when `.bridge` is absent or not one of the two words, never a
-    default. No second `jq` reads the roster's `exec.bridge`; `_codex_row` is unchanged.
+    default. Its twin `_codex_lane_upstream <id>` → `backend` | `siwc`, rc 1 `lane-upstream-unreadable` on the same
+    terms, reads `.upstream`; it is the one bash reader behind every `upstream-unsupported` refusal (Tasks 11, 12)
+    and the doctor's `siwc` FAIL (Task 13). No second `jq` reads the roster's `exec.bridge` or `exec.upstream`;
+    `_codex_row` is unchanged. Every caller captures the mode and its rc first (`mode="$(_codex_lane_mode "$id")";
+    mrc=$?`), never inside another command's argument: on rc 1, install prints one `NOT measured` line for the lane
+    and skips its tiers (counted as the lock-busy lane is), and start and the doctor refuse.
   `lane.json` gains `bridge`, `upstream` and `bridgeFiles: {stats: "bridge.stats.json", store: "reasoning.sqlite",
   recordings: "recordings"}`. `_codex_lane_json_state` checks the three for PRESENCE (strings, and an object of three
   strings), as it checks `units` today and for the same reason (`ccd/ccrc:12124-12126`), so a `lane.json` from before
@@ -1184,8 +1219,9 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
   account's bridge, not the raw row'` (a row with no `exec.bridge` renders `"bridge": "litellm"`);
   `'an older lane.json with no bridge reads stale and is re-rendered'`; `'_codex_lane_mode reads lane.json, and
   refuses an absent or unknown word'`; the README rows; the single-definition rows `'the bridge file names are
-  spelled once, in laneManifest'` and `'no ccd file reads exec.bridge from the roster'` (no `exec.bridge` or
-  `.bridge` jq path over the roster in `ccd/`).
+  spelled once, in laneManifest'` and `'no ccd file reads exec.bridge from the roster'` (no `exec.bridge`,
+  `.exec.bridge`, `exec.upstream` or `.exec.upstream` in `ccd/`; a bare `.bridge` or `.upstream` is `lane.json`'s and
+  is not scanned).
 - [ ] **Steps 2-4.** - [ ] **Step 5: Mutation rows** — R1 (mirror accepts any `bridge`) → 1; R2 (parser default
   `direct`) → many; R3 (`_codex_lane_json_state` ignores `bridge`) → 1 (an older lane.json …); R4 (`laneManifest`
   reads `account.exec.bridge`) → 1; R5 (mirror default `direct`) → 1 (the parity row); R6 (`_codex_lane_mode`
@@ -1199,32 +1235,46 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
   (`:12286-12288`), `_codex_unit` (`:12294-12299`), `_codex_pid_is_tier` (`:12311-12320`), `_codex_tier_ours`
   (`:12491-12585`, the shim arm `:12540-12561`), `_codex_started_json` (`:12615-12635`), `_codex_tier_stale`,
   `_codex_start_tier` (`:12965-13020`), `_codex_stop_tier`'s nohup wait (`:13093-13108`), `_codex_stop_lane`
-  (`:13146-13154`), `_codex_cmd_start` (`:13173-13305`; its per-tier loops `:13207-13228` become the lane's mode
-  tiers), `_codex_cmd_status` (`:13335-13462`), `_codex_reap_files` (`:12668-12700`), a new spine step
-  `_inst_codex_lanes` right before `_inst_codex_tiers` (`:13614`), `_inst_codex_tiers` (`:16737+`, its loop
-  `:16779`), the usage text (`:2436-2449`)
+  (`:13146-13154`), `_codex_cmd_start` (`:13173-13305`; its per-tier loops `:13207-13228` become the lane's mode tiers),
+  `_codex_cmd_status` (`:13335-13462`), `_codex_reap_files` (`:12668-12700`), a new spine step `_inst_codex_lanes` right
+  before `_inst_codex_tiers` (`:13614`), `_inst_codex_tiers` (`:16737+`, its loop `:16779`), `_uninst_codex`
+  (`:24805-24922`, its tier list `:24812`) and `_uninst_codex_by_hand` (`:24800`), the usage text (`:2436-2449`)
 - Test: `server/test/ccrc-codex.test.ts`, `server/test/codexLaneFixture.ts`, `server/test/ccrc-account.test.ts`,
-  `server/test/ccrc-install.test.ts`, and any suite that pins the spine's step order (`git grep -n
-  _inst_codex_tiers server/test` lists them, `ccrc-doctor.test.ts:13219` among them)
+  `server/test/ccrc-install.test.ts`, `server/test/ccrc-uninstall.test.ts`, and any suite that pins the spine's step
+  order (`git grep -n _inst_codex_tiers server/test` lists them, `ccrc-doctor.test.ts:13219` among them)
 
 **Interfaces:**
 - Produces:
-  - `CODEX_TIERS="litellm shim bridge"`; `_codex_mode_tiers <mode>` → `litellm shim` | `bridge`;
-    `_codex_other_tiers <mode>` → the other mode's; `_codex_bridge_dir` → `$CCRC_HERE/codexbridge`;
+  - `CODEX_TIERS="litellm shim bridge"`; `_codex_mode_tiers <mode>` → `litellm shim` | `bridge`, and rc 2 with
+    nothing printed for any other word, an empty one included, never a default; `_codex_other_tiers <mode>` → the
+    other mode's, on the same terms; `_codex_bridge_dir` → `$CCRC_HERE/codexbridge`;
     `_codex_bridge_digest` → sha256 over the sorted `<name> <sha256>` lines of the package's `*.py`; `_codex_python`
     → the system `python3`, refused `python-too-old` below 3.9. Every loop over the tiers that a mode decides
-    (`_codex_cmd_start`'s two, `_inst_codex_tiers`', the doctor's) walks `_codex_mode_tiers "$(_codex_lane_mode
-    <id>)"`, never `$CODEX_TIERS`; only the reap's file names and the mode-blind stop walk all three.
+    (`_codex_cmd_start`'s two, `_inst_codex_tiers`', the doctor's, and the advance step's readiness, Task 11b) walks
+    `_codex_mode_tiers "$mode"` with the mode captured first (Task 10's rule for rc 1), never `$CODEX_TIERS`; only
+    the reap's file names and the mode-blind stop walk all three.
   - `_codex_tier_port bridge` → `CX_PROXY` (the shim's port, D19); `_codex_unit <id> bridge` → `lane.json`'s
     `units.shim` (the bridge runs under the shim's unit name, so the two can never be active at once).
-  - **Identity, per tier** (`_codex_tier_ours`). `_codex_lane_answer <port>` prints the answering lane and sets
-    `CX_LANE_SHAPE`: `shim` for exactly `keys == ["lane"]` (today's predicate), `direct` for exactly `{"lane":
-    <string>, "mode": "direct"}`, rc 2 for anything else. The **shim** is the `shim`-shaped answer for this lane (as
-    today, a proven handle not required); a `direct`-shaped answer on the shim tier is rc 2 with `CX_TIER_WHY=
-    listener-other-mode`. The **bridge** is the `direct`-shaped answer for this lane AND a pid proven by its argv
-    (`_codex_pid_is_tier <id> bridge`) that itself holds the port (`_codex_pid_listens`); a `direct` answer with no
-    proven pid is rc 2 `listener-unidentified`, a `shim`-shaped answer on the bridge tier is rc 2
-    `listener-other-mode`, a proven pid with the port not answering yet is 4.
+  - **Identity, per tier** (`_codex_tier_ours`). `_codex_lane_answer <port>` prints `<shape> <lane>` on one line:
+    `shim` for exactly `keys == ["lane"]` (today's predicate), `direct` for exactly `{"lane": <string>, "mode":
+    "direct"}`, rc 2 for anything else. It prints the shape rather than setting a variable because its one caller
+    runs it in a command substitution (`lane="$(_codex_lane_answer "$port")"`, `:12541`), a subshell whose CX_*
+    never reach the caller (`:12152-12153`); `_codex_tier_ours` splits the line with `read -r shape lane`. The
+    **shim** is the `shim`-shaped answer for this lane (as today, a proven handle not required); a `direct`-shaped
+    answer on the shim tier is rc 2 with `CX_TIER_WHY=listener-other-mode`. The **bridge** is the `direct`-shaped
+    answer for this lane AND a pid proven by its argv (`_codex_pid_is_tier <id> bridge`) that itself holds the port
+    (`_codex_pid_listens`); a `direct` answer with no proven pid is rc 2 `listener-unidentified`, a `shim`-shaped
+    answer on the bridge tier is rc 2 `listener-other-mode`, a proven pid with the port not answering yet is 4.
+  - **The other mode's tier on a healthy lane.** The two modes share one unit (`units.shim`) and one port, so on
+    every healthy lane the other mode's tier reads rc 2: `listener-other-mode` while the lane's own mode tier
+    answers, or `unit-unproven` (`:12583`) while the shared port is silent and the shared unit's MainPID is proven,
+    by `_codex_pid_is_tier`, as the lane's own mode tier (a start in progress). The rule: while the lane's own mode
+    tier reads 0 or 4, the other mode's tier reading either of those is `not running` in status, start, stop,
+    `_inst_codex_tiers`, `_uninst_codex` and the doctor, and none of them calls `_codex_foreign_what` for it, whose
+    unit arm ("A live unit of this tier's name, whatever else answers", `:12852`) would name the shared unit
+    foreign. One predicate reads it, `_codex_tier_is_other_mode <id> <tier> <rc>`, called directly after that
+    `_codex_tier_ours` call as `_codex_tier_is_our_handle` is (`:12587-12600`), with the own mode tier measured first:
+    each walk puts the lane's own mode tiers first.
   - The bridge's argv is `<python3> -I <shim file> --ccrc-bridge=direct --ccrc-lane=<id>`, the `--ccrc-bridge` word
     BEFORE `--ccrc-lane`. `_codex_pid_is_tier <id> bridge` wants `<shim file> --ccrc-bridge=direct --ccrc-lane=<id>`,
     without the interpreter (as the litellm `want` leaves it out, `:12315`; `ps` may print `/usr/bin/python3`). A
@@ -1235,16 +1285,29 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
     and `CCRC_CODEX_AUTH_BASE` each ONLY when the caller has it set (a tier's environment is never the caller's,
     `:1218-1222`); both readers refuse a non-loopback value. It refuses `auth-library-absent` (remedy `ccrc update`)
     when `CCRC_CODEX_AUTH_LIB`'s file is not a regular readable file, as Stage 1's litellm arm does.
+  - **No runtime gate for the bridge.** Today both `_codex_started_json` and `_codex_start_tier` read the LiteLLM
+    runtime before any per-tier choice: the first returns 1 when `ccgpt-runtime python` answers nothing
+    (`:12617-12619`), which `_codex_tier_stale` reads as 2, "cannot tell", and the second refuses `runtime-absent`
+    for every tier (`:12976-12979`). In both, the `bridge` arm is decided BEFORE that runtime read, and its record's
+    `interpreter` is `_codex_python`.
   - `ccrc codex start <id>` on a `direct` lane: no `litellm.yaml`, no runtime required, the bridge tier only;
-    refuses `retired-tier-running` when the litellm tier or the litellm-mode shim tier reads this lane's (`0` or
-    `4`), and refuses a `listener-other-mode` answer the same way (never adopts, never stops either: that is
-    `switch`'s); refuses `upstream-unsupported` for `exec.upstream: siwc` ("arrives in Stage 3"). On a `litellm` lane
-    a running bridge (`bridge` tier `0`/`4`, or the shim tier `listener-other-mode`) is `retired-tier-running` too.
-    The rekey branch restarts the bridge tier on a `direct` lane.
+    refuses `retired-tier-running` when the litellm tier reads this lane's (`0` or `4`), or the shim tier does (a
+    `shim`-shaped answer for this lane, which the bridge tier reads as `listener-other-mode`: a shim on the shared
+    port), never adopting and never stopping either (that is `switch`'s); refuses `upstream-unsupported` for
+    `exec.upstream: siwc` ("arrives in Stage 3"). On a `litellm` lane a running bridge (the bridge tier `0`/`4`,
+    which the shim tier reads as `listener-other-mode`) is `retired-tier-running` too. Every other mode's rc 2 is
+    read by the rule above. The rekey branch restarts the bridge tier on a `direct` lane.
   - `ccrc codex stop <id>` and account removal stop all three tiers, mode-blind, the lane's own mode's tiers front
     first and then the other mode's (`direct`: bridge, shim, litellm; `litellm`: shim, litellm, bridge), so each tier
     is measured after the one holding the shared port has gone (`not running` for the absent ones); `_codex_stop_lane`
     prints `litellm <w>, shim <w>, bridge <w>`.
+  - **`ccrc uninstall` stops a bridge too.** `_uninst_codex` keeps its own hard-coded `local -a tiers=(shim
+    litellm)` (`:24812`) and stops a tier only when `_codex_tier_ours` proves it (`:24847-24868`), so on a `direct`
+    lane it would leave a running bridge, the credential's refresher, behind ccrc. Its tier list becomes
+    `_codex_stop_lane`'s order for the lane's mode (`direct`: bridge, shim, litellm), read through the same rule for
+    the other mode's tier. `_uninst_codex_by_hand <id> bridge` names the unit the bridge runs under (the shim's,
+    `ccgpt-<id>-shim.service`, `deploy/models-op.mjs:896`), its pidfile `bridge.pid` and its argv marker
+    `--ccrc-bridge=direct --ccrc-lane=<id>`.
   - **The stop waits for the drain.** The nohup arm's TERM-to-KILL wait (`:13096`, ten 1 s polls) is
     `_codex_stop_wait_s <tier>`: 10 for every tier, which is at least the bridge's `DRAIN_S + STOP_MARGIN_S` (5 + 5).
     The systemd arm is `systemctl --user stop` (`:1001`), which waits the unit's `TimeoutStopSec`; `systemd-run` sets
@@ -1285,15 +1348,66 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
   `systemd-run` records the `--setenv` pairs: both loopback); `'with neither base set, neither is forwarded'`;
   `'ccrc install over a lane.json from before this plan gives a clean codex check'` (`ccrc-install.test.ts`: plant
   the old `lane.json`, run the spine, then the doctor's `codex` check has no FAIL); `'siwc is refused
-  upstream-unsupported'`; `'python3 below 3.9 is refused'` (a fixture `python3`).
+  upstream-unsupported'`; `'python3 below 3.9 is refused'` (a fixture `python3`); `'a direct lane starts and reads
+  not-stale with no LiteLLM runtime'` (no `ccgpt-runtime` generation in the fixture: start brings the bridge up and
+  the stale check answers 1, current); `'uninstall stops a direct lane's bridge'` (`ccrc-uninstall.test.ts`: a
+  running bridge on a direct lane is stopped and named in the stopped list, and no `left alone` line names the
+  lane).
 - [ ] **Steps 2-4.** - [ ] **Step 5: Mutation rows** — L1 (adopt a running litellm tier) → 1; L2 (old argv marker) →
   1; L3 (digest ignores the package) → 1; L4 (reap misses the store) → 1; L5 (rekey restarts litellm only) → 1; L6
-  (the bridge answers `{"lane"}` only) → at least 2 (today's build refuses …; a litellm lane's running shim …); L7
-  (the shim tier accepts the direct shape) → 1 (start, status and stop on a healthy direct lane …); L8 (the
-  interpreter in the `want`) → 1; L9 (no forwarding) → 1 (… gets both bases); L10 (forward an unset base as empty)
-  → 1; L11 (no `_inst_codex_lanes`) → 1 (ccrc install over a lane.json …); L12 (stop the shim first on a direct
-  lane) → 1; L13 (nohup wait below the sum) → 1.
+  (the bridge answers `{"lane"}` only) → at least 2 (today's build refuses …; start, status and stop on a healthy
+  direct lane …); L7 (the shim tier accepts the direct shape) → 1 (start, status and stop on a healthy direct lane
+  …); L8 (the interpreter in the `want`) → 1; L9 (no forwarding) → 1 (… gets both bases); L10 (forward an unset base
+  as empty) → 1; L11 (no `_inst_codex_lanes`) → 1 (ccrc install over a lane.json …); L12 (stop the shim first on a
+  direct lane) → 1; L13 (nohup wait below the sum) → 1; L14 (`_codex_tier_is_other_mode` answers no: the other
+  mode's rc 2 read as foreign) → at least 2 (start, status and stop on a healthy direct lane …; a litellm lane's
+  running shim …); L15 (the runtime read before the `bridge` arm) → 1 (a direct lane starts and reads not-stale …);
+  L16 (`_uninst_codex` keeps `(shim litellm)`) → 1 (uninstall stops a direct lane's bridge).
 - [ ] **Step 6: Commit** — `ccrc codex: the bridge tier (… Task 11)`.
+
+### Task 11b: the hourly auto-advance on a `direct` lane
+
+Two gates of today's advance step would end it, silently, on every `direct` lane. (a) Its readiness question is a
+hard-coded `for tier in litellm shim` that returns at once unless each answers rc 0 (`ccd/ccrc:11652-11657`), then
+the check-only `litellm` comparison (`_models_advance_check`, `:11550-11556`, reading `_models_adv_body_check`,
+`:11458-11463`); on a `direct` lane the litellm tier reads 1 and the shim tier reads 2. (b) The canary's lane probe
+accepts only an answer whose one key is `lane` (`deploy/models-canary.mjs:160-170`) and sends its keyed request only
+when that answer names the lane (`:223`), so the bridge's `{"lane": <id>, "mode": "direct"}` makes every canary
+`unavailable`; `_models_canary` (`ccd/ccrc:11329`) has one caller, the advance step's canary read (`:11472`).
+
+**What the bridge reads for a model id**, from this plan's contract: the requested `model` passes through upstream
+unchanged after one check against the lane catalogue (`CCGPT_CATALOGUE`, the contract's Routes; read at each check,
+Task 8). It reads neither the class registry nor the settings env block for a model id; its one `settings.json`
+read is the window, at an overflow (Task 8). A class move (`advance-commit`) renames the registry and materialises,
+which re-renders the env block (`deploy/models-op.mjs:1545-1548`, "THE MOVE"), and takes its target from the
+catalogue (`candidateFor(registry, catalogue, …)`, `:1634`). So on a `direct` lane a move is the registry and the
+env re-render, with no tier restart.
+
+**Files:**
+- Modify: `ccd/ccrc` (`_models_advance_steps`' readiness, `:11649-11658`); `deploy/models-canary.mjs` (`laneInputs`
+  `:123-141`, `laneOf` `:160-170`)
+- Test: `server/test/ccrc-models-advance.test.ts`, `server/test/models-canary.test.ts`
+
+**Interfaces:**
+- Readiness: the step captures `_codex_lane_mode <id>` first (rc 1 ends the step with no event, as an unmeasured
+  tier does today) and walks `_codex_mode_tiers "$mode"`. On a `litellm` lane it is today's question exactly, the
+  check-only comparison included. On a `direct` lane it is the bridge tier alone, answering as itself (its
+  `direct`-shaped `/ccgpt/lane` and the pid its argv proves, Task 11), through the same bounded read, and no LiteLLM
+  check runs.
+- The canary: `laneInputs` also reads `lane.json`'s `bridge`, and `laneOf` accepts the `shim` shape on a `litellm`
+  lane and the `direct` shape (`{"lane": <string>, "mode": "direct"}`, exactly) on a `direct` lane, each only when it
+  names this lane; an absent or unknown `bridge` is `unavailable` with no keyed request, as `_codex_lane_mode`
+  refuses one. The request and the reader are unchanged.
+- [ ] **Step 1: Write the failing tests** — `'the advance step moves a class on a direct lane, canary first'`
+  (`ccrc-models-advance.test.ts`: a direct lane whose fake proxy answers in the direct shape under the bridge's argv;
+  the canary runs before the commit, the class moves, no check-only `litellm` op is called and no tier is
+  restarted); `'the canary refuses a listener that answers as another lane in direct shape'` (`models-canary.test.ts`:
+  `unavailable`, and nothing carrying the key is sent); `'a direct lane's canary passes through the direct shape'`.
+- [ ] **Steps 2-4.** - [ ] **Step 5: Mutation rows** — N1 (readiness walks `litellm shim` on every lane) → 1 (the
+  advance step moves a class on a direct lane …); N2 (`laneOf` accepts the `shim` shape only) → at least 2 (… moves a
+  class on a direct lane …; a direct lane's canary passes …); N3 (`laneOf` takes the direct shape's lane without
+  comparing it) → 1 (the canary refuses a listener that answers as another lane …).
+- [ ] **Step 6: Commit** — `models: auto-advance on a direct lane (… Task 11b)`.
 
 ### Task 12: `ccrc codex switch <id> litellm|direct`
 
@@ -1394,6 +1508,9 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
   [{model, from, to, refused}], skipped: [{model, why}]}`. It reads the lane's upstream from the parsed roster
   (Task 10) and takes only `refusals["<upstream>/<model>"]` and `routes["<upstream>/<model>"]`, so a refusal on one
   route never lowers another. For each such refusal:
+  0. **A refusal is applied once.** When its `at` is not later than the windows file's top-level
+     `refusalsApplied["<upstream>/<model>"]` → skipped `already-applied`. So after `clear-window` undoes a lowering,
+     the next refresh does not lower again from the same refusal, which the stats file keeps for good (Task 5).
   1. `to = floor(tokens × 0.9 / 1000) × 1000`; below `WINDOW_MIN` → skipped `below-minimum`.
   2. **The floor of real usage:** `to` is raised to `ceil(promptTokensMax / 1000) × 1000` of that route and model,
      the largest prompt the model accepted in real usage (Task 5), because `tokens` is an estimate (D24) and an
@@ -1405,8 +1522,13 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
   5. With no entry: `to` is capped at the lane's current `contextWindowFor(...).tokens`, so the lane's window never
      rises (D-TBD-first-lowering-capped-at-lane-window).
   6. Writes `{tokens: to, setAt: now, source: "refusal", refusedTokensEstimate: tokens}` (the name says the refused
-     size is the bridge's estimate; unknown keys are tolerated by `parseWindows`), then re-materialises, once, after
-     all models.
+     size is the bridge's estimate; unknown keys are tolerated by `parseWindows`) and records the refusal it applied,
+     `refusalsApplied["<upstream>/<model>"] = at`, in the same write, then re-materialises, once, after all models.
+     Measured, nothing else changes for the record: `parseWindows` tolerates an unknown top-level key
+     (`shared/models.mjs:497-500`, "this file TOLERATES them, at the top level"), and `clear-window` keeps one: it
+     edits a clone of the raw file (`deploy/models-op.mjs:1359`), deletes only the model's entry (`:1370`), and
+     removes the file only when `windows` is empty and no other top-level key exists (`:1376`), else writes it back
+     (D-5161). `set-window` writes the same clone, and `lower-windows` writes through it too (`writeWindows`).
   The refresh runs it for each `direct` lane whose `lane.json` names a stats file, under `_models_node_locked`, in
   its own pass before the probe, so a failed probe never skips a lowering.
 - The compaction chain's two env facts, pinned in `modelenv.test.ts`: `modelEnvBlock` never emits
@@ -1419,14 +1541,17 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
   window'`; `'a refusal of 1100 tokens is skipped below-minimum'`; `'a model no class names is skipped'`; `'a
   refusal estimated low never lowers below the largest accepted prompt'` (refusal 120000, `promptTokensMax` 281500:
   `to` is 282000); `'a refusal on another route is not read'` (`refusals["siwc/<m>"]` on a backend lane: nothing
-  lowered); `'the entry records refusedTokensEstimate'`; `'the hourly refresh lowers before the probe, and a failed
+  lowered); `'the entry records refusedTokensEstimate'`; `'a refusal lowers, clear-window removes it, and the next
+  refresh does not lower again'` (`refusalsApplied` survives the clear, and the second pass answers
+  `already-applied`); `'the hourly refresh lowers before the probe, and a failed
   probe does not stop it'`; `'the new window reaches settings.json in the same run'`; `'lower-windows is a write op
   and refused outside the lane-files lock'` (`ccrc-models-lock.test.ts`); `'no lane env block names the
   enforcement switch or the auto-compact window'` (`modelenv.test.ts`, over every class layout the suite builds).
 - [ ] **Steps 2-4.** - [ ] **Step 5: Mutation rows** — Z1 (× 1.0) → 1; Z2 (raise when larger) → 1; Z3 (ignore
   `setAt`) → 1; Z4 (no first-entry cap) → 1; Z5 (the pass inside the probe-success branch) → 1 (… a failed probe
   does not stop it); Z6 (no usage floor) → 1; Z7 (read refusals by model only) → 1; Z8 (`writes: false`) → 1
-  (single-definition); Z9 (`modelEnvBlock` emits the enforcement switch) → 1.
+  (single-definition); Z9 (`modelEnvBlock` emits the enforcement switch) → 1; Z10 (drop the applied record: no
+  `refusalsApplied` written) → 1 (a refusal lowers, clear-window removes it …).
 - [ ] **Step 6: Commit** — `models: a refusal lowers the window (codex-bridge D25, … Task 15)`.
 
 ### Task 16: the README and the ownership spec
@@ -1438,7 +1563,8 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
 - Test: `server/test/readme-roster-mirror.test.ts`, and any README pin the edit reaches (`readme-*.test.ts`)
 
 **Interfaces:** none. The README says: the two modes and the switch; what a `direct` lane runs and refreshes; the
-stats file and what it never holds; D25's lowering and how to undo it (`clear-window`), and that a lowered window
+stats file and what it never holds; D25's lowering and how to undo it (`clear-window`, after which the same refusal
+never lowers it again), and that a lowered window
 reaches sessions started after it (whether a running session re-reads `settings.json` is unmeasured); a restart
 cuts a stream longer than `DRAIN_S` and can fail a request that lands in the gap (Review Focus 3); "switch a
 `direct` lane back before a rollback to a build from before this one" (runbook step 6 says why).
@@ -1464,7 +1590,8 @@ first live step uses: recordings with a scrubber, and a bounded live probe.
 - Produces: one WARN per `direct` lane, `<id>: the bridge met <n> name(s) it does not know: <family>:<name>, …
   (names only, never content). Each is a protocol change to read; it is explained by adding it to
   ccd/codexbridge/known.py in a reviewed change.` A name is explained only in code, so the 7-day watch's "no
-  unexplained new name" is a doctor line, not a judgement.
+  unexplained new name" is a doctor line, not a judgement. The rollout of that change restarts the bridge, whose
+  load drops the name from the carried list (Task 5), so the WARN clears.
 - [ ] **Step 1: Write the failing tests** — `'a direct lane with an unexplained event type warns, naming it'`;
   `'a known name never warns'`; `'a litellm lane has no drift row'`; `'the WARN line holds names only'` (a stats file
   whose `unexplained` holds a sentinel outside `NAME_RE` prints `unrecognised`).
@@ -1515,25 +1642,26 @@ first live step uses: recordings with a scrubber, and a bounded live probe.
   `core/src/context/base_instructions.rs`, `protocol/src/models.rs`, `protocol/src/openai_models.rs`,
   `core/src/responses_retry.rs`); findings name a removed or added request-struct field, event literal, error code
   literal or header literal. The workflow runs daily (spec D1: "on each Codex stable release"): it lists the stable
-  `rust-v*` releases of `openai/codex`, finds the last tag already reported from the newest `codex wire: <old>..<new>`
-  issue title, open or closed, and for every CONSECUTIVE pair of stable tags from that tag on, oldest first, fetches
-  the nine files at each and opens one issue per pair with findings (titled `codex wire: <old>..<new>`, skipped when
-  that title exists) listing them and the upstream compare link. A pair with no finding opens nothing, so the next
-  run walks it again, which costs only fetches. With no such issue yet, the walk starts at the second-newest stable
-  tag (the newest pair, today's behaviour). So two releases between runs are both compared, never skipped. The
-  issue text holds nothing but upstream names. `nextPairs(stableTags: string[], lastReported: string | null):
-  Array<[string, string]>` is exported for the test.
+  `rust-v*` releases of `openai/codex`, reads the last WALKED tag from one state issue, `codex wire: state`, whose
+  body is that tag alone, kept apart from the finding issues; and for every CONSECUTIVE pair of stable tags from that
+  tag on, oldest first, fetches the nine files at each and opens one issue per pair with findings (titled `codex
+  wire: <old>..<new>`, skipped when that title exists) listing them and the upstream compare link. A pair with no
+  finding opens nothing. After the walk, the state issue's body becomes the newest tag walked (the issue is created
+  on the first run), so a finding-free pair is never walked twice. With no state issue yet, the walk starts at the
+  second-newest stable tag (the newest pair). So every release between two runs is compared, never skipped, whether
+  or not any pair has had a finding. The issue text holds nothing but upstream names. `nextPairs(stableTags:
+  string[], lastWalked: string | null): Array<[string, string]>` is exported for the test.
 - [ ] **Step 1: Write the failing tests** — `'it reports the removal of the instructions field'` and `'it reports the
   removal of the compaction endpoint constant'` (synthetic excerpts shaped like the two upstream changes, 0.162.0
   and 0.155.0, D-TBD-wire-watch-tested-on-synthetic-excerpts); `'an unchanged pair reports nothing'`; `'three
-  releases since the last report give three consecutive pairs, oldest first'` and `'with no report yet, the newest
-  pair'` (`nextPairs`); and in
+  releases since the last walk give three consecutive pairs, oldest first'`, `'no report yet, two releases since the
+  last walk give both pairs'` and `'with no state yet, the newest pair'` (`nextPairs`); and in
   `ci-select-tests.test.ts`, `'a change under ccd/codexbridge selects the bridge suites'` (a map built from a trace
   record that lists `ccd/codexbridge/reducer.py` as read selects `codex-bridge-replay.test.ts`), which is D4: every
   bridge test reads the whole package through `load_all()`, so the traced selection runs the replay corpus on every
   bridge change, and the daily full run backs it.
 - [ ] Steps 2-6. Mutation rows G1 (ignore removed fields) → 1; G2 (open an issue on an unchanged pair) → 1; G3
-  (`nextPairs`: the newest pair only) → 1 (three releases since the last report …).
+  (`nextPairs`: the newest pair only) → 2 (three releases since the last walk …; no report yet, two releases …).
 
 ---
 
