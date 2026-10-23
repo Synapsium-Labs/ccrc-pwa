@@ -367,7 +367,7 @@ const pathsOf = (p: { attachments?: PendingAttachment[] }): string[] | undefined
 
 /** D-6367: Retry sends `resume` only when the refusal left OUR text in the box (the three codes that follow a typed
  *  message), so the server presses Enter on it instead of answering `draft-present`. Any other refusal retries as today. */
-export const retryResumes = (code: string | undefined, draft: string | undefined): boolean =>
+const retryResumes = (code: string | undefined, draft: string | undefined): boolean =>
   (code === 'verify-failed' || code === 'enter-ignored' || code === 'type-failed') && typeof draft === 'string' && draft !== '';
 
 /** Object URLs die with the pending that owned them. */

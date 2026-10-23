@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
 import { FLEET_PROTO, SECRET_MASK } from '../../shared/api';
-import { ApiError, submitErrorText } from '../src/lib/api';
+import { ApiError, sendErrorText } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, getSessionStore, type SessionSnapshot } from '../src/stores/session';
 import { createFleetStore } from '../src/stores/fleet';
 import { setUpdater } from '../src/lib/swupdate';
@@ -513,6 +513,7 @@ describe('session store optimistic send', () => {
   it('Retry after verify-failed with text left sends resume: true; Retry after other refusals does not', async () => {
     const refusal = (code: string, draft?: string) =>
       new ApiError(409, { ok: false, error: code, ...(draft === undefined ? {} : { draft }) });
+    vi.useFakeTimers(); // restored by the file's afterEach
     const cases: Array<[string, unknown, boolean]> = [
       ['verify-failed + draft', refusal('verify-failed', 'my message'), true],
       ['enter-ignored + draft', refusal('enter-ignored', 'my message'), true],
@@ -547,7 +548,7 @@ describe('session store optimistic send', () => {
     store.getState().retry(store.getState().pending[0]!.key);
     await vi.waitFor(() => expect(store.getState().pending[0]?.code).toBe('nothing-to-submit'));
     expect(prompt.mock.calls[1]![2]).toMatchObject({ resume: true });
-    expect(store.getState().pending[0]!.error).toBe(submitErrorText('nothing-to-submit'));
+    expect(store.getState().pending[0]!.error).toBe(sendErrorText('nothing-to-submit'));
     expect(store.getState().pending[0]!.error).toMatch(/Check the transcript/);
   });
 

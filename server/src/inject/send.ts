@@ -347,11 +347,11 @@ async function watchSubmit(
     const askedAt = now();
     const pane = await d.tmux.captureAnsi(id);
     // D-6366: a failed capture is a blind poll, as an absent box is (neither reads the box); unlike an absent box, it
-    // counts against the blind deadline. One dropped read (a link drop) used to end
-    // the whole watch with the box unread; the poll count (`SUBMIT_TRIES`) bounds it, and `SUBMIT_BLIND_MS` the time
-    // of one blind run: the run's failed captures and the sleeps between them, from the ask of its first failed
-    // capture (that capture's own time included, so a hung tmux ends at its first). A run of 3 failures at 200 ms per
-    // capture, or 2 at 400 ms, keeps the watch's polls.
+    // counts against the blind deadline. One dropped read (a link drop) used to end the whole watch with the box
+    // unread; the poll count (`SUBMIT_TRIES`) bounds it, and `SUBMIT_BLIND_MS` the time of one blind run: the run's
+    // failed captures and the sleeps between them, from the ask of its first failed capture (that capture's own time
+    // included, so a hung tmux ends at its first). A run of 3 failures at 200 ms per capture, or 2 at 400 ms, keeps the
+    // watch's polls.
     if (pane === null) {
       failedSinceRead = true;
       if (runStart === null) runStart = askedAt;
