@@ -294,6 +294,10 @@ describe.skipIf(!LINUX)('pressure and the floor', () => {
     df(92, 10); expect(ask()).toBe('yes');
     df(40, 93); expect(ask(), 'inodes at 93 with bytes at 40').toBe('yes');
     df(40, 91); expect(ask()).toBe('no');
+    // Reserved blocks: 1000 blocks, 870 used, 80 available. df reads used/(used+avail) = 91.58%, so no pressure — the
+    // server's L0 and `_ts_pressure` agree; (size-avail)/size would read 92% and lower the floor early.
+    fs.writeFileSync(path.join(bin, 'df'), `#!/bin/sh\nif [ "$1" = -Pk ]; then printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\nx 1000 870 80 92%% /\\n'; else printf 'Filesystem Inodes IUsed IFree IUse%% Mounted\\nx 1000 10 990 1%% /\\n'; fi\n`, { mode: 0o755 });
+    expect(ask(), 'reserved blocks: used/(used+avail), the df formula').toBe('no');
   }, 60_000);
 });
 
@@ -411,6 +415,36 @@ describe.skipIf(!LINUX)('the verb: ws-collect --expect <token> --loose-hex <hex>
     expect(slots()).toEqual([]);
     expect(looseRecs()).toEqual([]);
   }, 120_000);
+
+  it('a killed verb leaves a record the census alone names, and resuming with that hex finishes', () => {
+    const p = mkLoose('stray-dir');
+    const clock = clockAfter(p, 49);
+    const tok = tokenOf('stray-dir', clock);
+    expect(verb('stray-dir', tok, `${clock} ${crashAt('moved')}`).code).toBe(137);
+    const c = census();
+    const recs = c['records'] as { hex: string; record: string }[];
+    expect(recs, 'the entry is in quarantine, so only its record names it').toHaveLength(1);
+    expect(recs[0]!.record).toBe(looseRecs()[0]);
+    expect(c['recordsUnmeasured']).toBe(0);
+    const hex = recs[0]!.hex;
+    expect(unhex(hex)).toBe('stray-dir');
+    const a = docFor(h.run(`${NO_PRESSURE} ${clock} cmd_ws_audit --loose-hex ${hex} --collect`));
+    expect(a['resume']).toBe('moved');
+    const r = h.run(`${NO_PRESSURE} ${clock} cmd_ws_collect --expect ${a['token']} --loose-hex ${hex}`);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(docOf(r.stdout)).toMatchObject({ collected: hex, resumed: true });
+    expect(looseRecs()).toEqual([]);
+    expect(census()['records']).toEqual([]);
+  }, 120_000);
+
+  it('an unreadable record is a counted, unmeasured row, never a hex', () => {
+    const rec = path.join(regDir(), 'tmpquarantine-loose');
+    fs.mkdirSync(rec, { recursive: true });
+    fs.writeFileSync(path.join(rec, '0123456789abcdef.1.2'), 'garbage\n');
+    const c = census();
+    expect(c['records']).toEqual([]);
+    expect(c['recordsUnmeasured']).toBe(1);
+  }, 60_000);
 
   it('a pause read in the lock stops the verb before anything moves', () => {
     const p = mkLoose('stray-dir');
