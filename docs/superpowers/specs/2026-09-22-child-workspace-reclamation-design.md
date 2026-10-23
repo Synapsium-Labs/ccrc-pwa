@@ -397,7 +397,7 @@ nothing is destroyed.
 | 6 | no in-progress git operation in the tree | `tree-busy` | retryable, bounded |
 | 7 | the branch is checked out in no other worktree | `branch-elsewhere` | terminal |
 | 8 | the tree reads, after a permission normalisation pass | `tree-unreadable` | **terminal** |
-| 9 | no nested checkout of a **different repository** is dirty or holds commits unreachable from its own upstream | `containment-unproven` | **terminal** |
+| 9 | no nested checkout of a **different repository** is dirty or holds commits unreachable from its own upstream; under `$REG/nested-rescue-live` such a checkout is **rescued** into the attic and the rung proceeds (disk-retention spec §2.7.1) | `containment-unproven` (`nested-rescue-too-large`, `nested-rescue-failed` at the pin) | **terminal** without the marker |
 | 10 | the recomputed fingerprint equals `--expect` | `state-changed` | retryable |
 | — | the workdir exists but git records no worktree there | `no-worktree-record` | **terminal** |
 
@@ -488,7 +488,10 @@ does not authorise proceeding over work nobody could see: a tree ccd cannot read
 hold uncommitted work that a WIP commit would silently commit nothing over (ccd has measured a mode-000
 directory answering rc 0 with empty status output — clean-looking and not clean), and a nested *foreign*
 repository's unpushed commits cannot be pinned into this repository's attic at all. Proceeding there is not
-"pin everything, then reap"; it is "reap, and note". Both surface through §5.9's attention item, which is
+"pin everything, then reap"; it is "reap, and note". (**Amended by the disk-retention spec §2.7.1, D-6632:** for a nested
+repository only, and only behind `$REG/nested-rescue-live`, the pin now rescues it. It WIP-commits the repository, fetches
+its refs, HEAD, reflog-only tips and the WIP under `refs/ccrc/attic/<id>/nested/<pathhex>/`, bounds the bytes it adds at
+`WS_NESTED_RESCUE_MAX_MB`, and re-proves each landed. Without the marker rung 9 is as written here.) Both surface through §5.9's attention item, which is
 the one exception §7 records against rule 4 — and it asks nothing of anyone.
 
 Rung 7 keeps `ws-reap`'s answer rather than the earlier proposal's "remove the worktree, keep the branch":
