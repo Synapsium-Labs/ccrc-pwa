@@ -1238,3 +1238,75 @@ the worker updates every place the plan states it, in the first task that touche
 11. **The socket that cannot be created is folded in** (D-6526), as chosen.
 12. **W27-L12 stays**, as chosen. If it ever reds with no mutant applied, report it in the wave-done; do not weaken
     the row to make it green.
+
+## As built (run 833, 2026-10-23)
+
+The worker's record. Measured on the workspace branch over base `a68c90f15` (main did not move during the wave, and
+the `client.ts` anchors were unchanged from `7ebdff20c`).
+
+- **Commits, in order:**
+  - the plan alone;
+  - Task 1, the harness and W27-L8;
+  - Task 2, the deadline;
+  - D-6528, the W27-L12 phase fix;
+  - Task 3, the log lines and D-6527's refusal line;
+  - Task 3's review fix, D-6529;
+  - Task 4, the README bullet;
+  - this note.
+- **Claims:**
+  - Group A was claim 2300.
+  - README went in under run 774's consent: request 8312, consent 8314. The owner claim was live as 2306 at Task 4
+    (re-declared from 2259, 2278 and 2295). Claim 2300's intent was renewed to cite all three. The change is one
+    hunk of nine added lines, with no existing line touched.
+- **Deviations:** sixteen defined, D-6514 to D-6529, each once (the server's reader prints `16 16`). Both reserve
+  numbers were spent:
+  - D-6528: W27-L12's starting phase. The row went red with no mutant applied; it is reported under ruling 12.
+  - D-6529: a refusal reason that repeats the token is withheld.
+- **The README bullet** adds one clause for the refusal line (D-6527, D-6529). The consent allows the link's journal
+  lines, and the clause states no number.
+- **Rows:** 15 in `remote-liveness.test.ts`, W27-L1 to W27-L15, all green. W27-L15 is the echoed-hello row of D-6529.
+- **Mutations**, each alone on the committed `client.ts`, each run collecting every row of its task, each restored to
+  green:
+
+| # | Red rows measured | Rows run (failed+passed) | Note |
+|---|---|---|---|
+| M6 | W27-L8 | 1+0 (Task 1, base) | the heartbeat's terminate has its first row |
+| M1 | W27-L1, L2, L3, L4, L12 | 5+3 | as expected |
+| M2 | W27-L1, L2, L4, L12 | 4+4 | L3 green, as expected |
+| M3 | W27-L2, L3 | 2+6 | L1, L4 green, as expected |
+| M4 | W27-L5 | 1+7 | as expected |
+| M5 | W27-L1, L2, L3, L4, L12 (Task 2); also L6, L9 (Task 3) | 5+3; 7+7 | a superset at Task 3 |
+| M18 | W27-L12 | 1+7 | after D-6528 |
+| M4b | W27-L5 | 1+13 | as expected |
+| M7 | W27-L6, L7 | 2+12 | as expected |
+| M8 | W27-L9, L13, L14 | 3+11 | a superset |
+| M9 | W27-L8, L9, L10, L11 | 4+10 | as expected |
+| M10 | W27-L1, L2, L3, L9 | 4+10 | as expected |
+| M11 | W27-L9, L10, L11 | 3+11 | as expected |
+| M12 | W27-L10, L14 | 2+12 | L14's first line is `lost` |
+| M13 | W27-L8 | 1+13 | as expected |
+| M14 | W27-L8 | 1+13 | as expected |
+| M15 | W27-L8 | 1+13 | as expected |
+| M16 | W27-L6, L11 | 2+12 | its first run also redded L3 once, under load; it did not repeat |
+| M17 | W27-L9, L10 | 2+12 | as expected |
+| M19 | W27-L13 | 1+13 | as expected |
+| M20 | W27-L13 | 1+13 | as expected |
+| M21 | W27-L14, L15 | 2+13 | L15 needs the line too |
+| M22 | W27-L14, L15 | 2+13 | the raw hello carries the token |
+| M23 | W27-L15 | 1+14 | D-6529 |
+
+- **Suites run** at the README commit, one file at a time, at a load average of 18 to 45:
+  - all green: `remote-liveness` 15, `remote-connect` 66, `remote-io` 217, `remote-pty` 6, `remote-runner` 28,
+    `remote-tail` 4, `fleet-identity-client` 6, `fleet-identity-composition` 4, `update-inventory` 90,
+    `caps-refresh` 8, `citations` 4, `single-definition` 841, `topology-clean` 60, `private-names` 47, `dtbd` 1,
+    `deviation-refs` 31, `typecheck-tests` 12, `growth-check` 45 (with `GROWTH_CHECK=1`), and from Task 4
+    `docs-parity` 54, `readme-holds` 17 and `pools-prose` 27;
+  - `secret-mask`: 82 of 83. One case went red: "a 2 MB TUI pane history is masked in slices …", whose check is the
+    largest gap between yields under 50 ms. The same case went red on a clean checkout of `origin/HEAD`, three of
+    three runs alternated with the branch (72 to 107 ms, against 51 to 93 ms on the branch). The test imports
+    `FleetClient` as a type only, and this branch changes nothing else under `server/src`. So it is load, and main
+    shares it; this wave did not cause it.
+  - `typecheck-tests` went red twice under a load average of 80 to 100, both times on its own 120 s tsc timeout. The
+    direct `tsc` runs were clean each time, and the quiet re-run passed 12 of 12.
+- **The full suite was not run locally.** CI's selection runs it for the PR, so the wave-done's `suite:` word is
+  `unrun`.
