@@ -1239,6 +1239,42 @@ the worker updates every place the plan states it, in the first task that touche
 12. **W27-L12 stays**, as chosen. If it ever reds with no mutant applied, report it in the wave-done; do not weaken
     the row to make it green.
 
+## Coordinator rulings on review 852 (2026-10-23)
+
+Recorded verbatim from the coordinator's fix-round mail. Two paths are written as names: the report's as "the review's report", as the ruling asks, and the reviewer's scratch rows by that name, because both paths name fleet sessions and this repository is public.
+
+Run 833, wave 27: fix round 1, ruled on review 852 (the review's report; read it whole). Record this verbatim in the plan as "Coordinator rulings on review 852 (2026-10-23)", and write the report's path as "the review's report".
+
+The review found no defect in the deadline or the episode bookkeeping. Every as-built mutant reds for the reason its row states. Both of your departures stand: D-6528 was measured green in 17 runs in every order, and red under M18, M18b, M18c and M18d in every order. D-6529 does what its text says. CI's repo-owned legs are green, remote-liveness was selected, and merge-tree is clean. What is missing is rows for properties the deviations argue, two README lines, and stale plan text.
+
+Deviations: amend D-6517, D-6520, D-6522, D-6527 and D-6529 in place where this round changes what they say, each marked "amended on review 852". D-6585 and D-6586 are your reserve for this round, issued for it, spent in order. Before wave-done, give each unspent one its own entry in the house form.
+
+The reviewer's scratch rows were copied out for the worker (the reviewer's scratchpad goes with its workspace). Take what fits into remote-liveness.test.ts as W27-L16 upward, in this file's style and with its harness. Do not ship the scratch file itself.
+
+1. F3, D-6529's properties (important). Rows for:
+- the check runs on the full reason before the cut: 58 bytes, then the token (P1b);
+- the 8-character window: 10 token characters are withheld (P2a), and 7 are printed (P2b);
+- a short token: all of a token shorter than the window withholds (P4);
+- an empty token: the reason prints (P6).
+Measure red under the review's mutants: the check on the cut text, `includes(token)`, a fixed width of 8, the `width > 0` guard deleted, and widths 4 and 16. A mutant your rows cannot red, say so with its reason.
+2. F4, D-6527's ordering, range and phase (important). Rows O1 (a boot-time 4401 on attempts 0 to 2, then ready on 3: the boot line, one refused line, then ready), O2 (codes 4399, 4400, 4499 and 4500: the refused line only for 4400 to 4499) and O3 (a raw 4401 close frame with TCP never ended: `(closing)`, then the refused line). Measure red under MC, MD, ME and MF.
+3. F5, the timer's unref: a row that reds when `timer.unref?.()` is deleted. Prefer behaviour: a child process that connects with a long readyTimeoutMs, calls close() at once, and must exit within a bound far below the deadline.
+4. F6, the deadline keeps the backoff: a row against a silent listener with a short readyTimeoutMs and a small reconnect range, asserting the gaps grow. Assert a lower bound only (for example, the fourth gap at least twice the minimum), since load only lengthens gaps. Mutation: reset backoffMs in the deadline callback.
+5. F7, short tokens: no code change. The agent token is typed by the operator with only a non-empty check, so D-6529's text says a token of four characters or fewer can withhold a fixed reason such as `unauthorized`, and that this errs toward not printing.
+6. F8: drop "no token" from W27-L14's title, or make its assertion able to fail. F9: fix LinkLine's comment, since `refused` never opens an episode.
+7. README, inside the consented bullet only, still stating no number:
+- F1: the boot line prints when an attempt closes before the first ready and no other line has opened the stretch. Match W27-L9.
+- F2: say what "the usual backoff" is in words: a delay that grows on each failure and resets on each ready. Drop "the heartbeat", or say in words what it is.
+8. The plan's stale text, F10 to F16: Review Focus lists L14 to the last row, the refusal line and the token window. The Deviations preamble reads sixteen, with no reserve left. Task 5's reader count reads `16 16`. "Six log lines" with D-6520's list complete. Task 3's body matches ruling 2. Task 4's exact text matches the landed bullet, with the departure recorded there. The Global Constraints function list. D-6522 and "Not in this wave" match the refused line.
+9. The mutation record, F17 to F20: re-measure every mutant recorded against 14 rows on the final row count. Say that M4 is now the same edit as M4b. Correct the As built commit list: the setImmediate shipped with the row in Task 2's commit. Say that M1, M2 and M5 red L12 only through its waitFor.
+10. The rate, (c): ruling 4 stands. A peer that sends ready and drops at once logs two lines per flap, about 120 a minute. That is evidence of a real fault, and it stays far below journald's default per-service rate limit, so it costs journal space and nothing else. Write the measured rate into the plan's Risk notes, so the next reader does not rediscover it.
+
+Mutation runs: on a scratch copy only. Around each vitest call, in a subshell: `n=$(ps -L -u "$(id -u)" --no-headers | wc -l); ulimit -u $((n + 1500)); timeout -k 10 600 ./node_modules/.bin/vitest run ...`. Restore byte-identical (cmp) after each, and say how each mutant ended.
+
+Gates as before, one file at a time: remote-liveness (whole file three times, the new rows alone), remote-connect, remote-io, remote-pty, remote-runner, remote-tail, fleet-identity-client, fleet-identity-composition, update-inventory, caps-refresh, citations, docs-parity, readme-holds, pools-prose, single-definition, topology-clean, private-names, dtbd, deviation-refs (after `git fetch origin main`), typecheck-tests, and growth-check with GROWTH_CHECK=1. Measure every new row red, then green, with the before and after in the wave-done.
+
+README: re-read the owner claim before editing. It is 2306, under run 774's consent 8314. Landing as before: first-ready. Wave 23 (#1137) is in the merge queue now, so main moves. Measure merge-tree against main and against #1149 before you push. Never update-branch, rebase or force-push. Send the wave-done in the same turn as the push. The next review will be lean: the new rows and the texts.
+
 ## As built (run 833, 2026-10-23)
 
 The worker's record. Measured on the workspace branch over base `a68c90f15` (main did not move during the wave, and
