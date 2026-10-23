@@ -5927,6 +5927,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     build jobs' job-level keys are pinned.
   - **A lead outside this wave, unmeasured:** CI's trusted-artifact reader picks artifacts by name and branch, not
     by workflow. Whether a release run's build job could plant one there is not yet known.
+- **2026-10-23 19:25 UTC — monitoring: both boxes on v0.0.589, no anomalies.** A console tap moved them from v0.0.587.
+  `STATUS 2026-10-23T19:25:46Z fleet=v0.0.589 server=v0.0.589 health=v0.0.589 newest=v0.0.591 intent=*:dev/auto=off`
+  `backups=fleet:236M/server:7495M disk=fleet:124G/server:23G`
 
 - **2026-10-22 14:05 UTC — an operator directive: no new version for a docs-only merge.** Verbatim (in chat): "Docs
   only updates with no changes to code (PRs) should not trigger new build versioning".
