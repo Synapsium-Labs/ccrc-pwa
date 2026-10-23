@@ -2494,6 +2494,30 @@ describe('W2-D43 and W2-D46: the counter line on the env path carries its arm (W
     expect(l.lines[0]).toMatchObject({ id: AL_ID2, rc: 0, arm: 'treatment' });
   }, 240_000);
 
+  it('a store read failure after the admission is exit 5 and counted with its arm; CONTROL: the same fault before the admission is not counted (W2-D46; review 829 F1)', async () => {
+    const { box, asof } = await seededBox();
+    // The same statement fault as the case above, but SQLite's own error: pairIndexOf's read of redact_hashes (step 7) throws
+    // after the admission, inside readContext, so it leaves through readFailure as ONE exit-5 answer, and the line carries
+    // the family the admission found (a readFailure with no id or generation would write none).
+    const env = {
+      CCRC_RECALL_SESSION: ID, CCRC_RECALL_ARM: 'treatment', CCRC_RECALL_ASOF: asof,
+      HISTORY_TEST_THROW_PREPARE: 'SqliteError:fixture-planted-read-fault@FROM redact_hashes',
+    };
+    const run = (): { r: Run; lines: Line[] } => added(box, ID, () => healthHh.runCli(box, ['tree', '--json'], { preloads: [PRELOADS.faults], env }));
+    // CONTROL: the marker does not list (ID, G1), so step 4 refuses before the statement is ever prepared: the fault does
+    // not fire, and nothing is counted. It is what shows the fault below lands after the admission.
+    writeMarker(box, storeIdOf(box), [[AL_ID2, '-']]);
+    const pre = run();
+    expect(ans(pre.r), `before the admission: ${pre.r.stderr}`).toEqual([2, 'headless-unlisted']);
+    expect(pre.lines, 'CONTROL: step 4 refused, so no counter line').toEqual([]);
+    writeMarker(box, storeIdOf(box), [[ID, G1], [AL_ID2, '-']]);
+    const post = run();
+    expect(ans(post.r), `after the admission: ${post.r.stderr}`).toEqual([5, 'store-read-failed']);
+    expect(post.lines, 'a read failure after the admission: exactly one counter line').toHaveLength(1);
+    expect(Object.keys(post.lines[0]!).sort()).toEqual(ENV_KEYS);
+    expect(post.lines[0]).toMatchObject({ ev: 'recall', id: ID, gen: G1, cmd: 'tree', rc: 5, arm: 'treatment' });
+  }, 240_000);
+
   it('under history-off nothing is written on the env path either; CONTROL: without the switch the same call writes its line', async () => {
     const { box, asof } = await seededBox();
     writeMarker(box, storeIdOf(box), [[ID, G1]]);

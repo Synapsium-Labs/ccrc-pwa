@@ -11784,6 +11784,18 @@ describe('W2-2b headless seam: decideHeadless, decideHeadlessStore and decideAsO
     expect(l.resolveGeneration({ envGen: G2, regGen: { state: 'value', value: G1 } }), 'CONTROL: the tmux path still reads the env first')
       .toEqual({ value: G2, via: 'env' });
   });
+
+  it('decideAsOfFamily: a row whose merged_into hop lands on no row refuses the whole answer, though the other row alone would admit it (W2-D40 step 4; review 829 F3)', async () => {
+    const l = await lib();
+    const ask = askOf(l);
+    // The second epoch row is a family merged into a row that is not there (merged_into set, the joined row's pk null).
+    // The valid row alone is a listed, unmerged family of SESSION: a decider that dropped the null family, instead of
+    // refusing on it, would admit here, so the asserted value decides, not a TypeError on a null family.
+    const dangling = row({ session_pk: 4, generation: '', merged_into: 9 });
+    expect(ask({ rows: [row(), dangling] }), 'a hop to no row, beside a valid row').toEqual(refused('asof-invalid'));
+    expect(ask({ rows: [dangling, row()] }), 'and the same two rows in the other order').toEqual(refused('asof-invalid'));
+    expect(ask({ rows: [row()] }), 'CONTROL: the valid row alone admits').toEqual(admitted(G1, '/home/u/tree/a-real'));
+  });
 });
 
 describe('W2-2b review fix (D-6445): decideScope\'s workspace arm keeps the env anchor as stored, and the tmux registry text trimmed (W2-D40, W2-D41; D-5767)', () => {
