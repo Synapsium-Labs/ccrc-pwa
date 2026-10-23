@@ -499,15 +499,15 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
   }, 40_000);
 
   it('W27-L25: the deadline keeps the backoff growing: five attempts take at least the timers they wait on', async () => {
-    // Attempt k is cut at its deadline (100 ms) and the next is scheduled after backoff 50, 100, 200, 400 ms. Every one
-    // of those is a timer that cannot fire early and `t0` precedes the first, so the fifth accept comes at least
-    // 4 * 100 + 750 ms after `t0` (5 ms off for the timer's 1 ms rounding). Load only delays it. A deadline that reset
-    // the backoff would put it near 4 * 150 ms.
+    // Five attempts: four deadlines of 100 ms and backoffs of 50, 100, 200 and 400 ms between them, so about 1150 ms
+    // after `t0`, which precedes the first timer. The floor is that sum less slack: Node arms a timer from libuv's cached
+    // loop time, refreshed once per loop iteration, so a timer armed after a stall inside one iteration fires early, by
+    // the length of the stall, as `Date.now()` sees it. A deadline that reset the backoff flattens the sum to about 600 ms.
     peer = await linkPeer(() => 'silent-upgrade');
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const t0 = Date.now();
     fleet = connectToAgent(peer.port, { readyTimeoutMs: 100, reconnectMinMs: 50, reconnectMaxMs: 400 });
     await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(5), { timeout: 8000 });
-    expect(peer.acceptTimes()[4]! - t0).toBeGreaterThanOrEqual(4 * 100 + (50 + 100 + 200 + 400) - 5);
+    expect(peer.acceptTimes()[4]! - t0).toBeGreaterThanOrEqual(950);
   });
 });
