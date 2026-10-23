@@ -181,7 +181,7 @@ import type { CoordRoutesHandle } from './coord/routes.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
-import { changeLatch } from './changeLatch.js';
+import { changeLatch, changeLatchMap } from './changeLatch.js';
 import { SERVER_CAPS_WRITE_MS, writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { runDispatch, type DispatchRunResult } from './update/converge.js';
@@ -1351,7 +1351,7 @@ export class FleetWatcher {
   /** Per project, the last orphan set this sweep reported — `staleReport`'s
    *  once-per-changing-set idiom, keyed because the reconcile sweep now walks
    *  every project the allocator has issued for rather than a subset of them. */
-  private readonly lastOrphanReport = new Map<string, string>();
+  private readonly orphanReport = changeLatchMap<string>();
   /** Built lazily (`mirrorFor` below) as soon as a coordination database
    *  exists — NOT only on the first sweep, since `lifecycleHealth()` must be
    *  able to ask it before any sweep has run. The mirror holds the cursor,
@@ -7210,8 +7210,7 @@ export class FleetWatcher {
       // claim, and why batch scatter is not reported here.
       const orphans = unallocatedDefinitions(defs, store.ledgerIssued(project));
       const oJson = JSON.stringify([project, orphans.map((o) => o.n)]);
-      if (orphans.length > 0 && oJson !== this.lastOrphanReport.get(project)) {
-        this.lastOrphanReport.set(project, oJson);
+      if (orphans.length > 0 && this.orphanReport.changed(project, oJson)) {
         console.warn(
           `ccrc-server: ${orphans.length} deviation number(s) defined in ${project}'s plans were ` +
           'never allocated: ' + orphans.map((o) => `D-${o.n} (${o.files.join(', ')})`).join('; ') +
