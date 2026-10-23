@@ -4,8 +4,8 @@
 // these verdicts; `coord/expireArchived.ts` (the one executor) reads the box's two documents through the parsers
 // here. Nothing in this file reads a file, a row or a clock.
 //
-// THE POPULATION is an ARCHIVED WORKSPACE nobody claims, seven days after its archive — never a child (#166's lane
-// owns those) and never a main checkout (nothing archives one). THE THRESHOLD IS NEVER TYPED HERE: ccd's
+// THE POPULATION is an ARCHIVED WORKSPACE nobody claims, seven days after its archive — a child only under the child
+// arm's own marker (D-6641; #166's lane owns a child that closes first) — and never a main checkout (nothing archives one). THE THRESHOLD IS NEVER TYPED HERE: ccd's
 // `ws-audit --expire` document carries `expiresAt` (`archivedAt + WS_EXPIRE_AFTER_S`, from the one ccd definition),
 // and `expireAuditExpiresAt` is the ONE reader of that key. A document without it — an older ccd — is NO EVIDENCE,
 // and the lane composes nothing for that row.
@@ -23,7 +23,10 @@ import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../sh
  *  `ws-expire`. It has NO WRITER in the tree: the operator touches it by hand on the fleet box, and
  *  `single-definition.test.ts` pins that, beside `stall-watch-live`. Spelled once, in its `shared/switches.ts` row
  *  (D-5855), and re-exported here. */
-export { EXPIRE_LANE_LIVE_MARKER } from '../../shared/switches.js';
+export { EXPIRE_LANE_LIVE_MARKER, EXPIRE_CHILD_LIVE_MARKER } from '../../shared/switches.js';
+
+/** The `lastOutcome` key of a marked child the lane has recorded as "would be cleaned up (child)": one row per archive. */
+export const CHILD_SHADOW_OUTCOME = 'would-expire-child';
 
 /** Every word `ws-expire` and `ws-audit --expire` refuse with — and NO other. `archived-expiry-policy.test.ts` holds
  *  this set equal to what ccd's EXPIRE region and the shared ladder (`_ws_reclaim_ladder`) emit, in both directions,
@@ -365,11 +368,16 @@ export interface ArchivedExpiryInput {
   /** What the lane has LEARNED from this archive's audit: the instant (seconds), `null` before any audit read one. */
   readonly expiresAt: number | null;
   readonly nowMs: number;
+  /** The child arm (D-6641): `cap` is `expire-child-v1` on the box, `live` is `$REG/expire-child-live`. Absent reads as
+   *  neither, so a marked child skips `child`, as it did before the arm existed. */
+  readonly childArm?: { readonly cap: boolean; readonly live: boolean };
 }
 
 export type ArchivedExpirySkip =
   | 'not-a-workspace' | 'not-archived' | 'child' | 'identity-unmeasured' | 'store-unreadable' | 'open-run'
-  | 'coordinating' | 'review-open' | 'expiry-unknown' | 'not-yet' | 'held';
+  | 'coordinating' | 'review-open' | 'expiry-unknown' | 'not-yet' | 'held'
+  /** A marked child, otherwise eligible, while `expire-child-live` is absent: the lane only records it (spec 2.7.4). */
+  | 'child-shadow';
 
 export type ArchivedExpiryVerdict =
   | { readonly eligible: true }
@@ -379,7 +387,8 @@ export type ArchivedExpiryVerdict =
  * IS THIS ROW AN ARCHIVED WORKSPACE THE SERVER MAY ASK TO EXPIRE NOW (spec §5.3, "A row is eligible when")? Every
  * conjunct in the spec's order, every doubt ineligible:
  *  - a workspace (a main checkout is never expired) with an archive;
- *  - no child marker — `child` or `unreadable` is #166's lane's, never this one's;
+ *  - no child marker — `unreadable` is never this lane's, and a readable `child` mark only under `expire-child-v1` and
+ *    `$REG/expire-child-live` (D-6641); without the marker the verdict is `child-shadow`, which the lane records;
  *  - identity measured;
  *  - the store read; no non-terminal run names it as `sessionId` or as `claimedBy`; it is not the `sessionId` of a
  *    review run whose reviewed run is not terminal (#166 R16, applied to unmarked reviewers: the report lives in
@@ -392,13 +401,15 @@ export function archivedExpiryVerdict(i: ArchivedExpiryInput): ArchivedExpiryVer
   const skip = (why: ArchivedExpirySkip): ArchivedExpiryVerdict => ({ eligible: false, why });
   if (i.workspace === null) return skip('not-a-workspace');
   if (i.archivedAt === null) return skip('not-archived');
-  if (i.child.kind !== 'none') return skip('child');
+  // A readable mark passes only on a box that proves `expire-child-v1`; an unreadable one never does.
+  if (i.child.kind === 'unreadable' || (i.child.kind === 'child' && i.childArm?.cap !== true)) return skip('child');
   if (!i.identityMeasured) return skip('identity-unmeasured');
   const kept = archivedExpiryStoreSkip(i.store);
   if (kept !== null) return skip(kept);
   if (i.expiresAt === null) return skip('expiry-unknown');
   if (i.nowMs < i.expiresAt * 1000) return skip('not-yet');
   if (i.held !== null) return skip('held');
+  if (i.child.kind === 'child' && i.childArm?.live !== true) return skip('child-shadow');
   return { eligible: true };
 }
 
