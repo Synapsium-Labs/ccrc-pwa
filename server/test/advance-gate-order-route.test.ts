@@ -22,7 +22,7 @@ describe('POST /api/runs/:id/advance — gate order over the wire (ARCH-33)', ()
     const { run } = recorder();
     const w = await appFor(mkTmp('ccrc-advance-order-'), run);
     app = w.app;
-    const post = (id: number | string, payload: unknown) => w.app.inject({
+    const post = (id: number | string, payload: Record<string, unknown>) => w.app.inject({
       method: 'POST', url: `/api/runs/${id}/advance`, headers: { 'x-ccrc-mail-token': ID_GATE_TOKEN }, payload,
     });
     return { ...w, post };
