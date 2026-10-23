@@ -1558,6 +1558,8 @@ export class FleetWatcher {
   /** A lane's beat (D-5862): `LANE_SCHEDULE`'s row for `name` decides whether it is due, the single flight, and the
    *  catch. Answers the lane's own promise, never awaited here, or null when throttled. */
   runLane<T>(name: LaneName, fn: () => Promise<T> | T, active = false): Promise<T | undefined> | null { return this.lanes.run(name, fn, active); }
+  /** Whether the lane's cadence has elapsed (pure). */
+  laneDue(name: LaneName, active = false): boolean { return this.lanes.due(name, active); }
   /** An on-demand run's stamp, as `inventoryNow` and `serverCapsNow` set it. */
   stamp(name: LaneName): void { this.lanes.stamp(name); }
 
@@ -2657,8 +2659,10 @@ export class FleetWatcher {
       // D-5242: hibernation's SHADOW sweep, never awaited, gated on `primed` like the stop-done lane. It only logs.
       if (this.primed) void this.sweepHibernate(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
-      void this.runLane('idleNudge', () => this.sweepIdleCompactNudge(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }))
-        ?.catch(() => { /* one bad sweep must not kill the poll */ });
+      // A due beat that lands on a pass still running is skipped by the row and still spends its slot, as it always did.
+      const nudge = this.runLane('idleNudge', () => this.sweepIdleCompactNudge(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }));
+      if (nudge === null) { if (this.laneDue('idleNudge')) this.stamp('idleNudge'); }
+      else void nudge.catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
