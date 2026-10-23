@@ -707,12 +707,18 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
     plantBackendCredential(authDir(), { accountId: 'acct-codex-a', ...o });
   // The tier's refresher meets a refusal: the library's own `ensure_fresh`, run by the driver against a fake token
   // endpoint, writes the status file a reader then reads (needs-signin for invalid_grant, config-error for
-  // invalid_client). Nothing here writes a status by hand.
-  const recordRefusal = async (error: string, word: string): Promise<void> => {
-    signIn({ expiresIn: 30 });
+  // invalid_client). Nothing here writes a status by hand. By default the credential is planted expiring; `o` can
+  // plant it fresh and have the driver refresh it early (`withinS`), and `o.consts` are set on the driver's copy of
+  // the library only, so a status recorded under another `CLIENT_ID` carries another `configHash` than the probe's
+  // library computes.
+  const recordRefusal = async (
+    error: string, word: string, o: { expiresIn?: number; withinS?: number; consts?: Record<string, unknown> } = {},
+  ): Promise<void> => {
+    signIn({ expiresIn: o.expiresIn ?? 30 });
     const srv = await fakeAuthServer({ token: [{ status: 400, body: { error } }] });
     try {
-      const r = await runAuthDriver(home, { authDir: authDir(), ops: [{ op: 'ensure_fresh', lane: 'codex-a' }] },
+      const op = { op: 'ensure_fresh', lane: 'codex-a', ...(o.withinS === undefined ? {} : { withinS: o.withinS }) };
+      const r = await runAuthDriver(home, { authDir: authDir(), ops: [op], ...(o.consts ? { consts: o.consts } : {}) },
         { CCRC_CODEX_AUTH_BASE: srv.base });
       expect(driverLines(r.stdout)[0]?.['error'], r.stderr).toBe(word);
       expect(srv.requests).toHaveLength(1);
@@ -773,6 +779,45 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
       expect(r.stderr).toMatch(/auth-library-absent: run ccrc update — /);
     }
     expect(probeArgv0(pr.rec), 'an interpreter ran with no auth library').toEqual([]);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'codex-a.json'))).toBe(false);
+  });
+
+  // A library that is there but cannot serve. Mode 000: the bash half's readable test refuses before any interpreter
+  // runs. One that raises on import, and one that defines `read` only: the program's own load refuses, FIRST on
+  // stderr, naming the exception's class and never its arguments, with no traceback and no request.
+  it('a library that cannot be read, does not import, or lacks a reader: auth-library-absent, naming only the class', () => {
+    signIn();
+    const bad = path.join(home, 'bad-lib');
+    fs.mkdirSync(bad, { recursive: true });
+    const unreadable = path.join(bad, 'mode-000.py');
+    fs.copyFileSync(AUTH_LIB, unreadable);
+    fs.chmodSync(unreadable, 0o000);
+    const r0 = codex({ CCRC_MODELS_AUTH_LIB: unreadable });
+    expect(r0.code).toBe(1);
+    expect(r0.stderr).toMatch(/auth-library-absent: run ccrc update — this fetch was handed no readable auth library/);
+    expect(probeArgv0(pr.rec), 'an interpreter ran with an unreadable library').toEqual([]);
+    const shapes = {
+      'raises-on-import': { src: 'raise RuntimeError("arg-text-the-refusal-never-prints")\n', cls: 'RuntimeError' },
+      'read-only': {
+        src: 'class _R:\n    credential = "present"\n    detail = ""\n    access_token = "x"\n'
+          + '    account_id = None\n    expires_at = None\n\n\ndef read(auth_dir):\n    return _R()\n',
+        cls: 'AttributeError',
+      },
+    } as const;
+    for (const [shape, { src, cls }] of Object.entries(shapes)) {
+      const file = path.join(bad, `${shape}.py`);
+      fs.writeFileSync(file, src);
+      const r = codex({ CCRC_MODELS_AUTH_LIB: file });
+      expect(r.code, shape).toBe(1);
+      expect(r.stderr.startsWith('ccrc-models-probe: the codex catalogue fetch for "codex-a" failed: '
+        + 'ccrc-models-probe: auth-library-absent: run ccrc update — '), `${shape}: ${r.stderr}`).toBe(true);
+      expect(r.stderr.includes(`(${cls})`), `${shape}: the class is named`).toBe(true);
+      expect(r.stderr.includes('arg-text-the-refusal-never-prints'), `${shape}: the exception's argument printed`).toBe(false);
+      expect(r.stderr.includes('Traceback'), `${shape}: a traceback`).toBe(false);
+    }
+    const calls = probeRuntimeCalls(pr.rec);
+    expect(calls, 'the program loads the two libraries itself').toHaveLength(2);
+    expect(calls.flatMap((c) => c.requests), 'a request was made').toEqual([]);
     expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'codex-a.json'))).toBe(false);
   });
 
@@ -875,6 +920,34 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/credential-unusable: run ccrc update, then ccrc codex login codex-a — /);
     expect(probeRuntimeCalls(pr.rec)[0]!.requests).toEqual([]);
+  });
+
+  // The library's own `_bars` rule, which the probe keeps: a config-error measured under another OAuth configuration
+  // is stale (a `ccrc update` that fixed the client cures it), so it bars nothing.
+  it('a config-error recorded under another OAuth configuration bars nothing: the catalogue request is sent', async () => {
+    // A fresh credential, refreshed early by a library whose CLIENT_ID is another one.
+    await recordRefusal('invalid_client', 'config-error',
+      { expiresIn: 3600, withinS: 7200, consts: { CLIENT_ID: 'app_fixture_older_client' } });
+    const r = codex();
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr.includes('credential-unusable'), 'a stale config-error barred the probe').toBe(false);
+    expect(probeRuntimeCalls(pr.rec)[0]!.requests).toHaveLength(1);
+    expect((catalogueAt('codex-a') as { models: unknown[] }).models).toHaveLength(9);
+  });
+
+  // Review Focus 1: a torn or unparseable credential is never answered with a sign-in.
+  it('an unparseable credential is credential-unusable, naming ccrc doctor, never login-required, and is never written', () => {
+    // Torn JSON: the library re-reads it, then reads it `unreadable`.
+    fs.writeFileSync(path.join(authDir(), 'auth.json'), '{"access_token":');
+    const before = authStat();
+    const files = authDirFiles();
+    const r = codex();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/credential-unusable: run ccrc doctor — /);
+    expect(r.stderr.includes('login-required'), 'a torn credential was answered with a sign-in').toBe(false);
+    expect(probeRuntimeCalls(pr.rec)[0]!.requests).toEqual([]);
+    expect(authStat(), 'auth.json was written').toEqual(before);
+    expect(authDirFiles()).toEqual(files);
   });
 
   // Review Focus 3: an idle lane whose access token expired. In litellm mode only the tier refreshes, on its next

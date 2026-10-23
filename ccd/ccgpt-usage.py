@@ -101,9 +101,9 @@ which is standard library only, so any `python3` of 3.9 or later runs it.
 refresher and every other caller only reads." This poll loads
 `ccd/ccgpt-auth.py` by its path, beside this file's own real path (under `-I`
 a sibling module is not on `sys.path`), and calls only its readers: `read`,
-`read_status` and `expired`. It never refreshes, never takes the library's
-lock and never signs in. Each reading it cannot use is one refusal line,
-remedy first, and nothing is published (`_require_logged_in`):
+`read_status`, `expired` and the pure `config_hash`. It never refreshes, never
+takes the library's lock and never signs in. Each reading it cannot use is one
+refusal line, remedy first, and nothing is published (`_require_logged_in`):
   - `absent`: `not-logged-in`, `ccrc codex login <id>`;
   - `incomplete`, or a needs-signin the tier recorded: `login-required`,
     `ccrc codex login <id>`;

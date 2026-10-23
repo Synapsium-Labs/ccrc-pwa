@@ -187,7 +187,7 @@ _fetch_codex_lane() {
     return 1
   fi
   if [ -z "$py" ] || [ ! -x "$py" ]; then
-    echo "$PROG: runtime-absent: run ccrc install (it builds the Codex runtime), then ccrc models refresh $ACCOUNT — this fetch was handed no runnable runtime interpreter (${py:-none}), so nothing imported litellm" >&2
+    echo "$PROG: runtime-absent: run ccrc install (it builds the Codex runtime), then ccrc models refresh $ACCOUNT — this fetch was handed no runnable runtime interpreter (${py:-none}), so nothing ran and nothing was sent" >&2
     return 1
   fi
   if [ -z "$lib" ] || [ ! -f "$lib" ] || [ ! -r "$lib" ]; then
