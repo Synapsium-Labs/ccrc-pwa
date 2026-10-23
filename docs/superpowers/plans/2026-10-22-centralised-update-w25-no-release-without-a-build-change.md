@@ -165,9 +165,10 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 - `release-stable.test.ts`: the S and Y rows at `a4ab632fa`.
 - `settings-screen.test.tsx`: P1 at `a5498cb54`.
 - Review 846's rows (X13 to X15, Y12, Y13, V1 and V2) at `0317c47e0`, in a scratch clone, each vitest call under `timeout -k 10 600` and a cap on new processes. X2 and X7 were re-measured there against the reshaped C30 and C35: each reds both cases (2 of 90).
-- Neither the targets nor the rows of an earlier measurement changed after it was taken.
+- Rows were re-measured where a later round changed their targets or their rows: X2 and X7 at `0317c47e0` (2 of 90 each), and X2, X7, X15 and X15rc in wave 26 Task 1 at `c6e59fc5b` (counts in their rows). Every other row's count is the case count of its own measurement, named in its group above.
 
-**The count.** This table has 82 rows, and none survived: 75 after fix round 3, and review 846's seven.
+**The count.** This table has 83 rows, and none survived: 75 after fix round 3, and review 846's seven.
+- Review 854 added one more, X15rc, measured in wave 26 Task 1 at `c6e59fc5b`.
 - The fix-round-2 table had 46 rows, not the 50 its wave-done gave.
 - "No survivors" speaks for the listed rows only. Two guards still have no row, below.
 
@@ -211,12 +212,12 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 | `release-main.test.ts` | M26 D-6502 never fires (`contained=""`) | W25-C28 |
 | `release-main.test.ts` | M27 publish's contained branch without its head check | W25-C28 |
 | `release-main.test.ts` | X1 (F2): `fs.lstatSync(full)` to `fs.statSync(full)` | W25-C29 (1 of 87) |
-| `release-main.test.ts` | X2 (F3): `st.mode & 0o7777` to `st.mode & 0o777` | W25-C30 setuid file, W25-C30 sticky directory (2 of 87) |
+| `release-main.test.ts` | X2 (F3): `st.mode & 0o7777` to `st.mode & 0o777` | W25-C30 setuid file, W25-C30 sticky directory (2 of 91); re-measured in wave 26, Task 1, at `c6e59fc5b` |
 | `release-main.test.ts` | X3 (F4): skip names starting with `.` in the walk | W25-C31 (1 of 87) |
 | `release-main.test.ts` | X4 (F5): delete the `git diff against $base failed` line | W25-C32 (1 of 87) |
 | `release-main.test.ts` | X5 (F5): guard diff `"$base" HEAD --` to `HEAD~1 HEAD --` | W25-C33, W25-P1 (2 of 87) |
 | `release-main.test.ts` | X6 (F6): `tag --contains HEAD \| newest` to `\| tail -n1` | W25-C34 x4 (vnext and v1.2.3-rc1, each on HEAD and on a descendant) (4 of 87) |
-| `release-main.test.ts` | X7 (F8 i): delete the listing-failure block after comm/awk | W25-C35 (1 of 87) |
+| `release-main.test.ts` | X7 (F8 i): delete the listing-failure block after comm/awk | W25-C35, comm exits 1, W25-C35, comm exits 0 and prints nothing, W25-C35, comm prints one well-formed line and exits 1 (3 of 91); re-measured in wave 26, Task 1, at `c6e59fc5b` |
 | `release-main.test.ts` | X8 (F8 iii): `!= false` to `= true` | W25-C36 x3 (empty, null, garbage) (3 of 87) |
 | `release-main.test.ts` | X9: delete the gh release download exit check | W25-C12 (the failed-download case) (1 of 87) |
 | `release-main.test.ts` | X10: delete the `-z "$BASE"` check | W25-C9, W25-C11 (2 of 87) |
@@ -224,7 +225,8 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 | `release-main.test.ts` | X12: delete publish's `merge-base --is-ancestor` check on `built unchanged` | W25-C16b (1 of 87) |
 | `release-main.test.ts` | X13 (review 846 F1): delete the base's extraction arm | W25-C37, the base case (1 of 90); its line becomes `differs from v0.0.1: 1 entries, first "ccd/ccrc"` |
 | `release-main.test.ts` | X14 (review 846 F1): delete the candidate's extraction arm | W25-C37, the candidate case (1 of 90) |
-| `release-main.test.ts` | X15 (review 846 F3): delete the listing check's shape half | W25-C35, comm exits 0 and prints nothing (1 of 90) |
+| `release-main.test.ts` | X15 (review 846 F3): delete the listing check's shape half | W25-C35, comm exits 0 and prints nothing (1 of 91); re-measured in wave 26, Task 1, at `c6e59fc5b` |
+| `release-main.test.ts` | X15rc (review 854): delete the listing check's rc half | W25-C35, comm prints one well-formed line and exits 1 (1 of 91) |
 | `build-release.test.ts` | W1 attest `if:` deleted | "runs prepare, compare, attests, then publish ... (D-3122, D-6499)" (no W25 id) |
 | `build-release.test.ts` | W2 GH_TOKEN env on prepare | W25-Y4 |
 | `build-release.test.ts` | W3 setup-node gated by an `if:` | W25-Y3 |
