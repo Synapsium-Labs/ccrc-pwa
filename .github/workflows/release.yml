@@ -159,6 +159,10 @@ jobs:
       # refusal leaves a tag with no release — re-runnable after the
       # operator removes the extra tag — the same shape as any other failed
       # release.yml run.
+      # The check is now defence in depth. `record` in the build job refuses a
+      # tarball named for another tag, and `verify` writes exactly
+      # `ccrc-$GITHUB_REF_NAME.tar.gz` or nothing, so this refusal should not
+      # fire; it stays, beside the copy it protects, in case either is loosened.
       - name: Name the provenance bundle
         env:
           CCRC_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}

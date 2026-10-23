@@ -73,7 +73,10 @@ jobs:
   # sign. Its checkout sets persist-credentials: false, so no credential is
   # left in the checkout's git config for that code to find. Nothing in this
   # job writes to origin: prepare's `git ls-remote` is anonymous on this
-  # public repository, and compare's token is this job's read token.
+  # public repository, and compare's token is this job's read token. The
+  # script reads any non-zero exit of those calls as "origin does not hold
+  # it", so on a private fork the anonymous calls would fail and be misread;
+  # this repository is public by ruling.
   build:
     runs-on: ubuntu-latest
     # 30, like release.yml — the one measured single-job run took 41 s.
