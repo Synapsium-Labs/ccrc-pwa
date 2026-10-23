@@ -623,20 +623,19 @@ export const INHERITED_GROUNDS = {
     why: 'the theme row\'s label: unselected it inherits the settings page, selected its row paints --accent-tint',
   },
   // ── the fleet's update line (UpdateIndicator.tsx, D-6327) ───────────────
-  // The quiet "↑ vX available" door and its stale words sit wherever the skin and the width put them, and set an ink on
-  // no ground of their own. Every placement is on the page (`--bg-page`): Refined's desk row in `.shell-banners` under
-  // the bar paints no ground of its own (refined.css, shell.css), so it shows the page from `body`; Instrument's status
-  // bar paints `--bg-page` (instrument.css `.ins-status`); both skins' phone rows sit in the page. `--bg-surface`
-  // stays registered as the other ground a bar paints (Refined's bar, `shell.css` `.shell-accounts`, held the line
-  // there before the ruled move to a row), so a placement moved back onto a bar is measured too. `--accent` and
-  // `--ink-tertiary` on those two are token pairs the gate already holds.
+  // The quiet "↑ vX available" door and its stale words set an ink on no ground of their own, and every place the line
+  // sits is the page (`--bg-page`), measured: Refined's row under the bar is in `.shell-banners`, which paints nothing
+  // (refined.css), inside `.ref-frame`, which paints nothing (shell.css), so it shows `body`; Instrument's status bar
+  // paints `--bg-page` (instrument.css `.ins-status`); both skins' phone rows (`.ref-phone-head`, and Instrument's
+  // `.fleet` column) paint nothing and show `body` too. The line no longer sits on a bar that paints `--bg-surface`,
+  // so that ground is not registered. `--accent` and `--ink-tertiary` on `--bg-page` are token pairs the gate holds.
   '.update-indicator-door': {
-    under: ['var(--bg-page)', 'var(--bg-surface)'],
-    why: "the fleet's update line: Refined's app bar paints --bg-surface, Instrument's status bar and the phone rows sit on --bg-page. Its selector names no painted ancestor",
+    under: ['var(--bg-page)'],
+    why: "the fleet's update line: Refined's row under the bar, Instrument's status bar and the phone rows all sit on the page (--bg-page). Its selector names no painted ancestor",
   },
   '.update-indicator-stale': {
-    under: ['var(--bg-page)', 'var(--bg-surface)'],
-    why: "the stale words beside the update line's version, on the same two grounds as .update-indicator-door. Its selector names no painted ancestor",
+    under: ['var(--bg-page)'],
+    why: "the stale words beside the update line's version, on the same ground as .update-indicator-door: the page (--bg-page). Its selector names no painted ancestor",
   },
   // ── the task card and the compaction card (PR #89) ──────────────────────
   // Seven rules that set a colour and paint no ground. Their hosts DO paint
