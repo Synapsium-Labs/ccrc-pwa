@@ -459,7 +459,7 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     // The lamp is reached as the row's first cell (skin-boundary (b): a skin's sheet never names the lamp's class).
     expect(declsOf('.ins-row .sess-line > :first-child', DENSE)).toMatch(/margin-top:\s*0/);
     // A row with no context fact makes its name's line the floor high and puts the lamp at that line's middle, so the
-    // lamp is on the name's first line in a one-line row and in a two-line one (T2e fix rounds 1 and 2, F5).
+    // lamp is on the name's first line in a one-line row and in a two-line one (T2e fix round 1, F5).
     expect(declsOf('.ins-row .sess-line:not(:has(.sess-meta--context)) .sess-body > .sess-open', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
     expect(declsOf('.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child', DENSE))
       .toMatch(/margin-top:\s*calc\(\(var\(--row-h\) - var\(--fs-base\) \* var\(--lh-tight\)\) \/ 2\)/);

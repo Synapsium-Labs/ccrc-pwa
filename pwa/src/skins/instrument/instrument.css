@@ -379,7 +379,7 @@
   }
   /* A row with no context fact (a main checkout) has slack only when it is ONE line, and the name is centred in the
      floor. So its name's line IS the floor high, the text centred in it, and the lamp sits at that line's middle: on the
-     name's first line whether the state stays beside the name or drops under it (T2e fix rounds 1 and 2, F5). The
+     name's first line whether the state stays beside the name or drops under it (T2e fix round 1, F5). The
      lamp's own height is the shared sheet's (`--fs-base` x `--lh-tight`). */
   .ins-row .sess-line:not(:has(.sess-meta--context)) .sess-body > .sess-open {
     min-height: var(--row-h);
