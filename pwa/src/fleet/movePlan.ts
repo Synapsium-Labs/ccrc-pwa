@@ -4,7 +4,7 @@
 // what the operator tapped, it answers which nodes that tap moves, in the
 // order the server will move them, and the request(s) one confirm sends. All
 // five move controls (Install / Roll back on a release row, Update / Roll back
-// on an inventory row, Update all on the fleet banner) build a MoveIntent and
+// on an inventory row, Update all in Settings › Updates) build a MoveIntent and
 // hand the plan to the ONE sheet (UpdateMoveSheet), so they cannot disagree.
 //
 // ORDER IS THE DISPATCHER'S. compareDispatchOrder (shared/api.ts) is the one

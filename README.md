@@ -1039,7 +1039,7 @@ against `SHA256SUMS` (`sha256sum -c SHA256SUMS`, or `shasum -a 256 -c` on macOS)
 `install.sh --release vX.Y.Z` fetches and checks its own copy against the release's `SHA256SUMS` again, so
 this narrows the first-install gap rather than closing it.
 
-**Settings, the update banner and release pushes (update-management W3).** The fleet header's **Settings**
+**Settings, the update line and release pushes (update-management W3).** The fleet header's **Settings**
 door opens `/settings`, which reads `GET /api/updates` once a minute and whenever the page is shown again.
 Updates: the fleet's channel (stable or dev); auto-install (off; stable releases only and every release on
 my channel — the latter two disabled, naming the nodes, until every node lists `update-gate`); **Check
@@ -1092,13 +1092,16 @@ In remote mode the foot of the fleet screen always
 carries `BuildLine`: `fleet <version> · server <version>`, read from the node inventory. A side reads
 `unversioned (<sha>)` for a stamp with no tag and adds `dirty` for a dirty tree; it is amber unless the side
 is a clean versioned release, and `—` when that node's stamp cannot be stated (never measured, unread, or the
-node unreachable). On the fleet screen an update banner (`vX is out on <channel> — …`, with a door to
-`/settings`) and a `→ vX` on that node's side of `BuildLine` appear while a measured node with a channel,
-whose stamp was read, that is not a macOS node, has a newer desired tag; the banner also waits until GitHub
-has answered since the server started. While a node halts the fleet (below), a halt banner above that one
-names each halting node — `<label>: <state> (last tried <target>) — <detail>` — with that node's own **Ack**
-in place, the same Ack as its row in Settings, which reads **Acked** after a clean ack until a poll shows a
-new lease; Update all is disabled meanwhile, under a line naming the nodes to Ack first. The amber banner for
+node unreachable). On the fleet screen one quiet update line (`↑ vX available`, a door to Settings › Updates,
+its title `vX is out on <channel> — …`) and a `→ vX` on that node's side of `BuildLine` appear while a measured
+node with a channel, whose stamp was read, that is not a macOS node, has a newer desired tag; the line also waits
+until GitHub has answered since the server started. Refined shows it as a row under its bar at a desk, Instrument
+in its status bar, and both as a row below 900 px. Its × hides the line on that device until a newer release waits;
+Settings › Updates, `BuildLine`'s arrow, the push and the halt banner never read that dismissal. While a node
+halts the fleet (below), a halt banner names each halting node — `<label>: <state> (last tried <target>) —
+<detail>` — with that node's own **Ack** in place, the same Ack as its row in Settings, which reads **Acked**
+after a clean ack until a poll shows a new lease; Update all, in Settings › Updates, is disabled meanwhile, under
+a line naming the nodes to Ack first. The amber banner for
 two boxes on different builds names its remedy from the same rows: while a halt stands, the halt banner's
 Ack first, then whichever of the next two would apply; when auto-install is on and would move every lagging
 box, so that every node ends on one release tag, the console's own move, followed in Settings; otherwise —
@@ -1111,7 +1114,7 @@ measured node already runs is recorded without a push. It has no session, so an 
 it; tapping it opens `/settings`.
 
 **Moving a node from the console (update-management W4, server side).** Install and Roll back on a release, Update and Roll
-back on a node, and Update all on the fleet screen's banner each open one confirm sheet that names the nodes the move takes,
+back on a node, and Update all in Settings › Updates each open one confirm sheet that names the nodes the move takes,
 fleet first, and sends `POST /api/updates/apply` (`{nodeId}` or `{all: true}`, with an optional `tag` — without one, the node's
 desired tag) or `POST /api/updates/rollback` (`{nodeId}`, with an optional `to` — without one, the node's previous version).
 Both are session-only: the box token never moves a node. A single-node move the dispatcher would refuse answers `409` with its

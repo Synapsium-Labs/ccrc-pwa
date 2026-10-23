@@ -24,11 +24,11 @@ beforeEach(() => {
   window.localStorage.clear();
   resetAcks();
   FleetSocket.instances = [];
-  // The screen's one /api/updates poll (UpdateBanner, centralised-update §13)
+  // The screen's one /api/updates poll (UpdateIndicator, centralised-update §13)
   // answers NOTHING by default, so no case here issues a real fetch for it and
-  // no banner appears in a case that is not about one — a second status region
+  // no update line appears in a case that is not about one — a second status region
   // would make the mark-seen case's bare getByRole('status') (`:2246`) ambiguous. A case
-  // about the banner re-spies with its own answer.
+  // about the update line re-spies with its own answer.
   vi.spyOn(api, 'updates').mockReturnValue(new Promise<UpdatesView>(() => {}));
 });
 
@@ -2461,8 +2461,8 @@ describe('the programme tree on the fleet screen', () => {
    *  recorded array: that tree is single-interval, and this one is not.
    *  `useProjectedHome` (20_000), `AccountsStrip` (20_000 for its poll and
    *  30_000 for its own `useNow`), `FleetHostBanner` (15_000 + 30_000),
-   *  `useUpdatesView` (60_000 — the screen's one /api/updates poll, handed to
-   *  UpdateBanner) and `HotFilesStrip` (30_000) all start polling from this
+   *  `useUpdatesView` (60_000 — the screen's one /api/updates poll, read by
+   *  UpdateIndicator) and `HotFilesStrip` (30_000) all start polling from this
    *  screen's mount, and
    *  none of them is what this gate decides — so the instrument is the
    *  PRESENCE of `1_000` among the recorded intervals, not their sequence.
@@ -2721,12 +2721,12 @@ describe('the door to /settings (centralised update management §13)', () => {
 
 // ── centralised-update W3: the screen's one /api/updates poll ───────────────
 //
-// UpdateBanner is FleetHostBanner's idiom: the screen polls once and injects
-// the answer. The count is the pin — a banner that self-polled beside the
+// UpdateIndicator reads the shell's one poll (`useFleetChrome().updates`), as the
+// banners do. The count is the pin — an indicator that self-polled beside the
 // screen's own poll would be a second request per minute, and a second
 // opinion about the inventory on one screen.
 
-describe('the update banner on the fleet screen', () => {
+describe('the update indicator on the fleet screen', () => {
   const stampOf = (version: string) => ({
     sha: 'bd2bf57a91c3e0d4f6a8b2c5e7d9f1a3b5c7e9d1', ref: 'main', builtAt: '2026-09-20T12:00:00Z', dirty: false, version,
   });
@@ -2749,19 +2749,19 @@ describe('the update banner on the fleet screen', () => {
     intent: [],
   });
 
-  it('polls /api/updates ONCE for the whole screen and hands the answer to UpdateBanner', async () => {
+  it('polls /api/updates ONCE for the whole screen and the indicator reads the answer', async () => {
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(updatesNewer());
     renderFleet(<FleetScreen store={makeStore()} />);
-    expect(await screen.findByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+    expect(await screen.findByText('↑ v0.0.9 available')).toBeInTheDocument();
     expect(updates).toHaveBeenCalledTimes(1);
   });
 
-  it('shows no update banner while /api/updates has not answered', () => {
+  it('shows no update indicator while /api/updates has not answered', () => {
     renderFleet(<FleetScreen store={makeStore()} />);
-    expect(document.querySelector('.update-banner')).toBeNull();
+    expect(document.querySelector('.update-indicator')).toBeNull();
   });
 
-  it("threads the screen's own fleetHealth into UpdateBanner — a genuinely local box states its lone both row's version (fix round 2, item 3)", async () => {
+  it("threads the screen's own fleetHealth into the indicator's title — a genuinely local box states its lone both row's version (fix round 2, item 3)", async () => {
     // The coordinator's own wording asked for a REMOTE health answer here,
     // naming an unreachable/unread fleet row beside a both server row. That
     // exact shape cannot discriminate the wiring under this fix: item 3
@@ -2773,7 +2773,7 @@ describe('the update banner on the fleet screen', () => {
     // discriminating neither picker (both already-established facts, this
     // wave and the one before it). The one case that CAN observe whether
     // `health={fleetHealth}` is really wired through is a genuinely LOCAL
-    // fleet with a LONE both row: wired, the banner correctly states its
+    // fleet with a LONE both row: wired, the title correctly states its
     // version (D-3301's local fallback); unwired, it would default to
     // "unknown" and read as remote (item 3's own safe default), wrongly
     // showing a dash for a real, single-box install. Reported to the
@@ -2786,7 +2786,8 @@ describe('the update banner on the fleet screen', () => {
       intent: [],
     });
     renderFleet(<FleetScreen store={makeStore()} />);
-    expect(await screen.findByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+    const door = await screen.findByRole('button', { name: 'Update v0.0.9 available, open Settings › Updates' });
+    expect(door).toHaveAttribute('title', 'v0.0.9 is out on stable — fleet and server are on v0.0.7.');
   });
 });
 
@@ -2852,7 +2853,7 @@ describe('a malformed /api/updates element does not blank the fleet screen (F11)
     update: { state: 'idle', target: null, startedAt: null, detail: null },
   });
 
-  it('renders BuildLine and the update banner over the well-formed rows, dropping a null node and one with no string sha', async () => {
+  it('renders BuildLine and the update indicator over the well-formed rows, dropping a null node and one with no string sha', async () => {
     const goodFleet = nodeOf('0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10', 'fleet');
     const goodServer = nodeOf('5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93', 'server');
     const badSha = { ...goodFleet, nodeId: '11111111-1111-1111-1111-111111111111', current: { ...goodFleet.current, sha: undefined } };
@@ -2866,7 +2867,7 @@ describe('a malformed /api/updates element does not blank the fleet screen (F11)
     vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     renderFleet(<FleetScreen store={makeStore()} />);
-    expect(await screen.findByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+    expect(await screen.findByText('↑ v0.0.9 available')).toBeInTheDocument();
     await waitFor(() => expect(document.querySelector('.build-line')?.textContent).toContain('fleet v0.0.7'));
     expect(document.querySelector('.build-line')?.textContent).toContain('server v0.0.7');
     expect(warn).toHaveBeenCalledTimes(1);
@@ -2966,52 +2967,11 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
   });
 });
 
-// ── centralised-update programme wave 5 Task 8: the banner's one tap ─────────
-// Update all is live on the real screen: the sheet names the nodes in
-// dispatch order, one confirm sends apply {all: true, tag}, and the SCREEN's
-// one poll re-reads the inventory — FleetScreen hands the banner its reload
-// (the banner is injected, so its own useUpdatesView(0) reload is a no-op).
-describe('Update all on the fleet screen (programme wave 5)', () => {
-  const FLEET = '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10';
-  const SERVER = '5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93';
-  const nodeOf = (nodeId: string, role: 'fleet' | 'server'): NodeWire => ({
-    nodeId, role, label: role, os: 'linux',
-    current: { sha: 'bd2bf57a91c3e0d4f6a8b2c5e7d9f1a3b5c7e9d1', ref: 'main', builtAt: '2026-09-20T12:00:00Z', dirty: false, version: 'v0.0.7' },
-    stampRead: 'ok', installState: 'complete', provenance: 'verified',
-    caps: [], agentOps: role === 'server' ? null : ['update'], highestVersion: 'v0.0.7', previousVersion: null,
-    measuredAt: Date.now() - MIN, reachable: true, unreachableSince: null,
-    channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null,
-    request: null, report: null,
-    update: { state: 'idle', target: null, startedAt: null, detail: null },
-  });
-  const behind = (): UpdatesView => ({
-    catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null },
-    releases: [],
-    nodes: [nodeOf(SERVER, 'server'), nodeOf(FLEET, 'fleet')],   // the server row first on the wire
-    intent: [],
-  });
-
-  it('opens the move sheet naming the fleet node first, sends apply {all: true, tag}, and re-polls the screen', async () => {
-    const updates = vi.spyOn(api, 'updates').mockResolvedValue(behind());
-    const apply = vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [FLEET, SERVER], skipped: [] });
-    renderFleet(<FleetScreen store={makeStore()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Update all' }));
-    const list = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
-    expect(within(list).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
-      '1. fleet (fleet) v0.0.7 → v0.0.9',
-      '2. server (server) v0.0.7 → v0.0.9',
-    ]);
-    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.9' }));
-    await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
-    expect(apply).toHaveBeenCalledWith({ all: true, tag: 'v0.0.9' });
-    await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
-  });
-});
-
 // ── centralised-update programme wave 14, R15: the halt on the home screen ───
 // The operator's 2026-10-05 12:12 screenshot: two banners, neither naming the halt, and the only Ack in Settings.
-// On the real screen, with the screen's ONE poll: the halt banner names the failed node and acks it in place, Update
-// all is disabled with its reason, the skew banner points at the halt, and the Ack re-polls the screen.
+// On the real screen, with the screen's ONE poll: the halt banner names the failed node and acks it in place, the skew
+// banner points at the halt, and the Ack re-polls the screen. (Update all lives in Settings › Updates now, which
+// disables it with its reason: settings-screen.test.tsx and update-halt-controls.test.tsx.)
 describe('the halt on the fleet screen (programme wave 14, R15)', () => {
   const FLEET = '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10';
   const SERVER = '5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93';
@@ -3034,28 +2994,28 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     intent: [{ scope: '*', channel: 'stable', pinnedTag: null, auto: 'stable', notify: 'off', setAt: 1, setBy: 'pwa' }],
   });
 
-  it('names the halt, disables Update all with its reason, points the skew banner at it, and acks in place', async () => {
+  it('names the halt, points the skew banner at it, and acks in place', async () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(halted());
     const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: halted().nodes[0]! });
     renderFleet(<FleetScreen store={makeStore()} />);
     const ackButton = await screen.findByRole('button', { name: 'Ack fleet' });
     expect(document.querySelector('.halt-banner-node-text')?.textContent).toBe('fleet: failed (last tried v0.0.84) — gate: unit not up');
-    // Three banners apply (the skew, the halt and the release line), so the stack (W2 Task S2c) shows the first two
-    // in rank order and folds the release line behind "+1 more"; open it to reach Update all.
+    // Two banners apply (the skew and the halt), so the stack (W2 Task S2c) folds nothing, and the release is a
+    // quiet line, not a third banner: the fleet screen holds no Update all.
+    expect(screen.queryByRole('button', { name: /^\d+ more banners?$/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Update all' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: '1 more banner' }));
-    expect(screen.getByRole('button', { name: 'Update all' })).toBeDisabled();
+    expect(document.querySelector('.update-indicator')).not.toBeNull();
     await waitFor(() => expect(screen.getByText(/run different builds/i)).toHaveTextContent('Nothing moves until fleet is acknowledged — tap Ack on it in the halt banner; auto-install then moves the lagging box.'));
     expect(document.body.textContent).not.toContain('ccrc rollout');
-    // The banners' order on the screen: the sticky host banner, then the halt, then the release line.
+    // The banners' order on the screen: the sticky host banner, then the halt.
     // Identified by hook class, not by the whole className: the host banner is
     // the Banner primitive now, so its class string is a cva's output and
     // asserting it verbatim would pin utilities this test has no claim on.
-    // The claim is the ORDER of the three.
-    const order = [...document.querySelectorAll('.banner, .halt-banner, .update-banner')]
-      .map((e) => ['halt-banner', 'update-banner'].find((c) => e.classList.contains(c)) ?? 'banner');
-    expect(order).toEqual(['banner', 'halt-banner', 'update-banner']);
+    // The claim is the ORDER of the two.
+    const order = [...document.querySelectorAll('.banner, .halt-banner')]
+      .map((e) => ['halt-banner'].find((c) => e.classList.contains(c)) ?? 'banner');
+    expect(order).toEqual(['banner', 'halt-banner']);
     expect(updates, 'one poll for the whole screen').toHaveBeenCalledTimes(1);
     fireEvent.click(ackButton);
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));   // through AckConfirm (D-5507)
@@ -3072,7 +3032,6 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     await waitFor(() => expect(screen.getByText(/run different builds/i))
       .toHaveTextContent('Auto-install is on and the console can move the lagging box — follow the move in Settings.'));
     expect(document.querySelector('.halt-banner')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Update all' })).not.toBeDisabled();
   });
 
   it('an Ack with no answer holds through a failed re-poll and re-arms on the next good read of the same lease', async () => {
@@ -3141,7 +3100,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     await until(() => expect(updates).toHaveBeenCalledTimes(2));
     await until(() => expect(count(document.querySelector('.halt-banner'))).toBe(1));
     expect(count(document.querySelector('.banner')), 'the skew banner').toBe(1);
-    expect(count(document.querySelector('.update-banner')), 'the release banner').toBe(1);
+    expect(count(document.querySelector('.update-indicator')), 'the release line').toBe(1);
     expect(count(document.querySelector('.build-line')), 'the build line').toBe(1);
     expect(count(document.body), 'four surfaces shown, and the one announcement').toBe(5);
     expect(exposed(), 'said to assistive tech once').toBe(1);

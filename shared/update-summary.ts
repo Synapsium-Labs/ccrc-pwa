@@ -1,8 +1,8 @@
 // The one spelling of "what the nodes run" (design 2026-09-20 §13; plan W3 Task 3, D-3301).
 //
 // Two packages say the same clause: the server's release push ("On stable — fleet and server are on v0.0.7.")
-// and the PWA's update banner ("v0.0.9 is out on stable — fleet and server are on v0.0.7."). Written twice it
-// is two sentences to keep in step, so it lives here, in L0, and both import it; `single-definition.test.ts`
+// and the PWA's update line, in its title ("v0.0.9 is out on stable — fleet and server are on v0.0.7."). Written
+// twice it is two sentences to keep in step, so it lives here, in L0, and both import it; `single-definition.test.ts`
 // holds the clause to this one file across the four TS roots.
 //
 // L0: this file imports NOTHING — not a type, not `node:*` — because the PWA bundles it. Its row type is
@@ -15,7 +15,7 @@
  *  VOUCH for `version` at all: a row that has never been measured (W5 review 161, F-I: not "unmeasured
  *  this run" — `measuredAt` is a persisting stamp, not a per-run flag), whose stamp did not read, or that is
  *  `reachable: false` (the global constraint "unreachable is not current", widened by D-3316 from settings/
- *  banner/BuildLine to the push summary and the decision too). Such a row still OCCUPIES its `role` (so no
+ *  update line/BuildLine to the push summary and the decision too). Such a row still OCCUPIES its `role` (so no
  *  other row falls back to standing in for it — the point of picking sides from every live row FIRST, below),
  *  but the clause states nothing about it: it renders exactly as if there were no row at all. REQUIRED
  *  rather than optional so every caller decides explicitly at the call site — an omitted field used to read
@@ -88,7 +88,7 @@ export function summaryFromSides(sides: { fleet: SummaryRow | null; server: Summ
  *  truthy or not-falsy, so a malformed non-boolean `reachable` on the wire never vouches either. Structural over
  *  any row shape carrying these three fields — the server's `NodeRow`, the wire's `NodeWire` — so
  *  neither type leaks into L0, the same discipline `versionSides`/`remoteSides` already keep on `role`.
- *  `server/src/watch.ts`'s `pushRelease`, `pwa/src/fleet/UpdateBanner.tsx`'s `updateBannerText`,
+ *  `server/src/watch.ts`'s `pushRelease`, `pwa/src/fleet/releaseWaiting.ts`'s `updateBannerText`,
  *  `BuildLine.tsx`'s `side()` guards and `FleetHostBanner.tsx`'s skew-arm `name()` all call this instead
  *  of computing the same three-clause fact inline — BuildLine's own inline form was narrower (`reachable`
  *  alone, missing the `measuredAt`/`stampRead` clauses) before this fix, which is exactly the kind of

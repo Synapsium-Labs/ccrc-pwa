@@ -1,6 +1,6 @@
 // The ONE poll of `GET /api/updates` (design 2026-09-20 §13; W3 Task 5), and
 // the two pure readers every update surface shares — the settings screen, the
-// fleet banner and BuildLine all read THIS file's answers, so none of them can
+// fleet's update line and BuildLine all read THIS file's answers, so none of them can
 // hold its own opinion of what "malformed" or "behind" means.
 //
 // The hook is `useFleetHealth`'s shape — newest issued request authoritative,
@@ -36,8 +36,8 @@ export type UpdatesFailure = 'not-configured' | 'failed';
 
 /** A later poll failed, so what a surface shows is the last answer that landed (`view` is kept, `failure` stands).
  *  The update plane's one sentence for it (wave 19, R24(b)), shown by every surface that reads this poll's kept
- *  view: the home screen's skew, halt and release banners and BuildLine, and announced once by the fleet screen's
- *  own status region (D-5124). Settings' own stale line says it too (its own exposure, a separate screen),
+ *  view: the home screen's skew and halt banners, its update line and BuildLine, and announced once by the fleet
+ *  screen's own status region (D-5124). Settings' own stale line says it too (its own exposure, a separate screen),
  *  imported from here. */
 export const UPDATES_STALE_TEXT = 'The latest read failed — this is the last answer that landed.';
 
@@ -167,12 +167,12 @@ export function asUpdatesView(raw: unknown): UpdatesView | null {
 // in L0 (`shared/update-arrow.ts`): BuildLine moved into @ccrc/ui, and a
 // design-system component cannot reach into this file — it owns the
 // `GET /api/updates` poll, and therefore the API client. They are re-exported
-// here, unchanged, so SettingsScreen, UpdateBanner, movePlan and their tests
+// here, unchanged, so SettingsScreen, releaseWaiting.ts, movePlan and their tests
 // keep the import they already have and there is still ONE definition.
 export { nodeVersion, pendingTag } from '../../../shared/update-arrow';
 
 /** The release a waiting update names: the NEWEST `pendingTag` across the inventory in semver order, with the node
- *  behind it. One definition for the update banner (`bannerRelease`) and the Settings release window
+ *  behind it. One definition for the fleet's update line (`bannerRelease`, fleet/releaseWaiting.ts) and the Settings release window
  *  (`releaseWindow`, D-5505), so the two cannot name different waiting releases. `null` when no node has an arrow. */
 export function newestPending(nodes: readonly NodeWire[] | null | undefined): { tag: string; node: NodeWire } | null {
   let best: { tag: string; node: NodeWire } | null = null;

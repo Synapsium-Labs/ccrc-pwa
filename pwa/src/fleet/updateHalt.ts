@@ -1,6 +1,6 @@
 // What the home screen says about a halted or skewed fleet (centralised-update design 2026-09-20 §10, §13;
 // programme wave 14, R15). Pure reads of FleetScreen's one /api/updates answer, with no poll of their own. Four
-// callers: the halt banner (HaltBanner.tsx), Update all (UpdateBanner.tsx), the skew arm (FleetHostBanner.tsx) and,
+// callers: the halt banner (HaltBanner.tsx), Update all (Settings › Updates), the skew arm (FleetHostBanner.tsx) and,
 // since wave 19 (R24(a)), Settings' release-row Install and per-node Update (screens/updates.tsx).
 //
 // WHO HALTS is the dispatcher's own rule, `isHaltingUpdate` (shared/update-move.ts, L0), the same predicate

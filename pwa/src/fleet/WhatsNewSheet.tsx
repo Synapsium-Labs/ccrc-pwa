@@ -1,23 +1,23 @@
-// WhatsNewSheet — what an update would bring (D-5549). The update banner's
-// "See what's new" opens it in place: before, the button navigated to
-// /settings, whose release list sits far below the fold, so the tap read as
-// doing nothing.
+// WhatsNewSheet — what an update would bring (D-5549). Settings ›
+// Updates opens it in place, from the waiting release's "See what's new":
+// before, the control navigated to /settings, whose release list sits far
+// below the fold, so the tap read as doing nothing.
 //
 // WHAT IT LISTS: every catalogue release above the OLDEST version a node that
 // is behind runs (a node with an arrow, `pendingTag`), up to the tag the
-// banner announces, newest first — every channel, because each release's
+// fleet's update line announces, newest first — every channel, because each release's
 // notes cover only its own range, so the dev releases in between are where a
 // stable tag's changes are written. A node already on the tag, or one with no
 // measured version, does not narrow the range; with no measured version behind
-// at all, the sheet shows the banner's tag alone and says "in", not "since".
+// at all, the sheet shows the waiting tag alone and says "in", not "since".
 //
 // THE NOTES are `ReleaseNotes` (the Settings rows render the same component):
 // plain text, grouped, Behind the scenes folded, each `#NNN` a link built from
 // the number and the server's release source. A release with no body says
 // "No notes for this release" under its tag and date.
 //
-// THE FOOTER is the banner's own two moves: Update all — the same move sheet,
-// opened by the banner once this sheet has closed, and disabled with the same
+// THE FOOTER is two moves: Update all — the same move sheet,
+// opened by Settings › Updates once this sheet has closed, and disabled with the same
 // reason line while a node halts the fleet — and Close. It is the Sheet's
 // pinned footer (D-5932): however many releases scroll, both stay in reach,
 // and the reason line sits in it, straight above Update all (D-6031).

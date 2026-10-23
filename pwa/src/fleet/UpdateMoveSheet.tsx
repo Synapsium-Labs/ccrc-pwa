@@ -1,7 +1,7 @@
 // UpdateMoveSheet — the ONE confirm sheet every move control opens
 // (centralised-update design 2026-09-20 §13 "W4 adds"; programme wave 5
 // Task 8): Install / Roll back on a /settings release row, Update / Roll back
-// on an inventory row, and the fleet banner's Update all. It names the nodes
+// on an inventory row, and Settings › Updates' Update all. It names the nodes
 // the move takes, numbered in the order the server's dispatcher moves them
 // (movePlan.ts), under the move's own headline, and one confirm sends the
 // request(s) by direction — `apply {tag}` forward, `rollback {to}` back.
@@ -258,7 +258,7 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone 
   /** D-5612 (settings spec §6.4): the caller writes the 202's line under the control that opened the sheet, so the
    *  sheet hands it the sentence when it closes on a request (MOVE_REQUESTED_TEXT, or MOVE_UNREADABLE_TEXT for a 2xx
    *  it could not read) instead of toasting. With it, an answer that lands after the sheet was dismissed is toasted,
-   *  because the control that asked is gone. Without it (the update banner), the sheet behaves as before. */
+   *  because the control that asked is gone. Without it, the sheet behaves as before. */
   onAnswered?: (text: string) => void;
   /** `danger` for a rollback (D-5507); `move`, the default, for Install and Update. */
   tone?: 'move' | 'danger';
