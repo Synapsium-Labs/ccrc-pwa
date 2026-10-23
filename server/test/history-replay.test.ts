@@ -196,7 +196,7 @@ describe('history-replay W2-4 Task 1: the argument grammar', () => {
     }
   };
 
-  it('FLAG_SPECS declares exactly W2-4\'s seven flags and W2-5a Task 7\'s, frozen', () => {
+  it('FLAG_SPECS declares exactly W2-4\'s seven flags, W2-5a Task 7\'s and W2-5b1 Task 1\'s, frozen', () => {
     expect(Object.isFrozen(replay.FLAG_SPECS)).toBe(true);
     expect(replay.FLAG_SPECS).toEqual({ out: 'string', account: 'string', budget: 'int', 'writer-model': 'string',
       'judge-model': 'string', 'arm-model': 'string', 'settings-mode': 'string',
@@ -210,7 +210,9 @@ describe('history-replay W2-4 Task 1: the argument grammar', () => {
       power: 'string', 'power-sha256': 'string', 'pilot-result': 'string', 'pilot-result-sha256': 'string',
       'sha-min-prefix': 'int', 'writer-input': 'string', 'n-fidelity': 'int', 'n-usage': 'int',
       'spend-budget': 'int', 'window-start': 'int', 'window-end': 'int', 'q18-decision': 'string',
-      draft: 'bool', finalize: 'bool', template: 'bool', registry: 'bool', section: 'string' });
+      draft: 'bool', finalize: 'bool', template: 'bool', registry: 'bool', section: 'string',
+      // W2-5b1 Task 1 (W2-D24, Q23): a part 2 consumer's stamp, taken at or after window start only
+      'allow-code-change': 'bool' });
   });
 
   it('a subcommand, a string, an int and a bool parse to {sub, flags}', () => {
@@ -883,7 +885,7 @@ describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger
 
   it('the rest of the stream: one tool pair by id, the result event, its permission denial, its usage, the message count and the malformed line', () => {
     const f = t4Replay.readStreamJson(STREAM);
-    expect(f.toolPairs).toEqual([{ id: 'toolu_1', name: 'Bash', input: { command: 'true' }, result: 'ok', isError: false }]);
+    expect(f.toolPairs).toEqual([{ id: 'toolu_1', name: 'Bash', input: { command: 'true' }, result: 'ok', isError: false, parentToolUseId: null }]);
     expect(f.result).toEqual({ subtype: 'success', isError: false, numTurns: 2, text: 'done' });
     expect(f.permissionDenials).toEqual([DENIAL]);
     expect(f.usageSource).toBe('result');
@@ -907,6 +909,7 @@ describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger
     expect(t4Replay.readStreamJson('')).toEqual({
       init: null, usage: { input: 0, cacheCreation: 0, cacheRead: 0, output: 0 }, usageSource: 'none', toolPairs: [],
       permissionDenials: null, result: null, assistantMessages: 0, malformedLines: 0, firstCallUsage: null,
+      resultUsage: null, assistantUsage: { input: 0, cacheCreation: 0, cacheRead: 0, output: 0 }, messages: [],
     });
   });
 
@@ -942,7 +945,7 @@ describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger
       { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_3', content: [{ type: 'text', text: 'one' }, { type: 'image' }, { type: 'text', text: 'two' }] }] } },
       { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_stray', content: 'stray' }] } },
     ));
-    expect(f.toolPairs).toEqual([{ id: 'toolu_3', name: 'Agent', input: { prompt: 'look' }, result: 'one\ntwo', isError: null }]);
+    expect(f.toolPairs).toEqual([{ id: 'toolu_3', name: 'Agent', input: { prompt: 'look' }, result: 'one\ntwo', isError: null, parentToolUseId: null }]);
     expect(f.assistantMessages).toBe(1);
     expect(f.usageSource).toBe('none');
   });
@@ -1153,7 +1156,9 @@ function t5Box(prefix: string): { home: string; out: string; up: T5Launch; gen: 
   };
 }
 
-const T5_RECALL = { session: 'fixture-recall-session', arm: 'fixture-arm-value', asof: 'fixture-asof-uuid' };
+/** W2-5b1 Task 1: spawnEnv takes only values the seam takes (W2-D50, W2-D42), so the contract's fixture is real-shaped:
+ *  a session id idOk takes, a RECALL_ARMS word (through lib, never spelled here) and a lowercase UUID. */
+const T5_RECALL = { session: 'fixture-recall-session', arm: t4Lib.RECALL_ARMS[1] as string, asof: '0189abcd-0000-4000-8000-0000000005b1' };
 /** An explicit no-op gate: runBatch requires one, and these cases test the runner, not Task 6's stop. */
 const T5_NO_GATE = (): void => {};
 const T5_BASE_KEYS = ['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH'];
@@ -3053,7 +3058,9 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
   // lib.mjs bring in exactly the names the plan's tasks use (W2-D33, W2-D74). A later W2-5a task that adds a name to a
   // module's braces updates that module's entry here in the same commit. So no edit adds a second reader unseen: keptOf
   // (W2-D68), sweep.mjs's recall-off content reader (W2-D29, R6) or a decode of its own. W2-D24's code hash covers the
-  // driver and the gate. The other ccd/history modules ride the release tag (W2-D24).
+  // driver and the gate. The other ccd/history modules ride the release tag (W2-D24). W2-5b1 Task 1 adds asOfCutOf to
+  // recall.mjs's names (W2-2a's cut, which the card's parent and W2-D78(iii) read); lib's and the gate's names are not
+  // pinned here, and W2-5b1 Task 1's own case holds the names that PR consumes from them.
   const EXPECTED_IMPORTS = ['node:fs', 'node:os', 'node:path', 'node:child_process', 'node:url', 'node:crypto',
     '../ccd/history/lib.mjs', '../ccd/history/store.mjs', '../ccd/history/derive.mjs', '../ccd/history/recall.mjs',
     '../ccd/history/cli.mjs', '../ccd/history/sweep.mjs', './history-gate.mjs', '../shared/roster-json.mjs'];
@@ -3062,7 +3069,7 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
     'node:crypto': '{ randomBytes }',
     '../ccd/history/store.mjs': '{ StoreError, openReader, readBounded, userVersion }',
     '../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf }',
-    '../ccd/history/recall.mjs': '{ expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf }',
+    '../ccd/history/recall.mjs': '{ asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf }',
     '../ccd/history/cli.mjs': '{ pairIndexOf }',
     '../ccd/history/sweep.mjs': '{ ftsTextOfBlob, readRegPresence }',
   };
@@ -4810,7 +4817,8 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     const doc = JSON.parse(bytes.toString('utf8'));
     expect(Object.keys(doc).sort()).toEqual(['account', 'budget', 'kind', 'measured_ms', 'model', 'settings_mode', 'spellings', 'spend', 'v']);
     expect(doc).toMatchObject({ kind: t9Driver.PROBE_KIND, v: 1, account: 'up-a', settings_mode: 'restricted', model: T9_MODEL, budget: 1_000_000 });
-    expect(doc.spend, 'the ledger under --out counts the three runs').toBe(3 * 5);
+    // W2-5b1 Task 1 (Q7): each run is charged the larger reading, its four messages' 4 x 5 against its result's 5.
+    expect(doc.spend, 'the ledger under --out counts the three runs').toBe(3 * 20);
     expect(doc.spellings).toEqual([
       { spelling: t9Driver.allowedToolSpellings(home)[0], denied: false, tool_error: false, ran: true, result_seen: true },
       { spelling: t9Driver.allowedToolSpellings(home)[1], denied: true, tool_error: true, ran: true, result_seen: true },
@@ -9251,7 +9259,9 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
 
     r7it('no W2-5a subcommand takes --allow-code-change: before window start a code change is a superseding draft (W2-D6, W2-D24)', () => {
       for (const sub of [['quiz-source'], ['freeze'], ['power'], ['open', '--finalize'], ['verify', '--registry']]) {
-        r7expect(run7(null, null, [...sub, '--allow-code-change']).stderr, sub.join(' ')).toBe(refusalLine('args-invalid', 'unknown flag "--allow-code-change"'));
+        // W2-5b1 Task 1 declares the flag for W2-5b's part 2 consumers (Q23): each W2-5a form now refuses it as a flag it
+        // never reads (checkFlags), where the grammar refused it as unknown before. Edited in place under R27.
+        r7expect(run7(null, null, [...sub, '--allow-code-change']).stderr, sub.join(' ')).toBe(refusalLine('args-invalid', `--allow-code-change is not a ${sub.join(' ')} flag`));
       }
     });
   });
@@ -10499,6 +10509,84 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect(r7drv.abStateOf('treatment', gen(1), { state: 'absent' })).toBe('ok');
     });
   });
+
+  // ── W2-5b1 Task 1: part 2 for W2-5b's consumers (W2-D24, W2-D25, W2-D90; S2 C22, Q23) ────────────────────────────
+  // In-process over chain7's final, so the validator's chain is the real one. A moved tree is tree7's. No case spawns.
+  r7describe('W2-5b1 Task 1: loadFinalRecord, the part 2 loader every W2-5b consumer shares', () => {
+    /** A part 2 consumer's flags for the saved final `rec`, over chain7's draft and frozen list. */
+    const flagsOf = (c: R7, rec: Saved, extra: R7 = {}): R7 => ({ record: rec.path, 'record-sha256': rec.sha, part1: c.d.path,
+      'part1-sha256': c.d.sha, frozen: c.fz.path, 'frozen-sha256': c.fz.sha, ...extra });
+    const START = T0 + DAY;   // chain7's window.start_ms
+    const AFTER = T0 + 2 * DAY;
+    const load = (flags: R7, o: { nowMs: number; root?: string }): R7 => r7drv.loadFinalRecord(flags as never, o) as R7;
+    const refusalOf = (fn: () => unknown): [string, string] | null => {
+      try { fn(); return null; } catch (e) {
+        if (e instanceof r7drv.DriverRefusal) return [(e as R7).word, (e as R7).detail];
+        throw e;
+      }
+    };
+    /** chain7's final superseded after window start by one that appends `amendment`, its detail_sha256 computed (W2-D90). */
+    const amended7 = (c: R7, amendment: R7): Saved => save7({ ...c.final, finalized_ms: AFTER, supersedes: c.f.sha,
+      amendments: [{ ...amendment, detail_sha256: r7Sha(r7Canon(amendment.detail)) }] }, 'part2-amended.json');
+    const MOVE = (over: R7 = {}): R7 => ({ kind: 'version-move', node_label_ref: 'node-a', at_ms: AFTER,
+      detail: { claude_code_version: '9.9.8 (Claude Code)', repilot_sha256: hex('repilot') }, ...over });
+    const BEFORE = `--allow-code-change before window start ${START}: before it a code change is a re-pilot and a superseding part 2 (W2-D6, W2-D24)`;
+
+    r7it('CONTROL: chain7\'s final loads with its draft and frozen list, re-checked against the tree it runs under, with no stamp', () => {
+      const c = chain7(home7(null));
+      const got = load(flagsOf(c, c.f), { nowMs: T0 });
+      r7expect([got.sha256, got.stamps, r7Canon(got.record)]).toEqual([c.f.sha, [], r7Canon(c.final)]);
+      r7expect(got.frozen.sha256).toBe(c.fz.sha);
+    });
+
+    r7it('a moved tree refuses code-changed; --allow-code-change at or after window start loads it stamped, before it is args-invalid; an unmeasured file is never stamped (W2-D24, Q23)', () => {
+      const c = chain7(home7(null));
+      const moved = tree7({ edit: 'deploy/measure-history.py' });
+      const flag = flagsOf(c, c.f, { 'allow-code-change': true });
+      r7expect(refusalOf(() => load(flagsOf(c, c.f), { nowMs: AFTER, root: moved }))).toEqual(['code-changed', 'changed deploy/measure-history.py']);
+      r7expect(load(flag, { nowMs: AFTER, root: moved }).stamps).toEqual(['code-changed']);
+      r7expect(load(flag, { nowMs: START, root: moved }).stamps, 'at window start exactly').toEqual(['code-changed']);
+      r7expect(refusalOf(() => load(flag, { nowMs: START - 1, root: moved }))).toEqual(['args-invalid', BEFORE]);
+      r7expect(refusalOf(() => load(flag, { nowMs: START - 1 })), 'before window start, with the code unmoved too').toEqual(['args-invalid', BEFORE]);
+      r7expect(refusalOf(() => load(flag, { nowMs: AFTER, root: tree7({ drop: 'deploy/measure-history.py' }) })))
+        .toEqual(['code-unmeasured', 'deploy/measure-history.py is absent']);
+    });
+
+    r7it('the re-check comes first: a moved tree beside an out-of-range spend_budget answers code-changed (W2-D24, S2 C22)', () => {
+      const c = chain7(home7(null));
+      const bad = save7({ ...c.final, spend_budget: 0 }, 'part2.json');
+      r7expect(refusalOf(() => load(flagsOf(c, bad), { nowMs: T0, root: tree7({ edit: 'deploy/measure-history.py' }) })))
+        .toEqual(['code-changed', 'changed deploy/measure-history.py']);
+      r7expect(refusalOf(() => load(flagsOf(c, bad), { nowMs: T0 })), 'CONTROL: under the unmoved tree the range check answers')
+        .toEqual(['record-invalid', 'spend_budget out-of-range']);
+    });
+
+    r7it.each([
+      ['a zero spend_budget', (f: R7): R7 => ({ ...f, spend_budget: 0 }), 'spend_budget out-of-range'],
+      ['a negative spend_budget', (f: R7): R7 => ({ ...f, spend_budget: -5 }), 'spend_budget out-of-range'],
+      ['a settings mode that is not a SETTINGS_MODES word', (f: R7): R7 => ({ ...f, pilot_result: { ...f.pilot_result, settings_mode: 'open' } }), 'pilot_result.settings_mode out-of-range'],
+    ] as Array<[string, (f: R7) => R7, string]>)('a signed final with %s refuses record-invalid, naming the field, before any --out (S2 C22, D-6309\'s rule)', (_what, edit, detail) => {
+      const c = chain7(home7(null));
+      const rec = save7(edit(c.final), 'part2.json');
+      r7expect(r7gate.validateOpenRecord(rec.value, { draft: c.draft, predecessor: null, frozen: { families: c.frozen.families, n_questions: 5 } }),
+        'CONTROL: the gate signs it').toEqual({ ok: true });
+      r7expect(refusalOf(() => load(flagsOf(c, rec), { nowMs: T0 }))).toEqual(['record-invalid', detail]);
+    });
+
+    r7it('a version-move amendment names a node by its label and carries a non-empty Claude Code version; CONTROL: a well-formed one, and a freeze exception, load (W2-D90, Q13, S2 C22)', () => {
+      const c = chain7(home7(null));
+      const flags = (s: Saved): R7 => flagsOf(c, s, { supersedes: c.f.path, 'supersedes-sha256': c.f.sha });
+      r7expect(load(flags(amended7(c, MOVE())), { nowMs: AFTER }).record.amendments).toHaveLength(1);
+      r7expect(refusalOf(() => load(flags(amended7(c, MOVE({ node_label_ref: 'node-z' }))), { nowMs: AFTER })))
+        .toEqual(['record-invalid', 'amendments[0].node_label_ref out-of-range']);
+      r7expect(refusalOf(() => load(flags(amended7(c, MOVE({ node_label_ref: null }))), { nowMs: AFTER })))
+        .toEqual(['record-invalid', 'amendments[0].node_label_ref out-of-range']);
+      r7expect(refusalOf(() => load(flags(amended7(c, MOVE({ detail: { claude_code_version: '', repilot_sha256: hex('repilot') } }))), { nowMs: AFTER })))
+        .toEqual(['record-invalid', 'amendments[0].detail.claude_code_version out-of-range']);
+      const exception = { kind: 'freeze-exception', node_label_ref: null, at_ms: AFTER, detail: { surface: 'ccd/history/lib.mjs', ruling: 'fixture ruling' } };
+      r7expect(load(flags(amended7(c, exception)), { nowMs: AFTER }).record.amendments[0].kind, 'another kind is not ranged').toBe('freeze-exception');
+    });
+  });
 });
 
 // ── W2-5a fix wave (the whole-branch review's items A to F): fw-prefixed helpers, one describe per item ────────────────
@@ -10674,5 +10762,330 @@ describe('W2-5a fix wave: the review\'s minors', () => {
     const src = readFileSync(SCRIPT, 'utf8').split('\n').filter((l) => /^export const BASELINE_FILES_ID\b/.test(l));
     expect(src).toHaveLength(1);
     expect(src[0], 'not spelled a second time').not.toMatch(/'v1'/);
+  });
+});
+
+// ── W2-5b1 Task 1: w5b1-prefixed bindings, so none collides with a binding above. Pure cases read the driver in
+// process; RP1-arm and the run case spawn W2-4's recording stub in a t5Box fixture HOME (W2-4 Task 5's harness).
+import * as w5b1Fs from 'node:fs';
+import * as w5b1Path from 'node:path';
+import * as w5b1Lib from '../../ccd/history/lib.mjs';
+import * as w5b1Recall from '../../ccd/history/recall.mjs';
+import * as w5b1Gate from '../../deploy/history-gate.mjs';
+import * as w5b1Drv from '../../deploy/history-replay.mjs';
+
+const W5B1_SRC = w5b1Path.join(REPO, 'deploy', 'history-replay.mjs');
+const w5b1IsComment = (t: string): boolean => t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
+/** The driver's code lines with their 1-based numbers: a line whose trimmed text opens a comment is not one. */
+const w5b1CodeLines = (text: string): Array<[number, string]> =>
+  text.split('\n').map((l, i): [number, string] => [i + 1, l]).filter(([, l]) => !w5b1IsComment(l.trim()));
+/** W2-D42's scan: each code line that spells an arm word as a whole string literal (any quote), an object key or a member
+ *  name. A longer word (`control-absent`, `controlIds`, `CONTROL_ARM`) is not an arm word. */
+const w5b1ArmWordLines = (text: string, arms: readonly string[]): string[] => {
+  const w = arms.join('|');
+  const res = [
+    new RegExp('([\'"`])(?:' + w + ')\\1'),
+    new RegExp('(?<![\\w$.-])(?:' + w + ')(?![\\w$-])\\s*:'),
+    new RegExp('\\.(?:' + w + ')(?![\\w$-])'),
+  ];
+  return w5b1CodeLines(text).filter(([, l]) => res.some((re) => re.test(l))).map(([n, l]) => `${n}: ${l.trim()}`);
+};
+/** A stream usage object in Claude Code's field names. */
+const W5B1_U = (input: number, cc: number, cr: number, out: number): Record<string, number> =>
+  ({ input_tokens: input, cache_creation_input_tokens: cc, cache_read_input_tokens: cr, output_tokens: out });
+/** A main thread that calls Agent once; the subagent's one message makes one Bash call; the result event's usage counts
+ *  the main thread only, the shape C6 fears. Main messages: 15 and 25 tokens; the subagent's: 300; the result's
+ *  default: 40, so the messages sum to 340. `result` null leaves the result event out. */
+const w5b1SubStream = (result: Record<string, number> | null = W5B1_U(30, 0, 0, 10)): string => [
+  { type: 'system', subtype: 'init', session_id: 'fixture-session-id', model: 'fixture-model', tools: ['Bash', 'Agent'], mcp_servers: [], plugins: [], skills: [], slash_commands: [] },
+  { type: 'assistant', parent_tool_use_id: null, message: { id: 'msg-main-1', content: [{ type: 'tool_use', id: 'toolu-agent', name: 'Agent', input: { prompt: 'look' } }], usage: W5B1_U(10, 0, 0, 5) } },
+  { type: 'assistant', parent_tool_use_id: 'toolu-agent', message: { id: 'msg-sub-1', content: [{ type: 'tool_use', id: 'toolu-bash', name: 'Bash', input: { command: 'ccrc history status --json' } }], usage: W5B1_U(100, 50, 100, 50) } },
+  { type: 'user', parent_tool_use_id: 'toolu-agent', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu-bash', content: '{}', is_error: false }] } },
+  { type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'toolu-agent', content: [{ type: 'text', text: 'found it' }] }] } },
+  { type: 'assistant', parent_tool_use_id: null, message: { id: 'msg-main-2', content: [{ type: 'text', text: 'ANSWER: x' }], usage: W5B1_U(20, 0, 0, 5) } },
+  ...(result === null ? [] : [{ type: 'result', subtype: 'success', is_error: false, num_turns: 2, result: 'ANSWER: x', permission_denials: [], usage: result }]),
+].map((e) => JSON.stringify(e)).join('\n') + '\n';
+
+describe('W2-5b1 Task 1: the arm words come from RECALL_ARMS by position, and the driver spells none (W2-D42; S2 C9)', () => {
+  const ARMS = w5b1Lib.RECALL_ARMS as readonly string[];
+
+  it('CONTROL: the scan sees an arm word as a literal in each quote, an object key and a member name, and not a longer word or a comment', () => {
+    const [c, t] = [ARMS[0]!, ARMS[1]!];
+    const seen = [`if (a.arm === '${c}') x();`, `const k = "${t}";`, 'const k = `' + c + '`;', `const n = { ${t}: 1 };`, `const v = counts.${c};`];
+    for (const l of seen) expect(w5b1ArmWordLines(l, ARMS), l).toEqual([`1: ${l}`]);
+    const unseen = [`return '${c}-absent';`, `const ${c}Ids = new Set();`, 'if (arm === CONTROL_ARM) x();', `// the ${c} arm's file`, ` * the ${t} arm`];
+    for (const l of unseen) expect(w5b1ArmWordLines(l, ARMS), l).toEqual([]);
+  });
+
+  it('deploy/history-replay.mjs spells no arm word on a code line (W2-D42)', () => {
+    expect(w5b1ArmWordLines(w5b1Fs.readFileSync(W5B1_SRC, 'utf8'), ARMS)).toEqual([]);
+  });
+
+  it('CONTROL_ARM and TREATMENT_ARM are RECALL_ARMS[0] and [1], the words W2 means by them, and the driver indexes RECALL_ARMS on those two lines only', () => {
+    expect([w5b1Drv.CONTROL_ARM, w5b1Drv.TREATMENT_ARM]).toEqual([ARMS[0], ARMS[1]]);
+    expect([w5b1Drv.CONTROL_ARM, w5b1Drv.TREATMENT_ARM], 'a reorder of RECALL_ARMS would swap them').toEqual(['control', 'treatment']);
+    const indexing = w5b1CodeLines(w5b1Fs.readFileSync(W5B1_SRC, 'utf8')).filter(([, l]) => /\bRECALL_ARMS\s*\[/.test(l)).map(([, l]) => l.trim());
+    expect(indexing).toEqual(['export const CONTROL_ARM = RECALL_ARMS[0];', 'export const TREATMENT_ARM = RECALL_ARMS[1];']);
+  });
+
+  it('the gate\'s ASSIGNMENT_ARMS and lib\'s RECALL_ARMS hold the same two words as a set; the gate keeps its own order (S2 C9)', () => {
+    const asSet = (l: readonly string[]): string[] => [...new Set(l)].sort();
+    expect([ARMS.length, (w5b1Gate.ASSIGNMENT_ARMS as readonly string[]).length]).toEqual([2, 2]);
+    expect(asSet(w5b1Gate.ASSIGNMENT_ARMS as readonly string[])).toEqual(asSet(ARMS));
+    // CONTROL: the comparison is a set's, so order never reds and a renamed word does.
+    expect(asSet([...ARMS].reverse())).toEqual(asSet(ARMS));
+    expect(asSet([ARMS[0]!, 'placebo'])).not.toEqual(asSet(ARMS));
+  });
+
+  it('the names W2-5b1 consumes from lib, recall.mjs and the gate are in the driver\'s import braces, and each module exports them (W2-2a, W2-2b, W2-3)', () => {
+    const text = w5b1Fs.readFileSync(W5B1_SRC, 'utf8');
+    const braces = (spec: string): string[] => {
+      const tail = ` } from '${spec}';`;
+      const line = text.split('\n').find((l) => l.startsWith('import { ') && l.endsWith(tail));
+      return line === undefined ? [] : line.slice('import { '.length, -tail.length).split(', ');
+    };
+    const want: Array<[string, Record<string, unknown>, string[]]> = [
+      ['../ccd/history/lib.mjs', w5b1Lib as unknown as Record<string, unknown>, ['HEADLESS_LIST_MAX_BYTES', 'RECALL_ARMS', 'asOfBinds', 'asOfHiddenNodesSql',
+        'asOfVisibleEntriesSql', 'cardLine', 'displayPrefixes', 'formatHeadlessList', 'parseHeadlessList']],
+      ['../ccd/history/recall.mjs', w5b1Recall as unknown as Record<string, unknown>, ['asOfCutOf']],
+      ['./history-gate.mjs', w5b1Gate as unknown as Record<string, unknown>, ['RUBRICS', 'classifyRun', 'labelCorrect', 'parseAnswerField', 'parseLabelLine', 'questionOutcome']],
+    ];
+    for (const [spec, mod, names] of want) {
+      expect(names.filter((n) => !braces(spec).includes(n)), `${spec}: not imported`).toEqual([]);
+      expect(names.filter((n) => mod[n] === undefined), `${spec}: not exported`).toEqual([]);
+    }
+  });
+});
+
+describe('W2-5b1 Task 1: every driver word is a stop or a refusal, exactly once (W2-D80 as amended, decisions section 7; Q24)', () => {
+  const STOPS = ['claude-version-moved', 'tree-moved', 'wrapper-moved', 'code-changed', 'limits-threshold', 'limits-stale', 'budget-exhausted',
+    'out-refused', 'code-unmeasured', 'version-unmeasured', 'tree-unmeasured', 'wrapper-unmeasured', 'run-live', 'out-in-use', 'interrupted', 'store-unreadable'];
+  /** Each word of `reasons` not in exactly one of the two lists, then each listed word that is not in `reasons`. */
+  const misclassified = (reasons: readonly string[], stops: readonly string[], refusals: readonly string[]): string[] => {
+    const all = [...stops, ...refusals];
+    return [...reasons.filter((w) => all.filter((x) => x === w).length !== 1), ...all.filter((w) => !reasons.includes(w))];
+  };
+
+  it('CONTROL: the check names a word in neither list, a word in both, and a listed word that is no driver word', () => {
+    const R = ['w-a', 'w-b', 'w-c'];
+    expect(misclassified(R, ['w-a'], ['w-b', 'w-c'])).toEqual([]);
+    expect(misclassified(R, ['w-a'], ['w-b'])).toEqual(['w-c']);
+    expect(misclassified(R, ['w-a', 'w-b'], ['w-b', 'w-c'])).toEqual(['w-b']);
+    expect(misclassified(R, ['w-a', 'w-z'], ['w-b', 'w-c'])).toEqual(['w-z']);
+  });
+
+  it('DRIVER_STOPS is W2-D80\'s seven, section 7\'s eight and W2-5a\'s store-unreadable; both lists frozen, in DRIVER_REASONS order', () => {
+    expect(Object.isFrozen(w5b1Drv.DRIVER_STOPS) && Object.isFrozen(w5b1Drv.DRIVER_REFUSALS)).toBe(true);
+    expect([...w5b1Drv.DRIVER_STOPS]).toEqual(w5b1Drv.DRIVER_REASONS.filter((w) => STOPS.includes(w)));
+    expect([...w5b1Drv.DRIVER_STOPS].sort()).toEqual([...STOPS].sort());
+    expect([...w5b1Drv.DRIVER_REFUSALS]).toEqual(w5b1Drv.DRIVER_REASONS.filter((w) => !STOPS.includes(w)));
+  });
+
+  it('each DRIVER_REASONS word is classified exactly once, and the lists hold no other word (Q24)', () => {
+    expect(misclassified(w5b1Drv.DRIVER_REASONS, w5b1Drv.DRIVER_STOPS, w5b1Drv.DRIVER_REFUSALS)).toEqual([]);
+  });
+
+  it('driverWordClass answers each word\'s class and refuses a word outside DRIVER_REASONS', () => {
+    for (const w of w5b1Drv.DRIVER_REASONS) expect(w5b1Drv.driverWordClass(w), w).toBe(STOPS.includes(w) ? 'stop' : 'refusal');
+    expect(() => w5b1Drv.driverWordClass('bad-args')).toThrow(/not a DRIVER_REASONS word/);
+    expect(() => w5b1Drv.driverWordClass('')).toThrow(TypeError);
+  });
+});
+
+describe('W2-5b1 Task 1: the stream reader attributes each message and tool pair, and spend is charged fail-closed (W2-D82, W2-D58, Q7)', () => {
+  t5afterEach(() => { t5vi.unstubAllEnvs(); });
+
+  it('each tool pair and each message names the Agent tool_use it ran under, or null on the main thread', () => {
+    const f = w5b1Drv.readStreamJson(w5b1SubStream());
+    expect(f.toolPairs).toEqual([
+      { id: 'toolu-agent', name: 'Agent', input: { prompt: 'look' }, result: 'found it', isError: null, parentToolUseId: null },
+      { id: 'toolu-bash', name: 'Bash', input: { command: 'ccrc history status --json' }, result: '{}', isError: false, parentToolUseId: 'toolu-agent' },
+    ]);
+    expect(f.messages).toEqual([
+      { id: 'msg-main-1', parentToolUseId: null, usage: { input: 10, cacheCreation: 0, cacheRead: 0, output: 5 } },
+      { id: 'msg-sub-1', parentToolUseId: 'toolu-agent', usage: { input: 100, cacheCreation: 50, cacheRead: 100, output: 50 } },
+      { id: 'msg-main-2', parentToolUseId: null, usage: { input: 20, cacheCreation: 0, cacheRead: 0, output: 5 } },
+    ]);
+    expect(f.assistantMessages, 'W2-4\'s count is unchanged: every message, the subagent\'s included').toBe(3);
+  });
+
+  it('both readings are kept, W2-4\'s usage stays the result\'s, and spend charges the larger (Q7); CONTROL: a larger result usage is charged as it is', () => {
+    const f = w5b1Drv.readStreamJson(w5b1SubStream());
+    expect(f.resultUsage).toEqual({ input: 30, cacheCreation: 0, cacheRead: 0, output: 10 });
+    expect(f.assistantUsage).toEqual({ input: 130, cacheCreation: 50, cacheRead: 100, output: 60 });
+    expect([f.usageSource, f.usage]).toEqual(['result', f.resultUsage]);
+    expect([w5b1Drv.usageTokens(f.resultUsage), w5b1Drv.usageTokens(f.assistantUsage), w5b1Drv.spendTokens(f)]).toEqual([40, 340, 340]);
+    expect(w5b1Drv.spendTokens(w5b1Drv.readStreamJson(w5b1SubStream(W5B1_U(990, 0, 0, 10)))), 'the larger reading, never the sum').toBe(1000);
+    const none = w5b1Drv.readStreamJson(w5b1SubStream(null));
+    expect([none.resultUsage, none.usageSource, w5b1Drv.spendTokens(none)]).toEqual([null, 'assistant', 340]);
+    expect(w5b1Drv.usageTokens(null)).toBe(0);
+  });
+
+  it('a parent_tool_use_id that is not a string reads null, and a message with no id keeps its parent', () => {
+    const s = [
+      { type: 'assistant', parent_tool_use_id: 7, message: { id: 'msg-odd', content: [{ type: 'tool_use', id: 'toolu-odd', name: 'Bash', input: {} }] } },
+      { type: 'assistant', parent_tool_use_id: 'toolu-agent', message: { usage: W5B1_U(1, 0, 0, 1) } },
+    ].map((e) => JSON.stringify(e)).join('\n') + '\n';
+    const f = w5b1Drv.readStreamJson(s);
+    expect(f.toolPairs[0]!.parentToolUseId).toBeNull();
+    expect(f.messages).toEqual([
+      { id: 'msg-odd', parentToolUseId: null, usage: null },
+      { id: null, parentToolUseId: 'toolu-agent', usage: { input: 1, cacheCreation: 0, cacheRead: 0, output: 1 } },
+    ]);
+    expect([f.resultUsage, w5b1Drv.spendTokens(f)]).toEqual([null, 2]);
+  });
+
+  it('a run on the stub is charged the larger reading, and its run.json records both beside the charge (Q7)', async () => {
+    const b = t5Box('ccrc-replay-w5b1-q7-');
+    t5fs.writeFileSync(t5path.join(b.home, STUB_STREAM), w5b1SubStream());
+    const o = await claimedRun(t5job(b, b.up, 'box', 'q7-run'));
+    const run = JSON.parse(t5fs.readFileSync(t5path.join(b.out, 'q7-run.run.json'), 'utf8'));
+    expect([o.tokens, run.tokens, run.usage_result_tokens, run.usage_assistant_tokens]).toEqual([340, 340, 40, 340]);
+    t5fs.writeFileSync(t5path.join(b.home, STUB_STREAM), w5b1SubStream(null));
+    await claimedRun(t5job(b, b.up, 'box', 'q7-noresult'));
+    const bare = JSON.parse(t5fs.readFileSync(t5path.join(b.out, 'q7-noresult.run.json'), 'utf8'));
+    expect([bare.tokens, bare.usage_result_tokens, bare.usage_assistant_tokens]).toEqual([340, null, 340]);
+    expect(t5drv.spentSoFar(b.out)).toBe(680);
+  }, 60_000);
+});
+
+describe('W2-5b1 Task 1: RP1-arm, the arm env with real values (W2-D50, W2-D42)', () => {
+  t5afterEach(() => { t5vi.unstubAllEnvs(); });
+  const SESSION = 'up-a-fixture-family';
+  const ASOF = '0189abcd-0000-4000-8000-0000000005b2';
+
+  it.each([0, 1])('upstream, RECALL_ARMS[%i]: exactly the seven keys, each the real value, none of the ambient ones', async (i) => {
+    const arm = w5b1Lib.RECALL_ARMS[i] as string;
+    const b = t5Box(`ccrc-replay-w5b1-rp1-${i}-`);
+    t5Ambient();
+    await claimedRun(t5job(b, b.up, 'arm', `rp1-arm-${i}`, { recall: { session: SESSION, arm, asof: ASOF } }));
+    const log = stubLog(b.home);
+    expect(log, 'the stub ran once').toHaveLength(1);
+    const l = log![0]!;
+    const keys = withoutDarwinAdded(l.envKeys);
+    expect(keys).toEqual(['CCRC_RECALL_ARM', 'CCRC_RECALL_ASOF', 'CCRC_RECALL_SESSION', 'CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
+    expect(Object.fromEntries(keys.map((k) => [k, l.env[k]]))).toEqual({
+      CCRC_RECALL_ARM: arm, CCRC_RECALL_ASOF: ASOF, CCRC_RECALL_SESSION: SESSION, CLAUDE_CONFIG_DIR: t5path.join(b.home, '.claude'),
+      HOME: b.home, LANG: 'fixture.UTF-8', PATH: `${b.out}/poison-bin:${t5path.dirname(process.execPath)}:/usr/bin:/bin`,
+    });
+    for (const k of T5_NEVER_KEYS) expect(l.envKeys, k).not.toContain(k);
+  }, 60_000);
+
+  it('generated: the same three seam values reach the stub through the wrapper, and CLAUDE_CODE_OAUTH_TOKEN by name only', async () => {
+    const arm = w5b1Lib.RECALL_ARMS[1] as string;
+    const b = t5Box('ccrc-replay-w5b1-rp1-gen-');
+    t5Ambient();
+    await claimedRun(t5job(b, b.gen, 'arm', 'rp1-arm-gen', { recall: { session: SESSION, arm, asof: ASOF } }));
+    const l = stubLog(b.home)![0]!;
+    expect(withoutDarwinAdded(l.envKeys).filter((k) => !T5_BASH_KEYS.includes(k))).toEqual([...T5_BASE_KEYS, ...T5_RECALL_KEYS, 'CLAUDE_CODE_OAUTH_TOKEN'].sort());
+    expect([l.env['CCRC_RECALL_SESSION'], l.env['CCRC_RECALL_ARM'], l.env['CCRC_RECALL_ASOF']]).toEqual([SESSION, arm, ASOF]);
+    for (const k of T5_NEVER_KEYS) expect(l.envKeys, k).not.toContain(k);
+    expect(t5fs.readFileSync(t5path.join(b.home, T5_STUB_LOG), 'utf8')).not.toContain(T5_TOKEN);
+  }, 60_000);
+
+  it('a value the seam would refuse is a TypeError before any spawn, with the stub log absent; CONTROL: the real values spawn once', async () => {
+    const arm = w5b1Lib.RECALL_ARMS[1] as string;
+    const bad: Array<[string, { session: string; arm: string; asof: string }, RegExp]> = [
+      ['an arm outside RECALL_ARMS', { session: SESSION, arm: 'fixture-arm-value', asof: ASOF }, /recall\.arm "fixture-arm-value" is not one of RECALL_ARMS/],
+      ['an ASOF that is not a lowercase UUID', { session: SESSION, arm, asof: ASOF.toUpperCase() }, /recall\.asof ".*" is not a lowercase UUID/],
+      ['a session id idOk refuses', { session: '../up-a', arm, asof: ASOF }, /recall\.session "\.\.\/up-a" is not a session id/],
+    ];
+    for (const [what, recall, re] of bad) {
+      const b = t5Box('ccrc-replay-w5b1-rp1-bad-');
+      t5typeError(await t5caught(() => claimedRun(t5job(b, b.up, 'arm', 'rp1-arm-bad', { recall }))), re);
+      expect(stubLog(b.home), `${what}: the stub never ran`).toBeNull();
+    }
+    const ok = t5Box('ccrc-replay-w5b1-rp1-ok-');
+    await claimedRun(t5job(ok, ok.up, 'arm', 'rp1-arm-ok', { recall: { session: SESSION, arm, asof: ASOF } }));
+    expect(stubLog(ok.home)).toHaveLength(1);
+  }, 120_000);
+});
+
+describe('W2-5b1 Task 1: the gate_code re-check verdict and the part 2 ranges, pure', () => {
+  type Verdict = { ok: true; stamps: string[] } | { ok: false; word: string; detail: string };
+  const V = w5b1Drv.codeRecheckVerdict as unknown as (r: object, s: object, o?: { allowCodeChange?: boolean; nowMs?: number | null }) => Verdict;
+  const FILES: Record<string, string> = Object.fromEntries((w5b1Gate.GATE_CODE_FILES as readonly string[]).map((f, i) => [f, 'abcd'[i]!.repeat(64)]));
+  const START = 1_800_086_400_000;
+  const rec = (window: object | null = { start_ms: START, end_ms: START + 14 * 86_400_000 }): Record<string, unknown> =>
+    ({ gate_code: { release_tag: 'v9.9.7', files: FILES }, ...(window === null ? {} : { window }) });
+  const measured = (over: Record<string, string> = {}): object => ({ state: 'measured', files: { ...FILES, ...over } });
+  const MOVED = measured({ 'deploy/measure-history.py': 'e'.repeat(64) });
+  const BEFORE = `--allow-code-change before window start ${START}: before it a code change is a re-pilot and a superseding part 2 (W2-D6, W2-D24)`;
+  const NO_WINDOW = '--allow-code-change is taken only by a part 2 consumer, after window start (W2-D6, W2-D24)';
+  const LIM = w5b1Drv.LIMITS_DEFAULTS as Record<string, number>;
+  const P2 = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    nodes: [{ label: 'node-a', store_id: '00000000-0000-4000-8000-0000000005b1' }], limits: { ...LIM },
+    quiz: { n_questions: 5 }, pilot_result: { settings_mode: 'restricted' }, amendments: [], ...over,
+  });
+  /** refuseOutOfRangeValues as a part 2 consumer calls it: its line, or null when it passes. */
+  const range = (p: Record<string, unknown>, budget: unknown = 30_000_000): string | null => {
+    try {
+      w5b1Drv.refuseOutOfRangeValues({ budget, budgetField: 'spend_budget', limits: p['limits'], quotas: null, part2: p } as never);
+      return null;
+    } catch (e) {
+      if (e instanceof w5b1Drv.DriverRefusal) return `${e.word}: ${e.detail}`;
+      throw e;
+    }
+  };
+  const move = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ kind: w5b1Drv.VERSION_MOVE_KIND, node_label_ref: 'node-a', at_ms: 1,
+    detail: { claude_code_version: '9.9.8 (Claude Code)', repilot_sha256: 'f'.repeat(64) }, ...over });
+
+  it('unchanged code is ok with no stamp, with or without the flag after window start', () => {
+    expect(V(rec(), measured())).toEqual({ ok: true, stamps: [] });
+    expect(V(rec(), measured(), { allowCodeChange: true, nowMs: START })).toEqual({ ok: true, stamps: [] });
+  });
+
+  it('a measured change is code-changed without the flag, and the stamp with it at or after window start', () => {
+    expect(V(rec(), MOVED)).toEqual({ ok: false, word: 'code-changed', detail: 'changed deploy/measure-history.py' });
+    expect(V(rec(), MOVED, { allowCodeChange: true, nowMs: START })).toEqual({ ok: true, stamps: ['code-changed'] });
+    expect(V(rec(), MOVED, { allowCodeChange: true, nowMs: START + 1 })).toEqual({ ok: true, stamps: ['code-changed'] });
+  });
+
+  it('the flag before window start, or on a record with no window, is args-invalid, whether or not the code moved (Q23, W2-D6)', () => {
+    for (const shas of [measured(), MOVED]) {
+      expect(V(rec(), shas, { allowCodeChange: true, nowMs: START - 1 })).toEqual({ ok: false, word: 'args-invalid', detail: BEFORE });
+      expect(V(rec(null), shas, { allowCodeChange: true, nowMs: START })).toEqual({ ok: false, word: 'args-invalid', detail: NO_WINDOW });
+    }
+    expect(() => V(rec(), MOVED, { allowCodeChange: true, nowMs: null }), 'a caller that takes the flag passes its clock').toThrow(TypeError);
+  });
+
+  it('an unmeasured file, on either side, is code-unmeasured whatever the flag says (W2-D24 as amended)', () => {
+    const opts = { allowCodeChange: true, nowMs: START };
+    expect(V(rec(), { state: 'unmeasured', path: 'deploy/measure-history.py', cause: 'absent' }, opts))
+      .toEqual({ ok: false, word: 'code-unmeasured', detail: 'deploy/measure-history.py is absent' });
+    const lacking = { ...rec(), gate_code: { release_tag: 'v9.9.7', files: Object.fromEntries(Object.entries(FILES).filter(([k]) => k !== 'ccd/history/lib.mjs')) } };
+    expect(V(lacking, MOVED, opts)).toEqual({ ok: false, word: 'code-unmeasured', detail: 'gate_code lacks ccd/history/lib.mjs' });
+  });
+
+  it('refuseOutOfRangeValues with part2 names each part 2 field a W2-5b consumer reads that is out of range, in order (S2 C22)', () => {
+    expect(range(P2()), 'CONTROL: the defaults pass').toBeNull();
+    expect(range(P2({ limits: { ...LIM, batch_max: w5b1Drv.BATCH_MAX, concurrency: w5b1Drv.CONCURRENCY_MAX } })), 'CONTROL: the runner caps pass').toBeNull();
+    expect(range(P2({ limits: { ...LIM, batch_max: 2, concurrency: 1 } })), 'CONTROL (R28): the floors pass, batch_max 2 (a batch holds both arms of one question)').toBeNull();
+    expect(range(P2({ limits: { ...LIM, batch_max: 1 } })), 'a batch that cannot hold both arms (R4, R28: the floor is RECALL_ARMS.length)').toBe('record-invalid: limits.batch_max out-of-range');
+    expect(range(P2(), 0)).toBe('record-invalid: spend_budget out-of-range');
+    expect(range(P2({ limits: { ...LIM, batch_max: w5b1Drv.BATCH_MAX + 1 } }))).toBe('record-invalid: limits.batch_max out-of-range');
+    expect(range(P2({ limits: { ...LIM, concurrency: w5b1Drv.CONCURRENCY_MAX + 1 } }))).toBe('record-invalid: limits.concurrency out-of-range');
+    expect(range(P2({ limits: { ...LIM, concurrency: 0 } }))).toBe('record-invalid: limits.concurrency out-of-range');
+    expect(range(P2({ quiz: { n_questions: 0 } }))).toBe('record-invalid: quiz.n_questions out-of-range');
+    expect(range(P2({ pilot_result: { settings_mode: 'open' } }))).toBe('record-invalid: pilot_result.settings_mode out-of-range');
+    expect(range({ nodes: [], limits: { threshold_pct: 101, max_age_ms: 0, batch_max: 0, concurrency: 3 }, quiz: {}, pilot_result: {}, amendments: [] }, -1))
+      .toBe('record-invalid: spend_budget out-of-range; limits.threshold_pct out-of-range; limits.max_age_ms out-of-range; limits.batch_max out-of-range; '
+        + 'limits.concurrency out-of-range; quiz.n_questions out-of-range; pilot_result.settings_mode out-of-range');
+  });
+
+  it('a version-move amendment needs a node label of the record and a non-empty Claude Code version; another kind is not ranged (W2-D90, Q13, S2 C22)', () => {
+    expect(range(P2({ amendments: [move()] }))).toBeNull();
+    expect(range(P2({ amendments: [move(), move({ node_label_ref: 'node-z' })] }))).toBe('record-invalid: amendments[1].node_label_ref out-of-range');
+    expect(range(P2({ amendments: [move({ node_label_ref: null, detail: { claude_code_version: '', repilot_sha256: 'f'.repeat(64) } })] })))
+      .toBe('record-invalid: amendments[0].node_label_ref out-of-range; amendments[0].detail.claude_code_version out-of-range');
+    expect(range(P2({ amendments: [{ kind: 'forced-act', node_label_ref: null, at_ms: 1, detail: { act: 'fixture-act', at_ms: 1 } }] }))).toBeNull();
+    expect(w5b1Gate.AMENDMENT_KINDS as readonly string[]).toContain(w5b1Drv.VERSION_MOVE_KIND);
+  });
+
+  it('W2-5a\'s two callers are unchanged: the budget is pilot_budget by default, and the quotas are checked unless null', () => {
+    const good = { budget: 100_000, limits: LIM, quotas: { target: 100, caps: { family: 5, boundary: 3, kind_per_family: 2 } } };
+    expect(() => w5b1Drv.refuseOutOfRangeValues({ ...good, budget: 0 } as never)).toThrow(/record-invalid: pilot_budget out-of-range$/);
+    expect(() => w5b1Drv.refuseOutOfRangeValues({ ...good, quotas: { target: 0, caps: good.quotas.caps } } as never)).toThrow(/record-invalid: quiz.target out-of-range$/);
+    expect(() => w5b1Drv.refuseOutOfRangeValues({ ...good, quotas: null } as never)).not.toThrow();
   });
 });

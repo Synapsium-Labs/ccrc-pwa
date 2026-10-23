@@ -6,10 +6,12 @@
 // print, and writes every output under the operator's --out directory. Refusing to run inside a pane is main's first
 // act (W2-D51, W2-D45).
 //
-// Imports: node: built-ins (node:crypto's randomBytes draws the W2 seeds); ../ccd/history/lib.mjs; the W2-1 exports
-// the quiz reads, from ../ccd/history/store.mjs, ../ccd/history/derive.mjs, ../ccd/history/recall.mjs and
-// ../ccd/history/cli.mjs (W2-D33, W2-D74); the index text and the registry read from ../ccd/history/sweep.mjs, never
-// its recall-off reader (W2-D29); ./history-gate.mjs, the pure gate (W2-D11); and ../shared/roster-json.mjs.
+// Imports: node: built-ins (node:crypto's randomBytes draws the W2 seeds); ../ccd/history/lib.mjs, with the as-of cut's
+// statements and the card line (W2-2a; W2-D35, W2-D75) and the headless seam's arm words and marker grammar (W2-2b;
+// W2-D42, W2-D44); the W2-1 exports the quiz reads, from ../ccd/history/store.mjs, ../ccd/history/derive.mjs,
+// ../ccd/history/recall.mjs (with W2-2a's asOfCutOf) and ../ccd/history/cli.mjs (W2-D33, W2-D74); the index text and the
+// registry read from ../ccd/history/sweep.mjs, never its recall-off reader (W2-D29); ./history-gate.mjs, the pure gate
+// (W2-D11); and ../shared/roster-json.mjs.
 // history-replay.test.ts pins the exact list and the names each ccd/history module brings in (D-5814). The driver spells
 // no node:sqlite specifier: it loads node:sqlite only through store.mjs, that module's one importer, and every store read
 // opens through store.mjs's read-only openReader (W2-D51); history-replay.test.ts scans every deploy/history-*.mjs for a
@@ -22,8 +24,9 @@
 // process.env whole, and every other env read goes through main's env parameter, with ONE exception: makeRunCwd's
 // os.tmpdir() reads TMPDIR itself for each run's cwd, as `mktemp -d` does in spec §10.2's cwd rule. The cwd is
 // still checked (outside any git tree, empty, mode 0700), so a TMPDIR that fails those refuses.
-// Never spelled here: the recall arm words, which reach a spawn as parameters (W2-D50), and the headless marker's
-// path, which W2-5b reaches through lib's historyPaths.
+// Never spelled here: the recall arm words (W2-D42), which this file takes by position from lib's RECALL_ARMS
+// (CONTROL_ARM, TREATMENT_ARM) and which reach a spawn as parameters (W2-D50); and the headless marker's path, which
+// W2-5b reaches through lib's historyPaths (O13). history-replay.test.ts scans this file for an arm word.
 // Its words: DRIVER_REASONS, frozen once here and nowhere else (W2-D59, W2-D12; D-5774). A refusal prints
 // `ccrc history-replay: <word>: <detail>` on stderr and exits EXIT.REFUSED (2); a defect exits EXIT.INTERNAL (1).
 // They are never lib REASONS: §8.7's table and SKILL.md do not list them. EXIT is imported, never declared (O14).
@@ -33,13 +36,13 @@ import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { CONTROL_FILE_MAX, EXIT, RECALL_OFF_META, SCHEMA_ADDED, SEARCHABLE_PROVENANCE, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, entryIndexText, ftsPhrase, ftsTextOf, historyPaths, idOk, isHistoryCommand, isSyntheticModel, producerOf, producerOfCopy, recallOffPath, recallOffStatusOf, redactField, redactFinalJson, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
+import { CONTROL_FILE_MAX, EXIT, HEADLESS_LIST_MAX_BYTES, RECALL_ARMS, RECALL_OFF_META, SCHEMA_ADDED, SEARCHABLE_PROVENANCE, UUID_RE, asOfBinds, asOfHiddenNodesSql, asOfVisibleEntriesSql, backendOf, blobOverDecodeCap, canonicalJson, cardLine, displayPrefixes, entryIndexText, formatHeadlessList, ftsPhrase, ftsTextOf, historyPaths, idOk, isHistoryCommand, isSyntheticModel, parseHeadlessList, producerOf, producerOfCopy, recallOffPath, recallOffStatusOf, redactField, redactFinalJson, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
 import { StoreError, openReader, readBounded, userVersion } from '../ccd/history/store.mjs';
 import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
-import { expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
+import { asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
-import { ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, assignArms, assignmentSha256, buildWindows, checkGateCode, collapseWs, expectedWindows, familyKey, parseQuestionLine, q18Power, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
+import { ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, RUBRICS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, assignArms, assignmentSha256, buildWindows, checkGateCode, classifyRun, collapseWs, expectedWindows, familyKey, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -100,6 +103,46 @@ export function refuse(word, detail) {
   throw new DriverRefusal(word, detail);
 }
 
+// ── W2-5b1 Task 1: the arm words by position (W2-D42, W2-D50; S2's C9) ──────────────────────────────────────────
+/** The two recall arms, by position in lib's RECALL_ARMS (W2-2b), the arm vocabulary's one declaration. This file spells
+ *  no arm word: history-replay.test.ts scans it, holds these two to the words W2 means by them, and holds RECALL_ARMS to
+ *  the gate's ASSIGNMENT_ARMS as a set (the gate's order is its own: handcheckSample reads it). These two lines are the
+ *  only places the driver indexes RECALL_ARMS. */
+export const CONTROL_ARM = RECALL_ARMS[0];
+export const TREATMENT_ARM = RECALL_ARMS[1];
+
+// ── W2-5b1 Task 1: the stop/refusal partition of DRIVER_REASONS (W2-D80 as amended, decisions §7; Q24) ─────────────
+/** The driver words that are STOPS: a question not spawned, or cut off, because of one is `not-run`. It never consumes its
+ *  re-run and is resumed after the stop clears (W2-D80). W2-D80's seven (the limits and budget stops and the moved and
+ *  changed four), decisions §7's eight (W2-4's four unmeasured words, its three later words and `out-refused`, which can
+ *  land mid-batch), and W2-5a's `store-unreadable`. In DRIVER_REASONS order. `not-run` stays emergent (Q24): a stopped
+ *  or refused run writes no run.json. */
+export const DRIVER_STOPS = Object.freeze([
+  'claude-version-moved', 'tree-moved', 'wrapper-moved', 'code-changed',
+  'limits-threshold', 'limits-stale', 'budget-exhausted',
+  'out-refused',
+  'code-unmeasured', 'version-unmeasured', 'tree-unmeasured', 'wrapper-unmeasured',
+  'run-live', 'out-in-use', 'interrupted',
+  'store-unreadable',
+]);
+/** Every other driver word is a REFUSAL: its remedy is a changed input, flag, account or record, or an operator act on
+ *  the marker, a control file or a frozen question (W2-D78's three), never a wait. In DRIVER_REASONS order. Both lists
+ *  are spelled, so a word added to DRIVER_REASONS reds history-replay.test.ts's "exactly once" pin until it is classified. */
+export const DRIVER_REFUSALS = Object.freeze([
+  'family-unlisted', 'family-recall-off',
+  'quiz-unanswerable', 'quiz-sha-mismatch',
+  'record-invalid', 'record-sha-mismatch', 'input-sha-mismatch',
+  'assignment-mismatch',
+  'args-invalid', 'in-pane', 'roster-invalid', 'account-refused', 'input-invalid',
+]);
+/** A driver word's class, for the batch summary and the operator's line (Q24, Q30). Pure.
+ *  @param {string} word  @returns {'stop' | 'refusal'} */
+export function driverWordClass(word) {
+  if (DRIVER_STOPS.includes(word)) return 'stop';
+  if (DRIVER_REFUSALS.includes(word)) return 'refusal';
+  throw new TypeError(`driverWordClass: ${JSON.stringify(word)} is not a DRIVER_REASONS word`);
+}
+
 // ── the argument grammar ──────────────────────────────────────────────────
 /** @typedef {'string' | 'int' | 'bool' | 'list'} FlagKind */
 /** @typedef {Record<string, string | number | boolean | string[]>} Flags */
@@ -127,6 +170,9 @@ export const FLAG_SPECS = Object.freeze(/** @type {Record<string, FlagKind>} */ 
   'sha-min-prefix': 'int', 'writer-input': 'string', 'n-fidelity': 'int', 'n-usage': 'int',
   'spend-budget': 'int', 'window-start': 'int', 'window-end': 'int', 'q18-decision': 'string',
   draft: 'bool', finalize: 'bool', template: 'bool', registry: 'bool', section: 'string',
+  // W2-5b1 Task 1 (W2-D24, Q23): a part 2 consumer's stamp, taken at or after window start only (loadFinalRecord). No W2-5a
+  // form lists it, so each refuses it through checkFlags.
+  'allow-code-change': 'bool',
 }));
 
 /** The subcommands, by name. Empty until Tasks 8 and 9 register `step0a` and `probe`, so every subcommand is
@@ -673,10 +719,13 @@ function sjResultText(content) {
 /** @typedef {{ sessionId: string|null, model: string|null, tools: string[]|null, mcpServers: unknown[]|null,
  *    plugins: unknown[]|null, skills: unknown[]|null, slashCommands: string[]|null }} StreamInit */
 /** @typedef {{ input: number, cacheCreation: number, cacheRead: number, output: number }} StreamUsage */
-/** @typedef {{ id: string, name: string, input: unknown, result: string|null, isError: boolean|null }} ToolPair */
+/** @typedef {{ id: string, name: string, input: unknown, result: string|null, isError: boolean|null,
+ *    parentToolUseId: string|null }} ToolPair */
+/** @typedef {{ id: string|null, parentToolUseId: string|null, usage: StreamUsage|null }} StreamMessage */
 /** @typedef {{ init: StreamInit|null, usage: StreamUsage, usageSource: 'result'|'assistant'|'none', toolPairs: ToolPair[],
  *    permissionDenials: unknown[]|null, result: { subtype: string|null, isError: boolean|null, numTurns: number|null,
- *    text: string|null }|null, assistantMessages: number, malformedLines: number, firstCallUsage: StreamUsage|null }} StreamFacts */
+ *    text: string|null }|null, assistantMessages: number, malformedLines: number, firstCallUsage: StreamUsage|null,
+ *    resultUsage: StreamUsage|null, assistantUsage: StreamUsage, messages: StreamMessage[] }} StreamFacts */
 
 /** What one spawn's stream-json says (W2-D51). Never throws.
  *  @param {string} text the whole stream
@@ -689,6 +738,7 @@ export function readStreamJson(text) {
   let malformedLines = 0;
   const messages = new Map();   // message.id, or a fresh Symbol for a message with none -> its usage, or null
   const pairs = new Map();      // tool_use id -> its pair, in first-seen order
+  const parents = new Map();    // message key -> the parent_tool_use_id its first event carried (W2-5b1 Task 1)
   for (const line of String(text).split('\n')) {
     if (line.trim() === '') continue;
     let ev;
@@ -712,12 +762,16 @@ export function readStreamJson(text) {
       }
     } else if (ev.type === 'assistant' && sjObject(ev.message)) {
       const msg = ev.message;
+      // W2-5b1 Task 1 (W2-D82, W2-D58, Q7, Q11): the event's parent_tool_use_id, the Agent tool_use a subagent's events
+      // name; null on the main thread, and for a value that is not a string, as every field here reads.
+      const parent = sjString(ev.parent_tool_use_id);
       const key = typeof msg.id === 'string' ? msg.id : Symbol('a message without an id');
+      if (!parents.has(key)) parents.set(key, parent);
       if (sjObject(msg.usage)) messages.set(key, sjUsage(msg.usage));
       else if (!messages.has(key)) messages.set(key, null);
       for (const b of Array.isArray(msg.content) ? msg.content : []) {
         if (sjObject(b) && b.type === 'tool_use' && typeof b.id === 'string' && typeof b.name === 'string' && !pairs.has(b.id)) {
-          pairs.set(b.id, { id: b.id, name: b.name, input: b.input ?? null, result: null, isError: null });
+          pairs.set(b.id, { id: b.id, name: b.name, input: b.input ?? null, result: null, isError: null, parentToolUseId: parent });
         }
       }
     } else if (ev.type === 'user' && sjObject(ev.message) && Array.isArray(ev.message.content)) {
@@ -737,20 +791,26 @@ export function readStreamJson(text) {
       permissionDenials = sjList(ev.permission_denials);
     }
   }
+  // W2-5b1 Task 1 (Q7): every assistant message's usage, summed once per message, subagent messages included. `usage`
+  // stays W2-4's reading (the result event's, else this sum); spend charges the larger of the two (spendTokens).
+  let assistantUsage = { input: 0, cacheCreation: 0, cacheRead: 0, output: 0 };
+  let messageUsageSeen = false;
+  for (const u of messages.values()) {
+    if (u === null) continue;
+    messageUsageSeen = true;
+    assistantUsage = {
+      input: assistantUsage.input + u.input, cacheCreation: assistantUsage.cacheCreation + u.cacheCreation,
+      cacheRead: assistantUsage.cacheRead + u.cacheRead, output: assistantUsage.output + u.output,
+    };
+  }
   let usage = { input: 0, cacheCreation: 0, cacheRead: 0, output: 0 };
   let usageSource = 'none';
   if (resultUsage !== null) {
     usage = resultUsage;
     usageSource = 'result';
-  } else {
-    for (const u of messages.values()) {
-      if (u === null) continue;
-      usageSource = 'assistant';
-      usage = {
-        input: usage.input + u.input, cacheCreation: usage.cacheCreation + u.cacheCreation,
-        cacheRead: usage.cacheRead + u.cacheRead, output: usage.output + u.output,
-      };
-    }
+  } else if (messageUsageSeen) {
+    usage = { ...assistantUsage };
+    usageSource = 'assistant';
   }
   // W2-5a Task 6: the FIRST call's usage, which the fidelity pilot's replay side reads (spec §10.2: "first-call input
   // tokens"). It is the first message the stream showed, by first-seen message id, with the last usage its events
@@ -760,15 +820,28 @@ export function readStreamJson(text) {
   return {
     init, usage, usageSource, toolPairs: [...pairs.values()], permissionDenials, result,
     assistantMessages: messages.size, malformedLines, firstCallUsage,
+    resultUsage, assistantUsage,
+    // W2-5b1 Task 1: each message in first-seen order, with the parent its first event named and its last usage.
+    messages: [...messages.keys()].map((k) => ({
+      id: typeof k === 'string' ? k : null, parentToolUseId: parents.get(k) ?? null, usage: messages.get(k) ?? null,
+    })),
   };
 }
 
-/** One spawn's spend in token-equivalents (W2-D55): input + cache_creation + cache_read + output.
+/** A usage's token-equivalents (W2-D55): input + cache_creation + cache_read + output; a null usage is 0.
+ *  @param {StreamUsage|null} u  @returns {number} */
+export function usageTokens(u) {
+  return u === null ? 0 : u.input + u.cacheCreation + u.cacheRead + u.output;
+}
+
+/** One spawn's spend in token-equivalents (W2-D55), charged fail-closed (Q7; decisions §7's C6): the larger of the result
+ *  event's usage and the sum of every assistant message's usage, subagent messages included, so an Agent subagent's
+ *  spend that the result usage leaves out is still charged, whatever the pilot later measures. Every charge site calls
+ *  this (launchRun and settleLeftover). An over-count is the budget's safe direction.
  *  @param {StreamFacts} facts
  *  @returns {number} */
 export function spendTokens(facts) {
-  const u = facts.usage;
-  return u.input + u.cacheCreation + u.cacheRead + u.output;
+  return Math.max(usageTokens(facts.resultUsage), usageTokens(facts.assistantUsage));
 }
 
 // ── D-5986: no-follow, type-checked I/O under --out ────────────────────────────────────────────────────────
@@ -1083,7 +1156,8 @@ export function spentSoFar(out) {
 // writer and the judge "go through the driver's spawn contract", SE10). Every spawn is `spawn(launcher, argv)`
 // with an argv array and no shell, a FRESH env built by spawnEnv from the allow-list (never a copy of the
 // driver's own), an empty 0700 cwd made per run outside any git tree and removed after it, and stdin as the only
-// input. Arm values arrive as parameters: this file never spells one (W2-5b's scan pins that).
+// input. Arm values arrive as parameters, each a word taken by position from lib's RECALL_ARMS (CONTROL_ARM, TREATMENT_ARM):
+// this file spells no arm word, and history-replay.test.ts's arm-word scan pins that (W2-D42).
 // A run's files land under --out in a fixed order: the stream `<name>.jsonl.part` while the child runs, then the spend
 // line in the ledger, then the rename to `<name>.jsonl`, then `<name>.run.json` via tmp + rename (D-5811). The run.json
 // is the completion marker and comes LAST, so a run killed before it is spawned again on resume. Beside the `.part` the
@@ -1161,7 +1235,8 @@ export function spawnArgv({ mode, model, settingsMode, home }) {
 }
 
 /** The child's whole environment, built fresh (the `env -i` equivalent, W2-D50): HOME, the explicit PATH, LANG,
- *  the account's CLAUDE_CONFIG_DIR, and in arm mode only the three CCRC_RECALL_* values passed in. Pure.
+ *  the account's CLAUDE_CONFIG_DIR, and in arm mode only the three CCRC_RECALL_* values passed in, each one the seam takes
+ *  (W2-5b1 Task 1: a session id lib's idOk takes, a RECALL_ARMS word, a lowercase UUID; any other is a TypeError). Pure.
  *  @param {{mode: string, home: string, configDir: string, poisonBin: string, lang: string | undefined,
  *    recall?: {session: string, arm: string, asof: string}}} spec
  *  @returns {Record<string, string>} */
@@ -1184,6 +1259,11 @@ export function spawnEnv({ mode, home, configDir, poisonBin, lang, recall }) {
   for (const k of ['session', 'arm', 'asof']) {
     if (typeof r[k] !== 'string' || r[k] === '') throw new TypeError(`spawnEnv: an arm run needs recall.${k}, a non-empty string`);
   }
+  // W2-5b1 Task 1 (W2-D50, W2-D42; RP1-arm): no arm run starts on a value the CLI would refuse (headless-arm-unknown,
+  // asof-invalid) after a model was paid for. A caller that builds one has a defect, so it is a TypeError.
+  if (!idOk(r.session)) throw new TypeError(`spawnEnv: recall.session ${JSON.stringify(r.session)} is not a session id`);
+  if (!RECALL_ARMS.includes(r.arm)) throw new TypeError(`spawnEnv: recall.arm ${JSON.stringify(r.arm)} is not one of RECALL_ARMS`);
+  if (!UUID_RE.test(r.asof)) throw new TypeError(`spawnEnv: recall.asof ${JSON.stringify(r.asof)} is not a lowercase UUID`);
   child.CCRC_RECALL_SESSION = r.session;
   child.CCRC_RECALL_ARM = r.arm;
   child.CCRC_RECALL_ASOF = r.asof;
@@ -1740,7 +1820,10 @@ export async function launchRun(job, opts = {}) {
   }
   const rec = {
     kind: RUN_KIND, v: 1, name, account: launch.accountId, mode, model, settings_mode: settingsMode,
-    code: res.code, signal: res.signal, ms, cwd, stream_sha256: sha256Hex(stream), tokens, unknown_options: unknownOptions,
+    code: res.code, signal: res.signal, ms, cwd, stream_sha256: sha256Hex(stream), tokens,
+    // W2-5b1 Task 1 (Q7): both readings the charge took the larger of, beside it.
+    usage_result_tokens: facts.resultUsage === null ? null : usageTokens(facts.resultUsage), usage_assistant_tokens: usageTokens(facts.assistantUsage),
+    unknown_options: unknownOptions,
   };
   writePlain(out, `${name}.run.json`, canonicalJson(rec) + '\n');
   return { name, skipped: false, code: res.code, signal: res.signal, ms, cwd, streamPath, facts, tokens, unknownOptions };
@@ -4010,7 +4093,7 @@ export function quizPopulation(families, { pilotFamilies, assignment }) {
   const controlIds = new Set();
   for (const a of assignment) {
     if (!ASSIGNMENT_ARMS.includes(a.arm)) throw new TypeError(`quizPopulation: arm ${JSON.stringify(a.arm)} is not an assignment arm`);
-    if (a.arm === 'control') controlIds.add(canonicalJson([a.store_id, a.ccrc_id]));
+    if (a.arm === CONTROL_ARM) controlIds.add(canonicalJson([a.store_id, a.ccrc_id]));
   }
   const kept = [];
   const excluded = { 'no-admitted-boundary': 0, pilot: 0, 'control-id': 0 };
@@ -4916,15 +4999,42 @@ function loadRecordInput(flags, part) {
   return { record: r, sha256: rec.sha256, frozen: fz };
 }
 
-/** W2-D24: the four gate_code files' installed bytes, measured now through codeShas(), against the record's gate_code.
- *  An unmeasured file is code-unmeasured, a measured change code-changed; no flag stamps either here (W2-D6). */
-export function recheckCode(record, root = TREE_ROOT) {
-  const shas = codeShas(root);
-  if (shas.state !== 'measured') refuse('code-unmeasured', `${shas.path} is ${shas.cause}`);
+/** W2-D24's re-check as a verdict, pure: `shas` (codeShas' answer) against the record's gate_code. An unmeasured file, on
+ *  either side, is `code-unmeasured` whatever the flag says (W2-D24 as amended); a measured change is `code-changed`, or,
+ *  with `allowCodeChange`, the stamp `code-changed` (W2-D24's one exception). The flag is taken at or after the record's
+ *  `window.start_ms` only (Q23): before it, W2-D6's remedy for a code change is a re-pilot and a superseding part 2, so the
+ *  flag is `args-invalid` there whether or not the code moved, and on a record with no window (a part 1) always. A caller
+ *  that passes the flag passes its clock (`nowMs`, a safe integer; anything else is a TypeError).
+ *  @param {{gate_code: unknown, window?: unknown}} record
+ *  @param {{state: 'measured', files: Record<string, string>} | {state: 'unmeasured', path: string, cause: string}} shas
+ *  @param {{allowCodeChange?: boolean, nowMs?: number | null}} [opts]
+ *  @returns {{ok: true, stamps: string[]} | {ok: false, word: string, detail: string}} */
+export function codeRecheckVerdict(record, shas, { allowCodeChange = false, nowMs = null } = {}) {
+  if (allowCodeChange) {
+    const start = plainObject(record.window) ? record.window.start_ms : undefined;
+    if (!Number.isSafeInteger(start)) {
+      return { ok: false, word: 'args-invalid', detail: '--allow-code-change is taken only by a part 2 consumer, after window start (W2-D6, W2-D24)' };
+    }
+    if (!Number.isSafeInteger(nowMs)) throw new TypeError(`codeRecheckVerdict: nowMs ${String(nowMs)} is not a clock reading`);
+    if (nowMs < start) {
+      return { ok: false, word: 'args-invalid', detail: `--allow-code-change before window start ${start}: before it a code change is a re-pilot and a superseding part 2 (W2-D6, W2-D24)` };
+    }
+  }
+  if (shas.state !== 'measured') return { ok: false, word: 'code-unmeasured', detail: `${shas.path} is ${shas.cause}` };
   const c = checkGateCode(record.gate_code, shas.files);
-  if (c.ok) return;
-  if (c.word === 'code-unmeasured') refuse('code-unmeasured', `gate_code lacks ${c.unmeasured.join(' ')}`);
-  refuse('code-changed', `changed ${c.mismatched.join(' ')}`);
+  if (c.ok) return { ok: true, stamps: [] };
+  if (c.word === 'code-unmeasured') return { ok: false, word: 'code-unmeasured', detail: `gate_code lacks ${c.unmeasured.join(' ')}` };
+  if (allowCodeChange) return { ok: true, stamps: ['code-changed'] };
+  return { ok: false, word: 'code-changed', detail: `changed ${c.mismatched.join(' ')}` };
+}
+
+/** W2-D24: the four gate_code files' installed bytes, measured now through codeShas(), against the record's gate_code,
+ *  refusing on codeRecheckVerdict's refusal and answering its stamps. W2-5a's consumers pass no opts (no flag before
+ *  window start, W2-D6); W2-5b's part 2 consumers reach it through loadFinalRecord. */
+export function recheckCode(record, root = TREE_ROOT, opts = {}) {
+  const v = codeRecheckVerdict(record, codeShas(root), opts);
+  if (!v.ok) refuse(v.word, v.detail);
+  return v.stamps;
 }
 
 function subcommandHome(env) {
@@ -5193,7 +5303,7 @@ export function verifyRegistryReport({ recordSha256, storeId, censusSha256, look
  *  is its own answer, never absent. Pure. */
 export function abStateOf(arm, generation, read) {
   if (read.state === 'unreadable') return 'unreadable';
-  if (arm === 'control') {
+  if (arm === CONTROL_ARM) {
     if (read.state === 'absent') return 'control-absent';
     return read.value.trim() === generation ? 'ok' : 'control-mismatch';
   }
@@ -5390,6 +5500,18 @@ function pilotResultError(o) {
 }
 
 // ── the subcommands ────────────────────────────────────────────────────────────────────────────────────────
+/** A positive safe integer: D-6309's range for every count and bound the record carries. */
+const positiveInt = (v) => Number.isSafeInteger(v) && /** @type {number} */ (v) >= 1;
+
+/** D-6309's refusal over [path, inRange] rows: `record-invalid`, naming each failing path as `<path> out-of-range`,
+ *  joined by `; `, in row order; nothing when every row is in range. The one spelling of that refusal, for
+ *  refuseOutOfRangeValues and for W2-5b1 Task 4's expectedForNode (R30, W2-D12).
+ *  @param {Array<[string, boolean]>} checks */
+function refuseRangeRows(checks) {
+  const bad = checks.filter(([, ok]) => !ok).map(([name]) => `${name} out-of-range`);
+  if (bad.length > 0) refuse('record-invalid', bad.join('; '));
+}
+
 /** D-6309: the record's budget, limits and quiz quotas, in range, asked before prepareOut makes --out. The
  *  gate's validator types these fields as bare integers with no range, so a signed record can carry a value that batchGate
  *  (`pilot_budget`, `limits.threshold_pct`, `limits.max_age_ms`) or sampleQuestions' assertCount (`quiz.target` and
@@ -5400,21 +5522,25 @@ function pilotResultError(o) {
  *  from both subcommands through refuseWriterAdmission: quiz-source passes the signed record's values, pilot-source its
  *  `--budget` (a positive integer by the flag grammar), LIMITS_DEFAULTS and pilotCaps, with `--n-usage` as the target.
  *  Tightening W2-3's validator in the gate is not this file's.
- *  @param {{ budget: unknown, limits: { threshold_pct?: unknown, max_age_ms?: unknown } | undefined,
- *    quotas: { target: unknown, caps: { family?: unknown, boundary?: unknown, kind_per_family?: unknown } | undefined } }} o */
-export function refuseOutOfRangeValues({ budget, limits, quotas }) {
-  const positive = (v) => Number.isSafeInteger(v) && /** @type {number} */ (v) >= 1;
+ *  W2-5b1 Task 1 (S2's C22): `budgetField` names the budget's field (`spend_budget` for a part 2 consumer); `quotas: null`
+ *  skips the quiz-quota rows (a part 2 consumer samples nothing); `part2`, a final, adds part2RangeChecks' rows.
+ *  @param {{ budget: unknown, budgetField?: string, limits: { threshold_pct?: unknown, max_age_ms?: unknown } | undefined,
+ *    quotas: { target: unknown, caps: { family?: unknown, boundary?: unknown, kind_per_family?: unknown } | undefined } | null,
+ *    part2?: any }} o */
+export function refuseOutOfRangeValues({ budget, budgetField = 'pilot_budget', limits, quotas, part2 = null }) {
   const checks = [
-    ['pilot_budget', positive(budget)],
-    ['limits.threshold_pct', positive(limits?.threshold_pct) && /** @type {number} */ (limits?.threshold_pct) <= 100],
-    ['limits.max_age_ms', positive(limits?.max_age_ms)],
-    ['quiz.target', positive(quotas?.target)],
-    ['quiz.caps.family', positive(quotas?.caps?.family)],
-    ['quiz.caps.boundary', positive(quotas?.caps?.boundary)],
-    ['quiz.caps.kind_per_family', positive(quotas?.caps?.kind_per_family)],
+    [budgetField, positiveInt(budget)],
+    ['limits.threshold_pct', positiveInt(limits?.threshold_pct) && /** @type {number} */ (limits?.threshold_pct) <= 100],
+    ['limits.max_age_ms', positiveInt(limits?.max_age_ms)],
+    ...(quotas === null ? [] : [
+      ['quiz.target', positiveInt(quotas?.target)],
+      ['quiz.caps.family', positiveInt(quotas?.caps?.family)],
+      ['quiz.caps.boundary', positiveInt(quotas?.caps?.boundary)],
+      ['quiz.caps.kind_per_family', positiveInt(quotas?.caps?.kind_per_family)],
+    ]),
+    ...(part2 === null ? [] : part2RangeChecks(part2)),
   ];
-  const bad = checks.filter(([, ok]) => !ok).map(([name]) => `${name} out-of-range`);
-  if (bad.length > 0) refuse('record-invalid', bad.join('; '));
+  refuseRangeRows(checks);
 }
 
 /** D-6307 (R10), D-6311, D-6309: the refusals openWriter makes that need no store and no spawn, asked before prepareOut makes
@@ -5792,6 +5918,74 @@ HANDLERS.set('freeze', freezeCommand);
 HANDLERS.set('power', powerCommand);
 HANDLERS.set('open', (flags, env) => openCommand(flags, env));
 HANDLERS.set('verify', verifyCommand);
+
+// ── W2-5b1 Task 1: part 2 for W2-5b's consumers (W2-D24, W2-D25, W2-D90; S2's C22, Q23) ────────────────────────────────
+/** The amendment kind whose detail W2-D56's version preflight reads (W2-D90): one of the gate's AMENDMENT_KINDS, held
+ *  there by history-replay.test.ts. */
+export const VERSION_MOVE_KIND = 'version-move';
+
+/** The arm batch's shape (Q3, R4), one spelling for part2RangeChecks and for `arms` on part 1 (W2-5b1 Task 4's `batch`):
+ *  limits.batch_max holds both arms of at least one question (RECALL_ARMS.length) and at most BATCH_MAX spawns (runBatch
+ *  throws past it), and limits.concurrency is runBatch's 1 to CONCURRENCY_MAX. The record's values are read, bounded by
+ *  these, never replaced by the constants. Pure.
+ *  @param {any} limits  @returns {Array<[string, boolean]>} */
+function batchShapeChecks(limits) {
+  return [
+    ['limits.batch_max', positiveInt(limits?.batch_max) && limits.batch_max >= RECALL_ARMS.length && limits.batch_max <= BATCH_MAX],
+    ['limits.concurrency', positiveInt(limits?.concurrency) && limits.concurrency <= CONCURRENCY_MAX],
+  ];
+}
+
+/** Each version-move amendment's node label (Q13 requires it: one of the record's node labels) and Claude Code version
+ *  (W2-D56 compares the measured --version with it: a non-empty string), as [path, inRange], in array order; another
+ *  kind adds no row. The one spelling of these two ranges (R30, W2-D12): part2RangeChecks reads it for a part 2
+ *  consumer, and W2-5b1 Task 4's expectedForNode reads it through refuseRangeRows. Pure.
+ *  @param {any} r  @returns {Array<[string, boolean]>} */
+function versionMoveChecks(r) {
+  const labels = new Set((Array.isArray(r?.nodes) ? r.nodes : []).map((n) => n?.label));
+  /** @type {Array<[string, boolean]>} */
+  const checks = [];
+  (Array.isArray(r?.amendments) ? r.amendments : []).forEach((a, i) => {
+    if (a?.kind !== VERSION_MOVE_KIND) return;
+    checks.push([`amendments[${i}].node_label_ref`, typeof a.node_label_ref === 'string' && labels.has(a.node_label_ref)]);
+    const v = a.detail?.claude_code_version;
+    checks.push([`amendments[${i}].detail.claude_code_version`, typeof v === 'string' && v !== '']);
+  });
+  return checks;
+}
+
+/** The part 2 fields a W2-5b consumer reads that the gate's validator types but does not range (S2's C22, D-6309's rule),
+ *  each as [path, inRange]: the arm batch's shape (batchShapeChecks); the question count (a count kept in range; Q5's per-node
+ *  share divides by the frozen list's entry count instead, which nodeQuestions holds non-empty); the settings mode the arms run under (Q26; spawnArgv
+ *  throws on another word); and each version-move amendment's rows (versionMoveChecks, R30). The window is not here: the
+ *  validator holds it to planned_days. A later task that reads another part 2 field adds its row here in the same commit. Pure.
+ *  @param {any} r  @returns {Array<[string, boolean]>} */
+function part2RangeChecks(r) {
+  /** @type {Array<[string, boolean]>} */
+  const checks = [
+    ...batchShapeChecks(r?.limits),
+    ['quiz.n_questions', positiveInt(r?.quiz?.n_questions)],
+    ['pilot_result.settings_mode', SETTINGS_MODES.includes(r?.pilot_result?.settings_mode)],
+    ...versionMoveChecks(r),
+  ];
+  return checks;
+}
+
+/** W2-5b's part 2 consumers' one loader (`arms --section quiz` and `judge --section quiz`, Tasks 4 and 5; W2-5b2's
+ *  `report`). The final through loadRecordInput (W2-D25: its sha before a byte is parsed, its draft, its frozen list, and
+ *  the final it supersedes when it is amended, the validator holding the chain); then W2-D24's re-check, first, before any
+ *  other input is read and before any spawn, with --allow-code-change taken at or after window start only and answered as
+ *  stamps the consumer writes into every output (Q23); then every part 2 field the consumer reads, in range (S2's C22). It
+ *  writes nothing and takes no --out, so a consumer calls it before prepareOut (W2-5a's R10, D-6309's rule).
+ *  @param {Flags} flags  @param {{nowMs: number, root?: string}} o
+ *  @returns {{record: any, sha256: string, frozen: any, stamps: string[]}} */
+export function loadFinalRecord(flags, { nowMs, root = TREE_ROOT }) {
+  const rec = loadRecordInput(flags, 'final');
+  const stamps = recheckCode(rec.record, root, { allowCodeChange: flags['allow-code-change'] === true, nowMs });
+  const r = rec.record;
+  refuseOutOfRangeValues({ budget: r.spend_budget, budgetField: 'spend_budget', limits: r.limits, quotas: null, part2: r });
+  return { ...rec, stamps };
+}
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
 // when main runs. Importing the module (the tests do) runs nothing. The exit code is set, never forced, so stderr drains.
