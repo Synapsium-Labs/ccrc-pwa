@@ -1463,6 +1463,30 @@ Measure before wave-done:
 
 Push once, and send the wave-done in the same turn. Keep claim 2300 until the merge.
 
+## Coordinator rulings on main's #1160 (2026-10-23)
+
+Recorded verbatim from the coordinator's third fix-round mail (8652), as the ruling asks.
+
+Run 833, wave 27: fix round 3. Main moved under PR #1172, and the PR no longer merges. Record this verbatim in the plan as "Coordinator rulings on main's #1160 (2026-10-23)".
+
+What happened. PR #1160 ("deadline on agent connect so a half-open socket can't strand the controller") landed on main at 16:39Z as 3dada7dc9, outside this programme, for the same 2026-10-22 incident. It bounds the same span you bound: socket creation to `ready`, 15 s by default, terminate the still-current not-ready socket and let `onClose` reconnect, cleared in `onReady`, `onClose` and `close()`, `unref`'d. Its names are `RemoteFleetConfig.connectTimeoutMs`, `DEFAULT_CONNECT_TIMEOUT_MS = 15_000`, `connectTimer`, `armConnectDeadline` and `clearConnectDeadline`, in server/src/remote/client.ts, with four rows in server/test/remote-connect.test.ts. `git merge-tree` of origin/main against 95d84c393 now conflicts in client.ts only. Your wave-done was right when you sent it; main moved after review 866.
+
+Ruled: absorb main by an ordinary `git merge origin/main` on your workspace branch (a measured conflict, so the consent rules allow it), and leave ONE deadline.
+1. One config field, one default constant, one timer, one arm and one clear. The field and the constant keep main's landed names, `connectTimeoutMs` and `DEFAULT_CONNECT_TIMEOUT_MS`, because they are on main and its rows use them. `readyTimeoutMs` and `DEFAULT_READY_TIMEOUT_MS` go. Pick one set of private names for the timer and its two methods, and say which in the departure. No second timer, guard or default survives anywhere.
+2. Your behaviour stays: the expiry still writes your `no ready within ...` journal line, the backoff is kept through the deadline, and every journal and refusal-line rule of this wave is unchanged.
+3. Main's four rows in remote-connect.test.ts stay byte-identical and green. Your 25 rows in remote-liveness.test.ts and remoteHelpers.ts take the renamed field; nothing else in them changes.
+4. README changes only if a line of yours names the old field (it names none at your tip). README auto-merges; keep main's side and yours.
+5. Plan: amend D-6516 in place, marked "amended on main's #1160", to name the landed field and constant. D-6724 and D-6725 are issued for this round, spent in order. Spend D-6724 on the absorb itself: which names survived and why, what was removed, and that the merged deadline is main's span with this wave's journal line. Give D-6725, if unspent, its own entry in the house form before wave-done. Update the Global Constraints, Review Focus, Mutation table and As built text wherever they name the old field.
+
+Measure before wave-done:
+- The deadline mutants re-run on the merged code: at least M1 to M5, and every mutant whose row arms or clears the timer. Each must red your rows as recorded, and deleting the arm must also red main's remote-connect rows 1 and 2. Record before and after in As built.
+- remote-liveness three times whole-file, remote-connect three times whole-file, then remote-io, readme-holds, docs-parity, citations, single-definition, topology-clean, private-names, dtbd, deviation-refs after `git fetch origin main`, and growth-check with GROWTH_CHECK=1. One file at a time, foreground.
+- Mutants on a scratch copy only, under `n=$(ps -L -u "$(id -u)" --no-headers | wc -l); ulimit -u $((n + 1500)); timeout -k 10 600 ...` in a subshell, restored by cmp after each.
+- After the merge, `git merge-tree` against the then-current origin/main is clean. Never rebase, force-push or update-branch.
+- Scan the round's added prose for private names.
+
+Your push removes the PR from the merge queue; that is expected. Push once and send the wave-done in the same turn. Claim 2342 covers your four paths; if you need server/test/remote-connect.test.ts edited (you should not), stop and ask me first. A lean review follows, then I queue the PR again.
+
 ## As built (run 833, 2026-10-23)
 
 The worker's record. Measured on the workspace branch over base `a68c90f15` (main did not move during the wave, and
