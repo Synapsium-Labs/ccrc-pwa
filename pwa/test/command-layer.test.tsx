@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { Sheet } from '@ccrc/ui';
+import { INSTRUMENT, SKINS, Sheet } from '@ccrc/ui';
 import { AUTH_VERDICTS } from '../../shared/api';
 import { CommandLayer } from '../src/command/CommandLayer';
 import { actionDoor, commandDoor, doorMark } from '../src/command/door';
@@ -265,12 +265,34 @@ describe('the base commands, through the palette', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     const page = screen.getByRole('combobox');
     expect(page.getAttribute('value') ?? (page as HTMLInputElement).value, 'a page starts empty').toBe('');
-    expect(screen.getByRole('option', { name: /Instrument \(preview\)/ })).toBeTruthy();
+    // The option's accessible name is its title then its group ("InstrumentLayout"), so no word boundary follows.
+    expect(screen.getByRole('option', { name: /^Instrument/ })).toBeTruthy();
+    for (const o of screen.getAllByRole('option')) expect(o.textContent ?? '', 'Instrument is no longer a preview').not.toContain('(preview)');
     expect(screen.getByRole('option', { name: /Match this device/ })).toBeTruthy();
     fireEvent.change(page, { target: { value: 'instrument' } });
     fireEvent.keyDown(page, { key: 'Enter' });
     expect(document.documentElement.getAttribute('data-skin')).toBe('instrument');
     expect(palette()).toBeNull();
+  });
+
+  it('Switch layout marks a skin that is a preview as one, by injection', () => {
+    // The shipped catalogue has no preview (above), so this is the only guard
+    // on the palette's "(preview)" arm in commands.ts. The entry is flipped on
+    // the catalogue itself, as skin-picker's injected case does; the command
+    // builds its options when the page opens, so the flip is read.
+    const entry = SKINS.find((s) => s.id === INSTRUMENT) as { preview: boolean } | undefined;
+    expect(entry).toBeDefined();
+    const was = entry!.preview;
+    entry!.preview = true;
+    try {
+      render(<CommandLayer openNewSession={vi.fn()} />);
+      const input = openPalette();
+      fireEvent.change(input, { target: { value: 'switch layout' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(screen.getByRole('option', { name: /^Instrument \(preview\)/ })).toBeTruthy();
+    } finally {
+      entry!.preview = was;
+    }
   });
 
   it('Backspace on an empty page goes back to the commands', () => {
