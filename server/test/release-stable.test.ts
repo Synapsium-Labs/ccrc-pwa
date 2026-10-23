@@ -194,19 +194,64 @@ describe('release-stable.sh: the refusal of a HEAD with no release tag says what
     return r.stderr;
   }
   const docsOnly = { 'README.md': '# fixture, edited\n', 'docs/a.md': 'a\n' };
+  const shipped = { 'server/src/x.ts': 'export const x = 1;\n' };
+  const pointerTail = (full: string): string =>
+    `A main merge whose build came out unchanged cuts no release either: the release-main run for ${full} printed "built unchanged" or what differed`;
+  const DOCS_WHY = "HEAD's merge changed only docs/ or the root's Markdown, so no release-main run started for it.";
 
-  it('W25-T1: a HEAD past a release is refused in one line naming the release, the full sha and "built unchanged"', () => {
+  it('W25-T1: a HEAD whose merge changed a shipped path is refused in one line naming the release, the full sha and "built unchanged"', () => {
     const home = mkTmp('ccrc-relstable-t1-');
     const root = fixture(home, { tagHead: 'v1.2.3' });
-    commitFiles(root, docsOnly);
+    commitFiles(root, shipped);
     const short = git(root, 'rev-parse', '--short', 'HEAD');
     const full = git(root, 'rev-parse', 'HEAD');
     const err = refused(home, run(root, home));
     expect(err).toBe(
-      `${REFUSAL_HEAD}${short} carries no vX.Y.Z tag; the newest release it contains is v1.2.3). A main merge whose build came out unchanged cuts no release either: the release-main run for ${full} printed "built unchanged" or what differed. stable now sits past v1.2.3 and cannot move back (fast-forward only); the next release cut from a descendant of ${short} is the next commit it can promote. Nothing was changed\n`);
+      `${REFUSAL_HEAD}${short} carries no vX.Y.Z tag; the newest release it contains is v1.2.3). ${pointerTail(full)}. stable now sits past v1.2.3 and cannot move back (fast-forward only); the next release cut from a descendant of ${short} is the next commit it can promote. Nothing was changed\n`);
     expect(err).toContain('v1.2.3');
     expect(err).toContain(full);
     expect(err).toContain('built unchanged');
+  });
+
+  it('W25-T1b: a HEAD whose merge changed only docs/ and the root Markdown says no release-main run started, and names the release', () => {
+    const home = mkTmp('ccrc-relstable-t1b-');
+    const root = fixture(home, { tagHead: 'v1.2.3' });
+    commitFiles(root, { 'docs/x.md': 'x\n', 'README.md': '# fixture, edited\n' });
+    const short = git(root, 'rev-parse', '--short', 'HEAD');
+    const full = git(root, 'rev-parse', 'HEAD');
+    const err = refused(home, run(root, home));
+    expect(err).toBe(
+      `${REFUSAL_HEAD}${short} carries no vX.Y.Z tag; the newest release it contains is v1.2.3). ${DOCS_WHY} stable now sits past v1.2.3 and cannot move back (fast-forward only); the next release cut from a descendant of ${short} is the next commit it can promote. Nothing was changed\n`);
+    expect(err).not.toContain(full);
+    expect(err).not.toContain('built unchanged');
+  });
+
+  it('W25-T1c: the docs rule is root-anchored; a Markdown file below the root, a docs directory below the root, or one non-docs path among docs paths all point at the run', () => {
+    const cases: Array<[string, Record<string, string>]> = [
+      ['skill', { 'ccd/x/SKILL.md': 'x\n' }],
+      ['nested', { 'pwa/src/docs/a.ts': 'x\n' }],
+      ['mixed', { 'docs/a.md': 'a\n', 'server/src/x.ts': 'x\n' }],
+      ['root-non-md', { 'LICENSE': 'x\n' }],
+    ];
+    for (const [name, files] of cases) {
+      const home = mkTmp(`ccrc-relstable-t1c-${name}-`);
+      const root = fixture(home, { tagHead: 'v1.2.3' });
+      commitFiles(root, files);
+      const full = git(root, 'rev-parse', 'HEAD');
+      const err = refused(home, run(root, home));
+      expect(err, name).toContain(`${pointerTail(full)}. stable now sits past`);
+      expect(err, name).not.toContain('no release-main run started');
+    }
+  });
+
+  it('W25-T1d: an empty HEAD commit (no changed path) points at the run; "only docs" needs at least one path', () => {
+    const home = mkTmp('ccrc-relstable-t1d-');
+    const root = fixture(home, { tagHead: 'v1.2.3' });
+    git(root, 'commit', '-q', '--allow-empty', '-m', 'an empty merge');
+    const full = git(root, 'rev-parse', 'HEAD');
+    const err = refused(home, run(root, home));
+    expect(err).toContain(`${pointerTail(full)}. stable now sits past`);
+    expect(err).not.toContain('no release-main run started');
   });
 
   it('W25-T3: only a release HEAD contains is named; a tag on a side branch is not', () => {
@@ -235,21 +280,21 @@ describe('release-stable.sh: the refusal of a HEAD with no release tag says what
     expect(err).toContain('stable now sits past v1.9.10 and');
   });
 
-  it('W25-T5: no release anywhere says HEAD contains none, and points at the release-main run', () => {
+  it('W25-T5: a one-commit HEAD with no release anywhere says HEAD contains none, points at the run, and says its changed paths could not be read', () => {
     const home = mkTmp('ccrc-relstable-t5-');
     const root = fixture(home);
     const short = git(root, 'rev-parse', '--short', 'HEAD');
     const full = git(root, 'rev-parse', 'HEAD');
     const err = refused(home, run(root, home));
     expect(err).toBe(
-      `${REFUSAL_HEAD}${short} carries no vX.Y.Z tag, and it contains no release tag). A main merge whose build came out unchanged cuts no release either: the release-main run for ${full} printed "built unchanged" or what differed. stable now points at ${short} and cannot move back (fast-forward only); the first release cut from a descendant of ${short} is the next commit it can promote. Nothing was changed\n`);
+      `${REFUSAL_HEAD}${short} carries no vX.Y.Z tag, and it contains no release tag). ${pointerTail(full)} (HEAD's changed paths could not be read). stable now points at ${short} and cannot move back (fast-forward only); the first release cut from a descendant of ${short} is the next commit it can promote. Nothing was changed\n`);
   });
 
   it('W25-T7: no push, force, reset or tag^{commit} command in the refusal, with or without a contained release', () => {
-    for (const [name, tagHead] of [['t7a', 'v1.2.3'], ['t7b', undefined]] as const) {
+    for (const [name, tagHead, files] of [['t7a', 'v1.2.3', docsOnly], ['t7b', undefined, docsOnly], ['t7c', 'v1.2.3', shipped]] as const) {
       const home = mkTmp(`ccrc-relstable-${name}-`);
       const root = fixture(home, tagHead === undefined ? {} : { tagHead });
-      commitFiles(root, docsOnly);
+      commitFiles(root, files);
       const err = refused(home, run(root, home));
       expect(err).not.toMatch(/git push|--force|push -f|\+refs|git reset|\^\{commit\}|<tag>/);
     }

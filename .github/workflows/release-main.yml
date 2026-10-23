@@ -38,7 +38,9 @@ name: release-main
 #     re-run.
 #   - The list is two root-anchored patterns, and is never widened without a
 #     ledger entry. server/test/build-release.test.ts pins this block exactly
-#     (W25-F1) and pins that the build archives neither pattern (W25-F2).
+#     (W25-F1) and, by running the builder on a repository that tracks both,
+#     pins that the built tarball holds no root docs/ entry and no root
+#     Markdown file (W25-F2).
 on:
   push:
     branches: [main]

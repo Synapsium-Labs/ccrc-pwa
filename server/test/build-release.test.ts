@@ -724,39 +724,30 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     for (const v of variants) expect(onBlock(wrap(v))).not.toEqual(EXACT_ON);
   });
 
-  // The PATHSPEC entries of build-release.sh, read from the file: the array
-  // literal (it spans lines) and the per-package arm, expanded over the loop's
-  // package list.
-  const pathspecEntries = (script: string): string[] => {
-    const arr = /^PATHSPEC=\(([^)]*)\)/m.exec(script);
-    if (!arr) throw new Error('build-release.sh holds no PATHSPEC=(...) array');
-    const entries = arr[1].split(/\s+/).filter((w) => w !== '' && !w.startsWith('#'));
-    const loop = /^for pkg in ([^;]+); do\n(?:(?!^done).*\n)*?.*PATHSPEC\+=\("\$pkg\/([^"]+)"\)/m.exec(script);
-    if (!loop) throw new Error('build-release.sh holds no per-package PATHSPEC+= arm');
-    for (const pkg of loop[1].trim().split(/\s+/)) entries.push(`${pkg}/${loop[2]}`);
-    if (entries.length === 0) throw new Error('no PATHSPEC entries were found');
-    return entries;
-  };
-  const filteredEntries = (entries: string[]): string[] => entries.filter(
-    (e) => e === 'docs' || e.startsWith('docs/') || (!e.includes('/') && e.endsWith('.md')),
-  );
-
-  it('W25-F2: no PATHSPEC entry of build-release.sh is docs, sits under docs/, or is a root Markdown file', () => {
-    const entries = pathspecEntries(readFileSync(SCRIPT, 'utf8'));
-    expect(entries.length, 'the scan found the array and the per-package arm').toBeGreaterThan(8);
-    expect(entries).toContain('install.sh');
-    expect(entries).toContain('server/scripts');
-    expect(filteredEntries(entries), 'the trigger ignores these, so the build must not archive them').toEqual([]);
-  });
-
-  it('W25-F2: the scan sees a planted docs entry and a planted root Markdown entry, and throws on a script with no array', () => {
-    const synthetic = (first: string): string => `PATHSPEC=(${first} shared\n  server/package.json)\n# a note\nfor pkg in server agent; do\n  if [ -n "$x" ]; then PATHSPEC+=("$pkg/scripts"); fi\ndone\n`;
-    expect(pathspecEntries(synthetic('install.sh'))).toEqual(['install.sh', 'shared', 'server/package.json', 'server/scripts', 'agent/scripts']);
-    expect(filteredEntries(pathspecEntries(synthetic('install.sh')))).toEqual([]);
-    expect(filteredEntries(pathspecEntries(synthetic('README.md')))).toEqual(['README.md']);
-    expect(filteredEntries(pathspecEntries(synthetic('docs')))).toEqual(['docs']);
-    expect(filteredEntries(pathspecEntries(synthetic('docs/a.md')))).toEqual(['docs/a.md']);
-    expect(() => pathspecEntries('echo nothing\n')).toThrow();
+  // W25-F2, by behaviour (D-6512): the trigger ignores docs/** and a root
+  // *.md, so the build must not read either. Not a scan of the script's text,
+  // which a glob, a `.`, a `./docs`, a later `PATHSPEC+=` or a `cp -a` of the
+  // root's copy would all slip past: the real builder runs in a fixture that
+  // TRACKS a docs/ file and a root Markdown file, and the tarball it writes is
+  // listed.
+  it('W25-F2: the built tarball holds no entry under docs/ and no root Markdown file, though the repository tracks both', () => {
+    const home = mkTmp('build-release-w25-f2-');
+    const root = fixtureRepo(home, {
+      tag: 'v1.2.3',
+      files: { 'docs/x.md': '# a doc\n', 'docs/sub/y.txt': 'y\n', 'README.md': '# fixture readme\n', 'NOTES.md': 'notes\n' },
+    });
+    expect(git(root, 'ls-files', '--', 'docs/x.md', 'README.md').split('\n').sort(), 'the fixture tracks the files the build must leave out')
+      .toEqual(['README.md', 'docs/x.md']);
+    const out = join(home, 'out');
+    const r = runRelease(root, home, ['--out', out]);
+    expect(r.code, r.stderr).toBe(0);
+    const t = spawnSync(TAR, ['-tzf', join(out, 'ccrc-v1.2.3.tar.gz')], { encoding: 'utf8' });
+    expect(t.status, t.stderr).toBe(0);
+    const entries = t.stdout.split('\n').filter((l) => l !== '');
+    expect(entries.length, 'the listing is not empty').toBeGreaterThan(8);
+    expect(entries.map((l) => l.replace(/^\.\//, '')), 'the listing is the real tarball').toContain('install.sh');
+    expect(entries.filter((l) => /^(\.\/)?docs(\/|$)/.test(l)), 'an entry under docs/').toEqual([]);
+    expect(entries.filter((l) => /^(\.\/)?[^/]+\.md$/.test(l)), 'a root Markdown entry').toEqual([]);
   });
 
   it('W25-Y2: the compare step holds the token for the base check and the download, and runs the second arm', () => {
