@@ -39,11 +39,20 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     collector: 'ccd-tmp-sweep (hourly; not live, not in use, nothing newer than CCD_TMP_SWEEP_MAX_AGE_DAYS=7)',
     bound: 'session lifetime + 7 days', tier: '138G uncollected on the fleet host 2026-09-22; single task .output files 1-4G', ruling: null },
   // D-5888 (#298): a `--child` workspace's temp root, the policy's ruling 4. Only the per-id leaf: loose
-  // top-level entries in ~/.cc-tmp are a separate class with no owner yet, and this row does not claim them.
+  // top-level entries in ~/.cc-tmp are a separate class, and this row does not claim them. D-5888 declined them because
+  // nothing identified them; that is REVERSED by D-6627 (fleet disk retention spec 2026-10-23 section 2.4): the loose
+  // arm of ws-collect binds an entry's own identity in a token, and the class has its own row, `cc-tmp-loose-entries`.
   { name: 'child-tmp-roots', root: '~/.cc-tmp/<id>/', pattern: 'S',
     creators: ['ccd (_child_tmpdir: a --child workspace spawns with TMPDIR here)', 'everything that follows TMPDIR in that session, Claude Code\'s scratch included'],
     collector: 'the reclaim tail (_ws_tmproot_remove, kept while in use); ws-collect for a root that outlived its row (server-composed, witness-gated)',
     bound: 'the child\'s lifetime; a root kept in use, until ws-collect takes it on a server-minted audit token (witness-gated)', tier: 'per child; the scratch ccd-tmp-sweep would otherwise hold under claude-<uid>', ruling: null },
+  // D-6627: a top-level entry of ~/.cc-tmp that no witness and no registry row names. The loose arm of ws-collect owns it
+  // (the same lane, quarantine, re-proof and switch as the witnessed arm), shadowed until $REG/collect-loose-live stands.
+  { name: 'cc-tmp-loose-entries', root: '~/.cc-tmp/<name>', pattern: 'S',
+    creators: ['everything that writes into ~/.cc-tmp outside a witnessed child leaf (a tool run with TMPDIR set by hand, a human)'],
+    collector: 'ws-collect loose arm (server-composed; a regular file or directory of this uid, quiet for 48 hours (24 under disk pressure), unheld, no registry row at, inside or through it, bound by a token over its own identity)',
+    bound: '48 hours untouched (24 under disk pressure), then taken on a server-minted audit token; links and special files stay the operator\'s',
+    tier: '18 directories and 105 loose files, about 6.7 GiB, measured 2026-10-06', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
   // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
   // it lives in the runtime dir, so a reboot empties it — the safe direction for

@@ -200,7 +200,7 @@ import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_SWEEP_MS } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import {
-  COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
+  COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectFeedTitle, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
   collectAfterPresence, collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
   collectBoxProbesAtArrival, collectCandidateOf, collectClearPair, collectFeedAnswerBody, collectFeedCollectedBody,
   collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedReadBody, collectFeedStep, collectLaneLive, collectSwitchFeedBody,
@@ -211,7 +211,7 @@ import {
   collectLaneCounts, type CollectLaneCounts, type CollectLaneSettled, type CollectLatchOutcome,
 } from './collectLane.js';
 import {
-  collectSwitches, collectTempRoot, learnCollect, readCollectPopulation,
+  collectSwitches, collectTempRoot, learnCollect, readCollectPopulation, readLooseCensus,
   type CollectClock, type CollectControlDeps, type CollectGenerations, type CollectJobOutcome, type CollectLanePort,
   collectRetireLatch,
 } from './coord/collectTempRoot.js';
@@ -5031,12 +5031,13 @@ export class FleetWatcher {
     const gathered = await Promise.all([
       readCollectPopulation(this.deps.io, this.deps.cfg.registryDir),
       collectSwitches(this.deps.io, this.deps.cfg.registryDir),
+      readLooseCensus({ runCcd: this.deps.runCcd, fleetState: this.deps.fleetState }),   // D-6627: read-only, once a pass
     ]);
     // The pass's decision clock, read AFTER the gather; the throttle re-stamped with it, so any two deciding passes are at
     // least one interval apart however long a gather takes.
     const mono = this.childReclaimLaneNow().monoMs;
     this.lastCollectSweep = mono;
-    const [listings, switches] = gathered;
+    const [listings, switches, loose] = gathered;
     // THE GATHER'S BRACKET (path-identity spec 2026-10-12 §5.5): an epoch that moved while the gather was out clears every
     // pair and ends the pass. Nothing it listed is read, and no latch is retired from a listing that straddled two
     // connections. The pairs, now empty, stand under the epoch after it.
@@ -5065,7 +5066,7 @@ export class FleetWatcher {
     // measured, neither names it); an answer still out for it then finds no entry, and is dropped, save a `collected`
     // act's row (`collectForgottenActRow`). The box-wide lines whose ids have all left are dropped with them (L1's
     // `collectBoxAfterPopulation`), so no line stands on evidence no later answer can clear.
-    const pop = collectPopulation({ ...listings, registryNames: new Set(names) });
+    const pop = collectPopulation({ ...listings, registryNames: new Set(names), loose });
     this.collectPop = pop;
     this.collectPopNames = new Set(names);
     for (const id of [...this.collectState.keys()]) if (collectForgets(pop, id)) this.collectState.delete(id);
@@ -5210,7 +5211,7 @@ export class FleetWatcher {
       case 'would-collect': {
         const next = collectAfterWouldCollect(e, at);
         this.collectFeedAfter(coord, id, next, { kind: 'row', key: collectWouldCollectKey(s.audit.value.token) },
-          () => ({ title: COLLECT_FEED_TITLE['would-collect'],
+          () => ({ title: collectFeedTitle(id, 'would-collect'),
             body: collectFeedWouldCollectBody(id, next.evidence.runId, next.evidence.leaf) }));
         return;
       }
@@ -5285,7 +5286,7 @@ export class FleetWatcher {
     const runId = e.evidence.runId;
     switch (r.kind) {
       case 'collected':
-        return { title: COLLECT_FEED_TITLE.collected, body: collectFeedCollectedBody(id, runId, e.evidence.leaf, r) };
+        return { title: collectFeedTitle(id, 'collected'), body: collectFeedCollectedBody(id, runId, e.evidence.leaf, r) };
       case 'refused': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedAnswerBody(id, runId, r.word, r.detail, r.paths) };
       case 'failed': return { title: COLLECT_FEED_TITLE.answer, body: r.token === ''
         ? collectFeedReadBody(id, runId, 'unaccepted', r.detail) : collectFeedAnswerBody(id, runId, r.token, r.detail, []) };

@@ -363,7 +363,9 @@ export type CollectListingDoubt =
  *    counted: an aside's name under `tmproots` gives its id or nothing, and every other one is a writer's temp file.
  *    The names themselves are never carried: they are untrusted same-uid input, and a sentence says the count alone.
  *  - `unmeasured`: each listing that gave no ids, and why.
- *  - `bothMeasured`: neither listing is in `unmeasured`, so an id neither names is gone from both. */
+ *  - `bothMeasured`: neither listing is in `unmeasured`, so an id neither names is gone from both.
+ *  - `looseDoubt`: why the loose census (fleet disk retention spec 2026-10-23 section 2.4) gave the lane no loose name this
+ *    pass, or null when it gave all of them (or was never asked: this ccd has no loose arm). The words are ccrc's. */
 export interface CollectPopulation {
   readonly ids: readonly string[];
   readonly candidates: readonly string[];
@@ -371,6 +373,7 @@ export interface CollectPopulation {
   readonly refusedNames: number;
   readonly unmeasured: readonly CollectListingDoubt[];
   readonly bothMeasured: boolean;
+  readonly looseDoubt?: string | null;
 }
 
 /** A quarantine record's name, `<id>.<ns>.<pid>` (spec §5.10, the quarantine record): ccd's own `_ws_collect_rec_id`
@@ -419,6 +422,8 @@ export function collectPopulation(input: {
   readonly tmproots: CollectListing;
   readonly tmpquarantine: CollectListing;
   readonly registryNames: ReadonlySet<string>;
+  /** The loose census (D-6627), or absent when the pass asked none. */
+  readonly loose?: CollectLooseCensus;
 }): CollectPopulation {
   const unmeasured: CollectListingDoubt[] = [];
   let refusedNames = 0;
@@ -452,9 +457,16 @@ export function collectPopulation(input: {
     const id = parseCollectRecordName(n);
     if (id !== null) recordIds.add(id); else refusedNames += 1;
   }
-  const ids = [...new Set([...witnessed, ...recordIds, ...asides])].sort();
-  const candidates = ids.filter((id) => recordIds.has(id) || !collectRowStands(input.registryNames, id));
-  return { ids, candidates, recordIds, refusedNames, unmeasured, bothMeasured: unmeasured.length === 0 };
+  // THE LOOSE ARM (D-6627): the census's names join as `loose:<hex>` ids, a record's hex always a candidate. They never
+  // meet the registry pre-filter (the census already left a row's name out) and never collide with a witnessed id.
+  const looseIn = collectLooseIds(input.loose);
+  refusedNames += looseIn.refused;
+  for (const id of looseIn.recordIds) recordIds.add(id);
+  const ids = [...new Set([...witnessed, ...recordIds, ...asides, ...looseIn.ids])].sort();
+  const looseSet = new Set(looseIn.ids);
+  const candidates = ids.filter((id) => recordIds.has(id) || looseSet.has(id) || !collectRowStands(input.registryNames, id));
+  return { ids, candidates, recordIds, refusedNames, unmeasured, bothMeasured: unmeasured.length === 0,
+    looseDoubt: looseIn.doubt };
 }
 
 /** Does `id`'s registry row stand in the tick's listing (spec §5.10, the pre-filter)? Its EXACT `<id>.child` or
@@ -466,6 +478,151 @@ export const collectRowStands = (registryNames: ReadonlySet<string>, id: string)
 /** Is `id` forgotten this pass, its pacing and feed episodes dropped without a feed row (spec §5.10)? Only when BOTH
  *  listings were measured and neither names it: an unmeasured listing never says an id is gone. */
 export const collectForgets = (pop: CollectPopulation, id: string): boolean => pop.bothMeasured && !pop.ids.includes(id);
+
+// ── the loose arm (fleet disk retention spec 2026-10-23 section 2.4, D-6627; reverses D-5888) ───────────────────
+//
+// `ws-collect` also collects the entries directly under `~/.cc-tmp` that no witness and no registry row names. ccd's
+// census (`ws-audit --collect-census`) lists them, classed, with each name as even-length lowercase hex so no name can
+// be read as an option. The lane keys such an entry by `loose:<hex>`: a string `isTmpRootId` refuses (the shape has no
+// `:`), so it can never be mistaken for a witnessed id and no witnessed-id argv can be built from it. Everything past
+// the id is today's lane: the licence, the pacing and the gates.
+
+/** The id prefix of a loose entry. */
+export const COLLECT_LOOSE_ID_PREFIX = 'loose:';
+/** The longest name a directory entry has, in bytes; its hex is twice that. */
+const COLLECT_LOOSE_NAME_MAX_BYTES = 255;
+const COLLECT_LOOSE_HEX = /^(?:[0-9a-f]{2})+$/;
+
+/** The lane's id for a loose entry named `hex`. */
+export const collectLooseId = (hex: string): string => `${COLLECT_LOOSE_ID_PREFIX}${hex}`;
+
+/** The hex a loose id carries, or null when `id` is no loose id. The ONE decoder of the prefix. */
+export function collectLooseHexOf(id: unknown): string | null {
+  if (typeof id !== 'string' || !id.startsWith(COLLECT_LOOSE_ID_PREFIX)) return null;
+  const hex = id.slice(COLLECT_LOOSE_ID_PREFIX.length);
+  return COLLECT_LOOSE_HEX.test(hex) && hex.length <= 2 * COLLECT_LOOSE_NAME_MAX_BYTES ? hex : null;
+}
+
+/** Is `id` a loose entry's? */
+export const collectIsLoose = (id: unknown): boolean => collectLooseHexOf(id) !== null;
+
+/** What the census said, as the lane reads it:
+ *  - `unavailable`: this ccd has no loose arm (`collect-loose-v1` not advertised), so nothing was asked;
+ *  - `unmeasured`: the census was asked and measured nothing (`why` is ccd's or the runner's text);
+ *  - `measured`: `looseHex` are the entries classed `loose`; `recordHex` are the loose quarantine records' entries, which
+ *    the listing cannot show (a killed verb's entry sits in the quarantine); `truncated` is a listing past the bound,
+ *    and `recordsUnmeasured` counts the records ccd could not read. */
+export type CollectLooseCensus =
+  | { readonly kind: 'unavailable' }
+  | { readonly kind: 'unmeasured'; readonly why: string }
+  | { readonly kind: 'measured'; readonly truncated: boolean; readonly looseHex: readonly string[];
+      readonly recordHex: readonly string[]; readonly recordsUnmeasured: number };
+
+/** The loose ids one census gives, pure. FAIL TOWARD KEEPING: a census that is unmeasured, or truncated, gives no
+ *  ENTRY name (a name beyond the bound was never classed), and the doubt is said. A record's entry is a candidate
+ *  whatever the listing's bound, because a kept record is never silent. A hex that is no hex, or a population past
+ *  `COLLECT_POPULATION_MAX`, adds nothing and is counted, never carried. */
+function collectLooseIds(c: CollectLooseCensus | undefined): {
+  readonly ids: readonly string[]; readonly recordIds: ReadonlySet<string>; readonly refused: number; readonly doubt: string | null;
+} {
+  const none = { ids: [] as string[], recordIds: new Set<string>(), refused: 0 };
+  if (c === undefined || c.kind === 'unavailable') return { ...none, doubt: null };
+  if (c.kind === 'unmeasured') {
+    return { ...none, doubt: `the census of loose temp entries measured nothing (${childReclaimDetailText(c.why)}), so none was considered` };
+  }
+  let refused = 0;
+  const ok = (h: unknown): h is string => {
+    if (typeof h === 'string' && COLLECT_LOOSE_HEX.test(h) && h.length <= 2 * COLLECT_LOOSE_NAME_MAX_BYTES) return true;
+    refused += 1; return false;
+  };
+  const entries = c.truncated ? [] : c.looseHex.filter(ok);
+  const records = c.recordHex.filter(ok);
+  const all = new Set([...entries, ...records].map(collectLooseId));
+  if (all.size > COLLECT_POPULATION_MAX) {
+    return { ...none, refused, doubt: `the census of loose temp entries named ${all.size} entries, past the ${COLLECT_POPULATION_MAX} the lane takes, so none was considered` };
+  }
+  const why: string[] = [];
+  if (c.truncated) why.push(`the census was cut at its bound, so no loose entry was considered (only the ${records.length} with a record)`);
+  if (c.recordsUnmeasured > 0) why.push(`${c.recordsUnmeasured} loose quarantine record(s) could not be read`);
+  return { ids: [...all], recordIds: new Set(records.map(collectLooseId)), refused, doubt: why.length === 0 ? null : why.join('; ') };
+}
+
+/** `ws-audit --collect-census`'s answer (exit 0 measured, exit 1 the unmeasured document), read totally. Any shape
+ *  this reader cannot vouch for is `unmeasured`, never an empty census. */
+export function parseCollectCensus(ok: boolean, stdout: string, stderr: string): CollectLooseCensus {
+  const out = stdout.trim();
+  const err = stderr.trim();
+  const bad = (why: string): CollectLooseCensus => ({ kind: 'unmeasured', why: err === '' ? why : `${why}: ${err}` });
+  if (out === '') return bad('ccd printed no census');
+  let v: unknown;
+  try { v = JSON.parse(out); } catch { return bad('ccd printed no JSON census'); }
+  if (!isObject(v) || v.mode !== 'collect-census') return bad('ccd printed a document that is not the census');
+  if (!ok || typeof v.unmeasured === 'string') {
+    return { kind: 'unmeasured', why: typeof v.unmeasured === 'string' && v.unmeasured !== '' ? v.unmeasured : (err === '' ? 'ccd measured nothing' : err) };
+  }
+  const entries = v.entries;
+  const records = v.records;
+  if (typeof v.truncated !== 'boolean' || !Array.isArray(entries) || !Array.isArray(records)
+    || typeof v.recordsUnmeasured !== 'number' || !Number.isSafeInteger(v.recordsUnmeasured) || v.recordsUnmeasured < 0) {
+    return bad('ccd printed a census this build cannot read');
+  }
+  const looseHex: string[] = [];
+  for (const e of entries) {
+    if (!isObject(e) || typeof e.hex !== 'string' || typeof e.class !== 'string') return bad('ccd printed a census entry this build cannot read');
+    if (e.class === 'loose') looseHex.push(e.hex);
+  }
+  const recordHex: string[] = [];
+  for (const r of records) {
+    if (!isObject(r) || typeof r.hex !== 'string') return bad('ccd printed a census record this build cannot read');
+    recordHex.push(r.hex);
+  }
+  return { kind: 'measured', truncated: v.truncated, looseHex, recordHex: [...new Set(recordHex)], recordsUnmeasured: v.recordsUnmeasured };
+}
+
+/** `ws-audit --loose-hex <hex> --collect`'s answer, read as the witnessed audit is, by the SAME reader: the document is
+ *  re-keyed (`session`, `mode`) and carries no witness and no leaf, which a loose entry does not have. The reader's
+ *  strictness is therefore not copied: a token of 64 lowercase hex, a resume phase that is a word, an exit status that
+ *  agrees with the verdict. A document for another entry is `unreadable`. */
+export function parseCollectLooseAudit(hex: string, ok: boolean, stdout: string, stderr: string): CollectAudit {
+  const out = stdout.trim();
+  if (out === '') return parseCollectAudit(hex, ok, stdout, stderr);
+  let v: unknown;
+  try { v = JSON.parse(out); } catch { return parseCollectAudit(hex, ok, stdout, stderr); }
+  if (!isObject(v) || v.mode !== 'collect-loose' || v.name !== hex) {
+    return { kind: 'unreadable', detail: `ws-audit --loose-hex --collect printed a document that is not ${collectLooseId(hex)}'s audit` };
+  }
+  const collect = isObject(v.collect) ? v.collect : {};
+  return parseCollectAudit(hex, ok, JSON.stringify({ ...v, session: hex, mode: 'collect',
+    collect: { ...collect, witness: null, leaf: null } }), stderr);
+}
+
+/** `ws-collect --expect <token> --loose-hex <hex>`'s answer. The collected line names the entry's hex and says
+ *  `loose`; it carries no witness word, so the result's is `absent` (an honest "no witness"). Every other shape is the
+ *  witnessed verb's, read by its reader. */
+export function parseCollectLooseResult(hex: string, ok: boolean, stdout: string, stderr: string): CollectResult {
+  const out = stdout.trim();
+  let v: unknown = null;
+  if (out !== '') { try { v = JSON.parse(out); } catch { v = null; } }
+  if (isObject(v) && typeof v.collected === 'string') {
+    if (v.collected !== hex) return { kind: 'failed', token: '', detail: `ws-collect reported collecting ${v.collected}, not ${hex}` };
+    if (!ok) return { kind: 'failed', token: '', detail: `ws-collect reported collecting ${hex} but exited non-zero` };
+    if (typeof v.record !== 'string' || v.record === '' || typeof v.resumed !== 'boolean' || v.loose !== true) {
+      return { kind: 'failed', token: '', detail: `ws-collect reported collecting ${hex} with a document this build cannot read` };
+    }
+    return { kind: 'collected', record: v.record, resumed: v.resumed, witness: 'absent' };
+  }
+  return parseCollectResult(hex, ok, stdout, stderr);
+}
+
+/** A loose entry's name as a feed row shows it: its hex decoded as UTF-8 and made one safe line. The name is untrusted
+ *  same-uid input, so bytes that are not UTF-8 are not shown as a guess: the row names the hex's head instead. */
+export function collectLooseNameText(hex: string): string {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i += 1) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  let t = '';
+  try { t = childReclaimDetailText(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { t = ''; }   // not UTF-8: never shown as a guess
+  return t === '' ? `an entry named by ${hex.slice(0, 16)}…` : t;
+}
 
 // ── the licence and the pacing (spec §5.10, "the lane": two observations, one job, one act) ─────────────────────
 //
@@ -1427,7 +1584,21 @@ export const COLLECT_FEED_TITLE: Readonly<Record<CollectFeedKind, string>> = {
   switch: 'temp root collector switch',
 };
 
-const collectWho = (id: string, runId: number | null): string => (runId === null ? id : `${id}, child of run #${runId}`);
+const collectWho = (id: string, runId: number | null): string => {
+  const hex = collectLooseHexOf(id);
+  if (hex !== null) return `temp entry ${collectLooseNameText(hex)}`;
+  return runId === null ? id : `${id}, child of run #${runId}`;
+};
+
+/** The feed titles of the loose arm's two rows (D-6627): a loose entry is a temp ENTRY, not a temp root. Its other
+ *  rows keep the collector's `answer` title. */
+export const COLLECT_LOOSE_FEED_TITLE: Readonly<Record<'collected' | 'would-collect', string>> = {
+  collected: 'temp entry collected',
+  'would-collect': 'temp entry would be collected',
+};
+/** The title of a `collected` or `would-collect` row for `id`: the loose arm's for a loose id, else the lane's. */
+export const collectFeedTitle = (id: string, kind: 'collected' | 'would-collect'): string =>
+  (collectIsLoose(id) ? COLLECT_LOOSE_FEED_TITLE[kind] : COLLECT_FEED_TITLE[kind]);
 const COLLECT_WITNESS_SAID: Readonly<Record<Extract<CollectResult, { readonly kind: 'collected' }>['witness'], string>> = {
   dropped: 'its witness was dropped',
   kept: 'its witness was kept: a newer spawn on this id had written it again',
@@ -1438,6 +1609,10 @@ const COLLECT_WITNESS_SAID: Readonly<Record<Extract<CollectResult, { readonly ki
  *  witness, and NEVER that a temp root was removed: nothing was. */
 export function collectFeedCollectedBody(id: string, runId: number | null, leaf: string | null,
   r: Extract<CollectResult, { readonly kind: 'collected' }>): string {
+  if (collectIsLoose(id) && r.record !== null) {
+    return `${collectWho(id, runId)}: the temp-entry collector removed it (record ${childReclaimDetailText(r.record)})`
+      + `${r.resumed ? ', finishing a collection an earlier attempt began' : ''}.`;
+  }
   const at = leaf === null ? '' : childReclaimDetailText(leaf);
   if (r.record === null) {
     return `${collectWho(id, runId)}: no leaf stood${at === '' ? '' : ` at ${at}`}, so nothing was moved; `
@@ -1450,6 +1625,10 @@ export function collectFeedCollectedBody(id: string, runId: number | null, leaf:
 
 /** Shadow's row, once per (id, token) episode (spec §5.10). */
 export function collectFeedWouldCollectBody(id: string, runId: number | null, leaf: string | null): string {
+  if (collectIsLoose(id)) {
+    return `would collect ${collectWho(id, runId)}: it was found idle and held by nothing by two audits at least a pass apart. `
+      + 'The collector, or its loose arm, is shadowed, so nothing was removed.';
+  }
   return `would collect ${collectWho(id, runId)}: ${collectTmp(leaf)} was found `
     + 'orphaned and idle by two audits at least a pass apart. The collector is shadowed, so nothing was removed.';
 }
@@ -1643,7 +1822,7 @@ export function collectForgottenActRow(id: string, s: CollectJobSettled, obs2: C
 } | null {
   if (s.kind !== 'acted' || s.result.kind !== 'collected') return null;
   const ev = collectEvidenceOf(obs2) ?? { runId: null, leaf: null };
-  return { runId: ev.runId, title: COLLECT_FEED_TITLE.collected,
+  return { runId: ev.runId, title: collectFeedTitle(id, 'collected'),
     body: collectFeedCollectedBody(id, ev.runId, ev.leaf, s.result) };
 }
 
@@ -2026,11 +2205,13 @@ export type CollectListingFailure = (typeof COLLECT_LISTING_FAILURES)[number];
 /** The registry listing as the executor reads it (path-identity spec 2026-10-12 §5.2). `marker` is the MEASURED
  *  presence of `COLLECT_LANE_LIVE_MARKER`. An unlistable registry carries NO marker field: a listing that failed proves
  *  no absence, and a proved absence is what retires the latch. It carries instead `reason`, the measured listing's
- *  failure: an unreadable registry is REPORTED as unreadable, never folded into an empty one (D-5969, ARCH-08b). */
+ *  failure: an unreadable registry is REPORTED as unreadable, never folded into an empty one (D-5969, ARCH-08b).
+ *  `looseMarker` (D-6627) is the loose arm's own marker, present (`true`) only when it was listed: absent reads as
+ *  shadow, and an unlistable registry never carries it. */
 export type CollectLaneSwitches =
-  | { readonly paused: false; readonly marker: boolean }
-  | { readonly paused: true; readonly why: 'raised'; readonly marker: boolean }
-  | { readonly paused: true; readonly why: 'unlistable'; readonly reason: CollectListingFailure };
+  | { readonly paused: false; readonly marker: boolean; readonly looseMarker?: true }
+  | { readonly paused: true; readonly why: 'raised'; readonly marker: boolean; readonly looseMarker?: true }
+  | { readonly paused: true; readonly why: 'unlistable'; readonly reason: CollectListingFailure; readonly looseMarker?: never };
 /** The connection epoch around a listing (path-identity spec 2026-10-12 §5.2, §5.5). In the executor, `before` is the
  *  epoch the job was queued under and `after` the epoch read after the final listing; in the pass, the pass-head epoch
  *  and the epoch after the gather. Epochs only rise, so `before === after` is "no connection came or went". */

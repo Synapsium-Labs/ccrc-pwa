@@ -25,7 +25,8 @@
    ccd-declared, per-session root that `os.tmpdir()` (and every other well-behaved mktemp user)
    follows, making ALL tool scratch S-pattern by construction; collected at reap and by a
    boot sweep. Until that ships (Build 5), the >6h `/tmp/cdk.out*` sweep continues manually
-   under the existing precedent.
+   under the existing precedent. *(2026-10-23, D-6627: the loose top-level entries of `~/.cc-tmp`, which D-5888 left with
+   no owner, are now the `ws-collect` loose arm's — the row 37 below; the per-id leaves stay the witnessed arm's.)*
 5a. **Foreign worktrees — EXECUTED 2026-08-11**: 47 clean worktrees older than 3 days removed
    via `git worktree remove` (no `--force`, so git itself refused anything dirty), ~32G freed,
    disk 90%→80%. Six kept: two fresh (`converse-loop`, `board-phase-1`), four dirty. Every
@@ -440,6 +441,7 @@ Every class the three scouts found, reconciled. `pattern` is the assignment from
 | 34 | `state-cache.json`, `push-subs.json` | fleetstate.ts:33,41 | **X** singleton-overwrite | tmp+rename overwrite every write | none | 18.7KB / 733B |
 | 35 | `/var/log/journal` | journald | **UNASSIGNED — out of this repo's remit, but on its box (§Open Q10)** | journald defaults; **no explicit `SystemMaxUse`** in journald.conf | uncapped by explicit config; not urgent at 43G free | 478MB (470MB current + 8.1MB stale machine-id) |
 | 36 | server-box `~/.cache` 7.8G, `~/.npm` 5.0G, `~/.pnpm-store` 1.6G, several multi-GB `~/.claude*` homes | generic tooling | **UNASSIGNED (§Open Q9)** | none | this box also carries `~/.cc-sessions` (57 files) and multiple `~/.claude*` wrapper homes the brief assigned to the fleet host — **either it doubles as a fleet member or these are legacy**; unresolved | the bulk of its 102G |
+| 37 | loose top-level entries of `~/.cc-tmp` (`~/.cc-tmp/<name>`, no witness, no registry row) | the `TMPDIR` root ruling 4 declares, written into by anything that is not a witnessed child leaf | tools run with `TMPDIR` set by hand, a human | **S** session-bound *(D-6627, reversing D-5888)* | the `ws-collect` loose arm (fleet disk retention 2026-10-23 §2.4): the server alone, a regular file or directory of this uid, 48 hours untouched (24 under disk pressure), unheld, no registry row at, inside or through it, a token over its own identity, shadow unless `$REG/collect-loose-live` stands and the lane is live | links, sockets, FIFOs and devices stay the operator's | 18 directories and 105 loose files, about 6.7 GiB, measured 2026-10-06 |
 
 ### A.3 — Scout reconciliation (the three reports agree; where they appear not to, here is why)
 
