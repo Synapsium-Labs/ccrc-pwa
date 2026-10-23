@@ -3753,8 +3753,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // silence §2 forbids, and the client would render it as "no control" rather
     // than "we could not look".
     if (!ccdCan(deps.fleetState, 'prStateSession')) return unknownView('unsupported');
-    // The task read starts beside pr-state, not after it. Never `Promise.all`: a failed pr-state answers
-    // `unknownView`, and a task read that rejects after that must not become an unhandled rejection.
+    // The task read starts beside pr-state, not after it, and is caught at once (below): a failed pr-state answers
+    // `unknownView` and ignores it, and a rejection while pr-state is pending is not unhandled. Never `Promise.all`.
     const tasks = prTasks(id);
     tasks.catch(() => {}); // caught from the start: a read that rejects while pr-state is pending is not unhandled
     const res = await deps.runCcd(argv);

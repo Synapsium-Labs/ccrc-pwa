@@ -458,6 +458,21 @@ describe('GET /api/sessions/:id/commands reads a bounded tail (D-6434)', () => {
     ]);
   });
 
+  it('no full listing anywhere: the window\'s deltas alone never answer', async () => {
+    // Over four chunks, so the walk ends above offset 0 and the head fallback runs; the head is filler and no full
+    // listing exists anywhere, only two deltas inside the window.
+    const S = CHUNK * 6;
+    const d1 = bytes(delta('- c: added in the window'));
+    const d2 = bytes(delta('- b: also in the window'));
+    const toD1 = Math.floor(S / 2);
+    const toD2 = 5000;
+    const toEnd = S - (toD1 + d1.length + toD2 + d2.length);
+    const all = Buffer.concat([bytes(filler(toD1)), d1, bytes(filler(toD2)), d2, bytes(filler(toEnd))]);
+    expect(all.length).toBe(S);
+    expect(all.indexOf(d1)).toBeGreaterThanOrEqual(S - 4 * CHUNK);
+    expect((await rig(all)).skills).toEqual([]);
+  });
+
   it('deltas and no full listing: built-ins only', async () => {
     const file = bytes(delta('- a: one'), filler(4000), delta('- b: two'), filler(4000));
     expect((await rig(file)).skills).toEqual([]);
