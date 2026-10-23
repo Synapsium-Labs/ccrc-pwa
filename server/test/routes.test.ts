@@ -359,6 +359,23 @@ describe('write routes', () => {
     await app.close();
   });
 
+  // R38: Retry now resumes after every enter-ignored, drafted or not; the server never sees the draft, so this pins its half.
+  it('a Retry after an enter-ignored with no draft: resume over an empty box is nothing-to-submit and over our own text one Enter', async () => {
+    const empty = await makeApp([boxPane('')]);
+    const emptyRes = await empty.app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(emptyRes.statusCode).toBe(409);
+    expect(emptyRes.json()).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(sendKeysCalls(empty.calls)).toEqual([]);
+    await empty.app.close();
+
+    const own = await makeApp([boxPane('hello'), boxPane('')]);
+    const ownRes = await own.app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(ownRes.statusCode).toBe(200);
+    expect(ownRes.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(own.calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
+    await own.app.close();
+  });
+
   it("a /prompt body with resume: 'yes' (not true) behaves as today", async () => {
     const { app, calls } = await makeApp([boxPane('hello')]);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: 'yes' } });

@@ -519,7 +519,6 @@ describe('session store optimistic send', () => {
       ['enter-ignored + draft', refusal('enter-ignored', 'my message'), true],
       ['type-failed + draft', refusal('type-failed', 'my message'), true],
       ['verify-failed, no draft', refusal('verify-failed'), false],
-      ["enter-ignored, draft ''", refusal('enter-ignored', ''), false],
       ['draft-present', refusal('draft-present', 'someone else'), false],
       ['not-alive', refusal('not-alive'), false],
       ['box-unreadable', refusal('box-unreadable'), false],
@@ -536,6 +535,25 @@ describe('session store optimistic send', () => {
       const retried = prompt.mock.calls[1]![2] as { resume?: boolean };
       if (resumes) expect(retried.resume, name).toBe(true);
       else expect(retried, name).not.toHaveProperty('resume');
+    }
+  });
+
+  // D-6367, R38: a landed send can still be answered enter-ignored with a blind final read (no draft), and Retry
+  // must never type a second copy; the server's whole-box resume types nothing over an empty box.
+  it('Retry after enter-ignored with no draft sends resume: true', async () => {
+    vi.useFakeTimers(); // restored by the file's afterEach
+    const cases: Array<[string, ApiError]> = [
+      ['enter-ignored, no draft field', new ApiError(409, { ok: false, error: 'enter-ignored' })],
+      ["enter-ignored, draft ''", new ApiError(409, { ok: false, error: 'enter-ignored', draft: '' })],
+    ];
+    for (const [name, failure] of cases) {
+      const prompt = vi.fn().mockRejectedValueOnce(failure);
+      prompt.mockResolvedValue(undefined);
+      const store = createSessionStore('s1', { api: { prompt } });
+      await store.getState().send('my message');
+      store.getState().retry(store.getState().pending[0]!.key);
+      expect(prompt, name).toHaveBeenCalledTimes(2);
+      expect(prompt.mock.calls[1]![2], name).toMatchObject({ resume: true });
     }
   });
 
