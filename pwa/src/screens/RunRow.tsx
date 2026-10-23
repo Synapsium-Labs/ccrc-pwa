@@ -29,9 +29,11 @@ import { navigate } from '../lib/router';
 import '../fleet/fleet.css';
 
 // `memo` (D-6442): the board re-renders each second while a dispatch is pending,
-// and a finished row's props are stable across those ticks (the run object from
-// the cold read, store sessions, booleans, state setters, and `nowMs` from
-// `finishedClock`), so only a row whose own props changed re-renders.
+// and a finished row's props are stable between those ticks (the run object from
+// the cold read, booleans, state setters, and `nowMs` from `finishedClock`), so a
+// tick re-renders no finished row. Not stable across fleet frames: every frame
+// brings new session objects, so a fleet frame re-renders every row with a live
+// session (at most 20 finished rows, by the fold) until C6's row reuse.
 export const RunRow = memo(function RunRow({
   run,
   nowMs,

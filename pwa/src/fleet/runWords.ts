@@ -389,8 +389,11 @@ export const FINISHED_FOLD = 20;
 
 /** The step of the clock a FINISHED row reads, in ms (D-6442). Every readout on
  *  a closed row (`formatAge` over `dispatchedAt`, `resumeNote`'s title,
- *  `childReclaimTitle`) is minute-grained, so a 30 s step changes none of them
- *  by more than the half-minute the board's own slow cadence already allowed. */
+ *  `childReclaimTitle`) is minute-grained. The step's lag ADDS to the board's own:
+ *  `useNow(30_000)` is not aligned to the step and `finishedClock` floors its
+ *  value again, so at the slow cadence a finished row's clock can trail real time
+ *  by almost 60 s, where it trailed by at most 30 s before. `formatAge`'s minute
+ *  grain (`just now` under 2 min) hides almost all of that. */
 export const FINISHED_CLOCK_MS = 30_000;
 
 /** The board's one tick, floored to `FINISHED_CLOCK_MS`: the `nowMs` a finished
