@@ -94,18 +94,30 @@ describe('diskVerdict: hysteresis, debounce, mounts', () => {
     expect(run([measured([fsAt(80)]), measured([fsAt(88)])], held('critical')).map((v) => v.level))
       .toEqual(['critical', 'warn']);
   });
-  it('a ghost filesystem is dropped once drifted to unmeasured with no unreadable root pointing at it', () => {
+  it('a vanished ok filesystem is a ghost: dropped once drifted to unmeasured with no unreadable root pointing at it', () => {
+    const start = run([measured([fsAt(10, 0, '8:1'), fsAt(10, 0, '8:2')])])[0]!;
+    const here = measured([fsAt(10, 0, '8:1')]);
+    const out = run([here, here, here], start);
+    expect(out.map((v) => v.level)).toEqual(['unmeasured', 'unmeasured', 'ok']);
+    expect(out[2]!.filesystems.map((f) => f.dev)).toEqual(['8:1']);
+  });
+  it('a vanished critical filesystem keeps paging: an unexplained absence never lowers a known-bad level', () => {
     const start = run([measured([fsAt(10, 0, '8:1'), fsAt(95, 0, '8:2')])])[0]!;
     const here = measured([fsAt(10, 0, '8:1')]);
     const out = run([here, here, here], start);
-    expect(out.map((v) => v.level)).toEqual(['critical', 'unmeasured', 'ok']);
-    expect(out[2]!.filesystems.map((f) => f.dev)).toEqual(['8:1']);
+    expect(out.map((v) => v.level)).toEqual(['critical', 'critical', 'critical']);
+    expect(out[2]!.filesystems.map((f) => f.dev)).toEqual(['8:1', '8:2']);
   });
-  it('an unreadable root pointing at a drifted filesystem keeps it, and the fleet off ok', () => {
+  it('a held warn whose reading becomes unmeasurable stays warn, never decays below it', () => {
+    const none: DiskFilesystem = { ...fsAt(10, 0, '8:1'), sizeBytes: 0, availBytes: 0, freeBytes: 0, files: 0, filesFree: 0 };
+    expect(run([measured([none]), measured([none]), measured([none])], held('warn')).map((v) => v.level))
+      .toEqual(['warn', 'warn', 'warn']);
+  });
+  it('an unreadable root pointing at a held critical filesystem keeps it critical', () => {
     const start = run([measured([fsAt(10, 0, '8:1'), fsAt(95, 0, '8:2')])])[0]!;
     const here = { ...measured([fsAt(10, 0, '8:1')]), missing: [{ label: 'r8:2', why: 'timeout' as const }] };
     const out = run([here, here, here], start);
-    expect(out.map((v) => v.level)).toEqual(['critical', 'unmeasured', 'unmeasured']);
+    expect(out.map((v) => v.level)).toEqual(['critical', 'critical', 'critical']);
     expect(out[2]!.filesystems.map((f) => f.dev)).toEqual(['8:1', '8:2']);
   });
   it('an absent root holds no bytes: it neither keeps a ghost nor forces unmeasured', () => {
@@ -142,16 +154,16 @@ describe('diskVerdict: hysteresis, debounce, mounts', () => {
     const none: DiskFilesystem = { ...fsAt(10, 0, '8:2'), sizeBytes: 0, availBytes: 0, freeBytes: 0, files: 0, filesFree: 0 };
     expect(run([measured([fsAt(10, 0, '8:1'), none])])[0]!.level).toBe('unmeasured');
   });
-  it('a critical filesystem that reads unmeasured twice beside an ok one never lets the fleet read ok', () => {
+  it('a critical filesystem that reads unmeasured twice beside an ok one stays critical', () => {
     const none: DiskFilesystem = { ...fsAt(10, 0, '8:2'), sizeBytes: 0, availBytes: 0, freeBytes: 0, files: 0, filesFree: 0 };
     const start = run([measured([fsAt(10, 0, '8:1'), fsAt(95, 0, '8:2')])])[0]!;
     const out = run([measured([fsAt(10, 0, '8:1'), none]), measured([fsAt(10, 0, '8:1'), none])], start);
-    expect(out.map((v) => v.level)).toEqual(['critical', 'unmeasured']);
+    expect(out.map((v) => v.level)).toEqual(['critical', 'critical']);
   });
-  it('a held critical filesystem that vanishes from a measurement does not clear on one pass', () => {
+  it('a held critical filesystem that vanishes from a measurement does not clear', () => {
     const start = run([measured([fsAt(10, 0, '8:1'), fsAt(95, 0, '8:2')])])[0]!;
     const [a, b] = run([measured([fsAt(10, 0, '8:1')]), measured([fsAt(10, 0, '8:1')])], start);
-    expect([a!.level, b!.level]).toEqual(['critical', 'unmeasured']);
+    expect([a!.level, b!.level]).toEqual(['critical', 'critical']);
     expect(a!.filesystems.map((f) => f.dev)).toEqual(['8:1', '8:2']);
   });
   it('a critical filesystem whose root label is shared with another filesystem stays on one unreadable pass', () => {

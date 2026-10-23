@@ -93,6 +93,11 @@ const DISK_MISSING_WHY_MAP: Record<DiskMissingWhy, true> = { absent: true, faile
 /** Every `DiskMissingWhy`, derived from the type. */
 export const DISK_MISSING_WHYS = Object.keys(DISK_MISSING_WHY_MAP) as DiskMissingWhy[];
 
+/** THE CONTRACT the decider reads (DR-2's reply must keep it): one row per `DISK_WORK_ROOTS` label ANY of whose
+ *  resolved paths could not be measured, even when its other paths were (a label such as `claude-tmp` or
+ *  `config-dirs` can span devices); the worst `why` wins (`timeout` over `failed` over `absent`). A label is
+ *  `absent` only when every path that failed was ENOENT. Reporting a label only when ALL its paths fail would let
+ *  a critical filesystem behind a failed path read as "moved" and drop. */
 export interface DiskMissingRoot {
   readonly label: string;
   readonly why: DiskMissingWhy;

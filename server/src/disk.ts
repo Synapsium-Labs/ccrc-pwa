@@ -67,6 +67,10 @@ const RANK: Record<DiskLevel, number> = { ok: 0, unmeasured: 1, warn: 2, critica
 export function diskVerdict(prev: DiskVerdict | null, measured: DiskMeasured, nowMs: number): DiskVerdict {
   const before = new Map((prev?.filesystems ?? []).map((f) => [f.dev, f]));
   const step = (last: DiskFilesystemVerdict, fs: DiskFilesystem, target: DiskLevel): DiskFilesystemVerdict => {
+    // Fail toward keeping: a reading that could not be taken never lowers a known-bad level. Only a real measurement
+    // moves a held `warn` or `critical`, through the hysteresis and the debounce below; otherwise the one alarm left
+    // would go dark exactly when a full box stalls and its statfs times out.
+    if (target === 'unmeasured' && RANK[last.level] >= RANK.warn) return { ...fs, level: last.level, pending: null };
     if (target === last.level) return { ...fs, level: last.level, pending: null };
     if (last.pending === target) return { ...fs, level: target, pending: null };
     if (last.pending !== null) {
@@ -87,16 +91,18 @@ export function diskVerdict(prev: DiskVerdict | null, measured: DiskMeasured, no
     const last = before.get(fs.dev);
     return last === undefined ? { ...fs, level: diskLevelOf(fs), pending: null } : step(last, fs, targetLevel(fs, last.level));
   });
-  // A held filesystem absent from this pass could not be read: it keeps its level and drifts toward `unmeasured` on the
-  // usual two sightings, never toward `ok`. Once drifted it is a ghost, and is dropped unless a root that could not be
-  // read (failed or timed out; an absent root holds no bytes) still points at it; a filesystem whose roots now all
-  // report on another device is dropped at once, unless one of those roots could not be read this pass (a label can span devices).
+  // A held filesystem absent from this pass could not be read. A held `warn` or `critical` keeps its level (see
+  // `step`); an `ok` one drifts toward `unmeasured` on the usual two sightings, never toward `ok`, and once drifted it is
+  // a ghost, dropped unless a root that could not be read (failed or timed out) still points at it. Any filesystem is
+  // dropped at once when every root now reports on another device or is absent (an absent root holds no bytes), and
+  // none could not be read this pass (a label can span devices).
   const unreadable = new Set(measured.missing.filter((m) => m.why !== 'absent').map((m) => m.label));
+  const absent = new Set(measured.missing.filter((m) => m.why === 'absent').map((m) => m.label));
   const reported = new Set(measured.filesystems.flatMap((f) => f.roots));
   let drifted = 0;
   const carried = [...before.values()].filter((f) => !seen.has(f.dev)).map((f) => step(f, f, 'unmeasured'))
     .filter((f) => {
-      if (f.roots.length > 0 && f.roots.every((r) => reported.has(r)) && !f.roots.some((r) => unreadable.has(r))) return false;
+      if (f.roots.length > 0 && f.roots.every((r) => reported.has(r) || absent.has(r)) && !f.roots.some((r) => unreadable.has(r))) return false;
       if (f.level === 'unmeasured' && !f.roots.some((r) => unreadable.has(r))) { drifted += 1; return false; }
       return true;
     });
