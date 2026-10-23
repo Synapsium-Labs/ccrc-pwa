@@ -1380,4 +1380,38 @@ describe('the bounded wait never sleeps past its budget (fix round 2, F9)', () =
     expect(fresh.out).toBe(`${askLine(false, 7)}\n`);
     expect(fresh.sleeps).toEqual([]);
   });
+
+  // The path through the spent budget the first scenario does not reach: the missing name starts RUNNING during the bound, so
+  // the bounded run itself prints WAIT pending (the loop ends on a name that reported, with the budget unspent). These cases
+  // show what the BLOCK does, nothing more: it starts no wait of its own, and a run with no bound sleeps for nothing whatever
+  // it finds. That the coordinator then reports the line and watches nothing, in this attempt, is the skill's prose, owned by
+  // the pins in coordinator-skill.test.ts; no shell test of the verdict alone proves that prose is followed.
+  it('block behaviour: a name that starts running during the bound ends the bounded wait with WAIT pending, and a later run with no bound starts no wait of its own', () => {
+    const running = runs(run('test (server)', null, 'in_progress'), run('test (agent)'), run('test (pwa)'), run('build-pwa'));
+    const first = waitedFor(300, 30, 2, { checkruns: running });
+    expect(first.out, `stderr: ${first.stderr}`).toBe('WAIT pending: test (server)\n');
+    expectWithinBudget(first, 300, 30);
+    expect(first.sleeps, 'the loop ends on the name that reported, with the budget unspent').toHaveLength(2);
+    expect(first.calls.filter((c) => c.endsWith('/check-runs'))).toHaveLength(3);
+    // Had the pending watch then run, the next verdict is a fresh one: the same repository with the name now passing and
+    // another required name that nothing has reported.
+    const added = ok({ ...((measured().protection as Answer).body as Record<string, unknown>),
+      required_status_checks: { strict: false, contexts: [...CLASSIC, 'added/ci'],
+        checks: [...CLASSIC, 'added/ci'].map((c) => ({ context: c, app_id: 15368 })) } });
+    const fresh = verdict(with_(measured, { protection: added, checkruns: classicGreen() })(), { BOUND_S: '0' }, {}, { late: {} });
+    expect(fresh.out, `stderr: ${fresh.stderr}`).toBe('WAIT not-reported: added/ci\n');
+    expect(fresh.sleeps, 'a run with no bound starts no wait of its own').toEqual([]);
+  });
+
+  it('block behaviour: the verdict after a rerun is a run with no bound, so a WAIT it finds is printed with no sleep in it', () => {
+    for (const [name, answer, line] of [
+      ['a rerun still running', runs(run('test (server)', null, 'in_progress'), run('test (agent)'), run('test (pwa)'), run('build-pwa')),
+        'WAIT pending: test (server)'],
+      ['a rerun not yet reported', runs(run('test (agent)'), run('test (pwa)'), run('build-pwa')), 'WAIT not-reported: test (server)'],
+    ] as const) {
+      const r = verdict(with_(measured, { checkruns: answer })(), { BOUND_S: '0' }, {}, { late: {} });
+      expect(r.out, `${name}; stderr: ${r.stderr}`).toBe(`${line}\n`);
+      expect(r.sleeps, name).toEqual([]);
+    }
+  });
 });

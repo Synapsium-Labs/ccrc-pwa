@@ -791,9 +791,11 @@ whole time, which is the only prevention this ordering rule buys.
    wait for them in the foreground —
    `gh pr checks <pr> --required --watch`, again if the call times out —
    never by ending your turn: no mail comes when checks finish. Then run the
-   verdict again. Whichever arm led back to the verdict, a `ROUTE Q` answer
-   does not skip this gate: never enqueue on a verdict without an exit `0`
-   read after it. On `1`, run the verdict again: a `RED` goes to the `RED`
+   verdict again. If this landing attempt's bounded wait is already spent
+   (§5b, **After a bounded wait**), the wait on `8` is not started: report the
+   exit and leave the landing stopped. Whichever arm led back to the verdict, a
+   `ROUTE Q` answer does not skip this gate: never enqueue on a verdict without
+   an exit `0` read after it. On `1`, run the verdict again: a `RED` goes to the `RED`
    rule of §5b, which limits a rerun to the kind it names and never reruns
    unconditionally; a `ROUTE Q` answer is the stop `checks-gate-unread`; any
    other line goes by its bullet in §5b. On any other exit the stop is
@@ -1163,6 +1165,9 @@ decides what this session does, and nothing else does:
   in the foreground, `gh pr checks <pr> --required --watch`, again if the call
   times out while a reported required check is still pending, then run the
   verdict again — never by ending your turn: no mail comes when checks finish.
+  Once this landing attempt's bounded wait is spent, which a `BOUND_S=300` run
+  that ends on this very line spends too (**After a bounded wait**, below), do
+  not wait: report the line to the operator and leave the landing stopped.
 - `WAIT not-reported: <names>` — a required name nothing has reported on the
   head yet, whatever `gh pr checks <pr> --required` exits: it judges only the
   checks that have reported, and its `--watch` returns at once when every
@@ -1177,9 +1182,12 @@ decides what this session does, and nothing else does:
   If the watch was cut off at its timeout, the five minutes start there instead:
   fifteen minutes of waiting budget in all, plus the time the commands
   themselves take, which this shell does not bound: only each Bash call's
-  timeout at 600000 does. The read after the last sleep decides the wait.
+  timeout at 600000 does. The read after the last sleep, made once the budget
+  is spent and so outside it, decides the wait.
   A name it still reads as not reported is the stop `not-reported`. A `ROUTE`
   it prints is not yet landing permission: see **After a bounded wait**, below.
+  Once this landing attempt's bounded wait is spent, none of this is started
+  again: report the line to the operator and leave the landing stopped.
 - `RED <names>` — a required check is red on the head, each name with its
   kind. If it is the PR's own, that is the existing fix-round rule (step 3:
   on route Q disarm first, then a fix round to the owning worker on the
@@ -1187,7 +1195,10 @@ decides what this session does, and nothing else does:
   `[github-actions]`, one `gh run rerun <run id> --failed` and the same wait,
   then the verdict again. One of kind `[app <id>]` or `[status]` that is not
   the PR's own, which no rerun here reaches, or one still red after the one
-  rerun, is the stop `red-unreachable`.
+  rerun, is the stop `red-unreachable`. Once this landing attempt's bounded wait
+  is spent (**After a bounded wait**, below), that one rerun buys no waiting:
+  run the verdict after it with `BOUND_S=0`, and if that line is a `WAIT`,
+  report it and stop, with no watch.
 - `STOP <reason>: <what it read>` — a stop (below).
 - Anything else — no line at all (the run was cut off or did not parse), more
   than one line, or a first word this list does not name — is the stop
@@ -1201,14 +1212,24 @@ while it waits. So a `ROUTE` printed by a run with `BOUND_S` above 0 is not
 landing permission. Discard it, and before you enqueue or merge anything run
 the complete verdict afresh with `BOUND_S=0`, `CR_IGNORE` set as **A requested
 change** says when the operator answered ignore, so that every read is made
-again. A verdict run after an external `--watch` wait is complete in the same
-way: a wait never replaces it. A fresh `STOP` or `RED` goes by its bullet. A
-fresh `WAIT`, `pending` or `not-reported`, a required name newly found on that
-read included, is not permission either: report that line to the operator and
-leave the landing stopped. Do not start a waiting phase again for it: no second
-watch, no second `BOUND_S=300`, and not the first-use instructions of the
-`WAIT` bullets above, whose budget is spent. A later landing attempt is the
-operator's to authorize; never assume it.
+again. A verdict run without `BOUND_S`, after an external `--watch` wait, needs
+no second run: every run of the block makes every read, and its line goes by its
+bullet. On the fresh run after a bounded one, a `STOP` or `RED` goes by its
+bullet. A fresh `WAIT`, `pending` or `not-reported`, a required name newly found
+on that read included, is not permission either: report that line to the
+operator and leave the landing stopped. Do not start a waiting phase again for
+it: no second watch, no second `BOUND_S=300`, and not the first-use instructions
+of the `WAIT` bullets above, whose budget is spent. The budget is spent once
+this landing attempt has run its `BOUND_S=300` verdict, also when that run ends
+early on a name that started running, and it stays spent for the rest of the
+attempt, whichever arm leads back to the verdict (a `WAIT pending` watch, the
+checks gate's exit `8`, the one rerun a `RED` allows): every later run of the
+verdict uses `BOUND_S=0`, and any later `WAIT`, pending or not-reported, the
+`WAIT pending` the bounded run itself prints included, is reported the same way
+and leaves the landing stopped, with no watch and no renewal when another
+required name becomes missing or pending. A later landing attempt is the
+operator's to authorize; never assume it, and no report, rerun, fresh route or
+passage of time is that authorization.
 
 **The approval licence.** `--admin` is licensed on a direct route only, and
 only when all three hold, each read fresh for this landing: an approval the
@@ -1278,13 +1299,14 @@ auto-merge, follow step 3's read-back and disarm rule, then stop
 `github-refused`, and never leave it armed on the operator's ignore.
 
 This session reads again before each enqueue, direct merge and re-enqueue, and
-after each wait, as a complete verdict (**After a bounded wait**, above). It cannot atomically prevent a request submitted after that
-last read or while an already-enqueued PR merges, and nothing here claims
-review enforcement at queue time. If it observes a request on a queued PR, it
-stops that landing attempt, disarms it as step 3 does if it is only armed, asks
-the operator to dequeue it if it is in the queue, asks address or ignore, and never enqueues
-again silently. Watching a queued PR continuously is a server follow-up, not
-this skill's.
+after each wait, as a complete verdict (**After a bounded wait**, above). It
+cannot atomically prevent a request submitted after that last read or while an
+already-enqueued PR merges, and nothing here claims review enforcement at queue
+time. If it observes a request on a queued PR, it stops that landing attempt,
+disarms it as step 3 does if it is only armed, asks the operator to dequeue it
+if it is in the queue, asks address or ignore, and never enqueues again
+silently. Watching a queued PR continuously is a server follow-up, not this
+skill's.
 
 **A stop.** A stop leaves the run where it is (at `merging` or
 `awaiting-review`), enqueues nothing, merges nothing and changes nothing. Say
