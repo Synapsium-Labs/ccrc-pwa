@@ -8510,3 +8510,26 @@ describe('codex bridge Stage 1 Task 5: the auth library owns its side-file names
     expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/ccgpt-auth.py']);
   });
 });
+
+// CODEX BRIDGE STAGE 2, TASK 1: the upstream error codes (the seven sets) are module constants in
+// ccd/codexbridge/errors.py, and every other reader imports errors.ALL_CODES rather than spell one. APPENDED, for the
+// reason the blocks above state: session-hook.test.ts's citation audit cites this file by line. The codes are read from
+// the module itself, so this row holds no second copy of them. ccd/ccgpt-usage.py and ccd/ccgpt-auth.py are left out:
+// they classify other endpoints.
+describe('codex bridge Stage 2 Task 1: the bridge owns the upstream error codes', () => {
+  it('the upstream error codes are spelled once, in codexbridge/errors.py', () => {
+    const py = spawnSync('python3', ['-I', '-c', [
+      'import sys', 'sys.dont_write_bytecode = True', 'sys.path.insert(0, sys.argv[1])',
+      'from codexbridge import errors', 'print("\\n".join(sorted(errors.ALL_CODES)))',
+    ].join('\n'), path.join(ccrcRoot, 'ccd')], { encoding: 'utf8' });
+    expect(py.status, py.stderr).toBe(0);
+    const codes = py.stdout.split('\n').filter(Boolean);
+    expect(codes.length).toBeGreaterThanOrEqual(16);
+    const r = spawnSync('git', ['-C', ccrcRoot, 'grep', '-l', '-w', ...codes.flatMap((c) => ['-e', c]), '--',
+      'ccd', 'shared', 'deploy', 'server/src', ':!ccd/ccgpt-usage.py', ':!ccd/ccgpt-auth.py'], { encoding: 'utf8' });
+    // git grep answers 1 for "no match" and above 1 for a failure: neither is the answer this row expects, and a
+    // failure must never read as an empty list.
+    if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/codexbridge/errors.py']);
+  });
+});
