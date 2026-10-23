@@ -68,13 +68,12 @@ const LANES: Lane[] = [
     spy: (r, hold) => { const s = stub(r, 'childReclaimGatherGenerations', hold, new Map()); return () => s.mock.calls.length; } },
   { key: 'collect', clock: 'mono', run: (r) => r.w.sweepTempRootCollect([], []),
     spy: (r, hold) => { const s = stub(r, 'collectPass', hold, undefined); return () => s.mock.calls.length; } },
-  { key: 'archivedExpiry', clock: 'wall', run: (r) => r.w.sweepArchivedExpiry([], []),
+  { key: 'archivedExpiry', clock: 'mono', run: (r) => r.w.sweepArchivedExpiry([], []),
     spy: (r, hold) => { const s = stub(r, 'archivedExpiryPass', hold, undefined); return () => s.mock.calls.length; } },
-  { key: 'deadCoordinator', clock: 'wall', run: (r) => r.w.sweepDeadCoordinators([], []),
+  { key: 'deadCoordinator', clock: 'mono', run: (r) => r.w.sweepDeadCoordinators([], []),
     spy: (r, hold) => { const s = stub(r, 'deadCoordinatorPass', hold, undefined); return () => s.mock.calls.length; } },
 ];
 const MONO = LANES.filter((l) => l.clock === 'mono');
-const WALL = LANES.filter((l) => l.clock === 'wall');
 
 describe.each(LANES)('the $key lane: the throttle', (lane) => {
   it('runs on the first call, skips inside its cadence, runs once the cadence has elapsed', async () => {
@@ -108,7 +107,7 @@ describe.each(LANES)('the $key lane: the throttle', (lane) => {
 });
 
 describe('the wall clock stepped by an hour between two calls', () => {
-  it.each(MONO)('$key (monotonic today): neither a step back nor a step forward moves it', async (lane) => {
+  it.each(MONO)('$key (monotonic): neither a step back nor a step forward moves it', async (lane) => {
     const r = rig(); const n = lane.spy(r);
     wall(NOW);
     await lane.run(r);
@@ -123,19 +122,21 @@ describe('the wall clock stepped by an hour between two calls', () => {
     expect(n(), 'the monotonic cadence did not run the lane').toBe(2);
   });
 
-  // The BEFORE rows of the behaviour commit (spec K11, §5.1 rule 1b): these two lanes throttle on `Date.now()` today, so a
-  // wall clock stepped back holds the lane for up to the step, and one stepped forward runs it at once.
-  it.each(WALL)('$key (wall today): a step back holds the lane, a step forward runs it at once', async (lane) => {
+  // The AFTER rows of the behaviour commit (spec K11, §5.1 rule 1b), the two rows that changed. BEFORE, these lanes throttled
+  // on `Date.now()`: a wall clock stepped back held the lane for up to the step (a whole cadence on the monotonic clock still
+  // did not run it), and one stepped forward ran it at once. AFTER, the cadence is real time: the step back runs the lane at its
+  // cadence, and the step forward does not run it early.
+  it.each(MONO.filter((l) => l.key === 'archivedExpiry' || l.key === 'deadCoordinator'))('$key: after the move, a step back runs the lane at its cadence and a step forward never runs it early', async (lane) => {
     const r = rig(); const n = lane.spy(r);
     wall(NOW);
     await lane.run(r);
     wall(NOW - HOUR);
     r.t.mono += CAD;
     await lane.run(r);
-    expect(n(), 'BEFORE: a wall step back, a whole cadence on the monotonic clock, still holds the lane').toBe(1);
+    expect(n(), 'AFTER: a wall step back, a whole cadence on the monotonic clock, runs the lane').toBe(2);
     wall(NOW + HOUR);
     await lane.run(r);
-    expect(n(), 'BEFORE: a wall step forward runs the lane at once').toBe(2);
+    expect(n(), 'AFTER: a wall step forward runs the lane early').toBe(2);
   });
 });
 
