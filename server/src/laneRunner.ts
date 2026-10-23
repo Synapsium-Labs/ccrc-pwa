@@ -61,8 +61,13 @@ export class LaneRunner {
   kick(name: string): void { this.stateOf(name).stamp = this.neverRun(this.rowOf(name)); }
 
   /** The post-gather re-stamp on the decision clock: a gather slower than the cadence throttles the next beat from
-   *  the decision, not from the start. The lane's own pass counter stays the lane's. */
-  restamp(name: string): void { this.stamp(name); }
+   *  the decision, not from the start. The lane's own pass counter stays the lane's. `at` is the lane's own reading of
+   *  the row's clock, taken once for its decisions (child reclaim and the collector hand theirs in), so the stamp is
+   *  the very reading the pass decided on; without it the runner reads the clock again. */
+  restamp(name: string, at?: number): void {
+    if (at === undefined) this.stamp(name);
+    else this.stateOf(name).stamp = at;
+  }
 
   /** The run in flight, or null (the dead-coordinator seal reads it where it read a guard and a promise). */
   inFlight(name: string): Promise<unknown> | null { return this.stateOf(name).flight?.promise ?? null; }
