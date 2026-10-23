@@ -250,7 +250,12 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   build's tarball matches the newest contained release's entry for entry (`release-main.sh compare`; only
   `build.json`'s `sha`, `builtAt` and `version` and MANIFEST's `build.json` line are set aside) cuts none, so
   `stable` promotes a release's own commit, never such an untagged head; a hand-pushed `vX.Y.0` tag for a minor rides
-  `release.yml`; both attest the tarball keylessly and publish the bundle beside it, each as two jobs: a `build` job with a read-only token and no persisted checkout credential runs every install and build, and a `publish` job that installs nothing and never opens the tarball re-derives the tag, checks the handed-over tarball's digest, and alone holds the write token and the signing identity, which `release-job-boundary.test.ts` holds). A prerelease is the `dev` channel; **`stable` is a promotion, never a rebuild**: a
+  `release.yml`; both attest the tarball keylessly and publish the bundle beside it, each as two jobs: a `build` job
+  with a read-only token and no persisted checkout credential runs every install and build, and a `publish` job that
+  installs nothing and never opens the tarball checks the handed-over tarball's digest — re-deriving the tag in
+  `release-main.yml`, taking its trigger ref in `release.yml` — and alone holds the write token and the signing
+  identity, which `release-job-boundary.test.ts` holds). A prerelease is the `dev` channel; **`stable` is a promotion,
+  never a rebuild**: a
   fast-forward push of a released commit to the `stable` branch runs `release-stable.yml` → `deploy/release-stable.sh`
   (only once the commit has a green `full-suite`, above), which flips the existing release's flag and makes it
   latest (design `2026-09-20-centralised-update-management-design.md` §4). Demotion is `gh release edit <tag>

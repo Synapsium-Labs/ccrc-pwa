@@ -166,7 +166,7 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 - `settings-screen.test.tsx`: P1 at `a5498cb54`.
 - Review 846's rows (X13 to X15, Y12, Y13, V1 and V2) at `0317c47e0`, in a scratch clone, each vitest call under `timeout -k 10 600` and a cap on new processes. X2 and X7 were re-measured there against the reshaped C30 and C35: each reds both cases (2 of 90).
 - Rows were re-measured where a later round changed their targets or their rows: X2 and X7 at `0317c47e0` (2 of 90 each), and X2, X7, X15 and X15rc in wave 26 Task 1 at `c6e59fc5b` (counts in their rows). Every other row's count is the case count of its own measurement, named in its group above.
-- Wave 26 then changed three targets after their measurement. It removed the attest step's `if:`, the whole target of W1 and A1; their successors are B1 and B2 in the wave-26 plan's Mutation table, measured there at `aa4d47280`. It reshaped `set_output`, M16's target, which was re-measured in wave 26 Task 3 at `54d8dda61` (count in the wave-26 table).
+- Wave 26 then changed the targets of three rows after their measurement. It removed the attest step's `if:`, the whole target of W1 and A1; their successors are B1 and B2 in the wave-26 plan's Mutation table, measured there at `aa4d47280`. It reshaped `set_output`, M16's target, which was re-measured in wave 26 Task 3 at `54d8dda61` (count in the wave-26 table).
 
 **The count.** This table has 83 rows, and none survived: 75 after fix round 3, and review 846's seven.
 - Review 854 added one more, X15rc, measured in wave 26 Task 1 at `c6e59fc5b`.
