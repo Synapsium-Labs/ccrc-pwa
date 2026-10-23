@@ -130,18 +130,21 @@ export function codexRoster(
 
 // ── what `_inst_bins` would have placed ──────────────────────────────────
 
-/** The GPT lane's four executables, in the order `_inst_bins`' GPT-lane gate
+/** The GPT lane's five executables, in the order `_inst_bins`' GPT-lane gate
  *  places them and its closing line names them (its `lane_bins=` literal in
  *  `ccd/ccrc`). ONE test-side spelling for the install and uninstall suites,
  *  which typed this list about ten times (final review F4); the product's own
  *  census is `install-census.test.ts`, which reads the gate itself.
  *  `ccrc-install.test.ts` pins this constant against that literal, so a
- *  fifth name, or a new order, reds there before any copy can drift. */
-export const GPT_LANE_BINS = ['ccgpt-proxy.py', 'ccgpt-usage.py', 'ccgpt-runtime', 'ccrc-codex'] as const;
+ *  sixth name, or a new order, reds there before any copy can drift. The auth
+ *  library `ccgpt-auth.py` is first (codex bridge Stage 1, Task 5): the files
+ *  after it will read their credential through it. */
+export const GPT_LANE_BINS = ['ccgpt-auth.py', 'ccgpt-proxy.py', 'ccgpt-usage.py', 'ccgpt-runtime', 'ccrc-codex'] as const;
 
-/** COPIES of `ccd/ccgpt-runtime` and `ccd/ccgpt-proxy.py` at
- *  `<home>/.local/bin`, 0755 — copies, not links, because a staleness case
- *  edits the placed shim and must never edit the repository's. */
+/** COPIES of `ccd/ccgpt-runtime`, `ccd/ccgpt-proxy.py` and, beside the shim,
+ *  the auth library `ccd/ccgpt-auth.py` at `<home>/.local/bin`, 0755 —
+ *  copies, not links, because a staleness case edits the placed shim and must
+ *  never edit the repository's. */
 export function plantCodexBins(home: string): { runtimeCli: string; shimFile: string } {
   const bin = harnessBin(home);
   const runtimeCli = path.join(bin, 'ccgpt-runtime');
@@ -149,6 +152,7 @@ export function plantCodexBins(home: string): { runtimeCli: string; shimFile: st
   for (const [src, dst] of [
     [path.join(REPO, 'ccd', 'ccgpt-runtime'), runtimeCli],
     [path.join(REPO, 'ccd', 'ccgpt-proxy.py'), shimFile],
+    [path.join(REPO, 'ccd', 'ccgpt-auth.py'), path.join(bin, 'ccgpt-auth.py')],
   ] as const) {
     if (!fs.existsSync(src)) throw new Error(`plantCodexBins: ${src} does not exist`);
     fs.copyFileSync(src, dst);
