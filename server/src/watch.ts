@@ -181,6 +181,7 @@ import type { CoordRoutesHandle } from './coord/routes.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
+import { changeLatch } from './changeLatch.js';
 import { SERVER_CAPS_WRITE_MS, writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { runDispatch, type DispatchRunResult } from './update/converge.js';
@@ -1040,8 +1041,8 @@ export class FleetWatcher {
   private lastServerCapsAt = 0;
   private serverCapsRun: Promise<WriteServerCapsResult | null> | null = null;
   /** The last server-caps write failure's stable key (`unwritable:<errno>`), so an unwritable ~/.ccrc warns once
-   *  per change of reason, not once a minute (`lastProjectionWhy`'s idiom); null after a success. */
-  private lastServerCapsWhy: string | null = null;
+   *  per change of reason, not once a minute (`changeLatch`'s idiom); null after a success. */
+  private readonly serverCapsWhy = changeLatch<string | null>();
   /** C2 (final fix wave): the last inventory-sweep REJECTION message warned
    *  about, so a standing cause (a locked or corrupt coord.db held past one
    *  sweep) warns once, not every tick/ready — reset to null the moment a
@@ -1715,10 +1716,9 @@ export class FleetWatcher {
     if (role !== 'server' && role !== 'both') return Promise.resolve(null);
     const run = writeServerCaps(ccrcDir, SERVER_CAPS, Math.floor(Date.now() / 1000)).then((r) => {
       const key = r.ok ? null : `${r.why}:${r.code ?? 'none'}`;
-      if (!r.ok && key !== this.lastServerCapsWhy) {
+      if (this.serverCapsWhy.changed(key) && !r.ok) {
         console.warn(`ccrc-server: could not write ~/.ccrc/server-caps (the fleet hook's gated arms stay off until it is written): ${r.detail}`);
       }
-      this.lastServerCapsWhy = key;
       return r;
     }).finally(() => { this.serverCapsRun = null; });
     this.serverCapsRun = run;
