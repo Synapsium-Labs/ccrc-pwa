@@ -1067,11 +1067,11 @@ export class FleetWatcher {
    *  own gap). Warned once when a tuple first appears, silent while it
    *  repeats, and warned again if it clears and later recurs. */
   private lastInventoryIssues: ReadonlySet<string> = new Set();
-  /** Task 12: the last projection-warning KEY (`projectionWarn`'s `key`, never its `message`), so a box
+  /** Task 12: the latch on the projection-warning KEY (`projectionWarn`'s `key`, never its `message`), so a box
    *  whose ~/.ccrc cannot take the file warns once per change of reason, not once a minute. */
-  private lastProjectionWhy: string | null = null;
+  private readonly projectionWhy = changeLatch<string | null>();
   /** Plan W3 Task 3: the last reason a release-push decision failed, so a coord.db that cannot be read
-   *  warns once per change of reason on the inventory lane's minute beat (`lastProjectionWhy`'s idiom). */
+   *  warns once per change of reason on the inventory lane's minute beat (`changeLatch`'s idiom). */
   private lastReleasePushFailure: string | null = null;
   /** Plan W3 Task 3 (D-3314): true once THIS process's sweep has actually REWRITTEN the rows the push decides
    *  on — never merely "a sweep finished" (W5 review 161, F-H: a sweep can finish with the server row
@@ -1988,10 +1988,9 @@ export class FleetWatcher {
       };
     }
     const key = warn?.key ?? null;
-    if (warn !== null && key !== this.lastProjectionWhy) {
+    if (this.projectionWhy.changed(key) && warn !== null) {
       console.warn(`ccrc-server: update: this server's own ~/.ccrc/update-intent was not written (${warn.message})`);
     }
-    this.lastProjectionWhy = key;
     // Plan W3 Task 3: the inventory run MEASURES what the nodes run, so it is where a release every node
     // already runs is marked instead of pushed (D-3294), where the first release after a
     // fresh install is decided at all (D-3300), and what opens the catalogue
