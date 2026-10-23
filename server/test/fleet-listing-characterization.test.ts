@@ -11,7 +11,7 @@ import { LATER, MONO_LATER, callerOf, countBy, primed, rig } from './fleetListin
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('a steady tick, every throttle elapsed: the registry listings by caller (the base table)', () => {
-  it('lists once for the tick, once for the limits read in its assembly, once each for tasks, names, PR, divergences and asks, and twice for the mail lane', async () => {
+  it('the listings by caller: the tick, the limits read in its assembly, and the lanes that still list for themselves', async () => {
     const r = rig();
     r.row('demo-a', 'demo');
     const m = r.coord.insertMail({ fromId: 'demo-b', fromUuid: 'u-b', toId: 'demo-a', runId: null, kind: 'status', subject: 's', body: 'b', artifacts: [] });
@@ -21,12 +21,13 @@ describe('a steady tick, every throttle elapsed: the registry listings by caller
     await r.w.tick();
     await r.settle();
     const by = countBy(r.listings);
+    const n = (c: string): number => by[c] ?? 0;
     // The dialog detector and the hook-state lane take the tick's own `records` and `names`; they never list. `limits` is
     // `readLimits`' marker listing inside `assembleFleet` (the plan counted eight by static reading and missed it).
-    expect({ tick: by.tick, limits: by.readLimits, tasks: by.tasksPass, names: by.namesPass, pr: by.prPass, divergences: by.divergencesPass, ask: by.askPass })
-      .toEqual({ tick: 1, limits: 1, tasks: 1, names: 1, pr: 1, divergences: 1, ask: 1 });
-    expect(by.mailPass, 'the mail lane lists for its switch read and again for its recipients').toBe(2);
-    expect(r.listings.length, 'the steady tick lists nine times in all').toBe(9);
+    expect({ tick: n('tick'), limits: n('readLimits'), tasks: n('tasksPass'), names: n('namesPass'), pr: n('prPass'),
+      divergences: n('divergencesPass'), ask: n('askPass'), mail: n('mailPass') })
+      .toEqual({ tick: 1, limits: 1, tasks: 0, names: 1, pr: 1, divergences: 1, ask: 1, mail: 2 });
+    expect(r.listings.length, 'the steady tick lists eight times in all').toBe(8);
   });
 });
 

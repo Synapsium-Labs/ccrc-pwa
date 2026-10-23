@@ -145,7 +145,7 @@ const EXPECTED_SITES: readonly string[] = [
   'watch.ts | mailPass | readRegistryMeasured | holds',
   'watch.ts | namesPass | readRegistry | omits',
   'watch.ts | prPass | readRegistry | omits',
-  'watch.ts | tasksPass | readRegistryMeasured | omits',
+  'watch.ts | fleetFor | readRegistryMeasured | tests-only',
   'watch.ts | tick | readRegistryMeasured | omits',
 ];
 
@@ -260,6 +260,18 @@ describe('tick hands its records to the lanes that would otherwise read the regi
     const body = tickBodyOf(tickCode(tickSource()), TICK_HEAD);
     expect(body, 'tick no longer hands detectDialogs its records: that lane would read the registry itself')
       .toMatch(/\bthis\.detectDialogs\([^)]*\brecords\s*\)/);
+  });
+});
+
+// D-5864 (ARCH-51 #786): the lanes that choose their rows from the registry are handed the tick's one model, and each
+// lane's own read (`fleetFor`, tagged `tests-only`) is reached by tests alone ONLY while `tick()` hands it over. A tick
+// that dropped the argument would turn that read into a second production listing without the census above noticing.
+describe('tick hands its model to the lanes that would otherwise list the registry again (D-5864)', () => {
+  const body = (): string => tickBodyOf(tickCode(tickSource()), TICK_HEAD);
+
+  it('tick() passes registryRead to sweepTasks(', () => {
+    expect(body(), 'tick no longer hands the task lane its model: that lane would list the registry itself')
+      .toMatch(/\bthis\.sweepTasks\(\s*registryRead\s*\)/);
   });
 });
 
