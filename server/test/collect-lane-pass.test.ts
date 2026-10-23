@@ -105,7 +105,8 @@ describe('one gather, one pass at a time, a monotonic throttle (spec §5.10)', (
     expect(handed('const [a, switches] = g;\nif (switches.paused) {\ncollectRetireLatch(d, switches, e);\nother(switches);'),
       'CONTROL: a second reader is seen').toHaveLength(3);
     expect(handed(pass), 'the pass hands its listing to collectRetireLatch( alone').toEqual([
-      'const [listings, switches] = gathered;',
+      // D-6627: the loose census is the gather's third read, destructured beside the other two.
+      'const [listings, switches, loose] = gathered;',
       expect.stringMatching(/^this\.collectLatchNote\(collectRetireLatch\([^;]*\bswitches\b[^;]*\)\);$/),
     ]);
   });

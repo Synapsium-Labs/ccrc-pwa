@@ -37,6 +37,10 @@ export const ORPHAN_TREE_LIVE_MARKER = 'orphan-tree-live';
 /** `$REG/orphan-tree-rescue-live`: arms the lane's rescue arm, for a tree whose HEAD is on no remote; it means nothing
  *  unless `orphan-tree-live` also stands. */
 export const ORPHAN_TREE_RESCUE_LIVE_MARKER = 'orphan-tree-rescue-live';
+/** `$REG/collect-loose-live`: arms the collector's LOOSE arm (fleet disk retention spec 2026-10-23 section 2.4, D-6627):
+ *  a loose `~/.cc-tmp` entry is removed only while it stands AND the lane itself is effectively live. No writer in the
+ *  tree. */
+export const COLLECT_LOOSE_LIVE_MARKER = 'collect-loose-live';
 /** `$REG/dead-coordinator-lane-live`: arms the dead-coordinator lane's act. */
 export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
 /** `$REG/idle-compact-nudge-disabled`: the idle-compaction nudge's kill switch. */
@@ -132,6 +136,11 @@ export const SWITCHES = {
     storage: { marker: ORPHAN_TREE_RESCUE_LIVE_MARKER }, default: 'absent: a tree with commits on no remote is left',
     owner: 'C4', meaning: 'With the orphan lane live, a tree whose HEAD is on no remote is pinned into the attic and then removed.',
     writer: 'hand-only',
+  },
+  [COLLECT_LOOSE_LIVE_MARKER]: {
+    storage: { marker: COLLECT_LOOSE_LIVE_MARKER }, default: 'absent: shadow, the lane records what loose entries it would remove',
+    owner: 'C4', meaning: 'The collector\'s loose arm acts: an idle entry under the fleet temp directory that no session '
+      + 'witnessed is removed, once the lane itself is live.', writer: 'hand-only',
   },
   [DEAD_COORDINATOR_LANE_LIVE_MARKER]: {
     storage: { marker: DEAD_COORDINATOR_LANE_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would end',
