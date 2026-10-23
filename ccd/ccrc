@@ -19304,26 +19304,26 @@ CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UP
 # Linux no process that acts on any OTHER setting receives (its one consumer is ccrc.service; the deadline's `min` and
 # `max` read it on purpose, naming it as the file, because the server's deadline can come from it, D-6591, D-6602); on
 # macOS the launchd job sources it, but a console-driven update never runs there (`_upd_detach_os_check`). The model
-# is asked only when ccrc.env's bytes hold the key as a whole token, in a comment too: a file that never names the key
-# cannot set it, so it reads <default> whatever the model or systemd makes of the rest of it but a NUL byte, which the
-# scan refuses first (the coordinator's rulings on reviews 839 and 847). That holds on macOS too (D-6587): a ccrc the
-# launchd job did not start never receives the job's bash reading of the file, and one it did start has that reading as
-# its environment, which wins, so for a ccrc read a file that never spells the key cannot set it on either platform, and
-# asking the model regardless would let one knob-less line it rejects (`CCRC_PROJECTS_ROOT=~/code`, a CRLF file) refuse
-# every setting at once. One exception, wave 23's ratified departure, kept for its one knob: on macOS the model is asked
-# for CCRC_BACKUP_DATA_KEEP whatever the scan says, because the job's bash can build that name without spelling it (a
-# backslash-newline inside it, a quoted `declare`), so there a file the model cannot decide still refuses it. The scan
-# before the model refuses what the model does not: ONE positive rule, over bytes (`LC_ALL=C`, as D-3833 reads
-# ccrc.env, so the box's locale cannot change an answer), on each line with its leading spaces, tabs and CRs gone (the
-# set `_box_env_value` trims): a comment (`#` or `;`, the set `_box_env_unit_whole` skips) is skipped; so is another
-# key's line, `[export ]NAME=` with NAME an identifier other than the key (as D-3823 reads `export OLD_KEY=…`); a line
-# that begins `<KEY>=` is the one the model reads; any other line that names the key as a whole token (no letter, digit
-# or `_` on either side) refuses, `export <KEY>=` included. The same scan says whether any line names it (its exit 4
-# when none does). A line holding a CR past its lead is never skipped, since systemd ends a line at a bare CR and would
-# read what follows as a line of its own (fix round 2's review); a file holding a NUL byte, which bash's `read` drops and
-# systemd cannot read at all (`_box_env_has_nul`, D-3832), and a scan that answers anything but 0, 1 or 4 (an awk that
-# cannot run, or is killed) could not be scanned. Only an absent file, one that never names the key, one the model reads
-# as not naming it, or an empty value there (as with an empty environment variable) reads <default>.
+# is asked only when a line of ccrc.env but a comment holds the key as a whole token (D-6604): a file that never names
+# the key cannot set it, so it reads <default> whatever the model or systemd makes of the rest of it but a NUL byte,
+# which the scan refuses first (the coordinator's rulings on reviews 839 and 847). That holds on macOS too (D-6587): a
+# ccrc the launchd job did not start never receives the job's bash reading of the file, and one it did start has that
+# reading as its environment, which wins, so for a ccrc read a file that never spells the key cannot set it on either
+# platform, and asking the model regardless would let one knob-less line it rejects (`CCRC_PROJECTS_ROOT=~/code`, a CRLF
+# file) refuse every setting at once. One exception, wave 23's ratified departure, kept for its one knob: on macOS the
+# model is asked for CCRC_BACKUP_DATA_KEEP whatever the scan says, because the job's bash can build that name without
+# spelling it (a backslash-newline inside it, a quoted `declare`), so there a file the model cannot decide still refuses
+# it. The scan before the model refuses what the model does not: ONE positive rule, over bytes (`LC_ALL=C`, as D-3833
+# reads ccrc.env, so the box's locale cannot change an answer), on each line with its leading spaces, tabs and CRs gone
+# (the set `_box_env_value` trims): a comment (`#` or `;`, the set `_box_env_unit_whole` skips) is skipped; so is
+# another key's line, `[export ]NAME=` with NAME an identifier other than the key (as D-3823 reads `export OLD_KEY=…`);
+# a line that begins `<KEY>=` is the one the model reads; any other line that names the key as a whole token (no letter,
+# digit or `_` on either side) refuses, `export <KEY>=` included. The same scan says whether a non-comment line names it
+# (its exit 4 when none does). A line holding a CR past its lead is never skipped, since systemd ends a line at a bare
+# CR and would read what follows as a line of its own (fix round 2's review); a file holding a NUL byte, which bash's
+# `read` drops and systemd cannot read at all (`_box_env_has_nul`, D-3832), and a scan that answers anything but 0, 1 or
+# 4 (an awk that cannot run, or is killed) could not be scanned. Only an absent file, one that never names the key, one
+# the model reads as not naming it, or an empty value there (like an empty environment value) reads <default>.
 _ccrc_knob() {   # <KEY> <default> [file]
   local key="$1" f="$BOX_ENV_FILE" g=0 why=""
   KNOB=""; KNOB_FROM=""; KNOB_WHY=""
@@ -19331,7 +19331,7 @@ _ccrc_knob() {   # <KEY> <default> [file]
   [ "${3:-}" = file ] || KNOB="${!key:-}"
   if [ -n "$KNOB" ]; then KNOB_FROM=environment
   elif [ -e "$f" ] || [ -L "$f" ]; then
-    if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f" 2>/dev/null; then g=2; else LC_ALL=C awk -v k="$key" '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t); w = (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]"); n += w } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } w { f = 1; exit } END { exit (f ? 0 : (n ? 1 : 4)) }' "$f" 2>/dev/null || g=$?; fi; else g=3; fi
+    if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f" 2>/dev/null; then g=2; else LC_ALL=C awk -v k="$key" '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t); w = (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]"); n += w && (!/^[#;]/ || /\r./) } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } w { f = 1; exit } END { exit (f ? 0 : (n ? 1 : 4)) }' "$f" 2>/dev/null || g=$?; fi; else g=3; fi
     case "$g" in 0) why="$f names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 1|4) ;; 3) why="$f is there but cannot be read" ;; *) why="$f could not be scanned" ;; esac
     # The named file alone: a path that cannot exist stands in for the exposure file, which no process that acts on any other
     # setting receives (review 839; the deadline's `min` and `max` name it as the file instead, D-6602). Never the empty

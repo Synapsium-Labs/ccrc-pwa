@@ -14325,6 +14325,8 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       // Only a whole token counts: an `_OLD` or `OLD_` key beside a value the model refuses still reads 3.
       ['an _OLD suffix key beside a non-ASCII value', bytes(`${K}_OLD=9999\nNOTE=café\n`), 3],
       ['an OLD_ prefix key beside a non-ASCII value', bytes(`OLD_${K}=9999\nNOTE=café\n`), 3],
+      // A comment line (no CR inside it) names no setting (ruling 16, D-6604), so the model is not asked and its refusal of NOTE never reaches the knob.
+      ['a comment naming the knob above a non-ASCII value', bytes(`# ${K} is tuned below\nNOTE=café\n`), 3],
     ];
     const UNTAKEN = `rc 1 keep  why ${K} cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take (it reads only a plain KEY=value line)\n`;
     /** What the unit model cannot decide refuses with its own clause, naming the file (review 817, F1 and F2): each with that clause's opening. */
@@ -14338,8 +14340,6 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       // systemd skips a file whose values are not valid UTF-8, which the model does not check, so it decides neither 9 nor the default.
       ['a lone UTF-8 lead byte ending another key\'s value above the knob', bytes('FOO=', [0xc3], `\n${K}=9\n`), 'line 1 has a non-ASCII byte in a NAME=value line'],
       ['a CR lead', bytes(`\r${K}=4\n`), 'line 1 has a carriage return inside a line'],
-      // A token in a comment counts as naming the knob (review 839), so the model is asked and its refusal stands.
-      ['a comment naming the knob above a non-ASCII value', bytes(`# ${K} is tuned below\nNOTE=café\n`), 'line 2 has a non-ASCII byte in a NAME=value line'],
     ];
     /** `_bak_data_keep` over a ccrc.env holding `text`, the whole shell under LC_ALL=`locale`, on the Linux arm of the unit model
      *  (`_box_unit_env`; a macOS box models its launchd job's bash, `_box_unit_env_shell`, which refuses a CR anywhere). */
@@ -14856,7 +14856,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       const home = boxWith('ccrc-fx-w24-r5-', 'CCRC_ROLE=server\n');
       writeFileSync(join(home, '.ccrc', 'exposure.env'), 'CCRC_BACKUP_KEEP=2\n');
       expect(knob(home, `_ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`)).toBe('rc 0 val 10 from default why \n');
-      // A comment naming the key makes the scan ask the unit model, which still reads ccrc.env alone.
+      // A comment naming the key names nothing (ruling 16, D-6604), so the model is not asked and the exposure file stays unread.
       writeFileSync(envFile(home), 'CCRC_ROLE=server\n# CCRC_BACKUP_KEEP is set elsewhere\n');
       expect(knob(home, `_ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`), 'the model asked').toBe('rc 0 val 10 from default why \n');
     });
@@ -14930,6 +14930,37 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(r.stdout).toBe('no awk\nrc 1 val  from  why CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env could not be scanned\n');
       expect(r.stderr, 'the reader printed').toBe('');
       expect(r.status).toBe(0);
+    });
+
+    // ── Ruling 16 (D-6604): a comment line names no setting, so the shipped example's `# KEY=` lines (D-6597) plus one
+    // unrelated line the platform's model cannot decide leave every setting at its default, as a knob-less file does (R8).
+    // The example is read at test time, never pasted; each platform model gets an odd line it refuses.
+    const EXAMPLE = (): Buffer => readFileSync(join(REPO, 'deploy', 'ccrc.env.example'));
+    const ODD = { linux: 'CCRC_VAPID_SUBJECT=mailto:josé@example.com\n', darwin: 'CCRC_PROJECTS_ROOT=~/code\n' } as const;
+    const exampleWith = (os: keyof typeof ODD, ...lines: string[]): Buffer => Buffer.concat([EXAMPLE(), ...[...lines, ODD[os]].map((l) => Buffer.from(l, 'utf8'))]);
+    const refused = (k: string): string => `rc 1 val  from  why ${k} cannot be measured: ~/.ccrc/ccrc.env `;
+
+    it.each(['linux', 'darwin'] as const)('W24-R12: a copy of ccrc.env.example plus one line the %s model cannot decide reads the default for every setting it only mentions in a comment (ruling 16, D-6604)', (os) => {
+      const home = boxWith('ccrc-fx-w24-r12-', exampleWith(os));
+      for (const k of SETTINGS) {
+        const got = knob(home, `CCD_OS=${os}; _ccrc_knob ${k} 7; ${ECHO}`);
+        // Wave 23's departure (ruling 10): on macOS the data keep asks the model whatever the scan says, so the odd line refuses it.
+        if (os === 'darwin' && k === 'CCRC_BACKUP_DATA_KEEP') expect(got.startsWith(refused(k)), got).toBe(true);
+        else expect(got, k).toBe('rc 0 val 7 from default why \n');
+      }
+    });
+
+    it.each(['linux', 'darwin'] as const)('W24-R13: on %s a comment line with a CR inside it still names the setting after the CR, which systemd reads as a line of its own (ruling 16, D-6604)', (os) => {
+      const home = boxWith('ccrc-fx-w24-r13-', exampleWith(os, '# note\rCCRC_VERSIONS_KEEP=1\n'));
+      const cr = knob(home, `CCD_OS=${os}; _ccrc_knob CCRC_VERSIONS_KEEP 7; ${ECHO}`);
+      expect(cr.startsWith(refused('CCRC_VERSIONS_KEEP')), cr).toBe(true);
+    });
+
+    it.each(['linux', 'darwin'] as const)('W24-R14: on %s a real assignment beside the odd line still refuses its key, while a key the file only comments reads the default (ruling 16, D-6604)', (os) => {
+      const home = boxWith('ccrc-fx-w24-r14-', exampleWith(os, 'CCRC_VERSIONS_KEEP=2\n'));
+      const set = knob(home, `CCD_OS=${os}; _ccrc_knob CCRC_VERSIONS_KEEP 7; ${ECHO}`);
+      expect(set.startsWith(refused('CCRC_VERSIONS_KEEP')), set).toBe(true);
+      expect(knob(home, `CCD_OS=${os}; _ccrc_knob CCRC_BACKUP_KEEP 7; ${ECHO}`), 'a key the file only comments').toBe('rc 0 val 7 from default why \n');
     });
 
     // ── Task 3 (D-6591, D-6592, D-6593, D-6601, D-6602, D-6603): one deadline reading on both sides, the keep-set bounded by it,

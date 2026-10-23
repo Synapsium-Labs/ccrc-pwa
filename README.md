@@ -1233,10 +1233,10 @@ count prune still runs (D-6590). A `ccrc.env` that is there but cannot be read a
 tabs, a line is skipped when it is a comment (`#` or `;`) or another key's `[export ]NAME=`, read when it begins
 `CCRC_BACKUP_DATA_KEEP=`, its value taken as systemd's `EnvironmentFile=` takes it (spaces and tabs around it trimmed), and
 refused when it names the knob as a whole word any other way, `export CCRC_BACKUP_DATA_KEEP=` included; a line holding a CR
-past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file that names the knob anywhere, a comment
-included, but that the box's model of systemd cannot decide (a value a quote or a backslash carries across lines, a CR that leads
+past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file that names the knob on a line that could
+assign it (a comment line counts only when a CR sits inside it, D-6604), but that the box's model of systemd cannot decide (a value a quote or a backslash carries across lines, a CR that leads
 a line or sits inside one, a non-ASCII byte in an assignment) refuses too: unmeasured is not unset (D-6365). On Linux a `ccrc.env`
-that never names the knob reads as the default, whatever else it holds but a NUL byte, since systemd cannot set it from that file; on macOS,
+that never names the knob outside such a comment line reads as the default, whatever else it holds but a NUL byte, since systemd cannot set it from that file; on macOS,
 whose launchd job sources the file with bash, one the model cannot decide still refuses (this knob alone; every other setting reads the Linux rule there). A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
 a dir is read on presence and size (a `coord.db` with no manifest is also opened for its header and tables), so damage of the
 same length there is not seen (D-6350, D-6364). On an update, `thin` also works to a time budget inside the console's deadline:
