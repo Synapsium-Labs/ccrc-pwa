@@ -34,6 +34,7 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { onBlock } from './workflowTrigger.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -684,21 +685,8 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
   });
 
   // W25 (D-6397, D-6401, D-6499): every merge builds, then compare decides.
-  // The `on:` block, as an exact text block: from the line `on:` up to the next
-  // top-level key, comments and blank lines stripped. Never a regex that ends
-  // at `$`, which a longer line or a following key would satisfy (D-6513).
-  const onBlock = (src: string): string[] => {
-    const lines = src.split('\n');
-    const from = lines.indexOf('on:');
-    expect(from, 'the workflow has a top-level on: line').toBeGreaterThan(-1);
-    const out = ['on:'];
-    for (const l of lines.slice(from + 1)) {
-      if (/^[A-Za-z_]/.test(l)) break;
-      if (l.trim() === '' || l.trim().startsWith('#')) continue;
-      out.push(l);
-    }
-    return out;
-  };
+  // The `on:` block is read by onBlock (workflowTrigger.ts), which W25-T8 in
+  // release-stable.test.ts shares.
   const EXACT_ON = [
     'on:',
     '  push:',
@@ -725,11 +713,14 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
   });
 
   // W25-F2, by behaviour (D-6512): the trigger ignores docs/** and a root
-  // *.md, so the build must not read either. Not a scan of the script's text,
-  // which a glob, a `.`, a `./docs`, a later `PATHSPEC+=` or a `cp -a` of the
-  // root's copy would all slip past: the real builder runs in a fixture that
-  // TRACKS a docs/ file and a root Markdown file, and the tarball it writes is
-  // listed.
+  // *.md, so the tarball must hold no entry NAMED under docs/ and no root
+  // Markdown entry. The real builder runs in a fixture that TRACKS a docs/
+  // file and a root Markdown file, and the tarball it writes is listed; no
+  // text of the script is parsed. It checks entry names only, not bytes: a
+  // build that shipped docs bytes under another name would let the trigger
+  // skip a docs-only merge that changes the tarball, and the next run's
+  // compare would release it, so such a miss delays a release and never loses
+  // one (review 846, ruling 6).
   it('W25-F2: the built tarball holds no entry under docs/ and no root Markdown file, though the repository tracks both', () => {
     const home = mkTmp('build-release-w25-f2-');
     const root = fixtureRepo(home, {

@@ -996,10 +996,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
 
   // Git does not track these bits, so the stub npm makes them: the base asset
   // is built at 755 (its own HOME), the candidate at the special mode.
-  it.each([
-    ['a setuid file (755 to 4755)', 'dist-file-mode', '4755', 'server/dist/server/src/index.js'],
-    ['a sticky directory (755 to 1755)', 'dist-mode', '1755', 'server/dist/server'],
-  ])('W25-C30: %s releases, and the line names it', (_name, file, mode, first) => {
+  const specialMode = (_name: string, file: string, mode: string, first: string): void => {
     const home = mkTmp('ccrc-relmain-w25c30-');
     baseNpm(home, file, '755');
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
@@ -1010,7 +1007,18 @@ describe('release-main.sh: compare — a build identical to the newest release H
     expect(c.code, c.stderr).toBe(0);
     expect(c.stdout).toBe(`${L.differs('v0.0.1', 1, first, 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
-  });
+  };
+  // Not on macOS (D-6583): compare's plain `tar` there is BSD tar (libarchive),
+  // whose -p restores a setuid bit only when the new file's owner matches the
+  // archive's (uid 0, from --owner=0), so as a non-root runner both trees
+  // extract at 755 and the case cannot tell them apart. The release lane runs
+  // on ubuntu-latest, with GNU tar, which keeps the bit.
+  it.skipIf(process.platform === 'darwin').each([
+    ['a setuid file (755 to 4755)', 'dist-file-mode', '4755', 'server/dist/server/src/index.js'],
+  ])('W25-C30: %s releases, and the line names it', specialMode);
+  it.each([
+    ['a sticky directory (755 to 1755)', 'dist-mode', '1755', 'server/dist/server'],
+  ])('W25-C30: %s releases, and the line names it', specialMode);
 
   it('W25-C31: a mode change on a dot-named entry alone releases, and the line names it', () => {
     const home = mkTmp('ccrc-relmain-w25c31-');
@@ -1081,15 +1089,41 @@ describe('release-main.sh: compare — a build identical to the newest release H
     expect(ghReads(home)).toHaveLength(2);
   });
 
-  it('W25-C35: a difference that cannot be listed releases with that reason — the line is never empty', () => {
+  // A listing that fails (rc) and one that exits 0 with nothing to show
+  // (awk then prints a bare TAB, which the shape check refuses) both release.
+  it.each([
+    ['comm exits 1', 'exit 1'], ['comm exits 0 and prints nothing', 'exit 0'],
+  ])('W25-C35: a difference that cannot be listed releases with that reason — the line is never empty (%s)', (_name, body) => {
     const home = mkTmp('ccrc-relmain-w25c35-');
     const root = fixture(home, { tags: ['v0.0.1'], assets: ['v0.0.1'] });
-    const env = stubbed(home, { comm: 'exit 1' });
+    const env = stubbed(home, { comm: body });
     const out = join(home, 'out');
     expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
     const c = run(root, home, ['compare', '--out', out], 0, env);
     expect(c.code, c.stderr).toBe(0);
     expect(c.stdout).toBe(`${L.cant('the fingerprints differ, and listing how failed', 'v0.0.2')}\n`);
+    expect(stateOf(out)).toMatch(/^built true\n/);
+  });
+
+  // A tar that extracts every entry but the one the merge changed, then exits
+  // 2. Planted on one side's extraction only (told apart by the archive's
+  // path); every other tar call, the build's included, runs for real.
+  it.each([
+    ['the base', '/asset/', "could not extract v0.0.1's tarball"],
+    ['the candidate', '/candidate/', 'could not extract the candidate'],
+  ])('W25-C37: a partial extraction of %s that exits non-zero releases with that reason — a short tree is never compared', (_name, side, reason) => {
+    const home = mkTmp('ccrc-relmain-w25c37-');
+    const root = fixture(home, { tags: ['v0.0.1'], assets: ['v0.0.1'], merge: (r) => chmodSync(join(r, 'ccd', 'ccrc'), 0o644) });
+    const realTar = spawnSync('sh', ['-c', 'command -v tar'], { encoding: 'utf8' }).stdout.trim();
+    expect(realTar).toMatch(/^\//);
+    const env = stubbed(home, {
+      tar: `case " $* " in *" -xpzf "*"${side}"*) "${realTar}" "$@" --exclude=./ccd/ccrc --exclude=ccd/ccrc; exit 2 ;; esac\nexec "${realTar}" "$@"`,
+    });
+    const out = join(home, 'out');
+    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    const c = run(root, home, ['compare', '--out', out], 0, env);
+    expect(c.code, c.stderr).toBe(0);
+    expect(c.stdout).toBe(`${L.cant(reason, 'v0.0.2')}\n`);
     expect(stateOf(out)).toMatch(/^built true\n/);
   });
 

@@ -17,10 +17,12 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFile
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { pathsIgnore } from './workflowTrigger.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const SCRIPT = join(REPO, 'deploy', 'release-stable.sh');
+const WORKFLOW = join(REPO, '.github', 'workflows', 'release-main.yml');
 
 const GIT_ENV = {
   GIT_AUTHOR_NAME: 'ccrc fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
@@ -196,7 +198,7 @@ describe('release-stable.sh: the refusal of a HEAD with no release tag says what
   const docsOnly = { 'README.md': '# fixture, edited\n', 'docs/a.md': 'a\n' };
   const shipped = { 'server/src/x.ts': 'export const x = 1;\n' };
   const pointerTail = (full: string): string =>
-    `A main merge whose build came out unchanged cuts no release either: the release-main run for ${full} printed "built unchanged" or what differed`;
+    `A main merge whose build came out unchanged cuts no release either: the release-main run for ${full} printed "built unchanged" or what differed, or was cancelled before it started because a later merge's run replaced it, and then that later run's line covers this merge`;
   const DOCS_WHY = "HEAD's merge changed only docs/ or the root's Markdown, so no release-main run started for it.";
 
   it('W25-T1: a HEAD whose merge changed a shipped path is refused in one line naming the release, the full sha and "built unchanged"', () => {
@@ -226,12 +228,14 @@ describe('release-stable.sh: the refusal of a HEAD with no release tag says what
     expect(err).not.toContain('built unchanged');
   });
 
-  it('W25-T1c: the docs rule is root-anchored; a Markdown file below the root, a docs directory below the root, or one non-docs path among docs paths all point at the run', () => {
+  it('W25-T1c: the docs rule is root-anchored and ends at the directory; a Markdown file below the root, a docs directory below the root, one non-docs path among docs paths, a docs- prefix or a root file named docs all point at the run', () => {
     const cases: Array<[string, Record<string, string>]> = [
       ['skill', { 'ccd/x/SKILL.md': 'x\n' }],
       ['nested', { 'pwa/src/docs/a.ts': 'x\n' }],
       ['mixed', { 'docs/a.md': 'a\n', 'server/src/x.ts': 'x\n' }],
       ['root-non-md', { 'LICENSE': 'x\n' }],
+      ['docs-prefix', { 'docs-site/a.ts': 'x\n' }],
+      ['root-docs-file', { 'docs': 'x\n' }],
     ];
     for (const [name, files] of cases) {
       const home = mkTmp(`ccrc-relstable-t1c-${name}-`);
@@ -252,6 +256,62 @@ describe('release-stable.sh: the refusal of a HEAD with no release tag says what
     const err = refused(home, run(root, home));
     expect(err).toContain(`${pointerTail(full)}. stable now sits past`);
     expect(err).not.toContain('no release-main run started');
+  });
+
+  it('W25-T9: a shipped file renamed under docs/ points at the run — a rename is listed by both its names (--no-renames)', () => {
+    const home = mkTmp('ccrc-relstable-t9-');
+    const root = fixture(home);
+    commitFiles(root, { 'deploy/x.sh': 'echo shipped\n' }, 'a shipped script');
+    git(root, 'tag', 'v1.2.3');
+    mkdirSync(join(root, 'docs'));
+    git(root, 'mv', 'deploy/x.sh', 'docs/x.sh');
+    git(root, 'commit', '-q', '-m', 'move it to docs');
+    expect(git(root, 'diff', '--name-status', 'HEAD^', 'HEAD'), 'git itself sees a rename').toMatch(/^R100\tdeploy\/x\.sh\tdocs\/x\.sh$/);
+    const full = git(root, 'rev-parse', 'HEAD');
+    const err = refused(home, run(root, home));
+    expect(err).toContain(`${pointerTail(full)}. stable now sits past v1.2.3`);
+    expect(err).not.toContain('no release-main run started');
+  });
+
+  // The script's case arms are a second copy of release-main.yml's
+  // paths-ignore list (D-6512). This row reads that list from the workflow and
+  // asks the script to classify sample paths for each pattern: inside and
+  // outside, at the root and at depth. A pattern with no samples here, or a
+  // sampled pattern the workflow no longer has, is red, so the two copies
+  // change together. "Outside" samples are outside every pattern.
+  const TRIGGER_SAMPLES: Record<string, { inside: string[]; outside: string[] }> = {
+    'docs/**': {
+      inside: ['docs/a.md', 'docs/sub/deep/b.ts'],
+      outside: ['docs.txt', 'docs-site/a.ts', 'pwa/src/docs/a.ts', 'server/docs/sub/c.json'],
+    },
+    '*.md': {
+      inside: ['README.md', 'NOTES.md'],
+      outside: ['LICENSE', 'ccd/x/SKILL.md', 'server/README.md'],
+    },
+  };
+  it('W25-T8: every paths-ignore pattern in release-main.yml has an arm here, and the arms classify its samples as the trigger does', () => {
+    const patterns = pathsIgnore(readFileSync(WORKFLOW, 'utf8'));
+    expect(patterns.length, 'the trigger has patterns').toBeGreaterThan(0);
+    let n = 0;
+    for (const pattern of patterns) {
+      const samples = TRIGGER_SAMPLES[pattern];
+      if (samples === undefined) throw new Error(`release-stable.sh has no arm for ${pattern}`);
+      for (const [where, list] of [['inside', samples.inside], ['outside', samples.outside]] as const) {
+        for (const p of list) {
+          const home = mkTmp('ccrc-relstable-t8-');
+          const root = fixture(home, { tagHead: 'v1.2.3' });
+          commitFiles(root, { [p]: 'x\n' });
+          const full = git(root, 'rev-parse', 'HEAD');
+          const err = refused(home, run(root, home));
+          const label = `${pattern} ${where}: ${p}`;
+          if (where === 'inside') expect(err, label).toContain(` ${DOCS_WHY} stable now sits past`);
+          else expect(err, label).toContain(`${pointerTail(full)}. stable now sits past`);
+          n++;
+        }
+      }
+    }
+    expect(Object.keys(TRIGGER_SAMPLES).sort(), 'a sampled pattern is no longer in the trigger').toEqual([...patterns].sort());
+    expect(n).toBeGreaterThan(0);
   });
 
   it('W25-T3: only a release HEAD contains is named; a tag on a side branch is not', () => {
