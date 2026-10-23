@@ -7,14 +7,19 @@
 //   - a BUILD job runs the install or the build (one of BUILD_MARKERS) or calls
 //     another workflow. It must declare a permissions mapping of `read`/`none`
 //     only, no `id-token` key at all, and every checkout in it must set
-//     `persist-credentials: false`;
+//     `persist-credentials: false`; and it carries no `continue-on-error` and
+//     no `strategy`, so its verdict is one job's (D-6727);
 //   - a WRITE job holds any `write`. Its steps may use only the actions its
 //     file's allowance names, may run only the exact bodies it names, and may
 //     carry nothing else that chooses which code runs: no job-level env,
 //     defaults or container, no step shell, no step environment variable
 //     outside that step's own allowed set, and a build output only where the
-//     allowance says (D-6648, D-6651, D-6663); and its download is at a major
+//     allowance says (D-6648, D-6651, D-6663), and no step condition but the
+//     exact one its allowance names (D-6729); and its download is at a major
 //     whose extractor confines every entry, spelled `@vN` (D-6726);
+//   - in EVERY job, a job's or a step's `with:` and `env:`, when present, is a
+//     mapping: a whole-value expression, a list or a scalar holds keys and
+//     values no check here can read (D-6728);
 //   - NO job reads a secret: none carries a `secrets:` key, and the whole
 //     parsed job, every key at every depth (container and services env, a
 //     step's if: and working-directory included), never names the `secrets`
@@ -22,9 +27,12 @@
 //     `github.token` (D-6663);
 //   - context names (`secrets`, `needs`, `steps`) match without regard to
 //     case, as GitHub resolves them (D-6663);
-//   - every `steps.<id>` and `needs.<job>.outputs.<k>` resolves to an id or an
-//     output that is declared, because a missing one is an empty string at run
-//     time and no release workflow runs before its merge (D-6659).
+//   - every `steps.<id>` and `needs.<job>.outputs.<k>` that a job's `outputs:`,
+//     `if:` or `env:` or a step's `if:`, `with:` or `env:` names resolves to an
+//     id or an output that is declared, because a missing one is an empty
+//     string at run time and no release workflow runs before its merge
+//     (D-6659). A `run:` body is not scanned: the D-5548 row in
+//     build-release.test.ts holds every body free of `${{` instead.
 // Text pins in build-release.test.ts hold each step's exact shape; this module
 // holds the boundary, so a new step in a write job asks for itself in the diff.
 import { parse } from 'yaml';
@@ -38,6 +46,8 @@ export interface WorkflowStep {
   with: Record<string, unknown>;
   env: Record<string, unknown>;
   if: string | null;
+  /** The step as parsed, every key, for the checks `with` and `env` fold. */
+  raw: Record<string, unknown>;
 }
 
 export interface WorkflowJob {
@@ -91,6 +101,7 @@ function readStep(raw: unknown): WorkflowStep {
     with: mapping(s.with),
     env: mapping(s.env),
     if: text(s.if),
+    raw: s,
   };
 }
 
@@ -165,6 +176,10 @@ export interface WriteAllowance {
    *  code at a shell's start (`SHELLOPTS` with `PS4`, `BASH_FUNC_*`, `HOME`
    *  and the rest) are not a list anyone finishes. */
   env: Readonly<Record<string, readonly string[]>>;
+  /** The one exact `if:` each step may carry, keyed as `env` is; a step that
+   *  is not keyed may carry none (D-6729). A condition decides whether the
+   *  step runs at all, `always()` past a failed check included. */
+  if: Readonly<Record<string, string>>;
 }
 
 /** The exact `with:` keys a write job may give each allowed action. A
@@ -277,7 +292,13 @@ function indexedReferences(job: WorkflowJob): string[] {
   return [...found];
 }
 
-const NO_ALLOWANCE: WriteAllowance = { uses: [], runs: [], needsIn: [], env: {} };
+const NO_ALLOWANCE: WriteAllowance = { uses: [], runs: [], needsIn: [], env: {}, if: {} };
+
+/** The two keys whose value every check reads as a mapping (D-6728). */
+const MAPPING_KEYS = ['with', 'env'] as const;
+/** The job keys a build job may not carry (D-6727): `continue-on-error`
+ *  passes a failed build, and a `strategy` runs it as several jobs. */
+const BUILD_JOB_FORBIDDEN_KEYS = ['continue-on-error', 'strategy'] as const;
 
 /** One plain sentence per breach of the boundary, naming the job; empty when
  *  the file holds. `allow` is this file's allowance, keyed by write job.
@@ -331,7 +352,18 @@ export function boundaryFindings(
           out.push(`${J} runs the install or the build and its checkout keeps its credential (step ${i + 1})`);
         }
       });
+      for (const k of BUILD_JOB_FORBIDDEN_KEYS) if (job.keys.includes(k)) out.push(`${J} runs the install or the build and carries the job key ${k}`);
     }
+
+    // ── with: and env: are mappings, in every job (D-6728) ──
+    for (const k of MAPPING_KEYS) {
+      if (Object.hasOwn(job.raw, k) && !isMapping(job.raw[k])) out.push(`${J} carries a job-level ${k}: that is not a mapping: ${shown(job.raw[k])}`);
+    }
+    job.steps.forEach((s, i) => {
+      for (const k of MAPPING_KEYS) {
+        if (Object.hasOwn(s.raw, k) && !isMapping(s.raw[k])) out.push(`${J} step ${i + 1} carries ${k === 'env' ? 'an' : 'a'} ${k}: that is not a mapping: ${shown(s.raw[k])}`);
+      }
+    });
 
     // ── no job reads a secret (D-6663) ──
     if (job.keys.includes('secrets') || readsSecrets(job.raw)) {
@@ -375,6 +407,9 @@ export function boundaryFindings(
           out.push(`${J} holds a write permission and runs a step outside its allowlist: ${s.run.trim().slice(0, 80)}`);
         }
         const stepKey = s.run !== null ? s.run.trim() : s.uses !== null ? actionName(s.uses) : '';
+        if (s.keys.includes('if') && !(Object.hasOwn(allowance.if, stepKey) && allowance.if[stepKey] === s.if)) {
+          out.push(`${J} holds a write permission and step ${n} carries if: ${shown(s.if ?? undefined)}, which its allowance does not permit`);
+        }
         const envSet = Object.hasOwn(allowance.env, stepKey) ? allowance.env[stepKey]! : [];
         for (const k of Object.keys(s.env)) {
           if (!envSet.includes(k)) out.push(`${J} holds a write permission and step ${n} sets ${k}, outside its env set`);

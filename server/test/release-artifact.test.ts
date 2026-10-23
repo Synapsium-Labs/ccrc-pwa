@@ -320,6 +320,21 @@ describe('release-artifact.sh: verify, in the publish job', () => {
     expectNothingWritten(out);
   });
 
+  // Review 871's F8: the regular-file check names what it refuses. With it
+  // gone the call is still refused, later and for another reason (the hash
+  // of a directory fails; a directory is not the SHA256SUMS line), so this
+  // row holds the reason.
+  it.each([NAME, 'SHA256SUMS'])('W26-V13: %s as a directory is refused as not a regular file', (name) => {
+    const home = mkTmp('ccrc-relart-');
+    const { root, head } = repo(home);
+    const { dir, digest } = artifact(home, 'downloaded', { json: buildJson(head, TAG) });
+    unlinkSync(join(dir, name));
+    mkdirSync(join(dir, name));
+    const out = join(home, 'release-out');
+    expectRefused(verify(root, dir, out, digest), `${name} in the build's artifact is not a regular file`);
+    expectNothingWritten(out);
+  });
+
   it('W26-V12: the write side never opens the tarball — 64 KiB of bytes that are not gzip at all verify and are copied byte-identical', () => {
     const home = mkTmp('ccrc-relart-');
     const { root } = repo(home);

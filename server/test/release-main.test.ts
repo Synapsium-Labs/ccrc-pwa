@@ -1471,4 +1471,14 @@ describe('release-main.sh: source pins', () => {
     expect(fn('compare')).toContain('record_release "$tag" "$head"');
     expect(body).toContain('record_release "$tag" "$head"');
   });
+  // D-6729 (review 871's F12): publish runs in the write job too, so it
+  // reaches no builder, no install and no tar either.
+  it('W26-P1: publish, the write job\'s other arm, runs no builder, no install and no tar', () => {
+    const body = fn('publish');
+    expect(body.length, 'publish\'s body was not found').toBeGreaterThan(200);
+    expect(body).toContain('gh release create "$tag"');
+    expect(body).not.toContain('build-release');
+    expect(body).not.toContain('npm');
+    expect(body).not.toContain('tar ');
+  });
 });

@@ -57,6 +57,7 @@ const ALLOW: Readonly<Record<string, Readonly<Record<string, WriteAllowance>>>> 
         [RECEIVE]: ['CCRC_BUILD_TAG', 'CCRC_BUILD_DIGEST'],
         'bash deploy/release-main.sh publish --out release-out': ['GH_TOKEN', 'CCRC_BUNDLE_PATH'],
       },
+      if: {},
     },
   },
   'release.yml': {
@@ -67,6 +68,7 @@ const ALLOW: Readonly<Record<string, Readonly<Record<string, WriteAllowance>>>> 
       runs: [VERIFY, NAME_BUNDLE, WRITE_NOTES, GH_PUBLISH],
       needsIn: ['env.CCRC_BUILD_DIGEST'],
       env: { [VERIFY]: ['CCRC_BUILD_DIGEST'], [NAME_BUNDLE]: ['CCRC_BUNDLE_PATH'], [WRITE_NOTES]: [], [GH_PUBLISH]: ['GH_TOKEN'] },
+      if: {},
     },
   },
   // Its job `if:` reads needs.* as a condition, never as a value.
@@ -76,6 +78,7 @@ const ALLOW: Readonly<Record<string, Readonly<Record<string, WriteAllowance>>>> 
       runs: ['bash deploy/release-stable.sh'],
       needsIn: [],
       env: { 'bash deploy/release-stable.sh': ['GH_TOKEN'] },
+      if: {},
     },
   },
 };
@@ -234,6 +237,7 @@ const BASE_ALLOW: Record<string, WriteAllowance> = {
     runs: ['bash r receive', 'bash r publish'],
     needsIn: ['with.name', 'env.CCRC_BUILD_TAG', 'env.CCRC_BUILD_DIGEST'],
     env: { 'bash r receive': ['CCRC_BUILD_TAG', 'CCRC_BUILD_DIGEST'], 'bash r publish': ['GH_TOKEN', 'CCRC_BUNDLE_PATH'] },
+    if: {},
   },
 };
 
@@ -259,6 +263,10 @@ const afterPublishTimeout = (lines: string): string => plant(PUBLISH_TIMEOUT, `$
 const RECEIVE_DIGEST = '          CCRC_BUILD_DIGEST: ${{ needs.build.outputs.digest }}\n';
 const receiveEnv = (line: string): string => plant(RECEIVE_DIGEST, `${RECEIVE_DIGEST}${line}`);
 const beforeJobs = (lines: string): string => plant('jobs:\n', `${lines}jobs:\n`);
+const BUILD_TIMEOUT = '    timeout-minutes: 30\n';
+const afterBuildTimeout = (lines: string): string => plant(BUILD_TIMEOUT, `${BUILD_TIMEOUT}${lines}`);
+const RECEIVE_ENV = '        env:\n          CCRC_BUILD_TAG: ${{ needs.build.outputs.tag }}\n          CCRC_BUILD_DIGEST: ${{ needs.build.outputs.digest }}\n';
+const PUBLISH_STEP = '      - name: publish\n';
 
 const MARKER_RUNS = [
   'cd server && npm ci', 'npm install', 'npm run build', 'npx tsc', 'pnpm i', 'yarn',
@@ -326,6 +334,11 @@ const PLANTED: Array<[string, string, string]> = [
   ['a build step reads a secret across a block scalar line', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', '        id: compare\n        env:\n          GH_TOKEN: |-\n            ${{\n            secrets.PAT }}\n'), 'runs the install or the build and reads secrets'],
   ['the publish step reads a secret after a newline', plant('          GH_TOKEN: ${{ github.token }}\n          CCRC_BUNDLE_PATH', '          GH_TOKEN: "${{\\nsecrets.PAT }}"\n          CCRC_BUNDLE_PATH'), 'holds a write permission and reads secrets'],
   ['a publish step passes NEEDS in capitals under another key', receiveEnv('          OTHER: ${{ NEEDS.build.outputs.tag }}\n'), 'passes a build output into env.OTHER'],
+  // Review 871's F4: each reader's case-insensitive match has a case of its
+  // own, in a place the build-output scan already permits.
+  ['a publish env reads a job outside its needs, NEEDS in capitals', plant(RECEIVE_DIGEST, '          CCRC_BUILD_DIGEST: ${{ NEEDS.other.outputs.x }}\n'), 'refers to needs.other, which is not in its needs'],
+  ['the build outputs name a step id nobody declares, STEPS in capitals', plant('${{ steps.record.outputs.digest }}', '${{ STEPS.recrod.outputs.digest }}'), 'refers to steps.recrod, which no earlier step of this job declares'],
+  ['a publish env reads the build output by index, NEEDS in capitals', plant(RECEIVE_DIGEST, "          CCRC_BUILD_DIGEST: ${{ NEEDS['build'].outputs.digest }}\n"), 'refers to needs by index, which this guard cannot resolve'],
   // D-6726: the download's extractor. @v4 to @v6 write an `x/../../..` entry
   // outside the download path; only a major spelled `@vN` at the floor or
   // later is read, never a minor pin or a SHA.
@@ -333,6 +346,22 @@ const PLANTED: Array<[string, string, string]> = [
   ['the download is at @v6, the last major with the old extractor', downloadAt('v6'), 'uses actions/download-artifact@v6, not @v7 or later'],
   ['the download is pinned to a minor', downloadAt('v7.0.0'), 'uses actions/download-artifact@v7.0.0, not @v7 or later'],
   ['the download is pinned to a SHA', downloadAt(SHA), `uses actions/download-artifact@${SHA}, not @v7 or later`],
+  // D-6728: a with: or env: that is present and not a mapping holds keys and
+  // values no check can read (a whole-value expression is resolved at run
+  // time), so it is a finding in every job, at the job and at each step.
+  ['a publish step with: is a whole-value expression', plant(PUBLISH_CHECKOUT, "      - uses: actions/checkout@v4\n        with: ${{ fromJSON('{\"fetch-depth\":0,\"ref\":\"x\"}') }}\n      - uses: actions/download-artifact@v7\n"), 'job publish step 1 carries a with: that is not a mapping'],
+  ['a publish step env: is a whole-value expression', plant(RECEIVE_ENV, '        env: ${{ fromJSON(needs.build.outputs.tag) }}\n'), 'job publish step 3 carries an env: that is not a mapping'],
+  ['a build job env: is a whole-value expression', afterBuildTimeout('    env: ${{ fromJSON(vars.E) }}\n'), 'job build carries a job-level env: that is not a mapping'],
+  ['a publish step with: is a list', plant(PUBLISH_CHECKOUT, '      - uses: actions/checkout@v4\n        with:\n          - fetch-depth: 0\n      - uses: actions/download-artifact@v7\n'), 'job publish step 1 carries a with: that is not a mapping'],
+  // D-6727: a build job's verdict is its job's. continue-on-error lets a
+  // failed build job pass, and a strategy runs it as several jobs whose
+  // outputs one value cannot hold.
+  ['the build job continues on error', afterBuildTimeout('    continue-on-error: true\n'), 'job build runs the install or the build and carries the job key continue-on-error'],
+  ['the build job carries a strategy', afterBuildTimeout('    strategy:\n      matrix:\n        n: [1, 2]\n'), 'job build runs the install or the build and carries the job key strategy'],
+  // D-6729: a write step's if: is refused unless its allowance names that
+  // exact condition; no step of a release write job carries one today.
+  ['the attest step runs always()', plant('        id: attest\n', '        id: attest\n        if: always()\n'), 'job publish holds a write permission and step 4 carries if: always(), which its allowance does not permit'],
+  ['the publish step runs always()', plant(PUBLISH_STEP, `${PUBLISH_STEP}        if: always()\n`), 'job publish holds a write permission and step 5 carries if: always(), which its allowance does not permit'],
 ];
 
 describe('W26-G4: the guard sees each planted breach', () => {
@@ -348,6 +377,40 @@ describe('W26-G4: the guard sees each planted breach', () => {
     expect(yaml).not.toBe(BASE);
     const findings = boundaryFindings(yaml, BASE_ALLOW, readCalled);
     expect(findings.some((f) => f.includes(phrase)), `no finding contains "${phrase}": ${JSON.stringify(findings)}`).toBe(true);
+  });
+
+  // D-6729 (review 871's F14): the named start-variable list is a second
+  // check beside the env allowlist, so an allowance that lists one of them
+  // is refused by it alone.
+  it('a start variable the step\'s own allowance lists is still refused, by the second check alone', () => {
+    const allow: Record<string, WriteAllowance> = {
+      publish: { ...BASE_ALLOW.publish!, env: { ...BASE_ALLOW.publish!.env, 'bash r receive': ['CCRC_BUILD_TAG', 'CCRC_BUILD_DIGEST', 'PATH'] } },
+    };
+    const findings = boundaryFindings(receiveEnv('          PATH: x\n'), allow, readCalled);
+    expect(findings).toEqual(['job publish holds a write permission and step 3 sets PATH, which a shell or a loader reads at start']);
+  });
+
+  // D-6729 (F17): a condition the allowance names, exactly, holds; any other
+  // spelling of it on that step does not.
+  it('a write step\'s if: holds only when its allowance names it exactly', () => {
+    const cond = "steps.attest.outputs.bundle-path != ''";
+    const allow: Record<string, WriteAllowance> = { publish: { ...BASE_ALLOW.publish!, if: { 'bash r publish': cond } } };
+    expect(boundaryFindings(plant(PUBLISH_STEP, `${PUBLISH_STEP}        if: ${cond}\n`), allow, readCalled)).toEqual([]);
+    expect(boundaryFindings(plant(PUBLISH_STEP, `${PUBLISH_STEP}        if: always()\n`), allow, readCalled))
+      .toEqual(['job publish holds a write permission and step 5 carries if: always(), which its allowance does not permit']);
+    expect(boundaryFindings(plant(PUBLISH_STEP, `${PUBLISH_STEP}        if: \${{ ${cond} }}\n`), allow, readCalled))
+      .toEqual([`job publish holds a write permission and step 5 carries if: \${{ ${cond} }}, which its allowance does not permit`]);
+  });
+
+  // D-6729 (F17): the review's two plants, in the landed files themselves.
+  it.each([
+    ['release.yml', '      - name: Name the provenance bundle\n', 5],
+    ['release-main.yml', '      - name: Push the tag and publish the prerelease\n', 5],
+  ] as const)('%s: if: always() on a publish step is refused', (file, at, n) => {
+    const src = read(file);
+    expect(src.split(at).length - 1, `${file}: the anchor is there once`).toBe(1);
+    const findings = boundaryFindings(src.replace(at, `${at}        if: always()\n`), ALLOW[file]!, readCalled);
+    expect(findings).toEqual([`job publish holds a write permission and step ${n} carries if: always(), which its allowance does not permit`]);
   });
 });
 

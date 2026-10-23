@@ -570,7 +570,24 @@ interface SplitShape {
   check: Record<string, unknown>;
   record: Record<string, unknown>;
   outputs: Record<string, unknown>;
+  /** The publish job's keys, as a set, and its job-level `if:` exactly
+   *  (null: it carries none). */
+  publishKeys: string[];
+  publishIf: string | null;
+  /** Every publish step that carries an `env:`, by name, with its whole
+   *  env, values included. */
+  publishEnv: Record<string, Record<string, unknown>>;
 }
+
+/** Both build jobs' keys, as a set (D-6727): no `continue-on-error`, no
+ *  job-level `if:`, no `strategy`, nothing else. */
+const BUILD_JOB_KEYS = ['outputs', 'permissions', 'runs-on', 'steps', 'timeout-minutes'];
+/** Each publish action at its pinned version, in order (D-6726, D-6729):
+ *  the checkout and the attest at `@v4`, the download at `@v7`. */
+const PUBLISH_USES_PINNED = ['actions/checkout@v4', 'actions/download-artifact@v7', 'actions/attest-build-provenance@v4'];
+/** The two values the publish steps are handed (D-6729). */
+const GH_TOKEN_VALUE = '${{ github.token }}';
+const BUNDLE_PATH_VALUE = '${{ steps.attest.outputs.bundle-path }}';
 
 function splitRows(file: string, shape: SplitShape): void {
   const src = (): string => readFileSync(join(REPO, '.github', 'workflows', file), 'utf8');
@@ -620,6 +637,31 @@ function splitRows(file: string, shape: SplitShape): void {
 
   it(`W26-Y5: ${file}: the build job's outputs are exactly the ones publish reads`, () => {
     expect(jobNamed(jobs(), 'build').outputs).toEqual(shape.outputs);
+  });
+
+  // D-6727 (review 871's F10): parsed, so a quoted "if": or a key moved
+  // anywhere in the job is seen; a build job that may fail and pass, run
+  // conditionally or fan out is not the one verdict publish reads.
+  it(`W26-Y7: ${file}: the build job's keys are exactly its five, and publish's job-level if: is exactly its own`, () => {
+    const js = jobs();
+    expect([...jobNamed(js, 'build').keys].sort()).toEqual(BUILD_JOB_KEYS);
+    const publish = jobNamed(js, 'publish');
+    expect([...publish.keys].sort()).toEqual([...shape.publishKeys].sort());
+    expect(publish.if).toBe(shape.publishIf);
+    expect(publish.keys.includes('if')).toBe(shape.publishIf !== null);
+  });
+
+  // D-6729 (F13): each publish action at its version, read from the parsed
+  // step, so a SHA, a minor pin or a moved major is a red here.
+  it(`W26-Y8: ${file}: the publish job uses exactly checkout@v4, download-artifact@v7 and attest-build-provenance@v4, in that order`, () => {
+    expect(jobNamed(jobs(), 'publish').steps.flatMap((s) => (s.uses === null ? [] : [s.uses]))).toEqual(PUBLISH_USES_PINNED);
+  });
+
+  // D-6729 (F15): the values, parsed, so a changed value with the old line
+  // kept as a comment is a red here.
+  it(`W26-Y9: ${file}: every publish step's env:, values included, is exactly its own`, () => {
+    const publish = jobNamed(jobs(), 'publish');
+    expect(Object.fromEntries(publish.steps.filter((s) => s.keys.includes('env')).map((s) => [s.name, s.env]))).toEqual(shape.publishEnv);
   });
 }
 
@@ -697,6 +739,38 @@ describe('release.yml: the thin workflow, pinned to the script', () => {
       run: 'bash deploy/release-artifact.sh record --tag "$GITHUB_REF_NAME" --dir release-out',
     },
     outputs: { digest: '${{ steps.record.outputs.digest }}' },
+    // No release decision, so no job-level if: (D-6658).
+    publishKeys: ['needs', 'runs-on', 'timeout-minutes', 'permissions', 'steps'],
+    publishIf: null,
+    publishEnv: {
+      "Check the build's artifact against its recorded digest": { CCRC_BUILD_DIGEST: '${{ needs.build.outputs.digest }}' },
+      'Name the provenance bundle': { CCRC_BUNDLE_PATH: BUNDLE_PATH_VALUE },
+      'Publish the GitHub Release': { GH_TOKEN: GH_TOKEN_VALUE },
+    },
+  });
+
+  // D-6729 (review 871's F16): the trigger, parsed, exactly; the text row
+  // above lists five events, and this one admits no other.
+  const EXACT_TRIGGER = { push: { tags: ['v*'] } };
+  const triggerOf = (src: string): unknown => (parse(src, { uniqueKeys: true }) as { on?: unknown }).on;
+
+  it('W26-F1: release.yml\'s trigger, parsed, is exactly a push of v* tags', () => {
+    expect(triggerOf(wf())).toEqual(EXACT_TRIGGER);
+  });
+
+  it('W26-F1: the parsed trigger sees each added event and each widening (the pin is not vacuous)', () => {
+    const src = wf();
+    const ON = "on:\n  push:\n    tags: ['v*']\n";
+    expect(src.split(ON).length - 1, 'the trigger block is there once').toBe(1);
+    const variants = [
+      `${ON}  workflow_run:\n    workflows: [ci]\n    types: [completed]\n`,
+      `${ON}  repository_dispatch:\n`,
+      `${ON}  release:\n    types: [published]\n`,
+      `${ON}  create:\n`,
+      "on:\n  push:\n    tags: ['v*']\n    branches: [main]\n",
+      "on:\n  push:\n    tags: ['v*', 'x*']\n",
+    ];
+    for (const v of variants) expect(triggerOf(src.replace(ON, v)), v).not.toEqual(EXACT_TRIGGER);
   });
 
   it('W26-Y6: release.yml has no release decision, so no decision check (D-6653, D-6658)', () => {
@@ -950,6 +1024,14 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
       release: '${{ steps.compare.outputs.release }}',
       tag: '${{ steps.compare.outputs.tag }}',
       digest: '${{ steps.record.outputs.digest }}',
+    },
+    publishKeys: ['needs', 'if', 'runs-on', 'timeout-minutes', 'permissions', 'steps'],
+    publishIf: "needs.build.outputs.release == 'true'",
+    publishEnv: {
+      "Check the build's artifact and tag it for this commit": {
+        CCRC_BUILD_TAG: '${{ needs.build.outputs.tag }}', CCRC_BUILD_DIGEST: '${{ needs.build.outputs.digest }}',
+      },
+      'Push the tag and publish the prerelease': { GH_TOKEN: GH_TOKEN_VALUE, CCRC_BUNDLE_PATH: BUNDLE_PATH_VALUE },
     },
   });
 
