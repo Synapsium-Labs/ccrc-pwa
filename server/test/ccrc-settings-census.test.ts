@@ -273,11 +273,12 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
     const variable: string[] = [];
     for (const f of FILES) {
       for (const m of CODE[f].matchAll(/\b(?:_ccrc_knob|_keep_knob) (CCRC_[A-Z0-9_]+)/g)) literal.add(m[1]);
-      for (const m of CODE[f].matchAll(/\b(?:_ccrc_knob|_keep_knob) "\$[^"]*"/g))
-        variable.push(`${m[0]} in ${ownerOf(CODE[f], m.index!)}`);
+      // Quoted or not: `_ccrc_knob $name 5` passes a name in a variable as surely as `"$name"`, so quotes are dropped from what is listed.
+      for (const m of CODE[f].matchAll(/\b(?:_ccrc_knob|_keep_knob) "?\$[^\s"]*"?/g))
+        variable.push(`${m[0].replace(/"/g, '')} in ${ownerOf(CODE[f], m.index!)}`);
     }
     expect({ notASetting: diff(literal, SETTINGS), neverTaken: diff(SETTINGS, literal) }).toEqual({ notASetting: [], neverTaken: [] });
-    expect(variable.sort()).toEqual(['_ccrc_knob "$1" in _keep_knob', '_ccrc_knob "$k" in _check_box-settings']);
+    expect(variable.sort()).toEqual(['_ccrc_knob $1 in _keep_knob', '_ccrc_knob $k in _check_box-settings']);
   });
 
   it('C5: every name read from the environment outside the reader is a reasoned exception, and every exception is still read', () => {

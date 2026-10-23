@@ -16949,8 +16949,8 @@ function plantHealthyBackupTools(home: string): void {
 // ── box-settings (wave 24, D-6599) ─────────────────────────────────────────
 
 describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-6599)', () => {
-  /** ccrc's tree and a ccrc.env holding `lines` after a role line, with the real `awk` ccrc's one reader scans with
-   *  (a box has one; `healthy()`'s contained PATH does not, and a reader that cannot scan WARNs). */
+  /** ccrc's tree and a ccrc.env holding `lines` after a role line, on a contained PATH with the real `awk` linked in,
+   *  since ccrc's one reader scans with it and, with no `awk` to scan with, WARNs that the file could not be scanned. */
   const settingsBox = (prefix: string, lines: string[]): string => {
     const home = mkTmp(prefix);
     installCcrc(home);
@@ -17012,5 +17012,24 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     expect(verdict(r)).toMatch(/CCRC_UPDATE_DEADLINE_MS= \(empty: the default\)/);
     expect(verdict(r), 'a named-empty line is not listed as unset').not.toMatch(/environment sets it:.*CCRC_UPDATE_DEADLINE_MS\b/);
     expect(r.code).toBe(0);
+  });
+
+  it('W24-S6: a scheme-less mirror base\'s credentials never print either (curl reads it as http)', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-url-bare-', ['CCRC_RELEASE_BASE_URL=u:hunter2@mirror.example/r']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=mirror\.example\/r;/);
+    expect(r.stdout).toContain('mirror.example');
+    expect(r.stdout).not.toContain('hunter2');
+    expect(r.code).toBe(0);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('W24-S7: a ccrc.env that is there but cannot be read WARNs, naming the file\'s own remedy', () => {
+    const home = settingsBox('ccrc-doctor-bs-unreadable-', ['CCRC_BACKUP_KEEP=5']);
+    chmodSync(join(home, '.ccrc', 'ccrc.env'), 0o000);
+    const r = runBs(home);
+    expect(r.stdout, r.stderr).toMatch(/^WARN box-settings: CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env is there but cannot be read/m);
+    expect(out(r)[1]).toMatch(/^ {2}remedy: .*make the file itself readable when it cannot be read or scanned/);
+    expect(out(r)).toHaveLength(2);
+    expect(r.stdout).not.toMatch(/^PASS box-settings/m);
+    expect(r.code).toBe(2);
   });
 });

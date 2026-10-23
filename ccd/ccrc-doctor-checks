@@ -9680,14 +9680,21 @@ _check_snapshot-posture() {
 # through ccrc's one reader in `file` mode (`_ccrc_knob <KEY> "" file`), so a line the environment hides today is seen
 # before the environment goes: once it does, the file is what every run reads. It reports what the reader reads, never
 # whether a value is valid (each act validates its own). It prints values for those names only, never another line of
-# the file, and through `_upd_redact`, so a mirror URL's userinfo never prints. A line the reader refuses, or a file it
-# cannot read at all, WARNs with each reason; until it is rewritten, the act that reads that setting refuses or falls
-# back, as its own line says. No role skip: every role reads its own settings.
+# the file, and through `_upd_redact`; a mirror base's userinfo is masked first, with a scheme or without one (curl
+# reads `user:password@host/...` as http, and `_upd_redact` strips only what follows `://`), so it never prints. A line
+# the reader refuses, or a file it cannot read at all, WARNs with each reason; until it is rewritten, the act that reads
+# that setting refuses or falls back, as its own line says. No role skip: every role reads its own settings.
 _check_box-settings() {
-  local k set="" unset="" why="" none="none of ccrc's settings"   # a `'` inside "${set:-…}" would open a quote in bash
+  local k v pre set="" unset="" why="" none="none of ccrc's settings"   # a `'` inside "${set:-…}" would open a quote in bash
   for k in "${CCRC_SETTINGS[@]}"; do
     if ! _ccrc_knob "$k" "" file; then why+="${why:+; }$KNOB_WHY"
-    elif [ "$KNOB_FROM" = file ]; then set+="${set:+, }$k=$KNOB"
+    elif [ "$KNOB_FROM" = file ]; then
+      v="$KNOB"
+      if [ "$k" = CCRC_RELEASE_BASE_URL ]; then   # each `[^/@[:space:]]*@` before the authority's first `/` goes
+        pre=""; [[ ! "$v" =~ ^[A-Za-z][A-Za-z0-9+.-]*:// ]] || pre="${BASH_REMATCH[0]}"
+        v="${v#"$pre"}"; [[ ! "$v" =~ ^([^/@[:space:]]*@)+ ]] || v="${v#"${BASH_REMATCH[0]}"}"; v="$pre$v"
+      fi
+      set+="${set:+, }$k=$v"
     elif [ "$KNOB_FROM" = empty ]; then set+="${set:+, }$k= (empty: the default)"
     else unset+="${unset:+,} $k"
     fi
