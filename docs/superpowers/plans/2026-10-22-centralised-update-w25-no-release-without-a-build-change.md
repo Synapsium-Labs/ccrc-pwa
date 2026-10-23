@@ -1400,3 +1400,48 @@ Deviations: amend D-6398, D-6408, D-6409, D-6502 and D-6512 in place, each sayin
 All of these sit inside the consented README and CLAUDE.md regions (8085, 8081; owner claim 2278 replaced 2259). Re-read ownership before Task 4.
 
 Gates as before, one file at a time. Measure every new row red, then green, and give the before and after in the wave-done. Landing as before: first-ready, measuring merge-tree against main and #1137's head. Send wave-done in the same turn as the push.
+
+## As built, fix round 3 (2026-10-23)
+
+**Suite.** The round's first full run is CI's on the pushed head: the PR touches `.github/`, so `select tests` runs the whole server suite. Review 842 read CI's full run at `d1754c19c` green, with 920 of the 920 server files. No full local run happened.
+
+**The eleven findings, each fixed:**
+- F1: release-stable tells a docs-only head from one with a run (D-6398 amended). Rows: W25-T1, T1b, T1c, T1d and T5.
+- F2, F3 and F4: rows W25-C29, C30 and C31 (D-6408 amended).
+- F5: W25-C32 and C33 (D-6409 amended).
+- F6: W25-C34 (D-6502 amended).
+- F7: W25-F2 builds the tarball and lists it, and all thirteen of the review's mutations red it (D-6512 amended).
+- F8: W25-C35 and C36, the four missing real rows (X9 to X12), the guards with no row named, and the count corrected.
+- F9: the interface texts as built.
+- F10: CLAUDE.md's stamp sentence.
+- F11: README's feature row names the trigger's patterns.
+- The stale W25-Y1 bullet is removed.
+
+**Rows, before and after** (the Mutation table holds every after):
+- Before: every new row was green on the round's code. W25-T1b and W25-T5 were red on the previous release-stable script (Y0), and green after its fix.
+- After: each new row reds under its mutation, X1 to X12, Y1 to Y6, and F7 (a) to (m).
+
+**Per-file runs at `e99d426a8`,** one file at a time, `--pool=forks --maxWorkers=1`:
+
+| File | Tests |
+|---|---|
+| release-main | 87 |
+| build-release | 46 |
+| release-stable | 24 |
+| release-notes | 44 |
+| update-states | 32 |
+| oss-metadata | 29 |
+| verify-provenance | 25 |
+| workflow-yaml-parses | 17 |
+| citations | 4 |
+| private-names | 47 |
+| topology-clean | 60 |
+| dtbd | 1 |
+| docs-parity | 54 |
+| deviation-refs | 31 |
+| single-definition | 836 |
+| growth-check | 45 |
+| typecheck-tests | 12 |
+| pwa settings-screen | 240 |
+
+**Commits:** `48828c125`, `b6173945e`, `a53127cab`, `a4ab632fa` and `e99d426a8`, and this note's own.
