@@ -877,10 +877,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // function — only an explicit teardown (leaving the session screen,
         // a swap/compact cycle) does. This is the belt to that fix's braces:
         // whatever the next connect delivers is authoritative, never a
-        // leftover from before the drop. `dialog` is not cleared here: the
-        // socket's own state lowers it whenever the connection is not open
-        // (`onState`, D-6325), because a new stream frames the menu it sees
-        // but never the absence of one.
+        // leftover from before the drop. `dialog` is not cleared here: a drop
+        // lowers it through the socket's own state (`onState`, D-6325),
+        // because a new stream frames the menu it sees but never the absence
+        // of one; after this explicit teardown nothing renders it.
         //
         // `mail` gets the identical belt-and-braces (fix round 1, finding 3's
         // named residual): `sessionws.ts`'s own per-connection sentinel now

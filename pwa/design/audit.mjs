@@ -882,7 +882,7 @@ export const INHERITED_GROUNDS = {
   },
   '.dlg-later:disabled': {
     under: ['var(--bg-sheet)'],
-    why: "review 844 M1: Deny's disabled look while the reconnect gap holds the ask (and a disabled \"Not now\"), tertiary ink as the own-words Send and the tab chips take. It sits in .dlg-actions inside the ask sheet's <Sheet>, whose .sheet-panel paints background: var(--bg-sheet) (primitives.css:141); the rule paints no ground and its selector names no painted ancestor. Registered rather than grandfathered: the ground is recoverable by reading the component.",
+    why: "D-6325 (the-ask-holds-through-a-reconnect): Deny's disabled look while the reconnect gap holds the ask, tertiary ink as the own-words Send and the tab chips take. It sits in .dlg-actions inside the ask sheet's <Sheet>, whose .sheet-panel paints background: var(--bg-sheet) (primitives.css:141); the rule paints no ground and its selector names no painted ancestor. Registered rather than grandfathered: the ground is recoverable by reading the component.",
   },
   '.opt-inert': {
     under: ['var(--bg-sheet)'],
