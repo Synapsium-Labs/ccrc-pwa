@@ -406,3 +406,19 @@ describe('the eight coordination lanes (D-5862, PR 2)', () => {
     expect(runner.runSync('due', () => {}, 0)).toBe(true);
   });
 });
+
+describe('the declared derivations are references, never a second literal', () => {
+  it('the stall watch\'s cadence is the claim lanes\' constant, by reference', () => {
+    expect(text('laneSchedule.ts')).toContain('export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;');
+    expect(laneRow('stalls').derivedFrom?.name).toBe('CLAIM_SWEEP_MS');
+    expect(laneRow('stalls').cadenceMs).toBe(laneRow('claimRenew').cadenceMs);
+  });
+
+  it('the digest beat and the approval prune are named rows, not bare literals in the watcher', () => {
+    const src = text('watch.ts');
+    expect(src).not.toMatch(/-\s*this\.lastDigestBeat/);
+    expect(src).not.toMatch(/86_400_000/);
+    expect(laneRow('digestBeat').cadenceMs).toBe(60_000);
+    expect(laneRow('approvalPrune').cadenceMs).toBe(86_400_000);
+  });
+});

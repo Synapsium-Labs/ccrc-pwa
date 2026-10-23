@@ -385,6 +385,13 @@ describe('sweepApprovals has no throttle; only its daily prune is a beat', () =>
     expect(prunedAsks.mock.calls.length).toBe(2);
   });
 
+  it('tick calls the lane on every tick, whatever the prune day says', async () => {
+    const r = rig();
+    const m = vi.spyOn(r.w, 'sweepApprovals').mockResolvedValue(undefined);
+    for (const ms of [NOW, NOW + 2_000, NOW + 4_000]) { at(ms); await r.w.tick(); await settleTurns(); }
+    expect(m.mock.calls.length, 'a tick skipped the approvals lane').toBe(3);
+  });
+
   it('a held approval past its notifyAt lapses on the call straight after a prune', async () => {
     const r = rig();
     at(NOW);
