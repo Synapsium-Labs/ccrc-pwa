@@ -6,6 +6,7 @@
 // Every case reads a fake `FleetIO` (registryCountingIO.ts) that logs each request, so what the reader asks the
 // agent link for is the thing measured, not an inference from the records it builds.
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   readRegistryMeasured, readSessionRecord, REGISTRY_ROW_CONCURRENCY,
@@ -85,6 +86,21 @@ describe('a registry read is bounded in requests and in rows in flight', () => {
       expect(read.records.map((r) => r.id)).toEqual([...read.records.map((r) => r.id)].sort());
       expect(read.names).toEqual(await jittered.io.readdir(dir));
     }
+  });
+
+  it('the listed-only read answers what the base read answered on the edge fixture', async () => {
+    quiet();
+    // The golden was generated ON THE BASE (aa4d287af's registry.ts, which read every field whether listed or not)
+    // over `edgeFixture()`, whose listing is truthful for every file it serves: a temporary test over a scratch
+    // copy of that file's source, writing `JSON.stringify({ refused, records }, null, 1)`. It is the one pin that is not circular: the serial
+    // reference above shares the changed `buildRecord`, this does not. A change to a record the edge fixture
+    // covers has to be a change of this file, on purpose.
+    const golden = JSON.parse(readFileSync(path.join(import.meta.dirname, 'fixtures', 'registry', 'edge-base-records.json'), 'utf8')) as
+      { refused: string[]; records: unknown[] };
+    const read = await readRegistryMeasured(countingIO(edgeFixture()).io, cfg);
+    if (!read.listed) throw new Error('unlisted');
+    expect([...read.refused]).toEqual(golden.refused);
+    expect(JSON.parse(JSON.stringify(read.records))).toEqual(golden.records);
   });
 
   it('never more than the bound in flight', async () => {
