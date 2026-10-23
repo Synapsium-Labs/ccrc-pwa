@@ -610,3 +610,48 @@ export function declaredDerivations(root: string = REPO): Array<{ name: string; 
   }
   return DECLARED_DERIVATIONS.map((name) => ({ name, file: found.get(name)?.file ?? null, reference: found.get(name)?.reference ?? false }));
 }
+
+/**
+ * D-5864 (Task C1j; ARCH-51 #786; spec K13's listing half): every place `server/src/watch.ts` lists the registry, from its
+ * syntax tree (`scan/symbols.ts`, over `scan/parse.ts`), never from a count typed by hand. A site is a call of `readRegistry(`
+ * or `readRegistryMeasured(`, or of a `readdir(` whose first argument names `registryDir`, inside a method of the class.
+ * Each is tagged by the method it sits in:
+ * - `selection`: it chooses rows for a lane. Exit target (C1j): exactly one, in `FleetWatcher.tick`; the lanes take the
+ *   tick's `FleetReadModel`.
+ * - `act`: it is read at the act and stays fresh, by name (`ACT_LISTING_METHODS`): the mail lane's last switch read
+ *   before it delivers, and the divergence census's listing, taken after git's records on purpose; and the tick's own bare
+ *   `readdir`, the snapshot write's re-confirmation when the fleet shrank.
+ * - `tests-only`: a lane's own read when called with no model, reached by tests alone (`TESTS_ONLY_LISTING_METHODS`);
+ *   the registry-refused census pins that `tick()` hands each lane its model.
+ * A method not named in either list is `selection`, so a new lane that lists for itself is counted as one.
+ * KNOWN WIDTH: `assembleFleet`'s marker listing inside `readLimits` (`limits.ts`) is another file's, reported in the PR body
+ * and left to the request-time readers' work (ARCH-52, W2); a listing reached through an alias, a helper or a `readdir`
+ * whose argument is a local that holds `registryDir` is not seen.
+ */
+export const ACT_LISTING_METHODS: readonly string[] = ['FleetWatcher.mailPass', 'FleetWatcher.divergencesPass'];
+export const TESTS_ONLY_LISTING_METHODS: readonly string[] = ['FleetWatcher.fleetFor', 'FleetWatcher.sweepHookStates', 'FleetWatcher.detectDialogs'];
+export const SELECTION_LISTING_METHOD = 'FleetWatcher.tick';
+
+export type ListingTag = 'selection' | 'act' | 'tests-only';
+export interface RegistryListingSite extends CensusSite { readonly method: string; readonly tag: ListingTag }
+
+export function registryListingSites(root: string = REPO): RegistryListingSite[] {
+  const file = path.join(root, 'server/src/watch.ts');
+  if (!existsSync(file)) return [];
+  const parsed = parsedFile(file);
+  const lines = parsed.text.split('\n');
+  const out: RegistryListingSite[] = [];
+  for (const c of parsed.calls) {
+    const isReader = c.name === 'readRegistry' || c.name === 'readRegistryMeasured';
+    const isListing = c.name === 'readdir' && (c.args[0]?.text ?? '').includes('registryDir');
+    if (!isReader && !isListing) continue;
+    const inner = parsed.symbols.filter((s) => s.kind === 'method' && s.name.startsWith('FleetWatcher.') && s.start <= c.start && c.end <= s.end)
+      .sort((a, b) => b.start - a.start)[0];
+    if (inner === undefined) continue;
+    // The tick's own bare `readdir(registryDir)` is the snapshot write's shrink re-confirmation, taken only when the fleet shrank.
+    const tag: ListingTag = ACT_LISTING_METHODS.includes(inner.name) || (inner.name === SELECTION_LISTING_METHOD && isListing) ? 'act'
+      : TESTS_ONLY_LISTING_METHODS.includes(inner.name) ? 'tests-only' : 'selection';
+    out.push({ file: 'server/src/watch.ts', line: c.line, text: lines[c.line - 1]!, method: inner.name, tag });
+  }
+  return out;
+}
