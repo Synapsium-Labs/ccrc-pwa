@@ -7,6 +7,13 @@
       "d": "D-6180",
       "reason": "auto-swap reliability W1: a stand-down line for every held limit, a re-logged tick-undecidable after the compact-note floor, and lane= on every decision line, all log-only bash in ccd/ccd's swap arm (measured +87 net code lines against the merge-base)",
       "added": "2026-10-21"
+    },
+    {
+      "file": "ccd/ccd",
+      "maxDelta": 70,
+      "d": "D-6619",
+      "reason": "fleet disk retention DR-7: the read-only path-users verb and its one-walk holder probe in ccd/ccd (measured +65 net code lines against the merge-base)",
+      "added": "2026-10-23"
     }
   ]
 }
