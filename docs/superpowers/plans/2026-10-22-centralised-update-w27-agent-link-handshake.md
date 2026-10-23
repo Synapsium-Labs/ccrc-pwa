@@ -1421,6 +1421,37 @@ Gates as before, one file at a time: remote-liveness (whole file three times, th
 
 README: re-read the owner claim before editing. It is 2306, under run 774's consent 8314. Landing as before: first-ready. Wave 23 (#1137) is in the merge queue now, so main moves. Measure merge-tree against main and against #1149 before you push. Never update-branch, rebase or force-push. Send the wave-done in the same turn as the push. The next review will be lean: the new rows and the texts.
 
+## Coordinator rulings on review 860 (2026-10-23)
+
+Recorded verbatim from the coordinator's second fix-round mail, with the report's path written as "the review's report", as the ruling asks.
+
+Run 833, wave 27: fix round 2, ruled on review 860 (the review's report; read it whole). Record this verbatim in the plan as "Coordinator rulings on review 860 (2026-10-23)", and write the report's path as "the review's report".
+
+The review found the round sound. M24 to M36 red as claimed, each by its own assertion, M30 stays green, every suite in the brief is green, CI's repo-owned legs are green, and merge-tree against main 49e7f187a is clean. Three findings remain, all small. This round ships no new behaviour.
+
+1. F1, the window is not pinned at 8 (important). Ruled: pin it, do not narrow the claim. D-6529 argues the 8 as a safety bound, and a red suite is the mechanism, so the rows must red on a window of 9 or 10. My ruling 1 on review 852 asked for 10 characters (P2a); that was my gap, and this corrects it.
+- Change W27-L17 to withhold exactly 8 token characters in a row (for example `token.slice(20, 28)`), so its title is true. W27-L18, which prints 7, stays as it is. Together they pin the window at exactly 8.
+- Add the review's two window mutants to the table as M37 (width 9) and M38 (width 10). Each must red W27-L17 by its assertion. Re-run M25, M29 and M30 against the new L17 and record them; M29 must still red it, and M30 must still stay green.
+- The plan's "the window is 8" claims (Review Focus, D-6529's amendment, and the As built text) and M29's guard text then stand as written. If any of them names 10, fix it to 8.
+
+2. F2, the boot line's wording (minor). In README's bullet (the clause that now reads "when an attempt closes before the first ready since the server started and no other line has opened the stretch"), write "when an attempt closes, or its socket cannot be created, before the first ready since the server started ...". Make the same change in D-6520, so its sentence agrees with the not-created case it already names. Mark D-6520 "amended on review 860". This stays inside the bullet already consented for this wave and adds no digit; nothing else in README changes.
+
+3. F3, the As built record (minor). Add 21488feb9 and d0aa1b780, and this round's commits, to the fix-round commit list. Say the campaign was re-run at d0aa1b780 for M34 and M35 by review 860 and holds, and record the window mutants of this round at your tip.
+
+4. Review question (c), D-6585 (no change to the ruling). The departure stands. Add the reviewer's reason to its text, marked "amended on review 860": under M36 every gap is about 150 ms, so the form "the fourth gap at least twice the minimum" stays green and would not catch the flattened backoff.
+
+The refuted items stay as they are. The README timeout clause need not name `closing`.
+
+Deviations: none are issued for this round, and none should be needed; the changes are amendments in place. If you meet a real departure, write D-TBD-<slug> and say so in the wave-done.
+
+Measure before wave-done:
+- remote-liveness three times, whole file; then readme-holds, docs-parity, citations, single-definition, topology-clean, private-names, dtbd, deviation-refs after `git fetch origin main`, and growth-check with GROWTH_CHECK=1. One file at a time, foreground.
+- Mutants on a scratch copy only. Around each vitest call, in a subshell: n=$(ps -L -u "$(id -u)" --no-headers | wc -l); ulimit -u $((n + 1500)); timeout -k 10 600 ./node_modules/.bin/vitest run ... Restore with cmp after each.
+- `git merge-tree` against the new origin/main and against each open head that touches README, before the push. Absorb main only on a measured conflict or a red, by an ordinary git merge that keeps both sides; never update-branch, rebase or force-push.
+- Scan the round's added prose for private names.
+
+Push once, and send the wave-done in the same turn. Keep claim 2300 until the merge.
+
 ## As built (run 833, 2026-10-23)
 
 The worker's record. Measured on the workspace branch over base `a68c90f15` (main did not move during the wave, and
