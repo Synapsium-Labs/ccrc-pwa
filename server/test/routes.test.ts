@@ -368,6 +368,17 @@ describe('write routes', () => {
     await app.close();
   });
 
+  it('a /prompt body with resume: true and replaceDraft: true over a foreign box is draft-present and clears nothing', async () => {
+    const { app, calls } = await makeApp([boxPane('somebody else was typing')]);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true, replaceDraft: true },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'draft-present', draft: 'somebody else was typing' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
   // D-6366: a refused send leaves one countable line, naming the outcome and the box's shape and never the text.
   it('a refused send writes one warn line naming its outcome, without the text', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

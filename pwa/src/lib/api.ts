@@ -48,10 +48,12 @@ function answered(body: unknown): DialogAnswered {
 // it without loading this fetch adapter. Re-exported: every existing import, and every screen, keeps its line.
 export { ApiError };
 
+/** The send and submit tables share this sentence: a resumed Retry (D-6367) and `/submit` both answer `nothing-to-submit`. */
+const NOTHING_TO_SUBMIT_TEXT = 'The box is empty — nothing was sent from here. Check the transcript before sending again.';
+
 /** Send failures the server names by code. Left raw these surfaced as bare
  *  slugs under the failed bubble ("dialog-open"), which says nothing about what
  *  to do next. `draft-present` is absent on purpose — it has its own sheet. */
-const NOTHING_TO_SUBMIT_TEXT = 'The box is empty — nothing was sent from here. Check the transcript before sending again.';
 const SEND_ERROR_TEXT: Record<string, string> = {
   'nothing-to-submit': NOTHING_TO_SUBMIT_TEXT, // a resumed Retry (D-6367) over an emptied box answers it
   'dialog-open': "Claude is asking a question — answer that first, then send.",
