@@ -189,7 +189,7 @@ import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { LaneRunner } from './laneRunner.js';
-import { DIVERGENCE_SWEEP_MS, LC_SWEEP_MS, PR_BACKOFF_MAX_MS, PR_SWEEP_MS, READINESS_SWEEP_MS, type LaneName } from './laneSchedule.js';
+import { CLAIM_SWEEP_MS, DIVERGENCE_SWEEP_MS, LC_SWEEP_MS, PR_BACKOFF_MAX_MS, PR_SWEEP_MS, READINESS_SWEEP_MS, type LaneName } from './laneSchedule.js';
 // THE TEMP-ROOT COLLECTOR'S LANE (child reclamation wave 9, spec §5.10). A block of its own, so no import line above
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
 import { COLLECT_CAP } from './ccdargv.js';
@@ -296,12 +296,6 @@ export const HEADS_BOOT_WAIT_MS = 2_500;
 /** The mirror lane's cadence, the census's and the readiness lane's live in `laneSchedule.ts`; the suites and `index.ts`
  *  import the two exported ones from here. */
 export { LC_SWEEP_MS, READINESS_SWEEP_MS };
-
-/** Build 9 wave 7 (D12): the claim lease's lane. 60 s — a 45-minute lease
- *  does not need the 2 s tick, and `sweepDivergences` already argues this
- *  cadence. Renew and lapse each keep their own clock so neither starves the
- *  other's first run. */
-const CLAIM_SWEEP_MS = 60_000;
 
 /** The stall watch's lane (spec 2026-09-29 §4.2, §10). It runs at `CLAIM_SWEEP_MS`'s cadence, for that
  *  constant's reason: a threshold of the quiet time (2 h built-in, 30 min at the least, stall watch settings §7)
@@ -1164,9 +1158,6 @@ export class FleetWatcher {
    *  row per source row per process, so a restart writes it once more. Never pruned, because an ended item
    *  never returns. */
   private readonly childReclaimLeafFed = new Set<number>();
-  /** The claim lanes' clocks (build 9 wave 7, D12). */
-  private lastClaimRenew = 0;
-  private lastClaimLapse = 0;
   /** The stall lane's own clock (`STALL_SWEEP_MS`), with the same `!== 0` never-run idiom. */
   private lastStallSweep = 0;
   /** True while a `sweepStalls` pass awaits its reads. A second pass started meanwhile returns at once. */
@@ -1603,6 +1594,10 @@ export class FleetWatcher {
   runLane<T>(name: LaneName, fn: () => Promise<T> | T, active = false): Promise<T | undefined> | null { return this.lanes.run(name, fn, active); }
   /** An on-demand run's stamp, as `inventoryNow` and `serverCapsNow` set it. */
   stamp(name: LaneName): void { this.lanes.stamp(name); }
+
+  /** A synchronous beat on the row's cadence (the claim pair, the daily prune, the digest's beat): runs `fn` when it is
+   *  due at `now` (default: the row's clock) and answers whether it did. */
+  runLaneSync(name: LaneName, fn: () => void, now?: number): boolean { return this.lanes.runSync(name, fn, now); }
   /** The lane runs on the next tick. */
   kick(name: LaneName): void { this.lanes.kick(name); }
   /** The post-gather re-stamp on the decision clock. */
@@ -6145,17 +6140,17 @@ export class FleetWatcher {
    * death" does its other half of the work.
    */
   renewClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[], refused: ReadonlySet<string>): void {
-    const now = Date.now();
-    if (this.lastClaimRenew !== 0 && now - this.lastClaimRenew < CLAIM_SWEEP_MS) return;
-    this.lastClaimRenew = now;
-    const store = this.deps.coord;
-    if (!store) return;
-    const probe = this.claimProbe(sessions, refused);
-    for (const c of store.activeClaims()) {
-      const v = probe.liveness(c.heldBy);
-      const d = claimExpiry(c, now, v === 'unmeasurable' ? 'running' : v);
-      if (d.act === 'renew') store.renewClaimRow(c.id, d.expiresAt, now);
-    }
+    this.runLaneSync('claimRenew', () => {
+      const now = Date.now();
+      const store = this.deps.coord;
+      if (!store) return;
+      const probe = this.claimProbe(sessions, refused);
+      for (const c of store.activeClaims()) {
+        const v = probe.liveness(c.heldBy);
+        const d = claimExpiry(c, now, v === 'unmeasurable' ? 'running' : v);
+        if (d.act === 'renew') store.renewClaimRow(c.id, d.expiresAt, now);
+      }
+    });
   }
 
   /** The lapse half — `claimExpiry`'s `lapse` arm applied. A holder measured
@@ -6163,16 +6158,16 @@ export class FleetWatcher {
    *  the 8 h hard cap lapses whatever the liveness said. Rows survive —
    *  `lapseClaimRow` lapses, never deletes. */
   lapseClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[], refused: ReadonlySet<string>): void {
-    const now = Date.now();
-    if (this.lastClaimLapse !== 0 && now - this.lastClaimLapse < CLAIM_SWEEP_MS) return;
-    this.lastClaimLapse = now;
-    const store = this.deps.coord;
-    if (!store) return;
-    const probe = this.claimProbe(sessions, refused);
-    for (const c of store.activeClaims()) {
-      const d = claimExpiry(c, now, probe.liveness(c.heldBy));
-      if (d.act === 'lapse') store.lapseClaimRow(c.id, d.endedBy, now);
-    }
+    this.runLaneSync('claimLapse', () => {
+      const now = Date.now();
+      const store = this.deps.coord;
+      if (!store) return;
+      const probe = this.claimProbe(sessions, refused);
+      for (const c of store.activeClaims()) {
+        const d = claimExpiry(c, now, probe.liveness(c.heldBy));
+        if (d.act === 'lapse') store.lapseClaimRow(c.id, d.endedBy, now);
+      }
+    });
   }
 
   /**
