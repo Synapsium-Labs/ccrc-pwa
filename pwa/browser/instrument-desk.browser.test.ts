@@ -69,6 +69,15 @@ const FIXTURE: AppFixture = {
   },
   fleetFrames: [{ type: 'fleet', sessions: SESSIONS }],
 };
+// The same fleet with two open runs (T2g, D-6715): the status bar's count then reads "… · 2 runs", its longest form.
+const RUNS = [1, 2].map((id) => ({
+  id, program: 'programme-a', programTitle: 'Programme A', wave: 1, waveOf: 2, project: 'project-a', homeProject: null,
+  state: 'working', closedAt: null,
+}));
+const WITH_RUNS: AppFixture = {
+  api: { ...FIXTURE.api, '/api/runs': RUNS },
+  fleetFrames: [{ type: 'fleet', sessions: SESSIONS }, { type: 'runs', runs: RUNS }],
+};
 const SESSION_ROUTE = '/s/project-a-desk-density-pass';
 
 let dist: string | undefined;
@@ -88,8 +97,8 @@ afterAll(async () => {
   removeDist(dist);
 });
 
-async function open(theme: string, width: number, height: number, route: string, touch = false) {
-  const opened = await openApp(browser!, { skin: INSTRUMENT, theme, width, touch }, FIXTURE);
+async function open(theme: string, width: number, height: number, route: string, touch = false, fixture: AppFixture = FIXTURE) {
+  const opened = await openApp(browser!, { skin: INSTRUMENT, theme, width, touch }, fixture);
   await opened.page.setViewportSize({ width, height });
   await opened.page.goto(server!.origin + route);
   await opened.page.waitForSelector('.shell-nav .sess-line', { timeout: 20_000 });
@@ -160,6 +169,50 @@ describe('one head in the list column', () => {
           return Math.round(document.querySelector('.shell-nav .sess-line')!.getBoundingClientRect().top - nav.top);
         });
         expect(offset).toBeLessThanOrEqual(BEFORE - BUDGET);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
+
+/** The first row's offset at 1280x800 on `/` after T2e (fd15dd7e0, Step 0 of T2g, both themes, a fine pointer), and what
+ *  T2g removes from it: the head (15 px, the pool lag and the count line gone, so no head at all) and the `.fleet` column's
+ *  row gap beside it (12 px), written exactly as measured: 223 before, 27 saved. After the change the measured offset is
+ *  AFTER_MEASURED_PLACEHOLDER px. */
+const AFTER_T2E = 223;
+const SAVING = 27;
+
+describe('one count at the desk (T2g, D-6715)', () => {
+  for (const theme of THEMES) {
+    it(`at 1280x800 the first row starts ${SAVING} px higher than after T2e, no less (${theme})`, async () => {
+      const { ctx, page } = await open(theme, 1280, 800, '/');
+      try {
+        const offset = await page.evaluate(() => {
+          const nav = document.querySelector('.shell-nav')!.getBoundingClientRect();
+          return Math.round(document.querySelector('.shell-nav .sess-line')!.getBoundingClientRect().top - nav.top);
+        });
+        expect(offset).toBeLessThanOrEqual(AFTER_T2E - SAVING);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+
+  // Green at the base (Step 0 measured it whole there): a guard for the one count left, which must not be cut with an
+  // ellipsis now that the column's copy is gone.
+  for (const touch of [false, true]) {
+    it(`at 900 the status bar's count is whole, with two open runs (${touch ? 'touch' : 'fine pointer'})`, async () => {
+      const { ctx, page } = await open(PHOSPHOR, 900, 800, '/', touch, WITH_RUNS);
+      try {
+        await page.waitForFunction(() => (document.querySelector('.ins-status-summary')?.textContent ?? '').includes('run'),
+          undefined, { timeout: 20_000 });
+        const m = await page.evaluate(() => {
+          const el = document.querySelector<HTMLElement>('.ins-status-summary')!;
+          return { text: el.textContent ?? '', scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
+        });
+        expect(m.text).toContain('run');
+        expect(m.scrollWidth, m.text).toBeLessThanOrEqual(m.clientWidth);
       } finally {
         await ctx.close();
       }

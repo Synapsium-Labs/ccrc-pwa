@@ -487,3 +487,60 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     }
   });
 });
+
+// ---- Desk polish, T2g (D-6715) ----------------------------------------------------------------------------------
+
+describe('the desk (T2g): one count, in the status bar', () => {
+  const readout = fleetSummary([S, WS], null).readout;
+
+  it("at 900, 1280 and 1920 Instrument's list column draws no count line, and the status bar's fleetSummary is the one count in the frame", () => {
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      const counts = document.querySelectorAll('.fleet-count, .ins-status-summary');
+      expect(counts, `${width}px: count elements`).toHaveLength(1);
+      expect(footer().contains(counts[0]!), `${width}px: inside the status bar`).toBe(true);
+      expect(counts[0]!.textContent, `${width}px`).toBe(readout);
+      // By its text, not its class: a count that came back under a new class name is still a second one.
+      const leaves = [...document.body.querySelectorAll('*')].filter((el) => el.children.length === 0);
+      expect(leaves.filter((el) => (el.textContent ?? '').includes(readout)), `${width}px: leaves that say the count`).toHaveLength(1);
+      cleanup();
+    }
+  });
+
+  it("at 899 Instrument's list column keeps its count line", () => {
+    stubAt(899);
+    mount('/');
+    expect(document.querySelector('.shell-nav .fleet-count')).toHaveTextContent(readout);
+    expect(document.querySelector('footer.shell-status')).toBeNull();
+  });
+
+  it("at the desk the list column's head is the pool lag alone when the epochs differ, and there is no head when they agree", () => {
+    stubAt(1280);
+    act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 3 } }));
+    mount('/');
+    const head = document.querySelector('.shell-nav .fleet-head');
+    expect(head).not.toBeNull();
+    expect(head!.textContent).toBe('epoch 5 / observed 3');
+    expect(head!.querySelector('.fleet-count, .wordmark')).toBeNull();
+    cleanup();
+    act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5 } }));
+    mount('/');
+    expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
+  });
+
+  it("Refined's desk column keeps its count line", () => {
+    act(() => { setSkin(REFINED); });
+    stubAt(1280);
+    mount('/');
+    expect(document.querySelector('.shell-nav .fleet-count')).toHaveTextContent(readout);
+  });
+
+  it('Refined at 1280 on an empty fleet with no lag draws no .shell-nav .fleet-head', () => {
+    act(() => { setSkin(REFINED); });
+    stubAt(1280);
+    mount('/', []);
+    expect(document.querySelector('.shell-nav')).not.toBeNull();
+    expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
+  });
+});
