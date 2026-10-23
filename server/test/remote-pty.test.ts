@@ -154,4 +154,74 @@ describe('remote SpawnPty — terminal drawer over the agent WS', () => {
     await vi.waitFor(() => expect(fake.instances[0]!.written).toContain('early\r'), wait);
     await vi.waitFor(() => expect(fake.instances[0]!.resized).toContainEqual({ cols: 90, rows: 28 }), wait);
   });
+
+  it('after a link drop and a reconnect, a write through the stale RemotePty reaches no pty', async () => {
+    // D-6368. The agent numbers ptys per CONNECTION from 1, so after a reconnect a new session's pty is id 1 again —
+    // the id the stale RemotePty still holds. Its keys must die at the source, never reach the new pty.
+    const fake = makeFakeSpawn();
+    await connected(fake.spawn);
+    const states: boolean[] = [];
+    fleet!.onStateChange((s) => states.push(s.connected));
+
+    const stale = fleet!.spawnPty('sess-a', 80, 24) as unknown as RemotePty;
+    await vi.waitFor(() => expect(fake.instances.length).toBe(1), wait);
+    let staleExited = 0;
+    stale.onExit(() => { staleExited += 1; });
+    await vi.waitFor(() => expect((stale as unknown as { ptyId: number | null }).ptyId).toBe(1), wait);
+
+    fleet!.client.ws?.close();   // the link drops; the client synthesizes the exit, then reconnects with backoff
+    await vi.waitFor(() => expect(states).toEqual([false, true]), wait);
+    expect(staleExited).toBe(1);
+
+    const fresh = fleet!.spawnPty('sess-b', 80, 24) as unknown as RemotePty;
+    await vi.waitFor(() => expect(fake.instances.length).toBe(2), wait);
+    // PROVE the premise: both hold id 1.
+    expect((fresh as unknown as { ptyId: number | null }).ptyId).toBe(1);
+    expect((stale as unknown as { ptyId: number | null }).ptyId).toBe(1);
+
+    stale.write('x');
+    stale.resize(99, 33);
+    fresh.write('y');   // frames ride one socket in order: once 'y' lands, an 'x' sent before it would have too
+    await vi.waitFor(() => expect(fake.instances[1]!.written).toContain('y'), wait);
+    for (const inst of fake.instances) expect(inst.written).not.toContain('x');
+    for (const inst of fake.instances) expect(inst.resized).not.toContainEqual({ cols: 99, rows: 33 });
+  });
+
+  it('a failed open fires exit, so the bridge closes the drawer\'s socket', async () => {
+    const fake = makeFakeSpawn();
+    await connected(fake.spawn);
+
+    // A session id outside the agent's charset is refused ('forbidden'), deterministically, before any spawn.
+    const pty = fleet!.spawnPty('not a session!', 80, 24) as unknown as RemotePty;
+    let exits = 0;
+    pty.onExit(() => { exits += 1; });
+    pty.write('queued-before-open');
+
+    await vi.waitFor(() => expect(exits).toBe(1), wait);
+    expect(fake.instances.length).toBe(0);
+    pty.write('after');   // closed: dropped at the source
+    expect(exits).toBe(1);
+  });
+
+  it('exit releases the client\'s pty listener', async () => {
+    const fake = makeFakeSpawn();
+    await connected(fake.spawn);
+    const offPty = vi.spyOn(fleet!.client, 'offPty');
+
+    const pty = fleet!.spawnPty('sess-a', 80, 24) as unknown as RemotePty;
+    await vi.waitFor(() => expect(fake.instances.length).toBe(1), wait);
+    let exits = 0;
+    pty.onExit(() => { exits += 1; });
+    // wait until the listener is registered on the client
+    await vi.waitFor(() => expect((fleet!.client as unknown as { ptyListeners: Map<number, unknown> }).ptyListeners.has(1)).toBe(true), wait);
+
+    fake.instances[0]!.emitExit();
+    await vi.waitFor(() => expect(exits).toBe(1), wait);
+
+    expect(offPty).toHaveBeenCalledWith(1);
+    expect((fleet!.client as unknown as { ptyListeners: Map<number, unknown> }).ptyListeners.has(1)).toBe(false);
+    // and a closed pty does not send `close` for an id the agent already dropped
+    pty.kill();
+    expect(fake.instances[0]!.killed).toBe(false);
+  });
 });
