@@ -12,6 +12,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { seedRow } from './idGateFixture.js';
 import { countingIO } from './countingIO.js';
+import { READ_FROM_MAX_BYTES } from '../../shared/agent-protocol.js';
 
 describe('parseSkillListing', () => {
   it('parses "- name: desc" lines, keeping plugin:skill names', () => {
@@ -209,5 +210,191 @@ describe('GET /api/sessions/:id/commands reads one registry row (D-6434)', () =>
   it('commands: 8 rows cost what 80 do', async () => {
     // Compared per method, so a failure prints the call that grew with the registry.
     expect(await callsFor(8)).toEqual(await callsFor(80));
+  });
+});
+
+// D-6434: the route reads the most recent FULL skill listing from a bounded tail of the transcript (at most four
+// chunks of READ_FROM_MAX_BYTES, then the head), never the whole file. Fixtures are byte-exact so a chunk boundary
+// lands where a case needs it: the filler lines are valid JSON of a chosen size.
+describe('GET /api/sessions/:id/commands reads a bounded tail (D-6434)', () => {
+  const CHUNK = READ_FROM_MAX_BYTES;
+  const FILLER_HEAD = '{"type":"user","message":{"content":"';
+  const FILLER_TAIL = '"}}\n';
+  const OVERHEAD = FILLER_HEAD.length + FILLER_TAIL.length;
+
+  /** One listing line. `isInitial` absent when undefined. */
+  const listing = (content: string, isInitial?: boolean): string =>
+    JSON.stringify({ attachment: { type: 'skill_listing', ...(isInitial === undefined ? {} : { isInitial }), content } }) + '\n';
+  const full = (content: string): string => listing(content, true);
+  const delta = (content: string): string => listing(content, false);
+
+  /** Valid JSONL filler of exactly `total` bytes, in lines of about 4 KB. `multibyte`: pad with 2-byte characters,
+   *  after one ASCII byte, so a line of even size puts every character's lead byte at an even offset. */
+  function filler(total: number, multibyte = false): string {
+    if (total === 0) return '';
+    expect(total).toBeGreaterThanOrEqual(OVERHEAD);
+    const k = Math.max(1, Math.ceil(total / 4000));
+    let base = Math.floor(total / k);
+    if (multibyte) base -= base % 2;
+    const sizes = Array.from({ length: k }, (_, i) => (i === k - 1 ? total - base * (k - 1) : base));
+    return sizes.map((n) => {
+      const pad = n - OVERHEAD;
+      return FILLER_HEAD + (multibyte ? 'x' + 'é'.repeat((pad - 1) / 2) : 'x'.repeat(pad)) + FILLER_TAIL;
+    }).join('');
+  }
+  const bytes = (...parts: string[]): Buffer => Buffer.from(parts.join(''), 'utf8');
+
+  interface Rig { skills: { name: string; desc: string }[]; transcriptCalls: Array<{ method: string; offset?: number; max?: number }> }
+  /** The route over a fixture HOME whose transcript is `file`; every FleetIO call on the transcript is recorded and
+   *  a range read at an offset in `failAt` answers `unreadable`. */
+  async function rig(file: Buffer, failAt: ReadonlySet<number> = new Set()): Promise<Rig> {
+    const home = mkTmp('ccrc-cmd-tail-');
+    const id = 'project-a-ws-a';
+    const uuid = '9'.repeat(36);
+    const workdir = '/data/projects/project-a';
+    seedRow(home, id, { wrapper: 'claude', uuid, workdir });
+    const tdir = path.join(home, '.claude', 'projects', workdir.replace(/[/._]/g, '-'));
+    mkdirSync(tdir, { recursive: true });
+    const transcript = path.join(tdir, `${uuid}.jsonl`);
+    writeFileSync(transcript, file);
+    const transcriptCalls: Rig['transcriptCalls'] = [];
+    const base = countingIO().io;
+    const io = new Proxy(base, {
+      get(target, prop, receiver) {
+        const v = Reflect.get(target, prop, receiver) as unknown;
+        if (typeof v !== 'function' || typeof prop !== 'string') return v;
+        return (...args: unknown[]) => {
+          if (args[0] === transcript) {
+            transcriptCalls.push({ method: prop, offset: args[1] as number | undefined, max: args[2] as number | undefined });
+            if (prop === 'readFileFromBytesMeasured' && failAt.has(args[1] as number)) {
+              return Promise.resolve({ ok: false, reason: 'unreadable' });
+            }
+          }
+          return (v as (...a: unknown[]) => unknown).apply(target, args);
+        };
+      },
+    });
+    const app = await buildServer({ ...testDeps(home, async () => ({ code: 1, stdout: '', stderr: '' })), io });
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${id}/commands` });
+    expect(res.statusCode).toBe(200);
+    const skills = (res.json() as { skills: Rig['skills'] }).skills;
+    await app.close();
+    return { skills, transcriptCalls };
+  }
+  const names = (r: Rig): string[] => r.skills.map((s) => s.name);
+
+  it('commands: a transcript over 1 MiB costs at most six bounded reads', async () => {
+    // The only full listing is on the first line: the four chunks find none, so the head read happens too.
+    const file = bytes(full('- a: from the head'), filler(CHUNK * 6 - 100));
+    expect(file.length).toBeGreaterThan(1024 * 1024);
+    const r = await rig(file);
+    expect(names(r)).toEqual(['a']);
+    // The resolver's own continuation check (an 8 KiB tail window, a stat before it) is on the same path; what the
+    // route adds is one stat, four chunks and the head. Nothing reads the file whole.
+    const methods = (m: string): Rig['transcriptCalls'] => r.transcriptCalls.filter((c) => c.method === m);
+    for (const whole of ['readFile', 'readFileMeasured', 'readFileFrom', 'readFileB64', 'readFileB64Measured']) {
+      expect(methods(whole), whole).toEqual([]);
+    }
+    expect(methods('readFileFromMeasured').every((c) => c.offset! >= file.length - 8192)).toBe(true);
+    const ranges = methods('readFileFromBytesMeasured');
+    expect(ranges).toHaveLength(5);
+    expect(ranges.every((c) => c.max! <= CHUNK)).toBe(true);
+    expect(methods('statMeasured').length).toBeLessThanOrEqual(2);
+  });
+
+  it('a full listing then a delta answers both, full first', async () => {
+    const file = bytes(
+      full('- a: first\n- b: second'), filler(5000),
+      delta('- c: third\n- b: second, renamed'), filler(3000),
+    );
+    const r = await rig(file);
+    expect(r.skills).toEqual([
+      { name: 'a', desc: 'first', kind: 'skill' },
+      { name: 'b', desc: 'second, renamed', kind: 'skill' },
+      { name: 'c', desc: 'third', kind: 'skill' },
+    ]);
+  });
+
+  it('a delta before the latest full listing is ignored', async () => {
+    const file = bytes(delta('- z: old delta'), filler(3000), full('- a: first\n- b: second'), filler(3000));
+    expect(names(await rig(file))).toEqual(['a', 'b']);
+  });
+
+  it('a full listing across a chunk boundary is found whole', async () => {
+    const L = full('- a: first\n- b: ' + 'the second skill, long enough to straddle a boundary '.repeat(4));
+    const P = 300_000;
+    const cutIn = Math.floor(Buffer.byteLength(L) / 2);
+    const tail = CHUNK - (Buffer.byteLength(L) - cutIn);
+    const file = bytes(filler(P), L, filler(tail));
+    const boundary = file.length - CHUNK;
+    expect(boundary).toBeGreaterThan(P);
+    expect(boundary).toBeLessThan(P + Buffer.byteLength(L) - 1); // the boundary is inside the listing line
+    expect(names(await rig(file))).toEqual(['a', 'b']);
+  });
+
+  it('a multibyte character split by a chunk boundary still parses', async () => {
+    const P = 400_000; // even, and every filler line is of even size, so each starts at an even offset
+    let L = '';
+    let idx = -1;
+    let desc = '';
+    for (let pad = 0; pad < 4; pad++) {
+      desc = `${'q'.repeat(pad)}price in €uros, ${'ünïcödé '.repeat(8)}end`;
+      L = full(`- a: ${desc}`);
+      idx = Buffer.from(L, 'utf8').indexOf(Buffer.from('€'));
+      if (idx % 2 === 0) break; // the euro sign's second byte is then at an odd offset
+    }
+    expect(idx % 2).toBe(0);
+    const tail = CHUNK - (Buffer.byteLength(L) - (idx + 1));
+    const file = bytes(filler(P, true), L, filler(tail));
+    const newer = file.length - CHUNK; // the first chunk starts here
+    const older = file.length - 2 * CHUNK;
+    // Self-check: the euro sign (E2 82 AC) is split by the newer boundary, and the older boundary splits a character
+    // of the filler: the byte at each is a UTF-8 continuation byte.
+    expect(file[newer - 1]).toBe(0xe2);
+    expect(file[newer]! & 0xc0).toBe(0x80);
+    expect(file[older]! & 0xc0).toBe(0x80);
+    const r = await rig(file);
+    expect(r.skills).toHaveLength(1);
+    expect(r.skills[0]!.desc).toBe(desc);
+  });
+
+  it('no full listing in four chunks: the head\'s first answers', async () => {
+    // Head: two full listings and a delta; a DIFFERENT full listing sits in the fifth chunk back; the window is filler.
+    const S = CHUNK * 6;
+    const head = bytes(full('- h1: first head'), full('- h2: second head'), delta('- hd: head delta'));
+    const fifthChunkAt = Math.floor(S / 4) - head.length; // x lands inside [S - 5 chunks, S - 4 chunks)
+    const x = Buffer.from(full('- x: from the fifth chunk'));
+    const file = bytes(head.toString(), filler(fifthChunkAt), x.toString());
+    const rest = S - file.length;
+    const all = Buffer.concat([file, Buffer.from(filler(rest))]);
+    expect(all.length).toBe(S);
+    const xAt = all.indexOf(x);
+    expect(xAt).toBeGreaterThanOrEqual(S - 5 * CHUNK);
+    expect(xAt + x.length).toBeLessThanOrEqual(S - 4 * CHUNK);
+    expect(names(await rig(all))).toEqual(['h2', 'hd']);
+  });
+
+  it('deltas and no full listing: built-ins only', async () => {
+    const file = bytes(delta('- a: one'), filler(4000), delta('- b: two'), filler(4000));
+    expect((await rig(file)).skills).toEqual([]);
+  });
+
+  it('a failed chunk read: built-ins only', async () => {
+    // 700 KB: three chunks. The only full listing is in the oldest; the middle chunk's read does not answer.
+    const file = bytes(filler(50_000), full('- a: only here'), filler(700_000 - 50_000 - Buffer.byteLength(full('- a: only here'))));
+    expect(file.length).toBe(700_000);
+    const middleOffset = file.length - 2 * CHUNK;
+    const ok = await rig(file);
+    expect(names(ok)).toEqual(['a']); // control: unfailed, the listing is found
+    const r = await rig(file, new Set([middleOffset]));
+    expect(r.skills).toEqual([]);
+    expect(r.transcriptCalls.some((c) => c.offset === middleOffset)).toBe(true);
+  });
+
+  it('a full listing on the file\'s first line is found', async () => {
+    const L = full('- a: on line one');
+    const file = bytes(L, filler(Math.floor(2.5 * CHUNK) - Buffer.byteLength(L)));
+    expect(file.length).toBe(Math.floor(2.5 * CHUNK));
+    expect(names(await rig(file))).toEqual(['a']);
   });
 });
