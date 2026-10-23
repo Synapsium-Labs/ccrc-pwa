@@ -5801,6 +5801,8 @@ git commit -m "feat(history-replay): the arm engine, arms --section pilot|quiz, 
 
 The departure this task first cites, D-6469 (R3), is defined in this plan's "Deviations found".
 
+**Final fix wave (after the whole-branch review).** Two departures found in the arm engine are built in `armBatchPreflight` and defined in "Deviations found": D-6481 refreshes the store's pair index (`refreshPairIndex`) at the top of every arm batch preflight and just before the judge builds its inputs, and D-6482 excludes an owed arm as `run-failed`, reason `arm-payload-changed`, when its answered sibling's payload, rebuilt now, no longer matches the stdin sha its manifest recorded (the summary names the excluded count and qids). Their pins are Task 4's describe "the pair index across arm batches"; the mutants are the deletion of each refresh, the dropped compare, and the compare that refuses instead of excluding.
+
 ### Task 5: The judge: one blinded judge-mode spawn per non-correct (qid, arm), retried once, then judge-failed (W2-D79, W2-D54, W2-D80, W2-D18; Q18)
 
 Tasks 1 to 4 leave the driver able to run both arms of every question of a section on this node, under the W2-D78 and W2-D56 preflights, and to record one answer per (qid, arm) under `--out` (Task 4). Nothing yet labels a wrong answer. This task adds `judge --section pilot|quiz`, the judge half of the decisions document's acts 14 (the usage pilot's judge, Q6) and 21 ("the arm batches, and then the judge batches"). It runs on each node, in that node's `--out`, after the section's arm batches (Q2).
