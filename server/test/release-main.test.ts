@@ -153,8 +153,8 @@ function plantBin(home: string, ghExit = 0, ghView: GhView = {}): string {
     '#!/bin/sh',
     'printf \'%s\\n\' "$PWD $*" >> "$HOME/npm-argv"',
     'if [ "$1" = "run" ] && [ "$2" = "build" ]; then case "$PWD" in',
-    '  */server) mkdir -p dist/server/src; echo "// s" > dist/server/src/index.js; if [ -f "$HOME/dist-mode" ]; then chmod "$(cat "$HOME/dist-mode")" dist/server; fi ;;',
-    '  */pwa) mkdir -p ../server/dist-pwa; echo "<title>p</title>" > ../server/dist-pwa/index.html ;;',
+    '  */server) mkdir -p dist/server/src; echo "// s" > dist/server/src/index.js; if [ -f "$HOME/dist-mode" ]; then chmod "$(cat "$HOME/dist-mode")" dist/server; fi; if [ -f "$HOME/dist-file-mode" ]; then chmod "$(cat "$HOME/dist-file-mode")" dist/server/src/index.js; fi ;;',
+    '  */pwa) mkdir -p ../server/dist-pwa; echo "<title>p</title>" > ../server/dist-pwa/index.html; if [ -f "$HOME/dot-mode" ]; then mkdir -p ../server/dist-pwa/.vite; chmod "$(cat "$HOME/dot-mode")" ../server/dist-pwa/.vite; fi ;;',
     '  */agent) mkdir -p dist/agent/src; echo "// a" > dist/agent/src/index.js ;;',
     'esac; fi; exit 0',
   ].join('\n'), { mode: 0o755 });
@@ -963,6 +963,149 @@ describe('release-main.sh: compare — a build identical to the newest release H
     expect(late.code).toBe(1);
     expect(late.stderr).toMatch(/was measured for [0-9a-f]{40}, not HEAD [0-9a-f]{40}/);
   });
+
+  /** PATH for a run with stub commands first, then the fixture's bin (the run re-plants it). */
+  function stubbed(home: string, stubs: Record<string, string>): NodeJS.ProcessEnv {
+    const dir = join(home, 'stubs');
+    mkdirSync(dir, { recursive: true });
+    for (const [name, body] of Object.entries(stubs)) writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return { PATH: `${dir}:${join(home, 'bin')}:${process.env.PATH ?? ''}` };
+  }
+  /** What the stub npm reads for the asset builds, which run under their own HOME. */
+  function baseNpm(home: string, file: string, body: string): void {
+    mkdirSync(join(home, 'asset-home'), { recursive: true });
+    writeFileSync(join(home, 'asset-home', file), `${body}\n`);
+  }
+
+  it('W25-C29: a link retargeted between two byte-identical shipped files releases, and the line names the link (the walk never follows a link)', () => {
+    const home = mkTmp('ccrc-relmain-w25c29-');
+    const twins = (r: string): void => {
+      writeFileSync(join(r, 'ccd', 'twin-a'), 'same bytes\n');
+      writeFileSync(join(r, 'ccd', 'twin-b'), 'same bytes\n');
+      symlinkSync('twin-a', join(r, 'ccd', 'twin-link'));
+    };
+    const retarget = (r: string): void => { unlinkSync(join(r, 'ccd', 'twin-link')); symlinkSync('twin-b', join(r, 'ccd', 'twin-link')); };
+    const root = fixture(home, { tags: ['v0.0.1'], seed: twins, merge: retarget, assets: ['v0.0.1'] });
+    const out = join(home, 'out');
+    const { p, c } = pipeline(root, home, out);
+    expect(p.code, p.stderr).toBe(0);
+    expect(c.code, c.stderr).toBe(0);
+    expect(c.stdout).toBe(`${L.differs('v0.0.1', 1, 'ccd/twin-link', 'v0.0.2')}\n`);
+    expect(stateOf(out)).toMatch(/^built true\n/);
+  });
+
+  // Git does not track these bits, so the stub npm makes them: the base asset
+  // is built at 755 (its own HOME), the candidate at the special mode.
+  it.each([
+    ['a setuid file (755 to 4755)', 'dist-file-mode', '4755', 'server/dist/server/src/index.js'],
+    ['a sticky directory (755 to 1755)', 'dist-mode', '1755', 'server/dist/server'],
+  ])('W25-C30: %s releases, and the line names it', (_name, file, mode, first) => {
+    const home = mkTmp('ccrc-relmain-w25c30-');
+    baseNpm(home, file, '755');
+    const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
+    writeFileSync(join(home, file), `${mode}\n`);
+    const out = join(home, 'out');
+    const { p, c } = pipeline(root, home, out);
+    expect(p.code, p.stderr).toBe(0);
+    expect(c.code, c.stderr).toBe(0);
+    expect(c.stdout).toBe(`${L.differs('v0.0.1', 1, first, 'v0.0.2')}\n`);
+    expect(stateOf(out)).toMatch(/^built true\n/);
+  });
+
+  it('W25-C31: a mode change on a dot-named entry alone releases, and the line names it', () => {
+    const home = mkTmp('ccrc-relmain-w25c31-');
+    baseNpm(home, 'dot-mode', '755');
+    const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
+    writeFileSync(join(home, 'dot-mode'), '700\n');
+    const out = join(home, 'out');
+    const { p, c } = pipeline(root, home, out);
+    expect(p.code, p.stderr).toBe(0);
+    expect(c.code, c.stderr).toBe(0);
+    expect(c.stdout).toBe(`${L.differs('v0.0.1', 1, 'server/dist-pwa/.vite', 'v0.0.2')}\n`);
+    expect(stateOf(out)).toMatch(/^built true\n/);
+  });
+
+  it('W25-C32: a git diff against the base that fails releases — a failed guard is not an empty one', () => {
+    const home = mkTmp('ccrc-relmain-w25c32-');
+    const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
+    const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+    expect(realGit).toMatch(/^\//);
+    // Fails only the guard's `diff --name-only`; every other git call runs for real.
+    const env = stubbed(home, { git: `case " $* " in *" diff "*) case " $* " in *" --name-only "*) exit 128 ;; esac ;; esac\nexec "${realGit}" "$@"` });
+    const out = join(home, 'out');
+    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    const c = run(root, home, ['compare', '--out', out], 0, env);
+    expect(c.code, c.stderr).toBe(0);
+    expect(c.stdout).toBe(`${L.cant('git diff against v0.0.1 failed', 'v0.0.2')}\n`);
+    expect(stateOf(out)).toMatch(/^built true\n/);
+    expect(ghReads(home)).toEqual([]);
+  });
+
+  it('W25-C33: a judge change older than HEAD~1 still releases — the guard reads the whole range from the base', () => {
+    const home = mkTmp('ccrc-relmain-w25c33-');
+    const root = fixture(home, {
+      tags: ['v0.0.1'], assets: ['v0.0.1'],
+      merge: put('.github/workflows/release-main.yml', '# a changed workflow\n'), after: docsOnly,
+    });
+    const out = join(home, 'out');
+    const { p, c } = pipeline(root, home, out);
+    expect(p.code, p.stderr).toBe(0);
+    expect(c.code, c.stderr).toBe(0);
+    expect(c.stdout).toBe(`${L.cant('v0.0.1..HEAD changes ".github/workflows/release-main.yml", which judges this comparison', 'v0.0.2')}\n`);
+    expect(stateOf(out)).toMatch(/^built true\n/);
+    expect(ghReads(home)).toEqual([]);
+  });
+
+  // A tag that is not release-shaped is no release: it never makes HEAD "contained".
+  it.each([
+    ['vnext', 'on HEAD'], ['v1.2.3-rc1', 'on HEAD'], ['vnext', 'on a descendant'], ['v1.2.3-rc1', 'on a descendant'],
+  ])('W25-C34: %s %s is not a release, so prepare builds a candidate and compare decides', (name, where) => {
+    const home = mkTmp('ccrc-relmain-w25c34-');
+    const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'], ...(where === 'on HEAD' ? { tagHead: name } : {}) });
+    const sha = git(root, 'rev-parse', 'HEAD');
+    if (where !== 'on HEAD') {
+      git(root, 'commit', '-q', '--allow-empty', '-m', 'a later merge');
+      git(root, 'tag', name);
+      // Back on branch main (the base asset's ref), so build.json agrees.
+      git(root, 'checkout', '-q', '-B', 'main', sha);
+    }
+    const n = entriesIn(join(home, 'assets', 'v0.0.1', 'ccrc-v0.0.1.tar.gz'));
+    const out = join(home, 'out');
+    const { p, c } = pipeline(root, home, out, {}, { GITHUB_OUTPUT: join(home, 'output') });
+    expect(p.code, p.stderr).toBe(0);
+    expect(p.stdout).not.toContain('already contained');
+    expect(c.code, c.stderr).toBe(0);
+    expect(c.stdout).toBe(`${L.skip(n, 'v0.0.1')}\n`);
+    expect(stateOf(out)).toBe(`built unchanged\nsame-as v0.0.1\nhead ${sha}\n`);
+    expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=false\n');
+    expect(ghReads(home)).toHaveLength(2);
+  });
+
+  it('W25-C35: a difference that cannot be listed releases with that reason — the line is never empty', () => {
+    const home = mkTmp('ccrc-relmain-w25c35-');
+    const root = fixture(home, { tags: ['v0.0.1'], assets: ['v0.0.1'] });
+    const env = stubbed(home, { comm: 'exit 1' });
+    const out = join(home, 'out');
+    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    const c = run(root, home, ['compare', '--out', out], 0, env);
+    expect(c.code, c.stderr).toBe(0);
+    expect(c.stdout).toBe(`${L.cant('the fingerprints differ, and listing how failed', 'v0.0.2')}\n`);
+    expect(stateOf(out)).toMatch(/^built true\n/);
+  });
+
+  it.each([[''], ['null'], ['garbage']])(
+    'W25-C36: a gh view that answers exit 0 with %j is no proof of a published release — it releases',
+    (answer) => {
+      const home = mkTmp('ccrc-relmain-w25c36-');
+      const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
+      const out = join(home, 'out');
+      const { p, c } = pipeline(root, home, out, { view: answer });
+      expect(p.code, p.stderr).toBe(0);
+      expect(c.code, c.stderr).toBe(0);
+      expect(c.stdout).toBe(`${L.cant(`v0.0.1 is not a published release (gh answered '${answer}')`, 'v0.0.2')}\n`);
+      expect(stateOf(out)).toMatch(/^built true\n/);
+      expect(ghCalls(home).filter((l) => l.startsWith('release download'))).toEqual([]);
+    });
 });
 
 describe('release-main.sh: source pins', () => {
