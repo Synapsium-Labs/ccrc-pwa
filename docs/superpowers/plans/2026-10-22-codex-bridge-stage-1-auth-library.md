@@ -1897,7 +1897,7 @@ report.
 - **What changed:** when every try fails, `sign_in_device` re-reads the file. When the file holds the sign-in's tokens,
   it answers `"signed-in"`, drops the record `commit_record` bound to the file, and writes `ok` with `unsaved: false`
   (`ccd/ccgpt-auth.py:1610-1631`). This is pinned by the case at `server/test/codex-auth-cli.test.ts:423-427`, which
-  goes red when `landed` is forced False (`:1614`) and when the landed arm's pop is removed (`:1628`).
+  goes red when `landed` is forced False (`ccd/ccgpt-auth.py:1614`) and when the landed arm's pop is removed (`:1628`).
 - **Why:** the directory fsync is the only failure after the rename, so the file already holds the record. The one-shot
   CLI exits next, so an unsaved record would claim memory that no process holds.
 - **Cost if wrong:** the directory entry's durability is unconfirmed. A crash that brings the old file back leaves a
@@ -1947,8 +1947,9 @@ report.
   the identity of the file it read under the lock, then re-raises and writes no status (`ccd/ccgpt-auth.py:1372-1382`).
   `commit_record` still refuses with the file untouched (`:719-720`). `retry_unsaved` lands the record once that file,
   still in place, reads again; while it reads unreadable the retry raises that refusal; and it drops the record once
-  another stands there (`:775-780`). Pinned by the case at
-  `server/test/codex-auth-lib.test.ts:1591`, through the driver's existing `eio-read:1` fault on the commit's re-read.
+  another stands there (`:775-780`). Pinned by two cases: `server/test/codex-auth-lib.test.ts:1591`, over an absent
+  file, through the driver's existing `eio-read:1` fault on the commit's re-read, and `:1641`, over the same present
+  file made unreadable during the round trip.
 - **Why:** an answer from the token endpoint means the refresh token the request carried is already rotated, so dropping
   the refreshed record would lose the only live pair, and the next refresh would answer `needs-signin`.
 - **Cost if wrong:** like any unsaved record it lives only in this process: an exit before the next holder loses it, and

@@ -1376,7 +1376,7 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
             # commit's re-read refused the file (a lock-ignoring writer tore it or swapped another family's file in
             # during the round trip, or the read failed). The record is kept unsaved, as the OSError arm keeps one,
             # bound to the identity read under the lock, `r`'s: the file it was to replace. `retry_unsaved` lands
-            # it while that file is still in place and drops it once another stands there, and `read` never serves
+            # it once that file, still in place, reads again, drops it once another stands there; `read` never serves
             # it over a file swapped in, whatever that file holds.
             _UNSAVED[key] = (dict(rec), r.identity, dict(refreshed))
             raise
