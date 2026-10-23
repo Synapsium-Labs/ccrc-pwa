@@ -272,3 +272,50 @@ describe('at least 24 px under a fine pointer, 44 px under touch', () => {
     }, 90_000);
   }
 });
+
+// On a phone the stale words are longer than the column: the row wraps them onto a further line, so the page never
+// scrolls sideways and the door, the × and the words stay on screen (the render sub-task measured Refined at 545 and
+// Instrument at 504 wide on a 390 phone before the row wrapped).
+const PHONES: AppView[] = THEMES.flatMap((theme) => [REFINED, INSTRUMENT].flatMap((skin) => [360, 390].map((width) => ({ skin, theme, width }))));
+
+describe('on a phone a stale update line wraps, the page never scrolls sideways and the × stays on screen', () => {
+  for (const view of PHONES) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      try {
+        const answers = await answerViewThenFail(page);
+        await page.goto(server!.origin + '/');
+        await page.waitForSelector('.update-indicator-dismiss', { timeout: 20_000 });
+        answers.fail();
+        await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+        await page.waitForSelector('.update-indicator-stale', { timeout: 20_000 });
+        await page.waitForTimeout(300);
+        const faults = await page.evaluate(() => {
+          const out: string[] = [];
+          const vw = window.innerWidth;
+          const lines = document.querySelectorAll('.update-indicator');
+          if (lines.length !== 1) out.push(`${lines.length} indicators in the page, not one`);
+          const line = lines[0] as HTMLElement | undefined;
+          if (line === undefined) return out;
+          if (line.dataset['form'] !== 'row') out.push(`the indicator's form is ${line.dataset['form']}`);
+          const parts: Array<[string, string]> = [['the door', '.update-indicator-door'], ['the ×', '.update-indicator-dismiss'], ['the stale words', '.update-indicator-stale']];
+          for (const [what, sel] of parts) {
+            const el = line.querySelector<HTMLElement>(sel);
+            if (el === null) { out.push(`no ${what}`); continue; }
+            const r = el.getBoundingClientRect();
+            if (r.left < -0.5 || r.right > vw + 0.5) out.push(`${what} is outside the viewport (${Math.round(r.left)}..${Math.round(r.right)} of ${vw})`);
+          }
+          const door = line.querySelector<HTMLElement>('.update-indicator-door');
+          const x = line.querySelector<HTMLElement>('.update-indicator-dismiss');
+          if (door !== null && x !== null && Math.abs(door.getBoundingClientRect().top - x.getBoundingClientRect().top) > 2) out.push('the door and the × are not on the first line together');
+          if (document.documentElement.scrollWidth > vw + 0.5) out.push(`the page scrolls sideways (${document.documentElement.scrollWidth} > ${vw})`);
+          return out;
+        });
+        expect(faults, 'a stale view on a phone').toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
