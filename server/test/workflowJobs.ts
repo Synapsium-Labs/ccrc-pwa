@@ -68,9 +68,16 @@ type Mapping = Record<string, unknown>;
 const isMapping = (v: unknown): v is Mapping => v !== null && typeof v === 'object' && !Array.isArray(v);
 const mapping = (v: unknown): Mapping => (isMapping(v) ? v : {});
 const text = (v: unknown): string | null => (v === undefined || v === null ? null : typeof v === 'string' ? v : String(v));
-/** A value as one string, for the reference and build-output scans: a
- *  mapping or a list is scanned as its JSON, never skipped. */
-const scanText = (v: unknown): string => (typeof v === 'string' ? v : JSON.stringify(v) ?? '');
+/** Every string a value holds, at every depth: each scalar leaf and each
+ *  mapping key, RAW. Never the value's JSON text, which writes a tab or a
+ *  newline as two characters and so hides a word behind a `\t` or a `\n`
+ *  that GitHub's expression lexer skips (D-6663). */
+const leaves = (v: unknown): string[] => {
+  if (v === undefined || v === null) return [];
+  if (Array.isArray(v)) return v.flatMap(leaves);
+  if (typeof v === 'object') return Object.entries(v as Mapping).flatMap(([k, x]) => [k, ...leaves(x)]);
+  return [String(v)];
+};
 
 function readStep(raw: unknown): WorkflowStep {
   const s = mapping(raw);
@@ -193,13 +200,14 @@ const shown = (v: unknown): string => (typeof v === 'string' ? v : v === undefin
 /** Each `${{ … }}` in a value that reads the `needs` context at all — a
  *  member, an index or the whole of it (`toJSON(needs)`). */
 const readsNeeds = (v: unknown): boolean =>
-  [...scanText(v).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((m) => /(?<![\w.-])needs\b/i.test(m[1] ?? ''));
+  leaves(v).some((s) => [...s.matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((m) => /(?<![\w.-])needs\b/i.test(m[1] ?? '')));
 /** A value, scanned whole at every depth, that names the `secrets` context
  *  at all: the bare word, in any case, followed by anything (a member, an
  *  index, `${{ secrets }}`, `contains(secrets, …)`, `toJSON( secrets )`).
  *  Not only inside `${{ }}`: an `if:` is an expression without one. Step
- *  names are scanned too; no release workflow spells the word anywhere. */
-const readsSecrets = (v: unknown): boolean => /(?<![\w.-])secrets(?![\w-])/i.test(scanText(v));
+ *  names are scanned too; no release workflow spells the word anywhere.
+ *  Each leaf and key is tested raw (`leaves`). */
+const readsSecrets = (v: unknown): boolean => leaves(v).some((s) => /(?<![\w.-])secrets(?![\w-])/i.test(s));
 
 export interface JobReference {
   /** `outputs.<k>`, `if`, `env.<K>`, or `step <n> if|with.<k>|env.<K>`. */
@@ -219,7 +227,7 @@ export interface JobReference {
 export function jobReferences(job: WorkflowJob): JobReference[] {
   const out: JobReference[] = [];
   const scan = (where: string, value: unknown, visible: number): void => {
-    const s = scanText(value);
+    const s = leaves(value).join('\n');
     for (const m of s.matchAll(/(?<![\w.-])steps\.([A-Za-z_][\w-]*)(?:\.outputs\.([A-Za-z_][\w-]*))?/gi)) {
       out.push({ where, kind: 'steps', id: m[1]!, output: m[2] ?? null, visible });
     }
@@ -246,7 +254,7 @@ function indexedReferences(job: WorkflowJob): string[] {
   const found = new Set<string>();
   for (const v of values) {
     if (v === null || v === undefined) continue;
-    for (const m of scanText(v).matchAll(/(?<![\w.-])(steps|needs)\s*\[/gi)) found.add(m[1]!.toLowerCase());
+    for (const s of leaves(v)) for (const m of s.matchAll(/(?<![\w.-])(steps|needs)\s*\[/gi)) found.add(m[1]!.toLowerCase());
   }
   return [...found];
 }

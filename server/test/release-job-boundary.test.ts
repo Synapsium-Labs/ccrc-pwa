@@ -317,6 +317,11 @@ const PLANTED: Array<[string, string, string]> = [
   ['a build step reads the bare secrets context', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', '        id: compare\n        env:\n          GH_TOKEN: ${{ secrets }}\n'), 'runs the install or the build and reads secrets'],
   ['a build step reads secrets through contains()', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', "        id: compare\n        env:\n          GH_TOKEN: ${{ contains(secrets, 'x') }}\n"), 'runs the install or the build and reads secrets'],
   ['a build step reads secrets through toJSON( secrets )', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', '        id: compare\n        env:\n          GH_TOKEN: ${{ toJSON( secrets ) }}\n'), 'runs the install or the build and reads secrets'],
+  // Each value is read raw, never as JSON text, so whitespace the
+  // expression lexer skips cannot hide the word (D-6663, fix round 3).
+  ['a build step reads a secret after a tab', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', '        id: compare\n        env:\n          GH_TOKEN: "${{\\tsecrets.PAT }}"\n'), 'runs the install or the build and reads secrets'],
+  ['a build step reads a secret across a block scalar line', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', '        id: compare\n        env:\n          GH_TOKEN: |-\n            ${{\n            secrets.PAT }}\n'), 'runs the install or the build and reads secrets'],
+  ['the publish step reads a secret after a newline', plant('          GH_TOKEN: ${{ github.token }}\n          CCRC_BUNDLE_PATH', '          GH_TOKEN: "${{\\nsecrets.PAT }}"\n          CCRC_BUNDLE_PATH'), 'holds a write permission and reads secrets'],
   ['a publish step passes NEEDS in capitals under another key', receiveEnv('          OTHER: ${{ NEEDS.build.outputs.tag }}\n'), 'passes a build output into env.OTHER'],
 ];
 
