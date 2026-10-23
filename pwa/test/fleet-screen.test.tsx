@@ -476,6 +476,24 @@ describe('FleetScreen', () => {
       await waitFor(() => expect(store.getState().projects?.[0]?.name).toBe('alpha'));
     });
 
+    it('a malformed /api/projects answer never reaches the store\'s projects', async () => {
+      // Through the REAL adapter: fetch answers a 200 `{}` for the project list only.
+      const asked = vi.fn();
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        if (url.startsWith('/api/projects')) {
+          asked();
+          return Promise.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }));
+        }
+        return url === '/api/accounts' ? Promise.resolve(accountsRoute()) : new Promise<Response>(() => {});
+      }));
+      const store = makeStore();
+      renderFleet(<FleetScreen store={store} />);
+      seed(store, { conn: 'open', roster: TEST_ROSTER, pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
+      await waitFor(() => expect(asked).toHaveBeenCalledTimes(1));
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+      expect(store.getState().projects).toBeNull();
+    });
+
     it('skips the null-state cold-load sweep, then refreshes for each pools frame only', async () => {
       const projects = vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
       const store = makeStore();

@@ -1006,6 +1006,16 @@ describe('account pools', () => {
     expect((fetchImpl.mock.calls[1] as [string, RequestInit])[0]).toBe('/api/projects?class=fable');
   });
 
+  it('a 200 /api/projects answer without a projects array rejects with a plain error', async () => {
+    for (const body of [{}, { roots: [] }, { projects: null }, { projects: {} }, null, []]) {
+      const api = createApi(vi.fn().mockResolvedValue(jsonResponse(200, body)) as unknown as typeof fetch);
+      const failure = await api.projects().then(() => null, (err: unknown) => err);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).not.toBeInstanceOf(ApiError);
+      expect((failure as Error).message).toBe("The server's project list could not be read.");
+    }
+  });
+
   it('createSession omits route entirely unless at least one field is set (routing slice 4, Task 6)', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);

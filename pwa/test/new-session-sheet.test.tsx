@@ -366,6 +366,30 @@ describe('NewSessionSheet — the project list that could not be read', () => {
   });
 });
 
+describe('NewSessionSheet — a project list the server answered without a projects array', () => {
+  it('an /api/projects answer without a projects array shows the sheet\'s error line and the app stays drawn', async () => {
+    // Through the REAL adapter: only fetch is stubbed, so the adapter's check is what turns a 200 `{}` into the error line.
+    // The store's cache is empty (`projects: null`), so the error line is what shows.
+    const roster = pooled(POOLS);
+    const store = storeWith(roster);
+    expect(store.getState().projects).toBeNull();
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response('{}', {
+      status: 200, headers: { 'content-type': 'application/json' },
+    })));
+    try {
+      render(<NewSessionSheet open onClose={vi.fn()} fleet={store} />);
+      fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+      const said = await screen.findByText(/Couldn't load the project list/);
+      expect(said).toHaveAttribute('role', 'alert');
+      expect(said).toHaveTextContent("Couldn't load the project list — The server's project list could not be read.");
+      expect(screen.queryByText(/ccrc could not draw this screen/)).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('NewSessionSheet — the routing fields ride the start, and only when set', () => {
   const startCall = async (projects: ProjectRow[]): Promise<ReturnType<typeof vi.fn>> => {
     const createSession = vi.fn().mockResolvedValue(undefined);
