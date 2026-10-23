@@ -584,6 +584,43 @@ the worker updates every place the plan states it, in the first task that touche
 9. **The first release run after landing** is the coordinator's to measure, against D-6659's checklist, read-only.
    The worker asks for nothing on a live run and triggers no workflow.
 
+## Coordinator rulings on review 871 (2026-10-23)
+
+Recorded verbatim from the coordinator's fix-round mail. The report is cited as "the review's report".
+
+Run 858, wave 26: fix round 1, ruled on review 871 (the review's report; read it whole). Record this verbatim in the plan as "Coordinator rulings on review 871 (2026-10-23)", and write the report's path as "the review's report". D-6726 to D-6731 are issued for this round, spent in order; give each unspent one its own entry before wave-done. Routing as before: Opus implementers for the workflow, script and guard edits, named per call; a security lens on the round.
+
+The review found the split's structure as planned, all 21 suites and CI's full run green, and D-6663, D-6664 and the wave-25 row edits standing. One finding breaks the wave's goal.
+
+1. F1 (critical): the hand-over's extraction. `download-artifact@v4` (v4.3.0, unzip-stream 0.3.1; v5 and v6 the same) writes `../` entries outside `release-in`, so a zip the build job uploads can replace a script the publish job runs next, the attest action's own files or `$HOME/.gitconfig`, beside the write token and OIDC. Ruled: both publish jobs move to `actions/download-artifact@v7` (or the newest major that bundles the per-segment sanitizer, unzip-stream 0.3.4 or later), and this amends ruling 8 for that one action only; the Dependabot branch is still redone after landing for the rest.
+   - Before editing, measure from the action's own bundle (`dist/index.js` at the tag you pin), in a scratch directory, with the review's zip: escape at v4, contained at the new major (the extra entries land under `release-in/`, where verify's exact file set refuses them). Record both in As built.
+   - Read from GitHub's docs that the new major downloads an artifact `upload-artifact@v4` made, and whether its `with:` keys or path semantics differ; adjust the exact `with:` set to match.
+   - A guard row: every `download-artifact` in a write job is at that major or later, as `@vN` exactly; an older major, a minor pin or a SHA reds. Plus a planted case per spelling.
+   - Fix the text this falsifies: D-6648's "two files under release-in", both workflows' download comments, and README's framing of what the publish job opens (inside the passage consent 8564 licenses).
+2. Question (a), the lost decision: narrow the claim, do not move the check. README's "a release decision that does not reach the next job fails the run" and D-6658 say what the check holds: a swallowed output append fails the build job; a value dropped at the job boundary (a mask) skips the publish job, an availability effect a hostile build already has. Amend D-6658 in place. Also pin, by parsed YAML, both build jobs' job-level keys (no `continue-on-error`, no job-level `if:`, no `strategy`) and release.yml's publish job-level `if:` exactly (F10).
+3. F2 (important): refuse a `with:` or `env:` that is present and not a mapping, in every job the guard reads; a planted row per shape.
+4. F3 (important): the record. Write the review's measurement into As built: `release-notes.mjs` imports `node:` built-ins only, and 22.16.0 and 22.23.3 give byte-identical bodies on four tags; the image version from a run log, its default node from the image readme.
+5. F4 (important): re-measure G-r, G-u and G-v at the tip, and add a mutation row for the case-insensitive flags round 2 added. Update F18's stale G-y count while there.
+6. Question (c): keep refusing every exact-spelling variant. The guard is an allowlist by design; a red on an equivalent spelling costs a deliberate guard edit, never a hole. Say so in D-6663's text.
+7. The minors:
+   - F5: keep the D-3127 check as defence in depth and say so in its comment;
+   - F6: the header's "every" is scoped to what it scans;
+   - F7: the per-file runs and CI's full run go into As built;
+   - F8: add a row that reds each of verify's `-ef` and `[ -f ]` checks alone, or record each in the mutation table as defence in depth with no row;
+   - F9: the workflow comment states the private-fork caveat;
+   - F11: the risk note says what the mask route shows;
+   - F12: extend the no-builder pin to the publish arm;
+   - F13: pin both publish checkouts' major as download and attest are;
+   - F14: a planted case that reds `setsStartEnv` alone, or remove it as redundant, recorded;
+   - F15: pin `CCRC_BUNDLE_PATH`'s and `GH_TOKEN`'s values by parsed YAML;
+   - F16: an exact-block pin of release.yml's trigger, like W25-F1;
+   - F17: refuse a step-level `if:` in a write job outside the shapes that carry one.
+8. Records: the README owner claim is now 2349 (it replaced 2306); cite 2349 in As built.
+
+Not in this round: the review's lead that `.github/ci/main-artifact.mjs` selects artifacts by name and branch rather than by workflow; it is outside this wave and goes to the ledger.
+
+Measure before wave-done: every suite the brief named, one file at a time, foreground; the mutants for each new row on a scratch copy, under `n=$(ps -L -u "$(id -u)" --no-headers | wc -l); ulimit -u $((n + 1500)); timeout -k 10 600 ...` in a subshell, restored by cmp; merge-tree against the current origin/main and #1172's head; a private-name scan of the round's prose. Trigger no workflow and touch no release. Push once, wave-done in the same turn. Claim 2322 hard-expires in about 3 h: re-take it under a new id if it lapses, and say so.
+
 ## As built (run 858)
 
 - **Claims and consents.** Group A was one claim for the whole wave. Group B: CLAUDE.md and the release-rollout spec were claimed once run 722's owner claim on CLAUDE.md lapsed with #1132's landing. Run 722's coordinator had consented to the Deploy-bullet clause first (request 8559, consent 8560, its claim 2312). README.md was edited beside run 774's live owner claim 2306 under its coordinator's scoped consent (request 8558, consent 8564): the two licensed regions only, no new paragraph, heading or anchor, and the attestation-is-not-a-dependency-audit distinction kept. D-6664's referent fix stays inside the licensed "Two trust roots" sentence.
