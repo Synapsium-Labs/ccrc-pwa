@@ -3429,6 +3429,15 @@ the last-known-good fleet snapshot instead of going blank:
   snapshot with `stale: true` and `downSince: <epoch ms>`; the PWA's banner
   ("Fleet host unreachable since …", with **Reboot**) comes from `GET /api/fleet/health`, which it
   polls every 15 s, and appears on `connected: false`.
+- The server bounds every attempt to reach the agent. An attempt with no `ready` within a fixed deadline of its
+  socket being created (a connect or an upgrade never answered, a hello never answered) is terminated and retried
+  with the usual backoff, and a ready link that stops answering the heartbeat is terminated too. The server's log
+  says so, once per kind per stretch without a link, each line starting `ccrc-server: agent link:`: when a ready
+  link is lost, when the heartbeat ends it, when an attempt times out (with the deadline, and whether the attempt
+  was still connecting or upgrading or had sent its hello), when an attempt fails before the first ready since the
+  server started, when the agent refuses the hello (with its close code and a printable cut of its reason, withheld
+  if it repeats the token), and when the link is ready again, with the time since that stretch's first line. None
+  of these values is an operator setting.
 - `GET /api/fleet/health` → `{mode, connected, downSince, roster, build, projectPools}`, plus
   `builds` (each box's stamp) in remote mode and a `lifecycle` block (the journal mirror's state,
   `unknown` until its first sweep) on a box running the coordination database —
