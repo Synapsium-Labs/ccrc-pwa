@@ -186,8 +186,9 @@ describe('mkTmp (agent suite)', () => {
     // And both are still wired, which is the constraint the standing rules put
     // above everything else in this package.
     const cfg = readFileSync(path.resolve(here, '..', 'vitest.config.ts'), 'utf8');
-    expect(cfg).toContain("setupFiles: ['test/contain-path.setup.ts']");
+    // Each list may also carry the shared git-environment scrub (../server/test/git-env.setup.mjs) ahead of it.
+    expect(cfg).toMatch(/setupFiles: \[(?:'[^']*', )*'test\/contain-path\.setup\.ts'\]/);
     expect(cfg, 'globalSetup is unwired — a module-load throw leaks again')
-      .toContain("globalSetup: ['test/contain-path.globalsetup.ts']");
+      .toMatch(/globalSetup: \[(?:'[^']*', )*'test\/contain-path\.globalsetup\.ts'\]/);
   });
 });
