@@ -360,3 +360,49 @@ describe('the nine sweep lanes outside coordination (D-5862, PR 1b)', () => {
     first.resolve();
   });
 });
+
+describe('the eight coordination lanes (D-5862, PR 2)', () => {
+  const ROWS: Array<[string, string, string]> = [
+    ['claimRenew', 'wall', 'none'], ['claimLapse', 'wall', 'none'], ['stalls', 'wall', 'skip'], ['idleNudge', 'wall', 'skip'],
+    ['mail', 'wall', 'none'], ['asks', 'wall', 'none'], ['approvalPrune', 'wall', 'none'], ['digestBeat', 'wall', 'none'],
+  ];
+
+  it('each lane is a row on the clock it throttles on today, with the flight it has today', () => {
+    for (const [name, clock, flight] of ROWS) {
+      expect(laneRow(name).clock, `${name}'s clock`).toBe(clock);
+      expect(laneRow(name).flight, `${name}'s flight`).toBe(flight);
+    }
+  });
+
+  it('runSync runs the body once the cadence has elapsed on the injected reading, stamps that reading, and answers whether it ran', () => {
+    const { runner } = rig([row({ name: 'beat', cadenceMs: 100 })]);
+    const fn = vi.fn();
+    expect(runner.runSync('beat', fn, 1_000), 'a first beat').toBe(true);
+    expect(runner.runSync('beat', fn, 1_099), 'a beat inside the cadence').toBe(false);
+    expect(runner.runSync('beat', fn, 1_100), 'a beat at the cadence').toBe(true);
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('runSync with no reading takes the row\'s clock; a throw spends the slot and reaches the caller', () => {
+    const { t, runner } = rig([row({ name: 'beat', cadenceMs: 100 })]);
+    const boom = vi.fn(() => { throw new Error('body failed'); });
+    expect(() => runner.runSync('beat', boom)).toThrow('body failed');
+    expect(runner.runSync('beat', boom), 'a failed beat did not spend its slot').toBe(false);
+    t.wall += 100;
+    expect(() => runner.runSync('beat', boom)).toThrow('body failed');
+    expect(boom).toHaveBeenCalledTimes(2);
+  });
+
+  it('a startsDue row is due at an injected reading of 0, and a plain wall row (stamp 0) is not due before its cadence', () => {
+    const { runner } = rig([row({ name: 'due', cadenceMs: 100, startsDue: true }), row({ name: 'plain', cadenceMs: 100 })]);
+    expect(runner.runSync('due', () => {}, 0)).toBe(true);
+    expect(runner.runSync('plain', () => {}, 50)).toBe(false);
+  });
+
+  it('kick returns a startsDue row to due at any reading', () => {
+    const { runner } = rig([row({ name: 'due', cadenceMs: 100, startsDue: true })]);
+    expect(runner.runSync('due', () => {}, 10_000)).toBe(true);
+    runner.kick('due');
+    expect(runner.runSync('due', () => {}, 0)).toBe(true);
+  });
+});

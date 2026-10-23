@@ -84,6 +84,34 @@ export const PR_BACKOFF_MAX_MS = 900_000;
  *  longer than any real sweep, short enough that wedged is not permanent. A safety interval, never a cadence. */
 export const PR_SWEEP_STUCK_MS = PR_BACKOFF_MAX_MS;
 
+/** Build 9 wave 7 (D12): the claim lease's lanes. 60 s: a 45-minute lease does not need the 2 s tick, and the divergence
+ *  census already argues this cadence. Renew and lapse each keep their own row so neither starves the other's first run. */
+export const CLAIM_SWEEP_MS = 60_000;
+
+/** The stall watch's lane (spec 2026-09-29 §4.2, §10). It runs at `CLAIM_SWEEP_MS`'s cadence, for that constant's reason:
+ *  a threshold of the quiet time (2 h built-in, 30 min at the least, stall watch settings §7) does not need the 2 s tick.
+ *  A DECLARED REFERENCE (the row's `derivedFrom`), never a second literal. EXPORTED for its suite; `watch.ts` re-exports it. */
+export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;
+
+/** `idle-compact-nudge` (D-5373): the lane's own clock. A nudge waits out `IDLE_NUDGE_SETTLE_MS` (30 s) anyway, so a 10 s
+ *  beat costs at most one beat of extra delay; the transcript tail is re-read only when the file changed. */
+export const IDLE_NUDGE_SWEEP_MS = 10_000;
+
+/** The mail lane (the seventh; spec:159 fixes the cadence). Ten seconds is not how fast mail should arrive, it is how
+ *  often the lane is allowed to ASK: delivery is bounded below by `MAIL_QUIET_MS`, so mail lands at a turn boundary. */
+export const MAIL_SWEEP_MS = 10_000;
+
+/** The ask-release lane's own self-throttle (RULING F4, task-7-brief): not how fast a lapsed hold fires (that ceiling is
+ *  `ASK_GRACE_MS`, measured in minutes) but how often the lane is allowed to ASK, as `MAIL_SWEEP_MS` is for mail. */
+export const ASK_SWEEP_MS = 10_000;
+
+/** The approvals lane's daily prune of the approval inputs and the asks' question text (D-5298). The lane itself
+ *  (`sweepApprovals`: lapse, ceiling, deferred pushes) has NO throttle and runs on every tick; only this block is a row. */
+export const APPROVAL_PRUNE_MS = 86_400_000;
+
+/** The daily digest's beat (D-5300): once a minute at most it looks for a settled day. */
+export const DIGEST_BEAT_MS = 60_000;
+
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
 
@@ -94,7 +122,8 @@ export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 
 export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'serverCaps'
-  | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor';
+  | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor'
+  | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -111,6 +140,9 @@ export interface LaneRow {
   /** The lane's catch sentence (`ccrc-server: …`), to which the failure's detail is appended; null when the caller
    *  keeps its own catch or the lane has its own latch. */
   readonly warnKey: string | null;
+  /** True when the lane's old field started at `-Infinity`, not `0`: it is due at ANY reading of its clock, a reading
+   *  injected by a caller (`sweepDigest(now)`) included. */
+  readonly startsDue?: true;
 }
 
 export const LANE_SCHEDULE: readonly LaneRow[] = [
@@ -133,6 +165,18 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   { name: 'readiness', cadenceMs: READINESS_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
   { name: 'ledgerReconcile', cadenceMs: LEDGER_RECONCILE_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
   { name: 'ledgerFloor', cadenceMs: LEDGER_FLOOR_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'claimRenew', cadenceMs: CLAIM_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'claimLapse', cadenceMs: CLAIM_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  {
+    name: 'stalls', cadenceMs: STALL_SWEEP_MS, clock: 'wall', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'CLAIM_SWEEP_MS', reason: 'the stall watch needs no finer beat than the claim lanes it runs after' },
+  },
+  { name: 'idleNudge', cadenceMs: IDLE_NUDGE_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'skip', warnKey: null },
+  { name: 'mail', cadenceMs: MAIL_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'asks', cadenceMs: ASK_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  // The prune's failure is caught by `sweepApprovals`' own try (its sentence names the whole sweep), so no warnKey.
+  { name: 'approvalPrune', cadenceMs: APPROVAL_PRUNE_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'digestBeat', cadenceMs: DIGEST_BEAT_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null, startsDue: true },
 ];
 
 export function laneRow(name: string): LaneRow {
