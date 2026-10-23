@@ -6632,6 +6632,18 @@ describe('the approval classifier, its class map and the redactor each have one 
   it('redactCommand is defined once, in coord/redact.ts', () => {
     expect(holders(/\bfunction redactCommand\b|\bconst redactCommand\s*=/)).toEqual(['server/src/coord/redact.ts']);
   });
+
+  // D-5867 (Task C1l, ARCH-66 (#801)): the egress rule patterns' one home is `shared/redact.mjs`. `.mjs` is not in
+  // `ALL`, so the home is read by path; the TypeScript holders are `ALL`'s.
+  it('the egress rule patterns have one home, shared/redact.mjs: no TypeScript file spells one', () => {
+    const FRAGMENTS = [/hooks\\\.slack\\\.com/, /gh\[pousr\]_/, /\bSECRET_NAME_TEST\b/, /\(\?:Proxy-\)\?Authorization/];
+    const home = readFileSync(path.join(ccrcRoot, 'shared', 'redact.mjs'), 'utf8');
+    for (const f of FRAGMENTS) {
+      expect(f.test(home), `${f} in shared/redact.mjs`).toBe(true);
+      expect(holders(f), `${f} in a .ts file`).toEqual([]);
+    }
+    expect(FRAGMENTS[0]!.test('const SLACK = /(hooks\\.slack\\.com\\/)/;'), 'CONTROL: the pattern sees a spelling').toBe(true);
+  });
 });
 
 // D-5232's mechanism (plan docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md, Task 9b). APPENDED at
