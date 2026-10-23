@@ -5745,6 +5745,17 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **CI's one red** is a download-trickle timing row that this wave does not touch and main passes. The round's push
     re-runs it.
 
+- **2026-10-23 11:15 UTC — a stall on review 846, and one hung call interrupted (mail 8473).** The stall watch reported
+  the reviewer frozen, with no hook event for an hour (mail 8461).
+  - **What was measured, read-only.** One of the reviewer's mutation runs over a scratch copy of the release build
+    script had hung for 2h10m. One mutant made the fixture script re-enter itself: 1,323 shells, all asleep on a pipe,
+    about 3 GB. A test's timeout cannot end it, because the test waits on a synchronous child. The fleet box sat at
+    52% full memory pressure, so every session on it stalled. The reviewer's worktree was clean at the reviewed tip.
+  - **What was done, once, as the notice asks.** That one call's process tree was stopped: 1,326 recorded process
+    ids, each checked against its start time. Available memory went from 4 GB to 14 GB, and pressure to 0.3%. The
+    reviewer's session and its other runs were not touched. The mail asks it to re-run the lost mutants under a
+    time and process cap, and to carry on with the review.
+
 - **2026-10-22 14:05 UTC — an operator directive: no new version for a docs-only merge.** Verbatim (in chat): "Docs
   only updates with no changes to code (PRs) should not trigger new build versioning".
   - **Today** `release-main.yml` runs on every push to `main` with no path filter, so every merge mints a prerelease:
