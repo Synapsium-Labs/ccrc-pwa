@@ -524,6 +524,7 @@ _ws_lines_json	C4
 _ws_rescue_doc	C4
 _ws_nested_bind	C4
 _ws_store_kb	C4
+_ws_nested_same	C4
 _ws_nested_rescue	C4
 _ws_scratch_rescue_run	C4
 cmd_scratch_rescue	C4
