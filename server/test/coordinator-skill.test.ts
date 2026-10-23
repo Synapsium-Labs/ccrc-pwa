@@ -2936,7 +2936,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(prose).toContain('`strict=unknown` comes only under read 3b: on a direct route the verdict has already stopped on a head behind the base, and route Q needs no strictness, since the queue tests the merged group itself.');
   });
 
-  it('lists exactly the stops the block prints, and the two no read decides', () => {
+  it('lists exactly the stops the block prints, and the four no read decides', () => {
     const printed = [...new Set([...block.matchAll(/stop "([a-z0-9-]+):/g)].map((m) => m[1]!))].sort();
     const lead = 'The verdict stops with one of these reasons: ';
     const i = prose.indexOf(lead);
@@ -3035,6 +3035,81 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     }
     // The enqueue and the dequeue: a re-enqueue is a landing, so it takes the verdict again, reviews included.
     expect(para).toContain('Then either enqueue it again exactly as above — the landing verdict (§5b) again first, then the checks, then the read-back — or send the owning worker a fix round');
+  });
+
+  // The whole action paragraphs, pinned exactly (fix round 2). A fragment pin passes while a contradicting sentence sits
+  // elsewhere in the same paragraph; these compare the whole normalized (`flat`) text, so any sentence added, cut, reworded
+  // or moved reds. Each is written as its sentences, joined by one space, so a failing diff names the sentence.
+  it('pins the whole native-queue landing paragraph, the gate through the enqueue, read-back, disarm and its end, so no exception can sit anywhere in it (the queue action pin)', () => {
+    const at = wl.indexOf('**Landing on a native-queue project**');
+    expect(at, 'wave-lifecycle.md lost its native-queue landing paragraph').toBeGreaterThanOrEqual(0);
+    const end = wl.indexOf('**Same project:**', at);
+    expect(end, 'the native-queue paragraph lost the paragraph that follows it').toBeGreaterThan(at);
+    const para = flat(wl.slice(at, end)).trim();
+    const whole = [
+    '**Landing on a native-queue project** (one whose base branch requires GitHub\'s merge queue — measure it before each landing, never from memory: the landing verdict (§5b) answers `ROUTE Q`, reading the PR\'s own base, never the literal `main`): the producer LANDS BEFORE IT CLOSES.',
+    'Once its review is clean and wave N+1 is open — or, on the programme\'s LAST wave, which has no wave N+1, once its review is clean (its close is SKILL.md step 7\'s and §6\'s) — advance the producer\'s run to `merging` (§4 — from `awaiting-review`, re-measured).',
+    'Enqueue only a PR whose required checks have all passed — every required name the verdict discovered passes on the head, and `gh pr checks <pr> --required` exits 0: for any other PR gh arms auto-merge instead of queueing it, and prints the same "will be added to the merge queue … when ready" line either way.',
+    'The `--required` exit decides, and a `ROUTE Q` answer does not waive it.',
+    'On `0`, go on under this gate and the read-back below.',
+    'On `8` (pending), wait for them in the foreground — `gh pr checks <pr> --required --watch`, again if the call times out — never by ending your turn: no mail comes when checks finish.',
+    'Then run the verdict again.',
+    'Whichever arm led back to the verdict, a `ROUTE Q` answer does not skip this gate: never enqueue on a verdict without an exit `0` read after it.',
+    'On `1`, run the verdict again: a `RED` goes to the `RED` rule of §5b, which limits a rerun to the kind it names and never reruns unconditionally; a `ROUTE Q` answer is the stop `checks-gate-unread`; any other line goes by its bullet in §5b.',
+    'On any other exit the stop is `checks-gate-unread` too.',
+    'Stop `checks-gate-unread` means: report the exit and the whole output, and never enqueue, arm, retry or choose another route by hand.',
+    'gh\'s "no required checks reported" and "no checks reported" are an exit `1`: with a `ROUTE Q` answer they are this stop, which is deliberately conservative on a queue repository, not support promised by an empty required set, and it does not touch a repository whose required checks gh reports.',
+    'Then, from your own session, enqueue its PR with `gh pr merge <pr> --match-head-commit <handoffCommit>`: no `--squash`, because the queue\'s merge method applies, and never `--admin`.',
+    'Prove it is IN the queue before you rely on the server: `gh api graphql -F o=\'{owner}\' -F n=\'{repo}\' -F p=<pr> -f query=\'query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }\'` gives one of four answers.',
+    'A queued PR answers a non-null `mergeQueueEntry`, the success answer.',
+    'A `state` of `MERGED` means it already landed: wait for or prove `merged:#<pr>`, and never disarm — a merged PR answers a null entry too, so the entry alone cannot tell merged from nothing queued.',
+    'A PR with no entry but a non-null `autoMergeRequest` means it is only armed, and nothing is queued and nothing will tell you so: disarm it (`gh pr merge <pr> --disable-auto`) and read why before you do anything else.',
+    'A PR with no entry, no `autoMergeRequest` and not merged means nothing is queued: read why before you do anything else.',
+    'Disarm the same way before any fix round from `merging` — an armed auto-merge queues whatever head the branch carries once its checks pass, and GitHub disarms it on a push only from a login without write access.',
+    'End your turn.',
+    'The run waits at `merging`, holding the child, so its workspace is not reclaimed under a PR still in the queue, and the server tells you how the queue answered: a `status` mail `merged:#<pr>` once the PR reads merged, or `dequeued:#<pr>@<time>` when the queue removed it without landing (GitHub does not re-enqueue).',
+    'On `merged:`, prove the merge exactly as above — MERGED, `headRefOid` equal to `handoffCommit` — then close the producer as this step closes a spent one (on the last wave, as §6 closes it), and only then dispatch wave N+1.',
+    'A `merged:#<pr>` can also reach a run at `merging` on a project without the queue, when a sweep reads your own synchronous merge before your close: prove and close as usual; a run already closed needs nothing.',
+    'On `dequeued:`, read why from the queue\'s own CI run, not the PR\'s checks, which ran on a different commit and can read green — `gh run list --event merge_group --json databaseId,headBranch,conclusion` finds it by its `headBranch` (`gh-readonly-queue/<base>/pr-<pr>-…`) and `gh run view <id> --log-failed` says why, while `gh pr view <pr> --json mergeStateStatus` answers a conflict.',
+    'Then either enqueue it again exactly as above — the landing verdict (§5b) again first, then the checks, then the read-back — or send the owning worker a fix round on the `merging → working` edge (SKILL.md step 6\'s send-back; its fresh wave-done gets a fresh review run, and a fresh `merging`).',
+    'Closing before the landing would hand a PR still in the queue to a reclaim: nothing could then tell you of its dequeue, and no worker would be left to fix it.',
+    'A coordinator whose own workspace carries a programme-wave hold or the child marker — a self-claimed run\'s, or a reclaim heir that was the programme\'s own worker — is refused its enqueue by the session hook, like any worker.',
+    'Do not close to shed the hold (a final close of a child reclaims your own pane): ask the operator to enqueue, or disarm, with the same spellings from their own shell, and wait at `merging` as above.',
+    ].join(' ');
+    expect(para).toBe(whole);
+    // The enqueue is the one sentence that enqueues, and the checks gate never enqueues on a ROUTE Q answer alone: the
+    // withdrawn no-checks exception stays withdrawn at every position, which the exact pin above holds and this states.
+    expect(para.match(/enqueue it anyway/g), 'the withdrawn no-checks exception is back').toBeNull();
+  });
+
+  it('pins the whole approval licence, both paragraphs, so no condition, gate or sentence can change unseen (the licence action pin)', () => {
+    const from = prose.indexOf('**The approval licence.**');
+    const to = prose.indexOf('**On every route**');
+    expect(from, 'the approval licence paragraph is gone').toBeGreaterThanOrEqual(0);
+    expect(to, 'the licence lost the paragraph that follows it').toBeGreaterThan(from);
+    const whole = [
+    '**The approval licence.** `--admin` is licensed on a direct route only, and only when all three hold, each read fresh for this landing: an approval the fleet cannot give is required and missing (a `pull_request` rule\'s, or classic protection\'s, `required_approving_review_count` above 0, and `reviewDecision` is `REVIEW_REQUIRED`), with no request for changes standing, an ignored one included; every required check has passed on the head; and `--admin` cannot skip a gate — no other gate applies, no review conversation must be resolved that an admin could skip (a `pull_request` rule\'s `required_review_thread_resolution`, or classic `required_conversation_resolution` without `enforce_admins`), classic required checks carry `enforce_admins`, and every ruleset carrying required checks answers `current_user_can_bypass: never`, an unreadable answer, or a rule that names no ruleset, counting as able to bypass.',
+    'The verdict weighs all three: it answers `admin=licensed`, and only then the spelling is `gh pr merge <pr> --<method> --admin --match-head-commit <handoffCommit>`, or it stops `licence-fails`.',
+    'Without a missing approval `--admin` is never passed; under read 3b it is never used; while a request for changes stands, ignored or not, it is never licensed; and it is never a fallback: a fallback is `--admin` after a refusal, and this licence is decided before the merge, from reads.',
+    'An approval kept in classic protection with `enforce_admins` on binds an admin too, so `--admin` does not help there, and GitHub\'s refusal is the stop.',
+    ].join(' ');
+    expect(prose.slice(from, to).trim()).toBe(whole);
+  });
+
+  it('pins the whole WAIT not-reported action: one foreground watch, never repeated, then one bounded read 5 phase, the cut-off clause included (the wait action pin)', () => {
+    const from = prose.indexOf('- `WAIT not-reported: <names>`');
+    const to = prose.indexOf('- `RED <names>`');
+    expect(from, 'the WAIT not-reported bullet is gone').toBeGreaterThanOrEqual(0);
+    expect(to, 'the WAIT bullet lost the RED bullet that follows it').toBeGreaterThan(from);
+    const whole = [
+    '- `WAIT not-reported: <names>` — a required name nothing has reported on the head yet, whatever `gh pr checks <pr> --required` exits: it judges only the checks that have reported, and its `--watch` returns at once when every reported one is green.',
+    'Wait on every check instead, `gh pr checks <pr> --watch --interval 30`, once, as one Bash call with its timeout at 600000, never repeated, whatever it exits or however it ends: a check that is not required and never completes must not hold the wait open.',
+    'Then run the verdict again with `BOUND_S=300` on the line before it, and the Bash tool\'s timeout at 600000.',
+    'It reads read 5 again every 30 seconds for at most 300 seconds.',
+    '**The bound is five minutes after the last of the PR\'s reported checks finished.** If the watch was cut off at its timeout, the five minutes start there instead: fifteen minutes in all at most.',
+    'A name it still reads as not reported is the stop `not-reported`.',
+    ].join(' ');
+    expect(prose.slice(from, to).trim()).toBe(whole);
   });
 
   it('stops every route on a requested change and asks the operator, with a bounded ignore (the operator\'s requested-change ruling)', () => {

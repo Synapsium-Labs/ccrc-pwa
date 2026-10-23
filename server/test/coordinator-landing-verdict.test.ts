@@ -113,7 +113,9 @@ exit "$rc"
 
 type Result = { out: string; calls: string[]; stderr: string };
 
-function verdict(fx: Fixture, env: Record<string, string> = {}): Result {
+/** `homeFiles` are written into the fixture HOME before the run (a name relative to HOME, then its content). The second
+ *  argument is all the block sees besides PATH, HOME and the fixture directory, so a variable it does not name is unset. */
+function verdict(fx: Fixture, env: Record<string, string> = {}, homeFiles: Record<string, string> = {}): Result {
   const home = mkTmp('ccrc-landing-verdict-');
   const bin = path.join(home, 'bin');
   const dir = path.join(home, 'fx');
@@ -121,6 +123,7 @@ function verdict(fx: Fixture, env: Record<string, string> = {}): Result {
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(bin, 'gh'), STUB, { mode: 0o755 });
   writeFileSync(path.join(dir, 'calls'), '');
+  for (const [name, text] of Object.entries(homeFiles)) writeFileSync(path.join(home, name), text);
   for (const [k, v] of Object.entries(fx) as [Key, Answer | Answer[]][]) {
     const seq = Array.isArray(v) ? v : [v];
     seq.forEach((a, i) => {
@@ -487,6 +490,47 @@ const REQUESTS: Case[] = [
   ['reviews: a user id of zero', withReviews(measured, '', rev(1, 'APPROVED', 0)), gStop],
   ['reviews: a user that is not an object', withReviews(measured, '', { id: 1, state: 'APPROVED', user: 'reviewer-a' }), gStop],
   ['reviews: a malformed entry is unreadable even beside a clean summary', withReviews(measured, 'APPROVED', rev(0, CR)), gStop],
+];
+
+// API order is the source (fix round 2). GitHub lists a pull request's reviews oldest first, and the block follows that
+// sequence: not review ids, not `submitted_at`. Each fixture lists ONE identity's reviews in the order the API supplies
+// them, with ids and timestamps (all distinct) that disagree with it, and the expected opinion follows the sequence. The
+// ids and times are synthetic and non-monotonic: they show the block does not sort, not that GitHub usually emits such ids.
+const revAt = (id: number, state: string, at: string | null, user = 1): Record<string, unknown> => ({ ...rev(id, state, user), submitted_at: at });
+const hour = (h: number): string => `2026-10-22T${String(h).padStart(2, '0')}:00:00Z`;
+/** The two reviews of one identity, in API order, as [id, time]: the ids disagree with the API and the times agree, the ids
+ *  agree and the times disagree, or both disagree. A sort by id reds on the first and third, a sort by time on the second
+ *  and third, and a reversal on all three. */
+const ORDERINGS: [string, [number, string], [number, string]][] = [
+  ['ids against the API order, times with it', [30, hour(9)], [10, hour(12)]],
+  ['times against the API order, ids with it', [10, hour(12)], [30, hour(9)]],
+  ['ids and times both against the API order', [30, hour(12)], [10, hour(9)]],
+];
+const ORDER: Case[] = [
+  ...ORDERINGS.flatMap(([how, a, b]): Case[] => [
+    [`API order: a request, then an approval, clears it: ${how}`,
+      with_(measured, { reviews: ok([revAt(a[0], CR, a[1]), revAt(b[0], 'APPROVED', b[1])]) }), GOOD_Q],
+    [`API order: an approval, then a request, stands at the request: ${how}`,
+      with_(measured, { reviews: ok([revAt(a[0], 'APPROVED', a[1]), revAt(b[0], CR, b[1])]) }), askLine(false, b[0])],
+    [`API order across two pages: a request on page 1, an approval on page 2, clears it: ${how}`,
+      with_(measured, { reviews: pages([revAt(a[0], CR, a[1])], [revAt(b[0], 'APPROVED', b[1])]) }), GOOD_Q],
+    [`API order across two pages: an approval on page 1, a request on page 2, stands at the request: ${how}`,
+      with_(measured, { reviews: pages([revAt(a[0], 'APPROVED', a[1])], [revAt(b[0], CR, b[1])]) }), askLine(false, b[0])],
+  ]),
+  ['API order: an opinion changed across three pages follows the sequence to its last, the smallest id and the earliest time',
+    with_(measured, { reviews: pages([revAt(70, CR, hour(10))], [revAt(8, CR, hour(9)), revAt(80, 'COMMENTED', hour(8))],
+      [revAt(2, 'APPROVED', hour(6))]) }), GOOD_Q],
+  ['API order: a dismissal last in the sequence clears an earlier request though its id and time are the smallest',
+    with_(measured, { reviews: ok([revAt(40, CR, hour(12)), revAt(5, 'DISMISSED', hour(9))]) }), GOOD_Q],
+  ['API order: a COMMENTED review last in the sequence, with the smallest id and the earliest time, replaces nothing',
+    with_(measured, { reviews: ok([revAt(40, CR, hour(12)), revAt(5, 'COMMENTED', hour(9))]) }), askLine(false, 40)],
+  ['API order: a PENDING review (no timestamp, the smallest id) last in the sequence replaces nothing',
+    with_(measured, { reviews: ok([revAt(60, 'APPROVED', hour(7)), revAt(9, CR, hour(8)), revAt(3, 'PENDING', null)]) }), askLine(false, 9)],
+  ['API order: COMMENTED and PENDING after an approval, both smaller by id, leave the approval standing',
+    with_(measured, { reviews: ok([revAt(9, CR, hour(7)), revAt(60, 'APPROVED', hour(8)), revAt(3, 'PENDING', null),
+      revAt(2, 'COMMENTED', hour(5))]) }), GOOD_Q],
+  ['API order is per identity: another reviewer\'s approval, later in the sequence, clears nothing of the first reviewer\'s request',
+    with_(measured, { reviews: ok([revAt(30, CR, hour(9), 1), revAt(10, 'APPROVED', hour(12), 2)]) }), askLine(false, 30)],
 ];
 
 const keyFor = (summary: boolean, ...ids: number[]) => ({ CR_IGNORE: keyOf(summary, ...ids) });
@@ -905,7 +949,7 @@ const NAMES: Case[] = [
   ['read 3b: enabled false is still no classic configuration, whatever the unread projection holds',
     with_(via3b, { branch: ok({ name: 'main', protection: { enabled: false, required_status_checks: { contexts: [null] } } }) }),
     'ROUTE U method=squash admin=never strict=unknown'],
-  ['read 3b: required_status_checks absent, null and empty are no classic checks', b3b(undefined), 'ROUTE U method=squash admin=never strict=unknown'],
+  ['read 3b: required_status_checks absent is no classic checks', b3b(undefined), 'ROUTE U method=squash admin=never strict=unknown'],
   ['read 3b: a null projected required_status_checks is no classic checks', b3b(null), 'ROUTE U method=squash admin=never strict=unknown'],
   ['read 3b: an empty projected required_status_checks is no classic checks', b3b({}), 'ROUTE U method=squash admin=never strict=unknown'],
   ['read 3b: genuine empty lists and null lists are valid', b3b({ checks: [], contexts: null }), 'ROUTE U method=squash admin=never strict=unknown'],
@@ -940,6 +984,19 @@ const ghSpelled = (b: string): string[] => {
 };
 /** Every line of the block that redirects stderr, once per redirect: `2>`, `&>` and `|&`. */
 const stderrHits = (t: string): string[] => t.split('\n').flatMap((l) => (l.match(/2>|&>|\|&/g) ?? []).map(() => l));
+/** The lines of the block's CODE (comment-only lines dropped) that name CR_IGNORE once the skip condition's two permitted
+ *  expansions are removed. The variable's only legitimate use is those two reads of the invoking shell's value; an
+ *  assignment, a `read` or `mapfile` into it, `printf -v`, `declare`, `export`, a default or a third expansion all leave
+ *  the name behind, or change the count of the two, and come back here. A contract-grade census of the ordinary spellings,
+ *  not a shell parser: an encoded or indirect spelling (a computed name, `eval`, a here-document) is the carried limit. */
+const crIgnoreStrays = (b: string): string[] => {
+  let code = b.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  for (const use of ['[ -n "$CR_IGNORE" ]', '[ "$CR_IGNORE" = "$key" ]']) {
+    if (code.split(use).length !== 2) return [`the skip condition lost or repeated ${use}`];
+    code = code.replace(use, '');
+  }
+  return code.split('\n').filter((l) => l.includes('CR_IGNORE'));
+};
 /** The spelled gh calls that are not one of the reads. */
 const ghOffenders = (b: string): string[] => ghSpelled(b).filter((s) => !GH_SPELLED.test(s));
 
@@ -996,13 +1053,53 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
     expect(ghOffenders(b)).toEqual([]);
   });
 
-  it('CR_IGNORE is read from the invoking shell only: the block never assigns, exports or defaults it', () => {
+  it('CR_IGNORE is read from the invoking shell only: the block never assigns, reads into, exports or defaults it', () => {
     expect(blocks).toHaveLength(1);
     const b = blocks[0]!;
     expect(b).toContain('CR_IGNORE');
     expect(b).not.toMatch(/CR_IGNORE=/);
     expect(b).not.toMatch(/CR_IGNORE:?[-=]/);
     expect(b).not.toMatch(/\bexport\b/);
+    // The census: the only code that names the variable is the two expansions of the skip condition.
+    expect(crIgnoreStrays(b), 'the block names CR_IGNORE other than in the skip condition\'s two expansions').toEqual([]);
+  });
+
+  it('the CR_IGNORE census rejects an ordinary read into it, a printf -v, a declare and a default, and accepts the block and a comment', () => {
+    expect(blocks).toHaveLength(1);
+    const b = blocks[0]!;
+    const anchor = 'if [ "$standing" = true ]; then\n';
+    expect(b.split(anchor), 'the planted spellings lost their anchor').toHaveLength(2);
+    const plant = (line: string): string => b.replace(anchor, `${line}\n${anchor}`);
+    expect(crIgnoreStrays(b)).toEqual([]);
+    expect(crIgnoreStrays(plant('# CR_IGNORE holds the key the operator answered'))).toEqual([]);
+    for (const line of [
+      '[ -f "$HOME/.ccrc-cr-ignore" ] && read -r CR_IGNORE < "$HOME/.ccrc-cr-ignore"',
+      'read -r CR_IGNORE < "$HOME/.ccrc-cr-ignore"',
+      '[ -f "$HOME/.ccrc-cr-ignore" ] && IFS= read -r CR_IGNORE < "$HOME/.ccrc-cr-ignore"',
+      'printf -v CR_IGNORE "%s" "$(cat "$HOME/.ccrc-cr-ignore")"',
+      'declare CR_IGNORE=x',
+      'mapfile -t CR_IGNORE < "$HOME/.ccrc-cr-ignore"',
+      'export CR_IGNORE',
+      ': "${CR_IGNORE:=x}"',
+    ]) expect(crIgnoreStrays(plant(line)), `the census passed: ${line}`).toHaveLength(1);
+    // The permitted expansions are exactly the two of the skip condition, each once: a third copy or a lost one is refused.
+    const cond = '[ -n "$CR_IGNORE" ] && [ "$CR_IGNORE" = "$key" ]';
+    expect(b.split(cond), 'the skip condition changed shape').toHaveLength(2);
+    expect(crIgnoreStrays(b.replace(cond, `${cond} && [ -n "$CR_IGNORE" ]`)), 'a third expansion passed').not.toEqual([]);
+    expect(crIgnoreStrays(b.replace(cond, '[ "$CR_IGNORE" = "$key" ]')), 'a lost expansion passed').not.toEqual([]);
+  });
+
+  it('CR_IGNORE comes from the invoking shell only: the exact key in a file under HOME, with CR_IGNORE unset, still stops', () => {
+    // The fixture HOME is the block's HOME. A durable override read from a file there is the convention check turned into a
+    // standing licence, which the operator's ruling excludes: only the operator's answer, in the invocation, skips the stop.
+    const fx = withReviews(measured, '', rev(7, CR));
+    // The control: the same key supplied in the invoking environment is accepted, so the file below holds the exact accepted key.
+    const control = verdict(fx(), keyFor(false, 7));
+    expect(control.out, `stderr: ${control.stderr}`).toBe(`${GOOD_Q}\n`);
+    for (const [how, text] of [['with a newline', `${keyOf(false, 7)}\n`], ['without one', keyOf(false, 7)]] as const) {
+      const r = verdict(fx(), {}, { '.ccrc-cr-ignore': text });
+      expect(r.out, `a key in $HOME/.ccrc-cr-ignore (${how}) skipped the stop; stderr: ${r.stderr}`).toBe(`${askLine(false, 7)}\n`);
+    }
   });
 
   it('judges a gh call as one logical line: a write split over a backslash continuation is refused', () => {
@@ -1034,7 +1131,7 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   });
 
   it.each([...ROUTES, ...CHECKS, ...STOPS, LICENSED_NEVER, ...REQUESTS, ...IGNORES, ...LICENCE, ...MALFORMED,
-  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES])('%s', (_name, fx, line, env) => {
+  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER])('%s', (_name, fx, line, env) => {
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);
     expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);
