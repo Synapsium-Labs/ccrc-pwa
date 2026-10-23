@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { TerminalDrawer } from '../src/session/TerminalDrawer';
+import { reattachVerdict } from '../src/session/typedFrame';
 import type { DrawerTerm } from '../src/session/terminalFactory';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, PTY_EXIT_CLOSE, TMUX_STATUS_ROWS } from '../../shared/api';
 
@@ -192,6 +193,21 @@ describe('TerminalDrawer quick keys', () => {
 });
 
 // — connection overlay —
+
+// D-6368: a drawer never sits open on a dead pty. The server closes the socket
+// with PTY_EXIT_CLOSE when the pty exits; the drawer re-attaches once, and a
+// second such close inside the bound (a link still down answers the re-dial with
+// a failed open) ends at the connection-lost state and its Reconnect.
+describe('reattachVerdict (D-6368)', () => {
+  it('allows only a first pty-exit close or one strictly after the reattach bound', () => {
+    expect(reattachVerdict(PTY_EXIT_CLOSE, null, 1_000_000)).toBe(true);
+    expect(reattachVerdict(PTY_EXIT_CLOSE, 999_999, 1_000_000)).toBe(false);
+    expect(reattachVerdict(PTY_EXIT_CLOSE, 969_999, 1_000_000)).toBe(true);
+    expect(reattachVerdict(PTY_EXIT_CLOSE, 970_000, 1_000_000)).toBe(false);
+    expect(reattachVerdict(1006, null, 1_000_000)).toBe(false);
+    expect(reattachVerdict(undefined, null, 1_000_000)).toBe(false);
+  });
+});
 
 // D-6368: a drawer never sits open on a dead pty. The server closes the socket
 // with PTY_EXIT_CLOSE when the pty exits; the drawer re-attaches once, and a

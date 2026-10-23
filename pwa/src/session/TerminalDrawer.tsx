@@ -43,7 +43,7 @@ import { api } from '../lib/api';
 import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
 import { wsUrl } from '../lib/ws';
-import { PINNED_WINDOW_COLS, PTY_EXIT_CLOSE } from '../../../shared/api';
+import { PINNED_WINDOW_COLS } from '../../../shared/api';
 import { BASE_CONSOLE_FONT_PX, consoleFit, type ConsoleFit } from './consoleFit';
 import { rowText } from './drawerModel';
 import {
@@ -51,7 +51,7 @@ import {
   type DrawerViewKind, type StorageLike,
 } from './drawerView';
 import { KeyBar, useKeyInput } from './KeyBarView';
-import { insertedFrame, inputLetter, keyLetter, typedFrame } from './typedFrame';
+import { insertedFrame, inputLetter, keyLetter, reattachVerdict, typedFrame } from './typedFrame';
 import { WrappedView } from './WrappedView';
 import './chat.css';
 
@@ -59,15 +59,6 @@ import './chat.css';
  *  history view opens by so the gesture reads as a scroll rather than a jump. */
 
 type Conn = 'connecting' | 'open' | 'down';
-
-/** A drawer never sits open on a dead pty (D-6368): the server closes the
- *  socket with PTY_EXIT_CLOSE when the pty exits, and the drawer re-attaches by
- *  itself, ONCE per this window. The bound is what makes it once: a link that is
- *  still down answers the re-dial with a failed open, which is a second
- *  pty-exit close right away, and that must end at Reconnect rather than loop.
- *  30 s is long enough for a re-dial that failed to be judged by its own close,
- *  short enough that a pty which died again much later heals the same way. */
-const REATTACH_BOUND_MS = 30_000;
 
 /** keyCode 229: a key an input method is handling, whose text xterm reads back
  *  out of its textarea a task later rather than from the key. */
@@ -453,14 +444,11 @@ export function TerminalDrawer({
     // `onclose` for a dead socket, never for a clean server close, so a 4000
     // reaches here alone.
     ws.onclose = (ev?: CloseEvent) => {
-      if (ev?.code === PTY_EXIT_CLOSE) {
-        const now = Date.now();
-        const last = lastReattachRef.current;
-        if (last === null || now - last > REATTACH_BOUND_MS) {
-          lastReattachRef.current = now;
-          setAttempt((a) => a + 1);
-          return;
-        }
+      const now = Date.now();
+      if (reattachVerdict(ev?.code, lastReattachRef.current, now)) {
+        lastReattachRef.current = now;
+        setAttempt((a) => a + 1);
+        return;
       }
       down();
     };
