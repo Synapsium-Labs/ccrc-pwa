@@ -13365,7 +13365,7 @@ describe('W2-5b1 Task 5: the judge spawn, RP1-judge and RP3-judge', () => {
   it('batches of at most ten at most two at once, and the preflight before every batch', async () => {
     const b = w6Box('ccrc-w2-5b1-t5-batches-');
     writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
-    writeFileSync(join(b.home, T5_STUB_SLEEP), '150');
+    writeFileSync(join(b.home, T5_STUB_SLEEP), '1500');   // D-6480: W2-4's concurrency case margin, so the pair overlaps under load
     const j = await w5b5Open(b, 'up-a');
     const items = await j.judge('quiz', w5b5Jobs(12));
     expect(items.every((i) => i.outcome === 'judged')).toBe(true);
@@ -13373,11 +13373,12 @@ describe('W2-5b1 Task 5: the judge spawn, RP1-judge and RP3-judge', () => {
     // V: a --version preflight (at open, then before each batch); P: a print-mode judge run.
     expect(log.map((e) => (e.argv.includes('-p') ? 'P' : 'V')).join('')).toBe(`VV${'P'.repeat(10)}VPP`);
     const prints = log.filter((e) => e.argv.includes('-p'));
-    // The depth when a run starts (W2-4's own measure): the runs whose interval holds that instant, itself included. A count
-    // of every run that overlaps a run at any time would read 3 for a run that straddles two others one after the other.
+    // D-6480: the depth when a run starts (W2-4's own measure, the most stubs alive at once): the runs whose interval holds
+    // that instant, itself included. A count of every run that overlaps a run at any time reads 3 for a run that straddles
+    // two others one after the other.
     const depth = (r: T5Log): number => prints.filter((s) => s.start <= r.start && r.start < s.end).length;
     expect(Math.max(...prints.map(depth)), 'two at once, never three').toBe(2);
-  }, 60_000);
+  }, 120_000);
 
   it('a stop never consumes the retry: a budget stop after a malformed first attempt, and a resume that judges on the second', async () => {
     const b = w6Box('ccrc-w2-5b1-t5-stop-');
