@@ -192,6 +192,7 @@ export function AskReview({
   summary,
   answering,
   locked,
+  gap,
   onAnswer,
   keys,
 }: {
@@ -205,11 +206,13 @@ export function AskReview({
   answering: number | null;
   /** Another send is in flight (an own-words call, D-5090), so no row may start one. */
   locked: boolean;
+  /** The connection is not live (`DialogSheet`'s gap): nothing can be sent, so no row is offered as a tap. */
+  gap: boolean;
   onAnswer: (optionIndex: number) => void;
   /** The sheet's keyboard (`useAskKeys`), whose digits include this screen's `1` and `2`. */
   keys?: AskKeys;
 }): ReactNode {
-  const disabled = locked || answering !== null;
+  const disabled = locked || gap || answering !== null;
   // Claude Code's own keys on this screen (decision `ask-review-digit-keys`, the operator's ruling "Match Claude Code"):
   // `1` submits every answer and `2` cancels AT ONCE, which declines the whole ask, exactly as in the terminal. The
   // Cancel row keeps saying so (`CANCEL_DECLINES_ALL`). They are the sheet's keyboard now (`useAskKeys`, decision
@@ -399,6 +402,7 @@ export function OwnWords({
   words,
   question,
   locked,
+  gap,
   keys,
 }: {
   slot: FreeTextSlot;
@@ -409,6 +413,9 @@ export function OwnWords({
   question: string;
   /** An option's answer is in flight. */
   locked: boolean;
+  /** The connection is not live: Send waits. The row and the field do not (they are the operator's own text, its focus
+   *  and a phone keyboard, and typing sends nothing), so this reaches neither. */
+  gap: boolean;
   /** The sheet's keyboard: the row, then the field, is its `words` row (↑/↓ leave it; ←/→ stay its caret's). */
   keys?: AskKeys;
 }): ReactNode {
@@ -468,7 +475,7 @@ export function OwnWords({
             className="dlg-reply"
             onSubmit={(e) => {
               e.preventDefault();
-              if (!busy && !locked && held === null && taken === null) onSend(row);
+              if (!busy && !locked && !gap && held === null && taken === null) onSend(row);
             }}
           >
             <input
@@ -489,7 +496,7 @@ export function OwnWords({
             <button
               type="submit"
               className="dlg-reply-send"
-              disabled={busy || locked || held !== null || taken !== null}
+              disabled={busy || locked || gap || held !== null || taken !== null}
               aria-busy={busy || undefined}
             >
               {/* Both faces share the button's one grid cell, so it is as wide as the wider face whichever shows, and
@@ -628,6 +635,7 @@ export function MultiPick({
   copy,
   picks,
   locked,
+  gap,
   keys,
 }: {
   multi: DialogMulti;
@@ -640,6 +648,9 @@ export function MultiPick({
   picks: Picks;
   /** Another send is in flight (an option's answer, or own words). */
   locked: boolean;
+  /** The connection is not live: the commit waits. A box does not: ticking is local state, not a send, so the operator's
+   *  set is kept and the commit is there when the connection speaks. */
+  gap: boolean;
   /** The sheet's keyboard: a digit toggles its box, ↑/↓ run the boxes then the commit. */
   keys?: AskKeys;
 }): ReactNode {
@@ -678,7 +689,7 @@ export function MultiPick({
           variant="primary"
           // A flex box drops the marker's leading space (`Nextanswering…`); the gap keeps the two apart.
           className="gap-2"
-          disabled={busy || locked || held !== null}
+          disabled={busy || locked || gap || held !== null}
           aria-busy={busy || undefined}
           onClick={() => onCommit(wanted)}
         >

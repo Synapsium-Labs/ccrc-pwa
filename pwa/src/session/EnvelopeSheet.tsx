@@ -73,6 +73,7 @@ export function EnvelopeSheet({
   dialog,
   answering,
   denying,
+  gap,
   words,
   picks,
   open,
@@ -101,6 +102,9 @@ export function EnvelopeSheet({
   answering: number | null;
   /** Deny's interrupt is in flight (held by the controller, the one sender). */
   denying: boolean;
+  /** The connection is not live (`DialogSheet`'s gap, D-6325): every control that sends is disabled. A flag of its own, not
+   *  part of `busy`, which also refuses the dismissal and the way to the terminal; the Other field stays as it is. */
+  gap: boolean;
   /** D-5090: the own-words text and its call. Held by the PARENT, never here, so an `ask_cleared` mid-call hands the
    *  same text and call to whichever surface the source now chooses (the transcript's copy, or the unreadable one). */
   words: Words;
@@ -242,7 +246,7 @@ export function EnvelopeSheet({
       active={placed}
       onReview={false}
       held={picksHeld}
-      busy={busy}
+      busy={busy || gap}
       onGo={(to) => onTab(to, placed === null ? undefined : placed + 1)}
     />
   );
@@ -263,7 +267,7 @@ export function EnvelopeSheet({
             variant="primary"
             // A flex box drops the marker's leading space (`Allowanswering…`); the gap keeps the two apart.
             className="gap-2"
-            disabled={!canAnswer || busy}
+            disabled={!canAnswer || busy || gap}
             aria-busy={allowing || undefined}
             onClick={() => onSelectOption(1)}
           >
@@ -273,7 +277,7 @@ export function EnvelopeSheet({
           <button
             type="button"
             className="dlg-later"
-            disabled={busy}
+            disabled={busy || gap}
             aria-busy={denying || undefined}
             onClick={onDeny}
           >
@@ -348,6 +352,7 @@ export function EnvelopeSheet({
           copy={q.options}
           picks={picks}
           locked={answering !== null || sendingWords || tabbing}
+          gap={gap}
           keys={keys}
         />
       ) : (
@@ -374,7 +379,7 @@ export function EnvelopeSheet({
                     label={label}
                     tag={recommendedTag(recommended)}
                     sublabel={o.description}
-                    disabled={!canAnswer || answering !== null || sendingWords || picking || tabbing}
+                    disabled={!canAnswer || gap || answering !== null || sendingWords || picking || tabbing}
                     busy={waiting}
                     onClick={() => onSelectOption(idx)}
                     marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
@@ -393,6 +398,7 @@ export function EnvelopeSheet({
                 words={words}
                 question={q.question}
                 locked={answering !== null || picking || tabbing}
+                gap={gap}
                 keys={keyScreen === null ? undefined : keys}
               />
             )}
@@ -401,7 +407,7 @@ export function EnvelopeSheet({
             <ChatRow
               row={chat}
               answering={answering}
-              disabled={busy}
+              disabled={busy || gap}
               onAnswer={onSelectOption}
               keys={keyScreen === null ? undefined : keys}
             />

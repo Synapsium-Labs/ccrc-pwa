@@ -308,6 +308,11 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   // its handler returns, so a second tap handled in the same tick finds every row still enabled and `locked` still
   // false: an option and then `Chat about this` (which declines the whole ask) would both be sent. `sending` is set the
   // moment a send starts (`claim`) and follows `locked` again from the next render on.
+  // The gap (D-6325, review 843 F3): the connection is not live, so the held surface is read-only in what it SHOWS as well
+  // as at the send. Every control that sends is disabled by this flag, which is NOT part of `locked`: `locked` also
+  // refuses the dismissal, and the gap must still hide. The Other field and its row stay as they are (the operator's own
+  // text, its focus and a phone keyboard survive), and so does a pick-several box (a local tick, not a send).
+  const gap = !live;
   const sending = useRef(false);
   useLayoutEffect(() => {
     sending.current = locked;
@@ -550,6 +555,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
         dialog={dialog}
         answering={answering}
         denying={denying}
+        gap={gap}
         words={words}
         picks={picks}
         open={open}
@@ -582,7 +588,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
             active={null}
             onReview
             held={picksHeld}
-            busy={locked}
+            busy={locked || gap}
             onGo={(to) => void moveTab(to)}
           />
         )}
@@ -593,6 +599,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
           summary={source.summary}
           answering={answering}
           locked={locked}
+          gap={gap}
           onAnswer={(k) => void answer(k)}
           keys={keys}
         />
@@ -623,7 +630,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
                 index={o.index}
                 label={o.label}
                 sublabel={o.description}
-                disabled={locked}
+                disabled={locked || gap}
                 busy={waiting}
                 onClick={() => void answer(o.index)}
                 // The optimistic "answering…" is this package's marker, not the
@@ -657,7 +664,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
 
 /** The one sentence the sheet says while the socket is down or the new connection has not yet spoken: the ask stays up and
  *  nothing can be sent. A sentence constant, so `plain-words.test.ts` reads it. */
-const RECONNECTING = 'Reconnecting. Answers wait until the session is back.';
+const RECONNECTING = 'Reconnecting. Nothing can be sent until the session is back.';
 
 /** The titles of the two surfaces that offer only the terminal. Sentence constants, so `plain-words.test.ts` reads them. */
 const UNREADABLE_TITLE = "Claude is asking a question this screen can't read yet.";
