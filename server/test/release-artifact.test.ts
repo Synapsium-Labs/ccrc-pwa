@@ -217,6 +217,33 @@ describe('release-artifact.sh: record, in the build job', () => {
     expectRefused(record(root, dir, out), `could not read build.json from ${NAME}, or it is not the builder's one-line shape`);
     expect(readFileSync(out, 'utf8')).toBe('');
   });
+
+  it('W26-A9: a truncated tarball whose build.json is intact is refused on tar\'s exit status, not on the shape', () => {
+    const home = mkTmp('ccrc-relart-');
+    const { root, head } = repo(home);
+    // build.json first, then a MANIFEST of incompressible bytes, so cutting
+    // the stream in half lands inside the MANIFEST: tar prints build.json
+    // whole and then fails on the truncated gzip stream.
+    const src = join(home, 'tree-truncated');
+    mkdirSync(src);
+    writeFileSync(join(src, 'build.json'), buildJson(head, TAG));
+    writeFileSync(join(src, 'MANIFEST'), randomBytes(64 * 1024));
+    const dir = join(home, 'release-out');
+    mkdirSync(dir);
+    const full = join(home, 'full.tar.gz');
+    const t = spawnSync('tar', ['-czf', full, '-C', src, './build.json', './MANIFEST'], { encoding: 'utf8' });
+    if (t.status !== 0) throw new Error(`fixture tar failed: ${t.stderr}`);
+    const bytes = readFileSync(full);
+    writeFileSync(join(dir, NAME), bytes.subarray(0, Math.floor(bytes.length / 2)));
+    writeFileSync(join(dir, 'SHA256SUMS'), sumsLine(sha256(join(dir, NAME)), NAME));
+    // The fixture's own premise: the JSON comes out intact and tar exits non-zero.
+    const probe = spawnSync('tar', ['-xzOf', join(dir, NAME), './build.json'], { encoding: 'utf8' });
+    expect(probe.status, 'tar must exit non-zero on the truncated stream').not.toBe(0);
+    expect(probe.stdout).toBe(buildJson(head, TAG));
+    const out = outputFile(home);
+    expectRefused(record(root, dir, out), `could not read build.json from ${NAME}, or it is not the builder's one-line shape`);
+    expect(readFileSync(out, 'utf8')).toBe('');
+  });
 });
 
 describe('release-artifact.sh: verify, in the publish job', () => {
@@ -443,11 +470,15 @@ describe('release-artifact.sh: source pins', () => {
     expect(code(body)).toContain(calls[0]);
   });
 
-  it('W26-A6: verify\'s body runs no decoder — the write side opens nothing it received', () => {
-    const body = fn('verify');
-    expect(body.length, 'verify\'s body was not found').toBeGreaterThan(200);
+  it('W26-A6: no decoder anywhere in the file but record\'s one tar -xzOf line — so no helper verify calls opens what it received', () => {
+    const lines = src().split('\n');
+    const reads = lines.filter((l) => l.includes('tar -xzOf'));
+    expect(reads).toHaveLength(1);
+    expect(fn('record')).toContain(reads[0]);
+    const rest = lines.filter((l) => l !== reads[0]).join('\n');
+    expect(rest.length).toBeGreaterThan(2000);
     for (const w of ['tar', 'gzip', 'gunzip', 'zcat', 'unzip', 'bsdtar', 'node']) {
-      expect(body, w).not.toMatch(word(w));
+      expect(rest, w).not.toMatch(word(w));
     }
   });
 });
