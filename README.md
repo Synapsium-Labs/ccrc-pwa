@@ -5742,6 +5742,31 @@ the journal (`journalctl --user -u ccd-tmp-sweep.service`). `ccd-tmp-sweep --dry
 pass would remove and removes nothing; `touch ~/.ccrc/tmp-sweep-paused` short-circuits every pass
 until removed. `ccrc doctor`'s `services` check warns when the timer is installed and stopped.
 
+**The live arm and the size budget** (fleet disk retention, D-6620). The rules above spare every unit a
+running or hibernated session owns, however old its contents. After the dead pass, under the same lock and
+pause file, the live arm reaches into those units' `scratchpad/` and `tasks/` (never the two directories, never
+the unit) and takes a top-level entry in two cases. **Age:** every entry under it has an mtime and ctime older
+than 14 days (3 under pressure) and every regular file an atime older too, unless its mount is `noatime`
+(then atime is not read, and the census says so; a directory's own atime never is). **Budget:** a session's
+scratch, summed over every root and unit of its uuid, is over `CCD_TMP_BUDGET_GB` (20); the first pass that
+sees it records `overSince` and gives 24 hours of grace (none under pressure), and after that the sweep takes
+entries oldest first until the total is under `CCD_TMP_BUDGET_TARGET_GB` (15), skipping any entry touched in
+the last 48 hours (a floor pressure never lowers), any entry a process holds, and any entry holding a
+repository with work on no remote (`git-work-unrescued`). Both knobs can only be raised. The roots walked are
+today's, `/tmp/claude-<uid>` when it differs, and each witnessed child leaf's `claude-<uid>`. "Held" is the one
+holder probe, `ccd path-users --json`: a cwd, an open fd, a file mapping or a `TMPDIR` at or under the entry,
+and any doubt (the probe failing, a walk running out of time) keeps the entry.
+
+A taken entry is renamed into `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>`; a pass 24 hours later (1 hour
+under pressure) asks the holder probe again and deletes it, so the session has a working day to move it back.
+**It ships in shadow:** without `~/.ccrc/tmp-sweep-live-arm` it records what it would take and touches
+nothing (no code in the tree creates that file; arming is the operator's). Pressure is the sweep's own
+measure of its filesystem (92% of bytes or inodes used, the same figure `shared/disk.ts` holds; `disk-twins.test.ts`
+pins them equal) and also shortens the dead arm to 2 days. The live arm scans at most every 6 hours, or every
+pass under pressure. Its census, `~/.ccrc/tmp-sweep.json` (`v`, `at`, `liveAt`, `pressure`, `arm`, `seq`,
+`roots`, `sessions` with each one's `budget`, `moved` rows kept 7 days or 1,000, `counts`), is replaced whole
+by a rename at the end of every pass, shadow or live. The sweep is its only writer.
+
 ### Pane-scope sweep (ccd-scope-sweep)
 
 Every ccd pane runs in its own transient `tmux-spawn-<uuid>.scope` under the session slice, and its

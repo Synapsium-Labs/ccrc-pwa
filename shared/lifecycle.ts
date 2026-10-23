@@ -34,10 +34,16 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   // then never collect". Session-bound (S), collected by age PLUS the absence of
   // a live owner — the live-session, open-fd and newest-mtime checks the
   // collector's own header states.
-  { name: 'claude-tmp-session-dirs', root: '${TMPDIR:-/tmp}/claude-<uid>/<project>/<session-uuid>/ + loose top-level entries', pattern: 'S',
+  { name: 'claude-tmp-session-dirs', root: '${TMPDIR:-/tmp}/claude-<uid>/<project>/<session-uuid>/ + loose top-level entries; also /tmp/claude-<uid>/ when it differs, and a witnessed child leaf\'s ~/.cc-tmp/<id>/claude-<uid>/ (DR-8)', pattern: 'S',
     creators: ['claude (Claude Code: scratchpad, background-task output)', 'agents writing into the root'],
-    collector: 'ccd-tmp-sweep (hourly; not live, not in use, nothing newer than CCD_TMP_SWEEP_MAX_AGE_DAYS=7)',
-    bound: 'session lifetime + 7 days', tier: '138G uncollected on the fleet host 2026-09-22; single task .output files 1-4G', ruling: null },
+    collector: 'ccd-tmp-sweep (hourly; dead units: not live, not in use, nothing newer than CCD_TMP_SWEEP_MAX_AGE_DAYS=7, 2 days under pressure). Its live arm (DR-8, D-6620, shadow unless ~/.ccrc/tmp-sweep-live-arm exists) takes a live unit\'s scratchpad/tasks entry untouched for 14 days (3 under pressure), or, over the size budget, the oldest entries untouched 48 hours, into <root>/.ccd-tmp-quarantine/<uuid>/ and deletes them a 24-hour grace later after a fresh holder ask',
+    bound: 'session lifetime + 7 days; a live session\'s scratch: each entry 14 days untouched, and a size budget of 20 GiB per session (taken down to 15 GiB, 48-hour floor, 24 hours after the notice)', tier: '138G uncollected on the fleet host 2026-09-22; single task .output files 1-4G; 194 GiB of live scratch under one root (2026-10-23)', ruling: null },
+  // DR-8 (D-6620): the live arm's record, the one reader of which is the server (DR-12). Rolling (R): replaced whole
+  // by a rename at the end of every pass, shadow or live, so it holds the last scan\'s sessions and the moved rows of
+  // the last 7 days or 1,000, whichever is fewer.
+  { name: 'tmp-sweep-census', root: '~/.ccrc/tmp-sweep.json', pattern: 'R',
+    creators: ['ccd-tmp-sweep'], collector: 'ccd-tmp-sweep (replaced whole every pass; moved rows kept 7 days or 1,000)',
+    bound: 'rolling', tier: 'at most 1,000 moved rows plus one row per live session', ruling: null },
   // D-5888 (#298): a `--child` workspace's temp root, the policy's ruling 4. Only the per-id leaf: loose
   // top-level entries in ~/.cc-tmp are a separate class with no owner yet, and this row does not claim them.
   { name: 'child-tmp-roots', root: '~/.cc-tmp/<id>/', pattern: 'S',
