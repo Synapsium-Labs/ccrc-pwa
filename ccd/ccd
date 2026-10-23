@@ -31640,6 +31640,8 @@ _ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_R
   git -C "$n" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
     || { RECLAIM_PIN_WHY="the nested repository at $n has no commit at HEAD — there is nothing to pin it by, so it stays"; return 1; }
   errf=$(_plat_mktemp) || { RECLAIM_PIN_WHY="could not make a scratch file to rescue $n"; return 1; }
+  # APPEND-ONLY: a name the attic already holds is never force-moved (a second same-named repository would orphan the first's tips).
+  [[ -z "$(git -C "$main" for-each-ref --count=1 "$base/" 2>/dev/null)" ]] || base="$base/again-$(date +%s)-$$-$RANDOM"
   specs=("+refs/*:$base/refs/*")
   # A commit only a reflog names (a stash below the newest, a reset-away tip) is in no ref: it is fetched by sha too.
   orph=$(git -C "$n" rev-list --reflog --not --all 2>/dev/null) \
@@ -31651,13 +31653,20 @@ _ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_R
   [[ -z "$wip" ]] || specs+=("+$wip:$base/wip" "+$wip:$base/wips/$wip")
   # THE BOUND IS MEASURED BEFORE ANYTHING LANDS, in a throwaway repository that borrows the project's store as an alternate, so the
   # answer is the same on every attempt: a refused rescue must not leave its objects in the store for the next one to find already paid.
-  # `transfer.unpackLimit` keeps the objects loose, so one the store already holds is skipped rather than kept in a pack.
-  q=$(_plat_mktemp_d) && git init -q --bare "$q" 2>/dev/null \
+  # An ordinary PACKED fetch (`unpackLimit=1`) keeps delta compression, so `size-pack` is a compressed upper bound on what would land
+  # (it may count objects no ref reaches, which only errs toward keeping). A repository whose own store is far over the bound is
+  # refused before any fetch, so a huge clone never writes its objects to temp on a box that is short of disk.
+  a=$(_ws_store_kb "$n")
+  if (( a > 4 * WS_NESTED_RESCUE_MAX_MB * 1024 )); then
+    rm -f "$errf"; RECLAIM_PIN_WORD=nested-rescue-too-large
+    RECLAIM_PIN_WHY="the nested repository at $n holds $(( a / 1024 )) MiB, far over the $WS_NESTED_RESCUE_MAX_MB MiB bound — nothing was taken"; return 1
+  fi
+  q=$(_plat_mktemp_d) && { _WS_NQ=$q; [[ -n "$(trap -p EXIT)" ]] || trap 'rm -rf "${_WS_NQ:-}"' EXIT; } && git init -q --bare "$q" 2>/dev/null \
     && git -C "$main" rev-parse --path-format=absolute --git-path objects >"$q/objects/info/alternates" 2>/dev/null \
     || { rm -rf "$q"; rm -f "$errf"; RECLAIM_PIN_WHY="could not make a scratch repository to measure the rescue of $n"; return 1; }
-  git -C "$q" -c gc.auto=0 -c transfer.unpackLimit=2147483647 -c uploadpack.allowAnySHA1InWant=true fetch -q --no-tags --no-write-fetch-head "$n" "${specs[@]}" >/dev/null 2>"$errf" \
+  git -C "$q" -c gc.auto=0 -c transfer.unpackLimit=1 -c uploadpack.allowAnySHA1InWant=true fetch -q --no-tags --no-write-fetch-head "$n" "${specs[@]}" >/dev/null 2>"$errf" \
     || { RECLAIM_PIN_WHY="could not fetch the nested repository at $n to measure it: $(head -1 "$errf")"; rm -rf "$q"; rm -f "$errf"; return 1; }
-  a=$(_ws_store_kb "$q"); rm -rf "$q"; b=0
+  a=$(_ws_store_kb "$q"); rm -rf "$q"; _WS_NQ=""; b=0
   if (( a > WS_NESTED_RESCUE_MAX_MB * 1024 )); then
     rm -f "$errf"; RECLAIM_PIN_WORD=nested-rescue-too-large
     RECLAIM_PIN_WHY="rescuing the nested repository at $n would add $(( a / 1024 )) MiB to the project, over the $WS_NESTED_RESCUE_MAX_MB MiB bound — nothing was taken"; return 1

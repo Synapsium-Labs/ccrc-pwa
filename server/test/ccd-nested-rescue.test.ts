@@ -120,6 +120,21 @@ describe('with the marker a nested repository is rescued, then the tree goes', (
     expect(h.git(c.main, 'for-each-ref', `${base(CHILD_ID)}/`), 'the refs of a refused rescue are removed').toBe('');
   }, 120_000);
 
+  it('the bound counts packed (delta-compressed) bytes: a delta-heavy history under a 2 MiB bound is rescued', () => {
+    const c = makeChild(h);
+    const n = plantNested(c.wt);
+    const lines = Array.from({ length: 6000 }, () => randomBytes(32).toString('hex'));
+    for (let i = 0; i < 20; i++) {
+      lines[i] = `edit ${i}`;
+      fs.writeFileSync(path.join(n.dir, 'text.txt'), lines.join('\n') + '\n');
+      h.git(n.dir, 'add', 'text.txt'); h.git(n.dir, 'commit', '-q', '-m', `v${i}`);
+    }
+    arm();
+    const r = childReclaimVerb(h, evalOf(h).token, { pre: 'WS_NESTED_RESCUE_MAX_MB=2;' });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(fs.existsSync(n.dir), 'the tree is gone').toBe(false);
+  }, 180_000);
+
   it('the bound holds on EVERY attempt: a 3 MiB blob over a 1 MiB bound is refused twice and the tree stays', () => {
     const c = makeChild(h);
     const n = plantNested(c.wt);
@@ -237,6 +252,24 @@ describe('scratch-rescue keeps a session\'s scratch repository in the project at
     expect(h.git(c.main, 'rev-parse', `${b}/refs/heads/main`)).toBe(tip);
     expect(entry['refs']).toBe(`${b}/`);
     expect(h.git(c.main, 'ls-tree', '-r', '--name-only', String(entry['wip'])).split('\n')).toContain('loose.txt');
+  }, 90_000);
+
+  it('a second same-named scratch repository never orphans the first: every earlier tip still resolves', () => {
+    const c = makeChild(h);
+    const tips: string[] = [];
+    for (const parent of ['one', 'two']) {
+      const scratch = path.join(h.home, 'scratch-area', parent, 'sandbox');
+      fs.mkdirSync(scratch, { recursive: true });
+      h.git(scratch, 'init', '-q', '-b', 'main');
+      fs.writeFileSync(path.join(scratch, `${parent}.txt`), `${parent}\n`);
+      h.git(scratch, 'add', '.'); h.git(scratch, 'commit', '-q', '-m', parent);
+      tips.push(h.git(scratch, 'rev-parse', 'HEAD'));
+      const r = h.run(`cmd_scratch_rescue --session ${CHILD_ID} "${scratch}"`);
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+    const named = h.git(c.main, 'for-each-ref', '--format=%(objectname)', `refs/ccrc/attic/${CHILD_ID}/`).split('\n');
+    for (const t of tips) expect(named, `tip ${t} is named by an attic ref`).toContain(t);
   }, 90_000);
 
   it('refuses a directory that is the project\'s own repository', () => {
