@@ -45,6 +45,16 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
   inbound-keys     {cut?: [names], text?: [[session, text]], call?: [ids], cache?: [[session, agent]]} -> each list
                    mapped through cut_name / text_key / call_key / cache_key, and "consts": BILLING_PREFIX,
                    COMPACTION_MARKER, IMAGE_TOKENS
+  reduce           {stream (a path) | bytes_b64, chunk: <int> | "whole", name_map?, tools_required?, live_text?,
+                   trace?} -> {"events": [[name, data], ...] (every block event released, in order), "terminal":
+                   {kind, reason, endTurn, usage, anthropicUsage, stop, continue, error}, "reasoning": [{"id", "key"}]
+                   (item ids and keys only, never an item), "counted": {"names", "counts"}, "committable",
+                   "emittedToolUse", "refusal", "phases", "emittedText", "warnings", "terminalBeforeEof",
+                   "outputItems" (a count), "responseId", "trace"? (per parsed event: its type, the events released,
+                   and whether terminal and committable were then set)}: one SseParser and one Reducer, the
+                   reducer's release() drained after every event, finish() after the parser is closed
+  stop-reasons     -> {"rows": [{"in": [kind, reason, end_turn, emitted_tool_use, refusal], "stop", "cont"}],
+                   "failedRaises": the class stop_reason raises for a failed terminal}
 A BridgeError prints as {"error": {status, etype, message, headers, state, code, requestId, kind}, "answer":
 {"status", "headers", "body": parsed JSON}, "event": errors.event(e) as text}. An op that raised prints
 {"raised": <class name>}. Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the package failed to import.
@@ -135,6 +145,73 @@ def _census_file(path):
                 if name == "TimeoutError":
                     out["timeoutError"].append(node.lineno)
     out["imports"] = sorted(set(out["imports"]))
+    return out
+
+
+# (kind, reason, end_turn, emitted_tool_use, refusal): the stop-reasons op's table rows, in the test's order.
+_STOP_ROWS = (
+    ("completed", None, None, True, False), ("completed", None, None, False, True),
+    ("completed", None, None, False, False), ("completed", None, True, False, False),
+    ("completed", None, False, False, False), ("completed", None, False, True, False),
+    ("incomplete", "max_output_tokens", None, False, False), ("incomplete", "content_filter", None, False, False),
+    ("incomplete", "interrupted", None, False, False), ("incomplete", "interrupted", None, True, False),
+)
+
+
+def _reduce(op, cb):
+    """One SseParser and one Reducer over a stream fed in `chunk`-byte pieces, `release()` drained after every event;
+    the reducer's reasoning is reported as item ids and keys only, never the items."""
+    reducer = cb.reducer
+    if "stream" in op:
+        with open(op["stream"], "rb") as f:
+            data = f.read()
+    else:
+        data = base64.b64decode(op["bytes_b64"])
+    chunk = op.get("chunk", "whole")
+    size = max(1, len(data) if chunk == "whole" else int(chunk))
+    sink = cb.ListSink()
+    r = reducer.Reducer(name_map=op.get("name_map") or {}, names=sink,
+                        tools_required=frozenset(op.get("tools_required") or []), live_text=op.get("live_text", True))
+    parser = cb.sse.SseParser()
+    events, trace = [], []
+
+    def take(parsed):
+        for ev in parsed:
+            r.feed(ev)
+            got = r.release()
+            events.extend([n, d] for n, d in got)
+            trace.append({"type": ev.type, "terminal": r.terminal is not None, "committable": r.committable,
+                          "released": [n + ":" + d["delta"]["type"] if n == "content_block_delta" else n
+                                       for n, d in got]})
+
+    for i in range(0, len(data), size):
+        take(parser.feed(data[i:i + size]))
+    take(parser.close())
+    before_eof = r.terminal is not None
+    t = r.finish()
+    events.extend([n, d] for n, d in r.release())
+    term = {"kind": t.kind, "reason": t.reason, "endTurn": t.end_turn,
+            "usage": {"input": t.usage.input, "cached": t.usage.cached, "cacheWrite": t.usage.cache_write,
+                      "output": t.usage.output},
+            "anthropicUsage": reducer.anthropic_usage(t.usage), "stop": None, "continue": False, "error": None}
+    if t.error is None:
+        term["stop"] = reducer.stop_reason(t, r.emitted_tool_use, r.refusal)
+        term["continue"] = reducer.needs_continuation(t, r.emitted_tool_use) and term["stop"] is None
+    else:
+        term["error"] = {"type": t.error.etype, "status": t.error.status, "message": t.error.message,
+                         "code": t.error.code}
+    out = {
+        "chunk": chunk, "events": events, "terminal": term,
+        "reasoning": [{"id": item.get("id"), "key": list(key) if key is not None else None}
+                      for item, key in r.reasoning],
+        "counted": {"names": [list(n) for n in sink.names], "counts": {k: v for k, v in r.counts.items() if v}},
+        "committable": r.committable, "emittedToolUse": r.emitted_tool_use, "refusal": r.refusal,
+        "phases": r.phases, "emittedText": {str(k): v for k, v in r.emitted_text.items()},
+        "warnings": list(r.warnings), "terminalBeforeEof": before_eof, "outputItems": len(r.output_items),
+        "responseId": r.response_id,
+    }
+    if op.get("trace"):
+        out["trace"] = trace
     return out
 
 
@@ -239,6 +316,22 @@ def _run(op, pkg, cb):
     if name == "endpoints":
         keys = ("CCGPT_BRIDGE_UPSTREAM_BASE", "CCRC_CODEX_AUTH_BASE", "HOME")
         return {k: os.environ.get(k) for k in keys}
+    if name == "reduce":
+        return _reduce(op, cb)
+    if name == "stop-reasons":
+        reducer = cb.reducer
+        rows = []
+        for kind, reason, end_turn, tool, refusal in _STOP_ROWS:
+            t = reducer.Terminal(kind, reason, None, reducer.ZERO_USAGE, end_turn)
+            rows.append({"in": [kind, reason, end_turn, tool, refusal], "stop": reducer.stop_reason(t, tool, refusal),
+                         "cont": reducer.needs_continuation(t, tool)})
+        failed = reducer.Terminal("failed", None, errors.classify_failed(None, now=0), reducer.ZERO_USAGE, None)
+        try:
+            reducer.stop_reason(failed, False, False)
+            raised = None
+        except Exception as e:  # the answer this op reports
+            raised = type(e).__name__
+        return {"rows": rows, "failedRaises": raised}
     _usage("unknown op " + json.dumps(name))
     return None
 
