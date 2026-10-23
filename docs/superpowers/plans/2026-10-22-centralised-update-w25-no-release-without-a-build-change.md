@@ -155,7 +155,7 @@ One PR, from this workspace's own branch.
 
 ## Mutation table
 
-> Fix round 2 (review 818, ruling 8) re-measured this table whole for the artifact comparison and the docs trigger; fix round 3 (review 842, F8) added its rows and corrected its count. The first design's rows are in git history at `4ca88f61e`.
+> Fix round 2 (review 818, ruling 8) re-measured this table whole for the artifact comparison and the docs trigger; fix round 3 (review 842, F8) added its rows and corrected its count; fix round 4 (review 846) added seven rows and gave guard (ii) its rows. The first design's rows are in git history at `4ca88f61e`.
 
 Each guard, the mutation that removes or weakens it, and the rows that went red. Each mutation was applied alone, its whole test file was run once, and the file was restored byte-identical. The runs were sequential, because the release fixtures copy `deploy/` at test time.
 
@@ -164,11 +164,12 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 - `build-release.test.ts`: the W, A and F1 rows at `cfa826d92`; the F7 rows (review 842, the thirteen mutations of the behavioural W25-F2) at `48828c125` plus the round's rows.
 - `release-stable.test.ts`: the S and Y rows at `a4ab632fa`.
 - `settings-screen.test.tsx`: P1 at `a5498cb54`.
+- Review 846's rows (X13 to X15, Y12, Y13, V1 and V2) at `0317c47e0`, in a scratch clone, each vitest call under `timeout -k 10 600` and a cap on new processes. X2 and X7 were re-measured there against the reshaped C30 and C35: each reds both cases (2 of 90).
 - Neither the targets nor the rows of an earlier measurement changed after it was taken.
 
-**The count.** This table has 75 rows, and none survived.
+**The count.** This table has 82 rows, and none survived: 75 after fix round 3, and review 846's seven.
 - The fix-round-2 table had 46 rows, not the 50 its wave-done gave.
-- "No survivors" speaks for the listed rows only. Three guards still have no row, below.
+- "No survivors" speaks for the listed rows only. Two guards still have no row, below.
 
 **Measured, then strengthened.** Y6 (an empty diff counted as docs) survived its first run, and W25-T1d was added for it. M22 was an equivalent mutant, so the redundant top-level gate it targeted was removed, and M22′ is its measurable form.
 
@@ -176,8 +177,7 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 
 **Builder rows that also red.** Under F7 (c), (e), (f), (h), (j), (k), (l) and (m), nine other builder rows also red, only because their fixtures lack the added path. W25-F2 is the row that pins the property.
 
-**Guards with no row** (review 842, F8), each named with the reason it has none:
-- **(ii) The two extraction-failure arms in `judge`.** The outcome is unchanged without them: an empty tree is an empty fingerprint, which releases. Only the reason in the line differs.
+**Guards with no row** (review 842, F8), each named with the reason it has none. (ii), the two extraction-failure arms in `judge`, was listed here with a false reason (review 846, F1): a partial extraction leaves a short tree, not an empty one. It now has rows, W25-C37 under X13 and X14.
 - **(iv) publish's HEAD check on `built true`.** It is backstopped by publish's tag-at-HEAD check, which refuses any HEAD that no longer carries the tag.
 - **(v) prepare's `git tag -d` after a failed build, and prepare's own dirty-tree refusal.** Both predate this wave. `build-release.sh`'s identical refusal masks the second.
 
@@ -222,6 +222,9 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 | `release-main.test.ts` | X10: delete the `-z "$BASE"` check | W25-C9, W25-C11 (2 of 87) |
 | `release-main.test.ts` | X11: delete the gh release view exit check | W25-C10 (the viewExit 1 case) (1 of 87) |
 | `release-main.test.ts` | X12: delete publish's `merge-base --is-ancestor` check on `built unchanged` | W25-C16b (1 of 87) |
+| `release-main.test.ts` | X13 (review 846 F1): delete the base's extraction arm | W25-C37, the base case (1 of 90); its line becomes `differs from v0.0.1: 1 entries, first "ccd/ccrc"` |
+| `release-main.test.ts` | X14 (review 846 F1): delete the candidate's extraction arm | W25-C37, the candidate case (1 of 90) |
+| `release-main.test.ts` | X15 (review 846 F3): delete the listing check's shape half | W25-C35, comm exits 0 and prints nothing (1 of 90) |
 | `build-release.test.ts` | W1 attest `if:` deleted | "runs prepare, compare, attests, then publish ... (D-3122, D-6499)" (no W25 id) |
 | `build-release.test.ts` | W2 GH_TOKEN env on prepare | W25-Y4 |
 | `build-release.test.ts` | W3 setup-node gated by an `if:` | W25-Y3 |
@@ -257,11 +260,15 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 | `release-stable.test.ts` | Y4 any root path counts as docs (`*) ;;`) | W25-T1c |
 | `release-stable.test.ts` | Y5 a non-docs path below the root no longer stops the walk | W25-T1, W25-T1c |
 | `release-stable.test.ts` | Y6 an empty diff counts as docs (`-gt 0` to `-ge 0`) | W25-T1d |
+| `release-stable.test.ts` | Y12 (review 846 F4): `docs/*) ;;` to `docs*) ;;` | W25-T1c, W25-T8 (2 of 26) |
+| `release-stable.test.ts` | Y13 (review 846 F7): `--no-renames` dropped | W25-T9 (1 of 26) |
+| `release-stable.test.ts` | V1 (review 846 F2, the review's W1): `'*.md'` to `'**/*.md'` in the workflow and in W25-F1's expected block | W25-T8, "release-stable.sh has no arm for **/*.md" (1 of 26) |
+| `release-stable.test.ts` | V2 (review 846 F2, the review's W2): `'LICENSE'` added in the workflow and in W25-F1's expected block | W25-T8, "release-stable.sh has no arm for LICENSE" (1 of 26) |
 | `settings-screen.test.tsx` | P1 the old channel note | the labels read spec §11.2's words: auto-install, announce, channel and the macOS row |
 
 ## Deviations found
 
-These twenty numbers, starting at D-6390, were issued to run 793. This plan defines all twenty, in order: D-6390 to D-6402 from the coordinator's draft, and D-6403 to D-6409 from the worker's reserve (D-6403 for the ruling on Reading 10; D-6404 and D-6405 for what Task 2's reviews found; D-6406 and D-6407 for review 812's fix round; D-6408 and D-6409 for review 818's). Fix round 2 also defines D-6499 to D-6501, from the block D-6499 to D-6510 issued to this wave for it (D-6502 for the round's review; D-6503 to D-6510 each have an `unused` entry below), and D-6511 to D-6513, the block issued with the operator's docs-trigger amendment. Fix round 2 rewrote D-6390, D-6392, D-6393, D-6398, D-6400, D-6401 and D-6405, and marked D-6391, D-6396, D-6399 (in part), D-6402, D-6403, D-6404, D-6406 and D-6407 superseded where they no longer apply; the amendment marked D-6397 superseded; none was removed.
+These twenty numbers, starting at D-6390, were issued to run 793. This plan defines all twenty, in order: D-6390 to D-6402 from the coordinator's draft, and D-6403 to D-6409 from the worker's reserve (D-6403 for the ruling on Reading 10; D-6404 and D-6405 for what Task 2's reviews found; D-6406 and D-6407 for review 812's fix round; D-6408 and D-6409 for review 818's). Fix round 2 also defines D-6499 to D-6501, from the block D-6499 to D-6510 issued to this wave for it (D-6502 for the round's review; D-6503 to D-6510 each have an `unused` entry below), and D-6511 to D-6513, the block issued with the operator's docs-trigger amendment. Fix round 4 (review 846) defines D-6583 from its reserve of D-6583 and D-6584; D-6584 has an `unused` entry below. Fix round 2 rewrote D-6390, D-6392, D-6393, D-6398, D-6400, D-6401 and D-6405, and marked D-6391, D-6396, D-6399 (in part), D-6402, D-6403, D-6404, D-6406 and D-6407 superseded where they no longer apply; the amendment marked D-6397 superseded; none was removed.
 
 - **D-6390.** The rule is "a merge whose shipped build would be unchanged cuts no release". It is implemented by measuring the artifact (option (b)): every merge builds, and a release is skipped only when the build's fingerprint (D-6408) exactly equals that of the newest release HEAD contains (D-6392). The path classifier (option (a)) is retired. This inverts the first text, which chose (a).
   - Why: two review rounds (812, 818) found eleven families of build inputs that the static guard (D-6396) passed silently, and the last one put `server/test` into the tarball with the guard green. A model of every way the builder, npm, tsc, vite and Tailwind can read a file has no end.
@@ -329,6 +336,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - Consequence, stated: a test-only fix after a red stable gate builds an unchanged artifact and cuts no release. So nothing is promotable until a release contains that fix: the next merge whose build differs, or a hand-cut `vX.Y.0` tag, which `release.yml` always builds.
   - Rewritten in fix round 2 (review 818). The first text is in git history at `4ca88f61e`.
   - **Amended on review 842:** the refusal tells a head with no release-main run from one with a run. It measures `git diff --name-only HEAD^ HEAD` under the trigger's own root-anchored rule (`docs/**`, and a root `*.md` with no `/`). When every path matches, it says HEAD's merge changed only `docs/` or the root's Markdown, so no release-main run started for it, and it names the newest release HEAD contains. Otherwise it points at release-main's run for HEAD's sha, as before. When HEAD has no parent, or the diff fails, it takes the pointer form and says HEAD's changed paths could not be read. Exit 2, no gh call, and no push or rewind command, as before. W25-T1 is pinned for the pointer case, W25-T1b for the docs case, and W25-T5 (a one-commit HEAD) for the unreadable case (F1).
+  - **Amended on review 846:** two changes and one pin. The diff runs with `--no-renames`, so a rename is listed by both its names: a shipped file moved under `docs/` names its shipped source and takes the pointer form, the safe direction, whatever GitHub's paths-ignore does with a rename (F7; W25-T9). The pointer now also covers a release-main run that a later merge's run replaced while it was pending: under the workflow's concurrency group such a run is cancelled before any job runs and prints nothing, and that later run's line covers this merge. The script's pointer and header and README's promotion paragraph say so (F8). W25-T1c now pins a `docs-` prefix and a root file named `docs` as outside the docs arm (F4).
 - **D-6399.** Every text that states "every merge is a release" is corrected in place: README, CLAUDE.md, the two script headers, the workflow headers, the `shared/api.ts` docstring, the PWA channel note with its pin, and the radio story.
   - The three specs get one dated delta note each and keep their sentences. Specs are dated history; a note keeps the decision record honest without rewriting it.
   - The PWA note becomes `Every merge that changes the build, minutes after it lands.` (Reading 5).
@@ -442,15 +450,18 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - **No `workflow_dispatch`:** there is no manual force-release button (the operator's answer 2).
   - **Stated in the workflow.** The comment above the trigger says all of this, and says the list is two root-anchored patterns that are never widened without a ledger entry.
 - **D-6512.** Why the filter is safe now, when D-6397 refused it. Each of D-6397's three reasons is answered in turn.
-  - **"A second, hand-kept list."** The list is two patterns, and neither decides a release: the fingerprint still decides every run that starts (D-6393). Row F2 pins the patterns disjoint from what the build archives.
+  - **"A second, hand-kept list."** The list is two patterns, and neither decides a release: the fingerprint still decides every run that starts (D-6393). Row F2 pins that the built tarball holds no entry named under `docs/` and no root Markdown entry: names only (corrected on review 846).
   - **"GitHub evaluates it over the push's own range"** (D-6392's hazard). The base is the newest published release HEAD contains, not the push's before. So a push the filter skips, the 3,000-file case included, can only delay a change to the next run that starts. That run's build includes the change and releases it, so nothing is lost or mislabelled.
   - **Said plainly:** a failed release followed only by docs merges stays unreleased until the next merge outside the two patterns, or until someone re-runs the failed run. There is no other door (the operator's answer 2).
   - **"The trigger pin would miss one"** (the old regex row, which stopped at `$`). It is replaced by an exact pin, row F1 (D-6513).
-  - **Amended on review 842:** W25-F2 now checks behaviour, not the script's text. It builds the fixture's tarball with the real `build-release.sh`, in a fixture repository that carries `docs/x.md` and a root `README.md`, and asserts that `tar -t` lists no entry under `docs/` and no root `.md`. So it catches every form review 842 listed (array entries in any quoting, a `PATHSPEC+=` after the loop, globs, `.`, `./docs`, and a `cp -a "$ROOT/…"` copy), and the review's thirteen mutations each red it. The workflow comment says the same (F7).
+  - **Amended on review 842:** W25-F2 now checks behaviour, not the script's text. It builds the fixture's tarball with the real `build-release.sh`, in a fixture repository that carries `docs/x.md` and a root `README.md`, and asserts that `tar -t` lists no entry under `docs/` and no root `.md`. It checks entry names only (corrected on review 846): each of the review's thirteen mutations puts an entry named under `docs/` or a root `.md` entry into the tarball, and each reds it. The workflow comment says the same (F7).
+  - **Amended on review 846:** two corrections. (1) W25-F2 checks names only, and that is enough. Suppose a build ever ships docs bytes under another name. Then the trigger skips a docs-only merge that changes the tarball, and the next run's compare sees the change and releases it, so a miss delays a release and never loses one. The row is not widened to a content sentinel (ruling 6). (2) The list has a second copy: `release-stable.sh`'s case arms, which tell a docs-only head from one with a run. Row W25-T8 reads the workflow's paths-ignore through W25-F1's reader, now shared in `server/test/workflowTrigger.ts`, and ties each pattern to an arm by sample paths, inside and outside, at the root and at depth. A pattern with no samples fails with "release-stable.sh has no arm for <pattern>", and a sampled pattern the workflow no longer has fails too. The workflow comment names the copy (F2, F6).
 - **D-6513.** The rows, each measured red under its mutation before landing:
   - **W25-F1** (`build-release.test.ts`, `release-main.yml` describe). The `on:` block, read as an exact text block, is exactly the push trigger of D-6511. It goes red if paths-ignore is dropped, if a pattern is widened to `'**/*.md'` or `'**/docs/**'`, if `workflow_dispatch` is added, or if a `paths:` key is added.
-  - **W25-F2.** No PATHSPEC entry of `deploy/build-release.sh` is `docs`, sits under `docs/`, or is a root `*.md` file. The entries are parsed from the file, the per-package `scripts/` arm included. It goes red if `README.md` or `docs` is added to PATHSPEC.
+  - **W25-F2** (amended on review 846). The real `build-release.sh` builds the fixture's tarball, in a fixture repository that tracks `docs/x.md`, `docs/sub/y.txt`, `README.md` and `NOTES.md`, and `tar -tzf` lists it. No entry is named under `docs/`, and no root entry ends in `.md`. Nothing is parsed from the script. It reds under each of review 842's thirteen mutations, F7 (a) to (m).
+  - **W25-T8** (added on review 846, `release-stable.test.ts`). Every paths-ignore pattern in `release-main.yml` has samples, and `release-stable.sh` classifies each sample as the trigger does. It reds when either copy of the list changes alone: V1 (`'*.md'` to `'**/*.md'`) and V2 (`'LICENSE'` added), each made in the workflow and in W25-F1's expected block, the ledgered path for an amendment.
   - **Retired:** W25-Y1 (no trigger filter) and the row `'triggers on main pushes and on NOTHING else'`, whose regex stopped at `$`. W25-F1 replaces both.
+  - **Amended on review 846:** the W25-F2 bullet above is rewritten in place to describe the behaviour row (F5), and W25-T8 is added (F2).
 - **D-6503** — `unused` (run 793): issued to this wave; no departure took it.
 - **D-6504** — `unused` (run 793): issued to this wave; no departure took it.
 - **D-6505** — `unused` (run 793): issued to this wave; no departure took it.
@@ -459,6 +470,10 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
 - **D-6508** — `unused` (run 793): issued to this wave; no departure took it.
 - **D-6509** — `unused` (run 793): issued to this wave; no departure took it.
 - **D-6510** — `unused` (run 793): issued to this wave; no departure took it.
+- **D-6583.** W25-C30's setuid case does not run on macOS (review 846, item 9). It uses no tool its sibling rows do not, but it depends on one behaviour of the tool they share, compare's plain `tar -xpzf`. On macOS that is BSD tar (libarchive). Its `-p` restores a setuid bit only when the new file's owner matches the archive entry's, and the builder writes uid 0 (`--owner=0`), so under a non-root runner both trees would extract at 755 and the case could not tell them apart (libarchive's `archive_write_disk(3)`, `ARCHIVE_EXTRACT_PERM`). This is read from the documentation and was not measured on a Mac.
+  - The case carries `it.skipIf(process.platform === 'darwin')`, the suite's idiom. The sticky-directory case runs everywhere.
+  - The release lane runs on `ubuntu-latest`, with GNU tar, which keeps the bit, so the lane is unchanged. `test-macos` runs only in the daily, dispatched and stable-gate full runs, so this is where a red would first have shown.
+- **D-6584** — `unused` (run 793): issued to this wave; no departure took it.
 
 
 ## File structure
@@ -1230,9 +1245,9 @@ No `continue-on-error` anywhere. The comments obey the existing pins: no `npm ci
 
 `release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD <short> carries no vX.Y.Z tag<tail>). <why> <where> and cannot move back (fast-forward only); the <first|next> release cut from a descendant of <short> is the next commit it can promote. Nothing was changed`
 
-- `<why>` (amended on review 842, D-6398), chosen by `git diff --name-only HEAD^ HEAD` under the trigger's rule:
+- `<why>` (amended on reviews 842 and 846, D-6398), chosen by `git diff --no-renames --name-only HEAD^ HEAD` under the trigger's rule:
   - every path is under `docs/` or is root Markdown: `HEAD's merge changed only docs/ or the root's Markdown, so no release-main run started for it.`;
-  - otherwise: `A main merge whose build came out unchanged cuts no release either: the release-main run for <full sha> printed "built unchanged" or what differed.`;
+  - otherwise: `A main merge whose build came out unchanged cuts no release either: the release-main run for <full sha> printed "built unchanged" or what differed, or was cancelled before it started because a later merge's run replaced it, and then that later run's line covers this merge.`;
   - no parent, or the diff fails: the pointer form, with `(HEAD's changed paths could not be read)` before its full stop.
 
 - `<tail>` is `; the newest release it contains is <NEWEST>`, or `, and it contains no release tag`.
@@ -1385,6 +1400,7 @@ Deviations: amend D-6398, D-6408, D-6409, D-6502 and D-6512 in place, each sayin
 5. F7, the docs pin, by behaviour (amends D-6512).
 - W25-F2 builds the fixture tarball with build-release.sh, in a fixture repo that carries docs/x.md and a root README.md. It asserts that tar -t lists no entry matching ^docs/ or a root .md.
 - So it catches every form the review listed: array literals, PATHSPEC+= after the loop, globs, '.', './docs', and cp -a "$ROOT/…".
+- **Corrected on review 846: names only.** W25-F2 checks entry names: no entry under `docs/` and no root `.md` entry in the tarball. A `cp -a` of docs bytes to another name stays green (review 846, F6; D-6512).
 - Measure all thirteen of the review's mutations red, one at a time. The workflow comment and D-6512 then say what the row checks.
 6. F8, the mutation table.
 - Rows for (i), the listing-failure check behind "the line is never empty", and (iii), `!= false` loosened to `= true`, with an empty, null or garbage gh answer at exit 0.
@@ -1445,3 +1461,53 @@ Gates as before, one file at a time. Measure every new row red, then green, and 
 | pwa settings-screen | 240 |
 
 **Commits:** `48828c125`, `b6173945e`, `a53127cab`, `a4ab632fa` and `e99d426a8`, and this note's own.
+
+## Coordinator rulings on review 846 (2026-10-23)
+
+Verbatim, as received.
+
+Run 793, wave 25: fix round 4, ruled on review 846 (the review's report; read it whole). Record this verbatim in the plan as "Coordinator rulings on review 846 (2026-10-23)", and write the report's path as "the review's report".
+
+The review found no wrong skip at the tip that a real build reaches. CI ran in full and is green, apart from a per-PR check from outside this repo's workflows, which is not this wave's gate. 0 CodeQL alerts are open, and merge-tree against main is clean. Every finding is a guard no row reds, or a text that says more than the row checks. All eight are fixed in this round.
+
+Deviations: amend D-6398, D-6512 and D-6513 in place, each saying "amended on review 846". D-6583 and D-6584 are your reserve for this round, issued for it, spent in order. Before wave-done, give each unspent one its own entry in the house form.
+
+1. F1, guard (ii), the extraction's rc (important).
+- Two rows, one per arm. A stub tar extracts every entry but the one the merge changes, then exits 2. The merge's only shipped change is a mode change on that entry. Plant the stub on the base's extraction in one row, and on the head's in the other.
+- Each expects `could not compare (could not extract <tag>'s tarball); releasing <tag>`.
+- Mutation: delete that row's arm alone. It must red that row alone.
+- Move (ii) out of "Guards with no row" and into the table.
+2. F2, release-stable's case arms, an untied copy of the trigger (important).
+- Add one row to release-stable.test.ts. It reads release-main.yml's on.push paths-ignore through the parser W25-F1 already uses. It maps each pattern to sample paths: inside and outside, at the root and at depth.
+- For each sample, it asserts the script's classification. A pattern the row has no samples for fails, with the message "release-stable.sh has no arm for <pattern>".
+- Measure the review's W1 and W2 red under this row.
+- Name the copy in the workflow comment at release-main.yml:39-43 and in D-6512: the script's arms are the second list, and this row ties them.
+3. F3: add a C35 case where comm exits 0 and prints nothing. Mutation: delete the shape half alone.
+4. F4: add T1c cases `docs-site/a.ts` and a root file named `docs`. Both must give the pointer form. Mutation: `docs/*` to `docs*`.
+5. F5: amend D-6513's W25-F2 bullet in place to describe the behaviour row: it builds the fixture tarball and lists it. Nothing is parsed.
+6. F6: names only, as ruled. W25-F2 checks entry NAMES: no docs/ entry and no root .md entry in the tarball.
+- Word the row's comment, D-6512's first bullet and D-6512's amendment that way. Strike "every form review 842 listed (… a cp -a copy)", which I wrote in ruling 5 of round 3. Leave that ruling's record as written, and add a note under it: "corrected on review 846: names only".
+- Say why names are enough. Suppose a build ever ships docs bytes under another name. Then the trigger skips a docs-only merge that changes the tarball, and the next run's compare releases it. A miss delays a release; it never loses one.
+- Do not widen the row to a content sentinel.
+7. F7, rename detection (needs a ruling): add `--no-renames` to why_untagged's `git diff --name-only HEAD^ HEAD`.
+- A rename out of a shipped path then lists both names, which gives the pointer form, the safe direction, whatever GitHub does with renames. It matches the release-scope helper and the comparer (W25-S6).
+- Add a row: a merge that does `git mv deploy/x.sh docs/x.sh` gives the pointer form. Mutation: drop the flag.
+- Fix the comment at :86-88, which names quoting as the only lossy case. Amend D-6398.
+8. F8, a cancelled pending run.
+- The pointer's sentence also covers the case where the run for HEAD's sha was cancelled before it started, because a later merge's run replaced it. Then it printed nothing, and the later run's line covers this merge.
+- Fix the script's pointer, the header at :15-19, D-6398 and README:781-783, and re-pin the tests' expected strings.
+9. C30 on macOS. test-macos does not run on a pull request, so a red there would first show in the daily run and the stable gate.
+- Read C30 and its helpers for any tool its sibling rows do not already use: tar flags, stat, sed -i, date -d, sha256sum. The siblings pass on main's daily macOS leg.
+- If C30 uses one, guard it the way the siblings are guarded. Say in the wave-done which it was.
+
+Mutation runs, a hard rule this round: a mutant on this box called itself this morning and starved it.
+- Run every mutant on a scratch copy.
+- Wrap each vitest call in `timeout -k 10 600`, inside a subshell with `ulimit -u 512`.
+- Restore byte-identical (cmp) after each.
+
+README and CLAUDE.md: every text change stays inside consents 8085 and 8081, at README:66, README:781-784 and CLAUDE.md:297-298. The README owner claim is now 2306, which replaced 2295. Re-read ownership before you edit.
+
+Gates as before, one file at a time: release-main, build-release, release-stable, release-notes, workflow-yaml-parses, docs-parity, single-definition, citations, private-names, topology-clean, dtbd, deviation-refs (after `git fetch origin main`), typecheck-tests, and growth-check with GROWTH_CHECK=1.
+- Measure every new row red, then green, and give the before and after in the wave-done.
+- Landing as before: first-ready against #1137, #1172 and runs 722 and 774. Measure merge-tree against main and against each open head you might meet.
+- Send the wave-done in the same turn as the push. The next review will be a lean one: the rows and the texts.
