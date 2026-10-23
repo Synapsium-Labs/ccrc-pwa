@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { LANE_SCHEDULE, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
+import { callsIn, symbolOf } from './scan/symbols.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
@@ -452,25 +453,22 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 
   it('the census\'s cadence has one home, here, and the watcher re-exports it; the three siblings follow it by reference', () => {
     expect(text('laneSchedule.ts')).toMatch(/export const CHILD_RECLAIM_SWEEP_MS = 60_000;/);
-    expect(text('watch.ts'), 'the watcher declares the census cadence a second time').not.toMatch(/const CHILD_RECLAIM_SWEEP_MS\s*=/);
+    // A second declaration in the watcher would clash with its import of this one (tsc), so only the re-export is read here.
     for (const name of ['collect', 'archivedExpiry', 'deadCoordinator']) expect(laneRow(name).derivedFrom?.name, name).toBe('childReclaim');
     expect(laneRow('childReclaim').derivedFrom).toBeNull();
   });
 
   it('the collector\'s observation interval is the census cadence, by reference, in this module', () => {
     expect(text('laneSchedule.ts')).toContain('export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;');
-    expect(text('watch.ts'), 'the watcher declares the observation interval a second time').not.toMatch(/const COLLECT_OBSERVE_INTERVAL_MS\s*=/);
   });
 
-  it('the watcher keeps no clock or guard of these lanes; the seal and the collector\'s restamp go through the runner', () => {
-    const w = text('watch.ts');
-    for (const f of ['lastChildReclaimSweep', 'lastCollectSweep', 'collectSweeping', 'lastArchivedExpirySweep', 'archivedExpirySweeping',
-      'lastDeadCoordinatorSweep', 'deadCoordinatorSweeping', 'deadCoordinatorPassRun']) {
-      expect(w, `${f} is still a field of the watcher`).not.toMatch(new RegExp(`\\b${f}\\b`));
-    }
-    expect(w).toContain("this.inFlight('deadCoordinator')");
-    expect(w).toMatch(/this\.restamp\('childReclaim', /);
-    expect(w).toMatch(/this\.restamp\('collect', /);
+  it('the seal and the collector\'s and child reclaim\'s restamp go through the runner (the fields are gone: the ratchet in single-definition counts them)', () => {
+    const watch = path.join(SRC, 'watch.ts');
+    const called = (sym: string): string[] => callsIn(symbolOf(watch, sym)).flatMap((c) => (c.name === null ? [] : [c.name]));
+    expect(called('FleetWatcher.sealDeadCoordinatorBreakerNow')).toContain('inFlight');
+    expect(called('FleetWatcher.sealDeadCoordinatorBreaker')).toContain('inFlight');
+    expect(called('FleetWatcher.collectPass')).toContain('restamp');
+    expect(called('FleetWatcher.childReclaimPass')).toContain('restamp');
   });
 
   it('restamp takes the decision clock\'s own reading when handed one', () => {

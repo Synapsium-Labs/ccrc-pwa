@@ -64,11 +64,11 @@ const coverage = (label: string, code: string, name: RegExp, allowed: readonly s
 const expressionHits = (name: RegExp, allowed: readonly string[]): string[] =>
   sources().flatMap((f) => coverage(path.relative(srcRoot, f), codeOnly(readFileSync(f, 'utf8')), name, allowed)).sort();
 
-/** `FleetWatcher.sweepChildReclaim`, whole: from its signature to its closing
+/** `FleetWatcher.childReclaimPass` (the pass `sweepChildReclaim` hands to its row), whole: from its signature to its closing
  *  brace, code only. Keyed on the method's symbol (D-6114, scan/symbols.ts), so it follows the method wherever it
  *  moves; a renamed or missing method throws by name. */
 const sweepChildReclaimLines = (): string[] =>
-  codeOnly(sourceOfSymbol(path.join(srcRoot, 'watch.ts'), 'FleetWatcher.sweepChildReclaim')).split('\n');
+  codeOnly(sourceOfSymbol(path.join(srcRoot, 'watch.ts'), 'FleetWatcher.childReclaimPass')).split('\n');
 
 describe('the sweep’s verdicts are read by no decision (spec §5.9)', () => {
   const DECLARATION = 'private childReclaimJudged: ReadonlyMap<string, ChildReclaimSweepVerdict> | null = null';

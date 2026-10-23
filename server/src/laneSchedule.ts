@@ -112,6 +112,22 @@ export const APPROVAL_PRUNE_MS = 86_400_000;
 /** The daily digest's beat (D-5300): once a minute at most it looks for a settled day. */
 export const DIGEST_BEAT_MS = 60_000;
 
+/** The child-reclaim lane (child-reclamation wave 4, spec §5.7). The
+ *  census's cadence, for the census's reason — a child's eligibility moves on
+ *  human timescales (a run closes, a re-dispatch binds) — and the
+ *  TWICE-OBSERVED rule is measured in these intervals: a child must read
+ *  eligible on two passes at least this far apart before anything is
+ *  composed. It is also the base of the failure backoff (spec §5.9: "retries
+ *  back off in between"). The collector, the expiry lane and the dead-coordinator lane run at the same cadence, as
+ *  siblings on the same tick. EXPORTED so its suite advances by the real constant; `watch.ts` re-exports it. */
+export const CHILD_RECLAIM_SWEEP_MS = 60_000;
+
+/** The temp-root collector's observation interval (spec §5.10): the lane spends a token only when its executor's own
+ *  audit ARRIVED at least this long after an earlier audit of the id answered that same token, on this process's
+ *  monotonic clock. The child lane's cadence, for that lane's reason, and DERIVED from it, never a second literal; L1
+ *  takes it as an argument (it imports no L4 constant). EXPORTED for its suite; `watch.ts` re-exports it. */
+export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;
+
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
 
@@ -123,7 +139,8 @@ export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor'
-  | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat';
+  | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
+  | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -177,6 +194,24 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // The prune's failure is caught by `sweepApprovals`' own try (its sentence names the whole sweep), so no warnKey.
   { name: 'approvalPrune', cadenceMs: APPROVAL_PRUNE_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
   { name: 'digestBeat', cadenceMs: DIGEST_BEAT_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null, startsDue: true },
+  // The four lanes that select destructive acts. Child reclaim is the census's own cadence; the other three are its siblings on
+  // the same tick, at the same cadence, and follow it by reference. Child reclaim and the collector throttle on the monotonic
+  // clock (the twice-observed rule's interval is real time); child reclaim has no guard (a pass overtaken while it gathers
+  // is dropped by its own pass counter), the collector keeps one pass at a time, and the dead-coordinator lane hands its pass to
+  // the shutdown seal (`inFlight`). Their failures reach `tick`'s own catch, so no row warns.
+  { name: 'childReclaim', cadenceMs: CHILD_RECLAIM_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  {
+    name: 'collect', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick; its observation interval is the same real time' },
+  },
+  {
+    name: 'archivedExpiry', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'wall', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick, under the same switch' },
+  },
+  {
+    name: 'deadCoordinator', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'wall', flight: 'join', warnKey: null,
+    derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick, under the same switch' },
+  },
 ];
 
 export function laneRow(name: string): LaneRow {
