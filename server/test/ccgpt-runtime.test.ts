@@ -1890,9 +1890,11 @@ const STANDIN_COMMON_PY = [
 
 /** Runs ops against the stand-in's Authenticator in one interpreter and prints one JSON
  *  line: which of the five names carry `_ccrc_auth`, each op's answer or error, and
- *  the stand-in's own CALLS. */
+ *  the stand-in's own CALLS. `replant` renames `cfg.replant` over the token dir's
+ *  credential, as a sign-in's atomic commit replaces it, between two ops of the SAME
+ *  process. */
 const AUTH_OPS_PY = [
-  'import json, sys, threading',
+  'import json, os, sys, threading',
   'sys.dont_write_bytecode = True',
   'cfg = json.loads(sys.argv[1])',
   'from litellm.llms.chatgpt import authenticator as m',
@@ -1927,6 +1929,7 @@ const AUTH_OPS_PY = [
   '    "write": lambda: call(lambda: A()._write_auth_file({"access_token": cfg.get("secret", "driver-write")})),',
   '    "expiry-writeback": lambda: call(lambda: A()._is_token_expired({"access_token": "x"}, "x")),',
   '    "threads": threads,',
+  '    "replant": lambda: call(lambda: os.replace(cfg["replant"], os.path.join(os.environ["CHATGPT_TOKEN_DIR"], "auth.json"))),',
   '}',
   'for op in cfg["ops"]:',
   '    out["ops"].append(OPS[op]())',
@@ -2176,6 +2179,57 @@ describe.skipIf(!PY)('the patch\'s authenticator part (codex-bridge Stage 1)', (
       }
       expect(srv.requests, 'the library read auth.json and asked the endpoint').toEqual([]);
       expect(r.out!.calls, 'the stand-in read the other file').toEqual([]);
+    } finally { await srv.close(); }
+  });
+
+  it('with it, and a relative CHATGPT_TOKEN_DIR: a 401 config-error from both token and account, and no request', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-reldir-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    // Expiring, so a library that resolved the relative dir against the cwd (the fixture
+    // home) would ask the endpoint.
+    const planted = plantBackendCredential(path.join(home, 'auth'), { expiresIn: 30 });
+    const srv = await fakeAuthServer({});
+    try {
+      const r = await runOps(py, home, { ops: ['token', 'account'] },
+        { CHATGPT_TOKEN_DIR: 'auth', CCRC_CODEX_AUTH_LIB: AUTH_LIB, CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.out!.ops).toHaveLength(2);
+      for (const a of r.out!.ops) {
+        // Never the library's ValueError escaping as a non-GetAccessTokenError.
+        expect(a).toMatchObject({ error: 'GetAccessTokenError', status: 401 });
+        expect(a.message).toMatch(/^config-error: /);
+        expect(JSON.stringify(a)).not.toContain(planted.access);
+      }
+      expect(srv.requests).toEqual([]);
+      expect(r.out!.calls, 'a stand-in method ran').toEqual([]);
+    } finally { await srv.close(); }
+  });
+
+  it('with it: a lane signed in again while its tier runs is served its new credential by the next request, in the same process', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-resignin-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    const auth = path.join(home, 'auth');
+    plantBackendCredential(auth, { expiresIn: 30 });
+    // The new sign-in's credential, a new identity for another account, staged on the
+    // same filesystem so the driver's rename replaces the file as a commit does.
+    const signedIn = plantBackendCredential(path.join(home, 'signin'), { claimAccountId: 'acct-fixture-1' });
+    const srv = await fakeAuthServer({ token: [{ status: 400, body: { error: 'invalid_grant' } }] });
+    try {
+      const r = await runOps(py, home,
+        { ops: ['token', 'replant', 'token', 'account'], replant: path.join(home, 'signin', 'auth.json') },
+        { CHATGPT_TOKEN_DIR: auth, CCRC_CODEX_AUTH_LIB: AUTH_LIB, CCRC_CODEX_LANE: 'codex-a', CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(0);
+      const [dead, replant, token, account] = r.out!.ops;
+      expect(dead).toMatchObject({ error: 'GetAccessTokenError', status: 401 });
+      expect(dead!.message).toMatch(/^needs-signin: /);
+      expect(replant).toEqual({ ok: null });
+      // No per-process verdict: the needs-signin the first request met is not kept.
+      expect(token).toEqual({ ok: signedIn.access });
+      expect(account).toEqual({ ok: 'acct-fixture-1' });
+      expect(srv.requests, 'only the dead refresh asked the endpoint').toHaveLength(1);
+      expect(r.out!.calls, 'a stand-in method ran').toEqual([]);
     } finally { await srv.close(); }
   });
 

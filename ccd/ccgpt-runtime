@@ -770,7 +770,10 @@ for _k in [k for k in os.environ if k.startswith(("CHATGPT_", "LITELLM_", "OPENA
     del os.environ[_k]
 os.environ.update(HOME=_tmp, CHATGPT_TOKEN_DIR=os.path.join(_tmp, "tok"), LITELLM_LOCAL_MODEL_COST_MAP="True")
 os.makedirs(os.environ["CHATGPT_TOKEN_DIR"])
-with open(os.path.join(os.environ["CHATGPT_TOKEN_DIR"], "auth.json"), "w") as _f:
+# The probe's credential file: LiteLLM's default CHATGPT_AUTH_FILE, which the auth scenario's
+# stub library below answers as its CREDENTIAL_NAME, so the probe spells it once.
+_PROBE_CRED = "auth.json"
+with open(os.path.join(os.environ["CHATGPT_TOKEN_DIR"], _PROBE_CRED), "w") as _f:
     json.dump({"access_token": "probe-not-a-secret", "expires_at": time.time() + 3600, "account_id": "probe"}, _f)
 
 MODEL, TOP, MID = "probe-model", "PROBE-TOP-SYSTEM", "PROBE-MID-SYSTEM"
@@ -836,7 +839,7 @@ except Exception as e:
 # carries the patch on PYTHONPATH, which `-I` hides from the child.
 _AUTH_FAILS = ("auth-patch-not-applied", "auth-device-flow-alive")
 _AUTH_STUB = """import os
-CREDENTIAL_NAME = "auth.json"
+CREDENTIAL_NAME = %s
 GOOD = os.path.normpath(%s)
 
 
@@ -932,7 +935,7 @@ import subprocess
 
 _auth_stub = os.path.join(_tmp, "ccgpt-auth-stub.py")
 with open(_auth_stub, "w") as _f:
-    _f.write(_AUTH_STUB % (json.dumps(os.environ["CHATGPT_TOKEN_DIR"]),))
+    _f.write(_AUTH_STUB % (json.dumps(_PROBE_CRED), json.dumps(os.environ["CHATGPT_TOKEN_DIR"])))
 _auth_patch = getattr(sys.modules.get("ccrc_litellm_patch"), "__file__", None) or ""
 try:
     _auth_run = subprocess.run(
