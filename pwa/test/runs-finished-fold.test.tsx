@@ -190,6 +190,7 @@ describe('the fold’s words (D-6442)', () => {
 });
 
 describe('measurement — Step 0 of C10 (D-6442)', () => {
+  // On demand only: `CCRC_MEASURE=1 ./node_modules/.bin/vitest run test/runs-finished-fold.test.tsx`.
   // No timing assertion: the numbers go to the console and the PR body. Real
   // `performance.now` is left alone (only timers and Date are faked), because a
   // faked clock would report every Profiler duration as zero.
@@ -198,7 +199,7 @@ describe('measurement — Step 0 of C10 (D-6442)', () => {
     return v[Math.min(v.length - 1, Math.floor(q * v.length))]!;
   };
 
-  it('500 closed runs and one pending dispatch: mount, then 20 one-second ticks', async () => {
+  it.skipIf(!process.env['CCRC_MEASURE'])('500 closed runs and one pending dispatch: mount, then 20 one-second ticks', async () => {
     const BOUNDARY = 1_800_000_000_000;
     vi.useFakeTimers({ now: BOUNDARY + 1_000, toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
     const pending = run({

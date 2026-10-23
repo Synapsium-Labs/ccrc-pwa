@@ -193,16 +193,18 @@ export function RunsScreen({
   const finishedHead = useRef<HTMLParagraphElement>(null);
   const focusHeadNext = useRef(false);
   const showMoreFinished = (): void => {
-    // The door unmounts with the last batch, so focus has to land somewhere that
-    // stays: the group's heading, never the body (D-6442).
-    if (shownFinished + FINISHED_FOLD >= finished.length) focusHeadNext.current = true;
-    setShownFinished(shownFinished + FINISHED_FOLD);
+    focusHeadNext.current = true;
+    setShownFinished((n) => n + FINISHED_FOLD);
   };
+  // The click's own commit consumes the flag, whether or not focus moves: the
+  // door unmounts with the last batch, so focus has to land somewhere that stays,
+  // the group's heading, never the body (D-6442). "Last batch" is read from the
+  // committed state here, so a `cold` that grew meanwhile leaves the door, and
+  // focus, where they are, and no flag outlives the click that set it.
   useEffect(() => {
-    if (focusHeadNext.current && shownFinished >= finished.length) {
-      focusHeadNext.current = false;
-      finishedHead.current?.focus();
-    }
+    if (!focusHeadNext.current) return;
+    focusHeadNext.current = false;
+    if (shownFinished >= finished.length) finishedHead.current?.focus();
   }, [shownFinished, finished.length]);
   // Review finding 19: neither half is trustworthy enough to assert "there
   // are none of these" until IT has a real answer — `runsFrameSeen` for
