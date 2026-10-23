@@ -1470,8 +1470,10 @@ D-number is defined in that plan's Deviations found. *(Added 2026-10-23.)*
   in place, writes derived fields back and can begin a device flow inside a request. For that window the library's
   read retries a torn file and answers `unreadable`, never `absent` or `needs-signin`, and writes nothing. A rollback
   to an older ccrc brings that behaviour back for every lane. The credential keeps LiteLLM's format, so the older
-  code reads it as it is and ignores the side files; an `auth.pending.json` left in an authDir is promoted by
-  `ccrc codex login <id>` or by one request through the lane, and should be before the rollback.
+  code reads it as it is and ignores the side files, so an `auth.pending.json` left in an authDir should be promoted
+  before the rollback, by `ccrc codex login <id>`: it settles the checkpoint under the library's lock even when the
+  lane is already signed in. Only a request that refreshes promotes it too; a request whose credential is unexpired
+  returns before the lock and leaves it in place.
 
 ### 24.3 The doctor reads the status and the mode (§12, §20.3, §20.5)
 
@@ -1483,8 +1485,9 @@ D-number is defined in that plan's Deviations found. *(Added 2026-10-23.)*
   - a `config-error`: `ccrc update`, then `ccrc codex login <id>`;
   - a credential this user does not own, tested before the mode, so a file both foreign-owned and the wrong mode gets
     the owner line alone;
-  - a mode other than 0600: `chmod 600` on the path the library's `paths` answers. It is then the only credential
-    line, because a 0000 file also reads `unreadable` and a chmod cures it;
+  - a mode that its owner cannot read, or that gives any group or other bit (`modeOk` false; 0600 is what the library
+    writes, and an owner-only 0400 or 0700 passes): `chmod 600` on the path the library's `paths` answers. It is then
+    the only credential line, because a 0000 file also reads `unreadable` and a chmod cures it;
   - a library that is missing (`auth-library-absent`) or answers nothing readable (`auth-status-unreadable`):
     `ccrc update`.
 
@@ -1498,13 +1501,19 @@ D-number is defined in that plan's Deviations found. *(Added 2026-10-23.)*
 ### 24.4 Account removal takes the library's lock (§13, §21.3)
 
 - **The hold.** `_acct_remove`'s codex arm takes `_codex_auth_hold` after the lane's lock, `_codex_lock`, and
-  releases it after `_codex_stop_lane`, so removal never stops a tier inside a refresh's token round trip. The two
+  releases it after `_codex_stop_lane`, so where the hold takes the lock, removal never stops a tier inside a
+  refresh's token round trip. The two
   locks are legitimately different: the lane's lock serialises tier starts and stops for up to the readiness bound,
   and the library's serialises credential writes for one refresh. Removal is the only stop that takes both (D-6384).
 - **Its refusals.** The lock's path and bound come from the library's `paths`. A holder past the bound refuses
   `codex-reap-failed`, with nothing removed. So does a symlink or another non-regular file at the lock path, which is
   never opened. A lane that never signed in has no authDir, holds nothing and gets none. A lock file the hold creates
   is 0600 whatever the umask.
+- **Where it holds nothing.** With no `flock` on the box, or with no library or no `python3` on the removing shell's
+  PATH (`_codex_auth`'s rc 3), the hold answers 0 holding nothing and the stop goes ahead unserialised. That arm is
+  accepted, not proved safe (D-TBD-auth-hold-no-library): a running tier keeps the library it loaded at its start and
+  runs it under the runtime's own interpreter, so it can still take the lock, and a stop inside its refresh can lose
+  a refresh token the endpoint has already rotated, leaving the lane to be signed in again.
 - **The wait for a poll stays, for one reason now** (D-6378). §21.3 says removal never stops the usage service
   because a poll mid-refresh may be writing the credential. That reason is gone: the publisher only reads. The other
   stands, so the wait does: a poll still running writes again the `~/.cc-limits` row the removal deletes.
