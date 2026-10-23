@@ -264,7 +264,11 @@ describe('the path-identity spec records W3 as built (path-identity spec §4.12,
     expect(code, 'the probe resolves no parent').toMatch(/\b_ws_dir_physical\b/);
     expect(code, 'the probe has no Darwin arm').toMatch(/\b_ws_expire_lsof\b/);
     expect(code, 'the probe names no bound of its own').toMatch(/\bWS_CWD_USERS_SCAN_S\b/);
-    for (const e of ['ENOENT', 'ESRCH', 'EACCES', 'EPERM']) expect(probe, `the probe has no ${e} rule`).toContain(e);
+    for (const e of ['ENOENT', 'ESRCH', 'EACCES']) expect(probe, `the probe has no ${e} rule`).toContain(e);
+    // A comment pin, not a rule pin: in `_ws_cwd_users` EPERM is named only in the whole-line `#` comments (the
+    // code skips it through `except PermissionError`, pinned below), so this goes red when the comments stop naming it.
+    expect(probe.split('\n').filter((l) => l.trimStart().startsWith('#')).join('\n'),
+      "the probe's comments no longer name EPERM, the class beside EACCES that the probe does not see").toContain('EPERM');
     expect(code, "the probe's entries() no longer skips a PermissionError (EACCES or EPERM) at the first read")
       .toMatch(/def entries\(pid\):(?:(?!\ndef )[\s\S])*?except PermissionError:/);
     expect(codeLines(shFunction(ccd, '_ws_expire_cwd_users')).some((l) => /\b_ws_cwd_users\b/.test(l)),
