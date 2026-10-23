@@ -458,7 +458,8 @@ LIVE = set(x for x in E.get('TS_LIVE', '').split('\n') if x)
 UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 QDIR = '.ccd-tmp-quarantine'
 WALK_S = 30
-WALK_ENTRIES = 2000000
+WALK_ENTRIES = int(E.get('CCD_TMP_SWEEP_WALK_ENTRIES') or 2000000)
+REPO_CAP = 50
 MOVED_KEEP = 1000
 MOVED_DAYS = 7
 now_ms = int(NOW * 1000)
@@ -476,6 +477,9 @@ def load_prev():
 prev = load_prev()
 seq = prev.get('seq') if isinstance(prev.get('seq'), int) else 0
 moved = [r for r in prev.get('moved', []) if isinstance(r, dict)]
+# path -> [start, end] of the sweep's own git probe: atimes inside it are the probe's reads, not a touch
+pprobed = prev.get('probed') if isinstance(prev.get('probed'), dict) else {}
+probed = {}
 
 def mount_noatime(path):
     best, opts = '', ''
@@ -511,9 +515,13 @@ def ccd_users(paths):
     return out
 
 ENTRIES = [0]
-def walk(path, noatime):
-    """newest touch, apparent disk bytes, entry count and any repositories under path; ok=False keeps it."""
-    r = {'ok': True, 'why': '', 'newest': 0.0, 'bytes': 0, 'entries': 0, 'repos': []}
+def walk(path, noatime, ctr=None):
+    """newest touch, apparent disk bytes, entry count and any repositories under path; ok=False keeps it.
+    ctr is the entry counter the walk is charged to: the scan shares one per pass, each pre-move re-walk has its own."""
+    ctr = ENTRIES if ctr is None else ctr
+    win = pprobed.get(path)
+    win = win if isinstance(win, list) and len(win) == 2 else None
+    r = {'ok': True, 'why': '', 'newest': 0.0, 'bytes': 0, 'entries': 0, 'repos': [], 'reposTruncated': False}
     try:
         top = os.lstat(path)
     except OSError:
@@ -524,13 +532,13 @@ def walk(path, noatime):
     stack = [(path, top)]
     while stack:
         p, st = stack.pop()
-        ENTRIES[0] += 1
+        ctr[0] += 1
         r['entries'] += 1
-        if time.monotonic() - t0 > WALK_S or ENTRIES[0] > WALK_ENTRIES:
+        if time.monotonic() - t0 > WALK_S or ctr[0] > WALK_ENTRIES:
             r['ok'], r['why'] = False, 'bound'
             return r
         r['newest'] = max(r['newest'], st.st_mtime, st.st_ctime)
-        if stat.S_ISREG(st.st_mode) and not noatime:
+        if stat.S_ISREG(st.st_mode) and not noatime and not (win and win[0] <= st.st_atime <= win[1]):
             r['newest'] = max(r['newest'], st.st_atime)
         r['bytes'] += st.st_blocks * 512
         if not stat.S_ISDIR(st.st_mode) or st.st_dev != dev:
@@ -542,8 +550,9 @@ def walk(path, noatime):
             r['ok'], r['why'] = False, 'unreadable'
             return r
         for k in kids:
-            if k.name == '.git' and len(r['repos']) < 50:
-                r['repos'].append(p)
+            if k.name == '.git':
+                if len(r['repos']) < REPO_CAP: r['repos'].append(p)
+                else: r['reposTruncated'] = True
             try:
                 stack.append((k.path, os.lstat(k.path)))
             except OSError:
@@ -678,12 +687,22 @@ if due:
         shadow = not ARMED
         dst = None
         if ARMED:
-            w = walk(c['path'], c['root']['noatime'])
+            w = walk(c['path'], c['root']['noatime'], [0])
             need = AGE_UNTOUCHED if kind == 'scratch' else AGE_FLOOR
-            if not w['ok'] or NOW - w['newest'] < need:
+            if not w['ok']:
+                bump('unmeasured'); c['fail'] = 'unmeasured'; return False
+            if NOW - w['newest'] < need:
                 bump('recent'); return False
             if any(v != 'nobody' for v in ccd_users(spellings(c)).values()):
                 bump('held'); return False
+        if kind == 'budget':
+            # the git question goes last, after every look that reads the tree, because asking it reads files too
+            t0 = time.monotonic()
+            bad = c.get('reposTruncated') or unpushed(c['repos'])
+            probed[c['path']] = [NOW, NOW + (time.monotonic() - t0) + 1]
+            if bad:
+                bump('gitKept'); c['fail'] = 'git-work-unrescued'; return False
+        if ARMED:
             try:
                 dst = quarantine(c)
             except OSError:
@@ -730,13 +749,12 @@ if due:
                     if not c['ok']: why = 'unmeasured'
                     elif c['age'] < AGE_FLOOR: why = 'touched-within-48h'
                     elif held_of(c) != 'nobody': why = 'held' if held_of(c) == 'held' else 'holder-unmeasured'
-                    elif unpushed(c['repos']): why = 'git-work-unrescued'
                     if why:
                         kept.append({'name': c['name'], 'why': why}); continue
                     if act(c, 'budget'):
                         counted -= c['bytes']; removed += c['bytes']
                     else:
-                        kept.append({'name': c['name'], 'why': 'move-failed'})
+                        kept.append({'name': c['name'], 'why': c.get('fail') or 'move-failed'})
                 state = 'over-unremovable' if counted > TARGET and kept else 'enforced'
         sessions[u] = {'id': cs[0]['id'], 'uuid': u, 'bytes': counted,
                        'scratchBytes': sum(c['bytes'] for c in cs if c['sub'] == 'scratchpad' and not c.get('gone')),
@@ -750,9 +768,11 @@ else:
         if isinstance(s, dict) and s.get('uuid'): sessions[s['uuid']] = s
 
 moved = [r for r in moved + newrows if now_ms - r.get('at', 0) <= MOVED_DAYS * 86400 * 1000][-MOVED_KEEP:]
+for k, v in pprobed.items():
+    if k not in probed and isinstance(v, list) and os.path.lexists(k): probed[k] = v
 out = {'v': 1, 'at': now_ms, 'liveAt': live_at, 'pressure': PRESSURE, 'arm': 'live' if ARMED else 'shadow', 'seq': seq,
        'roots': [{'arm': r['arm'], 'path': r['path'], 'noatime': r['noatime']} for r in roots],
-       'sessions': sorted(sessions.values(), key=lambda s: -s['bytes']), 'moved': moved, 'counts': counts}
+       'probed': probed, 'sessions': sorted(sessions.values(), key=lambda s: -s['bytes']), 'moved': moved, 'counts': counts}
 if not DRY:
     tmp = '%s.%d.tmp' % (CENSUS, os.getpid())
     try:

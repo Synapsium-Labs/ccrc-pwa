@@ -597,6 +597,104 @@ describe('the size budget', () => {
     expect(exists(a)).toBe(false);
   }, 120_000);
 
+  const GIT_ENV = (): NodeJS.ProcessEnv => ({ ...h.env(), GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x' });
+  const git = (cwd: string, ...a: string[]): void => { execFileSync('git', ['-C', cwd, ...a], { env: GIT_ENV(), stdio: 'ignore' }); };
+  /** A `git` that first touches one file's atime to the sweep's own clock, as a relatime mount does for a real read. */
+  function touchingGit(file: string, whenS: () => number): string {
+    const dir = path.join(h.home, 'gitwrap');
+    fs.mkdirSync(dir, { recursive: true });
+    const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    fs.writeFileSync(path.join(dir, 'git'), `#!/bin/sh\ntouch -a -d @${'$'}(cat "${path.join(dir, 'at')}") "${file}"\nexec "${real}" "${'$'}@"\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, 'at'), String(whenS()));
+    return dir;
+  }
+  const pathWith = (dir: string): string => `${dir}:${process.env.PATH ?? ''}`;
+
+  it('more than 50 repositories in one entry: the cap is a reason to keep it, never a silent stop (git-work-unrescued)', () => {
+    liveSession();
+    const [a] = sizes([['repo', 200, 6 * 24], ['b', 400, 5 * 24], ['c', 400, 4 * 24], ['d', 400, 3 * 24]]) as [string];
+    // a chain of nested repositories, so the order the walk finds them in is their depth: the 56th, past the cap of 50, holds the only unpushed commit
+    let r = a;
+    for (let i = 0; i < 60; i += 1) {
+      r = path.join(r, `r${i}`); fs.mkdirSync(r); git(r, 'init', '-q');
+      fs.appendFileSync(path.join(r, '.git', 'info', 'exclude'), 'r*/\n');
+      if (i === 55) { fs.writeFileSync(path.join(r, 'w'), 'x'); git(r, 'add', '-A'); git(r, 'commit', '-q', '-m', 'w'); }
+    }
+    setTimes(a, NOW0 - 6 * DAY);
+    arm();
+    sweep();
+    sweep({ plusS: 25 * HOUR });
+    expect(exists(a)).toBe(true);
+    expect(session(census()).budget.kept[0]).toEqual({ name: 'repo', why: 'git-work-unrescued' });
+  }, 180_000);
+
+  it('more than 50 clean repositories are kept all the same: a truncated answer is not a clean one', () => {
+    liveSession();
+    const [a] = sizes([['repo', 200, 6 * 24], ['b', 400, 5 * 24], ['c', 400, 4 * 24], ['d', 400, 3 * 24]]) as [string];
+    for (let i = 0; i < 52; i += 1) { const r = path.join(a, `r${i}`); fs.mkdirSync(r); git(r, 'init', '-q'); }
+    setTimes(a, NOW0 - 6 * DAY);
+    arm();
+    sweep();
+    sweep({ plusS: 25 * HOUR });
+    expect(exists(a)).toBe(true);
+    expect(session(census()).budget.kept[0]).toEqual({ name: 'repo', why: 'git-work-unrescued' });
+  }, 180_000);
+
+  /** A repository entry whose work a remote has, beside a recent entry that cannot go: the repository is the only way under. */
+  function pushedRepo(): string {
+    const [a] = sizes([['repo', 400, 6 * 24], ['recent', 1000, 1]]) as [string];
+    const remote = path.join(h.home, 'remote.git');
+    execFileSync('git', ['init', '-q', '--bare', remote], { env: GIT_ENV() });
+    git(a, 'init', '-q'); git(a, 'add', '-A'); git(a, 'commit', '-q', '-m', 'work');
+    git(a, 'remote', 'add', 'origin', remote); git(a, 'push', '-q', 'origin', 'HEAD'); git(a, 'fetch', '-q', 'origin');
+    setTimes(a, NOW0 - 6 * DAY);
+    return a;
+  }
+
+  it('the sweep\'s own git read refreshes an atime to the sweep\'s clock, and the entry is still taken', () => {
+    liveSession();
+    const a = pushedRepo();
+    const wrap = touchingGit(path.join(a, 'data'), () => NOW0 + 25 * HOUR);
+    arm();
+    sweep({ env: { PATH: pathWith(wrap) } });
+    const r = sweep({ plusS: 25 * HOUR, env: { PATH: pathWith(wrap) } });
+    expect(r.code, r.err).toBe(0);
+    expect(exists(a), r.out + r.err).toBe(false);
+    expect(census().moved.map((m) => m.name)).toContain('repo');
+  }, 180_000);
+
+  it('an entry probed and kept is not made "touched" by the probe at the next pass', () => {
+    liveSession();
+    const a = pushedRepo();
+    fs.writeFileSync(path.join(a, 'w'), 'unpushed');
+    git(a, 'add', '-A'); git(a, 'commit', '-q', '-m', 'local');
+    setTimes(a, NOW0 - 6 * DAY);
+    const wrap = touchingGit(path.join(a, 'data'), () => NOW0 + 25 * HOUR);
+    arm();
+    sweep({ env: { PATH: pathWith(wrap) } });
+    sweep({ plusS: 25 * HOUR, env: { PATH: pathWith(wrap) } });
+    expect(exists(a), 'the unpushed commit keeps it').toBe(true);
+    git(a, 'push', '-q', 'origin', 'HEAD'); git(a, 'fetch', '-q', 'origin');
+    fs.writeFileSync(path.join(wrap, 'at'), String(NOW0 + 40 * HOUR));
+    const r = sweep({ plusS: 40 * HOUR, env: { PATH: pathWith(wrap) } });
+    expect(r.code, r.err).toBe(0);
+    expect(exists(a), r.out + r.err).toBe(false);
+  }, 180_000);
+
+  it('a scan that spends its entry bound does not starve the pre-move re-walk: shadow and live agree', () => {
+    liveSession();
+    sizes([['a', 400, 6 * 24], ['b', 400, 5 * 24], ['c', 400, 4 * 24], ['d', 400, 3 * 24]]);
+    const env = { CCD_TMP_SWEEP_WALK_ENTRIES: '10' };
+    sweep({ env });
+    sweep({ plusS: 25 * HOUR, env });
+    const shadowRows = census().moved.filter((m) => m.shadow).map((m) => m.name);
+    expect(shadowRows.length).toBeGreaterThan(0);
+    arm();
+    const r = sweep({ plusS: 32 * HOUR, env });
+    expect(r.code, r.err).toBe(0);
+    expect(census().moved.filter((m) => !m.shadow).map((m) => m.name)).toEqual(shadowRows);
+  }, 180_000);
+
   it('under 15 GiB the episode ends; over 20 GiB again starts a new one', () => {
     liveSession();
     const es = sizes([['a', 400, 3 * 24], ['b', 400, 3 * 24], ['c', 400, 3 * 24], ['d', 400, 3 * 24]]);
