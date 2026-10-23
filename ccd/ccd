@@ -6473,14 +6473,16 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # lowers contention and is never a gate, so two retries holding two inodes is
 # two retries running at once, each with every refusal intact.
 #
-# NOT reachable this way, and this set IS the boundary — THIRTEEN dot-prefixed
-# artifacts live under `$REG`; the six above are reachable, these seven are
+# NOT reachable this way, and this set IS the boundary — FOURTEEN dot-prefixed
+# artifacts live under `$REG`; the six above are reachable, these eight are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The seven: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The eight: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# `$REG/.orphan-<sha16>.lock` (DR-17, D-6629: `ccd ws-orphan`'s per-tree lock; its suffix is the sha16 of a PATH, not
+# a `<project>-<slug>` id, so no `_reg_purge` glob can match it);
 # `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
 # exactly this reason; see the LC-BEGIN block, and note that its generations,
 # `errors` and `.rotate.lock` are counted WITH it, as `.reaped/`'s tombstones
