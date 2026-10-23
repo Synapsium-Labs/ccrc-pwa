@@ -843,7 +843,10 @@ the first that fails; macOS runs the same window and re-check in-process, with n
 session stopped on purpose while the sweep walks (its unit settled `inactive` with ccd's
 `~/.cc-sessions/<id>.stopped` stamp present or its registry row purged; a stop with neither still fails) passes on a
 line of its own, as it does in `deploy.sh agent`'s sweep (a serial loop with no re-check); then the from→to report, and, after a passed gate and a
-finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP` from the process environment, default 10).
+finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP` from the process environment, default 10) and the coordination
+data set thinned out of every backup past the newest `CCRC_BACKUP_DATA_KEEP` (default 3, at least 2; the environment, else
+`~/.ccrc/ccrc.env`) that carry one, by an update or `ccrc backup`, never a rollback by flip (a rollback by re-install
+thins as the update it runs).
 Rolling back is `ccrc rollback` (below), which, like any move below the floor, prints the coord.db restore commands rather than
 auto-restoring. **Across a two-box fleet, `ccrc rollout [--to] [--server-first] [--check] [--force]`** (with `--channel`,
 `--downgrade` and `--allow-unsigned`, below) from a machine holding `~/.ccrc/deploy.env`
@@ -1176,7 +1179,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `status`, `version` | what this box is (its build, role, services, sessions and whether the two boxes agree); the build it runs — both read-only |
 | `update`, `rollback`, `versions`, `channel`, `rollout`, `watchdog` | this section |
 | `backup`, `logs`, `uninstall` | the maintenance verbs, below |
-| `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
+| `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`, `thinned`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
 | `expose duckdns\|byo\|ip\|status` | a public name and a certificate ("Exposure", above) |
 | `passwd` | set or rotate the PWA passphrase ("The session gate", below) |
 | `adopt`, `wrappers` | rediscover the roster from `~/.local/bin`; write the wrappers the roster marks generated ("Accounts", below) |
@@ -1194,13 +1197,36 @@ newest earlier one that holds data (each chosen on its own, so a newer snapshot 
 with data; `deploy/coordination-snapshot.mjs` decides what is valid, and a classifier that cannot run or answers out of
 its table prunes nothing and says why), and nothing at all, exit 0, while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or
 the lock cannot be measured; hand-made siblings are never touched), as update and rollback do after a passed gate.
+After its prune, and only an update or `ccrc backup` (never a rollback by flip, which takes no backup; a rollback by re-install thins as the update it runs), the run thins the coordination
+data set (D-6346): of the backups that carry one, the newest `CCRC_BACKUP_DATA_KEEP` keep it, counting this run's own first, and
+every older one loses its `coord.db`, delegation journal, checkpoint and manifest and keeps the rest (its code, `memory/`, the
+units). The knob is a whole number from 2 to 9999, default 3, read from the process environment and else from
+`~/.ccrc/ccrc.env` alone, never `~/.ccrc/exposure.env`, which no process that thins receives on Linux; `0` and `1` are refused and an
+invalid value stops the prune and the thinning alike. So does a `ccrc.env` that is
+there but cannot be read, or that names the knob on a line the reader does not take. Read as bytes, after its leading spaces and
+tabs, a line is skipped when it is a comment (`#` or `;`) or another key's `[export ]NAME=`, read when it begins
+`CCRC_BACKUP_DATA_KEEP=`, its value taken as systemd's `EnvironmentFile=` takes it (spaces and tabs around it trimmed), and
+refused when it names the knob as a whole word any other way, `export CCRC_BACKUP_DATA_KEEP=` included; a line holding a CR
+past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file that names the knob anywhere, a comment
+included, but that the box's model of systemd cannot decide (a value a quote or a backslash carries across lines, a CR that leads
+a line or sits inside one, a non-ASCII byte in an assignment) refuses too: unmeasured is not unset (D-6365). On Linux a `ccrc.env`
+that never names the knob reads as the default, whatever else it holds but a NUL byte, since systemd cannot set it from that file; on macOS,
+whose launchd job sources the file with bash, one the model cannot decide still refuses. A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
+a dir is read on presence and size (a `coord.db` with no manifest is also opened for its header and tables), so damage of the
+same length there is not seen (D-6350, D-6364). On an update, `thin` also works to a time budget inside the console's deadline:
+it starts no full verification that could not finish in time, leaves the rest for the next update and exits 0 unless a dir was refused (D-6464). The newest data set from
+before a schema migration (a `coord.db` `user_version` lower than the newest kept set's) is kept as well, one at most, so the
+snapshot an older build's by-hand restore needs survives a failed migrating update (D-6358). A thinned dir holds
+`coordination-thinned.json`, written before anything is deleted, which says when, by which verb and by which rule;
+`ccrc coordination-snapshot validate` calls it `thinned`, not damaged. The update that first installs this retention cannot thin (it
+runs the previous tree's prune), so a box's first thinning is its next completed update or `ccrc backup`.
 Each backup dir also holds the delegation journal and checkpoint (`delegation-events.log`, `delegation-checkpoint.json`)
 and the manifest that describes them with the `coord.db` snapshot (`coordination-snapshot.json`), written last, after
 every member is durable. `ccrc coordination-snapshot validate|restore|recover` classifies such a dir, replaces the live
 journal, checkpoint and `coord.db` (with its WAL and SHM) from a valid one as a single set — only with `ccrc.service`
 measured inactive, asked again once its marker is durable — and finishes an interrupted restore from that marker; delegation
 recovery refuses to run while the marker stands, and so does the server's boot (it exits 1 naming `recover`). Its exits are
-`validate` 0 for `v1` and `legacy`, 1 for `none`, 2 for `invalid`, and 70 for a usage error or a helper that cannot run (SQLite included); `restore` and `recover` 0 done, 1 failed, 2 refused before any live change (an invalid source, a pending earlier restore, an unreadable marker, a missing `~/.ccrc`, a running or unmeasured service, a held update lock), 70 usage or a helper that cannot run. A restore that is rolled back puts the old set back whole: any file it did not place and that is not old is moved, never deleted, into `~/.ccrc/coordination-restore.foreign/<id>/`, and the report names it (exit 1, or 70 when the failure was the helper's own); a rollback that cannot finish says so and keeps the marker and stage for `recover` (`recover` exits 1; `restore` exits with its original failure's code, 1, or 70 when that failure was the helper's own).
+`validate` 0 for `v1` and `legacy`, 1 for `none` and for `thinned` (a backup whose data set the retention dropped, D-6346), 2 for `invalid`, and 70 for a usage error or a helper that cannot run (SQLite included); `restore` refuses a `thinned` source as `source-thinned` (exit 2); `restore` and `recover` 0 done, 1 failed, 2 refused before any live change (an invalid source, a pending earlier restore, an unreadable marker, a missing `~/.ccrc`, a running or unmeasured service, a held update lock), 70 usage or a helper that cannot run. A restore that is rolled back puts the old set back whole: any file it did not place and that is not old is moved, never deleted, into `~/.ccrc/coordination-restore.foreign/<id>/`, and the report names it (exit 1, or 70 when the failure was the helper's own); a rollback that cannot finish says so and keeps the marker and stage for `recover` (`recover` exits 1; `restore` exits with its original failure's code, 1, or 70 when that failure was the helper's own).
 Rollback arm 3 never copies the sidecars back: they are authority a running server wrote since the backup. Capture refuses a
 journal or checkpoint that does not validate, so `ccrc backup`, `ccrc update` and the fallback deploy stop on a damaged journal. A torn tail is not damage: the server cuts it off its own journal, keeping the bytes in `~/.ccrc/delegation-events.torn/` and saying so in its log and in `/api/fleet/health`'s `delegation.lastTailHeal`;
 capture, which never writes the journal, leaves it out of the snapshot (`delegation.journalTailOmitted` in the manifest, one warning line) and succeeds.
@@ -6567,7 +6593,8 @@ missing everything recent) and, last and still before the `rsync`, the delegatio
 journal and checkpoint with their manifest (`deploy/coordination-snapshot.mjs`;
 a failed capture aborts the deploy) — and, after a green deploy, prunes that directory
 to the newest `CCRC_BACKUP_KEEP` (default 10) timestamped backups, never a
-hand-made sibling. A backup copy that *fails* aborts the deploy before
+hand-made sibling (deploy never thins a coordination data set: the next update or `ccrc backup` on the box thins the dirs
+it wrote, like any other). A backup copy that *fails* aborts the deploy before
 `rsync --delete` can destroy the state it failed to save.
 The agent deploy installs `ccd` BEFORE restarting the agent — the agent
 caches `ccd caps` at boot, so the reverse order pins a stale verb set.
@@ -6601,7 +6628,10 @@ PWA raises its amber banner until the server lane runs. That is expected, not a 
 agent lane prints the same sentence as it goes — and the second deploy clears
 it.
 
-**Restore** (manual, from the target box — pick the `<ts>` to roll back to). The first remedy is `ccrc rollback`:
+**Restore** (manual, from the target box — pick the `<ts>` to roll back to). A backup's coordination data set is restorable
+only from a `<ts>` that `ccrc coordination-snapshot validate --from ~/ccrc-backups/<ts>` calls `v1`; retention
+thins every backup past the newest `CCRC_BACKUP_DATA_KEEP`, and `restore` refuses such a dir by name as `source-thinned`, so pick
+among the newest backups and the one kept from before a schema migration. The first remedy is `ccrc rollback`:
 to a version still kept under `~/ccrc-versions` it is a flip with no download. The `cp -a` lines below write
 THROUGH `~/ccrc` into the version directory it points at, which then holds a MIXED tree under its release's name —
 its digest then reads it as written through, and removing its `.ccrc-installed` as well, as arm 3 does, makes it
