@@ -63,7 +63,7 @@ spec  →  plan  →  waves of subagents  →  per-PR review lenses  →  whole-
 | **Account pools** | Tag projects and accounts into pools; placement, swaps and rescues stay inside one, and a blocked session with no room left in its pool strands, loudly, instead of crossing. |
 | **An optional session gate** | Passkeys or a passphrase, off by default, and it fails shut on every ambiguity rather than open. `ccrc expose` arms it. |
 | **One whitelisted socket** | Split across two boxes, the server never SSHes the fleet host. It drives it through a closed set of whitelisted operations, and nothing else. |
-| **Signed releases, updates that undo themselves** | Every merge to `main` that changes what ships becomes a provenance-attested `dev` release (a merge that changes only docs starts no release run, and one whose build comes out identical, a tests-only merge for one, cuts none), and `stable` is a promotion behind a full-suite gate. A box moves with one verb or one tap in Settings, behind a health gate that restores the previous build when it fails. |
+| **Signed releases, updates that undo themselves** | Every merge to `main` that changes what ships becomes a provenance-attested `dev` release (a merge that changes only `docs/` or the root's Markdown starts no release run, and one whose build comes out identical, a tests-only merge for one, cuts none), and `stable` is a promotion behind a full-suite gate. A box moves with one verb or one tap in Settings, behind a health gate that restores the previous build when it fails. |
 | **Public in one verb** | `ccrc expose` writes the Caddy config for a DuckDNS name, your own domain or a bare IP, arms the session gate, and prints the root steps instead of running them. |
 | **A doctor that names the fix** | `ccrc doctor` prints one verdict per check, with a remedy under every WARN and FAIL, and the install's own exit code is doctor's. |
 
@@ -779,8 +779,9 @@ why there is no linear-history rule), which runs `release-stable.yml`. `main`'s 
 release now, so push a release's own commit (`git push origin vX.Y.Z^{commit}:refs/heads/stable`), not
 `main`'s head. When that commit is not the head the daily run tested, the gate runs the full suite on it
 first. A push of an untagged head is refused after its gate, and the refusal names the newest release it
-contains and points at the release-main run for that head, which says `built unchanged` or what differed;
-`stable` then stays on that head until a release cut from a descendant of it is pushed. Its
+contains; it says when that head's merge changed only `docs/` or the root's Markdown, so no release-main run
+started for it, and otherwise points at the release-main run for that head, which says `built unchanged` or
+what differed; `stable` then stays on that head until a release cut from a descendant of it is pushed. Its
 `gate` job first looks for a green `full-suite` job on that commit from a trusted run — `ci.yml`'s daily or manual
 full run on `main`, or an earlier stable gate, never a pull request's — and, finding none, runs `ci.yml` in full
 mode; only then does `deploy/release-stable.sh` run (a red gate leaves the branch moved and no flag flipped, which

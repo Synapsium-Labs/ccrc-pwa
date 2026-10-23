@@ -295,7 +295,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `unversioned` when the stamp carries no `version` at all — ships skills on its agent arm only, and still refuses
   with exit 2 without a target (`server/test/deploy-coordinates.test.ts` pins that refusal). It DOES stamp
   `version`, but only when a release tag points at the built commit (`stamp_build`'s `git tag --points-at HEAD`),
-  which holds only for a `main` head whose merge changed what ships; the PWA shows a box amber for a MISSING `version`, which
+  which holds for a `main` head whose merge released; the PWA shows a box amber for a MISSING `version`, which
   is what an untagged working-tree deploy leaves. A release since W1 of the update-management design is a
   PRERELEASE until promoted, so a bare `ccrc rollout` (which pins from `latest/download`) moves the fleet to the
   newest STABLE; a dev build is `rollout --to vX.Y.Z`. The ordering rule survives as `rollout`'s default: fleet box first
