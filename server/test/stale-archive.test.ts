@@ -70,22 +70,25 @@ describe('staleArchiveVerdict (L1)', () => {
 const rec = (id: string, over: Record<string, unknown> = {}): SessionRecord => ({
   id, wrapper: 'lane-a', project: 'project-a', workdir: `/w/${id}`, uuid: `u-${id}`,
   workspace: `ws-${id}`, archivedAt: null, held: null, child: { kind: 'none' }, unmeasured: [],
-  spawn: null, supervisedAt: null, hibernatedAt: null, ...over,
+  spawn: null, supervisedAt: null, hibernatedAt: null, lifecycleUnmeasured: [], ...over,
 }) as unknown as SessionRecord;
 
 interface Harness {
   deps: StaleArchiveDeps; mem: StaleArchiveMemory; ccd: string[][]; feed: { title: string; body: string }[];
-  clock: { now: number }; setPane: (p: 'absent' | 'present' | 'unmeasured') => void; ccdAnswer: { stderr: string; ok: boolean };
+  clock: { now: number }; listing: { names: string[] | null }; fresh: Record<string, Record<string, unknown>>; rows: Map<string, SessionRecord>; setPane: (p: 'absent' | 'present' | 'unmeasured') => void; ccdAnswer: { stderr: string; ok: boolean };
 }
 const harness = (o: {
   claims?: Record<string, unknown>; open?: string[]; evidence?: number | null; viewer?: boolean; caps?: string[];
-  claimsThrow?: boolean; acts?: { act: string; at: number | null; outcome: string }[];
+  claimsThrow?: boolean; beforeAct?: (id: string) => void; acts?: { act: string; at: number | null; outcome: string }[];
 } = {}): Harness => {
   const clock = { now: NOW };
   const ccd: string[][] = [];
   const feed: { title: string; body: string }[] = [];
   let pane: 'absent' | 'present' | 'unmeasured' = 'absent';
   const ccdAnswer = { stderr: '', ok: true };
+  const listing: { names: string[] | null } = { names: [] };
+  const fresh: Record<string, Record<string, unknown>> = {};
+  const rows = new Map<string, SessionRecord>();
   const deps: StaleArchiveDeps = {
     coord: {
       childReclaimCoordinatorClaims: () => { if (o.claimsThrow) throw new Error('db'); return new Map(Object.entries(o.claims ?? {})) as never; },
@@ -99,18 +102,25 @@ const harness = (o: {
     pane: async () => pane,
     transcriptMtimeMs: async () => (o.evidence === undefined ? NOW - 15 * DAY : o.evidence === null ? 'none' : o.evidence),
     wokeAtMs: async () => null,
-    queueRun: (_id, fn) => fn(),
+    listRegistry: async () => (listing.names === null ? { ok: false, reason: 'unreadable' } : { ok: true, entries: listing.names }) as never,
+    rowNow: async (r) => ({ ...(rows.get(r.id) ?? r), ...(fresh[r.id] ?? {}) }) as SessionRecord,
+    queueRun: (id, fn) => (o.beforeAct?.(id), fn()),
     log: () => {},
     now: () => clock.now,
   };
-  return { deps, mem: { sightings: new Map(), would: new Set() }, ccd, feed, clock, setPane: (p) => { pane = p; }, ccdAnswer };
+  return { deps, listing, fresh, rows, mem: { sightings: new Map(), would: new Set() }, ccd, feed, clock, setPane: (p) => { pane = p; }, ccdAnswer };
+};
+const pass = (h: Harness, records: SessionRecord[], names: string[]) => {
+  h.listing.names = names;
+  for (const r of records) h.rows.set(r.id, r);
+  return staleArchivePass(h.deps, h.mem, records, names);
 };
 const LIVE = ['stale-archive-live'];
 /** Two passes an hour and a bit apart, the second the one that may act. */
 const twoPasses = async (h: Harness, records: SessionRecord[], names: string[]) => {
-  await staleArchivePass(h.deps, h.mem, records, names);
+  await pass(h, records, names);
   h.clock.now += STALE_ARCHIVE_SIGHTING_GAP_MS + 1;
-  return staleArchivePass(h.deps, h.mem, records, names);
+  return pass(h, records, names);
 };
 
 describe('staleArchivePass (L3)', () => {
@@ -129,7 +139,7 @@ describe('staleArchivePass (L3)', () => {
     const h = harness();
     await twoPasses(h, [rec('a')], []);
     h.clock.now += STALE_ARCHIVE_SWEEP_MS;
-    const again = await staleArchivePass(h.deps, h.mem, [rec('a')], []);
+    const again = await pass(h, [rec('a')], []);
     expect(h.ccd).toEqual([]);
     expect(h.feed).toHaveLength(1);
     expect(h.feed[0]!.title).toMatch(/would archive/i);
@@ -138,19 +148,19 @@ describe('staleArchivePass (L3)', () => {
 
   it('the first pass never acts: one sighting is not two', async () => {
     const h = harness();
-    await staleArchivePass(h.deps, h.mem, [rec('a')], LIVE);
+    await pass(h, [rec('a')], LIVE);
     expect(h.ccd).toEqual([]);
   });
 
   it('a pane back between the sightings starts the count again', async () => {
     const h = harness();
-    await staleArchivePass(h.deps, h.mem, [rec('a')], LIVE);
+    await pass(h, [rec('a')], LIVE);
     h.clock.now += STALE_ARCHIVE_SIGHTING_GAP_MS + 1;
     h.setPane('present');
-    await staleArchivePass(h.deps, h.mem, [rec('a')], LIVE);
+    await pass(h, [rec('a')], LIVE);
     h.setPane('absent');
     h.clock.now += 1;
-    await staleArchivePass(h.deps, h.mem, [rec('a')], LIVE);
+    await pass(h, [rec('a')], LIVE);
     expect(h.ccd).toEqual([]);
   });
 
@@ -216,9 +226,9 @@ describe('staleArchivePass (L3)', () => {
 
   it('reclaim-paused stops it entirely, and forgets the sightings', async () => {
     const h = harness();
-    await staleArchivePass(h.deps, h.mem, [rec('a')], LIVE);
+    await pass(h, [rec('a')], LIVE);
     h.clock.now += STALE_ARCHIVE_SIGHTING_GAP_MS + 1;
-    await staleArchivePass(h.deps, h.mem, [rec('a')], [...LIVE, 'reclaim-paused']);
+    await pass(h, [rec('a')], [...LIVE, 'reclaim-paused']);
     expect(h.ccd).toEqual([]);
     expect(h.mem.sightings.size).toBe(0);
   });
@@ -234,6 +244,39 @@ describe('staleArchivePass (L3)', () => {
   it('an unreadable registry listing is no licence: it holds like a raised pause', async () => {
     const h = harness();
     await twoPasses(h, [rec('a')], null as never);
+    expect(h.ccd).toEqual([]);
+  });
+
+  it('a pause raised, or the switch lifted, while the act waits on the queue stops the archive', async () => {
+    for (const [names, kind] of [[[...LIVE, 'reclaim-paused'], 'deferred'], [[], 'would-archive'], [null, 'deferred']] as const) {
+      const h = harness({ beforeAct: () => { h.listing.names = names as never; } });
+      await pass(h, [rec('a')], LIVE);
+      h.clock.now += STALE_ARCHIVE_SIGHTING_GAP_MS + 1;
+      const out = await pass(h, [rec('a')], LIVE);
+      expect(h.ccd, String(names)).toEqual([]);
+      expect(out.map((o) => o.kind)).toEqual([kind]);
+    }
+  });
+
+  it('a hold, a child mark, an archive or a new claim set between the verdict and the act stops the archive', async () => {
+    for (const over of [{ held: 'program' }, { child: { kind: 'child', runId: 3 } }, { archivedAt: 9 }, { unmeasured: ['x'] }]) {
+      const h = harness({ beforeAct: () => { h.fresh.a = over; } });
+      const out = await twoPasses(h, [rec('a')], LIVE);
+      expect(h.ccd, JSON.stringify(over)).toEqual([]);
+      expect(out.map((o) => o.kind)).toEqual(['deferred']);
+    }
+    const c = harness();
+    c.deps.coord!.openCoordinatorIds = () => [];
+    await pass(c, [rec('a')], LIVE);
+    c.clock.now += STALE_ARCHIVE_SIGHTING_GAP_MS + 1;
+    c.deps.coord!.childReclaimCoordinatorClaims = (() => new Map([['a', 1]])) as never;
+    await pass(c, [rec('a')], LIVE);
+    expect(c.ccd).toEqual([]);
+  });
+
+  it('an unreadable .supervised keeps the row however old the other evidence is', async () => {
+    const h = harness();
+    await twoPasses(h, [rec('a', { lifecycleUnmeasured: ['supervised'] })], LIVE);
     expect(h.ccd).toEqual([]);
   });
 });
