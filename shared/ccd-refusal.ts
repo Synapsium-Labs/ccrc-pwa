@@ -13,6 +13,11 @@
  * not list. Additive on the wire: no `FLEET_PROTO` bump, and the frozen caps corpus is untouched (the capability rides
  * the trailing `echo` lane of `cmd_caps`).
  *
+ * DEPLOY ORDER: additive for the NEW server, not for an already-deployed one. A server without this reader compares
+ * whole stderr in its prose matchers, so the extra line makes a pre-lock die (reclaim/expire/collect lock-unopenable,
+ * flock-unavailable, token-malformed) fall through to its generic branch. This wave widens a server reader, so it
+ * ships with `ccrc rollout --server-first`; a fleet-first rollout opens that window until the server lanes land.
+ *
  * `CCD_REFUSAL_TOKENS` is the words `_lc_refuse` can print. `server/test/ccd-refusal-v1.test.ts` holds it set-equal to
  * the literal tokens at `_lc_refuse`'s call sites, in both directions.
  */

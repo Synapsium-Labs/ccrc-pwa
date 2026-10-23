@@ -564,6 +564,14 @@ describe('POST /api/sessions/:id/forget', () => {
     await a.close();
   });
 
+  it("relays a refused forget's stderr without the refusal-v1 machine line (#560)", async () => {
+    const { app: a } = await app('', 1, 'ccd-refusal: forget session-live\nccd: demo-quiet-basin is still running — stop it first');
+    const res = await a.inject({ method: 'POST', url: '/api/sessions/demo-quiet-basin/forget' });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().stderr).toBe('ccd: demo-quiet-basin is still running — stop it first');
+    await a.close();
+  });
+
   it('501s a fleet whose deployed ccd never advertised the verb', async () => {
     const { app: a, calls } = await app('', 0, '', ['stop', 'ws-archive']);
     const res = await a.inject({ method: 'POST', url: '/api/sessions/demo-quiet-basin/forget' });
