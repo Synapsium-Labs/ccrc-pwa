@@ -354,19 +354,19 @@ Review 852's fix round re-measured M1 to M23 on the final 25 rows and measured M
 campaign measured otherwise than this table claimed, the Expected red column is corrected and says so (M3, M4, M21,
 M25, M31). The probe column of M24 to M36 reads "measured in review 852's fix round". Review 860's fix round adds
 M37 and M38, the window mutants (probe column "measured in review 860's fix round"). The fix round on main's #1160
-(D-6724) respells M1, M3, M5, M18 and M35 to the landed names and adds M39 to M44, the clears and the two halves of the
-guard.
+(D-6724) respells M1, M3, M5, M18 and M35 to the landed names and adds M39 to M45, the clears, the two halves of the guard
+and the `unref` behind the `close()` clear.
 
 | # | Guard (task) | Mutation | Expected red (at least), at the task's end | Planning probe: mutant / restored |
 |---|---|---|---|---|
 | M1 | the deadline is armed per attempt (T2) | delete the `this.armConnectDeadline(ws)` call in `connect` | W27-L1, L2, L3, L4, L12 | probe: red L1, L2, L3, L4, L6, L9; restored 10/10 green |
 | M2 | it is armed at socket creation, not at `open` (T2) | move the call into the `open` handler | W27-L1, L2, L4, L12 (L3 stays green) | probe: red L1, L2, L4, L9; restored 10/10 green |
 | M3 | it is a wall clock, not an idle timer (T2) | delete the call and pass `{ handshakeTimeout: this.cfg.connectTimeoutMs }` to `new WebSocket` | W27-L2, L3, and (amended on review 852) L1 through Task 3's line assertion: the idle timer ends the silent upgrade, but as a `never-ready` boot line, not a `no ready within` line; L4 stays green | probe: red L1, L2, L3, L6, L9; restored 10/10 green |
-| M4 | a ready link is left alone (T2) | delete `if (this.ready) return;` from the deadline (amended on review 852: from Task 3 the guard is M4b's `if (ws !== this.socket \|\| this.ready) return;`, this spelling has no anchor, and M4 is now the same edit as M4b) | W27-L5 | probe: red L5; restored 10/10 green |
+| M4 | a ready link is left alone (T2) | delete `if (this.ready) return;` from the deadline (amended on review 852: from Task 3 the guard is M4b's `if (ws !== this.socket \|\| this.ready) return;`, this spelling has no anchor, and M4 is now the same edit as M4b) | W27-L5; (amended on main's #1160) green: equivalent under the `onReady` clear, M43 reds it (D-6725) | probe: red L5; restored 10/10 green |
 | M4b | the same guard as Task 3 ships it (T3) | delete `\|\| this.ready` from the deadline's guard `if (ws !== this.socket \|\| this.ready) return;` | W27-L5 (a `no ready within 1000ms (ready not sent)` line and a second accept) | unmeasured: added in review |
 | M5 | the seam reaches the deadline (T2) | the constructor sets `connectTimeoutMs: DEFAULT_CONNECT_TIMEOUT_MS`, ignoring `cfg` | W27-L1, L2, L3, L4, L12 (15 s is past each 5 to 8 s wait) | probe: red L1, L2, L3, L4, L6, L9; restored 10/10 green |
 | M6 | the heartbeat ends a silent ready link (pinned, T1) | delete `this.socket?.terminate()` in the miss-limit branch | W27-L8 | probe: red L8; restored 10/10 green |
-| M7 | a leftover deadline says nothing (T3) | delete `ws !== this.socket \|\|` from the deadline's guard | W27-L6, L7 (each prints a `(closed)` line) | probe (first draft): red L6, L7, L10; restored 10/10 green |
+| M7 | a leftover deadline says nothing (T3) | delete `ws !== this.socket \|\|` from the deadline's guard | W27-L6, L7 (each prints a `(closed)` line); (amended on main's #1160) green: equivalent under the `onClose` and `close()` clears, M44 reds it (D-6725) | probe (first draft): red L6, L7, L10; restored 10/10 green |
 | M8 | one line per kind per episode (T3) | delete the `ep.logged.has(kind)` return in `note` | W27-L9 | probe: red L9; restored 10/10 green |
 | M9 | the recovery line (T3) | delete the `console.warn` in `onReady`'s episode close | W27-L8, L9, L10, L11 | probe (first draft): red L9, L10; restored 10/10 green |
 | M10 | the phase is named only as far as `readyState` proves it (T3) | swap the CONNECTING and OPEN words in `preReadyPhase` | W27-L1, L2, L3, L9 (W27-L6 accepts either word) | probe (first draft): red L1, L2, L3, L6, L9; restored 10/10 green |
@@ -394,16 +394,17 @@ guard.
 | M32 | the refused range has an upper bound (T3) | `code >= 4000` in place of `code >= 4400 && code <= 4499` | W27-L22 | measured in review 852's fix round |
 | M33 | the refused range is more than the one code 4401 (T3) | `code === 4401` in place of the range | W27-L22 | measured in review 852's fix round |
 | M34 | the closing phase has its own word (T3) | map CLOSING to `ready not sent` in `preReadyPhase` | W27-L23 | measured in review 852's fix round |
-| M35 | the deadline's timer is `unref`'d (T2) | delete `this.connectTimer.unref?.();` in `armConnectDeadline` | W27-L24 | measured in review 852's fix round |
+| M35 | the deadline's timer is `unref`'d (T2) | delete `this.connectTimer.unref?.();` in `armConnectDeadline` | W27-L24; (amended on main's #1160) green: `close()` clears the timer first, M45 reds it (D-6725) | measured in review 852's fix round |
 | M36 | the deadline keeps the backoff (T2) | set `this.backoffMs = this.cfg.reconnectMinMs;` in the deadline callback, before `ws.terminate()` | W27-L25 | measured in review 852's fix round |
 | M37 | the window is exactly 8, not 9 (T3; review 860) | `Math.min(9, token.length)` | W27-L17 | measured in review 860's fix round |
 | M38 | the window is exactly 8, not 10 (T3; review 860) | `Math.min(10, token.length)` | W27-L17 | measured in review 860's fix round |
-| M39 | the `onReady` clear (#1160) | delete `this.clearConnectDeadline();` in `onReady` | see As built (#1160 fix round) | measured in the #1160 fix round |
-| M40 | the `onClose` clear (#1160) | delete it in `onClose` | see As built (#1160 fix round) | measured in the #1160 fix round |
-| M41 | the `close()` clear (#1160) | delete it in `close()` | see As built (#1160 fix round) | measured in the #1160 fix round |
-| M42 | the clear at arm (#1160) | delete the `this.clearConnectDeadline();` at the top of `armConnectDeadline` | see As built (#1160 fix round) | measured in the #1160 fix round |
-| M43 | the ready half, both ways (D-6724) | M4 plus M39 | see As built (#1160 fix round) | measured in the #1160 fix round |
-| M44 | the current-socket half, both ways (D-6724) | M7 plus M40 plus M41 | see As built (#1160 fix round) | measured in the #1160 fix round |
+| M39 | the `onReady` clear (#1160) | delete `this.clearConnectDeadline();` in `onReady` | none alone (D-6725) | measured in the #1160 fix round |
+| M40 | the `onClose` clear (#1160) | delete it in `onClose` | none alone (D-6725) | measured in the #1160 fix round |
+| M41 | the `close()` clear (#1160) | delete it in `close()` | none alone (D-6725) | measured in the #1160 fix round |
+| M42 | the clear at arm (#1160) | delete the `this.clearConnectDeadline();` at the top of `armConnectDeadline` | none alone (D-6725) | measured in the #1160 fix round |
+| M43 | the ready half, both ways (D-6724) | M4 plus M39 | W27-L5, and main's C3 | measured in the #1160 fix round |
+| M44 | the current-socket half, both ways (D-6724) | M7 plus M40 plus M41 | W27-L7 | measured in the #1160 fix round |
+| M45 | the `unref`, behind the `close()` clear (D-6725) | M35 plus M41 | W27-L24 | measured in the #1160 fix round |
 
 The deadline's choice to terminate its CAPTURED socket, not `this.socket`, has no row of its own (D-6517): before
 Task 3 a stale deadline can reach only a closed socket, where `terminate` is a no-op, and from Task 3 the
@@ -419,7 +420,8 @@ order, and none is left in reserve:
 - The build spent the last two of the first block as departures: D-6528 and D-6529.
 - The fix round spent D-6585 as a departure, and gave D-6586, which no departure took, its own entry as an unspent
   number.
-- The fix round on main's #1160 spent D-6724 on the absorb and gave D-6725, which no departure took, its own entry.
+- The fix round on main's #1160 spent D-6724 on the absorb and D-6725 as a departure: three recorded red sets that
+  the merged clears make unreachable.
 
 Every entry is written `- **D-<n>** — <text>`, the form the server's one definition reader accepts
 (`server/src/coord/ledger.ts#DEFINITION`: after the number it needs `**` and then an em-dash, `(` or `:`). The form
@@ -674,8 +676,25 @@ reader itself).
     refusal-line rule of this wave is unchanged. The 25 rows of `remote-liveness.test.ts` and `remoteHelpers.ts`
     take the renamed field and nothing else, and main's four rows are byte-identical.
   - Against D-6517, the timer is now cleared in `onReady`, `onClose`, `close()` and at each arm.
-    MEASURED-CLEARS-PLACEHOLDER
-- **D-6725** — `unused` (run 833): issued to this wave's fix round on main's #1160; no departure took it.
+    Measured on the merged code (As built): each clear repeats a fact the fire-time check already reads, and each
+    half of the check repeats a clear, so no single one of them has a red row; only the pairs red. That is D-6725.
+- **D-6725** (the worker, main's #1160 fix round) — Three red sets recorded before the absorb no longer hold on the
+  merged code, and the rows were not changed: the ruling says the 25 rows take the renamed field and nothing else.
+  Main's clears and this wave's fire-time check now cover the same facts twice. D-6517 said that with the check
+  present a missing clear changes nothing; the converse now holds too.
+  - M4 (delete `|| this.ready`) and M39 (delete the `onReady` clear) are each green. Together (M43) they red W27-L5
+    and main's C3 ("never fires once ready arrived in time").
+  - M7 (delete `ws !== this.socket ||`), M40 and M41 (delete the `onClose` and `close()` clears) are each green.
+    Together (M44) they red W27-L7 only: W27-L6 stays green because the next attempt's arm clears the old timer
+    first (the clear M42 deletes), and C4 stays green because `close()` nulls `this.socket`.
+  - M35 (delete `this.connectTimer.unref?.()`) is green. W27-L24's child calls `close()`, which now clears the timer,
+    so the `unref` no longer decides whether the child exits. With the `close()` clear also deleted (M45) W27-L24
+    reds. On the merged code the timer lives only while its socket is current and not closed, and that socket's own
+    handle holds the event loop for the same span, so no row can red the `unref` alone.
+  - M42 (delete the clear at each arm) is green: `onClose` has already cleared the previous attempt's timer before
+    the next `connect`.
+  - W27-L24's comment still says "the deadline is never cleared, so only `unref` lets the child exit", which is no
+    longer true. It is left as it is, under the same ruling, for the coordinator to rule.
 
 Any reserve number still undefined at wave-done is defined in this section before the wave-done fingerprint, in the
 house form for an issued number no departure took (as `delegation-broker-wave3-observe.md` writes its run 740
@@ -1340,9 +1359,9 @@ green below is the worker's to measure; the planning probe's figures are named w
   of Steps 2 and 3 are listed in the as-built note, not folded into the word.
 - [ ] **Step 5: The PR body.**
   - The incident in one paragraph (an upgrade never answered, no bound, no log, 65 minutes), with D-6515's correction.
-  - The bound (D-6514, D-6516, D-6517): one wall clock per attempt, 15 s, main's stored timer cleared in `onReady`, `onClose` and `close()` with the
-    fire-time check kept (D-6724), acting on its own socket, and
-    the recovery bound (deadline plus one backoff, at most 45 s) against 65 minutes.
+  - The bound (D-6514, D-6516, D-6517): one wall clock per attempt, 15 s, main's stored timer cleared in `onReady`,
+    `onClose` and `close()` with the fire-time check kept (D-6724), acting on its own socket, and the recovery bound
+    (deadline plus one backoff, at most 45 s) against 65 minutes.
   - The rejected options and why: `handshakeTimeout` (D-6514), TCP keepalive (D-6518), an earlier heartbeat (D-6519).
   - The six kinds of log line verbatim, and the boot line's `socket not created` form (D-6520, D-6526); that an
     ordinary
@@ -1562,7 +1581,8 @@ the `client.ts` anchors were unchanged from `7ebdff20c`).
   - D-6529: a refusal reason that repeats the token is withheld.
 
   The fix round's two numbers: D-6585 is the W27-L25 floor, a departure from the ruling's example; D-6586 is unused
-  and has its own entry.
+  and has its own entry. The fix round on main's #1160 brought the count to twenty (the reader prints `20 20`):
+  D-6724 is the absorb and D-6725 the three red sets it made unreachable.
 - **The README bullet** adds one clause for the refusal line (D-6527, D-6529). The consent allows the link's journal
   lines, and the clause states no number. The fix round rewrote the bullet (below).
 - **Rows:** 15 in `remote-liveness.test.ts` at the first wave-done, W27-L1 to W27-L15, all green. W27-L15 is the
@@ -1643,6 +1663,42 @@ the `client.ts` anchors were unchanged from `7ebdff20c`).
     - M30 re-run: none, 0+25, still the equivalent mutant;
   - the README clause now reads "when an attempt closes, or its socket cannot be created, before the first ready"; the
     bullet is eleven added lines.
+- **The fix round on main's #1160** (mail 8652), on this branch after review 860's:
+  - main's #1160 (3dada7dc9) landed at 16:39Z under PR #1172 and bounds the same span; `git merge-tree` of
+    95d84c393 against origin/main 5d6d0b760 conflicted in `client.ts` only;
+  - commits, in order: the merge of origin/main, "one connect deadline under #1160's names (wave 27, D-6724)"
+    (e743a9965), an ordinary `git merge` whose resolution keeps main's field, constant, timer and clear,
+    moves this wave's `no ready within` line into `armConnectDeadline`, removes `readyTimeoutMs`,
+    `DEFAULT_READY_TIMEOUT_MS` and `armReadyDeadline`, and renames the field in `remote-liveness.test.ts` and
+    `remoteHelpers.ts` (nothing else in them changed); the coordinator's rulings recorded (bacf850d1); the plan's
+    names for the landed deadline, D-6516 and D-6517 amended, D-6724 (2d0775338); and this record, with D-6725;
+  - main's `remote-connect.test.ts` is byte-identical to origin/main; README merged with no conflict and is still one
+    added-only hunk of eleven lines against the new merge-base, with no digit;
+  - the deadline mutants, re-measured on the merged code on a scratch copy, each mutant run once over all 25 rows of
+    `remote-liveness` (failed + passed = 25) and over main's four connect-deadline rows of `remote-connect`, C1 to C4
+    in file order (failed + passed = 4, the other 66 skipped). Every red was an assertion; each mutant was restored by
+    copy and a byte-for-byte `cmp`; every green was re-run once and stayed green. Load average 30 to 24.
+
+| # | Recorded before (25 rows) | `remote-liveness` red rows | f+p | main's rows red | f+p | Held? |
+|---|---|---|---|---|---|---|
+| M1 | W27-L1, L2, L3, L4, L6, L9, L12, L23, L25 | the same | 9+16 | C1, C2 | 2+2 | yes; the ruling's C1 and C2 red |
+| M2 | W27-L1, L2, L4, L9, L12, L25 | the same | 6+19 | C1 | 1+3 | yes |
+| M3 | W27-L1, L2, L3, L6, L9, L23 | the same | 6+19 | C2 | 1+3 | yes |
+| M4 = M4b | W27-L5 | none | 0+25 | none | 0+4 | no: equivalent under the `onReady` clear (D-6725) |
+| M5 | as M1 | the same | 9+16 | C1, C2 | 2+2 | yes |
+| M7 | W27-L6, L7 | none | 0+25 | none | 0+4 | no: equivalent under the `onClose` and `close()` clears (D-6725) |
+| M18 | W27-L12 | the same | 1+24 | none | 0+4 | yes |
+| M35 | W27-L24 | none | 0+25 | none | 0+4 | no: `close()` clears the timer before the `unref` matters (D-6725) |
+| M36 | W27-L25 | the same | 1+24 | none | 0+4 | yes |
+| M39 | (new) | none | 0+25 | none | 0+4 | the `onReady` clear alone: green |
+| M40 | (new) | none | 0+25 | none | 0+4 | the `onClose` clear alone: green |
+| M41 | (new) | none | 0+25 | none | 0+4 | the `close()` clear alone: green |
+| M42 | (new) | none | 0+25 | none | 0+4 | the clear at arm alone: green |
+| M43 | (new) | W27-L5 | 1+24 | C3 | 1+3 | the ready half, both ways |
+| M44 | (new) | W27-L7 | 1+24 | none | 0+4 | the current-socket half, both ways |
+| M45 | (new) | W27-L24 | 1+24 | none | 0+4 | the `unref` behind the `close()` clear |
+
+  - the suites of this round, one file at a time, are recorded in the wave-done.
 - **Suites run** at the README commit (before review 852), one file at a time, at a load average of 18 to 45:
   - all green: `remote-liveness` 15, `remote-connect` 66, `remote-io` 217, `remote-pty` 6, `remote-runner` 28,
     `remote-tail` 4, `fleet-identity-client` 6, `fleet-identity-composition` 4, `update-inventory` 90,
