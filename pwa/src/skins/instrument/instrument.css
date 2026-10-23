@@ -335,7 +335,8 @@
 }
 
 /* W2 desk polish T2e (D-6335): the two-line dense row. Under a fine pointer at a desk a status row is the name with its
-   state word, then its context, about 40px instead of three lines at 61: no fact is dropped (D-5545), a long name still
+   state word, then its context: two lines and at most 42px when the name and state fit side by side, and never more than
+   three lines and under 61px (not three lines at 61 for every row): no fact is dropped (D-5545), a long name still
    wraps, and the density is the sheet's own `--row-h` (32 under a fine pointer) instead of `--tap-min`. Under a coarse
    pointer, or below 900, none of this applies and every row and control keeps the tap floor. CSS only: `SessionLine`
    keeps its three children, and the wrapping flex row below puts the second (the state word) beside the first. */
@@ -344,7 +345,8 @@
      side by side, the state at its own width and pushed to the line's end; the context takes a line of its own. A flex
      line breaks on the items' max-content sizes, so the state drops to its own line ONLY when the name and it do not
      fit together, and the name then has the whole line: a long needs-you row is three lines (name, state, context),
-     never four, and a short one stays two. A row without a context is one line, on the floor. */
+     never four, and a short one stays two. A row without a context (a main checkout) is one line, on the floor, when its
+     name and state fit side by side, and two (the name, then the state) when they do not. */
   .ins-row .sess-body {
     display: flex;
     flex-flow: row wrap;
