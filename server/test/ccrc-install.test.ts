@@ -7383,11 +7383,18 @@ function runTiersStep(c: {
   // function, unstubbed) resolves a real message from it, the same way the
   // shipped library would.
   oursWhy?: Readonly<Record<string, string>>;
+  // Whole-wave fix round, D-6691: run the REAL `_inst_codex_runtime` first, in
+  // the same shell, against a builder whose `build` fails while the previous
+  // generation stays current — the spine's own order, so the tiers step reads
+  // the `codex-runtime` that run put in INST_DEGRADED.
+  runtimeBuildFails?: boolean;
 }): StepRun {
   const home = mkTmp('ccrc-codex-tiers-step-');
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   writeFileSync(join(home, '.local', 'bin', 'ccgpt-runtime'), [
     '#!/bin/sh',
+    ...(c.runtimeBuildFails === true
+      ? ['[ "$1" = build ] && { echo "ccgpt-runtime: build failed at probe: fixture refusal" >&2; exit 1; }'] : []),
     '[ "$1" = python ] || { echo "stub ccgpt-runtime: unexpected argv: $*" >&2; exit 90; }',
     c.runtime === false
       ? 'echo "ccgpt-runtime: absent" >&2; exit 1'
@@ -7431,6 +7438,7 @@ function runTiersStep(c: {
     recordingStub('_codex_tier_stale', c.stale, 1),
     recordingStub('_codex_stop_tier', c.stopRc, 0, stopWords),
     recordingStub('_codex_start_tier', c.startRc, 0),
+    ...(c.runtimeBuildFails === true ? [ccrcFunction('_inst_codex_runtime'), '_inst_codex_runtime'] : []),
     ccrcFunction('_inst_codex_tiers'),
     '_inst_codex_tiers; rc=$?',
     DEGRADED_OUT,
@@ -7809,6 +7817,27 @@ describe('ccrc install: the codex tier restart step, measured in isolation (_ins
     expect(r.calls).toEqual([LOCK_A, A_L, A_S, '_codex_tier_stale codex-a shim', UNLOCK_A]);
     expect(r.stderr).toMatch(/^install: codex tiers: codex-a shim: NOT restarted — it runs code this install replaced, but no codex runtime resolves/m);
     expect(r.degraded).toEqual(['codex-tiers']);
+  });
+
+  it('a failed runtime build this run never restarts a stale litellm tier: one line, left as it was; the shim is restarted (D-6691)', () => {
+    // `stale: 0` on litellm stands for its record's library hash having moved
+    // (`_codex_started_json` hashes the stamp and the placed auth library):
+    // stale, while the build that would have given it new code did not pass.
+    // The shim is the control: the same run restarts it, so the skip is the
+    // litellm tier's alone.
+    const r = runTiersStep({
+      runtimeBuildFails: true,
+      ours: { 'codex-a litellm': 0, 'codex-a shim': [0, 1, 0] },
+      stale: { 'codex-a litellm': 0, 'codex-a shim': 0 }, readyS: '5',
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: codex runtime: NOT BUILT — ccgpt-runtime build exited 1 /m);
+    expect(r.calls).toEqual([LOCK_A, A_L, '_codex_tier_stale codex-a litellm', A_S, '_codex_tier_stale codex-a shim',
+      '_codex_stop_tier codex-a shim', A_S, '_codex_start_tier codex-a shim', A_S, UNLOCK_A]);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a litellm: left alone — it runs code this install replaced, but this run's codex runtime build did not pass \(the codex runtime: NOT BUILT line above\), so it keeps its running code until a build passes; then re-run: ccrc install$/m);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a shim: restarted — /m);
+    expect(r.stdout).toMatch(/— 1 restarted, 1 left as they were, 0 not restarted$/m);
+    expect(r.degraded).toEqual(['codex-runtime']);
   });
 
   it('two failed restarts degrade the step once, and the summary counts both', () => {

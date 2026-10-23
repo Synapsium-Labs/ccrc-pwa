@@ -236,7 +236,7 @@ def load_auth_library():
         lib = importlib.util.module_from_spec(spec)
         sys.modules["ccgpt_auth"] = lib
         spec.loader.exec_module(lib)
-        for name in ("read", "read_status", "expired", "config_hash"):
+        for name in ("read", "read_status", "expired", "bars"):
             getattr(lib, name)
         return lib
     except (Exception, SystemExit) as e:
@@ -252,7 +252,8 @@ def load_auth_library():
 # status the lane's tier recorded is current only for the credential it was
 # measured on, so a fresh sign-in clears it; a needs-signin bars before the
 # expiry, and a config-error bars only under the library's current OAuth
-# configuration, the library refresher's own rule. ChatGPT-Account-Id is the
+# configuration: the library refresher's own rule, asked through `bars`
+# (D-6692). ChatGPT-Account-Id is the
 # reading's `account_id`, the value LiteLLM's tier sends for the same header,
 # so this program never opens the credential itself.
 lib = load_auth_library()
@@ -266,11 +267,12 @@ if r.credential != "present":
     refuse("login-required", f"{login} — \"{ACCOUNT}\" holds no usable token ({r.detail}), and this unattended "
            "probe never starts a sign-in")
 status = lib.read_status(TOKEN_DIR)
-state = status.get("state") if status is not None else None
-if state == "needs-signin":
+# Whether the status bars is the library's one rule (`bars`, D-6692); this
+# probe only picks the refusal's words.
+if lib.bars(status) and status.get("state") == "needs-signin":
     refuse("login-required", f"{login} — the tier of \"{ACCOUNT}\" recorded that its credential needs a sign-in, "
            "and this unattended probe never starts one")
-if state == "config-error" and status.get("configHash") == lib.config_hash():
+if lib.bars(status):
     refuse("credential-unusable", f"run ccrc update, then ccrc codex login {ACCOUNT} — the token endpoint refused "
            "ccrc's OAuth client when the lane's tier last refreshed, and a sign-in alone does not cure it")
 if lib.expired(r):

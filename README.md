@@ -1443,7 +1443,7 @@ without it neither half of ccrc runs:
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
 `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
 `CCRC_UPSTREAM`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
-`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file` — the whole emitted surface, because a
+`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
 field the projection drops is a field no drift detector can see). `ccrc install` generates it from the box's
 own installed roster, and the deploy fallback from the
 roster **read back off the box**, never from the local file, so ccd's routing
@@ -2082,9 +2082,10 @@ Linux `fleet` or `both` box `ccrc install` (and every update) places ccrc's own
 lanes: `ccrc-codex-usage@<id>.timer` (every 15 minutes) is enabled for each, and one still enabled for an id
 that is no longer a `codex` lane is disabled. A lane's instance is withheld — and disabled if ccrc had enabled
 it — while another tool's `ccgpt-usage@<id>.timer` is enabled for that lane, because two publishers would race
-its `~/.cc-limits` row and two token refreshes its OAuth (the install names the unit to disable, and never
-disables it for you); a roster it cannot read converges nothing, and each of those is a degraded step. macOS
-places none. The publisher reads the lane's credential through the auth library and never refreshes it or starts a
+its `~/.cc-limits` row (the install names the unit to disable, and never disables it for you; the credential is no
+race, because the poll and the tier both read it through the auth library); a roster it cannot read converges
+nothing, and each of those is a degraded step. macOS places none. The publisher reads the lane's credential
+through the auth library and never refreshes it or starts a
 sign-in: an expired token fails the poll `token-expired`, and nothing is published until the lane's tier refreshes
 it on its next request; a credential that needs a sign-in fails it naming `ccrc codex login <id>`, and one it
 cannot use (`credential-unusable`) names `ccrc doctor`, or `ccrc update` and then `ccrc codex login <id>` after a

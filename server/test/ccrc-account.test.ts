@@ -7151,8 +7151,11 @@ describe('ccrc account remove: a codex lane takes the auth library\'s lock (code
       rosterBefore: readFileSync(roster, 'utf8'), laneOnly };
   }
 
-  /** The removal verb with the stop replaced by a probe of the auth lock, under CLOSED_AUTH_BASE. */
-  function removeProbed(home: string, lock: string): Result & { calls: string[]; ms: number } {
+  /** The removal verb with the stop replaced by a probe of the auth lock, under CLOSED_AUTH_BASE. With `timeoutMs`
+   *  it runs in a process group of its own (`spawnSyncGroup`), so a removal that blocks is ended with its children
+   *  and comes back with `timedOut` set instead of hanging the suite. */
+  function removeProbed(home: string, lock: string, opts: { timeoutMs?: number } = {}):
+    Result & { calls: string[]; ms: number; timedOut: boolean } {
     const calls = join(home, 'auth-lock-calls');
     const stubs = [
       `_codex_stop_lane() { if [ ! -e '${path.dirname(lock)}' ]; then echo auth=no-authdir; elif flock -n '${lock}' true 2>/dev/null; then echo auth=free; else echo auth=held; fi >> '${calls}'`,
@@ -7160,10 +7163,13 @@ describe('ccrc account remove: a codex lane takes the auth library\'s lock (code
       '_codex_tier_ours() { return 1; }',
     ].join('\n');
     const t0 = Date.now();
-    const r0 = spawnSync(BASH, ['-c', `. "${ccrcIn(home)}"\n${stubs}\ncmd_account remove --id codex-a`],
-      { env: { ...env(home), CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE }, encoding: 'utf8', input: '' });
+    const argv = ['-c', `. "${ccrcIn(home)}"\n${stubs}\ncmd_account remove --id codex-a`];
+    const o = { env: { ...env(home), CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE }, encoding: 'utf8' as const, input: '' };
+    const r0 = opts.timeoutMs === undefined ? spawnSync(BASH, argv, o)
+      : spawnSyncGroup(BASH, argv, { ...o, timeout: opts.timeoutMs });
     const ms = Date.now() - t0;
     return { code: r0.status ?? -1, stdout: r0.stdout ?? '', stderr: r0.stderr ?? '', ms,
+      timedOut: (r0.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT',
       calls: existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter(Boolean) : [] };
   }
 
@@ -7256,6 +7262,43 @@ describe('ccrc account remove: a codex lane takes the auth library\'s lock (code
     expect(readFileSync(target, 'utf8')).toBe('somebody else\'s file\n');
     const after = statSync(target, { bigint: true });
     expect([after.ino, after.mtimeNs, after.mode]).toEqual([before.ino, before.mtimeNs, before.mode]);
+  });
+
+  itHold('a FIFO at the auth lock path refuses codex-reap-failed (auth-lock-unusable) without opening it, nothing removed', async () => {
+    // `exec {fd}>>` on a FIFO is an O_WRONLY open with no O_NONBLOCK, which blocks until a reader comes: only the
+    // non-regular-file half of the hold's refusal stands between the removal and that unbounded wait. The spawn is
+    // bounded and grouped, so a regression comes back as `timedOut` instead of hanging the suite.
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-fifo-');
+    const made = spawnSync('mkfifo', [b.lock], { encoding: 'utf8' });
+    expect(made.status, made.stderr).toBe(0);
+    const r = removeProbed(b.home, b.lock, { timeoutMs: 15_000 });
+    expect(r.timedOut, 'the removal blocked opening a FIFO as its auth lock').toBe(false);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('codex-reap-failed');
+    expect(r.stderr).toContain('auth-lock-unusable');
+    expect(r.calls, 'the tiers were stopped although the lock could not be taken').toEqual([]);
+    nothingRemoved(b);
+    expect(lstatSync(b.lock).isFIFO(), 'the FIFO was replaced').toBe(true);
+  });
+
+  itHold('a library whose paths answer names no lock path or bound refuses codex-reap-failed (auth-status-unreadable), nothing removed', async () => {
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-nopaths-');
+    // A stand-in at the library's path that answers `paths` with an empty object: rc 0, but no `lock` and no
+    // `lockWaitS`. The hold must refuse rather than go ahead holding nothing.
+    writeFileSync(join(b.home, '.local', 'bin', 'ccgpt-auth.py'), [
+      'import sys',
+      'if sys.argv[1:2] == ["paths"]:',
+      '    print("{}")',
+      '',
+    ].join('\n'));
+    const r = removeProbed(b.home, b.lock, { timeoutMs: 15_000 });
+    expect(r.timedOut).toBe(false);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('codex-reap-failed');
+    expect(r.stderr).toContain('auth-status-unreadable');
+    expect(r.calls, 'the tiers were stopped holding nothing').toEqual([]);
+    nothingRemoved(b);
+    expect(existsSync(b.lock), 'the removal created an auth lock').toBe(false);
   });
 
   itHold('under a 0277 umask the hold leaves the lock file it created at 0600', async () => {

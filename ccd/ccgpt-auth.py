@@ -958,6 +958,15 @@ def _bars(status: Optional[dict]) -> bool:
     return state == KIND_CONFIG_ERROR and status.get("configHash") == config_hash()
 
 
+def bars(status: Optional[dict]) -> bool:
+    """The barring rule, for a reader outside this library (D-6692): True when `status`, a lane's current status as
+    `read_status` answers it, bars using the credential — its state is needs-signin, or config-error measured under
+    this library's current OAuth configuration. A config-error under another `configHash` is stale and bars nothing,
+    and `None` (no current status) bars nothing. `_bars` is the one definition and this returns its answer, so a new
+    barring state changes that one function and every reader with it."""
+    return _bars(status)
+
+
 def write_status(auth_dir: str, **fields: object) -> bool:
     """Write the lane's non-secret status file. Under `held(auth_dir)` only (a RuntimeError otherwise: the status has
     one writer at a time, as the credential does).

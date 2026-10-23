@@ -101,7 +101,7 @@ which is standard library only, so any `python3` of 3.9 or later runs it.
 refresher and every other caller only reads." This poll loads
 `ccd/ccgpt-auth.py` by its path, beside this file's own real path (under `-I`
 a sibling module is not on `sys.path`), and calls only its readers: `read`,
-`read_status`, `expired` and the pure `config_hash`. It never refreshes, never
+`read_status`, `expired` and the pure `bars`. It never refreshes, never
 takes the library's lock and never signs in. Each reading it cannot use is one
 refusal line, remedy first, and nothing is published (`_require_logged_in`):
   - `absent`: `not-logged-in`, `ccrc codex login <id>`;
@@ -269,7 +269,7 @@ def _load_auth_library():
         lib = importlib.util.module_from_spec(spec)
         sys.modules["ccgpt_auth"] = lib
         spec.loader.exec_module(lib)
-        for name in ("read", "read_status", "expired", "config_hash"):
+        for name in ("read", "read_status", "expired", "bars"):
             getattr(lib, name)
         return lib
     except (Exception, SystemExit) as e:
@@ -398,8 +398,9 @@ def _require_logged_in(lib, token_dir: str):
     `lane.json`'s `authDir`, `_token_dir` above), so an operator has a path to
     act on. A needs-signin bars before the expiry, so a dead credential is
     never answered `token-expired`; a config-error bars only when it was
-    measured under the library's current OAuth configuration
-    (`config_hash`), the rule the library's own refresher keeps.
+    measured under the library's current OAuth configuration. Whether a
+    status bars is the library's own rule, asked through `bars` (D-6692),
+    which its refresher keeps too.
     """
     r = lib.read(token_dir)
     login = f"run ccrc codex login {ACCOUNT_ID}"
@@ -411,11 +412,12 @@ def _require_logged_in(lib, token_dir: str):
         _refuse("login-required", login, f"lane {ACCOUNT_ID} holds no usable token ({r.detail}), and this "
                 "unattended poll never starts a sign-in")
     status = lib.read_status(token_dir)
-    state = status.get("state") if status is not None else None
-    if state == "needs-signin":
+    # Whether the status bars is the library's one rule (`bars`, D-6692); this
+    # poll only picks the refusal's words.
+    if lib.bars(status) and status.get("state") == "needs-signin":
         _refuse("login-required", login, f"lane {ACCOUNT_ID}'s tier recorded that its credential needs a sign-in, "
                 "and this unattended poll never starts one")
-    if state == "config-error" and status.get("configHash") == lib.config_hash():
+    if lib.bars(status):
         _refuse("credential-unusable", f"run ccrc update, then ccrc codex login {ACCOUNT_ID}",
                 "the token endpoint refused ccrc's OAuth client when the lane's tier last refreshed, and a sign-in "
                 "alone does not cure it")

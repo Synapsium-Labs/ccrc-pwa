@@ -1514,7 +1514,7 @@ D-number is defined in that plan's Deviations found. *(Added 2026-10-23.)*
   the hold answers 0 holding nothing and the stop goes ahead unserialised.
   With no `flock` binary on the box, the hold takes nothing, as the lane's own lock does, while a running tier still
   locks through the library's own Python `flock`. With no library or no `python3` on the removing shell's PATH
-  (`_codex_auth`'s rc 3), the arm is accepted, not proved safe (D-TBD-auth-hold-no-library): a running tier keeps the
+  (`_codex_auth`'s rc 3), the arm is accepted, not proved safe (D-6683): a running tier keeps the
   library it loaded at its start and runs it under the runtime's own interpreter. In either arm the tier can still
   take the lock, and a stop inside its refresh can lose a refresh token the endpoint has already rotated, leaving the
   lane to be signed in again.

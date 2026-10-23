@@ -4569,8 +4569,8 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
   });
 
   it('redact-source-unreadable\'s remedy names the codex auth library\'s causes and the log that says which (codex-bridge Stage 1, Task 10, fix round 1)', () => {
-    const i = healthLib.deriveHealth(base({ redactUnreadable: ['/home/u/.local/share/ccrc/codex/lane-a'] })).warn.find((x) => x.word === 'redact-source-unreadable');
-    expect(i?.remedy).toContain('make /home/u/.local/share/ccrc/codex/lane-a readable by this user');
+    const i = healthLib.deriveHealth(base({ redactUnreadable: ['/h/u/.local/share/ccrc/codex/lane-a'] })).warn.find((x) => x.word === 'redact-source-unreadable');
+    expect(i?.remedy).toContain('make /h/u/.local/share/ccrc/codex/lane-a readable by this user');
     expect(i?.remedy).toContain('~/ccrc/ccd/ccgpt-auth.py and python3 are present');
     expect(i?.remedy).toContain('journalctl --user -u ccd-history-sweep');
   });
