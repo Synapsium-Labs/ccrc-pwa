@@ -3756,8 +3756,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The task read starts beside pr-state, not after it. Never `Promise.all`: a failed pr-state answers
     // `unknownView`, and a task read that rejects after that must not become an unhandled rejection.
     const tasks = prTasks(id);
+    tasks.catch(() => {}); // caught from the start: a read that rejects while pr-state is pending is not unhandled
     const res = await deps.runCcd(argv);
-    if (!res.ok) { tasks.catch(() => {}); return unknownView(sweepFailureReason(res)); }
+    if (!res.ok) return unknownView(sweepFailureReason(res));
     const [first] = parsePrLines(res.stdout);
     return prView(first ?? null, await tasks, null);
   });

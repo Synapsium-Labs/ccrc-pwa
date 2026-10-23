@@ -290,13 +290,30 @@ describe('GET /api/sessions/:id/pr reads its tasks beside pr-state (D-6434)', ()
   });
 
   it('pr: a rejecting task read never breaks a failed pr-state\'s answer', async () => {
-    const { home, io } = rig(() => { throw new Error('tasks dir unreadable'); });
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: 'boom' });
+    // pr-state is GATED until the task read has thrown: a rejection nobody has caught yet, while pr-state is still
+    // pending, is an unhandled rejection, which exits the Node process (and fails vitest's run).
+    let thrown = false;
+    const { home, io } = rig(() => { thrown = true; throw new Error('tasks dir unreadable'); });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'pr-state') { await gate; return { code: 1, stdout: '', stderr: 'boom' }; }
+      return { code: 1, stdout: '', stderr: '' };
+    };
     const a = await buildServer({ ...testDeps(home, run), io });
-    const res = await a.inject({ method: 'GET', url: `/api/sessions/${ID}/pr` });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().pr).toMatchObject({ phase: 'unknown', reason: 'agent-down' });
-    await a.close();
+    try {
+      const pending = a.inject({ method: 'GET', url: `/api/sessions/${ID}/pr` });
+      await vi.waitFor(() => { expect(thrown).toBe(true); }, { timeout: 2000 });
+      // Let the rejection settle and the process see an uncaught one, if there is one, before pr-state answers.
+      await new Promise<void>((r) => setTimeout(r, 100));
+      release();
+      const res = await pending;
+      expect(res.statusCode).toBe(200);
+      expect(res.json().pr).toMatchObject({ phase: 'unknown', reason: 'agent-down' });
+    } finally {
+      release();
+      await a.close();
+    }
   });
 });
 
