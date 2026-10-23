@@ -504,6 +504,14 @@ const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegEx
   ['audit, --expire --defer-expired (no such mode)', ['ws-audit', '--session', 'x', '--expire', '--defer-expired'], false, USAGE],
   ['audit, a later duplicate --expire', ['ws-audit', '--session', 'x', '--expire', '--expire'], false, USAGE],
   ['a verb merely CONTAINING ws-expire later', ['caps', 'ws-expire'], false, null],
+  // the loose arm (fleet disk retention D-6625): its audit mints the token the loose verb trusts, so it starts protected;
+  // the census is read-only and ordinary; the verb is `ws-collect <any tail>`, already protected.
+  ['valid loose audit', ['ws-audit', '--loose-hex', 'x', '--collect'], true, null],
+  ['loose audit, --collect first', ['ws-audit', '--collect', '--loose-hex', 'x'], false, USAGE],
+  ['loose audit, an extra token', ['ws-audit', '--loose-hex', 'x', '--collect', 'extra'], false, USAGE],
+  ['loose audit, --reclaim is the session forms only', ['ws-audit', '--loose-hex', 'x', '--reclaim'], false, USAGE],
+  ['ws-collect --expect … --loose-hex …', ['ws-collect', '--expect', ANY_TOKEN, '--loose-hex', 'x'], true, null],
+  ['the census is ordinary', ['ws-audit', '--collect-census'], false, null],
   ['ws-expirex (prefix only)', ['ws-expirex'], false, null],
 ];
 
@@ -554,6 +562,7 @@ const CASE_VARIANTS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['WS-EXPIRE alone', ['WS-EXPIRE']],
   [`ws-exp${DOTTED_I}re (a non-ASCII fold)`, [`ws-exp${DOTTED_I}re`]],
   ['WS-AUDIT --SESSION x --EXPIRE', ['WS-AUDIT', '--SESSION', 'x', '--EXPIRE']],
+  ['WS-AUDIT --LOOSE-HEX x --COLLECT', ['WS-AUDIT', '--LOOSE-HEX', 'x', '--COLLECT']],
 ];
 /** Protected at the launcher although no locale measured here folds them —
  *  the superset's other half, harmless by design. A non-ASCII character stands
