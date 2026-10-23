@@ -5899,6 +5899,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   a queued pull request's branch rather than dequeuing it, so the ruling's line that the push would take #1172 out was
   wrong. The coordinator dequeued it, and the worker pushed once. The review rules on three guards that now have no
   red row alone: each is either defence in depth, kept with its paired mutant, or redundant and removed.
+- **2026-10-23 18:25 UTC — monitoring: both boxes on v0.0.587, no anomalies.** A console tap moved them from v0.0.586;
+  the server kept 5 backups, up 259M with the newer data sets.
+  `STATUS 2026-10-23T18:26:16Z fleet=v0.0.587 server=v0.0.587 health=v0.0.587 newest=v0.0.589 intent=*:dev/auto=off`
+  `backups=fleet:235M/server:7377M disk=fleet:126G/server:23G`
 
 - **2026-10-22 14:05 UTC — an operator directive: no new version for a docs-only merge.** Verbatim (in chat): "Docs
   only updates with no changes to code (PRs) should not trigger new build versioning".
