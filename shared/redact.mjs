@@ -1,9 +1,10 @@
 // THE REDACTOR'S ONE RULE TABLE (D-5867, ARCH-66 (#801); spec 2026-10-19 K7's TS half, section 2.3's redaction row).
 //
 // One implementation, as `models.mjs` is: this file runs everywhere, `redact.d.mts` types it for TypeScript callers and
-// `redact.ts` re-exports it. It is L0 and BROWSER-SAFE: it imports nothing, names no host global (`process`, `Buffer`,
-// `require`, any `node:` module) and runs nothing at load beyond building its table, because `shared/docs.ts` imports
-// it and the PWA bundles `shared/docs.ts`. A CLI form for ccd's halves lives in its own file (W5), never here.
+// `redact.ts` re-exports it. It is L0 and BROWSER-SAFE: it imports nothing, names no host global (no process object,
+// no byte-buffer class, no module loader, no built-in module specifier) and runs nothing at load beyond building its
+// table, because `shared/docs.ts` imports it and the PWA bundles `shared/docs.ts`. A CLI form for ccd's halves lives in
+// its own file (W5), never here. `docs-shared.test.ts` runs the L0 refusal patterns over this file's every byte.
 //
 // A RULE is an id and a step: `make(shapes)` returns `(text) => text`. A rule that is one pattern and one replacement
 // is built by `sub`; the three that need a loop (`secret-assigns`, `program-flags`, `token-segments`) are written as
