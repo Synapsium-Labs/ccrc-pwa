@@ -22,6 +22,7 @@ import {
   type ChildReclaimCollectInput, type ChildReclaimLaneNow, type ChildReclaimTierState,
 } from './childReclaimSweep.js';
 import { COLLECT_LANE_LIVE_MARKER } from '../../shared/switches.js';
+import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 /** A JSON object: never an array, never null. */
@@ -222,12 +223,12 @@ export type CollectWitnessWord = keyof typeof COLLECT_WITNESS_WORD_TABLE;
 
 /** The pre-lock dies of `cmd_ws_collect` the reader RECOGNISES (spec §5.10). Each acted nothing. */
 export type CollectDieWord =
-  | 'flock-unavailable' | 'lock-unopenable' | 'usage' | 'bad-token' | 'bad-session-id' | 'python3-unavailable';
+  | 'flock-unavailable' | typeof CCD_LOCK_UNOPENABLE | 'usage' | 'bad-token' | 'bad-session-id' | 'python3-unavailable';
 
 /** ccd's own message for each single-line recognised die, without its `ccd: ` prefix. Matched against the WHOLE trimmed
  *  stderr, never as a substring, so a die ccd extends no longer matches. `collect-readers.test.ts` holds these equal to
  *  `cmd_ws_collect`'s text, both ways. */
-export const COLLECT_DIE_TEXT: Readonly<Record<Exclude<CollectDieWord, 'lock-unopenable'>, string>> = {
+export const COLLECT_DIE_TEXT: Readonly<Record<Exclude<CollectDieWord, typeof CCD_LOCK_UNOPENABLE>, string>> = {
   usage: 'usage: ccd ws-collect --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]',
   'bad-token': 'bad token',
   'bad-session-id': 'bad session id',
@@ -256,8 +257,8 @@ function collectLockDie(sessionId: string, err: string): boolean {
 }
 
 function collectDie(sessionId: string, err: string): CollectDieWord | null {
-  if (collectLockDie(sessionId, err)) return 'lock-unopenable';
-  for (const word of Object.keys(COLLECT_DIE_TEXT) as Exclude<CollectDieWord, 'lock-unopenable'>[]) {
+  if (collectLockDie(sessionId, err)) return CCD_LOCK_UNOPENABLE;
+  for (const word of Object.keys(COLLECT_DIE_TEXT) as Exclude<CollectDieWord, typeof CCD_LOCK_UNOPENABLE>[]) {
     if (err === `ccd: ${COLLECT_DIE_TEXT[word]}`) return word;
   }
   return null;
@@ -297,7 +298,8 @@ function collectedOf(sessionId: string, ok: boolean, v: Readonly<Record<string, 
  *  stdout and a non-zero exit, so a document, however cut, is never read as one. */
 export function parseCollectResult(sessionId: string, ok: boolean, stdout: string, stderr: string): CollectResult {
   const out = stdout.trim();
-  const err = stderr.trim();
+  const said = readCcdRefusal(stderr);
+  const err = withoutCcdRefusal(stderr).trim();
   let v: unknown = null;
   if (out !== '') { try { v = JSON.parse(out); } catch { v = null; } }
   if (isObject(v)) {
@@ -313,6 +315,10 @@ export function parseCollectResult(sessionId: string, ok: boolean, stdout: strin
     }
   }
   if (out === '' && !ok) {
+    // The machine token first (`refusal-v1`, #560): ccd's own word for the two box dies, whatever their prose says now.
+    if (said !== null && said.act === 'collect' && (said.token === 'flock-unavailable' || said.token === CCD_LOCK_UNOPENABLE)) {
+      return { kind: 'die', word: said.token };
+    }
     const word = collectDie(sessionId, err);
     if (word !== null) return { kind: 'die', word };
   }
