@@ -13,7 +13,8 @@ W2: `2026-10-19-ccrc-history-w2-decisions.md`, the authority every W2 plan cites
 are written as their PRs become dispatchable. Wave 5h-2: `2026-10-19-ccrc-history-w5h2-redaction-and-ops.md`. W2-1:
 `2026-10-21-ccrc-history-w2-1-recall-off-and-exports.md`; W2-2a: `2026-10-22-ccrc-history-w2-2a-as-of-cut.md`; W2-5a:
 `2026-10-22-ccrc-history-w2-5a-quiz-builder.md`; W2-2b: `2026-10-22-ccrc-history-w2-2b-headless-seam.md`; W2-5b1:
-`2026-10-22-ccrc-history-w2-5b1-arms-and-judge.md`; each approved under the operator's directive of 2026-10-19.
+`2026-10-22-ccrc-history-w2-5b1-arms-and-judge.md`; W2-6: `2026-10-22-ccrc-history-w2-6-counters.md`; each approved
+under the operator's directive of 2026-10-19.
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-ridge`   Workspace: **a fresh child per wave** (one PR per child)
 
 **What this program is.** ccrc keeps its own lossless, searchable copy of every Claude Code session transcript on
@@ -36,13 +37,13 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 | 6 | W2: the replay eval and its gate (ruled Q7, Q14), in nine PRs on two lanes (rows below; W2-5b split in two, S1); the W2 decisions document is the authority | fleet + deploy | — | the build runs now; the window waits on the operator's acts (decisions §5) |
 | W2-1 | the recall-off verb and its generation checks, the per-tick presence record, the exports the deploy lane reads | fleet | #1105 | **merged** 2026-10-22 02:23Z as `cd622b2f6` at head `69105d4f9` (run 755; reviews 761 and 763; one fix round) |
 | W2-2a | the as-of cut | fleet | #1126 | **merged** 2026-10-22 15:55Z as `ecbab815e` at head `d119d6e90` (run 764; reviews 778 and 791; one fix round) |
-| W2-2b | the headless seam | fleet | #1154 | run 809, dispatched 2026-10-22 after its plan merged (#1146); wave-done at `b25a12846`; review 829 dispatched |
+| W2-2b | the headless seam | fleet | #1154 | **merged** 2026-10-23 11:50Z as `92dac5764` at head `42c9aaf24` (run 809; reviews 829 and 849; one fix round) |
 | W2-3 | `deploy/history-gate.mjs`, pure: windows, bootstrap, assignment, the gate, the quiz's labeller and admission, the open-record validator; `measure-history.py`'s raw rows and census | deploy | #856 | **merged** 2026-10-20 08:27Z as `36d0a92c1` at head `99325dc26` (run 636; reviews 664, 680 and 686; two fix rounds) |
 | W2-4 | `deploy/history-replay.mjs`, the driver core: the spawn contract, account admission, `--out`, limits and budget, preflights, step 0a and the probe | deploy | #826 | **merged** 2026-10-20 13:28Z as `780c8126c` at head `8660b6cf9` (run 637; reviews 657, 681, 696 and 701; three fix rounds) |
 | W2-5a | reconstruction, admission, the quiz builder and the open-record subcommands | deploy | #1134 | **merged** 2026-10-22 17:54Z as `c34f82830` at head `ac30619a3` (run 765; reviews 795 and 811; one fix round) |
-| W2-5b1 | the arms and the judge: `marker`, `verify` for the pilot and quiz sections, `arms` and `judge` | deploy | — | run 828; its plan merges first, then it dispatches after W2-2b merges |
+| W2-5b1 | the arms and the judge: `marker`, `verify` for the pilot and quiz sections, `arms` and `judge` | deploy | — | run 828, dispatched once W2-2b merged; in build |
 | W2-5b2 | the pilot and the verdict: `step0b`, `fidelity`, `pilot-result`, `open --amend`, `handcheck`, `report`, `open --finalize`'s derived budget, README's driver paragraph and the spec errata | deploy | — | after W2-5b1; its plan is drafted while W2-5b1 builds; merges before open-record part 1 |
-| W2-6 | the report-only counters | deploy | — | after W2-5b1; beside W2-5b2 only on a line-disjoint plan the coordinator rules on (Q29) |
+| W2-6 | the report-only counters: `deploy/history-counters.mjs`, its `count` and `combine` | deploy | — | run 851; its plan merges first (this file's PR), then it dispatches after W2-5b1 merges, beside W2-5b2 under Q29 (its plan shows the two line-disjoint) |
 | 7 | W3: steering (session-written leaves) | fleet (hook) | — | only if the operator records the W2 gate as passed |
 | 8 | W4: subagents and `touched` | fleet | — | only if the operator records the W2 gate as passed, and never before wave 5 is live |
 
@@ -722,8 +723,8 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
       - R11: README's seam paragraph goes inside "Session history: lossless recall", after the box-verbs and
         operator-verbs paragraph.
       - R12: the history-switches row names root and tier exactly as W2-D49 does, with no "(removed at W2 close)".
-  - **W2-2b (run 809, PR #1154), 2026-10-22, so far.** Every ruling below is the coordinator's, made in the operator's
-    place under the directive of 2026-10-19.
+  - **W2-2b (run 809, PR #1154), 2026-10-22 to 10-23.** Every ruling below is the coordinator's, made in the
+    operator's place under the directive of 2026-10-19.
     - Dispatched once #1146, which carried its plan, merged as `30ba2d662` and the disk cleared `ccd`'s workspace floor.
       Two claim holders' consents went to its worker with the brief: one on `single-definition.test.ts`, and one on
       README, scoped, with conditions.
@@ -739,6 +740,61 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
       line reads red, from history-export's free-space case on a full temp volume, red at the merge-base too. The last
       commit fixes a test fixture CodeQL flagged, with nothing dismissed. Re-measured clean; advanced to
       awaiting-review, and review run 829 dispatched.
+    - **Review 829** (at `b25a12846`): three Opus lenses (seam safety, correctness and pins with mutation, conformance
+      and the record), three Sonnet refuters per finding, none lost; 1 important and 5 minor confirmed, 4 refuted. All
+      eleven seam properties the brief named hold, each with a CONTROL, and 29 of 30 mutants red for their own reason.
+      The suite line's red reproduced as box state: history-export's free-space case fails on the full temp volume, at
+      the merge-base as well, and passes at the tip on a roomy one.
+      - F1 (important): the env path's post-admission read-failure arm (`readFailure` with the admitted id and
+        generation) had no red. Mutant M14, which drops them, left history-cli green, because every planted
+        `SqliteError` on the env path lands before the admission.
+      - F2: R1's reader bound is pinned by its source scan and by the narrowing direction only; widening it changes no
+        answer, because the parser enforces the same bound.
+      - F3: deleting `decideAsOfFamily`'s null-family check (M6c) reds only by a `TypeError`, not by the asserted
+        `asof-invalid`.
+      - F4 and F5, the record: the PR body counted eight commits where there are nine, and its Files paragraph missed
+        two plan edits; the plan's sentence that a headless call "reaches only the families the marker lists" was
+        false against W2-D41's widened scopes.
+      - F6: Task 6's commit touched D-6445's entry (punctuation and a blank line), against the plan's own scope, with
+        the meaning unchanged and the touch disclosed. It needed a ruling.
+    - **Ruling 8408, fix round 1:** pin F1 with the same fault as a `SqliteError`, answering exit 5
+      `store-read-failed` with exactly one counter line carrying rc 5, the resolved generation and arm `treatment`, red
+      under M14; pin F3 with a hop that lands on no row beside a row that alone would admit; F2 recorded in the PR body,
+      no change; F4 and F5 corrected in the body and the plan's sentence; F6 accepted as is, no restore, said in the
+      body. The ruling also carries what a refuted conformance finding named as worth carrying: the gate's four
+      arm-word literals ("Carried constraints", for W2-5b2).
+    - **Fix round 1 (8426):** four commits, tip `42c9aaf24`.
+      - A merge of `main` on a measured conflict (`git merge-tree` exit 1 with a tree id) in
+        `single-definition.test.ts`: #1165 and Task 1 each appended a describe at the file's end. Both are kept, main's
+        first, so every line `main` has keeps its number, which the session-hook line-citation audit relies on.
+      - F1's case, with a CONTROL; M14 reds it alone. A further commit, from the per-commit reviewer, makes the case
+        assert its own planted fault's message on stderr, so another post-admission read failure cannot keep it green.
+      - F3: plain M6c cannot red by value, since any null crashes first. The worker measured M6d instead, the fail-open
+        shape (the check deleted and null families filtered out), which reds the new case alone by its asserted
+        `asof-invalid`, and disclosed the substitution in the commit, the wave-done and the PR body.
+      - F5's sentence in the plan; the PR body patched for F2, F4, F6 and the carried residual.
+      Suites at the tip: history-cli 113 passed and 1 skipped, history-lib 1,358, single-definition 848, deviation-refs
+      31, both `tsc` runs clean. No D-number used in the round. Re-measured clean; advanced to awaiting-review, and the
+      scoped re-review run 849 dispatched.
+    - **Review 849** (at `42c9aaf24`, the round only): three Opus lenses (pins, the merge and coexistence, the record
+      and reproduction), three Sonnet refuters per finding, none lost; 1 minor confirmed, none refuted, none needing a
+      ruling. M14 and the planted-message change each red F1's case alone, and M6d F3's, for the guard's own reason. The
+      merge kept `main`'s line numbers: all 78 `single-definition.test.ts` line citations match, and the citation audit
+      passes 13 of 13. The minor: the F1 case's CONTROL title and comment say "the same fault before the admission",
+      but its marker does not list the id, so it is refused at step 1 and the planted fault never fires.
+    - **The coordinator's ruling on review 849: merge.** M6d is accepted for F3's ask, the substitution being
+      disclosed and aimed at what the ask meant; the title correction is a follow-up ("Later"); #1154's body gained
+      "Notes for review: reviews 829 and 849".
+  - **W2-2b landed:** #1154 entered the merge queue at `42c9aaf24` and merged on 2026-10-23 at 11:50Z as `92dac5764`
+    (run 809; the worker's whole-branch review, reviews 829 and 849; one fix round). Run 809 is closed. The numbers it
+    defines, each in the W2-2b plan: D-5767, D-5768, D-5769, D-6444 and D-6445. The rest of run 809's block is unused.
+  - **Disk, 2026-10-23, about 09:00Z.** The volume that holds the worktrees was short again. The removals below were
+    approved by the operator, in answer to the coordinator's question, for this programme's coordinator and another
+    programme's. That coordinator removed 55 dead `~/.cc-tmp` roots (13.95 GiB), three old Playwright Chromium builds
+    (about 1.9 GiB) and 77 `node_modules` trees in a third programme's evidence directories (22.86 GiB). This
+    programme's coordinator removed a cached Puppeteer browser and four unread Hugging Face reranker models (3.97 GiB).
+    That brought the volume back to 62 GiB free, and it has more since (125 GiB free when this entry was written).
+    Growing the volume is the operator's own act, not a coordinator's.
   - **W2-5b split in two (2026-10-22).** An Opus scoping pass against `c34f82830` (W2-5b's 18 ships, 24 carries and the
     spec errata it owns; about 9,000 to 10,500 added lines) recommended two serial PRs. Every ruling below is the
     coordinator's, made in the operator's place under the directive of 2026-10-19, and each plan names them so the
@@ -835,7 +891,76 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
       - D-6470 (Task 5): the judge's `answer_field` is capped at the reply's 16 KiB, beyond W2-D79's letter, which caps
         the reply only, so the judge's stdin is bounded.
     - Run 828 is open for W2-5b1 (wave 12), with the 20 numbers issued for it at run-open. It dispatches after W2-2b
-      merges, on the merge of this file's PR or later.
+      merges, on the merge of this file's PR or later. It was dispatched once W2-2b merged.
+  - **W2-6's plan (2026-10-22 to 10-23).** Four Opus drafters wrote one task each against `main` at `4f560398c` (W2-5a
+    and W2-5b1's plan merged, W2-2b not yet), and the coordinator ruled their open questions as U1 to U18. An Opus
+    integrator assembled it. Five Opus lenses (conformance, code reality, the counters' correctness, test discipline,
+    cross-task consistency) reviewed it, each finding with a Sonnet refuter: 33 confirmed and folded, none refuted. Two
+    were blocking, one defect two lenses found: Task 4's pin that the counter calls `turnsOf` on exactly one code line
+    was red against the counter as written. Nine were important and 22 minor. The coordinator ruled V1 to V5 on what the
+    review raised, and a convergence pass of two Opus lenses (executability, and a re-check of the counters), with
+    refuters, confirmed 5 more, all minor and folded, and refuted 3. Every count, red and fixture assumption in the plan
+    is a prediction nobody has run.
+    - The rulings, each the coordinator's, made in the operator's place under the directive of 2026-10-19:
+      - The module: U1 the counter imports the driver's exported helpers, and its refusal words are `DRIVER_REASONS`
+        under its own prefix (W2-D88 forbids only the driver importing the counter); U7 Task 1 owns the frame, the store
+        handle, the spec shape, `stratify`, the unmeasured list, the report and W2-D88's input checks in one ordered
+        function, and Tasks 2 and 3 add their specs in its shape; U18 the base is `main` after W2-5b1 merges, and Task 1
+        Step 0 checks W2-5b1's `arms` and `judge` handlers exist.
+      - A run: U2 one node per run, the strata per node, and a `combine` subcommand that sums the nodes' reports, each
+        passed with its sha, so the cross-node arm comparison is W2-6's, not W2-5b2's report's; U5 every measure is
+        called for every boundary, and answers `window-unmeasured` itself when it needs turns; U6 `count` accepts
+        `--allow-code-change` after window start only, and stamps the report `code_changed`, as `report` does (Q23).
+      - The drops: U3 the per-arm counters drop changed families (W2-D86) and assignment-unrealised ones, read from
+        each node's sha-checked `verify --section ab` output (V1 rewords it); U8 changed families are kept out of the
+        arm and producer cells and tallied apart by producer, and per-window rows carry `changed: true` (V3 adds the
+        arm).
+      - The counters: U9 echo hits read the stored `entries.provenance` with its `prov_version`, a mismatch counted
+        `prov_stale`, with no re-pairing walk; U10 untimed echo rows are counted over the positional range, boundary to
+        the next main boundary, a named residual; U11 making the span's path absolute against N's epoch cwd is a
+        reading, not a departure, and E25 states it.
+      - The tests: U4 W2-6's tests are whole describes at one interior anchor in `history-replay.test.ts`, directly
+        after W2-5a's last describe and before W2-5b1's first appended block, with no existing line edited, every
+        import and fixture inside the region and `w6c`-prefixed, and one top-level describe per task, "W2-6 Task <N>:
+        …"; U12 the single-definition pin naming the gate and the counter as `turnsOf`'s only callers lands in Task 4,
+        after the counter first calls it, so every commit stays green.
+      - The prose and the record: U13 README's paragraph names the entry and its rules, not the argv, the usage text
+        being the one spelling; U14 the paragraph sits at its own anchor, which W2-5b2's driver paragraph cannot
+        overlap, and W2-6's spec errata are its own rows only (E25), each citing its number; U15 the keep-off list
+        carried into W2-5b2's plan ("Carried constraints"); U16 the decisions document's §2 "one README line" becomes
+        "one README paragraph", amended in place by this file's PR, with no number; U17 plan-text commits are allowed
+        for build-time numbers and corrected predictions, under the task whose prediction it was.
+    - The plan defines two departures, issued for it while planning:
+      - D-6561 (Task 3): re-discovery reads a `NotebookEdit` tool_use's file from its `notebook_path`. It departs from
+        W2-D86 and the signed `COUNTERS_DEF_V1` text, which say `file_path`; that text cannot change without moving
+        `COUNTERS_DEF_V1_SHA256` in the gate, which W2-6 never touches.
+      - D-6562 (Task 2): the card measure's glue around lib's shared `cardIdsIn`, `cardWindowComplete` and
+        `decideCardDelivery` is spelled a second time in the counter, because `card.mjs`'s `deliveryOf` is
+        module-private and W2-6 never touches `ccd/**`. It departs from W2-D87's "no rule is spelled again". A parity
+        CONTROL against `card.mjs`'s `measureCardDelivery` on the same fixture store, and mutants, hold the two
+        spellings together; a boundary no copy holds answers unmeasured `boundary-uncopied`, where `card.mjs` answers
+        `none`. Moving the glue into lib is a later `ccd/**` follow-up ("Later").
+    - After the plan review (2026-10-23):
+      - V1, amending U3's wording: the per-arm counters drop every family whose verify state is not `ok`, and list each
+        state apart: `control-absent` and `control-mismatch` (W2-D23's assignment-unrealised), `treatment-named` (Q15),
+        and `unreadable` (unmeasured is never folded, W2-D84). U3's "no departure" reads "W2-D23 as extended by Q15 and
+        W2-D84's never-fold". The same state set is carried into W2-5b2's plan.
+      - V2: a verify output whose presence record has not seen the newest recall-off write (`seen_after_write` not
+        true) refuses `input-invalid`, `verify-ab-presence-stale`, after the verify-output checks, with a red-first
+        case, a CONTROL and a mutant.
+      - V3, amending U8: the dropped tallies are keyed by arm as well as producer,
+        `dropped_strata[kind][arm][producer | 'all']`.
+      - V4, the integrator's open points: the counter imports W2-5b1's `loadFinalRecord`, the one part-2 loader, and
+        Task 1 Step 1 stops if W2-5b1 did not ship it; the verify output must name the current part 2's sha, and
+        README's paragraph tells the operator that a mid-window amendment means re-running `verify --section ab` before
+        `count`; `combine` refuses node reports counted by different counter scripts; echo hits answer
+        `boundary-absent` when the store does not hold the boundary.
+      - V5, review F2: the plan's Base, its Q29 table and the PR body say W2-2b's headless-seam paragraph already sits
+        after the box-verbs paragraph on the dispatch base; README's, `lib.mjs`'s and `single-definition.test.ts`'s
+        anchors are re-measured at W2-2b's `42c9aaf24`; W2-5b2's README slot is after W2-2b's seam paragraph, or
+        wherever W2-5b2's plan puts it outside W2-6's lines. W2-6's own insertion point is unaffected.
+    - Run 851 is open for W2-6 (wave 13), with the 20 numbers issued for it at run-open. Its plan merges to `main` with
+      this file's PR, and it dispatches after W2-5b1 merges.
 - **Later (coordinator), from the build:**
   - The check after a bind runs two DISTINCT scans, over `blobs.exported_seg` and `entries.exported_seg`, on every
     check step. `exported_seg` sits after `z` and has no index, so a check spanning N steps likely reads the blob table
@@ -910,6 +1035,17 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
       until then.
     - R8's ref-survival decider moves from recall.mjs into lib before a consumer that needs R8's ref rule. W2-5b's card
       does not: its parent is W2-D35's node rule (S2).
+  - **From W2-2b's review 849, and W2-6's plan:**
+    - Correct the title and comment of history-cli's post-admission read-failure case (review 829's F1 pin). Its
+      CONTROL says "the same fault before the admission is not counted", but its marker does not list the id, so it is
+      refused `headless-unlisted` at step 1 and the planted fault never fires. Retitle it, and say step 1 where the
+      comment says step 4, or plant the same `SqliteError` on a pre-admission statement as the CONTROL.
+    - Move `card.mjs`'s card-delivery glue (the private `deliveryOf`) into lib, so that the sweep's card measure and
+      W2-6's counter call one function and D-6562's second spelling can go. It is a `ccd/**` change, which W2-6 never
+      makes.
+    - Name `deploy/history-counters.mjs` as a creator of the `history-replay-out` class in `shared/lifecycle.ts`:
+      `count` and `combine` make their `--out` through the driver's `prepareOut`, while the class names the driver as
+      its only creator. Nothing reds; it is outside W2-6's files, and W2-6's PR body names it.
 - **Later, for the operator.**
   - A way to forget a mislearned secret pair. None exists: pairs are permanent by design (D-4587). My
     recommendation is to keep it that way.
@@ -934,9 +1070,9 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 - **Order.** Part A merged first (#300), then B1 (#315), then B2 (#404), then B3 (#425), then B4 (#623), then 5h-1
   (#737), then 5h-2 (#1010), then W2-1 (#1105), which builds on them and on W2-3 (#856) and W2-4 (#826). W2-2a (fleet
   lane) and W2-5a (deploy lane) built on W2-1 alongside each other, on disjoint files, and both merged (#1126, #1134).
-  W2-2b (fleet lane, #1154), built on W2-2a, is in review. W2-5b1 (deploy lane) dispatches after W2-2b merges (W2-D2),
-  on the merge of the docs PR that carries its plan; W2-5b2 after W2-5b1 merges; W2-6 after W2-5b1, and beside W2-5b2
-  only on a plan that shows the two line-disjoint (Q29).
+  W2-2b (fleet lane, #1154), built on W2-2a, merged. W2-5b1 (deploy lane, run 828) was dispatched once W2-2b merged
+  (W2-D2) and is in build; W2-5b2 follows after W2-5b1 merges; W2-6 (run 851) after W2-5b1 too, beside W2-5b2 under Q29,
+  its plan showing the two line-disjoint.
 - **Peers.** The worker reads `GET /api/claims?project=ccrc-pwa` before each first edit of an existing file. Wave 5h's
   hot files are `ccd/history/*.mjs`, `ccd/history/recall.mjs` and the history tests; whichever PR lands second merges
   main and keeps both sides. Path-identity W3 (its plan, #1055) has this programme's acknowledgement for four
@@ -969,7 +1105,30 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
     version, found through W2-5b1's per-batch manifests (Q14). Until then, `arms` after a version move completes the
     missing arm only (W2-5b1's PR residual);
   - the spec errata W2-5b owns (E2, E7, E8, E9, E10, E11 and E19 to E24), each citing its number;
-  - W2-6 may run beside W2-5b2 on a line-disjoint plan the coordinator rules on first (Q29).
+  - from W2-2b (review 829's carry): the gate spells the arm words as literals in four places beside `ASSIGNMENT_ARMS`
+    (`deploy/history-gate.mjs`, W2-3's file), and W2-5b's arm-word scan covers the driver only;
+  - README: W2-5b2's driver paragraph goes after W2-2b's headless-seam paragraph (its last line ending "nothing is
+    counted."), before the `---` that closes the section, or wherever W2-5b2's plan puts it outside W2-6's lines (W2-6's
+    V5);
+  - from W2-6's plan (V1): the report's per-arm uptake drops exactly the families W2-6's counter drops, every family
+    whose `verify --section ab` state is not `ok`, each state listed apart:
+    - `control-absent` and `control-mismatch`: W2-D23's assignment-unrealised;
+    - `treatment-named`: Q15, a treatment family whose file names its generation leaves the comparison;
+    - `unreadable`: unmeasured is never folded (W2-D84);
+  - from W2-6's plan (U15), keep off W2-6's lines:
+    - `deploy/history-counters.mjs`, the whole file; in the driver, the names the counter imports keep their
+      signatures (`AB_STATES`, `VERIFY_AB_KIND`, `loadFinalRecord`, `loadInput`, `parseArgs`, `prepareOut`, `refuse`,
+      `DriverRefusal`), and no driver line names `turnsOf`;
+    - its README paragraph region: the card-line paragraph (`**The card line.**` to its last line), the gap where
+      W2-6's paragraph and its blank line go, and the box-verbs paragraph's first line;
+    - its spec errata rows, E25's two lines in §10.2's "The live A/B" list, and their buffer lines (the uptake bullet
+      above and the stratification bullet below);
+    - `single-definition.test.ts`'s W2-6 describe, appended at the file's end, and its buffer line, the line before it;
+    - W2-6's test block in `history-replay.test.ts`, the region after W2-5a's last describe ending at its `end of
+      W2-6's region (Q29)` marker, and the first line of W2-5b1's first appended block after it; W2-5b2's own describes
+      go at the end of the file;
+  - W2-6 runs beside W2-5b2 under Q29: its plan's Q29 table shows the two line-disjoint, and the coordinator rules on
+    W2-5b2's plan against it before dispatching them together.
 - **Operator acts, still owed, in this order on each session-hosting node:**
   1. If the node keeps its store on a volume, link `~/.ccrc/history/db` onto it (spec §9.3: a 0700 root and target).
   2. **Done on both nodes (measured 2026-10-15).** Once the node runs B2 (v0.0.195 or later), run `ccrc history
@@ -999,75 +1158,73 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 
 ## Next-wave brief
 
-One wave dispatches next: W2-5b1 (run 828, deploy lane), after W2-2b (run 809, PR #1154) merges, on the merge of the
-docs PR that carries its plan, or later (route: opus, ultracode, subagent sonnet, workflow on, compact 40). W2-2b is in
-review (run 829). The briefs of W2-2b (run 809), W2-2a (run 764), W2-5a (run 765), W2-1 (run 755), 5h-2 (run 702),
-W2-3 (run 636), W2-4 (run 637) and 5h-1 (run 626) are in this file's history. Each text is the brief as mailed, except
-that its block's numbers are described here, not listed, its base is named by the docs PR's merge rather than a SHA,
-and the coordinator is named by reference to this file's header. The mailed briefs add what the claims read at dispatch.
+One wave dispatches next: W2-6 (run 851, deploy lane), after W2-5b1 (run 828, in build) merges, on the merge of the
+docs PR that carries its plan, or later, and beside W2-5b2 under Q29 (route: opus, ultracode, subagent sonnet, workflow
+on, compact 40). Run 828's brief, W2-5b1's, was dispatched once W2-2b merged. The briefs of W2-5b1 (run 828), W2-2b
+(run 809), W2-2a (run 764), W2-5a (run 765), W2-1 (run 755), 5h-2 (run 702), W2-3 (run 636), W2-4 (run 637) and 5h-1
+(run 626) are in this file's history. Each text is the brief as mailed, except that its block's numbers are described
+here, not listed, its base is named by the docs PR's merge rather than a SHA, and the coordinator is named by reference
+to this file's header. The mailed briefs add what the claims read at dispatch.
 
 ```text
-Run 828 - programme ccrc-history, wave W2-5b1 (wave 12, deploy lane): the arms and the judge. Coordinator: the one this ledger's header names.
+Run 851 - programme ccrc-history, wave W2-6 (wave 13, deploy lane): the report-only counters. Coordinator: the one this ledger's header names.
 
-Ledger: docs/superpowers/programs/ccrc-history.md (on main). Read its W2 rows, W2-5b's split and "Carried constraints".
-Plan: docs/superpowers/plans/2026-10-22-ccrc-history-w2-5b1-arms-and-judge.md (about 8,200 lines). Read its header first, through "The PR". Then do Tasks 1-6 in order, one commit per task, as its PR section says.
-Authority: the plan's Decisions table (the coordinator's S, Q and R rulings and the four numbers it defines), then docs/superpowers/plans/2026-10-19-ccrc-history-w2-decisions.md, then the spec (rev 3.6 as amended; W2-5b1 never edits it), then the W2-5a and W2-2b plans as merged, then the merged code.
+Ledger: docs/superpowers/programs/ccrc-history.md (on main). Read its W2 rows, the W2-6 plan entry and "Carried constraints".
+Plan: docs/superpowers/plans/2026-10-22-ccrc-history-w2-6-counters.md (about 4,500 lines). Read its header first, through "The PR". Then do Tasks 1-4 in order, one commit per task, as its PR section says.
+Authority: the plan's Decisions table (the coordinator's U and V rulings, Q15, Q29 and the two numbers it defines), then the W2 decisions document (W2-D86 to W2-D88, W2-D23), then the spec (W2-6 edits only its own errata rows), then the merged plans and code.
 
 Execution skill: superpowers:subagent-driven-development.
 Commit on this workspace's own branch. Do not create or switch to a separate feature branch.
 
-What the wave ships: one PR, the plan's Goal. Files: deploy/history-replay.mjs and server/test/history-replay.test.ts, and the plan itself for build-time numbers or corrected predictions (R25). The PR creates no file. Never README.md or the spec (W2-5b2's), never ccd/**, shared/**, deploy/history-gate.mjs, deploy/measure-history.py, .github/** or the ledger. The in-place edits of earlier cases are only those R27 licenses. If a task seems to need another file or another in-place edit, stop and mail me.
+What the wave ships: one PR, the plan's Goal. Files: create deploy/history-counters.mjs; modify history-replay.test.ts (whole describes at U4's one interior anchor only), single-definition.test.ts, README.md (its own paragraph) and the spec (its own errata rows); the plan for build-time numbers or corrected predictions. Never deploy/history-replay.mjs, deploy/history-gate.mjs, deploy/measure-history.py, ccd/**, shared/**, .github/** or the ledger. W2-5b2 may build beside you (Q29): stay inside the plan's Q29 regions. If a task seems to need another file or another in-place edit, stop and mail me.
 
 What must hold (the plan's Global Constraints and Review Focus name each one's pins):
-- No arm spawn before W2-D78's checks and the gate pass (D-6468, D-6469, W2-D56, the per-node share), each refusal with the stub log absent.
-- RP1-arm's exact env, with real arm values.
-- The control payload is byte-identical to W2-5a's. The treatment payload is the card line, a blank line, then the control payload.
-- The card never names a parent hidden under asOfCut(N).
-- No arm word is spelled in the driver.
-- The judge sees no arm token and never judges a correct answer.
-- Every --record consumer re-checks gate_code first.
-- No INTERNAL exit after --out.
-- O13 holds.
+- Re-discovery and the five W2-D87 counters, per window, by arm and by producer, each from its named source.
+- Changed families and every non-ok verify state out of the arm comparison, tallied apart by arm and producer (V1, V3).
+- Unmeasured never 0; gaps reported, never repaired; the node-wide counters table never read; stores read-only.
+- The counter is never imported by the driver; turnsOf's only callers are the gate and the counter.
+- count refuses a stale presence (V2); combine refuses mixed scripts.
+- Every --record consumer re-checks gate_code first; no INTERNAL exit after --out.
 Each has a pin with a CONTROL. A gap you find: stop and mail me.
 
-Rulings: the plan's Decisions table, as written. S1, S2, Q1 to Q31 and R1 to R32 were taken by me in the operator's place under the directive of 2026-10-19, and the PR body names each so the operator can change them. Never change one yourself.
+Rulings: the plan's Decisions table, as written. U1 to U18 and V1 to V5 were taken by me in the operator's place under the directive of 2026-10-19, and the PR body names each so the operator can change them. Never change one yourself.
 
-Base: main at the merge of the docs PR that carries this plan, after W2-2b's merge, or later. Anchors were measured at c34f82830, before W2-2b. Task 1 Step 0 stops if W2-2b's lib names are missing. Re-anchor every Modify by content; line numbers are hints; the plan text is never ground truth.
+Base: main at the merge of the docs PR that carries this plan, after W2-5b1's merge, or later. Anchors: 4f560398c and W2-2b's 42c9aaf24. Task 1 Step 1 stops if W2-5b1's loadFinalRecord is missing. Re-anchor every Modify by content; line numbers are hints; the plan text is never ground truth.
 
-Measuring: run each step and record what it prints. Every red and count in the plan, and every fixture assumption (R32), is an unrun prediction: measure each, and correct a differing prediction in the task's own commit, recording measured over predicted. A red at a CONTROL is the fixture's to fix, never the guard's to weaken. Every mutant must red when its guard is removed; if one cannot, report it. A mutant applied in place is restored byte for byte (cmp) before the next. Every -t filter is a regex: keep each regex-safe and selecting at least one test. Key-shaped fixtures are assembled at runtime; non-ASCII fixtures with String.fromCharCode. Scratch goes under .superpowers/sdd/history-w2-5b1/, never git stash.
+Measuring: run each step and record what it prints. Every red and count in the plan, and every fixture assumption, is an unrun prediction: measure each, and correct a differing prediction in the task's own commit, recording measured over predicted. A red at a CONTROL is the fixture's to fix, never the guard's to weaken. Every mutant must red when its guard is removed; if one cannot, report it. A mutant applied in place is restored byte for byte (cmp) before the next. Every -t filter is a regex: keep each regex-safe and selecting at least one test. Key-shaped fixtures are assembled at runtime; non-ASCII fixtures with String.fromCharCode. Scratch goes under .superpowers/sdd/history-w2-6/, never git stash.
 
 Public repo: no private name in any file, commit message, PR title or body, and no host, account, session id, IP address or absolute home path anywhere (fixture paths in the /home/u style). Before each push, run `grep -c -i -w -F -f <(cut -f2 "$(git rev-parse --path-format=absolute --git-common-dir)/info/ccrc-private-names" | grep -v '^#')` over your added lines, your commit messages and the PR body. It must print 0. On a non-zero count, get line numbers only (grep -n ... | cut -d: -f1), judge each hit by its line, and never print a matched token.
 
 Peers: read GET /api/claims?project=ccrc-pwa before your first edit to any existing file. Any path another run holds: do not edit it; mail me the path, the lines and why. Whichever PR lands second absorbs main only on a measured conflict, by git merge, never a rebase, and keeps both sides.
 
 Live safety (on top of your skill and CLAUDE.md):
-- Never run claude, ccd, ccrc, the history shim, sweep.mjs, cli.mjs, deploy/history-replay.mjs, deploy/history-gate.mjs, deploy/measure-history.py or any ccrc history verb against the live $HOME or a live store. Never read ~/.ccrc, ~/.cc-sessions, ~/.cc-limits or any account home. Never write a headless-on marker or a recall-off file anywhere but a fixture HOME.
-- Every driver run in a test uses a fixture HOME, stub claude and ccrc binaries and a poisoned gh, as W2-4's and W2-5a's tests do. Nothing spawns a real model or spends on an account.
+- Never run claude, ccd, ccrc, the history shim, sweep.mjs, cli.mjs, deploy/history-replay.mjs, deploy/history-counters.mjs, deploy/history-gate.mjs, deploy/measure-history.py or any ccrc history verb against the live $HOME or a live store. Never read ~/.ccrc, ~/.cc-sessions, ~/.cc-limits or any account home. Never write a headless-on marker or a recall-off file anywhere but a fixture HOME; open stores read-only.
+- Tests use fixture HOMEs and fixture stores only. Nothing spawns a model.
 - Never enable a timer, or run ccrc update, rollback, deploy or rollout.
 - A test that names a live pid uses process.pid or pid 1. Never kill processes by pattern. Kill only PIDs or process groups you started.
 - The volume is short of space: keep scratch small; remove the fixtures your runs create.
 
-Suites: from inside server/, ./node_modules/.bin/vitest run test/<file>.test.ts, in the foreground, with a Bash timeout of at least 600000, one suite per tool call, never a loop. Re-run the CLAUDE.md load flakes in isolation before calling a red real. Task 6 names the whole-PR checks: run all of them.
+Suites: from inside server/, ./node_modules/.bin/vitest run test/<file>.test.ts, in the foreground, with a Bash timeout of at least 600000, one suite per tool call, never a loop. Re-run the CLAUDE.md load flakes in isolation before calling a red real. Task 4 names the whole-PR checks: run all of them.
 
 Departures:
-- The plan defines four numbers, D-6467, D-6468, D-6469 and D-6470, in its Deviations found, on main: cite them; never redefine them.
-- For a departure you find while executing, take the next unused number from this run's block: the 20 numbers issued for run 828, listed one by one in the brief as mailed.
+- The plan defines two numbers, D-6561 and D-6562, in its Deviations found, on main: cite them; never redefine them.
+- For a departure you find while executing, take the next unused number from this run's block: the 20 numbers issued for run 851, listed one by one in the brief as mailed.
 - Define it in the plan's "## Deviations found" in the same commit that first cites it, in the plan's em-dash form.
 - Never call the allocator, and never write a range, in any file or commit message. Run deviation-refs after `git fetch origin main` before each push. Name every number you used in your wave-done.
 
-Not yours: merging, rollout, the window and every operator act, W2-5b2, W2-6, every other ccrc-history PR, and the ledger.
+Not yours: merging, rollout, the window and every operator act, W2-5b2, every other ccrc-history PR, and the ledger.
 
 Before wave-done:
-- Run a whole-branch review of your own: four Opus · high lenses (correctness, the must-holds adversarially, decisions and plan conformance, does-it-reproduce) with refuters, pointed at the plan's Review Focus. Fix what it confirms.
+- Run a whole-branch review of your own: four Opus · high lenses (the counters' correctness, the strata and drops adversarially, decisions and plan conformance, does-it-reproduce) with refuters, pointed at the plan's Review Focus. Fix what it confirms.
 - Read the PR's review threads (gh api graphql, reviewThreads). A CodeQL thread left open blocks the merge even while its check reads green. Fix its cause in code; never resolve a thread or dismiss an alert yourself.
-Open the PR against main, ready for review (not a draft), titled "ccrc history wave W2-5b1: the arms and the judge", with the body Task 6 gives.
+Open the PR against main, ready for review (not a draft), titled "ccrc history wave W2-6: the report-only counters", with the body Task 4 gives.
 Wave-done when the PR is open, its checks are green, no review thread is open, and your branch tip is the PR head. Your fingerprint is the workspace branch tip.
 
-Routing (clause 13; routing-matrix row "bulk work larger than one context", as waves 2 to 11):
+Routing (clause 13; routing-matrix row "bulk work larger than one context", as waves 2 to 12):
 - main loop: Opus, ultracode, orchestrating;
 - implementer subagents: Sonnet at effort high (never below); per-task reviewer: Opus at effort high; scouts: Haiku; workflows on, compact threshold 40.
 - Name the model and effort explicitly on every Agent and agent() call.
-- Every subagent and workflow prompt opens with: "You are a subagent of the run 828 worker, not the worker. Do not invoke ccrc-worker. Never run ccrc-api, mail or claims. Return your report."
+- Every subagent and workflow prompt opens with: "You are a subagent of the run 851 worker, not the worker. Do not invoke ccrc-worker. Never run ccrc-api, mail or claims. Return your report."
 - If moved to a GPT lane, mail me at once. Commit after each task; the branch is the resume point.
 
 Questions go through your skill's AskUserQuestion rule. New build questions I rule on under the directive of 2026-10-19; acts outside the build go to the operator.

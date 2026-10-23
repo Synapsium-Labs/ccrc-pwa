@@ -146,7 +146,7 @@ function verbEnv(home: string): NodeJS.ProcessEnv {
   plant('journalctl',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/journalctl-argv"\nexit 0\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_RELEASE_BASE_URL',
-    'CCRC_BACKUP_KEEP', 'CCRC_ROLE', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+    'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_ROLE', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   // Task 11 review fix round 1 (spec-1/mut-1 CRITICAL): the harness's own
   // final check, after every plant() above — THROWS before this env can be
   // handed to any runVerb/spawn if systemd-run is not the contained front.
@@ -230,7 +230,7 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   // carries no marker either. It is also the only one `_inst_bins` places on
   // BOTH platform arms.
   writeFileSync(join(bin, 'ccd-account-auth'), '#!/bin/sh\n# account auth\n', { mode: 0o755 });
-  // The GPT lane's four, which `_inst_bins` places on both platform arms and
+  // The GPT lane's five, which `_inst_bins` places on both platform arms and
   // every role but server — so a `both`/`fleet` box has them and
   // `_uninst_tree_bins` must take them away. UNMARKED, as `_inst_atomic`
   // leaves them. `ccrc-codex` is the launcher every generated Codex wrapper
@@ -985,7 +985,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     }
   });
 
-  // The GPT lane's FOUR placed executables (`plantInstalledBox` plants them),
+  // The GPT lane's FIVE placed executables (`plantInstalledBox` plants them),
   // and never a bare `ccgpt` — on a live fleet box that name is another
   // repository's launcher (D-3478). Another repository's
   // `ccgpt-usage@.{service,timer}` pair is the other half of this case since
@@ -995,7 +995,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
   // them would delete a live unit ccrc never wrote. They must survive byte for
   // byte, their enabled instance's wants link too, and no systemctl verb may
   // name them. `itLinux`, as every other systemd-argv assertion in this file.
-  itLinux('uninstall removes the four GPT-lane executables and ccrc\'s own usage pair and instance, and leaves a ccgpt-usage@ pair and instance it never placed alone (Plan 3a Task 7)', () => {
+  itLinux('uninstall removes the five GPT-lane executables and ccrc\'s own usage pair and instance, and leaves a ccgpt-usage@ pair and instance it never placed alone (Plan 3a Task 7)', () => {
     const home = mkTmp('ccrc-uninst-ccgpt-');
     plantInstalledBox(home);
     const bin = join(home, '.local', 'bin');

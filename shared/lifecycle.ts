@@ -78,8 +78,12 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd/history/sweep.mjs'], collector: null, bound: 'store lifetime',
     tier: '~0.2-0.25 GB/year (inferred); one file per UTC month and writer, never rewritten; doctor WARNs journal-growth above 40 MB in a trailing 30 days',
     ruling: 'kept with the store; removed only with it (uninstall --purge --purge-history)' },
-  { name: 'history-switches', root: '~/.ccrc/history-off, ~/.ccrc/history-max-gb', pattern: 'O',
-    creators: ['operator shell'], collector: null, bound: 'until removed', tier: '<64 B each',
+  // W2-2b (W2-D49; D-5768): headless-on joins the switches. It is the one with content, a store line and one line per
+  // listed family, so its tier is its own. L0 imports nothing, so the tier names HEADLESS_LIST_MAX_BYTES as text and
+  // carries its KiB figure; lifecycle.test.ts holds the figure to lib's constant and to the marker grammar.
+  { name: 'history-switches', root: '~/.ccrc/history-off, ~/.ccrc/history-max-gb, ~/.ccrc/history/headless-on', pattern: 'O',
+    creators: ['operator shell'], collector: null, bound: 'until removed',
+    tier: '<64 B each; `headless-on` bounded at 64 KiB (HEADLESS_LIST_MAX_BYTES), one store line plus one line per listed family',
     ruling: 'touched by hand; persists until removed (no writer in the tree, pinned by single-definition.test.ts)' },
   // ccrc history, W1-B2 (spec 2026-10-05 §9.4): the operator's own snapshots (`doctor --backup`).
   { name: 'history-backups', root: '~/.ccrc/history/db/backups/<ts>.db, and its .<ts>.db.tmp while one is written', pattern: 'O',

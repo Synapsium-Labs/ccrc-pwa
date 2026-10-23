@@ -34,6 +34,7 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { onBlock } from './workflowTrigger.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -653,14 +654,6 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
   const WORKFLOW = join(REPO, '.github', 'workflows', 'release-main.yml');
   const wf = (): string => readFileSync(WORKFLOW, 'utf8');
 
-  it('triggers on main pushes and on NOTHING else', () => {
-    const src = wf();
-    expect(src).toMatch(/^on:\n  push:\n    branches: \[main\]$/m);
-    for (const trigger of ['tags:', 'pull_request', 'schedule:', 'workflow_dispatch', 'workflow_call']) {
-      expect(src, `release-main.yml must not also trigger on ${trigger}`).not.toContain(trigger);
-    }
-  });
-
   it('serialises: one concurrency group, never cancelling an in-flight release', () => {
     expect(wf()).toMatch(/^concurrency:\n  group: release-main\n  cancel-in-progress: false$/m);
   });
@@ -669,22 +662,124 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     expect(wf()).toMatch(/fetch-depth: 0/);
   });
 
-  it('runs prepare, attests, then publish — the bundle path handed to the script, the attest step skipped when nothing was built (D-3122)', () => {
+  it('runs prepare, compare, attests, then publish — the bundle path handed to the script, the attest step run only on an explicit release decision (D-3122, D-6499)', () => {
     const src = wf();
     expectAttestingWorkflow(src, 'release-main.yml');
     expect(src).toContain('bash deploy/release-main.sh prepare --out release-out');
+    expect(src).toContain('bash deploy/release-main.sh compare --out release-out');
     expect(src).toContain('bash deploy/release-main.sh publish --out release-out');
-    expect(src).toContain("if: hashFiles('release-out/ccrc-*.tar.gz') != ''");
+    expect(src, 'the attest gate is exactly the compare output, nothing appended').toMatch(/^        if: steps\.compare\.outputs\.release == 'true'$/m);
+    expect(src).not.toContain('hashFiles');
     expect(src).toContain('CCRC_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}');
     expect(src).toContain('GH_TOKEN: ${{ github.token }}');
     const prepare = src.search(/^        run: bash deploy\/release-main\.sh prepare /m);
+    const compare = src.search(/^        run: bash deploy\/release-main\.sh compare /m);
     const attest = src.search(/^      - uses: actions\/attest-build-provenance@v4$/m);
     const publish = src.search(/^        run: bash deploy\/release-main\.sh publish /m);
     expect(prepare).toBeGreaterThan(-1);
-    expect(attest).toBeGreaterThan(prepare);
+    expect(compare).toBeGreaterThan(prepare);
+    expect(attest).toBeGreaterThan(compare);
     expect(publish).toBeGreaterThan(attest);
     expect(src, 'the YAML must not build').not.toMatch(/npm ci|npm run|build-release\.sh/);
     expect(src, 'the YAML must not publish — the script owns the publish and its cleanup').not.toMatch(/gh release/);
+  });
+
+  // W25 (D-6397, D-6401, D-6499): every merge builds, then compare decides.
+  // The `on:` block is read by onBlock (workflowTrigger.ts), which W25-T8 in
+  // release-stable.test.ts shares.
+  const EXACT_ON = [
+    'on:',
+    '  push:',
+    '    branches: [main]',
+    "    paths-ignore: ['docs/**', '*.md']",
+  ];
+
+  // W25 (D-6511, D-6513): the trigger is the operator's, spelled once.
+  it('W25-F1: the trigger is push to main with paths-ignore of docs/** and *.md, no paths key and no other event', () => {
+    expect(onBlock(wf())).toEqual(EXACT_ON);
+  });
+
+  it('W25-F1: the block reader sees each widening and addition (the pin is not vacuous)', () => {
+    const wrap = (on: string[]): string => `name: x\n\n# note\n${on.join('\n')}\n\n# next\nconcurrency:\n  group: g\n`;
+    expect(onBlock(wrap(EXACT_ON))).toEqual(EXACT_ON);
+    const variants: string[][] = [
+      EXACT_ON.slice(0, 3),
+      EXACT_ON.map((l) => l.replace("'*.md'", "'**/*.md'")),
+      EXACT_ON.map((l) => l.replace("'docs/**'", "'**/docs/**'")),
+      [EXACT_ON[0], '  workflow_dispatch:', ...EXACT_ON.slice(1)],
+      [...EXACT_ON.slice(0, 3), "    paths: ['ccd/**']", EXACT_ON[3]],
+    ];
+    for (const v of variants) expect(onBlock(wrap(v))).not.toEqual(EXACT_ON);
+  });
+
+  // W25-F2, by behaviour (D-6512): the trigger ignores docs/** and a root
+  // *.md, so the tarball must hold no entry NAMED under docs/ and no root
+  // Markdown entry. The real builder runs in a fixture that TRACKS a docs/
+  // file and a root Markdown file, and the tarball it writes is listed; no
+  // text of the script is parsed. It checks entry names only, not bytes: a
+  // build that shipped docs bytes under another name would let the trigger
+  // skip a docs-only merge that changes the tarball, and the next run's
+  // compare would release it, so such a miss delays a release and never loses
+  // one (review 846, ruling 6).
+  it('W25-F2: the built tarball holds no entry under docs/ and no root Markdown file, though the repository tracks both', () => {
+    const home = mkTmp('build-release-w25-f2-');
+    const root = fixtureRepo(home, {
+      tag: 'v1.2.3',
+      files: { 'docs/x.md': '# a doc\n', 'docs/sub/y.txt': 'y\n', 'README.md': '# fixture readme\n', 'NOTES.md': 'notes\n' },
+    });
+    expect(git(root, 'ls-files', '--', 'docs/x.md', 'README.md').split('\n').sort(), 'the fixture tracks the files the build must leave out')
+      .toEqual(['README.md', 'docs/x.md']);
+    const out = join(home, 'out');
+    const r = runRelease(root, home, ['--out', out]);
+    expect(r.code, r.stderr).toBe(0);
+    const t = spawnSync(TAR, ['-tzf', join(out, 'ccrc-v1.2.3.tar.gz')], { encoding: 'utf8' });
+    expect(t.status, t.stderr).toBe(0);
+    const entries = t.stdout.split('\n').filter((l) => l !== '');
+    expect(entries.length, 'the listing is not empty').toBeGreaterThan(8);
+    expect(entries.map((l) => l.replace(/^\.\//, '')), 'the listing is the real tarball').toContain('install.sh');
+    expect(entries.filter((l) => /^(\.\/)?docs(\/|$)/.test(l)), 'an entry under docs/').toEqual([]);
+    expect(entries.filter((l) => /^(\.\/)?[^/]+\.md$/.test(l)), 'a root Markdown entry').toEqual([]);
+  });
+
+  it('W25-Y2: the compare step holds the token for the base check and the download, and runs the second arm', () => {
+    expect(wf()).toMatch(/^      - name: Compare the build with the newest release it contains\n        id: compare\n        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n        run: bash deploy\/release-main\.sh compare --out release-out$/m);
+  });
+
+  it('W25-Y3: the steps run in one order — checkout, setup-node, prepare, compare, attest, publish — and setup-node carries no condition', () => {
+    const src = wf();
+    const at = (re: RegExp): number => src.search(re);
+    const order = [
+      at(/^      - uses: actions\/checkout@v4$/m),
+      at(/^      - uses: actions\/setup-node@v4$/m),
+      at(/^        run: bash deploy\/release-main\.sh prepare /m),
+      at(/^        run: bash deploy\/release-main\.sh compare /m),
+      at(/^      - uses: actions\/attest-build-provenance@v4$/m),
+      at(/^        run: bash deploy\/release-main\.sh publish /m),
+    ];
+    expect(order.every((i) => i > -1), `every step is present: ${order.join(',')}`).toBe(true);
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
+    const setup = src.indexOf('      - uses: actions/setup-node@v4\n');
+    const setupBlock = src.slice(setup, src.indexOf('\n      - ', setup + 1));
+    expect(setupBlock, 'setup-node runs on every merge').not.toMatch(/^\s+if:/m);
+  });
+
+  it('W25-Y4: GH_TOKEN reaches compare and publish only; the step that installs has no env, no expression, and nothing continues on error', () => {
+    const src = wf();
+    expect(src.match(/^\s+GH_TOKEN:/gm) ?? [], 'exactly two GH_TOKEN lines: compare and publish').toHaveLength(2);
+    const stepBlock = (name: string): string => {
+      const from = src.indexOf(`      - name: ${name}`);
+      expect(from, `step ${name} is present`).toBeGreaterThan(-1);
+      const rest = src.slice(from + 1);
+      const next = rest.indexOf('\n      - ');
+      return rest.slice(0, next === -1 ? undefined : next);
+    };
+    expect(stepBlock('Compare the build with the newest release it contains')).toContain('GH_TOKEN: ${{ github.token }}');
+    expect(stepBlock('Push the tag and publish the prerelease')).toContain('GH_TOKEN: ${{ github.token }}');
+    const prepare = stepBlock('Derive the next tag and build the candidate');
+    expect(prepare).not.toContain('env:');
+    expect(prepare).not.toContain('${{');
+    expect(prepare).not.toContain('GH_TOKEN');
+    expect(src).not.toContain('continue-on-error');
   });
 });
 

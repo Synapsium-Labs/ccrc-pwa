@@ -53,16 +53,18 @@ export const TREE_FILES = [
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
-  // The GPT lane's four common executables, COPIED from the repository: the
+  // The GPT lane's five common executables, COPIED from the repository: the
   // two `.py` files (Plan 2a, placed since Plan 2b-1), and the runtime builder
   // and launcher. Plan 2b-2 wrote each of those two unplaced, then added both
   // here in the commit that made `_inst_bins` place them: an entry joins this
   // list NO EARLIER than the commit that writes its source. `_inst_bins`
-  // places all four, so a tree missing any one fails an install for a fixture
+  // places all five, so a tree missing any one fails an install for a fixture
   // reason rather than a real one. NEVER stubbed: a stub once hid a placement
   // that dies on a real tree (D-3165), the class `install-census.test.ts`'s
   // tracked-source case reds on. The launcher is `ccrc-codex`, not `ccgpt`
-  // (D-3478).
+  // (D-3478). The auth library `ccgpt-auth.py` (codex bridge Stage 1, Task 5)
+  // joined in the commit that placed it, first, as `_inst_bins` orders it.
+  'ccd/ccgpt-auth.py',
   'ccd/ccgpt-proxy.py',
   'ccd/ccgpt-usage.py',
   'ccd/ccgpt-runtime',

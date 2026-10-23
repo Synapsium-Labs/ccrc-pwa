@@ -95,7 +95,7 @@ export const DECLARED_BY: readonly DeclaredBy[];
 export const ERROR_CODES: readonly string[];
 export const CARD_PREFIX: 'History: ';
 export const COVERAGE: readonly ['this-box'];
-export const SCOPE_SOURCES: readonly ['tmux'];
+export const SCOPE_SOURCES: readonly ['tmux', 'env'];
 export const VARIANT_CAUSES: readonly ['ccd-sanitize', 'unknown'];
 export type Backend = 'anthropic' | 'other' | 'unknown';
 export const BACKENDS: readonly Backend[];
@@ -522,8 +522,51 @@ export function decideIdentity(i: { pane: string | null; tmux: TmuxRead | null }
 export interface RecallSeamValues { session: string | null; arm: string | null; asof: string | null }
 export function recallSeamEngaged(recall: RecallSeamValues): boolean;
 export function decideSeamInPane(i: { pane: string | null; recall: RecallSeamValues }): { ok: true } | ScopeRefusal<'headless-in-pane'>;
-export interface GenerationChoice { value: string | null; via: 'env' | 'registry' | 'newest' }
+// --- W2-2b Task 1: the headless seam's vocabulary and its marker (W2-D42, W2-D44, W2-D48)
+/** The W2 replay's two arms (W2-D42), frozen: the only values the seam's arm may take. */
+export const RECALL_ARMS: readonly ['control', 'treatment'];
+/** headless-on's bounds (W2-D44, chosen): bytes, and pair lines with duplicates counted. */
+export const HEADLESS_LIST_MAX_BYTES: 65536;
+export const HEADLESS_LIST_MAX_PAIRS: 1000;
+/** One listed family: its ccrc_id and its generation, '' for a legacy family (the marker spells it `-`). */
+export interface HeadlessPair { readonly ccrcId: string; readonly generation: string }
+/** A well-formed marker, frozen: its store line's store_id and its pairs in file order, duplicates kept. */
+export interface HeadlessList { readonly ok: true; readonly storeId: string; readonly pairs: readonly HeadlessPair[] }
+export function parseHeadlessList(text: string): HeadlessList | ScopeRefusal<'headless-malformed'>;
+export function formatHeadlessList(list: { storeId: string; pairs: readonly HeadlessPair[] }): string;
+/** store.mjs readBounded's answer (store.d.mts's BoundedRead), restated so this file imports nothing. */
+export type HeadlessMarkerRead = { state: 'absent' } | { state: 'unreadable' } | { state: 'over-cap' } | { state: 'value'; value: string };
+export function headlessMarkerOf(read: HeadlessMarkerRead): HeadlessList | ScopeRefusal<'headless-unarmed' | 'headless-malformed'>;
+// --- W2-2b Task 2: the headless seam's rows before the store (W2-D45, W2-D46 step 1)
+export function decideHeadless(i: {
+  recall: RecallSeamValues; paneSet: boolean; marker: HeadlessList | ScopeRefusal<'headless-unarmed' | 'headless-malformed'> | null;
+}):
+  | { ok: true; path: 'tmux' }
+  | { ok: true; path: 'headless'; session: string; arm: string; asof: string; list: { storeId: string; pairs: readonly HeadlessPair[] } }
+  | ScopeRefusal<'headless-in-pane' | 'headless-unarmed' | 'headless-malformed' | 'no-identity' | 'bad-id' | 'headless-unlisted'
+    | 'headless-arm-unknown' | 'asof-invalid'>;
+export interface GenerationChoice { value: string | null; via: 'env' | 'registry' | 'newest' | 'asof' }
 export function resolveGeneration(i: { envGen: string | null; regGen: Presence<string> }): GenerationChoice;
+// --- W2-2b Task 2: the env path's family, from CCRC_RECALL_ASOF (W2-D40, W2-D44, W2-D46 step 4)
+/** The marker's store line against this store's meta store_id, before any ASOF row is read (R3). */
+export function decideHeadlessStore(i: { list: { storeId: string; pairs: readonly HeadlessPair[] }; storeId: string | null }):
+  { ok: true } | ScopeRefusal<'headless-unlisted'>;
+/** One row of asOfFamilySql's answer: the ASOF entry, its boundary's transcript, one confirmed epoch with its family,
+ *  and the family that one merged into (one hop). */
+export interface AsOfFamilyRow {
+  readonly uuid: string; readonly entry_id: number | bigint; readonly boundary_entry_id: number | bigint | null;
+  readonly agent_id: string | null; readonly cwd: string | null; readonly cwd_real: string | null;
+  readonly session_pk: number | bigint | null; readonly ccrc_id: string | null; readonly generation: string | null;
+  readonly project: string | null; readonly merged_into: number | bigint | null;
+  readonly into_session_pk: number | bigint | null; readonly into_ccrc_id: string | null; readonly into_generation: string | null;
+  readonly into_project: string | null; readonly into_merged_into: number | bigint | null;
+}
+export function asOfFamilySql(): string;
+export function decideAsOfFamily(i: {
+  session: string; asof: string; rows: readonly AsOfFamilyRow[]; list: { storeId: string; pairs: readonly HeadlessPair[] };
+  storeId: string | null;
+}): { ok: true; via: 'asof'; generation: string; family: { ccrcId: string; project: string }; anchor: string | null }
+  | ScopeRefusal<'headless-unlisted' | 'asof-invalid'>;
 export function decideHarness(p: Presence<string>):
   { ok: true; harness: string } | ScopeRefusal<'harness-unsupported' | 'harness-unreadable'>;
 export interface ScopeInputs {
@@ -537,6 +580,9 @@ export type ScopeVerdict =
   | ScopeRefusal<'no-identity' | 'bad-args' | 'bad-id' | 'cross-project' | 'project-unreadable' | 'workspace-unreadable'>
   | { ok: true; kind: ScopeKind; source: string; id: string; generation: string | null; project: string | null; workdir: string | null };
 export function decideScope(i: ScopeInputs): ScopeVerdict;
+// --- W2-2b Task 3: the headless path's own two decisions (W2-D41, W2-D46)
+export function decideEnvProject(i: { verdict: Extract<ScopeVerdict, { ok: true }>; storedProject: string }): { ok: true } | ScopeRefusal<'cross-project'>;
+export function decideHeadlessRead(i: { recallOff: 'off' | 'stale' | 'none'; arm: string }): { ok: true } | { ok: false; rc: 8; why: 'recall-off' | 'arm' };
 export function displayPrefixes(ids: readonly string[]): Map<string, string>;
 export type ScopedId =
   | { kind: 'ok'; id: string } | { kind: 'out-of-scope' } | { kind: 'not-found' }

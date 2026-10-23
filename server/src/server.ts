@@ -44,7 +44,7 @@ import { SessionStream, parseSince } from './sessionws.js';
 // D-5866: the one verb question. Its own line, so the ccdargv import above is left as it stands.
 import { ccdCan } from './ccdargv.js';
 import {
-  sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, interruptVerdict, moveDialogTab, submitEnter,
+  sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, interruptVerdict, moveDialogTab, submitEnter, refusalShape,
   type InterruptVerdict, type SendDeps,
 } from './inject/send.js';
 import { answerAsk, readAskAnswer, type AskDeps } from './inject/ask.js';
@@ -2204,6 +2204,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const res = await sendPrompt(sendDeps, id, body.text, { onDraft: body.replaceDraft === true ? 'replace' : 'refuse', attachments });
+    if (!res.ok) console.warn(`ccrc-server: prompt ${id}: ${res.error} ${refusalShape(res)}`); // D-6366: countable, no text
     return res.ok ? res : reply.code(409).send(res);
   });
 

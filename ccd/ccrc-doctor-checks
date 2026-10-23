@@ -6747,7 +6747,7 @@ _check_codex() {
       "make it a directory this user can list again (ccrc creates it with mode 0700: chmod 700 $root), or move aside by hand whatever sits there, then re-run doctor; ccrc never changes or removes it for you"
   fi
   _dr_codex_usage_surplus_rows "$surplus_rc"
-  _dr_cx_report "${#lanes[@]} Codex lane(s): $(_dr_cx_join ', ' ${DRX_OK[@]+"${DRX_OK[@]}"}); runtime ${DRX_RUNTIME:-unmeasured}; the four GPT-lane executables match the shipped tree${DR_CODEX_USAGE_BOX_NOTE:+; $DR_CODEX_USAGE_BOX_NOTE}"
+  _dr_cx_report "${#lanes[@]} Codex lane(s): $(_dr_cx_join ', ' ${DRX_OK[@]+"${DRX_OK[@]}"}); runtime ${DRX_RUNTIME:-unmeasured}; the five GPT-lane executables match the shipped tree${DR_CODEX_USAGE_BOX_NOTE:+; $DR_CODEX_USAGE_BOX_NOTE}"
 }
 
 # ── _fix_codex — the cure `ccrc doctor --fix` runs for `codex` ────────────
@@ -6994,14 +6994,14 @@ _dr_cx_report() {   # <PASS detail>
   return "$worst"
 }
 
-# The four GPT-lane executables against the SHIPPED TREE, byte for byte —
+# The five GPT-lane executables against the SHIPPED TREE, byte for byte —
 # `_check_skills`' rule (the tree the stamp names, `$BOX_TREE_DIR/ccd`), with
 # `cmp` where that check uses `diff`. `CODEX_LANE_BINS` is `_inst_bins`'
 # GPT-lane gate, in its order, declared ONCE at file level so `_fix_codex`
 # (Task 8) restores exactly what this compares. ccrc-doctor.test.ts pins this
 # one line to `GPT_LANE_BINS`, which ccrc-install.test.ts pins to the gate
-# itself, so a fifth executable or a rename reds there before this list can drift.
-CODEX_LANE_BINS=(ccgpt-proxy.py ccgpt-usage.py ccgpt-runtime ccrc-codex)
+# itself, so a sixth executable or a rename reds there before this list can drift.
+CODEX_LANE_BINS=(ccgpt-auth.py ccgpt-proxy.py ccgpt-usage.py ccgpt-runtime ccrc-codex)
 _dr_cx_bins() {
   local tree="$BOX_TREE_DIR/ccd" bin="$HOME/.local/bin" name have_cmp=1
   local -a notree=() missing=() drift=() uncompared=()
@@ -7020,7 +7020,7 @@ _dr_cx_bins() {
   done
   [ "${#notree[@]}" -eq 0 ] || _dr_cx_fail "the shipped tree ($tree) has no $(_dr_cx_join ', ' "${notree[@]}"), so nothing on this box says what the GPT-lane executables should be" \
     "run 'ccrc update' (or 'ccrc install' from a checkout) to place the shipped tree"
-  [ "${#missing[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${missing[@]}") missing from \$HOME/.local/bin, or not executable — every Codex lane needs all four" \
+  [ "${#missing[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${missing[@]}") missing from \$HOME/.local/bin, or not executable — every Codex lane needs all five" \
     "run 'ccrc update' (or 'ccrc install' from a checkout): it places them from the shipped tree on every role but server"
   [ "${#drift[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${drift[@]}") in \$HOME/.local/bin differ from the shipped tree's copies in $tree, so a lane would run bytes this build did not ship" \
     "run 'ccrc update' (or 'ccrc install' from a checkout): it re-places them from the shipped tree"

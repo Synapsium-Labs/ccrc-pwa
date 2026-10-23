@@ -5339,8 +5339,8 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     'SEGMENT_HEADER_BYTES',
     // W2-1 Task 2 (W2-D12, W2-D30): the presence record's meta prefix and its two bounds, read by lib's planner, sweep.mjs and (the prefix) the gate.
     'RECALL_OFF_META', 'RECALL_OFF_GAP_MS', 'RECALL_OFF_SCAN_MAX',
-    // W2-1 Task 4 (W2-D30): the presence record's meta keys, each built from RECALL_OFF_META.
-    'RECALL_OFF_KEYS'] as const;
+    // W2-1 Task 4 (W2-D30): the presence record's meta keys, each built from RECALL_OFF_META. W2-2b Task 1 (W2-D12): the arm words and the marker's bounds.
+    'RECALL_OFF_KEYS', 'RECALL_ARMS', 'HEADLESS_LIST_MAX_BYTES', 'HEADLESS_LIST_MAX_PAIRS'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -8492,5 +8492,75 @@ describe('ccrc history W2-2a Task 5: the three CCRC_RECALL_ seam names are each 
       'ccd/history/cli.mjs: read CCRC_RECALL_ASOF',
       'ccd/history/cli.mjs: read CCRC_RECALL_SESSION',
     ]);
+  });
+});
+
+// CODEX BRIDGE STAGE 1, TASK 5: the auth library's three side-file names (its checkpoint, its status file and its lock)
+// are module constants in ccd/ccgpt-auth.py, and bash and node ask its CLI (`paths`, `secret-files`, `status`) rather
+// than spell them. APPENDED, for the reason the blocks above state: session-hook.test.ts's citation audit cites this
+// file by line. Tests, docs and README.md are prose about the names and are left out; the credential's own name,
+// `auth.json`, is not covered (it is spelled in today's bash, tests and README).
+describe('codex bridge Stage 1 Task 5: the auth library owns its side-file names', () => {
+  it('the auth library\'s side-file names are spelled only in ccd/ccgpt-auth.py', () => {
+    const r = spawnSync('git', ['-C', ccrcRoot, 'grep', '-l', '-e', 'auth.pending.json', '-e', 'auth.status.json',
+      '-e', 'auth.json.lock', '--', ':!server/test', ':!docs', ':!README.md'], { encoding: 'utf8' });
+    // git grep answers 1 for "no match" and above 1 for a failure: neither is the answer this row expects, and a
+    // failure must never read as an empty list.
+    if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/ccgpt-auth.py']);
+  });
+});
+
+// W2-2b Task 1 (W2-D42, W2-D44; O13, O14): the marker's parser, formatter and fold are defined once, in lib.mjs; the arm
+// words are quoted once in ccd/history, on RECALL_ARMS' line; and every ccd/history code line naming headless-on's path
+// is historyPaths' own field or the marker's one read, store.mjs's readBounded at HEADLESS_LIST_MAX_BYTES with no link
+// followed. APPENDED after the last describe, for the reason the CCRC HISTORY block above states; no import line is
+// added. HISTORY_MJS, ALL_MJS, stallCode and rel are that block's. KNOWN WIDTH: a path held in a variable, or
+// destructured, on one line and read on a later line is not seen, as O13's own scans say of theirs.
+describe('ccrc history: the headless marker and the arm words are defined once, in lib.mjs, and read one way (W2-D42, W2-D44; W2-2b Task 1)', () => {
+  const DEFINES = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:function\\s+${name}\\s*\\(|(?:const|let|var)\\s+${name}\\s*=)`);
+  const definers = (name: string): string[] =>
+    ALL_MJS.filter((f) => stallCode(f).split('\n').some((l) => DEFINES(name).test(l))).map(rel).sort();
+  /** An arm word in quotes of any kind. */
+  const ARM_WORD = /(['"`])(?:control|treatment)\1/;
+  /** A code line naming the marker's path, through a historyPaths(...) result or SWITCHES. */
+  const NAMES_MARKER = /\.headlessOn\b/;
+  /** historyPaths' own field: the one line that may name the path without reading it. */
+  const PATHS_FIELD = 'headlessOn: `${h}/${SWITCHES.headlessOn}`,';
+  /** The marker's one read (W2-D44): readBounded at the marker's bound, no link followed. */
+  const ONE_READ = /\breadBounded\([^,]*\.headlessOn, (?:[A-Za-z_$][\w$]*\.)?HEADLESS_LIST_MAX_BYTES, false\)/;
+  const allowed = (l: string): boolean => !NAMES_MARKER.test(l) || l.trim() === PATHS_FIELD || ONE_READ.test(l);
+
+  it('CONTROL: the patterns see a definition and not a call, a quoted arm word and not a longer one, and the one read and nothing else', () => {
+    expect(DEFINES('parseHeadlessList').test('export function parseHeadlessList(text) {')).toBe(true);
+    expect(DEFINES('headlessMarkerOf').test('const headlessMarkerOf = (r) => r;')).toBe(true);
+    expect(DEFINES('formatHeadlessList').test('  const t = formatHeadlessList({ storeId, pairs });')).toBe(false);
+    expect(ARM_WORD.test("export const RECALL_ARMS = Object.freeze(['control', 'treatment']);")).toBe(true);
+    expect(ARM_WORD.test('if (arm === "treatment") return 8;')).toBe(true);
+    expect(ARM_WORD.test("const c = 'controls';")).toBe(false);
+    expect(ARM_WORD.test('if (RECALL_ARMS.includes(arm)) return null;')).toBe(false);
+    expect(allowed('  const m = headlessMarkerOf(readBounded(P.headlessOn, HEADLESS_LIST_MAX_BYTES, false));')).toBe(true);
+    expect(allowed('  const m = healthStore.readBounded(historyPaths(home).headlessOn, healthLib.HEADLESS_LIST_MAX_BYTES, false);')).toBe(true);
+    expect(allowed(`    ${PATHS_FIELD}`)).toBe(true);
+    expect(allowed('  const m = readBounded(P.headlessOn, CONTROL_FILE_MAX, false);')).toBe(false);
+    expect(allowed('  const m = readBounded(P.headlessOn, HEADLESS_LIST_MAX_BYTES, true);')).toBe(false);
+    expect(allowed("  const t = readFileSync(historyPaths(home).headlessOn, 'utf8');")).toBe(false);
+    expect(allowed('  const armed = existsSync(P.headlessOn);')).toBe(false);
+    expect(allowed('  const p = P.headlessOn;')).toBe(false);
+  });
+
+  it('parseHeadlessList, formatHeadlessList and headlessMarkerOf are each defined in lib.mjs alone', () => {
+    for (const name of ['parseHeadlessList', 'formatHeadlessList', 'headlessMarkerOf']) expect(definers(name), name).toEqual(['ccd/history/lib.mjs']);
+  });
+
+  it('the arm words are quoted once in ccd/history, on RECALL_ARMS\' line in lib.mjs (W2-D42)', () => {
+    const hits = HISTORY_MJS.flatMap((f) => stallCode(f).split('\n').filter((l) => ARM_WORD.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(hits).toEqual(["ccd/history/lib.mjs: export const RECALL_ARMS = Object.freeze(['control', 'treatment']);"]);
+  });
+
+  it('every ccd/history code line naming headless-on\'s path is historyPaths\' field or the marker\'s one bounded read (W2-D44; O13)', () => {
+    const named = HISTORY_MJS.flatMap((f) => stallCode(f).split('\n').filter((l) => NAMES_MARKER.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(named, 'CONTROL: historyPaths names it').toContain(`ccd/history/lib.mjs: ${PATHS_FIELD}`);
+    expect(named.filter((x) => !allowed(x.slice(x.indexOf(': ') + 2)))).toEqual([]);
   });
 });
