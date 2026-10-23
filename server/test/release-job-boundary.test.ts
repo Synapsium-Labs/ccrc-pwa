@@ -209,7 +209,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: release-\${{ needs.build.outputs.tag }}
           path: \${{ runner.temp }}/release-in
@@ -247,9 +247,12 @@ const BUILD_PERMS = '    permissions:\n      contents: read\n';
 const BUILD_PERSIST = '          persist-credentials: false\n';
 const RECEIVE_STEP = '      - name: receive\n';
 const beforeReceive = (step: string): string => plant(RECEIVE_STEP, `${step}${RECEIVE_STEP}`);
-const PUBLISH_CHECKOUT = '      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n      - uses: actions/download-artifact@v4\n';
+const PUBLISH_CHECKOUT = '      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n      - uses: actions/download-artifact@v7\n';
 const publishCheckoutWith = (line: string): string =>
-  plant(PUBLISH_CHECKOUT, `      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n${line}      - uses: actions/download-artifact@v4\n`);
+  plant(PUBLISH_CHECKOUT, `      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n${line}      - uses: actions/download-artifact@v7\n`);
+const DOWNLOAD_USES = '      - uses: actions/download-artifact@v7\n';
+const downloadAt = (ref: string): string => plant(DOWNLOAD_USES, `      - uses: actions/download-artifact@${ref}\n`);
+const SHA = 'd3f86a106a0bac45b974a628896c90dbdf5c8093';
 const DOWNLOAD_PATH = '          path: ${{ runner.temp }}/release-in\n';
 const PUBLISH_TIMEOUT = '    timeout-minutes: 10\n';
 const afterPublishTimeout = (lines: string): string => plant(PUBLISH_TIMEOUT, `${PUBLISH_TIMEOUT}${lines}`);
@@ -323,11 +326,22 @@ const PLANTED: Array<[string, string, string]> = [
   ['a build step reads a secret across a block scalar line', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', '        id: compare\n        env:\n          GH_TOKEN: |-\n            ${{\n            secrets.PAT }}\n'), 'runs the install or the build and reads secrets'],
   ['the publish step reads a secret after a newline', plant('          GH_TOKEN: ${{ github.token }}\n          CCRC_BUNDLE_PATH', '          GH_TOKEN: "${{\\nsecrets.PAT }}"\n          CCRC_BUNDLE_PATH'), 'holds a write permission and reads secrets'],
   ['a publish step passes NEEDS in capitals under another key', receiveEnv('          OTHER: ${{ NEEDS.build.outputs.tag }}\n'), 'passes a build output into env.OTHER'],
+  // D-6726: the download's extractor. @v4 to @v6 write an `x/../../..` entry
+  // outside the download path; only a major spelled `@vN` at the floor or
+  // later is read, never a minor pin or a SHA.
+  ['the download is at @v4, whose extractor lets an entry out', downloadAt('v4'), 'uses actions/download-artifact@v4, not @v7 or later'],
+  ['the download is at @v6, the last major with the old extractor', downloadAt('v6'), 'uses actions/download-artifact@v6, not @v7 or later'],
+  ['the download is pinned to a minor', downloadAt('v7.0.0'), 'uses actions/download-artifact@v7.0.0, not @v7 or later'],
+  ['the download is pinned to a SHA', downloadAt(SHA), `uses actions/download-artifact@${SHA}, not @v7 or later`],
 ];
 
 describe('W26-G4: the guard sees each planted breach', () => {
   it('the clean base holds', () => {
     expect(boundaryFindings(BASE, BASE_ALLOW, readCalled)).toEqual([]);
+  });
+
+  it('a download at a later major than the floor holds (D-6726: "or later")', () => {
+    expect(boundaryFindings(downloadAt('v8'), BASE_ALLOW, readCalled)).toEqual([]);
   });
 
   it.each(PLANTED)('%s', (_name, yaml, phrase) => {

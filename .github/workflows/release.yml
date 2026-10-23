@@ -119,9 +119,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Into the runner's temp directory, outside the checkout, so nothing the
-      # build job sent can land on a script this job runs (D-6657).
-      - uses: actions/download-artifact@v4
+      # Into the runner's temp directory, outside the checkout (D-6657). The
+      # path alone keeps nothing off this job's scripts: what does is the
+      # extractor. This major's (unzip-stream 0.3.4) confines every zip entry
+      # under release-in, where @v4 to @v6 wrote an `x/../../..` entry outside
+      # it; and verify refuses any entry but the two expected files (D-6726).
+      - uses: actions/download-artifact@v7
         with:
           name: release-${{ github.ref_name }}
           path: ${{ runner.temp }}/release-in

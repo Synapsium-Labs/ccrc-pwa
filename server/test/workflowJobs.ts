@@ -13,7 +13,8 @@
 //     carry nothing else that chooses which code runs: no job-level env,
 //     defaults or container, no step shell, no step environment variable
 //     outside that step's own allowed set, and a build output only where the
-//     allowance says (D-6648, D-6651, D-6663);
+//     allowance says (D-6648, D-6651, D-6663); and its download is at a major
+//     whose extractor confines every entry, spelled `@vN` (D-6726);
 //   - NO job reads a secret: none carries a `secrets:` key, and the whole
 //     parsed job, every key at every depth (container and services env, a
 //     step's if: and working-directory included), never names the `secrets`
@@ -177,11 +178,28 @@ export const WITH_KEYS: Readonly<Record<string, readonly string[]>> = {
 };
 const EXACT_WITH = new Set(['actions/download-artifact', 'actions/attest-build-provenance']);
 
-/** The download writes the build's files; at exactly this path, under the
- *  runner's temp directory, they can never land on the checkout's scripts
- *  the next step runs. Exact, because a second expression in the path
- *  (`${{ env.D }}`) is a value this guard cannot read (D-6663). */
+/** The download writes the build's files at exactly this path, under the
+ *  runner's temp directory and outside the checkout (D-6657). Exact, because
+ *  a second expression in the path (`${{ env.D }}`) is a value this guard
+ *  cannot read (D-6663). The path alone keeps no entry off the checkout's
+ *  scripts; the extractor's major does (DOWNLOAD_MAJOR_FLOOR). */
 const DOWNLOAD_PATH = '${{ runner.temp }}/release-in';
+
+/** The oldest `actions/download-artifact` major a write job may use (D-6726).
+ *  `@v4` to `@v6` bundle unzip-stream 0.3.1, whose only guard strips a
+ *  LEADING run of `../`, so a zip entry `x/../../../<f>` lands outside the
+ *  download path, beside the write token and OIDC; `@v7` bundles 0.3.4, which
+ *  rewrites every `..` segment and so confines every entry under the path,
+ *  where verify's exact file set refuses it. Spelled `@v<N>` exactly: a minor
+ *  pin or a SHA names code this floor has not read, and an older major reopens
+ *  the hole. */
+const DOWNLOAD_MAJOR_FLOOR = 7;
+/** What a `uses:` names after its first `@`, or '' when it names nothing. */
+const actionRef = (uses: string): string => (uses.includes('@') ? uses.slice(uses.indexOf('@') + 1) : '');
+const downloadMajorHolds = (uses: string): boolean => {
+  const m = /^v([1-9]\d*)$/.exec(actionRef(uses));
+  return m !== null && Number(m[1]) >= DOWNLOAD_MAJOR_FLOOR;
+};
 
 const WRITE_JOB_KEYS = new Set(['runs-on', 'timeout-minutes', 'permissions', 'needs', 'if', 'steps']);
 const WRITE_STEP_KEYS = new Set(['name', 'id', 'if', 'uses', 'with', 'env', 'run']);
@@ -347,6 +365,9 @@ export function boundaryFindings(
             }
             if (name === 'actions/download-artifact' && 'path' in s.with && s.with.path !== DOWNLOAD_PATH) {
               out.push(`${J} downloads the build's artifact into ${shown(s.with.path)}, not exactly ${DOWNLOAD_PATH}`);
+            }
+            if (name === 'actions/download-artifact' && !downloadMajorHolds(s.uses)) {
+              out.push(`${J} uses actions/download-artifact@${actionRef(s.uses)}, not @v${DOWNLOAD_MAJOR_FLOOR} or later`);
             }
           }
         }
