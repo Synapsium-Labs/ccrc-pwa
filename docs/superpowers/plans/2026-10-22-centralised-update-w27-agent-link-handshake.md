@@ -1802,3 +1802,17 @@ no behaviour, no new row, no deviation issued; D-6724 and D-6725 are amended in 
   - the changed prose was scanned for private names, hosts and paths: no hits.
 - `git merge-tree` against origin/main at `24551a5b6` is clean (rc 0), and no open PR's head touches either file.
 - The change ships no file, so it should cut no release.
+- **Fix round 1** (review 884, the coordinator's rulings recorded above), on the same branch, text only:
+  - commit "W27-L24 pins the pair, the close() clear and the unref (wave 30, review 884)" (`cda888442`): W27-L24's
+    comment says the row pins the `close()` clear and the `unref` together, each of which alone lets the child exit,
+    so neither M41 nor M35 reds it and only M45, both removed, does. The plan's matching lines (Review Focus, the
+    M35 and M45 rows, D-6725's amendment, this note's first round) say the same, with M41 named beside M35 as
+    equivalent for this row; ruling (a)'s record is unchanged, with the one amendment line under it. This note's
+    "as the load-flake list says" now cites CLAUDE.md's general sentence that the suites are load-sensitive, and
+    `remote-liveness` is not added to any list;
+  - the commit after it records this block only. No code line changed;
+  - gates, one file at a time, in the foreground, at `cda888442`, at a load average of 13 to 19: `remote-liveness` 25 of
+    25 on three whole-file runs; `docs-parity` 54, `citations` 4, `topology-clean` 60, `private-names` 47, `dtbd` 1,
+    `deviation-refs` 31 (after `git fetch origin main`), `GROWTH_CHECK=1` `growth-check` 45. The round's prose was
+    scanned for private names, hosts and paths: no hits;
+  - `git merge-tree` against origin/main at `e836349aa` is clean (rc 0).
