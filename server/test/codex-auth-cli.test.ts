@@ -199,7 +199,7 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
       expect(cred).toMatchObject({ access_token: t.access, refresh_token: t.refresh, id_token: t.id, account_id: 'acct-fixture-signin' });
       const st = JSON.parse(readFileSync(statusPath(dir), 'utf8')) as Record<string, unknown>;
       expect(st).toMatchObject({ state: 'ok', lastErrorCode: null, lastRequestId: 'req-fixture-signin', unsaved: false });
-      // D-TBD-signin-last-refresh (pending the controller's ruling): a sign-in records its own time as lastRefreshAt.
+      // D-6556 (pending the controller's ruling): a sign-in records its own time as lastRefreshAt.
       expect(typeof st.lastRefreshAt).toBe('number');
       expect(lstatSync(statusPath(dir)).mode & 0o7777).toBe(0o600);
       expect(existsSync(pendingPath(dir))).toBe(false);
@@ -422,7 +422,7 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
 
   // Every try's rename lands and its directory fsync fails (enospc-fsyncdir:3): the file holds the sign-in's record,
   // so the sign-in is signed in, the status is ok with unsaved false, and nothing is kept in memory, which the second
-  // op in the same process reads (D-TBD-signin-landed-rename).
+  // op in the same process reads (D-6557).
   it('signin whose rename lands and whose directory fsync fails is signed-in, and keeps nothing unsaved', async () => {
     const home = mkTmp('codex-auth-enospc-dir-');
     const dir = laneDir(home);

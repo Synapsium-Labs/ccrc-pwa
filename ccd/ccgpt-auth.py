@@ -1564,7 +1564,7 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
        (the one-shot CLI that signs in exits next, so no later holder in this process could re-run the commit), and
        the status is `ok` with `unsaved` false. Only the directory entry's durability is unconfirmed; a crash that
        brings the old file back leaves that status bound to the new file's identity, so it is no longer current
-       (D-TBD-signin-landed-rename). Answers `"signed-in"`.
+       (D-6557). Answers `"signed-in"`.
     With CCRC_CODEX_AUTH_BASE set, one stderr line names it and its URL before the first request."""
     stream = sys.stdout if out is None else out
     wait = DEVICE_TIMEOUT_S if timeout_s is None else timeout_s
@@ -1608,7 +1608,7 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
                     break
             if not saved:
                 # A try that failed only AFTER its rename (the directory's fsync) left the sign-in's record in the
-                # file: the sign-in is signed in (D-TBD-signin-landed-rename).
+                # file: the sign-in is signed in (D-6557).
                 on_disk = _read_file(auth_dir)
                 landed = (on_disk.access_token == record["access_token"]
                           and on_disk.refresh_token == record["refresh_token"])
