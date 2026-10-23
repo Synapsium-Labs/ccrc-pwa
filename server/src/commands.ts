@@ -84,9 +84,9 @@ function answerOf(listings: readonly Listing[]): SlashCommand[] | null {
 }
 
 /** The session's skills from the most recent full listing in a bounded tail of its transcript, then the deltas
- *  after it. Four chunks back from EOF; with no full listing there, the head's last one; a read that does not
- *  answer, or no full listing anywhere, is no skills. Never reads the file whole (an intended change from the
- *  last listing of any kind, D-6434). */
+ *  after it. Four chunks back from EOF; with no full listing there, the head's last one plus the window's deltas;
+ *  a read that does not answer, or no full listing anywhere, is no skills. Never reads the file whole (an intended
+ *  change from the last listing of any kind, D-6434). */
 async function transcriptSkills(io: FleetIO, file: string): Promise<SlashCommand[]> {
   const st = await io.statMeasured(file);
   if (!st.ok) return [];
@@ -108,7 +108,9 @@ async function transcriptSkills(io: FleetIO, file: string): Promise<SlashCommand
   // partial JSON line never parses, so listingsIn would skip it anyway.
   const end = head.bytes.length < READ_FROM_MAX_BYTES ? head.bytes.length : head.bytes.lastIndexOf(10) + 1;
   const lines = wholeLines({ bytes: head.bytes.subarray(0, end), cut: 0, start: 0 });
-  return answerOf(listingsIn(lines)) ?? [];
+  // The window holds no full listing, only deltas, and all of them are newer than the head (the head is the first
+  // chunk, wholly before the window): they follow the head's answer. Window deltas alone never answer.
+  return answerOf([...listingsIn(lines), ...seen]) ?? [];
 }
 
 /** Built-ins plus the session's skills (from its transcript's skill_listing). */

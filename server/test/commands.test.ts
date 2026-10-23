@@ -435,6 +435,29 @@ describe('GET /api/sessions/:id/commands reads a bounded tail (D-6434)', () => {
     expect(names(await rig(file))).toEqual(['a']);
   });
 
+  it('no full listing in four chunks: the head\'s listing, then the window\'s deltas', async () => {
+    // Head: full H (a, b). The window (the last four chunks) holds no full listing but two deltas, D1 (c) then D2
+    // (b, renewed); a DIFFERENT full listing X sits in the fifth chunk back. Expect the head's answer, then D1, D2.
+    const S = CHUNK * 6;
+    const head = bytes(full('- a: from the head\n- b: old description'));
+    const x = bytes(full('- x: from the fifth chunk'));
+    const d1 = bytes(delta('- c: added in the window'));
+    const d2 = bytes(delta('- b: new description'));
+    const toX = Math.floor(S / 4) - head.length; // x lands inside [S - 5 chunks, S - 4 chunks)
+    const toD1 = Math.floor(S / 2) - (head.length + toX + x.length);
+    const toD2 = 5000;
+    const toEnd = S - (head.length + toX + x.length + toD1 + d1.length + toD2 + d2.length);
+    const all = Buffer.concat([head, bytes(filler(toX)), x, bytes(filler(toD1)), d1, bytes(filler(toD2)), d2, bytes(filler(toEnd))]);
+    expect(all.length).toBe(S);
+    expect(all.indexOf(x)).toBeLessThanOrEqual(S - 4 * CHUNK - x.length);
+    expect(all.indexOf(d1)).toBeGreaterThanOrEqual(S - 4 * CHUNK);
+    expect((await rig(all)).skills).toEqual([
+      { name: 'a', desc: 'from the head', kind: 'skill' },
+      { name: 'b', desc: 'new description', kind: 'skill' },
+      { name: 'c', desc: 'added in the window', kind: 'skill' },
+    ]);
+  });
+
   it('deltas and no full listing: built-ins only', async () => {
     const file = bytes(delta('- a: one'), filler(4000), delta('- b: two'), filler(4000));
     expect((await rig(file)).skills).toEqual([]);
