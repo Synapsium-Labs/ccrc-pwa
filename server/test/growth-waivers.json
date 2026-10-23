@@ -14,6 +14,13 @@
       "d": "D-6693",
       "reason": "codex bridge Stage 1 wave 2: ccd/ccrc's codex callers move onto the auth library (login signs in through it, start and status read its status, account removal takes its lock, the litellm tier's started record hashes it, and a failed runtime build leaves that tier running), measured +128 net code lines against the merge-base",
       "added": "2026-10-23"
+    },
+    {
+      "file": "ccd/ccd",
+      "maxDelta": 159,
+      "d": "D-6632",
+      "reason": "disk retention DR-20: rung 9's nested-repository rescue and the box-local scratch-rescue verb are bash that must sit beside the ladder they extend (ccd sources only accounts.sh, so there is no sourced-library path for these helpers), measured +149 net code lines against the merge-base",
+      "added": "2026-10-23"
     }
   ]
 }
