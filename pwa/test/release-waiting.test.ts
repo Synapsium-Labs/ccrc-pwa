@@ -1,7 +1,8 @@
 // releaseWaiting (D-6327): which release waits, and the sentence that names it — the decision the fleet's update line
-// and Settings › Updates both read. Moved unchanged from update-banner.test.tsx (the banner's "speaks" and "stays
-// silent" cases): the same fixtures, case names and expected strings, asserted on the pure functions instead of a
-// rendered component.
+// and Settings › Updates both read. The cases come from update-banner.test.tsx (the banner's "speaks" and "stays
+// silent" cases), with the same fixtures and expected strings, but they are re-asserted on the pure functions instead
+// of a rendered banner, which was necessary because the component was deleted. The first case was renamed ("renders
+// on a newer release…" became "names a newer release…"), and its `role="status"` assertion went with the banner.
 import { describe, expect, it } from 'vitest';
 import type { FleetHealth, NodeWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
