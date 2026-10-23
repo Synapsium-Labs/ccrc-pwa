@@ -1613,7 +1613,9 @@ export function producerOfCopy(rows, summaryIndex) {
  *  value layer's sources. The other half, every account's declared
  *  `exec.secretsFile`, arrives at runtime from the roster (the shim's
  *  `--secrets`), so no account list is in source. `exec.authDir` is never
- *  named: nothing in ccrc opens it.
+ *  named here, because an authDir is per-row roster data: the roster half
+ *  brings each codex lane's credential and checkpoint, which the shim asks the
+ *  auth library for (`secret-files`; codex-bridge Stage 1, Task 10).
  *  D-4205 D-4201 */
 export const SECRET_SOURCES = Object.freeze([
   Object.freeze({ glob: '.cc-secrets/*' }),

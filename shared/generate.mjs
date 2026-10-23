@@ -224,6 +224,17 @@ function idArray(ids) {
  * old rule. Never read or opened by ccd — it stats the path, the file holds a
  * secret.
  *
+ * ── `_ccrc_auth_dir` ──
+ *
+ * A codex row's `exec.authDir`, HOME-relative; nothing at rc 0 for any other
+ * row and for an unknown id (codex-bridge Stage 1, Task 10). Its one consumer
+ * is history's sweep shim (`ccd/ccd-history-sweep`), which asks the auth
+ * library (`ccd/ccgpt-auth.py secret-files`) which files under that directory
+ * hold a secret and registers each as a redaction source. Emitted ALWAYS, an
+ * empty `case` for a roster with no codex row, so `declare -F _ccrc_auth_dir`
+ * is the shim's version probe: an accounts.sh from before this function names
+ * no authDir, and the sweep then registers none, as before.
+ *
  * @param {import('./roster.js').Roster} roster
  * @returns {string}
  */
@@ -311,6 +322,18 @@ export function generateAccountsSh(roster) {
     .map(([a, sf]) => `    ${a.id}) printf '%s\\n' "${dqEscape(sf)}" ;;`)
     .join('\n');
 
+  // One arm per codex row, read from both producers' shapes exactly as
+  // `secretsArms` is: `parseRoster` nests `authDir` under `exec`,
+  // `rosterFromJson` flattens it beside `execKind` (its `codexTopology`,
+  // `shared/roster-json.mjs`). Only a codex row carries the field, and an
+  // unvalidated non-string gets no arm. `printf` and `dqEscape`d for the same
+  // reason as the secrets file: this function trusts no value it was handed.
+  const authDirArms = roster.byIdLengthDesc
+    .map((a) => [a, a.exec ? a.exec.authDir : a.authDir])
+    .filter(([, ad]) => typeof ad === 'string')
+    .map(([a, ad]) => `    ${a.id}) printf '%s\\n' "${dqEscape(ad)}" ;;`)
+    .join('\n');
+
   // `CCRC_SUBAGENT_CLASSES` — the two classes a session's `subagent` routing
   // field may name (routing spec 2026-09-14 §5.1), PROJECTED from
   // `shared/models.mjs`'s `SUBAGENT_CLASSES` so ccd validates against the one
@@ -359,6 +382,11 @@ ${poolArms}
 _ccrc_secrets_file() {
   case "$1" in
 ${secretsArms}
+  esac
+}
+_ccrc_auth_dir() {
+  case "$1" in
+${authDirArms}
   esac
 }
 `;

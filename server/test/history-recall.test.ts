@@ -34,6 +34,8 @@ import { brotliDecompressSync as t16brotli, brotliCompressSync as t16brotliCompr
 import { randomBytes as t16random, createHash as t18createHash } from 'node:crypto';
 import { DEFAULT_TEST_ROSTER as t18roster } from './helpers.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+// Every spawn that can run the auth library's code names a closed auth endpoint (codex-bridge Stage 1's rule).
+import { CLOSED_AUTH_BASE as c49AuthBase } from './codexAuthFixture.js';
 
 removeTmpFixturesEachTest();
 
@@ -4081,7 +4083,7 @@ describe.skipIf(process.platform === 'darwin')('C59: redaction before every cut,
   }, HEAVY);
 });
 
-describe.skipIf(process.platform === 'darwin')('C49: gateway keys redacted by roster; the loader opens nothing under exec.authDir (Task 18)', () => {
+describe.skipIf(process.platform === 'darwin')('C49: gateway keys and each codex credential redacted by roster (Task 18; codex-bridge Stage 1)', () => {
   const ID = 'claude-a-x18c49';
   const T = 'a1800003';
   const U = t18uuid(T, 0);
@@ -4089,8 +4091,11 @@ describe.skipIf(process.platform === 'darwin')('C49: gateway keys redacted by ro
   const SKEY = ['s', 'k-', t18hex(24)].join('');
   const GWK = t18alnum(40);
   const Z = t18alnum(40);
+  /** A value in the status file, which the library keeps beside the credential and never names a secret. */
+  const W = t18alnum(40);
   const AUTH_DIR = '.local/share/ccrc/codex/codex-a';
   let box: rH.HistoryBox;
+  let statusFile = '';
   const cli = (args: string[]): T18Run => rH.runCli(box, args, { env: rH.withPane(box, ID) });
 
   beforeAll(() => {
@@ -4104,14 +4109,21 @@ describe.skipIf(process.platform === 'darwin')('C49: gateway keys redacted by ro
     t18secret(box, '.ccrc/codex/codex-a/runtime.env', `LITELLM_MASTER_KEY=${SKEY}\n`);
     t18secret(box, '.config/x18-gw/gw.env', `GW_UPSTREAM_KEY=${GWK}\n`);
     t18secret(box, `${AUTH_DIR}/auth.json`, JSON.stringify({ access_token: Z }));
+    // The status file's name is the library's (`paths`), never spelled here.
+    const paths = spawnSync('python3', ['-IS', path.join(rH.REPO, 'ccd', 'ccgpt-auth.py'), 'paths', '--auth-dir', path.join(box.home, AUTH_DIR)],
+      { encoding: 'utf8', env: { ...box.env, CCRC_CODEX_AUTH_BASE: c49AuthBase } });
+    expect(paths.status, paths.stderr).toBe(0);
+    statusFile = String((JSON.parse(paths.stdout) as { status: string }).status);
+    t18secret(box, path.relative(box.home, statusFile), JSON.stringify({ version: 1, lastRequestId: W }));
     rH.seedFamily(box, { id: ID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000c018', uuid: U, rows: [
       rFx.userRow({ uuid: e(1), ts: t18ts(1), sessionId: U, text: `zqc49 lane key ${SKEY} end` }),
       rFx.userRow({ uuid: e(2), ts: t18ts(2), parentUuid: e(1), sessionId: U, text: `zqc49 gateway ${GWK} end` }),
       rFx.userRow({ uuid: e(3), ts: t18ts(3), parentUuid: e(2), sessionId: U, text: `zqc49 oauth ${Z} end` }),
+      rFx.userRow({ uuid: e(4), ts: t18ts(4), parentUuid: e(3), sessionId: U, text: `zqc49 status ${W} end` }),
     ] });
     // The shim reads the roster's declared secretsFile from accounts.sh and passes it to the sweep (§5.1), which
     // records its pairs in redact_hashes; the CLI, which sources no bash, uses those (§8.3 layer 1).
-    const r = rH.runShim(box);
+    const r = rH.runShim(box, [], { env: { CCRC_CODEX_AUTH_BASE: c49AuthBase } });
     expect(r.code, r.stderr).toBe(0);
   }, 240_000);
 
@@ -4125,22 +4137,61 @@ describe.skipIf(process.platform === 'darwin')('C49: gateway keys redacted by ro
     expect(t18leaks([t18ftsBytes(box)], SKEY.toLowerCase()), 'the sweep indexed the codex lane\'s key redacted: neither fixture value leaves a term (C49, rev 3.5)').toEqual([]);
   }, HEAVY);
 
-  it('the value under exec.authDir is never loaded: it prints (no shape catches it), no pair holds it, and an unreadable file there is never read', (ctx) => {
-    expect(cli(['expand', e(3)]).stdout).toContain(Z);
-    const db = rH.openStoreRO(box);
-    try {
-      const n = (db.prepare('SELECT count(*) AS n FROM redact_hashes WHERE len = ? AND sha256 = ?')
-        .get(Z.length, t18createHash('sha256').update(Z).digest()) as { n: number }).n;
-      expect(n).toBe(0);
-    } finally { db.close(); }
+  it('the credential under exec.authDir is a source: its value is redacted and a pair holds it, a 0000 one is listed unreadable, and the status file beside it is never loaded', (ctx) => {
+    const pairs = (v: string): number => {
+      const db = rH.openStoreRO(box);
+      try {
+        return (db.prepare('SELECT count(*) AS n FROM redact_hashes WHERE len = ? AND sha256 = ?')
+          .get(v.length, t18createHash('sha256').update(v).digest()) as { n: number }).n;
+      } finally { db.close(); }
+    };
+    const outs = [cli(['expand', e(3)]).stdout, cli(['expand', e(3), '--json']).stdout, cli(['grep', 'zqc49', '--json']).stdout];
+    expect(outs[0], 'CONTROL: the row is printed').toContain('zqc49 oauth');
+    expect(t18leaks(outs, Z), 'the credential\'s value is redacted').toEqual([]);
+    expect(pairs(Z), 'a pair holds the credential\'s value').toBe(1);
+    // The status file is no secret source: the library names only the credential and its checkpoint.
+    expect(fs.existsSync(statusFile), 'CONTROL: the status file is planted').toBe(true);
+    expect(cli(['expand', e(4)]).stdout, 'the status file\'s value prints: it was never loaded').toContain(W);
+    expect(pairs(W)).toBe(0);
     if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
     const auth = path.join(box.home, AUTH_DIR, 'auth.json');
     fs.chmodSync(auth, 0o000);
     try {
-      expect(rH.runShim(box).code).toBe(0);
+      expect(rH.runShim(box, [], { env: { CCRC_CODEX_AUTH_BASE: c49AuthBase } }).code).toBe(0);
       const st = rH.runCli(box, ['status', '--json']);
-      expect(st.json?.['redact_unreadable'] as string[]).not.toContain(auth);
+      expect(st.json?.['redact_unreadable'] as string[], 'a 0000 credential is an unreadable source now').toContain(auth);
     } finally { fs.chmodSync(auth, 0o600); }
+  }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('C49b: when the library cannot answer, the codex authDir is an unreadable redaction source (codex-bridge Stage 1, Task 10)', () => {
+  const AUTH_DIR = '.local/share/ccrc/codex/codex-a';
+  let box: rH.HistoryBox;
+  let stubDir = '';
+
+  beforeAll(() => {
+    const roster = structuredClone(t18roster) as { version: number; accounts: Record<string, unknown>[] };
+    roster.accounts.push({
+      id: 'codex-a', label: 'codex-a', configDirSuffix: '.claude-codex-a', homeAble: false, hue: 'amber', telemetry: 'codex',
+      exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir: AUTH_DIR },
+    });
+    box = rH.makeHistoryBox('ccrc-hist-x18c49b-', { roster });
+    t18secret(box, `${AUTH_DIR}/auth.json`, JSON.stringify({ access_token: t18alnum(40) }));
+    // A python3 that exits 1, first on PATH: the library cannot answer.
+    stubDir = path.join(box.home, 'python3-stub');
+    fs.mkdirSync(stubDir, { recursive: true });
+    fs.writeFileSync(path.join(stubDir, 'python3'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  }, 240_000);
+
+  it('a python3 that exits 1: redact_unreadable names the authDir, and the shim\'s stderr holds one line naming the lane and it', () => {
+    const dir = path.join(box.home, AUTH_DIR);
+    const r = rH.runShim(box, [], { env: { PATH: `${stubDir}:${box.env['PATH'] ?? ''}`, CCRC_CODEX_AUTH_BASE: c49AuthBase } });
+    expect(r.code, r.stderr).toBe(0);
+    const lines = r.stderr.split('\n').filter((l) => l.includes(dir));
+    expect(lines, r.stderr).toHaveLength(1);
+    expect(lines[0]).toContain('codex-a');
+    const st = rH.runCli(box, ['status', '--json']);
+    expect(st.json?.['redact_unreadable'] as string[]).toContain(dir);
   }, HEAVY);
 });
 

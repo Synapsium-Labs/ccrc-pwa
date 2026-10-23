@@ -409,12 +409,26 @@ describe('the sweep: skeleton, store open and refusals, and the shim', () => {
 
   it('parseSweepArgv: the shim\'s grammar, exactly', () => {
     expect(parseSweepArgv(['--secrets', '/s/a', '/s/b', '--', '/h/one', '/h/two'])).toEqual({
-      op: null, opArgs: [], rosterUnreadable: false, secrets: ['/s/a', '/s/b'], homes: ['/h/one', '/h/two'],
+      op: null, opArgs: [], rosterUnreadable: false, unanswered: [], secrets: ['/s/a', '/s/b'], homes: ['/h/one', '/h/two'],
     });
     expect(parseSweepArgv(['--op', 'import', '--apply', '--roster-unreadable', '--secrets', '--'])).toEqual({
-      op: 'import', opArgs: ['--apply'], rosterUnreadable: true, secrets: [], homes: [],
+      op: 'import', opArgs: ['--apply'], rosterUnreadable: true, unanswered: [], secrets: [], homes: [],
     });
     for (const bad of [[], ['--', '/h'], ['--secrets', '/s'], ['--op', '--secrets', '--'], ['--op', 'Import', '--secrets', '--']]) {
+      expect(parseSweepArgv(bad), JSON.stringify(bad)).toEqual({ error: 'bad-args' });
+    }
+  });
+
+  it('parseSweepArgv: each --unanswered path after --roster-unreadable and before --secrets, where an op\'s arguments stop too (codex-bridge Stage 1, Task 10)', () => {
+    expect(parseSweepArgv(['--unanswered', '/h/lane-a/auth', '--unanswered', '/h/lane-b/auth', '--secrets', '/s/a', '--', '/h/one'])).toEqual({
+      op: null, opArgs: [], rosterUnreadable: false, unanswered: ['/h/lane-a/auth', '/h/lane-b/auth'], secrets: ['/s/a'], homes: ['/h/one'],
+    });
+    expect(parseSweepArgv(['--op', 'import', '--apply', '--unanswered', '/h/lane-a/auth', '--secrets', '--'])).toEqual({
+      op: 'import', opArgs: ['--apply'], rosterUnreadable: false, unanswered: ['/h/lane-a/auth'], secrets: [], homes: [],
+    });
+    // No path; no path at the end; a relative path; out of order (before --roster-unreadable).
+    for (const bad of [['--unanswered', '--secrets', '--'], ['--unanswered'], ['--unanswered', 'relative/auth', '--secrets', '--'],
+      ['--unanswered', '/h/lane-a/auth', '--roster-unreadable', '--secrets', '--']]) {
       expect(parseSweepArgv(bad), JSON.stringify(bad)).toEqual({ error: 'bad-args' });
     }
   });
