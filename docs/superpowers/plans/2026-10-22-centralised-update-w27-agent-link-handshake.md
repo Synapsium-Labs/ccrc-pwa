@@ -90,7 +90,7 @@ sixteen numbers starting at D-6514. Every citation below is `path:line` at the p
 > The dispatched worker runs it under the `ccrc-worker` skill. The brief carries only this wave's specifics: this
 > plan's path, the task range, the claim groups and the deviation block.
 
-**Goal:** no attempt to reach the agent can wait more than `readyTimeoutMs` (15 s by default) from the moment its
+**Goal:** no attempt to reach the agent can wait more than `connectTimeoutMs` (15 s by default) from the moment its
 socket is created to the agent's `ready`, whatever phase it is stuck in: TCP connect, an upgrade never answered, an
 upgrade answered a byte at a time, or a hello never answered. A stuck attempt is terminated and the existing
 `onClose` path reconnects it with the existing backoff. The post-ready heartbeat, unchanged, gains the row it never
@@ -101,11 +101,12 @@ most 30 s) before the next attempt, against 65 minutes measured.
 **Architecture:** one file of source, `server/src/remote/client.ts`, an L4 delivery file. It imports `ws`, and the
 architecture spec calls it "the agent link, an L4 platform file"
 (docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md:80).
-- `RemoteFleetConfig` gains `readyTimeoutMs?: number`, a test seam beside `heartbeatMs`, with
-  `DEFAULT_READY_TIMEOUT_MS = 15_000` (D-6516). `index.ts` is untouched.
-- `connect()` arms `armReadyDeadline(ws)` right after `this.socket = ws`. The deadline is a one-shot `setTimeout`,
-  `unref`'d like the other two client timers, that is never cleared. When it fires it re-checks the facts, and acts
-  only on the socket it captured (D-6514, D-6517).
+- `RemoteFleetConfig` carries `connectTimeoutMs?: number`, a test seam beside `heartbeatMs`, with
+  `DEFAULT_CONNECT_TIMEOUT_MS = 15_000` (D-6516, amended on main's #1160). `index.ts` is untouched.
+- `connect()` arms `armConnectDeadline(ws)` right after `this.socket = ws`. The deadline is main's stored timer,
+  `connectTimer`, `unref`'d like the other two client timers (`this.connectTimer.unref?.()`), cleared in `onReady`,
+  `onClose` and `close()` and at each arm. When it fires it re-checks the facts, and acts only on the socket it
+  captured (D-6514, D-6517, D-6724).
 - A private `note(kind, text)` writes `console.warn('ccrc-server: agent link: …')` lines, once per kind per episode,
   and `onReady` closes the episode with one recovery line (D-6520). Nothing goes on `FleetState`, nothing on the wire.
 - No `handshakeTimeout` (D-6514), no TCP keepalive (D-6518), no earlier heartbeat (D-6519), no agent change, no
@@ -166,7 +167,8 @@ One PR, from this workspace's own branch.
     - `onClose` (:532-553): `code` and `reason` parameters, the `lost`, `never-ready` and failed-attempt bookkeeping,
       and the `refused` note (D-6527);
     - `startHeartbeat` (:593-611): one `note` call before the terminate (:601);
-    - new `armReadyDeadline` and `note`, placed after `stopHeartbeat` (:613-616), and the module functions
+    - `armConnectDeadline` (main's #1160 method, whose expiry now writes this wave's line through the new `note`),
+      and `note`, placed after `stopHeartbeat` (:613-616), and the module functions
       `preReadyPhase` and `refusalReason` (D-6529), placed after `isRecord` (:79);
     - new module types `LinkLine` and `LinkEpisode`, placed after `PtyListener` (:71).
   - `server/test/remoteHelpers.ts`: the comment above `connectToAgent` (:36-38).
@@ -197,8 +199,8 @@ One PR, from this workspace's own branch.
     nothing of its frame alive …'`, :247): the deadline's closure captures the socket and the client, never a frame.
   - `single-definition.test.ts`'s single reader of `frame.ops` in `client.ts`: untouched.
 - **No numeric citation in any added code or test line** (`citations.test.ts`, the D-5893 ratchet; its corpus is every
-  code file outside `docs/`). Cite a symbol (`client.ts#armReadyDeadline`, `agent/src/server.ts#handleConnection`) or a
-  row name. This plan's `path:line` anchors are for reading only.
+  code file outside `docs/`). Cite a symbol (`client.ts#armConnectDeadline`, `agent/src/server.ts#handleConnection`)
+  or a row name. This plan's `path:line` anchors are for reading only.
 - **Log lines** are `console.warn('ccrc-server: agent link: …')`, never `req.log` (the server runs with
   `logger: false`). They never print the agent URL, the token or any frame.
 - **Hermetic tests.** Loopback listeners on `127.0.0.1` port 0 only, real timers, no fixture HOME needed (the peers
@@ -237,7 +239,7 @@ One PR, from this workspace's own branch.
 ## Review Focus
 
 - **Every pre-ready phase is bounded by one wall clock.** An unanswered upgrade, a trickled upgrade and an unanswered
-  hello each end within `readyTimeoutMs` plus scheduling: rows W27-L1 to W27-L4. A TCP connect that hangs has NO
+  hello each end within `connectTimeoutMs` plus scheduling: rows W27-L1 to W27-L4. A TCP connect that hangs has NO
   hermetic row: every peer here is a listening loopback socket, so the kernel completes the TCP handshake at once,
   and a loopback port that accepts no TCP refuses at once instead of hanging (no listener in Node leaves SYNs
   unanswered). What a row CAN pin is that the clock is already running before the TCP connect completes: W27-L12
@@ -273,10 +275,11 @@ One PR, from this workspace's own branch.
   terminated and retried, each retry costing it one handshake, at the grown backoff (up to 30 s). Such an agent would
   also fail the heartbeat after `ready` (about 30 to 45 s), so the deadline is not the stricter of the two by much.
   A healthy agent answers within one round trip (`handleConnection` sends `ready` synchronously).
-- **Never-cleared timers.** At most one deadline per attempt is alive, each for at most `readyTimeoutMs`, `unref`'d, so
-  none keeps the process alive. Its closure holds the attempt's socket and the client, both already reachable while
-  the attempt lives; a closed socket is held up to 15 s longer. Nothing holds a request frame (the D-5513 row stays
-  green).
+- **The deadline's timer.** At most one deadline per attempt is alive, each for at most `connectTimeoutMs`, `unref`'d
+  (`connectTimer.unref?.()`), so none keeps the process alive. It is main's stored timer, `connectTimer`, cleared in
+  `onReady`, `onClose` and `close()` and at each arm, with the fire-time check kept (D-6724). Its closure holds the
+  attempt's socket and the client, both already reachable while the attempt lives; until it is cleared a closed
+  socket is held, at most 15 s longer. Nothing holds a request frame (the D-5513 row stays green).
 - **Log volume.** An episode prints at most three opening lines and one recovery line: its opener (`lost`, `no-pong`,
   `never-ready` or `no-ready`), if a later attempt in it hangs, one `no-ready`, and, if the agent refuses a hello with
   a close code from 4400 to 4499, one `refused` (D-6527). `lost` and `no-pong` need a ready
@@ -350,16 +353,18 @@ the task (below).
 Review 852's fix round re-measured M1 to M23 on the final 25 rows and measured M24 to M36 (As built). Where the
 campaign measured otherwise than this table claimed, the Expected red column is corrected and says so (M3, M4, M21,
 M25, M31). The probe column of M24 to M36 reads "measured in review 852's fix round". Review 860's fix round adds
-M37 and M38, the window mutants (probe column "measured in review 860's fix round").
+M37 and M38, the window mutants (probe column "measured in review 860's fix round"). The fix round on main's #1160
+(D-6724) respells M1, M3, M5, M18 and M35 to the landed names and adds M39 to M44, the clears and the two halves of the
+guard.
 
 | # | Guard (task) | Mutation | Expected red (at least), at the task's end | Planning probe: mutant / restored |
 |---|---|---|---|---|
-| M1 | the deadline is armed per attempt (T2) | delete the `this.armReadyDeadline(ws)` call in `connect` | W27-L1, L2, L3, L4, L12 | probe: red L1, L2, L3, L4, L6, L9; restored 10/10 green |
+| M1 | the deadline is armed per attempt (T2) | delete the `this.armConnectDeadline(ws)` call in `connect` | W27-L1, L2, L3, L4, L12 | probe: red L1, L2, L3, L4, L6, L9; restored 10/10 green |
 | M2 | it is armed at socket creation, not at `open` (T2) | move the call into the `open` handler | W27-L1, L2, L4, L12 (L3 stays green) | probe: red L1, L2, L4, L9; restored 10/10 green |
-| M3 | it is a wall clock, not an idle timer (T2) | delete the call and pass `{ handshakeTimeout: this.cfg.readyTimeoutMs }` to `new WebSocket` | W27-L2, L3, and (amended on review 852) L1 through Task 3's line assertion: the idle timer ends the silent upgrade, but as a `never-ready` boot line, not a `no ready within` line; L4 stays green | probe: red L1, L2, L3, L6, L9; restored 10/10 green |
+| M3 | it is a wall clock, not an idle timer (T2) | delete the call and pass `{ handshakeTimeout: this.cfg.connectTimeoutMs }` to `new WebSocket` | W27-L2, L3, and (amended on review 852) L1 through Task 3's line assertion: the idle timer ends the silent upgrade, but as a `never-ready` boot line, not a `no ready within` line; L4 stays green | probe: red L1, L2, L3, L6, L9; restored 10/10 green |
 | M4 | a ready link is left alone (T2) | delete `if (this.ready) return;` from the deadline (amended on review 852: from Task 3 the guard is M4b's `if (ws !== this.socket \|\| this.ready) return;`, this spelling has no anchor, and M4 is now the same edit as M4b) | W27-L5 | probe: red L5; restored 10/10 green |
 | M4b | the same guard as Task 3 ships it (T3) | delete `\|\| this.ready` from the deadline's guard `if (ws !== this.socket \|\| this.ready) return;` | W27-L5 (a `no ready within 1000ms (ready not sent)` line and a second accept) | unmeasured: added in review |
-| M5 | the seam reaches the deadline (T2) | the constructor sets `readyTimeoutMs: DEFAULT_READY_TIMEOUT_MS`, ignoring `cfg` | W27-L1, L2, L3, L4, L12 (15 s is past each 5 to 8 s wait) | probe: red L1, L2, L3, L4, L6, L9; restored 10/10 green |
+| M5 | the seam reaches the deadline (T2) | the constructor sets `connectTimeoutMs: DEFAULT_CONNECT_TIMEOUT_MS`, ignoring `cfg` | W27-L1, L2, L3, L4, L12 (15 s is past each 5 to 8 s wait) | probe: red L1, L2, L3, L4, L6, L9; restored 10/10 green |
 | M6 | the heartbeat ends a silent ready link (pinned, T1) | delete `this.socket?.terminate()` in the miss-limit branch | W27-L8 | probe: red L8; restored 10/10 green |
 | M7 | a leftover deadline says nothing (T3) | delete `ws !== this.socket \|\|` from the deadline's guard | W27-L6, L7 (each prints a `(closed)` line) | probe (first draft): red L6, L7, L10; restored 10/10 green |
 | M8 | one line per kind per episode (T3) | delete the `ep.logged.has(kind)` return in `note` | W27-L9 | probe: red L9; restored 10/10 green |
@@ -372,7 +377,7 @@ M37 and M38, the window mutants (probe column "measured in review 860's fix roun
 | M15 | `ready` closes the episode, so the next stretch logs afresh (T3) | delete `this.episode = null;` in `onReady` | W27-L8 (its third line repeats `ready again`, the second `no pong` is suppressed) | unmeasured: added in review |
 | M16 | the boot stretch is logged at its first failed attempt (T3) | in `onClose`, replace the two lines `const ep = this.episode ?? this.note('never-ready', …); ep.failedAttempts++;` with exactly `const ep = this.episode; if (ep) ep.failedAttempts++;` (never `ep?.failedAttempts++`, a SyntaxError that runs no row) | W27-L6, L11 (no `never-ready` line) | unmeasured: added in review |
 | M17 | only the boot stretch prints `never-ready` (T3) | in `onClose`, replace `this.episode ?? this.note('never-ready', …)` with the bare `this.note('never-ready', …)` | W27-L9, L10 (an extra `never-ready` line) | unmeasured: added in review |
-| M18 | the deadline is armed at socket creation, before the TCP connect completes (T2) | in `connect`, replace `this.armReadyDeadline(ws);` with `(ws as unknown as { _req: import('node:http').ClientRequest })._req.once('socket', (s) => s.once('connect', () => this.armReadyDeadline(ws)));` (`ws` keeps its request as `_req`, websocket.js `initAsClient`) | W27-L12 (attempt 0 writes its upgrade) | revision probe of the shape, not the row: armed on `connect`, the upgrade was written, 3 of 3 |
+| M18 | the deadline is armed at socket creation, before the TCP connect completes (T2) | in `connect`, replace `this.armConnectDeadline(ws);` with `(ws as unknown as { _req: import('node:http').ClientRequest })._req.once('socket', (s) => s.once('connect', () => this.armConnectDeadline(ws)));` (`ws` keeps its request as `_req`, websocket.js `initAsClient`) | W27-L12 (attempt 0 writes its upgrade) | revision probe of the shape, not the row: armed on `connect`, the upgrade was written, 3 of 3 |
 | M19 | a socket that cannot be created is logged (T3) | delete the `this.note('never-ready', …)` call in `connect`'s `catch` | W27-L13 (no line) | unmeasured: added in review |
 | M20 | that line never prints the URL (T3) | in that call, print `err.message` in place of `err.name` | W27-L13 (the line reads `socket not created: Invalid URL: not-a-url`) | revision probe: `ws`'s message for `not-a-url` is `Invalid URL: not-a-url` |
 | M21 | an agent refusal is logged once (T3) | delete the `this.note('refused', …)` call in `onClose` | W27-L14, L15 (D-6529), and (amended on review 852) every later row that expects a `refused` line, L16 to L23 | unmeasured: added by ruling 2 |
@@ -389,10 +394,16 @@ M37 and M38, the window mutants (probe column "measured in review 860's fix roun
 | M32 | the refused range has an upper bound (T3) | `code >= 4000` in place of `code >= 4400 && code <= 4499` | W27-L22 | measured in review 852's fix round |
 | M33 | the refused range is more than the one code 4401 (T3) | `code === 4401` in place of the range | W27-L22 | measured in review 852's fix round |
 | M34 | the closing phase has its own word (T3) | map CLOSING to `ready not sent` in `preReadyPhase` | W27-L23 | measured in review 852's fix round |
-| M35 | the deadline's timer is `unref`'d (T2) | delete `timer.unref?.();` in `armReadyDeadline` | W27-L24 | measured in review 852's fix round |
+| M35 | the deadline's timer is `unref`'d (T2) | delete `this.connectTimer.unref?.();` in `armConnectDeadline` | W27-L24 | measured in review 852's fix round |
 | M36 | the deadline keeps the backoff (T2) | set `this.backoffMs = this.cfg.reconnectMinMs;` in the deadline callback, before `ws.terminate()` | W27-L25 | measured in review 852's fix round |
 | M37 | the window is exactly 8, not 9 (T3; review 860) | `Math.min(9, token.length)` | W27-L17 | measured in review 860's fix round |
 | M38 | the window is exactly 8, not 10 (T3; review 860) | `Math.min(10, token.length)` | W27-L17 | measured in review 860's fix round |
+| M39 | the `onReady` clear (#1160) | delete `this.clearConnectDeadline();` in `onReady` | see As built (#1160 fix round) | measured in the #1160 fix round |
+| M40 | the `onClose` clear (#1160) | delete it in `onClose` | see As built (#1160 fix round) | measured in the #1160 fix round |
+| M41 | the `close()` clear (#1160) | delete it in `close()` | see As built (#1160 fix round) | measured in the #1160 fix round |
+| M42 | the clear at arm (#1160) | delete the `this.clearConnectDeadline();` at the top of `armConnectDeadline` | see As built (#1160 fix round) | measured in the #1160 fix round |
+| M43 | the ready half, both ways (D-6724) | M4 plus M39 | see As built (#1160 fix round) | measured in the #1160 fix round |
+| M44 | the current-socket half, both ways (D-6724) | M7 plus M40 plus M41 | see As built (#1160 fix round) | measured in the #1160 fix round |
 
 The deadline's choice to terminate its CAPTURED socket, not `this.socket`, has no row of its own (D-6517): before
 Task 3 a stale deadline can reach only a closed socket, where `terminate` is a no-op, and from Task 3 the
@@ -401,12 +412,14 @@ report to the coordinator before weakening a row or a guard.
 
 ## Deviations found
 
-Eighteen numbers were issued to run 833: sixteen starting at D-6514 at run-open (D-6514 to D-6529), and D-6585 and
-D-6586 for the review-852 fix round. Every one is defined below, in order, and none is left in reserve:
+Twenty numbers were issued to run 833: sixteen starting at D-6514 at run-open (D-6514 to D-6529), D-6585 and D-6586
+for the review-852 fix round, and D-6724 and D-6725 for the fix round on main's #1160. Every one is defined below, in
+order, and none is left in reserve:
 - The plan defined the first fourteen, D-6514 to D-6527 (D-6527 by the coordinator's ruling on Reading 2).
 - The build spent the last two of the first block as departures: D-6528 and D-6529.
 - The fix round spent D-6585 as a departure, and gave D-6586, which no departure took, its own entry as an unspent
   number.
+- The fix round on main's #1160 spent D-6724 on the absorb and gave D-6725, which no departure took, its own entry.
 
 Every entry is written `- **D-<n>** — <text>`, the form the server's one definition reader accepts
 (`server/src/coord/ledger.ts#DEFINITION`: after the number it needs `**` and then an em-dash, `(` or `:`). The form
@@ -442,6 +455,10 @@ reader itself).
   It is its own constant, not derived from `heartbeatMs` or `requestTimeoutMs`, so a row can shorten one without the
   other. No environment variable or config key is added and `index.ts` still passes only `url` and `token`, so wave 24's
   unification of operator tunables has nothing new to absorb.
+
+  (Amended on main's #1160.) The wave first named them `DEFAULT_READY_TIMEOUT_MS` and `readyTimeoutMs`. Main's #1160
+  landed the same value under `DEFAULT_CONNECT_TIMEOUT_MS = 15_000` and `connectTimeoutMs?`, and the absorb kept
+  main's names (D-6724). The reasons above hold unchanged for the landed constant.
 - **D-6517** — The deadline is a one-shot timer that is never cleared. When it fires it returns if its captured socket
   is ready (`this.ready`) and, from Task 3, if that socket is no longer current (`ws !== this.socket`); otherwise it
   terminates the CAPTURED socket. Why:
@@ -455,6 +472,9 @@ reader itself).
   - (Amended on review 852) The timer is `unref`'d, so a deadline that has not fired never keeps the process alive;
     W27-L24 pins it (M35). The deadline never resets the backoff: only `onReady` does, so a run of timed-out
     attempts keeps growing the delay to its ceiling; W27-L25 pins it (M36).
+  - (Amended on main's #1160.) The merged timer is main's stored `connectTimer`, cleared in `onReady`, `onClose`,
+    `close()` and at each arm, so "never cleared" and the first bullet's argument are history. The fire-time check,
+    the captured socket, the `unref` and the backoff rule stand. What the clears add is measured under D-6724.
 - **D-6518** — No TCP keepalive. Why: `ws` never sets it and it can be set before connect only through a wrapped
   `createConnection` (websocket.js:752-753), a new seam; it detects only an idle half-open socket, after the idle time
   plus probes (Node sets the idle time only; interval and count stay the kernel's 75 s and 9, unmeasured on the
@@ -639,6 +659,23 @@ reader itself).
   deadline of 100 ms plus a reset backoff of 50 ms), so the ruling's example form, "the fourth gap at least twice the
   minimum", stays green and would not catch the flattened backoff. The sum-to-the-fifth-accept form reds it.
 - **D-6586** — `unused` (run 833): issued to this wave's review-852 fix round; no departure took it.
+- **D-6724** (the worker, main's #1160 fix round) — The absorb of main's #1160 (3dada7dc9), which bounds the same
+  span, socket creation to `ready`, at the same 15 s. One deadline survives: main's span, with this wave's journal
+  line.
+  - Kept from main, because they are on main and its four rows in `remote-connect.test.ts` use them: the field
+    `RemoteFleetConfig.connectTimeoutMs`, the constant `DEFAULT_CONNECT_TIMEOUT_MS`, the stored timer
+    `connectTimer`, and the private methods `armConnectDeadline` and `clearConnectDeadline`. The ruling left the
+    private names to the worker; main's are kept so that the field, the constant and the methods share one word,
+    and main's rows and comments need no edit.
+  - Removed from this wave: `readyTimeoutMs`, `DEFAULT_READY_TIMEOUT_MS`, and `armReadyDeadline` with its local
+    one-shot timer.
+  - Kept from this wave: the expiry still writes the `no ready within` line through `note`; the guard is the same
+    two facts (`ws !== this.socket || this.ready`); the deadline never resets the backoff. Every journal and
+    refusal-line rule of this wave is unchanged. The 25 rows of `remote-liveness.test.ts` and `remoteHelpers.ts`
+    take the renamed field and nothing else, and main's four rows are byte-identical.
+  - Against D-6517, the timer is now cleared in `onReady`, `onClose`, `close()` and at each arm.
+    MEASURED-CLEARS-PLACEHOLDER
+- **D-6725** — `unused` (run 833): issued to this wave's fix round on main's #1160; no departure took it.
 
 Any reserve number still undefined at wave-done is defined in this section before the wave-done fingerprint, in the
 house form for an issued number no departure took (as `delegation-broker-wave3-observe.md` writes its run 740
@@ -650,8 +687,9 @@ never reclaimed.
 ## File structure
 
 - `server/src/remote/client.ts`:
-  - Task 2: `DEFAULT_READY_TIMEOUT_MS`, `RemoteFleetConfig.readyTimeoutMs`, the constructor line, the arm
-    call in `connect`, `armReadyDeadline`, and the new field's doc comment.
+  - Task 2: `DEFAULT_CONNECT_TIMEOUT_MS`, `RemoteFleetConfig.connectTimeoutMs`, the constructor line, the arm
+    call in `connect`, `armConnectDeadline` and `clearConnectDeadline`, and the field's doc comment (as landed on
+    main's #1160 and merged, D-6724).
   - Task 3: `LinkLine`, `LinkEpisode`, `preReadyPhase`, the `episode` field, `note`, the current-socket half of the
     deadline's guard and its line, the `close` listener's code, `onClose`'s bookkeeping, `startHeartbeat`'s note,
     `onReady`'s recovery line, the `note` call in `connect`'s `catch` (D-6526), the `refused` note in `onClose`
@@ -823,6 +861,10 @@ green below is the worker's to measure; the planning probe's figures are named w
 
 ### Task 2: one deadline from socket to ready (W27-b; D-6514, D-6516, D-6517)
 
+> Since main's #1160 was absorbed (D-6724), the field is `connectTimeoutMs`, the constant
+> `DEFAULT_CONNECT_TIMEOUT_MS` and the method `armConnectDeadline`, on a stored timer cleared in `onReady`, `onClose`
+> and `close()`; the code below is this task as built before that.
+
 **Files:**
 - Modify: `server/src/remote/client.ts`: `RemoteFleetConfig` (:37-48), the constants block (:73-77), the private fields
   (:171-181), the constructor (:189-199), `connect` (:353-372), and new `armReadyDeadline` after `stopHeartbeat`.
@@ -951,6 +993,10 @@ green below is the worker's to measure; the planning probe's figures are named w
   table). Confirm `git diff --quiet HEAD -- src/remote/client.ts` after the last; the as-built note records the reds.
 
 ### Task 3: the link says what it does (W27-c; D-6517, D-6520, D-6522, D-6526, D-6527, D-6529)
+
+> Since main's #1160 was absorbed (D-6724), the field is `connectTimeoutMs`, the constant
+> `DEFAULT_CONNECT_TIMEOUT_MS` and the method `armConnectDeadline`, on a stored timer cleared in `onReady`, `onClose`
+> and `close()`; the code below is this task as built before that.
 
 **Files:**
 - Modify: `server/src/remote/client.ts`: the module types after `PtyListener` (:71), `preReadyPhase` and
@@ -1270,30 +1316,32 @@ green below is the worker's to measure; the planning probe's figures are named w
   - `GROWTH_CHECK=1 ./node_modules/.bin/vitest run test/growth-check.test.ts`. None of this wave's files is a growth
     file; run it to confirm.
   - After `git fetch origin main`, run `deviation-refs`. Then measure the definitions with the server's OWN reader,
-    not a grep that may accept a form the reader rejects. From `server/` this prints `18 18` and the eighteen
-    issued numbers in order, D-6514 to D-6529 and then D-6585 and D-6586 (every one is defined, and none is in
-    reserve; see Deviations found):
+    not a grep that may accept a form the reader rejects. From `server/` this prints `20 20` and the twenty
+    issued numbers in order, D-6514 to D-6529, then D-6585 and D-6586, then D-6724 and D-6725 (every one is defined,
+    and none is in reserve; see Deviations found):
 
     ```
     ./node_modules/.bin/tsx -e "import { readFileSync } from 'node:fs';
     import { definitionsIn } from './src/coord/ledger.ts';
     const path = '../docs/superpowers/plans/2026-10-22-centralised-update-w27-agent-link-handshake.md';
     const ns = definitionsIn([{ path, text: readFileSync(path, 'utf8') }]).map((d) => d.n)
-      .filter((n) => n >= 6514 && n <= 6529 || n === 6585 || n === 6586);
+      .filter((n) => n >= 6514 && n <= 6529 || n === 6585 || n === 6586 || n === 6724 || n === 6725);
     console.log(ns.length, new Set(ns).size, ns.join(' '));"
     ```
 
     At planning time, with the first form, this printed `0 0`; with the entries rewritten it printed `12 12` for
     D-6514 to D-6525, and with D-6526 added it prints `13 13` for D-6514 to D-6526 (measured at this revision). With
-    D-6527 to D-6529 defined it printed `16 16`, and with D-6585 and D-6586 it prints `18 18`. Check too that none of
-    the eighteen is defined on `origin/main` (the same reader over `git show origin/main:<plan>` for
+    D-6527 to D-6529 defined it printed `16 16`, with D-6585 and D-6586 it printed `18 18`, and with D-6724 and D-6725
+    it prints `20 20`. Check too that none of
+    the twenty is defined on `origin/main` (the same reader over `git show origin/main:<plan>` for
     any plan `deviation-refs` names).
 - [ ] **Step 4: The wave-done fingerprint.** The `suite:` line follows worker clause 15: `green` or `red` from the FIRST
   full suite run after the implementation was complete, `unrun` when no full run happened locally. The per-file runs
   of Steps 2 and 3 are listed in the as-built note, not folded into the word.
 - [ ] **Step 5: The PR body.**
   - The incident in one paragraph (an upgrade never answered, no bound, no log, 65 minutes), with D-6515's correction.
-  - The bound (D-6514, D-6516, D-6517): one wall clock per attempt, 15 s, never cleared, acting on its own socket, and
+  - The bound (D-6514, D-6516, D-6517): one wall clock per attempt, 15 s, main's stored timer cleared in `onReady`, `onClose` and `close()` with the
+    fire-time check kept (D-6724), acting on its own socket, and
     the recovery bound (deadline plus one backoff, at most 45 s) against 65 minutes.
   - The rejected options and why: `handshakeTimeout` (D-6514), TCP keepalive (D-6518), an earlier heartbeat (D-6519).
   - The six kinds of log line verbatim, and the boot line's `socket not created` form (D-6520, D-6526); that an
