@@ -1,4 +1,4 @@
-import { IDLE_RUN_STATES, isRegistryId, isRunState, parseCanonicalPositiveSafeInteger, transitionsFor } from '../../../shared/api.js';
+import { IDLE_RUN_STATES, isRegistryId, isRunState, transitionsFor } from '../../../shared/api.js';
 import type { RunKind, RunState } from '../../../shared/api.js';
 
 /**
@@ -64,10 +64,9 @@ export interface AdvanceRequest {
 }
 
 /** The request's own three gates, in order and before the run is read: the canonical run id and the body shape
- *  (both `bad-request`), then the target scope (`bad-transition` with a `detail`, since no run is involved yet). */
-export function advanceRequest(idParam: string, b: AdvanceBody):
+ *  (both `bad-request`; the id arrives already through the route seam's canonical parse, `null` when it is not one), then the target scope (`bad-transition` with a `detail`, since no run is involved yet). */
+export function advanceRequest(id: number | null, b: AdvanceBody):
   { ok: true; req: AdvanceRequest } | { ok: false; refusal: AdvanceRefusal } {
-  const id = parseCanonicalPositiveSafeInteger(idParam);
   const fp = b.fingerprint;
   if (id === null || !isRunState(b.to) || typeof fp !== 'object' || fp === null ||
       typeof fp.branchTip !== 'string' || typeof fp.handoffCommit !== 'string' ||

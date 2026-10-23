@@ -1830,7 +1830,7 @@ export function registerCoordRoutes(
 
     // The body shape and the target scope are `advanceRequest`'s, the run-dependent gates `advanceGate`'s (ARCH-33,
     // D-TBD-arch33-advance-gate); this handler gathers their facts and acts.
-    const parsed = advanceRequest((req.params as { id: string }).id, (req.body ?? {}) as AdvanceBody);
+    const parsed = advanceRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), (req.body ?? {}) as AdvanceBody);
     if (!parsed.ok) return refuseAdvance(reply, parsed.refusal);
     const { id, to, fingerprint: fp } = parsed.req;
     const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber,

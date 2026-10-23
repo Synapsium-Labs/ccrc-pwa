@@ -10,9 +10,14 @@
 import { describe, it, expect } from 'vitest';
 import { parsedFile } from './scan/symbols.js';
 import {
-  ADVANCE_GATES, ADVANCE_TARGETS, advanceGate, advanceRequest,
+  ADVANCE_GATES, ADVANCE_TARGETS, advanceGate, advanceRequest as advanceRequestParsed,
   type AdvanceGate, type AdvanceGateFacts, type AdvanceRefusal, type AdvanceRunFacts,
 } from '../src/coord/advance.js';
+import { parseCanonicalPositiveSafeInteger } from '../../shared/api.js';
+
+/** The route seam parses the id; these rows feed the textual id through the same parse. */
+const advanceRequest = (id: string, b: Parameters<typeof advanceRequestParsed>[1]) =>
+  advanceRequestParsed(parseCanonicalPositiveSafeInteger(id), b);
 
 const run = (over: Partial<AdvanceRunFacts> = {}): AdvanceRunFacts =>
   ({ kind: 'work', state: 'working', sessionId: 'ws-1', ...over });
