@@ -781,7 +781,9 @@ release now, so push a release's own commit (`git push origin vX.Y.Z^{commit}:re
 first. A push of an untagged head is refused after its gate, and the refusal names the newest release it
 contains; it says when that head's merge changed only `docs/` or the root's Markdown, so no release-main run
 started for it, and otherwise points at the release-main run for that head, which says `built unchanged` or
-what differed; `stable` then stays on that head until a release cut from a descendant of it is pushed. Its
+what differed, or was cancelled before it started because a later merge's run replaced it, and then that
+later run's line covers this head; `stable` then stays on that head until a release cut from a descendant of
+it is pushed. Its
 `gate` job first looks for a green `full-suite` job on that commit from a trusted run — `ci.yml`'s daily or manual
 full run on `main`, or an earlier stable gate, never a pull request's — and, finding none, runs `ci.yml` in full
 mode; only then does `deploy/release-stable.sh` run (a red gate leaves the branch moved and no flag flipped, which

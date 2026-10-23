@@ -39,8 +39,12 @@ name: release-main
 #   - The list is two root-anchored patterns, and is never widened without a
 #     ledger entry. server/test/build-release.test.ts pins this block exactly
 #     (W25-F1) and, by running the builder on a repository that tracks both,
-#     pins that the built tarball holds no root docs/ entry and no root
-#     Markdown file (W25-F2).
+#     pins that the built tarball holds no entry named under docs/ and no root
+#     Markdown entry (W25-F2; names only).
+#   - The list has a second copy: deploy/release-stable.sh's case arms, which
+#     tell a docs-only head (no run started) from one with a run. W25-T8
+#     (server/test/release-stable.test.ts) reads this list and ties each
+#     pattern to an arm there, so the two change together (D-6512).
 on:
   push:
     branches: [main]

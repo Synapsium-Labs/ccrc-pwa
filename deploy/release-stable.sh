@@ -14,10 +14,12 @@
 # contains and says why there is none (D-6398): when HEAD's own merge changed
 # only docs/ or the root's Markdown, no release-main run started for it (the
 # trigger's paths-ignore); otherwise it points at release-main's run for
-# HEAD's sha, which says whether its build came out unchanged; and when HEAD's
-# changed paths cannot be read (no parent, a failed diff) it points at the run
-# and says so — "promote a tree nobody built" is unexpressible. THIS script is
-# that guard.
+# HEAD's sha, which says whether its build came out unchanged, or was
+# cancelled before it started because a later merge's run replaced it (the
+# workflow's concurrency group), and then that later run's line covers this
+# merge; and when HEAD's changed paths cannot be read (no parent, a failed
+# diff) it points at the run and says so — "promote a tree nobody built" is
+# unexpressible. THIS script is that guard.
 # It never promotes a release HEAD only contains.
 # D-3129: HEAD may carry MORE THAN ONE release-shaped tag (e.g. an
 # auto-tagged patch sitting on the same commit as a hand-cut minor) — a
@@ -84,12 +86,17 @@ if [ "${#TAGS[@]}" -eq 0 ]; then
   # trigger ignores a push whose every path is under docs/ or is a root *.md
   # (no slash). Every path matching says no run started; any other path points
   # at the run for HEAD's sha; no parent, or a failed diff, does the same and
-  # says the paths could not be read. A path git quotes (a tab, a quote, a
-  # backslash) fails the match, which is the pointer form: the safe direction.
+  # says the paths could not be read. Two cases a match would get wrong are
+  # turned into the pointer form, the safe direction: a path git quotes (a
+  # tab, a quote, a backslash) fails the match, and --no-renames lists a
+  # rename by both its names, so a shipped file moved under docs/ still names
+  # its shipped source. These arms are a second copy of the trigger's
+  # paths-ignore list; W25-T8 reads that list from release-main.yml and ties
+  # each pattern to an arm here (D-6512).
   why_untagged() {
-    local pointer="A main merge whose build came out unchanged cuts no release either: the release-main run for $FULL printed \"built unchanged\" or what differed"
+    local pointer="A main merge whose build came out unchanged cuts no release either: the release-main run for $FULL printed \"built unchanged\" or what differed, or was cancelled before it started because a later merge's run replaced it, and then that later run's line covers this merge"
     local paths p n=0
-    if ! paths="$(git -C "$ROOT" diff --name-only HEAD^ HEAD 2>/dev/null)"; then
+    if ! paths="$(git -C "$ROOT" diff --no-renames --name-only HEAD^ HEAD 2>/dev/null)"; then
       WHY="$pointer (HEAD's changed paths could not be read)."
       return
     fi
