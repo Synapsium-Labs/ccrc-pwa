@@ -142,20 +142,20 @@ Each guard, the mutation that removes or weakens it, and the rows expected to go
 |---|---|---|
 | `release-main.test.ts` | X15rc (carried, Task 1): delete `[ "$rc" -ne 0 ] \|\| ` from `judge`'s listing check | W25-C35, comm prints a well-formed line and exits 1 (1 of N) |
 | `release-main.test.ts` | X2, X7, X15 re-measured (Task 1) | X2: W25-C30 x2; X7: W25-C35 x3; X15: W25-C35 exits 0 and prints nothing |
-| `release-artifact.test.ts` | K1: `record` skips the named-tarball check | W26-A2 |
-| `release-artifact.test.ts` | K2: `record` skips the `SHA256SUMS` line check | W26-A3 |
-| `release-artifact.test.ts` | K3: `put_output`'s guard removed | W26-A5 |
-| `release-artifact.test.ts` | K4: `verify` skips the digest comparison | W26-V2 |
-| `release-artifact.test.ts` | K5: `verify` accepts a `SHA256SUMS` that merely starts with the expected line | W26-V3 (the two-line case) |
-| `release-artifact.test.ts` | K6: `verify` skips the exact-file-set check | W26-V4 x3 |
-| `release-artifact.test.ts` | K7: `verify`'s `-L` refusals deleted | W26-V5 x2 |
-| `release-artifact.test.ts` | K8: `record` skips the `version` comparison | W26-A7 |
-| `release-artifact.test.ts` | K9: `record` skips the `sha` comparison | W26-A8 |
-| `release-artifact.test.ts` | K10: `record`'s shape refusal deleted (the `[[ =~ ]]` failure branch) | W26-A9, the reordered-keys case (it then refuses with the version reason, not the shape reason) |
-| `release-artifact.test.ts` | K11: `verify`'s tag and digest shape checks deleted | W26-A4 (verify cases) |
-| `release-artifact.test.ts` | K12: `verify`'s out-directory tripwire deleted | W26-V10 |
-| `release-artifact.test.ts` | K13: `verify` copies before it checks | W26-V11 (nothing written on refusal) |
-| `release-artifact.test.ts` | K14: a `tar -tzf "$tarball" >/dev/null` line added to `verify`'s body | W26-A6 (the write side parses nothing), W26-V12 (tar refuses the non-gzip bytes) |
+| `release-artifact.test.ts` | K1: `record` skips the named-tarball check | W26-A2 — measured at `30380fcf4`: W26-A2 (1 of 48), exit 1 |
+| `release-artifact.test.ts` | K2: `record` skips the `SHA256SUMS` line check | W26-A3 — measured at `30380fcf4`: W26-A3 x3, all three cases (3 of 48), exit 1 |
+| `release-artifact.test.ts` | K3: `put_output`'s guard removed | W26-A5 — measured at `30380fcf4` (the `{ …; } 2>/dev/null \|\| :` wrapper dropped): W26-A5 (1 of 48), exit 1 |
+| `release-artifact.test.ts` | K4: `verify` skips the digest comparison | W26-V2 — measured at `30380fcf4`: W26-V2 (1 of 48), exit 1 |
+| `release-artifact.test.ts` | K5: `verify` accepts a `SHA256SUMS` that merely starts with the expected line | W26-V3 (the two-line case) — measured at `30380fcf4` (`cmp -s -n <length of the expected line>`): W26-V3 two-line case (1 of 48), exit 1 |
+| `release-artifact.test.ts` | K6: `verify` skips the exact-file-set check | W26-V4 x3 — measured at `30380fcf4`: W26-V4 x3 and W26-V6 x2 (5 of 48), exit 1. DIFFERS from the expectation: with the file-set check gone a missing file falls to the regular-file refusal, so W26-V6's "holds" reason goes red too |
+| `release-artifact.test.ts` | K7: `verify`'s `-L` refusals deleted | W26-V5 x2 — measured at `30380fcf4`: W26-V5 x2 (2 of 48), exit 1 |
+| `release-artifact.test.ts` | K8: `record` skips the `version` comparison | W26-A7 — measured at `30380fcf4`: W26-A7 (1 of 48), exit 1 |
+| `release-artifact.test.ts` | K9: `record` skips the `sha` comparison | W26-A8 — measured at `30380fcf4`: W26-A8 (1 of 48), exit 1 |
+| `release-artifact.test.ts` | K10: `record`'s shape refusal deleted (the `[[ =~ ]]` failure branch) | W26-A9, the reordered-keys case (it then refuses with the version reason, not the shape reason) — measured at `30380fcf4` (the failure branch replaced by `[[ "$json" =~ $re ]] \|\| :`): W26-A9 reordered-keys case (1 of 48), exit 1. The reason DIFFERS from the parenthesis: under `set -u` the unmatched captures abort the script with bash's `BASH_REMATCH[1]: unbound variable` (exit 1) before the version comparison runs |
+| `release-artifact.test.ts` | K11: `verify`'s tag and digest shape checks deleted | W26-A4 (verify cases) — measured at `30380fcf4`: W26-A4 verify `--tag` x2 and `--digest` x3 (5 of 48), exit 1 |
+| `release-artifact.test.ts` | K12: `verify`'s out-directory tripwire deleted | W26-V10 — measured at `30380fcf4`: W26-V10 the out-holds-a-tarball case (1 of 48), exit 1; the `--out` equal to `--in` case stays green, refused by the `-ef` line |
+| `release-artifact.test.ts` | K13: `verify` copies before it checks | W26-V11 (nothing written on refusal) — measured at `30380fcf4`, two placements. (a) the three writes moved to just after the shape checks: 15 of 48 red, exit 1 — W26-V1, W26-V2, W26-V3 x3, W26-V4 x3, W26-V5 x2, W26-V6 x2, W26-V12, W26-V10 x2; the out tripwire then refuses the copy just made, so most rows red on the reason, and only the W26-V10 out-holds-a-tarball row on the V11 helper. (b) the writes moved to just after the out-directory checks, before the artifact checks: 11 of 48 red, exit 1 — W26-V2, W26-V3 x3, W26-V4 x3, W26-V5 x2, W26-V6 x2; ten on the V11 helper ("must not exist or be empty"), W26-V6's missing-tarball case on `cp`'s own error |
+| `release-artifact.test.ts` | K14: a `tar -tzf "$tarball" >/dev/null` line added to `verify`'s body | W26-A6 (the write side parses nothing), W26-V12 (tar refuses the non-gzip bytes) — measured at `30380fcf4` (spelled `tar -tzf "$in/$name" >/dev/null`, verify having no `$tarball`): W26-A6 x2 (the one-tar-call pin and the no-decoder pin) and W26-V12 (3 of 48), exit 1 |
 | `release-main.test.ts` | M16 (wave-25 row, re-measured in Task 3): `set_output`'s guard removed | W25-C19 |
 | `release-main.test.ts` | J1: `set_output` drops the `tag=` line | W26-C1 (release case) |
 | `release-main.test.ts` | J2: compare's skip passes a tag to `set_output` | W26-C1 (skip case) |
