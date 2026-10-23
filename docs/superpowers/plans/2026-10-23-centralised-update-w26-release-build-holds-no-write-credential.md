@@ -158,17 +158,17 @@ Each guard, the mutation that removes or weakens it, and the rows expected to go
 | `release-artifact.test.ts` | K14: a `tar -tzf "$tarball" >/dev/null` line added to `verify`'s body | W26-A6 (the write side parses nothing), W26-V12 (tar refuses the non-gzip bytes) — measured at `30380fcf4` (spelled `tar -tzf "$in/$name" >/dev/null`, verify having no `$tarball`): W26-A6 x2 (the one-tar-call pin and the no-decoder pin) and W26-V12 (3 of 48), exit 1 |
 | `release-artifact.test.ts` | K15: `record`'s rc refusal after `tar -xzOf` deleted (replaced by `:`) | W26-A9, the truncated-tarball case — measured at `3522d14a5`: W26-A9 truncated-tarball case (1 of 49), exit 1; the mutant records the truncated tarball and exits 0 |
 | `release-artifact.test.ts` | K16: a `zcat --help >/dev/null` line added to `digest_of`'s body | W26-A6 — measured at `3522d14a5`: W26-A6, the whole-file no-decoder pin (1 of 49), exit 1 |
-| `release-main.test.ts` | M16 (wave-25 row, re-measured in Task 3): `set_output`'s guard removed | W25-C19 |
-| `release-main.test.ts` | J1: `set_output` drops the `tag=` line | W26-C1 (release case) |
-| `release-main.test.ts` | J2: compare's skip passes a tag to `set_output` | W26-C1 (skip case) |
-| `release-main.test.ts` | J3: `receive`'s derivation check deleted | W26-R2 |
-| `release-main.test.ts` | J4: `receive` never calls `verify` | W26-R3 |
-| `release-main.test.ts` | J5: `receive`'s tagged-HEAD refusal deleted | W26-R4 |
-| `release-main.test.ts` | J6: `receive`'s contained refusal deleted | W26-R5 |
-| `release-main.test.ts` | J7: `receive`'s dirty-tree check deleted | W26-R6 (the dirty clone and the in-clone out directory) |
-| `release-main.test.ts` | J8: `receive`'s state and tarball tripwire deleted | W26-R6 (the two out-of-clone cases) |
-| `release-main.test.ts` | J9: `receive` does not tag locally | W26-R1, W26-R9 (publish refuses "HEAD no longer carries") |
-| `release-main.test.ts` | J10: `receive` accepted with `--tag` alone (the three-flag check deleted) | W26-R7 |
+| `release-main.test.ts` | M16 (wave-25 row, re-measured in Task 3): `set_output`'s guard removed | W25-C19 — measured at `54d8dda61` (the `{ …; } 2>/dev/null \|\| :` wrapper dropped from the one `printf`): W25-C19 (1 of 112), exit 1 |
+| `release-main.test.ts` | J1: `set_output` drops the `tag=` line | W26-C1 (release case) — measured at `54d8dda61`: W26-C1 release case, and W25-C2 to W25-C6 (five), W25-C8 x2 and W25-C26 (9 of 112), exit 1. DIFFERS from the expectation: those eight wave-25 rows read the output file exactly, and Task 3 amended them to expect the `tag=v0.0.2` line |
+| `release-main.test.ts` | J2: compare's skip passes a tag to `set_output` | W26-C1 (skip case) — measured at `54d8dda61`: W26-C1 skip case, W25-C1 and W25-C34 x4 (6 of 112), exit 1. DIFFERS from the expectation: W25-C1 and W25-C34 read a skip's output file exactly too |
+| `release-main.test.ts` | J3: `receive`'s derivation check deleted | W26-R2 — measured at `54d8dda61`: W26-R2 (1 of 112), exit 1 |
+| `release-main.test.ts` | J4: `receive` never calls `verify` | W26-R3 — measured at `54d8dda61`: W26-R1, W26-R3, W26-R9 and W26-P1 (4 of 112), exit 1. DIFFERS from the expectation: with no copy into the out directory, `record_release` cannot write the state, so the two passing pipelines red too, and P1's one-`verify` count reds |
+| `release-main.test.ts` | J5: `receive`'s tagged-HEAD refusal deleted | W26-R4 — measured at `54d8dda61`: W26-R4 (1 of 112), exit 1; the contained refusal fires instead |
+| `release-main.test.ts` | J6: `receive`'s contained refusal deleted | W26-R5 — measured at `54d8dda61`: W26-R5 (1 of 112), exit 1; the derivation refusal fires instead |
+| `release-main.test.ts` | J7: `receive`'s dirty-tree check deleted | W26-R6 (the dirty clone and the in-clone out directory) — measured at `54d8dda61`: W26-R6 dirty clone and in-clone `release-out` cases (2 of 112), exit 1 |
+| `release-main.test.ts` | J8: `receive`'s state and tarball tripwire deleted | W26-R6 (the two out-of-clone cases) — measured at `54d8dda61`: W26-R6 out-of-clone state and tarball cases (2 of 112), exit 1 |
+| `release-main.test.ts` | J9: `receive` does not tag locally | W26-R1, W26-R9 (publish refuses "HEAD no longer carries") — measured at `54d8dda61`: W26-R1 (no local tag after receive) and W26-R9 (publish refuses "HEAD no longer carries v0.0.2") (2 of 112), exit 1 |
+| `release-main.test.ts` | J10: `receive` accepted with `--tag` alone (the three-flag check deleted) | W26-R7 — measured at `54d8dda61` (the loop replaced by `:`): W26-R7, the three receive-missing-a-flag cases (3 of 112), exit 1; each then exits 1 at a later refusal |
 | `build-release.test.ts` | B1: the publish job's `if:` deleted | the amended attest-gate row |
 | `build-release.test.ts` | B2: `\|\| always()` appended to the publish job's `if:` | the amended attest-gate row |
 | `build-release.test.ts` | B3: `ref: ${{ github.sha }}` added to the build job's checkout | W26-Y2 |
