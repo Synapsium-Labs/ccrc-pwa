@@ -2496,11 +2496,11 @@ already running).
             for /health to answer the new version: a failed gate exits 4; a
             doctor FAIL with the gate passed exits 3; --no-gate skips it.
             After a passed gate and a finished sweep, ~/ccrc-backups is pruned
-            to the newest CCRC_BACKUP_KEEP (default 10, read from the process
-            environment only) timestamped backups, never this run's own; then
-            every backup past the newest CCRC_BACKUP_DATA_KEEP (default 3; the
-            environment, else the box's ccrc.env) that carry the coordination
+            to the newest CCRC_BACKUP_KEEP (default 10) timestamped backups,
+            never this run's own; then every backup past the newest
+            CCRC_BACKUP_DATA_KEEP (default 3) that carry the coordination
             data set is thinned to its code and coordination-thinned.json.
+            Each setting here is the environment's, else the box's ccrc.env.
             With no --to the target is the control plane's projection
             (~/.ccrc/update-intent): its desired, or for one run
             [--channel stable|dev]'s desired-stable/desired-dev; a box no
@@ -2582,11 +2582,11 @@ already running).
             (coordination-snapshot.json), dists, ccd and the units to
             ~/ccrc-backups/<ts>/ (never
             ~/.ccrc/collect-lane-generation.log: a restore leaves it in place),
-            then prune to the newest \$CCRC_BACKUP_KEEP (default 10) timestamped
+            then prune to the newest CCRC_BACKUP_KEEP (default 10) timestamped
             backups — never this run's own or one named after it began, nor the
             newest earlier tree backup, valid coordination snapshot and valid one
             that holds data — then thin the data set from each past the newest
-            \$CCRC_BACKUP_DATA_KEEP (default 3) that carry one; skipped while another
+            CCRC_BACKUP_DATA_KEEP (default 3) that carry one; skipped while another
             ccrc run holds ~/.ccrc/update.lock — hand-made siblings are never touched
   coordination-snapshot
             validate --from <timestamp-directory>   classify a backup's coordination
@@ -11196,9 +11196,9 @@ MODELS_INVOKE_CEILING_S=300
 # A notify hook's own deadline in seconds (`deploy/notify.sh`'s `curl -m 5`), the soft half of its reserve.
 MODELS_HOOK_S=5
 
-# The advance step's time budget for one refresh run, in seconds: `CCRC_MODELS_ADVANCE_BUDGET_S`, 250 when unset or empty; a
-# whole number is itself, base 10 (`0250` is 250), and 3600 at most, capped by its digit count before `$(( ))` could overflow
-# on it; ANYTHING ELSE (`off`, `-1`, `1.5`) is 0, the step off for this run, said on stderr without the value (D-6266).
+# The advance step's time budget for one refresh run, in seconds: `CCRC_MODELS_ADVANCE_BUDGET_S`, the environment, else the
+# box's ccrc.env, else 250 (an empty value too); a ccrc.env `_ccrc_knob` cannot read for it is 0, the step off for this run, said
+# on stderr; a whole number is itself, base 10 (`0250` is 250), 3600 at most; ANYTHING ELSE (`off`, `-1`) is 0 too (D-6266).
 _models_advance_budget_secs() {
   local s; _ccrc_knob CCRC_MODELS_ADVANCE_BUDGET_S 250 && s="$KNOB" || { echo "$PROG: $KNOB_WHY, so the advance step is off for this run" >&2; s=0; }
   case "$s" in *[!0-9]*) echo "$PROG: CCRC_MODELS_ADVANCE_BUDGET_S is not a whole number of seconds, so the advance step is off for this run" >&2; s=0 ;; esac
@@ -20603,7 +20603,7 @@ _upd_marker_unsigned() {
 # header above `CCRC_RELEASE_OWNER`: install.sh runs before any ccrc exists.)
 # A mirror, `CCRC_RELEASE_BASE_URL`, is a setting (wave 24, D-6594): the environment, else the box's ccrc.env, else that
 # default, read through `_ccrc_knob`, so a console update, the watchdog and the deploying machine's rollout pin all fetch
-# from the host the operator named. rc 0 prints the base; rc 1, a ccrc.env line naming it that cannot be read, prints
+# from the host the operator named. rc 0 prints the base; rc 1, a ccrc.env that cannot be read for it, prints
 # nothing on stdout and one `$PROG:` line on stderr (never `update:`: a rollback and a rollout reach it too), and the
 # caller refuses before anything on the box changes, since fetching from the default host then would read unmeasured as
 # unset. The line names the file, never the value, which can carry `user:pass@`.

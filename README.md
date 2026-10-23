@@ -418,7 +418,7 @@ through your own server. What does leave the box, all of it on your behalf:
   request for each class it would move to a new model, and again on each run while that request is refused: a user
   turn that reads "Reply with the single word OK." (at most 512 tokens, streamed, at the lowest effort level the model
   lists), with no session data (see "Turning the step off" in
-  [Model classes per lane](#model-classes-per-lane-ccrc-models) for where `CCRC_MODELS_ADVANCE_BUDGET_S=0` must be set).
+  [Model classes per lane](#model-classes-per-lane-ccrc-models) for where to set `CCRC_MODELS_ADVANCE_BUDGET_S=0` (a `~/.ccrc/ccrc.env` line)).
 - **Only if you set them up** — DuckDNS and an ACME CA, as `ccrc expose` uses them (DuckDNS
   for its `duckdns` arm, the CA for `duckdns` and `byo`, neither for `ip`); your browser's
   push service once VAPID keys are set (each notification is encrypted to the
@@ -869,9 +869,9 @@ the first that fails; macOS runs the same window and re-check in-process, with n
 session stopped on purpose while the sweep walks (its unit settled `inactive` with ccd's
 `~/.cc-sessions/<id>.stopped` stamp present or its registry row purged; a stop with neither still fails) passes on a
 line of its own, as it does in `deploy.sh agent`'s sweep (a serial loop with no re-check); then the from→to report, and, after a passed gate and a
-finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP` from the process environment, default 10) and the coordination
-data set thinned out of every backup past the newest `CCRC_BACKUP_DATA_KEEP` (default 3, at least 2; the environment, else
-`~/.ccrc/ccrc.env`) that carry one, by an update or `ccrc backup`, never a rollback by flip (a rollback by re-install
+finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP`, default 10) and the coordination
+data set thinned out of every backup past the newest `CCRC_BACKUP_DATA_KEEP` (default 3, at least 2)
+that carry one, by an update or `ccrc backup`, never a rollback by flip (a rollback by re-install
 thins as the update it runs).
 Rolling back is `ccrc rollback` (below), which, like any move below the floor, prints the coord.db restore commands rather than
 auto-restoring. **Across a two-box fleet, `ccrc rollout [--to] [--server-first] [--check] [--force]`** (with `--channel`,
@@ -1192,7 +1192,7 @@ bytes are no longer the kept ones, and `unmeasured` one `ccrc` cannot show to be
 `ccd/ccrc` or its role's build missing, or its kept stamp missing, unparseable or naming another tag; neither changes a prune verdict). After an install or update whose
 gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename to a dot-name first: never the one `~/ccrc` points at, `previous`, a
 tag this node's projection names, or a version a running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
-stay. An input that cannot be read prunes nothing (a `CCRC_VERSIONS_KEEP` that is not a whole number from 0 to 9999 is one), a dead process's `.pruning-`/`.incoming.` leftover is swept once per prune, and only `--prune` removes an incomplete tree. `deploy.sh` still
+stay. An input that cannot be read prunes nothing (a `CCRC_VERSIONS_KEEP` that is not a whole number from 0 to 9999, or that `ccrc.env` names on a line the reader cannot take, is one), a dead process's `.pruning-`/`.incoming.` leftover is swept once per prune, and only `--prune` removes an incomplete tree. `deploy.sh` still
 pushes its tree through `~/ccrc`, into whichever version directory that points at.
 
 **The `ccrc` verbs at a glance** (`ccrc --help` has each one's full text; exit 0 is success, 1 the tool ran
@@ -1226,10 +1226,10 @@ the lock cannot be measured; hand-made siblings are never touched), as update an
 After its prune, and only an update or `ccrc backup` (never a rollback by flip, which takes no backup; a rollback by re-install thins as the update it runs), the run thins the coordination
 data set (D-6346): of the backups that carry one, the newest `CCRC_BACKUP_DATA_KEEP` keep it, counting this run's own first, and
 every older one loses its `coord.db`, delegation journal, checkpoint and manifest and keeps the rest (its code, `memory/`, the
-units). The knob is a whole number from 2 to 9999, default 3, read from the process environment and else from
-`~/.ccrc/ccrc.env` alone, never `~/.ccrc/exposure.env`, which no process that thins receives on Linux; `0` and `1` are refused and an
-invalid value stops the prune and the thinning alike. So does a `ccrc.env` that is
-there but cannot be read, or that names the knob on a line the reader does not take. Read as bytes, after its leading spaces and
+units). The knob is a whole number from 2 to 9999, default 3, read as every ccrc setting is (below); `0` and `1` are
+refused, and an invalid value, or a line naming the knob that the reader does not take, stops the thinning only, while the
+count prune still runs (D-6590). A `ccrc.env` that is there but cannot be read at all stops both, and each says so.
+Read as bytes, after its leading spaces and
 tabs, a line is skipped when it is a comment (`#` or `;`) or another key's `[export ]NAME=`, read when it begins
 `CCRC_BACKUP_DATA_KEEP=`, its value taken as systemd's `EnvironmentFile=` takes it (spaces and tabs around it trimmed), and
 refused when it names the knob as a whole word any other way, `export CCRC_BACKUP_DATA_KEEP=` included; a line holding a CR
@@ -1237,7 +1237,7 @@ past its lead is never skipped, a file holding a NUL byte cannot be scanned, and
 included, but that the box's model of systemd cannot decide (a value a quote or a backslash carries across lines, a CR that leads
 a line or sits inside one, a non-ASCII byte in an assignment) refuses too: unmeasured is not unset (D-6365). On Linux a `ccrc.env`
 that never names the knob reads as the default, whatever else it holds but a NUL byte, since systemd cannot set it from that file; on macOS,
-whose launchd job sources the file with bash, one the model cannot decide still refuses. A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
+whose launchd job sources the file with bash, one the model cannot decide still refuses (this knob alone; every other setting reads the Linux rule there). A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
 a dir is read on presence and size (a `coord.db` with no manifest is also opened for its header and tables), so damage of the
 same length there is not seen (D-6350, D-6364). On an update, `thin` also works to a time budget inside the console's deadline:
 it starts no full verification that could not finish in time, leaves the rest for the next update and exits 0 unless a dir was refused (D-6464). The newest data set from
@@ -1279,6 +1279,23 @@ tier it can prove is that lane's own. It leaves, for you to remove by hand, the 
 the `ccrc-ddns` units `ccrc expose duckdns` installed, whose timer keeps re-pointing the DNS record (after
 `--purge` removes `~/.ccrc/exposure.env` it fails every five minutes instead —
 `systemctl --user disable --now ccrc-ddns.timer` first).
+
+**ccrc's own settings.** Seven values decide what ccrc keeps or removes, how long it waits before judging an update, where
+it fetches a release from, and whether a step runs at all: `CCRC_BACKUP_KEEP`, `CCRC_BACKUP_DATA_KEEP`,
+`CCRC_VERSIONS_KEEP`, `CCRC_UPDATE_HEALTH_S`, `CCRC_UPDATE_DEADLINE_MS`, `CCRC_RELEASE_BASE_URL` and
+`CCRC_MODELS_ADVANCE_BUDGET_S`. `deploy/ccrc.env.example` documents each, with its default and range. ccrc takes each
+from its process environment, else from `~/.ccrc/ccrc.env`, read by name as systemd's `EnvironmentFile=` reads a line and
+never sourced, else the default. A console-driven update, the update watchdog and the models timer run with no shell of
+yours, so the file is where a lasting setting goes. A line ccrc cannot read stops only the act that reads it: the backup
+keep stops the count prune and the data keep the thinning (D-6590), the deadline lets no verification start this run past
+the keep-set's first (D-6591, D-6592), the health gate waits its default 90 seconds (D-6593), the release base stops the
+update before anything on the box changes (D-6594), the models budget turns the advance step off for that run (D-6595),
+and the versions keep stops the versions prune while `ccrc versions` still lists (D-6596). A file ccrc cannot read at all
+(unreadable, or holding a NUL byte) stops every act that reads a setting from it, and each says so. The thinning's time
+bound takes the smallest reading of `CCRC_UPDATE_DEADLINE_MS` the server may hold (the environment, `ccrc.env`, and
+`~/.ccrc/exposure.env`, which the server reads too), and the watchdog the largest (D-6591, D-6602). On macOS a file the
+box's model of systemd cannot decide refuses only the settings it names, and `CCRC_BACKUP_DATA_KEEP` always (D-6587).
+`ccrc doctor`'s `box-settings` check reads `ccrc.env` alone and names a line the reader refuses (D-6599).
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -1978,13 +1995,14 @@ possibly none.
 
 **Turning the step off.** `CCRC_MODELS_ADVANCE_BUDGET_S=0` turns it off. So does any value that is not a whole number
 (`off`, `false`, `-1`, `1.5`, a space): the step is off for that run, and the refresh says so in one line on standard
-error, which names the variable but not its value. Unset or empty, the budget is the default, 250; a whole number is read
-in base 10 (`0250` is 250), and one over 3600 is read as 3600. Set it in the environment of each run you mean to switch
-off. The hourly unit gets it from a drop-in of two lines (`systemctl --user edit ccrc-models.service`, then `[Service]` and
-`Environment=CCRC_MODELS_ADVANCE_BUDGET_S=0`; without the `[Service]` line systemd ignores the assignment). A hand
-`ccrc models refresh`, including the one `ccrc doctor`'s remedies name, does not read the drop-in: it reads its own
-environment, so it runs the step unless its command line sets the variable too. `~/.ccrc/ccrc.env` does not set it: the
-unit reads no environment file, and `ccrc` never sources that one. To keep one class still under every run, hold it. The
+error, which names the variable but not its value. The budget is read from the environment, else `~/.ccrc/ccrc.env`,
+else the default, 250 (an empty value is the default too); a whole number is read in base 10 (`0250` is 250), and one over
+3600 is read as 3600. The lasting place is a `CCRC_MODELS_ADVANCE_BUDGET_S=0` line in `~/.ccrc/ccrc.env`: the hourly
+timer and a hand `ccrc models refresh` (the one `ccrc doctor`'s remedies name included) both honour it. A drop-in
+(`systemctl --user edit ccrc-models.service`, then `[Service]` and `Environment=CCRC_MODELS_ADVANCE_BUDGET_S=0`; without
+the `[Service]` line systemd ignores the assignment) still works as an override for that one unit, because a set
+environment wins. A `ccrc.env` line ccrc cannot read turns the step off for that run and says why on standard error. To
+keep one class still under every run, hold it. The
 step also does nothing where there is no `flock`, where the lock directory is absent and `mkdir` is not to be had, or
 where `timeout` cannot escalate to KILL.
 
