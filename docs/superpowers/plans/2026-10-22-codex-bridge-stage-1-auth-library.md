@@ -1518,9 +1518,10 @@ first; the doctor's owner line names that and stands alone (D-6682, D-6684).
    `ccgpt-auth.py` and the new poller and probe; the patch edit makes `ccgpt-runtime check` answer `probe-moved`, so the
    update rebuilds the Codex runtime once (a pip install from the package index, bounded by `CCRC_RUNTIME_PIP_S`);
    `_inst_codex_tiers` then restarts each lane's LiteLLM tier (stale generation and library hash). A build that fails
-   (`install: codex runtime: NOT BUILT — …`) restarts no LiteLLM tier: each stays running on its old code, which on a
-   first Stage 1 update is LiteLLM's own auth, and the update says so in one line per lane, until a build passes and
-   `ccrc install` is re-run (D-6691). The shim tier is restarted either way. A restart that lands
+   (`install: codex runtime: NOT BUILT — …`) restarts no LiteLLM tier already on the current generation: it stays
+   running on its old code, which on a first Stage 1 update is LiteLLM's own auth, and the update says so in one line
+   per lane, until a build passes and `ccrc install` is re-run (D-6691); a tier recorded on an older generation is still
+   restarted onto the current one. The shim tier is restarted either way. A restart that lands
    while the tier is inside a refresh's token round trip can spend the refresh token
    (D-6384), so a quiet window or a paused auto-update for the lane window (ownership
    spec §21.11) matters twice.
@@ -1528,8 +1529,8 @@ first; the doctor's owner line names that and stands alone (D-6682, D-6684).
    differ, so update the server box promptly after.
 3. **What moves, server box.** Nothing of the lane (a server box places no GPT-lane file); `accounts.sh` regenerates.
 4. **Verify, first the build:** the update printed `install: codex runtime: <generation> built, probed and current`.
-   A `NOT BUILT` line instead means every LiteLLM tier was left on its old code (D-6691): fix the build and re-run
-   `ccrc install` before the checks below, which read nothing new until then.
+   A `NOT BUILT` line instead means each current-generation LiteLLM tier was left on its old code (D-6691): fix the
+   build and re-run `ccrc install` before the checks below, which read nothing new until then.
    **Then, per lane:** `ccrc codex status lane-a --json | jq .auth` reads `state: "ok"`, `credential: "present"`,
    `authBase: "default"`; `ccrc doctor` keeps `codex: … signed in`; after the first expiry, `auth.lastRefreshAt` moves
    (the tier refreshed through the library) and the authDir holds `auth.json.lock` and `auth.status.json`. The tier's
@@ -1989,7 +1990,7 @@ report.
 - **Departs from:** Task 6 Step 4, "every pre-existing `ccgpt-runtime` case green", with layer (c) not among the cases
   Task 6 changes. M7 used to shadow any installed patch with an empty one.
 - **What changed:** M7 now mutates the patch to `cls = None`, which switches off the stream part alone. It is retitled
-  'M7: a patch with no stream part FAILS stream-tool-args-kept …' (`server/test/ccgpt-runtime.test.ts:1329-1339`).
+  'M7: a patch with no stream part FAILS stream-tool-args-kept …' (`server/test/ccgpt-runtime.test.ts:1330-1340`).
 - **Why:** the probe's auth scenario runs before the stream gates, so an empty patch now FAILs `auth-patch-not-applied`
   and never reaches the gate M7 measures.
 - **Cost if wrong:** layer (c) is opt-in (`CCRC_TEST_LITELLM_PY`) and was not run in this wave, so the retitled M7 has
@@ -2001,7 +2002,7 @@ report.
   before its authenticator import' to the probe-source pin.
 - **What changed:** the case runs the probe with both variables set, over a stand-in copy whose authenticator override
   raises if either one survives the scrub. It asserts that the probe reaches `transformation-import` and prints no
-  `auth-vars-leak` (`server/test/ccgpt-runtime.test.ts:2350-2359`).
+  `auth-vars-leak` (`server/test/ccgpt-runtime.test.ts:2351-2360`).
 - **Why:** a text pin would still pass if the scrub moved after the import, as long as its text read right.
 - **Cost if wrong:** the case depends on the stand-in override, so a change to `stubWithOverride` can move it. T14
   measures it red (1 failed).
