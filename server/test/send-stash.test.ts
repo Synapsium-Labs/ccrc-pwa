@@ -648,6 +648,27 @@ describe("onDraft: 'stash' (D-5911)", () => {
       expect(res).toEqual({ ok: true });
     });
 
+    it("D-6367: `resumeIfOwn: 'whole'` over a held stash goes through the held-stash submit: a swallowed Enter gets the retry, the stash stays unsent", async () => {
+      const ours = 'please review the latest diff of the module';
+      const f = fakeCc({ box: [ours], stash: ['an earlier human note'], swallowEnters: 1, restoreOnSubmit: false });
+      const res = await send(f, ours, { resumeIfOwn: 'whole' });
+      expect(f.keys).toEqual(['Enter', 'Enter']);
+      expect(f.state.history).toEqual([ours]);
+      expect(f.state.stash).toEqual(['an earlier human note']);
+      expect(res).toEqual({ ok: true });
+    });
+
+    it("D-6367: `resumeIfOwn: 'whole'` never stashes (onDraft is not consulted) and its Enter's restore is not mistaken for our text", async () => {
+      const ours = 'please review the latest diff of the module';
+      const human = `${ours.slice(0, 30)} and then the human kept typing`;
+      const f = fakeCc({ box: [ours], stash: [human] });
+      const res = await send(f, ours, { ...STASH, resumeIfOwn: 'whole' });
+      expect(f.keys).toEqual(['Enter']);
+      expect(f.state.history).toEqual([ours]);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true });
+    });
+
     it('post-merge review: a capture missing the indicator after a swallowed Enter is not a delivery', async () => {
       const nudge = 'you have mail waiting for you, fetch it';
       const f = fakeCc({ box: [nudge], stash: ['an earlier human note'], swallowEnters: 1, hideAfterSwallow: 1 });
