@@ -4829,7 +4829,7 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     ]);
     // The driver's whole subcommand set, in registration order: W2-4's two, W2-5a Task 7's six, then W2-5b1's, in task
     // order (Task 1's grammar cases use an unregistered name).
-    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker']);
+    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms']);
   });
 
   // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
@@ -11973,4 +11973,891 @@ b1t2describe('W2-5b1 Task 2: the as-of pieces', () => {
       b1t2expect(lines(/\basOfEntrySql\b|\bcutHidesASource\b|\blineageEntries\b|card\.mjs/)).toEqual([]);
     });
   });
+});
+
+// ── W2-5b1 Task 4: the arm engine, `arms --section pilot|quiz` (W2-D78, W2-D80, W2-D56, W2-D55, W2-D64, W2-D82) ──
+// Every HOME is a fixture: up-a (upstream) with the arm stub below, a fresh limits row, a tagged stamp, a store made by
+// store.mjs's createStore (or, in the end-to-end describe, W2-5a Task 6's swept w6SourceBox), and headless-on written from lib's
+// formatHeadlessList. `arms` runs in-process with Task 2's question re-check and payload injected (Task 2 pins its own),
+// except the end-to-end case, which runs them for real. No case spawns a real model, reads the live HOME, or writes
+// outside its own mkTmp trees. The test may spell the arm words; the driver never does (W2-D42).
+import { describe as w5b4Describe, expect as w5b4Expect, it as w5b4It, vi as w5b4Vi, beforeAll as w5b4BeforeAll } from 'vitest';
+import * as w5b4Drv from '../../deploy/history-replay.mjs';
+import * as w5b4Gate from '../../deploy/history-gate.mjs';
+import * as w5b4Lib from '../../ccd/history/lib.mjs';
+import { createStore as w5b4CreateStore } from '../../ccd/history/store.mjs';
+import { mkTmp as w5b4MkTmp } from './tmpHelpers.js';
+import { REPO as W5B4_REPO } from './historyHelpers.js';
+
+type W5b4R = Record<string, any>;
+type W5b4Ref = { store_id: string; ccrc_id: string; generation: string };
+type W5b4Saved = { path: string; sha: string; value: W5b4R };
+type W5b4Result = { code: unknown; stdout: string; stderr: string; refusal: { word: string; detail: string } | null };
+const D4 = w5b4Drv as unknown as W5b4R;
+const W5B4_DAY = 86_400_000;
+const W5B4_T0 = 1_800_000_000_000;
+const W5B4_STORE_A = '00000000-0000-4000-8000-0000000004a1';
+const W5B4_STORE_B = '00000000-0000-4000-8000-0000000004b1';
+const W5B4_OPUS = 'claude-opus-9-1';
+const W5B4_ARM_MODEL = 'claude-arm-9-1';
+const W5B4_STAMP = 'v9.9.8';
+const W5B4_LANG = 'fixture.UTF-8';
+const w5b4Gen = (n: number): string => `0189abcd-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const w5b4Hex = (label: string): string => w5b4Lib.sha256Hex(`w2-5b1 task 4 fixture: ${label}`) as string;
+const W5B4_SEED = w5b4Hex('seed');
+/** The arm values in W2-2b's frozen order, positionally. */
+const W5B4_ARMS: string[] = [...(w5b4Lib.RECALL_ARMS as readonly string[])];
+const W5B4_CONTROL = W5B4_ARMS[0]!;
+const W5B4_TREATMENT = W5B4_ARMS[1]!;
+const W5B4_PILOT: W5b4Ref = { store_id: W5B4_STORE_A, ccrc_id: 'pilot-4', generation: w5b4Gen(940) };
+const W5B4_HEAD = { writer_model: W5B4_OPUS, labeller: { ...w5b4Gate.LABELLER, sha_min_prefix: 7 } };
+/** The stub's per-key controls live here: `<asof>.<arm>[.<k>]<ext>`, k the key's k-th -p run (1-based). */
+const W5B4_ARM_DIR = 'stub-arm';
+
+/** W2-4's recording stub, reshaped for arm runs: the same log line (so stubLog reads it), and for an arm run (a -p run
+ *  with CCRC_RECALL_ARM set) a per-(ASOF, ARM) choice of stream, exit code, sleep, and three acts taken before it exits
+ *  (rewrite the limits row, create a path, remove a path). `--version` prints STUB_STREAM, as W2-4's stub does. */
+const W5B4_ARM_STUB = `#!/usr/bin/env node
+(async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const start = Date.now();
+  const home = path.resolve(path.dirname(process.argv[1]), '..', '..');
+  const at = (f) => path.join(home, f);
+  const opt = (f) => { try { return fs.readFileSync(at(f), 'utf8'); } catch { return null; } };
+  const argv = process.argv.slice(2);
+  const print = argv.includes('-p');
+  const stdin = print ? fs.readFileSync(0, 'utf8') : '';
+  const arm = process.env.CCRC_RECALL_ARM;
+  const key = print && typeof arm === 'string' ? process.env.CCRC_RECALL_ASOF + '.' + arm : null;
+  const dir = ${JSON.stringify(W5B4_ARM_DIR)};
+  let k = 0;
+  if (key !== null) {
+    fs.mkdirSync(at(dir), { recursive: true });
+    fs.appendFileSync(at(dir + '/' + key + '.count'), 'x');
+    k = fs.statSync(at(dir + '/' + key + '.count')).size;
+  }
+  const per = (ext) => (key === null ? null : (opt(dir + '/' + key + '.' + k + ext) ?? opt(dir + '/' + key + ext)));
+  const sleep = Number(per('.sleep') ?? '0');
+  if (sleep > 0) await new Promise((r) => setTimeout(r, sleep));
+  const limits = per('.limits');
+  if (limits !== null) fs.writeFileSync(at('.cc-limits/up-a.json'), limits);
+  const touch = per('.touch');
+  if (touch !== null) { fs.mkdirSync(path.dirname(touch), { recursive: true }); fs.writeFileSync(touch, ''); }
+  const rm = per('.rm');
+  if (rm !== null) fs.rmSync(rm, { force: true });
+  const env = {};
+  for (const [n, v] of Object.entries(process.env)) if (n !== 'CLAUDE_CODE_OAUTH_TOKEN') env[n] = v;
+  fs.appendFileSync(at(${JSON.stringify(T5_STUB_LOG)}), JSON.stringify({ argv, envKeys: Object.keys(process.env).sort(), env,
+    cwd: process.cwd(), cwdMode: fs.statSync(process.cwd()).mode & 0o777, cwdEntries: fs.readdirSync(process.cwd()), stdin,
+    start, end: Date.now() }) + '\\n');
+  process.stdout.write(per('.jsonl') ?? opt(${JSON.stringify(STUB_STREAM)}) ?? '');
+  process.exitCode = Number(per('.exit') ?? '0');
+})();
+`;
+
+const w5b4LimitsRow = (pct: number): string => {
+  const nowS = Math.floor(Date.now() / 1000);
+  return JSON.stringify({ five: pct, seven: pct, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 });
+};
+function w5b4Limits(home: string, pct: number): void {
+  mkdirSync(join(home, '.cc-limits'), { recursive: true });
+  writeFileSync(join(home, '.cc-limits', 'up-a.json'), w5b4LimitsRow(pct));
+}
+/** Make `home` a fixture node: up-a and the arm stub, a fresh limits row at 10%, a tagged stamp. */
+function w5b4Node(home: string): void {
+  writeRoster(home, [FIXTURE_ACCOUNTS[0]!]);
+  const bin = join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'up-a'), W5B4_ARM_STUB, { mode: 0o700 });
+  if (!existsSync(join(home, STUB_STREAM))) writeFileSync(join(home, STUB_STREAM), T5_STREAM);
+  w5b4Limits(home, 10);
+  writeFileSync(join(home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-22T00:00:00Z', dirty: false, version: W5B4_STAMP }));
+}
+/** A fixture node with a createStore store of id `store` (none when null). */
+function w5b4Home(store: string | null = W5B4_STORE_A): string {
+  const home = w5b4MkTmp('ccrc-w5b4-home-');
+  w5b4Node(home);
+  if (store !== null) w5b4CreateStore(home, { storeId: store });
+  return home;
+}
+/** headless-on as the operator writes it from `marker` (W2-D84): lib's formatHeadlessList. */
+function w5b4Marker(home: string, storeId: string, refs: W5b4Ref[]): void {
+  const p = w5b4Lib.historyPaths(home).headlessOn as string;
+  mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+  const text = w5b4Lib.formatHeadlessList({ storeId, pairs: refs.map((r) => ({ ccrcId: r.ccrc_id, generation: r.generation })) }) as string;
+  writeFileSync(p, text, { mode: 0o600 });
+}
+/** One stub control for the runs of (question, arm): every run of that key, or only its k-th. */
+function w5b4Act(home: string, q: W5b4R, arm: string, ext: string, text: string, k: number | null = null): void {
+  const dir = join(home, W5B4_ARM_DIR);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${q.boundary_uuid as string}.${arm}${k === null ? '' : `.${k}`}${ext}`), text);
+}
+/** A stream-json an arm run prints: init, one Bash tool pair per call (with the event's parent_tool_use_id), an optional
+ *  event carrying an `error` field, and a result whose usage sums to T5_TOKENS (none when `result` is false). */
+function w5b4Stream(o: { text?: string; calls?: Array<{ command: string; isError?: boolean; parent?: string }>; error?: string; result?: boolean }): string {
+  const ev: object[] = [{ type: 'system', subtype: 'init', session_id: 'fixture-arm-session', model: W5B4_ARM_MODEL, tools: ['Bash', 'Agent'],
+    mcp_servers: [], plugins: [], skills: [], slash_commands: [] }];
+  (o.calls ?? []).forEach((c, i) => {
+    const id = `toolu_w5b4_${i}`;
+    ev.push({ type: 'assistant', parent_tool_use_id: c.parent ?? null, message: { id: `msg-w5b4-${i}`, usage: { input_tokens: 1, output_tokens: 1 },
+      content: [{ type: 'tool_use', id, name: 'Bash', input: { command: c.command } }] } });
+    ev.push({ type: 'user', parent_tool_use_id: c.parent ?? null, message: { content: [{ type: 'tool_result', tool_use_id: id,
+      content: c.isError === true ? 'exit 8' : 'ok', is_error: c.isError === true }] } });
+  });
+  if (o.error !== undefined) ev.push({ type: 'assistant', error: o.error, message: { id: 'msg-w5b4-error', content: [{ type: 'text', text: 'x' }] } });
+  if (o.result !== false) {
+    ev.push({ type: 'result', subtype: 'success', is_error: false, num_turns: 2, result: o.text ?? '', permission_denials: [],
+      usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 30, output_tokens: 5 } });
+  }
+  return ev.map((e) => JSON.stringify(e)).join('\n') + '\n';
+}
+
+const w5b4Shas = (): Record<string, string> => (D4.codeShas(W5B4_REPO) as { files: Record<string, string> }).files;
+/** What the stub answers to --version: STUB_STREAM's first line (W2-4 Task 7's measureClaudeVersion). */
+const w5b4Version = (home: string): string => readFileSync(join(home, STUB_STREAM), 'utf8').split('\n')[0]!.trim();
+/** One frozen entry on family `f` (W2-D73's eleven fields, its qid by W2-5a Task 6's qidOf): a sha fact of 7 hex digits. */
+function w5b4Entry(f: W5b4Ref, n: number): W5b4R {
+  const fact = (0xbd40000 + n).toString(16);
+  const e = { store_id: f.store_id, ccrc_id: f.ccrc_id, generation: f.generation, boundary_uuid: w5b4Gen(8400 + n), kind: 'sha', fact,
+    fact_raw: fact, question: `Which commit did arm fixture step ${n} record?`, source_entry_uuid: w5b4Gen(9400 + n), repo_roots: ['/home/u/tree'] };
+  return { ...e, qid: D4.qidOf(e) as string };
+}
+/** Part 1 through the driver's own buildDraft (W2-5a), every node's step 0a measured under `shas`, HOME's stub and stamp. */
+function w5b4Draft(home: string, o: { stores?: string[]; pilotFamilies?: W5b4Ref[]; pilotFrozenSha?: string; over?: W5b4R; shas?: Record<string, string> } = {}): W5b4R {
+  const stores = o.stores ?? [W5B4_STORE_A];
+  const shas = o.shas ?? w5b4Shas();
+  const s0 = { kind: D4.STEP0A_KIND, v: 1, measured_ms: W5B4_T0 - 40 * W5B4_DAY, account: 'up-a', settings_mode: 'restricted',
+    claude_code_version: w5b4Version(home), wrapper_sha256: null,
+    flags_accepted: Object.fromEntries((D4.contractFlags('restricted') as string[]).map((f) => [f, true])),
+    writer_init: { tools: [] }, judge_init: { tools: [] }, box_init: { tools: ['Bash', 'Agent'] },
+    code_shas: shas, release_stamp: W5B4_STAMP, budget: 100_000, spend: 600 };
+  const pilot = { kind: D4.PILOT_SOURCE_KIND, v: 1, store_id: stores[0], seed: w5b4Hex('pilot seed'), n_fidelity: 5, n_usage: 5,
+    families: o.pilotFamilies ?? [W5B4_PILOT], fidelity: [], frozen_sha256: o.pilotFrozenSha ?? w5b4Hex('pilot frozen'), writer_model: W5B4_OPUS,
+    used: { labeller: { ...w5b4Gate.LABELLER, path_forms: [...w5b4Gate.LABELLER.path_forms] }, sha_min_prefix: 7, writer_input: 'excerpt',
+      baseline_files: 'v1', writer_prompt_sha256: w5b4Gate.WRITER_PROMPT_SHA256, answer_protocol_sha256: w5b4Gate.ANSWER_PROTOCOL_SHA256 },
+    code_shas: shas, release_stamp: W5B4_STAMP, budget: 3_000_000, spend: 900_000, counts: {} };
+  return D4.buildDraft({ nodes: stores.map((s, i) => ({ label: `node-${i}`, store_id: s })),
+    step0a: stores.map((s, i) => ({ ...s0, label: `node-${i}`, store_id: s })), pilot, account: 'up-a',
+    models: { arm: W5B4_ARM_MODEL, writer: W5B4_OPUS, judge: W5B4_OPUS }, gateCode: { release_tag: W5B4_STAMP, files: shas },
+    seedHex: W5B4_SEED, nowMs: W5B4_T0 - 30 * W5B4_DAY, overrides: o.over ?? {}, supersedes: null }) as W5b4R;
+}
+/** Saved as the operator saves a record: canonical JSON and one newline, 0600, outside any git tree. */
+function w5b4Save(value: unknown, name: string): W5b4Saved {
+  const p = join(w5b4MkTmp('ccrc-w5b4-in-'), name);
+  const text = `${w5b4Lib.canonicalJson(value) as string}\n`;
+  writeFileSync(p, text, { mode: 0o600 });
+  return { path: p, sha: w5b4Lib.sha256Hex(text) as string, value: value as W5b4R };
+}
+/** A frozen list's bytes saved as they are (W2-D73: no trailing newline). */
+function w5b4SaveText(text: string, name: string): W5b4Saved {
+  const p = join(w5b4MkTmp('ccrc-w5b4-in-'), name);
+  writeFileSync(p, text, { mode: 0o600 });
+  return { path: p, sha: w5b4Lib.sha256Hex(text) as string, value: JSON.parse(text) as W5b4R };
+}
+const w5b4Inp = (name: string, s: W5b4Saved): string[] => [`--${name}`, s.path, `--${name}-sha256`, s.sha];
+const w5b4Out = (): string => join(w5b4MkTmp('ccrc-w5b4-out-'), 'out');
+/** The pilot section: `n` usage questions on `family`, the pilot frozen list, part 1 naming its sha, headless-on listing
+ *  the family (unless `marker` is false), and the argv. `entries` is the list as the driver reads it, in qid order. */
+function w5b4Pilot(home: string, o: { n?: number; over?: W5b4R; shas?: Record<string, string>; stores?: string[]; family?: W5b4Ref;
+  frozenSha?: string; marker?: boolean } = {}) {
+  const family = o.family ?? W5B4_PILOT;
+  const made = Array.from({ length: o.n ?? 2 }, (_, i) => w5b4Entry(family, i + 1));
+  const fz = w5b4SaveText(D4.frozenListText('pilot', W5B4_HEAD, made) as string, 'pilot-frozen.json');
+  const draft = w5b4Draft(home, { stores: o.stores, pilotFamilies: [family], pilotFrozenSha: o.frozenSha ?? fz.sha, over: o.over, shas: o.shas });
+  const d = w5b4Save(draft, 'part1.json');
+  if (o.marker !== false) w5b4Marker(home, W5B4_STORE_A, [family]);
+  const out = w5b4Out();
+  return { entries: fz.value.entries as W5b4R[], fz, draft, d, out,
+    argv: ['arms', '--section', 'pilot', '--out', out, ...w5b4Inp('record', d), ...w5b4Inp('frozen', fz)] };
+}
+/** The quiz section over two nodes: three questions on node A's family, two on node B's; part 1, the quiz frozen list,
+ *  and part 2 through the driver's own buildFinal (an empty assignment, no registry drop), with `spendBudget` and the
+ *  pilot result's settings mode; headless-on on node A listing A's family. */
+function w5b4Quiz(home: string, o: { over?: W5b4R; shas?: Record<string, string>; spendBudget?: number; settingsMode?: string } = {}) {
+  const famA: W5b4Ref = { store_id: W5B4_STORE_A, ccrc_id: 'quiz-a', generation: w5b4Gen(410) };
+  const famB: W5b4Ref = { store_id: W5B4_STORE_B, ccrc_id: 'quiz-b', generation: w5b4Gen(420) };
+  const made = [w5b4Entry(famA, 11), w5b4Entry(famA, 12), w5b4Entry(famA, 13), w5b4Entry(famB, 14), w5b4Entry(famB, 15)];
+  const draft = w5b4Draft(home, { stores: [W5B4_STORE_A, W5B4_STORE_B], over: o.over, shas: o.shas });
+  const d = w5b4Save(draft, 'part1.json');
+  const fz = w5b4SaveText(D4.frozenListText('quiz', W5B4_HEAD, made) as string, 'frozen.json');
+  const final = D4.buildFinal({ draft, draftSha256: d.sha,
+    assembled: { nodes: [W5B4_STORE_A, W5B4_STORE_B].map((s) => ({ store_id: s, census_sha256: w5b4Hex(`census ${s}`), report: { census: { as_of_ms: W5B4_T0 } } })), drops: [] },
+    assignment: { list: [], sha256: w5b4Gate.assignmentSha256([]) },
+    power: { headline: null, at_power_80: null, at_rho_0: null, rho_hat: null, n_f: {}, coverage: {}, pre_window_uptake: {} }, powerSha256: w5b4Hex('power'),
+    frozen: { sha256: fz.sha, list: fz.value, families: D4.familiesOf(fz.value.entries) },
+    pilotResult: { fidelity: [], usage_extrapolation: {}, step0b_sha256: w5b4Hex('step0b'), settings_mode: o.settingsMode ?? 'restricted', absent_rate: { num: 0, den: 10 } },
+    spendBudget: o.spendBudget ?? 1_000_000, window: { start: W5B4_T0 + W5B4_DAY, end: W5B4_T0 + 15 * W5B4_DAY }, decision: 'keep', nowMs: W5B4_T0 }) as W5b4R;
+  const f = w5b4Save(final, 'part2.json');
+  w5b4Marker(home, W5B4_STORE_A, [famA]);
+  const out = w5b4Out();
+  const entries = fz.value.entries as W5b4R[];
+  return { entries, mine: entries.filter((e) => e.store_id === W5B4_STORE_A), famA, draft, d, fz, final, f, out,
+    argv: (rec: W5b4Saved = f, extra: string[] = []): string[] =>
+      ['arms', '--section', 'quiz', '--out', out, ...w5b4Inp('record', rec), ...w5b4Inp('part1', d), ...w5b4Inp('frozen', fz), ...extra] };
+}
+/** A version-move amendment (W2-D90, Q13's detail) for node `label`. */
+function w5b4Move(label: string, version: string, i: number): W5b4R {
+  const detail = { claude_code_version: version, repilot_sha256: w5b4Hex(`repilot ${i}`) };
+  return { kind: 'version-move', node_label_ref: label, at_ms: W5B4_T0 + W5B4_DAY + i,
+    detail_sha256: w5b4Lib.sha256Hex(w5b4Lib.canonicalJson(detail)) as string, detail };
+}
+/** Part 2 superseded after window start, appending `amendments` (W2-D90: only amendments, finalized_ms and supersedes move). */
+function w5b4Amend(fx: { final: W5b4R }, amendments: W5b4R[]): W5b4Saved {
+  return w5b4Save({ ...fx.final, supersedes: w5b4Gate.recordSha256(fx.final), finalized_ms: W5B4_T0 + W5B4_DAY + 3_600_000, amendments }, 'part2-amended.json');
+}
+
+/** Task 2's recheckBatch and armPayloads, stood in with their shapes: every question passes (its verdict's cut carries
+ *  its qid), and each payload names its qid and the arm it goes to (plain to the control arm, carded to the treatment). */
+const W5B4_FAKE: W5b4R = {
+  recheck: async (_rs: unknown, es: W5b4R[]): Promise<Map<string, W5b4R>> =>
+    new Map(es.map((e) => [e.qid as string, { ok: true, boundaryEntryId: 0, cut: { qid: e.qid } }])),
+  payloads: (_rs: unknown, _id: number, _question: string, cut: W5b4R): W5b4R => ({ state: 'payloads',
+    plain: `fixture payload ${cut.qid as string} ${W5B4_CONTROL}\n`, carded: `fixture payload ${cut.qid as string} ${W5B4_TREATMENT}\n` }),
+  now: (): number => W5B4_T0 + 2 * W5B4_DAY,
+};
+/** `arms` in-process, as main runs it (parseArgs, then the handler) with W5B4_FAKE's deps under `deps`: stdout and stderr
+ *  captured, a refusal answered as {word, detail}; any other throw is the case's failure (D-6309's rule). */
+async function w5b4Arms(home: string, argv: string[], deps: W5b4R = {}): Promise<W5b4Result> {
+  const err: string[] = [];
+  const out: string[] = [];
+  const e1 = w5b4Vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write);
+  const o1 = w5b4Vi.spyOn(process.stdout, 'write').mockImplementation(((s: string | Uint8Array) => { out.push(String(s)); return true; }) as typeof process.stdout.write);
+  try {
+    const { flags } = D4.parseArgs(argv) as { flags: W5b4R };
+    const code = await D4.armsCommand(flags, { HOME: home, TMUX_PANE: undefined, LANG: W5B4_LANG }, { ...W5B4_FAKE, ...deps });
+    return { code, stdout: out.join(''), stderr: err.join(''), refusal: null };
+  } catch (e) {
+    if (e instanceof w5b4Drv.DriverRefusal) return { code: null, stdout: out.join(''), stderr: err.join(''), refusal: { word: (e as W5b4R).word, detail: (e as W5b4R).detail } };
+    throw e;
+  } finally {
+    e1.mockRestore();
+    o1.mockRestore();
+  }
+}
+const w5b4Runs = (home: string): W5b4R[] => ((stubLog(home) ?? []) as unknown as W5b4R[]).filter((e) => e.argv.includes('-p'));
+const w5b4Versions = (home: string): number => ((stubLog(home) ?? []) as unknown as W5b4R[]).filter((e) => e.argv[0] === '--version').length;
+const w5b4Json = (p: string): W5b4R => JSON.parse(readFileSync(p, 'utf8')) as W5b4R;
+const w5b4Manifests = (out: string, section: string): W5b4R[] => {
+  const dir = join(out, section, 'arms', 'batches');
+  return existsSync(dir) ? readdirSync(dir).sort().map((n) => w5b4Json(join(dir, n))) : [];
+};
+const w5b4Answer = (out: string, section: string, q: W5b4R, arm: string): W5b4R => w5b4Json(join(out, section, 'answers', `${q.qid as string}.${arm}.json`));
+const w5b4Summary = (out: string, section: string): W5b4R => w5b4Json(join(out, section, 'arms', 'summary.json'));
+const w5b4Names = (section: string, es: W5b4R[], attempt = 1): string[] =>
+  es.flatMap((e) => W5B4_ARMS.map((arm) => `${section}/arms/${e.qid as string}/${arm}.a${attempt}`));
+const w5b4Stop = (section: string, kind: string, word: string, notRun: number, rerun: number): string =>
+  `ccrc history-replay: arms ${section} ${kind} ${word}: ${notRun} question(s) not run, ${rerun} owing a re-run; nothing is retried\n`;
+
+w5b4Describe('W2-5b1 Task 4: the arm engine, pure parts', () => {
+  w5b4It('spendShareOf is ceil(budget x n / N) in integers, exact past 2^53 products (Q5)', () => {
+    w5b4Expect(D4.spendShareOf(1_000_001, 3, 5)).toBe(600_001);
+    w5b4Expect(D4.spendShareOf(1_000_000, 3, 5), 'CONTROL: an exact division adds nothing').toBe(600_000);
+    w5b4Expect(D4.spendShareOf(100, 3, 5)).toBe(60);
+    w5b4Expect(D4.spendShareOf(7, 5, 5), 'the whole list is the whole budget').toBe(7);
+    w5b4Expect(D4.spendShareOf(Number.MAX_SAFE_INTEGER, 2, 3), 'exact where a float product rounds').toBe(6_004_799_503_160_661);
+    for (const bad of [[0, 1, 1], [5, 0, 1], [5, 2, 1], [5, 1, 0], [1.5, 1, 1]]) {
+      w5b4Expect(() => D4.spendShareOf(...bad), JSON.stringify(bad)).toThrow(TypeError);
+    }
+  });
+
+  w5b4It('questionStateOf: a run-failed arm fails the question, two answered arms answer it, an owed re-run is rerun, else not-run (W2-D80)', () => {
+    const rows: Array<[string[], string]> = [
+      [['answered', 'answered'], 'answered'],
+      [['answered', 'run-failed'], 'run-failed'],
+      [['run-failed', 'rerun'], 'run-failed'],
+      [['answered', 'rerun'], 'rerun'],
+      [['rerun', 'not-run'], 'rerun'],
+      [['answered', 'not-run'], 'not-run'],
+      [['not-run', 'not-run'], 'not-run'],
+    ];
+    for (const [arms, want] of rows) w5b4Expect(D4.questionStateOf(arms), arms.join(' ')).toBe(want);
+    w5b4Expect(() => D4.questionStateOf(['answered', 'infra-failed']), 'a run class is not an outcome').toThrow(TypeError);
+    w5b4Expect(() => D4.questionStateOf([]), 'no arm is no question').toThrow(TypeError);
+    w5b4Expect(D4.questionCountsOf(['answered', 'run-failed', 'rerun', 'not-run', 'not-run'])).toEqual({ questions: 5, answered: 1, run_failed: 1, rerun_owed: 1, not_run: 2 });
+  });
+
+  w5b4It('uptakeOf counts a paired, non-error history Bash call, and via_agent for one inside a subagent (W2-D82)', () => {
+    const pair = (o: W5b4R): W5b4R => ({ id: 't', name: 'Bash', input: { command: 'ccrc history grep x' }, result: 'ok', isError: false, parentToolUseId: null, ...o });
+    w5b4Expect(D4.uptakeOf([
+      pair({}),
+      pair({ parentToolUseId: 'toolu_agent' }),
+      pair({ input: { command: '"$HOME/.local/bin/ccrc" history show y' }, result: null, isError: false }),
+      pair({ isError: true, result: 'exit 8' }),
+      pair({ result: null, isError: null }),
+      pair({ input: { command: 'ls -la' } }),
+      pair({ name: 'Read', input: { command: 'ccrc history grep x' } }),
+      pair({ input: 'ccrc history grep x' }),
+    ])).toEqual({ calls: 3, via_agent: 1, errored: 1 });
+    w5b4Expect(D4.uptakeOf([]), 'CONTROL: no pair, no call').toEqual({ calls: 0, via_agent: 0, errored: 0 });
+  });
+
+  w5b4It('armAnswerOf: the last ANSWER line, labelCorrect on a value only, unknown and absent kept apart (W2-D64)', () => {
+    const e = w5b4Entry(W5B4_PILOT, 1);
+    const facts = (text: string | null, toolPairs: W5b4R[] = []): W5b4R => ({ result: text === null ? null : { text }, toolPairs });
+    w5b4Expect(D4.armAnswerOf(e, facts(`ANSWER: deadbee\nthen\nANSWER: ${e.fact as string}`), 7)).toEqual({
+      answer_field: { state: 'value', value: e.fact }, correct: true, absent: false, reply: `ANSWER: deadbee\nthen\nANSWER: ${e.fact as string}`,
+      uptake: { calls: 0, via_agent: 0, errored: 0 } });
+    w5b4Expect(D4.armAnswerOf(e, facts(`ANSWER: ${e.fact as string} or abc1234`), 7).correct, 'a hedged pair is not correct').toBe(false);
+    w5b4Expect(D4.armAnswerOf(e, facts('ANSWER: UNKNOWN'), 7)).toMatchObject({ answer_field: { state: 'unknown' }, correct: false, absent: false });
+    w5b4Expect(D4.armAnswerOf(e, facts(`The commit is ${e.fact as string}.`), 7), 'F in the reply without the line is absent').toMatchObject({ answer_field: { state: 'absent' }, correct: false, absent: true });
+    w5b4Expect(D4.armAnswerOf(e, facts(null), 7)).toMatchObject({ answer_field: { state: 'absent' }, correct: false, absent: true, reply: null });
+  });
+
+  w5b4It('expectedForNode: part 1\'s step 0a entry, or the node\'s newest version-move amendment (W2-D56, W2-D90)', () => {
+    const home = w5b4MkTmp('ccrc-w5b4-pure-');
+    writeFileSync(join(home, STUB_STREAM), T5_STREAM);
+    const draft = w5b4Draft(home, { stores: [W5B4_STORE_A, W5B4_STORE_B] });
+    const plain = D4.expectedForNode(draft, W5B4_STORE_A);
+    w5b4Expect(plain).toEqual({ from: 'step0a', expected: { claude_code_version: w5b4Version(home), release_stamp: W5B4_STAMP,
+      wrapper_sha256: null, code_shas: draft.gate_code.files } });
+    const final = { ...draft, amendments: [w5b4Move('node-0', 'v-a', 1), w5b4Move('node-1', 'v-b', 2), w5b4Move('node-0', 'v-c', 3)] };
+    w5b4Expect(D4.expectedForNode(final, W5B4_STORE_A)).toMatchObject({ from: 'amendments[2]', expected: { claude_code_version: 'v-c' } });
+    w5b4Expect(D4.expectedForNode(final, W5B4_STORE_B)).toMatchObject({ from: 'amendments[1]', expected: { claude_code_version: 'v-b' } });
+    const other = { ...draft, amendments: [w5b4Move('node-1', 'v-b', 2), { kind: 'freeze-exception', node_label_ref: null, at_ms: 1, detail_sha256: w5b4Hex('d'), detail: {} }] };
+    w5b4Expect(D4.expectedForNode(other, W5B4_STORE_A), 'CONTROL: another node\'s move and another kind leave node A\'s step 0a version').toMatchObject({ from: 'step0a' });
+    const refusal = (rec: W5b4R, store: string): unknown => { try { D4.expectedForNode(rec, store); return null; } catch (e) { return [(e as W5b4R).word, (e as W5b4R).detail]; } };
+    w5b4Expect(refusal({ ...draft, amendments: [w5b4Move('node-9', 'v', 1)] }, W5B4_STORE_A)).toEqual(['record-invalid', 'amendments[0].node_label_ref out-of-range']);
+    w5b4Expect(refusal({ ...draft, amendments: [{ ...w5b4Move('node-0', 'v', 1), detail: { repilot_sha256: w5b4Hex('r') } }] }, W5B4_STORE_A))
+      .toEqual(['record-invalid', 'amendments[0].detail.claude_code_version out-of-range']);
+    w5b4Expect(refusal(draft, '00000000-0000-4000-8000-0000000004c1')).toEqual(['input-invalid', 'store 00000000-0000-4000-8000-0000000004c1 is not one of the record\'s nodes']);
+    w5b4Expect(refusal({ ...draft, amendments: [w5b4Move('node-0', 'v-a', 1), { ...w5b4Move('node-1', 'v', 2), detail: { repilot_sha256: w5b4Hex('r') } }] }, W5B4_STORE_A),
+      'another node\'s move with no version is refused too: the record is out of range whatever node asks (R30, as loadFinalRecord reads it)')
+      .toEqual(['record-invalid', 'amendments[1].detail.claude_code_version out-of-range']);
+    // R30 (W2-D12): the version-move ranges are spelled once, in Task 1's versionMoveChecks, and refused once, through
+    // refuseRangeRows; expectedForNode reads both. A code line is one whose trimmed text does not open a comment.
+    const code = readFileSync(join(W5B4_REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+    w5b4Expect(code.filter((l) => l.includes('.node_label_ref') && l.includes('labels.has(')).length, 'R30: the label range on one code line').toBe(1);
+    w5b4Expect(code.filter((l) => l.includes('out-of-range') && /node_label_ref|claude_code_version/.test(l)), 'R30: no second refusal of either row').toEqual([]);
+    w5b4Expect(code.filter((l) => l.includes('versionMoveChecks(')).length, 'R30: defined once, read by part2RangeChecks and expectedForNode').toBe(3);
+  });
+
+  w5b4It('armsSummaryOf: the counts, the per-arm rates over answered questions only, and the stop (Q30, W2-D64)', () => {
+    const ans = (state: string, correct: boolean, calls: number): W5b4R => ({ answer_field: state === 'value' ? { state, value: 'x' } : { state }, correct,
+      absent: state === 'absent', reply: 'r', uptake: { calls, via_agent: calls > 1 ? 1 : 0, errored: 0 } });
+    const q = (qid: string, state: string, c: W5b4R | null, t: W5b4R | null): W5b4R => ({ qid, state, arms: [{ arm: W5B4_CONTROL, answer: c }, { arm: W5B4_TREATMENT, answer: t }] });
+    const s = D4.armsSummaryOf({ section: 'quiz', recordSha256: w5b4Hex('rec'), storeId: W5B4_STORE_A, budget: { in_force: 60, spend_budget: 100, n_node: 3, n_all: 5 },
+      spend: 130, batches: 2, stop: { word: 'budget-exhausted', kind: 'stop', detail: 'spent 130 of 60' }, stamps: new Set(['code-changed']),
+      questions: [q('q1', 'answered', ans('unknown', false, 0), ans('value', true, 2)), q('q2', 'answered', ans('absent', false, 0), ans('value', false, 1)),
+        q('q3', 'run-failed', ans('value', true, 1), null), q('q4', 'not-run', null, null)] });
+    w5b4Expect(s).toEqual({ kind: D4.ARMS_SUMMARY_KIND, v: 1, section: 'quiz', record_sha256: w5b4Hex('rec'), store_id: W5B4_STORE_A,
+      budget: { in_force: 60, spend_budget: 100, n_node: 3, n_all: 5 }, spend: 130, batches: 2,
+      stop: { word: 'budget-exhausted', kind: 'stop', detail: 'spent 130 of 60' }, stamps: ['code-changed'],
+      counts: { questions: 4, answered: 2, run_failed: 1, rerun_owed: 0, not_run: 1 },
+      arms: {
+        [W5B4_CONTROL]: { answered: 2, value: 0, unknown: 1, absent: 1, correct: 0, uptake_questions: 0, uptake_calls: 0, via_agent: 0, errored: 0 },
+        [W5B4_TREATMENT]: { answered: 2, value: 2, unknown: 0, absent: 0, correct: 1, uptake_questions: 2, uptake_calls: 3, via_agent: 1, errored: 0 },
+      },
+      absent_rate: { [W5B4_CONTROL]: { num: 1, den: 2 }, [W5B4_TREATMENT]: { num: 0, den: 2 } },
+      questions: [{ qid: 'q1', state: 'answered' }, { qid: 'q2', state: 'answered' }, { qid: 'q3', state: 'run-failed' }, { qid: 'q4', state: 'not-run' }] });
+  });
+
+  w5b4It('armRunName, answerRel and armsSummaryRel carry the section, the attempt and a RECALL_ARMS member only (Q4)', () => {
+    w5b4Expect(D4.armRunName('quiz', '0123456789abcdef', W5B4_TREATMENT, 2)).toBe(`quiz/arms/0123456789abcdef/${W5B4_TREATMENT}.a2`);
+    w5b4Expect(D4.answerRel('pilot', '0123456789abcdef', W5B4_CONTROL)).toBe(`pilot/answers/0123456789abcdef.${W5B4_CONTROL}.json`);
+    w5b4Expect(D4.armsSummaryRel('pilot')).toBe('pilot/arms/summary.json');
+    w5b4Expect(() => D4.armRunName('quiz', '0123456789abcdef', 'placebo', 1)).toThrow(TypeError);
+    w5b4Expect(() => D4.armRunName('quiz', '0123456789abcdef', W5B4_CONTROL, 3)).toThrow(TypeError);
+    w5b4Expect(() => D4.armRunName('ab', '0123456789abcdef', W5B4_CONTROL, 1)).toThrow(TypeError);
+    w5b4Expect(() => D4.answerRel('quiz', '0123456789abcdef', 'placebo')).toThrow(TypeError);
+  });
+
+  w5b4It('streamEventsOf keeps every JSON object line, and errorFieldsOf every error field a run carried, once each (Q31)', () => {
+    const text = [JSON.stringify({ type: 'assistant', error: 'fixture_b' }), 'not json', '[1]', '', JSON.stringify({ type: 'assistant', error: 'fixture_a' }),
+      JSON.stringify({ type: 'assistant', error: 'fixture_b' }), JSON.stringify({ type: 'result', error: 7 })].join('\n');
+    const events = D4.streamEventsOf(text) as W5b4R[];
+    w5b4Expect(events.map((e) => e.type)).toEqual(['assistant', 'assistant', 'assistant', 'result']);
+    w5b4Expect(D4.errorFieldsOf(events)).toEqual(['fixture_a', 'fixture_b']);
+    w5b4Expect(D4.errorFieldsOf(D4.streamEventsOf(T5_STREAM)), 'CONTROL: a clean stream carries none').toEqual([]);
+  });
+
+  w5b4It('readArmAnswers refuses out-refused for an answer file it cannot read and for one that is not this section\'s answer record; CONTROL: the same record read directly (R26, R31)', () => {
+    const out = w5b4MkTmp('ccrc-w5b4-answers-');
+    const dir = join(out, 'pilot', 'answers');
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const q = w5b4Entry(W5B4_PILOT, 1);
+    const name = `${q.qid as string}.${W5B4_CONTROL}.json`;
+    const at = join(dir, name);
+    const record = { kind: D4.ANSWER_KIND, v: 1, section: 'pilot', qid: q.qid, arm: W5B4_CONTROL, arm_state: 'answered', reply: 'ANSWER: UNKNOWN', correct: false };
+    const kept = join(out, 'kept.json');
+    writeFileSync(kept, `${w5b4Lib.canonicalJson(record) as string}\n`, { mode: 0o600 });
+    const put = (text: string): void => { rmSync(at, { recursive: true, force: true }); writeFileSync(at, text, { mode: 0o600 }); };
+    const read = (): unknown => {
+      try {
+        return D4.readArmAnswers(out, 'pilot');
+      } catch (e) {
+        if (e instanceof w5b4Drv.DriverRefusal) return [(e as W5b4R).word, (e as W5b4R).detail];
+        throw e;
+      }
+    };
+    w5b4Expect(D4.readArmAnswers(join(out, 'none'), 'pilot'), 'no answers directory is no record').toEqual([]);
+    copyFileSync(kept, at);
+    w5b4Expect(read(), 'CONTROL: the record itself reads').toEqual([{ qid: q.qid, arm: W5B4_CONTROL, outcome: 'answered', reply: 'ANSWER: UNKNOWN', correct: false }]);
+    rmSync(at);
+    symlinkSync(kept, at);
+    w5b4Expect(read(), 'a link to that same record is never followed (D-5986)').toEqual(['out-refused', `pilot/answers/${name} not-regular`]);
+    rmSync(at);
+    mkdirSync(at);
+    w5b4Expect(read(), 'a directory where a record belongs').toEqual(['out-refused', `pilot/answers/${name} not-regular`]);
+    put('not json');
+    w5b4Expect(read(), 'bytes that are not JSON').toEqual(['out-refused', `pilot/answers/${name} is not JSON`]);
+    put(`${w5b4Lib.canonicalJson({ ...record, kind: D4.ARMS_SUMMARY_KIND }) as string}\n`);
+    w5b4Expect(read(), 'another kind').toEqual(['out-refused', `pilot/answers/${name} is not an answer record`]);
+    put(`${w5b4Lib.canonicalJson({ ...record, section: 'quiz' }) as string}\n`);
+    w5b4Expect(read(), 'another section').toEqual(['out-refused', `pilot/answers/${name} is not an answer record`]);
+    put(`${w5b4Lib.canonicalJson({ ...record, arm: W5B4_TREATMENT }) as string}\n`);
+    w5b4Expect(read(), 'a record under another (qid, arm)\'s name').toEqual(['out-refused', `pilot/answers/${name} is not an answer record`]);
+    put(`${w5b4Lib.canonicalJson(record) as string}\n`);
+    w5b4Expect(read(), 'CONTROL: written back, it reads again').toHaveLength(1);
+  });
+});
+
+w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: arms on the stub', () => {
+  w5b4It('RP1-arm: both arms of each question, the exact env with the real ARM values, one manifest and the summary sha (W2-D50, W2-D42, Q14)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 2 });
+    const r = await w5b4Arms(home, fx.argv);
+    w5b4Expect(r.refusal).toBeNull();
+    w5b4Expect(r.code).toBe(0);
+    w5b4Expect(r.stdout, 'stdout stays empty (D-5983)').toBe('');
+    w5b4Expect(r.stderr).toBe(`sha256 ${w5b4Lib.sha256Hex(readFileSync(join(fx.out, 'pilot', 'arms', 'summary.json'))) as string}\n`);
+    const runs = w5b4Runs(home);
+    w5b4Expect(runs).toHaveLength(4);
+    for (const run of runs) {
+      w5b4Expect(withoutDarwinAdded(run.envKeys as string[]), 'RP1-arm: exactly the seven keys').toEqual([...T5_BASE_KEYS, ...T5_RECALL_KEYS].sort());
+      for (const k of T5_NEVER_KEYS) w5b4Expect(run.env[k], k).toBeUndefined();
+      w5b4Expect(run.argv).toEqual(t5Argv('arm', W5B4_ARM_MODEL, home));
+      w5b4Expect(run.env.HOME).toBe(home);
+      w5b4Expect(run.env.CLAUDE_CONFIG_DIR).toBe(join(home, '.claude'));
+      w5b4Expect(run.env.LANG).toBe(W5B4_LANG);
+      w5b4Expect((run.env.PATH as string).split(':')[0]!.endsWith('/poison-bin'), 'the poisoned gh first').toBe(true);
+    }
+    const seen = runs.map((x) => [x.env.CCRC_RECALL_SESSION, x.env.CCRC_RECALL_ASOF, x.env.CCRC_RECALL_ARM, x.stdin].join('|')).sort();
+    const want = fx.entries.flatMap((e) => W5B4_ARMS.map((arm) => [e.ccrc_id, e.boundary_uuid, arm, `fixture payload ${e.qid as string} ${arm}\n`].join('|'))).sort();
+    w5b4Expect(seen, 'SESSION is the family id, ASOF its boundary, ARM each RECALL_ARMS member once per question').toEqual(want);
+    const m = w5b4Manifests(fx.out, 'pilot');
+    w5b4Expect(m).toHaveLength(1);
+    w5b4Expect(m[0]).toMatchObject({ kind: D4.ARM_BATCH_KIND, v: 1, section: 'pilot', record_sha256: fx.d.sha, store_id: W5B4_STORE_A, batch: 1,
+      claude_code_version: w5b4Version(home), stamps: [] });
+    w5b4Expect((m[0]!.runs as W5b4R[]).map((x) => x.name), 'frozen qid order, each question\'s arms side by side').toEqual(w5b4Names('pilot', fx.entries));
+    w5b4Expect(m[0]!.runs[0]).toEqual({ name: w5b4Names('pilot', fx.entries)[0], qid: fx.entries[0]!.qid, arm: W5B4_CONTROL, attempt: 1,
+      stdin_sha256: w5b4Lib.sha256Hex(`fixture payload ${fx.entries[0]!.qid as string} ${W5B4_CONTROL}\n`) });
+    w5b4Expect(w5b4Summary(fx.out, 'pilot')).toMatchObject({ kind: D4.ARMS_SUMMARY_KIND, section: 'pilot', record_sha256: fx.d.sha, store_id: W5B4_STORE_A,
+      batches: 1, stop: null, stamps: [], spend: 4 * T5_TOKENS, budget: { in_force: fx.draft.pilot_budget, spend_budget: null, n_node: 2, n_all: 2 },
+      counts: { questions: 2, answered: 2, run_failed: 0, rerun_owed: 0, not_run: 0 } });
+  }, 120_000);
+
+  w5b4It('answer records per (qid, arm): the answer field, labelCorrect, uptake with via_agent, absent, every error field, and the per-arm rates (W2-D82, W2-D64, Q31)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 2 });
+    const [q1, q2] = fx.entries as [W5b4R, W5b4R];
+    w5b4Act(home, q1, W5B4_TREATMENT, '.jsonl', w5b4Stream({ text: `I checked the history.\nANSWER: ${q1.fact as string}`,
+      calls: [{ command: 'ccrc history grep fixture --json', parent: 'toolu_agent_w5b4' }, { command: 'ls -la' }] }));
+    w5b4Act(home, q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'ANSWER: UNKNOWN', calls: [{ command: '~/.local/bin/ccrc history grep fixture', isError: true }] }));
+    w5b4Act(home, q2, W5B4_TREATMENT, '.jsonl', w5b4Stream({ text: 'ANSWER: abc1234 or def5678', error: 'fixture_error_field' }));
+    const r = await w5b4Arms(home, fx.argv);
+    w5b4Expect(r.code).toBe(0);
+    const t1 = `pilot/arms/${q1.qid as string}/${W5B4_TREATMENT}.a1`;
+    w5b4Expect(w5b4Answer(fx.out, 'pilot', q1, W5B4_TREATMENT)).toEqual({ kind: D4.ANSWER_KIND, v: 1, section: 'pilot', record_sha256: fx.d.sha,
+      store_id: W5B4_STORE_A, qid: q1.qid, arm: W5B4_TREATMENT, ccrc_id: q1.ccrc_id, generation: q1.generation, boundary_uuid: q1.boundary_uuid,
+      fact_kind: 'sha', question_state: 'answered', arm_state: 'answered',
+      attempts: [{ name: t1, class: 'answered', code: 0, signal: null, tokens: T5_TOKENS, error_fields: [] }],
+      run: t1, answer_field: { state: 'value', value: q1.fact }, correct: true, absent: false,
+      reply: `I checked the history.\nANSWER: ${q1.fact as string}`, uptake: { calls: 1, via_agent: 1, errored: 0 }, stamps: [] });
+    w5b4Expect(w5b4Answer(fx.out, 'pilot', q1, W5B4_CONTROL), 'the exit-8 call is errored, never a call (W2-D82)').toMatchObject({
+      answer_field: { state: 'unknown' }, correct: false, absent: false, uptake: { calls: 0, via_agent: 0, errored: 1 } });
+    w5b4Expect(w5b4Answer(fx.out, 'pilot', q2, W5B4_TREATMENT), 'a hedged pair is a value, not correct').toMatchObject({
+      answer_field: { state: 'value', value: 'abc1234 or def5678' }, correct: false, absent: false });
+    w5b4Expect(w5b4Answer(fx.out, 'pilot', q2, W5B4_TREATMENT).attempts[0].error_fields, 'Q31: an error field is recorded').toEqual(['fixture_error_field']);
+    w5b4Expect(w5b4Answer(fx.out, 'pilot', q2, W5B4_CONTROL), 'the default stream has no ANSWER line').toMatchObject({
+      answer_field: { state: 'absent' }, correct: false, absent: true, reply: 'ok' });
+    const read = D4.readArmAnswers(fx.out, 'pilot') as W5b4R[];
+    w5b4Expect(read, 'readArmAnswers: one row per (qid, arm), projected from the records (R26)').toHaveLength(4);
+    w5b4Expect(read).toContainEqual({ qid: q1.qid, arm: W5B4_TREATMENT, outcome: 'answered', reply: `I checked the history.\nANSWER: ${q1.fact as string}`, correct: true });
+    const s = w5b4Summary(fx.out, 'pilot');
+    w5b4Expect(s.arms).toEqual({
+      [W5B4_CONTROL]: { answered: 2, value: 0, unknown: 1, absent: 1, correct: 0, uptake_questions: 0, uptake_calls: 0, via_agent: 0, errored: 1 },
+      [W5B4_TREATMENT]: { answered: 2, value: 2, unknown: 0, absent: 0, correct: 1, uptake_questions: 1, uptake_calls: 1, via_agent: 1, errored: 0 },
+    });
+    w5b4Expect(s.absent_rate).toEqual({ [W5B4_CONTROL]: { num: 1, den: 2 }, [W5B4_TREATMENT]: { num: 0, den: 2 } });
+  }, 120_000);
+
+  w5b4It('batches: limits.batch_max / 2 questions each, both arms side by side, in frozen qid order, the preflight before each (Q3)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 7 });
+    w5b4Expect((await w5b4Arms(home, fx.argv)).code).toBe(0);
+    w5b4Expect(w5b4Manifests(fx.out, 'pilot').map((m) => (m.runs as W5b4R[]).map((x) => x.name)))
+      .toEqual([w5b4Names('pilot', fx.entries.slice(0, 5)), w5b4Names('pilot', fx.entries.slice(5))]);
+    w5b4Expect(w5b4Runs(home)).toHaveLength(14);
+    w5b4Expect(w5b4Versions(home), 'one --version per batch').toBe(2);
+    const home2 = w5b4Home();
+    const fx2 = w5b4Pilot(home2, { n: 5, over: { limits: { batch_max: 4 } } });
+    w5b4Expect((await w5b4Arms(home2, fx2.argv)).code).toBe(0);
+    w5b4Expect(w5b4Manifests(fx2.out, 'pilot').map((m) => (m.runs as W5b4R[]).map((x) => x.name)), 'CONTROL: batch_max 4 holds two questions')
+      .toEqual([w5b4Names('pilot', fx2.entries.slice(0, 2)), w5b4Names('pilot', fx2.entries.slice(2, 4)), w5b4Names('pilot', fx2.entries.slice(4))]);
+  }, 180_000);
+
+  type W5b4Before = [string, string, RegExp, () => { home: string; argv: string[]; out: string }];
+  const pilotIn = (home: string, o: Parameters<typeof w5b4Pilot>[1] = {}): { home: string; argv: string[]; out: string } => {
+    const fx = w5b4Pilot(home, o);
+    return { home, argv: fx.argv, out: fx.out };
+  };
+  const BEFORE_OUT: W5b4Before[] = [
+    ['code-changed is asked first, before the frozen list is read (W2-D24)', 'code-changed', /measure-history\.py/, () => {
+      const home = w5b4Home();
+      const fx = w5b4Pilot(home, { shas: { ...w5b4Shas(), 'deploy/measure-history.py': w5b4Hex('moved') } });
+      return { home, out: fx.out, argv: fx.argv.map((a) => (a === fx.fz.path ? join(home, 'no-such-frozen.json') : a)) };
+    }],
+    ['a pilot list that is not part 1\'s', 'quiz-sha-mismatch', /is not the record's pilot\.frozen_sha256/, () => pilotIn(w5b4Home(), { frozenSha: w5b4Hex('another list') })],
+    ['no store on the node', 'store-unreadable', /./, () => pilotIn(w5b4Home(null))],
+    ['a store the record does not name', 'input-invalid', /^store 00000000-0000-4000-8000-0000000004b1 is not one of the record's nodes$/, () => pilotIn(w5b4Home(W5B4_STORE_B))],
+    ['a pilot question on another node\'s store', 'input-invalid', /^pilot question [0-9a-f]{16} is on store 00000000-0000-4000-8000-0000000004b1, not this node's/,
+      () => pilotIn(w5b4Home(), { stores: [W5B4_STORE_A, W5B4_STORE_B], family: { ...W5B4_PILOT, store_id: W5B4_STORE_B } })],
+    ['a batch_max that cannot hold both arms (R28)', 'record-invalid', /^limits\.batch_max out-of-range$/, () => pilotIn(w5b4Home(), { over: { limits: { batch_max: 1 } } })],
+    ['a concurrency past CONCURRENCY_MAX', 'record-invalid', /^limits\.concurrency out-of-range$/, () => pilotIn(w5b4Home(), { over: { limits: { concurrency: 3 } } })],
+    ['the record\'s account is hidden in the roster (W2-D52)', 'account-refused', /^hidden$/, () => {
+      const home = w5b4Home();
+      // The roster needs exactly one upstream account (shared/roster-json.mjs), so up-a stays, marked hidden.
+      writeRoster(home, [fixtureAccount('up-a', { kind: 'upstream' }, { configDirSuffix: '.claude', homeAble: true, telemetry: 'anthropic', hidden: true })]);
+      return pilotIn(home);
+    }],
+    ['the limits row at the threshold', 'limits-threshold', /^five 90 seven 90 at or over 70$/, () => {
+      const home = w5b4Home();
+      w5b4Limits(home, 90);
+      return pilotIn(home);
+    }],
+    ['the installed stamp moved (W2-D6)', 'tree-moved', /^recorded v9\.9\.8, measured v0\.0\.1$/, () => {
+      const home = w5b4Home();
+      writeFileSync(join(home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-22T00:00:00Z', dirty: false, version: 'v0.0.1' }));
+      return pilotIn(home);
+    }],
+    ['W2-D78 (i): no headless-on', 'family-unlisted', /./, () => pilotIn(w5b4Home(), { marker: false })],
+    ['W2-D78 (i): headless-on names another store', 'family-unlisted', /./, () => {
+      const home = w5b4Home();
+      const fx = pilotIn(home);
+      w5b4Marker(home, W5B4_STORE_B, [W5B4_PILOT]);
+      return fx;
+    }],
+    ['W2-D78 (i): headless-on lists another generation', 'family-unlisted', /./, () => {
+      const home = w5b4Home();
+      const fx = pilotIn(home);
+      w5b4Marker(home, W5B4_STORE_A, [{ ...W5B4_PILOT, generation: w5b4Gen(941) }]);
+      return fx;
+    }],
+    ['W2-D78 (ii), family-recall-off: a recall-off entry for the family', 'family-recall-off', /^present pilot-4$/, () => {
+      const home = w5b4Home();
+      const p = w5b4Lib.recallOffPath(home, 'pilot-4') as string;
+      mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+      writeFileSync(p, '');
+      return pilotIn(home);
+    }],
+  ];
+  w5b4It.each(BEFORE_OUT)('refuses before --out, with the stub log absent: %s', async (_label, word, detail, setup) => {
+    const { home, argv, out } = setup();
+    const r = await w5b4Arms(home, argv);
+    w5b4Expect(r.refusal?.word).toBe(word);
+    w5b4Expect(r.refusal?.detail).toMatch(detail);
+    w5b4Expect(existsSync(out), 'no --out is made').toBe(false);
+    w5b4Expect(stubLog(home), 'no spawn, not even --version').toBeNull();
+  }, 60_000);
+
+  // W2-D24 (R23): arms re-checks the code it runs under before any other input, under W2-5a's title; the record is
+  // signed with a code sha this tree does not have, and the input read next is unreadable (pilot) or the store absent (quiz).
+  const W5B4_MOVED = (): Record<string, string> => ({ ...w5b4Shas(), 'deploy/measure-history.py': w5b4Hex('moved') });
+  w5b4It.each([
+    ['arms --section pilot', (home: string): { out: string; argv: string[] } => {
+      const fx = w5b4Pilot(home, { shas: W5B4_MOVED() });
+      return { out: fx.out, argv: fx.argv.map((a) => (a === fx.fz.path ? join(home, 'no-such-frozen.json') : a)) };
+    }],
+    ['arms --section quiz', (home: string): { out: string; argv: string[] } => {
+      const fx = w5b4Quiz(home, { shas: W5B4_MOVED() });
+      return { out: fx.out, argv: fx.argv() };
+    }],
+  ] as Array<[string, (home: string) => { out: string; argv: string[] }]>)('code-changed before any other input is read, re-checks the code it runs under: %s', async (_sub, setup) => {
+    const home = w5b4Home(null);   // no store: a re-check after the store open would answer store-unreadable
+    const { out, argv } = setup(home);
+    const r = await w5b4Arms(home, argv);
+    w5b4Expect(r.refusal).toEqual({ word: 'code-changed', detail: 'changed deploy/measure-history.py' });
+    w5b4Expect(existsSync(out), 'no --out').toBe(false);
+    w5b4Expect(stubLog(home), 'no spawn').toBeNull();
+  }, 60_000);
+
+  w5b4It('an --out holding pilot-source.json is refused, and the same --out without it runs (Q25)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 1 });
+    const out = D4.prepareOut(fx.out) as string;
+    writeFileSync(join(out, 'pilot-source.json'), '{}\n', { mode: 0o600 });
+    const r = await w5b4Arms(home, fx.argv);
+    w5b4Expect(r.refusal).toEqual({ word: 'out-refused', detail: 'pilot-source.json is here: arms run on a fresh --out, never pilot-source\'s' });
+    w5b4Expect(stubLog(home)).toBeNull();
+    w5b4Expect(existsSync(join(out, 'pilot'))).toBe(false);
+    rmSync(join(out, 'pilot-source.json'));
+    w5b4Expect((await w5b4Arms(home, fx.argv)).code, 'CONTROL: without it').toBe(0);
+  }, 60_000);
+
+  w5b4It('W2-D78 (iii) before every batch: an unanswerable question refuses its batch, the earlier batch ran, the summary names it (Q30)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 6 });
+    const last = fx.entries[5]!;
+    const r = await w5b4Arms(home, fx.argv, { recheck: async (rs: unknown, es: W5b4R[]): Promise<Map<string, W5b4R>> => {
+      if (es.some((e) => e.qid === last.qid)) D4.refuse('quiz-unanswerable', `${last.qid as string} clause (b) unanswerable`);
+      return W5B4_FAKE.recheck(rs, es);
+    } });
+    w5b4Expect(r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${last.qid as string} clause (b) unanswerable` });
+    w5b4Expect(w5b4Runs(home), 'batch 1 ran, batch 2 spawned nothing').toHaveLength(10);
+    w5b4Expect(w5b4Versions(home), 'batch 2 refused before its --version').toBe(1);
+    w5b4Expect(r.stderr).toBe(w5b4Stop('pilot', 'refusal', 'quiz-unanswerable', 1, 0));
+    const s = w5b4Summary(fx.out, 'pilot');
+    w5b4Expect(s.stop).toEqual({ word: 'quiz-unanswerable', kind: 'refusal', detail: `${last.qid as string} clause (b) unanswerable` });
+    w5b4Expect(s.counts).toEqual({ questions: 6, answered: 5, run_failed: 0, rerun_owed: 0, not_run: 1 });
+    w5b4Expect(readdirSync(join(fx.out, 'pilot', 'answers')).sort(), 'the five settled questions have their records')
+      .toEqual(fx.entries.slice(0, 5).flatMap((e) => W5B4_ARMS.map((arm) => `${e.qid as string}.${arm}.json`)).sort());
+  }, 120_000);
+
+  w5b4It('W2-D78 (iii): a payload that no longer reconstructs refuses quiz-unanswerable, never a dropped question (D-6469)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 2 });
+    const gone = fx.entries[1]!;
+    const r = await w5b4Arms(home, fx.argv, { payloads: (rs: unknown, id: number, question: string, cut: W5b4R): W5b4R =>
+      (cut.qid === gone.qid ? { state: 'discard', why: 'summary-absent' } : W5B4_FAKE.payloads(rs, id, question, cut)) });
+    w5b4Expect(r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${gone.qid as string} payload summary-absent` });
+    w5b4Expect(stubLog(home), 'the batch spawned nothing').toBeNull();
+    w5b4Expect(w5b4Summary(fx.out, 'pilot').counts).toEqual({ questions: 2, answered: 0, run_failed: 0, rerun_owed: 0, not_run: 2 });
+  }, 60_000);
+
+  w5b4It('W2-D78 (i) and (ii) before every batch: headless-on removed, or a recall-off entry written, during a batch refuses the next', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 6 });
+    w5b4Act(home, fx.entries[0]!, W5B4_CONTROL, '.touch', w5b4Lib.recallOffPath(home, 'pilot-4') as string, 1);
+    const r = await w5b4Arms(home, fx.argv);
+    w5b4Expect(r.refusal).toEqual({ word: 'family-recall-off', detail: 'present pilot-4' });
+    w5b4Expect(w5b4Runs(home)).toHaveLength(10);
+    w5b4Expect(w5b4Versions(home), 'batch 2 refused before its --version').toBe(1);
+    w5b4Expect(w5b4Summary(fx.out, 'pilot').stop).toMatchObject({ word: 'family-recall-off', kind: 'refusal' });
+    const home2 = w5b4Home();
+    const fx2 = w5b4Pilot(home2, { n: 6 });
+    w5b4Act(home2, fx2.entries[0]!, W5B4_CONTROL, '.rm', w5b4Lib.historyPaths(home2).headlessOn as string, 1);
+    const r2 = await w5b4Arms(home2, fx2.argv);
+    w5b4Expect(r2.refusal?.word).toBe('family-unlisted');
+    w5b4Expect(w5b4Runs(home2)).toHaveLength(10);
+    w5b4Expect(w5b4Versions(home2), 'batch 2 refused before its --version').toBe(1);
+  }, 180_000);
+
+  w5b4It('a driver timeout is infra-failed and re-run once as attempt 2 in a later batch; a second infra failure is run-failed in both arms (Q4, W2-D80)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 2 });
+    const [q1, q2] = fx.entries as [W5b4R, W5b4R];
+    w5b4Act(home, q1, W5B4_CONTROL, '.sleep', '30000', 1);
+    w5b4Act(home, q2, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }));
+    w5b4Act(home, q2, W5B4_CONTROL, '.exit', '1');
+    const r = await w5b4Arms(home, fx.argv, { timeoutMs: 1500 });
+    w5b4Expect(r.refusal).toBeNull();
+    const name = (q: W5b4R, arm: string, n: number): string => `pilot/arms/${q.qid as string}/${arm}.a${n}`;
+    const c1 = w5b4Answer(fx.out, 'pilot', q1, W5B4_CONTROL);
+    w5b4Expect((c1.attempts as W5b4R[]).map((t) => [t.name, t.class, t.code, t.signal])).toEqual([
+      [name(q1, W5B4_CONTROL, 1), 'infra-failed', null, 'SIGTERM'], [name(q1, W5B4_CONTROL, 2), 'answered', 0, null]]);
+    w5b4Expect(c1).toMatchObject({ question_state: 'answered', arm_state: 'answered', run: name(q1, W5B4_CONTROL, 2) });
+    const c2 = w5b4Answer(fx.out, 'pilot', q2, W5B4_CONTROL);
+    w5b4Expect((c2.attempts as W5b4R[]).map((t) => [t.class, t.code])).toEqual([['infra-failed', 1], ['infra-failed', 1]]);
+    w5b4Expect(c2).toMatchObject({ question_state: 'run-failed', arm_state: 'run-failed', run: null, answer_field: null, correct: null, uptake: null });
+    w5b4Expect(w5b4Answer(fx.out, 'pilot', q2, W5B4_TREATMENT), 'the answered arm of a run-failed question is recorded and excluded')
+      .toMatchObject({ question_state: 'run-failed', arm_state: 'answered', run: name(q2, W5B4_TREATMENT, 1) });
+    w5b4Expect(w5b4Manifests(fx.out, 'pilot').map((m) => (m.runs as W5b4R[]).map((x) => x.name)), 'each re-run in a later batch')
+      .toEqual([w5b4Names('pilot', fx.entries), [name(q1, W5B4_CONTROL, 2), name(q2, W5B4_CONTROL, 2)]]);
+    w5b4Expect(existsSync(join(fx.out, `${name(q2, W5B4_CONTROL, 3)}.run.json`)), 'never a third attempt').toBe(false);
+    const s = w5b4Summary(fx.out, 'pilot');
+    w5b4Expect(s.counts).toEqual({ questions: 2, answered: 1, run_failed: 1, rerun_owed: 0, not_run: 0 });
+    w5b4Expect(s.arms[W5B4_TREATMENT].answered, 'q2 is excluded from both arms').toBe(1);
+  }, 180_000);
+
+  w5b4It('a stop never consumes the re-run: the limits stop before the re-run batch, then the resume spawns attempt 2 (W2-D80, Q24, Q30)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 1 });
+    const q = fx.entries[0]!;
+    w5b4Act(home, q, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }), 1);
+    w5b4Act(home, q, W5B4_CONTROL, '.exit', '1', 1);
+    w5b4Act(home, q, W5B4_CONTROL, '.limits', w5b4LimitsRow(90), 1);
+    const r = await w5b4Arms(home, fx.argv);
+    w5b4Expect(r.refusal?.word).toBe('limits-threshold');
+    w5b4Expect(r.stderr).toBe(w5b4Stop('pilot', 'stop', 'limits-threshold', 0, 1));
+    w5b4Expect(w5b4Summary(fx.out, 'pilot')).toMatchObject({ stop: { word: 'limits-threshold', kind: 'stop' },
+      counts: { questions: 1, answered: 0, run_failed: 0, rerun_owed: 1, not_run: 0 } });
+    w5b4Limits(home, 10);
+    const again = await w5b4Arms(home, fx.argv);
+    w5b4Expect(again.refusal).toBeNull();
+    const c = w5b4Answer(fx.out, 'pilot', q, W5B4_CONTROL);
+    w5b4Expect((c.attempts as W5b4R[]).map((t) => [t.name, t.class])).toEqual([
+      [`pilot/arms/${q.qid as string}/${W5B4_CONTROL}.a1`, 'infra-failed'], [`pilot/arms/${q.qid as string}/${W5B4_CONTROL}.a2`, 'answered']]);
+    w5b4Expect(w5b4Manifests(fx.out, 'pilot').map((m) => (m.runs as W5b4R[]).map((x) => x.name)), 'the stopped batch wrote no manifest')
+      .toEqual([w5b4Names('pilot', [q]), [`pilot/arms/${q.qid as string}/${W5B4_CONTROL}.a2`]]);
+    w5b4Expect(w5b4Summary(fx.out, 'pilot')).toMatchObject({ stop: null, counts: { answered: 1, rerun_owed: 0 } });
+  }, 120_000);
+
+  w5b4It('quiz: the per-node spend share is printed, and the node ledger enforces it; a mid-batch stop is summarised (Q5, Q30)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { spendBudget: 1_000_001 });
+    const r = await w5b4Arms(home, fx.argv());
+    w5b4Expect(r.refusal).toBeNull();
+    const summary = join(fx.out, 'quiz', 'arms', 'summary.json');
+    w5b4Expect(r.stderr).toBe(`ccrc history-replay: spend share 600001 = ceil(1000001 x 3 / 5)\nsha256 ${w5b4Lib.sha256Hex(readFileSync(summary)) as string}\n`);
+    w5b4Expect(w5b4Json(summary).budget).toEqual({ in_force: 600_001, spend_budget: 1_000_001, n_node: 3, n_all: 5 });
+    w5b4Expect(w5b4Runs(home).map((x) => x.env.CCRC_RECALL_SESSION), 'only this node\'s questions').toEqual(Array(6).fill('quiz-a'));
+    w5b4Expect(w5b4Runs(home)[0]!.argv, 'CONTROL for Q26: a restricted pilot result').toEqual(t5Argv('arm', W5B4_ARM_MODEL, home));
+    const home2 = w5b4Home();
+    const fx2 = w5b4Quiz(home2, { spendBudget: 100, over: { limits: { concurrency: 1 } } });
+    const r2 = await w5b4Arms(home2, fx2.argv());
+    w5b4Expect(r2.refusal).toEqual({ word: 'budget-exhausted', detail: 'spent 65 of 60' });
+    w5b4Expect(w5b4Runs(home2), 'the share, 60, stops the second spawn').toHaveLength(1);
+    w5b4Expect(r2.stderr).toBe(`ccrc history-replay: spend share 60 = ceil(100 x 3 / 5)\n${w5b4Stop('quiz', 'stop', 'budget-exhausted', 3, 0)}`);
+    w5b4Expect(w5b4Summary(fx2.out, 'quiz')).toMatchObject({ stop: { word: 'budget-exhausted', kind: 'stop', detail: 'spent 65 of 60' },
+      counts: { questions: 3, answered: 0, run_failed: 0, rerun_owed: 0, not_run: 3 } });
+  }, 120_000);
+
+  w5b4It('quiz: the arms run under part 2\'s pilot_result.settings_mode (Q26)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { settingsMode: 'fallback' });
+    w5b4Expect((await w5b4Arms(home, fx.argv())).code).toBe(0);
+    for (const run of w5b4Runs(home)) {
+      w5b4Expect(run.argv).toEqual(['--setting-sources', 'project,local', '--settings', '{"disableAllHooks":true}', ...t5Argv('arm', W5B4_ARM_MODEL, home).slice(1)]);
+    }
+  }, 120_000);
+
+  w5b4It('pilot: part 1\'s settings mode is ranged before --out, and a SETTINGS_MODES word runs under it (Q26, R31)', async () => {
+    // Part 1 re-saved with its settings mode, and every step 0a entry's with it (the validator holds the two equal).
+    const pilotWith = (mode: string): { home: string; argv: string[]; out: string } => {
+      const home = w5b4Home();
+      const fx = w5b4Pilot(home);
+      const d = w5b4Save({ ...fx.draft, settings_mode: mode, step0a: (fx.draft.step0a as W5b4R[]).map((x) => ({ ...x, settings_mode: mode })) }, 'part1-mode.json');
+      return { home, out: fx.out, argv: fx.argv.map((a) => (a === fx.d.path ? d.path : a === fx.d.sha ? d.sha : a)) };
+    };
+    const bad = pilotWith('open');
+    const r = await w5b4Arms(bad.home, bad.argv);
+    w5b4Expect(r.refusal).toEqual({ word: 'record-invalid', detail: 'settings_mode out-of-range' });
+    w5b4Expect(existsSync(bad.out), 'no --out is made').toBe(false);
+    w5b4Expect(stubLog(bad.home), 'no spawn, not even --version').toBeNull();
+    const good = pilotWith('fallback');
+    const ok = await w5b4Arms(good.home, good.argv);
+    w5b4Expect(ok.refusal, 'CONTROL: another SETTINGS_MODES word is admitted').toBeNull();
+    w5b4Expect(w5b4Runs(good.home).length, 'CONTROL: both arms ran').toBe(4);
+    for (const run of w5b4Runs(good.home)) w5b4Expect((run.argv as string[]).slice(0, 2), 'under part 1\'s mode').toEqual(['--setting-sources', 'project,local']);
+  }, 120_000);
+
+  w5b4It('quiz: the version preflight reads this node\'s newest version-move amendment, and no other node\'s (W2-D56, W2-D90)', async () => {
+    const moved = async (amendments: (home: string) => W5b4R[]): Promise<{ home: string; r: W5b4Result; out: string }> => {
+      const home = w5b4Home();
+      const fx = w5b4Quiz(home);
+      const r = await w5b4Arms(home, fx.argv(w5b4Amend(fx, amendments(home)), w5b4Inp('supersedes', fx.f)));
+      return { home, r, out: fx.out };
+    };
+    const a = await moved(() => [w5b4Move('node-0', 'fixture-version-moved', 1)]);
+    w5b4Expect(a.r.refusal).toEqual({ word: 'claude-version-moved', detail: `recorded fixture-version-moved, measured ${w5b4Version(a.home)}` });
+    w5b4Expect(w5b4Runs(a.home), 'no arm run').toHaveLength(0);
+    w5b4Expect(w5b4Versions(a.home), 'the one --version the preflight asks').toBe(1);
+    const b = await moved(() => [w5b4Move('node-1', 'fixture-version-moved', 1)]);
+    w5b4Expect(b.r.refusal, 'CONTROL: node B\'s move leaves node A on part 1\'s version').toBeNull();
+    const c = await moved((home) => [w5b4Move('node-0', 'fixture-version-moved', 1), w5b4Move('node-0', w5b4Version(home), 2)]);
+    w5b4Expect(c.r.refusal, 'CONTROL: the newest move names the measured version').toBeNull();
+    const d = await moved(() => [w5b4Move('node-9', 'fixture-version-moved', 1)]);
+    w5b4Expect(d.r.refusal).toEqual({ word: 'record-invalid', detail: 'amendments[0].node_label_ref out-of-range' });
+    w5b4Expect(existsSync(d.out), 'refused before --out').toBe(false);
+  }, 180_000);
+
+  w5b4It('quiz: --allow-code-change after window start stamps the manifest, every answer and the summary; without it, code-changed before --out (Q23, W2-D24)', async () => {
+    const shas = { ...w5b4Shas(), 'deploy/measure-history.py': w5b4Hex('moved') };
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { shas });
+    const plain = await w5b4Arms(home, fx.argv());
+    w5b4Expect(plain.refusal?.word).toBe('code-changed');
+    w5b4Expect(existsSync(fx.out)).toBe(false);
+    const r = await w5b4Arms(home, fx.argv(fx.f, ['--allow-code-change']));
+    w5b4Expect(r.refusal).toBeNull();
+    w5b4Expect(w5b4Manifests(fx.out, 'quiz')[0]!.stamps).toEqual(['code-changed']);
+    w5b4Expect(w5b4Summary(fx.out, 'quiz').stamps).toEqual(['code-changed']);
+    for (const q of fx.mine) for (const arm of W5B4_ARMS) w5b4Expect(w5b4Answer(fx.out, 'quiz', q, arm).stamps).toEqual(['code-changed']);
+    const home2 = w5b4Home();
+    const fx2 = w5b4Quiz(home2, { shas });
+    const early = await w5b4Arms(home2, fx2.argv(fx2.f, ['--allow-code-change']), { now: () => W5B4_T0 });
+    w5b4Expect(early.refusal?.word, 'before window start the flag is refused (Task 1\'s rule)').toBe('args-invalid');
+    w5b4Expect(stubLog(home2)).toBeNull();
+  }, 120_000);
+
+  w5b4It('a data case after --out refuses, never a defect: a run.json with no exit code, an answer path that is a directory (D-6309\'s rule)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 1 });
+    const q = fx.entries[0]!;
+    w5b4Expect((await w5b4Arms(home, fx.argv)).code).toBe(0);
+    const rj = join(fx.out, 'pilot', 'arms', q.qid as string, `${W5B4_CONTROL}.a1.run.json`);
+    writeFileSync(rj, `${w5b4Lib.canonicalJson({ ...w5b4Json(rj), code: 'x' }) as string}\n`, { mode: 0o600 });
+    const r = await w5b4Arms(home, fx.argv);
+    w5b4Expect(r.refusal).toEqual({ word: 'out-refused', detail: `run-json-invalid pilot/arms/${q.qid as string}/${W5B4_CONTROL}.a1` });
+    w5b4Expect(r.stderr).toBe('ccrc history-replay: arms pilot stop out-refused: not-run count unmeasured; nothing is retried\n');
+    const home2 = w5b4Home();
+    const fx2 = w5b4Pilot(home2, { n: 1 });
+    const q2 = fx2.entries[0]!;
+    w5b4Expect((await w5b4Arms(home2, fx2.argv)).code).toBe(0);
+    const ap = join(fx2.out, 'pilot', 'answers', `${q2.qid as string}.${W5B4_CONTROL}.json`);
+    rmSync(ap);
+    mkdirSync(ap);
+    const r2 = await w5b4Arms(home2, fx2.argv);
+    w5b4Expect(r2.refusal).toEqual({ word: 'out-refused', detail: `pilot/answers/${q2.qid as string}.${W5B4_CONTROL}.json is not a regular file` });
+    w5b4Expect(r2.stderr).toBe(w5b4Stop('pilot', 'stop', 'out-refused', 0, 0));
+  }, 120_000);
+
+  w5b4It('arms takes only its form\'s flags, and --section is pilot or quiz', async () => {
+    const home = w5b4Home();
+    const said = async (argv: string[]): Promise<unknown> => (await w5b4Arms(home, argv)).refusal;
+    w5b4Expect(await said(['arms'])).toEqual({ word: 'args-invalid', detail: 'arms wants --section pilot or --section quiz, not null' });
+    w5b4Expect(await said(['arms', '--section', 'ab'])).toEqual({ word: 'args-invalid', detail: 'arms wants --section pilot or --section quiz, not "ab"' });
+    w5b4Expect(await said(['arms', '--section', 'pilot', '--allow-code-change'])).toEqual({ word: 'args-invalid', detail: '--allow-code-change is not a arms --section pilot flag' });
+    w5b4Expect(await said(['arms', '--section', 'quiz', '--account', 'up-a'])).toEqual({ word: 'args-invalid', detail: '--account is not a arms --section quiz flag' });
+    w5b4Expect(await said(['arms', '--section', 'pilot', '--out', '/o'])).toEqual({ word: 'args-invalid', detail: 'record-required' });
+    w5b4Expect(stubLog(home)).toBeNull();
+  });
+});
+
+w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: arms end to end over a swept store', () => {
+  let sb: W6SourceBox;
+  w5b4BeforeAll(() => { sb = w6SourceBox('ccrc-w5b4-e2e-'); }, 360_000);
+
+  w5b4It('RP1-arm on a real store: the control stdin is W2-5a\'s payload byte for byte, the treatment one card line, a blank line and that payload (Q20, W2-D50)', async () => {
+    const home = sb.box.home;
+    w5b4Node(home);
+    const rs0 = D4.openReplayStore(home) as W5b4R;
+    const storeId = rs0.storeId as string;
+    rs0.close();
+    const fam: W5b4Ref = { store_id: storeId, ccrc_id: sb.id, generation: sb.gen };
+    const e = { ...fam, boundary_uuid: sb.u(5), kind: 'command', fact: sb.cmd, fact_raw: sb.cmd, question: 'Which command rebuilt the fixture package?',
+      source_entry_uuid: sb.u(2), repo_roots: [sb.cwd] };
+    const entry = { ...e, qid: D4.qidOf(e) as string };
+    const fz = w5b4SaveText(D4.frozenListText('pilot', W5B4_HEAD, [entry]) as string, 'pilot-frozen.json');
+    const d = w5b4Save(w5b4Draft(home, { stores: [storeId], pilotFamilies: [fam], pilotFrozenSha: fz.sha }), 'part1.json');
+    w5b4Marker(home, storeId, [fam]);
+    const out = w5b4Out();
+    const r = await w5b4Arms(home, ['arms', '--section', 'pilot', '--out', out, ...w5b4Inp('record', d), ...w5b4Inp('frozen', fz)],
+      { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(r.refusal).toBeNull();
+    const runs = w5b4Runs(home);
+    w5b4Expect(runs).toHaveLength(2);
+    for (const run of runs) {
+      w5b4Expect(run.envKeys).toEqual([...T5_BASE_KEYS, ...T5_RECALL_KEYS].sort());
+      w5b4Expect([run.env.CCRC_RECALL_SESSION, run.env.CCRC_RECALL_ASOF]).toEqual([sb.id, sb.u(5)]);
+    }
+    w5b4Expect(runs.map((x) => x.env.CCRC_RECALL_ARM).sort()).toEqual([...W5B4_ARMS].sort());
+    const rs = D4.openReplayStore(home) as W5b4R;
+    try {
+      const id = Number((rs.db.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(sb.u(5)) as { entry_id: number }).entry_id);
+      const want = D4.reconstructPayload(rs, id, entry.question) as { state: string; text: string };
+      w5b4Expect(want.state, 'CONTROL: the boundary reconstructs').toBe('payload');
+      const byArm = Object.fromEntries(runs.map((x) => [x.env.CCRC_RECALL_ARM as string, x.stdin as string]));
+      w5b4Expect(byArm[W5B4_CONTROL], 'the control payload is W2-5a\'s composer\'s, byte for byte').toBe(want.text);
+      const t = byArm[W5B4_TREATMENT]!;
+      w5b4Expect(t.endsWith(`\n\n${want.text}`)).toBe(true);
+      const card = t.slice(0, t.length - want.text.length - 2);
+      w5b4Expect(card.length, 'a card line').toBeGreaterThan(0);
+      w5b4Expect(card.includes('\n'), 'one line').toBe(false);
+    } finally {
+      rs.close();
+    }
+  }, 360_000);
 });

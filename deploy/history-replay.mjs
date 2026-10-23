@@ -42,7 +42,7 @@ import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/histor
 import { asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
-import { ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, RUBRICS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, assignArms, assignmentSha256, buildWindows, checkGateCode, classifyRun, collapseWs, expectedWindows, familyKey, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
+import { ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, assignArms, assignmentSha256, buildWindows, checkGateCode, classifyRun, collapseWs, expectedWindows, familyKey, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -4426,14 +4426,9 @@ export async function openWriter(o) {
   const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits });
   const stamps = new Set();
   const preflightNow = async () => {
-    const wrapperSha256 = wrapperSha(launch);   // wrapper-unmeasured before any spawn
-    gate();
-    const version = await measureClaudeVersion(launch, out, lang);
-    refuseIfStopping();
-    const verdict = preflight(expected, { version, stamp: readReleaseStamp(home), wrapperSha256, codeShas: codeShas() },
-      { allowCodeChange: o.allowCodeChange === true });
-    if (!verdict.ok) refuse(verdict.word, verdict.detail);
-    for (const s of verdict.stamps) stamps.add(s);
+    // W2-5b1 Task 4 (R26): the one spawn preflight the writer, the arms and the judge share.
+    const pre = await preflightSpawn({ launch, home, out, lang, gate, expected, allowCodeChange: o.allowCodeChange === true });
+    for (const s of pre.stamps) stamps.add(s);
   };
   await preflightNow();
   /** @param {string} section  @param {WriterItem} item  @returns {Promise<WriterAnswer>} */
@@ -4911,6 +4906,10 @@ const SUBCOMMAND_FLAGS = Object.freeze({
   'marker --section ab': { required: ['section', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256', 'node-label'], optional: [...PRED_INPUT] },
   'verify --section pilot': { required: ['section', ...DRAFT_INPUT], optional: [...PRED_INPUT] },
   'verify --section quiz': { required: ['section', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
+  // W2-5b1 Task 4 (Q2, Q23): the pilot form reads part 1 and the pilot frozen list and takes no --allow-code-change (a
+  // pilot act's remedy for a code change is a re-pilot, W2-D6); the quiz form reads part 2 with its part 1 and frozen list.
+  'arms --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
+  'arms --section quiz': { required: ['section', 'out', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, 'allow-code-change'] },
 });
 
 const copyJson = (v) => JSON.parse(JSON.stringify(v));
@@ -4969,15 +4968,15 @@ function loadInputs(flags, name, cap = OUT_JSON_CAP) {
   return pairedInputs(flags, name).map(([p, h]) => loadInput(name, p, h, INPUT_WORDS, cap));
 }
 
-/** The quiz's frozen list (W2-D73) through Task 6's one reader, loadFrozenList (its sha checked before a byte is parsed,
+/** A frozen list (the quiz's by default; W2-5b1 Task 4 reads the pilot's) (W2-D73) through Task 6's one reader, loadFrozenList (its sha checked before a byte is parsed,
  *  quiz-sha-mismatch; its bytes the canonical list their own fields give, input-invalid), after loadInput's git-tree
  *  rule (W2-D25); and its families. */
-function loadFrozen(p, sha256) {
+function loadFrozen(p, sha256, section = 'quiz') {
   if (typeof p !== 'string' || p === '') refuse('args-invalid', '--frozen names no path');
   const g = insideGitTree(path.dirname(path.resolve(p)));
   if (g.state === 'inside') refuse('input-invalid', `frozen in-git-tree ${g.at}`);
   if (g.state === 'unmeasured') refuse('input-invalid', `frozen git-unmeasured ${g.at} ${g.code}`);
-  const list = loadFrozenList(p, sha256, 'quiz');
+  const list = loadFrozenList(p, sha256, section);
   return { sha256, list, families: familiesOf(list.entries) };
 }
 
@@ -5532,10 +5531,11 @@ function refuseRangeRows(checks) {
  *  Tightening W2-3's validator in the gate is not this file's.
  *  W2-5b1 Task 1 (S2's C22): `budgetField` names the budget's field (`spend_budget` for a part 2 consumer); `quotas: null`
  *  skips the quiz-quota rows (a part 2 consumer samples nothing); `part2`, a final, adds part2RangeChecks' rows.
+ *  `batch` adds batchShapeChecks' rows (W2-5b1 Task 4).
  *  @param {{ budget: unknown, budgetField?: string, limits: { threshold_pct?: unknown, max_age_ms?: unknown } | undefined,
  *    quotas: { target: unknown, caps: { family?: unknown, boundary?: unknown, kind_per_family?: unknown } | undefined } | null,
- *    part2?: any }} o */
-export function refuseOutOfRangeValues({ budget, budgetField = 'pilot_budget', limits, quotas, part2 = null }) {
+ *    part2?: any, batch?: boolean }} o */
+export function refuseOutOfRangeValues({ budget, budgetField = 'pilot_budget', limits, quotas, part2 = null, batch = false }) {
   const checks = [
     [budgetField, positiveInt(budget)],
     ['limits.threshold_pct', positiveInt(limits?.threshold_pct) && /** @type {number} */ (limits?.threshold_pct) <= 100],
@@ -5546,6 +5546,8 @@ export function refuseOutOfRangeValues({ budget, budgetField = 'pilot_budget', l
       ['quiz.caps.boundary', positiveInt(quotas?.caps?.boundary)],
       ['quiz.caps.kind_per_family', positiveInt(quotas?.caps?.kind_per_family)],
     ]),
+    // W2-5b1 Task 4 (R4): the arm batch's shape, asked by `arms` on either part (part 2 also carries it through part2).
+    ...(batch ? batchShapeChecks(limits) : []),
     ...(part2 === null ? [] : part2RangeChecks(part2)),
   ];
   refuseRangeRows(checks);
@@ -5568,11 +5570,22 @@ export function refuseOutOfRangeValues({ budget, budgetField = 'pilot_budget', l
  *    quotas: { target: number, caps: { family: number, boundary: number, kind_per_family: number } }, expected: object }} o */
 function refuseWriterAdmission({ home, accountId, budget, limits, quotas, expected }) {
   refuseOutOfRangeValues({ budget, limits, quotas });
+  refuseSpawnAdmission({ home, accountId, limits, expected });
+}
+
+/** refuseWriterAdmission's no-store, no-spawn half (D-6307, D-6311), factored by W2-5b1 Task 4 so the writer, `arms` and
+ *  `judge` ask one spelling (R26): the roster (`roster-invalid`), the account (`account-refused`), the wrapper's sha
+ *  (`wrapper-unmeasured`), the limits row at open, then preflightFiles against `expected`, in that order. `allowCodeChange`
+ *  (`arms` and `judge` after window start under --allow-code-change, Q23) lets preflightFiles answer a measured code change
+ *  as a stamp, as the batch preflight does; the writer passes none, so its words and order are unchanged. Writes nothing.
+ *  @param {{ home: string, accountId: string, limits: { threshold_pct: number, max_age_ms: number }, expected: object,
+ *    allowCodeChange?: boolean }} o */
+function refuseSpawnAdmission({ home, accountId, limits, expected, allowCodeChange = false }) {
   const { json, roster } = readRoster(home);
   const launch = admitAccount(json, roster, accountId, home);
   const wrapperSha256 = wrapperSha(launch);
   refuseOnLimits(home, accountId, { thresholdPct: limits.threshold_pct, maxAgeMs: limits.max_age_ms }, Date.now());
-  const verdict = preflightFiles(expected, { stamp: readReleaseStamp(home), wrapperSha256, codeShas: codeShas() });
+  const verdict = preflightFiles(expected, { stamp: readReleaseStamp(home), wrapperSha256, codeShas: codeShas() }, { allowCodeChange });
   if (!verdict.ok) refuse(verdict.word, verdict.detail);
 }
 
@@ -6379,6 +6392,538 @@ async function verifyHeadless(section, flags, env) {
 }
 
 HANDLERS.set('marker', markerCommand);
+
+// ── W2-5b1 Task 4: the arm engine, `arms --section pilot|quiz` (W2-D78, W2-D80, W2-D56, W2-D55, W2-D64, W2-D82; S1, Q2 to Q5, Q14, Q23 to Q26, Q30, Q31) ──
+// One subcommand, run per node in that node's own --out (Q2):
+//   arms --section pilot   after part 1, on the pilot node, over the pilot frozen list's usage questions, under part 1's
+//                          pilot_budget, limits, account, arm_model and settings_mode (W2-D55, W2-D76);
+//   arms --section quiz    after part 2, on each named node, over the quiz questions on this node's store, under this
+//                          node's share of spend_budget (Q5) and part 2's pilot_result.settings_mode (Q26).
+// Both arms of each question run side by side, at the record's limits.concurrency, limits.batch_max / 2 questions per
+// batch, in frozen qid order (Q3); batches loop inside one invocation, and armBatchPreflight, W2-D78's and W2-D56's checks
+// composed once, runs before each. A run's attempt is in its name (`<section>/arms/<qid>/<arm>.a<n>`, Q4). A recorded run
+// (its run.json written, W2-4) is classified by the gate's classifyRun over its stream's events, spawned and not stopped
+// (a driver timeout has no result event: infra-failed); an arm's outcome is the gate's questionOutcome over its recorded
+// attempts, and a question's is questionStateOf over its arms. A stop writes no run.json, so a stopped attempt is never an
+// attempt: it keeps its number and is resumed, never consuming the re-run (W2-D80, Q24). Each batch writes a manifest
+// before it spawns (Q14); each settled question writes one answer record per arm (W2-D82, W2-D64); the summary is
+// rewritten after the last batch and on any refusal once --out is claimed, with the stop's word, its kind (Task 1's
+// DRIVER_STOPS partition) and the not-run count, and one stderr line says so (Q30). Nothing is retried automatically.
+// Every refusal that needs no spawn answers before prepareOut makes --out (W2-5a's R10, D-6307, D-6311, D-6309's rule).
+// The run's loader, node values and answer reader (loadArmRun, armNodeOf, readArmAnswers), the no-spawn admission
+// (refuseSpawnAdmission) and the spawn preflight (preflightSpawn) are shared with W2-5b1 Task 5's judge (R8, R26).
+// The arm words are never spelled here: every per-arm value is keyed by RECALL_ARMS' members at run time (W2-D42).
+
+/** The two sections an arm batch runs over (W2-D76, W2-D77). */
+export const ARM_SECTIONS = Object.freeze(['pilot', 'quiz']);
+/** W2-D80: one run and one re-run; a second infrastructure failure makes the arm run-failed. */
+export const ARM_ATTEMPTS_MAX = 2;
+/** The per-batch manifest (Q14), the per-(qid, arm) answer record (W2-D82) and the summary (Q30). */
+export const ARM_BATCH_KIND = 'ccrc-history-w2-arm-batch';
+export const ANSWER_KIND = 'ccrc-history-w2-answer';
+export const ARMS_SUMMARY_KIND = 'ccrc-history-w2-arms-summary';
+const ARM_BATCH_FILE_RE = /^[0-9]{4}\.json$/;
+/** questionCountsOf's key for each of the gate's QUESTION_OUTCOMES. */
+const QUESTION_COUNT_KEYS = Object.freeze({ answered: 'answered', 'run-failed': 'run_failed', rerun: 'rerun_owed', 'not-run': 'not_run' });
+
+function armSectionOk(who, section) {
+  if (!ARM_SECTIONS.includes(section)) throw new TypeError(`${who}: section ${JSON.stringify(section)} is not one of ${ARM_SECTIONS.join(', ')}`);
+}
+function armOk(who, arm) {
+  if (!RECALL_ARMS.includes(arm)) throw new TypeError(`${who}: ${JSON.stringify(arm)} is not a RECALL_ARMS member`);
+}
+/** One arm run's name under --out (Q4): the attempt is part of it, so a re-run never overwrites the run it re-runs.
+ *  @param {string} section  @param {string} qid  @param {string} arm  @param {number} attempt  @returns {string} */
+export function armRunName(section, qid, arm, attempt) {
+  armSectionOk('armRunName', section);
+  armOk('armRunName', arm);
+  if (!Number.isSafeInteger(attempt) || attempt < 1 || attempt > ARM_ATTEMPTS_MAX) throw new TypeError(`armRunName: attempt ${String(attempt)} is not 1 to ${ARM_ATTEMPTS_MAX}`);
+  return `${section}/arms/${qid}/${arm}.a${attempt}`;
+}
+/** One (qid, arm)'s answer record under --out (W2-D82).  @returns {string} */
+export function answerRel(section, qid, arm) {
+  armSectionOk('answerRel', section);
+  armOk('answerRel', arm);
+  return `${section}/answers/${qid}.${arm}.json`;
+}
+/** The section's summary under --out (Q30).  @returns {string} */
+export function armsSummaryRel(section) {
+  armSectionOk('armsSummaryRel', section);
+  return `${section}/arms/summary.json`;
+}
+const armBatchDir = (section) => `${section}/arms/batches`;
+
+// ── pure ──
+/** Q5: this node's share of part 2's spend_budget, ceil(budget × nNode / nAll), in integers (BigInt), so the share is
+ *  exact for any safe budget. The share is at most the budget, so it is a safe integer. Pure.
+ *  @param {number} budget  @param {number} nNode this node's questions  @param {number} nAll the frozen list's  @returns {number} */
+export function spendShareOf(budget, nNode, nAll) {
+  for (const [k, v] of [['budget', budget], ['nNode', nNode], ['nAll', nAll]]) {
+    if (!Number.isSafeInteger(v) || v < 1) throw new TypeError(`spendShareOf: ${k} ${String(v)} is not a positive safe integer`);
+  }
+  if (nNode > nAll) throw new TypeError(`spendShareOf: ${nNode} questions of ${nAll}`);
+  return Number((BigInt(budget) * BigInt(nNode) + BigInt(nAll) - 1n) / BigInt(nAll));
+}
+
+/** W2-D80: a question's state from its arms' outcomes (each the gate's questionOutcome over that arm's attempts). A
+ *  run-failed arm fails the question, which is then excluded from both arms; both arms answered answer it; an owed re-run
+ *  leaves it `rerun`; anything else is `not-run` (Q24's emergent rule). Pure.
+ *  @param {readonly string[]} armStates  @returns {'answered' | 'rerun' | 'run-failed' | 'not-run'} */
+export function questionStateOf(armStates) {
+  if (!Array.isArray(armStates) || armStates.length === 0) throw new TypeError('questionStateOf: one outcome per arm');
+  for (const s of armStates) if (!QUESTION_OUTCOMES.includes(s)) throw new TypeError(`questionStateOf: ${String(s)} is not a question outcome`);
+  if (armStates.includes('run-failed')) return 'run-failed';
+  if (armStates.every((s) => s === 'answered')) return 'answered';
+  return armStates.includes('rerun') ? 'rerun' : 'not-run';
+}
+
+/** The summary's counts over questionStateOf's answers (Q30). Pure.
+ *  @param {readonly string[]} states  @returns {{questions: number, answered: number, run_failed: number, rerun_owed: number, not_run: number}} */
+export function questionCountsOf(states) {
+  const c = { questions: states.length, answered: 0, run_failed: 0, rerun_owed: 0, not_run: 0 };
+  for (const s of states) {
+    const k = QUESTION_COUNT_KEYS[s];
+    if (k === undefined) throw new TypeError(`questionCountsOf: ${String(s)} is not a question outcome`);
+    c[k] += 1;
+  }
+  return c;
+}
+
+/** A recorded run's stream as the parsed events classifyRun reads: every line that is a JSON object, in order; any other
+ *  line is skipped (readStreamJson counts it). Never throws. Pure.  @param {string} text  @returns {object[]} */
+export function streamEventsOf(text) {
+  const events = [];
+  for (const line of String(text).split('\n')) {
+    if (line.trim() === '') continue;
+    try {
+      const ev = JSON.parse(line);
+      if (plainObject(ev)) events.push(ev);
+    } catch {
+      // not an event: readStreamJson's malformedLines
+    }
+  }
+  return events;
+}
+
+/** Q31: every string `error` field the run's events carried, once each, sorted. Pure.  @param {object[]} events  @returns {string[]} */
+export function errorFieldsOf(events) {
+  return [...new Set(events.filter((e) => typeof e.error === 'string').map((e) => e.error))].sort();
+}
+
+/** W2-D82: an uptake call is a Bash tool_use whose command lib's isHistoryCommand reads as `ccrc history`, paired by id
+ *  with a tool_result that is not is_error. One inside an Agent subagent (Task 1's parentToolUseId) counts, and is also
+ *  counted as via_agent. A history call whose result is is_error is `errored` (the control arm's exit 8, which the pilot
+ *  measures, W2-D82), never a call. A tool_use with no tool_result paired is neither. Pure.
+ *  @param {ReadonlyArray<{name: string, input: unknown, result: string | null, isError: boolean | null, parentToolUseId: string | null}>} toolPairs
+ *  @returns {{calls: number, via_agent: number, errored: number}} */
+export function uptakeOf(toolPairs) {
+  let calls = 0;
+  let viaAgent = 0;
+  let errored = 0;
+  for (const p of toolPairs) {
+    if (p.name !== 'Bash' || !plainObject(p.input) || typeof p.input.command !== 'string' || !isHistoryCommand(p.input.command)) continue;
+    if (p.result === null && p.isError === null) continue;   // no tool_result paired by id
+    if (p.isError === true) { errored += 1; continue; }
+    calls += 1;
+    if (typeof p.parentToolUseId === 'string') viaAgent += 1;
+  }
+  return { calls, via_agent: viaAgent, errored };
+}
+
+/** One answered run's answer (W2-D64): the gate's parseAnswerField over the result text, labelCorrect on a `value` only
+ *  (W2-D63), the absent state kept apart for the absent rate, the reply as the run gave it (the judge redacts it, W2-D79),
+ *  and uptakeOf. Pure.
+ *  @param {{kind: string, fact: string, repo_roots: string[]}} entry  @param {{result: {text: string | null} | null, toolPairs: object[]}} facts
+ *  @param {7 | 40} shaMinPrefix */
+export function armAnswerOf(entry, facts, shaMinPrefix) {
+  const reply = facts.result === null ? null : facts.result.text;
+  const answerField = parseAnswerField(reply ?? '');
+  const correct = answerField.state === 'value'
+    && labelCorrect(entry.kind, entry.fact, answerField.value, { repoRoots: entry.repo_roots, shaMinPrefix });
+  return { answer_field: answerField, correct, absent: answerField.state === 'absent', reply, uptake: uptakeOf(facts.toolPairs) };
+}
+
+/** W2-D56's `expected` for this node: part 1's step 0a entry for its store (version, wrapper) and gate_code (stamp, code
+ *  shas), with the version replaced by the node's newest version-move amendment when part 2 carries one (W2-D90; Q13's
+ *  detail `{claude_code_version, repilot_sha256}`, node_label_ref required). Amendments are append-only, so the newest
+ *  is the last in array order. A version-move naming no node, or whose detail holds no version, is a record the gate
+ *  should not have signed: record-invalid, before --out, through W2-5b1 Task 1's versionMoveChecks and refuseRangeRows,
+ *  the one spelling of those two ranges (R30, W2-D12), never a second one here. Pure.
+ *  @param {Record<string, any>} record  @param {string} storeId */
+export function expectedForNode(record, storeId) {
+  const node = record.nodes.find((n) => n.store_id === storeId);
+  const entry = record.step0a.find((s) => s.store_id === storeId);
+  if (node === undefined || entry === undefined) refuse('input-invalid', `store ${storeId} is not one of the record's nodes`);
+  refuseRangeRows(versionMoveChecks(record));   // R30: Task 1's one spelling of the version-move ranges (W2-D12)
+  let version = entry.claude_code_version;
+  let from = 'step0a';
+  (record.amendments ?? []).forEach((a, i) => {
+    if (a.kind !== VERSION_MOVE_KIND || a.node_label_ref !== node.label) return;
+    version = a.detail.claude_code_version;
+    from = `amendments[${i}]`;
+  });
+  return { expected: { claude_code_version: version, release_stamp: record.gate_code.release_tag, wrapper_sha256: entry.wrapper_sha256,
+    code_shas: record.gate_code.files }, from };
+}
+
+/** The summary (Q30, W2-D64): the counts over every question, and per arm over the answered questions only (a run-failed
+ *  question is excluded from both arms, W2-D80): the answer states, the correct count and uptake (W2-D82); the absent
+ *  rate per arm as an exact {num, den}. Pure.
+ *  @param {{section: string, recordSha256: string, storeId: string, budget: object, spend: number, batches: number,
+ *    stop: {word: string, kind: string, detail: string} | null, stamps: Iterable<string>,
+ *    questions: Array<{qid: string, state: string, arms: Array<{arm: string, answer: object | null}>}>}} o */
+export function armsSummaryOf({ section, recordSha256, storeId, budget, spend, batches, stop, stamps, questions }) {
+  const zero = () => ({ answered: 0, value: 0, unknown: 0, absent: 0, correct: 0, uptake_questions: 0, uptake_calls: 0, via_agent: 0, errored: 0 });
+  const arms = Object.fromEntries(RECALL_ARMS.map((arm) => [arm, zero()]));
+  for (const q of questions) {
+    if (q.state !== 'answered') continue;
+    for (const a of q.arms) {
+      const s = arms[a.arm];
+      s.answered += 1;
+      s[a.answer.answer_field.state] += 1;
+      if (a.answer.correct) s.correct += 1;
+      if (a.answer.uptake.calls > 0) s.uptake_questions += 1;
+      s.uptake_calls += a.answer.uptake.calls;
+      s.via_agent += a.answer.uptake.via_agent;
+      s.errored += a.answer.uptake.errored;
+    }
+  }
+  return {
+    kind: ARMS_SUMMARY_KIND, v: 1, section, record_sha256: recordSha256, store_id: storeId, budget, spend, batches, stop,
+    stamps: [...stamps].sort(), counts: questionCountsOf(questions.map((q) => q.state)), arms,
+    absent_rate: Object.fromEntries(RECALL_ARMS.map((arm) => [arm, { num: arms[arm].absent, den: arms[arm].answered }])),
+    questions: questions.map((q) => ({ qid: q.qid, state: q.state })),
+  };
+}
+
+// ── measuring and acting ──
+/** The pilot frozen list (W2-D73) through W2-5a's loadFrozen (the git-tree rule, its sha before a byte is parsed, the
+ *  canonical bytes), and its sha must be part 1's pilot.frozen_sha256 (W2-D76). */
+function loadPilotFrozen(flags, record) {
+  const fz = loadFrozen(flags.frozen, flags['frozen-sha256'], 'pilot');
+  if (fz.sha256 !== record.pilot.frozen_sha256) refuse('quiz-sha-mismatch', `frozen ${fz.sha256} is not the record's pilot.frozen_sha256 ${record.pilot.frozen_sha256}`);
+  return fz;
+}
+/** This node's questions, in the frozen list's qid order (Q3). The pilot runs on its one node, so a pilot question on
+ *  another store refuses; a node with no question has no arm batch to run. */
+function nodeQuestions(section, entries, storeId) {
+  const other = entries.find((e) => e.store_id !== storeId);
+  if (section === 'pilot' && other !== undefined) refuse('input-invalid', `pilot question ${other.qid} is on store ${other.store_id}, not this node's ${storeId}`);
+  const mine = entries.filter((e) => e.store_id === storeId);
+  if (mine.length === 0) refuse('input-invalid', `the ${section} list holds no question on store ${storeId}`);
+  return mine;
+}
+/** The arm run's inputs (R8, R26: the one loader `arms` and `judge` share), each refusal before any store, spawn or --out:
+ *  quiz, Task 1's loadFinalRecord (the chain, W2-D24's re-check first with Q23's stamp after window start, the part 2
+ *  ranges), the settings mode part 2's pilot_result.settings_mode (Q26); pilot, part 1 through loadRecordInput, its
+ *  gate_code re-checked (recheckCode; the pilot forms take no --allow-code-change, Q23), then the pilot frozen list
+ *  against part 1's pilot.frozen_sha256, the settings mode part 1's. Reads no store, spawns nothing, writes nothing.
+ *  @param {Flags} flags  @param {'pilot' | 'quiz'} section  @param {{ nowMs: number }} o */
+export function loadArmRun(flags, section, { nowMs }) {
+  armSectionOk('loadArmRun', section);
+  if (section === 'pilot') {
+    const rec = loadRecordInput(flags, 'draft');
+    const codeStamps = recheckCode(rec.record);   // W2-D24 (arms and judge --section pilot)
+    const fz = loadPilotFrozen(flags, rec.record);
+    if (!SETTINGS_MODES.includes(rec.record.settings_mode)) refuse('record-invalid', 'settings_mode out-of-range');
+    return { section, record: rec.record, recordSha256: rec.sha256, frozen: fz, settingsMode: rec.record.settings_mode, allowCodeChange: false, codeStamps };
+  }
+  const rec = loadFinalRecord(flags, { nowMs });   // W2-D24 (arms and judge --section quiz)
+  return { section, record: rec.record, recordSha256: rec.sha256, frozen: rec.frozen,
+    settingsMode: rec.record.pilot_result.settings_mode,
+    allowCodeChange: flags['allow-code-change'] === true, codeStamps: rec.stamps };
+}
+
+/** This node's values for an arm run (R26; Q2, Q5, W2-D56): the node named in the record (W2-D84's rule), this node's
+ *  questions in frozen qid order, the budget in force (part 1's pilot_budget, or this node's share of spend_budget, Q5),
+ *  W2-D56's expected values (expectedForNode), the account, the limits and the settings mode. Refuses before --out. */
+export function armNodeOf(run, storeId) {
+  const r = run.record;
+  requireNamedNode(r, storeId);
+  const questions = nodeQuestions(run.section, run.frozen.list.entries, storeId);
+  const nAll = run.frozen.list.entries.length;
+  const budget = run.section === 'pilot' ? r.pilot_budget : spendShareOf(r.spend_budget, questions.length, nAll);
+  const { expected } = expectedForNode(r, storeId);
+  return { questions, nAll, account: r.account, expected, budget, limits: r.limits, settingsMode: run.settingsMode };
+}
+/** One arm run (W2-D50): the family's id as CCRC_RECALL_SESSION, the arm, and boundary N as CCRC_RECALL_ASOF. */
+function armJob(ctx, q, arm, attempt, stdin) {
+  const job = { launch: ctx.launch, mode: 'arm', model: ctx.model, settingsMode: ctx.settingsMode,
+    recall: { session: q.ccrc_id, arm, asof: q.boundary_uuid }, stdin, out: ctx.out, name: armRunName(ctx.section, q.qid, arm, attempt), lang: ctx.lang };
+  return ctx.timeoutMs === undefined ? job : { ...job, timeoutMs: ctx.timeoutMs };
+}
+/** One arm's recorded attempts, each classified (W2-D80), its outcome and the attempt it owes next (null when settled).
+ *  A recorded run is W2-4's finishedOutcome, which refuses a run recorded for another account, model or settings mode,
+ *  or a changed stream; its exit code must be an integer or null, or classifyRun would throw (D-6309's rule). */
+function armAttemptsOf(ctx, q, arm) {
+  const attempts = [];
+  for (let n = 1; n <= ARM_ATTEMPTS_MAX; n += 1) {
+    const job = armJob(ctx, q, arm, n, '');
+    const done = finishedOutcome(job);
+    if (done === null) break;
+    if (!(done.code === null || Number.isInteger(done.code))) refuse('out-refused', `run-json-invalid ${job.name}`);
+    const read = readPlain(done.streamPath, OUT_STREAM_CAP);
+    if (read.state !== 'bytes') refuse('out-refused', `run-stream-changed ${job.name}`);
+    const events = streamEventsOf(read.bytes.toString('utf8'));
+    const cls = classifyRun(events, done.code, { spawned: true, stopped: false });
+    attempts.push({ name: job.name, class: cls, code: done.code, signal: done.signal ?? null, tokens: done.tokens, errorFields: errorFieldsOf(events), facts: done.facts });
+    if (cls === 'answered') break;
+  }
+  const state = questionOutcome(attempts.map((t) => t.class));
+  return { attempts, state, next: state === 'not-run' || state === 'rerun' ? attempts.length + 1 : null };
+}
+const answeredAttempt = (a) => a.attempts.find((t) => t.class === 'answered') ?? null;
+/** One question's arms, its state, and the (arm, attempt) jobs it owes; a settled question owes none (a run-failed one
+ *  is excluded from both arms, so its other arm's owed re-run is never spawned, W2-D80). */
+function questionArmsOf(ctx, q) {
+  const arms = RECALL_ARMS.map((arm) => ({ arm, ...armAttemptsOf(ctx, q, arm) }));
+  const state = questionStateOf(arms.map((a) => a.state));
+  const settled = state === 'answered' || state === 'run-failed';
+  return { q, arms, state, next: settled ? [] : arms.filter((a) => a.next !== null).map((a) => ({ arm: a.arm, attempt: a.next })) };
+}
+
+/** W2-D78 and W2-D56 before one arm batch, composed once. Read-only first:
+ *  (i) every batch family listed in headless-on for this store (Task 3's requireListed: family-unlisted);
+ *  (ii) no batch family with a recall-off entry (W2-4's refuseRecallOff: family-recall-off);
+ *  (iii) the batch's questions re-checked (Task 2's recheckBatch: quiz-unanswerable naming each failing qid and clause,
+ *        over the roster's config dirs, R6), then each question's two payloads (Task 2's armPayloads, with the verdict's
+ *        cut: plain to the control arm, carded to the treatment arm); a payload that no longer reconstructs refuses
+ *        quiz-unanswerable `<qid> payload <word>`, never dropping the question (D-6469);
+ *  then preflightSpawn (R26): the wrapper's sha, the gate (W2-D55: the budget, then the limits row), and the one spawn,
+ *  `--version`, with W2-D56's preflight against ctx.expected. Answers each pending (qid, arm)'s stdin and the version. */
+async function armBatchPreflight(ctx, pending) {
+  const qs = pending.map((s) => s.q);
+  requireListed(ctx.home, ctx.storeId, familiesOf(qs));   // W2-D78 (i)
+  refuseRecallOff(ctx.home, [...new Set(qs.map((q) => q.ccrc_id))]);   // W2-D78 (ii)
+  const verdicts = await ctx.deps.recheck(ctx.rs, qs, { configDirs: ctx.configDirs });   // W2-D78 (iii)
+  const stdins = new Map();
+  for (const s of pending) {
+    const v = verdicts.get(s.q.qid);
+    const p = ctx.deps.payloads(ctx.rs, v.boundaryEntryId, s.q.question, v.cut);
+    if (p.state !== 'payloads') refuse('quiz-unanswerable', `${s.q.qid} payload ${p.why}`);   // D-6469
+    const byArm = new Map([[CONTROL_ARM, p.plain], [TREATMENT_ARM, p.carded]]);
+    for (const { arm } of s.next) stdins.set(`${s.q.qid} ${arm}`, byArm.get(arm));
+  }
+  const pre = await preflightSpawn({ launch: ctx.launch, home: ctx.home, out: ctx.out, lang: ctx.lang, gate: ctx.gate,
+    expected: ctx.expected, allowCodeChange: ctx.allowCodeChange });
+  for (const st of pre.stamps) ctx.stamps.add(st);
+  return { stdins, version: pre.version };
+}
+
+/** W2-D56's preflight before a spawn batch, the one spelling the writer (`openWriter`), the arms (armBatchPreflight) and
+ *  the judge (`openJudge`) share (R26), in W2-D56's order: the wrapper's sha (`wrapper-unmeasured` before any spawn), the
+ *  gate (W2-D55), the one `--version` spawn, the stop check, then `preflight` against `expected` (`claude-version-moved`,
+ *  `tree-moved`, `wrapper-moved`, `code-changed` and the four unmeasured words; a measured code change is a stamp under
+ *  `allowCodeChange`). Answers the measured version and the stamps.
+ *  @returns {Promise<{ version: string, stamps: string[] }>} */
+async function preflightSpawn({ launch, home, out, lang, gate, expected, allowCodeChange = false }) {
+  const wrapperSha256 = wrapperSha(launch);   // wrapper-unmeasured before any spawn
+  gate();
+  const version = await measureClaudeVersion(launch, out, lang);
+  refuseIfStopping();
+  const verdict = preflight(expected, { version, stamp: readReleaseStamp(home), wrapperSha256, codeShas: codeShas() }, { allowCodeChange });
+  if (!verdict.ok) refuse(verdict.word, verdict.detail);
+  return { version: version.version, stamps: verdict.stamps };
+}
+/** How many batch manifests the section holds (Q14): 0 before its first. */
+function armBatchCount(ctx) {
+  const rel = armBatchDir(ctx.section);
+  const st = lstatOrNull(ctx.out, rel);
+  if (st === null) return 0;
+  if (!st.isDirectory()) refuse('out-refused', `${rel} is not a directory`);
+  let names;
+  try {
+    names = readdirSync(path.join(ctx.out, rel));
+  } catch (e) {
+    refuse('out-refused', `${rel} unreadable ${errCode(e)}`);
+  }
+  return names.filter((n) => ARM_BATCH_FILE_RE.test(n)).length;
+}
+/** Q14: the batch's manifest, written after its preflight and before its first spawn, never replaced: the version the
+ *  preflight measured, the stamps in force, and each planned run with its stdin's sha. A run's version is the last
+ *  manifest that names it (a recorded run is never planned again). */
+function writeArmManifest(ctx, version, planned) {
+  const n = armBatchCount(ctx) + 1;
+  ensurePlainDir(ctx.out, armBatchDir(ctx.section));
+  const rel = `${armBatchDir(ctx.section)}/${String(n).padStart(4, '0')}.json`;
+  if (lstatOrNull(ctx.out, rel) !== null) refuse('out-refused', `${rel} already exists`);
+  writePlain(ctx.out, rel, canonicalJson({
+    kind: ARM_BATCH_KIND, v: 1, section: ctx.section, record_sha256: ctx.recordSha256, store_id: ctx.storeId, batch: n,
+    claude_code_version: version, stamps: [...ctx.stamps].sort(), preflight_ms: Date.now(),
+    runs: planned.map((p) => ({ name: p.job.name, qid: p.qid, arm: p.arm, attempt: p.attempt, stdin_sha256: sha256Hex(p.job.stdin) })),
+  }) + '\n');
+}
+/** One (qid, arm)'s answer record (W2-D82, W2-D64, Q31), for a settled question. */
+function answerRecordOf(ctx, s, a) {
+  const q = s.q;
+  const won = answeredAttempt(a);
+  const ans = won === null ? null : armAnswerOf(q, won.facts, ctx.shaMinPrefix);
+  return {
+    kind: ANSWER_KIND, v: 1, section: ctx.section, record_sha256: ctx.recordSha256, store_id: q.store_id,
+    qid: q.qid, arm: a.arm, ccrc_id: q.ccrc_id, generation: q.generation, boundary_uuid: q.boundary_uuid, fact_kind: q.kind,
+    question_state: s.state, arm_state: a.state,
+    attempts: a.attempts.map((t) => ({ name: t.name, class: t.class, code: t.code, signal: t.signal, tokens: t.tokens, error_fields: t.errorFields })),
+    run: won === null ? null : won.name,
+    answer_field: ans === null ? null : ans.answer_field, correct: ans === null ? null : ans.correct,
+    absent: ans === null ? null : ans.absent, reply: ans === null ? null : ans.reply, uptake: ans === null ? null : ans.uptake,
+    stamps: [...ctx.stamps].sort(),
+  };
+}
+/** Every settled question's two records, written once: a settled question's runs never change, so a record already there
+ *  is left as it is; anything there that is not a regular file refuses out-refused (D-5986). */
+function settleAnswers(ctx, states) {
+  for (const s of states) {
+    if (s.state !== 'answered' && s.state !== 'run-failed') continue;
+    ensurePlainDir(ctx.out, `${ctx.section}/answers`);
+    for (const a of s.arms) {
+      const rel = answerRel(ctx.section, s.q.qid, a.arm);
+      const have = lstatOrNull(ctx.out, rel);
+      if (have !== null) {
+        if (!have.isFile()) refuse('out-refused', `${rel} is not a regular file`);
+        continue;
+      }
+      writePlain(ctx.out, rel, canonicalJson(answerRecordOf(ctx, s, a)) + '\n');
+    }
+  }
+}
+/** A section's answer records under --out, as the judge reads them (R8, R26; W2-5b2 reads the same files): each
+ *  `<section>/answers/<qid>.<arm>.json` settleAnswers wrote, projected as {qid, arm, outcome, reply, correct}: `outcome`
+ *  the record's arm_state, `reply` the answered attempt's raw result text (the judge redacts it, W2-D54), `correct` its
+ *  labelCorrect flag. No directory is no record. A file it cannot read, or one that is not this section's answer record
+ *  under its own name, refuses out-refused (D-5986, D-6309's rule).
+ *  @param {string} out  @param {'pilot' | 'quiz'} section */
+export function readArmAnswers(out, section) {
+  armSectionOk('readArmAnswers', section);
+  const rel = `${section}/answers`;
+  const st = lstatOrNull(out, rel);
+  if (st === null) return [];
+  if (!st.isDirectory()) refuse('out-refused', `${rel} is not a directory`);
+  let names;
+  try {
+    names = readdirSync(path.join(out, rel)).sort();
+  } catch (e) {
+    refuse('out-refused', `${rel} unreadable ${errCode(e)}`);
+  }
+  return names.map((n) => {
+    const read = readPlain(path.join(out, rel, n), OUT_JSON_CAP);
+    if (read.state !== 'bytes') refuse('out-refused', `${rel}/${n} ${read.state === 'bad' ? badWord(read) : read.state}`);
+    let r;
+    try {
+      r = JSON.parse(read.bytes.toString('utf8'));
+    } catch {
+      refuse('out-refused', `${rel}/${n} is not JSON`);
+    }
+    if (!plainObject(r) || r.kind !== ANSWER_KIND || r.section !== section || `${r.qid}.${r.arm}.json` !== n) refuse('out-refused', `${rel}/${n} is not an answer record`);
+    return { qid: r.qid, arm: r.arm, outcome: r.arm_state, reply: r.reply, correct: r.correct };
+  });
+}
+/** The summary (Q30), rewritten whole; answers its path under --out. */
+function writeArmsSummary(ctx, states, stop) {
+  const questions = states.map((s) => ({ qid: s.q.qid, state: s.state, arms: s.arms.map((a) => {
+    const won = answeredAttempt(a);
+    return { arm: a.arm, answer: won === null ? null : armAnswerOf(s.q, won.facts, ctx.shaMinPrefix) };
+  }) }));
+  const summary = armsSummaryOf({ section: ctx.section, recordSha256: ctx.recordSha256, storeId: ctx.storeId, budget: ctx.budget,
+    spend: spentSoFar(ctx.out), batches: armBatchCount(ctx), stop, stamps: ctx.stamps, questions });
+  const rel = armsSummaryRel(ctx.section);
+  ensurePlainDir(ctx.out, `${ctx.section}/arms`);
+  writePlain(ctx.out, rel, canonicalJson(summary) + '\n');
+  return rel;
+}
+/** Q30: a refusal once --out is claimed. The line names the word, its kind (Task 1's driverWordClass over the DRIVER_STOPS
+ *  partition, so a word with no class is a defect, never a guess: a stop is resumed once its cause
+ *  clears; any other word is a refusal the operator rules on) and the not-run count; the settled answers and the summary
+ *  are written, except after `interrupted` (D-5984: nothing more after the signal handler has run). A second refusal while
+ *  measuring leaves the counts unmeasured and the summary unwritten; the first refusal stands. */
+function reportArmsStop(ctx, questions, e) {
+  const kind = driverWordClass(e.word);
+  let counted = 'not-run count unmeasured';
+  try {
+    const states = questions.map((q) => questionArmsOf(ctx, q));
+    const c = questionCountsOf(states.map((s) => s.state));
+    counted = `${c.not_run} question(s) not run, ${c.rerun_owed} owing a re-run`;
+    if (e.word !== 'interrupted') {
+      settleAnswers(ctx, states);
+      writeArmsSummary(ctx, states, { word: e.word, kind, detail: e.detail });
+    }
+  } catch (e2) {
+    if (!(e2 instanceof DriverRefusal)) throw e2;
+  }
+  process.stderr.write(`ccrc history-replay: arms ${ctx.section} ${kind} ${e.word}: ${counted}; nothing is retried\n`);
+}
+
+// A handler that takes deps after its env names that parameter driverEnv, never env (W2-4 Task 5's env scan).
+/** `arms --section pilot|quiz` (W2 decisions §5 acts 14 and 21; W2-D78, W2-D80, W2-D56, W2-D55). In order: the section and
+ *  its form's flags; HOME; loadArmRun (the record, its gate_code re-checked first, W2-D24; Q23's --allow-code-change, quiz
+ *  only, after window start; the frozen list, the pilot's against part 1; the settings mode, Q26); the unusable inputs;
+ *  the store, once (W2-5a's R3), and armNodeOf (this node named in the record, its questions, the budget in force, Q5,
+ *  W2-D56's expected); the ranges with the batch shape (R4) and refuseSpawnAdmission (roster, account, wrapper, limits
+ *  row, preflightFiles; R26); W2-D78 (i) and (ii) over every question; all before prepareOut. Then `--out` (fresh of
+ *  pilot-source's output, Q25), the claim, the account, the gate, and the batch loop. Exit 0 with every question settled
+ *  and `sha256 <hex>` of the summary on stderr, stdout empty (D-5983); a refusal exits 2 after reportArmsStop's line. */
+export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBatch, payloads: armPayloads, now: () => Date.now() }) {
+  const section = flags.section;
+  if (!ARM_SECTIONS.includes(section)) refuse('args-invalid', `arms wants --section pilot or --section quiz, not ${JSON.stringify(section ?? null)}`);
+  checkFlags(`arms --section ${section}`, flags);
+  const home = subcommandHome(driverEnv);
+  const run = loadArmRun(flags, section, { nowMs: deps.now() });   // W2-D24 (arms): gate_code before any other input
+  const record = run.record;
+  refuseUnusableInputs(home, flags.out, [['arm-model', record.arm_model]]);
+  const rs = openReplayStore(home);
+  try {
+    const storeId = rs.storeId;
+    const node = armNodeOf(run, storeId);
+    const { questions, budget, nAll } = node;
+    refuseOutOfRangeValues({ budget, budgetField: section === 'pilot' ? 'pilot_budget' : 'spend_budget', limits: node.limits, quotas: null, batch: true });
+    refuseSpawnAdmission({ home, accountId: node.account, limits: node.limits, expected: node.expected, allowCodeChange: run.allowCodeChange });   // arms: W2-5a's R10, D-6307, D-6311
+    requireListed(home, storeId, familiesOf(questions));
+    refuseRecallOff(home, [...new Set(questions.map((q) => q.ccrc_id))]);
+    if (section === 'quiz') process.stderr.write(`ccrc history-replay: spend share ${budget} = ceil(${record.spend_budget} x ${questions.length} / ${nAll})\n`);
+    const out = prepareOut(flags.out);
+    refuseColonInRealOut(out);
+    if (lstatOrNull(out, PILOT_SOURCE_FILE) !== null) refuse('out-refused', `${PILOT_SOURCE_FILE} is here: arms run on a fresh --out, never pilot-source's`);
+    const claim = claimOut(out);
+    try {
+      const { json, roster } = readRoster(home);
+      const launch = admitAccount(json, roster, node.account, home);
+      const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits: node.limits });
+      const ctx = {
+        section, home, out, rs, storeId, launch, gate, expected: node.expected, allowCodeChange: run.allowCodeChange, deps,
+        configDirs: rosterConfigDirs(roster, home), model: record.arm_model, settingsMode: node.settingsMode,
+        lang: driverEnv.LANG, timeoutMs: deps.timeoutMs, recordSha256: run.recordSha256, shaMinPrefix: record.labeller.sha_min_prefix,
+        budget: { in_force: budget, spend_budget: section === 'quiz' ? record.spend_budget : null, n_node: questions.length, n_all: nAll },
+        stamps: new Set(run.codeStamps),
+      };
+      const perBatch = Math.floor(node.limits.batch_max / RECALL_ARMS.length);
+      let states;
+      try {
+        for (;;) {
+          states = questions.map((q) => questionArmsOf(ctx, q));
+          settleAnswers(ctx, states);
+          const pending = states.filter((s) => s.next.length > 0).slice(0, perBatch);
+          if (pending.length === 0) break;
+          const pre = await armBatchPreflight(ctx, pending);
+          const planned = pending.flatMap((s) => s.next.map(({ arm, attempt }) => ({ qid: s.q.qid, arm, attempt,
+            job: armJob(ctx, s.q, arm, attempt, pre.stdins.get(`${s.q.qid} ${arm}`)) })));
+          writeArmManifest(ctx, pre.version, planned);
+          await runBatch(planned.map((p) => p.job), { gate, claim, concurrency: record.limits.concurrency });
+        }
+      } catch (e) {
+        if (e instanceof DriverRefusal) reportArmsStop(ctx, questions, e);
+        throw e;
+      }
+      const rel = writeArmsSummary(ctx, states, null);
+      process.stderr.write(`sha256 ${shaOfPlain(out, rel)}\n`);
+      return EXIT.OK;
+    } finally {
+      claim.release();
+    }
+  } finally {
+    rs.close();
+  }
+}
+
+HANDLERS.set('arms', (flags, env) => armsCommand(flags, env));
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
 // when main runs. Importing the module (the tests do) runs nothing. The exit code is set, never forced, so stderr drains.
