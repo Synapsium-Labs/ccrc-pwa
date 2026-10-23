@@ -56,7 +56,9 @@
   "synth3-gap-with-live-block",
   "synth3-refusal-first-then-text",
   "synth3-live-index-finishes-as-a-call",
-  "synth3-live-index-finishes-as-reasoning"
+  "synth3-live-index-finishes-as-reasoning",
+  "synth3-live-text-without-content-index",
+  "synth3-final-output-unfinished-call-at-live-index"
  ],
  "streams": {
   "hook-custom-tool-call-no-delta": {
@@ -1828,6 +1830,37 @@
    },
    "warnings": []
   },
+  "synth3-final-output-unfinished-call-at-live-index": {
+   "blocks": [
+    {
+     "text": "Hi",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": [
+    "an unfinished item was skipped"
+   ]
+  },
   "synth3-final-output-unfinished-items": {
    "blocks": [
     {
@@ -2044,6 +2077,39 @@
     "cache_read_input_tokens": 0,
     "input_tokens": 3,
     "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth3-live-text-without-content-index": {
+   "blocks": [
+    {
+     "text": "Hello wor",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "upstream unavailable (the stream closed before a terminal event)",
+    "status": 503,
+    "type": "api_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
    },
    "warnings": []
   },

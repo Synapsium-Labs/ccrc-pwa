@@ -12,7 +12,8 @@ THE RULES (each is a case or a mutation row in codex-bridge-replay.test.ts):
 - R4  blocks come only from `response.output_item.done`: argument deltas, `.done` events, `content_part.*` and
       reasoning deltas are ignored. The one exception is R14's live text.
 - R5  `response.completed.output` (and `.incomplete.output`) fills an item that never got a done event, matched by
-      position, with a warning; an item there whose status is set and is not `completed` is skipped.
+      position, with a warning; an item there whose status is set and is not `completed` is skipped, except a
+      MESSAGE already streaming live at that position (R9 closes its block); a call there is skipped like any other.
 - R6  items are released in `output_index` order; a gap holds the later items until the terminal.
 - R7  a repeated `output_index` is dropped.
 - R8  `function_call` -> `tool_use{id: call_id, name: name_map.get(n, n), input: {}}` and ONE `input_json_delta`
@@ -34,7 +35,9 @@ THE RULES (each is a case or a mutation row in codex-bridge-replay.test.ts):
       live); at the item's done event a missing suffix is sent; a text that does not extend what was sent is
       counted `liveTextMismatch` and nothing is re-sent, and so is a finished item at the live index that is not a
       message (the live block is closed before it is released, keeping R2). The text keyed and recorded is always
-      the text EMITTED, which is what Claude Code sends back.
+      the text EMITTED, which is what Claude Code sends back, so `emitted_text` is keyed by the output_index whose
+      text was sent: a live block closed that way keeps its entry under an index that finished as a call or as
+      reasoning (Claude Code still sends that text back).
 - R15 usage comes from the terminal event's `usage` (`anthropic_usage`).
 - R16 `response.failed` and a top-level `error` event are classified by `errors.classify_failed`; blocks already
       released stay, and nothing held is released after a failure.
@@ -445,8 +448,8 @@ class Reducer:
             if pos in self._seen or pos < self._cursor or not isinstance(it, dict):
                 continue
             status = it.get("status")
-            live = self._live is not None and self._live["oi"] == pos
-            if status not in (None, "completed") and not live:
+            live = it.get("type") == "message" and self._live is not None and self._live["oi"] == pos
+            if status not in (None, "completed") and not live:  # R9's live message only, never a call
                 self._warn(W_UNFINISHED)
                 continue
             self._warn(W_FILLED)
@@ -488,8 +491,9 @@ def stop_reason(t: Terminal, emitted_tool_use: bool, refusal: bool) -> Optional[
     return "end_turn"
 
 
-def needs_continuation(t: Terminal, emitted_tool_use: bool, *, refusal: bool = False) -> bool:
+def needs_continuation(t: Terminal, emitted_tool_use: bool, *, refusal: bool) -> bool:
     """True when a non-failed reply asks to be continued (`end_turn:false`, or `interrupted`) and emitted no
-    `tool_use`, exactly when `stop_reason` answers None. The refusal flag wins as it does there: the server passes
-    the reducer's `refusal`, so a refused reply that also says `end_turn:false` is never continued."""
+    `tool_use`, exactly when `stop_reason` answers None. The refusal flag wins as it does there, and it is REQUIRED
+    (keyword-only, no default): a caller that leaves it out gets a TypeError, never a refused `end_turn:false` reply
+    continued upstream. The server passes the reducer's `refusal`."""
     return t.error is None and stop_reason(t, emitted_tool_use, refusal) is None

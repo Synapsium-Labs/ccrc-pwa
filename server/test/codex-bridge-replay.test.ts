@@ -168,10 +168,10 @@ describe.skipIf(!PY)('the reducer, against the replay corpus (codex-bridge spec 
     }
   });
 
-  it('the corpus holds the 32 ported streams, the 16 new ones and the 9 of review round 1', () => {
+  it('the corpus holds the 32 ported streams, the 16 new ones and the 11 of review rounds 1 and 2', () => {
     expect(STREAMS.filter((s) => !s.startsWith('synth2-') && !s.startsWith('synth3-'))).toHaveLength(32);
     expect(STREAMS.filter((s) => s.startsWith('synth2-'))).toHaveLength(16);
-    expect(STREAMS.filter((s) => s.startsWith('synth3-'))).toHaveLength(9);
+    expect(STREAMS.filter((s) => s.startsWith('synth3-'))).toHaveLength(11);
   });
 
   it('the usage sum equals the upstream input_tokens', async () => {
@@ -246,6 +246,13 @@ describe.skipIf(!PY)('the reducer, against the replay corpus (codex-bridge spec 
     expect(line.reasoning[0].key).toEqual(['text', sent]);
     expect(line.emittedText).toEqual({ 1: sent });
     expect(line.counted.counts).toEqual({ liveTextMismatch: 1 });
+  });
+
+  it('a live block closed because its index finished as a call keeps its sent text in emitted_text', async () => {
+    // emitted_text is keyed by the output_index whose text was SENT: index 0 finished as a function_call, but
+    // Claude Code was sent 'Hi' and sends it back, so the entry stays (R14).
+    const [line] = await run([reduceOp('synth3-live-index-finishes-as-a-call', 'whole')]);
+    expect(line.emittedText).toEqual({ 0: 'Hi', 1: 'x' });
   });
 
   it('a reasoning item before a message is keyed by that message', async () => {
@@ -343,5 +350,7 @@ describe.skipIf(!PY)('the reducer, against the replay corpus (codex-bridge spec 
       { in: ['completed', null, false, false, true], stop: 'refusal', cont: false },
     ]);
     expect(table.failedRaises).toBe('ValueError');
+    // the refusal flag is required: the two-argument call raises rather than continuing a refused reply
+    expect(table.twoArgContinuationRaises).toBe('TypeError');
   });
 });

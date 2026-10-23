@@ -332,7 +332,12 @@ def _run(op, pkg, cb):
             raised = None
         except Exception as e:  # the answer this op reports
             raised = type(e).__name__
-        return {"rows": rows, "failedRaises": raised}
+        try:  # the plan's two-argument spelling, the refusal flag left out
+            reducer.needs_continuation(reducer.Terminal("completed", None, None, reducer.ZERO_USAGE, False), False)
+            two_arg = None
+        except Exception as e:  # the answer this op reports
+            two_arg = type(e).__name__
+        return {"rows": rows, "failedRaises": raised, "twoArgContinuationRaises": two_arg}
     _usage("unknown op " + json.dumps(name))
     return None
 

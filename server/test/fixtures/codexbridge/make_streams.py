@@ -8,9 +8,9 @@ expectation is changed here, never by hand.
 THE CORPUS. 32 streams ported from the throwaway prototype (8 rebuilt from shapes in this repository: the runtime
 probe's scripted streams in `ccd/ccgpt-runtime` and the patch driver's in `server/test/ccgpt-runtime.test.ts`; 24
 synthetic until the operator's scrubbed recordings replace them, D-6430), then 16 `synth2-` streams: the second guard
-for each rule the prototype guarded once, and the spec §5 reducer list, then 9 `synth3-` streams for the rule arms
-the Task 3 review found no stream reaching. Every stream is synthetic: tiny texts, ids of
-the form `<prefix>_fx<n>`, encrypted content `ENC-<n>`, neutral tool names.
+for each rule the prototype guarded once, and the spec §5 reducer list, then 11 `synth3-` streams for the rule arms
+the Task 3 review found no stream reaching (9 in fix round 1, 2 in fix round 2). Every stream is synthetic: tiny
+texts, ids of the form `<prefix>_fx<n>`, encrypted content `ENC-<n>`, neutral tool names.
 
 THE EXPECTATIONS are written here by hand, never computed by the reducer: per stream, `setup` (the reducer's
 `name_map` and `tools_required`), the folded `blocks` (`{type: "text", text}` or `{type: "tool_use", id, name, input,
@@ -72,8 +72,12 @@ class Stream:
         return self.add("response.output_item.done", output_index=n, item=item)
 
     def text_delta(self, n, delta, item_id=None, content_index=0):
-        return self.add("response.output_text.delta", item_id=item_id or ("msg_fx%d" % n), output_index=n,
-                        content_index=content_index, delta=delta)
+        """`content_index=None` leaves the field out of the event."""
+        fields = {"item_id": item_id or ("msg_fx%d" % n), "output_index": n}
+        if content_index is not None:
+            fields["content_index"] = content_index
+        fields["delta"] = delta
+        return self.add("response.output_text.delta", **fields)
 
     def completed(self, output, usage=None, end_turn=None):
         response = {"id": "resp_fx1", "object": "response", "status": "completed", "output": output}
@@ -484,6 +488,16 @@ stream("synth3-live-index-finishes-as-reasoning",
        Stream().created().text_delta(0, "Hi").done(0, rs(0)).done(1, say(1, "After")).completed([], usage(3, 2)),
        expect([T("Hi"), T("After")], stop="end_turn", use=AU(3, 0, 0, 2), reasoning=[["text", "After"]],
               counts={"liveTextMismatch": 1}))
+# ── synth3, fix round 2 ──
+# R14: a delta with no content_index is part 0, so it goes live: the drop keeps what was sent, committable.
+stream("synth3-live-text-without-content-index",
+       Stream().created().added(0, msg(0, [], status="in_progress")).text_delta(0, "Hello ", content_index=None)
+       .text_delta(0, "wor", content_index=None),
+       expect([T("Hello wor")], error=TRUNCATED))
+# R5 and R9: an unfinished CALL in the final output at the live index is skipped; only a live message is exempt.
+stream("synth3-final-output-unfinished-call-at-live-index",
+       Stream().created().text_delta(0, "Hi").completed([fc(0, '{"q":', status="in_progress")], usage(3, 2)),
+       expect([T("Hi")], stop="end_turn", use=AU(3, 0, 0, 2), warnings=[W_UNFINISHED]))
 
 
 def main():
