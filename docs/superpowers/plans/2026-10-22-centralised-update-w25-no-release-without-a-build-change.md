@@ -155,15 +155,31 @@ One PR, from this workspace's own branch.
 
 ## Mutation table
 
-> Fix round 2 (review 818, ruling 8) re-measured this table whole for the artifact comparison and the docs trigger; the first design's rows are in git history at `4ca88f61e`.
+> Fix round 2 (review 818, ruling 8) re-measured this table whole for the artifact comparison and the docs trigger; fix round 3 (review 842, F8) added its rows and corrected its count. The first design's rows are in git history at `4ca88f61e`.
 
-Each guard, the mutation that removes or weakens it, and the rows that went red. Each mutation was applied alone, its whole test file was run once, and the file was restored byte-identical (measured sequentially: the release fixtures copy `deploy/` at test time).
-- **When:** the `release-main.test.ts` and `build-release.test.ts` rows were measured at `cfa826d92`, the `release-stable.test.ts` and `settings-screen.test.tsx` rows at `a5498cb54`; neither of those two files nor their targets changed in between.
-- **Readable rows (review 818, F11):** the `say` and `set_output` mutations are M15 and M16.
-- **The channel note's row is restored (F13):** P1.
-- **Survivors: none.**
-- **Retired:** M22, which set the old top-level gate to always true. It was an equivalent mutant, because `normalise` already matches exact top-level names. The gate was removed, and M22′ is the measurable form.
-- **Not counted:** the nine builder rows F2a and F2b also red, because `git archive` refuses a path the fixture lacks.
+Each guard, the mutation that removes or weakens it, and the rows that went red. Each mutation was applied alone, its whole test file was run once, and the file was restored byte-identical. The runs were sequential, because the release fixtures copy `deploy/` at test time.
+
+**When each row was measured:**
+- `release-main.test.ts`: the M rows at `cfa826d92`; the X rows (review 842) at `48828c125` plus the round's rows.
+- `build-release.test.ts`: the W, A and F1 rows at `cfa826d92`; the F7 rows (review 842, the thirteen mutations of the behavioural W25-F2) at `48828c125` plus the round's rows.
+- `release-stable.test.ts`: the S and Y rows at `a4ab632fa`.
+- `settings-screen.test.tsx`: P1 at `a5498cb54`.
+- Neither the targets nor the rows of an earlier measurement changed after it was taken.
+
+**The count.** This table has 75 rows, and none survived.
+- The fix-round-2 table had 46 rows, not the 50 its wave-done gave.
+- "No survivors" speaks for the listed rows only. Three guards still have no row, below.
+
+**Measured, then strengthened.** Y6 (an empty diff counted as docs) survived its first run, and W25-T1d was added for it. M22 was an equivalent mutant, so the redundant top-level gate it targeted was removed, and M22′ is its measurable form.
+
+**Readable rows** (review 818, F11 and F13): the `say` and `set_output` mutations are M15 and M16, and P1 restores the channel note's row.
+
+**Builder rows that also red.** Under F7 (c), (e), (f), (h), (j), (k), (l) and (m), nine other builder rows also red, only because their fixtures lack the added path. W25-F2 is the row that pins the property.
+
+**Guards with no row** (review 842, F8), each named with the reason it has none:
+- **(ii) The two extraction-failure arms in `judge`.** The outcome is unchanged without them: an empty tree is an empty fingerprint, which releases. Only the reason in the line differs.
+- **(iv) publish's HEAD check on `built true`.** It is backstopped by publish's tag-at-HEAD check, which refuses any HEAD that no longer carries the tag.
+- **(v) prepare's `git tag -d` after a failed build, and prepare's own dirty-tree refusal.** Both predate this wave. `build-release.sh`'s identical refusal masks the second.
 
 | File run | Mutation | Red rows, as measured |
 |---|---|---|
@@ -194,6 +210,18 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 | `release-main.test.ts` | M25 `at.length !== 1` to `> 1` | W25-C27 (base MANIFEST with no build.json line) |
 | `release-main.test.ts` | M26 D-6502 never fires (`contained=""`) | W25-C28 |
 | `release-main.test.ts` | M27 publish's contained branch without its head check | W25-C28 |
+| `release-main.test.ts` | X1 (F2): `fs.lstatSync(full)` to `fs.statSync(full)` | W25-C29 (1 of 87) |
+| `release-main.test.ts` | X2 (F3): `st.mode & 0o7777` to `st.mode & 0o777` | W25-C30 setuid file, W25-C30 sticky directory (2 of 87) |
+| `release-main.test.ts` | X3 (F4): skip names starting with `.` in the walk | W25-C31 (1 of 87) |
+| `release-main.test.ts` | X4 (F5): delete the `git diff against $base failed` line | W25-C32 (1 of 87) |
+| `release-main.test.ts` | X5 (F5): guard diff `"$base" HEAD --` to `HEAD~1 HEAD --` | W25-C33, W25-P1 (2 of 87) |
+| `release-main.test.ts` | X6 (F6): `tag --contains HEAD \| newest` to `\| tail -n1` | W25-C34 x4 (vnext and v1.2.3-rc1, each on HEAD and on a descendant) (4 of 87) |
+| `release-main.test.ts` | X7 (F8 i): delete the listing-failure block after comm/awk | W25-C35 (1 of 87) |
+| `release-main.test.ts` | X8 (F8 iii): `!= false` to `= true` | W25-C36 x3 (empty, null, garbage) (3 of 87) |
+| `release-main.test.ts` | X9: delete the gh release download exit check | W25-C12 (the failed-download case) (1 of 87) |
+| `release-main.test.ts` | X10: delete the `-z "$BASE"` check | W25-C9, W25-C11 (2 of 87) |
+| `release-main.test.ts` | X11: delete the gh release view exit check | W25-C10 (the viewExit 1 case) (1 of 87) |
+| `release-main.test.ts` | X12: delete publish's `merge-base --is-ancestor` check on `built unchanged` | W25-C16b (1 of 87) |
 | `build-release.test.ts` | W1 attest `if:` deleted | "runs prepare, compare, attests, then publish ... (D-3122, D-6499)" (no W25 id) |
 | `build-release.test.ts` | W2 GH_TOKEN env on prepare | W25-Y4 |
 | `build-release.test.ts` | W3 setup-node gated by an `if:` | W25-Y3 |
@@ -204,14 +232,31 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 | `build-release.test.ts` | F1c `'docs/**'` to `'**/docs/**'` (on the paths-ignore line) | W25-F1 |
 | `build-release.test.ts` | F1d `workflow_dispatch:` added under `on:` | W25-F1 |
 | `build-release.test.ts` | F1e `paths: ['ccd/**']` added under `push:` | W25-F1 |
-| `build-release.test.ts` | F2a `README.md` added to PATHSPEC | W25-F2 (no PATHSPEC entry is docs) plus 9 builder rows (assembles tarball, sha256sum -c, SHA256SUMS size, MANIFEST names, real ccd body, build.json stamp, --untagged, scripts/, hook refusal), since `git archive` of a missing path fails |
-| `build-release.test.ts` | F2b `docs` added to PATHSPEC | W25-F2 plus the same 9 builder rows |
-| `release-stable.test.ts` | S1 a side-branch tag named | W25-T3 |
+| `build-release.test.ts` | F7 (a) PATHSPEC literal gains `"d*"` | W25-F2 only |
+| `build-release.test.ts` | F7 (b) PATHSPEC literal gains `d*` | W25-F2 only |
+| `build-release.test.ts` | F7 (c) PATHSPEC literal gains `'*.md'` | W25-F2, plus 9 builder rows whose fixtures lack a root Markdown file (git archive fails) |
+| `build-release.test.ts` | F7 (d) PATHSPEC literal gains `.` | W25-F2, "assembles ccrc-<tag>.tar.gz holding the layout" |
+| `build-release.test.ts` | F7 (e) PATHSPEC literal gains `./docs` | W25-F2, plus 9 builder rows (fixtures lack docs) |
+| `build-release.test.ts` | F7 (f) PATHSPEC literal gains `"README.md"` | W25-F2 (a root Markdown entry), plus 9 builder rows |
+| `build-release.test.ts` | F7 (g) `PATHSPEC+=("d*")` after the scripts loop | W25-F2 only |
+| `build-release.test.ts` | F7 (h) `PATHSPEC+=('*.md')` after the loop | W25-F2, plus 9 builder rows |
+| `build-release.test.ts` | F7 (i) `PATHSPEC+=(.)` after the loop | W25-F2, "assembles ccrc-<tag>.tar.gz holding the layout" |
+| `build-release.test.ts` | F7 (j) `PATHSPEC+=(./docs)` after the loop | W25-F2, plus 9 builder rows |
+| `build-release.test.ts` | F7 (k) `PATHSPEC+=(docs)` after the loop | W25-F2, plus 9 builder rows |
+| `build-release.test.ts` | F7 (l) `cp -a "$ROOT/README.md" "$TOP/README.md"` after the archive line | W25-F2, plus 9 builder rows (the copy fails where the fixture has no README.md) |
+| `build-release.test.ts` | F7 (m) `cp -a "$ROOT/docs" "$TOP/docs"` after the archive line | W25-F2 (an entry under docs/), plus 9 builder rows |
+| `release-stable.test.ts` | S1 a side-branch tag named (`tag --list` for `tag --merged HEAD`) | W25-T3 |
 | `release-stable.test.ts` | S2 lexical sort | W25-T4 |
-| `release-stable.test.ts` | S3 a gh call before the refusal | an untagged HEAD is exit 2 — a merge commit has no release to promote; gh never runs (§18 row 2), W25-T1, W25-T3, W25-T4, W25-T5, W25-T7 |
-| `release-stable.test.ts` | S4 a push command in the refusal | W25-T1, W25-T5, W25-T7 |
-| `release-stable.test.ts` | S5 the run pointer dropped | W25-T1, W25-T5 |
-| `release-stable.test.ts` | S6 a measurement reintroduced | pin: the code (comments aside) calls neither release-main.sh nor node, and measures nothing |
+| `release-stable.test.ts` | S3 a gh call before the refusal | an untagged HEAD is exit 2 — a merge commit has no release to promote; gh never runs (§18 row 2), W25-T1, W25-T1b, W25-T1c, W25-T1d, W25-T3, W25-T4, W25-T5, W25-T7 |
+| `release-stable.test.ts` | S4 a push command in the refusal | W25-T1, W25-T1b, W25-T5, W25-T7 |
+| `release-stable.test.ts` | S5 the run pointer loses its sha | W25-T1, W25-T1c, W25-T1d, W25-T5 |
+| `release-stable.test.ts` | S6 a measurement reintroduced (`node -e 0`) | pin: the code (comments aside) calls neither release-main.sh nor node, and measures nothing |
+| `release-stable.test.ts` | Y1 docs branch never taken (`if [ "$n" -gt 0 ]` becomes `if false`) | W25-T1b |
+| `release-stable.test.ts` | Y2 root anchor widened (`docs/*\|*/docs/*\|*.md` count as docs, no `*/*` arm) | W25-T1c |
+| `release-stable.test.ts` | Y3 unreadable note dropped | W25-T5 |
+| `release-stable.test.ts` | Y4 any root path counts as docs (`*) ;;`) | W25-T1c |
+| `release-stable.test.ts` | Y5 a non-docs path below the root no longer stops the walk | W25-T1, W25-T1c |
+| `release-stable.test.ts` | Y6 an empty diff counts as docs (`-gt 0` to `-ge 0`) | W25-T1d |
 | `settings-screen.test.tsx` | P1 the old channel note | the labels read spec §11.2's words: auto-install, announce, channel and the macOS row |
 
 ## Deviations found
