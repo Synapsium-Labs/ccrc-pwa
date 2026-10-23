@@ -45,6 +45,8 @@ export const STALE_ARCHIVE_SWEEP_MS = 60 * 60_000;
 export const STALE_ARCHIVE_ACTOR = 'sweep:stale-archive';
 /** Journal acts that say a workspace ran or was brought up. */
 const RUN_ACTS: readonly string[] = ['spawn', 'start', 'supervise'];
+/** Journal acts that end a pane (`_ws_unsupervise` removes `.supervised` as it writes them): the pane-less clock starts there. */
+const PANE_END_ACTS: readonly string[] = ['hibernate', 'unsupervise', 'stop'];
 /** How many of a session's newest journal rows are read for them. */
 const JOURNAL_ROWS = 500;
 
@@ -94,11 +96,11 @@ export type StaleArchiveOutcome =
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-/** The journal's newest run act for one session (ms), or null: no rows, no stamped rows, or a read that failed. */
+/** The journal's newest run or pane-end act for one session (ms), or null: no rows, no stamped rows, or a read that failed. */
 function journalEvidence(coord: NonNullable<StaleArchiveDeps['coord']>, id: string): number | null {
   let newest: number | null = null;
   for (const e of coord.lifecycleFor({ sessionId: id, limit: JOURNAL_ROWS })) {
-    if (e.at !== null && RUN_ACTS.includes(e.act) && (newest === null || e.at > newest)) newest = e.at;
+    if (e.at !== null && (RUN_ACTS.includes(e.act) || PANE_END_ACTS.includes(e.act)) && (newest === null || e.at > newest)) newest = e.at;
   }
   return newest;
 }
@@ -120,6 +122,9 @@ async function evidenceFor(
     if (j !== null) stamps.push(j);
     if (rec.supervisedAt !== null) stamps.push(rec.supervisedAt * 1000);
     if (rec.spawn !== null) stamps.push(rec.spawn.at * 1000);
+    // The act that ended the pane deletes `.supervised`, so the pane-less count starts at hibernate/stop, not at the last run.
+    if (rec.hibernatedAt !== null) stamps.push(rec.hibernatedAt);
+    if (rec.stopped !== null && rec.stopped !== undefined) stamps.push(rec.stopped.at * 1000);
     const woke = await deps.wokeAtMs(rec);
     if (woke !== null) stamps.push(woke);
     const t = await deps.transcriptMtimeMs(rec);
