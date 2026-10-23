@@ -777,6 +777,152 @@ const ENTRIES: Case[] = [
     ...rules(rsc([{ context: ' padded name ' }])), checkruns: runs(run('padded name')) }), 'WAIT not-reported:  padded name '],
 ];
 
+// Classic protection's conversation-resolution switch, and the names of its required checks. The licence tests the
+// switch with `== true`, so a string "true" reads as not set and silently waives the conversation gate; a nameless
+// check becomes a requirement with an empty label, or is satisfied by a nameless status.
+const classicBody = (extra: Record<string, unknown>, enforce = true): Answer => ok({ enforce_admins: { enabled: enforce },
+  required_pull_request_reviews: { required_approving_review_count: 1 }, required_linear_history: { enabled: false },
+  required_signatures: { enabled: false }, ...extra });
+const convFx = (conv?: unknown, enforce = true): (() => Fixture) => with_(bare, { pr: prWith('REVIEW_REQUIRED'),
+  protection: classicBody(conv === undefined ? {} : { required_conversation_resolution: conv }, enforce) });
+const BAD_CONV: [string, unknown][] = [
+  ['the string "true"', { enabled: 'true' }], ['the string "false"', { enabled: 'false' }], ['the number 1', { enabled: 1 }],
+  ['the number 0', { enabled: 0 }], ['null', { enabled: null }], ['an array', { enabled: [] }], ['an object', { enabled: {} }],
+];
+const BAD_CONV_CONTAINERS: [string, unknown][] = [
+  ['an array', []], ['a string', 'x'], ['a number', 7], ['the boolean true', true], ['the boolean false', false], ['zero', 0], ['an empty string', ''],
+];
+const CONV: Case[] = [
+  ...BAD_CONV.flatMap(([what, v]): Case[] => [
+    [`unreadable: read 3: required_conversation_resolution.enabled is ${what}, with enforce_admins on`, convFx(v, true), 'STOP unreadable: read 3'],
+    [`unreadable: read 3: required_conversation_resolution.enabled is ${what}, with enforce_admins off`, convFx(v, false), 'STOP unreadable: read 3'],
+  ]),
+  ...BAD_CONV_CONTAINERS.map(([what, v]): Case => [`unreadable: read 3: required_conversation_resolution is ${what}, not an object`,
+    convFx(v, false), 'STOP unreadable: read 3']),
+  ['unreadable: read 3: a malformed conversation switch is refused on route Q too, where the licence is never weighed',
+    with_(measured, (f) => ({ ...f, protection: ok({ ...(measured().protection as Answer).body as object,
+      required_conversation_resolution: { enabled: 'true' } }) })), 'STOP unreadable: read 3'],
+  ['classic required_conversation_resolution absent: the gate is not set', convFx(undefined, false), 'ROUTE U method=squash admin=licensed strict=no'],
+  ['classic required_conversation_resolution null: the gate is not set', convFx(null, false), 'ROUTE U method=squash admin=licensed strict=no'],
+  ['classic required_conversation_resolution an object without enabled: a sparse shape stays valid', convFx({}, false),
+    'ROUTE U method=squash admin=licensed strict=no'],
+  ['classic required_conversation_resolution false waives nothing', convFx({ enabled: false }, false),
+    'ROUTE U method=squash admin=licensed strict=no'],
+  ['classic required_conversation_resolution true with enforce_admins on binds an admin too: licensed', convFx({ enabled: true }, true),
+    'ROUTE U method=squash admin=licensed strict=no'],
+  ['classic required_conversation_resolution true without enforce_admins still fails the licence', convFx({ enabled: true }, false),
+    'STOP licence-fails: an approval is missing and --admin could skip conversation resolution'],
+];
+
+const classicChecks = (rsc: unknown, extra: Record<string, unknown> = {}): Answer => ok({ enforce_admins: { enabled: false },
+  required_linear_history: { enabled: false }, required_signatures: { enabled: false },
+  ...(rsc === undefined ? {} : { required_status_checks: rsc }), ...extra });
+const classicFx = (rsc: unknown, status: Answer = ok({ state: 'pending', statuses: [] })): (() => Fixture) =>
+  with_(bare, { protection: classicChecks(rsc), status });
+const nameless = (state: string, context: unknown) => ok({ state, statuses: [{ context, state }] });
+const BAD_CTX_ENTRIES: [string, unknown][] = [
+  ['null', null], ['an empty string', ''], ['a number', 7], ['an array', []], ['an object', {}], ['the boolean true', true],
+];
+const BAD_CHECK_OBJECTS: [string, unknown][] = [
+  ['null', null], ['an empty object', {}], ['an object with only an app_id', { app_id: 15368 }], ['a null context', { context: null }],
+  ['an empty context', { context: '' }], ['a numeric context', { context: 7 }], ['an array context', { context: ['x'] }],
+  ['an object context', { context: {} }], ['a string', 'x'], ['a number', 7], ['an array', []], ['the boolean true', true],
+];
+const BAD_LISTS: [string, unknown][] = [['an empty object', {}], ['an object holding named entries', { a: 'legacy/ci' }],
+  ['a string', 'legacy/ci'], ['a number', 7], ['the boolean true', true]];
+const R3 = 'STOP unreadable: read 3';
+const R3B = 'STOP unreadable: read 3b, after read 3 answered 403';
+/** Read 3b: the branch view answers 403 for read 3, then protection comes from the branch view's own projection. */
+const b3b = (rsc: unknown, protectionExtra: Record<string, unknown> = {}, status: Answer = ok({ state: 'pending', statuses: [] })): (() => Fixture) =>
+  with_(via3b, { status, branch: ok({ name: 'main', protection: { enabled: true, ...(rsc === undefined ? {} : { required_status_checks: rsc }),
+    ...protectionExtra } }) });
+const NAMES: Case[] = [
+  ...BAD_CTX_ENTRIES.map(([what, e]): Case => [`unreadable: read 3: a classic contexts entry is ${what}`,
+    classicFx({ strict: false, contexts: [e] }), R3]),
+  ...BAD_CHECK_OBJECTS.map(([what, e]): Case => [`unreadable: read 3: a classic checks entry is ${what}`,
+    classicFx({ strict: false, checks: [e] }), R3]),
+  ...BAD_LISTS.flatMap(([what, v]): Case[] => [
+    [`unreadable: read 3: classic contexts is ${what}, not an array`, classicFx({ strict: false, contexts: v }), R3],
+    [`unreadable: read 3: classic checks is ${what}, not an array`, classicFx({ strict: false, checks: v }), R3],
+  ]),
+  ['unreadable: read 3: a nameless contexts entry after a good one', classicFx({ contexts: ['legacy/ci', null] }), R3],
+  ['unreadable: read 3: a nameless contexts entry before a good one', classicFx({ contexts: ['', 'legacy/ci'] }), R3],
+  ['unreadable: read 3: a nameless checks entry after a good one', classicFx({ checks: [{ context: 'legacy/ci', app_id: -1 }, {}] }), R3],
+  ['unreadable: read 3: a nameless checks entry before a good one', classicFx({ checks: [{}, { context: 'legacy/ci', app_id: -1 }] }), R3],
+  ['unreadable: read 3: a nameless contexts entry is not satisfied by a nameless success status (null)',
+    classicFx({ contexts: [null] }, nameless('success', null)), R3],
+  ['unreadable: read 3: a nameless contexts entry is not satisfied by a nameless success status (empty)',
+    classicFx({ contexts: [''] }, nameless('success', '')), R3],
+  ['unreadable: read 3: a nameless contexts entry does not wait as an empty label', classicFx({ contexts: [null] }), R3],
+  ['unreadable: read 3: a nameless contexts entry does not wait as an empty label (empty string)', classicFx({ contexts: [''] }), R3],
+  ['unreadable: read 3: a nameless checks entry does not wait as an empty label', classicFx({ checks: [{}] }), R3],
+  ...[['an array', []], ['a string', 'x'], ['a number', 7], ['the boolean true', true], ['the boolean false', false]].map(([what, v]): Case =>
+    [`unreadable: read 3: required_status_checks is ${what as string}, not an object`, classicFx(v), R3]),
+  ['unreadable: read 3: a nameless classic entry is refused on route Q too, where the required set still gates the enqueue',
+    with_(measured, (f) => ({ ...f, protection: ok({ ...(measured().protection as Answer).body as object,
+      required_status_checks: { strict: false, contexts: [null], checks: [] } }) })), R3],
+  // What stays valid.
+  ['classic required_status_checks absent: no classic checks', classicFx(undefined), 'ROUTE U method=squash admin=never strict=no'],
+  ['classic required_status_checks null: no classic checks', classicFx(null), 'ROUTE U method=squash admin=never strict=no'],
+  ['classic required_status_checks an empty object: no classic checks', classicFx({}), 'ROUTE U method=squash admin=never strict=no'],
+  ['classic genuine empty checks and contexts lists: no classic checks', classicFx({ strict: false, contexts: [], checks: [] }),
+    'ROUTE U method=squash admin=never strict=no'],
+  ['classic contexts alone, checks absent: a legacy context satisfied by a commit status',
+    classicFx({ strict: false, contexts: ['legacy/ci'] }, ok({ state: 'success', statuses: [{ context: 'legacy/ci', state: 'success' }] })),
+    'ROUTE G method=squash admin=never strict=no'],
+  ['classic context keeps its bytes, spaces included: the name is judged as written',
+    classicFx({ strict: false, contexts: [' padded name '] }, ok({ state: 'success', statuses: [{ context: ' padded name ', state: 'success' }] })),
+    'ROUTE G method=squash admin=never strict=no'],
+  ['classic context is not trimmed: a status under the trimmed name does not satisfy it',
+    classicFx({ strict: false, contexts: [' padded name '] }, ok({ state: 'success', statuses: [{ context: 'padded name', state: 'success' }] })),
+    'WAIT not-reported:  padded name '],
+  ['classic checks entry keeps its bytes, spaces included, and a pinned App is not validated here',
+    with_(bare, { protection: classicChecks({ strict: false, checks: [{ context: ' padded name ', app_id: 15368 }] }),
+      checkruns: runs(run(' padded name ')) }), 'ROUTE G method=squash admin=never strict=no'],
+  ['classic checks null and contexts null are lists with no entries, not a stop', classicFx({ strict: false, checks: null, contexts: null }),
+    'ROUTE U method=squash admin=never strict=no'],
+  // Read 3b: the same names, from the branch view's projection, stop at read 3b's own spelling.
+  ...BAD_CTX_ENTRIES.map(([what, e]): Case => [`unreadable: read 3b: a projected contexts entry is ${what}`,
+    b3b({ contexts: [e] }), R3B]),
+  ...BAD_CHECK_OBJECTS.map(([what, e]): Case => [`unreadable: read 3b: a projected checks entry is ${what}`, b3b({ checks: [e] }), R3B]),
+  ...BAD_LISTS.flatMap(([what, v]): Case[] => [
+    [`unreadable: read 3b: projected contexts is ${what}, not an array`, b3b({ contexts: v }), R3B],
+    [`unreadable: read 3b: projected checks is ${what}, not an array`, b3b({ checks: v }), R3B],
+  ]),
+  ...[['an array', []], ['a string', 'x'], ['a number', 7], ['the boolean true', true], ['the boolean false', false]].map(([what, v]): Case =>
+    [`unreadable: read 3b: the projected required_status_checks is ${what as string}, not an object`, b3b(v), R3B]),
+  ['unreadable: read 3b: a nameless entry after a good one', b3b({ contexts: ['legacy/ci', null] }), R3B],
+  ['unreadable: read 3b: a nameless checks entry before a good one', b3b({ checks: [{}, { context: 'legacy/ci', app_id: -1 }] }), R3B],
+  ['unreadable: read 3b: a nameless contexts entry is not satisfied by a nameless success status (null)',
+    b3b({ contexts: [null] }, {}, nameless('success', null)), R3B],
+  ['unreadable: read 3b: a nameless contexts entry is not satisfied by a nameless success status (empty)',
+    b3b({ contexts: [''] }, {}, nameless('success', '')), R3B],
+  ['unreadable: read 3b: a nameless checks entry does not wait as an empty label', b3b({ checks: [{}] }), R3B],
+  ['unreadable: read 3b: the stop keeps the 401 context of read 3',
+    with_(b3b({ contexts: [null] }), { protection: fail(401, 'Bad credentials') }), 'STOP unreadable: read 3b, after read 3 answered 401'],
+  ['unreadable: read 3b: a nameless entry is refused on route Q too, where the required set still gates the enqueue',
+    with_(b3b({ contexts: [null] }), (f) => ({ ...f, ...rules(pull({}), queue('SQUASH')), ...settings(true, false, false, true) })), R3B],
+  ['read 3b: enabled false is still no classic configuration, whatever the unread projection holds',
+    with_(via3b, { branch: ok({ name: 'main', protection: { enabled: false, required_status_checks: { contexts: [null] } } }) }),
+    'ROUTE U method=squash admin=never strict=unknown'],
+  ['read 3b: required_status_checks absent, null and empty are no classic checks', b3b(undefined), 'ROUTE U method=squash admin=never strict=unknown'],
+  ['read 3b: a null projected required_status_checks is no classic checks', b3b(null), 'ROUTE U method=squash admin=never strict=unknown'],
+  ['read 3b: an empty projected required_status_checks is no classic checks', b3b({}), 'ROUTE U method=squash admin=never strict=unknown'],
+  ['read 3b: genuine empty lists and null lists are valid', b3b({ checks: [], contexts: null }), 'ROUTE U method=squash admin=never strict=unknown'],
+  ['read 3b: a named contexts entry keeps its bytes, spaces included, and is satisfied by a status of that exact name',
+    b3b({ contexts: [' padded name '] }, {}, ok({ state: 'success', statuses: [{ context: ' padded name ', state: 'success' }] })),
+    'ROUTE G method=squash admin=never strict=unknown'],
+  ['read 3b: a named checks entry still matches by App', b3b({ checks: [{ context: 'build-pwa', app_id: 15368 }] }),
+    'WAIT not-reported: build-pwa'],
+  ['read 3b: a named checks entry satisfied by its App still routes G', with_(b3b({ checks: [{ context: 'build-pwa', app_id: 15368 }] }),
+    { checkruns: runs(run('build-pwa')) }), 'ROUTE G method=squash admin=never strict=unknown'],
+  ['read 3b: a named checks entry is not satisfied by another App\'s run', with_(b3b({ checks: [{ context: 'build-pwa', app_id: 15368 }] }),
+    { checkruns: runs(run('build-pwa', 'success', 'completed', OTHER_APP)) }), 'WAIT not-reported: build-pwa'],
+  ['classic strict keeps the reading it had: a string strict is not this guard\'s to validate, and reads as not strict',
+    with_(bare, { protection: classicChecks({ strict: 'yes', checks: [{ context: 'build-pwa', app_id: 15368 }] }),
+      checkruns: runs(run('build-pwa')) }), 'ROUTE G method=squash admin=never strict=no'],
+];
+
 /** Every argv the block may send: its reads (read 1 with its reviews, and the compare under read 3b), as GETs. */
 const READ = /^(pr view 42 --json baseRefName,headRefOid,state,reviewDecision|api (--paginate |-i )?repos\/\{owner\}\/\{repo\}(\/[^\s]*)?)$/;
 /** The same reads as the block's TEXT spells them, from the word `gh` to the end of its quoted path, followed only by
@@ -888,7 +1034,7 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   });
 
   it.each([...ROUTES, ...CHECKS, ...STOPS, LICENSED_NEVER, ...REQUESTS, ...IGNORES, ...LICENCE, ...MALFORMED,
-  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES])('%s', (_name, fx, line, env) => {
+  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES])('%s', (_name, fx, line, env) => {
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);
     expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);

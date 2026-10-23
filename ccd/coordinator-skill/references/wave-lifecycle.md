@@ -960,19 +960,31 @@ unknown=$(jq -r '[.[].type] - ["pull_request", "merge_queue", "required_status_c
 [ -z "$unknown" ] || stop "unknown-rule-type: $unknown"
 
 # Read 3: classic protection. A 404 is "not protected" only with exactly that message; a 401 or 403 goes to read 3b.
+# A 200 body is typed where the licence and the required set read it (the review count, the conversation switch's
+# `enabled`, the names of the required checks): a missing field keeps its default, a wrong type is a stop. The names
+# are one predicate, `classic_names`, which read 3b's projection of the same checks uses too: a missing or null
+# container or list is no entries, a present one is an object or an array, and every entry has a non-empty string name.
+names='def named: type == "string" and length > 0;
+  def typed($k; f): (has($k) | not) or (.[$k] | f);
+  def classic_names: . == null or (type == "object"
+    and typed("checks"; . == null or (type == "array" and all(.[]; type == "object" and (.context | named))))
+    and typed("contexts"; . == null or (type == "array" and all(.[]; named))));'
 r3=$(gh api -i "repos/{owner}/{repo}/branches/$base/protection" 2>/dev/null)
 c3=$(head -n1 <<<"$r3" | cut -d' ' -f2) b3=$(tr -d '\r' <<<"$r3" | sed '1,/^$/d') via=3
 case "$c3" in
-  200) prot=$(jq -ce '
+  200) prot=$(jq -ce "$names"'
          def cnt: type == "number" and . == floor and . >= 0 and . <= 9007199254740991;
-         if type == "object" and (.required_pull_request_reviews | . == null or (type == "object"
-              and ((has("required_approving_review_count") | not) or (.required_approving_review_count | cnt))))
+         if type == "object"
+            and (.required_pull_request_reviews | . == null or (type == "object" and typed("required_approving_review_count"; cnt)))
+            and (.required_conversation_resolution | . == null or (type == "object" and typed("enabled"; type == "boolean")))
+            and (.required_status_checks | classic_names)
          then . else error("not a usable object") end' <<<"$b3") || stop "unreadable: read 3" ;;
   404) [ "$(jq -r .message <<<"$b3")" = "Branch not protected" ] || stop "unreadable: read 3 answered 404"
        prot='{}' ;;
   401|403) via=3b
-       prot=$(gh api "repos/{owner}/{repo}/branches/$base" | jq -c '.protection | if .enabled == true
-         then {required_status_checks} elif .enabled == false then {} else error("no enabled") end') \
+       prot=$(gh api "repos/{owner}/{repo}/branches/$base" | jq -c "$names"'.protection | if .enabled == true
+         then (if .required_status_checks | classic_names then {required_status_checks} else error("unnamed") end)
+         elif .enabled == false then {} else error("no enabled") end') \
          || stop "unreadable: read 3b, after read 3 answered $c3" ;;
   *) stop "unreadable: read 3 answered ${c3:-nothing}" ;;
 esac
