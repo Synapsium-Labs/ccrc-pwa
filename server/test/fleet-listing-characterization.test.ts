@@ -26,8 +26,8 @@ describe('a steady tick, every throttle elapsed: the registry listings by caller
     // `readLimits`' marker listing inside `assembleFleet` (the plan counted eight by static reading and missed it).
     expect({ tick: n('tick'), limits: n('readLimits'), tasks: n('tasksPass'), names: n('namesPass'), pr: n('prPass'),
       divergences: n('divergencesPass'), ask: n('askPass'), mail: n('mailPass') })
-      .toEqual({ tick: 1, limits: 1, tasks: 0, names: 0, pr: 0, divergences: 1, ask: 1, mail: 2 });
-    expect(r.listings.length, 'the steady tick lists six times in all').toBe(6);
+      .toEqual({ tick: 1, limits: 1, tasks: 0, names: 0, pr: 0, divergences: 1, ask: 0, mail: 2 });
+    expect(r.listings.length, 'the steady tick lists five times in all').toBe(5);
   });
 });
 

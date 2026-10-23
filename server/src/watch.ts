@@ -2445,7 +2445,7 @@ export class FleetWatcher {
       // NEVER awaited, same reasoning as `sweepMail` immediately above — the
       // release CAS and its own registry listing must not sit in front of the
       // dialog detector either. Own clock (`ASK_SWEEP_MS`).
-      void this.sweepAsks().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepAsks(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5298 (plan Task 16): the approvals lane's lapse, ceiling and retention, never awaited for the same reason.
       void this.sweepApprovals().catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5300 (plan Task 17): the daily digest's beat. Synchronous, guarded inside, and throttled to once a minute.
@@ -8935,22 +8935,22 @@ export class FleetWatcher {
    *  `tick()` void-dispatches this (it can sit behind whatever `sweepMail`
    *  and every other lane are doing), so a test that only awaits `tick()` has
    *  NOT awaited this sweep. */
-  async sweepAsks(): Promise<void> {
+  async sweepAsks(fleet?: FleetReadModel): Promise<void> {
     if (!this.primed) return;
     const store = this.deps.coord;
     if (!store) return;
-    await this.runLane('asks', () => this.askPass(store));
+    await this.runLane('asks', () => this.askPass(store, fleet));
   }
 
-  private async askPass(store: CoordStore): Promise<void> {
+  private async askPass(store: CoordStore, fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
 
     // Fail-shut, same discipline as `sweepMail`'s own `MAIL_DISABLED_MARKER`
     // read a few hundred lines up: a registry we cannot list is a kill-switch
-    // we cannot read, so `listing === null` ("can't tell") reads as disabled
-    // rather than as license to keep holding new asks.
-    const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
-    this.asksDisabled = listing === null || listing.includes(ASKS_DISABLED_MARKER);
+    // we cannot read, so an `unmeasurable` switch ("can't tell") reads as disabled
+    // rather than as license to keep holding new asks. The switch comes from the tick's listing (D-5864): it gates
+    // the hold on later ticks, so nothing here acts on it at once.
+    this.asksDisabled = (await this.fleetFor(fleet)).switches[ASKS_DISABLED_MARKER] !== 'clear';
 
     if (this.heldAsks.size === 0) return;
     for (const [id, held] of [...this.heldAsks]) {
