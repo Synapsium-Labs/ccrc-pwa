@@ -74,7 +74,7 @@ const classOf = (c: Record<string, any>, name: string): string | undefined =>
   (c['entries'] as { hex: string; class: string }[]).find((e) => e.hex === hexOf(name))?.class;
 const verdictOf = (name: string, pre = ''): string => docFor(audit(name, pre))['verdict'] as string;
 
-describe('characterization: today an unwitnessed leaf is not the witnessed arm’s (green before the loose arm)', () => {
+describe.skipIf(!LINUX)('characterization: today an unwitnessed leaf is not the witnessed arm’s (green before the loose arm)', () => {
   it('the audit and the verb both answer not-witnessed for a name no witness stands for', () => {
     mkLoose('stray-dir');
     const a = h.run('cmd_ws_audit --session stray-dir --collect');
