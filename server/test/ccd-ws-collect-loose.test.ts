@@ -14,7 +14,11 @@ import { eventsOf } from './lifecycleHelpers.js';
 import { GAP_LOG, WRONG_TOKEN, crashAt, docOf, gapAt, gaps, holderAt, inoAt, killHolder, type Run } from './wsCollectFixture.js';
 
 let h: PrHarness;
-beforeEach(() => { h = makePrHarness('ccrc-ws-collect-loose-'); });
+beforeEach(() => {
+  h = makePrHarness('ccrc-ws-collect-loose-');
+  // The witness directory a live registry always holds: the slug-free check's listing control finds it (D-6625).
+  fs.mkdirSync(path.join(h.home, '.cc-sessions', 'tmproots'), { recursive: true });
+});
 afterEach(() => { killHolder(h); h.cleanup(); });
 
 const LINUX = process.platform === 'linux';
@@ -203,6 +207,22 @@ describe.skipIf(!LINUX)('the audit: ws-audit --loose-hex <hex> --collect', () =>
     fs.writeFileSync(path.join(regDir(), 'demo-other.workdir'), path.join(p, 'clone'));
     fs.writeFileSync(path.join(regDir(), 'demo-other.uuid'), 'deadbeef-0000-4000-8000-000000000000');
     expect(verdictOf('stray-dir', clockAfter(p, 49))).toBe('containment-unproven');
+  }, 60_000);
+
+  it('registry residue that names a path inside the entry is a row: the census classes it registered, the audit refuses it', () => {
+    const p = mkLoose('demo-calm-mesa');
+    fs.writeFileSync(path.join(regDir(), 'demo-calm-mesa.workdir'), path.join(p, 'out'));
+    fs.writeFileSync(path.join(regDir(), 'demo-calm-mesa.wrapper'), 'lane-a');
+    expect(classOf(census(), 'demo-calm-mesa')).toBe('registered');
+    const d = docFor(audit('demo-calm-mesa', clockAfter(p, 49)));
+    expect(d['verdict']).not.toBe('collectable');
+    expect(fs.existsSync(p), 'nothing was touched').toBe(true);
+  }, 60_000);
+
+  it('a row named for the entry itself that lies inside it holds a name no slug check reaches', () => {
+    const p = mkLoose('scratchdir');
+    fs.writeFileSync(path.join(regDir(), 'scratchdir.workdir'), path.join(p, 'out'));
+    expect(verdictOf('scratchdir', clockAfter(p, 49))).toBe('containment-unproven');
   }, 60_000);
 
   it('a checkout git records elsewhere holds it', () => {
