@@ -6,7 +6,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import { localIO, type FleetIO } from '../src/io.js';
 import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER } from '../../shared/switches.js';
-import { LATER, MONO_LATER, callerOf, countBy, primed, rig } from './fleetListingFixture.js';
+import { LATER, MONO0, MONO_LATER, NOW, callerOf, countBy, primed, rig, type Rig } from './fleetListingFixture.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -71,6 +71,130 @@ describe('a registry that changes between two ticks: each lane reads the newest 
     await r.w.tick();
     await r.settle();
     expect(disabled(), 'a lowered asks-disabled marker was not read').toBe(false);
+  });
+});
+
+/** Make one field of one session unreadable from now on: listed, its bytes never come back (a dropped round trip). */
+function breakField(r: Rig, id: string, field: string): void {
+  const deps = (r.w as unknown as { deps: { io: FleetIO } }).deps;
+  const base = deps.io;
+  deps.io = { ...base, readFileMeasured: async (p: string) => (p.endsWith(`${id}.${field}`) ? { ok: false, reason: 'unreadable' } : base.readFileMeasured(p)) };
+}
+/** Record every ccd argv the PR lane (or any lane) runs from now on, answering a plain failure. */
+function recordCcd(r: Rig): string[][] {
+  const calls: string[][] = [];
+  (r.w as unknown as { deps: { runCcd: (a: string[]) => Promise<unknown> } }).deps.runCcd = async (a: string[]) => { calls.push(a); return { ok: false, code: 1, stdout: '', stderr: '' }; };
+  return calls;
+}
+const prProjects = (calls: string[][]): string[] => calls.filter((a) => a.includes('pr-state')).map((a) => a[a.indexOf('--project') + 1] ?? '');
+const REFUSED = '--actor';
+/** The delivery row as the lane left it: the narrow `delivery()` read carries neither its gate nor its error. */
+const deliveryOf = (r: Rig, id: number): { state: string; lastError: string | null; lastGate: string | null; attempts: number } | undefined =>
+  (r.coord as unknown as { db: { prepare: (q: string) => { get: (n: number) => unknown } } }).db
+    .prepare('SELECT state, lastError, lastGate, attempts FROM mail_deliveries WHERE id = ?').get(id) as never;
+const queueMailTo = (r: Rig, toId: string): number => {
+  // The delivery is queued at the primed clock, so it is due by the second tick (a real-clock row would be in its future).
+  r.at(NOW, MONO0);
+  const m = r.coord.insertMail({ fromId: 'demo-b', fromUuid: 'u-b', toId, runId: null, kind: 'status', subject: 's', body: 'b', artifacts: [] });
+  r.coord.queueDelivery(m.id, toId, 'env');
+  return m.id;
+};
+
+describe('a registry that changes between two ticks: the PR and mail lanes read the newest listing', () => {
+  it('the PR lane checks the project of a workspace row that appeared between the ticks', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    await primed(r);
+    r.row('late-w', 'lateproj', { workspace: 'late', branch: 'ws/late' });
+    const calls = recordCcd(r);
+    r.at(LATER, MONO_LATER);
+    await r.w.tick();
+    await r.settle();
+    expect(prProjects(calls), 'the new workspace row\'s project was never asked for its PR state').toContain('lateproj');
+  });
+
+  it('the mail lane attempts a queued delivery to a recipient that appeared between the ticks, and neither parks nor holds it', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    const id = queueMailTo(r, 'demo-late');
+    await primed(r);
+    r.row('demo-late', 'demo');
+    r.at(LATER, MONO_LATER);
+    await r.w.tick();
+    await r.settle();
+    const row = deliveryOf(r, id);
+    expect(row?.lastGate, 'the recipient was read as absent').not.toBe('registry-absent');
+    expect(row?.lastGate, 'the delivery was never attempted').toBeTruthy();
+    expect(row?.state).toBe('queued');
+  });
+
+  it('a refused id planted between the ticks is left out by the task, name and PR lanes', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    await primed(r);
+    r.row(REFUSED, 'refproj', { workspace: 'ref', branch: 'ws/ref' });
+    const calls = recordCcd(r);
+    r.at(LATER, MONO_LATER);
+    await r.w.tick();
+    await r.settle();
+    expect(prProjects(calls)).not.toContain('refproj');
+    expect(r.reads.filter((p) => p.endsWith(path.join('tasks', `u-${REFUSED}`)))).toEqual([]);
+    expect(r.stats.filter((p) => p.includes(`u-${REFUSED}`))).toEqual([]);
+  });
+
+  it('a refused recipient planted between the ticks is held registry-unmeasurable by the mail lane, never read as absent', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    const id = queueMailTo(r, REFUSED);
+    await primed(r);
+    r.row(REFUSED, 'demo');
+    r.at(LATER, MONO_LATER);
+    await r.w.tick();
+    await r.settle();
+    const row = deliveryOf(r, id);
+    expect(row?.lastError).toBe('registry row listed but unreadable (registry-unmeasurable)');
+    expect(row?.state).not.toBe('rejected');
+  });
+
+  it('a session whose uuid file became unreadable between the ticks has no plan directory or transcript read', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    r.row('demo-w', 'demo', { workspace: 'slug', branch: 'ws/slug' });
+    await primed(r);
+    breakField(r, 'demo-a', 'uuid');
+    breakField(r, 'demo-w', 'uuid');
+    r.at(LATER, MONO_LATER);
+    await r.w.tick();
+    await r.settle();
+    expect(r.reads.filter((p) => p.endsWith(path.join('tasks', 'u-demo-a'))), 'a row with no measured uuid had its plan directory read').toEqual([]);
+    expect(r.stats.filter((p) => p.includes('u-demo-w')), 'a row with no measured uuid had its transcript stat\'d').toEqual([]);
+  });
+
+  it('a workspace row whose workspace file became unreadable between the ticks is not asked for its PR state', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    r.row('unr-w', 'unrproj', { workspace: 'unr', branch: 'ws/unr' });
+    await primed(r);
+    breakField(r, 'unr-w', 'workspace');
+    const calls = recordCcd(r);
+    r.at(LATER, MONO_LATER);
+    await r.w.tick();
+    await r.settle();
+    expect(prProjects(calls)).not.toContain('unrproj');
+  });
+
+  it('a recipient whose uuid file became unreadable between the ticks is held registry-unmeasurable by the mail lane', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    const id = queueMailTo(r, 'demo-a');
+    await primed(r);
+    breakField(r, 'demo-a', 'uuid');
+    r.at(LATER, MONO_LATER);
+    await r.w.tick();
+    await r.settle();
+    const row = deliveryOf(r, id);
+    expect(row?.lastError).toBe('registry row listed but unreadable (registry-unmeasurable)');
+    expect(row?.state).not.toBe('rejected');
   });
 });
 
