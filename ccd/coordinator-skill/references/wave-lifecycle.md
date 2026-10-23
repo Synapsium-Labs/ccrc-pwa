@@ -792,7 +792,7 @@ whole time, which is the only prevention this ordering rule buys.
    wait**), do not start the wait: report the exit to the operator and leave the
    landing stopped; otherwise wait for them in the foreground —
    `gh pr checks <pr> --required --watch`, again if the call times out —
-   never by ending your turn: no mail comes when checks finish. Then run the
+   never by ending your turn: no mail comes when checks finish, then run the
    verdict again. Whichever arm led back to the verdict, a `ROUTE Q` answer
    does not skip this gate: never enqueue on a verdict without an exit `0` read
    after it. On `1`, run the verdict again: a `RED` goes to the `RED`
@@ -1209,8 +1209,8 @@ decides what this session does, and nothing else does:
 read 5 again and nothing else: the PR's reviews, the rules and the head are the
 snapshot from the start of that run, and nothing here claims they are watched
 while it waits. So a `ROUTE` printed by a run with `BOUND_S` above 0 is not
-landing permission. Discard it, and before you enqueue or merge anything run
-the complete verdict afresh with `BOUND_S=0`, `CR_IGNORE` set as **A requested
+landing permission. Discard it, and before you enqueue or merge anything run the
+complete verdict afresh with `BOUND_S=0`, `CR_IGNORE` set as **A requested
 change** says when the operator answered ignore, so that every read is made
 again. A verdict run without `BOUND_S`, after an external `--watch` wait, needs
 no second run: every run of the block makes every read, and its line goes by its
@@ -1219,39 +1219,44 @@ bullet. A fresh `WAIT`, `pending` or `not-reported`, a required name newly found
 on that read included, is not permission either: report that line to the
 operator and leave the landing stopped. Do not start a waiting phase again for
 it: no second watch, no second `BOUND_S=300`, and not the first-use instructions
-of the `WAIT` bullets above, whose budget is spent. A landing attempt is one run
-of the landing procedure, entered through one of two doors. The first is a fresh
-accepted entry to `merging` for the reviewed handoff, a fix round's completed
-edits, new independent review and fresh `merging` transition included;
-re-reading a run that is still at `merging` is not an entry, and states are
-never cycled to make one. The second is the re-enqueue step 3 gives for one
-genuinely dequeued queue entry, after the notice, the PR and the queue are
-measured afresh and the queue's own `merge_group` reason is read, and only where
-step 3 permits a re-enqueue rather than a fix round or a stop; it may be the
-same reviewed head, still at `merging`. A replayed or duplicate notice, another
-measurement of the same dequeue, and a PR already re-enqueued or merged are not
-another attempt. An attempt's enqueue is complete when the read-back proves a
-real queue entry; auto-merge only armed is not one, begins no attempt and goes
-by step 3's disarm rule; a direct merge still needs its exact-head `MERGED`
-proof. A stop, a report, a spent `WAIT`, a fix round's edits, a new commit, a
-fresh CI result and a fix-round mail each grant nothing. The budget is spent
-once this landing attempt has run its `BOUND_S=300` verdict, also when that run
-ends early on a name that started running. It stays spent for the rest of the
-attempt, whichever arm leads back to the verdict (the checks gate's exit `1`,
-the one rerun a `RED` allows, the `CR_IGNORE` run). Every later run of the
-verdict uses `BOUND_S=0`, and any later `WAIT`, pending or not-reported,
-including the `WAIT pending` the bounded run itself prints, is reported the same
-way and leaves the landing stopped: no watch, and no renewal when another
-required name becomes missing or pending. The operator's ignore answer permits
-only the complete fresh verdict with the exact `CR_IGNORE` key, inside the
-current attempt: it neither replenishes nor consumes a waiting phase, and when
-the bound is spent that run uses `BOUND_S=0`, a `WAIT` it prints is reported
-with no watch, and `admin` stays never over a standing request. A different
-required name, a returned route, a rerun, the clock, an account or session
-resumption and a repeated mail are not resets. Only an explicit operator
-instruction to start another attempt is separate authorization: never infer it
-from an ignore answer or from automation, and no report, rerun, fresh route or
-passage of time is one.
+of the `WAIT` bullets above, whose budget is spent.
+
+A landing attempt is one run of the landing procedure, entered through one of
+two doors. The first is a fresh accepted entry to `merging` for the reviewed
+handoff; after a fix round, that is only once its edits are complete, a new
+independent review has passed on the changed tip, and the run has entered
+`merging` again; re-reading a run that is still at `merging` is not an entry,
+and states are never cycled to make one. The second is the re-enqueue step 3
+gives for one genuinely dequeued queue entry, after the notice, the PR and the
+queue are measured afresh and the queue's own `merge_group` reason is read, and
+only where step 3 permits a re-enqueue rather than a fix round or a stop (a
+dequeue asked for because a request for changes was observed is that stop, not
+this door); it may be the same reviewed head, still at `merging`. A replayed or
+duplicate notice, another measurement of the same dequeue, and a PR already
+re-enqueued or merged are not another attempt. An attempt's enqueue is complete
+when the read-back proves a real queue entry; auto-merge only armed is not one,
+begins no attempt and goes by step 3's disarm rule; a direct merge still needs
+its exact-head `MERGED` proof. A stop, a report, a spent `WAIT`, a fix round's
+edits alone, a new commit, a fresh CI result and a fix-round mail each grant
+nothing.
+
+The budget is spent once this landing attempt has run its `BOUND_S=300` verdict,
+also when that run ends early on a name that started running. It stays spent for
+the rest of the attempt, whichever arm leads back to the verdict (the checks
+gate's exit `1`, the one rerun a `RED` allows, the `CR_IGNORE` run). Every later
+run of the verdict uses `BOUND_S=0`, and any later `WAIT`, pending or
+not-reported, including the `WAIT pending` the bounded run itself prints, is
+reported the same way and leaves the landing stopped: no watch, and no renewal
+when another required name becomes missing or pending. The operator's ignore
+answer permits only the complete fresh verdict with the exact `CR_IGNORE` key,
+inside the current attempt: it neither replenishes nor consumes a waiting phase,
+and when the bound is spent that run uses `BOUND_S=0`, a `WAIT` it prints is
+reported with no watch, and `admin` stays never over a standing request. A
+different required name, a returned route, a rerun, the clock, an account or
+session resumption and a repeated mail are not resets. Outside these two doors,
+only an explicit operator instruction to start another attempt authorizes one:
+never infer it from an ignore answer or from automation, and no report, rerun,
+fresh route or passage of time is one.
 
 **The approval licence.** `--admin` is licensed on a direct route only, and
 only when all three hold, each read fresh for this landing: an approval the

@@ -1382,7 +1382,7 @@ describe('the bounded wait never sleeps past its budget (fix round 2, F9)', () =
   });
 
   // The path through the spent budget the first scenario does not reach: the missing name starts RUNNING during the bound, so
-  // the bounded run itself prints WAIT pending (the loop ends on a name that reported, with the budget unspent). These cases
+  // the bounded run itself prints WAIT pending (the loop ends on a name that reported, with time left in the bound). These cases
   // show what the BLOCK does, nothing more: it starts no wait of its own, and a run with no bound sleeps for nothing whatever
   // it finds. That the coordinator then reports the line and watches nothing, in this attempt, is the skill's prose, owned by
   // the pins in coordinator-skill.test.ts; no shell test of the verdict alone proves that prose is followed.
@@ -1391,7 +1391,7 @@ describe('the bounded wait never sleeps past its budget (fix round 2, F9)', () =
     const first = waitedFor(300, 30, 2, { checkruns: running });
     expect(first.out, `stderr: ${first.stderr}`).toBe('WAIT pending: test (server)\n');
     expectWithinBudget(first, 300, 30);
-    expect(first.sleeps, 'the loop ends on the name that reported, with the budget unspent').toHaveLength(2);
+    expect(first.sleeps, 'the loop ends on the name that reported, with time left in the bound').toHaveLength(2);
     expect(first.calls.filter((c) => c.endsWith('/check-runs'))).toHaveLength(3);
     // A later run in the same attempt uses BOUND_S=0, as every later run does: with the name now passing and another required
     // name that nothing has reported, it prints WAIT not-reported and sleeps for nothing. Reporting that line is the prose's job.
