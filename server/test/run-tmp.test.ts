@@ -719,16 +719,16 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
    *  `globalSetup` by absolute path, one fixture test, and a record file. */
   function fixture(): string {
     const fx = mkTmp('ccrc-runtmp-e2e-');
-    // `plant.mjs` runs first and, when FX_PLANT names a path, points the project's `tmpDir` at it with a file inside
-    // (vitest makes its own lazily): the arm must remove it on a signal.
+    // `plant.mjs` runs first and, when FX_PLANT is set, makes vitest's REAL `project.tmpDir` (it may not exist yet) with a
+    // file inside and records the path: the arm must remove that very directory on a signal, leaving the base empty.
     writeFileSync(path.join(fx, 'plant.mjs'), [
       "import { mkdirSync, writeFileSync } from 'node:fs';",
       'export default function plant(project) {',
-      '  const p = process.env.FX_PLANT;',
-      '  if (!p) return;',
-      '  project.tmpDir = p;',
+      '  if (!process.env.FX_PLANT) return;',
+      '  const p = project.tmpDir;',
       "  mkdirSync(p, { recursive: true });",
       "  writeFileSync(p + '/x', 'x');",
+      "  writeFileSync(process.env.FX_RECORD + '.planted', p);",
       '}',
       '',
     ].join('\n'));
@@ -776,6 +776,13 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     throw new Error(`the nested run wrote no record\n--- nested output ---\n${n.output()}`);
   }
 
+  /** The real `project.tmpDir` the fixture planted, read back from its record; it must sit under the base. */
+  const plantedDir = (n: Nested, base: string): string => {
+    const p = readFileSync(`${path.join(n.fx, 'record.jsonl')}.planted`, 'utf8');
+    expect(p.startsWith(`${base}${path.sep}`), 'vitest\'s tmpDir is not under the base').toBe(true);
+    return p;
+  };
+
   const runsIn = (base: string): string[] => readdirSync(base).filter((f) => f.startsWith(RUN_PREFIX));
 
   /** A run killed the one way no arm can answer: SIGKILL to main, then its orphan workers. */
@@ -791,9 +798,9 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
 
   it('T5a: GNU timeout\'s double SIGTERM — main, then its group — exits 143 and leaves nothing', async () => {
     const base = socketBase();
-    const planted = path.join(base, 'vitest-tmp-planted');
-    const n = nested(base, 'sleep', { FX_PLANT: planted });
+    const n = nested(base, 'sleep', { FX_PLANT: '1' });
     const rec = await firstRecord(n);
+    const planted = plantedDir(n, base);
     expect(existsSync(planted), 'the plant never happened, so this case proves nothing').toBe(true);
     process.kill(n.pid, 'SIGTERM');      // GNU timeout signals its child first...
     process.kill(-n.pid, 'SIGTERM');     // ...then its process group: main's second SIGTERM, after vitest's `once`
@@ -801,6 +808,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     expect(rec.tmpdir).toMatch(new RegExp(`^${base}/${RUN_PREFIX}[A-Za-z0-9]{6}/${RUN_TMP}$`));
     expect(runsIn(base)).toEqual([]);
     expect(existsSync(planted), 'vitest\'s tmpDir survived the signal').toBe(false);
+    expect(readdirSync(base), 'the base is not empty after the signal').toEqual([]);
   }, 120_000);
 
   it('T5b: a worker that dies outright — teardown still collects the fixture it left', async () => {
@@ -832,14 +840,15 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
 
   it('T5d: SIGHUP to the group — a closed terminal or tmux pane — exits 129 and leaves nothing', async () => {
     const base = socketBase();
-    const planted = path.join(base, 'vitest-tmp-planted');
-    const n = nested(base, 'sleep', { FX_PLANT: planted });
+    const n = nested(base, 'sleep', { FX_PLANT: '1' });
     await firstRecord(n);
+    const planted = plantedDir(n, base);
     expect(existsSync(planted), 'the plant never happened, so this case proves nothing').toBe(true);
     process.kill(-n.pid, 'SIGHUP');
     expect(await n.exit, n.output()).toEqual({ code: 129, signal: null });
     expect(runsIn(base)).toEqual([]);
     expect(existsSync(planted), 'vitest\'s tmpDir survived the signal').toBe(false);
+    expect(readdirSync(base), 'the base is not empty after the signal').toEqual([]);
   }, 120_000);
 
   it('T5e: a dead run that is not quiet at setup is reaped at TEARDOWN once it is', async () => {
