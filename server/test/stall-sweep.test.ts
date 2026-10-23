@@ -931,7 +931,7 @@ describe('sweepStalls: wiring', () => {
     expect(lane).toBeGreaterThan(claims);
     expect(primed).toBeGreaterThan(lane);
     expect(src.match(/setInterval\(/g)).toHaveLength(2); expect(callsIn(symbolOf('server/src/watch.ts', 'createDelegationStallSampler')).filter((c) => c.callee === 'LANE_TIMERS.setInterval'), 'the lane sampler, by name').toHaveLength(1);   // D-5832: the tick's, and the delegation lane's stall sampler by name (unref'd; only tests call the lane's close(), so in production it lives for the process)
-    expect(src).toContain('export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;');
+    expect(readFileSync(path.join(here, '../src/laneSchedule.ts'), 'utf8')).toContain('export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;');   // the cadence now lives in the lane table (D-5862)
   });
 });
 

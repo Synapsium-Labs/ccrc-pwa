@@ -189,7 +189,7 @@ import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { LaneRunner } from './laneRunner.js';
-import { CLAIM_SWEEP_MS, DIVERGENCE_SWEEP_MS, LC_SWEEP_MS, PR_BACKOFF_MAX_MS, PR_SWEEP_MS, READINESS_SWEEP_MS, type LaneName } from './laneSchedule.js';
+import { DIVERGENCE_SWEEP_MS, IDLE_NUDGE_SWEEP_MS, LC_SWEEP_MS, STALL_SWEEP_MS, PR_BACKOFF_MAX_MS, PR_SWEEP_MS, READINESS_SWEEP_MS, type LaneName } from './laneSchedule.js';
 // THE TEMP-ROOT COLLECTOR'S LANE (child reclamation wave 9, spec §5.10). A block of its own, so no import line above
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
 import { COLLECT_CAP } from './ccdargv.js';
@@ -295,15 +295,8 @@ export const HEADS_BOOT_WAIT_MS = 2_500;
 
 /** The mirror lane's cadence, the census's and the readiness lane's live in `laneSchedule.ts`; the suites and `index.ts`
  *  import the two exported ones from here. */
-export { LC_SWEEP_MS, READINESS_SWEEP_MS };
+export { IDLE_NUDGE_SWEEP_MS, LC_SWEEP_MS, READINESS_SWEEP_MS, STALL_SWEEP_MS };
 
-/** The stall watch's lane (spec 2026-09-29 §4.2, §10). It runs at `CLAIM_SWEEP_MS`'s cadence, for that
- *  constant's reason: a threshold of the quiet time (2 h built-in, 30 min at the least, stall watch settings §7)
- *  does not need the 2 s tick. EXPORTED for its suite, as `LC_SWEEP_MS` and `READINESS_SWEEP_MS` are. */
-export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;
-/** `idle-compact-nudge` (D-5373): the lane's own clock. A nudge waits out `IDLE_NUDGE_SETTLE_MS` (30 s) anyway, so a
- *  10 s beat costs at most one beat of extra delay; the transcript tail is re-read only when the file changed. */
-export const IDLE_NUDGE_SWEEP_MS = 10_000;
 /** How much of a transcript's end the nudge lane reads: the compaction summary (~14 KB measured) and the attachments
  *  Claude Code re-injects after it sit well inside 1 MiB, the backlog's own window. */
 const IDLE_NUDGE_TAIL_BYTES = 1024 * 1024;
@@ -451,15 +444,9 @@ function projectionWarn(p: ProjectionOutcome): { key: string; message: string } 
   return { key, message };
 }
 
-/** The SEVENTH lane. (Sixth is naming, fifth is hook-state sweeping.) spec:159
- *  fixes the cadence; the rest of this block is the gate's arithmetic.
+/** The mail lane (the seventh; cadence `MAIL_SWEEP_MS`, `laneSchedule.ts`; the rest of this block is the gate's arithmetic).
  *
- *  Ten seconds is not how fast mail should arrive — it is how often the lane
- *  is allowed to ASK. Actual delivery is bounded below by `MAIL_QUIET_MS`,
- *  which is the point: mail lands at a turn boundary, not mid-thought. */
-const MAIL_SWEEP_MS = 10_000;
-
-/** How long a session must have been idle before it is interruptible. ccd's
+ * How long a session must have been idle before it is interruptible. ccd's
  *  own `COMPACT_QUIET` (`ccd/ccd:142`), taken rather than re-derived: this is
  *  the same judgement about the same panes, and two numbers for one policy is
  *  two numbers to get out of step. Measured from `statusUpdatedAt`, which
@@ -468,13 +455,6 @@ const MAIL_SWEEP_MS = 10_000;
  *  watch design's §3.1), which is all this quiet needs. `mailTurnIdle`
  *  (`turnidle.ts`) applies it. */
 const MAIL_QUIET_MS = 60_000;
-
-/** The ask-release lane's own self-throttle (RULING F4, task-7-brief). Not how
- *  fast a lapsed hold fires — that ceiling is `ASK_GRACE_MS` (`askwindow.ts`), measured
- *  in minutes — but how often the lane is allowed to ASK, the same relation
- *  `MAIL_SWEEP_MS`'s own docstring states for the mail lane. Ten seconds
- *  matches that cadence and is ample against a window sized in minutes. */
-const ASK_SWEEP_MS = 10_000;
 
 /** No session gets two injections inside this window, however much mail is
  *  queued for it. A fan-out of six findings arriving as six prompts in ninety
@@ -818,12 +798,9 @@ export class FleetWatcher {
   private pendingReseed = new Map<string, { ask: AskRow | null; approvals: { id: number; notifyAt: number }[] }>();
   /** Set once the boot snapshot behind `pendingReseed` has been read (or there was no store to read). */
   private reseedLoaded = false;
-  /** The day the approval inputs and the asks' question text were last pruned (`sweepApprovals`). */
-  private lastApprovalPrune = 0;
   /** The digest beat's memory (D-5300): the last day it settled (sent, skipped at zero, or found already claimed),
-   *  and when it last looked. The `digests` row, not this, is what keeps a restart from sending twice. */
+   *  (when it last looked is the `digestBeat` row). The `digests` row, not this, is what keeps a restart from sending twice. */
   private lastDigestDay: string | null = null;
-  private lastDigestBeat = -Infinity;
   /** D-5290: dialogs whose FIRST raise is deferred, per child — the dialog id
    *  and how many ticks it has been seen while the child's hookstate was not
    *  yet `waiting` and no envelope made it answerable. Bounded by
@@ -1158,10 +1135,6 @@ export class FleetWatcher {
    *  row per source row per process, so a restart writes it once more. Never pruned, because an ended item
    *  never returns. */
   private readonly childReclaimLeafFed = new Set<number>();
-  /** The stall lane's own clock (`STALL_SWEEP_MS`), with the same `!== 0` never-run idiom. */
-  private lastStallSweep = 0;
-  /** True while a `sweepStalls` pass awaits its reads. A second pass started meanwhile returns at once. */
-  private stallSweepRunning = false;
   /** Wave 2's in-memory clocks, keyed by session id, pruned every sweep (`pruneStallMemory`) and dropped whole after a
    *  gap of more than STALL_CLOCK_GAP_MS between judged sweeps (`dropStallClocks`, `lastStallJudgedAt`). A server
    *  restart re-times each one, which the spec accepts (slug `absent-worker-is-dead-after-grace` (D-3631)): when a run worker
@@ -1306,8 +1279,6 @@ export class FleetWatcher {
   /** The newest compaction read off each session's transcript tail, keyed by the file's path, size and mtime, so an
    *  idle session waiting on the operator costs one stat per beat, not a 1 MiB read. */
   private readonly idleNudgeTails = new Map<string, { sig: string; tail: CompactionTail }>();
-  private idleNudgeRunning = false;
-  private lastIdleNudgeAt = 0;
   /** The set of projects with at least one non-dead session, as of the last
    *  completed `tick()` — feeds `pushOne`'s "name the project only when more
    *  than one is active" rule. `detectDialogs` and `sweepPr`/`sweepMerged`
@@ -1321,11 +1292,6 @@ export class FleetWatcher {
    *  inside a lane that promises never to block) is not on offer.
    */
   private activeProjects = new Set<string>();
-  /** The seventh lane's clock. */
-  private lastMailSweep = 0;
-  /** The ask-release lane's own clock (Task 7) — same `!== 0` never-run
-   *  sentinel `lastMailSweep` above uses, gated by `ASK_SWEEP_MS`. */
-  private lastAskSweep = 0;
   /** Per session: when this lane last injected. IN MEMORY BY DESIGN, and the
    *  direction of the failure is why: a restart forgets the cooldown and may
    *  deliver one message sooner than it should have. Persisting it would buy
@@ -2691,11 +2657,8 @@ export class FleetWatcher {
       // D-5242: hibernation's SHADOW sweep, never awaited, gated on `primed` like the stop-done lane. It only logs.
       if (this.primed) void this.sweepHibernate(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
-      if (Date.now() - this.lastIdleNudgeAt >= IDLE_NUDGE_SWEEP_MS) {
-        this.lastIdleNudgeAt = Date.now();
-        void this.sweepIdleCompactNudge(sessions, registryRead.names, { panePids, records, refused: registryRead.refused })
-          .catch(() => { /* one bad sweep must not kill the poll */ });
-      }
+      void this.runLane('idleNudge', () => this.sweepIdleCompactNudge(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }))
+        ?.catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
@@ -6212,11 +6175,11 @@ export class FleetWatcher {
     if (!this.primed) return;
     const store = this.deps.coord;
     if (!store) return;
+    await this.runLane('stalls', () => this.stallPass(store, sessions, names, tick));
+  }
+
+  private async stallPass(store: CoordStore, sessions: readonly FleetSession[], names: readonly string[], tick: StallTick): Promise<void> {
     const now = Date.now();
-    if (this.lastStallSweep !== 0 && now - this.lastStallSweep < STALL_SWEEP_MS) return;
-    if (this.stallSweepRunning) return;
-    this.lastStallSweep = now;
-    this.stallSweepRunning = true;
     let judging = false;
     try {
       // `mail-disabled` reaches L1 as a fact, and `stallMailDisabledHold` decides what it holds (slug
@@ -6281,7 +6244,6 @@ export class FleetWatcher {
     } finally {
       // A judged sweep is stamped when it ENDS, its error path included, so the next start measures only unobserved time.
       if (judging) this.lastStallJudgedAt = Date.now();
-      this.stallSweepRunning = false;
     }
   }
 
@@ -6795,23 +6757,18 @@ export class FleetWatcher {
    * in the chat (`transcript/parse.ts`), and its user row is itself a hold for this compaction.
    */
   async sweepIdleCompactNudge(sessions: readonly FleetSession[], names: readonly string[], tick: StallTick): Promise<void> {
-    if (!this.primed || this.idleNudgeRunning) return;
-    this.idleNudgeRunning = true;
-    try {
-      const disabled = idleNudgeDisabled(names);
-      const coord = this.deps.coord;
-      const durable = coord !== undefined && this.deps.notifyLog !== undefined;
-      for (const s of sessions) {
-        const row: IdleNudgeRowFacts = {
-          disabled, durable, unmeasured: s.unmeasured.length > 0 || s.statusUnmeasured,
-          lifecycle: s.lifecycle, archived: s.archivedAt !== null, status: s.status,
-          dialogPending: s.dialogPending, askSummary: s.askSummary, ask: s.ask?.state ?? null,
-        };
-        if (idleNudgeRowHold(row) !== null || coord === undefined) continue;
-        await this.idleNudgeOne(s, row, coord, tick);
-      }
-    } finally {
-      this.idleNudgeRunning = false;
+    if (!this.primed) return;
+    const disabled = idleNudgeDisabled(names);
+    const coord = this.deps.coord;
+    const durable = coord !== undefined && this.deps.notifyLog !== undefined;
+    for (const s of sessions) {
+      const row: IdleNudgeRowFacts = {
+        disabled, durable, unmeasured: s.unmeasured.length > 0 || s.statusUnmeasured,
+        lifecycle: s.lifecycle, archived: s.archivedAt !== null, status: s.status,
+        dialogPending: s.dialogPending, askSummary: s.askSummary, ask: s.ask?.state ?? null,
+      };
+      if (idleNudgeRowHold(row) !== null || coord === undefined) continue;
+      await this.idleNudgeOne(s, row, coord, tick);
     }
   }
 
@@ -7225,9 +7182,11 @@ export class FleetWatcher {
     if (!this.primed) return;
     const store = this.deps.coord;
     if (!store) return;
+    await this.runLane('mail', () => this.mailPass(store));
+  }
+
+  private async mailPass(store: CoordStore): Promise<void> {
     const now = Date.now();
-    if (this.lastMailSweep !== 0 && now - this.lastMailSweep < MAIL_SWEEP_MS) return;
-    this.lastMailSweep = now;
 
     // Fail-shut: a registry we cannot list is a kill-switch we cannot read.
     const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
@@ -9022,9 +8981,11 @@ export class FleetWatcher {
     if (!this.primed) return;
     const store = this.deps.coord;
     if (!store) return;
+    await this.runLane('asks', () => this.askPass(store));
+  }
+
+  private async askPass(store: CoordStore): Promise<void> {
     const now = Date.now();
-    if (this.lastAskSweep !== 0 && now - this.lastAskSweep < ASK_SWEEP_MS) return;
-    this.lastAskSweep = now;
 
     // Fail-shut, same discipline as `sweepMail`'s own `MAIL_DISABLED_MARKER`
     // read a few hundred lines up: a registry we cannot list is a kill-switch
@@ -9239,11 +9200,10 @@ export class FleetWatcher {
         this.heldApprovals.delete(childId);
         if (this.dialogIds.get(childId) === entry.dialogId) this.pushOne(entry.ev, this.activeProjects);
       }
-      if (now - this.lastApprovalPrune >= 86_400_000) {
-        this.lastApprovalPrune = now;
+      this.runLaneSync('approvalPrune', () => {
         coord.pruneApprovalInputs(now);
         coord.pruneAskQuestions(now);
-      }
+      }, now);
     } catch (err) {
       console.warn(`ccrc-server: sweepApprovals failed (${err instanceof Error ? err.message : String(err)}) — the next sweep retries`);
     }
@@ -9261,8 +9221,10 @@ export class FleetWatcher {
   sweepDigest(now: number = Date.now()): void {
     const coord = this.deps.coord;
     if (!coord) return;
-    if (now - this.lastDigestBeat < 60_000) return;
-    this.lastDigestBeat = now;
+    this.runLaneSync('digestBeat', () => this.digestBeat(coord, now), now);
+  }
+
+  private digestBeat(coord: CoordStore, now: number): void {
     try {
       const hour = readDigestHour(this.deps.cfg.ccrcDir);
       const day = digestDayFor(now, hour);

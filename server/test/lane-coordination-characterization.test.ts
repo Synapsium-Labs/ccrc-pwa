@@ -297,9 +297,11 @@ describe('the idle-compact nudge: the throttle sits in tick, the single flight i
       id: 'demo-quiet-basin', unmeasured: [], statusUnmeasured: false, lifecycle: 'running', archivedAt: null, status: 'idle',
       dialogPending: false, askSummary: null, ask: null,
     };
-    void r.w.sweepIdleCompactNudge([session as never], [], TICK); await settleTurns();
+    // The single flight is the lane's row now (`runLane`), so both calls go through it, a cadence apart.
+    const call = (): void => { void r.w.runLane('idleNudge', () => r.w.sweepIdleCompactNudge([session as never], [], TICK)); };
+    at(NOW); call(); await settleTurns();
     expect(one.mock.calls.length, 'the first call did not reach a session').toBe(1);
-    void r.w.sweepIdleCompactNudge([session as never], [], TICK); await settleTurns();
+    at(NOW + IDLE_NUDGE_SWEEP_MS); call(); await settleTurns();
     expect(one.mock.calls.length, 'a second call started while the first was running').toBe(1);
   });
 });
