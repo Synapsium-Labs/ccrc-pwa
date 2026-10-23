@@ -32,13 +32,13 @@ Run-level wave numbers map onto the spec's wave names as below. W0 (the spec) ne
 | 4 | W3 | worktree path identity (spec section 4) | ccd/ccd + one server string, fleet box first | #1132 | **merged** `357fec3bf` (2026-10-23 14:28), head `c64e21643`; dispatched 2026-10-21 from the plan merged as #1055 (`c10173d0e`); one absorption of main (`270824d3e`); reviews 790, 835 and 859; fix rounds R82 and R83; R39's full CI run 39859336719 at `059ffa60f` red only on the exempt growth row and a macOS harness exit that is not W3's; run **722 closed** done (2026-10-23 14:29) |
 | 4 | W3 landing prerequisite | the growth check's named-PR exemption (D-6211): `server/test/growth-exemptions.json`, read from `origin/main` only, withheld from a PR that edits the check's own files; the list ships empty | server test | #1084 | **merged** `2c4438d32` (2026-10-21 17:07), head `1e9e971e6`; reviews 750, 752, 756 and 757, fix rounds 1 to 3; review 757's two residuals carried; run **748 closed** done (2026-10-21) |
 | 4 | W3 exemption entry | one entry: #1132 may grow `ccd/ccd` by up to 760 net code lines; the exemption-age stamp's size goes from 0 to 1 | server test data | #1135 | **merged** `bd895fbe4` (2026-10-23 12:03), head `5ac7e3d28`; opened at cap 751 (`cd8b05a5f`), re-measured to 760 after fix round 1; enqueued ahead of #1132; the coordinator's own PR, no run |
-| 4 | W3 exemption removal | removes #1135's entry once #1132 has landed; the stamp's size goes back to 0 | server test data | #1179 | opened after #1132 merged; it leaves the list empty, as #1084 shipped it |
+| 4 | W3 exemption removal | removes #1135's entry once #1132 has landed; the stamp's size goes back to 0 | server test data | #1179 | **merged** `60866e4ed` (2026-10-23 15:04), head `f7235b547`, through the merge queue; the list is empty again, as #1084 shipped it; the coordinator's own PR, no run |
 
 ## Decisions & deviations
 
 - **2026-10-23 14:29 — W3 IS LANDED (#1132 = `357fec3bf`); RUN 722 IS CLOSED; THE PROGRAMME IS COMPLETE.**
   - **Landing.** #1132 merged through the merge queue, alone in its group, as `357fec3bf` at 2026-10-23 14:28, head `c64e21643`. Run 722 then closed done at 2026-10-23 14:29, with `prPhase: merged`. The close was final and queued the child's reclaim; run 722 was the programme's only open run. The worker was told to release its claims and make no further commits (8573).
-  - **The exemption entry goes.** #1179 removes #1135's entry from `server/test/growth-exemptions.json` and returns the exemption-age stamp to size 0. The list is empty again, as #1084 shipped it.
+  - **The exemption entry goes.** #1179 (merged as `60866e4ed` at 15:04) removes #1135's entry from `server/test/growth-exemptions.json` and returns the exemption-age stamp to size 0. The list is empty again, as #1084 shipped it.
   - **The contract's R83 is amended.** W2 left one text change owed to child-reclamation's contract
     (`aside-joins-the-population`). This closing PR makes it: R83's step 3 now admits the compare-and-drop aside's id,
     as `collectPopulation` does.
@@ -953,7 +953,7 @@ ledger and written here, the follow-ups left open with their owners, and what st
 ## Next-wave brief
 
 **Final state.** There is no next wave. The programme is complete: #1132 merged as `357fec3bf` at 2026-10-23 14:28, run
-722 closed at 2026-10-23 14:29, and #1179 removes #1135's exemption entry. W4 is not scheduled (PG1 B).
+722 closed at 2026-10-23 14:29, and #1179 (`60866e4ed`) removed #1135's exemption entry. W4 is not scheduled (PG1 B).
 
 **Any later work starts from:**
 - the follow-ups under Carried constraints, each with its owner;
