@@ -103,9 +103,8 @@ const statementsOf = (parsed: ParsedFile, from: number, to: number): SqlStatemen
 };
 
 /** Every SQL statement inside `symbol`'s span, in source order, nested functions' statements included. A statement
- *  is a string expression whose text opens as one (`UPDATE t SET`, `INSERT INTO`, `DELETE FROM`, `SELECT … FROM`, DDL), so a comment that quotes SQL is not one.
- *  KNOWN
- *  WIDTH: SQL assembled from a variable (`'UPDATE ' + table`) or a `.join` is not a string expression. */
+ *  is a string expression whose text opens as one (`UPDATE t SET`, `INSERT INTO`, `DELETE FROM`, `SELECT … FROM`,
+ *  DDL), so a comment that quotes SQL is not one. KNOWN WIDTH: SQL assembled from a variable (`'UPDATE ' + table`) or a `.join` is not a string expression. */
 export function sqlStatementsIn(symbol: SourceSymbol): SqlStatement[] {
   return statementsOf(parsedFile(symbol.file), symbol.start, symbol.end);
 }
