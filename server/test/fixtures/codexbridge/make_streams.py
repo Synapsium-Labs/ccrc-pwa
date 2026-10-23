@@ -8,9 +8,9 @@ expectation is changed here, never by hand.
 THE CORPUS. 32 streams ported from the throwaway prototype (8 rebuilt from shapes in this repository: the runtime
 probe's scripted streams in `ccd/ccgpt-runtime` and the patch driver's in `server/test/ccgpt-runtime.test.ts`; 24
 synthetic until the operator's scrubbed recordings replace them, D-6430), then 16 `synth2-` streams: the second guard
-for each rule the prototype guarded once, and the spec §5 reducer list, then 11 `synth3-` streams for the rule arms
-the Task 3 review found no stream reaching (9 in fix round 1, 2 in fix round 2). Every stream is synthetic: tiny
-texts, ids of the form `<prefix>_fx<n>`, encrypted content `ENC-<n>`, neutral tool names.
+for each rule the prototype guarded once, and the spec §5 reducer list, then 13 `synth3-` streams for the rule arms
+the Task 3 review found no stream reaching (9 in fix round 1, 2 in fix round 2, 2 in fix round 3). Every stream is
+synthetic: tiny texts, ids of the form `<prefix>_fx<n>`, encrypted content `ENC-<n>`, neutral tool names.
 
 THE EXPECTATIONS are written here by hand, never computed by the reducer: per stream, `setup` (the reducer's
 `name_map` and `tools_required`), the folded `blocks` (`{type: "text", text}` or `{type: "tool_use", id, name, input,
@@ -497,6 +497,18 @@ stream("synth3-live-text-without-content-index",
 # R5 and R9: an unfinished CALL in the final output at the live index is skipped; only a live message is exempt.
 stream("synth3-final-output-unfinished-call-at-live-index",
        Stream().created().text_delta(0, "Hi").completed([fc(0, '{"q":', status="in_progress")], usage(3, 2)),
+       expect([T("Hi")], stop="end_turn", use=AU(3, 0, 0, 2), warnings=[W_UNFINISHED]))
+# ── synth3, fix round 3 ──
+# R5 and R9: a live MESSAGE in the final output whose status is `in_progress` (not `incomplete`) is skipped too: no
+# suffix and no refusal part of its unfinished content is sent, and the terminal closes the block with what was sent.
+stream("synth3-final-output-in-progress-message-at-live-index",
+       Stream().created().text_delta(0, "Hi")
+       .completed([msg(0, [out_text("Hi there"), refusal_part("no")], status="in_progress")], usage(3, 2)),
+       expect([T("Hi")], stop="end_turn", use=AU(3, 0, 0, 2), warnings=[W_UNFINISHED]))
+# R5: only a live MESSAGE that is `incomplete` is exempt, so an `incomplete` CALL at the live index is still skipped
+# in the final output (the round-2 stream above guards an `in_progress` call, which the status test alone now skips).
+stream("synth3-final-output-incomplete-call-at-live-index",
+       Stream().created().text_delta(0, "Hi").completed([fc(0, '{"q":', status="incomplete")], usage(3, 2)),
        expect([T("Hi")], stop="end_turn", use=AU(3, 0, 0, 2), warnings=[W_UNFINISHED]))
 
 

@@ -168,10 +168,10 @@ describe.skipIf(!PY)('the reducer, against the replay corpus (codex-bridge spec 
     }
   });
 
-  it('the corpus holds the 32 ported streams, the 16 new ones and the 11 of review rounds 1 and 2', () => {
+  it('the corpus holds the 32 ported streams, the 16 new ones and the 13 of review rounds 1 to 3', () => {
     expect(STREAMS.filter((s) => !s.startsWith('synth2-') && !s.startsWith('synth3-'))).toHaveLength(32);
     expect(STREAMS.filter((s) => s.startsWith('synth2-'))).toHaveLength(16);
-    expect(STREAMS.filter((s) => s.startsWith('synth3-'))).toHaveLength(11);
+    expect(STREAMS.filter((s) => s.startsWith('synth3-'))).toHaveLength(13);
   });
 
   it('the usage sum equals the upstream input_tokens', async () => {

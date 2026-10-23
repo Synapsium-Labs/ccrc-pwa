@@ -58,7 +58,9 @@
   "synth3-live-index-finishes-as-a-call",
   "synth3-live-index-finishes-as-reasoning",
   "synth3-live-text-without-content-index",
-  "synth3-final-output-unfinished-call-at-live-index"
+  "synth3-final-output-unfinished-call-at-live-index",
+  "synth3-final-output-in-progress-message-at-live-index",
+  "synth3-final-output-incomplete-call-at-live-index"
  ],
  "streams": {
   "hook-custom-tool-call-no-delta": {
@@ -1829,6 +1831,68 @@
     "output_tokens": 6
    },
    "warnings": []
+  },
+  "synth3-final-output-in-progress-message-at-live-index": {
+   "blocks": [
+    {
+     "text": "Hi",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": [
+    "an unfinished item was skipped"
+   ]
+  },
+  "synth3-final-output-incomplete-call-at-live-index": {
+   "blocks": [
+    {
+     "text": "Hi",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": [
+    "an unfinished item was skipped"
+   ]
   },
   "synth3-final-output-unfinished-call-at-live-index": {
    "blocks": [

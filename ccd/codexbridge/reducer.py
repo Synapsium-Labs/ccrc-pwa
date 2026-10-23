@@ -12,8 +12,10 @@ THE RULES (each is a case or a mutation row in codex-bridge-replay.test.ts):
 - R4  blocks come only from `response.output_item.done`: argument deltas, `.done` events, `content_part.*` and
       reasoning deltas are ignored. The one exception is R14's live text.
 - R5  `response.completed.output` (and `.incomplete.output`) fills an item that never got a done event, matched by
-      position, with a warning; an item there whose status is set and is not `completed` is skipped, except a
-      MESSAGE already streaming live at that position (R9 closes its block); a call there is skipped like any other.
+      position, with a warning; an item there whose status is set and is not `completed` is skipped, except an
+      `incomplete` MESSAGE already streaming live at that position (R9 closes its block with what was sent); a call
+      there, or a live message with any other unfinished status (`in_progress`), is skipped like any other, and the
+      terminal closes the live block with what was sent.
 - R6  items are released in `output_index` order; a gap holds the later items until the terminal.
 - R7  a repeated `output_index` is dropped.
 - R8  `function_call` -> `tool_use{id: call_id, name: name_map.get(n, n), input: {}}` and ONE `input_json_delta`
@@ -448,8 +450,9 @@ class Reducer:
             if pos in self._seen or pos < self._cursor or not isinstance(it, dict):
                 continue
             status = it.get("status")
-            live = it.get("type") == "message" and self._live is not None and self._live["oi"] == pos
-            if status not in (None, "completed") and not live:  # R9's live message only, never a call
+            live = (status == "incomplete" and it.get("type") == "message" and self._live is not None
+                    and self._live["oi"] == pos)
+            if status not in (None, "completed") and not live:  # R9's incomplete live message only, never a call
                 self._warn(W_UNFINISHED)
                 continue
             self._warn(W_FILLED)

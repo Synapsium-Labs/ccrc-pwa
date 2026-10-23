@@ -54,7 +54,9 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    and whether terminal and committable were then set)}: one SseParser and one Reducer, the
                    reducer's release() drained after every event, finish() after the parser is closed
   stop-reasons     -> {"rows": [{"in": [kind, reason, end_turn, emitted_tool_use, refusal], "stop", "cont"}],
-                   "failedRaises": the class stop_reason raises for a failed terminal}
+                   "failedRaises": the class stop_reason raises for a failed terminal,
+                   "twoArgContinuationRaises": the class the two-argument needs_continuation call raises (None if it
+                   answers)}
 A BridgeError prints as {"error": {status, etype, message, headers, state, code, requestId, kind}, "answer":
 {"status", "headers", "body": parsed JSON}, "event": errors.event(e) as text}. An op that raised prints
 {"raised": <class name>}. Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the package failed to import.

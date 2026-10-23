@@ -1,0 +1,9 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_fx1","object":"response","status":"in_progress","output":[]},"sequence_number":0}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_fx0","output_index":0,"content_index":0,"delta":"Hi","sequence_number":1}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_fx1","object":"response","status":"completed","output":[{"type":"function_call","id":"fc_fx0","call_id":"call_fx0","name":"probe_tool","arguments":"{\"q\":","status":"incomplete"}],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}},"sequence_number":2}
+
