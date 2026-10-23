@@ -414,7 +414,9 @@ export function NewSessionSheet({
         toast(failedTo('start', err), 'error');
       }
     } finally {
-      setStarting(false);
+      // A dismissed start has nothing left to release: the close already cleared `starting`, and a sheet reopened since
+      // may have its own start in flight, which this one's end must not re-enable.
+      if (mine === generation.current) setStarting(false);
     }
   };
 

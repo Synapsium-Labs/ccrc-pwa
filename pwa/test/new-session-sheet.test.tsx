@@ -598,6 +598,27 @@ describe('NewSessionSheet — success opens the new session', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('a dismissed create answering later does not re-enable the reopened sheet\'s own start in flight', async () => {
+    let answerA!: () => void;
+    vi.spyOn(api, 'createSession')
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { answerA = resolve; }))
+      .mockImplementationOnce(() => new Promise<void>(() => {})); // the reopened sheet's start never answers
+    const { flush, close, reopen } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    close();
+    reopen();
+    await flush();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
+    await act(async () => { answerA(); }); // the dismissed create answers: its sheet is gone, this one's start is not done
+    await flush();
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
+  });
+
   it('a named create answered after the sheet was dismissed says it started, with the server\'s title, and navigates nowhere', async () => {
     let answer!: (a: { named: true; id: string; slug: string; title: string }) => void;
     vi.spyOn(api, 'workspaceAdd').mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
@@ -635,12 +656,25 @@ describe('NewSessionSheet — success opens the new session', () => {
     vi.spyOn(api, 'createSession')
       .mockResolvedValueOnce(undefined) // the first start: answers, then waits for a row that never comes
       .mockImplementationOnce(() => new Promise<void>(() => {})); // the second start: never answers
-    const { onClose, flush, close, reopen } = await mount();
+    const { store, onClose, flush, close, reopen } = await mount();
+    // Count the store's live listeners: a wait for a row holds one until it settles.
+    let listeners = 0;
+    const subscribe = store.subscribe.bind(store);
+    vi.spyOn(store, 'subscribe').mockImplementation((listener) => {
+      listeners += 1;
+      const off = subscribe(listener);
+      return () => { listeners -= 1; off(); };
+    });
     await pickDemo(flush);
+    const listenersBeforeStart = listeners;
     startUnnamed();
     await flush();
     expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled(); // the first wait is running
+    expect(listeners).toBeGreaterThan(listenersBeforeStart);
     close();
+    await flush();
+    // The dismissal ended the wait itself: its fleet listener is released now, not when its 60 s bound runs out.
+    expect(listeners).toBe(listenersBeforeStart);
     reopen();
     await flush();
     await pickDemo(flush);
