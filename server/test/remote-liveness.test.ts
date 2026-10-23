@@ -3,7 +3,10 @@
 // server whose upgrade handling is chosen per attempt, so one port can be silent first and healthy later.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createServer, type IncomingMessage } from 'node:http';
-import type { Socket } from 'node:net';
+import { spawn } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { createServer as createNetServer, type Socket } from 'node:net';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';
@@ -18,17 +21,24 @@ type PeerMode =
   | 'ready-no-pong'    // answer hello with ready, never answer a ping
   | 'ready-then-drop'  // answer hello with ready, then terminate the socket 100 ms later
   | 'refuse-hello'     // complete the upgrade, count the hello, close the socket with 4401 and a long reason
-  | 'echo-hello';      // complete the upgrade, count the hello, close the socket with 4401 and the hello as reason
+  | 'echo-hello'       // complete the upgrade, count the hello, close the socket with 4401 and the hello as reason
+  | 'close-hello';     // complete the upgrade, count the hello, close with the code and reason `closeOf` names
+
+interface HelloClose { code: number; reason: string }
 
 interface LinkPeer {
   port: number;
   accepts(): number; // TCP connections the listener accepted
   hellos(): number;  // hello frames received
   upgraded(attempt: number): boolean; // whether that accept's upgrade request arrived, whatever the mode
+  acceptTimes(): number[]; // Date.now() at each TCP accept, in order
   close(): Promise<void>;
 }
 
-async function linkPeer(modeOf: (attempt: number) => PeerMode): Promise<LinkPeer> {
+async function linkPeer(
+  modeOf: (attempt: number) => PeerMode,
+  closeOf: (attempt: number) => HelloClose = () => ({ code: 4401, reason: 'unauthorized' }),
+): Promise<LinkPeer> {
   const sockets = new Set<Socket>();
   const intervals = new Set<NodeJS.Timeout>();
   // The attempt number is the TCP accept index, not the upgrade index: an attempt the client aborts before it
@@ -36,11 +46,13 @@ async function linkPeer(modeOf: (attempt: number) => PeerMode): Promise<LinkPeer
   const attemptOf = new Map<Duplex, number>();
   let accepted = 0;
   let hellos = 0;
+  const times: number[] = [];
   const upgradedAttempts = new Set<number>();
   const wss = new WebSocketServer({ noServer: true });
   const http = createServer();
   http.on('connection', (s: Socket) => {
     attemptOf.set(s, accepted++);
+    times.push(Date.now());
     sockets.add(s);
     s.on('error', () => undefined);
     s.on('close', () => { sockets.delete(s); attemptOf.delete(s); });
@@ -68,6 +80,7 @@ async function linkPeer(modeOf: (attempt: number) => PeerMode): Promise<LinkPeer
           if (mode === 'silent-hello') return;
           if (mode === 'refuse-hello') { ws.close(4401, REFUSE_REASON); return; }
           if (mode === 'echo-hello') { ws.close(4401, raw.toString()); return; }
+          if (mode === 'close-hello') { const c = closeOf(attempt); ws.close(c.code, c.reason); return; }
           ws.send(JSON.stringify({ t: 'ready', v: 1 }));
           if (mode === 'ready-then-drop') setTimeout(() => ws.terminate(), 100);
         } else if (msg.t === 'ping' && mode !== 'ready-no-pong') {
@@ -84,6 +97,7 @@ async function linkPeer(modeOf: (attempt: number) => PeerMode): Promise<LinkPeer
     accepts: () => accepted,
     hellos: () => hellos,
     upgraded: (attempt) => upgradedAttempts.has(attempt),
+    acceptTimes: () => [...times],
     close: () => new Promise<void>((resolve) => {
       for (const t of intervals) clearInterval(t);
       for (const s of sockets) s.destroy();
@@ -96,6 +110,48 @@ async function linkPeer(modeOf: (attempt: number) => PeerMode): Promise<LinkPeer
 // 120 bytes, with a control character at index 10: the printable form of its first 64 characters is
 // `abcdefghij?` followed by 53 `x`.
 const REFUSE_REASON = `abcdefghij\x07${'x'.repeat(109)}`;
+
+/** A hand-written peer on a TCP server that allows half-open sockets: it completes the upgrade by hand, writes one raw
+ *  close frame after the hello, and never ends or destroys its own side, so the client's socket stays CLOSING. */
+async function rawClosePeer(code: number, reason: string): Promise<{ port: number; close(): Promise<void> }> {
+  const sockets = new Set<Socket>();
+  const srv = createNetServer({ allowHalfOpen: true }, (s) => {
+    sockets.add(s);
+    s.on('error', () => undefined);
+    s.on('close', () => sockets.delete(s));
+    let buf = Buffer.alloc(0);
+    let upgraded = false;
+    let closed = false;
+    s.on('data', (d: Buffer) => {
+      buf = Buffer.concat([buf, d]);
+      if (!upgraded) {
+        const end = buf.indexOf('\r\n\r\n');
+        if (end < 0) return;
+        const head = buf.subarray(0, end).toString('latin1');
+        buf = buf.subarray(end + 4);
+        const key = /sec-websocket-key:\s*(\S+)/i.exec(head)?.[1] ?? '';
+        const accept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+        s.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+          + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`);
+        upgraded = true;
+      }
+      if (upgraded && !closed && buf.length >= 2) { // the hello frame has arrived
+        closed = true;
+        const text = Buffer.from(reason, 'utf8');
+        const payload = Buffer.alloc(2 + text.length);
+        payload.writeUInt16BE(code, 0);
+        text.copy(payload, 2);
+        s.write(Buffer.concat([Buffer.from([0x88, payload.length]), payload]));
+      }
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', () => resolve()));
+  const address = srv.address();
+  return {
+    port: typeof address === 'object' && address !== null ? address.port : 0,
+    close: () => new Promise<void>((resolve) => { for (const s of sockets) s.destroy(); srv.close(() => resolve()); }),
+  };
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -274,7 +330,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
       expect(fleet.state.connected).toBe(false);
     });
 
-  it('W27-L14: an agent that refuses each hello is logged once, with a printable reason and no token', async () => {
+  it('W27-L14: an agent that refuses each hello is logged once, with a printable reason', async () => {
     // A ready link is lost, then every attempt's hello is closed with 4401 and a 120-byte reason that carries a
     // control character: one `refused` line, the reason cut to 64 printable characters.
     peer = await linkPeer((n) => (n === 0 ? 'ready-then-drop' : 'refuse-hello'));
@@ -306,5 +362,149 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     for (let i = 0; i + 8 <= TOKEN.length; i++) {
       expect(lines.some((l) => l.includes(TOKEN.slice(i, i + 8)))).toBe(false);
     }
+  });
+
+  /** Closes the pair the row opened, so a row can open another; `afterEach` finds nothing left. */
+  async function closePair(): Promise<void> {
+    await fleet?.close();
+    fleet = undefined;
+    await peer?.close();
+    peer = undefined;
+    vi.restoreAllMocks();
+  }
+
+  /** Every attempt's hello is closed with `code` and `reason`; returns the link lines once `accepts` attempts ran. */
+  async function refusalLines(token: string, code: number, reason: string, accepts = 3): Promise<string[]> {
+    peer = await linkPeer(() => 'close-hello', () => ({ code, reason }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    fleet = connectFleet({
+      url: `ws://127.0.0.1:${peer.port}`, token, reconnectMinMs: 30, reconnectMaxMs: 100, heartbeatMs: 60_000,
+      readyTimeoutMs: 5000,
+    });
+    await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(accepts), { timeout: 8000 });
+    return linkLines(warn);
+  }
+
+  const WITHHELD = '[withheld: repeats the token]';
+
+  it('W27-L16: the token check runs on the full reason, before the 64-character cut (D-6529)', async () => {
+    // 58 `x` then the token: only 6 token characters lie inside the cut, which is fewer than the 8-character window.
+    const token = randomBytes(32).toString('hex');
+    expect(await refusalLines(token, 4401, `${'x'.repeat(58)}${token}`))
+      .toEqual([NEVER_READY(4401), REFUSED(4401, WITHHELD)]);
+  });
+
+  it('W27-L17: 8 token characters in a row are enough to withhold the reason', async () => {
+    const token = randomBytes(32).toString('hex');
+    expect(await refusalLines(token, 4401, `bad token ${token.slice(20, 30)} seen`))
+      .toEqual([NEVER_READY(4401), REFUSED(4401, WITHHELD)]);
+  });
+
+  it('W27-L18: 7 token characters in a row are printed (the window is 8)', async () => {
+    const token = randomBytes(32).toString('hex');
+    const reason = `bad token ${token.slice(20, 27)} seen`;
+    expect(await refusalLines(token, 4401, reason)).toEqual([NEVER_READY(4401), REFUSED(4401, reason)]);
+  });
+
+  it('W27-L19: a token shorter than the window withholds a reason that holds all of it', async () => {
+    expect(await refusalLines('abc', 4401, 'xabcx')).toEqual([NEVER_READY(4401), REFUSED(4401, WITHHELD)]);
+  });
+
+  it('W27-L20: an empty token checks nothing, so the reason is printed', async () => {
+    expect(await refusalLines('', 4401, 'unauthorized'))
+      .toEqual([NEVER_READY(4401), REFUSED(4401, 'unauthorized')]);
+  });
+
+  it('W27-L21: a boot-time refusal logs the boot line, one refused line, then ready (D-6527)', async () => {
+    const token = randomBytes(32).toString('hex');
+    peer = await linkPeer((n) => (n < 3 ? 'close-hello' : 'ready'), () => ({ code: 4401, reason: 'unauthorized' }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    fleet = connectFleet({
+      url: `ws://127.0.0.1:${peer.port}`, token, reconnectMinMs: 30, reconnectMaxMs: 100, heartbeatMs: 60_000,
+      readyTimeoutMs: 5000,
+    });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 8000 });
+    expect(linkLines(warn))
+      .toEqual([NEVER_READY(4401), REFUSED(4401, 'unauthorized'), expect.stringMatching(READY_AFTER(3))]);
+  });
+
+  it('W27-L22: the refused range is 4400 to 4499: 4399 and 4500 print the boot line only', async () => {
+    for (const [code, refused] of [[4399, false], [4400, true], [4499, true], [4500, false]] as const) {
+      const token = randomBytes(32).toString('hex');
+      const lines = await refusalLines(token, code, 'unauthorized');
+      expect(lines).toEqual(refused ? [NEVER_READY(code), REFUSED(code, 'unauthorized')] : [NEVER_READY(code)]);
+      await closePair();
+    }
+  });
+
+  it('W27-L23: a close frame with the TCP side never ended logs (closing), then the refused line', async () => {
+    // The peer writes one raw 4401 close frame and keeps its side open, so the client's socket stays CLOSING until
+    // the deadline fires: that line names the phase `closing`, and the close handler then prints the refusal.
+    const raw = await rawClosePeer(4401, 'unauthorized');
+    try {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      fleet = connectFleet({
+        url: `ws://127.0.0.1:${raw.port}`, token: randomBytes(32).toString('hex'), reconnectMinMs: 5000,
+        reconnectMaxMs: 5000, heartbeatMs: 60_000, readyTimeoutMs: 1000,
+      });
+      await vi.waitFor(() => expect(linkLines(warn).length).toBeGreaterThanOrEqual(2), { timeout: 8000 });
+      expect(linkLines(warn)).toEqual([NO_READY(1000, 'closing'), REFUSED(4401, 'unauthorized')]);
+    } finally {
+      await fleet?.close();
+      fleet = undefined;
+      await raw.close();
+    }
+  });
+
+  it('W27-L24: the deadline timer never keeps the process alive (D-6517)', async () => {
+    // A child process connects with a 60 s deadline to a peer that never answers, closes the client and returns. The
+    // deadline is never cleared, so only `unref` lets the child exit before it fires. The row races the child's exit
+    // against EXIT_BOUND_MS and asserts on the race, so a deadline that holds the process fails this assertion at the
+    // bound (the row's own timeout is longer than the bound), not vitest's clock.
+    const EXIT_BOUND_MS = 25_000;
+    peer = await linkPeer(() => 'silent-upgrade');
+    const serverDir = fileURLToPath(new URL('..', import.meta.url));
+    const script = [
+      'const { connectFleet } = await import(process.env.CLIENT_URL);',
+      'const f = connectFleet({ url: process.env.PEER_URL, token: \'unused\', reconnectMinMs: 30, reconnectMaxMs: 100,',
+      '  heartbeatMs: 60000, readyTimeoutMs: 60000 });',
+      'await new Promise((r) => setTimeout(r, 300));',
+      'await f.close();',
+    ].join('\n');
+    const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+      cwd: serverDir,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: {
+        ...process.env,
+        CLIENT_URL: pathToFileURL(fileURLToPath(new URL('../src/remote/client.ts', import.meta.url))).href,
+        PEER_URL: `ws://127.0.0.1:${peer.port}`,
+      },
+    });
+    let stderr = '';
+    child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+    try {
+      const outcome = await new Promise<{ code: number | null; signal: string | null } | 'timeout'>((resolve) => {
+        child.once('exit', (code, signal) => resolve({ code, signal }));
+        child.once('error', () => resolve({ code: -1, signal: null }));
+        setTimeout(() => resolve('timeout'), EXIT_BOUND_MS).unref();
+      });
+      expect({ outcome, stderr }).toEqual({ outcome: { code: 0, signal: null }, stderr: '' });
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
+  }, 40_000);
+
+  it('W27-L25: the deadline keeps the backoff growing: later gaps between attempts are longer', async () => {
+    // Each gap between accepts is at least the deadline plus that attempt's backoff, because a timer never fires early:
+    // 100+50, 100+100, 100+200, 100+400 ms. Load only lengthens a gap, so lower bounds on the third and fourth gaps
+    // (with a margin for the accept-time jitter between attempts) cannot fail on load. A deadline that reset the
+    // backoff would hold every gap near 150 ms.
+    peer = await linkPeer(() => 'silent-upgrade');
+    fleet = connectToAgent(peer.port, { readyTimeoutMs: 100, reconnectMinMs: 50, reconnectMaxMs: 400 });
+    await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(5), { timeout: 8000 });
+    const times = peer.acceptTimes();
+    const gaps = [1, 2, 3, 4].map((i) => times[i]! - times[i - 1]!);
+    expect(gaps[2]!).toBeGreaterThanOrEqual(300 - 40);
+    expect(gaps[3]!).toBeGreaterThanOrEqual(500 - 40);
   });
 });

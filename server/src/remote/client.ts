@@ -76,7 +76,8 @@ interface Pending {
 type TailListener = (msg: TailData | TailReset) => void;
 type PtyListener = (msg: PtyData | PtyExit) => void;
 
-/** The kinds of line that open an episode without a ready link (wave 27, D-6520, D-6527). */
+/** The kinds of line a stretch without a ready link prints, each at most once per stretch; all but `refused` can
+ *  open one (wave 27, D-6520, D-6527). */
 type LinkLine = 'lost' | 'no-pong' | 'never-ready' | 'no-ready' | 'refused';
 /** One stretch without a ready link that has printed a line: when it opened, which kinds it printed, and how many
  *  attempts ended without a ready since. Private to the client; never on `state`, never on the wire. */
