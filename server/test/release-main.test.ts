@@ -1347,18 +1347,20 @@ describe('release-main.sh: receive — the publish job re-derives the tag and ve
     expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
   });
 
+  const WRONG_ARM = (arm: string): string => `release-main.sh: --in, --tag and --digest are receive's flags, not ${arm}'s`;
   it.each([
-    ['prepare --tag', ['prepare', '--tag', 'v0.0.2']],
-    ['publish --in', ['publish', '--in', 'x']],
-    ['compare --digest', ['compare', '--digest', 'a'.repeat(64)]],
-    ['receive without --in', ['receive', '--tag', 'v0.0.2', '--digest', 'a'.repeat(64)]],
-    ['receive without --tag', ['receive', '--in', 'x', '--digest', 'a'.repeat(64)]],
-    ['receive without --digest', ['receive', '--in', 'x', '--tag', 'v0.0.2']],
-  ] as const)('W26-R7: %s is a usage error, exit 2', (_name, args) => {
+    ['prepare --tag', ['prepare', '--tag', 'v0.0.2'], WRONG_ARM('prepare')],
+    ['publish --in', ['publish', '--in', 'x'], WRONG_ARM('publish')],
+    ['compare --digest', ['compare', '--digest', 'a'.repeat(64)], WRONG_ARM('compare')],
+    ['receive without --in', ['receive', '--tag', 'v0.0.2', '--digest', 'a'.repeat(64)], 'release-main.sh: receive needs --in'],
+    ['receive without --tag', ['receive', '--in', 'x', '--digest', 'a'.repeat(64)], 'release-main.sh: receive needs --tag'],
+    ['receive without --digest', ['receive', '--in', 'x', '--tag', 'v0.0.2'], 'release-main.sh: receive needs --digest'],
+  ] as const)('W26-R7: %s is a usage error, exit 2, and says why', (_name, args, why) => {
     const home = mkTmp('ccrc-relmain-w26r7-');
     const root = fixture(home, { tags: ['v0.0.1'] });
     const r = run(root, home, [...args]);
     expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toContain(why);
     expect(git(root, 'tag', '--points-at', 'HEAD')).toBe('');
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
   });
