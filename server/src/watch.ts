@@ -2406,6 +2406,8 @@ export class FleetWatcher {
         pane: async (rec) => paneFromLiveWord(await liveWordFor(reads, rec)),
         transcriptMtimeMs: (rec) => transcriptMtimeVia(io, cfg, rec, (a) => this.transcripts.resolve(a)),
         wokeAtMs: (rec) => wokeAtVia(io, cfg, rec),
+        listRegistry: () => io.readdirMeasured(cfg.registryDir),
+        rowNow: async (rec) => { const a = await readSessionRecord(io, cfg, rec.id); return a.kind === 'found' ? a.record : null; },
         queueRun: (id, fn) => this.deps.queue.run(id, fn), log: (line) => console.warn(line), now: Date.now,
       }, this.staleArchiveMemory, records, names);
     } catch (err) {

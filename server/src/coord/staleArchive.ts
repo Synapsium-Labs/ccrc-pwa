@@ -4,7 +4,7 @@ import type { Presence } from '../presence.js';
 import type { CoordStore } from './store.js';
 import type { RunCcd } from './ports.js';
 import type { NoticeRecord } from '../notice.js';
-import type { FleetIO } from '../io.js';
+import type { FleetIO, MeasuredDirectoryRead } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import { configDirFor } from '../config.js';
 import { ARCHIVE_IF_NO_PANE_CAP, CCD_ARGV, capSupported, sweepDec } from '../ccdargv.js';
@@ -62,6 +62,11 @@ export interface StaleArchiveDeps {
   readonly transcriptMtimeMs: (rec: SessionRecord) => Promise<number | 'none' | 'unreadable'>;
   /** `$REG/<id>.woke` as ms, or null. */
   readonly wokeAtMs: (rec: SessionRecord) => Promise<number | null>;
+  /** The registry listing, MEASURED, taken again at the act (as the expiry lane's `expirySwitches` does): a listing that
+   *  rejects or fails is a pause that cannot be ruled out. */
+  readonly listRegistry: () => Promise<MeasuredDirectoryRead>;
+  /** The row read afresh at the act; null when it cannot be read or is gone (keeps). */
+  readonly rowNow: (rec: SessionRecord) => Promise<SessionRecord | null>;
   readonly queueRun: <T>(id: string, fn: () => Promise<T>) => Promise<T>;
   readonly log: (line: string) => void;
   readonly now: () => number;
@@ -78,7 +83,7 @@ export type StaleArchiveOutcome =
   | { readonly kind: 'archived'; readonly id: string }
   | { readonly kind: 'would-archive'; readonly id: string }
   | { readonly kind: 'live-at-act'; readonly id: string }
-  | { readonly kind: 'deferred'; readonly id: string; readonly why: StaleArchiveSkip | 'cap' }
+  | { readonly kind: 'deferred'; readonly id: string; readonly why: StaleArchiveSkip | 'cap' | 'paused' }
   | { readonly kind: 'failed'; readonly id: string; readonly detail: string };
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -97,6 +102,10 @@ function journalEvidence(coord: NonNullable<StaleArchiveDeps['coord']>, id: stri
 async function evidenceFor(deps: StaleArchiveDeps, coord: NonNullable<StaleArchiveDeps['coord']>, rec: SessionRecord): Promise<number | null> {
   const stamps: number[] = [];
   try {
+    // A lifecycle stamp that is listed but did not read (`.supervised` above all) may be the newest sign of a run, so the
+    // row is judged on none of the others: doubt keeps. (`.spawn` is read by the registry's plain reader, which cannot tell
+    // an unreadable file from an absent one: a known residual, to be read through `fieldMeasured` in a follow-up.)
+    if (rec.lifecycleUnmeasured.length > 0) return null;
     const j = journalEvidence(coord, rec.id);
     if (j !== null) stamps.push(j);
     if (rec.supervisedAt !== null) stamps.push(rec.supervisedAt * 1000);
@@ -110,6 +119,16 @@ async function evidenceFor(deps: StaleArchiveDeps, coord: NonNullable<StaleArchi
     return null;
   }
   return stamps.length === 0 ? null : Math.max(...stamps);
+}
+
+/** Every id that was ever a claimant or is a coordinator now; null when the claims did not read. */
+function claimedIds(deps: StaleArchiveDeps, coord: NonNullable<StaleArchiveDeps['coord']>): ReadonlySet<string> | null {
+  try {
+    return new Set([...coord.childReclaimCoordinatorClaims().keys(), ...coord.openCoordinatorIds()]);
+  } catch (err) {
+    deps.log(`ccrc-server: stale-archive: the claims did not read (${errText(err)}) — nothing is archived`);
+    return null;
+  }
 }
 
 export async function staleArchivePass(
@@ -127,13 +146,7 @@ export async function staleArchivePass(
   const live = readSwitches(names)[STALE_ARCHIVE_LIVE_MARKER] === 'set';
   const coord = deps.coord;
   const now = deps.now();
-  let everClaimed: ReadonlySet<string> | null;
-  try {
-    everClaimed = new Set([...coord.childReclaimCoordinatorClaims().keys(), ...coord.openCoordinatorIds()]);
-  } catch (err) {
-    deps.log(`ccrc-server: stale-archive: the claims did not read (${errText(err)}) — nothing is archived this pass`);
-    everClaimed = null;
-  }
+  const everClaimed = claimedIds(deps, coord);
   // TWO — the sightings and the verdicts.
   const due: { rec: SessionRecord; evidenceAtMs: number }[] = [];
   const seen = new Set<string>();
@@ -182,17 +195,35 @@ export async function staleArchivePass(
     return out;
   }
   const { rec } = due[0]!;
-  out.push(await act(deps, mem, rec, dec));
+  out.push(await act(deps, mem, rec, dec, coord));
   return out;
 }
 
 /** The act, on the session's queue: presence once more, then `ws-archive --if-no-pane --reason stale`. */
 async function act(
   deps: StaleArchiveDeps, mem: StaleArchiveMemory, rec: SessionRecord, dec: NonNullable<ReturnType<typeof sweepDec>>,
+  coord: NonNullable<StaleArchiveDeps['coord']>,
 ): Promise<StaleArchiveOutcome> {
   const id = rec.id;
   return deps.queueRun(id, async (): Promise<StaleArchiveOutcome> => {
     if (deps.presence?.isVisible(id) !== false) return { kind: 'deferred', id, why: 'viewer' };
+    // The switches and the row, once more, nearest the argv: a pause raised, the switch lifted, a hold or a child mark set,
+    // an archive or a claim made since the verdict all stop it here (ccd's own refusal covers only a pane).
+    let listed: MeasuredDirectoryRead;
+    try { listed = await deps.listRegistry(); } catch { listed = { ok: false, reason: 'unreadable' } as MeasuredDirectoryRead; }
+    if (!listed.ok || readSwitches(listed.entries)[RECLAIM_PAUSE_MARKER] === 'set') return { kind: 'deferred', id, why: 'paused' };
+    if (readSwitches(listed.entries)[STALE_ARCHIVE_LIVE_MARKER] !== 'set') return { kind: 'would-archive', id };
+    let fresh: SessionRecord | null;
+    try { fresh = await deps.rowNow(rec); } catch { fresh = null; }
+    if (fresh === null) return { kind: 'deferred', id, why: 'identity-unmeasured' };
+    if (fresh.workspace === null) return { kind: 'deferred', id, why: 'not-a-workspace' };
+    if (fresh.archivedAt !== null) return { kind: 'deferred', id, why: 'archived' };
+    if (fresh.child.kind !== 'none') return { kind: 'deferred', id, why: 'child' };
+    if (fresh.unmeasured.length > 0) return { kind: 'deferred', id, why: 'identity-unmeasured' };
+    if (fresh.held !== null) return { kind: 'deferred', id, why: 'held' };
+    const claimed = claimedIds(deps, coord);
+    if (claimed === null) return { kind: 'deferred', id, why: 'claims-unreadable' };
+    if (claimed.has(id)) return { kind: 'deferred', id, why: 'claimant' };
     let res: Awaited<ReturnType<RunCcd>>;
     try {
       res = await deps.runCcd(CCD_ARGV.wsArchive(id, { ...dec, reason: 'stale' }, { ifNoPane: true }));
