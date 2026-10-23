@@ -14,6 +14,7 @@ _plat_btime	K
 _plat_devino	K
 _plat_bytes	K
 _plat_epoch_ms	K
+_plat_workdirid_pane	K
 _plat_cp_replace	K
 _plat_mktemp	K
 _plat_mktemp_d	K
@@ -385,6 +386,7 @@ _child_runid_valid	C5
 _spawn_start	C2
 _spawn_settle	C2
 _spawn	C2
+_spawn_workdirid_pending	C2
 _inject_spawn_effort	C3
 _transcript_stalled_pair	C3
 _transcript_limit_banner	C3
@@ -493,6 +495,7 @@ _ws_reclaim_classify	C4
 _ws_reclaim_ignored_fail	C4
 _ws_reclaim_stash_shas	C4
 _ws_reclaim_record	C4
+_ws_workdirid_read	C4
 _ws_reclaim_workdir_shared	C4
 _ws_reclaim_recorded	C4
 _ws_reclaim_recorded_git	C4
@@ -502,6 +505,10 @@ _ws_reclaim_resolve	C4
 _ws_reclaim_resolvable	C4
 _ws_reclaim_plain_path	C4
 _ws_reclaim_absent	C4
+_ws_ident_compose	C4
+_ws_ident_eq	C4
+_ws_path_ident	C4
+_ws_reclaim_idwalk	C4
 _ws_reclaim_main_branch	C4
 _ws_reclaim_main_line_refuse	C4
 _ws_reclaim_branch_state	C4
@@ -549,11 +556,13 @@ _ws_reclaim_fail	C4
 _ws_reclaim_owned	C4
 _ws_reclaim_nested_proven	C4
 _ws_reclaim_nested_record	C4
+_ws_reclaim_reask	C4
 _ws_reclaim_kept_read	C4
 _ws_reclaim_dropped_count	C4
 _ws_dir_physical	C4
 _ws_path_users_proc_root	C4
 _ws_path_users	C4
+_ws_cwd_users	C4
 _ws_leaf_uid	C4
 _ws_leaf_read_small	C4
 _ws_leaf_checkout_accepted	C4

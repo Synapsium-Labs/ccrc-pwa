@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghContainedEnv, type CcdHarness, toolAdjToken as adj } from './ccdWsHelpers.js';
+import { paneFragment } from './worktreeIdentityFixture.js';   // path-identity W3 (R8): the pane's entry-identity writer, read from ccd's composer
 import { CHILD_DENY_RULES, CHILD_DENY_PATH_QUALIFIED, childDenyRules } from '../../shared/api.js';
 import { FORBIDDEN_CCD_VERBS } from '../src/coord/approvalguard.js';
 import { childShellOf, denySettingsOf, readSessionRecord } from '../src/registry.js';
@@ -64,10 +65,10 @@ const spawnBoth = (id: string): string[] => {
 /** Today's argv for a top-level row, spelled from ccd's own `_resume_env` and `_tool_adj_env` (D-5241, Linux only)
  *  (`ccd-route-spawn.test.ts`'s rule). */
 const today = (sidflag: string): string =>
-  `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)} '${h.home}/.local/bin/claude'  ${sidflag} --dangerously-skip-permissions`;
+  `cd '${h.home}' && ${paneFragment(h, TOP, h.home)}true; cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)} '${h.home}/.local/bin/claude'  ${sidflag} --dangerously-skip-permissions`;
 /** A child's argv: today's, plus its temp root and the shell pin in the env, and `--settings` before the id flag. */
 const childLine = (id: string, settings: string, sidflag: string): string =>
-  `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)} TMPDIR='${h.home}/.cc-tmp/${id}' `
+  `cd '${h.home}' && ${paneFragment(h, id, h.home)}true; cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)} TMPDIR='${h.home}/.cc-tmp/${id}' `
   + `CLAUDE_CODE_SHELL=/bin/bash '${h.home}/.local/bin/claude' --settings '${settings}' ${sidflag} --dangerously-skip-permissions`;
 
 describe('CHILD_DENY_RULES (spec §6.6)', () => {

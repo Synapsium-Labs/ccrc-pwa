@@ -884,7 +884,9 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
         expect(r.verdict, `${spelled}: ${r.detail}`).toBe('unmeasured');
         expect(r.token).toBe('');
         expect(r.detail).toContain(`registry row(s) ${id} name a workdir that cannot be resolved`);
-        expect(r.detail).toContain('; a \'..\' in it follows a directory that no longer exists, or cannot otherwise be placed;');
+        expect(r.detail).toContain('; a \'..\' in it could not be walked the way that session\'s own cd walked it (it follows a'
+          + ' directory that does not exist now, or a path ccd could not enter logically), so where it leads was never placed,'
+          + ' even if it names this child;');
       } else {
         expect(r.verdict, `${spelled}: ${r.detail}`).toBe('containment-unproven');
         expect(r.detail).toContain(`registry row(s) ${id} spell their workdir through ${wt}, not as one plain path`);
@@ -1179,15 +1181,17 @@ describe('an OTHER row whose workdir is not absolute cannot be placed — unmeas
     expect(fs.readFileSync(path.join(wt, 'server', 'live.txt'), 'utf8')).toContain('uncommitted');
   }, 60_000);
 
-  it('a PLAIN absolute row that RESOLVES to a `//` spelling — through a link whose target opens with `//` — is not placed either, and `<child>/server` stands', () => {
+  it('a PLAIN absolute row that RESOLVES to a `//` spelling — through a link whose target opens with `//` — is placed inside the child, and `<child>/server` stands', () => {
     // `$HOME/elsewhere/dslink` -> `/` + `<child>`: the row's value is one plain
     // path, but `_ws_realpath` (bash's `pwd -P`) resolves it to
     // `//<child>/server`, no prefix of the child's — it read as outside, and
     // the verb removed the other session's files (rereview fr171-B-r1 N1,
     // measured). Whether a platform's `pwd -P` keeps that `//` is read here,
-    // never assumed: where it does (bash on Linux, measured) the row is
-    // unplaced; where it collapses it the row places inside the child and is
-    // refused. Either way nothing of that session's is removed.
+    // never assumed. On every platform the row places inside the child and is
+    // refused: where `pwd -P` keeps it (bash on Linux, measured) the identity
+    // walk places it by device and inode (path-identity spec §4.5), and where
+    // it collapses it the strings do. Either way nothing of that session's is
+    // removed.
     const { wt } = makeChild(h);
     fs.mkdirSync(path.join(wt, 'server'));
     fs.writeFileSync(path.join(wt, 'server', 'live.txt'), 'another session’s uncommitted work\n');
@@ -1198,13 +1202,8 @@ describe('an OTHER row whose workdir is not absolute cannot be placed — unmeas
     if (process.platform !== 'darwin') expect(resolved, 'bash keeps the link target’s leading `//`').toBe(`/${wt}/server`);
     otherRow('demo-dslink', row);
     const r = evalOf(h);
-    if (resolved.startsWith('//')) {
-      expect(r.verdict, r.detail).toBe('unmeasured');
-      expect(r.detail).toContain(`registry row(s) demo-dslink ${UNPLACED}`);
-    } else {
-      expect(r.verdict, r.detail).toBe('containment-unproven');
-      expect(r.detail).toContain('registry row(s) demo-dslink rooted inside');
-    }
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain('registry row(s) demo-dslink rooted inside');
     expect(r.token).toBe('');
     expect(r.detail, 'the value is never printed').not.toContain(row);
     expect(fs.readFileSync(path.join(wt, 'server', 'live.txt'), 'utf8')).toContain('uncommitted');
@@ -1239,7 +1238,7 @@ describe('an OTHER row whose workdir is not absolute cannot be placed — unmeas
     expect(fs.readFileSync(path.join(wt, 'server', 'live.txt'), 'utf8')).toContain('uncommitted');
   }, 60_000);
 
-  it('a CHILD whose own workdir resolves to a `//` spelling places no other row against it — unmeasured; a row LITERALLY naming it or a path inside it still refuses', () => {
+  it('a CHILD whose own workdir resolves to a `//` spelling places a row by its real path inside it — containment-unproven; a row LITERALLY naming it or a path inside it still refuses', () => {
     // `$HOME/worktrees` -> `/` + `$HOME/wtreal`: the child's workdir resolves
     // to `//…/wtreal/demo/quiet-basin`, so a row spelled by the REAL path
     // inside the child resolves plain, is no prefix of it, and read as
@@ -1259,17 +1258,26 @@ describe('an OTHER row whose workdir is not absolute cannot be placed — unmeas
     expect(evalOf(h).verdict, 'with no other row there is nothing to place: it reclaims').toBe('reclaimable');
     otherRow('demo-other', real);
     const r = evalOf(h);
-    if (mine.startsWith('//')) {
-      expect(r.verdict, r.detail).toBe('unmeasured');
-      expect(r.detail).toContain(`registry row(s) demo-other cannot be placed against this child: ${CHILD_ID}'s own workdir resolves to a path opening with //`);
-      expect(r.detail, 'the value is never printed').not.toContain('wtreal');
-    } else {
-      expect(r.verdict, r.detail).toBe('containment-unproven');
-    }
+    // On every platform the row lies inside the child: where `pwd -P` keeps the
+    // `//` the identity walk places it by device and inode (path-identity spec §4.5).
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail, 'the value is never printed').not.toContain('wtreal');
     expect(r.token).toBe('');
     expect(fs.readFileSync(path.join(real, 'live.txt'), 'utf8')).toContain('uncommitted');
-    // A literal refusal still outranks it (M1): a row naming the child's own
-    // spelling, and one naming a path inside it through that spelling.
+    dropRow('demo-other');
+    const outside = path.join(h.home, 'elsewhere-real', 'server');
+    fs.mkdirSync(outside, { recursive: true });
+    otherRow('demo-other', outside);
+    const o = evalOf(h);
+    if (mine.startsWith('//')) {
+      expect(o.verdict, o.detail).toBe('unmeasured');
+      expect(o.detail).toContain(`registry row(s) demo-other cannot be placed against this child: ${CHILD_ID}'s own workdir resolves to a path opening with //`);
+    } else {
+      expect(o.verdict, o.detail).toBe('reclaimable');
+    }
+    // A literal refusal still outranks the hold that outside row raises, where it raises one (M1): it raises one only
+    // where the child resolves to `//`; where `pwd -P` collapses the `//` the row is plainly outside and holds
+    // nothing. A row naming the child's own spelling, and one naming a path inside it through that spelling.
     for (const [id, spelled, says] of [['demo-twin', wt, 'also named by registry row(s) demo-twin'],
       ['demo-nested', path.join(wt, 'server'), 'registry row(s) demo-nested rooted inside']] as const) {
       otherRow(id, spelled);
@@ -1620,8 +1628,10 @@ describe('the logical resolver places every row and the child by one call (spec 
     fs.symlinkSync(path.join(h.home, 'elsewhere', 'sub'), path.join(h.home, 'lnk'));
   };
   const UNRESOLVED = 'name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered'
-    + ' or followed, or no longer exists, so its spelling no longer says where that session lives; a \'..\' in it follows a'
-    + ' directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place'
+    + ' or followed, or no longer exists, so its spelling no longer says where that session lives; a \'..\' in it could not be'
+    + ' walked the way that session\'s own cd walked it (it follows a directory that does not exist now, or a path ccd could'
+    + ' not enter logically), so where it leads was never placed, even if it names this child; or it holds a control'
+    + ' character), so ccd cannot place'
     + ' them against this child';
 
   it('an existing path through a symlinked ancestor resolves to its physical path', () => {

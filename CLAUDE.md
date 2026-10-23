@@ -222,7 +222,46 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   is a real break, so re-run the file alone first. `ccd-collect-aside-settle` (path-identity W2) runs the real
   collector, reclaim and expire verbs on git fixtures, its in-use probes stubbed but its ws-expire case with the
   expiry ladder's real `/proc` walk, at about 10 s a case at worst, so under load it fails as vitest's `Test timed out
-  in <n>ms`; any other red is a real break, so re-run the file alone first.
+  in <n>ms`; any other red is a real break, so re-run the file alone first. `ccd-worktree-identity-fence`
+  (path-identity W3) runs the real reclaim and expire verbs end to end on git fixtures, their tail's post-kill wait
+  walking the real `/proc`, the working-directory probe (`_ws_cwd_users`) walking it too in a reclaim's wait and
+  before each of its standing forced removals, and one expiry case's ladder walking it as well, so under load it
+  fails as vitest's `Test timed out in <n>ms`, or as a `worktree-remove-failed` whose detail says a walk of `/proc`
+  did not finish within its bound or, under process churn, that
+  `the processes of this box could not be measured (/proc, exit 3)`; any other red is a real break, so re-run the
+  file alone first. `ccd-reclaim-moved-identity` (path-identity W3) runs the real reclaim verb's tail on git fixtures
+  in one case, whose post-kill wait walks the real `/proc` twice a pass (`_ws_path_users`, and the working-directory
+  probe `_ws_cwd_users`), at about 10 s a case at worst. That case refuses at the tail's first ownership check,
+  before any standing forced removal asks the probe, and the wait only waits, so a walk past its bound or an
+  unmeasured answer (`the processes of this box could not be measured (/proc, exit 3)`) only lengthens it: under load
+  it fails as vitest's `Test timed out in <n>ms`; any other red is a real break, so re-run the file alone first.
+  `ccd-cwd-users` (path-identity W3) asks the shared working-directory probe (`_ws_cwd_users`) of real processes on
+  the real `/proc` in a few cases (one walk each, bounded at 10 s by `WS_CWD_USERS_SCAN_S`), and its identity arm walks
+  the `..` chain of every same-uid process on the box, so under load it fails as a vitest `Test timed out in <n>ms` or
+  as an unmeasured answer (`the walk of /proc did not finish within 10s`, or, under process churn,
+  `the processes of this box could not be measured (/proc, exit 3)`), and a process anywhere on the box sitting
+  in a directory that cannot be searched makes the probe answer unmeasured while it sits there; any other red is a
+  real break, so re-run the file alone first.
+  `ccd-reclaim-tail-cwd` (path-identity W3) runs the real reclaim and expire verbs end to end on git fixtures with
+  real processes standing in their trees, and walks the real `/proc` (`_ws_cwd_users`) at the post-kill wait and
+  before every standing forced removal, at about 6 s a case at worst, so under load it fails in three shapes:
+  vitest's `Test timed out in <n>ms`, or a `worktree-remove-failed` whose detail says a walk of `/proc` did not
+  finish within its bound or, under process churn, that
+  `the processes of this box could not be measured (/proc, exit 3)`, or an assertion on how often the post-kill wait
+  asked the tree, which counts other asks than its pins expect (B1 counted fewer than its pin, `expected 2 to be
+  greater than or equal to 3`, and CONTROL N counted two where it pins one). Any other red is a real break, so re-run
+  the file alone first. `ccd-reclaim-tail-window`
+  (path-identity W3) runs the real reclaim and expire verbs end to end on git fixtures, with the tail's real `/proc`
+  walks (its post-kill wait, and the working-directory probe before every standing forced removal), at about 10 s a
+  case at worst, so under load it fails as vitest's `Test timed out in <n>ms`, or as a `worktree-remove-failed` whose
+  detail says a walk did not finish within its bound or, under process churn, that
+  `the processes of this box could not be measured (/proc, exit 3)`; any other red is a real break, so re-run the
+  file alone first. `ccd-ws-expire-consent-branch` (path-identity W3) runs the real ws-expire verb end to end on git
+  fixtures. Its ladder walked the real `/proc` before W3 too; W3 moved that walk onto the shared `_ws_cwd_users`
+  (thread passes, second reads, and `, exit <rc>` in the detail), so under load a case can fail as an unmeasured
+  verdict whose detail says `the processes of this box could not be measured (/proc, exit 3)` (measured once, in a
+  full run's shard, on the case that makes a branch between the in-lock recompute and the pin, and green alone); any
+  other red is a real break, so re-run the file alone first.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
   `ci.yml`, whose trigger picks a mode). **A pull request** runs the server tests its change can affect, chosen
   from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
