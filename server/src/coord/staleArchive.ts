@@ -104,13 +104,17 @@ function journalEvidence(coord: NonNullable<StaleArchiveDeps['coord']>, id: stri
 
 /** The newest sign this workspace ran, or null when nothing can be said. A transcript that could not be read makes it
  *  null, because the file might be the newest sign: doubt keeps. */
-async function evidenceFor(deps: StaleArchiveDeps, coord: NonNullable<StaleArchiveDeps['coord']>, rec: SessionRecord): Promise<number | null> {
+async function evidenceFor(
+  deps: StaleArchiveDeps, coord: NonNullable<StaleArchiveDeps['coord']>, rec: SessionRecord, names: readonly string[],
+): Promise<number | null> {
   const stamps: number[] = [];
   try {
     // A lifecycle stamp that is listed but did not read (`.supervised` above all) may be the newest sign of a run, so the
     // row is judged on none of the others: doubt keeps. (`.spawn` is read by the registry's plain reader, which cannot tell
-    // an unreadable file from an absent one: a known residual, to be read through `fieldMeasured` in a follow-up.)
+    // an unreadable file from an absent one, so a listed-but-null `.spawn` is treated as unread below.)
     if (rec.lifecycleUnmeasured.length > 0) return null;
+    // A `.spawn` that is listed but read as absent is the same doubt, so it keeps too.
+    if (rec.spawn === null && names.includes(`${rec.id}.spawn`)) return null;
     const j = journalEvidence(coord, rec.id);
     if (j !== null) stamps.push(j);
     if (rec.supervisedAt !== null) stamps.push(rec.supervisedAt * 1000);
@@ -175,7 +179,7 @@ export async function staleArchivePass(
     const had = mem.sightings.get(rec.id);
     const sightings = { firstAt: had?.firstAt ?? now, lastAt: now };
     mem.sightings.set(rec.id, sightings);
-    const evidenceAtMs = await evidenceFor(deps, coord, rec);
+    const evidenceAtMs = await evidenceFor(deps, coord, rec, names);
     const v = staleArchiveVerdict(
       { workspace: rec.workspace, archivedAt: rec.archivedAt, child: rec.child, identityMeasured: rec.unmeasured.length === 0, held: rec.held },
       { claims: 'never', pane, sightings, viewer: deps.presence?.isVisible(rec.id) !== false, evidenceAtMs },
