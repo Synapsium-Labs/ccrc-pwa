@@ -2082,8 +2082,9 @@ Linux `fleet` or `both` box `ccrc install` (and every update) places ccrc's own
 lanes: `ccrc-codex-usage@<id>.timer` (every 15 minutes) is enabled for each, and one still enabled for an id
 that is no longer a `codex` lane is disabled. A lane's instance is withheld — and disabled if ccrc had enabled
 it — while another tool's `ccgpt-usage@<id>.timer` is enabled for that lane, because two publishers would race
-its `~/.cc-limits` row (the install names the unit to disable, and never disables it for you; the credential is no
-race, because the poll and the tier both read it through the auth library); a roster it cannot read converges
+its `~/.cc-limits` row (the install names the unit to disable, and never disables it for you; ccrc's own poll adds
+no credential race, because it only reads through the auth library and never refreshes, but that other timer
+refreshes outside the library's lock, so it can still race the tier's refresh); a roster it cannot read converges
 nothing, and each of those is a degraded step. macOS places none. The publisher reads the lane's credential
 through the auth library and never refreshes it or starts a
 sign-in: an expired token fails the poll `token-expired`, and nothing is published until the lane's tier refreshes

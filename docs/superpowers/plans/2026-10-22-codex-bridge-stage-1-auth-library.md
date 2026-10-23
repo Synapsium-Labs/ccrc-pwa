@@ -1506,11 +1506,11 @@ operator notes.
 Nothing here is run by an agent. Wave 1 changes nothing a lane runs; these notes are for wave 2's release.
 
 **Before the update, fleet box, per codex lane.** Ask the library where the lane's credential is: from the release's
-tree (the box has no placed copy yet), `python3 -IS ccd/ccgpt-auth.py paths --auth-dir "$HOME/<authDir>"` prints it
-as `credential`. `stat -c '%a %U'` that path, and `chmod 600` any file whose mode has a group or other bit. The doctor
-now FAILs that mode, so without this a first update can exit 3 (the box is on the new build, its FAIL lines are its
-health). A file this user does not own needs `chown`, as root, first; the doctor's owner line names that and stands
-alone (D-6682, D-6684).
+tree (the box has no placed copy yet), `python3 -IS ccd/ccgpt-auth.py paths --auth-dir "$HOME/<authDir>"` prints it as
+`credential`. `stat -c '%a %U'` that path, and `chmod 600` any file whose mode is not owner-readable with no group or
+other bit (what the doctor's `modeOk` tests). The doctor now FAILs that mode, so without this a first update can exit 3
+(the box is on the new build, its FAIL lines are its health). A file this user does not own needs `chown`, as root,
+first; the doctor's owner line names that and stands alone (D-6682, D-6684).
 
 1. **When.** Nothing holds it back: R-O9 closed on 2026-10-19 and Stage 0's windows were applied on 2026-10-22
    (ruling 9). A tier restart cuts the lane's in-flight requests, so pick a quiet window.
@@ -2095,8 +2095,8 @@ report.
   (`:10507-10508`).
 - **Why:** a value inherited from the caller's environment must not steer a probe of a row that is not this codex lane.
   `CCRC_CODEX_PYTHON` is unset in those arms for the same reason.
-- **Cost if wrong:** no visible effect today: the probe refuses a non-codex row at `runtime-absent` before it would
-  load the library.
+- **Cost if wrong:** no visible effect today: the probe refuses a non-codex row at `no-token-dir`, or `runtime-absent`
+  when its secrets file sets `CHATGPT_TOKEN_DIR`, before it would load the library.
 
 ### D-6677 — plantLaneAuth gives each lane its own account id
 
@@ -2188,9 +2188,9 @@ report.
   `ownerOk` is not false, the mode FAIL is still the only credential line.
 - **Why:** a non-owner cannot run the bare `chmod 600` the mode line names (it fails with EPERM), and the owner line's
   remedy already ends in `chmod 600`.
-- **Cost if wrong:** such a file shows one FAIL where the plan reads two. Row D2e measures 2 failed, not the plan's 1,
-  and row D8's case 'FAILs a credential neither owned by this user nor at mode 0600 on the owner line, with no bare
-  chmod line' pins the order. The plan's sentence should read "unless `ownerOk` is also false".
+- **Cost if wrong:** such a file shows the owner FAIL where the plan's sentence reads the mode FAIL. Row D2e measures 2
+  failed, not the plan's 1, and row D8's case 'FAILs a credential neither owned by this user nor at mode 0600 on the
+  owner line, with no bare chmod line' pins the order. The plan's sentence should read "unless `ownerOk` is also false".
 
 ### D-6685 — the ownership spec's first count stays four
 
@@ -2223,8 +2223,10 @@ report.
   holds. The `:765` row names its unchanged holders plus two new Stage 1 readers, Task 10's hostile-value emitter case
   and Task 1's `paths_for` case (D-6540). The `:1326` row reads "Unchanged, and green after Task 7"
   (`docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md:1548-1557`).
-- **Why:** the Global Constraints list `_acct_credential`'s refusal and the authDir validation as not touched, so no
-  Stage 1 task gave those rows a new holder.
+- **Why:** the Global Constraints' Not touched list names `_acct_credential`'s `codex-lane` refusal (the `:774` row)
+  and `uninstall --purge`'s treatment of an authDir (the `:794` row), so no Stage 1 task gave those rows a new holder.
+  The `:765` row (authDir path validation) is not in that list; no task gave it a new holder because no Stage 1 task
+  changes `shared/roster.ts`'s authDir gate.
 - **Cost if wrong:** a row that did need a new holder reads as held by tests that no longer measure it.
 
 ### D-6688 — step 2's grep has one line that is not the OAuth rule
@@ -2254,8 +2256,9 @@ report.
 - **Departs from:** Task 11's accounts-connect bullet: "`:59`, `:143` — one blockquote note each", carrying the plan's
   sentence verbatim.
 - **What changed:** the note for `:59` follows the table at
-  `docs/superpowers/specs/2026-10-18-accounts-connect-design.md:66`, with the lead-in "**The Codex (ChatGPT) OAuth row.**" before the plan's verbatim sentence. The note for `:143` is an
-  indented blockquote inside its list item, verbatim (`:146`).
+  `docs/superpowers/specs/2026-10-18-accounts-connect-design.md:66`, with the lead-in
+  "**The Codex (ChatGPT) OAuth row.**" before the plan's verbatim sentence. The note for `:143` is an indented
+  blockquote inside its list item, verbatim (`:146`).
 - **Why:** a blockquote cannot sit inside a Markdown table row.
 - **Cost if wrong:** the note sits seven lines below the row it amends, and the row itself (`:59`) still reads "ccrc
   passes the path and never reads the file".
@@ -2265,12 +2268,17 @@ report.
 - **Departs from:** Task 6 (`_inst_codex_tiers` restarts each lane's LiteLLM tier onto the new generation, the
   generation and the library hash both moving) and rollout note 2. Neither names a run whose runtime build failed.
 - **What changed:** when this run's `INST_DEGRADED` holds `codex-runtime` (every `NOT BUILT` arm of
-  `_inst_codex_runtime`, `ccd/ccrc:16497-16541`), `_inst_codex_tiers` leaves a stale litellm tier running and prints
-  one line, `install: codex tiers: <id> litellm: left alone — … so it keeps its running code until a build passes;
-  then re-run: ccrc install` (`:17059-17063`), counted as left as it was, never as a failure. Its header says why
-  (`:16972-16982`). The shim tier is restarted as before. 'a failed runtime build this run never restarts a stale
-  litellm tier …' (`server/test/ccrc-install.test.ts:7822`) runs the real `_inst_codex_runtime` against a failing
-  builder, then the step; row X2 (the guard made `if false`) → 1 failed.
+  `_inst_codex_runtime`, `ccd/ccrc:16497-16541`) and the tier's `litellm.started` record names the generation that
+  resolves now (its `generation`, read with `jq -r .generation`, equals `${py%/bin/python}`), `_inst_codex_tiers`
+  leaves a stale litellm tier running and prints one line, `install: codex tiers: <id> litellm: left alone — … so it
+  keeps its running code until a build passes; then re-run: ccrc install` (`:17064-17070`), counted as left as it
+  was, never as a failure. A tier whose record names an older generation, or none, is restarted onto the current one
+  as before. Its header says why (`:16973-16987`). The shim tier is restarted as before. 'a failed runtime build this
+  run never restarts a stale litellm tier …' (`server/test/ccrc-install.test.ts:7833`) runs the real
+  `_inst_codex_runtime` against a failing builder, then the step, over a record that names the current generation;
+  row X2 (the guard made `if false`) → 1 failed. 'a failed runtime build still restarts a litellm tier whose record
+  names an older generation …' (`:7855`) plants an older generation's record; row Y1 (the generation comparison
+  removed) → 1 failed.
 - **Why:** the tier's record hashes the generation's stamp and the placed auth library (`_codex_started_json`,
   `ccd/ccrc:12689`), so a new library reads stale even when the build failed and the previous generation stays
   current. A restart then brings the tier back on that same generation, whose patch may carry no authenticator, and
@@ -2303,12 +2311,13 @@ report.
   against the merge-base (`server/test/growthCheck.ts:46`), unless a waiver naming a defined D-number covers it. The
   plan names no growth for `ccd/ccrc`.
 - **What changed:** measured with `growthCheck.ts`'s own `codeLines` (`:173`) against the merge-base `a68c90f15`,
-  `ccd/ccrc` grows from 11452 to 11579 code lines, +127: the whole-wave review's +123 plus D-6691's four. One entry is
-  appended to `server/test/growth-waivers.json` (`:11-17`): `ccd/ccrc`, `maxDelta` 127, `D-6693`, added 2026-10-23.
-  The existing entry is untouched, and `ccd/ccd` and `ccd/session-hook.sh` grow by 0.
+  `ccd/ccrc` grows from 11452 to 11580 code lines, +128: the whole-wave review's +123, D-6691's four, and the closing
+  fix round's one (the skip's generation comparison). One entry is appended to `server/test/growth-waivers.json`
+  (`:11-17`): `ccd/ccrc`, `maxDelta` 128 (127 until the closing fix round raised it by that line), `D-6693`, added
+  2026-10-23. The existing entry is untouched, and `ccd/ccd` and `ccd/session-hook.sh` grow by 0.
 - **Why:** wave 2 moves ccd/ccrc's codex callers onto the library: login signs in through it, start and status read
   its status, account removal takes its lock, the litellm tier's started record hashes it, and a failed build leaves
   that tier running. Each is a caller that lives in ccd/ccrc, and none has another home in this stage.
-- **Cost if wrong:** the waiver caps ccd/ccrc at +127 for this branch, so a later fix round that adds a code line reds
+- **Cost if wrong:** the waiver caps ccd/ccrc at +128 for this branch, so a later fix round that adds a code line reds
   the growth check until a waiver covers the new delta, and the debt stands until consolidation W5 pays it down (the
   file's `payer`). A merge-base that moves can change the measured delta.

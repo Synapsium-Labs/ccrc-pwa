@@ -16620,9 +16620,10 @@ _codex_usage_flat_foreign() {
 #     `_inst_enable_timer`, whose refusal is a counted degraded step;
 #   - a codex lane for which ANOTHER repository's `ccgpt-usage@<id>.timer` is
 #     enabled gets no ccrc instance, and one ccrc had enabled is withdrawn: two
-#     publishers would race one `~/.cc-limits/<id>.json` (D-3719). The
-#     credential is no race: the poll and the tier both read it through the
-#     auth library.
+#     publishers would race one `~/.cc-limits/<id>.json` (D-3719). ccrc's
+#     own poll adds no credential race, because it only reads through the
+#     auth library and never refreshes; the other tool's timer refreshes
+#     outside the library's lock, so it can still race the tier's refresh.
 #     ccrc NEVER disables the foreign timer; the line names the operator's own
 #     command. The flat `ccgpt-usage.timer` names no lane, so it is reported as
 #     unattributable and blocks nothing.
@@ -16969,17 +16970,21 @@ _inst_enable() {
 # the guardrail `_inst_enable` is. An unreadable roster (`_codex_lanes` rc 1)
 # is a failure too, never "no codex lane".
 #
-# A FAILED RUNTIME BUILD NEVER RESTARTS THE LITELLM TIER (D-6691). That tier's
-# record hashes the generation's stamp AND the placed auth library
-# (`_codex_started_json`), so a new library reads as stale even when this run's
-# build failed and the previous generation stays current. A restart then brings
-# the tier back on that same generation, whose patch may carry no
-# authenticator, and cuts its in-flight requests for nothing. So when this
-# run's INST_DEGRADED holds `codex-runtime`, a stale litellm tier is left
-# running and said so in one line: it keeps its running code until a build
-# passes. It counts as left as it was, never as a failure: the runtime step has
-# already degraded this run. The shim tier does not run on the generation, and
-# is restarted as before.
+# A FAILED RUNTIME BUILD NEVER RESTARTS A LITELLM TIER ALREADY ON THE CURRENT
+# GENERATION (D-6691). That tier's record hashes the generation's stamp AND
+# the placed auth library (`_codex_started_json`), so a new library reads as
+# stale even when this run's build failed and the previous generation stays
+# current. A restart then brings the tier back on that same generation, whose
+# patch may carry no authenticator, and cuts its in-flight requests for
+# nothing. So when this run's INST_DEGRADED holds `codex-runtime` AND the
+# tier's `<tier>.started` record names the generation that resolves now (its
+# `generation`, read with `jq -r .generation`, equals `${py%/bin/python}`), a
+# stale litellm tier is left running and said so in one line: it keeps its
+# running code until a build passes. It counts as left as it was, never as a
+# failure: the runtime step has already degraded this run. A tier whose record
+# names an older generation (or none) is not on the one that resolves now, so
+# a restart does move it there, and it is restarted as before. The shim tier
+# does not run on the generation, and is restarted as before.
 _inst_codex_tiers() {
   [ "$INST_ROLE" = server ] && return 0
   local lanes id tier ours stale py ready deadline back stopword rc lrc=0
@@ -17056,8 +17061,10 @@ _inst_codex_tiers() {
           echo "install: codex tiers: $id $tier: left alone — whether it runs code this install replaced could not be measured (no runtime resolves, or its code file cannot be read), and a tier nobody can prove stale is never restarted"
           kept=$((kept + 1)); continue ;;
       esac
-      # D-6691: a failed build this run leaves the litellm tier on its code.
-      if [ "$tier" = litellm ] && [[ " ${INST_DEGRADED[*]-} " == *" codex-runtime "* ]]; then
+      # D-6691: a failed build this run leaves the litellm tier on its code,
+      # but only while its record names the generation that resolves now.
+      if [ "$tier" = litellm ] && [[ " ${INST_DEGRADED[*]-} " == *" codex-runtime "* ]] \
+        && [ "$(jq -r .generation "$(_codex_lane_dir "$id")/$tier.started" 2>/dev/null)" = "${py%/bin/python}" ]; then
         echo "install: codex tiers: $id litellm: left alone — it runs code this install replaced, but this run's codex runtime build did not pass (the codex runtime: NOT BUILT line above), so it keeps its running code until a build passes; then re-run: ccrc install"
         kept=$((kept + 1)); continue
       fi

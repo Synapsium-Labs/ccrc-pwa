@@ -1175,8 +1175,8 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     }
   });
 
-  // The library's own `_bars` rule, which the publisher keeps: a config-error measured under another OAuth
-  // configuration is stale (a `ccrc update` that fixed the client cures it), so it bars nothing.
+  // The library's own `_bars` rule, which the publisher asks through `bars` (D-6692): a config-error measured under
+  // another OAuth configuration is stale (a `ccrc update` that fixed the client cures it), so it bars nothing.
   it('a config-error recorded under another OAuth configuration bars nothing: the poll publishes', async () => {
     const home = mkTmp('ccgpt-usage-config-error-stale-');
     const id = mintId();

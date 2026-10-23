@@ -7306,6 +7306,7 @@ const LOCK_AFTER_OUT = 'printf \'%s\\n\' "${CX_LOCK_FD:-}" "${CX_LOCK_ID:-}" > "
 /** Task 4's one-line definitions, read out of ccd/ccrc rather than re-typed. */
 const RUNTIME_CLI_DEF = (): string => ccrcLine(/^_codex_runtime_cli\(\) \{.*\}$/m, '_codex_runtime_cli');
 const CODEX_TIERS_DEF = (): string => ccrcLine(/^CODEX_TIERS=.*$/m, 'CODEX_TIERS=');
+const LANE_DIR_DEF = (): string => ccrcLine(/^_codex_lane_dir\(\) +\{.*\}$/m, '_codex_lane_dir');
 
 /** The requirement the stub builder DECLARES, in the placed builder's own
  *  assignment shape. A fixture value, never the real one: the real-spine case
@@ -7388,9 +7389,18 @@ function runTiersStep(c: {
   // generation stays current — the spine's own order, so the tiers step reads
   // the `codex-runtime` that run put in INST_DEGRADED.
   runtimeBuildFails?: boolean;
+  // Closing fix round, D-6691: `"<id> <tier>"` -> the generation directory's
+  // name that the planted `<tier>.started` record names; the skip reads it.
+  startedGen?: Readonly<Record<string, string>>;
 }): StepRun {
   const home = mkTmp('ccrc-codex-tiers-step-');
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  for (const [key, gen] of Object.entries(c.startedGen ?? {})) {
+    const [id, tier] = key.split(' ');
+    mkdirSync(join(home, '.ccrc', 'codex', id), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'codex', id, `${tier}.started`),
+      JSON.stringify({ generation: join(home, '.ccrc', 'runtime', 'codex', gen), code: 'f'.repeat(64) }) + '\n');
+  }
   writeFileSync(join(home, '.local', 'bin', 'ccgpt-runtime'), [
     '#!/bin/sh',
     ...(c.runtimeBuildFails === true
@@ -7419,6 +7429,7 @@ function runTiersStep(c: {
     lanesFn(c.lanes ?? ['codex-a'], c.lanesRc ?? 0),
     CODEX_TIERS_DEF(),
     RUNTIME_CLI_DEF(),
+    LANE_DIR_DEF(),
     ccrcFunction('_codex_ready_secs'),
     // Real, unstubbed (review round 2, N2/N3): `_inst_codex_tiers` now calls
     // this on a 2, the same helper the identity gate above it already used.
@@ -7824,9 +7835,10 @@ describe('ccrc install: the codex tier restart step, measured in isolation (_ins
     // (`_codex_started_json` hashes the stamp and the placed auth library):
     // stale, while the build that would have given it new code did not pass.
     // The shim is the control: the same run restarts it, so the skip is the
-    // litellm tier's alone.
+    // litellm tier's alone. The litellm record names the generation that
+    // resolves now, the one shape the skip covers.
     const r = runTiersStep({
-      runtimeBuildFails: true,
+      runtimeBuildFails: true, startedGen: { 'codex-a litellm': 'gen-20260101T000000Z-1' },
       ours: { 'codex-a litellm': 0, 'codex-a shim': [0, 1, 0] },
       stale: { 'codex-a litellm': 0, 'codex-a shim': 0 }, readyS: '5',
     });
@@ -7837,6 +7849,24 @@ describe('ccrc install: the codex tier restart step, measured in isolation (_ins
     expect(r.stdout).toMatch(/^install: codex tiers: codex-a litellm: left alone — it runs code this install replaced, but this run's codex runtime build did not pass \(the codex runtime: NOT BUILT line above\), so it keeps its running code until a build passes; then re-run: ccrc install$/m);
     expect(r.stdout).toMatch(/^install: codex tiers: codex-a shim: restarted — /m);
     expect(r.stdout).toMatch(/— 1 restarted, 1 left as they were, 0 not restarted$/m);
+    expect(r.degraded).toEqual(['codex-runtime']);
+  });
+
+  it('a failed runtime build still restarts a litellm tier whose record names an older generation onto the current one (D-6691)', () => {
+    // The previous build's generation is current, and this tier's record
+    // names an older one: a restart moves it onto the current generation, so
+    // the skip does not cover it.
+    const r = runTiersStep({
+      runtimeBuildFails: true, startedGen: { 'codex-a litellm': 'gen-20251201T000000Z-1' },
+      ours: { 'codex-a litellm': [0, 1, 0] }, stale: { 'codex-a litellm': 0 }, readyS: '5',
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: codex runtime: NOT BUILT — ccgpt-runtime build exited 1 /m);
+    expect(r.calls).toEqual([LOCK_A, A_L, '_codex_tier_stale codex-a litellm', '_codex_stop_tier codex-a litellm', A_L,
+      '_codex_start_tier codex-a litellm', A_L, A_S, UNLOCK_A]);
+    expect(r.stdout).not.toMatch(/codex-a litellm: left alone/);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a litellm: restarted — /m);
+    expect(r.stdout).toMatch(/— 1 restarted, 0 left as they were, 0 not restarted$/m);
     expect(r.degraded).toEqual(['codex-runtime']);
   });
 

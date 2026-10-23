@@ -10,9 +10,9 @@
     },
     {
       "file": "ccd/ccrc",
-      "maxDelta": 127,
+      "maxDelta": 128,
       "d": "D-6693",
-      "reason": "codex bridge Stage 1 wave 2: ccd/ccrc's codex callers move onto the auth library (login signs in through it, start and status read its status, account removal takes its lock, the litellm tier's started record hashes it, and a failed runtime build leaves that tier running), measured +127 net code lines against the merge-base",
+      "reason": "codex bridge Stage 1 wave 2: ccd/ccrc's codex callers move onto the auth library (login signs in through it, start and status read its status, account removal takes its lock, the litellm tier's started record hashes it, and a failed runtime build leaves that tier running), measured +128 net code lines against the merge-base",
       "added": "2026-10-23"
     }
   ]

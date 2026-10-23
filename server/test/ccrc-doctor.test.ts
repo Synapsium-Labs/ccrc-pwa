@@ -13006,7 +13006,7 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     // Plan 3b Task A2: this fixture is BOTH armed (`usageBox` enables ccrc's own
     // timer), so the WARN says so and names ccrc's withdrawal first. The title is
     // §20.10's row of record, kept verbatim; the withheld-only case is the next one.
-    expect(warns(r.stdout)).toEqual([`WARN codex: codex-a: another repository's ccgpt-usage@codex-a.timer is enabled, and ccrc's own ${T} is enabled too, so two publishers race this lane's ~/.cc-limits row and two token refreshes its OAuth directory`]);
+    expect(warns(r.stdout)).toEqual([`WARN codex: codex-a: another repository's ccgpt-usage@codex-a.timer is enabled, and ccrc's own ${T} is enabled too, so two publishers race this lane's ~/.cc-limits row, and ccgpt-usage@codex-a.timer refreshes the credential outside the auth library's lock, so it can race the tier's refresh (ccrc's own poll only reads it)`]);
     expect(r.stdout).toMatch(new RegExp(`^ {2}remedy: systemctl --user disable --now ${esc(T)} \\(ccrc's own unit; no ccrc fixer withdraws it\\), or leave it to the next update, whose converge withdraws ${esc(T)} while ccgpt-usage@codex-a\\.timer stands and re-measures the link\\. Once this lane's cutover no longer needs ccgpt-usage@codex-a\\.timer, disable it yourself: systemctl --user disable --now ccgpt-usage@codex-a\\.timer — ccrc never disables another tool's unit$`, 'm'));
     expect(r.asked).toEqual([]);
   });
@@ -13015,7 +13015,7 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     const home = usageBox('ccrc-doctor-usage-second-writer-withheld-', { enabled: false });
     plantForeignUsage(home, 'codex-a');
     const r = usageRows(home);
-    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: another repository's ccgpt-usage@codex-a\.timer is enabled, so two publishers would race this lane's ~\/\.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own ccrc-codex-usage@codex-a\.timer while it stands$/)]);
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: another repository's ccgpt-usage@codex-a\.timer is enabled, so two publishers would race this lane's ~\/\.cc-limits row, and ccgpt-usage@codex-a\.timer refreshes the credential outside the auth library's lock, so it can race the tier's refresh — ccrc withholds its own ccrc-codex-usage@codex-a\.timer while it stands$/)]);
     expect(r.stdout).toMatch(/^ {2}remedy: once this lane's cutover no longer needs it, disable it yourself: systemctl --user disable --now ccgpt-usage@codex-a\.timer, then run: ccrc install — ccrc never disables another tool's unit$/m);
     expect(r.asked).toEqual([]);
   });

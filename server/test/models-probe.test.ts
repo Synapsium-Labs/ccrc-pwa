@@ -922,8 +922,8 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
     expect(probeRuntimeCalls(pr.rec)[0]!.requests).toEqual([]);
   });
 
-  // The library's own `_bars` rule, which the probe keeps: a config-error measured under another OAuth configuration
-  // is stale (a `ccrc update` that fixed the client cures it), so it bars nothing.
+  // The library's own `_bars` rule, which the probe asks through `bars` (D-6692): a config-error measured under
+  // another OAuth configuration is stale (a `ccrc update` that fixed the client cures it), so it bars nothing.
   it('a config-error recorded under another OAuth configuration bars nothing: the catalogue request is sent', async () => {
     // A fresh credential, refreshed early by a library whose CLIENT_ID is another one.
     await recordRefusal('invalid_client', 'config-error',

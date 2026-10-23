@@ -1263,7 +1263,8 @@ function mutatedPatch(from: string, to: string): Buffer {
  *  copy, and this directory's `sitecustomize.py` imports it for an interpreter
  *  with no `.pth` (PYTHONPATH also precedes the stdlib's own sitecustomize, the
  *  reason M2's works). So the copy written here is the only patch that ever
- *  runs: an EMPTY one (M7) shadows any installed patch. `before` is
+ *  runs: M7's copy switches off only the stream part and still shadows any
+ *  installed patch (D-6668). `before` is
  *  sitecustomize text run AHEAD of the import (M2's mutation), so the patch's
  *  finder lands first on sys.meta_path and wraps whatever loader follows it. */
 function patchSite(home: string, patch: Buffer = patchSource(), before = ''): string {

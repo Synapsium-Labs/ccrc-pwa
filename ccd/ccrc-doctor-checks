@@ -6451,11 +6451,11 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
   # leaves both, and "ccrc withholds its own" would be false over a link
   # that says otherwise.
   if _codex_usage_enabled "$f" && _codex_usage_enabled "$t"; then
-    _dr_cx_warn "$id: another repository's $f is enabled, and ccrc's own $t is enabled too, so two publishers race this lane's ~/.cc-limits row and two token refreshes its OAuth directory" \
+    _dr_cx_warn "$id: another repository's $f is enabled, and ccrc's own $t is enabled too, so two publishers race this lane's ~/.cc-limits row, and $f refreshes the credential outside the auth library's lock, so it can race the tier's refresh (ccrc's own poll only reads it)" \
       "systemctl --user disable --now $t (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws $t while $f stands and re-measures the link. Once this lane's cutover no longer needs $f, disable it yourself: systemctl --user disable --now $f — ccrc never disables another tool's unit"
     rc=2
   elif _codex_usage_enabled "$f"; then
-    _dr_cx_warn "$id: another repository's $f is enabled, so two publishers would race this lane's ~/.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own $t while it stands" \
+    _dr_cx_warn "$id: another repository's $f is enabled, so two publishers would race this lane's ~/.cc-limits row, and $f refreshes the credential outside the auth library's lock, so it can race the tier's refresh — ccrc withholds its own $t while it stands" \
       "once this lane's cutover no longer needs it, disable it yourself: systemctl --user disable --now $f, then run: ccrc install — ccrc never disables another tool's unit"
     rc=2
   elif _codex_usage_enabled "$t"; then
