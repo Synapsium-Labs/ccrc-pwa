@@ -572,6 +572,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
     && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } \
+    && { [ ! -f ~/.cc-sessions/lib/transcript.jq ] || cp -a ~/.cc-sessions/lib/transcript.jq ~/ccrc-backups/$TS/transcript.jq; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
     && { [ ! -f ~/.config/systemd/user/claude-session@.service ] || cp -a ~/.config/systemd/user/claude-session@.service ~/ccrc-backups/$TS/claude-session@.service; }"
   # `--exclude 'ccrc-mail.token'`: a checkout may still hold a gitignored
@@ -629,6 +630,11 @@ if [ "$TARGET" = "agent" ]; then
   # All executables go through install_atomic — see its comment for why a
   # plain scp over these exact files is a live correctness bug — save ccd
   # itself, which is a PAIR rendered on the box (the pair helper's header, above).
+  # The transcript reader ccd and the doctor load with `jq -L` (ARCH-65), 644:
+  # data for jq. BEFORE the ccd it serves, so a partial deploy never leaves a
+  # new ccd without it (a missing file only makes a read answer NOT MEASURED).
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/lib'
+  install_atomic ccd/lib/transcript.jq .cc-sessions/lib/transcript.jq 644
   install_ccd_pair
   # The coordination client, beside ccd because the fleet host is where sessions
   # run and a session-side client on the server box is a copy nobody invokes. A

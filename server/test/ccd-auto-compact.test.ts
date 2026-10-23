@@ -874,7 +874,7 @@ describe('_transcript_last_turn_ts (D-3102, D-3104)', () => {
     // "no real turn", which the caller FAILS OPEN on — the pre-D-3103
     // behaviour, never a false refusal, but also never the fix.
     const src = fs.readFileSync(CCD, 'utf8');
-    expect(src).toContain('rows=$(tail -n "$COMPACT_TURN_TAIL_LINES" "$f" 2>/dev/null) || return 2');
+    expect(src).toContain('tail -n "$COMPACT_TURN_TAIL_LINES" -- "$f" 2>/dev/null');
     expect(Number(h.sh('echo "$COMPACT_TURN_TAIL_LINES"'))).toBeGreaterThan(
       Number(h.sh('echo "$REDRIVE_TAIL_LINES"')));
   });

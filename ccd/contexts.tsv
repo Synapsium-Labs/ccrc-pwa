@@ -240,7 +240,6 @@ _ci_walk_has	C3
 _ci_walk_add	C3
 _ci_addrs	C3
 _ci_extant	C3
-_ci_transcript_path	C3
 _continued_in_of	C3
 _follow_continued_in	C3
 _ci_pane_refused	C3

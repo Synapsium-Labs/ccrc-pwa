@@ -634,7 +634,7 @@ interface Walked {
  * included, so a marker naming a uuid that lived in ANOTHER project, or in
  * ANOTHER ACCOUNT's config dir, was followed there (#189 review, F4, reproduced:
  * `foreign-glob`, another account) — while `ccd`, which looks only at its own
- * workdir's addresses (`_ci_transcript_path`), never moved the registry, so
+ * workdir's addresses (`_ci_addrs`/`_ci_extant`), never moved the registry, so
  * the two authorities disagreed for good and the doctor WARNed for ever. A
  * successor found beside its predecessor therefore carries the predecessor's
  * `rung` and `account`: it was reached through that address and no other, and
