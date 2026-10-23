@@ -235,7 +235,7 @@ describe('the rescue arm', () => {
     for (const f of foreign) expect(refs).not.toContain(`refs/ccrc/attic/orphan/${sha16(t)}/${f}`);
   }, 120_000);
 
-  it('--rescue pins EVERY sha of a tree whose HEAD reflog is longer than 200, or keeps the tree', () => {
+  it('--rescue pins EVERY sha of a tree whose HEAD reflog is longer than 200 (the tree is removed)', () => {
     const t = claudeTree();
     pushCommit(t, 'claude/agent-a');
     // 240 amends: more distinct HEAD-reflog shas than the shared-helper cap of 200
@@ -244,13 +244,25 @@ describe('the rescue arm', () => {
     const shas = [...new Set(h.git(t, 'reflog', 'show', 'HEAD', '--format=%H').split('\n').filter(Boolean))];
     expect(shas.length).toBeGreaterThan(200);
     const r = orphan(t, rescueOf(t), '--rescue');
-    if (fs.existsSync(t)) {
-      expect(r.doc['failed'], JSON.stringify(r.doc)).toBe('pin-failed');
-    } else {
-      const refs = h.git(main(), 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/orphan/${sha16(t)}/`).split('\n').filter(Boolean);
-      for (const s of shas) expect(refs).toContain(`refs/ccrc/attic/orphan/${sha16(t)}/${s}`);
-    }
+    expect(r.code, JSON.stringify(r.doc)).toBe(0);
+    expect(r.doc['removed']).toBe(true);
+    expect(fs.existsSync(t)).toBe(false);
+    const refs = h.git(main(), 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/orphan/${sha16(t)}/`).split('\n').filter(Boolean);
+    for (const s of shas) expect(refs).toContain(`refs/ccrc/attic/orphan/${sha16(t)}/${s}`);
   }, 180_000);
+
+  it('a partial pin (one reflog sha cannot be pinned) removes nothing and fails pin-failed', () => {
+    const t = claudeTree();
+    pushCommit(t, 'claude/agent-a');
+    const amendedAway = h.git(t, 'rev-parse', 'HEAD');
+    h.git(t, 'commit', '--amend', '-m', 'amended');
+    const tok = rescueOf(t);
+    const failOne = `git() { if [[ "$*" == *update-ref* && "$*" == *${amendedAway}* ]]; then return 1; fi; command git "$@"; };`;
+    const r = orphan(t, tok, '--rescue', `${STUBS} ${failOne}`);
+    expect(r.code).toBe(1);
+    expect(r.doc['failed'], JSON.stringify(r.doc)).toBe('pin-failed');
+    expect(fs.existsSync(t)).toBe(true);
+  }, 60_000);
 
   it('a failed pin removes nothing', () => {
     const t = claudeTree();
