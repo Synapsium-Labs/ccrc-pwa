@@ -155,7 +155,7 @@ describe('diskVerdict: hysteresis, debounce, mounts', () => {
     expect(a!.filesystems.map((f) => f.dev)).toEqual(['8:1', '8:2']);
   });
   it('a missing root never reads as fleet ok', () => {
-    const m = { ...measured([fsAt(10)]), missing: [{ label: 'r8:1', why: 'timeout' }] };
+    const m = { ...measured([fsAt(10)]), missing: [{ label: 'r8:1', why: 'timeout' as const }] };
     expect(run([m])[0]!.level).toBe('unmeasured');
   });
   it('a verdict is stamped with the clock it was given', () => {
