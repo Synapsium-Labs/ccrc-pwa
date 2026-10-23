@@ -1440,7 +1440,7 @@ the `client.ts` anchors were unchanged from `7ebdff20c`).
   - Group A was claim 2300.
   - README went in under run 774's consent: request 8312, consent 8314. The owner claim was live as 2306 at Task 4
     (re-declared from 2259, 2278 and 2295). Claim 2300's intent was renewed to cite all three. The change is one
-    hunk of nine added lines, with no existing line touched.
+    hunk, nine added lines at Task 4 and ten after review 852's fix round, with no existing line touched.
 - **Deviations:** eighteen defined, each once (the server's reader prints `18 18`; it printed `16 16` for D-6514 to
   D-6529 before the fix round). The first block's two reserve numbers were spent:
   - D-6528: W27-L12's starting phase. The row went red with no mutant applied; it is reported under ruling 12.

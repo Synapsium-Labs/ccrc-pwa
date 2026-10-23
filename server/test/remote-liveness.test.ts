@@ -440,15 +440,17 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
   it('W27-L23: a close frame with the TCP side never ended logs (closing), then the refused line', async () => {
     // The peer writes one raw 4401 close frame and keeps its side open, so the client's socket stays CLOSING until
     // the deadline fires: that line names the phase `closing`, and the close handler then prints the refusal.
+    // 3000 ms: the connect, the hand-made upgrade, the hello and the close frame all fit inside the deadline, or it
+    // would fire while the socket is still CONNECTING.
     const raw = await rawClosePeer(4401, 'unauthorized');
     try {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       fleet = connectFleet({
         url: `ws://127.0.0.1:${raw.port}`, token: randomBytes(32).toString('hex'), reconnectMinMs: 5000,
-        reconnectMaxMs: 5000, heartbeatMs: 60_000, readyTimeoutMs: 1000,
+        reconnectMaxMs: 5000, heartbeatMs: 60_000, readyTimeoutMs: 3000,
       });
       await vi.waitFor(() => expect(linkLines(warn).length).toBeGreaterThanOrEqual(2), { timeout: 8000 });
-      expect(linkLines(warn)).toEqual([NO_READY(1000, 'closing'), REFUSED(4401, 'unauthorized')]);
+      expect(linkLines(warn)).toEqual([NO_READY(3000, 'closing'), REFUSED(4401, 'unauthorized')]);
     } finally {
       await fleet?.close();
       fleet = undefined;
@@ -461,6 +463,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     // deadline is never cleared, so only `unref` lets the child exit before it fires. The row races the child's exit
     // against EXIT_BOUND_MS and asserts on the race, so a deadline that holds the process fails this assertion at the
     // bound (the row's own timeout is longer than the bound), not vitest's clock.
+    // The child's stderr is the failure message only: a loader warning on another Node version is not the property.
     const EXIT_BOUND_MS = 25_000;
     peer = await linkPeer(() => 'silent-upgrade');
     const serverDir = fileURLToPath(new URL('..', import.meta.url));
@@ -491,7 +494,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
         child.once('close', (code, signal) => resolve({ code, signal }));
         child.once('error', () => resolve({ code: -1, signal: null }));
       });
-      expect({ outcome, stderr }).toEqual({ outcome: { code: 0, signal: null }, stderr: '' });
+      expect(outcome, stderr).toEqual({ code: 0, signal: null });
     } finally {
       clearTimeout(bound);
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
