@@ -919,8 +919,12 @@ export function ownRenderedBox(ansiPane: string, parts: readonly string[], prove
  * (the provenance guard, 1, stays with its caller) and the tail it answers (or `null`). `head` is guard 4's and 5's
  * only difference: `'tail'` (`ownRenderedBox`) lets the first run be a suffix of ours, which a box at the row cap
  * shows when its head scrolled out; `'whole'` (`sendPrompt`'s `resumeIfOwn: 'whole'`) needs the first run to EQUAL
- * ours, so nothing of ours is hidden above the window and no row is added. A resume cannot have this call's
- * provenance (an earlier call typed the text): the ownership claim is the client's `resume` plus this correspondence.
+ * ours, so nothing of ours is hidden above the window and no row is added. `'whole'` also refuses a box AT the row
+ * cap (R43 F1): such a box keeps its last rows in view, so rows above the window cannot be seen, and a claim equal to
+ * the visible rows would press Enter over lines never claimed. The cost, a message that renders at exactly the cap
+ * cannot be resumed and answers `draft-present`, is the safe direction (the one the hidden-head case takes). A resume
+ * cannot have this call's provenance (an earlier call typed the text): the ownership claim is the client's `resume`
+ * plus this correspondence.
  *
  * WHAT IT PROVES, no more: the box equals our text UP TO WHITESPACE (`squash` erases every space, newline and blank
  * row, which wrapping moves), so no non-space character is added or removed. That is enough for a resume: one Enter
@@ -945,6 +949,9 @@ function renderedAsTyped(ansiPane: string, parts: readonly string[], head: 'tail
   for (let i = 1; i < seen.length; i++) if (seen[i] !== typed[i]) return null;
   if (head === 'whole' ? seen[0] !== typed[0] : !typed[0]!.endsWith(seen[0]!)) return null;
   const paneRows = ansiPane.replace(/\n$/, '').split('\n').length;
+  // R43 F1: a box at the row cap keeps its LAST rows in view, so rows above the window are invisible; `'whole'` refuses
+  // it (nothing of ours may be hidden), whatever the first run says.
+  if (head === 'whole' && rows.length === boxRowCap(paneRows)) return null;
   if (seen[0] !== typed[0] && rows.length !== boxRowCap(paneRows)) return null;
   const inView = squash(rows.join(''));
   if (inView === '') return null;
@@ -1265,8 +1272,9 @@ export type OnDraft = 'refuse' | 'replace' | 'stash';
  * only when it renders the composed text up to whitespace, wrapped lines and blank
  * rows read as the rows they are (`renderedAsTyped`, the correspondence
  * `ownRenderedBox` proves: no non-space character added or removed). Any
- * other box is `draft-present`; an EMPTY box is `nothing-to-submit`, because the
- * earlier send may have landed and nothing is ever retyped. It types, clears and
+ * other box is `draft-present`, a box at the row cap included (rows above the window cannot be seen, R43 F1; a message
+ * that renders at exactly the cap cannot be resumed, the safe direction); an EMPTY box is `nothing-to-submit`,
+ * because the earlier send may have landed and nothing is ever retyped. It types, clears and
  * stashes nothing (`onDraft` is not consulted).
  *
  * `clearMailResidue` (robust-mail-delivery spec §2.2): a caller that sets
