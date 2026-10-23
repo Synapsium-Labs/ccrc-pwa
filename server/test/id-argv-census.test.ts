@@ -342,12 +342,12 @@ const GATES = {
   /** The collector executor's step 1. */
   'collector-step-1': {
     file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot',
-    re: /if \(!isTmpRootId\(job\.id\)\) return \{ kind: 'not-asked', step: 1, why: 'id-refused'/,
+    re: /if \(looseHex === null && !isTmpRootId\(job\.id\)\) return \{ kind: 'not-asked', step: 1, why: 'id-refused'/,
   },
   /** The learning audit's own id gate (path-identity W2), first in `learnCollect`: the twin of the step-1 check. */
   'collector-learn-gate': {
     file: 'coord/collectTempRoot.ts', scope: 'learnCollect',
-    re: /if \(!isTmpRootId\(id\)\) return \{ kind: 'id-refused' \};/,
+    re: /if \(!isTmpRootId\(id\) && collectLooseHexOf\(id\) === null\) return \{ kind: 'id-refused' \};/,
   },
   /** The population gate's witness half; with the record half below, the gate before the learning audit's own. */
   'collector-population': {

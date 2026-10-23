@@ -471,8 +471,9 @@ export function collectPopulation(input: {
   const ids = [...new Set([...witnessed, ...recordIds, ...asides, ...looseIn.ids])].sort();
   const looseSet = new Set(looseIn.ids);
   const candidates = ids.filter((id) => recordIds.has(id) || looseSet.has(id) || !collectRowStands(input.registryNames, id));
+  // The field rides only a pass that asked a census, so a population built without one keeps its shape.
   return { ids, candidates, recordIds, refusedNames, unmeasured, bothMeasured: unmeasured.length === 0,
-    looseDoubt: looseIn.doubt };
+    ...(input.loose === undefined ? {} : { looseDoubt: looseIn.doubt }) };
 }
 
 /** Does `id`'s registry row stand in the tick's listing (spec §5.10, the pre-filter)? Its EXACT `<id>.child` or

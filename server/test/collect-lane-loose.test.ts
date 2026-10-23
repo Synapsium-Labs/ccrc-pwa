@@ -148,7 +148,7 @@ describe('the population (D-6627): a census name joins as a loose id, and doubt 
     expect(un.ids).toEqual([]);
     expect(un.looseDoubt).toMatch(/measured nothing \(find failed\)/);
     expect(collectPopulation({ ...none, loose: { kind: 'unavailable' } }).looseDoubt).toBeNull();
-    expect(collectPopulation({ ...none }).looseDoubt).toBeNull();
+    expect(collectPopulation({ ...none }).looseDoubt ?? null).toBeNull();
   });
 
   it('unread records are said, and a hex that is no hex is counted and never carried', () => {
