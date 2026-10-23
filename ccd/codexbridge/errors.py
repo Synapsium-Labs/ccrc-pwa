@@ -178,9 +178,8 @@ def _number(value: object) -> Optional[float]:
 
 
 def _retry_after_from_reset(err: Optional[dict], now: float) -> Optional[str]:
-    """Seconds until the limit resets: `resets_at` (epoch seconds), else `resets_in_seconds` (a usage-limit body
-    measured on a lane carried that field and no `resets_at`, spec 2026-09-13's S1-R10 row); None when unknown or
-    already past."""
+    """Seconds until the limit resets: `resets_at` (epoch seconds), else `resets_in_seconds` (the usage-limit body
+    measured in spec 2026-09-13's S1-R10 row named that field); None when unknown or already past."""
     if err is None:
         return None
     at = _number(err.get("resets_at"))

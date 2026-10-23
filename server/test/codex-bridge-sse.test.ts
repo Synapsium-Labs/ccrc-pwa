@@ -112,6 +112,10 @@ describe.skipIf(!PY)('the SSE parser (codex-bridge spec §2.4)', () => {
     expect(line.events).toHaveLength(1);
     expect(line.events[0].type).toBe('x');
     expect(line.scanned).toBeLessThanOrEqual(2 * 20000);
+    // `found` is counted by the buffer's own find(), from the offset each search was actually given, so a search
+    // that starts earlier than the parser counts is seen here
+    expect(line.found).toBeLessThanOrEqual(2 * 20000);
+    expect(line.found).toBe(line.scanned);
   });
 
   it.each([1, 13, 'whole'] as const)('the parser gives the same events fed in %s-byte chunks', async (chunk) => {
@@ -146,6 +150,25 @@ describe.skipIf(!PY)('the SSE parser (codex-bridge spec §2.4)', () => {
     // the next event is whole: the malformed mark ends with its own event
     expect(multi.events).toEqual([{ name: null, data: null, type: null }, { name: null, data: { type: 'b' }, type: 'b' }]);
     expect(multi.warnings).toEqual(['a line that is not UTF-8']);
+  });
+
+  it('a comment that is not UTF-8 is skipped, and another field that is not is ignored with its event standing', async () => {
+    const [comment, event] = await run([
+      { op: 'sse-feed', bytes_b64: b64Bytes(': ', [0xff], '\n\ndata: {"type":"b"}\n\n'), chunk: 1 },
+      { op: 'sse-feed', bytes_b64: b64Bytes('event: ', [0xff], '\ndata: {"type":"response.output_text.delta","delta":"x"}\n\n'), chunk: 'whole' },
+    ]);
+    expect(comment.events).toEqual([{ name: null, data: { type: 'b' }, type: 'b' }]);
+    expect(comment.warnings).toEqual([]);
+    expect(event.events).toEqual([
+      { name: null, data: { type: 'response.output_text.delta', delta: 'x' }, type: 'response.output_text.delta' },
+    ]);
+    expect(event.warnings).toEqual(['a line that is not UTF-8']);
+  });
+
+  it('a line whose field name is not UTF-8 makes its event malformed: it may have been the data field', async () => {
+    const [line] = await run([{ op: 'sse-feed', bytes_b64: b64Bytes('da', [0xff], 'ta: {"type":"a"}\n\n'), chunk: 'whole' }]);
+    expect(line.events).toEqual([{ name: null, data: null, type: null }]);
+    expect(line.warnings).toEqual(['a line that is not UTF-8']);
   });
 
   it('warnings past WARNINGS_MAX are counted in one last warning, never kept', async () => {
@@ -191,9 +214,14 @@ describe.skipIf(!PY)('runBridgeDriver (codexBridgeFixture.ts): no test reaches a
     const [empty] = await run([{ op: 'endpoints' }], { CCGPT_BRIDGE_UPSTREAM_BASE: '', CCRC_CODEX_AUTH_BASE: '' });
     expect(empty.CCGPT_BRIDGE_UPSTREAM_BASE).toBe(CLOSED_AUTH_BASE);
     expect(empty.CCRC_CODEX_AUTH_BASE).toBe(CLOSED_AUTH_BASE);
-    const [named] = await run([{ op: 'endpoints' }], { CCGPT_BRIDGE_UPSTREAM_BASE: 'http://127.0.0.1:1' });
-    expect(named.CCGPT_BRIDGE_UPSTREAM_BASE).toBe('http://127.0.0.1:1');
+    // a named value differs from the default, so an arm that always answers the default is red
+    expect(CLOSED_AUTH_BASE).not.toBe('http://127.0.0.1:2');
+    const [named] = await run([{ op: 'endpoints' }], { CCGPT_BRIDGE_UPSTREAM_BASE: 'http://127.0.0.1:2' });
+    expect(named.CCGPT_BRIDGE_UPSTREAM_BASE).toBe('http://127.0.0.1:2');
     expect(named.CCRC_CODEX_AUTH_BASE).toBe(CLOSED_AUTH_BASE);
+    const [auth] = await run([{ op: 'endpoints' }], { CCRC_CODEX_AUTH_BASE: 'http://127.0.0.1:2' });
+    expect(auth.CCRC_CODEX_AUTH_BASE).toBe('http://127.0.0.1:2');
+    expect(auth.CCGPT_BRIDGE_UPSTREAM_BASE).toBe(CLOSED_AUTH_BASE);
   });
 
   it('a HOME outside the temp root, or an env that sets HOME, is refused before anything is spawned', () => {

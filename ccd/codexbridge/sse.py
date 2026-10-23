@@ -9,8 +9,11 @@ look stopped, never from zero, so a byte is examined a bounded number of times h
 before it is dropped, so CRLF and LF streams, and a CRLF split across two chunks, parse alike.
 
 A malformed `data:` field (not JSON, or JSON that is not an object) is an event with `data` None and one warning,
-never fatal; a warning names what was wrong, never the content. A line that is not UTF-8 makes its whole event
-malformed the same way: the event is answered with `data` None, never dropped and never rebuilt from its other lines.
+never fatal; a warning names what was wrong, never the content. A `data:` line that is not UTF-8, or a line whose
+field name is not, makes its whole event malformed the same way: the event is answered with `data` None, never
+dropped and never rebuilt from its other lines. A `:` comment is skipped before it is decoded, so its bytes never
+matter; any other field whose value is not UTF-8 (`event:`, `id:`, `retry:`, an unknown one) is ignored with one
+warning, and the event's other fields stand.
 """
 
 import json
@@ -92,15 +95,21 @@ class SseParser:
     def _line(self, raw: bytes) -> Optional[SseEvent]:
         if not raw:
             return self._dispatch()
+        if raw.startswith(b":"):  # a comment, skipped before it is decoded
+            return None
         try:
             line = raw.decode("utf-8")
         except UnicodeDecodeError:
             self._warn("a line that is not UTF-8")
-            self._seen_field = True
-            self._poisoned = True
-            return None
-        if line.startswith(":"):
-            return None
+            name_raw = raw.partition(b":")[0]
+            try:
+                poison = name_raw.decode("utf-8") == "data"
+            except UnicodeDecodeError:  # the field name itself is unreadable: it may have been `data`
+                poison = True
+            if poison:
+                self._seen_field = True
+                self._poisoned = True
+            return None  # any other field with a value that is not UTF-8 is ignored
         field, sep, value = line.partition(":")
         if sep and value.startswith(" "):
             value = value[1:]

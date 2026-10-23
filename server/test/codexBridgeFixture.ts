@@ -37,15 +37,13 @@ const TMP_ROOT = (() => {
  *  directory. The env is built from scratch: PATH and TMPDIR, then the caller's `env`, then the two endpoint
  *  variables (each CLOSED_AUTH_BASE unless `env` names a non-empty value: an empty one would read as unset, which is
  *  a live endpoint), then HOME. No PYTHON* variable is set: `-I` implies `-E`, so the driver's own
- *  `sys.dont_write_bytecode = True` is what keeps a `__pycache__` out of the tree. `onLine` is called with each JSON
- *  line as the driver prints it (one per op, flushed). Past `timeoutMs` (default 10000) the child is killed with
- *  SIGKILL and `timedOut` is true; `status` is then null. */
+ *  `sys.dont_write_bytecode = True` is what keeps a `__pycache__` out of the tree. Past `timeoutMs` (default 10000)
+ *  the child is killed with SIGKILL and `timedOut` is true; `status` is then null. */
 export function runBridgeDriver(
   home: string,
   action: object,
   env: Record<string, string> = {},
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  o: { timeoutMs?: number; onLine?: (line: Record<string, any>) => void } = {},
+  o: { timeoutMs?: number } = {},
 ): Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }> {
   const resolved = path.resolve(home);
   if (!resolved.startsWith(TMP_ROOT + path.sep)) {
@@ -75,16 +73,7 @@ export function runBridgeDriver(
     let stderr = '';
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, o.timeoutMs ?? 10_000);
-    let seen = 0;
-    child.stdout.on('data', (c: Buffer) => {
-      stdout += c.toString();
-      if (!o.onLine) return;
-      for (let nl = stdout.indexOf('\n', seen); nl !== -1; nl = stdout.indexOf('\n', seen)) {
-        const text = stdout.slice(seen, nl);
-        seen = nl + 1;
-        if (text.trim() !== '') o.onLine(JSON.parse(text) as Record<string, unknown>);
-      }
-    });
+    child.stdout.on('data', (c: Buffer) => { stdout += c.toString(); });
     child.stderr.on('data', (c: Buffer) => { stderr += c.toString(); });
     child.once('error', (err) => { clearTimeout(timer); reject(err); });
     child.once('close', (code) => { clearTimeout(timer); resolve({ status: code, stdout, stderr, timedOut }); });

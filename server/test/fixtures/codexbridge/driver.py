@@ -17,8 +17,9 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
   census           {dir?} -> {"files": [{"file", "syntaxError"?, "imports", "pep604", "timeoutError"}]}: an ast walk
                    of every *.py in `dir` (default `<pkg>/codexbridge`) at feature_version (3, 9); the file is read,
                    never imported
-  sse-feed         {bytes_b64, chunk: <int> | "whole"} -> {"events", "warnings", "scanned"}: one SseParser fed in
-                   `chunk`-byte pieces, then closed
+  sse-feed         {bytes_b64, chunk: <int> | "whole"} -> {"events", "warnings", "scanned", "found"}: one SseParser
+                   fed in `chunk`-byte pieces, then closed; `found` is the bytes its buffer's find() examined, counted
+                   by the buffer itself (a bytearray subclass swapped in before the first feed), never by the parser
   frame            {type, data} -> {"result": sse.frame(type, data) as text}
   ping             -> {"result": sse.PING as text}
   classify-http    {status, body? (text) | bodyB64?, headers?, now} -> a BridgeError
@@ -68,6 +69,18 @@ def _bridge_error(errors, e):
         "answer": {"status": status, "headers": dict(headers), "body": json.loads(body.decode("utf-8"))},
         "event": errors.event(e).decode("utf-8"),
     }
+
+
+class _CountingBuffer(bytearray):
+    """The parser's buffer, counting what each find() examines from the offset it was actually given: (the match's
+    end, or the buffer's length) minus that offset. In-place `+=` and `del` keep the subclass."""
+
+    found = 0
+
+    def find(self, sub, start=0, end=None):
+        r = bytearray.find(self, sub, start) if end is None else bytearray.find(self, sub, start, end)
+        self.found += (r + 1 if r >= 0 else len(self)) - start
+        return r
 
 
 def _has_bitor(node):
@@ -128,12 +141,13 @@ def _run(op, pkg, cb):
         chunk = op.get("chunk", "whole")
         size = len(data) if chunk == "whole" else int(chunk)
         p = sse.SseParser()
+        counting = p._buf = _CountingBuffer()
         events = []
         for i in range(0, len(data), max(1, size)):
             events.extend(p.feed(data[i:i + max(1, size)]))
         events.extend(p.close())
         return {"events": [{"name": e.name, "data": e.data, "type": e.type} for e in events],
-                "warnings": list(p.warnings), "scanned": p.scanned}
+                "warnings": list(p.warnings), "scanned": p.scanned, "found": counting.found}
     if name == "frame":
         return {"result": sse.frame(op["type"], op["data"]).decode("utf-8")}
     if name == "ping":
