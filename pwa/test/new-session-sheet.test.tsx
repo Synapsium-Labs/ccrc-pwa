@@ -598,7 +598,7 @@ describe('NewSessionSheet — success opens the new session', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('a named create answered after the sheet was dismissed navigates nowhere', async () => {
+  it('a named create answered after the sheet was dismissed says it started, with the server\'s title, and navigates nowhere', async () => {
     let answer!: (a: { named: true; id: string; slug: string; title: string }) => void;
     vi.spyOn(api, 'workspaceAdd').mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
     const { onClose, flush, close } = await mount();
@@ -606,8 +606,10 @@ describe('NewSessionSheet — success opens the new session', () => {
     startNamed();
     await flush();
     close();
-    await act(async () => { answer({ named: true, id: 'claude-demo-ws-a', slug: 'login-cleanup', title: 'Login cleanup' }); });
+    // The server resolved the ticket again at create: its title is not what was typed, and the toast says the server's.
+    await act(async () => { answer({ named: true, id: 'claude-demo-ws-a', slug: 'login-cleanup', title: 'Login cleanup (renamed)' }); });
     await flush();
+    expect(await screen.findByText('Starting Login cleanup (renamed) on team·max…')).toBeInTheDocument();
     expect(window.location.pathname).toBe('/');
     expect(onClose).not.toHaveBeenCalled();
   });
