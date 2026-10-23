@@ -3430,6 +3430,24 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     expect(treeDigest(behind)).toEqual(before);
   });
 
+  it('W23-T29 (D-6464, review 839): a refusal the walk made before a time stop still exits 3, with nothing refused behind it', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const own = clone(home, tpl, stamp(9));
+    const unreadable = clone(home, tpl, stamp(8));
+    writeFileSync(path.join(unreadable, RECORD), '{');
+    expect(H.quickState(H.realFs, unreadable).error).toBeDefined();
+    const fulls = [7, 6].map((n) => clone(home, tpl, stamp(n)));
+    const r = thinCli(home, [...argv({ keep: 2, own, dirs: [unreadable, ...fulls] }), '--until', '1']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(3);
+    expect(linesOf(r.stdout)).toEqual([
+      expect.stringMatching(new RegExp(`^WARN: could not thin ${stamp(8)}: .+ — it is left as it is$`)),
+      BUDGET_LINE(2),
+      'coordination data sets: 1 kept, 0 thinned this run, 3 left as they are',
+    ]);
+  });
+
   it('W23-T31 (D-6464): the pre-migration keep\'s verification waits on the budget too: past it, the candidate and every older dir are left, never thinned unverified', () => {
     const T0 = 1_800_000_000;
     const home = mkHome();
