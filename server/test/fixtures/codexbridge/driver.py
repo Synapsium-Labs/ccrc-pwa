@@ -34,9 +34,11 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    library loaded by path (`spec_from_file_location`, as the bridge loads it), never through sys.path
   endpoints        -> {"CCGPT_BRIDGE_UPSTREAM_BASE", "CCRC_CODEX_AUTH_BASE", "HOME"}: the two endpoint variables and
                    HOME as this process received them (None when unset); URLs and a fixture path, never a credential
-  from-anthropic   {body, headers?, output_config?, stored?} -> {"request": the NeutralRequest as a dict
-                   (`tools_required` sorted), "names": [[family, value], ...]}, or a BridgeError (below) with "names":
-                   `inbound.from_anthropic` with a ListSink; `output_config` is passed only when the op names it, and
+  from-anthropic   {body, headers? | headerLines?, output_config?, stored?} -> {"request": the NeutralRequest as a
+                   dict (`tools_required` sorted), "names": [[family, value], ...]}, or a BridgeError (below) with
+                   "names": `inbound.from_anthropic` with a ListSink; `headers` is a plain dict, `headerLines` a list
+                   of [name, value] pairs put in an http.client.HTTPMessage (the server's own header type, a repeated
+                   name kept as repeated lines); `output_config` is passed only when the op names it, and
                    `stored` is the lookup stub: a list of {"call": <id>, "turn"} or {"session", "text", "turn"}, each
                    keyed by `inbound.call_key` / `inbound.text_key`, so a test never spells a key itself; "lookups"
                    lists the keys asked for, in order
@@ -50,6 +52,7 @@ A BridgeError prints as {"error": {status, etype, message, headers, state, code,
 
 import ast
 import base64
+import http.client
 import importlib
 import importlib.util
 import json
@@ -209,8 +212,13 @@ def _run(op, pkg, cb):
         kwargs = {"names": sink, "lookup": lookup}
         if "output_config" in op:
             kwargs["output_config"] = op["output_config"]
+        headers = op.get("headers") or {}
+        if "headerLines" in op:
+            headers = http.client.HTTPMessage()
+            for k, v in op["headerLines"]:
+                headers[k] = v  # Message.__setitem__ appends: a repeated name stays two lines
         try:
-            req = inbound.from_anthropic(op["body"], op.get("headers") or {}, **kwargs)
+            req = inbound.from_anthropic(op["body"], headers, **kwargs)
         except errors.BridgeError as e:
             out = _bridge_error(errors, e)
             out.update({"names": [list(n) for n in sink.names], "lookups": lookups})

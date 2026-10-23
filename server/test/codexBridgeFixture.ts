@@ -32,8 +32,10 @@ const TMP_ROOT = (() => {
   try { return realpathSync(tmpdir()); } catch { return tmpdir(); }
 })();
 
-/** The longest action passed inline in argv; a longer one goes through a file (below). */
+/** The longest action, in UTF-8 BYTES, passed inline in argv; a longer one goes through a file (below). */
 const ARG_INLINE_MAX = 64 * 1024;
+/** A per-process counter, so two calls sharing one HOME never write the same action file. */
+let actionFiles = 0;
 
 /** Spawn `python3 -I driver.py <action>` ASYNCHRONOUSLY (a synchronous child deadlocks against a fake server on this
  *  event loop), in the fixture `home`, which is its cwd and its HOME. `action.pkg` defaults to this tree's `ccd`
@@ -42,8 +44,9 @@ const ARG_INLINE_MAX = 64 * 1024;
  *  a live endpoint), then HOME. No PYTHON* variable is set: `-I` implies `-E`, so the driver's own
  *  `sys.dont_write_bytecode = True` is what keeps a `__pycache__` out of the tree. Past `timeoutMs` (default 10000)
  *  the child is killed with SIGKILL and `timedOut` is true; `status` is then null. An action longer than
- *  ARG_INLINE_MAX is written to `<home>/.driver-action.json` (0600) and passed as `@<path>`: Linux refuses one
- *  argument past 128 KiB (E2BIG), and a case such as a 700,000-character tool result needs more. */
+ *  ARG_INLINE_MAX UTF-8 bytes is written to `<home>/.driver-action-<n>.json` (0600, `n` unique per call) and passed
+ *  as `@<path>`: Linux refuses one argument past 128 KiB in bytes (E2BIG), and a case such as a 700,000-character
+ *  tool result needs more. */
 export function runBridgeDriver(
   home: string,
   action: object,
@@ -71,8 +74,9 @@ export function runBridgeDriver(
   };
   const full = JSON.stringify({ pkg: CCD_DIR, ...action });
   let arg = full;
-  if (full.length > ARG_INLINE_MAX) {
-    const file = path.join(resolved, '.driver-action.json');
+  if (Buffer.byteLength(full, 'utf8') > ARG_INLINE_MAX) {
+    actionFiles += 1;
+    const file = path.join(resolved, `.driver-action-${actionFiles}.json`);
     writeFileSync(file, full, { mode: 0o600 });
     arg = '@' + file;
   }

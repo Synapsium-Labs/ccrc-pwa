@@ -170,7 +170,9 @@ def _texts(content: object, what: str) -> List[str]:
 
 def _drop_billing(text: str) -> str:
     """A text without its billing line: Claude Code's first system block is `x-anthropic-billing-header: …;`, whose
-    suffix varies between requests and would break the prefix cache."""
+    suffix varies between requests and would break the prefix cache. Only the block's FIRST line is removed: the
+    rest of a block (or of a string system value) that starts with the billing line is kept, so no system text after
+    it is lost (D-TBD-inbound-billing-first-line)."""
     if not text.startswith(BILLING_PREFIX):
         return text
     newline = text.find("\n")
@@ -192,11 +194,15 @@ def _image(block: dict, names: NameSink) -> dict:
     source = block.get("source")
     if isinstance(source, dict):
         kind = source.get("type")
-        if kind == "base64" and isinstance(source.get("data"), str) and isinstance(source.get("media_type"), str):
-            url = "data:" + source["media_type"] + ";base64," + source["data"]
-            return {"type": "input_image", "image_url": url, "detail": "auto"}
-        if kind == "url" and isinstance(source.get("url"), str):
-            return {"type": "input_image", "image_url": source["url"], "detail": "auto"}
+        if kind == "base64":
+            if isinstance(source.get("data"), str) and isinstance(source.get("media_type"), str):
+                url = "data:" + source["media_type"] + ";base64," + source["data"]
+                return {"type": "input_image", "image_url": url, "detail": "auto"}
+            raise _malformed("an image block's base64 source is incomplete")
+        if kind == "url":
+            if isinstance(source.get("url"), str):
+                return {"type": "input_image", "image_url": source["url"], "detail": "auto"}
+            raise _malformed("an image block's url source has no url")
         raise _unsupported("image source", "image." + kind if isinstance(kind, str) else None, names)
     raise _malformed("an image block has no source")
 

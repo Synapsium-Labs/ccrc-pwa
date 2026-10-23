@@ -246,8 +246,9 @@ describe.skipIf(!PY)('inbound: the mapping table (codex-bridge spec §2.3)', () 
       op(body()),
       op(body({ tool_choice: { type: 'auto', disable_parallel_tool_use: true } })),
       op(body({ tool_choice: { type: 'any', disable_parallel_tool_use: false } })),
+      op(body({ tool_choice: { type: 'auto' } })),
     ]);
-    expect(lines.map((l) => l.request.parallel_tool_calls)).toEqual([true, false, true]);
+    expect(lines.map((l) => l.request.parallel_tool_calls)).toEqual([true, false, true, true]);
   });
 
   it('reasoning.effort, set by the effort hook, is the effort', async () => {
@@ -591,5 +592,93 @@ describe.skipIf(!PY)('inbound: the helpers and refusals (codex-bridge plan Task 
       expect(l.error?.status, JSON.stringify(l)).toBe(400);
       expect(l.error.etype).toBe('invalid_request_error');
     }
+  });
+});
+
+describe.skipIf(!PY)('inbound: the arms no earlier case pinned (codex-bridge plan Task 2)', () => {
+  it('a block that starts with the billing line loses that line only, and keeps the rest of its text', async () => {
+    const [blocks, str] = await run([
+      op(body({ system: [{ type: 'text', text: `${BILLING('a1b')}\nRest.` }, { type: 'text', text: 'Next.' }] })),
+      op(body({ system: `${BILLING('f00')}\n\nRest of the string.` })),
+    ]);
+    expect(blocks.request.developer).toBe('Rest.\n\nNext.');
+    expect(str.request.developer).toBe('Rest of the string.');
+    expect(JSON.stringify([blocks.request, str.request])).not.toContain('x-anthropic-billing-header');
+  });
+
+  it('a tool_choice of another shape is dropped and counted; a tool choice is cut; a tool with no object schema gets an empty one', async () => {
+    const long = 'mcp__server__' + 'd'.repeat(52) + 'tool1';
+    expect(long.length).toBe(70);
+    const [str, weird, named, schemas] = await run([
+      op(body({ tool_choice: 'auto' })),
+      op(body({ tool_choice: { type: 'weird' } })),
+      op(body({ tool_choice: { type: 'tool', name: long } })),
+      op(body({ tools: [{ name: 'NoSchema', description: 'd' }, { name: 'BadSchema', description: 'e', input_schema: 'not-an-object' }] })),
+    ]);
+    expect([str.request.tool_choice, str.request.parallel_tool_calls]).toEqual([null, true]);
+    expect(fam(str, 'requestField')).toEqual(['tool_choice']);
+    expect(weird.request.tool_choice).toBeNull();
+    expect(fam(weird, 'requestField')).toEqual(['tool_choice']);
+    expect(named.request.tool_choice).toEqual({ type: 'function', name: long.slice(0, 55) + '_' + sha8(long) });
+    expect(fam(named, 'requestField')).toEqual([]);
+    const empty = { type: 'object', properties: {} };
+    expect(schemas.request.tools).toEqual([
+      { type: 'function', name: 'NoSchema', description: 'd', parameters: empty, strict: false },
+      { type: 'function', name: 'BadSchema', description: 'e', parameters: empty, strict: false },
+    ]);
+    expect(schemas.request.tools_required).toEqual([]);
+  });
+
+  it('a type that fails CODE_RE is named unrecognised in the refusal, never shown', async () => {
+    const odd = 'Has Space sentinel-q7';
+    const wide = 'w'.repeat(70);
+    const [block, tool] = await run([
+      op(body({ messages: [{ role: 'user', content: [{ type: odd, text: 'x' }] }] })),
+      op(body({ tools: [{ type: wide, name: 'srv' }] })),
+    ]);
+    expect(block.error.status).toBe(400);
+    expect(block.error.message).toBe('unsupported content block: unrecognised');
+    expect(tool.error.message).toBe('unsupported server tool: unrecognised');
+    for (const l of [block, tool]) {
+      const shown = JSON.stringify([l.error.message, l.answer, l.event]);
+      expect(shown).not.toContain('sentinel-q7');
+      expect(shown).not.toContain(wide);
+    }
+  });
+
+  it('an incomplete image source is a malformed 400; an unknown source type is unsupported', async () => {
+    const img = (source: object): Record<string, unknown> => body({ messages: [{ role: 'user', content: [{ type: 'image', source }] }] });
+    const [noData, noMedia, noUrl, file] = await run([
+      op(img({ type: 'base64', media_type: 'image/png' })),
+      op(img({ type: 'base64', data: 'AAAA' })),
+      op(img({ type: 'url' })),
+      op(img({ type: 'file', file_id: 'file-sentinel' })),
+    ]);
+    for (const l of [noData, noMedia, noUrl]) {
+      expect(l.error.status).toBe(400);
+      expect(l.error.etype).toBe('invalid_request_error');
+      expect(l.error.message.startsWith('malformed request: ')).toBe(true);
+      expect(fam(l, 'unsupportedField')).toEqual([]);
+    }
+    expect(file.error.message).toBe('unsupported image source: image.file');
+    expect(fam(file, 'unsupportedField')).toEqual(['image.file']);
+    expect(JSON.stringify(file)).not.toContain('file-sentinel');
+  });
+
+  it('an http.client message carries the session, agent and every anthropic-beta line', async () => {
+    const l = await one(body(), {
+      headerLines: [
+        ['X-Claude-Code-Session-Id', 'sess-m'], ['x-claude-code-agent-id', 'agent-m'],
+        ['anthropic-beta', 'beta-one, beta-two'], ['Anthropic-Beta', 'beta-three'],
+      ],
+    });
+    expect([l.request.session_id, l.request.cache_key]).toEqual(['sess-m', 'ccrc:sess-m:agent-m']);
+    expect(fam(l, 'betaValue')).toEqual(['beta-one', 'beta-two', 'beta-three']);
+  });
+
+  it('an action under 64 Ki characters but past 128 KiB in UTF-8 bytes still reaches the driver', async () => {
+    const wide = '€'.repeat(50_000); // 50,000 characters, 150,000 UTF-8 bytes: past one argv string's limit
+    const l = await one(body({ messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: wide }] }] }));
+    expect(l.request.items).toEqual([out('call_fx1', wide)]);
   });
 });
