@@ -7,10 +7,11 @@ import {
   type StaleArchiveFacts, type StaleArchiveRow,
 } from '../src/archivedExpiry.js';
 import {
-  STALE_ARCHIVE_SWEEP_MS, staleArchivePass, type StaleArchiveDeps, type StaleArchiveMemory,
+  STALE_ARCHIVE_SWEEP_MS, paneFromLiveWord, staleArchivePass, transcriptMtimeVia, wokeAtVia, type StaleArchiveDeps, type StaleArchiveMemory,
 } from '../src/coord/staleArchive.js';
 import { ACTOR_FLAGS_CAP, ARCHIVE_IF_NO_PANE_CAP, CCD_ARGV } from '../src/ccdargv.js';
 import type { SessionRecord } from '../src/registry.js';
+import type { CcrcConfig } from '../src/config.js';
 
 const DAY = 86_400_000;
 const NOW = 1_790_000_000_000;
@@ -324,5 +325,45 @@ describe('staleArchivePass (L3)', () => {
     const h = harness();
     await twoPasses(h, [rec('a', { lifecycleUnmeasured: ['supervised'] })], LIVE);
     expect(h.ccd).toEqual([]);
+  });
+});
+
+describe('the arm\'s port builders', () => {
+  const cfg = { home: '/h', registryDir: '/reg', roster: { byId: new Map([['w', { configDirSuffix: '.c' }]]) } } as unknown as CcrcConfig;
+  const r = rec('a', { wrapper: 'w' });
+  const R = (res: Parameters<typeof transcriptMtimeVia>[3] extends (a: never) => Promise<infer T> ? T : never) => async () => res;
+  const stat = (o: { ok: true; mtimeMs: number } | { ok: false; reason: string }) => ({ statMeasured: async () => o }) as never;
+
+  it('an incomplete fallback is unreadable, not none', async () => {
+    expect(await transcriptMtimeVia(stat({ ok: false, reason: 'absent' }), cfg, r, R({ kind: 'fallback', path: '/p', complete: false }))).toBe('unreadable');
+  });
+  it('a complete fallback whose stat is absent is none', async () => {
+    expect(await transcriptMtimeVia(stat({ ok: false, reason: 'absent' }), cfg, r, R({ kind: 'fallback', path: '/p', complete: true }))).toBe('none');
+  });
+  it('a stat error is unreadable and a found stat is its mtime', async () => {
+    expect(await transcriptMtimeVia(stat({ ok: false, reason: 'error' }), cfg, r, R({ kind: 'found', path: '/p' }))).toBe('unreadable');
+    expect(await transcriptMtimeVia(stat({ ok: true, mtimeMs: 7 }), cfg, r, R({ kind: 'found', path: '/p' }))).toBe(7);
+  });
+  it('a found answer whose tail was unmeasured or that declined to a successor is unreadable', async () => {
+    expect(await transcriptMtimeVia(stat({ ok: true, mtimeMs: 7 }), cfg, r, R({ kind: 'found', path: '/p', tailUnmeasured: true }))).toBe('unreadable');
+    expect(await transcriptMtimeVia(stat({ ok: true, mtimeMs: 7 }), cfg, r, R({ kind: 'found', path: '/p', declinedTo: 'u2' }))).toBe('unreadable');
+  });
+  it('an unknown wrapper is unreadable', async () => {
+    expect(await transcriptMtimeVia(stat({ ok: true, mtimeMs: 7 }), cfg, rec('a', { wrapper: 'x' }), R({ kind: 'found', path: '/p' }))).toBe('unreadable');
+  });
+
+  const read = (o: { ok: true; content: string } | { ok: false; reason: string }) => ({ readFileMeasured: async () => o }) as never;
+  it('wokeAtVia: absent is null, unread or unparseable throws, a stamp is ms', async () => {
+    expect(await wokeAtVia(read({ ok: false, reason: 'absent' }), cfg, r)).toBeNull();
+    await expect(wokeAtVia(read({ ok: false, reason: 'error' }), cfg, r)).rejects.toThrow();
+    await expect(wokeAtVia(read({ ok: true, content: 'x' }), cfg, r)).rejects.toThrow();
+    expect(await wokeAtVia(read({ ok: true, content: '12\n' }), cfg, r)).toBe(12000);
+  });
+
+  it('paneFromLiveWord: only no-pane is absent', () => {
+    expect(paneFromLiveWord({ ok: true })).toBe('present');
+    expect(paneFromLiveWord({ ok: false, reason: 'no-pane' })).toBe('absent');
+    expect(paneFromLiveWord({ ok: false, reason: 'unmeasured' })).toBe('unmeasured');
+    expect(paneFromLiveWord({ ok: false, reason: 'no-config-dir' })).toBe('unmeasured');
   });
 });

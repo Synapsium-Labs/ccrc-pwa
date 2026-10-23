@@ -1,3 +1,4 @@
+// The stale-archive arm: L3, it gathers the facts and acts.
 import type { SessionRecord } from '../registry.js';
 import type { FleetState } from '../fleetstate.js';
 import type { Presence } from '../presence.js';
@@ -281,11 +282,16 @@ export function paneFromLiveWord(
  *  Only a proven absence is `none`; a stat that failed any other way is `unreadable`, which keeps the row. */
 export async function transcriptMtimeVia(
   io: Pick<FleetIO, 'statMeasured'>, cfg: CcrcConfig, rec: SessionRecord,
-  resolve: (a: { configDir: string; dir: string; registryWorkdir: string; uuid: string }) => Promise<{ path: string }>,
+  resolve: (a: { configDir: string; dir: string; registryWorkdir: string; uuid: string }) => Promise<
+    | { kind: 'found'; path: string; declinedTo?: string; tailUnmeasured?: true }
+    | { kind: 'fallback'; path: string; complete: boolean }>,
 ): Promise<number | 'none' | 'unreadable'> {
   const configDir = configDirFor(cfg, rec.wrapper);
   if (configDir === undefined) return 'unreadable';
-  const st = await io.statMeasured((await resolve({ configDir, dir: rec.workdir, registryWorkdir: rec.workdir, uuid: rec.uuid })).path);
+  const res = await resolve({ configDir, dir: rec.workdir, registryWorkdir: rec.workdir, uuid: rec.uuid });
+  // An incomplete search, or a found file whose successor may exist, is not an absence: keep the row.
+  if (res.kind === 'fallback' ? !res.complete : res.tailUnmeasured === true || res.declinedTo !== undefined) return 'unreadable';
+  const st = await io.statMeasured(res.path);
   return st.ok ? st.mtimeMs : st.reason === 'absent' ? 'none' : 'unreadable';
 }
 
