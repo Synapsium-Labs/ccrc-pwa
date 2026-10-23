@@ -12271,6 +12271,20 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     expectNoCodexWarn(r.stdout);
   });
 
+  it('FAILs a credential neither owned by this user nor at mode 0600 on the owner line, with no bare chmod line', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-owner-mode-');
+    const cred = join(authDirOf(home, 'codex-a'), 'auth.json');
+    // A non-owner cannot chmod the file (EPERM), so the owner line, whose remedy ends in the chmod, is the one line.
+    plantAuthLibStandIn(home, { credential: 'present', state: 'ok', mode: '0644', modeOk: false, ownerOk: false });
+    const r = runDoctor(home);
+    const re = new RegExp(`^FAIL codex: codex-a's credential ${reEsc(cred)} is not owned by this user, `, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe(`  remedy: make this user its owner (chown, as root), then chmod 600 ${cred}`);
+    expect(r.stdout).not.toMatch(/^FAIL codex: .*has mode /m);
+    expect(r.stdout).not.toMatch(/^ {2}remedy: chmod 600 /m);
+    expectNoCodexWarn(r.stdout);
+  });
+
   it('FAILs an empty status answer: auth-status-unreadable', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-auth-status-empty-');
     plantAuthLibStandIn(home, null);

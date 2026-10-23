@@ -12938,9 +12938,16 @@ _codex_unlock() {   # always rc 0
 #   CX_AUTH_LOCK_FD set; rc 0 with CX_AUTH_LOCK_FD EMPTY when there is
 #   nothing to hold: an authDir that does not exist (no credential to write),
 #   no `flock` on this box (as `_codex_lock`), or no library or no python3
-#   (`_codex_auth`'s rc 3: then no ccrc process can take this lock either,
-#   because the tier, the sign-in and every reader reach the credential only
-#   through that library). rc 1, with one refusal line and CX_AUTH_LOCK_FD
+#   on this shell's PATH (`_codex_auth`'s rc 3, D-TBD-auth-hold-no-library).
+#   That last arm is ACCEPTED UNSERIALISED, not proved safe. What holds: a
+#   tier started with no library file loads none and fails closed, and the
+#   sign-in and every reader reach the credential only through the library.
+#   What does not: a running tier keeps the library it loaded at its start
+#   (`_load_auth_library`, ccd/ccgpt-runtime, once per process) and runs it
+#   under the runtime's own interpreter, not this PATH's python3, so a library
+#   file gone since that start, or a removing shell with no python3 on PATH,
+#   leaves that tier able to take the lock while this answers 0 having held
+#   nothing. rc 1, with one refusal line and CX_AUTH_LOCK_FD
 #   empty, on a timeout, on a `paths` answer it cannot read, on a lock path
 #   that cannot be opened, and on a symlink or any other non-regular file at
 #   the lock path, which is refused WITHOUT being opened (`held`'s
@@ -24748,8 +24755,9 @@ _uninst_codex_usage() {
 # verbs: ccd's placements do NOT wait on it (ccd/ccd's "A RE-READ, NOT A LOCK"),
 # so a session can be placed on the lane while this waits. So a run that waited
 # sets ACCT_USAGE_WAITED, and the caller takes its liveness census again before
-# it stops a tier or moves anything. One poll is a token refresh plus one
-# request the publisher bounds at 30 s (the unit's own comment).
+# it stops a tier or moves anything. One poll is one request the publisher
+# bounds at 30 s (the unit's own comment); since codex-bridge Stage 1 it makes
+# no token refresh.
 #
 # ASKED ONLY WHERE A POLL CAN RUN: on Linux, with ccrc's template
 # `ccrc-codex-usage@.service` placed in the unit directory, whether or not the
@@ -24795,7 +24803,7 @@ _acct_remove_usage() {   # <id> <what-still-stands>
         return 0 ;;
     esac
     if [ "$said" -eq 0 ]; then
-      printf '%s\n' "$PROG account remove: ccrc's usage poll $s is running ($state); waiting up to ${limit}s for it to finish before \$HOME/.cc-limits/$1.json is removed. ccrc never stops it: it may be writing the lane's OAuth token file." >&2
+      printf '%s\n' "$PROG account remove: ccrc's usage poll $s is running ($state); waiting up to ${limit}s for it to finish before \$HOME/.cc-limits/$1.json is removed. ccrc never stops it, and a row removed under a running poll is written again." >&2
       said=1; ACCT_USAGE_WAITED=1
     fi
     if [ $(( SECONDS - t0 )) -ge "$limit" ]; then
@@ -24809,7 +24817,7 @@ _acct_remove_usage() {   # <id> <what-still-stands>
           still="$still Except ccrc's usage timer $u: it is not enabled, and this run did not disable it, so it does not stand; 'ccrc install' enables it again for a lane that is still codex."
         fi
       fi
-      _acct_refuse 1 usage-refresh-in-flight "ccrc's usage poll $s for $1 still reads $state after ${limit}s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before \$HOME/.cc-limits/$1.json: ccrc never stops a poll, because it may be writing the lane's OAuth token file, and a row removed under a running poll is written again. $timer $still Retry 'ccrc account remove --id $1' once 'systemctl --user is-active $s' reads inactive: every step this run took is safe to repeat."
+      _acct_refuse 1 usage-refresh-in-flight "ccrc's usage poll $s for $1 still reads $state after ${limit}s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before \$HOME/.cc-limits/$1.json: ccrc never stops a poll, and a row removed under a running poll is written again. $timer $still Retry 'ccrc account remove --id $1' once 'systemctl --user is-active $s' reads inactive: every step this run took is safe to repeat."
     fi
     sleep 1
   done

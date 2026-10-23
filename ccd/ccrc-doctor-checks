@@ -7076,6 +7076,10 @@ _dr_cx_runtime() {
 # name), with its own remedy:
 #   - library or python3 missing (rc 3): auth-library-absent, `ccrc update`;
 #   - no answer it can read (rc 1): auth-status-unreadable, `ccrc update`;
+#   - `ownerOk` false: the owner, then the mode. It is tested FIRST: a
+#     non-owner cannot run a bare `chmod` (EPERM), and its remedy already ends
+#     in the `chmod 600`, so a credential both foreign-owned and the wrong mode
+#     gets this one line;
 #   - `modeOk` false: `chmod 600 <the path `paths` answers>`, and it is the
 #     ONLY credential line, because a 0000 file also reads `unreadable` (the
 #     library's open is refused) and "move it aside" would discard a credential
@@ -7083,7 +7087,6 @@ _dr_cx_runtime() {
 #     there, or the path is not a regular file (a symlink, a FIFO, a
 #     directory), whose lstat mode is not the credential's, so it takes the
 #     `unreadable` arm below and never a chmod, which would follow a symlink;
-#   - `ownerOk` false: the owner, then the mode;
 #   - `absent`/`incomplete`: not signed in, `ccrc codex login <id>` (start's
 #     own words for its not-logged-in refusal);
 #   - `unreadable`/`foreign-family`: move it aside, then sign in again;
@@ -7114,14 +7117,14 @@ _dr_cx_auth() {   # <id> <authDir> — records at most one credential finding, o
       return 0
     fi
   fi
-  if [ "${mok:-}" = false ]; then
-    _dr_cx_fail "$id's credential $cred has mode $mode, and a lane's credential is readable and writable by its owner alone: one that others can read leaks the lane's tokens, and one its owner cannot read stops the lane" \
-      "chmod 600 $cred"
-    return 0
-  fi
   if [ "${ook:-}" = false ]; then
     _dr_cx_fail "$id's credential $cred is not owned by this user, so another user can replace what the lane signs in with" \
       "make this user its owner (chown, as root), then chmod 600 $cred"
+    return 0
+  fi
+  if [ "${mok:-}" = false ]; then
+    _dr_cx_fail "$id's credential $cred has mode $mode, and a lane's credential is readable and writable by its owner alone: one that others can read leaks the lane's tokens, and one its owner cannot read stops the lane" \
+      "chmod 600 $cred"
     return 0
   fi
   case "$CX_AUTH_CRED" in

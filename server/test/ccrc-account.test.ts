@@ -6226,7 +6226,7 @@ describe('ccrc account remove', () => {
     // THE ORDER IS THE CLAIM: every read saw the row AND the roster entry still standing.
     expect(usageSvcCalls(home)).toEqual(Array(3).fill(`--user is-active ${SVC} row=present roster=named`));
     expect(r.stderr.split('\n').filter((l) => l.startsWith('ccrc account remove: '))).toEqual([
-      `ccrc account remove: ccrc's usage poll ${SVC} is running (active); waiting up to 30s for it to finish before $HOME/.cc-limits/ext-a.json is removed. ccrc never stops it: it may be writing the lane's OAuth token file.`]);
+      `ccrc account remove: ccrc's usage poll ${SVC} is running (active); waiting up to 30s for it to finish before $HOME/.cc-limits/ext-a.json is removed. ccrc never stops it, and a row removed under a running poll is written again.`]);
     expect(usageCtlCalls(home)).toEqual(['--user disable --now ccrc-codex-usage@ext-a.timer']);
     expect(lexists(link)).toBe(false);
     expect(existsSync(row), 'the limits row survived the removal').toBe(false);
@@ -6246,7 +6246,7 @@ describe('ccrc account remove', () => {
     const j = oneObject(r);
     expect(j['error']).toBe('usage-refresh-in-flight');
     const detail = String(j['detail']);
-    expect(detail.startsWith(`ccrc's usage poll ${SVC} for ext-a still reads activating after 2s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before $HOME/.cc-limits/ext-a.json: ccrc never stops a poll, because it may be writing the lane's OAuth token file, and a row removed under a running poll is written again.`), detail).toBe(true);
+    expect(detail.startsWith(`ccrc's usage poll ${SVC} for ext-a still reads activating after 2s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before $HOME/.cc-limits/ext-a.json: ccrc never stops a poll, and a row removed under a running poll is written again.`), detail).toBe(true);
     expect(detail).toContain('ccrc\'s usage timer ccrc-codex-usage@ext-a.timer is not enabled, so no new poll starts.');
     expect(detail).toContain('The roster entry and all account artifacts still stand');
     // P9: THIS run disabled the timer, so the refusal corrects the clause that says what stands, in one sentence.
@@ -7132,7 +7132,7 @@ describe('ccrc account remove', () => {
 describe('ccrc account remove: a codex lane takes the auth library\'s lock (codex-bridge Stage 1, Task 9)', () => {
   const itHold = it.skipIf(!PY3 || !HAVE_FLOCK);
 
-  async function authHoldBox(prefix: string): Promise<{
+  async function authHoldBox(prefix: string, opts: { credential?: boolean } = {}): Promise<{
     home: string; authDir: string; lock: string; launcher: string; roster: string; rosterBefore: string; laneOnly: string[];
   }> {
     const home = box(prefix);
@@ -7143,7 +7143,7 @@ describe('ccrc account remove: a codex lane takes the auth library\'s lock (code
     const { laneOnly } = plantLaneState(home, lane);
     plantTmux(home, []);
     const authDir = join(home, lane.exec.authDir);
-    plantBackendCredential(authDir);
+    if (opts.credential !== false) plantBackendCredential(authDir);
     // The library this tree ships, placed where `_codex_auth_lib` reads it.
     copyFileSync(join(REPO, 'ccd', 'ccgpt-auth.py'), join(home, '.local', 'bin', 'ccgpt-auth.py'));
     const roster = join(home, '.ccrc', 'accounts.json');
@@ -7155,7 +7155,7 @@ describe('ccrc account remove: a codex lane takes the auth library\'s lock (code
   function removeProbed(home: string, lock: string): Result & { calls: string[]; ms: number } {
     const calls = join(home, 'auth-lock-calls');
     const stubs = [
-      `_codex_stop_lane() { if flock -n '${lock}' true 2>/dev/null; then echo auth=free; else echo auth=held; fi >> '${calls}'`,
+      `_codex_stop_lane() { if [ ! -e '${path.dirname(lock)}' ]; then echo auth=no-authdir; elif flock -n '${lock}' true 2>/dev/null; then echo auth=free; else echo auth=held; fi >> '${calls}'`,
       `  if [ -e '${join(home, 'holder-released')}' ]; then echo after-release >> '${calls}'; fi; return 0; }`,
       '_codex_tier_ours() { return 1; }',
     ].join('\n');
@@ -7198,6 +7198,20 @@ describe('ccrc account remove: a codex lane takes the auth library\'s lock (code
       expect(r.ms, 'the removal did not wait for the holder').toBeGreaterThanOrEqual(1500);
       expect(readFileSync(b.roster, 'utf8')).not.toBe(b.rosterBefore);
     } finally { endHolder(holder); }
+  });
+
+  itHold('a lane never signed in (no authDir) holds nothing and is removed, creating no authDir and no lock', async () => {
+    // The library is placed, so `_codex_auth paths` answers: only the absent-authDir arm stands between the hold and
+    // an open of a lock file in a directory that does not exist (auth-lock-unusable, codex-reap-failed).
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-noauthdir-', { credential: false });
+    expect(existsSync(b.authDir)).toBe(false);
+    const r = removeProbed(b.home, b.lock);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['ok'], r.stderr).toBe(true);
+    expect(r.calls, 'the tiers were not stopped once').toEqual(['auth=no-authdir']);
+    expect(existsSync(b.authDir), 'the removal created the authDir').toBe(false);
+    expect(existsSync(b.lock), 'the removal created an auth lock').toBe(false);
+    expect(readFileSync(b.roster, 'utf8')).not.toBe(b.rosterBefore);
   });
 
   itHold('a holder past the bound refuses codex-reap-failed, nothing removed', async () => {
