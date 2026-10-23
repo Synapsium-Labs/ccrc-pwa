@@ -9894,10 +9894,14 @@ function renderAskBrief(
 //       this one does not is pending again (R102), so its last lines are read once more after it ends. A pass forgets nothing of an owner a
 //       NEWER pass has listed or re-pended (R107, the `listedBy` stamp): a cut pass's late flush can land after it. Until it is read its listed hours,
 //       and its measured hours not yet closed (R106), are lost windows. An hour that leaves the read horizon before the owner is read is
-//       STAGED as a gap with a LOSS word (`hour-never-closed`, never a carve-out word) for the pass's flush, and leaves the memory as it is staged;
-//       the owner is forgotten once it has no listed hour left: so the memory is bounded by the read horizon (and `lastListed` by the live
-//       sessions). A failed flush is covered by the next recovery's not-ready window; an R82 pre-write refusal of that gap's own bucket
-//       would drop it unrecorded, and nothing known produces one.
+//       STAGED as a gap with a LOSS word (`hour-never-closed`, never a carve-out word) for the pass's flush, and leaves the memory as it is staged,
+//       except an hour D-6471 deferred (below), which leaves only once its gap is durable (a later pass finds the row); the owner is
+//       forgotten once it has no listed hour left: so the memory is bounded by the read horizon (and `lastListed` by the live sessions),
+//       with one edge, D-6471's (review 838 F4): under a STANDING R82 pre-write refusal of a deferred hour's gap bucket the row never lands,
+//       so the hour stays in memory past the horizon and its lost window keeps holding overlapping candidates. Only an R82 refusal reaches
+//       it, nothing known produces one, and the hold is the safe direction (no candidate leases over an unwritten loss); bounding it is
+//       wave 4's. A failed flush is covered by the next recovery's not-ready window; an R82 pre-write refusal of a non-deferred hour's gap
+//       bucket would drop it unrecorded, and nothing known produces one.
 //     - THE HOURS AN `unreadable` INCARNATION DEFERS (D-6471, the operator's "Fix first, then soak"; `owed` on the `(id, null)` owner).
 //       A census pass that reads a session's registry generation `unreadable` (an agent reconnecting reads every live one so) stages no
 //       stand-in gap for the hour when the lane holds the session's prior incarnation P (the last listing, a pending owner, else the
@@ -11356,10 +11360,12 @@ class DelegationLane {
   /**
    * R89: a listed hour of a pending owner that has LEFT THE READ HORIZON before any observation of it completed can never be read: it is
    * STAGED as a gap with a LOSS word for the pass's flush, never `directory-absent` or `capability-absent` (nothing measured either),
-   * under the owner's incarnation (the stand-in for an unmeasured one, whose own word it keeps), and leaves the memory as it is staged (an
-   * hour D-6471 deferred only once its gap is durable: the next pass finds the row); an owner with no listed hour left is forgotten. So the memory is bounded by the read horizon. The two edges: a flush that fails is covered by
-   * the next recovery's not-ready window, and an R82 pre-write refusal of that gap's own bucket would drop it unrecorded (nothing known
-   * produces one).
+   * under the owner's incarnation (the stand-in for an unmeasured one, whose own word it keeps: an hour D-6471 deferred says `unreadable`,
+   * the reason it was deferred under), and leaves the memory as it is staged; an owner with no listed hour left is forgotten. So the memory
+   * is bounded by the read horizon. D-6471: a DEFERRED hour leaves (`hours` and `owed`) only once its gap is durable (a later pass's noteGap
+   * finds the row), so a failed or refused flush stages it again; under a standing R82 refusal of its bucket it never leaves (review 838
+   * F4: the safe direction, bounded in wave 4). The two edges of a non-deferred hour: a flush that fails is covered by the next recovery's
+   * not-ready window, and an R82 pre-write refusal of that gap's own bucket would drop it unrecorded (nothing known produces one).
    */
   private async expirePendingOwners(pass: LanePass, durable: DelegationDurability): Promise<void> {
     for (const [k, p] of [...this.pendingOwners]) {
@@ -11367,10 +11373,10 @@ class DelegationLane {
         if (this.readable(hourMs, pass.now)) continue;
         if (pass.signal.aborted) return;
         const detail = p.incarnation === null
-          ? laneIncarnationGap(p.reason)
+          ? laneIncarnationGap(p.owed?.has(hourMs) === true ? 'unreadable' : p.reason)      // D-6471 (review 838 F3): an owed hour was deferred under `unreadable`
           : `${DELEGATION_HOUR_NEVER_CLOSED}: listed in this hour, and never read before the hour left the read horizon`;
         // D-6471: a deferred hour stays (owed) until its loss gap is durable: a later pass finds the row and lets it go
-        if (await this.noteGap(pass, durable, p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs, detail) || !p.owed?.has(hourMs)) p.hours.delete(hourMs);
+        if (await this.noteGap(pass, durable, p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs, detail) || !p.owed?.has(hourMs)) { p.hours.delete(hourMs); p.owed?.delete(hourMs); }
       }
       if (p.hours.size === 0) this.pendingOwners.delete(k);
     }

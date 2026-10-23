@@ -4934,6 +4934,19 @@ describe('D-6471 (wave-3 follow-up 9): an `unreadable` incarnation defers its ho
   };
   const healthOfH = (w: World) => delegationHealthWindowOf(intervalsOf(w.home), H + DELEGATION_HOUR_MS);
   const quiet = (): void => { vi.spyOn(console, 'warn').mockImplementation(() => {}); };
+  /** F7 (review 838): passes at `t0 + i * STEP` from i = 1 until the first one after which the applier is ready and not failed: the first
+   *  completed pass after the in-process recovery. Returns its index. */
+  const untilRecovered = async (w: World, t0: number, incs: Record<string, ParentIncarnation>): Promise<number> => {
+    for (let i = 1; i < 12; i++) {
+      await passAt(w, t0 + i * STEP, incs);
+      const applier = (await w.watcher.delegationApplier())!;
+      if (applier.failure() === null && applier.state().phase === 'ready') return i;
+    }
+    throw new Error('the applier never recovered');
+  };
+  const HOUR11 = '2026-10-15T11:00:00.000Z';
+  const HOUR12 = '2026-10-15T12:00:00.000Z';
+  const changing: ParentIncarnation = { kind: 'unmeasured', reason: 'changing' };
 
   it('R-A (the 17:00Z shape): measured, then one `unreadable` pass, then measured again with nothing new: the hour is discharged, no stand-in row, and it counts measured', async () => {
     for (const [p2, p3] of [[at(1), at(2)], [H + DELEGATION_HOUR_MS - 30_000, H + DELEGATION_HOUR_MS + 30_000]] as const) {
@@ -5001,8 +5014,9 @@ describe('D-6471 (wave-3 follow-up 9): an `unreadable` incarnation defers its ho
     expect((await w.watcher.delegationApplier())!.failure(), 'failed closed').not.toBeNull();
     expect(standIn(w, 'demo-a'), 'nothing of the failed pass is durable').toBeUndefined();
     expect(await owed(w, 'demo-a'), 'the loss gap is not durable, so the hour stays owed').toBe(true);
-    for (let i = 1; i < 8; i++) await passAt(w, EXPIRED + i * STEP, { 'demo-a': unreadable, 'demo-b': measured() });
-    expect(standIn(w, 'demo-a'), 'the gap landed after the recovery').toMatchObject({ state: 'unmeasured', detail: LOSS });
+    const first = await untilRecovered(w, EXPIRED, { 'demo-a': unreadable, 'demo-b': measured() });
+    expect(standIn(w, 'demo-a'), 'the gap landed in the first completed pass after the recovery').toMatchObject({ state: 'unmeasured', detail: LOSS });
+    await passAt(w, EXPIRED + (first + 1) * STEP, { 'demo-a': unreadable, 'demo-b': measured() });
     expect(await owed(w, 'demo-a'), 'and, durable, it left the memory').toBe(false);
   });
 
@@ -5069,8 +5083,8 @@ describe('D-6471 (wave-3 follow-up 9): an `unreadable` incarnation defers its ho
     await passAt(w, at(2), { 'demo-a': measured() });
     expect((await w.watcher.delegationApplier())!.failure(), 'failed closed').not.toBeNull();
     expect(await owed(w, 'demo-a'), 'still owed after the failed flush').toBe(true);
-    for (let i = 3; i < 9; i++) await passAt(w, at(i), { 'demo-a': measured() });
-    expect(await owed(w, 'demo-a'), 'discharged after the recovery').toBe(false);
+    await untilRecovered(w, at(2), { 'demo-a': measured() });
+    expect(await owed(w, 'demo-a'), 'discharged in the first completed pass after the recovery').toBe(false);
     expect(standIn(w, 'demo-a')).toBeUndefined();
     expect(disk(w.home).journalLines, 'the line was read after the recovery').toBe(1);
   });
@@ -5178,6 +5192,82 @@ describe('D-6471 (wave-3 follow-up 9): an `unreadable` incarnation defers its ho
     expect(intervalFor(w.home, 'demo-a'), 'P read `directory-absent`').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^directory-absent/) });
     for (const t of [CLOSED, EXPIRED, EXPIRED + STEP]) await passAt(w, t, { 'demo-a': measured() });
     expect(standIn(w, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+
+  it('R-B (F1, review 838): an expired owed hour whose gap is durable leaves `owed` as well as `hours` (the owner lives on through another owed hour)', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });                                           // H owed
+    await passAt(w, CLOSED, {});                                                                // 11:03, nobody listed: the checkpoint arm closes (P, H)
+    await passAt(w, at(60), { 'demo-a': measured() });                                          // 11:30: (demo-a, P, 11) on file; H is closed, so not read
+    await passAt(w, at(61), { 'demo-a': unreadable });                                          // H+1 owed
+    for (const t of [EXPIRED, EXPIRED + STEP]) await passAt(w, t, { 'demo-a': unreadable });
+    expect(standIn(w, 'demo-a'), 'H expired as its loss').toMatchObject({ state: 'unmeasured', detail: LOSS });
+    // no behaviour reads an expired hour's `owed` entry (its only reader past the horizon is the J branch's `listedBy` stamp), so the
+    // lane's private pending memory is read directly, as `owed` reads `pendingWindows`
+    const lane = (w.watcher as unknown as { delegationLane(): { pendingOwners: Map<string, { hours: Set<number>; owed?: Map<number, string> }> } }).delegationLane();
+    const p = lane.pendingOwners.get(JSON.stringify(['demo-a', null]));
+    expect(p?.hours.has(H + DELEGATION_HOUR_MS), 'H+1 is still owed, so the owner is still there').toBe(true);
+    expect(p?.owed?.has(H), 'H left `owed` with its hour').toBe(false);
+  });
+
+  it('R-B (F3, review 838): an owed hour\'s expiry gap says `unreadable`, the reason it was deferred under, whatever the owner was listed as since', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });                                           // H owed
+    await passAt(w, at(60), { 'demo-a': changing });                                            // H+1 listed `changing`: its own gap
+    expect(standIn(w, 'demo-a', HOUR11)).toMatchObject({ state: 'unmeasured', detail: 'incarnation-unmeasured: the parent\'s registry incarnation is changing' });
+    for (const t of [EXPIRED, EXPIRED + STEP]) await passAt(w, t, { 'demo-a': changing });
+    expect(standIn(w, 'demo-a'), 'H was deferred under `unreadable`').toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+
+  it('R-G (capability absent; F5, X2): a read of P while the fleet does not offer the capability never discharges: the owed hour expires as its loss gap', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    w.fleet.ccdVerbs = ['caps', 'ws-rm'];                                                       // an old fleet: no capability token
+    await passAt(w, at(2), { 'demo-a': measured() });
+    expect(intervalFor(w.home, 'demo-a'), 'P read `capability-absent`').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^capability-absent/) });
+    expect(await owed(w, 'demo-a'), 'a carve-out read: still owed').toBe(true);
+    for (const t of [CLOSED, EXPIRED, EXPIRED + STEP]) await passAt(w, t, { 'demo-a': measured() });
+    expect(standIn(w, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+
+  it('R-D (iii; F6, X5): a live read of P whose bucket the applier refuses before writing (R82) discharges nothing; the pass that applies it does', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', iso(at(1) + 10_000)));             // so P's read stages a cursor
+    // every application of demo-a's bucket is refused before anything is written (its cursor's anchor starts past its cursor), as the R82 rows do
+    const real = DelegationDurability.prototype.applyAcceptedBatch;
+    const refuse = vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementation(function (this: DelegationDurability, batches) {
+      return real.call(this, batches.map((b) => (b.cursor !== null && b.cursor.sessionId === 'demo-a'
+        ? { ...b, cursor: { ...b.cursor, anchor: { start: b.cursor.cursor + 1, sha256: 'a'.repeat(64) } } } : b)));
+    });
+    quiet();
+    await passAt(w, at(2), { 'demo-a': measured() });
+    expect((await w.watcher.delegationApplier())!.failure(), 'a pre-write refusal: the applier is not failed').toBeNull();
+    expect(await owed(w, 'demo-a'), 'refused: still owed').toBe(true);
+    refuse.mockRestore();
+    await passAt(w, at(3), { 'demo-a': measured() });
+    expect(await owed(w, 'demo-a'), 'applied: discharged').toBe(false);
+    expect(standIn(w, 'demo-a')).toBeUndefined();
+  });
+
+  it('R-E (iv; the text\'s M9): deferral is decided per hour, never from the owner\'s last listed reason: H+2 defers although the owner was last listed `changing` (in H+1)', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });                                           // H owed: it keeps the `(id, null)` owner alive
+    await passAt(w, at(60), { 'demo-a': changing });                                            // H+1: `changing`, its gap
+    await passAt(w, at(120), { 'demo-a': measured() });                                         // 12:30: (demo-a, P, 12) on file
+    await passAt(w, at(121), { 'demo-a': unreadable });
+    expect(standIn(w, 'demo-a', HOUR12), 'H+2 was never listed for a gap: deferred').toBeUndefined();
+    expect(await owed(w, 'demo-a', H + 2 * DELEGATION_HOUR_MS)).toBe(true);
   });
 
   it('R-H (M6): a session first listed `unreadable` has no prior incarnation: today\'s immediate stand-in gap', async () => {
