@@ -1500,9 +1500,10 @@ describe('ccrc install: the fixture tree', () => {
     // auth library `ccgpt-auth.py` joined the same way in codex bridge Stage 1
     // Task 5, so all five are COPIED from the repository like every other
     // executable. They are never stubbed: a stub once let a placement pass
-    // here while a real tree would die (D-3165). The pin this case replaced held both OUT of the
-    // fixture tree (and `ccgpt-runtime` in the repository) until that commit,
-    // and flipping it was that commit's intended red.
+    // here while a real tree would die (D-3165). The pin this case replaced
+    // held the Plan 2b-2 pair OUT of the fixture tree (and `ccgpt-runtime` in
+    // the repository) until their commit, and flipping it was that commit's
+    // intended red.
     //
     // And NOT `ccgpt` (D-3478): on a live fleet box `$HOME/.local/bin/ccgpt`
     // is another repository's launcher, so the repository ships no file of that
@@ -2185,7 +2186,9 @@ describe('ccrc install: the executables and files it installs', () => {
     // the commit that wrote its source, because `_inst_atomic` dies on a
     // missing source by design. So this case covered only the two `.py`
     // files until Plan 2b-2 placed `ccgpt-runtime` and `ccrc-codex`, and it
-    // was extended to four in the commit that placed them.
+    // was extended to four in the commit that placed them, and to five when
+    // codex bridge Stage 1 Task 5 placed the auth library `ccgpt-auth.py`,
+    // first.
     const { home } = installed;
     for (const name of GPT_LANE_BINS) {
       const bin = join(home, '.local', 'bin', name);
