@@ -792,7 +792,7 @@ whole time, which is the only prevention this ordering rule buys.
    wait**), do not start the wait: report the exit to the operator and leave the
    landing stopped; otherwise wait for them in the foreground —
    `gh pr checks <pr> --required --watch`, again if the call times out —
-   never by ending your turn: no mail comes when checks finish, then run the
+   never by ending your turn: no mail comes when checks finish; then run the
    verdict again. Whichever arm led back to the verdict, a `ROUTE Q` answer
    does not skip this gate: never enqueue on a verdict without an exit `0` read
    after it. On `1`, run the verdict again: a `RED` goes to the `RED`

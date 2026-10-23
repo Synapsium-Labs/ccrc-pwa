@@ -3049,7 +3049,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(para).toContain('every required name the verdict discovered passes on the head, and `gh pr checks <pr> --required` exits 0: for any other PR gh arms auto-merge instead of queueing it,');
     expect(para).toContain('The `--required` exit decides, and a `ROUTE Q` answer does not waive it.');
     expect(para).toContain('On `0`, go on under this gate and the read-back below.');
-    expect(para).toContain('On `8` (pending), if this landing attempt\'s bounded wait is already spent (§5b, **After a bounded wait**), do not start the wait: report the exit to the operator and leave the landing stopped; otherwise wait for them in the foreground — `gh pr checks <pr> --required --watch`, again if the call times out — never by ending your turn: no mail comes when checks finish, then run the verdict again. Whichever arm led back to the verdict, a `ROUTE Q` answer does not skip this gate: never enqueue on a verdict without an exit `0` read after it.');
+    expect(para).toContain('On `8` (pending), if this landing attempt\'s bounded wait is already spent (§5b, **After a bounded wait**), do not start the wait: report the exit to the operator and leave the landing stopped; otherwise wait for them in the foreground — `gh pr checks <pr> --required --watch`, again if the call times out — never by ending your turn: no mail comes when checks finish; then run the verdict again. Whichever arm led back to the verdict, a `ROUTE Q` answer does not skip this gate: never enqueue on a verdict without an exit `0` read after it.');
     expect(para).toContain('On `1`, run the verdict again: a `RED` goes to the `RED` rule of §5b, which limits a rerun to the kind it names and never reruns unconditionally; a `ROUTE Q` answer is the stop `checks-gate-unread`; any other line goes by its bullet in §5b.');
     expect(para).toContain('On any other exit the stop is `checks-gate-unread` too. Stop `checks-gate-unread` means: report the exit and the whole output, and never enqueue, arm, retry or choose another route by hand.');
     expect(para).toContain('gh\'s "no required checks reported" and "no checks reported" are an exit `1`: with a `ROUTE Q` answer they are this stop, which is deliberately conservative on a queue repository, not support promised by an empty required set, and it does not touch a repository whose required checks gh reports.');
@@ -3083,7 +3083,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       'Enqueue only a PR whose required checks have all passed — every required name the verdict discovered passes on the head, and `gh pr checks <pr> --required` exits 0: for any other PR gh arms auto-merge instead of queueing it, and prints the same "will be added to the merge queue … when ready" line either way.',
       'The `--required` exit decides, and a `ROUTE Q` answer does not waive it.',
       'On `0`, go on under this gate and the read-back below.',
-      'On `8` (pending), if this landing attempt\'s bounded wait is already spent (§5b, **After a bounded wait**), do not start the wait: report the exit to the operator and leave the landing stopped; otherwise wait for them in the foreground — `gh pr checks <pr> --required --watch`, again if the call times out — never by ending your turn: no mail comes when checks finish, then run the verdict again.',
+      'On `8` (pending), if this landing attempt\'s bounded wait is already spent (§5b, **After a bounded wait**), do not start the wait: report the exit to the operator and leave the landing stopped; otherwise wait for them in the foreground — `gh pr checks <pr> --required --watch`, again if the call times out — never by ending your turn: no mail comes when checks finish; then run the verdict again.',
       'Whichever arm led back to the verdict, a `ROUTE Q` answer does not skip this gate: never enqueue on a verdict without an exit `0` read after it.',
       'On `1`, run the verdict again: a `RED` goes to the `RED` rule of §5b, which limits a rerun to the kind it names and never reruns unconditionally; a `ROUTE Q` answer is the stop `checks-gate-unread`; any other line goes by its bullet in §5b.',
       'On any other exit the stop is `checks-gate-unread` too.',
@@ -3183,7 +3183,6 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(prose.slice(from, to).trim()).toBe(list);
   });
 
-  // The boundary paragraph, whole, for the same reason: its residual is stated once and nothing can be appended to it.
   // The requested-change section, whole: its fragments are pinned above, and this one proves nothing is appended to the
   // intro, the address and ignore lines, or the CR_IGNORE paragraph (a sentence that starts a fresh bounded wait, or a new
   // attempt, on an ignore answer or a dequeue).
@@ -3229,21 +3228,23 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(prose.slice(from).trim()).toBe(whole);
   });
 
-  // The section's opening, whole, up to the verdict-line list: why every landing reads the repository first.
-  it('pins the whole opening of §5b, from the first sentence to the verdict lines (the intro pin)', () => {
-    const from = prose.indexOf('Before every landing, on every project');
+  // The section's opening, whole, from its heading (nothing may sit between the heading and the first sentence) up to the
+  // verdict-line list: why every landing reads the repository first.
+  it('pins the whole opening of §5b, from its heading to the verdict lines (the intro pin)', () => {
     const to = prose.indexOf('Run it once the review is clean');
-    expect(from, '§5b lost its opening').toBeGreaterThanOrEqual(0);
-    expect(to, 'the opening lost the verdict lines that follow it').toBeGreaterThan(from);
+    expect(prose.startsWith('### 5b — The landing route, from the repository\'s own rules '), '§5b does not begin at its heading').toBe(true);
+    expect(to, 'the opening lost the verdict lines that follow it').toBeGreaterThan(0);
     const whole = [
+      '### 5b — The landing route, from the repository\'s own rules',
       'Before every landing, on every project, this session reads the PR\'s repository and lands only by the route its rules give (spec 2026-09-23 §5.7).',
       'The reads run fresh each time, never from memory, because the operator can change any of them between two PRs.',
       'They are the block below, the **landing verdict**: run it from your own session, in a checkout of the PR\'s repository, with `<pr>` and `<handoffCommit>` filled in.',
       'It makes GETs only, prints exactly one line, and never merges, enqueues or writes a setting.',
     ].join(' ');
-    expect(prose.slice(from, to).trim()).toBe(whole);
+    expect(prose.slice(0, to).trim()).toBe(whole);
   });
 
+  // The boundary paragraph, whole, for the same reason: its residual is stated once and nothing can be appended to it.
   it('pins the whole boundary paragraph: the re-read before each landing, the residual, the queued-request action (the boundary pin)', () => {
     const from = prose.indexOf('This session reads again before each enqueue');
     const to = prose.indexOf('**A stop.**');
