@@ -2025,7 +2025,7 @@ export class FleetWatcher {
    *
    * The send starts only AFTER the mark committed, is `void`ed and is never retried
    * (D-3295): at most once, because a repeated "vX is out" is the noise the persisted
-   * mark exists to stop, and a missed one is still shown by the banner and the settings screen.
+   * mark exists to stop, and a missed one is still shown by the update line and the settings screen.
    *
    * Sessionless (D-3296): no `sessionId`, no presence gate, no `NotifyLog` or feed record —
    * `pushOne` is about a session and this is about the fleet. A server-role process only: the push

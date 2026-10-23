@@ -623,11 +623,13 @@ export const INHERITED_GROUNDS = {
     why: 'the theme row\'s label: unselected it inherits the settings page, selected its row paints --accent-tint',
   },
   // ── the fleet's update line (UpdateIndicator.tsx, D-6327) ───────────────
-  // The quiet "↑ vX available" door and its stale words sit on whichever bar holds them, and set an ink on no ground of
-  // their own: Refined's app bar paints `--bg-surface` (shell.css `.shell-accounts`), Instrument's status bar and both
-  // skins' phone rows sit on the page (`--bg-page`: instrument.css `.ins-status`, the fleet column). Both are
-  // registered because the one rule moves between them with the skin and the width; grounding it on one would leave
-  // the other unmeasured. `--accent` and `--ink-tertiary` on those two are token pairs the gate already holds.
+  // The quiet "↑ vX available" door and its stale words sit wherever the skin and the width put them, and set an ink on
+  // no ground of their own. Every placement is on the page (`--bg-page`): Refined's desk row in `.shell-banners` under
+  // the bar paints no ground of its own (refined.css, shell.css), so it shows the page from `body`; Instrument's status
+  // bar paints `--bg-page` (instrument.css `.ins-status`); both skins' phone rows sit in the page. `--bg-surface`
+  // stays registered as the other ground a bar paints (Refined's bar, `shell.css` `.shell-accounts`, held the line
+  // there before the ruled move to a row), so a placement moved back onto a bar is measured too. `--accent` and
+  // `--ink-tertiary` on those two are token pairs the gate already holds.
   '.update-indicator-door': {
     under: ['var(--bg-page)', 'var(--bg-surface)'],
     why: "the fleet's update line: Refined's app bar paints --bg-surface, Instrument's status bar and the phone rows sit on --bg-page. Its selector names no painted ancestor",

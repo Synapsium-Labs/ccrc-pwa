@@ -1,13 +1,14 @@
 // UpdateIndicator — the fleet's "a release is out" line (D-6327), one quiet door to Settings › Updates. It replaced
-// the full-width banner: an available release asks for nothing now, so it is a word in a bar, not a band that pushes
-// the fleet down. Every action the banner offered (Update all, See what's new, the halt's reason) lives in Settings ›
-// Updates, one tap away through this door.
+// the full-width banner: an available release asks for nothing now, so it is a word in a bar (Instrument's status
+// bar) or one 44 px row (Refined's desk, under the bar; the phone rows). The row does move content down while a
+// release waits, and the dismiss × is how it goes. Every action the old banner offered (Update all, See what's new,
+// the halt's reason) lives in Settings › Updates, one tap away through this door.
 //
 // WHAT IT SAYS is `releaseWaitingWords(view)` and nothing else of its own (releaseWaiting.ts; Settings' index line
 // builds on the same words, so the two never disagree), and it speaks iff `bannerRelease` names a waiting release over
 // the shell's one updates poll (`useFleetChrome().updates`). No view yet, or none waiting: it renders nothing.
-// UNREACHABLE IS NOT CURRENT still holds, in `bannerRelease`. The banner's channel-and-what-runs sentence stays one
-// hover away, as the door's `title` (`updateBannerText`).
+// UNREACHABLE IS NOT CURRENT still holds, in `bannerRelease`. The channel-and-what-runs sentence the old banner
+// carried stays one hover away, as the door's `title` (`updateBannerText`).
 //
 // DISMISSED (part b): a × beside the door, in every form, hides the line on this device until a NEWER release waits
 // (`releaseDismissal.ts` keeps the mark; `shownRelease` is the rule). It hides this line and nothing else: Settings ›

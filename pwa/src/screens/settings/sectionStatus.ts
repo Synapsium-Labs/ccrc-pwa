@@ -2,9 +2,9 @@
 //
 // MEASURED, NEVER OPTIMISTIC. A read that has not landed is a skeleton and a failed one says "could not be read";
 // neither is folded into a status. Updates leads with "vX available · fleet runs vY" exactly when `bannerRelease`
-// names a tag, the predicate (fleet/releaseWaiting.ts) the fleet's update line and BuildLine use, so the three never disagree. Automation's pause
-// part is a skeleton until the first coord frame, never "runs normally". Notifications says "not available" where
-// push is unsupported, never "off". Security is red only when `unarmedExposure`.
+// names a tag, the predicate (fleet/releaseWaiting.ts) the fleet's update line and BuildLine use, so the three never
+// disagree. Automation's pause part is a skeleton until the first coord frame, never "runs normally". Notifications
+// says "not available" where push is unsupported, never "off". Security is red only when `unarmedExposure`.
 import type { NodeWire, NotifyMode, UpdatesView } from '../../../../shared/api';
 import { AUTO_MODES, FLEET_SCOPE, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT } from '../../../../shared/api';
 import { COLLECT_STATE_TEXT } from '../../fleet/collectLaneWords';

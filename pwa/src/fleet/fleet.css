@@ -3187,8 +3187,9 @@ button.proj-card-pool::before {
 /* ── UpdateIndicator (D-6327; centralised-update design 2026-09-20 §13) ──────
    "↑ vX available": a quiet line in the accent at the meta size, a door to Settings › Updates, placed once per width
    (Refined's row under the bar at a desk, Instrument's status bar, one row under Refined's phone header and in
-   Instrument's fleet column). News, not a fault, and not a band: it takes the room of a word. `flex: none` and
-   `nowrap`: the line stays on one line and never shrinks or clips, whatever sits beside it. The empty glyph
+   Instrument's fleet column). News, not a fault, and not a band: it takes the room of a word. In the bar form
+   (`status`) `flex: none` and `nowrap` keep the line on one line, never shrunk or clipped, whatever sits beside it;
+   the `row` form below spans its column and lets its stale words wrap on a phone. The empty glyph
    span `Door` always draws is hidden, the idiom of `.ref-tab` (refined.css). */
 .update-indicator {
   display: inline-flex;
