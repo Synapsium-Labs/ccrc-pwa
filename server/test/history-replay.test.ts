@@ -11555,6 +11555,7 @@ const B1T2_ROWS: B1t2RowSpec[] = [
 type B1t2Opts = {
   kept?: 'list' | 'null' | 'tombstone' | 'object' | 'mixed'; learn?: string[]; prune?: string[]; unindex?: string[];
   retime?: Record<string, number>; uncopy?: boolean; twoParents?: boolean; noParent?: boolean; noLeaf?: boolean; badLeaf?: boolean;
+  untimedBoundary?: boolean;
 };
 type B1t2Fx = { home: string; entry: Record<string, number>; blob: Record<string, number>; uuid: Record<string, string>; leaf: string };
 
@@ -11567,7 +11568,8 @@ type B1t2Fx = { home: string; entry: Record<string, number>; blob: Record<string
  *  - `learn`: redaction pairs the store learned after the freeze (redact_hashes rows, which pairIndexOf reads);
  *  - `prune`, `unindex`, `retime`: a row's blob pruned, its index row deleted, or its ts_ms moved;
  *  - `uncopy`: no copy holds N; `noLeaf`: N has no leaf node; `badLeaf`: N's leaf id is B1T2_BAD_LEAF;
- *  - `noParent`: P has no children; `twoParents`: Q is also L2's depth-1 parent. */
+ *  - `noParent`: P has no children; `twoParents`: Q is also L2's depth-1 parent;
+ *  - `untimedBoundary`: N's own ts_ms is NULL (clause (b)'s boundary-untimed). */
 async function b1t2Plant(o: B1t2Opts = {}): Promise<B1t2Fx> {
   const home = b1t2MkTmp('b1t2-store-');
   b1t2Store.createStore(home);
@@ -11640,6 +11642,7 @@ async function b1t2Plant(o: B1t2Opts = {}): Promise<B1t2Fx> {
   }
   for (const k of o.prune ?? []) w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = ?').run(B1T2_T, fx.blob[k]!);
   for (const k of o.unindex ?? []) w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(fx.blob[k]!);
+  if (o.untimedBoundary === true) w.prepare('UPDATE entries SET ts_ms = NULL WHERE entry_id = ?').run(fx.entry.bn!);
   b1t2Store.closeWriter(w);
   return fx;
 }
@@ -11812,6 +11815,15 @@ b1t2describe('W2-5b1 Task 2: the as-of pieces', () => {
       const late = await b1t2Plant({ retime: { a1: B1T2_T + 5 } });
       await b1t2With(late, async (rs) => {
         b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(late, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'b', why: 'unanswerable-untimed' });
+      });
+    });
+
+    b1t2it('(b): a boundary row with no timestamp is boundary-untimed, whatever its source answers (CONTROL: answerability over the same store with a numeric T_N answers answerable)', async () => {
+      const fx = await b1t2Plant({ untimedBoundary: true });
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'b', why: 'boundary-untimed' });
+        const a = await B1T2.answerability(rs.db, rs.idx, { tsMs: B1T2_T, transcriptPk: 1, spanEntryIds: [fx.entry.a1!, fx.entry.r1!] }, B1T2_CMD);
+        b1t2expect(a.state, 'CONTROL: the source itself is answerable at a numeric T_N').toBe('answerable');
       });
     });
 
