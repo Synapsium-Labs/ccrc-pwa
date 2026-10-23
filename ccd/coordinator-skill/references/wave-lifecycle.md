@@ -956,14 +956,19 @@ rules=$(gh api --paginate "repos/{owner}/{repo}/rules/branches/$base" | jq -sc '
          and all(.parameters.required_status_checks[]; type == "object" and (.context | type) == "string" and (.context | length) > 0)
          else true end))
   then flatten(1) else error("malformed") end') || stop "unreadable: read 2"
-unknown=$(jq -r '[.[].type] - ["pull_request", "merge_queue", "required_status_checks", "required_linear_history",
+# The stop lines print a list of values joined by commas, an empty string as "" and any other value as it is. That text
+# only shows what was found: whether a queue rule or an unknown type exists, and how many methods there are, is decided
+# on the arrays, so a value that prints as nothing is still a value.
+shown='map(if . == "" then "\"\"" else . end) | join(",")'
+unk=$(jq -c '[.[].type] - ["pull_request", "merge_queue", "required_status_checks", "required_linear_history",
   "workflows", "code_scanning", "required_deployments", "required_signatures", "non_fast_forward", "deletion",
-  "creation"] | unique | join(",")' <<<"$rules") || stop "unreadable: read 2"
-[ -z "$unknown" ] || stop "unknown-rule-type: $unknown"
+  "creation"] | unique' <<<"$rules") || stop "unreadable: read 2"
+[ "$unk" = "[]" ] || stop "unknown-rule-type: $(jq -r "$shown" <<<"$unk")"
 
 # Read 3: classic protection. A 404 is "not protected" only with exactly that message; a 401 or 403 goes to read 3b.
 # A 200 body is typed where the licence and the required set read it (the review count, the conversation switch's
-# `enabled`, the names of the required checks): a missing field keeps its default, a wrong type is a stop. The names
+# `enabled`, the names of the required checks): a missing field keeps its default, a wrong type is a stop, and the body is
+# exactly one value (`-s` slurps the answer: an empty body, or two or more values, is a stop here). The names
 # are one predicate, `classic_names`, which read 3b's projection of the same checks uses too: a missing or null
 # container or list is no entries, a present one is an object or an array, and every entry has a non-empty string name.
 names='def named: type == "string" and length > 0;
@@ -974,9 +979,10 @@ names='def named: type == "string" and length > 0;
 r3=$(gh api -i "repos/{owner}/{repo}/branches/$base/protection" 2>/dev/null)
 c3=$(head -n1 <<<"$r3" | cut -d' ' -f2) b3=$(tr -d '\r' <<<"$r3" | sed '1,/^$/d') via=3
 case "$c3" in
-  200) prot=$(jq -ce "$names"'
+  200) prot=$(jq -sce "$names"'
          def cnt: type == "number" and . == floor and . >= 0 and . <= 9007199254740991;
-         if type == "object"
+         if length == 1 then .[0] else error("not exactly one value") end
+         | if type == "object"
             and (.required_pull_request_reviews | . == null or (type == "object" and typed("required_approving_review_count"; cnt)))
             and (.required_conversation_resolution | . == null or (type == "object" and typed("enabled"; type == "boolean")))
             and (.required_status_checks | classic_names)
@@ -984,7 +990,9 @@ case "$c3" in
   404) [ "$(jq -r .message <<<"$b3")" = "Branch not protected" ] || stop "unreadable: read 3 answered 404"
        prot='{}' ;;
   401|403) via=3b
-       prot=$(gh api "repos/{owner}/{repo}/branches/$base" | jq -c "$names"'.protection | if .enabled == true
+       prot=$(gh api "repos/{owner}/{repo}/branches/$base" | jq -sc "$names"'
+         if length == 1 then .[0] else error("not exactly one value") end
+         | .protection | if .enabled == true
          then (if .required_status_checks | classic_names then {required_status_checks} else error("unnamed") end)
          elif .enabled == false then {} else error("no enabled") end') \
          || stop "unreadable: read 3b, after read 3 answered $c3" ;;
@@ -1005,13 +1013,14 @@ methods=$(jq -nc --argjson s "$r4" --argjson r "$rules" --argjson p "$prot" '
       (.; map(select(IN($a[]))))
   | if any($r[]; .type == "required_linear_history") or $p.required_linear_history.enabled == true
     then map(select(. != "merge")) else . end') || stop "unreadable: the method set"
-queues=$(jq -r '[.[] | select(.type == "merge_queue") | (.parameters.merge_method // "unknown") | ascii_downcase]
-  | unique | join(",")' <<<"$rules") || stop "unreadable: read 2"
-if [ -n "$queues" ]; then
-  route=Q method=$queues
-  [[ $queues == *,* ]] && stop "two-queue-methods: $queues"
-  jq -e --arg m "$method" 'any(.[]; . == $m)' <<<"$methods" >/dev/null \
-    || stop "queue-method-not-allowed: the queue merges by $method and the method set is $methods"
+qs=$(jq -c '[.[] | select(.type == "merge_queue") | (.parameters.merge_method // "unknown") | ascii_downcase] | unique' \
+  <<<"$rules") || stop "unreadable: read 2"
+if [ "$qs" != "[]" ]; then
+  route=Q qshow=$(jq -r "$shown" <<<"$qs")
+  jq -e 'length == 1' <<<"$qs" >/dev/null || stop "two-queue-methods: $qshow"
+  method=$(jq -r '.[0]' <<<"$qs")
+  jq -e --argjson q "$qs" 'any(.[]; . == $q[0])' <<<"$methods" >/dev/null \
+    || stop "queue-method-not-allowed: the queue merges by $qshow and the method set is $methods"
   [ "$(jq -r .allow_auto_merge <<<"$r4")" = true ] || stop "auto-merge-off: a merge_queue rule applies"
 else
   method=$(jq -r 'if any(.[]; . == "squash") then "squash" elif any(.[]; . == "merge") then "merge"

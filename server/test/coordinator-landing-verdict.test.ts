@@ -989,6 +989,123 @@ const NAMES: Case[] = [
       checkruns: runs(run('build-pwa')) }), 'ROUTE G method=squash admin=never strict=no'],
 ];
 
+// ---- Fix round 3: nothing is lost before a route is chosen (an empty queue method, an empty rule type, a source of many values) ----
+// A value that prints as nothing is still a value. A queue rule or an unknown rule type whose only text is the empty
+// string joined to an empty display and was read as no queue and no unknown type, so a direct route (even a licensed
+// `--admin` one) could be chosen over a rule this block does not understand. The decisions are made on the arrays, and the
+// joined text is only what a stop prints: an empty value shows as `""`, every other value as it is. A source that is
+// one object (read 3's body, read 3b's branch view) is exactly one value, not zero and not several.
+const EMPTY = '""';
+const queueRule = (parameters: unknown, id = 11) => ({ type: 'merge_queue', ruleset_id: id, parameters });
+/** The reproduction: an otherwise bare repository whose only gate is an approval that is missing; the rule that stands in the way is
+ *  the queue (or the rule of unknown type), so a direct route can only be chosen by losing it. */
+const bareApproval = (...rs: unknown[]) => with_(bare, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }), ...rs),
+  pr: prWith('REVIEW_REQUIRED') }));
+const ALL3 = '["squash","merge","rebase"]';
+const bareNotAllowed = (shown: string, set = ALL3): string =>
+  `STOP queue-method-not-allowed: the queue merges by ${shown} and the method set is ${set}`;
+const prettyProt = (o: unknown): Answer => prot200(JSON.stringify(o, null, 2) + '\n');
+const sparseProt = { enforce_admins: { enabled: true }, required_linear_history: { enabled: false } };
+const branchRaw = (raw: string): (() => Fixture) => with_(via3b, { branch: { code: 200, raw } });
+
+const LOSS: Case[] = [
+  // F1: the queue methods are values; a queue rule is present when there is one, whatever its method prints as.
+  ['an empty queue method is a queue, not no queue: the reproduction (approval missing, bare repository) never routes direct',
+    bareApproval(queueRule({ merge_method: '' })), bareNotAllowed(EMPTY)],
+  ['an empty queue method is a queue: the same stop with the licence not in play (nothing required, auto-merge off)',
+    with_(bare, rules(queueRule({ merge_method: '' }))), bareNotAllowed(EMPTY)],
+  ['an empty queue method on this repository as measured: the method is not in the set, whatever auto-merge says',
+    with_(measured, (f) => ({ ...f, ...rules(pull({}), queue('')) })), bareNotAllowed(EMPTY, '["squash"]')],
+  ['an empty queue method with auto-merge off on this repository: the method stop comes first, as it does for any method',
+    with_(measured, (f) => ({ ...f, ...rules(pull({}), queue('')), ...settings(true, false, false, false) })), bareNotAllowed(EMPTY, '["squash"]')],
+  ['an empty queue method named by two rules is one empty method', with_(measured, (f) => ({ ...f, ...rules(pull({}), queue('', 11), queue('', 12)) })),
+    bareNotAllowed(EMPTY, '["squash"]')],
+  ['an empty queue method beside a valid one is two methods: both show, and no route follows',
+    with_(measured, (f) => ({ ...f, ...rules(pull({}), queue('', 11), queue('SQUASH', 12)) })), `STOP two-queue-methods: ${EMPTY},squash`],
+  ['an empty queue method beside a valid one, on the bare repository with an approval missing: still two methods, never a direct route',
+    bareApproval(queueRule({ merge_method: 'SQUASH' }, 12), queueRule({ merge_method: '' }, 13)), `STOP two-queue-methods: ${EMPTY},squash`],
+  ['a valid SQUASH queue still routes Q', with_(measured, (f) => ({ ...f, ...rules(pull({}), queue('SQUASH')) })), GOOD_Q],
+  ['a lower-case queue method routes Q by that method', with_(measured, (f) => ({ ...f, ...rules(pull({}), queue('squash')) })), GOOD_Q],
+  ['two queue rules naming one method (in different case) are one method and route Q',
+    with_(measured, (f) => ({ ...f, ...rules(pull({}), queue('SQUASH', 11), queue('squash', 12)) })), GOOD_Q],
+  ['a queue rule with no merge_method keeps its reading: unknown, which is not allowed', with_(measured, (f) => ({ ...f,
+    ...rules(pull({}), queueRule({})) })), bareNotAllowed('unknown', '["squash"]')],
+  ['a queue rule whose merge_method is null keeps its reading: unknown, which is not allowed', with_(measured, (f) => ({ ...f,
+    ...rules(pull({}), queueRule({ merge_method: null })) })), bareNotAllowed('unknown', '["squash"]')],
+  ['a queue rule whose method this block does not list stays not allowed', with_(measured, (f) => ({ ...f,
+    ...rules(pull({}), queue('FAST')) })), bareNotAllowed('fast', '["squash"]')],
+  ['one queue method that holds a comma is one method, not two: it is not allowed and shows as it is', with_(measured, (f) => ({ ...f,
+    ...rules(pull({}), queue('squash,merge')) })), bareNotAllowed('squash,merge', '["squash"]')],
+  ['two distinct queue methods that are both valid for the settings stay two methods', with_(measured, (f) => ({ ...f,
+    ...rules(pull({}), queue('SQUASH', 11), queue('MERGE', 12)), ...settings(true, true, false, true) })), 'STOP two-queue-methods: merge,squash'],
+  // F2: an unknown rule type is the set of such types; the empty string is one.
+  ['an empty rule type is an unknown type: the reproduction (approval missing, bare repository) never routes direct',
+    bareApproval({ type: '', ruleset_id: 3 }), `STOP unknown-rule-type: ${EMPTY}`],
+  ['an empty rule type on the bare repository with nothing else required is an unknown type',
+    with_(bare, rules({ type: '', ruleset_id: 3 })), `STOP unknown-rule-type: ${EMPTY}`],
+  ['an empty rule type beside this repository\'s queue stops before route Q',
+    with_(measured, (f) => ({ ...f, ...rules(pull({}), queue('SQUASH'), { type: '', ruleset_id: 3 }) })), `STOP unknown-rule-type: ${EMPTY}`],
+  ['an empty rule type shown as it is when it stands first among known rules',
+    with_(measured, (f) => ({ ...f, ...rules({ type: '', ruleset_id: 3 }, pull({}), queue('SQUASH')) })), `STOP unknown-rule-type: ${EMPTY}`],
+  ['an ordinary unknown type is still reported by name (approval missing, bare repository)', bareApproval({ type: 'x', ruleset_id: 3 }),
+    'STOP unknown-rule-type: x'],
+  ['an empty rule type beside another unknown type cannot cancel it: both are reported', bareApproval({ type: '', ruleset_id: 3 },
+    { type: 'x', ruleset_id: 4 }), `STOP unknown-rule-type: ${EMPTY},x`],
+  ['another unknown type before an empty one: both are reported in the same order', bareApproval({ type: 'x', ruleset_id: 4 },
+    { type: '', ruleset_id: 3 }), `STOP unknown-rule-type: ${EMPTY},x`],
+  ['an empty rule type named twice is reported once', bareApproval({ type: '', ruleset_id: 3 }, { type: '', ruleset_id: 4 }),
+    `STOP unknown-rule-type: ${EMPTY}`],
+  ['an empty rule type on a LATER page of the rules answer is still an unknown type', with_(measured, {
+    rules: { code: 200, raw: JSON.stringify([pull({})]) + '\n' + JSON.stringify([queue('SQUASH'), { type: '', ruleset_id: 3 }]) } }),
+    `STOP unknown-rule-type: ${EMPTY}`],
+  ['an empty rule type on the FIRST page, with a valid second page, is an unknown type', with_(measured, {
+    rules: { code: 200, raw: JSON.stringify([{ type: '', ruleset_id: 3 }]) + '\n' + JSON.stringify([pull({}), queue('SQUASH')]) } }),
+    `STOP unknown-rule-type: ${EMPTY}`],
+  ['a genuine empty rule set is still no rules (positive control)', with_(bare, rules()), 'ROUTE U method=squash admin=never strict=no'],
+  ['known rule types only are still routed (positive control: a required workflow)', with_(bare, rules({ type: 'workflows', ruleset_id: 5, parameters: {} },
+    { type: 'deletion', ruleset_id: 5 }, { type: 'non_fast_forward', ruleset_id: 5 })), 'ROUTE G method=squash admin=never strict=no'],
+  // F3: read 3's body and read 3b's branch view are each exactly one value.
+  ['unreadable: read 3 answers 200 with two objects printed back to back', with_(measured, { protection: prot200('{}{}') }), R3],
+  ['unreadable: read 3 answers 200 with two objects on separate lines', with_(measured, { protection: prot200('{}\n{}') }), R3],
+  ['unreadable: read 3 answers 200 with two objects, the first of them this repository\'s protection',
+    with_(measured, { protection: prot200(JSON.stringify((measured().protection as Answer).body) + '\n{}') }), R3],
+  ['unreadable: read 3 answers 200 with an object and then a truncated value', with_(measured, { protection: prot200('{}\n{') }), R3],
+  ['unreadable: read 3 answers 200 with an object and then null', with_(measured, { protection: prot200('{}\nnull') }), R3],
+  ['unreadable: read 3 answers 200 with an object and then a scalar', with_(measured, { protection: prot200('{}\n7') }), R3],
+  ['unreadable: read 3 answers 200 with an object and then an array', with_(measured, { protection: prot200('{}\n[]') }), R3],
+  ['unreadable: read 3 answers 200 with two objects, refused on route Q too', with_(measured, { protection: prot200('{}{}') }), R3],
+  ['read 3 answers 200 with one sparse object: still readable (control)', with_(bare, { protection: prot200('{}') }),
+    'ROUTE U method=squash admin=never strict=no'],
+  ['read 3 answers 200 with one object printed over many lines is still one value (control)',
+    with_(bare, { protection: prettyProt(sparseProt) }), 'ROUTE U method=squash admin=never strict=no'],
+  ['read 3 answers 200 with one object and a trailing blank line is still one value (control)',
+    with_(bare, { protection: prot200('{}\n\n') }), 'ROUTE U method=squash admin=never strict=no'],
+  ['read 3 answers 200 with this repository\'s full protection printed over many lines (control)',
+    with_(measured, { protection: prettyProt((measured().protection as Answer).body) }), GOOD_Q],
+  ['read 3 answers 404 with exactly Branch not protected is still no protection (control)', with_(bare, { protection: fail(404, 'Branch not protected') }),
+    'ROUTE U method=squash admin=never strict=no'],
+  ['unreadable: read 3b answers with empty stdout and exit 0', branchRaw(''), R3B],
+  ['unreadable: read 3b answers with empty stdout and exit 0, after a 401', with_(branchRaw(''), { protection: fail(401, 'Bad credentials') }),
+    'STOP unreadable: read 3b, after read 3 answered 401'],
+  ['unreadable: read 3b answers with two usable objects printed back to back',
+    branchRaw('{"name":"main","protection":{"enabled":false}}{"name":"main","protection":{"enabled":false}}'), R3B],
+  ['unreadable: read 3b answers with two usable objects on separate lines',
+    branchRaw('{"name":"main","protection":{"enabled":false}}\n{"name":"main","protection":{"enabled":false}}'), R3B],
+  ['unreadable: read 3b answers with two usable objects, after a 401', with_(branchRaw('{"protection":{"enabled":false}}\n{"protection":{"enabled":false}}'),
+    { protection: fail(401, 'Bad credentials') }), 'STOP unreadable: read 3b, after read 3 answered 401'],
+  ['unreadable: read 3b answers with a usable object and then a truncated value', branchRaw('{"protection":{"enabled":false}}\n{'), R3B],
+  ['unreadable: read 3b answers with a usable object and then null', branchRaw('{"protection":{"enabled":false}}\nnull'), R3B],
+  ['unreadable: read 3b answers with a usable object and then a truncated value, after a 401', with_(branchRaw('{"protection":{"enabled":false}}\n{'),
+    { protection: fail(401, 'Bad credentials') }), 'STOP unreadable: read 3b, after read 3 answered 401'],
+  ['unreadable: read 3b answers with two objects, refused on route Q too', with_(branchRaw('{"protection":{"enabled":false}}\n{"protection":{"enabled":false}}'),
+    (f) => ({ ...f, ...rules(pull({}), queue('SQUASH')), ...settings(true, false, false, true) })), R3B],
+  ['read 3b answers with one object printed over many lines: still one value (control)',
+    branchRaw(JSON.stringify({ name: 'main', protection: { enabled: false } }, null, 2) + '\n'), 'ROUTE U method=squash admin=never strict=unknown'],
+  ['read 3b answers with one enabled=true projection and a named check: still readable (control)',
+    with_(b3b({ checks: [{ context: 'build-pwa', app_id: 15368 }] }), { checkruns: runs(run('build-pwa')) }), 'ROUTE G method=squash admin=never strict=unknown'],
+  ['read 3b answers with one sparse enabled=true projection: still readable (control)', b3b(undefined), 'ROUTE U method=squash admin=never strict=unknown'],
+];
+
 /** Every argv the block may send: its reads (read 1 with its reviews, and the compare under read 3b), as GETs. */
 const READ = /^(pr view 42 --json baseRefName,headRefOid,state,reviewDecision|api (--paginate |-i )?repos\/\{owner\}\/\{repo\}(\/[^\s]*)?)$/;
 /** The same reads as the block's TEXT spells them, from the word `gh` to the end of its quoted path, followed only by
@@ -1189,7 +1306,7 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   });
 
   it.each([...ROUTES, ...CHECKS, ...STOPS, LICENSED_NEVER, ...REQUESTS, ...IGNORES, ...LICENCE, ...MALFORMED,
-  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER])('%s', (_name, fx, line, env) => {
+  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS])('%s', (_name, fx, line, env) => {
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);
     expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);
