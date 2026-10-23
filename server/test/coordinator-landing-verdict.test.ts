@@ -111,11 +111,31 @@ rc=$(cat "$p.rc")
 exit "$rc"
 `;
 
-type Result = { out: string; calls: string[]; stderr: string };
+type Result = { out: string; calls: string[]; stderr: string; sleeps: string[] };
+
+/** A virtual clock for the bounded wait. The block calls `sleep` by name, so a shell function of that name, defined in the
+ *  shell that runs the block, logs the duration it was asked for to `$FX/sleeps`, moves bash's own `$SECONDS` forward by
+ *  that many seconds and returns at once: no case waits in real time, and the time the block believes has passed is the sum
+ *  of what it asked for plus the whole seconds the run really took (a small tick the cases are sized to ignore). A request
+ *  that is not a positive whole number is logged as it is and ends the run, so a sleep of zero or less is a red case, not a
+ *  loop. After the `$VS_LATE`th sleep every file `<read>.late.*` in `$FX` replaces the read's answer: the answer the read
+ *  that follows the last sleep gets. */
+const VIRTUAL_CLOCK = `sleep() {
+  case "$1" in ''|*[!0-9]*|0) printf 'bad %s\n' "$1" >> "$FX/sleeps"; exit 97 ;; esac
+  printf '%s\n' "$1" >> "$FX/sleeps"
+  SECONDS=$((SECONDS + $1)); VS_N=$((\${VS_N:-0} + 1))
+  [ "$VS_N" = "\${VS_LATE:-0}" ] || return 0
+  for f in "$FX"/*.late.*; do [ -e "$f" ] && cp "$f" "\${f%.late.*}.\${f##*.}"; done
+  return 0
+}
+`;
 
 /** `homeFiles` are written into the fixture HOME before the run (a name relative to HOME, then its content). The second
- *  argument is all the block sees besides PATH, HOME and the fixture directory, so a variable it does not name is unset. */
-function verdict(fx: Fixture, env: Record<string, string> = {}, homeFiles: Record<string, string> = {}): Result {
+ *  argument is all the block sees besides PATH, HOME and the fixture directory, so a variable it does not name is unset.
+ *  With `clock`, the block runs under the virtual clock above and `clock.late` holds the answers that replace the reads'
+ *  once the `VS_LATE`th sleep (named in that second argument) has run. */
+function verdict(fx: Fixture, env: Record<string, string> = {}, homeFiles: Record<string, string> = {},
+  clock?: { late: Fixture }): Result {
   const home = mkTmp('ccrc-landing-verdict-');
   const bin = path.join(home, 'bin');
   const dir = path.join(home, 'fx');
@@ -123,24 +143,26 @@ function verdict(fx: Fixture, env: Record<string, string> = {}, homeFiles: Recor
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(bin, 'gh'), STUB, { mode: 0o755 });
   writeFileSync(path.join(dir, 'calls'), '');
+  writeFileSync(path.join(dir, 'sleeps'), '');
   for (const [name, text] of Object.entries(homeFiles)) writeFileSync(path.join(home, name), text);
+  const put = (stem: string, k: Key, a: Answer): void => {
+    writeFileSync(`${stem}.out`, k === 'protection' ? included(a) : (a.raw ?? JSON.stringify(a.body ?? null)));
+    writeFileSync(`${stem}.rc`, a.code === 200 ? '0' : '1');
+    writeFileSync(`${stem}.code`, String(a.code));
+  };
   for (const [k, v] of Object.entries(fx) as [Key, Answer | Answer[]][]) {
     const seq = Array.isArray(v) ? v : [v];
-    seq.forEach((a, i) => {
-      const stem = path.join(dir, Array.isArray(v) && i < seq.length - 1 ? `${k}.${i + 1}` : k);
-      const text = k === 'protection' ? included(a) : (a.raw ?? JSON.stringify(a.body ?? null));
-      writeFileSync(`${stem}.out`, text);
-      writeFileSync(`${stem}.rc`, a.code === 200 ? '0' : '1');
-      writeFileSync(`${stem}.code`, String(a.code));
-    });
+    seq.forEach((a, i) => put(path.join(dir, Array.isArray(v) && i < seq.length - 1 ? `${k}.${i + 1}` : k), k, a));
   }
-  const script = blocks[0]!.replace(/<pr>/g, '42').replace(/<handoffCommit>/g, HC);
+  for (const [k, a] of Object.entries(clock?.late ?? {}) as [Key, Answer][]) put(path.join(dir, `${k}.late`), k, a);
+  const script = (clock ? VIRTUAL_CLOCK : '') + blocks[0]!.replace(/<pr>/g, '42').replace(/<handoffCommit>/g, HC);
   const r = spawnSync('bash', ['-c', script], {
     cwd: home, encoding: 'utf8', timeout: 15000,
     env: { PATH: `${bin}:${process.env['PATH'] ?? ''}`, HOME: home, FX: dir, ...env },
   });
   const calls = readFileSync(path.join(dir, 'calls'), 'utf8').split('\n').filter(Boolean);
-  return { out: r.stdout, calls, stderr: r.stderr };
+  const sleeps = readFileSync(path.join(dir, 'sleeps'), 'utf8').split('\n').filter(Boolean);
+  return { out: r.stdout, calls, stderr: r.stderr, sleeps };
 }
 
 /** Each case: what changes from its starting fixture, and the ONE line the verdict must print. */
@@ -1240,5 +1262,122 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
     expect(r.out).toBe('STOP not-reported: test (server) within 2s\n');
     expect(r.calls.filter((c) => c.endsWith('/check-runs')).length).toBeGreaterThanOrEqual(2);
     expect(r.calls.filter((c) => c.startsWith('pr view'))).toHaveLength(1);
+  });
+});
+
+// ---- Fix round 2, F9: the bounded wait is a budget of SLEEPING, and no sleep passes what is left of it ----
+// The loop sleeps, then reads read 5, and stops once the budget is spent; the read after the last sleep is the one that
+// judges the wait. These cases run the block under a virtual clock (`VIRTUAL_CLOCK`), so what they assert is the sleeps
+// the block REQUESTED, never how long a loaded box took to run it: no case waits, and none asserts a wall-clock total.
+// What stays unbounded is outside this block's reach and is not asserted here: the time a `gh` call takes (the stub answers
+// at once), the final read after the last sleep, and the scheduling around them. The Bash call's own timeout is what bounds
+// those; nothing in this shell is a hard network deadline.
+const STILL_MISSING = (): Fixture =>
+  with_(measured, { checkruns: runs(run('test (agent)'), run('test (pwa)'), run('build-pwa')) })();
+
+/** `test (server)` has not reported until the `sleeps`th sleep has run; `late` is what the read that follows that sleep gets. */
+const waitedFor = (bound: number, poll: number, sleeps: number, late: Fixture = {}): Result =>
+  verdict(STILL_MISSING(), { BOUND_S: String(bound), POLL_S: String(poll), VS_LATE: String(sleeps) }, {}, { late });
+
+/** Every sleep requested is a positive whole number no longer than POLL_S and no longer than the budget that was left when
+ *  it was requested. The block's clock never runs slower than the sleeps it asked for, so the sum of the requests is a
+ *  ceiling on the budget used, whatever a loaded box adds (a whole-second tick only shortens the wait). */
+function expectWithinBudget(r: Result, bound: number, poll: number): void {
+  expect(r.sleeps.every((s) => /^[1-9]\d*$/.test(s)), `a sleep that is not a positive whole number: ${r.sleeps.join(',')}`).toBe(true);
+  let spent = 0;
+  for (const s of r.sleeps.map(Number)) {
+    expect(s, `asked to sleep ${s}s with POLL_S=${poll}`).toBeLessThanOrEqual(poll);
+    expect(s, `asked to sleep ${s}s with only ${bound - spent}s of the ${bound}s left (requests so far: ${r.sleeps.join(',')})`)
+      .toBeLessThanOrEqual(bound - spent);
+    spent += s;
+  }
+}
+
+/** [BOUND_S, POLL_S, sleeps the budget takes]: a budget the interval does not divide, one it divides, and an interval
+ *  longer than the whole budget. The sizes keep a tick of a second or two from changing the count. */
+const BUDGETS: [bound: number, poll: number, sleeps: number][] = [[70, 30, 3], [90, 30, 3], [100, 60, 2], [20, 300, 1]];
+
+describe('the bounded wait never sleeps past its budget (fix round 2, F9)', () => {
+  for (const [bound, poll, n] of BUDGETS) {
+    it(`BOUND_S=${bound} POLL_S=${poll}: ${n} sleeps, each within what is left, then a stop for a name that never reports`, () => {
+      const r = waitedFor(bound, poll, n);
+      expect(r.out, `stderr: ${r.stderr}`).toBe(`STOP not-reported: test (server) within ${bound}s\n`);
+      expectWithinBudget(r, bound, poll);
+      expect(r.sleeps).toHaveLength(n);
+      // A read follows every sleep (the last one included) and no sleep follows the budget's end.
+      expect(r.calls.filter((c) => c.endsWith('/check-runs'))).toHaveLength(n + 1);
+      expect(r.calls.filter((c) => c.startsWith('pr view'))).toHaveLength(1);
+    });
+  }
+
+  it('a budget the interval does not divide ends in one shortened sleep, and an interval longer than the budget is itself shortened', () => {
+    const r = waitedFor(70, 30, 3);
+    expect(r.sleeps.slice(0, 2)).toEqual(['30', '30']);
+    expect(Number(r.sleeps[2])).toBeLessThanOrEqual(10);
+    const long = waitedFor(20, 300, 1);
+    expect(Number(long.sleeps[0]), 'a POLL_S above BOUND_S is asked for whole').toBeLessThanOrEqual(20);
+  });
+
+  // The read after the last sleep decides the wait, so each of its three answers is classified, not assumed.
+  const FINAL: [name: string, late: Fixture, line: string][] = [
+    ['a name that reports at the final read is read again, and lands', { checkruns: classicGreen() }, GOOD_Q],
+    ['a name that reports at the final read as still running waits', { checkruns: runs(run('test (server)', null, 'in_progress'),
+      run('test (agent)'), run('test (pwa)'), run('build-pwa')) }, 'WAIT pending: test (server)'],
+    ['a name that reports at the final read as red is red', { checkruns: runs(run('test (server)', 'failure'), run('test (agent)'),
+      run('test (pwa)'), run('build-pwa')) }, 'RED test (server) [github-actions]'],
+    ['a final read that is an empty answer from the check runs stops unreadable', { checkruns: raw200('') }, R5],
+    ['a final read that fails stops unreadable', { checkruns: fail(500) }, R5],
+    ['a final read whose check runs are an object stops unreadable', { checkruns: raw200('{"check_runs":{}}') }, R5],
+    ['a final read that is an empty answer from the statuses stops unreadable', { status: raw200('') }, R5],
+  ];
+  for (const [name, late, line] of FINAL) {
+    it(`BOUND_S=70 POLL_S=30: ${name}`, () => {
+      const r = waitedFor(70, 30, 3, late);
+      expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);
+      expectWithinBudget(r, 70, 30);
+      expect(r.sleeps).toHaveLength(3);
+      expect(r.calls.filter((c) => c.endsWith('/check-runs')), 'the read after the last sleep was never made').toHaveLength(4);
+    });
+  }
+
+  it('a name that never reports is still the stop not-reported at the final read, and only a bounded invocation stops', () => {
+    const r = waitedFor(70, 30, 3, { checkruns: runs(run('test (agent)'), run('test (pwa)'), run('build-pwa')) });
+    expect(r.out).toBe('STOP not-reported: test (server) within 70s\n');
+    const once = verdict(STILL_MISSING(), {}, {}, { late: {} });
+    expect(once.out, 'without BOUND_S the verdict waits for nothing').toBe('WAIT not-reported: test (server)\n');
+    expect(once.sleeps).toEqual([]);
+  });
+
+  // F12: only read 5 is read again while the verdict waits. Reviews, rules and the head are this invocation's snapshot, so
+  // the route a bounded invocation prints is discarded as permission, and the COMPLETE verdict runs afresh with BOUND_S=0.
+  it('the fresh verdict after a bounded wait that routed reads everything again and waits for nothing: a name newly required is a WAIT, not another bound', () => {
+    const first = waitedFor(300, 30, 2, { checkruns: classicGreen() });
+    // The name reports after the second sleep, so the wait ends with 240 of its 300 seconds unspent.
+    expect(first.out, `stderr: ${first.stderr}`).toBe(`${GOOD_Q}\n`);
+    expect(first.calls.filter((c) => c.endsWith('/reviews')), 'the bounded run read the reviews once, at its start').toHaveLength(1);
+    expect(first.calls.filter((c) => c.endsWith('/rules/branches/main'))).toHaveLength(1);
+    // The fresh run, a moment later: an operator added a required name that nothing has reported.
+    const added = ok({ ...((measured().protection as Answer).body as Record<string, unknown>),
+      required_status_checks: { strict: false, contexts: [...CLASSIC, 'added/ci'],
+        checks: [...CLASSIC, 'added/ci'].map((c) => ({ context: c, app_id: 15368 })) } });
+    const fresh = verdict(with_(measured, { protection: added, checkruns: classicGreen() })(), { BOUND_S: '0' }, {}, { late: {} });
+    expect(fresh.out, `stderr: ${fresh.stderr}`).toBe('WAIT not-reported: added/ci\n');
+    expect(fresh.sleeps, 'BOUND_S=0 starts no wait: the bound is not repeated').toEqual([]);
+    // It is a COMPLETE verdict: the reviews, the rules and the protection are read again, not carried over.
+    expect(fresh.calls.filter((c) => c.endsWith('/reviews'))).toHaveLength(1);
+    expect(fresh.calls.filter((c) => c.endsWith('/rules/branches/main'))).toHaveLength(1);
+    expect(fresh.calls.filter((c) => c.endsWith('/protection'))).toHaveLength(1);
+    // And the same repository without the added name is the route the bounded run printed.
+    const same = verdict(with_(measured, { checkruns: classicGreen() })(), { BOUND_S: '0' }, {}, { late: {} });
+    expect(same.out).toBe(`${GOOD_Q}\n`);
+    expect(same.sleeps).toEqual([]);
+  });
+
+  it('the fresh verdict reads a request for changes that arrived during the wait: the snapshot of the bounded run is not carried over', () => {
+    const first = waitedFor(300, 30, 2, { checkruns: classicGreen() });
+    expect(first.out).toBe(`${GOOD_Q}\n`);
+    const fresh = verdict(with_(measured, { checkruns: classicGreen(), reviews: ok([rev(7, CR)]) })(), { BOUND_S: '0' }, {}, { late: {} });
+    expect(fresh.out).toBe(`${askLine(false, 7)}\n`);
+    expect(fresh.sleeps).toEqual([]);
   });
 });

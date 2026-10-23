@@ -1077,9 +1077,16 @@ checks() {
         | join(", "))) // "passing"' || echo unreadable
 }
 v=$(checks) w=${v%% *}
+# A bounded wait re-reads read 5 only: the reviews, the rules and the head stay this run's snapshot (section 5b).
+# Each sleep is cut to the time left of BOUND_S seconds and none starts once it is spent; the read after the last sleep decides.
 if [ "$w" = not-reported ] && [ "$BOUND_S" -gt 0 ]; then
   end=$((SECONDS + BOUND_S))
-  while [ "$w" = not-reported ] && [ "$SECONDS" -lt "$end" ]; do sleep "$POLL_S"; v=$(checks) w=${v%% *}; done
+  while [ "$w" = not-reported ]; do
+    left=$((end - SECONDS))
+    [ "$left" -gt 0 ] || break
+    [ "$left" -lt "$POLL_S" ] || left=$POLL_S
+    sleep "$left"; v=$(checks) w=${v%% *}
+  done
 fi
 case "$w" in
   passing) ;;
@@ -1164,12 +1171,15 @@ decides what this session does, and nothing else does:
   timeout at 600000, never repeated, whatever it exits or however it ends: a
   check that is not required and never completes must not hold the wait open.
   Then run the verdict again with `BOUND_S=300` on the line before it, and the
-  Bash tool's timeout at 600000. It reads read 5 again every 30 seconds for at
-  most 300 seconds.
+  Bash tool's timeout at 600000. It reads read 5 again every 30 seconds, each
+  sleep cut short to what is left of its 300 seconds.
   **The bound is five minutes after the last of the PR's reported checks finished.**
   If the watch was cut off at its timeout, the five minutes start there instead:
-  fifteen minutes in all at most.
-  A name it still reads as not reported is the stop `not-reported`.
+  fifteen minutes of waiting budget in all, plus the time the commands
+  themselves take, which this shell does not bound: only each Bash call's
+  timeout at 600000 does. The read after the last sleep decides the wait.
+  A name it still reads as not reported is the stop `not-reported`. A `ROUTE`
+  it prints is not yet landing permission: see **After a bounded wait**, below.
 - `RED <names>` — a required check is red on the head, each name with its
   kind. If it is the PR's own, that is the existing fix-round rule (step 3:
   on route Q disarm first, then a fix round to the owning worker on the
@@ -1183,6 +1193,22 @@ decides what this session does, and nothing else does:
   than one line, or a first word this list does not name — is the stop
   `verdict-unread`: say what the run printed, and never land, enqueue or choose
   a route by hand.
+
+**After a bounded wait.** While the verdict waits inside `BOUND_S`, it reads
+read 5 again and nothing else: the PR's reviews, the rules and the head are the
+snapshot from the start of that run, and nothing here claims they are watched
+while it waits. So a `ROUTE` printed by a run with `BOUND_S` above 0 is not
+landing permission. Discard it, and before you enqueue or merge anything run
+the complete verdict afresh with `BOUND_S=0`, `CR_IGNORE` set as **A requested
+change** says when the operator answered ignore, so that every read is made
+again. A verdict run after an external `--watch` wait is complete in the same
+way: a wait never replaces it. A fresh `STOP` or `RED` goes by its bullet. A
+fresh `WAIT`, `pending` or `not-reported`, a required name newly found on that
+read included, is not permission either: report that line to the operator and
+leave the landing stopped. Do not start a waiting phase again for it: no second
+watch, no second `BOUND_S=300`, and not the first-use instructions of the
+`WAIT` bullets above, whose budget is spent. A later landing attempt is the
+operator's to authorize; never assume it.
 
 **The approval licence.** `--admin` is licensed on a direct route only, and
 only when all three hold, each read fresh for this landing: an approval the
@@ -1252,7 +1278,7 @@ auto-merge, follow step 3's read-back and disarm rule, then stop
 `github-refused`, and never leave it armed on the operator's ignore.
 
 This session reads again before each enqueue, direct merge and re-enqueue, and
-after each wait. It cannot atomically prevent a request submitted after that
+after each wait, as a complete verdict (**After a bounded wait**, above). It cannot atomically prevent a request submitted after that
 last read or while an already-enqueued PR merges, and nothing here claims
 review enforcement at queue time. If it observes a request on a queued PR, it
 stops that landing attempt, disarms it as step 3 does if it is only armed, asks

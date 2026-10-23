@@ -2967,10 +2967,41 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     // The every-check watch runs ONCE: a non-required check that never completes must not hold the wait open.
     expect(prose).toContain('once, as one Bash call with its timeout at 600000, never repeated');
     expect(prose).toContain('`BOUND_S=300`');
-    expect(prose).toContain(`every ${poll} seconds for at most 300 seconds`);
+    expect(prose).toContain(`It reads read 5 again every ${poll} seconds, each sleep cut short to what is left of its 300 seconds.`);
     expect(prose).toContain('The bound is five minutes after the last of the PR\'s reported checks finished.');
-    expect(prose).toContain('fifteen minutes in all at most');
     expect(prose).toContain('never by ending your turn');
+  });
+
+  // The bound is a budget of WAITING, not a wall-clock promise: a `gh` call, the read after the last sleep and the
+  // scheduling around them take time this shell does not bound, and only the Bash call's timeout does.
+  it('states the wait as a budget of waiting plus the commands\' own time, bounded by the tool call, never as a wall-clock total (the budget pins)', () => {
+    const disclosure = 'fifteen minutes of waiting budget in all, plus the time the commands themselves take, which this shell does not bound: only each Bash call\'s timeout at 600000 does. The read after the last sleep decides the wait.';
+    expect(prose, 'the budget lost its overhead disclosure or the Bash timeout that bounds it').toContain(disclosure);
+    expect(prose, 'the exact wall-clock promise is back').not.toContain('fifteen minutes in all at most');
+    expect(prose, 'the wait is again described as polling for at most its seconds').not.toContain('seconds for at most 300 seconds');
+  });
+
+  // The loop, whole: every sleep is cut to what is left of the budget, none starts once it is spent, and the read that
+  // follows the last sleep stays. Its behaviour is the verdict file's (a virtual clock); this is the block's own text.
+  it('pins the bounded wait loop whole: the remaining budget is computed before every sleep, the spent budget ends the loop, the final read stays (the loop pin)', () => {
+    const loop = [
+      'if [ "$w" = not-reported ] && [ "$BOUND_S" -gt 0 ]; then',
+      '  end=$((SECONDS + BOUND_S))',
+      '  while [ "$w" = not-reported ]; do',
+      '    left=$((end - SECONDS))',
+      '    [ "$left" -gt 0 ] || break',
+      '    [ "$left" -lt "$POLL_S" ] || left=$POLL_S',
+      '    sleep "$left"; v=$(checks) w=${v%% *}',
+      '  done',
+      'fi',
+    ].join('\n');
+    expect(block, 'the bounded wait loop changed').toContain(loop);
+    // The two comment lines above it say what the wait re-reads and how its sleeps are cut; §5b's paragraph says the same.
+    expect(block, 'the block lost the comment on what a bounded wait re-reads').toContain(
+      '# A bounded wait re-reads read 5 only: the reviews, the rules and the head stay this run\'s snapshot (section 5b).');
+    expect(block, 'the block lost the comment on how its sleeps are cut').toContain(
+      '# Each sleep is cut to the time left of BOUND_S seconds and none starts once it is spent; the read after the last sleep decides.');
+    expect(block, 'a full POLL_S sleep is back').not.toContain('sleep "$POLL_S"');
   });
 
   it('licenses --admin narrowly, never as a fallback, and never retries a refused merge (spec §5.7.4)', () => {
@@ -3001,7 +3032,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       '- `strict=yes` — a strict-protection repository: clause 15\'s land-sync applies as it does today.',
       '- `MERGED head=<sha>` — the PR already landed: prove it as step 3 does (MERGED, `headRefOid` equal to `handoffCommit`). It is not a stop; a different head fails the proof, and that is reported, never closed on.',
       '- `WAIT pending: <names>` — a reported required check is still running. Wait in the foreground, `gh pr checks <pr> --required --watch`, again if the call times out while a reported required check is still pending, then run the verdict again — never by ending your turn: no mail comes when checks finish.',
-      '- `WAIT not-reported: <names>` — a required name nothing has reported on the head yet, whatever `gh pr checks <pr> --required` exits: it judges only the checks that have reported, and its `--watch` returns at once when every reported one is green. Wait on every check instead, `gh pr checks <pr> --watch --interval 30`, once, as one Bash call with its timeout at 600000, never repeated, whatever it exits or however it ends: a check that is not required and never completes must not hold the wait open. Then run the verdict again with `BOUND_S=300` on the line before it, and the Bash tool\'s timeout at 600000. It reads read 5 again every 30 seconds for at most 300 seconds.',
+      '- `WAIT not-reported: <names>` — a required name nothing has reported on the head yet, whatever `gh pr checks <pr> --required` exits: it judges only the checks that have reported, and its `--watch` returns at once when every reported one is green. Wait on every check instead, `gh pr checks <pr> --watch --interval 30`, once, as one Bash call with its timeout at 600000, never repeated, whatever it exits or however it ends: a check that is not required and never completes must not hold the wait open. Then run the verdict again with `BOUND_S=300` on the line before it, and the Bash tool\'s timeout at 600000. It reads read 5 again every 30 seconds, each sleep cut short to what is left of its 300 seconds.',
       'A name it still reads as not reported is the stop `not-reported`.',
       '- `RED <names>` — a required check is red on the head, each name with its kind. If it is the PR\'s own, that is the existing fix-round rule (step 3: on route Q disarm first, then a fix round to the owning worker on the `merging → working` edge). If it is not the PR\'s own and its kind is `[github-actions]`, one `gh run rerun <run id> --failed` and the same wait, then the verdict again. One of kind `[app <id>]` or `[status]` that is not the PR\'s own, which no rerun here reaches, or one still red after the one rerun, is the stop `red-unreachable`.',
       '- `STOP <reason>: <what it read>` — a stop (below).',
@@ -3108,11 +3139,43 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       '- `WAIT not-reported: <names>` — a required name nothing has reported on the head yet, whatever `gh pr checks <pr> --required` exits: it judges only the checks that have reported, and its `--watch` returns at once when every reported one is green.',
       'Wait on every check instead, `gh pr checks <pr> --watch --interval 30`, once, as one Bash call with its timeout at 600000, never repeated, whatever it exits or however it ends: a check that is not required and never completes must not hold the wait open.',
       'Then run the verdict again with `BOUND_S=300` on the line before it, and the Bash tool\'s timeout at 600000.',
-      'It reads read 5 again every 30 seconds for at most 300 seconds.',
-      '**The bound is five minutes after the last of the PR\'s reported checks finished.** If the watch was cut off at its timeout, the five minutes start there instead: fifteen minutes in all at most.',
-      'A name it still reads as not reported is the stop `not-reported`.',
+      'It reads read 5 again every 30 seconds, each sleep cut short to what is left of its 300 seconds.',
+      '**The bound is five minutes after the last of the PR\'s reported checks finished.** If the watch was cut off at its timeout, the five minutes start there instead: fifteen minutes of waiting budget in all, plus the time the commands themselves take, which this shell does not bound: only each Bash call\'s timeout at 600000 does. The read after the last sleep decides the wait.',
+      'A name it still reads as not reported is the stop `not-reported`. A `ROUTE` it prints is not yet landing permission: see **After a bounded wait**, below.',
     ].join(' ');
     expect(prose.slice(from, to).trim()).toBe(whole);
+  });
+
+  // F12: inside the bounded wait only read 5 is read again, so the route it prints rests on a snapshot of the reviews, the rules
+  // and the head. The paragraph says so, discards that route as permission, runs the complete verdict afresh with BOUND_S=0, and
+  // spends nothing a second time: a fresh WAIT is reported and the landing stays stopped, never sent back to a watch or a bound.
+  it('discards the route a bounded wait prints and runs the complete verdict afresh without a bound; a fresh WAIT stops the landing (the fresh-verdict pins)', () => {
+    const from = prose.indexOf('**After a bounded wait.**');
+    const to = prose.indexOf('**The approval licence.**');
+    expect(from, '§5b lost its paragraph on the route a bounded wait prints').toBeGreaterThanOrEqual(0);
+    expect(to, 'the paragraph lost the approval licence that follows it').toBeGreaterThan(from);
+    const parts = [
+      '**After a bounded wait.**',
+      // The explanation of the internal snapshot, and no claim that it is watched.
+      'While the verdict waits inside `BOUND_S`, it reads read 5 again and nothing else: the PR\'s reviews, the rules and the head are the snapshot from the start of that run, and nothing here claims they are watched while it waits.',
+      // The action: the route is not permission; the complete verdict, afresh, without a bound.
+      'So a `ROUTE` printed by a run with `BOUND_S` above 0 is not landing permission. Discard it, and before you enqueue or merge anything run the complete verdict afresh with `BOUND_S=0`, `CR_IGNORE` set as **A requested change** says when the operator answered ignore, so that every read is made again.',
+      'A verdict run after an external `--watch` wait is complete in the same way: a wait never replaces it.',
+      'A fresh `STOP` or `RED` goes by its bullet.',
+      // The consumed budget: a fresh WAIT, a newly required name included, is reported and stops the landing.
+      'A fresh `WAIT`, `pending` or `not-reported`, a required name newly found on that read included, is not permission either: report that line to the operator and leave the landing stopped.',
+      'Do not start a waiting phase again for it: no second watch, no second `BOUND_S=300`, and not the first-use instructions of the `WAIT` bullets above, whose budget is spent.',
+      'A later landing attempt is the operator\'s to authorize; never assume it.',
+    ];
+    for (const part of parts) expect(prose, `§5b lost or reworded: ${part.slice(0, 80)}…`).toContain(part);
+    expect(prose.slice(from, to).trim(), 'the paragraph is no longer exactly its sentences').toBe(parts.join(' '));
+    // The block is where the wait is bounded; the fresh run is the BOUND_S default, so it never waits.
+    expect(block).toContain('BOUND_S=${BOUND_S:-0}');
+    // The WAIT not-reported bullet hands its ROUTE to the paragraph, and the boundary sentence says the re-read is that verdict.
+    expect(prose).toContain('A `ROUTE` it prints is not yet landing permission: see **After a bounded wait**, below.');
+    expect(prose).toContain('and after each wait, as a complete verdict (**After a bounded wait**, above).');
+    // What the paragraph's own residual left intact stays in the requested-change section.
+    expect(prose).toContain('It cannot atomically prevent a request submitted after that last read or while an already-enqueued PR merges');
   });
 
   it('stops every route on a requested change and asks the operator, with a bounded ignore (the operator\'s requested-change ruling)', () => {
@@ -3128,7 +3191,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       'A key whose `reviews` is empty, a summary-only request, can never be ignored: inspect the PR\'s reviews, read the verdict again and report to the operator.',
       'Only a fresh `ROUTE` result permits the normal landing steps. Never merge, enqueue or pass `--admin` on a `changes-requested` line.',
       'While any request stands the verdict never answers `admin=licensed`, ignored or not. Ignore cannot evade GitHub\'s refusal of a missing required approval: a direct refusal is `github-refused`; on route Q, if gh only arms auto-merge, follow step 3\'s read-back and disarm rule, then stop `github-refused`, and never leave it armed on the operator\'s ignore.',
-      'This session reads again before each enqueue, direct merge and re-enqueue, and after each wait. It cannot atomically prevent a request submitted after that last read or while an already-enqueued PR merges, and nothing here claims review enforcement at queue time.',
+      'This session reads again before each enqueue, direct merge and re-enqueue, and after each wait, as a complete verdict (**After a bounded wait**, above). It cannot atomically prevent a request submitted after that last read or while an already-enqueued PR merges, and nothing here claims review enforcement at queue time.',
       'If it observes a request on a queued PR, it stops that landing attempt, disarms it as step 3 does if it is only armed, asks the operator to dequeue it if it is in the queue, asks address or ignore, and never enqueues again silently. Watching a queued PR continuously is a server follow-up, not this skill\'s.',
     ];
     for (const s of rc) expect(prose, `§5b lost or reworded: ${s.slice(0, 70)}…`).toContain(s);
