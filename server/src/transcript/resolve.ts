@@ -336,9 +336,11 @@ async function globByUuid(
     if (livenessWitness === null) return { hits: [], complete: false };
     return { hits: [], complete: (await limit(() => io.stat(livenessWitness))) !== null };
   }
-  // The per-directory stats go out together, `limit` holding them to the bound. `hits` is then built in `names`
-  // order from the per-index answers, so a completion order that differs from the issue order changes nothing
-  // `pickNewest` sees. A null stat is folded to absent, as it always was (see the choice recorded above).
+  // The per-directory stats go out together, `limit` holding them to the bound. `hits` is built in `names` order
+  // from the per-index answers, but that order is not what makes the answer stable: `pickNewest` is a total order
+  // (mtime, then roster order, then path) and so is `collapseHits`' survivor (lowest (order, path) of a size:mtime
+  // group), so no input order, completion order included, changes it. A null stat is folded to absent, as it
+  // always was (see the choice recorded above).
   const paths = names.map((name) => path.join(root, name, `${uuid}.jsonl`));
   const stats = await Promise.all(paths.map((p) => limit(() => io.stat(p))));
   const hits: GlobHit[] = [];
