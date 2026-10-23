@@ -129,6 +129,8 @@ const decFlags = (dec: ActorFlags | null): readonly string[] =>
  * `wsReclaim`'s literal would end that match before `decFlags(` — hiding
  * `ws-reclaim` from the one test that runs the real binary on its dec.
  */
+/** `--child-of <run>`, or nothing: the expiry verbs' child arm (D-6641). */
+const childOfFlags = (childOf: number | undefined): readonly string[] => (childOf === undefined ? [] : ['--child-of', String(childOf)]);
 const deferFlags = (deferExpired: boolean): readonly string[] => (deferExpired ? ['--defer-expired'] : []);
 
 /**
@@ -539,13 +541,14 @@ export const CCD_ARGV = {
   /** `ws-audit --expire` (workspace lifecycle, spec 2026-09-24 §5.3): the SAME verb and granted prefix as
    *  `wsAudit` — `['ws-audit','--session']` — with the mode flag after the id, the order `cmd_ws_audit` reads. No
    *  grant of its own, and no `--defer-expired`: an expiry never skips its presence rungs. */
-  wsExpireAudit: (id: string) => argv(['ws-audit', '--session', id, '--expire']),
+  wsExpireAudit: (id: string, childOf?: number) =>
+    argv(['ws-audit', '--session', id, '--expire', ...childOfFlags(childOf)]),
   /** `ws-expire` — the server-composed teardown of an ARCHIVED workspace seven days after its archive. `token` is
    *  `ws-audit --expire`'s, re-proven by ccd inside the reap lock; it binds the archive's epoch. The confirmation token
    *  LEADS (`['ws-expire','--expect']` is the grant); the dec trails, and ccd strips it before it binds a positional.
    *  Workspace lifecycle wave 3b's lane is its one caller (`expireArchived`'s act), behind `EXPIRE_CAP`. */
-  wsExpire: (token: string, id: string, dec: ActorFlags | null) =>
-    argv(['ws-expire', '--expect', token, '--session', id, ...decFlags(dec)]),
+  wsExpire: (token: string, id: string, dec: ActorFlags | null, childOf?: number) =>
+    argv(['ws-expire', '--expect', token, '--session', id, ...childOfFlags(childOf), ...decFlags(dec)]),
   /** `ws-audit --collect` (child reclamation, spec 2026-09-22 §5.10): the SAME verb and granted prefix as `wsAudit` —
    *  `['ws-audit','--session']` — with the mode flag after the id, the order `cmd_ws_audit` reads. No grant of its own,
    *  and no `--defer-expired`. Its document carries a witnessed temp root's verdict and, when it is collectable, the
@@ -1001,6 +1004,12 @@ export const RECLAIM_PAUSE_CAP = 'reclaim-pause-v1';
  *  sent to a box with no evidence it exists is the failure the capability reader was built to prevent. Nothing reads
  *  it in this build — wave 3b's lane does, before its first audit. */
 export const EXPIRE_CAP = 'expire-v1';
+
+/** The `ccd caps` token that says `ws-audit --expire` and `ws-expire` take `--child-of <run>` (spec 2026-10-23 section
+ *  2.7.4, D-6641): an archived child expires on the word of its run. Spelled ONCE in `server/src`; ccd's
+ *  `echo expire-child-v1` is the other spelling. READ IT WITH `capSupported`, NEVER `verbSupported`: the flag widens a
+ *  destructive verb, so a box with no evidence is never sent it. */
+export const EXPIRE_CHILD_CAP = 'expire-child-v1';
 
 /** The `ccd caps` token that says this box has the native Docs reader (spec 2026-10-01 section 2 (a), docs W2):
  *  `docs-index`, `docs-tree`, `docs-show` and `docs-fetch` at exactly the argv the `docs*` builders above emit — one

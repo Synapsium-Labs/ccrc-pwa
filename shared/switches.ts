@@ -29,6 +29,8 @@ export const HIBERNATE_DISABLED_MARKER = 'hibernate-disabled';
 export const HIBERNATE_LIVE_MARKER = 'hibernate-live';
 /** `$REG/expire-lane-live`: arms the expiry lane's act. */
 export const EXPIRE_LANE_LIVE_MARKER = 'expire-lane-live';
+/** `$REG/expire-child-live`: arms the expiry lane's child arm (an archived child, spec 2026-10-23 section 2.7.4). */
+export const EXPIRE_CHILD_LIVE_MARKER = 'expire-child-live';
 /** `$REG/collect-lane-live`: the LEGACY arm of the collector's switch (Settings is the other arm). Kept: it still
  *  arms the lane while it stands and its latch is unset (spec K12). */
 export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
@@ -108,6 +110,10 @@ export const SWITCHES = {
   [EXPIRE_LANE_LIVE_MARKER]: {
     storage: { marker: EXPIRE_LANE_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would expire',
     owner: 'C4', meaning: 'The expiry lane acts: an archived workspace past its time is expired.', writer: 'hand-only',
+  },
+  [EXPIRE_CHILD_LIVE_MARKER]: {
+    storage: { marker: EXPIRE_CHILD_LIVE_MARKER }, default: 'absent: shadow, the lane records which archived children it would expire',
+    owner: 'C4', meaning: 'The expiry lane takes an archived child too, once the lane itself acts.', writer: 'hand-only',
   },
   [COLLECT_LANE_LIVE_MARKER]: {
     storage: { marker: COLLECT_LANE_LIVE_MARKER }, default: 'absent: the Settings arm alone decides', owner: 'C4',
