@@ -1387,8 +1387,11 @@ operator notes.
 - Modify: `ccd/history/lib.mjs:1605-1611` and `ccd/history/sweep.mjs:5633` — the two "never names an authDir"
   sentences: the frozen list still names none (an authDir is per-row roster data), and the roster half now brings
   each codex lane's credential and checkpoint.
+- Modify: `README.md` — the accounts.sh projection list (`:1446`) names `_ccrc_auth_dir` after `_ccrc_secrets_file`,
+  because that paragraph claims "the whole emitted surface" (amended by the whole-wave fix round).
 - Test: `server/test/roster-generate.test.ts`, `server/test/gen-accounts.test.ts`, `server/test/history-recall.test.ts`,
-  `server/test/history-lib.test.ts`, `server/test/history-sweep.test.ts`
+  `server/test/history-lib.test.ts`, `server/test/history-sweep.test.ts`, and `server/test/pools-prose.test.ts`,
+  which pins that list against the generator's emitted names
 
 **Interfaces:**
 - Consumes: the CLI's `secret-files` (Task 4).
@@ -1502,19 +1505,32 @@ operator notes.
 
 Nothing here is run by an agent. Wave 1 changes nothing a lane runs; these notes are for wave 2's release.
 
+**Before the update, fleet box, per codex lane.** Ask the library where the lane's credential is: from the release's
+tree (the box has no placed copy yet), `python3 -IS ccd/ccgpt-auth.py paths --auth-dir "$HOME/<authDir>"` prints it
+as `credential`. `stat -c '%a %U'` that path, and `chmod 600` any file whose mode has a group or other bit. The doctor
+now FAILs that mode, so without this a first update can exit 3 (the box is on the new build, its FAIL lines are its
+health). A file this user does not own needs `chown`, as root, first; the doctor's owner line names that and stands
+alone (D-6682, D-6684).
+
 1. **When.** Nothing holds it back: R-O9 closed on 2026-10-19 and Stage 0's windows were applied on 2026-10-22
    (ruling 9). A tier restart cuts the lane's in-flight requests, so pick a quiet window.
 2. **What moves, fleet box.** `ccrc update --to vX.Y.Z` (or `ccrc rollout --to vX.Y.Z`, fleet box first): it places
    `ccgpt-auth.py` and the new poller and probe; the patch edit makes `ccgpt-runtime check` answer `probe-moved`, so the
    update rebuilds the Codex runtime once (a pip install from the package index, bounded by `CCRC_RUNTIME_PIP_S`);
-   `_inst_codex_tiers` then restarts each lane's LiteLLM tier (stale generation and library hash). A restart that lands
+   `_inst_codex_tiers` then restarts each lane's LiteLLM tier (stale generation and library hash). A build that fails
+   (`install: codex runtime: NOT BUILT — …`) restarts no LiteLLM tier: each stays running on its old code, which on a
+   first Stage 1 update is LiteLLM's own auth, and the update says so in one line per lane, until a build passes and
+   `ccrc install` is re-run (D-6691). The shim tier is restarted either way. A restart that lands
    while the tier is inside a refresh's token round trip can spend the refresh token
    (D-6384), so a quiet window or a paused auto-update for the lane window (ownership
    spec §21.11) matters twice.
    `accounts.sh` gains `_ccrc_auth_dir`; until the server box is updated, the two boxes' generated roster digests
    differ, so update the server box promptly after.
 3. **What moves, server box.** Nothing of the lane (a server box places no GPT-lane file); `accounts.sh` regenerates.
-4. **Verify, per lane:** `ccrc codex status lane-a --json | jq .auth` reads `state: "ok"`, `credential: "present"`,
+4. **Verify, first the build:** the update printed `install: codex runtime: <generation> built, probed and current`.
+   A `NOT BUILT` line instead means every LiteLLM tier was left on its old code (D-6691): fix the build and re-run
+   `ccrc install` before the checks below, which read nothing new until then.
+   **Then, per lane:** `ccrc codex status lane-a --json | jq .auth` reads `state: "ok"`, `credential: "present"`,
    `authBase: "default"`; `ccrc doctor` keeps `codex: … signed in`; after the first expiry, `auth.lastRefreshAt` moves
    (the tier refreshed through the library) and the authDir holds `auth.json.lock` and `auth.status.json`. The tier's
    log carries no `Enter code:` line from then on. The status file's `expiresAt - lastRefreshAt` is the backend's
@@ -1955,3 +1971,344 @@ report.
 - **Cost if wrong:** like any unsaved record it lives only in this process: an exit before the next holder loses it, and
   a file swapped in at another identity drops it at the next `retry_unsaved`, keeping that file. The refused call still
   raises its refusal to its caller.
+
+### D-6667 — the probe's auth scenario is handed the patch its parent loaded
+
+- **Departs from:** Task 6's probe scenario, `subprocess.run([sys.executable, "-I", "-c", AUTH_SCENARIO], env=…)`,
+  whose fresh child loads the patch only through its own `.pth`.
+- **What changed:** the parent passes the patch file it loaded and the dead token dir to the child as argv
+  (`ccd/ccgpt-runtime:939-943`). When the child's own `.pth` loaded a different file or none, the child removes any
+  `_ccrc_finder` finder and loads that file first (`:883-891`).
+- **Why:** layer (c) runs a borrowed interpreter with the patch on PYTHONPATH (`patchSite`), and `-I` hides PYTHONPATH
+  from the child. Without the handoff, every opt-in real-LiteLLM case would FAIL `auth-patch-not-applied`.
+- **Cost if wrong:** none in a real build: parent and child are the same interpreter, so the two paths are equal and
+  nothing is reloaded. The child can only ever load the patch its parent already runs.
+
+### D-6668 — layer (c)'s M7 switches off the stream part only
+
+- **Departs from:** Task 6 Step 4, "every pre-existing `ccgpt-runtime` case green", with layer (c) not among the cases
+  Task 6 changes. M7 used to shadow any installed patch with an empty one.
+- **What changed:** M7 now mutates the patch to `cls = None`, which switches off the stream part alone. It is retitled
+  'M7: a patch with no stream part FAILS stream-tool-args-kept …' (`server/test/ccgpt-runtime.test.ts:1329-1339`).
+- **Why:** the probe's auth scenario runs before the stream gates, so an empty patch now FAILs `auth-patch-not-applied`
+  and never reaches the gate M7 measures.
+- **Cost if wrong:** layer (c) is opt-in (`CCRC_TEST_LITELLM_PY`) and was not run in this wave, so the retitled M7 has
+  not been measured against a real LiteLLM.
+
+### D-6669 — the probe's scrub is pinned by behaviour, not by its source text
+
+- **Departs from:** Task 6 Step 1, which adds 'the probe's parent scrubs CCRC_CODEX_AUTH_LIB and CCRC_CODEX_AUTH_BASE
+  before its authenticator import' to the probe-source pin.
+- **What changed:** the case runs the probe with both variables set, over a stand-in copy whose authenticator override
+  raises if either one survives the scrub. It asserts that the probe reaches `transformation-import` and prints no
+  `auth-vars-leak` (`server/test/ccgpt-runtime.test.ts:2350-2359`).
+- **Why:** a text pin would still pass if the scrub moved after the import, as long as its text read right.
+- **Cost if wrong:** the case depends on the stand-in override, so a change to `stubWithOverride` can move it. T14
+  measures it red (1 failed).
+
+### D-6670 — where a task's mutation rows are measured and recorded
+
+- **Departs from:** Global Constraints, Mutation discipline: run each row on the shipped file, prove the restore with
+  `git diff --exit-code -- <file>`, and record `<row> → <n> failed (<titles>)` in the task's commit body.
+- **What changed:** Task 6 measured T1-T14 on its committed bytes and recorded them in its task report; its commit body
+  says so (`406e0efc4`). Task 7 measured U1-U6 on the final working-tree bytes, proved each restore by sha256 rather
+  than `git diff`, and committed with the rows in the body (`d2b1f2771`); the committed blobs' sha256 equal the
+  measured ones.
+- **Why:** the controller's rules require rows measured on committed bytes and forbid amending. A row measured after
+  the commit therefore cannot reach that commit's body, and the two tasks resolved this in opposite ways.
+- **Cost if wrong:** Task 6's commit alone does not show its rows. They live in a gitignored report under
+  `.superpowers/sdd/`, which survives only as long as that worktree does.
+
+### D-6671 — ccrc-codex's env keeps the loopback auth base
+
+- **Departs from:** Task 6's Files list. It changes `ghContainedEnv` and `containedSpawnOptions` and names no edit to
+  `server/test/ccrc-codex.test.ts`'s `env()`, which deleted every `CCRC_CODEX_*` variable after calling
+  `ghContainedEnv`.
+- **What changed:** `env()` still deletes every `CCRC_CODEX_*` variable except `CCRC_CODEX_AUTH_BASE`
+  (`server/test/ccrc-codex.test.ts:76-84`).
+- **Why:** deleting it would remove the new `CLOSED_AUTH_BASE` default. Task 8's start, status and login cases in this
+  suite run the library CLI, and would then run without the override that the Global Constraints require of every
+  spawned library process.
+- **Cost if wrong:** `ghContainedEnv` keeps a caller's own non-empty value, and `env()` passes `process.env`, so an
+  ambient `CCRC_CODEX_AUTH_BASE` in the runner's shell reaches this suite. The library accepts only a loopback
+  `http://` value.
+
+### D-6672 — a failed library load fails the account-id read closed too, and its 401 names no path
+
+- **Departs from:** Task 6's Interfaces. For a library that fails to load, they name only `get_access_token` raising
+  the 401 `"auth-library-absent: … run ccrc update"`, and the stderr line names the path. `get_account_id` is defined
+  only for a library that loads.
+- **What changed:** with no library, `get_account_id` raises the same 401 as `get_access_token`
+  (`ccd/ccgpt-runtime:1420-1427`). That 401's message says "its log names the path" and does not carry the path. The
+  tier's one stderr line names the path and the exception's type (`:1383-1384`).
+- **Why:** a stock `get_account_id` would reach LiteLLM's read path and its write-backs, which the patch exists to keep
+  off the credential. The 401's message reaches a Claude Code session as an API error, which is no place for a path in
+  the user's home.
+- **Cost if wrong:** a caller asking only for the account id gets a 401 where stock LiteLLM would have answered from
+  the file. The operator finds the path in the tier's log, not in the error.
+
+### D-6673 — the readers' ensure_fresh rows are measured at the expiry arm
+
+- **Departs from:** Task 7 Step 5's U1 and U2 (swap `read` for `ensure_fresh`), each predicted at 1 failed.
+- **What changed:** U1 and U2 as written measured 6 failed each. Two narrower rows were added, U1b and U2b
+  (`ensure_fresh` on the expiry arm only), at 1 failed each. All four are recorded in `d2b1f2771`'s body.
+- **Why:** `ensure_fresh` raises on every reading that is not `present`, so the literal swap also reds the five
+  other-reading cases. Only the narrower row isolates the expired-token case.
+- **Cost if wrong:** no code effect. The plan names two rows where the record has four, and the plan's counts do not
+  match the measured ones.
+
+### D-6674 — the readers bar needs-signin before the expiry, and a config-error only under this config
+
+- **Departs from:** Task 7's refusal table. It maps status `needs-signin` to `login-required` and status
+  `config-error` to `credential-unusable`, and gives neither an order nor a config test.
+- **What changed:** both readers read the status after the reading and before the expiry test, so a dead credential is
+  `login-required` and never `token-expired`, and a config-error bars only when it was measured under the library's
+  current config. Task 7 spelt that rule in each reader; since the whole-wave fix round both ask the library's `bars`
+  (D-6692) and only pick the refusal's words (`ccd/ccgpt-usage.py:414-426`, `ccd/ccrc-models-probe:269-280`). New
+  config-error and needs-signin cases in both suites pin this, and stayed green across that change.
+- **Why:** an expiry tested first would answer a dead credential `token-expired`, whose remedy ("none needed") never
+  cures it. A config-error recorded under an older config is retried by the refresher and set aside by the status
+  report (D-6558), so a reader that still barred it would refuse a lane the tier serves.
+- **Cost if wrong:** the order is the readers' own: a barring state the library adds later reaches them through
+  `bars` and is answered `credential-unusable`, with the config-error's remedy, until a reader names its words. The
+  rule itself is no longer spelt three times (D-6692).
+
+### D-6675 — LiteLLM's stand-in authenticator is retired
+
+- **Departs from:** Task 7's `codexLaneFixture.ts` bullet: "`writeAuthStub`/`authStubSource` stay only for the tests
+  that still need LiteLLM's stand-in."
+- **What changed:** no test needed the stand-in after this task, so `writeAuthStub`, `authStubSource`,
+  `setAuthStubMode`, `AuthStubMode`, `authAsks`, `deviceFlowMarks` and the wrapper's stub path were removed. No code or
+  test names any of them at `e891f2888` (an older plan's text still does). The probe's 'renamed' and
+  'no-get-account-id' (`runtime-api-moved`) cases went with the guard they pinned, and the 'refresh-fails' and cooldown
+  cases became needs-signin-status cases.
+- **Why:** the plan keeps the helpers only for tests that still need them, and none does. Kept, they would be dead code
+  that nothing measures.
+- **Cost if wrong:** a later test that needs LiteLLM's own Authenticator behaviour has to rebuild a stand-in.
+
+### D-6676 — the models probe's env unsets its library path for a non-codex row
+
+- **Departs from:** Task 7's `ccd/ccrc` bullet. It says only that `_models_probe_codex_env` "also exports
+  `CCRC_MODELS_AUTH_LIB`", and is silent on its other arms.
+- **What changed:** every arm that returns before the codex export (not codex, roster absent, roster untold) unsets
+  `CCRC_MODELS_AUTH_LIB` beside `CCRC_CODEX_PYTHON` (`ccd/ccrc:10495-10501`). The codex arm exports it
+  (`:10507-10508`).
+- **Why:** a value inherited from the caller's environment must not steer a probe of a row that is not this codex lane.
+  `CCRC_CODEX_PYTHON` is unset in those arms for the same reason.
+- **Cost if wrong:** no visible effect today: the probe refuses a non-codex row at `runtime-absent` before it would
+  load the library.
+
+### D-6677 — plantLaneAuth gives each lane its own account id
+
+- **Departs from:** Task 7's `plantLaneAuth` bullet, which plants `plantBackendCredential`'s synthetic credential and
+  names no account id.
+- **What changed:** each lane's planted credential carries `accountId: acct-<id>`
+  (`server/test/codexLaneFixture.ts:1701`).
+- **Why:** readers now take `ChatGPT-Account-Id` from the library's reading. 'two codex lanes: each probe is handed its
+  own authDir …' (`server/test/ccrc-models.test.ts:1654`) keeps proving that each lane sends its own id only if the two
+  ids differ.
+- **Cost if wrong:** fixture-only. A case that expected the account-id claim from the tokens, not from the file, would
+  read the file's value instead.
+
+### D-6678 — the C-2/C-3 header case no longer names the account id
+
+- **Departs from:** Task 7 Step 1, whose list of `ccgpt-usage.test.ts` cases to change does not include the C-2/C-3
+  header case.
+- **What changed:** that case's assertion that `chatgpt-account-id` is absent was dropped, and a comment says why
+  (`server/test/ccgpt-usage.test.ts:727-734`). The new case 'sends ChatGPT-Account-Id, and originator stays
+  codex_cli_rs' (`:1258-1268`) now owns the header.
+- **Why:** the old assertion pinned the absence that D-6373 ends, so it would red on the plan's own change.
+- **Cost if wrong:** the header is pinned in one place only, so U3 reds one case, not two.
+
+### D-6679 — the poller's not-logged-in line gains its word and puts the remedy first
+
+- **Departs from:** Task 7's refusal table, which marks `not-logged-in` as "(unchanged)". The poller's old line had no
+  word at all: `ccgpt-usage: refusing to publish — lane <id> is not logged in (<dir>)`.
+- **What changed:** the line is now `ccgpt-usage: not-logged-in: run ccrc codex login <id> — lane <id> is not logged
+  in (<dir>); nothing was published`, in the one shape `_refuse` gives every reader refusal
+  (`ccd/ccgpt-usage.py:250-253`, `:407-408`). `server/test/ccgpt-usage.test.ts:528` pins it.
+- **Why:** the Interfaces say every refusal is "one line, remedy first, nothing published or written", and the table's
+  word only exists in the probe's line.
+- **Cost if wrong:** anything that matched the old "refusing to publish" text for this case stops matching. The
+  publisher's configuration refusals keep that wording.
+
+### D-6680 — the login's success line drops its parenthesis
+
+- **Departs from:** Task 8's Interfaces, where login answers `logged in` at rc 0 for both `signed-in` and
+  `already-signed-in`. The old line read `ccrc codex: <id>: logged in (auth.json is present in its authDir)`.
+- **What changed:** at rc 0 the login prints `ccrc codex: <id>: logged in` with no parenthesis (`ccd/ccrc:13708`).
+- **Why:** the library's own `signed-in` or `already-signed-in: <sentence>` line, relayed live just above, already says
+  which case it was. "auth.json is present" is the existence-only check this stage retires.
+- **Cost if wrong:** only one sentence changes. A script that matched the parenthesis no longer matches.
+
+### D-6681 — start refuses a credential word it does not know
+
+- **Departs from:** Task 8's Interfaces, which name the `auth-status-unreadable` refusal only for an empty status
+  answer or one jq cannot read.
+- **What changed:** a `credential` word other than absent, incomplete, unreadable, foreign-family or present is refused
+  `auth-status-unreadable`, with remedy `ccrc update`, and nothing starts (`ccd/ccrc:13383-13385`).
+- **Why:** a word this ccrc does not define means the library and ccrc are out of step, the same kind of fault as an
+  answer it cannot read. Starting on it would serve from a credential nothing has judged.
+- **Cost if wrong:** a library that adds a word refuses every start until ccrc is updated to match, even if the new
+  word should start.
+
+### D-6682 — the owner FAIL's remedy is a chown, not ccrc update
+
+- **Departs from:** Task 9's FAIL list, "`ownerOk` false, `auth-library-absent` and `auth-status-unreadable` (`ccrc
+  update`)". Read one way, it gives the owner line the remedy `ccrc update`.
+- **What changed:** when `ownerOk` is false the FAIL's remedy is "make this user its owner (chown, as root), then chmod
+  600 <path>", using the credential path the library's `paths` answers (`ccd/ccrc-doctor-checks:7120-7124`). The
+  controller ruled this text.
+- **Why:** `ccrc update` cannot change a file's owner, so it would be a remedy that cures nothing.
+- **Cost if wrong:** the remedy needs root, which the doctor cannot act on itself, so an operator without root is left
+  without a step the line names.
+
+### D-6683 — removal's hold holds nothing with no library or no python3
+
+- **Departs from:** Task 9's `_codex_auth_hold`, whose only hold-nothing arms are an absent authDir and a missing
+  `flock`. The plan says nothing about a missing library.
+- **What changed:** when `_codex_auth` answers rc 3 (no readable library file, or no `python3` on PATH,
+  `ccd/ccrc:11981-11993`), the hold answers 0 with `CX_AUTH_LOCK_FD` empty (`:12975`), and removal stops the lane
+  unserialised (`:9158-9161`). The header calls this arm accepted, not proved safe (`:12937-12950`), and the controller
+  ruled that the silent rc 0 stays. The ownership spec's §24.4 says the same
+  (`docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md:1513-1520`).
+- **Why:** a tier started with no library loads none and fails closed, and the sign-in and every reader reach the
+  credential only through the library. The other options, a stderr line or a refusal while a tier runs, would be new
+  mechanism.
+- **Cost if wrong:** a running tier keeps the library it loaded at its start and runs it under the runtime's own
+  interpreter. So a library file removed since that start, or a removing shell with no `python3`, lets the stop land
+  inside a refresh. That can lose a refresh token the endpoint has already rotated, and the lane must be signed in
+  again.
+
+### D-6684 — the doctor tests the owner before the mode
+
+- **Departs from:** Task 9: "When `modeOk` is false the mode FAIL is the only credential line" (plan `:1286-1287`).
+- **What changed:** `_dr_cx_auth` tests `ownerOk` false (`ccd/ccrc-doctor-checks:7120-7124`) before `modeOk` false
+  (`:7125-7129`). A credential that is both foreign-owned and at the wrong mode gets the owner line alone. Whenever
+  `ownerOk` is not false, the mode FAIL is still the only credential line.
+- **Why:** a non-owner cannot run the bare `chmod 600` the mode line names (it fails with EPERM), and the owner line's
+  remedy already ends in `chmod 600`.
+- **Cost if wrong:** such a file shows one FAIL where the plan reads two. Row D2e measures 2 failed, not the plan's 1,
+  and row D8's case 'FAILs a credential neither owned by this user nor at mode 0600 on the owner line, with no bare
+  chmod line' pins the order. The plan's sentence should read "unless `ownerOk` is also false".
+
+### D-6685 — the ownership spec's first count stays four
+
+- **Departs from:** Task 11's Files bullet: "the 'four executables' sentences (`:16`, `:547`, `:620`) say five".
+- **What changed:** `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md:16` still says four. `:547` and
+  `:620` say five, each with `(amended: §24)`.
+- **Why:** `:16` is §0's measured account of another repository on 2026-09-20, and that repository never had a
+  counterpart of the library, so "five" would make it false. `:547` and `:620` count ccrc's own placed executables.
+- **Cost if wrong:** one word, and one pointer on `:16`.
+
+### D-6686 — six more contradicted sentences carry the §24 pointer
+
+- **Departs from:** Task 11's Files bullet. Its list of `(amended: §24)` pointer sites is §9, §12's doctor row, §19.7,
+  §20.1, §21.3, §21.7 and §21.8.
+- **What changed:** six more sentences that the tree now contradicts carry the pointer: `:71` (decision 5, "never
+  opens"), `:150` (§4.1), `:1094` and `:1095` (§20.10's rows, which Task 7 re-seated), `:1250` (§22.3's M7) and
+  `:1287` (§23.2's "D-3161 is closed everywhere"). §24.6 gains rows for §20.10's two rows, §22.3's M7 and the tier
+  guard. §5.1's heading and §5.3's "four common executables" (`:317`) are not marked; instead §24.1 says they count the
+  four that predate the library (`:1393`).
+- **Why:** the task's title is "the rule's text, everywhere it is stated", and §19-§23's convention is that a
+  contradicted sentence carries a pointer. A pointer on a heading would change its anchor.
+- **Cost if wrong:** if the plan's list was meant to be exhaustive, the six same-line hunks and the extra §24.6 rows are
+  reverted.
+
+### D-6687 — four §24.6 rows keep their holders
+
+- **Departs from:** Task 11's §24.6, "each with its new holder test from Tasks 1-10", for §18's rows at `:765`, `:774`
+  and `:794` and §23.5's `:1326`.
+- **What changed:** the `:774` and `:794` rows read "Unchanged", with their unchanged case titles and why each still
+  holds. The `:765` row names its unchanged holders plus two new Stage 1 readers, Task 10's hostile-value emitter case
+  and Task 1's `paths_for` case (D-6540). The `:1326` row reads "Unchanged, and green after Task 7"
+  (`docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md:1548-1557`).
+- **Why:** the Global Constraints list `_acct_credential`'s refusal and the authDir validation as not touched, so no
+  Stage 1 task gave those rows a new holder.
+- **Cost if wrong:** a row that did need a new holder reads as held by tests that no longer measure it.
+
+### D-6688 — step 2's grep has one line that is not the OAuth rule
+
+- **Departs from:** Task 11 Step 2: "`git grep -n 'never reads one\|never opens the file' -- ccd` … print nothing".
+- **What changed:** at `e891f2888` the grep prints one line, `ccd/history/cli.mjs:1155` ("status never reads one fact
+  twice"), which is left unedited.
+- **Why:** that sentence is about history's status reader, not the OAuth rule, and the file is outside the task's
+  claims.
+- **Cost if wrong:** none to the text. The check's pattern is wider than its target, so anyone re-running it must set
+  this line aside.
+
+### D-6689 — the README's sign-in paragraph grows to say what the library does
+
+- **Departs from:** the task's consent note, "keep line counts where you can". The plan's own README bullet asks only
+  that the sign-in description name the library, its three side files, `needs-signin`, and a login that needs no
+  runtime.
+- **What changed:** the Codex-lane sign-in paragraph is rewritten as "One library owns the credential."
+  (`README.md:2064-2074`, 11 lines where 4 stood), and the `ccrc codex login` comment (`:2039`) is reworded with it.
+  Counting the models paragraph and the usage publisher's sentence, Task 11 grew README by 13 lines.
+- **Why:** the old paragraph said the opposite ("hands the path to the lane's own runtime and never … rewrites"), and
+  the four facts the plan requires do not fit in its four lines.
+- **Cost if wrong:** if the consent was narrower, the text moves into the code block's comment plus one sentence.
+
+### D-6690 — the accounts-connect note for a table row follows the table
+
+- **Departs from:** Task 11's accounts-connect bullet: "`:59`, `:143` — one blockquote note each", carrying the plan's
+  sentence verbatim.
+- **What changed:** the note for `:59` follows the table at
+  `docs/superpowers/specs/2026-10-18-accounts-connect-design.md:66`, with the lead-in "**The Codex (ChatGPT) OAuth row.**" before the plan's verbatim sentence. The note for `:143` is an
+  indented blockquote inside its list item, verbatim (`:146`).
+- **Why:** a blockquote cannot sit inside a Markdown table row.
+- **Cost if wrong:** the note sits seven lines below the row it amends, and the row itself (`:59`) still reads "ccrc
+  passes the path and never reads the file".
+
+### D-6691 — a failed runtime build leaves the litellm tier running, unrestarted
+
+- **Departs from:** Task 6 (`_inst_codex_tiers` restarts each lane's LiteLLM tier onto the new generation, the
+  generation and the library hash both moving) and rollout note 2. Neither names a run whose runtime build failed.
+- **What changed:** when this run's `INST_DEGRADED` holds `codex-runtime` (every `NOT BUILT` arm of
+  `_inst_codex_runtime`, `ccd/ccrc:16497-16541`), `_inst_codex_tiers` leaves a stale litellm tier running and prints
+  one line, `install: codex tiers: <id> litellm: left alone — … so it keeps its running code until a build passes;
+  then re-run: ccrc install` (`:17059-17063`), counted as left as it was, never as a failure. Its header says why
+  (`:16972-16982`). The shim tier is restarted as before. 'a failed runtime build this run never restarts a stale
+  litellm tier …' (`server/test/ccrc-install.test.ts:7822`) runs the real `_inst_codex_runtime` against a failing
+  builder, then the step; row X2 (the guard made `if false`) → 1 failed.
+- **Why:** the tier's record hashes the generation's stamp and the placed auth library (`_codex_started_json`,
+  `ccd/ccrc:12689`), so a new library reads stale even when the build failed and the previous generation stays
+  current. A restart then brings the tier back on that same generation, whose patch may carry no authenticator, and
+  cuts its in-flight requests for nothing; a stop inside a refresh can also spend a refresh token (D-6384).
+- **Cost if wrong:** until a build passes and `ccrc install` is re-run, the lane keeps serving on its old code, which
+  on a first Stage 1 update is LiteLLM's own auth, device flow included. The `NOT BUILT` line and this line are the
+  only signal, so rollout note 4 now checks the build first.
+
+### D-6692 — the readers ask the library whether a status bars a refresh
+
+- **Departs from:** Task 7's Interfaces, under which the readers consume `read`, `expired` and `read_status` only,
+  while Task 3's barring rule (`read_status`'s "a status bars a reading when …") stays the library's private `_bars`.
+  Task 7's readers each spelt that rule again (D-6674).
+- **What changed:** `ccd/ccgpt-auth.py` exports `bars(status)`, which returns `_bars(status)` and has a docstring
+  (`:961-967`; `_bars` at `:950-958`). Both readers decide with `lib.bars(status)` and only pick the refusal's words:
+  a barring needs-signin is `login-required`, any other barring status `credential-unusable`
+  (`ccd/ccgpt-usage.py:414-423`, `ccd/ccrc-models-probe:269-277`). Each loader's required names swap `config_hash`,
+  no longer called, for `bars` (`ccd/ccgpt-usage.py:272`, `ccd/ccrc-models-probe:239`). 'answers what _bars answers:
+  …' (`server/test/codex-auth-lib.test.ts:1382`) pins `bars` to `_bars` on needs-signin, a current and a stale
+  config-error, ok and no status; row X3 (`bars` answering needs-signin only) → 1 failed.
+- **Why:** the whole-wave review's CL-2: one rule spelt in three places can drift, and a reader that disagreed with
+  the refresher would refuse a lane the tier serves, or publish for one it bars.
+- **Cost if wrong:** the library gains a public name the Interfaces did not list. A library without `bars` beside a
+  newer reader fails that reader's load check, so the reader refuses `auth-library-absent` rather than guessing; both
+  are placed from one tree. The readers still spell `needs-signin` to pick their words (D-6674).
+
+### D-6693 — ccd/ccrc grows past the growth limit, waived in growth-waivers.json
+
+- **Departs from:** the growth check's limit: a listed file grows by at most `GROWTH_LIMIT`, 40 net code lines,
+  against the merge-base (`server/test/growthCheck.ts:46`), unless a waiver naming a defined D-number covers it. The
+  plan names no growth for `ccd/ccrc`.
+- **What changed:** measured with `growthCheck.ts`'s own `codeLines` (`:173`) against the merge-base `a68c90f15`,
+  `ccd/ccrc` grows from 11452 to 11579 code lines, +127: the whole-wave review's +123 plus D-6691's four. One entry is
+  appended to `server/test/growth-waivers.json` (`:11-17`): `ccd/ccrc`, `maxDelta` 127, `D-6693`, added 2026-10-23.
+  The existing entry is untouched, and `ccd/ccd` and `ccd/session-hook.sh` grow by 0.
+- **Why:** wave 2 moves ccd/ccrc's codex callers onto the library: login signs in through it, start and status read
+  its status, account removal takes its lock, the litellm tier's started record hashes it, and a failed build leaves
+  that tier running. Each is a caller that lives in ccd/ccrc, and none has another home in this stage.
+- **Cost if wrong:** the waiver caps ccd/ccrc at +127 for this branch, so a later fix round that adds a code line reds
+  the growth check until a waiver covers the new delta, and the debt stands until consolidation W5 pays it down (the
+  file's `payer`). A merge-base that moves can change the measured delta.
