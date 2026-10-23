@@ -987,7 +987,10 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
       expect(controls.length).toBeGreaterThan(0);
       for (const control of controls) expect(inert!.contains(control), 'a control outside the inert wrapper').toBe(true);
       expect(status()).toBeNull();
-      expect(answer).not.toHaveBeenCalled();
+      // A tap on a held control sends nothing, even where `inert` is not honoured (jsdom does not): a closing surface is
+      // the screen gone, and `claim()` refuses it.
+      fireEvent.click(controls[0]!);
+      expect(answer, 'a tap on the closed menu answered it').not.toHaveBeenCalled();
       expect(interrupt).not.toHaveBeenCalled();
       expect(store.getState().dialog, 'the pre-drop menu is still the store\'s current one').toBeNull();
     },
@@ -1264,5 +1267,112 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     expect(status(), 'the same ask is live again').toBeNull();
     held('the same ask arriving again');
     expect(answer).toHaveBeenCalledTimes(1);
+  });
+
+  // Review 844 I1: the store's `dialog` is null for the whole gap (F1), so "the pane moved on" cannot be read from it while
+  // the connection has not spoken. An own-words or pick-commit call whose reply settles in the gap stays landed, like an
+  // option's answer: the `[dialogId, closed]` reset decides once the new connection speaks, and until then a second answer
+  // cannot go while the first is still being typed into the pane.
+  const later = <T,>(): { promise: Promise<T>; resolve: (v: T) => void } => {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+  };
+  const settle = async (): Promise<void> => {
+    await act(async () => { await new Promise<void>((r) => setTimeout(r, 0)); });
+  };
+  const typedOf = (dialog: Dialog): Dialog => ({
+    ...dialog, id: 'dlg-typed', options: dialog.options.map((o) => (o.index === 4 ? { ...o, label: 'Memcached' } : o)),
+  });
+
+  it.each([
+    ['without a next', false],
+    ['with a next', true],
+  ])('own words whose reply settles in the gap stay landed through the reconnect, and no second answer goes: %s', async (_name, withNext) => {
+    const reply = later<unknown>();
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(reply.promise as never);
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const fx = askFixture(1);
+    const store = connected(fx);
+    mount(store);
+    fireEvent.click(screen.getByRole('button', { name: /^Other/ }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Memcached' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(text).toHaveBeenCalledTimes(1);
+
+    drop();
+    reply.resolve(withNext ? { next: typedOf(fx.dialog!) } : {});
+    await settle();
+    expect((screen.getByRole('textbox') as HTMLInputElement).value, 'the call was released in the gap').toBe('Memcached');
+
+    reconnect();
+    act(() => {
+      for (const frame of fx.frames) store.getState().apply(frame);
+    });
+    expect(status(), 'the same ask is live again').toBeNull();
+    expect((screen.getByRole('textbox') as HTMLInputElement).value, 'the text was lost after the reconnect').toBe('Memcached');
+    expect(screen.getByRole('button', { name: /^In-process/ }), 'rows released by a call that never ended').toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /^In-process/ }));
+    expect(option, 'a second answer went out').not.toHaveBeenCalled();
+    expect(text).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['without a next', false],
+    ['with a next', true],
+  ])('a pick commit whose reply settles in the gap stays landed through the reconnect, and no second commit goes: %s', async (_name, withNext) => {
+    const reply = later<unknown>();
+    const commit = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(reply.promise as never);
+    const base = askFixture(9).dialog!;
+    const dialog: Dialog = { ...base, multi: { ...base.multi!, commit: 'Submit' } };
+    const ask = { questions: [{
+      question: 'Which regions should it deploy to?', header: 'Regions', multiSelect: true,
+      options: [{ label: 'North' }, { label: 'East' }, { label: 'South' }],
+    }] };
+    const frames: AskFixture['frames'] = [{ type: 'dialog', dialog }, { type: 'ask', ask, key: 'ask-key-m' }];
+    const store = connected({ ask, dialog, askFrameSeen: true, frames });
+    mount(store);
+    fireEvent.click(screen.getAllByRole('checkbox')[0]!);
+    fireEvent.click(screen.getByRole('button', { name: /^(Next|Review answers)/ }));
+    expect(commit).toHaveBeenCalledTimes(1);
+    const ticked = (): boolean[] => screen.getAllByRole('checkbox').map((c) => (c as HTMLInputElement).checked
+      || c.getAttribute('aria-checked') === 'true');
+
+    drop();
+    reply.resolve(withNext ? { next: { ...dialog, id: 'dlg-after' } } : {});
+    await settle();
+    expect(ticked()[0], 'the ticked box was lost in the gap').toBe(true);
+
+    reconnect();
+    act(() => {
+      for (const frame of frames) store.getState().apply(frame);
+    });
+    expect(status(), 'the same ask is live again').toBeNull();
+    expect(ticked()[0], 'the ticked box was lost after the reconnect').toBe(true);
+    expect(screen.getAllByRole('checkbox')[0], 'boxes released by a commit that never ended').toBeDisabled();
+    const next = screen.getByRole('button', { name: /^(Next|Review answers)/ });
+    expect(next, 'the commit was released').toBeDisabled();
+    fireEvent.click(next);
+    expect(commit, 'a second commit went out').toHaveBeenCalledTimes(1);
+  });
+
+  // An answer's `next` that arrives in the gap is the old connection's evidence: the store's `dialog` is null there (F1), so
+  // `applyAnswered` would write it, and a new stream that frames no menu would then decide from it. The sheet does not apply
+  // it while the connection has not spoken; the new stream frames the current menu itself.
+  it('an answer\'s next that arrives in the gap is not taken as the current menu', async () => {
+    holdClosingContent();
+    const reply = later<unknown>();
+    vi.spyOn(api, 'answerDialog').mockReturnValue(reply.promise as never);
+    const store = connected(askFixture(4));
+    mount(store);
+    fireEvent.click(screen.getByRole('button', { name: /^Yes, and auto-accept edits/ }));
+    drop();
+    reconnect();
+    reply.resolve({ next: repainted(4) });
+    await settle();
+    expect(store.getState().dialog, 'the old connection\'s next became the store\'s menu').toBeNull();
+    act(() => store.getState().apply({ type: 'ask_cleared' }));
+    expect(store.getState().dialog).toBeNull();
+    expect(panel()?.getAttribute('data-state'), 'a menu the new stream never framed is offered live').toBe('closed');
   });
 });
