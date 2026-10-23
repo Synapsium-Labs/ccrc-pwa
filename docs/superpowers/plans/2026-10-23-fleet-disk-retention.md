@@ -2,7 +2,7 @@
 
 > **For agentic workers:** thirty-one PRs, Tasks DR-1 to DR-31, one task per PR. REQUIRED SUB-SKILL: superpowers:subagent-driven-development, with superpowers:test-driven-development for every red-first step. Routing is per task (**Routing** line). Band 1 is mechanical and may go to `handoff-run`; band 2 is spec-able and may go to `handoff-run` when the weekly pace says so, with the orchestrator reviewing the diff; band 3 is written and reviewed natively and never handed off. Hand off only tasks whose change is literal: workers have stalled on deep `ccd/ccd` edits. Workers do not edit §Deviations and decisions.
 
-**Spec:** `docs/superpowers/specs/2026-10-23-fleet-disk-retention-design.md` (rev 2), implementing the operator's rulings of 2026-10-23 on #1119, their answers to rev 0's questions, and lifecycle-exit rulings G1 to G4 (posted on #1167 and #1119).
+**Spec:** `docs/superpowers/specs/2026-10-23-fleet-disk-retention-design.md` (rev 3), implementing the operator's rulings of 2026-10-23 on #1119, their answers to rev 0's questions, and lifecycle-exit rulings G1 to G4 (posted on #1167 and #1119).
 
 **Issue:** #1119.
 
@@ -64,7 +64,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
 | DR-9 tmp-sweep output cap | 3 | FLEET | DR-8 |
 | DR-10 tmp-sweep test-run arm | 3 | FLEET | DR-8 |
 | DR-11 vitest's `tmpDir` in the run's signal arm | 1 | SERVER (tests) | none |
-| DR-12 census read, receipts mail, budget notice | 2 | AGENT + SERVER | DR-3, DR-8 |
+| DR-12 census read, receipts mail, budget notice-then-enforce mail | 2 | AGENT + SERVER | DR-3, DR-8 |
 | DR-13 ccd loose collect | 3 | FLEET | DR-7, #1132 |
 | DR-14 loose collect grants | 1 | AGENT + SERVER | DR-13 |
 | DR-15 collect lane loose arm (shadow) | 3 | SERVER | DR-14 |
@@ -237,7 +237,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/ccd-ws-collect-reprove.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/ccd-contexts.test.ts --maxWorkers=2
 
-### Task DR-8: the tmp sweep's live arm, in shadow, and its census (D-6620; spec §2.1, §2.5.1)
+### Task DR-8: the tmp sweep's live arm and its enforcing size budget, in shadow, and its census (D-6620; spec §2.1, §2.1.1, §2.5.1)
 
 **Routing:** band 3. **Lane:** FLEET (`ccd/ccd-tmp-sweep`).
 
@@ -246,7 +246,14 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
   - roots: the existing one, `/tmp/claude-<uid>` when it differs, and each witnessed child leaf's `claude-<uid>` when present (validated: a directory owned by this uid whose physical path is where it should be);
   - after today's pass, under the same lock: the live arm over units classified live; candidates are the direct children of `scratchpad/` and `tasks/`; the uuid → id map from `$REG/*.uuid`; the untouched rule (mtime, ctime, regular-file atime unless `noatime`); holders through `ccd path-users --json`; quarantine at `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>` and deletion a pass ≥ 24 h later after a fresh holder ask;
   - `_ts_pressure` (statfs twin of L0) and the pressure ages;
-  - shadow unless `~/.ccrc/tmp-sweep-live-arm` exists;
+  - **the size budget (spec §2.1.1):**
+    - per session, sum `scratchpad/` and `tasks/` across every root and unit of its uuid, child leaf included, with quarantine excluded;
+    - over `CCD_TMP_BUDGET_GB` (20), record `overSince`, and `enforceAt` = `overSince` + 24 h, or `overSince` itself under `_ts_pressure`;
+    - at or after `enforceAt`, still over: rank top-level entries oldest-first by newest touch, and take each that is untouched 48 h, unheld and has its git work rescued, through the same quarantine, until under `CCD_TMP_BUDGET_TARGET_GB` (15);
+    - an entry holding a repository with work on no remote is rescued through `ccd`'s `_ws_nested_rescue` once DR-20 has landed, and is kept as `git-work-unrescued` until then;
+    - the episode ends under 15 GiB;
+    - both knobs can only be raised;
+  - shadow unless `~/.ccrc/tmp-sweep-live-arm` exists (the budget's removals included; its census fields are written either way);
   - the census `~/.ccrc/tmp-sweep.json`, written to a temp file and renamed;
   - the summary line gains the live arm's counts.
 - Modify `shared/lifecycle.ts`: `claude-tmp-session-dirs`' collector and bound; a new `tmp-sweep-census` row.
@@ -267,9 +274,20 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
   - "`ccd path-users` failing keeps every candidate";
   - "the census has `seq` rising across passes and keeps 1,000 rows";
   - "under a fake `df` at 93%, the ages are the pressure ages";
-  - "the pause file stops the live arm as it stops today's".
+  - "the pause file stops the live arm as it stops today's";
+  - budget (sparse fixture files, with the two knobs raised in a test-only way so a fixture stays small):
+    - "over budget, first sighting: `overSince` and `enforceAt` are recorded, and nothing is moved (notice only)";
+    - "still over 24 h later: the oldest unheld entries untouched for 48 h are moved oldest-first until the session is under 15 GiB, and no further";
+    - "an entry touched within 48 h is never moved even while the session stays over; the census reads `over-unremovable` and lists it with why";
+    - "a held entry is skipped, and the next-oldest is taken";
+    - "under a fake `df` at 93%: `enforceAt` equals `overSince` (no grace), and entries move on the first sighting";
+    - "a child leaf's scratch counts toward its session";
+    - "quarantined bytes do not count";
+    - "an entry holding a repository with an unpushed commit is kept as `git-work-unrescued` (before DR-20)";
+    - "under 15 GiB the episode ends; over 20 GiB again starts a new one";
+    - "shadow: would-remove (budget) rows, nothing moved".
 - [ ] **Step 3: Green.**
-- [ ] **Step 4: Mutation table, RUN.** Rows for: mtime-only rule; top-level-only walk; atime on directories; deleting without quarantine; grace removed; shadow marker ignored; unmapped units swept; pressure applied without the measurement.
+- [ ] **Step 4: Mutation table, RUN.** Rows for: mtime-only rule; top-level-only walk; atime on directories; deleting without quarantine; grace removed; shadow marker ignored; unmapped units swept; pressure applied without the measurement; budget newest-first instead of oldest-first; the 48 h floor dropped; the target of 15 GiB read as 20; the 24 h grace skipped without pressure; quarantined bytes counted.
 - [ ] **Step 5: Verify.**
 
       cd server && ./node_modules/.bin/vitest run test/tmp-sweep.test.ts --maxWorkers=2
@@ -327,19 +345,19 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/run-tmp.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/ccrc-uninstall.test.ts -t 'numeric-PID' --maxWorkers=2
 
-### Task DR-12: the census is read, sessions are told, and the budget notice (D-6624; spec §2.1)
+### Task DR-12: the census is read, sessions are told, and the budget's notice-then-enforce mail (D-6624; spec §2.1, §2.1.1)
 
 **Routing:** band 2. **Lane:** AGENT + SERVER (the `NODE_FILES` key is the agent's admission set: deploy the agent first).
 
 **Files:**
 - Modify `shared/agent-protocol.ts` (`NODE_FILES` ≈:170): `tmpSweep: 'tmp-sweep.json'`. The inventory's `MEASURED_FILE_KEYS` leaves it out (it has its own reader).
-- Create `server/src/tmpSweep.ts` (L1): `parseTmpSweepCensus` (one reader, `null` for malformed), `tmpSweepReceipts(census, mailed)` (one mail per session per pass, non-shadow rows only), `tmpSweepBudget(census, prevBands)` (band = ⌊bytes / 20 GiB⌋, re-arm below 18 GiB), and the mail words.
+- Create `server/src/tmpSweep.ts` (L1): `parseTmpSweepCensus` (one reader, `null` for malformed), `tmpSweepReceipts(census, mailed)` (one mail per session per pass, non-shadow rows only), `tmpSweepBudget(census, noticed)` (one notice per over-budget episode, keyed on the session's `overSince`), and the mail words. The notice names the total, the five largest entries and `enforceAt`; at critical pressure it says enforcement has begun. Receipts list `budget` rows and the entries the budget kept, with why.
 - Modify `server/src/watch.ts`: `sweepTmpSweepCensus` every 5 min reads the file through `FleetIO`, queues system mail from `operator` (`queueSystemMail`, `coord/rundefsTx.ts` ≈:61) deduplicated by `hasMailWithSubject`, sends the budget notice to the session and, for a run's worker, its coordinator (`resolveCoordinator`); fills `disk.holders` with the five largest sessions.
 - Create `server/test/tmp-sweep-mail.test.ts`; modify `server/test/fleet-health.test.ts`.
 
-- [ ] **Step 1: Red.** "two passes' rows for one session send two mails, a re-read sends none"; "shadow rows send no mail"; "a row whose id has no registry row sends nothing and logs once"; "19 GiB sends nothing, 21 GiB one notice, 41 GiB a second, 17 GiB re-arms"; "the coordinator copy goes only to a worker of an open run"; "a malformed census is unmeasured, and `holders` is empty"; "the body names the quarantine path and the time to move it back".
+- [ ] **Step 1: Red.** "two passes' rows for one session send two mails, a re-read sends none"; "shadow rows send no mail"; "a row whose id has no registry row sends nothing and logs once"; "over budget, first sighting: one notice to the session and its coordinator naming `enforceAt`, and no receipt"; "the same episode on later passes sends no second notice"; "a new `overSince` (a new episode) sends a new notice"; "a critical-pressure census: the notice says enforcement has begun"; "budget removals arrive as receipt rows with their quarantine paths, and kept entries with why"; "the coordinator copy goes to a worker's run's coordinator, and a coordinating session gets no copy"; "a malformed census is unmeasured, and `holders` is empty"; "the body names the quarantine path and the time to move it back".
 - [ ] **Step 2: Green.**
-- [ ] **Step 3: Mutation table, RUN.** Rows for: no dedupe; shadow mailed; re-arm at 20 GiB (flapping); the coordinator always copied.
+- [ ] **Step 3: Mutation table, RUN.** Rows for: no dedupe; shadow mailed; a notice per pass rather than per episode; the coordinator always copied; `enforceAt` left out of the body.
 - [ ] **Step 4: Verify.**
 
       cd agent && ./node_modules/.bin/vitest run --maxWorkers=2
@@ -512,7 +530,8 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
   - the audit document gains `nestedRescue: {wouldRescue, rescue}`;
   - the pin (`_ws_reclaim_pin_contained` ≈:32198): for each rescuable repository, step (1a) stops refusing and calls a new `_ws_nested_rescue`. It makes a scratch-index WIP commit inside the nested repository (`_ws_wip_commit`'s shape, untracked non-ignored files included), runs a contained `git -C <main> fetch --no-tags --no-write-fetch-head <N> '+refs/*:refs/ccrc/attic/<id>/nested/<pathhex>/refs/*'`, writes the WIP as `…/wip`, measures the bytes the fetch added, and refuses `nested-rescue-too-large` above `WS_NESTED_RESCUE_MAX_MB` (512, raise-only). It then re-proves that every rescued sha resolves (`nested-rescue-failed` otherwise);
   - the tombstone's `containment.rescued` (≈:32343-32366);
-  - caps `nested-rescue-v1`.
+  - caps `nested-rescue-v1`;
+  - for DR-8's budget (spec §2.1.1, ruling (3)): a box-local entry, `ccd scratch-rescue --session <id> <path>`, that runs `_ws_nested_rescue` into the session's project attic under `refs/ccrc/attic/<id>/scratch/<namehex>/`. It sits behind the privileged direct-entry check, is added to `FORBIDDEN_CCD_VERBS` (`server/src/coord/approvalguard.ts`), and is called only by `ccd-tmp-sweep`.
 - Modify `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md` (the rung-9 row ≈:400 and ≈:484-492) and `docs/superpowers/programs/child-reclamation-contract.md` (§3 ≈:160).
 - Create `server/test/ccd-nested-rescue.test.ts`. Its fixture builds a child tree holding a fixture repository with two unpushed commits, an untracked file and no remote.
 
@@ -753,11 +772,11 @@ One contiguous block of thirty-one, D-6613 to D-6643, issued by the allocator (`
 - **D-6617** (DR-5): banner id `disk`, ranked after `fleet-host`, at warn and critical.
 - **D-6618** (DR-6): `_check_disk` prints one line per work filesystem; its bash thresholds are pinned equal to L0's.
 - **D-6619** (DR-7): `_ws_path_users` counts file mappings and answers many paths in one walk; `ccd path-users` is its read-only entry.
-- **D-6620** (DR-8): the live arm, its roots, the untouched rule with regular-file atime, the 24 h quarantine, the census and the box-measured pressure ages; shadow until `~/.ccrc/tmp-sweep-live-arm`.
+- **D-6620** (DR-8): the live arm, its roots, the untouched rule with regular-file atime, the 24 h quarantine, the census and the box-measured pressure ages; shadow until `~/.ccrc/tmp-sweep-live-arm`. **The size budget enforces** (operator ruling 2026-10-23 (3)). Over 20 GiB of `scratchpad/` + `tasks/` per session, child leaf included and quarantine excluded, the sweep records `overSince`. After a 24 h grace (none at 92% pressure), if the session is still over, it moves the oldest top-level entries that are untouched 48 h, unheld and have their git work rescued, oldest-first, through the same quarantine, until the session is under 15 GiB. An entry touched within 48 h is never taken. Git work on no remote is kept until DR-20's rescue helper lands.
 - **D-6621** (DR-9): a finished `.output` over 1 GiB keeps 64 MiB at each end with a marker, by rename.
 - **D-6622** (DR-10): a `ccrc-testrun-*` root with no listener, 6 h ctime-quiet and unheld is removed by the tmp sweep.
 - **D-6623** (DR-11): the run's signal arm removes vitest's own `tmpDir`.
-- **D-6624** (DR-12): the census is a node file; the server mails receipts from the `operator` role and the 20 GiB band notice to the session and a worker's coordinator.
+- **D-6624** (DR-12): the census is a node file; the server mails receipts from the `operator` role. The budget is **notice-then-enforce**: one notice per over-budget episode (keyed on `overSince`) to the session and a worker's coordinator, naming the 24 h `enforceAt` (or saying enforcement has begun at critical pressure). Budget removals and the entries the budget kept come in the receipt mail.
 - **D-6625** (DR-13): the census, the loose audit with a 48 h floor (24 h under pressure, never below 86400 s), the loose verb with its own lock and record family; R38 and R59 amended.
 - **D-6626** (DR-14): two `ws-audit` grant prefixes and three argv builders.
 - **D-6627** (DR-15): loose names join the collect population, rule (e) exempts them, and they are shadow until `collect-loose-live`. **Reverses D-5888.**
@@ -802,3 +821,5 @@ One contiguous block of thirty-one, D-6613 to D-6643, issued by the allocator (`
 **rev 1 (2026-10-23).** The operator's answers to the spec's §9 and rulings G1 to G4. DR-8's Step 0 became a re-ground, because both scratch locations were observed. Wave 5 added DR-20 to DR-31. #840 P4-4 to P4-6 were confirmed not on `main` and added to the Gates.
 
 **rev 2 (2026-10-23).** Every spec question is ruled (spec §9.1, items 10 to 16). DR-27's red cases name the hand-hold and review-child rulings; nothing else in the tasks changes.
+
+**rev 3 (2026-10-23).** Operator ruling (3): the size budget enforces. DR-8 gains the budget's rule and its red cases, DR-12's notice becomes notice-then-enforce, and both definitions (D-6620, D-6624) say so. DR-20's rescue helper is reused for git work in scratch once it lands.
