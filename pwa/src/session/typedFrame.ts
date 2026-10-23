@@ -120,7 +120,18 @@ export function keyLetter(ev: KeyLike): string | null {
  * as a paste does, `typedFrame(data)`: unchanged when it holds no control at
  * all, sanitised and bracketed when it does, so it can neither end a bracketed
  * paste nor submit a line.
+ *
+ * ONE EXCEPTION, A LONE LINE FEED (D-6368). A phone keyboard's Return reaches
+ * xterm's textarea as an inserted `\n` after a keyCode-229 keydown, and xterm 6
+ * reads that growth a task later and sends it as data
+ * (`CompositionHelper._handleAnyTextareaChanges`): inside the window, a lone
+ * LF. Claude Code reads an LF (Ctrl+J) as a newline, not a submit, so the
+ * reader's Return would never send. Inside a window it is Enter. A physical
+ * Ctrl+J is a keydown xterm sends at once, no window open, so it never gets
+ * here and stays an LF. Text holding a line feed among other characters is
+ * still a paste.
  */
 export function insertedFrame(data: string): string {
+  if (data === '\n') return KEY_SEQ.enter;
   return oneKey(data) ? data : typedFrame(data);
 }
