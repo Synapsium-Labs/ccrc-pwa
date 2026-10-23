@@ -32,6 +32,10 @@ export const EXPIRE_LANE_LIVE_MARKER = 'expire-lane-live';
 /** `$REG/collect-lane-live`: the LEGACY arm of the collector's switch (Settings is the other arm). Kept: it still
  *  arms the lane while it stands and its latch is unset (spec K12). */
 export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
+/** `$REG/collect-loose-live`: arms the collector's LOOSE arm (fleet disk retention spec 2026-10-23 section 2.4, D-6627):
+ *  a loose `~/.cc-tmp` entry is removed only while it stands AND the lane itself is effectively live. No writer in the
+ *  tree. */
+export const COLLECT_LOOSE_LIVE_MARKER = 'collect-loose-live';
 /** `$REG/dead-coordinator-lane-live`: arms the dead-coordinator lane's act. */
 export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
 /** `$REG/idle-compact-nudge-disabled`: the idle-compaction nudge's kill switch. */
@@ -113,6 +117,11 @@ export const SWITCHES = {
     storage: { marker: COLLECT_LANE_LIVE_MARKER }, default: 'absent: the Settings arm alone decides', owner: 'C4',
     meaning: 'The legacy arm of the collector: it arms the lane while it stands and its latch is unset.',
     writer: 'hand-only',
+  },
+  [COLLECT_LOOSE_LIVE_MARKER]: {
+    storage: { marker: COLLECT_LOOSE_LIVE_MARKER }, default: 'absent: shadow, the lane records what loose entries it would remove',
+    owner: 'C4', meaning: 'The collector\'s loose arm acts: an idle entry under the fleet temp directory that no session '
+      + 'witnessed is removed, once the lane itself is live.', writer: 'hand-only',
   },
   [DEAD_COORDINATOR_LANE_LIVE_MARKER]: {
     storage: { marker: DEAD_COORDINATOR_LANE_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would end',

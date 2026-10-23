@@ -8564,3 +8564,40 @@ describe('ccrc history: the headless marker and the arm words are defined once, 
     expect(named.filter((x) => !allowed(x.slice(x.indexOf(': ') + 2)))).toEqual([]);
   });
 });
+
+// FLEET DISK RETENTION DR-15 (D-6627; spec 2026-10-23 §2.4). APPENDED, for the reason the blocks above state:
+// `session-hook.test.ts`'s citation audit cites this file by line. The collector's LOOSE arm SHIPS SHADOWED: a loose
+// `~/.cc-tmp` entry is removed only while `$REG/collect-loose-live` stands AND the lane itself is effectively live. The
+// file is the operator's to touch BY HAND, as `collect-lane-live` is, so no line of shell names it and its one
+// TypeScript spelling is its switchboard row, an L0 file that reaches no `node:` module and so cannot write it.
+describe('fleet disk retention DR-15: the collector’s loose-arm marker has no writer in the tree', () => {
+  const NAME = 'collect-loose-live';
+  const DEFINER = 'shared/switches.ts';
+  const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  it('the files that name its constant are the definer and the executor, which reads it from the registry listing alone', () => {
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('COLLECT_LOOSE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/coord/collectTempRoot.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+
+  it('it is read in ONE place, nearest the argv: the job consults it after the lane’s own switch and before the loose verb', () => {
+    // D-6114: keyed on the job's symbol (scan/symbols.ts), never a literal slice of the file.
+    const job = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server/src/coord/collectTempRoot.ts'), 'collectTempRoot'));
+    expect(job.match(/\blooseMarker\b/g)?.length, 'the job reads the final listing’s marker once').toBe(1);
+    const at = (needle: string): number => job.split('\n').findIndex((l) => l.includes(needle));
+    const [live, marker, verb] = [at('collectLaneLive(lane)'), at('looseMarker'), at('wsCollectLoose(')];
+    expect([live, marker, verb].every((i) => i > -1), 'an anchor is gone').toBe(true);
+    expect(live).toBeLessThan(marker);
+    expect(marker).toBeLessThan(verb);
+  });
+});

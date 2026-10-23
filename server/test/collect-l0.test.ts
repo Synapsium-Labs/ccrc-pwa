@@ -110,9 +110,9 @@ describe('the collector’s ChildReclaimAttention arms (spec §5.9)', () => {
 });
 
 describe('COLLECT_BOX_LABELS — the box-wide lines’ fixed sessionIds (spec §5.9)', () => {
-  it('the lines are the table’s keys, derived, ten of them', () => {
+  it('the lines are the table’s keys, derived, eleven of them', () => {
     expect([...COLLECT_BOX_LINES].sort()).toEqual(Object.keys(COLLECT_BOX_LABELS).sort());
-    expect(COLLECT_BOX_LINES).toHaveLength(10);
+    expect(COLLECT_BOX_LINES).toHaveLength(11);
   });
 
   it.each(Object.keys(COLLECT_BOX_LABELS))('%s: holds a slash, which no registry file name can carry, so no session id and no temp-root id equals it', (line) => {
