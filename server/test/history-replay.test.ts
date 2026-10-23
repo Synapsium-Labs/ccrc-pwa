@@ -13630,3 +13630,42 @@ describe('W2-5b1 Task 5: the judge subcommand', () => {
     expect([...W5B5.HANDLERS.keys()].slice(-2), 'judge is registered right after arms').toEqual(['arms', 'judge']);
   });
 });
+
+// ── W2-5b1 Task 6: the arms-then-judge walk over one --out (R21) ─────────────────────────────────────────────────
+// Task 4's real `arms --section pilot` on the arm stub (Task 2's re-check and payloads stood in, as Task 4's stub cases
+// stand them in), then `judge --section pilot` over the same --out with every loader real: Task 4's loadArmRun,
+// armNodeOf and readArmAnswers. The --version line and every judge run print one labelled stream (W5B5_LABELLED, written
+// before part 1 measures the version); each arm run prints its own. Every HOME is a mkTmp fixture; nothing spawns a model.
+describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 6: the arms-then-judge walk over one --out (R21)', () => {
+  it('arms then judge: the answer records reach the judge through readArmAnswers, a correct answer never does, and judged.json names ids only (W2-D79, W2-D80, Q2)', async () => {
+    const home = w5b4MkTmp('ccrc-w5b6-walk-');
+    writeFileSync(join(home, STUB_STREAM), W5B5_LABELLED);   // before w5b4Node, so --version and part 1's step 0a read it
+    w5b4Node(home);
+    w5b4CreateStore(home, { storeId: W5B4_STORE_A });
+    const fx = w5b4Pilot(home, { n: 2 });
+    const [q1, q2] = fx.entries as [W5b4R, W5b4R];
+    w5b4Act(home, q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'ANSWER: UNKNOWN' }));
+    w5b4Act(home, q1, W5B4_TREATMENT, '.jsonl', w5b4Stream({ text: `ANSWER: ${q1.fact as string}` }));
+    w5b4Act(home, q2, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'ANSWER: deadbee' }));
+    w5b4Act(home, q2, W5B4_TREATMENT, '.jsonl', w5b4Stream({ text: 'I do not remember the commit.' }));
+    const arms = await w5b4Arms(home, fx.argv);
+    expect([arms.refusal, arms.code]).toEqual([null, 0]);
+    expect(D4.readArmAnswers(fx.out, 'pilot'), 'one record per (qid, arm)').toHaveLength(4);
+    const flags = (D4.parseArgs(['judge', ...fx.argv.slice(1)]) as { flags: Record<string, unknown> }).flags;
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(flags, W5B5_ENV(home)));
+    expect(r.refusal).toBeNull();
+    expect(r.code).toBe(0);
+    const judgedText = readFileSync(join(fx.out, 'pilot', 'judged.json'), 'utf8');
+    expect(r.stderr, 'only the sha line (D-5983)').toBe(`sha256 ${sha256Hex(judgedText)}\n`);
+    const map = JSON.parse(readFileSync(join(fx.out, 'pilot', 'judge.map.json'), 'utf8')) as { items: W5b5MapRow[] };
+    expect(map.items).toEqual(W5B5.judgeMapOf((fx.draft.bootstrap as W5b4R).seed as string, fx.entries as unknown as W5b5Entry[], W5B5_ARMS));
+    const idOf = (q: W5b4R, a: string): string => map.items.find((m) => m.qid === q.qid && m.arm === a)!.id;
+    const judged = JSON.parse(judgedText) as Record<string, any>;
+    expect(judged.items.map((i: W5b5Item) => i.id)).toEqual([idOf(q1, W5B4_CONTROL), idOf(q2, W5B4_CONTROL), idOf(q2, W5B4_TREATMENT)].sort());
+    expect(judged.counts).toEqual({ judged: 3, judge_failed: 0, uncertain: 0, fabricated: 3, excluded_correct: 1, excluded_run_failed_questions: 0 });
+    const judgeRuns = w5b4Runs(home).filter((x) => x.env.CCRC_RECALL_ARM === undefined);
+    expect(judgeRuns, 'one judge spawn per non-correct answer').toHaveLength(3);
+    for (const run of judgeRuns) for (const a of W5B5_ARMS) expect(run.stdin as string, a).not.toContain(a);
+    for (const a of W5B5_ARMS) expect(judgedText, a).not.toContain(a);
+  }, 180_000);
+});
