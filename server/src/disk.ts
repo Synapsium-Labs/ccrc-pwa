@@ -8,16 +8,8 @@
 // volume pages as plainly as a full one.
 import {
   DISK_CLEAR_MARGIN_PCT, DISK_CRITICAL_PCT, DISK_WARN_PCT,
-  type DiskExpectedMount, type DiskFilesystem, type DiskFilesystemLevel, type DiskLevel,
+  type DiskExpectedMount, type DiskFilesystem, type DiskFilesystemLevel, type DiskLevel, type DiskMeasured,
 } from '../../shared/disk.js';
-
-/** What one measurement pass read: the filesystems and the expected-mount answers. */
-export interface DiskMeasured {
-  readonly filesystems: readonly DiskFilesystem[];
-  readonly expectedMounts: readonly DiskExpectedMount[];
-  /** Roots that could not be read at all (a statfs that timed out, a root that is absent), with the reason. */
-  readonly missing: readonly { readonly label: string; readonly why: string }[];
-}
 
 /** A filesystem's held level and the one differing level seen once, awaiting its second sighting. */
 export interface DiskFilesystemVerdict extends DiskFilesystemLevel {
@@ -30,6 +22,8 @@ export interface DiskVerdict {
   readonly level: DiskLevel;
   readonly filesystems: readonly DiskFilesystemVerdict[];
   readonly expectedMounts: readonly DiskExpectedMount[];
+  /** Expected mounts missing in this pass: one missing pass is a bad read, two in a row is critical. */
+  readonly mountsDown: readonly string[];
 }
 
 /** Whether `used` of `total` is at least `pct` percent, by integer cross-multiplication: 85.0% is exactly 85. */
@@ -37,7 +31,9 @@ const atLeast = (used: number, total: number, pct: number): boolean => total > 0
 
 /** Whether either of bytes-used and inodes-used is at least `pct` percent. */
 function usedAtLeast(fs: DiskFilesystem, pct: number): boolean {
-  return atLeast(fs.sizeBytes - fs.availBytes, fs.sizeBytes, pct) || atLeast(fs.files - fs.filesFree, fs.files, pct);
+  // df's formula: used / (used + avail), with used = size - free (reserved blocks are neither used nor available).
+  const used = Math.max(0, fs.sizeBytes - fs.freeBytes);
+  return atLeast(used, used + fs.availBytes, pct) || atLeast(fs.files - fs.filesFree, fs.files, pct);
 }
 
 /** A filesystem that reports neither a size nor inodes tells nothing. */
@@ -73,6 +69,17 @@ export function diskVerdict(prev: DiskVerdict | null, measured: DiskMeasured, no
   const step = (last: DiskFilesystemVerdict, fs: DiskFilesystem, target: DiskLevel): DiskFilesystemVerdict => {
     if (target === last.level) return { ...fs, level: last.level, pending: null };
     if (last.pending === target) return { ...fs, level: target, pending: null };
+    if (last.pending !== null) {
+      // Two differing sightings on the same side of the held level agree that it moved at least that far: take the
+      // level both reached (the lower rank of the two going up, the higher going down), not "no agreement".
+      const base = RANK[last.level];
+      const rise = RANK[target] > base;
+      if (rise === RANK[last.pending] > base) {
+        const [a, b] = [RANK[last.pending], RANK[target]];
+        const agreed = rise ? (a < b ? last.pending : target) : (a > b ? last.pending : target);
+        return { ...fs, level: agreed, pending: target };
+      }
+    }
     return { ...fs, level: last.level, pending: target };
   };
   const seen = new Set(measured.filesystems.map((f) => f.dev));
@@ -81,14 +88,27 @@ export function diskVerdict(prev: DiskVerdict | null, measured: DiskMeasured, no
     return last === undefined ? { ...fs, level: diskLevelOf(fs), pending: null } : step(last, fs, targetLevel(fs, last.level));
   });
   // A held filesystem absent from this pass could not be read: it keeps its level and drifts toward `unmeasured` on the
-  // usual two sightings, never toward `ok`.
-  const carried = [...before.values()].filter((f) => !seen.has(f.dev)).map((f) => step(f, f, 'unmeasured'));
+  // usual two sightings, never toward `ok`. Once drifted it is a ghost, and is dropped unless a root that could not be
+  // read (failed or timed out; an absent root holds no bytes) still points at it; a filesystem whose roots now all
+  // report on another device is dropped at once.
+  const unreadable = new Set(measured.missing.filter((m) => m.why !== 'absent').map((m) => m.label));
+  const reported = new Set(measured.filesystems.flatMap((f) => f.roots));
+  let drifted = 0;
+  const carried = [...before.values()].filter((f) => !seen.has(f.dev)).map((f) => step(f, f, 'unmeasured'))
+    .filter((f) => {
+      if (f.roots.length > 0 && f.roots.every((r) => reported.has(r))) return false;
+      if (f.level === 'unmeasured' && !f.roots.some((r) => unreadable.has(r))) { drifted += 1; return false; }
+      return true;
+    });
   const filesystems = [...read, ...carried];
-  const missingMount = measured.expectedMounts.some((m) => !m.mounted);
-  let level: DiskLevel = filesystems.length === 0 ? 'unmeasured' : 'ok';
+  // A missing mount pages only when it was missing the pass before too; one bad read never pages.
+  const mountsDown = measured.expectedMounts.filter((m) => !m.mounted).map((m) => m.path);
+  const confirmed = mountsDown.some((p) => (prev?.mountsDown ?? []).includes(p));
+  let level: DiskLevel = 'ok';
   for (const f of filesystems) if (RANK[f.level] > RANK[level]) level = f.level;
   // Whatever could not be read this pass keeps the fleet off `ok`, while each filesystem's own level stays debounced.
-  if ((measured.missing.length > 0 || carried.length > 0 || measured.filesystems.length === 0) && RANK[level] < RANK.unmeasured) level = 'unmeasured';
-  if (missingMount) level = 'critical';
-  return { at: nowMs, level, filesystems, expectedMounts: measured.expectedMounts };
+  const unknown = unreadable.size > 0 || carried.length > 0 || drifted > 0 || mountsDown.length > 0 || measured.filesystems.length === 0;
+  if (unknown && RANK[level] < RANK.unmeasured) level = 'unmeasured';
+  if (confirmed) level = 'critical';
+  return { at: nowMs, level, filesystems, expectedMounts: measured.expectedMounts, mountsDown };
 }

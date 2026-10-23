@@ -4,15 +4,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   DISK_CLEAR_MARGIN_PCT, DISK_CRITICAL_PCT, DISK_PRESSURE_AGES, DISK_WARN_PCT, DISK_WORK_ROOTS, readDiskHealth,
-  type DiskFilesystem,
+  type DiskFilesystem, type DiskMeasured,
 } from '../../shared/disk.js';
-import { diskLevelOf, diskVerdict, type DiskMeasured, type DiskVerdict } from '../src/disk.js';
+import { diskLevelOf, diskVerdict, type DiskVerdict } from '../src/disk.js';
 
 const SIZE = 1000;
 /** A filesystem `usedPct` full by bytes (tenths of a point resolve: 849 of 1000 is 84.9) and `inodePct` by inodes. */
 const fsAt = (usedPct: number, inodePct = 0, dev = '8:1'): DiskFilesystem => ({
-  dev, mount: '/data', fsType: 'ext4', roots: ['home'],
-  sizeBytes: SIZE, availBytes: Math.round(SIZE - (usedPct * SIZE) / 100),
+  dev, mount: `/data${dev}`, fsType: 'ext4', roots: [`r${dev}`],
+  sizeBytes: SIZE, availBytes: Math.round(SIZE - (usedPct * SIZE) / 100), freeBytes: Math.round(SIZE - (usedPct * SIZE) / 100),
   files: SIZE, filesFree: Math.round(SIZE - (inodePct * SIZE) / 100), readOnly: false,
 });
 const measured = (fss: DiskFilesystem[], mounts: { path: string; mounted: boolean }[] = []): DiskMeasured =>
@@ -70,13 +70,63 @@ describe('diskVerdict: hysteresis, debounce, mounts', () => {
     expect(v.level).toBe('critical');
     expect(v.filesystems.map((f) => f.level)).toEqual(['ok', 'critical']);
   });
-  it('a missing expected mount is critical, at once, with every filesystem fine', () => {
-    const v = run([measured([fsAt(10)], [{ path: '/data', mounted: false }])], held('ok'))[0]!;
-    expect(v.level).toBe('critical');
-    expect(v.expectedMounts).toEqual([{ path: '/data', mounted: false }]);
+  it('a missing expected mount pages on its second consecutive pass, never its first', () => {
+    const down = measured([fsAt(10)], [{ path: '/data', mounted: false }]);
+    const [a, b] = run([down, down], held('ok'));
+    expect(a!.level).toBe('unmeasured');
+    expect(b!.level).toBe('critical');
+    expect(b!.expectedMounts).toEqual([{ path: '/data', mounted: false }]);
   });
-  it('a missing expected mount is critical even when no filesystem was measured', () => {
-    expect(run([measured([], [{ path: '/data', mounted: false }])])[0]!.level).toBe('critical');
+  it('a missing mount that is back the next pass never pages', () => {
+    const down = measured([fsAt(10)], [{ path: '/data', mounted: false }]);
+    const up = measured([fsAt(10)], [{ path: '/data', mounted: true }]);
+    expect(run([down, up, down], held('ok')).map((v) => v.level)).toEqual(['unmeasured', 'ok', 'unmeasured']);
+  });
+  it('a missing expected mount is critical on its second pass even when no filesystem was measured', () => {
+    const down = measured([], [{ path: '/data', mounted: false }]);
+    expect(run([down, down]).map((v) => v.level)).toEqual(['unmeasured', 'critical']);
+  });
+  it('91.5% then 92.5% then 91.5% after ok reaches warn on the second reading, never stays ok', () => {
+    expect(run([measured([fsAt(91.5)]), measured([fsAt(92.5)]), measured([fsAt(91.5)])], held('ok')).map((v) => v.level))
+      .toEqual(['ok', 'warn', 'warn']);
+  });
+  it('80% then 88% from critical falls to warn on the second reading, never stays critical', () => {
+    expect(run([measured([fsAt(80)]), measured([fsAt(88)])], held('critical')).map((v) => v.level))
+      .toEqual(['critical', 'warn']);
+  });
+  it('a ghost filesystem is dropped once drifted to unmeasured with no unreadable root pointing at it', () => {
+    const start = run([measured([fsAt(10, 0, '8:1'), fsAt(95, 0, '8:2')])])[0]!;
+    const here = measured([fsAt(10, 0, '8:1')]);
+    const out = run([here, here, here], start);
+    expect(out.map((v) => v.level)).toEqual(['critical', 'unmeasured', 'ok']);
+    expect(out[2]!.filesystems.map((f) => f.dev)).toEqual(['8:1']);
+  });
+  it('an unreadable root pointing at a drifted filesystem keeps it, and the fleet off ok', () => {
+    const start = run([measured([fsAt(10, 0, '8:1'), fsAt(95, 0, '8:2')])])[0]!;
+    const here = { ...measured([fsAt(10, 0, '8:1')]), missing: [{ label: 'r8:2', why: 'timeout' as const }] };
+    const out = run([here, here, here], start);
+    expect(out.map((v) => v.level)).toEqual(['critical', 'unmeasured', 'unmeasured']);
+    expect(out[2]!.filesystems.map((f) => f.dev)).toEqual(['8:1', '8:2']);
+  });
+  it('an absent root holds no bytes: it neither keeps a ghost nor forces unmeasured', () => {
+    const here = { ...measured([fsAt(10, 0, '8:1')]), missing: [{ label: 'r8:2', why: 'absent' as const }] };
+    expect(run([here])[0]!.level).toBe('ok');
+    const start = run([measured([fsAt(10, 0, '8:1'), fsAt(95, 0, '8:2')])])[0]!;
+    const out = run([here, here, here], start);
+    expect(out[2]!.filesystems.map((f) => f.dev)).toEqual(['8:1']);
+  });
+  it('a filesystem whose roots now all report on another device is dropped at once', () => {
+    const start = run([measured([fsAt(95, 0, '8:2')])])[0]!;
+    const moved: DiskFilesystem = { ...fsAt(10, 0, '8:3'), roots: ['r8:2'] };
+    const v = run([measured([moved])], start)[0]!;
+    expect(v.filesystems.map((f) => f.dev)).toEqual(['8:3']);
+    expect(v.level).toBe('ok');
+  });
+  it('used percent is df\'s: reserved blocks are neither used nor available', () => {
+    // 1000 blocks, 100 reserved: 825 used, 75 avail -> df says 91.7% (warn); (size - avail) / size would say 92.5%.
+    expect(diskLevelOf({ ...fsAt(0), sizeBytes: 1000, freeBytes: 175, availBytes: 75 })).toBe('warn');
+    // 830 used, 70 avail -> 92.2%: critical.
+    expect(diskLevelOf({ ...fsAt(0), sizeBytes: 1000, freeBytes: 170, availBytes: 70 })).toBe('critical');
   });
   it('no filesystems is unmeasured, never ok', () => {
     expect(run([measured([])])[0]!.level).toBe('unmeasured');
@@ -84,16 +134,16 @@ describe('diskVerdict: hysteresis, debounce, mounts', () => {
     expect(run([measured([])], held('ok'))[0]!.level).toBe('unmeasured');
   });
   it('a filesystem that reports no size and no inodes is unmeasured, never ok', () => {
-    const none: DiskFilesystem = { ...fsAt(10), sizeBytes: 0, availBytes: 0, files: 0, filesFree: 0 };
+    const none: DiskFilesystem = { ...fsAt(10), sizeBytes: 0, availBytes: 0, freeBytes: 0, files: 0, filesFree: 0 };
     expect(diskLevelOf(none)).toBe('unmeasured');
     expect(run([measured([none])])[0]!.level).toBe('unmeasured');
   });
   it('an unmeasured filesystem beside an ok one is never a fleet ok', () => {
-    const none: DiskFilesystem = { ...fsAt(10, 0, '8:2'), sizeBytes: 0, availBytes: 0, files: 0, filesFree: 0 };
+    const none: DiskFilesystem = { ...fsAt(10, 0, '8:2'), sizeBytes: 0, availBytes: 0, freeBytes: 0, files: 0, filesFree: 0 };
     expect(run([measured([fsAt(10, 0, '8:1'), none])])[0]!.level).toBe('unmeasured');
   });
   it('a critical filesystem that reads unmeasured twice beside an ok one never lets the fleet read ok', () => {
-    const none: DiskFilesystem = { ...fsAt(10, 0, '8:2'), sizeBytes: 0, availBytes: 0, files: 0, filesFree: 0 };
+    const none: DiskFilesystem = { ...fsAt(10, 0, '8:2'), sizeBytes: 0, availBytes: 0, freeBytes: 0, files: 0, filesFree: 0 };
     const start = run([measured([fsAt(10, 0, '8:1'), fsAt(95, 0, '8:2')])])[0]!;
     const out = run([measured([fsAt(10, 0, '8:1'), none]), measured([fsAt(10, 0, '8:1'), none])], start);
     expect(out.map((v) => v.level)).toEqual(['critical', 'unmeasured']);
@@ -105,7 +155,7 @@ describe('diskVerdict: hysteresis, debounce, mounts', () => {
     expect(a!.filesystems.map((f) => f.dev)).toEqual(['8:1', '8:2']);
   });
   it('a missing root never reads as fleet ok', () => {
-    const m = { ...measured([fsAt(10)]), missing: [{ label: 'home', why: 'statfs timed out' }] };
+    const m = { ...measured([fsAt(10)]), missing: [{ label: 'r8:1', why: 'timeout' }] };
     expect(run([m])[0]!.level).toBe('unmeasured');
   });
   it('a verdict is stamped with the clock it was given', () => {
@@ -123,7 +173,7 @@ describe('readDiskHealth: the one reader', () => {
   it('reads a whole block', () => {
     const r = readDiskHealth({ disk: good() });
     expect(r?.level).toBe('warn');
-    expect(r?.filesystems[0]?.mount).toBe('/data');
+    expect(r?.filesystems[0]?.mount).toBe('/data8:1');
     expect(r?.holders).toEqual([{ label: 'sessions', bytes: 12 }]);
   });
   it('answers null for absent, a string, a block missing level, and a filesystem with a negative size', () => {

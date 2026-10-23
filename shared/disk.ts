@@ -64,7 +64,12 @@ export interface DiskFilesystem {
   /** Labels of the `DISK_WORK_ROOTS` rows on this filesystem. */
   readonly roots: readonly string[];
   readonly sizeBytes: number;
+  /** Bytes a non-privileged writer can still use (`f_bavail`). */
   readonly availBytes: number;
+  /** Bytes free including the reserved blocks (`f_bfree`). Used percent is computed the way `df` does:
+   *  used = size - free, percent = used / (used + avail). So the server and the box's bash twins agree near 92%, where
+   *  `(size - avail) / size` would read the reserved blocks as used. */
+  readonly freeBytes: number;
   readonly files: number;
   readonly filesFree: number;
   readonly readOnly: boolean;
@@ -78,6 +83,23 @@ export interface DiskFilesystemLevel extends DiskFilesystem {
 export interface DiskExpectedMount {
   readonly path: string;
   readonly mounted: boolean;
+}
+
+/** Why a work root could not be measured: `absent` is ENOENT (the root holds no bytes, so nothing is unknown);
+ *  `failed` and `timeout` are unknown (the root may hold bytes nobody read). */
+export type DiskMissingWhy = 'absent' | 'failed' | 'timeout';
+
+export interface DiskMissingRoot {
+  readonly label: string;
+  readonly why: DiskMissingWhy;
+}
+
+/** What one measurement pass read, as the agent's `disk` reply carries it and the decider takes it. (The plan's
+ *  DR-3 text calls this `DiskMeasure`; it means this one type.) */
+export interface DiskMeasured {
+  readonly filesystems: readonly DiskFilesystem[];
+  readonly expectedMounts: readonly DiskExpectedMount[];
+  readonly missing: readonly DiskMissingRoot[];
 }
 
 /** One entry of the "who is growing" view: a named holder and the bytes it holds. */
@@ -114,15 +136,16 @@ function readFilesystem(v: unknown): DiskFilesystemLevel | null {
   const level = str(v['level']);
   const sizeBytes = num(v['sizeBytes']);
   const availBytes = num(v['availBytes']);
+  const freeBytes = num(v['freeBytes']);
   const files = num(v['files']);
   const filesFree = num(v['filesFree']);
   const roots = v['roots'];
   if (dev === null || mount === null || fsType === null || level === null || !LEVELS.includes(level)) return null;
-  if (sizeBytes === null || availBytes === null || files === null || filesFree === null) return null;
+  if (sizeBytes === null || availBytes === null || freeBytes === null || files === null || filesFree === null) return null;
   if (!Array.isArray(roots) || !roots.every((r) => typeof r === 'string')) return null;
   if (typeof v['readOnly'] !== 'boolean') return null;
   return {
-    dev, mount, fsType, roots: roots as string[], sizeBytes, availBytes, files, filesFree,
+    dev, mount, fsType, roots: roots as string[], sizeBytes, availBytes, freeBytes, files, filesFree,
     readOnly: v['readOnly'], level: level as DiskLevel,
   };
 }
