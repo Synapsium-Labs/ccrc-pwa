@@ -2320,6 +2320,27 @@ _DR_DISK_WORK_ROOTS=(
 # root, and never a PASS. The percent is computed the way `df` does it, used
 # over used-plus-available, in integers and without rounding up, so 91.2% does
 # not read as the FAIL line.
+# Known absent: some ancestor is a readable, searchable directory whose readdir
+# listing (no stat of the name) lacks the next component. A plain file counts
+# as absent too (it holds no filesystem to measure). Anything else is unknown.
+_dr_root_absent() {
+  local p="$1" parent name e
+  [ "$p" = "/" ] && return 1
+  parent="${p%/*}"; [ -n "$parent" ] || parent="/"
+  name="${p##*/}"
+  if [ -d "$parent" ]; then
+    [ -r "$parent" ] && [ -x "$parent" ] || return 1
+    ( shopt -s dotglob nullglob
+      for e in "$parent"/*; do [ "${e##*/}" = "$name" ] && exit 1; done
+      exit 0 ) && return 0
+    # Listed, yet not a directory: a plain file is absent; a failed stat is not.
+    [ -e "$p" ] && return 0
+    return 1
+  fi
+  [ -e "$parent" ] && return 0
+  _dr_root_absent "$parent"
+}
+
 _check_disk() {
   if ! command -v df >/dev/null 2>&1; then
     _dr_warn disk "df is not on PATH, so this check cannot measure free space on the work filesystems" \
@@ -2364,7 +2385,12 @@ _check_disk() {
   local total ipct
   for pair in "${pairs[@]}"; do
     label="${pair%%|*}"; path="${pair#*|}"
-    [ -d "$path" ] || continue
+    if [ ! -d "$path" ]; then
+      # Skipped only when KNOWN absent; a root that exists but cannot be
+      # stat'd (stale mount, unsearchable parent) is UNKNOWN, never skipped.
+      if _dr_root_absent "$path"; then continue; fi
+      unmeasured+=("$label ($path)"); continue
+    fi
     if [ -n "${m_root[$path]:-}" ]; then continue; fi
     m_root[$path]=1
     out="$(df -Pk "$path" 2>/dev/null)"; last=""
@@ -2388,18 +2414,12 @@ _check_disk() {
     esac
     if [ "$ino" != "-" ] && [ "$ino" -gt 0 ] 2>/dev/null; then
       ipct=$(( iused * 100 / ino ))
-      if [ $(( iused * 100 )) -ge $(( _DR_DISK_CRITICAL_PCT * ino )) ]; then ipct=$_DR_DISK_CRITICAL_PCT
-      elif [ $(( iused * 100 )) -ge $(( _DR_DISK_WARN_PCT * ino )) ] && [ "$ipct" -lt "$_DR_DISK_WARN_PCT" ]; then ipct=$_DR_DISK_WARN_PCT
-      fi
     fi
 
     total=$(( used + avail ))
     local bpct=0
     if [ "$total" -gt 0 ]; then
       bpct=$(( used * 100 / total ))
-      if [ $(( used * 100 )) -ge $(( _DR_DISK_CRITICAL_PCT * total )) ]; then bpct=$_DR_DISK_CRITICAL_PCT
-      elif [ $(( used * 100 )) -ge $(( _DR_DISK_WARN_PCT * total )) ] && [ "$bpct" -lt "$_DR_DISK_WARN_PCT" ]; then bpct=$_DR_DISK_WARN_PCT
-      fi
     fi
 
     if [ -z "${m_seen[$mnt]:-}" ]; then

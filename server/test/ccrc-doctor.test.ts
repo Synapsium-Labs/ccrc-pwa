@@ -6010,6 +6010,33 @@ describe('ccrc doctor: disk, every work filesystem', () => {
     expect(r.code).toBe(0);
   });
 
+  it('prints the measured percent past the FAIL line, never the threshold', () => {
+    const home = healthy('ccrc-doctor-disk-99pct-');
+    twoFs(home, { sizeKiB: 100 * GIB, usedKiB: 99 * GIB, availKiB: 1 * GIB, inodes: 1_000_000, iused: 980_000 });
+    const line = diskLines(runDoctor(home).stdout).find((l) => l.includes('/mnt/work')) ?? '';
+    expect(line).toMatch(/^FAIL disk: /);
+    expect(line).toContain('99% of bytes');
+    expect(line).toContain('98% of inodes');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a root under an unsearchable parent is WARN naming it, never an all-PASS', () => {
+    const home = healthy('ccrc-doctor-disk-unstatable-');
+    const locked = join(home, 'locked');
+    mkdirSync(join(locked, 'cfg'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), `CCRC_ACCOUNTS=(lane-a)\n_ccrc_cfg_dir() { echo "${locked}/cfg"; }\n`);
+    chmodSync(locked, 0o000);
+    try {
+      const r = runDoctor(home);
+      const lines = diskLines(r.stdout);
+      const warn = lines.find((l) => l.startsWith('WARN disk: ')) ?? '';
+      expect(warn, lines.join('\n')).toContain('config-dirs');
+      expect(warn).toContain(`${locked}/cfg`);
+      expect(warn).toContain('never measured');
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+
   it('a config dir from the roster is measured with its own filesystem', () => {
     const home = healthy('ccrc-doctor-disk-config-dir-');
     mkdirSync(join(home, '.claude-a'), { recursive: true });
