@@ -1201,18 +1201,19 @@ After its prune, and only an update or `ccrc backup` (never a rollback by flip, 
 data set (D-6346): of the backups that carry one, the newest `CCRC_BACKUP_DATA_KEEP` keep it, counting this run's own first, and
 every older one loses its `coord.db`, delegation journal, checkpoint and manifest and keeps the rest (its code, `memory/`, the
 units). The knob is a whole number from 2 to 9999, default 3, read from the process environment and else from
-`~/.ccrc/ccrc.env`; `0` and `1` are refused and an invalid value stops the prune and the thinning alike. So does a `ccrc.env` that is
-there but cannot be read, or that names the knob on a line the reader does not take. Read as bytes, after its leading spaces, tabs
-and CRs, a line is skipped when it is a comment (`#` or `;`) or another key's `[export ]NAME=`, read when it begins
+`~/.ccrc/ccrc.env` alone, never `~/.ccrc/exposure.env`, which no process that thins receives on Linux; `0` and `1` are refused and an
+invalid value stops the prune and the thinning alike. So does a `ccrc.env` that is
+there but cannot be read, or that names the knob on a line the reader does not take. Read as bytes, after its leading spaces and
+tabs, a line is skipped when it is a comment (`#` or `;`) or another key's `[export ]NAME=`, read when it begins
 `CCRC_BACKUP_DATA_KEEP=`, its value taken as systemd's `EnvironmentFile=` takes it (spaces and tabs around it trimmed), and
 refused when it names the knob as a whole word any other way, `export CCRC_BACKUP_DATA_KEEP=` included; a line holding a CR
-past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file the box's model of systemd cannot
-decide (a value a quote or a backslash carries across lines, a CR inside a line, a non-ASCII byte in an assignment) refuses
-too, `~/.ccrc/exposure.env` included, and so does an exposure file that names the knob at all, since only the environment or
-`ccrc.env` sets it: unmeasured is not unset (D-6365). A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
+past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file that names the knob anywhere, a comment
+included, but that the box's model of systemd cannot decide (a value a quote or a backslash carries across lines, a CR that leads
+a line or sits inside one, a non-ASCII byte in an assignment) refuses too: unmeasured is not unset (D-6365). A `ccrc.env` that never
+names the knob reads as the default, whatever else it holds, since it cannot set it. A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
 a dir is read on presence and size (a `coord.db` with no manifest is also opened for its header and tables), so damage of the
 same length there is not seen (D-6350, D-6364). On an update, `thin` also works to a time budget inside the console's deadline:
-it starts no full verification that could not finish in time, leaves the rest for the next update and still exits 0 (D-6464). The newest data set from
+it starts no full verification that could not finish in time, leaves the rest for the next update and exits 0 unless a dir was refused (D-6464). The newest data set from
 before a schema migration (a `coord.db` `user_version` lower than the newest kept set's) is kept as well, one at most, so the
 snapshot an older build's by-hand restore needs survives a failed migrating update (D-6358). A thinned dir holds
 `coordination-thinned.json`, written before anything is deleted, which says when, by which verb and by which rule;

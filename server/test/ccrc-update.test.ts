@@ -13835,9 +13835,9 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       cpSync(dirOf(t, '30000101-000001'), dirOf(home, name), { recursive: true });
       expect(listing(home, name)).toEqual(['agent-dist', 'coordination-thinned.json']);
     };
-    /** The checkout's ccrc (or another file) sourced, then `script`, in the fixture box's environment. */
-    const sourced = (home: string, script: string, env: NodeJS.ProcessEnv = {}, ccrc: string = join(REPO, 'ccd', 'ccrc')): Result => {
-      const r = spawnSync(BASH, ['-c', `. "$1"; ${script}`, 'ccrc-under-test', ccrc], { env: { ...updateEnv(home), ...env }, encoding: 'utf8' });
+    /** The checkout's ccrc (or another file) sourced, then `script`, in the fixture box's environment; `timeout` (ms) bounds a row a hang must fail. */
+    const sourced = (home: string, script: string, env: NodeJS.ProcessEnv = {}, ccrc: string = join(REPO, 'ccd', 'ccrc'), timeout?: number): Result => {
+      const r = spawnSync(BASH, ['-c', `. "$1"; ${script}`, 'ccrc-under-test', ccrc], { env: { ...updateEnv(home), ...env }, encoding: 'utf8', timeout });
       return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
     };
     const stubUpdate = (home: string): void => { packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' }); };
@@ -14263,6 +14263,14 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       ['a trailing space', bytes(`${K}=4 \n`), 4],
       ['a trailing tab', bytes(`${K}=4\t\n`), 4],
       ['a trailing space before CRLF', bytes(`${K}=4 \r\n`), 4],
+      // A ccrc.env whose bytes never hold the knob as a whole token cannot set it, so it reads 3 whatever the model or systemd makes of
+      // the rest (the coordinator's ruling on review 839): the model is not asked, so none of these stops the prune.
+      ['a valid UTF-8 value and no knob', bytes('NOTE=café\n'), 3],
+      ['a lone UTF-8 lead byte in a value and no knob', bytes('FOO=', [0xc3], '\n'), 3],
+      ['a bare CR inside a comment and no knob', bytes('# a\rb\n'), 3],
+      ['a comment ending in two CRs and no knob', bytes('# note\r\r\n'), 3],
+      ['a bare CR inside a value and no knob', bytes('FOO=a\rb\n'), 3],
+      ['a quoted value spanning lines over a UTF-8 comment and no knob', bytes('FOO="x\n# café\n"\n'), 3],
     ];
     const UNTAKEN = `rc 1 keep  why ${K} cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take (it reads only a plain KEY=value line)\n`;
     /** What the unit model cannot decide refuses with its own clause, naming the file (review 817, F1 and F2): each with that clause's opening. */
@@ -14279,10 +14287,11 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     ];
     /** `_bak_data_keep` over a ccrc.env holding `text`, the whole shell under LC_ALL=`locale`, on the Linux arm of the unit model
      *  (`_box_unit_env`; a macOS box models its launchd job's bash, `_box_unit_env_shell`, which refuses a CR anywhere). */
-    const dataKeep = (home: string, text: Buffer, locale: string): string => {
+    const dataKeep = (home: string, text: Buffer | null, locale: string, env: NodeJS.ProcessEnv = {}): string => {
       mkdirSync(join(home, '.ccrc'), { recursive: true });
-      writeFileSync(join(home, '.ccrc', 'ccrc.env'), text);
-      const r = sourced(home, 'CCD_OS=linux; _bak_data_keep; echo "rc $? keep ${BAK_DATA_KEEP} why ${BAK_DATA_KEEP_WHY}"', { LC_ALL: locale });
+      if (text === null) rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+      else writeFileSync(join(home, '.ccrc', 'ccrc.env'), text);
+      const r = sourced(home, 'CCD_OS=linux; _bak_data_keep; echo "rc $? keep ${BAK_DATA_KEEP} why ${BAK_DATA_KEEP_WHY}"', { LC_ALL: locale, ...env });
       expect(r.code, r.stderr).toBe(0);
       return r.stdout;
     };
@@ -14301,7 +14310,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17r-'), text, 'C')).toBe(UNTAKEN);
     });
 
-    it.each(READ)('W23-B17: %s reads under LC_ALL=C, never refused (D-6365, review 806 F1, F4; review 817 F1, F8)', (_shape, text, keep) => {
+    it.each(READ)('W23-B17: %s reads under LC_ALL=C, never refused (D-6365, review 806 F1, F4; review 817 F1, F8; review 839)', (_shape, text, keep) => {
       expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17a-'), text, 'C')).toBe(`rc 0 keep ${keep} why \n`);
     });
 
@@ -14309,31 +14318,35 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       undecided(dataKeep(freshUpdateBox('ccrc-fx-w23-b17d-'), text, 'C'), clause, shape);
     });
 
-    it.skipIf(process.getuid?.() === 0)('W23-B17: an exposure file that is there but cannot be read refuses as unmeasured, though it never carries the knob (D-6365, review 817 F1)', () => {
-      const home = freshUpdateBox('ccrc-fx-w23-b17e-');
+    // ccrc.env alone (the coordinator's ruling on review 839): no process that thins receives the exposure file, so nothing there is
+    // read for the knob, whether it names the knob, names it empty, cannot be read or cannot be decided.
+    const EXPOSED: readonly (readonly [string, (exp: string) => void])[] = [
+      ['an exposure file that names the knob', (exp) => { writeFileSync(exp, `CCRC_AUTH=on\n${K}=2\n`); }],
+      ['an exposure file that names the knob with an empty value', (exp) => { writeFileSync(exp, `${K}=\n`); }],
+      ['an exposure file that cannot be read', (exp) => { writeFileSync(exp, 'CCRC_AUTH=on\n'); chmodSync(exp, 0o000); }],
+      ['an exposure file holding an internationalised origin', (exp) => { writeFileSync(exp, bytes('CCRC_ORIGIN=https://b', [0xc3, 0xbc], 'cher.example\n')); }],
+    ];
+    /** `dataKeep` in a fresh box whose exposure file is planted by `plant`, beside a ccrc.env holding `text` (null: none). */
+    const exposed = (plant: (exp: string) => void, text: Buffer | null, locale: string): string => {
+      const home = freshUpdateBox('ccrc-fx-w23-b17x-');
       const exp = join(home, '.ccrc', 'exposure.env');
       mkdirSync(join(home, '.ccrc'), { recursive: true });
-      writeFileSync(exp, 'CCRC_AUTH=on\n');
-      chmodSync(exp, 0o000);
-      const out = dataKeep(home, bytes(`${K}=4\n`), 'C');
-      chmodSync(exp, 0o600);
-      expect(out).toBe(`rc 1 keep  why ${K} cannot be measured: ~/.ccrc/exposure.env is there but cannot be read\n`);
+      plant(exp);
+      try { return dataKeep(home, text, locale); } finally { chmodSync(exp, 0o600); }
+    };
+    it.each(EXPOSED)('W23-B17: %s beside ccrc.env\'s 9 reads 9: only the environment or ccrc.env sets the knob (D-6365, review 839)', (_shape, plant) => {
+      expect(exposed(plant, bytes(`${K}=9\n`), 'C')).toBe('rc 0 keep 9 why \n');
     });
-
-    // The exposure file never carries the knob, so it never overrides ccrc.env by presence, as the unit's second EnvironmentFile=
-    // would; and a shape the model does not decide there refuses as it does in ccrc.env (the review of fix round 3).
-    const EXPOSED: readonly (readonly [string, Buffer, string])[] = [
-      ['an exposure file that names the knob', bytes(`CCRC_AUTH=on\n${K}=2\n`), 'names it, but only the environment or ccrc.env sets this knob'],
-      ['an exposure file that names the knob with an empty value', bytes(`${K}=\n`), 'names it, but only the environment or ccrc.env sets this knob'],
-      ['an exposure file with a non-ASCII byte in an assignment', bytes('CCRC_ORIGIN=https://b', [0xc3, 0xbc], 'cher.example\n'), 'line 1 has a non-ASCII byte in a NAME=value line'],
-    ];
-    it.each(EXPOSED)('W23-B17: %s refuses, and ccrc.env\'s own value is not taken (D-6365, review 817 F1)', (shape, text, clause) => {
-      const home = freshUpdateBox('ccrc-fx-w23-b17x-');
-      mkdirSync(join(home, '.ccrc'), { recursive: true });
-      writeFileSync(join(home, '.ccrc', 'exposure.env'), text);
-      const out = dataKeep(home, bytes(`${K}=9\n`), 'C');
-      expect(out.startsWith(`rc 1 keep  why ${K} cannot be measured: ~/.ccrc/exposure.env ${clause}`), `${shape}: ${out}`).toBe(true);
-      expect(out, `${shape}: the refusal never prints the file's bytes`).not.toMatch(/=\d/);
+    it('W23-B17: with no ccrc.env, an exposure file that names the knob reads the default 3 (D-6365, review 839)', () => {
+      expect(exposed(EXPOSED[0]![1], null, 'C')).toBe('rc 0 keep 3 why \n');
+    });
+    it('W23-B17: an undecidable ccrc.env still refuses with the exposure file left out, with one beside it or none (D-6365, review 839)', () => {
+      const span = UNDECIDED[0]!;
+      undecided(dataKeep(freshUpdateBox('ccrc-fx-w23-b17p-'), span[1], 'C'), span[2], `${span[0]}, no exposure file`);
+      undecided(exposed((exp) => { writeFileSync(exp, 'CCRC_AUTH=on\n'); }, span[1], 'C'), span[2], `${span[0]}, an exposure file beside it`);
+    });
+    it.each(UNDECIDED)('W23-B17: the environment\'s 5 wins beside %s, with no refusal (D-6360, D-6365, review 839 F2)', (_shape, text) => {
+      expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17v-'), text, 'C', { [K]: '5' })).toBe('rc 0 keep 5 why \n');
     });
 
     it('W23-B17: a ccrc.env that holds a NUL byte, and a scan that cannot run or is killed, could not be scanned: each refuses (D-6365, fix round 2)', () => {
@@ -14354,7 +14367,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       }
     });
 
-    it.skipIf(UTF8 === null)(`W23-B17: under a UTF-8 locale (${UTF8 ?? 'none: locale -a lists neither C.UTF-8 nor en_US.UTF-8, so this half is skipped'}) every shape answers as under LC_ALL=C, because the scan and the unit model read bytes (D-3833, D-3979, D-6365, review 806 F1, review 817 F1)`, () => {
+    it.skipIf(UTF8 === null)(`W23-B17: under a UTF-8 locale (${UTF8 ?? 'none: locale -a lists neither C.UTF-8 nor en_US.UTF-8, so this half is skipped'}) every shape answers as under LC_ALL=C, because the scan and the unit model read bytes (D-3833, D-3979, D-6365, review 806 F1, review 817 F1, review 839 F4)`, () => {
       const loc = UTF8!;
       const charmap = spawnSync('locale', ['charmap'], { env: { ...process.env, LC_ALL: loc }, encoding: 'utf8' }).stdout ?? '';
       expect(charmap.trim(), `${loc} is a UTF-8 locale on this runner`).toBe('UTF-8');
@@ -14362,6 +14375,22 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       for (const [shape, text] of REFUSED) expect(dataKeep(home, text, loc), shape).toBe(UNTAKEN);
       for (const [shape, text, keep] of READ) expect(dataKeep(home, text, loc), shape).toBe(`rc 0 keep ${keep} why \n`);
       for (const [shape, text, clause] of UNDECIDED) undecided(dataKeep(home, text, loc), clause, shape);
+      for (const [shape, text] of UNDECIDED) expect(dataKeep(home, text, loc, { [K]: '5' }), `the environment beside ${shape}`).toBe('rc 0 keep 5 why \n');
+      for (const [shape, plant] of EXPOSED) expect(exposed(plant, bytes(`${K}=9\n`), loc), shape).toBe('rc 0 keep 9 why \n');
+      expect(exposed(EXPOSED[0]![1], null, loc), 'no ccrc.env').toBe('rc 0 keep 3 why \n');
+    });
+
+    it('W23-B17: a ccrc.env that never names the knob does not stop the prune: _bak_gc update prunes 12 backups to 10 at CCRC_BACKUP_KEEP=10, with no WARN (review 839)', () => {
+      const home = box('ccrc-fx-w23-b17g-');
+      const names = Array.from({ length: 12 }, (_, i) => `202501${String(i + 1).padStart(2, '0')}-000000`);
+      for (const n of names) plantDir(home, n, 'tree');
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\nNOTE=café\n');
+      const g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"', { CCRC_BACKUP_KEEP: '10' });
+      expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+      expect(g.stdout).not.toMatch(/WARN/);
+      expect(g.stdout).toMatch(/^rc 0$/m);
+      for (const n of names.slice(0, 2)) expect(g.stdout).toMatch(new RegExp(`^update: backups: pruned \\$HOME/ccrc-backups/${n}`, 'm'));
+      expect(readdirSync(backupRoot(home)).sort(), 'the newest ten are left').toEqual(names.slice(2));
     });
 
     it.skipIf(process.getuid?.() === 0)('W23-B18: a ccrc.env that is there but cannot be read refuses, never falls back to the default: nothing pruned or thinned (D-6365)', () => {
@@ -14384,7 +14413,9 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     it.each([
       ['a dangling link', (env: string): void => { symlinkSync(join(dirname(env), 'no-such.env'), env); }],
       ['a directory', (env: string): void => { mkdirSync(env); }],
-    ] as const)('W23-B18: %s at ccrc.env cannot be read, so it refuses, never falls back to the default: nothing pruned or thinned (D-6365, review 806 F5)', (_shape, plant) => {
+      // Opened, a FIFO with no writer blocks for ever, so the row runs under a bound and a hang fails it (review 839 F1).
+      ['a FIFO', (env: string): void => { expect(spawnSync('mkfifo', [env]).status).toBe(0); }],
+    ] as const)('W23-B18: %s at ccrc.env cannot be read, so it refuses, never falls back to the default: nothing pruned or thinned (D-6365, review 806 F5, review 839 F1)', (_shape, plant) => {
       const four = NAMES.slice(0, 4);
       const home = box('ccrc-fx-w23-b18x-');
       plantFull(home, four);
@@ -14392,7 +14423,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       const env = join(home, '.ccrc', 'ccrc.env');
       rmSync(env, { force: true });
       plant(env);
-      const g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"');
+      const g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"', {}, join(REPO, 'ccd', 'ccrc'), 60_000);
       expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
       expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env is there but cannot be read — nothing pruned or thinned$/m);
       expect(g.stdout).toMatch(/^rc 1$/m);
