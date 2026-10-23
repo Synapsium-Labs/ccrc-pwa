@@ -8290,16 +8290,16 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
 
   it('only W4\'s two clocks remain as lane clock fields, and no unnamed clock is compared with a constant', async () => {
     const { laneClockFields, laneClockShapes } = await import('./consolidationCensus.js');
-    expect(text(await laneClockFields()), 'a lane clock is a row of LANE_SCHEDULE, not a field').toEqual([
+    expect(text(laneClockFields()), 'a lane clock is a row of LANE_SCHEDULE, not a field').toEqual([
       'private lastStopDoneSweep = 0;', 'private lastHibernateSweep = 0;',
     ]);
-    const shapes = (await laneClockShapes()).map((x) => x.text.trim());
+    const shapes = laneClockShapes().map((x) => x.text.trim());
     expect(shapes.filter((t) => !/lastStopDoneSweep|lastHibernateSweep/.test(t)), 'no lane clock outside runLane').toEqual([]);
   });
 
   it('only the tick\'s guard, dispatchNow\'s run and its follow-up, and W4\'s two guards remain as single-flight fields', async () => {
     const { singleFlightGuards } = await import('./consolidationCensus.js');
-    expect(text(await singleFlightGuards()).sort(), 'a lane\'s single flight is its row\'s flight').toEqual([
+    expect(text(singleFlightGuards()).sort(), 'a lane\'s single flight is its row\'s flight').toEqual([
       'private dispatchAgain = false;', 'private dispatchRun: Promise<DispatchRunResult> | null = null;',
       'private hibernateSweeping = false;', 'private stopDoneSweeping = false;', 'private ticking = false;',
     ]);
@@ -8307,12 +8307,12 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
 
   it('no bare cadence literal is compared with a lane clock', async () => {
     const { cadenceLiterals } = await import('./consolidationCensus.js');
-    expect(text(await cadenceLiterals()), 'a cadence is a named row').toEqual([]);
+    expect(text(cadenceLiterals()), 'a cadence is a named row').toEqual([]);
   });
 
   it('each declared derivation is a reference to the constant it follows, 3 of 3', async () => {
     const { declaredDerivations } = await import('./consolidationCensus.js');
-    const d = await declaredDerivations();
+    const d = declaredDerivations();
     expect(d.filter((x) => x.file === null).map((x) => x.name), 'a derivation is declared nowhere').toEqual([]);
     expect(d.filter((x) => !x.reference).map((x) => x.name), 'each derivation is a reference').toEqual([]);
     expect(d).toHaveLength(3);
@@ -8333,10 +8333,10 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
         '}',
         'export const COLLECT_OBSERVE_INTERVAL_MS = 60_000;',
       ].join('\n'));
-      expect(await laneClockShapes(tree)).toHaveLength(1);
-      expect(await singleFlightGuards(tree)).toHaveLength(1);
-      expect(await cadenceLiterals(tree)).toHaveLength(1);
-      expect((await declaredDerivations(tree)).find((x) => x.name === 'COLLECT_OBSERVE_INTERVAL_MS')?.reference).toBe(false);
+      expect(laneClockShapes(tree)).toHaveLength(1);
+      expect(singleFlightGuards(tree)).toHaveLength(1);
+      expect(cadenceLiterals(tree)).toHaveLength(1);
+      expect((declaredDerivations(tree)).find((x) => x.name === 'COLLECT_OBSERVE_INTERVAL_MS')?.reference).toBe(false);
     } finally {
       rm(tree, { recursive: true, force: true });
     }
