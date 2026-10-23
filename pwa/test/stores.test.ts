@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
 import { FLEET_PROTO, SECRET_MASK } from '../../shared/api';
-import { ApiError } from '../src/lib/api';
+import { ApiError, submitErrorText } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, getSessionStore, type SessionSnapshot } from '../src/stores/session';
 import { createFleetStore } from '../src/stores/fleet';
 import { setUpdater } from '../src/lib/swupdate';
@@ -507,6 +507,48 @@ describe('session store optimistic send', () => {
     const store = createSessionStore('s1', { api: { prompt } });
     await store.getState().send('x');
     expect(store.getState().pending[0]!.submittable).toBeUndefined();
+  });
+
+  // D-6367: Retry says the text is ours only when the refusal left OUR text in the box.
+  it('Retry after verify-failed with text left sends resume: true; Retry after other refusals does not', async () => {
+    const refusal = (code: string, draft?: string) =>
+      new ApiError(409, { ok: false, error: code, ...(draft === undefined ? {} : { draft }) });
+    const cases: Array<[string, unknown, boolean]> = [
+      ['verify-failed + draft', refusal('verify-failed', 'my message'), true],
+      ['enter-ignored + draft', refusal('enter-ignored', 'my message'), true],
+      ['type-failed + draft', refusal('type-failed', 'my message'), true],
+      ['verify-failed, no draft', refusal('verify-failed'), false],
+      ["enter-ignored, draft ''", refusal('enter-ignored', ''), false],
+      ['draft-present', refusal('draft-present', 'someone else'), false],
+      ['not-alive', refusal('not-alive'), false],
+      ['box-unreadable', refusal('box-unreadable'), false],
+      ['dialog-open', refusal('dialog-open'), false],
+      ['a non-ApiError failure', new Error('network down'), false],
+    ];
+    for (const [name, failure, resumes] of cases) {
+      const prompt = vi.fn().mockRejectedValueOnce(failure);
+      prompt.mockResolvedValue(undefined);
+      const store = createSessionStore('s1', { api: { prompt } });
+      await store.getState().send('my message');
+      store.getState().retry(store.getState().pending[0]!.key);
+      expect(prompt, name).toHaveBeenCalledTimes(2);
+      const retried = prompt.mock.calls[1]![2] as { resume?: boolean };
+      if (resumes) expect(retried.resume, name).toBe(true);
+      else expect(retried, name).not.toHaveProperty('resume');
+    }
+  });
+
+  it('a resumed Retry answered nothing-to-submit shows the check-the-transcript sentence', async () => {
+    const prompt = vi.fn()
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'enter-ignored', draft: 'my message' }))
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'nothing-to-submit' }));
+    const store = createSessionStore('s1', { api: { prompt } });
+    await store.getState().send('my message');
+    store.getState().retry(store.getState().pending[0]!.key);
+    await vi.waitFor(() => expect(store.getState().pending[0]?.code).toBe('nothing-to-submit'));
+    expect(prompt.mock.calls[1]![2]).toMatchObject({ resume: true });
+    expect(store.getState().pending[0]!.error).toBe(submitErrorText('nothing-to-submit'));
+    expect(store.getState().pending[0]!.error).toMatch(/Check the transcript/);
   });
 
   it('retry() re-sends a failed pending; discard() drops it', async () => {

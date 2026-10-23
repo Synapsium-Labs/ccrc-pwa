@@ -337,6 +337,37 @@ describe('write routes', () => {
     await app.close();
   });
 
+  // D-6367: Retry's whole-box resume rides the body's one optional `resume` field (`=== true`, one reader).
+  const RULE = '─'.repeat(60);
+  const boxPane = (text: string): string => `earlier turn\n${RULE}\n❯ ${text}\n${RULE}\n  👤 team·max\n`;
+
+  it('a /prompt body with resume: true resumes the box whole: one Enter, nothing typed', async () => {
+    const { app, calls } = await makeApp([boxPane('hello'), boxPane('')]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
+    await app.close();
+  });
+
+  it('a /prompt body with resume: true over an empty box is 409 nothing-to-submit, nothing typed', async () => {
+    const { app, calls } = await makeApp([boxPane('')]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it("a /prompt body with resume: 'yes' (not true) behaves as today", async () => {
+    const { app, calls } = await makeApp([boxPane('hello')]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: 'yes' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'draft-present', draft: 'hello' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
   // D-6366: a refused send leaves one countable line, naming the outcome and the box's shape and never the text.
   it('a refused send writes one warn line naming its outcome, without the text', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
