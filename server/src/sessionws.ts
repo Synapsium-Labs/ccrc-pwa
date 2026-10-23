@@ -86,7 +86,8 @@ export class SessionStream {
   private agedKeep: AgedKeep = NO_AGED_KEEP;
   /** Failed captures in a row since the last reading of the pane (decision `ask-failed-capture-holds`). */
   private failedCaptures = 0;
-  /** Whether the last capture judged failed and was held (FAILED_CAPTURES_CLEAR); an early return keeps the previous value (D-6324). */
+  /** The last capture this stream judged: whether it failed and was held (under FAILED_CAPTURES_CLEAR). An early
+   *  return in `checkDialog` keeps the previous tick's value (D-6324). */
   private captureHeld = false;
   /** Bumped on every `answered:<id>` this stream handles; a poll reading taken under an older value read the pane
    *  from before that answer and is dropped (decision `ask-stale-poll-dropped`). */

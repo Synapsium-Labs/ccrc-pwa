@@ -492,8 +492,8 @@ async function ladder(io: FleetIO, o: ResolveOpts): Promise<Laddered> {
   // true, which is only possible if this io answered non-null ABOUT that
   // directory, so it exists — see `globByUuid`'s own doc for why that makes
   // a later null stat of it evidence about the connection and not the disk.
-  // The accounts are searched together under the shared `limit` (D-6369) and
-  // pooled in roster order, so `pickNewest` sees what the serial search gave it.
+  // The accounts are searched together under the shared `limit` (D-6369) and pooled in roster order; the answer is
+  // order-free all the same, because `pickNewest` and `collapseHits`' survivor are total orders (see `globByUuid`).
   const globs = await Promise.all((o.foreign ?? []).map(
     (acct, order) => globByUuid(io, acct.configDir, o.uuid, acct.account, order, o.configDir, limit)));
   for (const g of globs) {

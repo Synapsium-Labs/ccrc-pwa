@@ -1565,9 +1565,9 @@ describe('the uuid search runs its stats with bounded concurrency (D-6369)', () 
   });
 
   it('a stat that rejects under the limiter rejects the search, drains the queue, and never puts more than the bound in flight', async () => {
-    // 100 own directories: the first batch is the bound, 68 wait. The first directory's stat rejects at 10 ms,
-    // as every call of the first batch settles. The slot it held must go to a waiter like any other (released in
-    // `finally`): were it kept, the search would run the rest of its queue one slot short.
+    // 100 own directories: the first batch is the bound, 100 − GLOB_STAT_CONCURRENCY wait. The first directory's stat
+    // rejects at 10 ms, as every call of the first batch settles. The slot it held must go to a waiter like any other
+    // (released in `finally`): were it kept, the search would run the rest of its queue one slot short.
     const { io, stats } = fakeIO({ n: 100, rejecting: [fileIn(OWN, 0)] });
     vi.useFakeTimers();
     const settled = resolveTranscript(io, {
