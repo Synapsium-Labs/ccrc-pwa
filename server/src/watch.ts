@@ -165,7 +165,7 @@ import {
   rankArchivedHeld, type ArchivedExpiryEntry, type ArchivedExpiryVerdict,
   type ExpiryStoreRead,
 } from './archivedExpiry.js';
-import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
+import { childEverCoordinated, expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import {
   deadAnchorNext, deadCoordinatorNewEpisode, deadCoordinatorAttention, deadCoordinatorBreaker,
   deadCoordinatorBreakerHeldKey, deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal, deadCoordinatorJournalSpawnedAt,
@@ -5588,12 +5588,13 @@ export class FleetWatcher {
     const due: string[] = [];
     const childArm = { cap: capSupported(this.deps.fleetState, EXPIRE_CHILD_CAP), live: names.includes(EXPIRE_CHILD_LIVE_MARKER) };
     const childOfOf = new Map(archived.map((r): [string, number | undefined] => [r.id, r.child.kind === 'child' ? r.child.runId : undefined]));
+    const rowUuidOf = new Map(archived.map((r): [string, string | null] => [r.id, childReclaimRowUuid(r)]));
     for (const r of archived) {
       seen.add(r.id);
       let entry = archivedExpiryEntryFor(this.archivedExpiryState.get(r.id), r.archivedAt!);
       const past = entry.expiresAt !== null && now >= entry.expiresAt * 1000;
       const read: ExpiryStoreRead = !store.ok ? { ok: false, detail: store.detail } : this.archivedExpiryStoreRead(
-        coord, r.id, store.workers.has(r.id), store.claimants.has(r.id), past);
+        coord, r.id, store.workers.has(r.id), store.claimants.has(r.id), past, r.child.kind === 'child' ? r : null);
       const v = archivedExpiryVerdict({
         sessionId: r.id, workspace: r.workspace, archivedAt: r.archivedAt, child: r.child,
         identityMeasured: r.unmeasured.length === 0, held: r.held, store: read, expiresAt: entry.expiresAt, nowMs: now, childArm,
@@ -5632,7 +5633,7 @@ export class FleetWatcher {
         const result = await this.deps.queue.run(id, () => expireArchived({
           coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
           presence: this.deps.presence, notifyLog: this.deps.notifyLog,
-        }, { sessionId: id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt!, childOf: childOfOf.get(id) }));
+        }, { sessionId: id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt!, childOf: childOfOf.get(id), rowUuid: rowUuidOf.get(id) ?? null }));
         if (result.kind === 'box' && result.word === 'flock-unavailable') this.archivedExpiryBoxRefused = result.detail;
         // Whether the row's entry STANDS rides the feed row, so a shadow row over it never says nothing was deleted (wave 6).
         if (archivedExpiryOutcomeKey(result) !== entry.lastOutcome) {
@@ -5666,11 +5667,13 @@ export class FleetWatcher {
    *  for a row PAST its instant (`past`), the only rows it can decide; a read that fails is the store's failure for
    *  this row. */
   private archivedExpiryStoreRead(
-    coord: CoordStore, id: string, openWorker: boolean, openClaimant: boolean, past: boolean,
+    coord: CoordStore, id: string, openWorker: boolean, openClaimant: boolean, past: boolean, child: SessionRecord | null,
   ): ExpiryStoreRead {
     if (!past || openWorker || openClaimant) return { ok: true, openWorker, openClaimant, reviewing: false };
     const review = expiryReviewing(coord, id);
-    return review.ok ? { ok: true, openWorker, openClaimant, reviewing: review.reviewing } : review;
+    if (!review.ok) return review;
+    return { ok: true, openWorker, openClaimant, reviewing: review.reviewing,
+      ...(child === null ? {} : { coordinated: childEverCoordinated(coord, id, childReclaimRowUuid(child)) }) };
   }
 
   /**

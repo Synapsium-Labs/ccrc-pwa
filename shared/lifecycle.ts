@@ -130,4 +130,10 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     collector: 'server/test/run-tmp.globalsetup.mjs (teardown; SIGTERM/SIGINT/SIGHUP/exit arm; a later run\'s reap at setup and teardown: owner socket refuses AND ctime-quiet for RUN_QUIET_S)',
     bound: 'one test run; after a SIGKILL, until a later run under the same TMPDIR finds it quiet',
     tier: '1,551 dirs / 5.74 GiB from five timed-out shards in one morning (#316, 2026-10-07)', ruling: null },
+  // Fleet disk retention, DR-29 (spec 2026-10-23 §Docs and registry): an archived workspace nobody claims, children
+  // included (a child only under its own marker, in shadow until armed). ccd's ws-expire removes it; the server asks.
+  { name: 'archived-workspaces', root: '<workdir> of an archived registry row (worktree, clips, tmp root)', pattern: 'W',
+    creators: ['ccd ws-archive'],
+    collector: 'ccd ws-expire, asked by the server\'s expiry lane (children included, a child only under its own capability and marker)',
+    bound: '7 days after the archive', tier: 'one worktree per archived row', ruling: null },
 ];
