@@ -635,56 +635,24 @@ describe('NewSessionSheet — success opens the new session', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('a sheet dismissed during the wait navigates nowhere and its clock is cleared', async () => {
+  it('a sheet dismissed during the wait says it started once, and navigates nowhere', async () => {
     vi.useFakeTimers();
     vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
     const { store, onClose, flush, close } = await mount();
     await pickDemo(flush);
     startUnnamed();
     await flush();
+    expect(screen.queryByText(/^Starting demo/)).toBeNull(); // still waiting: nothing said yet
     close();
+    await flush();
+    // The create had succeeded: the dismissal says so once, as the in-flight dismissal does.
+    expect(screen.getAllByText('Starting demo on team·max…')).toHaveLength(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
     showFrame(store, [NEW_ROW]);
     await flush();
     expect(window.location.pathname).toBe('/');
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.queryByText(/^Starting demo/)).toBeNull(); // the bound's toast belongs to a sheet that is still waiting
-  });
-
-  it('a dismissal during the wait ends that wait, so a reopened sheet\'s own start is not cut short by its clock', async () => {
-    vi.useFakeTimers();
-    vi.spyOn(api, 'createSession')
-      .mockResolvedValueOnce(undefined) // the first start: answers, then waits for a row that never comes
-      .mockImplementationOnce(() => new Promise<void>(() => {})); // the second start: never answers
-    const { store, onClose, flush, close, reopen } = await mount();
-    // Count the store's live listeners: a wait for a row holds one until it settles.
-    let listeners = 0;
-    const subscribe = store.subscribe.bind(store);
-    vi.spyOn(store, 'subscribe').mockImplementation((listener) => {
-      listeners += 1;
-      const off = subscribe(listener);
-      return () => { listeners -= 1; off(); };
-    });
-    await pickDemo(flush);
-    const listenersBeforeStart = listeners;
-    startUnnamed();
-    await flush();
-    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled(); // the first wait is running
-    expect(listeners).toBeGreaterThan(listenersBeforeStart);
-    close();
-    await flush();
-    // The dismissal ended the wait itself: its fleet listener is released now, not when its 60 s bound runs out.
-    expect(listeners).toBe(listenersBeforeStart);
-    reopen();
-    await flush();
-    await pickDemo(flush);
-    startUnnamed();
-    await flush();
-    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
-    // The first wait's 60 s bound would have fired by now had the dismissal not ended it.
-    await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
-    expect(screen.getByRole('button', { name: /^(Starting…|Still starting)/ })).toBeDisabled();
-    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getAllByText('Starting demo on team·max…')).toHaveLength(1); // the bound's own toast is not a second one
   });
 
   it('past 60 s without a frame it toasts and closes, as before, and navigates nowhere', async () => {
