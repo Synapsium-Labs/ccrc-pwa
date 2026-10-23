@@ -23696,7 +23696,7 @@ _bak_ours() {
 # file, which on Linux no process that thins receives (its one consumer is ccrc.service; on macOS the launchd job sources it, so a knob
 # there reaches a console-driven update as its environment, a residual), and it is asked only when ccrc.env's bytes hold the knob as a
 # whole token, in a comment too: a file that never names the knob cannot set it, so its keep is 3 whatever the model or systemd
-# makes of the rest of it (the coordinator's ruling on review 839). That premise is systemd's: on macOS the model is asked whatever the
+# makes of the rest of it but a NUL byte, which the scan refuses first (the coordinator's rulings on reviews 839 and 847). That premise is systemd's: on macOS the model is asked whatever the
 # scan says, because the launchd job sources the file with bash, which can build the name without spelling it (a backslash-newline
 # inside it, a quoted `declare`), so there a file the model cannot decide still refuses (the review of fix round 4). The scan before it refuses what the model does not: ONE positive rule, over bytes (`LC_ALL=C`,
 # as D-3833 reads ccrc.env, so the box's locale cannot change an answer), on each line with its leading spaces, tabs and CRs gone

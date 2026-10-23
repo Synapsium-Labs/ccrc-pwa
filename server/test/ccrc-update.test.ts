@@ -14245,6 +14245,8 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       // systemd ends a line at a bare CR, so what follows it is a line of its own there (fix round 2's own review).
       ['a bare CR inside another key\'s line', bytes(`FOO=1\r${K}=9999\n`)],
       ['a bare CR inside a comment', bytes(`# note\r${K}=9999\n`)],
+      // Every position is tested, not the first occurrence only: systemd reads `${K}=9999` as a line of its own (review 847, R8).
+      ['a bare CR after an _OLD key, then the knob', bytes(`${K}_OLD=1\r${K}=9999\n`)],
     ];
     /** Each with the keep it reads: the line's value, or the default 3 where the line is not the knob's. */
     const READ: readonly (readonly [string, Buffer, number])[] = [
@@ -14372,7 +14374,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     it('W23-B17: a ccrc.env that holds a NUL byte, and a scan that cannot run or is killed, could not be scanned: each refuses (D-6365, fix round 2)', () => {
       const SCANNED = `rc 1 keep  why ${K} cannot be measured: ~/.ccrc/ccrc.env could not be scanned\n`;
       // bash's `read` drops a NUL, so the line `_box_env_value` reads is not the one in the file.
-      for (const text of [bytes(`export CCRC_BACKUP\u0000_DATA_KEEP=9999\n`), bytes(`${K}=4\nNOTE=\u0000\n`)]) {
+      for (const text of [bytes(`export CCRC_BACKUP\u0000_DATA_KEEP=9999\n`), bytes(`${K}=4\nNOTE=\u0000\n`), bytes('NOTE=x\u0000y\n')]) {
         expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17n-'), text, 'C')).toBe(SCANNED);
       }
       for (const [why, body] of [['an awk that cannot run', 'exit 127'], ['an awk that is killed', 'kill -TERM $$']]) {
@@ -14400,17 +14402,30 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(exposed(EXPOSED[0]![1], null, loc), 'no ccrc.env').toBe('rc 0 keep 3 why \n');
     });
 
-    it('W23-B17: a ccrc.env that never names the knob does not stop the prune: _bak_gc update prunes 12 backups to 10 at CCRC_BACKUP_KEEP=10, with no WARN (review 839)', () => {
-      const home = box('ccrc-fx-w23-b17g-');
+    /** 12 code-only backups beside a ccrc.env that never names the knob, then `_bak_gc update` at CCRC_BACKUP_KEEP=10 on the named arm. */
+    const pruneTwelve = (os: 'linux' | 'darwin'): { home: string; names: string[]; g: Result } => {
+      const home = box(`ccrc-fx-w23-b17g-${os}-`);
       const names = Array.from({ length: 12 }, (_, i) => `202501${String(i + 1).padStart(2, '0')}-000000`);
       for (const n of names) plantDir(home, n, 'tree');
       writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\nNOTE=café\n');
-      const g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"', { CCRC_BACKUP_KEEP: '10' });
+      return { home, names, g: sourced(home, `CCD_OS=${os}; UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"`, { CCRC_BACKUP_KEEP: '10' }) };
+    };
+    it('W23-B17: a ccrc.env that never names the knob does not stop the prune: _bak_gc update prunes 12 backups to 10 at CCRC_BACKUP_KEEP=10, with no WARN (review 839; on the Linux arm, review 847)', () => {
+      const { home, names, g } = pruneTwelve('linux');
       expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
       expect(g.stdout).not.toMatch(/WARN/);
       expect(g.stdout).toMatch(/^rc 0$/m);
       for (const n of names.slice(0, 2)) expect(g.stdout).toMatch(new RegExp(`^update: backups: pruned \\$HOME/ccrc-backups/${n}`, 'm'));
       expect(readdirSync(backupRoot(home)).sort(), 'the newest ten are left').toEqual(names.slice(2));
+    });
+
+    it('W23-B17: on macOS the same ccrc.env stops the prune: the Darwin model refuses NOTE=café, _bak_gc WARNs, returns 1 and leaves all 12 (review 839 departure 1, review 847)', () => {
+      const { home, names, g } = pruneTwelve('darwin');
+      expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+      expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env line 2 is not a plain NAME=value line\b.* — nothing pruned or thinned$/m);
+      expect(g.stdout).toMatch(/^rc 1$/m);
+      expect(g.stdout, 'no prune line').not.toMatch(/^update: backups: pruned /m);
+      expect(readdirSync(backupRoot(home)).sort(), 'all twelve are left').toEqual(names);
     });
 
     it.skipIf(process.getuid?.() === 0)('W23-B18: a ccrc.env that is there but cannot be read refuses, never falls back to the default: nothing pruned or thinned (D-6365)', () => {
