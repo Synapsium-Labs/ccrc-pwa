@@ -475,36 +475,39 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
       cwd: serverDir,
       stdio: ['ignore', 'ignore', 'pipe'],
       env: {
-        ...process.env,
+        PATH: process.env.PATH ?? '',
+        ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
         CLIENT_URL: pathToFileURL(fileURLToPath(new URL('../src/remote/client.ts', import.meta.url))).href,
         PEER_URL: `ws://127.0.0.1:${peer.port}`,
       },
     });
     let stderr = '';
+    let bound: NodeJS.Timeout | undefined;
     child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
     try {
+      // 'close', not 'exit': it follows the end of the child's stderr, so the assertion reads all of it.
       const outcome = await new Promise<{ code: number | null; signal: string | null } | 'timeout'>((resolve) => {
-        child.once('exit', (code, signal) => resolve({ code, signal }));
+        bound = setTimeout(() => resolve('timeout'), EXIT_BOUND_MS);
+        child.once('close', (code, signal) => resolve({ code, signal }));
         child.once('error', () => resolve({ code: -1, signal: null }));
-        setTimeout(() => resolve('timeout'), EXIT_BOUND_MS).unref();
       });
       expect({ outcome, stderr }).toEqual({ outcome: { code: 0, signal: null }, stderr: '' });
     } finally {
+      clearTimeout(bound);
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     }
   }, 40_000);
 
-  it('W27-L25: the deadline keeps the backoff growing: later gaps between attempts are longer', async () => {
-    // Each gap between accepts is at least the deadline plus that attempt's backoff, because a timer never fires early:
-    // 100+50, 100+100, 100+200, 100+400 ms. Load only lengthens a gap, so lower bounds on the third and fourth gaps
-    // (with a margin for the accept-time jitter between attempts) cannot fail on load. A deadline that reset the
-    // backoff would hold every gap near 150 ms.
+  it('W27-L25: the deadline keeps the backoff growing: five attempts take at least the timers they wait on', async () => {
+    // Attempt k is cut at its deadline (100 ms) and the next is scheduled after backoff 50, 100, 200, 400 ms. Every one
+    // of those is a timer that cannot fire early and `t0` precedes the first, so the fifth accept comes at least
+    // 4 * 100 + 750 ms after `t0` (5 ms off for the timer's 1 ms rounding). Load only delays it. A deadline that reset
+    // the backoff would put it near 4 * 150 ms.
     peer = await linkPeer(() => 'silent-upgrade');
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const t0 = Date.now();
     fleet = connectToAgent(peer.port, { readyTimeoutMs: 100, reconnectMinMs: 50, reconnectMaxMs: 400 });
     await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(5), { timeout: 8000 });
-    const times = peer.acceptTimes();
-    const gaps = [1, 2, 3, 4].map((i) => times[i]! - times[i - 1]!);
-    expect(gaps[2]!).toBeGreaterThanOrEqual(300 - 40);
-    expect(gaps[3]!).toBeGreaterThanOrEqual(500 - 40);
+    expect(peer.acceptTimes()[4]! - t0).toBeGreaterThanOrEqual(4 * 100 + (50 + 100 + 200 + 400) - 5);
   });
 });
