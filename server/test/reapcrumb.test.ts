@@ -1,7 +1,15 @@
 // server/test/reapcrumb.test.ts — the L0 reaping-breadcrumb union (ARCH-25, #531).
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { REAP_ACTS, REAP_PHASES, parseReapCrumb } from '../../shared/reapcrumb.js';
 import { reviveWsAudit } from '../../shared/api.js';
+
+describe('L0: reapcrumb.ts imports nothing, so shared/api.ts value-importing it pulls nothing else into the PWA', () => {
+  it('has no import, require or re-export', () => {
+    const src = readFileSync(new URL('../../shared/reapcrumb.ts', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/^\s*import\b|\bimport\s*\(|\brequire\s*\(|^\s*export\s*(?:\*|\{[^}]*\})\s*from\s/m);
+  });
+});
 
 describe('parseReapCrumb', () => {
   it('reads a bare phase as the reap act', () => {

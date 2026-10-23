@@ -197,6 +197,7 @@ _ws_tombstone_reclip	C4
 _ws_tomb_str	C4
 _ws_tomb_children	C4
 cmd_ws_reap	C4
+_crumb_parse	C4
 _ws_reap_locked	C4
 _ws_reap_tail	C4
 _ws_gc_bytes	C4
