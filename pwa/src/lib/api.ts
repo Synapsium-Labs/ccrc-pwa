@@ -51,7 +51,9 @@ export { ApiError };
 /** Send failures the server names by code. Left raw these surfaced as bare
  *  slugs under the failed bubble ("dialog-open"), which says nothing about what
  *  to do next. `draft-present` is absent on purpose — it has its own sheet. */
+const NOTHING_TO_SUBMIT_TEXT = 'The box is empty — nothing was sent from here. Check the transcript before sending again.';
 const SEND_ERROR_TEXT: Record<string, string> = {
+  'nothing-to-submit': NOTHING_TO_SUBMIT_TEXT, // a resumed Retry (D-6367) over an emptied box answers it
   'dialog-open': "Claude is asking a question — answer that first, then send.",
   // No longer "open the terminal to check": the text is verified sitting in the
   // box, the server knows it, and the failed bubble now carries a Send it
@@ -125,7 +127,7 @@ export const sendErrorText = (code: string, submittable?: boolean): string =>
  *  The server proves the box is empty; only the transcript can say what left
  *  it. */
 const SUBMIT_ERROR_TEXT: Record<string, string> = {
-  'nothing-to-submit': 'The box is empty — nothing was sent from here. Check the transcript before sending again.',
+  'nothing-to-submit': NOTHING_TO_SUBMIT_TEXT,
   'blank-first-row': "The box's first line is blank, so what would be sent can't be proven — open the terminal.",
   'box-mismatch': 'The box holds something else now — open the session and look before sending.',
   'dialog-open': 'A question is up — answer that first.',
@@ -1176,9 +1178,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ expect }),
       })).json()) as ReapResult,
-    prompt: (id: string, text: string, opts: { replaceDraft?: boolean; attachments?: string[] } = {}) =>
+    prompt: (id: string, text: string, opts: { replaceDraft?: boolean; attachments?: string[]; resume?: boolean } = {}) =>
       post(`${sid(id)}/prompt`, {
         text,
+        ...(opts.resume === true ? { resume: true } : {}),
         ...(opts.replaceDraft === undefined ? {} : { replaceDraft: opts.replaceDraft }),
         ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
       }),

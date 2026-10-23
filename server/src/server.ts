@@ -2178,7 +2178,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/prompt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown };
+    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown; resume?: unknown };
     const raw = Array.isArray(body.attachments) ? body.attachments : [];
     if (raw.length > MAX_ATTACHMENTS) {
       return reply.code(400).send({ ok: false, error: 'bad-attachment' });
@@ -2203,7 +2203,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.text !== 'string' || (body.text.length === 0 && attachments.length === 0)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const res = await sendPrompt(sendDeps, id, body.text, { onDraft: body.replaceDraft === true ? 'replace' : 'refuse', attachments });
+    // D-6367: Retry over our own left text. `resume === true` is this field's one reader; anything else is today's call.
+    const res = await sendPrompt(sendDeps, id, body.text, {
+      onDraft: body.replaceDraft === true ? 'replace' : 'refuse', attachments,
+      ...(body.resume === true ? { resumeIfOwn: 'whole' as const } : {}),
+    });
     if (!res.ok) console.warn(`ccrc-server: prompt ${id}: ${res.error} ${refusalShape(res)}`); // D-6366: countable, no text
     return res.ok ? res : reply.code(409).send(res);
   });

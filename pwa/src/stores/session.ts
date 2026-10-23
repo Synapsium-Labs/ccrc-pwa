@@ -365,6 +365,11 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
 const pathsOf = (p: { attachments?: PendingAttachment[] }): string[] | undefined =>
   p.attachments?.length ? p.attachments.map((a) => a.path) : undefined;
 
+/** D-6367: Retry sends `resume` only when the refusal left OUR text in the box (the three codes that follow a typed
+ *  message), so the server presses Enter on it instead of answering `draft-present`. Any other refusal retries as today. */
+export const retryResumes = (code: string | undefined, draft: string | undefined): boolean =>
+  (code === 'verify-failed' || code === 'enter-ignored' || code === 'type-failed') && typeof draft === 'string' && draft !== '';
+
 /** Object URLs die with the pending that owned them. */
 const revoke = (p: PendingSend | undefined): void => {
   for (const a of p?.attachments ?? []) if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
@@ -688,7 +693,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
     const dispatch = async (
       key: string,
       text: string,
-      opts: { replaceDraft?: boolean; attachments?: string[] } = {},
+      opts: { replaceDraft?: boolean; attachments?: string[]; resume?: boolean } = {},
     ): Promise<void> => {
       try {
         await apiImpl.prompt(id, text, opts);
@@ -909,6 +914,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       retry(key) {
         const p = get().pending.find((x) => x.key === key);
         if (!p || p.state !== 'failed') return;
+        const resume = retryResumes(p.code, p.draft); // before the set below clears both
         // Spread, never re-list: an object literal here is exactly why
         // `attachments` used to vanish on retry, and it would swallow every
         // field added after it too.
@@ -918,7 +924,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
                               submittable: undefined, queued: undefined,
                               sentAfter: reSendBar(x, s.events) } : x),
         }));
-        void dispatch(key, p.text, { replaceDraft: p.replaceDraft, attachments: pathsOf(p) });
+        void dispatch(key, p.text, { replaceDraft: p.replaceDraft, attachments: pathsOf(p), ...(resume ? { resume } : {}) });
       },
 
       /** Re-send a pending in place after a draft conflict — same record, so the
