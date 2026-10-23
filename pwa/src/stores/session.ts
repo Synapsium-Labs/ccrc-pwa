@@ -370,8 +370,8 @@ const pathsOf = (p: { attachments?: PendingAttachment[] }): string[] | undefined
  *  be answered enter-ignored with a blind final read (no draft), and Retry must never type a second copy. The
  *  server's resume answers `nothing-to-submit` over an empty box (types nothing), presses one Enter over our own
  *  text, and answers `draft-present` over anything else. `verify-failed` resumes only with a non-empty draft. Every
- *  other code retries as today, `type-failed` included: the server's `type-failed` refusal carries no draft, and
- *  nothing was typed, so it retypes (R43 F3). */
+ *  other code retries as today, `type-failed` included: the server's `type-failed` refusal carries no draft, so it
+ *  retries without `resume` (R43 F3). */
 const retryResumes = (code: string | undefined, draft: string | undefined): boolean =>
   code === 'enter-ignored' || (code === 'verify-failed' && typeof draft === 'string' && draft !== '');
 
