@@ -1,6 +1,6 @@
 // The bounded pool (desktop polish C1, D-6388): B4's promise limiter (D-6369), pinned before it moves out of
-// transcript/resolve.ts into bounded.ts. Four cases, green on the old code (characterization), so the move
-// commit changes only this file's import.
+// transcript/resolve.ts into bounded.ts. The four limiter cases were green on the old code (characterization),
+// so the move commit changed only this file's import; the mapBounded cases came with mapBounded.
 import { describe, expect, it } from 'vitest';
 import { limiter, mapBounded } from '../src/bounded.js';
 
@@ -84,9 +84,16 @@ describe('the bounded pool (the limiter)', () => {
     // the waiter took the freed slot at once: still two in flight, never one
     expect(inFlight).toBe(2);
     expect(counts).toEqual([1, 2, 2]);
+    // a late arrival finds the bound still full: the handoff never let the count dip below it
+    const lateGate = gate();
+    const late = call(lateGate);
+    await settle();
+    expect(inFlight).toBe(2);
+    expect(counts).toEqual([1, 2, 2]);
     g[1].resolve();
     waiterGate.resolve();
-    await Promise.all([a, b, w]);
+    lateGate.resolve();
+    await Promise.all([a, b, w, late]);
     expect(inFlight).toBe(0);
   });
 });
@@ -115,6 +122,12 @@ describe('mapBounded', () => {
     for (const g of gates) { g.resolve(); await settle(); }
     await run;
     expect(peak).toBe(3);
+  });
+
+  it('mapBounded refuses a limit that is not an integer of at least 1', () => {
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => mapBounded([1], bad, async (n) => n), String(bad)).toThrow(RangeError);
+    }
   });
 
   it('mapBounded passes the index and answers an empty list', async () => {
