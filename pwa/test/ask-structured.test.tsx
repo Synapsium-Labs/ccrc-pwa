@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { ChatEvent, Dialog, FleetSession } from '../../shared/api';
+import type { ChatEvent, Dialog, FleetSession, HookAsk } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
 import { api } from '../src/lib/api';
 import { DialogSheet } from '../src/session/DialogSheet';
@@ -647,7 +647,7 @@ class ScriptedSocket {
   drop(): void { this.readyState = 3; this.onclose?.(new Event('close') as CloseEvent); }
 }
 
-const RECONNECTING = 'Reconnecting. Answers wait until the session is back.';
+const RECONNECTING = 'Reconnecting. Nothing can be sent until the session is back.';
 
 describe('the ask holds through a reconnect, and an ask that ends closes with its exit (D-6325)', () => {
   /** The sockets of the store the case built, in the order its `makeSocket` made them: each store keeps its own list, so
@@ -782,6 +782,81 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     // Hiding is not a send: the scrim and the close still work in the gap.
     reconnect();
     expect(option).not.toHaveBeenCalled();
+  });
+
+  // F3 of review 843: the gap is read-only in what it SHOWS, not only at the send. Every control that sends is disabled
+  // (its own flag, not `locked`, which also refuses the dismissal); the Other field and its row are the operator's own
+  // text and stay as they are, and a pick-several box is a local tick, not a send. The sheet still closes.
+  it('in the gap every send control is disabled, the Other field is not, and the sheet still closes', () => {
+    holdClosingContent();
+    const button = (name: string | RegExp): HTMLElement => screen.getByRole('button', { name });
+
+    // A question with Other open: its options, the Chat row, Send and the tab chips send; the field and its row do not.
+    const one = connected(askFixture(1));
+    mount(one);
+    fireEvent.click(button(/^Other/));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Memcached' } });
+    expect(button('Send'), 'live: Send is on').toBeEnabled();
+    expect(button(/^In-process/)).toBeEnabled();
+    drop();
+    for (const name of [/^Redis/, /^In-process/, /^None/, /^Talk it over in the chat instead/, 'Send', /^Go to Tracing/]) {
+      expect(button(name), `${String(name)} in the gap`).toBeDisabled();
+    }
+    expect(screen.getByRole('textbox'), 'the Other field in the gap').toBeEnabled();
+    expect(button(/^Other/), 'the Other row in the gap').toBeEnabled();
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(panel()?.getAttribute('data-state'), 'the scrim in the gap').toBe('closed');
+    cleanup();
+
+    // A menu that is no ask: every row.
+    mount(connected(askFixture(4)));
+    drop();
+    for (const name of [/^Yes, and auto-accept edits/, /^Yes, and manually approve edits/, /^No, keep planning/]) {
+      expect(button(name), `${String(name)} in the gap`).toBeDisabled();
+    }
+    cleanup();
+
+    // A permission prompt whose menu matches: Allow and Deny.
+    const approval: HookAsk = { approval: { tool: 'Bash', summary: 'rm -rf build/' } };
+    const yesNo: Dialog = {
+      id: 'dlg-allow', title: 'Do you want to proceed?', selectedIndex: 1, parsed: true, raw: '❯ 1. Yes',
+      options: [{ index: 1, label: 'Yes' }, { index: 2, label: 'No' }],
+    };
+    mount(connected({
+      ask: approval, dialog: yesNo, askFrameSeen: true,
+      frames: [{ type: 'dialog', dialog: yesNo }, { type: 'ask', ask: approval, key: 'ask-key-p' }],
+    }));
+    expect(button('Allow'), 'live: Allow is on').toBeEnabled();
+    expect(button('Deny')).toBeEnabled();
+    drop();
+    expect(button('Allow'), 'Allow in the gap').toBeDisabled();
+    expect(button('Deny'), 'Deny in the gap').toBeDisabled();
+    cleanup();
+
+    // The review: Submit answers, Cancel and the tab chips.
+    mount(connected(askFixture(8)));
+    drop();
+    for (const name of [/^Submit answers/, /^Cancel/, /^Go to Cache/]) {
+      expect(button(name), `${String(name)} in the gap`).toBeDisabled();
+    }
+    cleanup();
+
+    // A pick-several question: the boxes are a local tick, the commit is a send.
+    const base = askFixture(9).dialog!;
+    const dialog: Dialog = { ...base, multi: { ...base.multi!, commit: 'Submit' } };
+    const ask = { questions: [{
+      question: 'Which regions should it deploy to?', header: 'Regions', multiSelect: true,
+      options: [{ label: 'North' }, { label: 'East' }, { label: 'South' }],
+    }] };
+    mount(connected({
+      ask, dialog, askFrameSeen: true,
+      frames: [{ type: 'dialog', dialog }, { type: 'ask', ask, key: 'ask-key-m' }],
+    }));
+    fireEvent.click(screen.getAllByRole('checkbox')[0]!);
+    expect(button(/^(Next|Review answers)/), 'live: the commit is on once a box is ticked').toBeEnabled();
+    drop();
+    expect(button(/^(Next|Review answers)/), 'the commit in the gap').toBeDisabled();
+    for (const box of screen.getAllByRole('checkbox')) expect(box, 'a box in the gap').toBeEnabled();
   });
 
   it('a permission prompt\'s Deny sends nothing in the gap', () => {

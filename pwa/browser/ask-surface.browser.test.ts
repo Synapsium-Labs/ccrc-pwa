@@ -265,7 +265,7 @@ describe('a reconnect keeps the open ask on screen (D-6325)', () => {
   const DROP_AFTER_MS = 3_000;
   const ASK_AFTER_MS = 2_000;
   const SAMPLE_MS = 250;
-  const RECONNECTING = 'Reconnecting. Answers wait until the session is back.';
+  const RECONNECTING = 'Reconnecting. Nothing can be sent until the session is back.';
 
   interface Sample { at: number; present: boolean; status: string | null; panelId: string | null }
 
