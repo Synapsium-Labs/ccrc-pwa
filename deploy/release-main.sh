@@ -12,70 +12,105 @@
 # A release is skipped only on a positive, exact, non-empty match with the
 # base release's fingerprint; every other outcome releases (D-6393).
 #
-# The build, the decision and the publish are THREE ARMS, because the
-# provenance bundle is produced by the workflow's attest ACTION, which has to
-# run AFTER the decision and BEFORE the publish, and a bash script cannot run
-# an action:
+# FOUR ARMS IN TWO JOBS of the main-push workflow (D-6656). The build job runs
+# every line of the checkout's own code (the install, the builder, the
+# comparison) and holds a READ token only: no code the install runs can push a
+# tag, create or edit a release, or mint a signing certificate. The publish job
+# holds the write token and runs none of that code; it takes the build's
+# tarball as one uploaded artifact, plus the tag and the tarball's digest as
+# step outputs, and RE-PROVES them before any write. The attest step is an
+# ACTION in the publish job, between receive and publish, which a bash script
+# cannot run, so the arms stay separate:
 #
-#   prepare  — no token, no gh. Refuse a dirty tree, derive the next PATCH tag
-#              from the highest release-shaped tag, tag it LOCALLY (never
-#              pushed here), build the candidate with build-release.sh (the one
-#              builder) into $OUT_DIR/candidate, outside the attest step's
-#              glob, and write $OUT_DIR/release-main.state as `built
-#              candidate` (D-6499, D-6500). A HEAD that a release tag already
-#              contains is a re-run of an older merge: it builds nothing,
-#              tags nothing and records `built contained` (D-6502).
-#   compare  — GH_TOKEN. Pick the base (the newest release tag HEAD contains,
-#              D-6392), download its tarball outside the checkout, check it
-#              against its own SHA256SUMS, extract both tarballs, fingerprint
-#              both (D-6408) and decide (D-6393). A skip deletes the local tag
-#              and records `built unchanged`; a release moves the candidate
-#              into $OUT_DIR and records `built true`. Prints one line saying
-#              which (D-6501) and writes `release=<true|false>` for the attest
-#              step's condition. A change to this script or to the workflow
-#              releases without comparing (D-6409).
-#   publish  — read the state, copy the attest step's bundle
-#              ($CCRC_BUNDLE_PATH) to the name every `ccrc update` fetches,
-#              refuse without it, write the notes (release-notes.mjs,
-#              D-5548), push the tag, `gh release create` naming ALL THREE
-#              artifacts `--prerelease --notes-file`, delete the tag again if
-#              the publish never completes. A skip, or an already-tagged HEAD,
-#              exits 0 having done nothing; an undecided build is refused.
+#   prepare  — the build job; no token, no gh. Refuse a dirty tree, derive the
+#              next PATCH tag from the highest release-shaped tag, tag it
+#              LOCALLY (never pushed here), build the candidate with
+#              build-release.sh (the one builder) into $OUT_DIR/candidate, and
+#              write $OUT_DIR/release-main.state as `built candidate` (D-6499,
+#              D-6500). A HEAD that a release tag already contains is a re-run
+#              of an older merge: it builds nothing, tags nothing and records
+#              `built contained` (D-6502).
+#   compare  — the build job; a read-only GH_TOKEN. Pick the base (the newest
+#              release tag HEAD contains, D-6392), download its tarball outside
+#              the checkout, check it against its own SHA256SUMS, extract both
+#              tarballs, fingerprint both (D-6408) and decide (D-6393). A skip
+#              deletes the local tag and records `built unchanged`; a release
+#              moves the candidate into $OUT_DIR and records `built true`.
+#              Prints one line saying which (D-6501) and writes `release=false`,
+#              or `release=true` with `tag=<tag>`, as the job's outputs; the
+#              publish job runs only on `release=true` (D-6658). A change to
+#              this script or to the workflow releases without comparing
+#              (D-6409). release-artifact.sh's `record` then hands the
+#              tarball's digest on, and the tarball and SHA256SUMS are uploaded.
+#   receive  — the publish job, in its own fresh checkout, before the attest
+#              step. Trusts nothing the build job wrote: refuse a dirty tree, an
+#              out directory that already holds a state or a tarball, a HEAD
+#              that carries a release tag, and a HEAD a release tag contains;
+#              re-derive the tag and refuse unless it is the build's (D-6649,
+#              D-6662); verify the downloaded artifact against the recorded
+#              digest with release-artifact.sh, which copies it into $OUT_DIR
+#              without opening it; only then tag LOCALLY and record `built true`
+#              — exactly the state compare left in the build job, so publish
+#              runs unchanged.
+#   publish  — the publish job, after the attest step. Read the state, copy the
+#              attest step's bundle ($CCRC_BUNDLE_PATH) to the name every `ccrc
+#              update` fetches, refuse without it, write the notes
+#              (release-notes.mjs, D-5548), push the tag, `gh release create`
+#              naming ALL THREE artifacts `--prerelease --notes-file`, delete the
+#              tag again if the publish never completes. A skip, or an
+#              already-tagged HEAD, exits 0 having done nothing; an undecided
+#              build is refused.
 #
-# NOTHING REACHES ORIGIN BEFORE publish's push — so a failed attest step, a
-# cancelled job between the arms, or a refused publish leaves origin exactly
-# as it was and a re-run derives the same number. That is the property the
-# one-script version's cleanup trap protected, kept across the split. Each
-# state records the HEAD it was measured for, and compare and publish refuse a
-# state for another commit (D-6500).
+# NOTHING REACHES ORIGIN BEFORE publish's push — so a failed build, a failed
+# attest step, a cancelled job, a refused receive or a refused publish leaves
+# origin exactly as it was and a re-run derives the same number. A re-run of
+# the failed publish job alone receives the same artifact while it is retained
+# (D-6657). Each state records the HEAD it was measured for, and compare and
+# publish refuse a state for another commit (D-6500).
 #
 # WHY ONE WORKFLOW DOES ALL OF IT: a tag pushed with the workflow's own
 # GITHUB_TOKEN never fires release.yml (GitHub suppresses workflow-caused
 # events), and this repo carries no Actions secret that could push as someone
-# else. So the main-push job must tag AND build AND attest AND publish itself.
+# else. So the main-push workflow must tag AND build AND attest AND publish
+# itself; it does so as two jobs of that one workflow, the build job's outputs
+# and artifact crossing to the publish job.
 set -euo pipefail
 
 HERE="${BASH_SOURCE[0]}"; [[ "$HERE" == */* ]] || HERE="./$HERE"
 ROOT="$(cd "${HERE%/*}/.." && pwd)"
 
-usage() { echo "usage: bash deploy/release-main.sh prepare|compare|publish [--out <dir>] — prepare: on a clean, untagged HEAD derive the next vX.Y.Z patch tag, tag LOCALLY, build the candidate with build-release.sh; compare: set the candidate against the newest release HEAD contains and decide whether this merge releases; publish: push the tag and publish tarball + SHA256SUMS + provenance bundle (\$CCRC_BUNDLE_PATH) as a prerelease"; }
+usage() { echo "usage: bash deploy/release-main.sh prepare|compare|publish [--out <dir>] | receive --in <dir> --tag <tag> --digest <hex> [--out <dir>] — prepare (build job): on a clean, untagged HEAD derive the next vX.Y.Z patch tag, tag LOCALLY, build the candidate with build-release.sh; compare (build job): set the candidate against the newest release HEAD contains and decide whether this merge releases; receive (publish job): re-derive the tag, verify the build's artifact in --in against --digest, tag LOCALLY; publish (publish job): push the tag and publish tarball + SHA256SUMS + provenance bundle (\$CCRC_BUNDLE_PATH) as a prerelease"; }
 die() { echo "release-main.sh: $*" >&2; exit 1; }
 
 ARM=""
 OUT_DIR=""
+# receive's three flags, and which of them were given (D-6656).
+IN_DIR="" RECV_TAG="" RECV_DIGEST=""
+HAVE=" "
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
-    prepare|compare|publish)
+    prepare|compare|receive|publish)
       [ -z "$ARM" ] || { echo "release-main.sh: one arm, not two: $ARM and $1" >&2; usage >&2; exit 2; }
       ARM="$1"; shift ;;
     --out)
       [ $# -ge 2 ] || { echo "release-main.sh: --out needs a directory" >&2; usage >&2; exit 2; }
       OUT_DIR="$2"; shift 2 ;;
+    --in|--tag|--digest)
+      [ $# -ge 2 ] || { echo "release-main.sh: $1 needs a value" >&2; usage >&2; exit 2; }
+      case "$1" in --in) IN_DIR="$2" ;; --tag) RECV_TAG="$2" ;; --digest) RECV_DIGEST="$2" ;; esac
+      HAVE="$HAVE$1 "; shift 2 ;;
     *) echo "release-main.sh: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
-[ -n "$ARM" ] || { echo "release-main.sh: an arm is required: prepare, compare or publish" >&2; usage >&2; exit 2; }
+[ -n "$ARM" ] || { echo "release-main.sh: an arm is required: prepare, compare, receive or publish" >&2; usage >&2; exit 2; }
+if [ "$ARM" = receive ]; then
+  for flag in --in --tag --digest; do
+    [[ "$HAVE" == *" $flag "* ]] || { echo "release-main.sh: receive needs $flag" >&2; usage >&2; exit 2; }
+  done
+elif [ "$HAVE" != " " ]; then
+  echo "release-main.sh: --in, --tag and --digest are receive's flags, not $ARM's (given:${HAVE% })" >&2; usage >&2; exit 2
+fi
 [ -n "$OUT_DIR" ] || OUT_DIR="$ROOT/release-out"
 STATE="$OUT_DIR/release-main.state"
 SHAPE='^v[0-9]+\.[0-9]+\.[0-9]+$'
@@ -93,12 +128,22 @@ say() {
   fi
 }
 
-# The attest step's condition: `release=true` only on an explicit release
-# decision (D-6499).
+# The build job's outputs: `release=true` only on an explicit release decision
+# (D-6499), and then with `tag=<tag>` in the same printf, so the two lines land
+# together or not at all (D-6658). An output that cannot be written never fails
+# the run; the build job's decision check turns a lost one into a failed run.
 set_output() {
+  local lines="release=$1"$'\n'
+  [ $# -lt 2 ] || lines+="tag=$2"$'\n'
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
-    { printf 'release=%s\n' "$1" >> "$GITHUB_OUTPUT"; } 2>/dev/null || :
+    { printf '%s' "$lines" >> "$GITHUB_OUTPUT"; } 2>/dev/null || :
   fi
+}
+
+# The state a release decision leaves, written by compare in the build job and
+# by receive in the publish job (D-6656): publish reads it in either.
+record_release() {
+  printf 'built true\ntag %s\nhead %s\n' "$1" "$2" > "$STATE"
 }
 
 # Tag names on stdin; prints the highest release-shaped one. A version sort and
@@ -391,10 +436,49 @@ compare() {
   else
     mv -- "$cand" "$OUT_DIR/ccrc-$tag.tar.gz"
     mv -- "$OUT_DIR/candidate/SHA256SUMS" "$OUT_DIR/SHA256SUMS"
-    printf 'built true\ntag %s\nhead %s\n' "$tag" "$head" > "$STATE"
-    set_output true
+    record_release "$tag" "$head"
+    set_output true "$tag"
   fi
   say "$LINE"
+}
+
+# ── receive ──────────────────────────────────────────────────────────────
+# The publish job's first arm (D-6656). Every check runs before any write: the
+# out directory, the local tag and the state are untouched by a refusal. It
+# never runs gh, the builder or the install, and never opens the tarball:
+# release-artifact.sh's verify hashes it and compares one line (D-6657).
+receive() {
+  local tag="$RECV_TAG" digest="$RECV_DIGEST" at_head contained head
+  # First, so an out directory inside the checkout that is already filled
+  # refuses here: the workflow's release-out is not gitignored.
+  [ -z "$(git -C "$ROOT" status --porcelain)" ] \
+    || die "refusing a dirty tree — a release is built from a commit; commit or stash, then re-run (git status --porcelain is non-empty); nothing was tagged or pushed"
+  # The attest step signs every tarball in the out directory; an out directory
+  # outside the checkout is not seen by the dirty check.
+  if [ -e "$STATE" ] || compgen -G "$OUT_DIR/ccrc-*.tar.gz" >/dev/null; then
+    die "$OUT_DIR already holds a state or a tarball — receive runs once, into an empty out directory; nothing was tagged or pushed"
+  fi
+
+  at_head="$(git -C "$ROOT" tag --points-at HEAD | grep -E "$SHAPE" | head -n1)" || at_head=""
+  [ -z "$at_head" ] \
+    || die "HEAD already carries $at_head — it was published already, or release.yml owns it; nothing was tagged or pushed"
+  contained="$(git -C "$ROOT" tag --contains HEAD | newest)" || contained=""
+  [ -z "$contained" ] \
+    || die "HEAD is already contained in $contained — a re-run of an older merge; nothing was tagged or pushed"
+
+  # The build job's tag is its output, so untrusted: this checkout derives its
+  # own from origin's tags, and the two must agree (D-6649, D-6662).
+  derive_tags
+  [ "$NEXT" = "$tag" ] \
+    || die "the build job derived $tag; this checkout derives $NEXT — a release tag reached origin between the two jobs; re-run all jobs; nothing was tagged or pushed"
+
+  bash "$ROOT/deploy/release-artifact.sh" verify --tag "$tag" --digest "$digest" --in "$IN_DIR" --out "$OUT_DIR" \
+    || die "the build's artifact did not verify; nothing was tagged or pushed"
+
+  head="$(git -C "$ROOT" rev-parse HEAD)"
+  git -C "$ROOT" tag "$tag" || die "git tag $tag failed; nothing was pushed"
+  record_release "$tag" "$head"
+  echo "release-main.sh: received $tag from the build job (sha256 $digest) — tagged locally (NOT pushed); next: attest, then publish"
 }
 
 # ── publish ──────────────────────────────────────────────────────────────
@@ -496,5 +580,6 @@ publish() {
 case "$ARM" in
   prepare) prepare ;;
   compare) compare ;;
+  receive) receive ;;
   publish) publish ;;
 esac
