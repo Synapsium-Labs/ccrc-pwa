@@ -2326,6 +2326,13 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     ['an array', '[]', 0],
     ['an object with no credential', '{"state": "ok"}', 0],
     ['a whole object, then exit 1', '{"credential": "present", "state": "ok"}', 1],
+    // Review fix round 2 (T8-FR1-CQ-1): the one-answer guard and the state's type test.
+    // jq prints one `<credential> <state>` line per object, so two objects carry a
+    // newline AND a second space; a newline inside one word carries the newline alone.
+    ['two objects', '{"credential": "present", "state": "ok"}\n{"credential": "absent", "state": null}', 0],
+    ['a credential word with a space', '{"credential": "pres ent", "state": "ok"}', 0],
+    ['a state with a newline in it', '{"credential": "present", "state": "o\\nk"}', 0],
+    ['a state that is not a string', '{"credential": "present", "state": 5}', 0],
   ];
   const plantStandin = (home: string, out: string | null, rc: number): void => {
     fs.rmSync(authLib(home), { force: true });
