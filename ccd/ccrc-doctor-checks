@@ -6451,11 +6451,11 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
   # leaves both, and "ccrc withholds its own" would be false over a link
   # that says otherwise.
   if _codex_usage_enabled "$f" && _codex_usage_enabled "$t"; then
-    _dr_cx_warn "$id: another repository's $f is enabled, and ccrc's own $t is enabled too, so two publishers race this lane's ~/.cc-limits row and two token refreshes its OAuth directory" \
+    _dr_cx_warn "$id: another repository's $f is enabled, and ccrc's own $t is enabled too, so two publishers race this lane's ~/.cc-limits row, and $f refreshes the credential outside the auth library's lock, so it can race the tier's refresh (ccrc's own poll only reads it)" \
       "systemctl --user disable --now $t (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws $t while $f stands and re-measures the link. Once this lane's cutover no longer needs $f, disable it yourself: systemctl --user disable --now $f — ccrc never disables another tool's unit"
     rc=2
   elif _codex_usage_enabled "$f"; then
-    _dr_cx_warn "$id: another repository's $f is enabled, so two publishers would race this lane's ~/.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own $t while it stands" \
+    _dr_cx_warn "$id: another repository's $f is enabled, so two publishers would race this lane's ~/.cc-limits row, and $f refreshes the credential outside the auth library's lock, so it can race the tier's refresh — ccrc withholds its own $t while it stands" \
       "once this lane's cutover no longer needs it, disable it yourself: systemctl --user disable --now $f, then run: ccrc install — ccrc never disables another tool's unit"
     rc=2
   elif _codex_usage_enabled "$t"; then
@@ -6583,8 +6583,11 @@ _dr_codex_usage_surplus_rows() {   # <_dr_codex_usage_surplus's rc> -> WARN find
 # --check true` and `litellm` without `--commit` — so this file never names
 # the class registry's file (single-definition.test.ts pins that count at the
 # lines `_check_models` has), and no row here writes, renders, mkdirs,
-# starts or stops anything. `exec.authDir` is asked for existence and mode
-# ONLY: nothing under it is ever opened (spec §9).
+# starts or stops anything. `exec.authDir` is asked for existence and search
+# permission by `[ ]` tests, and its credential through the auth library's
+# non-secret `status` (codex-bridge Stage 1, Task 9): its state and the file's
+# mode and owner. The library is the one ccrc code that opens a credential, so
+# no row here reads the secret, and none writes under an authDir.
 #
 # THE RUNTIME ROW TRUSTS THE STAMP (ruling R-C5,
 # D-3711). `ccgpt-runtime check` compares the
@@ -6614,6 +6617,7 @@ _check_codex() {
   for fn in _box_env_value _codex_lanes _codex_row _codex_lane_json_state _codex_lane_dir \
             _codex_litellm_yaml _codex_runtime_cli _models_node _models_roster_path _models_litellm_template \
             _codex_tier_ours _codex_tier_stale _codex_foreign_what _codex_tier_is_our_handle \
+            _codex_auth_status _codex_auth \
             _svc_is_active _svc_status_hint \
             _codex_usage_enabled _codex_usage_enabled_ids _codex_usage_timer _codex_usage_foreign _codex_usage_wants _codex_usage_flat_foreign \
             _plat_mtime; do
@@ -6782,10 +6786,12 @@ _check_codex() {
 #      no-op and whose gate stops and starts only a tier it proves this
 #      lane's (the identity gate every stop path shares);
 #   4. only when step 1 replaced the BYTES (measured by `cmp`, never a
-#      mode-only fix or a compare that could not run) of one of the two
+#      mode-only fix or a compare that could not run) of one of the three
 #      files a running tier's identity is computed from — the shim
-#      (`_codex_shim_file`) or the runtime CLI (`_codex_runtime_cli`), per
-#      `_codex_started_json` — or step 2 rebuilt the runtime:
+#      (`_codex_shim_file`), the runtime CLI (`_codex_runtime_cli`) or the
+#      auth library the litellm tier loads (`_codex_auth_lib`, codex-bridge
+#      Stage 1, Task 6), per `_codex_started_json` — or step 2 rebuilt the
+#      runtime:
 #      `_inst_codex_tiers`, the install step `ccrc install` and `ccrc update`
 #      run. ccgpt-usage.py and ccrc-codex are code no tier runs, so they
 #      never ask it. That step restarts a tier only when it is ccrc's own,
@@ -6795,7 +6801,9 @@ _check_codex() {
 #      residue D-3721's entry names; ruled, not cured).
 # WHAT IT NEVER DOES: edit the roster or choose a port (a row that does not
 # validate is named and left); run OAuth (`ccrc codex login <id>` is the
-# remedy the check prints); open anything under an authDir; signal a process
+# remedy the check prints); write anything under an authDir (the check reads
+# a credential only through the auth library's non-secret `status` and the
+# file's mode, and this fixer reads none); signal a process
 # it cannot prove is a lane's (every stop is behind `_codex_tier_ours`,
 # inside steps 3 and 4); enable or disable any unit; overwrite a launcher;
 # delete anything.
@@ -6814,7 +6822,7 @@ _fix_codex() {
     local role="" lanes lrc=0 n src dst rt id replaced=0 cmp_ok=1 bytes
     local -a ids=() missing=()
     for n in _codex_lanes _codex_row _codex_lane_json_state _codex_lock _codex_unlock \
-             _codex_shim_file _codex_runtime_cli _models_node _models_roster_path _models_litellm_lane_held \
+             _codex_shim_file _codex_auth_lib _codex_runtime_cli _models_node _models_roster_path _models_litellm_lane_held \
              _inst_atomic _inst_codex_tiers _box_env_value _models_node_locked; do
       declare -F "$n" >/dev/null 2>&1 || missing+=("$n")
     done
@@ -6874,10 +6882,12 @@ _fix_codex() {
         case "$bytes" in
           1)
             echo "FIX codex: restored \$HOME/.local/bin/$n from the shipped tree"
-            # The two files a running tier's identity is computed from
-            # (`_codex_started_json`): the shim a shim tier runs, and the
-            # runtime CLI that names every tier's generation.
-            if [ "$dst" = "$(_codex_shim_file)" ] || [ "$dst" = "$(_codex_runtime_cli)" ]; then
+            # The three files a running tier's identity is computed from
+            # (`_codex_started_json`): the shim a shim tier runs, the
+            # runtime CLI that names every tier's generation, and the auth
+            # library a litellm tier loads.
+            if [ "$dst" = "$(_codex_shim_file)" ] || [ "$dst" = "$(_codex_runtime_cli)" ] \
+                || [ "$dst" = "$(_codex_auth_lib)" ]; then
               replaced=1
             fi ;;
           0)
@@ -6951,13 +6961,14 @@ _fix_codex() {
       )
     done
 
-    # 4. The tiers — only when this run replaced the bytes of the shim or the
-    # runtime CLI, or rebuilt the runtime (step 1's `replaced`, step 2's).
+    # 4. The tiers — only when this run replaced the bytes of the shim, the
+    # runtime CLI or the auth library, or rebuilt the runtime (step 1's
+    # `replaced`, step 2's).
     if [ "$replaced" -eq 1 ]; then
       if ( INST_ROLE="${role:-both}"; INST_DEGRADED=(); _inst_codex_tiers; [ "${#INST_DEGRADED[@]}" -eq 0 ] ); then
-        echo "FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, which restarts every running ccrc-owned tier that measures stale, on any lane (its lines above)"
+        echo "FIX codex: tiers: this fix replaced code a running tier runs (the shim, the runtime or the auth library), so it re-ran the install step 'ccrc update' runs, which restarts every running ccrc-owned tier that measures stale, on any lane (its lines above)"
       else
-        echo "FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, and that step could not restart every stale tier (its lines above say which)"
+        echo "FIX codex: tiers: this fix replaced code a running tier runs (the shim, the runtime or the auth library), so it re-ran the install step 'ccrc update' runs, and that step could not restart every stale tier (its lines above say which)"
       fi
     fi
     echo "FIX codex: done for ${#ids[@]} codex lane(s) — no port, roster row, OAuth, credential, unidentified listener or unit enablement was touched; the re-measurement below is the verdict"
@@ -7058,6 +7069,93 @@ _dr_cx_runtime() {
   return 0
 }
 
+# The lane's credential, through the auth library (codex-bridge Stage 1,
+# Task 9): `_codex_auth_status` (ccd/ccrc) reads its `status`, which never
+# writes and never touches the network. Each finding is one FAIL inside this
+# `codex` check (no WARN, no new check name: a soak gate allow-lists WARNs by
+# name), with its own remedy:
+#   - library or python3 missing (rc 3): auth-library-absent, `ccrc update`;
+#   - no answer it can read (rc 1): auth-status-unreadable, `ccrc update`;
+#   - `ownerOk` false: the owner, then the mode. It is tested FIRST: a
+#     non-owner cannot run a bare `chmod` (EPERM), and its remedy already ends
+#     in the `chmod 600`, so a credential both foreign-owned and the wrong mode
+#     gets this one line;
+#   - `modeOk` false: `chmod 600 <the path `paths` answers>`, the only credential
+#     line unless `ownerOk` is false too (the owner line above then stands alone):
+#     a 0000 file also reads `unreadable` (the library's open is refused) and "move
+#     it aside" would discard a credential a chmod cures. `modeOk`/`ownerOk` null
+#     is NOT false (D-6559): nothing is there, or the path is not a regular file (a
+#     symlink, a FIFO, a directory), whose lstat mode is not the credential's, so
+#     it takes the `unreadable` arm below and never a chmod, which would follow a symlink;
+#   - `absent`/`incomplete`: not signed in, `ccrc codex login <id>` (start's
+#     own words for its not-logged-in refusal);
+#   - `unreadable`/`foreign-family`: move it aside, then sign in again;
+#   - a present credential whose status reads `needs-signin` or
+#     `config-error`: start's two refusals, with start's remedies;
+#   - anything else present: PASS, `signed in`, whether or not the access
+#     token expired (in litellm mode the tier refreshes it on its next request).
+_dr_cx_auth() {   # <id> <authDir> — records at most one credential finding, or adds "signed in" to DRX_LANE_WORDS
+  local id="$1" dir="$2" rc=0 mok ook mode cred
+  _codex_auth_status "$id" 2>/dev/null || rc=$?
+  if [ "$rc" -eq 3 ]; then
+    _dr_cx_fail "the auth library or python3 is missing (auth-library-absent), so whether $id is signed in cannot be told" \
+      "run 'ccrc update', which places the library, then re-run doctor"
+    return 0
+  elif [ "$rc" -ne 0 ]; then
+    _dr_cx_fail "the auth library answered no status ccrc can read for $id (auth-status-unreadable), so whether it is signed in cannot be told" \
+      "run 'ccrc update', which places the library again, then re-run doctor"
+    return 0
+  fi
+  # `null` stays the word null: only a JSON `false` is a mode or owner finding.
+  read -r mok ook mode < <(printf '%s\n' "$CX_AUTH_JSON" | jq -r '"\(.modeOk) \(.ownerOk) \(.mode)"' 2>/dev/null) || :
+  cred=''
+  if [ "${mok:-}" = false ] || [ "${ook:-}" = false ] || [ "$CX_AUTH_CRED" = unreadable ] || [ "$CX_AUTH_CRED" = foreign-family ]; then
+    cred="$(_codex_auth paths --auth-dir "$dir" 2>/dev/null | jq -er '.credential | select(type == "string" and length > 0)' 2>/dev/null)" || cred=''
+    if [ -z "$cred" ]; then
+      _dr_cx_fail "the auth library named no credential path for $id (auth-status-unreadable), so what to do with its credential cannot be told" \
+        "run 'ccrc update', which places the library again, then re-run doctor"
+      return 0
+    fi
+  fi
+  if [ "${ook:-}" = false ]; then
+    _dr_cx_fail "$id's credential $cred is not owned by this user, so another user can replace what the lane signs in with" \
+      "make this user its owner (chown, as root), then chmod 600 $cred"
+    return 0
+  fi
+  if [ "${mok:-}" = false ]; then
+    _dr_cx_fail "$id's credential $cred has mode $mode, and a lane's credential is readable and writable by its owner alone: one that others can read leaks the lane's tokens, and one its owner cannot read stops the lane" \
+      "chmod 600 $cred"
+    return 0
+  fi
+  case "$CX_AUTH_CRED" in
+    absent|incomplete)
+      _dr_cx_fail "$id is not signed in: the auth library reads its credential in ~/$CX_AUTH as $CX_AUTH_CRED, so 'ccrc codex start $id' refuses" \
+        "sign the lane in: ccrc codex login $id"
+      return 0 ;;
+    unreadable|foreign-family)
+      _dr_cx_fail "the auth library reads $id's credential $cred as $CX_AUTH_CRED, so 'ccrc codex start $id' refuses it and ccrc never writes over it" \
+        "move it aside, then ccrc codex login $id"
+      return 0 ;;
+    present) ;;
+    *)
+      _dr_cx_fail "the auth library reads $id's credential as \"$CX_AUTH_CRED\", a word this ccrc does not know (auth-status-unreadable)" \
+        "run 'ccrc update', which places a library and a ccrc that agree, then re-run doctor"
+      return 0 ;;
+  esac
+  case "$CX_AUTH_STATE" in
+    needs-signin)
+      _dr_cx_fail "the token endpoint refused $id's refresh token (the auth library's status reads needs-signin), so 'ccrc codex start $id' refuses and its tier can serve no request" \
+        "sign the lane in again: ccrc codex login $id"
+      return 0 ;;
+    config-error)
+      _dr_cx_fail "the token endpoint refused the client this ccrc signs $id in with (the auth library's status reads config-error), so 'ccrc codex start $id' refuses" \
+        "run 'ccrc update' first, then 'ccrc codex login $id' if the lane is still refused"
+      return 0 ;;
+  esac
+  DRX_LANE_WORDS+=", signed in"
+  return 0
+}
+
 # One lane's static rows. Its row already read in `_check_codex`'s row pass;
 # it is read again HERE so this shell's CX_* are this lane's.
 _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> — sets DRX_LANE_WORDS
@@ -7066,21 +7164,19 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
   DRX_LANE_WORDS=''
   _codex_row "$id" 2>/dev/null || return 0
   DRX_LANE_WORDS="ports $CX_PROXY/$CX_LITELLM"
-  # authDir: EXISTENCE AND MODE ONLY (spec §9, §12). `[ -f ]` needs search
-  # permission on the directory and nothing on the file, so a 0000 auth.json
-  # passes: its contents are never this check's business.
+  # authDir: the directory by `[ ]` tests, then the credential through the
+  # auth library's non-secret status (codex-bridge Stage 1, Task 9). The
+  # library is the one ccrc code that opens a credential; this row reads its
+  # `status` answer and never the secret, and writes nothing under an authDir.
   auth="$HOME/$CX_AUTH"
   if [ ! -e "$auth" ] && [ ! -L "$auth" ]; then
     _dr_cx_fail "$id's authDir ~/$CX_AUTH does not exist, so the lane has nothing to sign in to" \
-      "sign the lane in: ccrc codex login $id (the runtime's own login creates it, owner-only) — ccrc never performs OAuth for you"
+      "sign the lane in: ccrc codex login $id (the auth library's sign-in creates it, owner-only) — ccrc never performs OAuth for you"
   elif [ ! -d "$auth" ] || [ ! -r "$auth" ] || [ ! -x "$auth" ]; then
     _dr_cx_fail "$id's authDir ~/$CX_AUTH is not a directory this user can list and search, so whether the lane is signed in cannot be told" \
-      "make it a directory you own and can search (chmod u+rx ~/$CX_AUTH); ccrc never reads what is inside it"
-  elif [ ! -f "$auth/auth.json" ]; then
-    _dr_cx_fail "$id has no OAuth login: ~/$CX_AUTH holds no auth.json (existence is all ccrc checks; it never reads one), so 'ccrc codex start $id' refuses" \
-      "sign the lane in: ccrc codex login $id"
+      "make it a directory you own and can search (chmod u+rx ~/$CX_AUTH); ccrc reads what is inside it only through its auth library"
   else
-    DRX_LANE_WORDS+=", signed in"
+    _dr_cx_auth "$id" "$auth"
   fi
   # lane.json against the ROSTER row: id, configDir, authDir, both ports, unit names present.
   st="$(_codex_lane_json_state "$id" 2>/dev/null)" || st=''

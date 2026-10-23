@@ -1375,6 +1375,35 @@ function pyWithLib(home: string, body: string[], args: string[]): { status: numb
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
+// The whole-wave fix round, D-6692: the barring rule is ONE definition (`_bars`), and its public face `bars` is what the
+// two readers (`ccgpt-usage.py`, `ccrc-models-probe`) ask. This pins `bars` to `_bars`'s answer on each state a reader
+// branches on, so the readers' refusals follow the library's rule rather than a copy of it.
+describe.skipIf(!PY)('bars: the barring rule, public (D-6692)', () => {
+  it('answers what _bars answers: needs-signin and a current config-error bar; a stale config-error, ok and no status do not', () => {
+    const home = mkTmp('codex-auth-bars-');
+    const r = pyWithLib(home, [
+      'cur = mod.config_hash()',
+      'stale = "0" * 64 if cur != "0" * 64 else "1" * 64',
+      'cases = [',
+      '    ("needs-signin", {"state": "needs-signin", "configHash": stale}),',
+      '    ("config-error current", {"state": "config-error", "configHash": cur}),',
+      '    ("config-error stale", {"state": "config-error", "configHash": stale}),',
+      '    ("ok", {"state": "ok", "configHash": cur}),',
+      '    ("none", None),',
+      ']',
+      'print(json.dumps([[name, mod.bars(st), mod._bars(st)] for name, st in cases]))',
+    ], []);
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual([
+      ['needs-signin', true, true],
+      ['config-error current', true, true],
+      ['config-error stale', false, false],
+      ['ok', false, false],
+      ['none', false, false],
+    ]);
+  });
+});
+
 describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
   it('a valid token is returned with no lock taken and no request made', async () => {
     const home = mkTmp('codex-auth-valid-');

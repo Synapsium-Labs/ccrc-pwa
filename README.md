@@ -613,7 +613,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `config`, `auth`, `rc` | `ccrc.env` coherent for its fleet mode; the session gate and its passphrase file; this box's `--remote-control` setting |
 | `exposure`, `update-exposure`, `caddy`, `caddyfile`, `cert`, `name` | the exposure pieces ("Exposure", below) |
 | `wrappers`, `skills`, `accounts`, `credentials` | the roster against `~/.local/bin` (Claude Code's binary included); the ccrc skills in every home; declared credential files and provider env blocks (a Codex lane's may omit `ANTHROPIC_BASE_URL`, which its launcher exports, but may not name an endpoint other than its loopback shim); a token file for every account the health probe measures |
-| `codex` | for each `exec.kind: "codex"` lane: the five GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp and compares the installed LiteLLM patch with `patch-source`); the roster row and its ports; `exec.authDir` and its `auth.json`, for existence and mode only; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
+| `codex` | for each `exec.kind: "codex"` lane: the five GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp and compares the installed LiteLLM patch with `patch-source`); the roster row and its ports; `exec.authDir`, then its `auth.json` through the auth library's non-secret status (signed in or not, `needs-signin`, `config-error`, another family's or an unreadable file) and the file's owner and mode; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
 | `pools`, `memory`, `routing`, `models` | project pool tags; one memory store per project; lane routing; model-catalogue freshness |
 | `transcripts` | every registry row's uuid against its transcript, read by the one `continued-in` rule `ccd` and the server share: a WARN names the sessions reading a transcript Claude Code has superseded (a supervised one clears on its next supervise tick; a stopped or archived one is followed when it is next resumed) and, apart, a session whose marker names a successor never written (it clears at that job's first line, or at the first prompt the session answers on its own transcript; the row's wrapper is named, because `<wrapper> agents` lists only that account's jobs); rows it could not measure (at neither direct spelling, unreadable, or a registry row it cannot read) are counted apart inside the PASS, never claimed clean; a FAIL when `~/.cc-sessions` is not a readable, searchable directory |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
@@ -627,7 +627,7 @@ the shipped tree's own installer — and measures them again; the second verdict
 doctor writes nothing. Only a FAIL reaches a fixer, never a WARN. `wrappers` re-runs `ccrc wrappers` with no flag,
 which overwrites only a launcher whose ccrc marker still verifies. `codex` re-places a GPT-lane executable that is
 missing or differs, rebuilds a runtime its check refuses, re-renders a lane's stale `lane.json` or `litellm.yaml`
-under the lane's lock, and — only when it replaced the shim or the runtime — re-runs the install step that
+under the lane's lock, and — only when it replaced the shim, the auth library or the runtime — re-runs the install step that
 restarts a stale ccrc-owned tier; it never edits the roster, chooses a port, signs a lane in or enables a unit,
 so a usage timer that is not enabled is a WARN whose remedy is `ccrc install`.
 
@@ -1498,7 +1498,7 @@ without it neither half of ccrc runs:
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
 `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
 `CCRC_UPSTREAM`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
-`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file` — the whole emitted surface, because a
+`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
 field the projection drops is a field no drift detector can see). `ccrc install` generates it from the box's
 own installed roster, and the deploy fallback from the
 roster **read back off the box**, never from the local file, so ccd's routing
@@ -1902,9 +1902,12 @@ lane whose `exec.kind` is not `codex`: only a codex lane declares the `authDir` 
 registry anywhere else fails its probe (`no-token-dir`, or `runtime-absent` when its secrets file sets
 `CHATGPT_TOKEN_DIR`) on every hourly refresh (a registry that already exists is left as it is). On a codex lane
 `ccrc-models-probe` runs under the isolated runtime's interpreter with that lane's own
-`exec.authDir` and no default, and refuses with the remedy first — `ccrc install` when no runtime is current,
-`ccrc codex login <id>` when the authDir holds no `auth.json` or a token that can be neither used nor refreshed;
-it never starts a device-code sign-in. `show` says when no class on a lane is available, and a Codex
+`exec.authDir` and no default. It reads the credential through the auth library and never refreshes it, and it
+refuses with the remedy first — `ccrc install` when no runtime is current, `ccrc update` when the library is
+missing (`auth-library-absent`), `ccrc codex login <id>` when the authDir holds no credential or one that needs a
+sign-in, and `ccrc doctor` for a file it cannot use (`credential-unusable`; after a `config-error`, `ccrc update`
+and then the login). An expired token is `token-expired`: no request is made and the catalogue is kept, because
+the lane's own tier refreshes it on its next request. It never starts a device-code sign-in. `show` says when no class on a lane is available, and a Codex
 lane's launcher refuses to start on such a lane. Doctor's `models` check WARNs on a catalogue that is stale,
 unrewritten for three hours, or never probed. Every subcommand prints one JSON object on stdout; `show` adds a human summary on stderr unless `--json`. An
 account whose id is `refresh` or `litellm` cannot be addressed here — `ccrc models refresh …` refuses rather
@@ -2088,7 +2091,7 @@ the two ports are examples — any two free ports above 1023 that no other `code
 
 ```bash
 ccrc install                      # accounts.sh, the wrapper, the Codex runtime and the lane's usage timer
-ccrc codex login <id>             # device-code sign-in through the lane's own runtime, into exec.authDir
+ccrc codex login <id>             # device-code sign-in through ccrc's auth library, into exec.authDir
 ccrc models <id> init codex       # seed the class registry — the launcher refuses a lane with no model class
 ccrc codex status <id> [--json]   # each tier: running, starting, stopped, foreign or unknown
 ccrc codex start <id>             # optional: the lane's wrapper runs it on every session start
@@ -2113,10 +2116,17 @@ Per-lane state lives in
 `~/.ccrc/logs/codex/<id>/`. The verbs need `jq` (and every one but `login` needs `node`) and are refused on a
 `server`-role box.
 
-**`exec.authDir` is the lane's, not ccrc's.** ccrc hands the path to the lane's own runtime and never moves,
-rewrites or removes what is in it — not on `ccrc account remove`, not on `ccrc uninstall` (which stops the
-lane's proven tiers, removes the runtime, and keeps the lane directory and logs), and not on `--purge`, because
-the parser refuses an `authDir` under `~/.ccrc`.
+**One library owns the credential.** Exactly one ccrc program reads and writes `auth.json` in `exec.authDir`:
+the auth library `ccgpt-auth.py`, placed beside the shim. `ccrc codex login` is its device-code sign-in and needs
+no Codex runtime; it writes nothing until the sign-in completes, so an abandoned one leaves the authDir as it was,
+and it never writes over another tool's credential file. The lane's LiteLLM tier is the one refresher, through
+the library's lock, and every other reader only reads. Beside the credential the library keeps `auth.json.lock`,
+the checkpoint `auth.pending.json` and the non-secret `auth.status.json`, each 0600; a refresh token the token
+endpoint refuses is the state `needs-signin` there, which the tier answers with a 401 at once and `ccrc codex
+start` and doctor name with `ccrc codex login <id>` as the remedy. History's redaction loads the credential as a
+secret source. ccrc never moves or removes the authDir — not on `ccrc account remove`, not on `ccrc uninstall`
+(which stops the lane's proven tiers, removes the runtime, and keeps the lane directory and logs), and not on
+`--purge`, because the parser refuses an `authDir` under `~/.ccrc`.
 
 **Usage.** `ccgpt-usage.py` publishes a lane's Codex usage into `~/.cc-limits/<id>.json` — the weekly window
 as `seven`, a 5h-style window as `five` only while it is active — so the swapper and the accounts screen see
@@ -2127,10 +2137,15 @@ Linux `fleet` or `both` box `ccrc install` (and every update) places ccrc's own
 lanes: `ccrc-codex-usage@<id>.timer` (every 15 minutes) is enabled for each, and one still enabled for an id
 that is no longer a `codex` lane is disabled. A lane's instance is withheld — and disabled if ccrc had enabled
 it — while another tool's `ccgpt-usage@<id>.timer` is enabled for that lane, because two publishers would race
-its `~/.cc-limits` row and two token refreshes its OAuth (the install names the unit to disable, and never
-disables it for you); a roster it cannot read converges nothing, and each of those is a degraded step. macOS
-places none. The publisher never starts a device-code sign-in: a lane whose token can be neither used nor
-refreshed fails the poll naming `ccrc codex login <id>`, and the unit is bounded at 300 s. Doctor's `codex`
+its `~/.cc-limits` row (the install names the unit to disable, and never disables it for you; ccrc's own poll adds
+no credential race, because it only reads through the auth library and never refreshes, but that other timer
+refreshes outside the library's lock, so it can still race the tier's refresh); a roster it cannot read converges
+nothing, and each of those is a degraded step. macOS places none. The publisher reads the lane's credential
+through the auth library and never refreshes it or starts a
+sign-in: an expired token fails the poll `token-expired`, and nothing is published until the lane's tier refreshes
+it on its next request; a credential that needs a sign-in fails it naming `ccrc codex login <id>`, and one it
+cannot use (`credential-unusable`) names `ccrc doctor`, or `ccrc update` and then `ccrc codex login <id>` after a
+`config-error`; with a library it cannot load (`auth-library-absent`) it names `ccrc update`. The unit is bounded at 300 s. Doctor's `codex`
 check WARNs when a lane's timer is not enabled, when another tool's is, and when the lane's row is missing or
 older than three polls. `ccrc account remove` disables the removed lane's instance and `ccrc uninstall` every
 one, each found through systemd's own enablement links rather than the roster. Because the lane's `telemetry` is
