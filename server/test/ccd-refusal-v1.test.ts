@@ -70,7 +70,8 @@ describe('with refusal-v1, a fixture ccd with REWORDED die prose still classifie
     }
   });
   it('a token for another act is not this lane’s: it is read as before', () => {
-    expect(parseExpireResult(ID, '', `${line('reclaim', 'held')}\n${REWORDED}`)).toMatchObject({ kind: 'failed', resumable: true });
+    expect(parseExpireResult(ID, '', `${line('reclaim', 'lock-unopenable')}\n${REWORDED}`)).toMatchObject({ kind: 'failed', resumable: true });
+    expect(parseChildReclaimResult(ID, '', `${line('expire', 'lock-unopenable')}\n${REWORDED}`)).toMatchObject({ resume: 'resumable' });
     expect(parseCollectResult(ID, false, '', `${line('expire', 'lock-unopenable')}\n${REWORDED}`)).toMatchObject({ kind: 'no-document' });
   });
   it('a document on stdout still wins over a token line', () => {
@@ -93,6 +94,11 @@ describe('a ccd WITHOUT refusal-v1 still classifies through the prose fallback',
   it('a ccd WITH the line but a word this build does not list falls back to the prose, whole-output', () => {
     const err = `${line('reclaim', 'a-word-from-a-newer-ccd')}\nccd: bad token`;
     expect(parseChildReclaimResult(ID, '', err)).toMatchObject({ resume: 'pre-lock-die', token: 'token-malformed' });
+  });
+  it('ws-expire and ws-collect read their prose box dies through an unlisted word’s line, token lines dropped', () => {
+    const flock = 'ccd: flock (util-linux) is unavailable — refusing to run the destructive verb unserialised';
+    expect(parseExpireResult(ID, '', `${line('expire', 'a-word-from-a-newer-ccd')}\n${flock}`)).toMatchObject({ kind: 'box', word: 'flock-unavailable' });
+    expect(parseCollectResult(ID, false, '', `${line('collect', 'a-word-from-a-newer-ccd')}\n${flock}`)).toEqual({ kind: 'die', word: 'flock-unavailable' });
   });
 });
 
