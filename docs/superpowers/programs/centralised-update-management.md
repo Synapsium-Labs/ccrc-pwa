@@ -2824,6 +2824,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         block, against 32.7 s before the broker's attempt fix; reported to the broker's coordinator. STATUS: fleet and
         server v0.0.574, newest v0.0.578, intent dev/auto=off, backups fleet 232M/server 9890M, disk free fleet
         144G/work volume 7G/server 21G.
+      - 06:55: a console tap moved both nodes to v0.0.578 (#1165 and three docs merges): the fleet box 06:30:33 to
+        06:31:49, the server box 06:32:05 to 06:36:23, both reports `done`. The keep of five held: five update
+        backups, 10242M, with the server at 20.7G free. None of these releases carries the broker fix the soak waits
+        on. The work volume came back to 9.8G, still just under the floor. STATUS: fleet and server v0.0.578, newest
+        v0.0.578, intent dev/auto=off, backups fleet 233M/server 10242M, disk free fleet 146G/work volume 10G/server 21G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
