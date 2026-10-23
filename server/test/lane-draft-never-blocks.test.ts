@@ -234,8 +234,8 @@ const blankComments = (src: string): string =>
   src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
     .replace(/(^|[^:'"`\\])\/\/[^\n]*/g, (m, pre: string) => pre + ' '.repeat(m.length - pre.length));
 
-/** `sweepMail`'s code, keyed on its symbol (D-5854: no literal source pin over a W1a file), comments blanked. */
-const sweepMailCode = (): string => blankComments(sourceOfSymbol('server/src/watch.ts', 'FleetWatcher.sweepMail'));
+/** `mailPass`'s code (the body `sweepMail` runs through its lane), keyed on its symbol (D-5854: no literal source pin over a W1a file), comments blanked. */
+const sweepMailCode = (): string => blankComments(sourceOfSymbol('server/src/watch.ts', 'FleetWatcher.mailPass'));
 
 type Policy = 'stash' | 'refuse-or-replace';
 interface Site { file: string; fn: string; policy: Policy }
@@ -247,7 +247,7 @@ const CALL_SITES: readonly Site[] = [
   { file: 'inject/send.ts', fn: 'clearSender', policy: 'stash' },                 // the wave N>=2 `/clear`, dispatch's `sendClear` port (ARCH-22)
   { file: 'server.ts', fn: 'POST /api/sessions/:id/prompt', policy: 'refuse-or-replace' },   // the PWA's human send
   { file: 'watch.ts', fn: 'idleNudgeOne', policy: 'stash' },                     // the idle compact nudge
-  { file: 'watch.ts', fn: 'sweepMail', policy: 'stash' },                        // every mail
+  { file: 'watch.ts', fn: 'mailPass', policy: 'stash' },                        // every mail
 ];
 
 const FN_RE = /^ {2}(?:private |public |protected )?(?:static )?(?:async )?(?!(?:if|for|while|switch|catch|return|await)\b)([A-Za-z_]\w*)\s*\(|^(?:export )?(?:async )?function\s+([A-Za-z_]\w*)|app\.(get|post|put|patch|delete)\('([^']+)'/;
