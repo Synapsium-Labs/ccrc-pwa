@@ -14673,6 +14673,19 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
         }
       });
 
+      it('W24-B8: a rollback whose keep is refused touches nothing and returns 1 before the lock', () => {
+        const home = box('ccrc-fx-w24-b8-');
+        plantFull(home, FOUR);
+        const before = fingerprint(home, FOUR);
+        expect(existsSync(lockOf(home)), 'no lock file before the call').toBe(false);
+        const g = sourced(home, GC('rollback'), { CCRC_BACKUP_KEEP: 'x' });
+        expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+        expect(g.stdout).toMatch(/^rollback: backups: WARN: CCRC_BACKUP_KEEP='x' is not a whole number from 0 to 9999 — nothing pruned$/m);
+        expect(g.stdout).toMatch(/^rc 1$/m);
+        expect(fingerprint(home, FOUR), 'every planted dir is byte-identical').toEqual(before);
+        expect(existsSync(lockOf(home)), 'refused before the lock').toBe(false);
+      });
+
       /** `ccrc backup` under `env -i`: HOME, the row's PATH and a TMPDIR inside the box, the two bus paths the row's shims
        *  need (inside the box), and `extra`; no other variable, so no CCRC_ setting reaches it but what `extra` names. */
       const bareBackup = (home: string, extra: string[] = []): Result => {
