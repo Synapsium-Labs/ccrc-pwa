@@ -112,6 +112,10 @@ async function lineFaults(page: Page, holderSel: string, barSel: string | null, 
     if (line === null) return { faults: [...out, `the indicator is not inside ${hs}`], holderHeight: hb.height, barHeight: bar?.getBoundingClientRect().height ?? 0 };
     const vw = window.innerWidth;
     const vh = window.innerHeight;
+    // The 0.5 px slack below is accepted (the coordinator's ruling, D-6327 fix round 1). Under a fine pointer Instrument's
+    // status bar is 24 px border-box with a 1 px top border, so its content box is 23 px, and the door and the × are 24 px
+    // (the target floor): they overhang the bar's bottom edge, which is the viewport's bottom edge, by 0.5 px. That is
+    // invisible at the viewport's edge, and the 24 px floor stands.
     const inside = (what: string, r: { left: number; right: number; top: number; bottom: number }, b: DOMRect, where: string): void => {
       if (r.left < b.left - 0.5 || r.right > b.right + 0.5 || r.top < b.top - 0.5 || r.bottom > b.bottom + 0.5) {
         out.push(`${what} is not whole inside ${where} (${Math.round(r.left)}..${Math.round(r.right)} x ${Math.round(r.top)}..${Math.round(r.bottom)} in ${Math.round(b.left)}..${Math.round(b.right)} x ${Math.round(b.top)}..${Math.round(b.bottom)})`);
@@ -312,6 +316,33 @@ describe('on a phone a stale update line wraps, the page never scrolls sideways 
           return out;
         });
         expect(faults, 'a stale view on a phone').toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+// Below 900 the fleet view hides the main landmark (`display: none`), so focusing it does nothing and the × leaving the
+// page would drop focus to the body. The dismiss moves focus to a landmark that is displayed instead.
+describe('on a phone the dismiss moves focus to a displayed landmark, never the body', () => {
+  for (const view of THEMES.flatMap((theme) => [REFINED, INSTRUMENT].map((skin) => ({ skin, theme, width: 390 })))) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      try {
+        await page.goto(server!.origin + '/');
+        await page.waitForSelector('.update-indicator-dismiss', { timeout: 20_000 });
+        await page.waitForTimeout(300);
+        await page.click('.update-indicator-dismiss');
+        await page.waitForSelector('.update-indicator', { state: 'detached', timeout: 20_000 });
+        const found = await page.evaluate(() => {
+          const el = document.activeElement;
+          const r = el?.getBoundingClientRect();
+          return { isBody: el === document.body, tag: el?.tagName ?? null, id: el?.id ?? null, w: r?.width ?? 0, h: r?.height ?? 0 };
+        });
+        expect(found.isBody, 'focus fell to the body').toBe(false);
+        expect(found.w > 0 && found.h > 0, `the focused ${found.tag}#${found.id} is displayed (${found.w} x ${found.h})`).toBe(true);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
