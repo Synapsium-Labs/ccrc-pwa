@@ -8887,6 +8887,38 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(readReport(home2).phase).toBe('failed');
   });
 
+  // Wave 24 (D-6602): the watchdog takes the LARGEST deadline reading, for both of its thresholds, and says when one cannot be read.
+  const W24_WATCHDOG_WARN = 'watchdog: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the '
+    + 'server may take it from (the environment, the box\'s ccrc.env, the exposure file) — using the largest reading ccrc could decide';
+
+  itLinux('W24-D4: the watchdog warns on a deadline it cannot read and uses the largest it can', () => {
+    const home = watchBox('ccrc-watchdog-w24-d4-');
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_UPDATE_DEADLINE_MS=6e5\n');
+    report(home, { phase: 'installing', ageS: 700 });
+    const r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: undefined });
+    expect(r.code, r.stderr).toBe(0);
+    const out = r.stdout.split('\n');
+    expect(out[0]).toBe(W24_WATCHDOG_WARN);
+    expect(out[1]).toMatch(/^watchdog: update in progress \(installing, 70\ds old\)$/);
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+  });
+
+  itLinux('W24-D5: the watchdog never wedges a live update the server still counts as inside its deadline', async () => {
+    const home = watchBox('ccrc-watchdog-w24-d5-');
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_UPDATE_DEADLINE_MS=1800000\n');
+    report(home, { phase: 'installing', ageS: 700 });
+    const before = readFileSync(jsonPath(home), 'utf8');
+    const pgid = await holdLock(home);
+    try {
+      // The environment's 300 s would make 700 s past twice the deadline; the server reads ccrc.env's 1800 s.
+      const r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: '300000' });
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).not.toMatch(/wedged/);
+      expect(r.stdout).toMatch(/^watchdog: update in progress \(installing, 70\ds old\)$/m);
+      expect(readFileSync(jsonPath(home), 'utf8'), 'the report is not rewritten').toBe(before);
+    } finally { release(pgid); }
+  });
+
   itLinux('a fleet node has nothing to watch; an unrecorded role is the spine\'s default, both; any argument is a usage error', () => {
     const fleet = watchBox('ccrc-watchdog-fleet-', { role: 'fleet' });
     report(fleet, { phase: 'installing', ageS: 3600 });
@@ -10001,7 +10033,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(r.stdout).toMatch(/^update: gate: server answers on v1\.0\.0 /m);
     expect(r.stdout).toContain('rollback: this box runs v1.0.0 again — flipped back to $HOME/ccrc-versions/v1.0.0, no download');
     // No resolving, fetching, verifying or backing-up: nothing was downloaded.
-    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'done']);
+    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'restarting', 'done']);
     expect(lastReport(home)).toMatchObject({
       phase: 'done', detail: 'rolled back by flip to v1.0.0', target: 'v1.0.0', from: 'rollback',
     });
@@ -10018,6 +10050,17 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
       }
       expect(r.stdout).not.toMatch(/DEGRADED/);
     }
+  });
+
+  // Wave 24 (D-6601): a completed flip re-stamps its report before it prunes, so its keep-set runs inside the deadline the
+  // console's lease measures from that write. The text half (after the sweep, directly before the prune) is W24-K5's.
+  it('W24-K5: a rollback by flip, run from the console, writes a restarting report, pruning ~/ccrc-backups, after its sweep and before done', () => {
+    const { home } = flipBox('ccrc-rollback-flip-w24-k5-');
+    withSweep(home);
+    const r = rollbackRun(home, ['--to', 'v1.0.0', '--from', 'pwa']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(reportWrites(home).map((w) => `${String(w['phase'])} ${String(w['detail'])}`).slice(-3))
+      .toEqual(['restarting null', 'restarting pruning ~/ccrc-backups', 'done rolled back by flip to v1.0.0']);
   });
 
   // Review 179 fix round 1, item 5: a rollback by flip reaches `_upd_sweep`
@@ -10074,7 +10117,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(lastReport(home)).toMatchObject({
       phase: 'done', detail: "doctor exited 1 - the box moved; its health is ccrc doctor's", target: 'v1.0.0', from: 'rollback',
     });
-    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'done']);
+    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'restarting', 'done']);
     if (process.platform === 'linux') {
       expect(calls(home), 'a moved box is swept, exit 3 or not').toContain('--user try-restart claude-session@*');
     }
@@ -12101,7 +12144,7 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     expect(existsSync(join(home, 'rsync-argv'))).toBe(false);
     expect(existsSync(join(home, 'npm-argv'))).toBe(false);
     expect(lastReport(home)).toMatchObject({ phase: 'done', detail: 'rolled back by flip to v1.0.0', from: 'watchdog' });
-    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'done']);
+    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'restarting', 'done']);
   });
 
   it('the same shape produced by a REAL killed update — the staged spine and its updater SIGKILLed at `_inst_stamp`, after `_inst_tree`\'s flip — then the watchdog\'s bare rollback: the state the real code leaves is the state the rule admits', () => {
@@ -14873,6 +14916,259 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
           .toBe('from [the default]\nrc 1 from []\n');
       }
     });
+
+    // ── Task 3 (D-6591, D-6592, D-6593, D-6601, D-6602, D-6603): one deadline reading on both sides, the keep-set bounded by it,
+    // and the gate window from ccrc.env. The watchdog's rows (W24-D4, W24-D5) sit beside its fixture, and the flip run of W24-K5
+    // beside the rollback-by-flip fixture.
+    const DL_WARN = (lead: string): string => `${lead}: backups: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of `
+      + 'milliseconds everywhere the server may take it from (the environment, the box\'s ccrc.env, the exposure file), so no verification '
+      + 'starts this run past the keep-set\'s first full one — the next update continues';
+    const KEEPSET_WARN = (lead: string): string => `${lead}: backups: WARN: this run's time budget ran out before the keep-set found the `
+      + 'newest valid coordination snapshot — nothing pruned or thinned; the next update continues';
+    const exposureFile = (home: string): string => join(home, '.ccrc', 'exposure.env');
+    /** `script` in the sourced checkout ccrc under `env -i`: HOME, the box's contained PATH, TMPDIR and `extra`, so no CCRC_ name
+     *  reaches it but what `extra` lists; `wrap` is a command the bash runs under (`timeout 5`). */
+    const bareSourced = (home: string, script: string, extra: string[] = [], wrap: string[] = []): Result => {
+      mkdirSync(join(home, 'tmp'), { recursive: true });
+      const list = [`HOME=${home}`, `PATH=${updateEnv(home)['PATH'] ?? ''}`, `TMPDIR=${join(home, 'tmp')}`, ...extra];
+      const r = spawnSync('env', ['-i', ...list, ...wrap, BASH, '-c', `. "$1"; ${script}`, 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')],
+        { encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    /** `_upd_deadline_ms <mode>` and its rc, as `<stdout> rc <n>`; it never prints on stderr. */
+    const deadline = (home: string, mode: '' | 'min' | 'max', extra: string[] = []): string => {
+      const r = bareSourced(home, `_upd_deadline_ms ${mode}; echo " rc $?"`, extra);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr, 'the reading printed on stderr').toBe('');
+      return r.stdout;
+    };
+    /** The checkout's ccrc sourced, then `script`, in the fixture box's environment with `env` over it (W23's `sourced`). */
+    const sourcedWith = (home: string, script: string, env: NodeJS.ProcessEnv = {}): Result => {
+      const r = spawnSync(BASH, ['-c', `. "$1"; ${script}`, 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')],
+        { env: { ...updateEnv(home), ...env }, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    /** Wave 23's update box (W23's `box`, `stubUpdate` and `plantFull`, local to that describe): a database and a checkpoint to
+     *  capture, a v2.0.0 release to move to, and earlier full backups. */
+    const updBox = (prefix: string): string => {
+      const home = freshUpdateBox(prefix);
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantCoordDb(home);
+      plantLiveCheckpoint(home);
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      return home;
+    };
+    const FLOOR = 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""';
+    const validateCalls = (home: string): number => nodeOrder(home).filter((l) => l === 'helper validate').length;
+    /** Every entry under ~/ccrc-backups, a file by its content digest: what "byte-identical" compares. */
+    const backups = (home: string): string[] => readdirSync(backupRoot(home), { recursive: true, encoding: 'utf8' }).sort().map((f) => {
+      const p = join(backupRoot(home), f);
+      return statSync(p).isFile() ? `${f}:${createHash('sha256').update(readFileSync(p)).digest('hex')}` : `${f}/`;
+    });
+    const K_NAMES = ['20250101-000000', '20250102-000000', '20250103-000000'];
+    /** Three earlier dirs, each a manifest that does not hold up beside a coord.db: every classifier call is a full one (it holds a
+     *  coord.db) and answers `invalid`, through the node shim, which records each call. `v1At` names one that holds a valid data set. */
+    const kBox = (prefix: string, v1At?: string): string => {
+      const home = freshUpdateBox(prefix);
+      for (const n of K_NAMES) plantDir(home, n, n === v1At ? 'tree+v1-full' : 'invalid');
+      return home;
+    };
+    const ago = (s: number): number => Math.floor(Date.now() / 1000) - s;
+
+    it('W24-D1: the plain reading', () => {
+      const home = boxWith('ccrc-fx-w24-d1-', null);
+      expect(deadline(home, '', ['CCRC_UPDATE_DEADLINE_MS=700000']), 'the environment').toBe('700000 rc 0\n');
+      writeFileSync(envFile(home), 'CCRC_UPDATE_DEADLINE_MS=600000\n');
+      expect(deadline(home, ''), 'the file').toBe('600000 rc 0\n');
+      rmSync(envFile(home));
+      expect(deadline(home, ''), 'neither').toBe('900000 rc 0\n');
+      writeFileSync(envFile(home), 'CCRC_UPDATE_DEADLINE_MS=600000\n');
+      expect(deadline(home, '', ['CCRC_UPDATE_DEADLINE_MS=6e5']), 'a set environment that cannot be read never falls through to the file')
+        .toBe('900000 rc 1\n');
+      for (const v of ['6e5', '0600000', '600000.0']) {
+        writeFileSync(envFile(home), `CCRC_UPDATE_DEADLINE_MS=${v}\n`);
+        expect(deadline(home, ''), v).toBe('900000 rc 1\n');
+      }
+    });
+
+    it('W24-D2: min takes the smallest of the environment, ccrc.env and the exposure file, a named-empty file counts as 900000, and any reading it cannot decide makes it 0', () => {
+      const home = boxWith('ccrc-fx-w24-d2-', 'CCRC_UPDATE_DEADLINE_MS=\n');
+      expect(deadline(home, 'min', ['CCRC_UPDATE_DEADLINE_MS=1200000']), 'scenario a').toBe('900000 rc 0\n');
+      writeFileSync(envFile(home), 'CCRC_UPDATE_DEADLINE_MS=1200000\n');
+      writeFileSync(exposureFile(home), 'CCRC_UPDATE_DEADLINE_MS=\n');
+      expect(deadline(home, 'min'), 'scenario b').toBe('900000 rc 0\n');
+      writeFileSync(envFile(home), 'CCRC_UPDATE_DEADLINE_MS=600000\n');
+      rmSync(exposureFile(home));
+      const env = ['CCRC_UPDATE_DEADLINE_MS=700000'];
+      expect(deadline(home, 'min', env), 'the environment and the file').toBe('600000 rc 0\n');
+      writeFileSync(exposureFile(home), 'CCRC_UPDATE_DEADLINE_MS=500000\n');
+      expect(deadline(home, 'min', env), 'and the exposure file').toBe('500000 rc 0\n');
+      writeFileSync(exposureFile(home), 'CCRC_UPDATE_DEADLINE_MS=+500000\n');
+      expect(deadline(home, 'min', env), 'a named value that is not canonical').toBe('0 rc 1\n');
+      if (process.getuid?.() !== 0) {
+        writeFileSync(exposureFile(home), 'CCRC_UPDATE_DEADLINE_MS=500000\n');
+        chmodSync(exposureFile(home), 0o000);
+        try { expect(deadline(home, 'min', env), 'an exposure file that cannot be read').toBe('0 rc 1\n'); }
+        finally { chmodSync(exposureFile(home), 0o600); }
+      }
+      rmSync(exposureFile(home));
+      writeFileSync(envFile(home), Buffer.from('CCRC_UPDATE_DEADLINE_MS=600000\nNOTE=x\u0000y\n', 'utf8'));
+      expect(deadline(home, 'min', env), 'a NUL byte in ccrc.env').toBe('0 rc 1\n');
+      rmSync(envFile(home));
+      expect(deadline(home, 'min', env), 'no files').toBe('700000 rc 0\n');
+    });
+
+    it('W24-D3: _bak_gc update passes thin the smallest bound, and none it can use when the deadline is undecided', () => {
+      /** One update through W23-B20's shim, `plant` run on the box first: the report thin saw, its `--until`, and the stdout. */
+      const update = (prefix: string, plant: (home: string) => void): { saw: { updatedAt: number }; until: number; out: string[] } => {
+        const u = updBox(prefix);
+        for (const n of ['20250101-000000']) plantDir(u, n, 'tree+v1-full');
+        plant(u);
+        const r = runUpdate(u, [], withShim(u));
+        expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+        const saw = JSON.parse(readFileSync(join(u, 'thin-saw-update.json'), 'utf8'));
+        expect(saw, 'thin sees the re-stamp').toMatchObject({ phase: 'restarting', detail: 'pruning and thinning ~/ccrc-backups' });
+        const args = readFileSync(join(u, 'thin-args'), 'utf8').split('\n');
+        expect(args.filter((a) => a === '--until'), 'one bound').toHaveLength(1);
+        return { saw, until: Number(args[args.indexOf('--until') + 1]), out: r.stdout.split('\n') };
+      };
+      const exposed = update('ccrc-fx-w24-d3-exposure-', (h) => writeFileSync(exposureFile(h), 'CCRC_UPDATE_DEADLINE_MS=600000\n'));
+      expect(exposed.until, 'the exposure file\'s 600 s, the smallest reading').toBe(exposed.saw.updatedAt + 600 - 235);
+      expect(exposed.out).not.toContain(DL_WARN('update'));
+      const undecided = update('ccrc-fx-w24-d3-undecided-', (h) => appendFileSync(envFile(h), 'CCRC_UPDATE_DEADLINE_MS=6e5\n'));
+      expect(undecided.out).toContain(DL_WARN('update'));
+      expect(undecided.until, 'the re-stamp less the margin: already past').toBe(undecided.saw.updatedAt - 235);
+      // The hard cap (D-6601, D-6603): a report started 3.5 deadlines back, re-stamped now. The re-stamp's term would be now + 665;
+      // the control plane's hard cap, less the 40 s its start can lead the report's, is earlier.
+      const home = updBox('ccrc-fx-w24-d3-cap-');
+      plantDir(home, '20250101-000000', 'tree+v1-full');
+      const now = ago(0);
+      const started = now - 3150;
+      const r = sourcedWith(home, `${FLOOR}; UPD_THIN_AT=${now}; UPD_REPORT_STARTED=${started}; _bak_gc update; echo "rc $?"`, withShim(home));
+      expect(r.stdout, `stderr: ${r.stderr}`).toMatch(/^rc 0$/m);
+      const args = readFileSync(join(home, 'thin-args'), 'utf8').split('\n');
+      expect(Number(args[args.indexOf('--until') + 1]), 'the hard cap\'s term').toBe(started + 4 * 900 - 40 - 235);
+    });
+
+    it('W24-D6: _upd_deadline_ms max', () => {
+      const home = boxWith('ccrc-fx-w24-d6-', 'CCRC_UPDATE_DEADLINE_MS=1800000\n');
+      const env = ['CCRC_UPDATE_DEADLINE_MS=300000'];
+      expect(deadline(home, 'max', env), 'the file over the environment').toBe('1800000 rc 0\n');
+      writeFileSync(exposureFile(home), 'CCRC_UPDATE_DEADLINE_MS=2000000\n');
+      expect(deadline(home, 'max', env), 'the exposure file').toBe('2000000 rc 0\n');
+      rmSync(exposureFile(home));
+      writeFileSync(envFile(home), 'CCRC_UPDATE_DEADLINE_MS=\n');
+      expect(deadline(home, 'max', env), 'a named-empty file is the server\'s 900000').toBe('900000 rc 0\n');
+      writeFileSync(envFile(home), 'CCRC_UPDATE_DEADLINE_MS=2e6\n');
+      expect(deadline(home, 'max'), 'a reading it cannot decide').toBe('900000 rc 1\n');
+    });
+
+    it('W24-K1: past its bound the keep-set makes its first full verification and no other, and answers 3', () => {
+      const home = kBox('ccrc-fx-w24-k1-');
+      const r = sourcedWith(home, `${FLOOR}; _bak_list; _bak_keepset "$(( $(date +%s) - 1 ))"; echo "rc $? [$BAK_KEEP_SNAP] [$BAK_KEEP_DATA] [$BAK_KEEP_TREE]"`,
+        withShim(home));
+      expect(r.stdout, `stderr: ${r.stderr}`).toBe('rc 3 [] [] []\n');
+      expect(validateCalls(home), nodeOrder(home).join(' | ')).toBe(1);
+    });
+
+    it('W24-K2: before its bound, and with no bound, it walks until it finds a valid data set', () => {
+      for (const until of ['"$(( $(date +%s) + 3600 ))"', '""']) {
+        const home = kBox('ccrc-fx-w24-k2-', K_NAMES[1]);
+        const r = sourcedWith(home, `${FLOOR}; _bak_list; _bak_keepset ${until}; echo "rc $? [$BAK_KEEP_DATA]"`, withShim(home));
+        expect(r.stdout, `${until}: stderr: ${r.stderr}`).toBe(`rc 0 [${join(backupRoot(home), K_NAMES[1]!)}]\n`);
+        expect(validateCalls(home), until).toBe(2);
+      }
+    });
+
+    it('W24-K3: an update whose keep-set reaches the bound prunes and thins nothing', () => {
+      const home = kBox('ccrc-fx-w24-k3-');
+      const before = backups(home);
+      // A keep of 1, so a keep-set that did not stop would prune the two older dirs by count.
+      const r = sourcedWith(home, `${FLOOR}; UPD_THIN_AT=${ago(700)}; _bak_gc update; echo "rc $?"`, withShim(home, { CCRC_BACKUP_KEEP: '1' }));
+      expect(r.stdout.split('\n'), `stderr: ${r.stderr}`).toEqual([KEEPSET_WARN('update'), 'rc 1', '']);
+      expect(validateCalls(home)).toBe(1);
+      expect(nodeOrder(home), 'nothing thinned').not.toContain('helper thin');
+      expect(backups(home), 'every dir byte-identical').toEqual(before);
+    });
+
+    it('W24-K4: a walk of cheap calls is never stopped: manifest-only and code-only dirs past the bound prune by count', () => {
+      const pruned = (n: string): string => `update: backups: pruned $HOME/ccrc-backups/${n} `;
+      const shapes: (readonly [string, readonly (readonly [string, 'v1-empty' | 'plain'])[], readonly string[]])[] = [
+        ['code-only oldest', [['20250101-000000', 'plain'], ['20250102-000000', 'plain'], ['20250103-000000', 'v1-empty'],
+          ['20250104-000000', 'v1-empty'], ['20250105-000000', 'v1-empty'], ['20250106-000000', 'v1-empty'], ['20250107-000000', 'v1-empty']],
+        ['20250101-000000', '20250102-000000', '20250103-000000', '20250104-000000']],
+        ['a deploy.sh backup newest', [['20250101-000000', 'v1-empty'], ['20250102-000000', 'v1-empty'], ['20250103-000000', 'v1-empty'],
+          ['20250104-000000', 'v1-empty'], ['20250105-000000', 'v1-empty'], ['20250106-000000', 'plain']],
+        ['20250101-000000', '20250102-000000', '20250103-000000']],
+      ];
+      for (const [shape, dirs, gone] of shapes) {
+        const home = boxWith('ccrc-fx-w24-k4-', 'CCRC_UPDATE_DEADLINE_MS=6e5\n');
+        for (const [n, kind] of dirs) plantDir(home, n, kind);
+        // The fleet box's shape: a manifest alone, `data: no`.
+        expect(readdirSync(join(backupRoot(home), '20250103-000000')), shape).toEqual(['coordination-snapshot.json']);
+        const r = sourcedWith(home, `${FLOOR}; UPD_THIN_AT=${ago(700)}; _bak_gc update; echo "rc $?"`, withShim(home, { CCRC_BACKUP_KEEP: '3' }));
+        const out = r.stdout.split('\n');
+        expect(validateCalls(home), `${shape}: every manifest classified`).toBe(5);
+        expect(out, `${shape}: stderr: ${r.stderr}`).toContain(DL_WARN('update'));
+        expect(out, shape).not.toContain(KEEPSET_WARN('update'));
+        expect(out.at(-2), shape).toBe('rc 1');
+        expect(out.filter((l) => l.includes(': backups: pruned ')).map((l) => l.slice(0, pruned('20250101-000000').length)), shape)
+          .toEqual(gone.map(pruned));
+        expect(readdirSync(backupRoot(home)).sort(), shape).toEqual(dirs.map(([n]) => n).filter((n) => !gone.includes(n)));
+      }
+    });
+
+    it('W24-K5: a rollback by flip re-stamps and bounds its keep-set (D-6601)', () => {
+      const home = kBox('ccrc-fx-w24-k5-');
+      const before = backups(home);
+      const r = sourcedWith(home, `${FLOOR}; UPD_THIN_AT=${ago(700)}; _bak_gc rollback; echo "rc $?"`, withShim(home, { CCRC_BACKUP_KEEP: '1' }));
+      expect(r.stdout.split('\n'), `stderr: ${r.stderr}`).toEqual([KEEPSET_WARN('rollback'), 'rc 1', '']);
+      expect(validateCalls(home)).toBe(1);
+      expect(backups(home), 'nothing pruned').toEqual(before);
+      // The flip arm's text: the re-stamp after the sweep and directly before the prune. Its run is pinned beside the flip fixture.
+      const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+      const body = /^cmd_rollback\(\) \{[\s\S]*?\n\}$/m.exec(src)?.[0].split('\n') ?? [];
+      const gc = body.findIndex((l) => /^\s+_bak_gc rollback /.test(l));
+      expect(gc, 'cmd_rollback calls _bak_gc rollback').toBeGreaterThan(0);
+      expect(body[gc - 1], 'the line before it').toMatch(/^\s+_bak_restamp "pruning ~\/ccrc-backups"$/);
+      expect(body.slice(0, gc - 1).some((l) => /^\s+_upd_sweep$/.test(l)), 'after the sweep').toBe(true);
+    });
+
+    it('W24-K6: the hard-cap term\'s literals are the control plane\'s', () => {
+      const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+      const fn = (name: string): string => new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src)?.[0] ?? '';
+      const until = fn('_bak_gc').split('\n').filter((l) => /^\s+until=\$\(\(/.test(l));
+      expect(until, 'one until line in _bak_gc').toHaveLength(1);
+      expect(until[0]).toContain('4 *');
+      expect(until[0]).toContain('- 40');
+      const dispatch = readFileSync(join(REPO, 'server', 'src', 'update', 'dispatch.ts'), 'utf8');
+      expect(dispatch).toMatch(/^export const UPDATE_DEADLINE_HARD_CAP_FACTOR = 4;$/m);
+      const proto = readFileSync(join(REPO, 'shared', 'agent-protocol.ts'), 'utf8');
+      const ms = (name: string): number => Number((new RegExp(`^export const ${name} = ([0-9_]+);$`, 'm').exec(proto)?.[1] ?? 'NaN').replace(/_/g, ''));
+      // The re-install rollback's probe of the release host, before its first report: its validated ceiling, by its name.
+      const ceiling = Number(/_upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME [\s\S]*?" ([0-9]+)\n/.exec(fn('_upd_asset_listed'))?.[1] ?? 'NaN');
+      expect(ceiling, 'the probe\'s ceiling').toBeGreaterThan(0);
+      expect((ms('UPDATE_SPAWN_TIMEOUT_MS') + ms('UPDATE_SPAWN_DRAIN_MS')) / 1000 + ceiling).toBe(40);
+    });
+
+    it('W24-H1: the gate window is read from ccrc.env, the environment wins, and an unreadable line waits 90', () => {
+      const gate = (home: string, extra: string[] = []): Result => bareSourced(home,
+        '_upd_gate_probe() { UPD_GATE_WHY="fixture: never up"; return 1; }; _upd_gate server v2.0.0', extra, ['timeout', '5']);
+      const home = boxWith('ccrc-fx-w24-h1-', 'CCRC_UPDATE_HEALTH_S=0\n');
+      let r = gate(home);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stdout).toMatch(/^update: gate FAILED after 0s — fixture: never up$/m);
+      writeFileSync(envFile(home), 'export CCRC_UPDATE_HEALTH_S=7\n');
+      r = gate(home, ['CCRC_UPDATE_HEALTH_S=0']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stdout).toMatch(/^update: gate FAILED after 0s /m);
+      expect(r.stdout).not.toContain('WARN');
+      writeFileSync(envFile(home), 'export CCRC_UPDATE_HEALTH_S=0\n');
+      r = gate(home);
+      expect(r.stdout.split('\n')).toContain('update: WARN: CCRC_UPDATE_HEALTH_S cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader '
+        + 'does not take (it reads only a plain KEY=value line) — using 90');
+      expect(r.code, 'still waiting at 5 s').toBe(124);
+    }, 20_000);
   });
 
   describe('a classifier that cannot run, or answers out of its table, prunes NOTHING and says why (I1, R25)', () => {
