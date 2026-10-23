@@ -127,13 +127,35 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
     }
   }
   if (mode === 'record-only' || visible) return { recorded, archived };
-  void deps.push?.notify({
+  sendPush(deps.push, {
     title: event.title, body: event.body, sessionId: event.sessionId,
     tag: opts.tag ?? `${event.kind}-${event.sessionId}`,
     ...(opts.actions ? { actions: opts.actions } : {}),
     ...(opts.url !== undefined ? { url: opts.url } : {}),
   });
   return { recorded, archived };
+}
+
+/** D-TBD-banner-funnel (ARCH-59 (#794)): a push that is no `NotifyEvent`, for the one writer that has no ring row to
+ *  make: the `notify.sh` banner's model-class push (`POST /api/notify` with `push: true`). D-5211 rules a feed record
+ *  out for it, and no `NotifyEvent` kind fits a model-class line (a new kind widens `shared/api.ts`'s union and the
+ *  PWA's per-kind tables), so it takes neither the gate, the ring nor the archive: the caller's policy has already
+ *  decided it is pushable, and this only sends it. The push is the funnel's, so the one `PushService.notify` call for a
+ *  notice stays in this file. A rejected send is logged under `failed` (the text before ` (reason)`) and never thrown,
+ *  because the caller has already answered. */
+export function notifyPushOnly(deps: Pick<NoticeDeps, 'push'>, payload: PushPayload, failed: string): void {
+  sendPush(deps.push, payload, failed);
+}
+
+/** The ONE `PushService.notify` call in this file (the census in `notify-push.test.ts` counts it). `failed` names the
+ *  caller's sentence for a rejected send; `raise` names none and keeps its send unguarded, as it always was. */
+function sendPush(push: NoticeDeps['push'], payload: PushPayload, failed?: string): void {
+  const sent = push?.notify(payload);
+  if (failed !== undefined) {
+    void sent?.catch((err: unknown) => {
+      console.warn(`${failed} (${err instanceof Error ? err.message : String(err)})`);
+    });
+  }
 }
 
 /** The composition root's one sink over its deps. */

@@ -782,16 +782,12 @@ describe('the push patterns are built from their owners, every shape uses them, 
   });
 });
 
-describe('the direct callers of PushService.notify in server/src (the consolidation design, §3 K6)', () => {
-  // The notify funnel (notice.ts) is the one way a notice is raised. Two callers still reach the push service directly,
-  // each for reasons of its own. The watcher's release sender (`pushRelease`, watch.ts) is sessionless (D-3296): a
+describe('the direct callers of PushService.notify in server/src (the consolidation design, §3 K6; ARCH-59)', () => {
+  // The notify funnel (notice.ts) is the one way a notice is raised, and the one place `PushService.notify` is called for
+  // one (ARCH-59, #794: /api/notify's models push goes through `notifyPushOnly`, which shares `sendPush` with `raise`).
+  // One caller is left outside it: the watcher's release sender (`pushRelease`, watch.ts) is sessionless (D-3296): a
   // release is about the fleet, not a session, so it has no session for the presence gate and keeps no `NotifyLog` or
-  // feed record. /api/notify's models push: the composition root's bound sink records every notice it can push, and
-  // D-5211 rules a feed record out for that push in W2; the raw `notify` with a push-only set of sinks would take a
-  // `NotifyEvent` kind, and none fits a model-class notice: a new kind widens shared/api.ts's union and the PWA's
-  // per-kind tables, and an existing kind misfiles it. The design's K6 funnel
-  // (docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md) is the owner that will absorb them, and this
-  // list is what that wave finds them by.
+  // feed record. This list is what a later wave finds it by.
   //
   // WHAT IT CATCHES: any line, in any JS or TS source file under server/src, that spells a call of a member named `notify`
   // in one of NOTIFY_SPELLINGS' forms once its inline `/* … */` spans are stripped, unless what is left begins with `//`,
@@ -833,11 +829,11 @@ describe('the direct callers of PushService.notify in server/src (the consolidat
     return out;
   };
 
-  it('are the funnel, the watcher\'s release sender and this route, once each, and no others', () => {
-    expect(callers()).toEqual({ 'notice.ts': 1, 'server.ts': 1, 'watch.ts': 1 });
+  it('are the funnel and the watcher\'s release sender, once each, and no others', () => {
+    expect(callers()).toEqual({ 'notice.ts': 1, 'watch.ts': 1 });
   });
 
-  it('the walk of server/src descends and finds the three callers\' files among the files it reads', () => {
+  it('the walk of server/src descends and finds the callers\' files among the files it reads', () => {
     const files = walk(SRC);
     expect(files.length).toBeGreaterThan(100);
     for (const f of ['notice.ts', 'server.ts', 'watch.ts']) expect(files).toContain(path.join(SRC, f));

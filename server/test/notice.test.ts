@@ -20,7 +20,9 @@ import {
   catchUpBody, catchUpExpected, degradeLine, feedRecorder, flushedAfterRecord, interruptDeps, withoutFlush,
   type FeedRecorder,
 } from './feedWriterFixture.js';
-import { NOTICE_DEGRADED_DEFAULT, notify, notifyEach, type NoticeMode, type NoticeRecord } from '../src/notice.js';
+import {
+  NOTICE_DEGRADED_DEFAULT, notify, notifyEach, notifyPushOnly, type NoticeMode, type NoticeRecord,
+} from '../src/notice.js';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -266,5 +268,30 @@ describe('notify: the once-only key reaches the archive and decides nothing (D-5
     expect((rec.coord.db.prepare('SELECT dedupe_key AS k FROM feed_events').all() as { k: string | null }[]))
       .toEqual([{ k: null }]);
     expect(rec.coord.hasNotice('done', A, '')).toBe(false);
+  });
+});
+
+describe('notifyPushOnly: a push with no ring record and no archive row (D-TBD-banner-funnel; ARCH-59 #794)', () => {
+  const PAYLOAD = { title: 'Model classes', body: 'lane-a: opus moved', tag: 'models-advance:lane-a:opus', url: '/accounts' };
+
+  it('sends the payload to the push service unchanged, and touches neither the ring nor the archive', async () => {
+    const rec = await feedRecorder(mkTmp('ccrc-notice-pushonly-'));
+    notifyPushOnly({ push: rec.push }, PAYLOAD, 'the push did not go out');
+    expect(rec.calls).toEqual(['push']);
+    expect(rec.pushes).toEqual([PAYLOAD]);
+    expect(rec.ring).toEqual([]);
+    expect(rec.archived).toEqual([]);
+  });
+
+  it('with no push service it does nothing, and does not throw', () => {
+    expect(() => notifyPushOnly({}, PAYLOAD, 'the push did not go out')).not.toThrow();
+  });
+
+  it('a rejected push is logged under the caller\'s sentence, and never thrown or left unhandled', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const push = { notify: vi.fn(async () => { throw new Error('store unwritable'); }) };
+    notifyPushOnly({ push }, PAYLOAD, 'ccrc-server: /api/notify: the push did not go out');
+    await vi.waitFor(() => expect(warn.mock.calls.flat().join(' '))
+      .toContain('ccrc-server: /api/notify: the push did not go out (store unwritable)'));
   });
 });

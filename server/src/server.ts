@@ -103,7 +103,7 @@ import {
 import { ARCHIVE_REFUSALS, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
-import { noticeSink } from './notice.js';
+import { noticeSink, notifyPushOnly } from './notice.js';
 import type { Dialog, DigestAnswer, DigestCorrectAnswer } from '../../shared/api.js';
 import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
@@ -1719,44 +1719,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // cap written from MODELS_PUSH_MAX. The message itself is never logged: it
     // is free text from a process we do not trust.
     //
-    // THIS IS A DIRECT `PushService.notify`, OUTSIDE notice.ts's `notify()` FUNNEL,
-    // AND IS LEGITIMATELY DIFFERENT FOR NOW, for three reasons. (1) The
-    // composition root's bound sink (`notice = noticeSink(deps)`, above) records
-    // every notice it can push: in `raise` (notice.ts) `push` and `record-always`
-    // run `log.record` and then `recordFeedEvent` before `deps.push?.notify`
-    // (`record-only` records and never pushes; index.ts passes the ring in
-    // `deps`), and the one path that records nothing, `push` for a session the
-    // operator is looking at, pushes nothing either. D-5211 rules a feed record out
-    // for this push in W2. (A notice with no session is not the obstacle: the
-    // daily digest goes through the funnel with `sessionId: ''`.) (2) The raw
-    // `notify` with a push-only set of sinks is reachable (`NoticeDeps`' sinks are
-    // each optional, and watch.ts already passes subsets), but its event is a
-    // `NoticeRecord`, which carries a `NotifyEvent` kind, and no kind in
-    // shared/api.ts's union fits a model-class notice: a new kind widens that union
-    // and the PWA's per-kind tables (`KIND_WORD` and `KIND_GLYPH` in
-    // MailScreen.tsx), and an existing kind misfiles it. (3) The owner that will
-    // absorb it is the consolidation design's K6 funnel, whose ARCH-59 item moves
-    // the notify.sh banner into the funnel
-    // (docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md, §3
-    // K6, and the ARCH-59 row of its §4). A census in notify-push.test.ts lists
-    // the direct callers of `PushService.notify` in server/src, so that wave
-    // finds this one mechanically. It is lexical. It strips a line's inline
-    // `/* … */` spans first, so a line that begins with an inline block comment
-    // and then has code is counted, and it skips the line when what is left
-    // begins with `//`, `/*` or `*`. On every other line it counts a spelling
-    // of a call of a member named `notify`: a call, an optional or
-    // non-null-asserted call, a call with a type argument that has no nested
-    // angle brackets or parentheses, a `bind`/`call`/`apply`, a bracketed name,
-    // or a line ending in `.notify` or `.notify!`. It sees only those
-    // spellings. It does not see any other spelling (a parenthesised member,
-    // `Reflect.apply`, a reference destructured or aliased and called later),
-    // or code on a line that begins with `*` or `*/`.
+    // THE PUSH IS THE NOTICE FUNNEL'S (ARCH-59, #794): `notifyPushOnly` (notice.ts) sends it, so no `PushService.notify`
+    // call is left in this file (the census in notify-push.test.ts counts the callers). It is the push-only entry, not
+    // `notify()`: D-5211 rules a feed record out for a models push, and no `NotifyEvent` kind fits a model-class line
+    // (a new kind widens shared/api.ts's union and the PWA's per-kind tables, an existing one misfiles it). The banner
+    // itself stays a bus frame: it is a transient channel read by the open sockets, not a record, and it writes nothing.
     //
     // The decision is made whether or not a push service exists: no VAPID keys
     // is delivery configuration, not a way around the policy. With none,
     // `deps.push` is undefined and nothing is sent. The response never waits
     // for the send, and a send that rejects (a subscription store that cannot
-    // be written) is logged rather than left unhandled: the banner has already
+    // be written) is logged by the funnel rather than left unhandled: the banner has already
     // gone out. The tag is the decision's (per lane and class, D-5212).
     if (body.push === true) {
       const decision = modelsPushDecision(message, deps.cfg.roster.byId);
@@ -1780,10 +1753,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         console.warn('ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind '
           + `lane (${decision.reason})${detail}; the banner went out, the phone push did not`);
       } else {
-        void deps.push?.notify({ title: 'Model classes', body: message, tag: decision.tag, url: '/accounts' })
-          .catch((err: unknown) => {
-            console.warn(`ccrc-server: /api/notify: the push did not go out (${err instanceof Error ? err.message : String(err)})`);
-          });
+        notifyPushOnly(deps, { title: 'Model classes', body: message, tag: decision.tag, url: '/accounts' },
+          'ccrc-server: /api/notify: the push did not go out');
       }
     }
     return { ok: true };
