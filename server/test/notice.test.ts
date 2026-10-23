@@ -21,7 +21,7 @@ import {
   type FeedRecorder,
 } from './feedWriterFixture.js';
 import {
-  NOTICE_DEGRADED_DEFAULT, notify, notifyEach, notifyPushOnly, type NoticeMode, type NoticeRecord,
+  NOTICE_DEGRADED_DEFAULT, notify, notifyEach, notifyPushOnly, noticeBanner, type NoticeMode, type NoticeRecord,
 } from '../src/notice.js';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
@@ -293,5 +293,26 @@ describe('notifyPushOnly: a push with no ring record and no archive row (D-TBD-b
     notifyPushOnly({ push }, PAYLOAD, 'ccrc-server: /api/notify: the push did not go out');
     await vi.waitFor(() => expect(warn.mock.calls.flat().join(' '))
       .toContain('ccrc-server: /api/notify: the push did not go out (store unwritable)'));
+  });
+});
+
+describe('noticeBanner: the notify.sh banner\'s bus frames (D-TBD-banner-funnel; ARCH-59 #794)', () => {
+  const frames = (message: string): unknown[] => {
+    const seen: unknown[] = [];
+    noticeBanner({ bus: { emit: ((e: string, ...a: unknown[]) => { seen.push([e, ...a]); return true; }) as never } }, message);
+    return seen;
+  };
+
+  it('a plain line is one global notice frame', () => {
+    expect(frames('plain')).toEqual([['notice', { message: 'plain' }]]);
+  });
+
+  it('a cc swap: line adds the moved session\'s own frame after the global one', () => {
+    const m = 'cc swap: s1 moved a -> b (limits)';
+    expect(frames(m)).toEqual([['notice', { message: m }], ['session:s1', { type: 'notice', message: m }]]);
+  });
+
+  it('a line that only mentions a swap mid-text is not routed to a session', () => {
+    expect(frames('note: cc swap: s1 moved a -> b')).toHaveLength(1);
   });
 });

@@ -18,6 +18,7 @@ import type { NotifyLog } from './notifylog.js';
 import type { CoordStore } from './coord/store.js';
 import type { PushPayload, PushService } from './push.js';
 import type { Presence } from './presence.js';
+import type { Bus } from './bus.js';
 
 /** The record gate and the push: the three combinations a writer can reach (there is no record-unless-visible-and-never-
  *  push writer).
@@ -145,6 +146,18 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
  *  because the caller has already answered. */
 export function notifyPushOnly(deps: Pick<NoticeDeps, 'push'>, payload: PushPayload, failed: string): void {
   sendPush(deps.push, payload, failed);
+}
+
+/** D-TBD-banner-funnel (ARCH-59 (#794)): the `notify.sh` banner, the bus frames `POST /api/notify` raises. A banner is a
+ *  transient channel the open sockets read, not a ring record: it writes no `NotifyLog` row and no archive row, and it
+ *  has no presence gate (it reaches every open console). It is ONE global `notice` frame, and for a
+ *  `cc swap: <id> moved <from> -> <to>` line a second frame on the moved session's own stream, after the global one, so
+ *  that session's chat surfaces the account change inline. The route authenticates and parses, and this is the only
+ *  writer of either frame (the census in `notify-push.test.ts` reds if `server.ts` emits a `notice` again). */
+export function noticeBanner(deps: { readonly bus: Pick<Bus, 'emit'> }, message: string): void {
+  deps.bus.emit('notice', { message });
+  const swap = /^cc swap: (\S+) moved (\S+) -> (\S+)/.exec(message);
+  if (swap) deps.bus.emit(`session:${swap[1]}`, { type: 'notice', message });
 }
 
 /** The ONE `PushService.notify` call in this file (the census in `notify-push.test.ts` counts it). `failed` names the

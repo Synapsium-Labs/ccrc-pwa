@@ -103,7 +103,7 @@ import {
 import { ARCHIVE_REFUSALS, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
-import { noticeSink, notifyPushOnly } from './notice.js';
+import { noticeBanner, noticeSink, notifyPushOnly } from './notice.js';
 import type { Dialog, DigestAnswer, DigestCorrectAnswer } from '../../shared/api.js';
 import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
@@ -1654,9 +1654,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const message = body.message;
-    bus.emit('notice', { message });
-    const swap = /^cc swap: (\S+) moved (\S+) -> (\S+)/.exec(message);
-    if (swap) bus.emit(`session:${swap[1]}`, { type: 'notice', message });
+    noticeBanner({ bus }, message);
     // Auto-advance spec §2.3 steps 5 and 6 (plan W2 Task 12): a class that
     // moved, or was held back, reaches the PHONE too - the banner alone reaches
     // only an open console. Exactly `true`, never a truthy string, and behind
@@ -1722,8 +1720,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // THE PUSH IS THE NOTICE FUNNEL'S (ARCH-59, #794): `notifyPushOnly` (notice.ts) sends it, so no `PushService.notify`
     // call is left in this file (the census in notify-push.test.ts counts the callers). It is the push-only entry, not
     // `notify()`: D-5211 rules a feed record out for a models push, and no `NotifyEvent` kind fits a model-class line
-    // (a new kind widens shared/api.ts's union and the PWA's per-kind tables, an existing one misfiles it). The banner
-    // itself stays a bus frame: it is a transient channel read by the open sockets, not a record, and it writes nothing.
+    // (a new kind widens shared/api.ts's union and the PWA's per-kind tables, an existing one misfiles it). The banner's
+    // bus frames are the funnel's too (`noticeBanner`): a transient channel read by the open sockets, not a record.
     //
     // The decision is made whether or not a push service exists: no VAPID keys
     // is delivery configuration, not a way around the policy. With none,

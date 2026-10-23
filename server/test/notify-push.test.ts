@@ -854,6 +854,20 @@ describe('the direct callers of PushService.notify in server/src (the consolidat
     expect(callers()).toEqual({ 'notice.ts': 1, 'watch.ts': 1 });
   });
 
+  it('the banner\'s bus frames have one writer, notice.ts: no other file emits a `notice` event or a `type: \'notice\'` session frame (ARCH-59, #794)', () => {
+    const emitsNotice = (text: string): string[] => text.split('\n').filter((l) => {
+      const code = l.replace(/\/\*.*?\*\//g, '');
+      return !/^\s*(\/\/|\*|\/\*)/.test(code)
+        && (/\.emit\s*\(\s*(['"`])notice\1/.test(code) || /\.emit\s*\(\s*`session:[^`]*`\s*,\s*\{\s*type:\s*(['"`])notice\1/.test(code));
+    });
+    const out: Record<string, number> = {};
+    for (const f of walk(SRC)) {
+      const n = emitsNotice(readFileSync(f, 'utf8')).length;
+      if (n > 0) out[path.relative(SRC, f)] = n;
+    }
+    expect(out).toEqual({ 'notice.ts': 2 });
+  });
+
   it('the walk of server/src descends and finds the callers\' files among the files it reads', () => {
     const files = walk(SRC);
     expect(files.length).toBeGreaterThan(100);
