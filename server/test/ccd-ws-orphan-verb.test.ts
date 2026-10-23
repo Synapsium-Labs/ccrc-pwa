@@ -209,6 +209,32 @@ describe('the rescue arm', () => {
     expect(Number(r.doc['pinned'])).toBeGreaterThanOrEqual(2);
   }, 60_000);
 
+  it('--rescue pins the TREE’s own reflog, not the 200 first shas of every reflog in the shared repository', () => {
+    const t = claudeTree();
+    pushCommit(t, 'claude/agent-a');
+    const amendedAway = h.git(t, 'rev-parse', 'HEAD');
+    h.git(t, 'commit', '--amend', '-m', 'b');
+    const head = h.git(t, 'rev-parse', 'HEAD');
+    // 205 commits on other branches, each with its own reflog entry, every one sorting BEFORE the amended-away sha:
+    // under a shared `reflog show --all | sort -u | head -200` they would fill the cap and push it out.
+    const gen = spawnSync('bash', ['-c', [
+      'n=0; i=0; lim="$1"',
+      'while (( n < 205 )); do i=$((i+1))',
+      '  c=$(git commit-tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904 -m "f$i") || exit 1',
+      '  if [[ "$c" < "$lim" ]]; then git update-ref -m x "refs/heads/foreign/$n" "$c" || exit 1; n=$((n+1)); fi',
+      '  (( i < 20000 )) || exit 2',
+      'done'].join('\n'), 'gen', amendedAway], { cwd: main(), env: h.env(), encoding: 'utf8' });
+    expect(gen.status, gen.stderr).toBe(0);
+    const foreign = h.git(main(), 'for-each-ref', '--format=%(objectname)', 'refs/heads/foreign/').split('\n').filter(Boolean);
+    expect(foreign.length).toBe(205);
+    const r = orphan(t, rescueOf(t), '--rescue');
+    expect(r.code, JSON.stringify(r.doc)).toBe(0);
+    const refs = h.git(main(), 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/orphan/${sha16(t)}/`).split('\n').filter(Boolean);
+    expect(refs).toContain(`refs/ccrc/attic/orphan/${sha16(t)}/${head}`);
+    expect(refs).toContain(`refs/ccrc/attic/orphan/${sha16(t)}/${amendedAway}`);
+    for (const f of foreign) expect(refs).not.toContain(`refs/ccrc/attic/orphan/${sha16(t)}/${f}`);
+  }, 120_000);
+
   it('a failed pin removes nothing', () => {
     const t = claudeTree();
     pushCommit(t, 'claude/agent-a');
