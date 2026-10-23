@@ -16,6 +16,7 @@ import {
 } from './consolidationCensus.js';
 import { capabilityChoiceSites, W4_HELD_FILES } from './consolidationCensus.js';
 import { changeLatchSites, changeLatchReported } from './consolidationCensus.js';
+import { registryListingSites } from './consolidationCensus.js';
 import { cadenceLiterals, declaredDerivations, laneClockFields, laneClockReported, laneClockShapes, singleFlightGuards } from './consolidationCensus.js';
 
 const show = (name: string, sites: readonly CensusSite[]): void => {
@@ -387,5 +388,50 @@ describe('the lane schedule census (D-5862)', () => {
     expect(fields.map((x) => x.text).join('\n')).toContain('lastStopDoneSweep');
     expect(laneClockReported().map((x) => x.text).join('\n')).toContain('lastSweepAt');
     expect(declaredDerivations()).toHaveLength(3);
+  });
+});
+
+describe('registryListingSites: where watch.ts lists the registry, tagged selection, act or tests-only (D-5864)', () => {
+  const fixture = [
+    'class FleetWatcher {',
+    '  async tick(): Promise<void> {',
+    '    // readRegistryMeasured( named in a comment is not a call',
+    '    const a = await readRegistryMeasured(this.deps.io, this.deps.cfg);',
+    '    const again = await this.deps.io.readdir(this.deps.cfg.registryDir);',
+    '  }',
+    '  private async lanePass(): Promise<void> {',
+    '    const r = await readRegistry(this.deps.io, this.deps.cfg);',
+    '  }',
+    '  private async divergencesPass(): Promise<void> {',
+    '    const n = await this.deps.io.readdir(this.deps.cfg.registryDir);',
+    '    const other = await this.deps.io.readdir(this.deps.cfg.projectsRoot);',
+    '  }',
+    '  private async fleetFor(): Promise<void> {',
+    '    const f = await readRegistryMeasured(this.deps.io, this.deps.cfg);',
+    '  }',
+    '}',
+  ].join('\n');
+
+  it('FIXTURE: a call in tick or in a lane is selection, a bare readdir in tick and a named act read are act, a named fallback is tests-only, a comment and another directory are nothing', () => {
+    const tree = mkdtempSync(path.join(tmpdir(), 'listing-census-'));
+    try {
+      mkdirSync(path.join(tree, 'server/src'), { recursive: true });
+      writeFileSync(path.join(tree, 'server/src/watch.ts'), fixture);
+      expect(registryListingSites(tree).map((s) => `${s.line} ${s.method} ${s.tag}`)).toEqual([
+        '4 FleetWatcher.tick selection',
+        '5 FleetWatcher.tick act',
+        '8 FleetWatcher.lanePass selection',
+        '11 FleetWatcher.divergencesPass act',
+        '15 FleetWatcher.fleetFor tests-only',
+      ]);
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
+  });
+
+  it('REAL TREE: finds the tick\'s listing, and prints the list for the PR body', () => {
+    const sites = registryListingSites();
+    console.log(`census registryListingSites: ${sites.length}\n${sites.map((s) => `  ${s.line} ${s.method} ${s.tag}  ${s.text.trim()}`).join('\n')}`);
+    expect(sites.filter((s) => s.method === 'FleetWatcher.tick').length, 'the tick lists the registry').toBeGreaterThan(0);
   });
 });
