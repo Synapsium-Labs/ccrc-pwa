@@ -3,14 +3,21 @@
 // this account take. Same disclosure, same rule, same wire flag.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { ProjectRow, RosterWire } from '../../shared/api';
+import { ToastHost } from '@ccrc/ui';
+import type { FleetSession, ProjectRow, RosterWire } from '../../shared/api';
 import { NewSessionSheet } from '../src/fleet/NewSessionSheet';
+import { NAME_FIELD_TEXT } from '../src/fleet/WorkspaceNameField';
 import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  window.history.replaceState(null, '', '/');
+});
 
 const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
 
@@ -449,5 +456,213 @@ describe('the routing row’s third select, and the project order', () => {
     fireEvent.click(await screen.findByRole('button', { name: /other pool/i }));
     expect(await screen.findByText('theirs')).toBeInTheDocument();
     expect(screen.getByTitle(/pool-b/)).toBeInTheDocument();
+  });
+});
+
+// ── THE SHEET OPENS THE NEW SESSION AT ONCE (desktop polish B5, D-6370) ──
+describe('NewSessionSheet — success opens the new session', () => {
+  /** The row `createSession` makes for `demo` on claude: a main checkout, absent from the store until a fleet frame lists it. */
+  const NEW_ROW: FleetSession = fleetSession({ id: 'claude-demo', wrapper: 'claude', project: 'demo', workspace: null });
+  const NEW_WS_ROW: FleetSession = fleetSession({ id: 'claude-demo-ws-a', wrapper: 'claude', project: 'demo', workspace: 'ws-a' });
+
+  /** Render the sheet over a store of its own and drain microtasks only, so it works under fake timers too. */
+  const mount = async (opts: { cached?: ProjectRow[]; projects?: Promise<{ roots: string[]; projects: ProjectRow[] }> } = {}) => {
+    const roster = pooled(POOLS);
+    const store = storeWith(roster);
+    if (opts.cached !== undefined) act(() => { store.setState({ projects: opts.cached }); });
+    vi.spyOn(api, 'projects').mockImplementation(() => opts.projects ?? Promise.resolve({ roots: ['/w'], projects: [proj('demo')] }));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    vi.spyOn(api, 'linearResolve').mockResolvedValue({ title: 'Login cleanup', source: 'linear', note: null });
+    const onClose = vi.fn();
+    const ui = (open: boolean) => <><ToastHost /><NewSessionSheet open={open} onClose={onClose} fleet={store} /></>;
+    const view = render(ui(true));
+    const flush = async (): Promise<void> => { await act(async () => {}); };
+    await flush();
+    return { store, onClose, flush, close: () => view.rerender(ui(false)) };
+  };
+  const pickDemo = async (flush: () => Promise<void>): Promise<void> => {
+    fireEvent.click(screen.getByRole('button', { name: /team·max/ }));
+    await flush();
+    fireEvent.click(screen.getByText('demo'));
+  };
+  const showFrame = (store: FleetStore, sessions: FleetSession[]): void => {
+    act(() => { store.setState({ sessions }); });
+  };
+  const startUnnamed = () => fireEvent.click(screen.getByRole('button', { name: /^Start demo/ }));
+  const startNamed = () => {
+    fireEvent.change(screen.getByLabelText(NAME_FIELD_TEXT.label), { target: { value: 'Login cleanup' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Start Login cleanup/ }));
+  };
+
+  it('a named create answered with an id navigates to it', async () => {
+    vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: true, id: 'ws a/1', slug: 'login-cleanup', title: 'Login cleanup' });
+    const { onClose, flush } = await mount();
+    await pickDemo(flush);
+    startNamed();
+    await waitFor(() => expect(window.location.pathname).toBe('/s/ws%20a%2F1'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/^Starting/)).toBeNull(); // a navigating success shows no toast
+  });
+
+  it('a named answer this build cannot read keeps the toast and the close, and goes nowhere', async () => {
+    vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: false });
+    const { onClose, flush } = await mount();
+    await pickDemo(flush);
+    startNamed();
+    expect(await screen.findByText('Starting demo on team·max…')).toBeInTheDocument();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('an unnamed create navigates when the fleet frame lists the new session', async () => {
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { store, onClose, flush } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    await flush();
+    // The create answered, the frame has not: the sheet holds in its starting state and goes nowhere.
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/');
+
+    showFrame(store, [NEW_ROW]);
+    await waitFor(() => expect(window.location.pathname).toBe('/s/claude-demo'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/^Starting demo/)).toBeNull();
+  });
+
+  it('an unnamed create whose frame came BEFORE the answer still navigates once it resolves', async () => {
+    let answer!: () => void;
+    vi.spyOn(api, 'createSession').mockImplementation(() => new Promise<void>((resolve) => { answer = resolve; }));
+    const { store, onClose, flush } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    showFrame(store, [NEW_ROW]);
+    expect(window.location.pathname).toBe('/');
+    await act(async () => { answer(); });
+    await waitFor(() => expect(window.location.pathname).toBe('/s/claude-demo'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('a session already running in that project is not the new one', async () => {
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { store, onClose, flush } = await mount();
+    showFrame(store, [NEW_ROW]); // alive BEFORE the create
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    showFrame(store, [NEW_ROW, NEW_WS_ROW]); // a workspace row is not a main checkout either
+    await flush();
+    expect(window.location.pathname).toBe('/');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a create answered after the sheet was dismissed navigates nowhere', async () => {
+    let answer!: () => void;
+    vi.spyOn(api, 'createSession').mockImplementation(() => new Promise<void>((resolve) => { answer = resolve; }));
+    const { store, onClose, flush, close } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    close();
+    await act(async () => { answer(); });
+    showFrame(store, [NEW_ROW]);
+    await flush();
+    expect(window.location.pathname).toBe('/');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a named create answered after the sheet was dismissed navigates nowhere', async () => {
+    let answer!: (a: { named: true; id: string; slug: string; title: string }) => void;
+    vi.spyOn(api, 'workspaceAdd').mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+    const { onClose, flush, close } = await mount();
+    await pickDemo(flush);
+    startNamed();
+    await flush();
+    close();
+    await act(async () => { answer({ named: true, id: 'claude-demo-ws-a', slug: 'login-cleanup', title: 'Login cleanup' }); });
+    await flush();
+    expect(window.location.pathname).toBe('/');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a sheet dismissed during the wait navigates nowhere and its clock is cleared', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { store, onClose, flush, close } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    close();
+    await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+    showFrame(store, [NEW_ROW]);
+    await flush();
+    expect(window.location.pathname).toBe('/');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText(/^Starting demo/)).toBeNull(); // the bound's toast belongs to a sheet that is still waiting
+  });
+
+  it('past 60 s without a frame it toasts and closes, as before, and navigates nowhere', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { onClose, flush } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(59_000); });
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Starting demo on team·max…')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/');
+  });
+});
+
+describe('NewSessionSheet — step 2 shows the cached project list at once', () => {
+  const open = (cached: ProjectRow[] | null, projects: Promise<{ roots: string[]; projects: ProjectRow[] }>) => {
+    const roster = pooled(POOLS);
+    const store = storeWith(roster);
+    if (cached !== null) act(() => { store.setState({ projects: cached }); });
+    vi.spyOn(api, 'projects').mockImplementation(() => projects);
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={store} />);
+    return store;
+  };
+
+  it('step 2 renders cached projects before /api/projects answers', async () => {
+    const store = open([proj('cached-a'), proj('cached-b')], new Promise(() => {}));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    expect(await screen.findByText('cached-a')).toBeInTheDocument();
+    expect(screen.getByText('cached-b')).toBeInTheDocument();
+    expect(document.querySelector('.proj-skel')).toBeNull();
+    expect(store.getState().projects).toHaveLength(2); // the sheet reads the store's list, it never writes it
+  });
+
+  it('the fetched list replaces the cached one when it answers, and the store is left alone', async () => {
+    let answer!: (r: { roots: string[]; projects: ProjectRow[] }) => void;
+    const cached = [proj('cached-a')];
+    const store = open(cached, new Promise((resolve) => { answer = resolve; }));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    await screen.findByText('cached-a');
+    await act(async () => { answer({ roots: ['/w'], projects: [proj('fresh-a')] }); });
+    expect(await screen.findByText('fresh-a')).toBeInTheDocument();
+    expect(screen.queryByText('cached-a')).toBeNull();
+    expect(store.getState().projects).toBe(cached);
+  });
+
+  it('a failed fetch shows the error line only when there is no cached list to show', async () => {
+    open([proj('cached-a')], Promise.reject(new Error('agent link is down')));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    expect(await screen.findByText('cached-a')).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't load the project list/)).toBeNull();
+  });
+
+  it('with neither a fetched nor a cached list the skeleton shows', async () => {
+    open(null, new Promise(() => {}));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    await act(async () => {});
+    expect(document.querySelector('.proj-skel')).not.toBeNull();
   });
 });

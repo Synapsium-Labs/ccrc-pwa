@@ -3,9 +3,10 @@
 // Step 2: pick the project — searchable list from api.projects, with
 // registry projects first, most recently active on top. The confirm row
 // narrates the action in plain language ("Start project-c on
-// team·alt") and posts api.createSession; success closes the sheet (the
-// new card arrives over /ws/fleet), failure toasts ccd's stderr and leaves
-// every choice in place.
+// team·alt") and posts api.createSession. Success opens the new session: the sheet
+// closes and goes to it as soon as /ws/fleet lists its row (a create answers no id), with the old "Starting…" toast
+// as the fallback if no row comes within a minute. Failure toasts ccd's stderr and leaves every choice in place.
+// Step 2 shows the fleet store's last project list the moment it opens, and the fetch on open replaces it.
 //
 // THE NAME FIELD (named workspaces S8, design 2026-10-20 §2.1) sits under the project list. Empty, nothing about
 // this sheet changed: the same `createSession`, the same body, the main checkout. Filled, the sheet starts a
@@ -13,10 +14,11 @@
 // server's `--wrapper`, never a quiet placement elsewhere). That create's refusals stay in the sheet with the text
 // intact; an account refusal returns to the account step, with the project and the name kept. A crossing project or
 // an account a workspace never starts on closes the door: the field is disabled with its sentence and no name is
-// ever sent (`nameDoorReason`).
+// ever sent (`nameDoorReason`). A workspace create answers its session's id, so that success closes the sheet and
+// opens the session at once, with no toast.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { ProjectRow } from '../../../shared/api';
+import type { FleetSession, ProjectRow } from '../../../shared/api';
 import { CLASSES, type ModelClass } from '../../../shared/models';
 import { Button, Select, Sheet, toast } from '@ccrc/ui';
 import { accountIsHomeAble, accountLabel, accountPool, accountPoolState } from '../lib/accounts';
@@ -38,11 +40,15 @@ import {
 } from './accountPicker';
 import { useAccountUsage } from './useProjectedHome';
 import { ProjectPicker } from './ProjectPicker';
+import { liveIdsIn, startedSessionFor } from './startProgramPolicy';
 import { NAME_FIELD_CLASS, WorkspaceNameField } from './WorkspaceNameField';
 import { useNamePreview } from './useNamePreview';
 import { addRefusalText, classifyAddError } from './workspaceAddWords';
 import { LINEAR_SETTINGS_PATH, confirmLabel, nameDoorReason } from './workspaceNameWords';
 import './fleet.css';
+
+/** How long an unnamed create waits for its session's row on the fleet feed before it gives up, toasts and closes. */
+export const NEW_SESSION_WAIT_MS = 60_000;
 
 /** The new-session door's own sentences for the name field (named workspaces S8, design §2.1). */
 export const NEW_SESSION_NAME_TEXT = {
@@ -122,6 +128,9 @@ export function NewSessionSheet({
 }: NewSessionSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
   const roster = fleet((s) => s.roster);
+  // The last `/api/projects` read, which `useProjectRows` owns and writes. Read here, never written: it fills step 2
+  // until this sheet's own fetch answers.
+  const cachedProjects = fleet((s) => s.projects);
   // The SAME poll the picker's eligibility already came from, now also the
   // source of its gauges — this sheet was fetching every account row and using
   // one boolean off it while reading its numbers off the live fleet frame,
@@ -151,6 +160,8 @@ export function NewSessionSheet({
   const [name, setName] = useState('');
   // A create answers after its sheet was closed: its words are for a sheet that is gone. Bumped on every close.
   const generation = useRef(0);
+  // Ends the wait for a created session's row (settles it as "no row"); null when nothing is waiting.
+  const stopWait = useRef<(() => void) | null>(null);
   const [notice, setNotice] = useState<{ step: 'account' | 'name'; text: string } | null>(null);
   const [starting, setStarting] = useState(false);
   /** `starting` has been true for long enough that "Starting…" is no longer an
@@ -181,6 +192,12 @@ export function NewSessionSheet({
     };
   }, [open]);
 
+  // An unmount is a dismissal too: the wait's clock and its fleet subscription go with it, and nothing navigates.
+  useEffect(() => () => {
+    generation.current += 1;
+    stopWait.current?.();
+  }, []);
+
   // The slow-label clock. Keyed on `starting` alone, so it is armed by the same
   // transition that disables the button and disarmed by every exit from it —
   // including the close-reset below, which sets `starting` back to false.
@@ -194,6 +211,7 @@ export function NewSessionSheet({
   useEffect(() => {
     if (open) return;
     generation.current += 1;
+    stopWait.current?.();
     setWrapper(null);
     setProject(null);
     selectedCrossingRef.current = null;
@@ -216,10 +234,14 @@ export function NewSessionSheet({
     const prev = lastActive.get(s.workdir);
     if (prev === undefined || at > prev) lastActive.set(s.workdir, at);
   }
+  // This sheet's own list once it has one, else the store's cached one; the skeleton only when neither exists, and a
+  // failed fetch speaks only when there is nothing cached to show.
+  const shown: readonly ProjectRow[] | null = list ?? cachedProjects;
+  const shownError = shown === null ? listError : null;
   const ordered =
-    list === null
+    shown === null
       ? []
-      : [...list].sort((a, b) => {
+      : [...shown].sort((a, b) => {
           const ra = lastActive.get(a.workdir);
           const rb = lastActive.get(b.workdir);
           if (ra === undefined && rb === undefined) return 0; // keep server order
@@ -306,6 +328,25 @@ export function NewSessionSheet({
   /** The confirm's own gate, which Enter in the name field follows exactly. */
   const canStart = wrapper !== null && project !== null && !starting && preview.kind !== 'refused';
 
+  /** Settles with the first row `find` returns, checked now and on every change of the store, or with null at the bound
+   *  or when the sheet is dismissed (`stopWait`). The caller tells those two apart by the generation. */
+  const waitForRow = (find: () => FleetSession | null): Promise<FleetSession | null> => new Promise((resolve) => {
+    const settle = (row: FleetSession | null): void => {
+      clearTimeout(timer);
+      unsubscribe();
+      stopWait.current = null;
+      resolve(row);
+    };
+    const check = (): void => {
+      const row = find();
+      if (row !== null) settle(row);
+    };
+    const timer = setTimeout(() => settle(null), NEW_SESSION_WAIT_MS);
+    const unsubscribe = fleet.subscribe(check);
+    stopWait.current = () => settle(null);
+    check();
+  });
+
   const start = async (): Promise<void> => {
     if (wrapper === null || project === null || starting) return;
     const mine = generation.current;
@@ -319,10 +360,23 @@ export function NewSessionSheet({
         const answer = await api.workspaceAdd(project.name, { name, wrapper, ...(hasRoute ? { route } : {}) });
         // THE TITLE IS THE SERVER'S: it resolves a ticket again at create, so the preview's title (or what was typed) may
         // not be what it stored. An answer this build cannot read names none, rather than a guess.
-        toast(`Starting ${answer.named ? answer.title : project.name} on ${accountLabel(roster, wrapper)}…`);
+        if (answer.named) {
+          // The answer carries the session's id: open it. A dismissed sheet only says it started, and goes nowhere.
+          if (mine !== generation.current) {
+            toast(`Starting ${answer.title} on ${accountLabel(roster, wrapper)}…`);
+            return;
+          }
+          onClose();
+          navigate(`/s/${encodeURIComponent(answer.id)}`);
+          return;
+        }
+        toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
         onClose();
         return;
       }
+      // The new row can reach the fleet store before this create's HTTP answer, so what was alive is taken BEFORE it.
+      const preLive = liveIdsIn(fleet.getState().sessions);
+      const said = `Starting ${project.name} on ${accountLabel(roster, wrapper)}…`;
       const body = {
         wrapper, project: project.name, workdir: project.workdir,
         ...(hasRoute ? { route } : {}),
@@ -330,8 +384,16 @@ export function NewSessionSheet({
       await (isCrossing(project)
         ? api.createSession({ ...body, crossPool: true })
         : api.createSession(body));
-      toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
+      if (mine !== generation.current) {
+        toast(said);
+        return;
+      }
+      // The create answers no id, so the sheet stays in its starting state until /ws/fleet lists the new main checkout.
+      const row = await waitForRow(() => startedSessionFor(fleet.getState().sessions, wrapper, project.name, preLive));
+      if (mine !== generation.current) return;
+      if (row === null) toast(said);
       onClose();
+      if (row !== null) navigate(`/s/${encodeURIComponent(row.id)}`);
     } catch (err) {
       if (preview.kind === 'named') {
         const refusal = classifyAddError(err);
@@ -438,8 +500,8 @@ export function NewSessionSheet({
           <ProjectPicker
             query={query}
             onQuery={setQuery}
-            list={list}
-            listError={listError}
+            list={shown}
+            listError={shownError}
             empty={inPool.length === 0 && otherPool.length === 0}
           >
               {inPool.map((candidate) => (
