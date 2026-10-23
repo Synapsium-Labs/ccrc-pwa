@@ -14,8 +14,13 @@
 //     defaults or container, no step shell, no step environment variable
 //     outside that step's own allowed set, and a build output only where the
 //     allowance says (D-6648, D-6651, D-6663);
-//   - a build job, or a job that calls a workflow, carries no `secrets:` key
-//     and reads no `secrets` context (D-6663);
+//   - NO job reads a secret: none carries a `secrets:` key, and the whole
+//     parsed job, every key at every depth (container and services env, a
+//     step's if: and working-directory included), never names the `secrets`
+//     context in any case or form. Every token these workflows use is
+//     `github.token` (D-6663);
+//   - context names (`secrets`, `needs`, `steps`) match without regard to
+//     case, as GitHub resolves them (D-6663);
 //   - every `steps.<id>` and `needs.<job>.outputs.<k>` resolves to an id or an
 //     output that is declared, because a missing one is an empty string at run
 //     time and no release workflow runs before its merge (D-6659).
@@ -47,6 +52,8 @@ export interface WorkflowJob {
   env: unknown;
   defaults: unknown;
   steps: WorkflowStep[];
+  /** The job as parsed, every key, for the scans that read all of it. */
+  raw: Record<string, unknown>;
 }
 
 export interface WorkflowFile {
@@ -95,6 +102,7 @@ function readJob(id: string, raw: unknown): WorkflowJob {
     env: j.env,
     defaults: j.defaults,
     steps: Array.isArray(j.steps) ? j.steps.map(readStep) : [],
+    raw: j,
   };
 }
 
@@ -185,10 +193,11 @@ const shown = (v: unknown): string => (typeof v === 'string' ? v : v === undefin
 /** Each `${{ … }}` in a value that reads the `needs` context at all — a
  *  member, an index or the whole of it (`toJSON(needs)`). */
 const readsNeeds = (v: unknown): boolean =>
-  [...scanText(v).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((m) => /(?<![\w.-])needs\b/.test(m[1] ?? ''));
-/** Any `${{ … }}` in a value that reads the `secrets` context at all. */
-const readsSecrets = (v: unknown): boolean =>
-  [...scanText(v).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((m) => /(?<![\w.-])secrets\b/.test(m[1] ?? ''));
+  [...scanText(v).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((m) => /(?<![\w.-])needs\b/i.test(m[1] ?? ''));
+/** A value, scanned whole at every depth, that names the `secrets` context:
+ *  a member, an index or the whole of it (`toJSON(secrets)`), in any case.
+ *  Not only inside `${{ }}`: an `if:` is an expression without one. */
+const readsSecrets = (v: unknown): boolean => /(?<![\w.-])secrets\s*[.[)]/i.test(scanText(v));
 
 export interface JobReference {
   /** `outputs.<k>`, `if`, `env.<K>`, or `step <n> if|with.<k>|env.<K>`. */
@@ -209,10 +218,10 @@ export function jobReferences(job: WorkflowJob): JobReference[] {
   const out: JobReference[] = [];
   const scan = (where: string, value: unknown, visible: number): void => {
     const s = scanText(value);
-    for (const m of s.matchAll(/(?<![\w.-])steps\.([A-Za-z_][\w-]*)(?:\.outputs\.([A-Za-z_][\w-]*))?/g)) {
+    for (const m of s.matchAll(/(?<![\w.-])steps\.([A-Za-z_][\w-]*)(?:\.outputs\.([A-Za-z_][\w-]*))?/gi)) {
       out.push({ where, kind: 'steps', id: m[1]!, output: m[2] ?? null, visible });
     }
-    for (const m of s.matchAll(/(?<![\w.-])needs\.([A-Za-z_][\w-]*)(?:\.outputs\.([A-Za-z_][\w-]*))?/g)) {
+    for (const m of s.matchAll(/(?<![\w.-])needs\.([A-Za-z_][\w-]*)(?:\.outputs\.([A-Za-z_][\w-]*))?/gi)) {
       out.push({ where, kind: 'needs', id: m[1]!, output: m[2] ?? null, visible });
     }
   };
@@ -235,7 +244,7 @@ function indexedReferences(job: WorkflowJob): string[] {
   const found = new Set<string>();
   for (const v of values) {
     if (v === null || v === undefined) continue;
-    for (const m of scanText(v).matchAll(/(?<![\w.-])(steps|needs)\s*\[/g)) found.add(m[1]!);
+    for (const m of scanText(v).matchAll(/(?<![\w.-])(steps|needs)\s*\[/gi)) found.add(m[1]!.toLowerCase());
   }
   return [...found];
 }
@@ -294,12 +303,14 @@ export function boundaryFindings(
           out.push(`${J} runs the install or the build and its checkout keeps its credential (step ${i + 1})`);
         }
       });
-      // isBuildJob holds every called-workflow job, so this covers both.
-      const values: unknown[] = [...Object.values(job.with), ...Object.values(mapping(job.env))];
-      for (const st of job.steps) values.push(...Object.values(st.with), ...Object.values(st.env), st.run);
-      if (job.keys.includes('secrets') || values.some(readsSecrets)) {
-        out.push(`${J} runs the install or the build and reads secrets`);
-      }
+    }
+
+    // ── no job reads a secret (D-6663) ──
+    if (job.keys.includes('secrets') || readsSecrets(job.raw)) {
+      // isBuildJob holds every called-workflow job.
+      if (isBuildJob(job)) out.push(`${J} runs the install or the build and reads secrets`);
+      if (isWriteJob(job)) out.push(`${J} holds a write permission and reads secrets`);
+      if (!isBuildJob(job) && !isWriteJob(job)) out.push(`${J} reads secrets`);
     }
 
     // ── a write job's steps, and what chooses its code (D-6648, D-6651) ──

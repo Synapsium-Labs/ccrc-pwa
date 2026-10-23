@@ -307,6 +307,14 @@ const PLANTED: Array<[string, string, string]> = [
   ['a build step reads a secret', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', '        id: compare\n        env:\n          GH_TOKEN: ${{ secrets.PAT }}\n'), 'runs the install or the build and reads secrets'],
   ['the download path is an expression', plant(DOWNLOAD_PATH, '          path: ${{ runner.temp }}/${{ env.D }}\n        env:\n          D: ../x\n'), 'not exactly ${{ runner.temp }}/release-in'],
   ['a build checkout spelled with a capital keeps its credential', plant('      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n          persist-credentials: false\n', '      - uses: Actions/checkout@v4\n        with:\n          fetch-depth: 0\n'), 'its checkout keeps its credential'],
+  // D-6663, fix round 2: no job reads secrets, by any key or spelling, and
+  // context names match without regard to case.
+  ['a build job container carries a secret', plant('    timeout-minutes: 30\n', '    timeout-minutes: 30\n    container:\n      image: node:22\n      env:\n        T: ${{ secrets.PAT }}\n'), 'runs the install or the build and reads secrets'],
+  ['a build job service carries a secret', plant('    timeout-minutes: 30\n', '    timeout-minutes: 30\n    services:\n      db:\n        image: postgres\n        env:\n          P: ${{ secrets.PAT }}\n'), 'runs the install or the build and reads secrets'],
+  ['a build step reads SECRETS in capitals', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', '        id: compare\n        env:\n          GH_TOKEN: ${{ SECRETS.PAT }}\n'), 'runs the install or the build and reads secrets'],
+  ['a build step if: reads a secret', plant("        id: record\n        if: steps.compare.outputs.release == 'true'\n", "        id: record\n        if: steps.compare.outputs.release == 'true' && secrets.PAT != ''\n"), 'runs the install or the build and reads secrets'],
+  ['the publish step passes a secret under an allowed key', plant('          GH_TOKEN: ${{ github.token }}\n          CCRC_BUNDLE_PATH', '          GH_TOKEN: ${{ secrets.PAT }}\n          CCRC_BUNDLE_PATH'), 'holds a write permission and reads secrets'],
+  ['a publish step passes NEEDS in capitals under another key', receiveEnv('          OTHER: ${{ NEEDS.build.outputs.tag }}\n'), 'passes a build output into env.OTHER'],
 ];
 
 describe('W26-G4: the guard sees each planted breach', () => {
