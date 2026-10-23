@@ -4829,7 +4829,7 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     ]);
     // The driver's whole subcommand set, in registration order: W2-4's two, W2-5a Task 7's six, then W2-5b1's, in task
     // order (Task 1's grammar cases use an unregistered name).
-    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms']);
+    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms', 'judge']);
   });
 
   // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
@@ -12860,4 +12860,772 @@ w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: arms end to e
       rs.close();
     }
   }, 360_000);
+});
+
+// ── W2-5b1 Task 5: the judge (W2-D79, W2-D54, W2-D80, W2-D18; Q18, Q2) ──────────────────────────────────────────
+// Live safety: every spawn reaches W2-4's recording stub at `$HOME/.local/bin/<id>` in a mkTmp fixture HOME (W2-5a Task
+// 6's w6Box), through spawnEnv's allow-list, with the poisoned gh first on PATH; nothing spawns a real model. The
+// subcommand cases open a createStore store in that HOME and inject Task 4's three readers (the record, the node, the
+// answers), except the W2-D24 rows and the --allow-code-change case, which read Task 4's fixture records (mkTmp files)
+// through its real loader; no case reads a real record or the live HOME. Key-shaped values are assembled at runtime, and non-ASCII
+// ones are built with String.fromCharCode. Arm values are RECALL_ARMS' own, never spelled here.
+import * as w5b5Lib from '../../ccd/history/lib.mjs';
+import * as w5b5Gate from '../../deploy/history-gate.mjs';
+import { createStore as w5b5CreateStore } from '../../ccd/history/store.mjs';
+
+type W5b5Entry = {
+  qid: string; store_id: string; ccrc_id: string; generation: string; boundary_uuid: string; kind: string; fact: string;
+  fact_raw: string; question: string; source_entry_uuid: string; repo_roots: string[];
+};
+type W5b5Answer = { qid: string; arm: string; outcome: string; reply: string | null; correct: boolean | null };
+type W5b5Input = { v: number; kind: string; question: string; expected: string; answer_field: string | null; reply: string };
+type W5b5Attempt = { run: string; code: number | null; signal: string | null; skipped: boolean; tokens: number; result: boolean; label: string | null; error_fields: string[] };
+type W5b5Item = { id: string; outcome: string; label: string | null; attempts: W5b5Attempt[] };
+type W5b5Job = { id: string; input: W5b5Input };
+type W5b5MapRow = { id: string; qid: string; arm: string };
+type W5b5Judge = { launch: unknown; stamps(): string[]; judge(section: string, jobs: W5b5Job[]): Promise<W5b5Item[]> };
+type W5b5Picked = { items: Array<{ qid: string; arm: string; entry: W5b5Entry; reply: string }>; excluded: { correct: number; run_failed_questions: number } };
+/** The driver's judge surface, typed once here, so no case needs its own cast. */
+type W5b5Drv = {
+  JUDGE_REPLY_MAX_BYTES: number; JUDGE_INPUT_KEYS: readonly string[]; JUDGE_ATTEMPTS: number; JUDGE_OUTCOMES: readonly string[];
+  JUDGE_ID_RE: RegExp; JUDGED_KIND: string; JUDGE_MAP_KIND: string; ARM_SECTIONS: readonly string[];
+  FLAG_SPECS: Record<string, string>;
+  DRIVER_REASONS: readonly string[]; HANDLERS: Map<string, unknown>; LIMITS_DEFAULTS: Record<string, number>;
+  capUtf8Bytes(text: string, maxBytes: number): string;
+  maskValue(value: unknown, idx: unknown): unknown;
+  judgeInputOf(entry: W5b5Entry, reply: string | null, idx: unknown): W5b5Input;
+  judgeStdin(rubricId: string, input: W5b5Input): string;
+  judgeMapOf(seedHex: string, entries: ReadonlyArray<{ qid: string }>, arms: readonly string[]): W5b5MapRow[];
+  judgeMapText(section: string, frozenSha256: string, map: W5b5MapRow[]): string;
+  judgeItemsOf(o: { entries: W5b5Entry[]; answers: W5b5Answer[]; arms: readonly string[]; shaMinPrefix: number }): W5b5Picked;
+  judgeJobsOf(o: { items: W5b5Picked['items']; map: W5b5MapRow[]; idx: unknown }): W5b5Job[];
+  openJudge(o: Record<string, unknown>): Promise<W5b5Judge>;
+  judgeCommand(flags: Record<string, unknown>, env: Record<string, unknown>, deps?: Record<string, unknown>): Promise<number>;
+  refuse(word: string, detail: string): never;
+};
+const W5B5 = replay as unknown as W5b5Drv;
+const W5B5_ARMS = w5b5Lib.RECALL_ARMS as unknown as readonly string[];
+const [W5B5_ARM0, W5B5_ARM1] = W5B5_ARMS as unknown as [string, string];
+const W5B5_STORE = '00000000-0000-4000-8000-0000000005b5';
+const W5B5_OTHER_STORE = '00000000-0000-4000-8000-0000000005b6';
+const W5B5_SEED = sha256Hex('w2-5b1 task 5 fixture: seed');
+/** The (qid, arm) key's separator, a NUL built at runtime (no escape in the file, Global Constraints), as the driver's is. */
+const W5B5_NUL = String.fromCharCode(0);
+/** Judge streams: W2-5a's writer stream builder, so the init line (the stub's --version) never moves. */
+const W5B5_LABELLED = w6Reply('The answer names one other command, with no hedge.\nLABEL: fabricated');
+const W5B5_MALFORMED = w6Reply('I cannot tell which of the two labels fits this answer.');
+/** A stream the variant stub prints once, to the first print-mode run that takes it (w5b5PlantOnce). */
+const W5B5_ONCE = 'stub-stream-once.jsonl';
+const W5B5_ENV = (home: string): Record<string, unknown> => ({ HOME: home, TMUX_PANE: undefined, LANG: 'fixture.UTF-8' });
+
+/** A frozen entry (W2-D73's fields) on `storeId`, its qid computed by qidOf. No question names an arm. */
+function w5b5Entry(fact: string, storeId: string = W5B5_STORE, kind = 'command'): W5b5Entry {
+  const six = { store_id: storeId, ccrc_id: 'fixture-ccrc-a', generation: W6_GEN, boundary_uuid: W6_BOUNDARY, kind, fact };
+  return { qid: replay.qidOf(six as never) as string, ...six, fact_raw: fact,
+    question: `Which command rebuilt step ${fact.length} of the fixture package?`, source_entry_uuid: W6_SOURCE, repo_roots: ['/home/u/tree'] };
+}
+const w5b5Answer = (qid: string, arm: string, outcome: string, reply: string | null, correct: boolean | null): W5b5Answer =>
+  ({ qid, arm, outcome, reply, correct });
+/** `n` jobs with positional ids j0001.., each a wrong answer to its own command question. */
+function w5b5Jobs(n: number): W5b5Job[] {
+  return Array.from({ length: n }, (_, k) => ({
+    id: `j${String(k + 1).padStart(4, '0')}`,
+    input: W5B5.judgeInputOf(w5b5Entry(`npm run fixture-step-${k} --workspace pkg-a`), `ANSWER: npm run other-${k}`, W6_IDX),
+  }));
+}
+function w5b5Open(b: W6Box, id: string, over: Record<string, unknown> = {}): Promise<W5b5Judge> {
+  return W5B5.openJudge({
+    home: b.home, accountId: id, model: W6_MODEL, settingsMode: 'restricted', rubricId: 'v1', claim: b.claim, budget: 100_000,
+    limits: W5B5.LIMITS_DEFAULTS, expected: w6Expected(b.home, id), lang: 'fixture.UTF-8', ...over,
+  });
+}
+/** The recording stub with one more setting: in print mode only, a W5B5_ONCE stream is taken (renamed away, so exactly
+ *  one run gets it) and printed instead of STUB_STREAM. Its --version calls never take it. The shared stub is untouched. */
+function w5b5PlantOnce(home: string, id: string): void {
+  const tail = `process.stdout.write(opt(${JSON.stringify(STUB_STREAM)}) ?? '');`;
+  expect(T5_STUB_SOURCE.split(tail)).toHaveLength(2);
+  const once = [
+    'let once = null;',
+    "if (process.argv.slice(2).includes('-p')) {",
+    `  const taken = at(${JSON.stringify(W5B5_ONCE)} + '.' + process.pid);`,
+    `  try { fs.renameSync(at(${JSON.stringify(W5B5_ONCE)}), taken); once = fs.readFileSync(taken, 'utf8'); } catch { once = null; }`,
+    '}',
+    `process.stdout.write(once ?? opt(${JSON.stringify(STUB_STREAM)}) ?? '');`,
+  ].join('\n  ');
+  writeFileSync(join(home, '.local', 'bin', id), T5_STUB_SOURCE.replace(tail, once), { mode: 0o700 });
+}
+/** The judge order spelled independently of the driver: (qid, arm) pairs sorted by code unit, then Fisher-Yates over
+ *  the gate's own stream for `label`, by randInt, as W2-D18 and W2-D79 state it. */
+function w5b5Order(seed: string, pairs: Array<[string, string]>, label = 'judge-order'): Array<[string, string]> {
+  const key = ([q, a]: [string, string]): string => `${q}${W5B5_NUL}${a}`;
+  const out = [...pairs].sort((x, y) => (key(x) < key(y) ? -1 : key(x) > key(y) ? 1 : 0));
+  const rng = w5b5Gate.substream(seed, label);
+  for (let s = 0; s < out.length - 1; s += 1) {
+    const j = s + w5b5Gate.randInt(rng, out.length - s);
+    [out[s], out[j]] = [out[j]!, out[s]!];
+  }
+  return out;
+}
+/** Every path under `root`, relative, sorted. */
+function w5b5Files(root: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string, rel: string): void => {
+    for (const n of readdirSync(dir)) {
+      const r = rel === '' ? n : `${rel}/${n}`;
+      out.push(r);
+      if (lstatSync(join(dir, n)).isDirectory()) walk(join(dir, n), r);
+    }
+  };
+  walk(root, '');
+  return out.sort();
+}
+/** An in-process call, its stderr captured and its refusal, if any, answered as {word, detail}. */
+async function w5b5InProcess(fn: () => Promise<unknown>): Promise<{ code: unknown; stderr: string; refusal: { word: string; detail: string } | null }> {
+  const lines: string[] = [];
+  const spy = vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { lines.push(String(s)); return true; }) as typeof process.stderr.write);
+  try {
+    return { code: await fn(), stderr: lines.join(''), refusal: null };
+  } catch (e) {
+    if (e instanceof DriverRefusal) return { code: null, stderr: lines.join(''), refusal: { word: e.word, detail: e.detail } };
+    throw e;
+  } finally {
+    spy.mockRestore();
+  }
+}
+/** Flags that pass `judge --section <section>`'s grammar (its form repeats the arms form's lists), each input a placeholder:
+ *  the injected loaders never read them. */
+function w5b5Flags(out: string, section: string): Record<string, unknown> {
+  const sha = 'a'.repeat(64);
+  const input = '/home/u/fixture-input.json';
+  const part1 = section === 'quiz' ? { part1: input, 'part1-sha256': sha } : {};
+  return { record: input, 'record-sha256': sha, ...part1, frozen: input, 'frozen-sha256': sha, out, section };
+}
+/** Task 4's ArmRun, as the judge reads it: the record's four judge fields, the section's frozen list, no stamps. */
+function w5b5Run(entries: W5b5Entry[], over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    record: { judge_model: W6_MODEL, rubric_id: 'v1', bootstrap: { seed: W5B5_SEED }, labeller: { sha_min_prefix: 7 } },
+    recordSha256: sha256Hex('w2-5b1 task 5 fixture: record'),
+    frozen: { sha256: sha256Hex('w2-5b1 task 5 fixture: frozen'), list: { entries } },
+    allowCodeChange: false, codeStamps: [], ...over,
+  };
+}
+/** Task 4's ArmNode for up-a on a w6Box HOME. */
+function w5b5NodeOf(home: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return { account: 'up-a', expected: w6Expected(home, 'up-a'), budget: 100_000, limits: W5B5.LIMITS_DEFAULTS, settingsMode: 'restricted', ...over };
+}
+const w5b5Deps = (run: unknown, node: unknown, answers: unknown[]): Record<string, unknown> =>
+  ({ loadArmRun: () => run, armNodeOf: () => node, readArmAnswers: () => answers, now: () => Date.now() });
+/** A w6Box HOME (roster, stubs, limits rows, stamp, a claimed --out the command never uses) and, with `store`, a store
+ *  made by createStore with W5B5_STORE as its id: the node the subcommand opens. */
+function w5b5Home(prefix: string, store = true): W6Box {
+  const b = w6Box(prefix);
+  if (store) w5b5CreateStore(b.home, { storeId: W5B5_STORE });
+  return b;
+}
+
+describe('W2-5b1 Task 5: the judge input, W2-D79 and W2-D54', () => {
+  it('the input is canonical v1 with kind, question, expected, answer_field and reply, and the stdin is the signed rubric, a blank line and that input', () => {
+    const e = w5b5Entry(W6_CMD);
+    const reply = `I think it was the lint step.\nANSWER: ${W6_CMD2}`;
+    const input = W5B5.judgeInputOf(e, reply, W6_IDX);
+    expect(input).toEqual({ v: 1, kind: 'command', question: e.question, expected: W6_CMD, answer_field: W6_CMD2, reply });
+    expect(W5B5.JUDGE_INPUT_KEYS).toEqual(['answer_field', 'expected', 'kind', 'question', 'reply', 'v']);
+    expect(Object.keys(input).sort()).toEqual([...W5B5.JUDGE_INPUT_KEYS]);
+    for (const id of ['v1', 'v1-strict'] as const) {
+      expect(W5B5.judgeStdin(id, input), id).toBe(`${w5b5Gate.RUBRICS[id]}\n\n${w5b5Lib.canonicalJson(input)}\n`);
+    }
+    expect(() => W5B5.judgeStdin('v2', input)).toThrow(TypeError);
+  });
+
+  it('answer_field is the ANSWER line as parseAnswerField reads it: the value, UNKNOWN, or null when there is none', () => {
+    const e = w5b5Entry(W6_CMD);
+    const field = (reply: string): string | null => W5B5.judgeInputOf(e, reply, W6_IDX).answer_field;
+    expect(field(`Thinking it over.\nANSWER: \`${W6_CMD2}\``)).toBe(W6_CMD2);
+    expect(field('ANSWER: unknown')).toBe('UNKNOWN');
+    expect(field('ANSWER: UNKNOWN')).toBe('UNKNOWN');
+    expect(field('I do not remember which command it was.')).toBeNull();
+    expect(field(`ANSWER: ${W6_CMD}\nANSWER: ${W6_CMD2}`), 'the last ANSWER line').toBe(W6_CMD2);
+  });
+
+  it('the reply is redacted, then capped at 16 KiB of UTF-8, never splitting a code point; answer_field is carried beside it, cut at the same cap (D-6470)', () => {
+    expect(W5B5.JUDGE_REPLY_MAX_BYTES).toBe(16384);
+    const e = w5b5Entry(W6_CMD);
+    const han = `${String.fromCharCode(0x4e2d)} `;   // three UTF-8 bytes and a space
+    const reply = `${han.repeat(5500)}\nANSWER: ${W6_CMD2}`;
+    expect(W5B5.maskValue(reply, W6_IDX), 'CONTROL: the fixture holds nothing to redact').toBe(reply);
+    const input = W5B5.judgeInputOf(e, reply, W6_IDX);
+    expect(Buffer.byteLength(input.reply)).toBeLessThanOrEqual(16384);
+    expect(Buffer.byteLength(input.reply)).toBeGreaterThan(16384 - 4);
+    expect(reply.startsWith(input.reply)).toBe(true);
+    expect(input.answer_field, 'the ANSWER line past the cut reaches the judge in its own field').toBe(W6_CMD2);
+    const smile = `${String.fromCharCode(0xd83d, 0xde00)} `;   // four UTF-8 bytes and a space
+    const wide = W5B5.judgeInputOf(e, smile.repeat(4000), W6_IDX).reply;
+    expect(Buffer.byteLength(wide)).toBeLessThanOrEqual(16384);
+    expect(Buffer.byteLength(wide)).toBeGreaterThan(16384 - 5);
+    expect(wide).not.toMatch(W6_LONE_SURROGATE);
+    const short = 'A short reply.\nANSWER: UNKNOWN';
+    expect(W5B5.judgeInputOf(e, short, W6_IDX).reply, 'CONTROL: a reply under the cap is whole').toBe(short);
+    const longField = `npm run ${'x'.repeat(20_000)}`;
+    const capped = W5B5.judgeInputOf(e, `ANSWER: ${longField}`, W6_IDX).answer_field!;
+    expect(Buffer.byteLength(capped), 'D-6470: a 20,000-byte ANSWER value is cut at the same cap').toBe(16384);
+    expect(longField.startsWith(capped)).toBe(true);
+  });
+
+  it('W2-D54 order: a secret straddling the 16 KiB edge is redacted whole before the cap, and no head of it survives', () => {
+    // Spaced filler, so the secret is a run of its own and its (length, sha256) pair matches it whole.
+    const reply = `${'a '.repeat(8187)}${W6_SECRET} tail\nANSWER: ${W6_CMD2}`;
+    expect(Buffer.byteLength(reply.slice(0, reply.indexOf(W6_SECRET))), 'the fixture: the secret starts 10 bytes before the cut').toBe(16374);
+    const input = W5B5.judgeInputOf(w5b5Entry(W6_CMD), reply, W6_IDX);
+    expect(input.reply).not.toContain(W6_SECRET.slice(0, 6));
+    expect(input.reply).toContain(t4Lib.REDACTED_MARK);
+    // CONTROL: cut the raw reply first and redact afterwards, and the head the cut leaves matches no pair.
+    expect(t4Lib.redactField(W5B5.capUtf8Bytes(reply, 16384), W6_IDX)).toContain(W6_SECRET.slice(0, 10));
+  });
+
+  it('a key-shaped value in the question, the reply or its ANSWER line reaches the input redacted', () => {
+    const key = w6Akia('JUDGEKY');
+    const e = { ...w5b5Entry(W6_CMD), question: `Which command ran after the key ${key} was exported?` };
+    const input = W5B5.judgeInputOf(e, `It read the key from ${key} first.\nANSWER: ${key}`, W6_IDX);
+    expect(w5b5Lib.canonicalJson(input)).not.toContain(key);
+    expect(input.question).toContain(t4Lib.REDACTED_MARK);
+    expect(input.reply).toContain(t4Lib.REDACTED_MARK);
+    expect(input.answer_field).toContain(t4Lib.REDACTED_MARK);
+  });
+
+  it('a reply of null is judged as the empty string, with no answer_field', () => {
+    expect(W5B5.judgeInputOf(w5b5Entry(W6_CMD), null, W6_IDX)).toMatchObject({ reply: '', answer_field: null });
+  });
+});
+
+describe('W2-5b1 Task 5: who reaches the judge, and the judge order', () => {
+  const arms = W5B5_ARMS;
+  const pickOf = (entries: W5b5Entry[], answers: W5b5Answer[]): W5b5Picked =>
+    W5B5.judgeItemsOf({ entries, answers, arms, shaMinPrefix: 7 });
+  const refusalOf = (fn: () => unknown): unknown => { try { fn(); return null; } catch (e) { return e; } };
+
+  it('a correct answer never reaches the judge; UNKNOWN, a missing ANSWER line and a wrong value do', () => {
+    const e1 = w5b5Entry(W6_CMD);
+    const e2 = w5b5Entry(W6_CMD2);
+    const right = `It was this one.\nANSWER: ${W6_CMD}`;
+    expect(w5b5Gate.labelCorrect('command', W6_CMD, W6_CMD, { repoRoots: ['/home/u/tree'], shaMinPrefix: 7 }), 'CONTROL: the gate scores it correct').toBe(true);
+    const answers = [
+      w5b5Answer(e1.qid, W5B5_ARM0, 'answered', right, true),
+      w5b5Answer(e1.qid, W5B5_ARM1, 'answered', `ANSWER: ${W6_CMD2}`, false),
+      w5b5Answer(e2.qid, W5B5_ARM0, 'answered', 'ANSWER: UNKNOWN', false),
+      w5b5Answer(e2.qid, W5B5_ARM1, 'answered', 'I do not remember the command.', false),
+    ];
+    const r = pickOf([e1, e2], answers);
+    const got = r.items.map((i) => JSON.stringify([i.qid, i.arm, i.reply])).sort();
+    const want = [[e1.qid, W5B5_ARM1, `ANSWER: ${W6_CMD2}`], [e2.qid, W5B5_ARM0, 'ANSWER: UNKNOWN'], [e2.qid, W5B5_ARM1, 'I do not remember the command.']]
+      .map((x) => JSON.stringify(x)).sort();
+    expect(got).toEqual(want);
+    expect(r.excluded).toEqual({ correct: 1, run_failed_questions: 0 });
+  });
+
+  it('W2-D80: a run-failed question leaves the judge in both arms', () => {
+    const e1 = w5b5Entry(W6_CMD);
+    const e2 = w5b5Entry(W6_CMD2);
+    const r = pickOf([e1, e2], [
+      w5b5Answer(e1.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_ERR}`, false),
+      w5b5Answer(e1.qid, W5B5_ARM1, 'run-failed', null, null),
+      w5b5Answer(e2.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_ERR}`, false),
+      w5b5Answer(e2.qid, W5B5_ARM1, 'answered', `ANSWER: ${W6_ERR}`, false),
+    ]);
+    expect(r.items.map((i) => i.qid), 'CONTROL: the other question is judged in both arms').toEqual([e2.qid, e2.qid]);
+    expect(r.excluded).toEqual({ correct: 0, run_failed_questions: 1 });
+  });
+
+  it('an unsettled pair refuses input-invalid arms-unsettled, never a TypeError', () => {
+    const e = w5b5Entry(W6_CMD);
+    const done = w5b5Answer(e.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_ERR}`, false);
+    for (const [label, other] of [['rerun', [w5b5Answer(e.qid, W5B5_ARM1, 'rerun', null, null)]],
+      ['not-run', [w5b5Answer(e.qid, W5B5_ARM1, 'not-run', null, null)]], ['no record', []]] as Array<[string, W5b5Answer[]]>) {
+      const err = refusalOf(() => pickOf([e], [done, ...other]));
+      expect(err, label).toBeInstanceOf(DriverRefusal);
+      expect(err, label).toMatchObject({ word: 'input-invalid' });
+      expect((err as DriverRefusal).detail, label).toMatch(/^arms-unsettled 1 \(first [0-9a-f]{16}\)/);
+    }
+    expect(refusalOf(() => pickOf([e], [done, w5b5Answer(e.qid, W5B5_ARM1, 'answered', `ANSWER: ${W6_ERR}`, false)])), 'CONTROL: settled').toBeNull();
+  });
+
+  it('W2-D80, R14: a run-failed arm settles its question, so the other arm\'s rerun or not-run record is excluded with it and refuses nothing', () => {
+    // Task 4 writes both records when either arm is run-failed, and never spawns the other arm's owed attempt again.
+    const e1 = w5b5Entry(W6_CMD);
+    const e2 = w5b5Entry(W6_CMD2);
+    const wrong = (e: W5b5Entry): W5b5Answer[] => [W5B5_ARM0, W5B5_ARM1].map((a) => w5b5Answer(e.qid, a, 'answered', `ANSWER: ${W6_ERR}`, false));
+    for (const other of ['rerun', 'not-run']) {
+      const r = pickOf([e1, e2], [w5b5Answer(e1.qid, W5B5_ARM0, other, null, null), w5b5Answer(e1.qid, W5B5_ARM1, 'run-failed', null, null), ...wrong(e2)]);
+      expect(r.excluded, other).toEqual({ correct: 0, run_failed_questions: 1 });
+      expect(r.items.map((i) => i.qid), `${other}: the other question is judged in both arms`).toEqual([e2.qid, e2.qid]);
+    }
+    const err = refusalOf(() => pickOf([e1], [w5b5Answer(e1.qid, W5B5_ARM1, 'run-failed', null, null)]));
+    expect(err, 'CONTROL: a missing record still refuses, a run-failed arm beside it or not').toMatchObject({ word: 'input-invalid' });
+  });
+
+  it('an answer record that disagrees with its own reply, names an unknown question or arm, or is recorded twice refuses out-refused', () => {
+    const e = w5b5Entry(W6_CMD);
+    const wrong = w5b5Answer(e.qid, W5B5_ARM1, 'answered', `ANSWER: ${W6_ERR}`, false);
+    const cases: Array<[string, W5b5Answer[], RegExp]> = [
+      ['a correct reply flagged wrong', [w5b5Answer(e.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_CMD}`, false), wrong], /^answer-record-mismatch [0-9a-f]{16}$/],
+      ['a wrong reply flagged correct', [w5b5Answer(e.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_ERR}`, true), wrong], /^answer-record-mismatch [0-9a-f]{16}$/],
+      ['an unknown question', [w5b5Answer('0'.repeat(16), W5B5_ARM0, 'answered', 'x', false), wrong], /^answer-record-unknown /],
+      ['an unknown arm', [w5b5Answer(e.qid, 'fixture-arm', 'answered', 'x', false), wrong], /^answer-record-unknown /],
+      ['a pair recorded twice', [wrong, wrong], /^answer-record-duplicate [0-9a-f]{16}$/],
+    ];
+    for (const [label, answers, detail] of cases) {
+      const err = refusalOf(() => pickOf([e], answers));
+      expect(err, label).toBeInstanceOf(DriverRefusal);
+      expect(err, label).toMatchObject({ word: 'out-refused' });
+      expect((err as DriverRefusal).detail, label).toMatch(detail);
+    }
+  });
+
+  it('the judge order is the judge-order substream over every qid and arm pair sorted by code unit, with positional ids from j0001', () => {
+    const es = [W6_CMD, W6_CMD2, W6_ERR].map((f) => w5b5Entry(f));
+    const map = W5B5.judgeMapOf(W5B5_SEED, es, arms);
+    const pairs = es.flatMap((e) => arms.map((a): [string, string] => [e.qid, a]));
+    expect(map.map((m) => [m.qid, m.arm])).toEqual(w5b5Order(W5B5_SEED, pairs));
+    expect(map.map((m) => m.id)).toEqual(['j0001', 'j0002', 'j0003', 'j0004', 'j0005', 'j0006']);
+    expect(map.every((m) => Object.keys(m).sort().join(',') === 'arm,id,qid' && W5B5.JUDGE_ID_RE.test(m.id))).toBe(true);
+    expect(w5b5Order(W5B5_SEED, pairs, 'handcheck'), 'CONTROL: another label draws another order').not.toEqual(w5b5Order(W5B5_SEED, pairs));
+    const text = W5B5.judgeMapText('quiz', 'f'.repeat(64), map);
+    expect(JSON.parse(text)).toEqual({ kind: W5B5.JUDGE_MAP_KIND, v: 1, section: 'quiz', frozen_sha256: 'f'.repeat(64), items: map });
+    expect(text).toBe(`${w5b5Lib.canonicalJson(JSON.parse(text))}\n`);
+  });
+
+  it('the order is the same in any input order, mixes the arms across batches, and moves with the seed', () => {
+    const es = Array.from({ length: 10 }, (_, k) => w5b5Entry(`npm run fixture-step-${k} --workspace pkg-a`));
+    const a = W5B5.judgeMapOf(W5B5_SEED, es, arms);
+    expect(W5B5.judgeMapOf(W5B5_SEED, [...es].reverse(), [...arms].reverse())).toEqual(a);
+    expect(new Set(a.slice(0, 10).map((m) => m.arm)).size, 'both arms in the first batch of ten').toBe(2);
+    const sorted = [...a].sort((x, y) => (`${x.qid}${W5B5_NUL}${x.arm}` < `${y.qid}${W5B5_NUL}${y.arm}` ? -1 : 1));
+    expect(a.map((m) => m.qid + m.arm), 'CONTROL: a real shuffle, not the sorted list').not.toEqual(sorted.map((m) => m.qid + m.arm));
+    expect(W5B5.judgeMapOf(sha256Hex('w2-5b1 task 5 fixture: another seed'), es, arms).map((m) => m.qid + m.arm)).not.toEqual(a.map((m) => m.qid + m.arm));
+  });
+
+  it('ids widen past 9999 pairs and keep one width', () => {
+    const es = Array.from({ length: 5000 }, (_, k) => ({ qid: k.toString(16).padStart(16, '0') }));
+    const map = W5B5.judgeMapOf(W5B5_SEED, es, arms);
+    expect(map).toHaveLength(10000);
+    expect([map[0]!.id, map[9999]!.id]).toEqual(['j00001', 'j10000']);
+    expect(map.every((m) => /^j[0-9]{5}$/.test(m.id) && W5B5.JUDGE_ID_RE.test(m.id))).toBe(true);
+    expect(W5B5.judgeMapOf(W5B5_SEED, es.slice(0, 4999), arms)[0]!.id, 'CONTROL: 9998 pairs keep four digits').toBe('j0001');
+  });
+});
+
+describe('W2-5b1 Task 5: the judge spawn, RP1-judge and RP3-judge', () => {
+  it.each(['up-a', 'gen-a'])('RP1-judge %s: the judge call goes through W2-4 spawn in judge mode, with the rubric and the canonical input on stdin', async (id) => {
+    const b = w6Box(`ccrc-w2-5b1-t5-rp1-${id}-`);
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const j = await w5b5Open(b, id);
+    const [job] = w5b5Jobs(1);
+    const [item] = await j.judge('quiz', [job!]);
+    expect(item).toEqual({ id: 'j0001', outcome: 'judged', label: 'fabricated', attempts: [
+      { run: 'quiz/judge/j0001-1', code: 0, signal: null, skipped: false, tokens: 45, result: true, label: 'fabricated', error_fields: [] }] });
+    const runs = w6Runs(b.home);
+    expect(runs, 'one judge spawn').toHaveLength(1);
+    const l = runs[0]!;
+    expect(l.argv).toEqual(t5Argv('judge', W6_MODEL, b.home));
+    expect(l.argv).not.toContain('--allowedTools');
+    const keys = withoutDarwinAdded(l.envKeys).filter((k) => !T5_BASH_KEYS.includes(k));
+    expect(keys).toEqual(id === 'gen-a' ? [...T5_BASE_KEYS, 'CLAUDE_CODE_OAUTH_TOKEN'].sort() : [...T5_BASE_KEYS].sort());
+    for (const k of [...T5_NEVER_KEYS, ...T5_RECALL_KEYS]) expect(l.envKeys, k).not.toContain(k);
+    expect(l.env['PATH']).toBe(`${b.out}/poison-bin:${path.dirname(process.execPath)}:/usr/bin:/bin`);
+    expect(l.env['CLAUDE_CONFIG_DIR']).toBe(join(b.home, id === 'gen-a' ? '.gen-a' : '.claude'));
+    expect(l.stdin).toBe(`${w5b5Gate.RUBRICS.v1}\n\n${w5b5Lib.canonicalJson(job!.input)}\n`);
+    const dir = join(b.out, 'quiz', 'judge');
+    expect(readFileSync(join(dir, 'j0001-1.jsonl'), 'utf8')).toBe(W5B5_LABELLED);
+    expect(JSON.parse(readFileSync(join(dir, 'j0001-1.run.json'), 'utf8'))).toMatchObject({ mode: 'judge', model: W6_MODEL, account: id });
+    expect(readFileSync(join(dir, 'j0001.input.json'), 'utf8')).toBe(`${w5b5Lib.canonicalJson(job!.input)}\n`);
+    expect(readFileSync(join(b.home, T5_STUB_LOG), 'utf8')).not.toContain(T5_TOKEN);
+  }, 60_000);
+
+  it.each([['cx-a', 'kind-codex'], ['ext-n', 'kind-external'], ['ext-a', 'kind-external'], ['gen-o', 'provider-openai']])(
+    'RP3-judge %s: refused account-refused before any spawn, and the stub log stays absent', async (id, detail) => {
+      const b = w6Box(`ccrc-w2-5b1-t5-rp3-${id}-`);
+      const err = await w5b5Open(b, id).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(DriverRefusal);
+      expect(err).toMatchObject({ word: 'account-refused', detail });
+      expect(stubLog(b.home), 'no spawn, not even --version').toBeNull();
+      expect(existsSync(join(b.out, 'quiz'))).toBe(false);
+    }, 60_000);
+
+  it('a judge model that is not an exact Opus id refuses args-invalid before admission and any spawn', async () => {
+    for (const model of ['opus', 'claude-opus-latest', 'claude-other-9-1']) {
+      const b = w6Box('ccrc-w2-5b1-t5-model-');
+      const err = await w5b5Open(b, 'up-a', { model }).then(() => null, (e: unknown) => e);
+      expect(err, model).toMatchObject({ word: 'args-invalid', detail: `judge-model ${JSON.stringify(model)} is not an exact Opus model id` });
+      expect(stubLog(b.home), model).toBeNull();
+    }
+    const refused = w6Box('ccrc-w2-5b1-t5-model-refused-');
+    const err = await w5b5Open(refused, 'cx-a', { model: 'opus' }).then(() => null, (e: unknown) => e);
+    expect(err, 'the model refusal comes first: a refused account with a bad model is args-invalid').toMatchObject({ word: 'args-invalid' });
+    expect(stubLog(refused.home)).toBeNull();
+  }, 60_000);
+
+  it('the last LABEL line is the label, and a labelled reply is never retried', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-last-');
+    writeFileSync(join(b.home, STUB_STREAM), w6Reply('LABEL: fabricated\nOn reflection the one value is hedged.\nLABEL: uncertain'));
+    const j = await w5b5Open(b, 'up-a');
+    const [item] = await j.judge('quiz', w5b5Jobs(1));
+    expect(item).toMatchObject({ outcome: 'judged', label: 'uncertain' });
+    expect(item!.attempts).toHaveLength(1);
+    expect(w6Runs(b.home)).toHaveLength(1);
+  }, 60_000);
+
+  it('W2-D79: a reply malformed twice is judge-failed, after two spawns with identical stdin', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-failed-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_MALFORMED);
+    const j = await w5b5Open(b, 'up-a');
+    const [job] = w5b5Jobs(1);
+    const [item] = await j.judge('quiz', [job!]);
+    expect(item).toMatchObject({ id: 'j0001', outcome: 'judge-failed', label: null, attempts: [
+      { run: 'quiz/judge/j0001-1', code: 0, result: true, label: null }, { run: 'quiz/judge/j0001-2', code: 0, result: true, label: null }] });
+    expect(W5B5.JUDGE_ATTEMPTS).toBe(2);
+    const runs = w6Runs(b.home);
+    expect(runs, 'one spawn, then its one retry').toHaveLength(2);
+    expect(runs[0]!.stdin).toBe(`${w5b5Gate.RUBRICS.v1}\n\n${w5b5Lib.canonicalJson(job!.input)}\n`);
+    expect(runs[1]!.stdin, 'identical input').toBe(runs[0]!.stdin);
+  }, 60_000);
+
+  it('CONTROL: malformed once, then labelled on the retry with identical stdin', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-retry-');
+    w5b5PlantOnce(b.home, 'up-a');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    writeFileSync(join(b.home, W5B5_ONCE), W5B5_MALFORMED);
+    const j = await w5b5Open(b, 'up-a');
+    expect(existsSync(join(b.home, W5B5_ONCE)), 'CONTROL: the --version call leaves the once-stream for the first print run').toBe(true);
+    const [item] = await j.judge('quiz', w5b5Jobs(1));
+    expect(item).toMatchObject({ outcome: 'judged', label: 'fabricated', attempts: [
+      { run: 'quiz/judge/j0001-1', label: null }, { run: 'quiz/judge/j0001-2', label: 'fabricated' }] });
+    const runs = w6Runs(b.home);
+    expect(runs).toHaveLength(2);
+    expect(runs[1]!.stdin).toBe(runs[0]!.stdin);
+    expect(existsSync(join(b.home, W5B5_ONCE)), 'the first print run took it').toBe(false);
+  }, 60_000);
+
+  it('a run that exits non-zero, or shows no result event, is a malformed attempt even when it printed a LABEL line', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-runfail-');
+    w6PlantPrintExit(b.home, 'up-a');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const j = await w5b5Open(b, 'up-a');
+    writeFileSync(join(b.home, W6_PRINT_EXIT), '0');
+    const [ok] = await j.judge('quiz', w5b5Jobs(1));
+    expect(ok, 'CONTROL: exit 0 is judged on its first attempt').toMatchObject({ outcome: 'judged', label: 'fabricated', attempts: [{ code: 0 }] });
+    writeFileSync(join(b.home, W6_PRINT_EXIT), '3');
+    const [exited] = await j.judge('pilot', w5b5Jobs(1));
+    expect(exited).toMatchObject({ outcome: 'judge-failed', label: null, attempts: [
+      { run: 'pilot/judge/j0001-1', code: 3, result: true, label: null }, { run: 'pilot/judge/j0001-2', code: 3, result: true, label: null }] });
+    writeFileSync(join(b.home, W6_PRINT_EXIT), '0');
+    writeFileSync(join(b.home, STUB_STREAM), w6Reply('LABEL: fabricated', { result: false }));
+    const [silent] = await j.judge('quiz', w5b5Jobs(2).slice(1));
+    expect(silent).toMatchObject({ id: 'j0002', outcome: 'judge-failed', attempts: [
+      { code: 0, result: false, label: null }, { code: 0, result: false, label: null }] });
+  }, 60_000);
+
+  it('Q31: every error field a judge run carries is recorded on its attempt, and a clean run records none', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-errors-');
+    const head = JSON.stringify({ type: 'result' }).slice(0, -1);   // the result line's opening, `{"type":"result"`
+    expect(W5B5_LABELLED.split(head), 'the fixture: one result line').toHaveLength(2);
+    const errorEvent = JSON.stringify({ type: 'assistant', error: 'fixture_error_field', message: { id: 'msg-w5b5-error', content: [{ type: 'text', text: 'x' }] } });
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED.replace(head, `${errorEvent}\n${head}`));
+    const j = await w5b5Open(b, 'up-a');
+    const [item] = await j.judge('quiz', w5b5Jobs(1));
+    expect(item).toMatchObject({ outcome: 'judged', label: 'fabricated', attempts: [{ error_fields: ['fixture_error_field'] }] });
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const [clean] = await j.judge('pilot', w5b5Jobs(1));
+    expect(clean!.attempts.map((a) => a.error_fields), 'CONTROL: a clean run records none').toEqual([[]]);
+  }, 60_000);
+
+  it('no arm token reaches the judge stdin, an input file, a run name or any file name under the section', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-blind-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const es = [W6_CMD, W6_CMD2].map((f) => w5b5Entry(f));
+    const answers = es.flatMap((e) => [W5B5_ARM0, W5B5_ARM1].map((a) => w5b5Answer(e.qid, a, 'answered', `ANSWER: ${W6_ERR}`, false)));
+    const picked = W5B5.judgeItemsOf({ entries: es, answers, arms: W5B5_ARMS, shaMinPrefix: 7 });
+    const map = W5B5.judgeMapOf(W5B5_SEED, es, W5B5_ARMS);
+    const jobs = W5B5.judgeJobsOf({ items: picked.items, map, idx: W6_IDX });
+    expect(jobs, 'CONTROL: both arms of both questions are judged').toHaveLength(4);
+    const j = await w5b5Open(b, 'up-a');
+    await j.judge('quiz', jobs);
+    for (const a of W5B5_ARMS) expect(w5b5Gate.RUBRICS.v1, 'CONTROL: the rubric names no arm').not.toContain(a);
+    const runs = w6Runs(b.home);
+    expect(runs).toHaveLength(4);
+    for (const r of runs) for (const a of W5B5_ARMS) expect(r.stdin, a).not.toContain(a);
+    const files = w5b5Files(join(b.out, 'quiz'));
+    expect(files.length, 'CONTROL: the walk saw every run').toBeGreaterThanOrEqual(13);
+    for (const f of files) for (const a of W5B5_ARMS) expect(f, a).not.toContain(a);
+    for (const f of files.filter((x) => x.endsWith('.input.json'))) {
+      for (const a of W5B5_ARMS) expect(readFileSync(join(b.out, 'quiz', f), 'utf8'), `${f} ${a}`).not.toContain(a);
+    }
+    const text = W5B5.judgeMapText('quiz', 'f'.repeat(64), map);
+    for (const a of W5B5_ARMS) expect(text, 'CONTROL: the map file is where the arms live').toContain(a);
+  }, 60_000);
+
+  it('batches of at most ten at most two at once, and the preflight before every batch', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-batches-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    writeFileSync(join(b.home, T5_STUB_SLEEP), '150');
+    const j = await w5b5Open(b, 'up-a');
+    const items = await j.judge('quiz', w5b5Jobs(12));
+    expect(items.every((i) => i.outcome === 'judged')).toBe(true);
+    const log = stubLog(b.home)!;
+    // V: a --version preflight (at open, then before each batch); P: a print-mode judge run.
+    expect(log.map((e) => (e.argv.includes('-p') ? 'P' : 'V')).join('')).toBe(`VV${'P'.repeat(10)}VPP`);
+    const prints = log.filter((e) => e.argv.includes('-p'));
+    // The depth when a run starts (W2-4's own measure): the runs whose interval holds that instant, itself included. A count
+    // of every run that overlaps a run at any time would read 3 for a run that straddles two others one after the other.
+    const depth = (r: T5Log): number => prints.filter((s) => s.start <= r.start && r.start < s.end).length;
+    expect(Math.max(...prints.map(depth)), 'two at once, never three').toBe(2);
+  }, 60_000);
+
+  it('a stop never consumes the retry: a budget stop after a malformed first attempt, and a resume that judges on the second', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-stop-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_MALFORMED);
+    const jobs = w5b5Jobs(1);
+    const first = await w5b5Open(b, 'up-a', { budget: 1 });
+    const err = await first.judge('quiz', jobs).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ word: 'budget-exhausted' });
+    expect(w6Runs(b.home), 'attempt 1 ran and was charged; attempt 2 never spawned').toHaveLength(1);
+    expect(existsSync(join(b.out, 'quiz', 'judge', 'j0001-2.run.json'))).toBe(false);
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const again = await w5b5Open(b, 'up-a', { budget: 100_000 });
+    const [item] = await again.judge('quiz', jobs);
+    expect(item).toMatchObject({ outcome: 'judged', label: 'fabricated', attempts: [
+      { run: 'quiz/judge/j0001-1', skipped: true, label: null }, { run: 'quiz/judge/j0001-2', skipped: false, label: 'fabricated' }] });
+    expect(w6Runs(b.home)).toHaveLength(2);
+  }, 60_000);
+
+  it('a resumed judge reuses finished runs with no spawn, and changed input for the same id refuses out-refused', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-resume-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const j = await w5b5Open(b, 'up-a');
+    const jobs = w5b5Jobs(1);
+    await j.judge('quiz', jobs);
+    const [again] = await j.judge('quiz', jobs);
+    expect(again).toMatchObject({ outcome: 'judged', label: 'fabricated', attempts: [{ skipped: true }] });
+    expect(w6Runs(b.home)).toHaveLength(1);
+    const changed = [{ id: 'j0001', input: { ...jobs[0]!.input, reply: 'ANSWER: npm run changed' } }];
+    const err = await j.judge('quiz', changed).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ word: 'out-refused', detail: 'judge-input-changed quiz/judge/j0001.input.json' });
+    expect(w6Runs(b.home)).toHaveLength(1);
+  }, 60_000);
+});
+
+describe('W2-5b1 Task 5: the judge subcommand', () => {
+  it('judge takes only its form\'s flags, and --section is pilot or quiz', () => {
+    const home = mkTmp('ccrc-w2-5b1-t5-grammar-');
+    const out = join(home, 'judge-out');
+    const said = (argv: string[]): [unknown, string] => { const r = runDriver(home, argv); return [r.code, r.stderr]; };
+    expect(said(['judge', '--section', 'quiz', '--n-usage', '5'])).toEqual([2, refusalLine('args-invalid', '--n-usage is not a judge --section quiz flag')]);
+    expect(said(['judge', '--section', 'pilot', '--out', out, '--allow-code-change'])).toEqual([2, refusalLine('args-invalid', '--allow-code-change is not a judge --section pilot flag')]);
+    expect(said(['judge', '--section', 'ab', '--out', out])).toEqual([2, refusalLine('args-invalid', 'judge wants --section pilot or --section quiz, not "ab"')]);
+    expect(said(['judge', '--out', out])).toEqual([2, refusalLine('args-invalid', 'judge wants --section pilot or --section quiz, not null')]);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it('the record is loaded first: a code-changed refusal leaves no --out, opens no store and spawns nothing', async () => {
+    const b = w5b5Home('ccrc-w2-5b1-t5-first-', false);
+    const out = join(b.home, 'judge-out');
+    let nodeAsked = false;
+    const deps = {
+      loadArmRun: () => W5B5.refuse('code-changed', 'changed deploy/history-gate.mjs'),
+      armNodeOf: () => { nodeAsked = true; return w5b5NodeOf(b.home); },
+      readArmAnswers: () => [],
+      now: () => Date.now(),
+    };
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home), deps));
+    expect(r.refusal).toEqual({ word: 'code-changed', detail: 'changed deploy/history-gate.mjs' });
+    expect(nodeAsked).toBe(false);
+    expect(existsSync(out)).toBe(false);
+    expect(stubLog(b.home)).toBeNull();
+    // CONTROL: past the loader, this HOME (which has no store) refuses at the store open, before --out.
+    const c = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home),
+      w5b5Deps(w5b5Run([w5b5Entry(W6_CMD)]), w5b5NodeOf(b.home), [])));
+    expect(c.refusal?.word).toBe('store-unreadable');
+    expect(existsSync(out)).toBe(false);
+  }, 60_000);
+
+  // W2-D24 (R23): judge re-checks the code it runs under before any other input, under W2-5a's title, through Task 4's real
+  // loader over Task 4's fixtures: the record is signed with a code sha this tree does not have, and the input read next
+  // is unreadable (pilot) or the store absent (quiz).
+  const W5B5_MOVED = (): Record<string, string> => ({ ...w5b4Shas(), 'deploy/measure-history.py': w5b4Hex('moved') });
+  it.each([
+    ['judge --section pilot', (home: string): { out: string; argv: string[] } => {
+      const fx = w5b4Pilot(home, { shas: W5B5_MOVED() });
+      return { out: fx.out, argv: ['judge', ...fx.argv.slice(1).map((a) => (a === fx.fz.path ? join(home, 'no-such-frozen.json') : a))] };
+    }],
+    ['judge --section quiz', (home: string): { out: string; argv: string[] } => {
+      const fx = w5b4Quiz(home, { shas: W5B5_MOVED() });
+      return { out: fx.out, argv: ['judge', ...fx.argv().slice(1)] };
+    }],
+  ] as Array<[string, (home: string) => { out: string; argv: string[] }]>)('code-changed before any other input is read, re-checks the code it runs under: %s', async (_sub, setup) => {
+    const home = w5b4Home(null);   // no store: a re-check after the store open would answer store-unreadable
+    const { out, argv } = setup(home);
+    const flags = (replay.parseArgs(argv) as { flags: Record<string, unknown> }).flags;
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(flags, W5B5_ENV(home)));
+    expect(r.refusal).toEqual({ word: 'code-changed', detail: 'changed deploy/measure-history.py' });
+    expect(existsSync(out), 'no --out').toBe(false);
+    expect(stubLog(home), 'no spawn').toBeNull();
+  }, 60_000);
+
+  it.each([
+    ['account-refused', (h: string): Record<string, unknown> => ({ account: 'cx-a', expected: w6Expected(h, 'cx-a') })],
+    ['limits-threshold', (h: string): Record<string, unknown> => {
+      const nowS = Math.floor(Date.now() / 1000);
+      writeFileSync(join(h, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 90, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+      return {};
+    }],
+    ['tree-moved', (h: string): Record<string, unknown> => ({ expected: { ...w6Expected(h, 'up-a'), release_stamp: 'v0.0.1' } })],
+  ] as Array<[string, (h: string) => Record<string, unknown>]>)('%s: a refusal that needs no store and no spawn answers before --out', async (word, over) => {
+    const b = w5b5Home(`ccrc-w2-5b1-t5-pre-${word}-`);
+    const out = join(b.home, 'judge-out');
+    const node = w5b5NodeOf(b.home, over(b.home));
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home), w5b5Deps(w5b5Run([w5b5Entry(W6_CMD)]), node, [])));
+    expect(r.refusal?.word).toBe(word);
+    expect(existsSync(out), 'no --out').toBe(false);
+    expect(stubLog(b.home), 'no spawn, not even --version').toBeNull();
+  }, 60_000);
+
+  it('an --out holding \':\', a judge model that is not an exact Opus id, or a budget or limits out of range refuses before --out, in either section (D-5813, D-6309)', async () => {
+    const b = w5b5Home('ccrc-w2-5b1-t5-pre-inputs-');
+    const run = w5b5Run([w5b5Entry(W6_CMD)]);
+    const colon = join(b.home, 'judge:out');
+    const c = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(colon, 'quiz'), W5B5_ENV(b.home), w5b5Deps(run, w5b5NodeOf(b.home), [])));
+    expect(c.refusal).toEqual({ word: 'args-invalid', detail: "out contains ':'" });
+    expect(existsSync(colon), 'no --out').toBe(false);
+    const out = join(b.home, 'judge-out');
+    const notOpus = w5b5Run([w5b5Entry(W6_CMD)], { record: { ...(run['record'] as Record<string, unknown>), judge_model: 'claude-other-9-1' } });
+    const m = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home), w5b5Deps(notOpus, w5b5NodeOf(b.home), [])));
+    expect(m.refusal, 'the judge model').toMatchObject({ word: 'args-invalid' });
+    expect(existsSync(out), 'the judge model: no --out').toBe(false);
+    for (const [section, field] of [['pilot', 'pilot_budget'], ['quiz', 'spend_budget']] as const) {
+      const node = w5b5NodeOf(b.home, { budget: 0, limits: { ...W5B5.LIMITS_DEFAULTS, threshold_pct: 101 } });
+      const r = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, section), W5B5_ENV(b.home), w5b5Deps(run, node, [])));
+      expect(r.refusal, section).toEqual({ word: 'record-invalid', detail: `${field} out-of-range; limits.threshold_pct out-of-range` });
+      expect(existsSync(out), `${section}: no --out`).toBe(false);
+    }
+    expect(stubLog(b.home), 'no spawn, not even --version').toBeNull();
+  }, 60_000);
+
+  // Q23 through Task 4's real loader and node reader on Task 4's quiz fixture (its arm-stub HOME, so darwin skips it as
+  // Task 4's stub cases are skipped); the answers are injected, every one correct, so the judge opens, spawns only its
+  // --version preflight and judges nothing. The clock is deps.now: W5B4_T0's window starts after the real one.
+  it.skipIf(process.platform === 'darwin')('quiz: --allow-code-change after window start stamps judged.json; without it, code-changed before --out, and before window start args-invalid (Q23, W2-D24)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { shas: W5B5_MOVED() });
+    const right = fx.mine.flatMap((q) => W5B5_ARMS.map((a) => w5b5Answer(q.qid as string, a, 'answered', `ANSWER: ${q.fact as string}`, true)));
+    const deps = (nowMs: number): Record<string, unknown> =>
+      ({ loadArmRun: replay.loadArmRun, armNodeOf: replay.armNodeOf, readArmAnswers: () => right, now: () => nowMs });
+    const flagsOf = (extra: string[]): Record<string, unknown> =>
+      (replay.parseArgs(['judge', ...fx.argv(fx.f, extra).slice(1)]) as { flags: Record<string, unknown> }).flags;
+    const after = W5B4_T0 + 2 * W5B4_DAY;
+    const plain = await w5b5InProcess(() => W5B5.judgeCommand(flagsOf([]), W5B5_ENV(home), deps(after)));
+    expect(plain.refusal?.word, 'without the flag').toBe('code-changed');
+    const early = await w5b5InProcess(() => W5B5.judgeCommand(flagsOf(['--allow-code-change']), W5B5_ENV(home), deps(W5B4_T0)));
+    expect(early.refusal?.word, 'before window start the flag is refused (Task 1\'s rule)').toBe('args-invalid');
+    expect(existsSync(fx.out), 'neither made --out').toBe(false);
+    expect(stubLog(home), 'neither spawned').toBeNull();
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(flagsOf(['--allow-code-change']), W5B5_ENV(home), deps(after)));
+    expect(r.refusal).toBeNull();
+    expect(r.code).toBe(0);
+    const judged = JSON.parse(readFileSync(join(fx.out, 'quiz', 'judged.json'), 'utf8')) as Record<string, any>;
+    expect(judged.stamps, 'Q23: the measured change is a stamp on the output').toEqual(['code-changed']);
+    expect(judged.items, 'every answer correct: nothing judged').toEqual([]);
+    expect(judged.counts.excluded_correct).toBe(2 * fx.mine.length);
+  }, 120_000);
+
+  // Q5 on the judge's spawn gate, through Task 4's real loader and node reader on Task 4's quiz fixture (darwin skips it, as
+  // above): spend_budget 100 over this node's 3 of 5 questions is a share of 60. One answer is non-correct, so one judge
+  // run spawns and is charged T5_TOKENS (65: the arm stub's default STUB_STREAM, whose reply carries no LABEL line, so the
+  // attempt is malformed); the re-run's preflight gate then refuses. Part 2's whole spend_budget, 100, would let it spawn.
+  it.skipIf(process.platform === 'darwin')('quiz: the judge spends under this node\'s spend share, and budget-exhausted stops its re-run (Q5, W2-D55)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { spendBudget: 100 });
+    const wrong = fx.mine[0]!;
+    const answers = [
+      w5b5Answer(wrong.qid as string, W5B5_ARM0, 'answered', 'ANSWER: UNKNOWN', false),
+      w5b5Answer(wrong.qid as string, W5B5_ARM1, 'answered', `ANSWER: ${wrong.fact as string}`, true),
+      ...fx.mine.slice(1).flatMap((q) => W5B5_ARMS.map((a) => w5b5Answer(q.qid as string, a, 'answered', `ANSWER: ${q.fact as string}`, true))),
+    ];
+    const flagsOf = (): Record<string, unknown> => (replay.parseArgs(['judge', ...fx.argv().slice(1)]) as { flags: Record<string, unknown> }).flags;
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(flagsOf(), W5B5_ENV(home),
+      { loadArmRun: replay.loadArmRun, armNodeOf: replay.armNodeOf, readArmAnswers: () => answers, now: () => W5B4_T0 + 2 * W5B4_DAY }));
+    expect(r.refusal).toEqual({ word: 'budget-exhausted', detail: 'spent 65 of 60' });
+    expect(w5b4Runs(home), 'attempt 1 ran and was charged; the re-run never spawned').toHaveLength(1);
+    expect(existsSync(join(fx.out, 'quiz', 'judged.json')), 'a stop writes no judged.json').toBe(false);
+  }, 120_000);
+
+  it('end to end on the stub: judged.json, the map file and the sha line, each node judging only its own non-correct answers', async () => {
+    const b = w5b5Home('ccrc-w2-5b1-t5-e2e-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const [e1, e2, e3] = [W6_CMD, W6_CMD2, 'npm run fixture-test --workspace pkg-c'].map((f) => w5b5Entry(f)) as [W5b5Entry, W5b5Entry, W5b5Entry];
+    const far = w5b5Entry('npm run fixture-docs --workspace pkg-d', W5B5_OTHER_STORE);
+    const answers = [
+      w5b5Answer(e1.qid, W5B5_ARM0, 'answered', `ANSWER: ${e1.fact}`, true),
+      w5b5Answer(e1.qid, W5B5_ARM1, 'answered', `ANSWER: ${W6_ERR}`, false),
+      w5b5Answer(e2.qid, W5B5_ARM0, 'answered', 'ANSWER: UNKNOWN', false),
+      w5b5Answer(e2.qid, W5B5_ARM1, 'run-failed', null, null),
+      w5b5Answer(e3.qid, W5B5_ARM0, 'answered', 'I would guess a lint command.', false),
+      w5b5Answer(e3.qid, W5B5_ARM1, 'answered', `ANSWER: ${e3.fact}`, true),
+    ];
+    const out = join(b.home, 'judge-out');
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home),
+      w5b5Deps(w5b5Run([e1, e2, e3, far]), w5b5NodeOf(b.home), answers)));
+    expect(r.refusal).toBeNull();
+    expect(r.code).toBe(0);
+    const judgedText = readFileSync(join(out, 'quiz', 'judged.json'), 'utf8');
+    expect(r.stderr, 'only the sha line, of the bytes on disk (D-5983)').toBe(`sha256 ${sha256Hex(judgedText)}\n`);
+    const mapText = readFileSync(join(out, 'quiz', 'judge.map.json'), 'utf8');
+    const map = JSON.parse(mapText) as { items: W5b5MapRow[] };
+    expect(map.items, 'every pair of the frozen list, the other node\'s included').toEqual(W5B5.judgeMapOf(W5B5_SEED, [e1, e2, e3, far], W5B5_ARMS));
+    expect(map.items).toHaveLength(8);
+    const idOf = (q: string, a: string): string => map.items.find((m) => m.qid === q && m.arm === a)!.id;
+    const judged = JSON.parse(judgedText) as Record<string, any>;
+    expect(judged.items.map((i: W5b5Item) => i.id)).toEqual([idOf(e1.qid, W5B5_ARM1), idOf(e3.qid, W5B5_ARM0)].sort());
+    expect(judged).toMatchObject({
+      kind: W5B5.JUDGED_KIND, v: 1, section: 'quiz', store_id: W5B5_STORE, judge_model: W6_MODEL, rubric_id: 'v1',
+      rubric_sha256: w5b5Gate.RUBRIC_SHA256.v1, settings_mode: 'restricted', reply_max_bytes: 16384, map_sha256: sha256Hex(mapText),
+      counts: { judged: 2, judge_failed: 0, uncertain: 0, fabricated: 2, excluded_correct: 2, excluded_run_failed_questions: 1 },
+      budget: 100_000, stamps: [],
+    });
+    expect(judged.spend, 'two judge runs charged, 45 each').toBe(90);
+    for (const a of W5B5_ARMS) {
+      expect(judgedText, `judged.json names ids only (${a})`).not.toContain(a);
+      expect(mapText, 'CONTROL: the map names both arms').toContain(a);
+    }
+    const runs = w6Runs(b.home);
+    expect(runs).toHaveLength(2);
+    for (const run of runs) for (const a of W5B5_ARMS) expect(run.stdin, a).not.toContain(a);
+    expect(runs.map((run) => run.stdin.includes(e1.question) || run.stdin.includes(e3.question))).toEqual([true, true]);
+  }, 120_000);
+
+  it('a judge map that changed under --out refuses out-refused before any spawn; the same inputs resume', async () => {
+    const b = w5b5Home('ccrc-w2-5b1-t5-map-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const e1 = w5b5Entry(W6_CMD);
+    const e2 = w5b5Entry(W6_CMD2);
+    const wrong = (e: W5b5Entry): W5b5Answer[] => [W5B5_ARM0, W5B5_ARM1].map((a) => w5b5Answer(e.qid, a, 'answered', `ANSWER: ${W6_ERR}`, false));
+    const out = join(b.home, 'judge-out');
+    const call = (entries: W5b5Entry[], answers: W5b5Answer[]) => w5b5InProcess(() =>
+      W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home), w5b5Deps(w5b5Run(entries), w5b5NodeOf(b.home), answers)));
+    expect((await call([e1], wrong(e1))).code).toBe(0);
+    expect(w6Runs(b.home)).toHaveLength(2);
+    const same = await call([e1], wrong(e1));
+    expect(same.code, 'CONTROL: the same inputs resume').toBe(0);
+    expect(w6Runs(b.home), 'CONTROL: and spawn nothing').toHaveLength(2);
+    const moved = await call([e1, e2], [...wrong(e1), ...wrong(e2)]);
+    expect(moved.refusal).toEqual({ word: 'out-refused', detail: 'judge-map-changed quiz/judge.map.json' });
+    expect(w6Runs(b.home)).toHaveLength(2);
+  }, 120_000);
+
+  it('JUDGE_OUTCOMES are driver-local report words, disjoint from DRIVER_REASONS and GATE_REASONS', () => {
+    expect(W5B5.JUDGE_OUTCOMES).toEqual(['judged', 'judge-failed']);
+    expect(Object.isFrozen(W5B5.JUDGE_OUTCOMES)).toBe(true);
+    for (const w of W5B5.JUDGE_OUTCOMES) {
+      expect(W5B5.DRIVER_REASONS, w).not.toContain(w);
+      expect(w5b5Gate.GATE_REASONS as readonly string[], w).not.toContain(w);
+    }
+    expect([...W5B5.HANDLERS.keys()].slice(-2), 'judge is registered right after arms').toEqual(['arms', 'judge']);
+  });
 });

@@ -42,7 +42,7 @@ import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/histor
 import { asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
-import { ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, assignArms, assignmentSha256, buildWindows, checkGateCode, classifyRun, collapseWs, expectedWindows, familyKey, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
+import { ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, assignArms, assignmentSha256, buildWindows, checkGateCode, classifyRun, collapseWs, expectedWindows, familyKey, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -4385,10 +4385,19 @@ export function qidOf({ store_id, ccrc_id, generation, boundary_uuid, kind, fact
  *  `out-refused` (a resume never builds on a question written from other input); a path that is not a regular file
  *  refuses as every read under --out does (D-5986). */
 function pinWriterInput(out, rel, text) {
+  pinOutBytes(out, rel, text, 'writer-input');
+}
+
+/** Pin bytes under --out (W2-5a's writer input, W2-5b1's judge input and judge map): written when absent, compared when
+ *  present. Different bytes refuse `out-refused` `<what>-changed <rel>` (a resume never builds on a run made from other
+ *  input, nor reads an id as another pair); a path that is not a regular file refuses as every read under --out does
+ *  (D-5986). One function, so the three pins are one spelling.
+ *  @param {string} out  @param {string} rel  @param {string} text  @param {string} what */
+function pinOutBytes(out, rel, text, what) {
   const read = readPlain(path.join(out, rel), OUT_JSON_CAP);
   if (read.state === 'absent') { writePlain(out, rel, text); return; }
   if (read.state === 'bad') refuse('out-refused', `${rel} ${badWord(read)}`);
-  if (read.bytes.toString('utf8') !== text) refuse('out-refused', `writer-input-changed ${rel}`);
+  if (read.bytes.toString('utf8') !== text) refuse('out-refused', `${what}-changed ${rel}`);
 }
 
 /** W2-D72, W2-D25: the writer is the exact Opus id, never an alias, refused `args-invalid` before any spawn. Before
@@ -4396,8 +4405,16 @@ function pinWriterInput(out, rel, text) {
  *  --out, and a refused model leaves no --out (R10); openWriter asks it again, for every other caller.
  *  @param {unknown} model */
 function refuseWriterModel(model) {
+  refuseOpusModel('writer-model', model);
+}
+
+/** W2-D72, W2-D79, W2-D25: the writer and the judge are each an exact Opus id, never an alias (the gate's
+ *  EXACT_MODEL_ID_RE and OPUS_MODEL_RE), refused `args-invalid` under the flag that names the role, before admission and
+ *  any spawn. One function, so the writer's check and the judge's are one spelling.
+ *  @param {string} flag  @param {unknown} model */
+function refuseOpusModel(flag, model) {
   if (typeof model !== 'string' || !EXACT_MODEL_ID_RE.test(model) || !OPUS_MODEL_RE.test(model)) {
-    refuse('args-invalid', `writer-model ${JSON.stringify(model)} is not an exact Opus model id`);
+    refuse('args-invalid', `${flag} ${JSON.stringify(model)} is not an exact Opus model id`);
   }
 }
 
@@ -4910,6 +4927,9 @@ const SUBCOMMAND_FLAGS = Object.freeze({
   // pilot act's remedy for a code change is a re-pilot, W2-D6); the quiz form reads part 2 with its part 1 and frozen list.
   'arms --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
   'arms --section quiz': { required: ['section', 'out', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, 'allow-code-change'] },
+  // W2-5b1 Task 5 (Q2, Q23): the judge reads exactly what arms reads (Task 4's loadArmRun), and no flag of its own.
+  'judge --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
+  'judge --section quiz': { required: ['section', 'out', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, 'allow-code-change'] },
 });
 
 const copyJson = (v) => JSON.parse(JSON.stringify(v));
@@ -6924,6 +6944,325 @@ export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBat
 }
 
 HANDLERS.set('arms', (flags, env) => armsCommand(flags, env));
+
+// ── W2-5b1 Task 5: the judge (W2-D79, W2-D54, W2-D80, W2-D18; Q18, Q2) ───────────────────────────────────────────
+// One judge-mode spawn (`--tools ""`) per non-correct (qid, arm) of this node, through W2-4's contract and nothing else:
+// launchRun reached through runBatch, under batchGate, on a claimed --out, after W2-D56's preflight before every batch
+// (RP1-judge, RP3-judge). Its input is canonical {v: 1, kind, question, expected, answer_field, reply}, every string masked
+// as a VALUE before anything serialises it (W2-D54, D-6308), the reply then cut to JUDGE_REPLY_MAX_BYTES of UTF-8. No arm
+// token reaches an input or a file name: an item is named by its positional id in the 'judge-order' shuffle over every
+// (qid, arm) pair of the section's frozen list, sorted by (qid, arm) by code unit (W2-D18, W2-D79, Q18), the same map on
+// every node, and the id-to-(qid, arm) map is its own file, <section>/judge.map.json. A correct answer (labelCorrect over
+// the reply's ANSWER field, re-derived here and held to the arm's record) never reaches the judge, nor does either arm of
+// a run-failed question (W2-D80). A reply with no LABEL line, or a run that failed (a non-zero exit, a signal, no result
+// event: D-6305's rule for the writer), is a malformed attempt, retried once with identical input in a later batch, then
+// judge-failed (W2-D79, W2-D81). A stop throws before its run is recorded, so it never consumes the retry: a resume runs
+// that attempt again under the same name (W2-D80's rule; D-5984). This file never spells an arm word: the arms are
+// RECALL_ARMS' values, passed in (W2-D42).
+
+/** W2-D79: the most UTF-8 bytes of an arm's redacted reply the judge's input carries (16 KiB). */
+export const JUDGE_REPLY_MAX_BYTES = 16 * 1024;
+/** W2-D79's canonical judge input, its keys in canonicalJson's order. */
+export const JUDGE_INPUT_KEYS = Object.freeze(['answer_field', 'expected', 'kind', 'question', 'reply', 'v']);
+/** W2-D79: a malformed reply is retried once with identical input, so an item is spawned at most twice. */
+export const JUDGE_ATTEMPTS = 2;
+/** A judged item's outcome (W2-D79, W2-D81): driver-local report words, never refusals and never the gate's, pinned
+ *  disjoint from DRIVER_REASONS and GATE_REASONS as W2-5a pinned its drop lists. */
+export const JUDGE_OUTCOMES = Object.freeze(['judged', 'judge-failed']);
+const JUDGE_ID_MIN_DIGITS = 4;
+/** Q18: a positional judge id, `j` and at least JUDGE_ID_MIN_DIGITS digits, one width in a map. */
+export const JUDGE_ID_RE = new RegExp(`^j[0-9]{${JUDGE_ID_MIN_DIGITS},}$`);
+/** Under --out: a section's judge runs and pinned inputs (<section>/judge/<id>-<attempt>, <section>/judge/<id>.input.json),
+ *  its map (<section>/judge.map.json) and its output (<section>/judged.json). */
+export const JUDGE_DIR = 'judge';
+export const JUDGE_MAP_FILE = 'judge.map.json';
+export const JUDGED_FILE = 'judged.json';
+export const JUDGE_MAP_KIND = 'ccrc-history-w2-judge-map';
+export const JUDGED_KIND = 'ccrc-history-w2-judged';
+
+/** @typedef {{ run: string, code: number|null, signal: string|null, skipped: boolean, tokens: number, result: boolean,
+ *    label: 'uncertain'|'fabricated'|null, error_fields: string[] }} JudgeAttempt */
+/** @typedef {{ id: string, outcome: 'judged'|'judge-failed', label: 'uncertain'|'fabricated'|null,
+ *    attempts: JudgeAttempt[] }} JudgedItem */
+/** @typedef {{ v: 1, kind: string, question: string, expected: string, answer_field: string|null, reply: string }} JudgeInput */
+
+/** The longest prefix of `text`, in whole code points, whose UTF-8 is at most `maxBytes`: a surrogate pair is never split.
+ *  Pure.
+ *  @param {string} text  @param {number} maxBytes  @returns {string} */
+export function capUtf8Bytes(text, maxBytes) {
+  if (typeof text !== 'string') throw new TypeError('capUtf8Bytes: text is a string');
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new TypeError('capUtf8Bytes: maxBytes is a non-negative integer');
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+  let bytes = 0;
+  let end = 0;
+  for (const ch of text) {
+    const n = Buffer.byteLength(ch, 'utf8');
+    if (bytes + n > maxBytes) break;
+    bytes += n;
+    end += ch.length;
+  }
+  return text.slice(0, end);
+}
+
+/** The ANSWER field as the judge is shown it (the gate's RUBRIC_HEAD: "null when it gave none"): a value as parsed, the
+ *  protocol's own `UNKNOWN` for an unknown, null for no ANSWER line. */
+const answerFieldOf = (a) => (a.state === 'value' ? a.value : a.state === 'unknown' ? 'UNKNOWN' : null);
+
+/** The (qid, arm) key's separator: a NUL, built at runtime, so this file holds no escape an agent's write could decode
+ *  into a raw byte (a qid is 16 hex digits, so no qid holds it). */
+const JUDGE_PAIR_SEP = String.fromCharCode(0);
+/** The one (qid, arm) key every judge list sorts and looks up by: the qid, JUDGE_PAIR_SEP, the arm, so code-unit order
+ *  over keys is (qid, arm) order. */
+const judgePairKey = (qid, arm) => `${qid}${JUDGE_PAIR_SEP}${arm}`;
+
+/** The judge's input for one answer (W2-D79), every string masked as a value (W2-D54, D-6308) and only then the reply cut
+ *  to JUDGE_REPLY_MAX_BYTES; answer_field is read from the RAW reply (the field labelCorrect scored), masked whole, then cut
+ *  at the same cap, so the judge's stdin is bounded (D-6470). Pure.
+ *  @param {{ kind: string, question: string, fact: string }} entry  @param {string|null} reply
+ *  @param {import('../ccd/history/lib.mjs').PairIndex} idx  @returns {JudgeInput} */
+export function judgeInputOf(entry, reply, idx) {
+  if (!FACT_KINDS.includes(entry?.kind)) throw new TypeError(`judgeInputOf: kind ${JSON.stringify(entry?.kind)} is not one of ${FACT_KINDS.join(', ')}`);
+  if (reply !== null && typeof reply !== 'string') throw new TypeError('judgeInputOf: reply is a string or null');
+  const text = reply ?? '';
+  const field = answerFieldOf(parseAnswerField(text));
+  return {
+    v: 1, kind: entry.kind,
+    question: /** @type {string} */ (maskValue(entry.question, idx)),
+    expected: /** @type {string} */ (maskValue(entry.fact, idx)),
+    answer_field: field === null ? null : capUtf8Bytes(/** @type {string} */ (maskValue(field, idx)), JUDGE_REPLY_MAX_BYTES),   // D-6470
+    reply: capUtf8Bytes(/** @type {string} */ (maskValue(text, idx)), JUDGE_REPLY_MAX_BYTES),
+  };
+}
+
+/** The judge's stdin: the signed rubric, a blank line, the canonical input, one newline (the writer's shape). Pure.
+ *  @param {string} rubricId  @param {JudgeInput} input  @returns {string} */
+export function judgeStdin(rubricId, input) {
+  if (!RUBRIC_IDS.includes(rubricId)) throw new TypeError(`judgeStdin: rubric ${JSON.stringify(rubricId)} is not one of ${RUBRIC_IDS.join(', ')}`);
+  return `${RUBRICS[rubricId]}\n\n${canonicalJson(input)}\n`;
+}
+
+/** Q18, W2-D79, W2-D18: the judge map, every (qid, arm) pair of the section's frozen list sorted by (qid, arm) by code unit
+ *  and drawn into order on the record seed's 'judge-order' substream (W2-5a's seededOrder), each named by its position,
+ *  `j` and the 1-based position at one width (at least JUDGE_ID_MIN_DIGITS). The same list and seed give the same map on
+ *  every node, so an id names one pair across nodes. Pure.
+ *  @param {string} seedHex  @param {ReadonlyArray<{ qid: string }>} entries  @param {readonly string[]} arms
+ *  @returns {Array<{ id: string, qid: string, arm: string }>} */
+export function judgeMapOf(seedHex, entries, arms) {
+  const pairs = [];
+  for (const e of entries) for (const arm of arms) pairs.push({ qid: e.qid, arm });
+  const order = seededOrder(substream(seedHex, 'judge-order'), pairs, (p) => judgePairKey(p.qid, p.arm));
+  const width = Math.max(JUDGE_ID_MIN_DIGITS, String(order.length).length);
+  return order.map((p, k) => ({ id: `j${String(k + 1).padStart(width, '0')}`, qid: p.qid, arm: p.arm }));
+}
+
+/** The map file's exact text: canonicalJson of {kind, v, section, frozen_sha256, items} and one newline. Pure. */
+export function judgeMapText(section, frozenSha256, map) {
+  const items = map.map(({ id, qid, arm }) => ({ id, qid, arm }));
+  return `${canonicalJson({ kind: JUDGE_MAP_KIND, v: 1, section, frozen_sha256: frozenSha256, items })}\n`;
+}
+
+/** Who reaches the judge (W2-D79, W2-D80), over this node's frozen entries and the arm answers its --out holds. Every
+ *  answer record must name one of these qids and an arm, once (else `out-refused`); every question must be settled as
+ *  Task 4 settles it (R14): every arm recorded, and either some arm run-failed or every arm answered (else `input-invalid`
+ *  arms-unsettled, one per unsettled pair: the arm batches come first). A question either of whose arms is run-failed is
+ *  settled and excluded in both, whatever the other arm's own record reads (`rerun` or `not-run`: arms never spawns it
+ *  again, so refusing it would never clear); an answer is correct by labelCorrect over its own reply's ANSWER field, which
+ *  must equal the record's flag (else `out-refused` answer-record-mismatch), and a correct one never reaches the judge.
+ *  Every refusal here is data under --out, never a TypeError (D-6309's rule).
+ *  @param {{ entries: Array<{ qid: string, kind: string, fact: string, repo_roots: string[] }>,
+ *    answers: Array<{ qid: string, arm: string, outcome: string, reply: string|null, correct: boolean|null }>,
+ *    arms: readonly string[], shaMinPrefix: number }} o */
+export function judgeItemsOf({ entries, answers, arms, shaMinPrefix }) {
+  const byQid = new Map(entries.map((e) => [e.qid, e]));
+  const seen = new Map();
+  for (const a of answers) {
+    if (!plainObject(a) || !byQid.has(a.qid) || !arms.includes(a.arm)) refuse('out-refused', `answer-record-unknown ${typeof a?.qid === 'string' ? a.qid : 'without a qid'}`);
+    const key = judgePairKey(a.qid, a.arm);
+    if (seen.has(key)) refuse('out-refused', `answer-record-duplicate ${a.qid}`);
+    seen.set(key, a);
+  }
+  const unsettled = [];
+  for (const e of entries) {
+    const own = arms.map((arm) => seen.get(judgePairKey(e.qid, arm)));
+    const failed = own.some((a) => a !== undefined && a.outcome === 'run-failed');   // R14: either arm run-failed settles the question
+    for (const a of own) if (a === undefined || (!failed && a.outcome !== 'answered')) unsettled.push(e.qid);
+  }
+  if (unsettled.length > 0) refuse('input-invalid', `arms-unsettled ${unsettled.length} (first ${[...unsettled].sort(cmpUnit)[0]}): finish the arm batches first`);
+  const items = [];
+  const excluded = { correct: 0, run_failed_questions: 0 };
+  for (const e of [...entries].sort((x, y) => cmpUnit(x.qid, y.qid))) {
+    const own = arms.map((arm) => seen.get(judgePairKey(e.qid, arm)));
+    if (own.some((a) => a.outcome === 'run-failed')) { excluded.run_failed_questions += 1; continue; }   // W2-D80: excluded from both arms
+    for (const a of own) {
+      if (a.reply !== null && typeof a.reply !== 'string') refuse('out-refused', `answer-record-invalid ${e.qid}`);
+      const parsed = parseAnswerField(a.reply ?? '');
+      const correct = parsed.state === 'value' && labelCorrect(e.kind, e.fact, parsed.value, { repoRoots: e.repo_roots, shaMinPrefix });
+      if (a.correct !== correct) refuse('out-refused', `answer-record-mismatch ${e.qid}`);
+      if (correct) { excluded.correct += 1; continue; }   // W2-D79: a correct answer never reaches the judge
+      items.push({ qid: e.qid, arm: a.arm, entry: e, reply: a.reply ?? '' });
+    }
+  }
+  return { items, excluded };
+}
+
+/** The judge's jobs: each item's input under its map id, in id order (the shuffle's order). Pure. A pair the map lacks is
+ *  a defect: the map and the items come from the same frozen list.
+ *  @param {{ items: Array<{ qid: string, arm: string, entry: object, reply: string }>,
+ *    map: Array<{ id: string, qid: string, arm: string }>, idx: import('../ccd/history/lib.mjs').PairIndex }} o
+ *  @returns {Array<{ id: string, input: JudgeInput }>} */
+export function judgeJobsOf({ items, map, idx }) {
+  const idOf = new Map(map.map((m) => [judgePairKey(m.qid, m.arm), m.id]));
+  return items.map((it) => {
+    const id = idOf.get(judgePairKey(it.qid, it.arm));
+    if (id === undefined) throw new TypeError(`judgeJobsOf: ${it.qid} has no id in the judge map`);
+    return { id, input: judgeInputOf(it.entry, it.reply, idx) };
+  }).sort((a, b) => cmpUnit(a.id, b.id));
+}
+
+/** One judge run as its attempt (W2-D79): a run that failed (a non-zero exit, a signal, no result event) yields no label,
+ *  whatever it printed (D-6305's rule for the writer, applied to the judge); otherwise the reply's last LABEL line. Every
+ *  `error` field the run's stream carried is recorded, as each arm attempt records them (Q31, Task 4's streamEventsOf and
+ *  errorFieldsOf); a stream it cannot read refuses `out-refused`, a data case under --out (D-6309's rule).
+ *  @returns {JudgeAttempt} */
+function judgeAttemptOf(d) {
+  const failed = d.code !== 0 || d.signal !== null || d.facts.result === null;
+  const parsed = failed ? { ok: false } : parseLabelLine(d.facts.result?.text ?? '');
+  const read = readPlain(d.streamPath, OUT_STREAM_CAP);
+  if (read.state !== 'bytes') refuse('out-refused', `run-stream-changed ${d.name}`);
+  return { run: d.name, code: d.code, signal: d.signal, skipped: d.skipped, tokens: d.tokens, result: d.facts.result !== null,
+    label: parsed.ok ? parsed.label : null, error_fields: errorFieldsOf(streamEventsOf(read.bytes.toString('utf8'))) };
+}
+
+/** Open the judge (W2-D79) on a claimed --out. In order, before any spawn: the settings mode and the rubric id (TypeErrors:
+ *  the record's validator signed both), the model (an exact Opus id, else `args-invalid`, refuseOpusModel), the roster and
+ *  the account (W2-D52: `roster-invalid`, `account-refused`; RP3-judge), the gate (W2-D55), then W2-D56's preflight
+ *  (Task 4's preflightSpawn). `judge(section, jobs)` pins each job's input beside its runs, then runs attempt 1 of every
+ *  job and attempt 2 of every malformed one, each pass in batches of at most BATCH_MAX at CONCURRENCY_MAX (runBatch's
+ *  default), the preflight before each batch.
+ *  @param {{ home: string, accountId: string, model: string, settingsMode: string, rubricId: string, claim: object,
+ *    budget: number, limits: object, expected: object, allowCodeChange?: boolean, lang: string | undefined }} o
+ *  @returns {Promise<Readonly<{ launch: object, stamps: () => string[],
+ *    judge: (section: string, jobs: Array<{ id: string, input: JudgeInput }>) => Promise<JudgedItem[]> }>>} */
+export async function openJudge(o) {
+  if (o === null || typeof o !== 'object' || !Object.hasOwn(o, 'lang')) {
+    throw new TypeError("openJudge: carries lang, the caller's LANG from main's env (undefined when unset)");
+  }
+  const { home, accountId, model, settingsMode, rubricId, claim, budget, limits, expected, lang } = o;
+  if (!SETTINGS_MODES.includes(settingsMode)) throw new TypeError(`openJudge: settings mode ${JSON.stringify(settingsMode)} is not one of ${SETTINGS_MODES.join(', ')}`);
+  if (!RUBRIC_IDS.includes(rubricId)) throw new TypeError(`openJudge: rubric ${JSON.stringify(rubricId)} is not one of ${RUBRIC_IDS.join(', ')}`);
+  const { out } = requireClaim('openJudge', { claim }, []);
+  refuseOpusModel('judge-model', model);
+  const { json, roster } = readRoster(home);
+  const launch = admitAccount(json, roster, accountId, home);   // RP3-judge: every refusal here lands before any spawn
+  const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits });
+  const stamps = new Set();
+  const preflightNow = async () => {
+    const pre = await preflightSpawn({ launch, home, out, lang, gate, expected, allowCodeChange: o.allowCodeChange === true });
+    for (const s of pre.stamps) stamps.add(s);
+  };
+  await preflightNow();
+  /** @param {string} section  @param {Array<{ id: string, input: JudgeInput }>} jobs  @returns {Promise<JudgedItem[]>} */
+  const judge = async (section, jobs) => {
+    if (!ARM_SECTIONS.includes(section)) throw new TypeError(`judge: section ${JSON.stringify(section)} is not one of ${ARM_SECTIONS.join(', ')}`);
+    const ids = new Set();
+    for (const j of jobs) {
+      if (!plainObject(j) || typeof j.id !== 'string' || !JUDGE_ID_RE.test(j.id) || ids.has(j.id)) {
+        throw new TypeError(`judge: job id ${JSON.stringify(j?.id)} is not a fresh judge id`);
+      }
+      ids.add(j.id);
+    }
+    const dir = `${section}/${JUDGE_DIR}`;
+    ensurePlainDir(out, dir);
+    for (const j of jobs) pinOutBytes(out, `${dir}/${j.id}.input.json`, `${canonicalJson(j.input)}\n`, 'judge-input');
+    /** @type {Map<string, JudgeAttempt[]>} */
+    const attempts = new Map(jobs.map((j) => [j.id, []]));
+    for (let attempt = 1; attempt <= JUDGE_ATTEMPTS; attempt += 1) {
+      // W2-D79: attempt 1 of every job, then attempt 2 of every malformed one, never of a labelled one
+      const due = jobs.filter((j) => {
+        const a = attempts.get(j.id);
+        return a.length === attempt - 1 && a.every((x) => x.label === null);
+      });
+      for (let i = 0; i < due.length; i += BATCH_MAX) {
+        const batch = due.slice(i, i + BATCH_MAX);
+        await preflightNow();   // W2-D56: before every judge batch
+        const runs = batch.map((j) => ({ launch, mode: 'judge', model, settingsMode, stdin: judgeStdin(rubricId, j.input), out, name: `${dir}/${j.id}-${attempt}`, lang }));
+        const done = await runBatch(runs, { gate, claim });
+        done.forEach((d, k) => attempts.get(batch[k].id).push(judgeAttemptOf(d)));
+      }
+    }
+    return jobs.map((j) => {
+      const a = attempts.get(j.id);
+      const label = a[a.length - 1].label;
+      return { id: j.id, outcome: label === null ? 'judge-failed' : 'judged', label, attempts: a };
+    });
+  };
+  return Object.freeze({ launch, stamps: () => [...stamps].sort(), judge });
+}
+
+/** `judge --section pilot|quiz` (W2 decisions §5 acts 14 and 21; W2-D79; Q2): on this node, in this node's --out, after
+ *  the section's arm batches. In order: the section, then its form's flags (`judge --section pilot|quiz`); Task 4's loader, which
+ *  re-checks gate_code before any other input (W2-D24) and answers the section's record, frozen list and code-change
+ *  stamps, under deps.now's clock (Q23's window); the unusable inputs and the judge model (D-5813, refuseOpusModel); the run's
+ *  one store open (W2-5a's R3), for this node's id and the run's pair index; Task 4's node values (the account, W2-D56's
+ *  expected values, the budget in force, Q5, the limits and the settings mode); the ranges of the budget in force and the
+ *  limits (D-6309's rule) and the refusals that need no store and no spawn, before --out exists (W2-5a's R10, D-6307,
+ *  D-6311), as `arms` makes them; then --out, its claim, the map (pinned), the arm answers, the items, the jobs and the
+ *  judge. Writes <section>/judged.json and prints only `sha256 <hex>` of it on stderr (D-5983).
+ *  @param {Flags} flags  @param {DriverEnv} driverEnv
+ *  @param {{ loadArmRun: typeof loadArmRun, armNodeOf: typeof armNodeOf, readArmAnswers: typeof readArmAnswers, now: () => number }} [deps] */
+export async function judgeCommand(flags, driverEnv, deps = { loadArmRun, armNodeOf, readArmAnswers, now: () => Date.now() }) {
+  const section = flags.section;
+  if (!ARM_SECTIONS.includes(section)) refuse('args-invalid', `judge wants --section pilot or --section quiz, not ${JSON.stringify(section ?? null)}`);
+  checkFlags(`judge --section ${section}`, flags);
+  const home = subcommandHome(driverEnv);
+  const run = deps.loadArmRun(flags, section, { nowMs: deps.now() });   // W2-D24 (judge): gate_code before any other input, the store or a spawn
+  refuseUnusableInputs(home, flags.out, [['judge-model', run.record.judge_model]]);   // D-5813: HOME, --out and the model id, before --out
+  refuseOpusModel('judge-model', run.record.judge_model);   // R10: before --out; openJudge asks it again at open
+  const rs = openReplayStore(home);   // the run's one store open (W2-5a's R3): this node's id and the run's pair index
+  try {
+    const node = deps.armNodeOf(run, rs.storeId);
+    refuseOutOfRangeValues({ budget: node.budget, budgetField: section === 'pilot' ? 'pilot_budget' : 'spend_budget', limits: node.limits, quotas: null });   // D-6309's rule: batchGate throws on either
+    refuseSpawnAdmission({ home, accountId: node.account, limits: node.limits, expected: node.expected, allowCodeChange: run.allowCodeChange === true });   // judge: W2-5a's R10, D-6307, D-6311, before --out exists
+    const out = prepareOut(flags.out);
+    refuseColonInRealOut(out);
+    const claim = claimOut(out);
+    try {
+      const r = run.record;
+      const map = judgeMapOf(r.bootstrap.seed, run.frozen.list.entries, RECALL_ARMS);
+      ensurePlainDir(out, section);
+      const mapRel = `${section}/${JUDGE_MAP_FILE}`;
+      pinOutBytes(out, mapRel, judgeMapText(section, run.frozen.sha256, map), 'judge-map');
+      const own = run.frozen.list.entries.filter((e) => e.store_id === rs.storeId);   // Q2: this node's questions only
+      const picked = judgeItemsOf({ entries: own, answers: deps.readArmAnswers(out, section), arms: RECALL_ARMS, shaMinPrefix: r.labeller.sha_min_prefix });
+      const jobs = judgeJobsOf({ items: picked.items, map, idx: rs.idx });
+      const judge = await openJudge({ home, accountId: node.account, model: r.judge_model, settingsMode: node.settingsMode, rubricId: r.rubric_id,
+        claim, budget: node.budget, limits: node.limits, expected: node.expected, allowCodeChange: run.allowCodeChange === true, lang: driverEnv.LANG });
+      const items = await judge.judge(section, jobs);
+      const count = (pred) => items.filter(pred).length;
+      const output = {
+        kind: JUDGED_KIND, v: 1, section, store_id: rs.storeId, record_sha256: run.recordSha256, frozen_sha256: run.frozen.sha256,
+        map_sha256: shaOfPlain(out, mapRel), judge_model: r.judge_model, rubric_id: r.rubric_id, rubric_sha256: RUBRIC_SHA256[r.rubric_id],
+        settings_mode: node.settingsMode, reply_max_bytes: JUDGE_REPLY_MAX_BYTES, items,
+        counts: {
+          judged: count((i) => i.outcome === 'judged'), judge_failed: count((i) => i.outcome === 'judge-failed'),
+          uncertain: count((i) => i.label === 'uncertain'), fabricated: count((i) => i.label === 'fabricated'),
+          excluded_correct: picked.excluded.correct, excluded_run_failed_questions: picked.excluded.run_failed_questions,
+        },
+        budget: node.budget, spend: spentSoFar(out), stamps: [...new Set([...run.codeStamps, ...judge.stamps()])].sort(),
+      };
+      const rel = `${section}/${JUDGED_FILE}`;
+      writePlain(out, rel, canonicalJson(output) + '\n');
+      process.stderr.write(`sha256 ${shaOfPlain(out, rel)}\n`);   // D-5983: stderr; stdout stays empty
+      return EXIT.OK;
+    } finally {
+      claim.release();
+    }
+  } finally {
+    rs.close();
+  }
+}
+
+HANDLERS.set('judge', (flags, env) => judgeCommand(flags, env));
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
 // when main runs. Importing the module (the tests do) runs nothing. The exit code is set, never forced, so stderr drains.
