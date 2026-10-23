@@ -13,7 +13,7 @@ import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
-import { CCD_ARGV, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, capSupported, verbSupported, sweepDec } from './ccdargv.js';
+import { CCD_ARGV, EXPIRE_CAP, EXPIRE_CHILD_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, capSupported, verbSupported, sweepDec } from './ccdargv.js';
 import {
   isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, sweepFailureReason, type CcdPrFailure, type PrQueueRead,
 } from './prstate.js';
@@ -160,9 +160,10 @@ import {
 } from './childReclaimSweep.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
-  EXPIRE_AUDITS_PER_PASS, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
+  CHILD_SHADOW_OUTCOME, EXPIRE_AUDITS_PER_PASS, EXPIRE_CHILD_LIVE_MARKER, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
   archivedExpiryOutcomeKey, archivedExpirySighted, archivedExpiryVerdict, expiryAttention, expiryReportStands,
-  rankArchivedHeld, type ArchivedExpiryEntry, type ExpiryStoreRead,
+  rankArchivedHeld, type ArchivedExpiryEntry, type ArchivedExpiryVerdict,
+  type ExpiryStoreRead,
 } from './archivedExpiry.js';
 import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import {
@@ -5585,6 +5586,8 @@ export class FleetWatcher {
     const seen = new Set<string>();
     const learn: string[] = [];
     const due: string[] = [];
+    const childArm = { cap: capSupported(this.deps.fleetState, EXPIRE_CHILD_CAP), live: names.includes(EXPIRE_CHILD_LIVE_MARKER) };
+    const childOfOf = new Map(archived.map((r): [string, number | undefined] => [r.id, r.child.kind === 'child' ? r.child.runId : undefined]));
     for (const r of archived) {
       seen.add(r.id);
       let entry = archivedExpiryEntryFor(this.archivedExpiryState.get(r.id), r.archivedAt!);
@@ -5593,9 +5596,10 @@ export class FleetWatcher {
         coord, r.id, store.workers.has(r.id), store.claimants.has(r.id), past);
       const v = archivedExpiryVerdict({
         sessionId: r.id, workspace: r.workspace, archivedAt: r.archivedAt, child: r.child,
-        identityMeasured: r.unmeasured.length === 0, held: r.held, store: read, expiresAt: entry.expiresAt, nowMs: now,
+        identityMeasured: r.unmeasured.length === 0, held: r.held, store: read, expiresAt: entry.expiresAt, nowMs: now, childArm,
       });
       entry = archivedExpirySighted(entry, v, r.held, now);
+      entry = this.recordChildShadow(coord, r, v, entry);
       this.archivedExpiryState.set(r.id, entry);
       if (!v.eligible && v.why === 'expiry-unknown' && now >= entry.nextAskAt) learn.push(r.id);
       if (archivedExpiryDue(entry, now)) due.push(r.id);
@@ -5609,7 +5613,7 @@ export class FleetWatcher {
     learn.sort((a, b) => this.archivedExpiryState.get(a)!.nextAskAt - this.archivedExpiryState.get(b)!.nextAskAt);
     for (const id of learn.slice(0, EXPIRE_AUDITS_PER_PASS)) {
       try {
-        const read = await this.deps.queue.run(id, () => learnExpiry(this.deps, id));
+        const read = await this.deps.queue.run(id, () => learnExpiry(this.deps, id, childOfOf.get(id)));
         const e = this.archivedExpiryState.get(id);
         if (e !== undefined) this.archivedExpiryState.set(id, archivedExpiryLearned(e, read, Date.now(), CHILD_RECLAIM_SWEEP_MS));
       } catch (err) {
@@ -5628,7 +5632,7 @@ export class FleetWatcher {
         const result = await this.deps.queue.run(id, () => expireArchived({
           coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
           presence: this.deps.presence, notifyLog: this.deps.notifyLog,
-        }, { sessionId: id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt! }));
+        }, { sessionId: id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt!, childOf: childOfOf.get(id) }));
         if (result.kind === 'box' && result.word === 'flock-unavailable') this.archivedExpiryBoxRefused = result.detail;
         // Whether the row's entry STANDS rides the feed row, so a shadow row over it never says nothing was deleted (wave 6).
         if (archivedExpiryOutcomeKey(result) !== entry.lastOutcome) {
@@ -5646,6 +5650,15 @@ export class FleetWatcher {
     // gone) this pass holds nothing, so it leaves the block now, not at the next registry read.
     this.expiryAttentionList = expiryAttention(this.archivedExpiryState, this.archivedExpiryBoxRefused !== null);
     this.archivedHeldBlock = rankArchivedHeld(left === null ? archived : archived.filter((r) => r.id !== left), this.archivedExpiryState);
+  }
+
+  /** A marked child the verdict would take but for `expire-child-live` (D-6641): ONE feed row per archive, "would be
+   *  cleaned up (child)", so the operator sees the arm's population before arming it. Nothing is composed. */
+  private recordChildShadow(coord: CoordStore, r: SessionRecord, v: ArchivedExpiryVerdict, entry: ArchivedExpiryEntry): ArchivedExpiryEntry {
+    if (v.eligible || v.why !== 'child-shadow' || entry.expiresAt === null || entry.lastOutcome === CHILD_SHADOW_OUTCOME) return entry;
+    recordExpireFeed({ coord, notifyLog: this.deps.notifyLog }, { kind: 'would-expire', sensitive: 0, child: true,
+      sessionId: r.id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt }, false);
+    return { ...entry, lastOutcome: CHILD_SHADOW_OUTCOME };
   }
 
   /** One archived row's store answers in the lane's pass (spec §5.3's run conjuncts). `reviewing` — a REVIEW run

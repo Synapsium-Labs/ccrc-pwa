@@ -5,12 +5,12 @@ import type { CcdResult, RunCcd } from './ports.js';
 import type { CcdArgv } from '../ccdargv.js';
 import type { Presence } from '../presence.js';
 import type { NotifyLog } from '../notifylog.js';
-import { CCD_ARGV, EXPIRE_CAP, ccdCan, sweepDec } from '../ccdargv.js';
+import { CCD_ARGV, EXPIRE_CAP, EXPIRE_CHILD_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { readSwitches } from '../../../shared/switches.js';
 import {
-  EXPIRE_ASKS_AGAIN_CADENCE, EXPIRE_HALT_WORDS, EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit,
+  EXPIRE_ASKS_AGAIN_CADENCE, EXPIRE_CHILD_LIVE_MARKER, EXPIRE_HALT_WORDS, EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit,
   parseExpireResult, reviewKeeps,
   type ArchivedExpiryOutcome, type ExpireAuditRead, type ExpiryStoreRead,
 } from '../archivedExpiry.js';
@@ -40,7 +40,8 @@ import { notify } from '../notice.js';
  *      refusal is classified, so another archive's refusal is never folded onto the queued one (review 313, F2);
  *   6. the switches read ONCE MORE, nearest the argv — `expire-lane-live` decides SHADOW or LIVE at the act, and a
  *      pause raised during the audit stops it — whatever the lane believed when it queued the row;
- *   7. shadow: "would expire", and stop. Live: the verb, the capability asked AGAIN in the act's own scope.
+ *   7. shadow: "would expire", and stop. A CHILD (`childOf`, D-6641) also needs `expire-v1`'s sibling capability
+ *      and `expire-child-live`, both asked again here; either missing is shadow or `unsupported`, never the flag. Live: the verb, the capability asked AGAIN in the act's own scope.
  * It NEVER kills, never stops a unit, never retries inside itself: ccd does the act, and re-proves the token inside
  * its lock at the instant of deletion.
  */
@@ -58,12 +59,16 @@ export interface ExpireArchivedRequest {
   readonly sessionId: string;
   readonly archivedAt: number;
   readonly expiresAt: number;
+  /** The minting run, when the row carries a readable child marker: `--child-of` rides every call for it (D-6641). */
+  readonly childOf?: number;
 }
 
 /** The executor's answer, as the lane folds it (`ArchivedExpiryOutcome`), plus what the feed row needs. */
 export type ExpireArchivedResult = ArchivedExpiryOutcome & {
   readonly sessionId: string; readonly archivedAt: number; readonly expiresAt: number;
   readonly wip?: string | null | 'unreadable'; readonly secretsDropped?: number | 'unreadable';
+  /** The row is an archived child (D-6641): its shadow row says so. */
+  readonly child?: true;
 };
 
 /** What both executor entries answer for a session id that is not a registry id (spec §2.3): refused here, before
@@ -72,15 +77,18 @@ export type ExpireArchivedResult = ArchivedExpiryOutcome & {
 const EXPIRE_ID_REFUSED = 'the server refused this session id: it is not a registry id, so no call was composed';
 
 export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchivedRequest): Promise<ExpireArchivedResult> {
-  const { sessionId, archivedAt, expiresAt } = req;
+  const { sessionId, archivedAt, expiresAt, childOf } = req;
   const answer = (o: ArchivedExpiryOutcome, extra: Partial<ExpireArchivedResult> = {}): ExpireArchivedResult =>
-    ({ ...o, sessionId, archivedAt, expiresAt, ...extra } as ExpireArchivedResult);
+    ({ ...o, sessionId, archivedAt, expiresAt, ...(childOf === undefined ? {} : { child: true }), ...extra } as ExpireArchivedResult);
   // 0 — the id, before any read (spec §2.3): one that is not a registry id reaches neither builder. A pure check, so it
   //     stands ahead of the capability; `composition` is the answer the lane never asks again.
   if (!isRegistryId(sessionId)) return answer({ kind: 'composition', detail: EXPIRE_ID_REFUSED });
   // 1 — the capability, refusing on no evidence.
   if (!ccdCan(deps.fleetState, 'wsExpire')) {
     return answer({ kind: 'deferred', why: 'unsupported', detail: `the fleet host does not advertise ${EXPIRE_CAP}` });
+  }
+  if (childOf !== undefined && !capSupported(deps.fleetState, EXPIRE_CHILD_CAP)) {
+    return answer({ kind: 'deferred', why: 'unsupported', detail: `the fleet host does not advertise ${EXPIRE_CHILD_CAP}` });
   }
   // 2 — the switch, from ONE listing. Unlistable is a pause this server cannot rule out.
   const first = await expirySwitches(deps);
@@ -95,7 +103,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
     return answer({ kind: 'deferred', why: 'presence', detail: 'someone is viewing this session' });
   }
   // 5 — the audit, and the threshold through its one reader.
-  const audit = await expireAudit(deps, sessionId);
+  const audit = await expireAudit(deps, sessionId, childOf);
   // An unreadable audit is the AUDIT's failure, never the verb's: no verb ran, so nothing stopped part-way, and the lane
   // must not read it as one that may have (final review I1) — `audit-failed`, never `failed`.
   if (audit.kind === 'unreadable') return answer({ kind: 'audit-failed', detail: audit.detail });
@@ -121,8 +129,8 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
   const last = await expirySwitches(deps);
   if (last.kind === 'paused') return answer({ kind: 'deferred', why: 'paused-at-server', detail: last.detail });
   // 7 — shadow stops here: the lane records it, and nothing is composed.
-  if (!last.live) return answer({ kind: 'would-expire', sensitive: audit.sensitive });
-  const verb = await expireAct(deps, sessionId, audit.verdict.token);
+  if (!last.live || (childOf !== undefined && !last.childLive)) return answer({ kind: 'would-expire', sensitive: audit.sensitive });
+  const verb = await expireAct(deps, sessionId, audit.verdict.token, childOf);
   if (verb === 'unsupported') {
     return answer({ kind: 'deferred', why: 'unsupported', detail: `the fleet host does not advertise ${EXPIRE_CAP}` });
   }
@@ -142,7 +150,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
 /** The two switches, from ONE registry listing: `reclaim-paused` (or a listing that could not be taken, which cannot
  *  rule it out) is `paused`; otherwise whether `expire-lane-live` stands. A rejecting `readdirMeasured` is a listing
  *  that could not be taken, `unreadable`. */
-async function expirySwitches(deps: ExpireArchivedDeps): Promise<{ kind: 'paused'; detail: string } | { kind: 'clear'; live: boolean }> {
+async function expirySwitches(deps: ExpireArchivedDeps): Promise<{ kind: 'paused'; detail: string } | { kind: 'clear'; live: boolean; childLive: boolean }> {
   // D-5969 (ARCH-08b): the MEASURED listing; a rejecting port is `unreadable`, and the pause says which it was.
   let listed: MeasuredDirectoryRead;
   try { listed = await deps.io.readdirMeasured(deps.cfg.registryDir); } catch { listed = { ok: false, reason: 'unreadable' }; }
@@ -153,7 +161,7 @@ async function expirySwitches(deps: ExpireArchivedDeps): Promise<{ kind: 'paused
   if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') {
     return { kind: 'paused', detail: `${RECLAIM_PAUSE_MARKER} is raised: cleanup is paused fleet-wide` };
   }
-  return { kind: 'clear', live: names.includes(EXPIRE_LANE_LIVE_MARKER) };
+  return { kind: 'clear', live: names.includes(EXPIRE_LANE_LIVE_MARKER), childLive: names.includes(EXPIRE_CHILD_LIVE_MARKER) };
 }
 
 /** THE REVIEW CONJUNCT for one row (spec §5.3, #166 R16): is `id` the `sessionId` of a REVIEW run whose reviewed
@@ -200,17 +208,18 @@ export function readExpiryStore(coord: CoordStore, id: string): ExpiryStoreRead 
 /** The lane's LEARNING read (wave 3b): the audit alone, to learn when this archive expires — ccd's own instant, so
  *  the server never types the threshold. Read-only on the box (`ws-audit` journals a terminal refusal and nothing
  *  else); behind the capability, as the act is. */
-export async function learnExpiry(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState'>, sessionId: string): Promise<ExpireAuditRead> {
+export async function learnExpiry(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState'>, sessionId: string, childOf?: number): Promise<ExpireAuditRead> {
   // The id first, as the act's step 0 (spec §2.3): the learning audit is the other `wsExpireAudit` builder.
   if (!isRegistryId(sessionId)) return { kind: 'unreadable', detail: EXPIRE_ID_REFUSED };
   if (!ccdCan(deps.fleetState, 'wsExpire')) return { kind: 'unreadable', detail: `the fleet host does not advertise ${EXPIRE_CAP}` };
-  return expireAudit(deps, sessionId);
+  if (childOf !== undefined && !capSupported(deps.fleetState, EXPIRE_CHILD_CAP)) return { kind: 'unreadable', detail: `the fleet host does not advertise ${EXPIRE_CHILD_CAP}` };
+  return expireAudit(deps, sessionId, childOf);
 }
 
 /** The audit — its own function, as `childReclaimAudit` is: an old verb (`ws-audit`), asked the old question. ANY
  *  exit 1 is `unreadable` (`parseExpireAudit` reads the exit before a byte of the document). */
-async function expireAudit(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState'>, sessionId: string): Promise<ExpireAuditRead> {
-  const argv = CCD_ARGV.wsExpireAudit(sessionId);
+async function expireAudit(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState'>, sessionId: string, childOf?: number): Promise<ExpireAuditRead> {
+  const argv = CCD_ARGV.wsExpireAudit(sessionId, childOf);
   if (!ccdCan(deps.fleetState, 'wsExpireAudit')) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
   const res = await deps.runCcd(argv);
   // D-6034: a call that never ran (or may not have) is read FIRST, before a byte of a document: unreadable, so the
@@ -221,9 +230,10 @@ async function expireAudit(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState
 
 /** The act — its own function, and the capability asked AGAIN inside it: this is the scope `verb-gate.test.ts` reads
  *  for `ws-expire`'s gate, and the one line that must never run without it. */
-async function expireAct(deps: ExpireArchivedDeps, sessionId: string, token: string) {
+async function expireAct(deps: ExpireArchivedDeps, sessionId: string, token: string, childOf?: number) {
   if (!ccdCan(deps.fleetState, 'wsExpire')) return 'unsupported' as const;
-  const argv = CCD_ARGV.wsExpire(token, sessionId, sweepDec(deps.fleetState, 'expire sweep'));
+  if (childOf !== undefined && !capSupported(deps.fleetState, EXPIRE_CHILD_CAP)) return 'unsupported' as const;
+  const argv = CCD_ARGV.wsExpire(token, sessionId, sweepDec(deps.fleetState, 'expire sweep'), childOf);
   const res = await deps.runCcd(argv);
   // D-6034: read FIRST, before the box words and the composition dies are read off the runner's stderr. The verb may
   // have started (a link that dropped after the send, a wait that expired), so this is the reader's own "may have been
@@ -281,7 +291,7 @@ export function expireFeedBody(r: ExpireArchivedResult, standing = false): strin
       return `${who} was cleaned up: its commits are kept in the attic (ccd ws-attic --session ${r.sessionId}), ${wip}${secrets}${leaves}.`;
     }
     case 'would-expire':
-      return `${who} would be cleaned up now — the cleanup is not armed (shadow), so `
+      return `${who} would be cleaned up now${r.child === true ? ' (child)' : ''} — the cleanup is not armed (shadow), so `
         + `${standing ? 'this pass deleted nothing — but an earlier attempt may have stopped part-way, so what is left on disk is '
           + 'not known, and its attention entry stands' : 'nothing was deleted'}`
         + `${r.sensitive > 0 ? `; ${r.sensitive} secret-shaped ${r.sensitive === 1 ? 'file' : 'files'} would be dropped` : ''}.`;
@@ -313,6 +323,7 @@ export function expireFeedBody(r: ExpireArchivedResult, standing = false): strin
  *  A missing log degrades the record and never the act. */
 export function recordExpireFeed(deps: Pick<ExpireArchivedDeps, 'coord' | 'notifyLog'>, r: ExpireArchivedResult, standing = false): void {
   // Through the funnel (`notice.ts`, D-5859), `'record-only'`: recorded whatever the presence, never pushed.
-  notify(deps, { kind: 'run', sessionId: r.sessionId, runId: null, title: FEED_TITLE[r.kind], body: expireFeedBody(r, standing) },
+  const title = r.child === true && r.kind === 'would-expire' ? 'archived child workspace would be cleaned up' : FEED_TITLE[r.kind];
+  notify(deps, { kind: 'run', sessionId: r.sessionId, runId: null, title, body: expireFeedBody(r, standing) },
     'record-only', { degraded: `archived expiry ${r.kind}, feed archive degraded` });
 }

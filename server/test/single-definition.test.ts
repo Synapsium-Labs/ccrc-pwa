@@ -5018,6 +5018,28 @@ describe('workspace lifecycle wave 3b: the expiry lane’s live switch has no wr
   });
 });
 
+// FLEET DISK RETENTION DR-29 (D-6641, spec 2026-10-23 section 2.7.4). The expiry lane's child arm SHIPS SHADOWED behind
+// `$REG/expire-child-live`, which the operator touches by hand: no shell line names it, its one TS spelling is its
+// definer, and the files naming its constant are the definer, its re-exporter, the lane's executor and the lane, none
+// of which reaches a write.
+describe('fleet disk retention DR-29: the expiry lane’s child switch has no writer in the tree', () => {
+  const NAME = 'expire-child-live';
+  const DEFINER = 'shared/switches.ts';
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
+  });
+  it('the files that name its constant are the definer, its re-exporter, the executor and the lane, and none reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('EXPIRE_CHILD_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/archivedExpiry.ts', 'server/src/coord/expireArchived.ts', DEFINER, 'server/src/watch.ts'].sort());
+    for (const f of holders.filter((h) => h !== 'server/src/watch.ts')) {
+      expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+    }
+  });
+});
+
 // THE THRESHOLD IS NEVER TYPED BY THE SERVER (the coordinator's ruling (C), wave 3b): ccd's `ws-audit --expire`
 // document carries `expiresAt` (`archivedAt + WS_EXPIRE_AFTER_S`), and the server reads it through ONE reader. Both
 // halves pinned: no seven-day literal in the server or the PWA beside the one that is not an expiry (`limits.ts`'s
