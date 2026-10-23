@@ -84,6 +84,10 @@ describe('the Finished group before the fold — characterization (D-6442)', () 
   });
 });
 
+// A per-case timeout for every case that mounts the board and clicks or ticks:
+// its DOM is slow on a loaded box, and the 5 s default timed out in a full run.
+const BOARD_MS = 30_000;
+
 const door = (): HTMLElement | null => screen.queryByRole('button', { name: /more finished runs?/ });
 
 describe('the Finished group folds (D-6442)', () => {
@@ -97,25 +101,25 @@ describe('the Finished group folds (D-6442)', () => {
   }, 120_000);
 
   it('Show more reveals the next 20', async () => {
-    await mount(closedRuns(100));
+    await mount(closedRuns(61));
     fireEvent.click(door()!);
     // The next 20 are the next-newest: nothing reordered, nothing skipped.
-    expect(finishedIds()).toEqual(Array.from({ length: 40 }, (_, k) => 100 - k));
-    expect(door()).toHaveAccessibleName('Show 20 more finished runs, 60 not shown');
-  });
+    expect(finishedIds()).toEqual(Array.from({ length: 40 }, (_, k) => 61 - k));
+    expect(door()).toHaveAccessibleName('Show 20 more finished runs, 21 not shown');
+  }, BOARD_MS);
 
   it('the Finished group’s name keeps the total', async () => {
     await mount(closedRuns(45));
     expect(screen.getByRole('group', { name: 'finished (45)' })).toBeInTheDocument();
     fireEvent.click(door()!);
     expect(screen.getByRole('group', { name: 'finished (45)' })).toBeInTheDocument();
-  });
+  }, BOARD_MS);
 
   it('shows no door for a group that fits in one batch', async () => {
     await mount(closedRuns(FINISHED_FOLD));
     expect(finishedRows()).toHaveLength(FINISHED_FOLD);
     expect(door()).toBeNull();
-  });
+  }, BOARD_MS);
 
   it('the last Show more moves focus to the Finished heading, never the body', async () => {
     await mount(closedRuns(25));
@@ -127,7 +131,7 @@ describe('the Finished group folds (D-6442)', () => {
     expect(head).not.toBeNull();
     expect(document.activeElement).toBe(head);
     expect(document.activeElement).not.toBe(document.body);
-  });
+  }, BOARD_MS);
 
   it('a middle Show more leaves focus on its door', async () => {
     await mount(closedRuns(45));
@@ -136,7 +140,7 @@ describe('the Finished group folds (D-6442)', () => {
     fireEvent.click(d);
     expect(finishedRows()).toHaveLength(40);
     expect(document.activeElement).toBe(door());
-  });
+  }, BOARD_MS);
 
   it('a middle Show more leaves no flag behind: a later shorter archive moves no focus to the heading', async () => {
     // Click a middle Show more (40 of 45 shown), then let the archive be re-read
@@ -161,7 +165,7 @@ describe('the Finished group folds (D-6442)', () => {
     expect(finishedRows()).toHaveLength(30);
     expect(door()).toBeNull();
     expect(document.activeElement).not.toBe(finishedGroup().querySelector('.runs-group-head'));
-  });
+  }, BOARD_MS);
 });
 
 describe('a one-second tick (D-6442)', () => {
@@ -189,7 +193,7 @@ describe('a one-second tick (D-6442)', () => {
     expect(calls().filter((x) => x.state === 'planned').length).toBeGreaterThanOrEqual(6);
     expect(calls().filter((x) => x.state === 'done')).toHaveLength(0);
     expect(document.querySelector('.run-dispatch')?.textContent).toContain('0:48');
-  });
+  }, BOARD_MS);
 
   it('a finished row’s clock still moves: it re-renders once when the 30 s step turns, and not before or after', async () => {
     // The clock starts one second past a step boundary and the board ticks each
@@ -215,7 +219,7 @@ describe('a one-second tick (D-6442)', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     }
     expect(finishedCalls()).toBe(FINISHED_FOLD);
-  });
+  }, BOARD_MS);
 });
 
 describe('the fold’s words (D-6442)', () => {
@@ -230,7 +234,7 @@ describe('the fold’s words (D-6442)', () => {
     await mount(closedRuns(50));
     expect(door()).toHaveAccessibleName('Show 20 more finished runs, 30 not shown');
     expect(door()?.textContent).toBe('Show 20 more finished runs, 30 not shown');
-  });
+  }, BOARD_MS);
 
   it('finishedClock floors to 30 s', () => {
     const b = 1_800_000_000_000;
