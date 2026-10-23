@@ -27,6 +27,7 @@
 #     collector of a witnessed child temp root whose workspace is gone)
 #   ws-audit --session <value> --reclaim [--defer-expired] — the token skeleton;
 #   ws-audit --session <value> --expire           — the expiry's token skeleton;
+#   ws-audit --session <value> --expire --child-of <value> — the same, for an archived child (expire-child-v1);
 #   ws-audit --session <value> --collect          — the collector's token skeleton;
 #     <value> is any string here, and the body still validates it as a session id
 # Each of those tokens is matched WITHOUT CASE, a deliberate superset: an inherited
@@ -149,6 +150,9 @@ def is_protected(argv):
         return True
     if len(argv) == 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
             and (folds_to(argv[3], '--expire') or folds_to(argv[3], '--collect')):
+        return True
+    if len(argv) == 6 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
+            and folds_to(argv[3], '--expire') and folds_to(argv[4], '--child-of'):
         return True
     return (len(argv) in (4, 5) and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session')
             and folds_to(argv[3], '--reclaim') and (len(argv) == 4 or folds_to(argv[4], '--defer-expired')))

@@ -96,8 +96,8 @@ real values: `deploy/reference-fleet.md` (gitignored).
   (one dispatch minted for a run, marked `$REG/<id>.child` and held by the server as that run's), composed
   after that run closes or binds a different session, with a token re-proved on the box — never a session's verb, and never run against
   the live host from a shell or a test. **`ws-expire` is forbidden to every session too**: it is the SERVER's act on an
-  ARCHIVED workspace only, seven days after its archive (never a main checkout, never a child), with a token that binds
-  that archive and is re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
+  ARCHIVED workspace only, seven days after its archive (never a main checkout; a child only through `--child-of` naming
+  the run its marker reads as), with a token that binds that archive and is re-proved on the box (for a child it binds the run too) — never a session's verb, and never run against the live host from a shell or a test.
   **`ws-collect` is forbidden to every session too**: it is the SERVER's act on an ORPHANED, WITNESSED temp root only,
   behind a token re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):

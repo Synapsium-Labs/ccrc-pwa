@@ -502,6 +502,12 @@ const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegEx
   ['ws-expire with a malformed tail (the body’s parser owns that)', ['ws-expire', '--defer-expired'], true, null],
   ['valid audit --expire', ['ws-audit', '--session', 'x', '--expire'], true, null],
   ['audit, --expire --defer-expired (no such mode)', ['ws-audit', '--session', 'x', '--expire', '--defer-expired'], false, USAGE],
+  // `--child-of` (expire-child-v1): the one 6-token audit shape, protected exactly as the plain `--expire` is.
+  ['valid audit --expire --child-of', ['ws-audit', '--session', 'x', '--expire', '--child-of', '7'], true, null],
+  ['audit, --expire --child-of with no run', ['ws-audit', '--session', 'x', '--expire', '--child-of'], false, USAGE],
+  ['audit, --child-of before --expire', ['ws-audit', '--session', 'x', '--child-of', '7', '--expire'], false, USAGE],
+  ['audit, --reclaim --child-of (no such mode)', ['ws-audit', '--session', 'x', '--reclaim', '--child-of', '7'], false, USAGE],
+  ['audit, --expire --child-of and an extra token', ['ws-audit', '--session', 'x', '--expire', '--child-of', '7', 'extra'], false, USAGE],
   ['audit, a later duplicate --expire', ['ws-audit', '--session', 'x', '--expire', '--expire'], false, USAGE],
   ['a verb merely CONTAINING ws-expire later', ['caps', 'ws-expire'], false, null],
   ['ws-expirex (prefix only)', ['ws-expirex'], false, null],
@@ -554,6 +560,7 @@ const CASE_VARIANTS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['WS-EXPIRE alone', ['WS-EXPIRE']],
   [`ws-exp${DOTTED_I}re (a non-ASCII fold)`, [`ws-exp${DOTTED_I}re`]],
   ['WS-AUDIT --SESSION x --EXPIRE', ['WS-AUDIT', '--SESSION', 'x', '--EXPIRE']],
+  ['WS-AUDIT --SESSION x --EXPIRE --CHILD-OF 7', ['WS-AUDIT', '--SESSION', 'x', '--EXPIRE', '--CHILD-OF', '7']],
 ];
 /** Protected at the launcher although no locale measured here folds them —
  *  the superset's other half, harmless by design. A non-ASCII character stands
