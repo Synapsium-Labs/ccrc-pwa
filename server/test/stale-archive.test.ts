@@ -184,10 +184,25 @@ describe('staleArchivePass (L3)', () => {
     }
   });
 
-  it('a hibernated row whose .supervised is 15 days old and has no transcript archives', async () => {
+  it('a row hibernated 15 days ago (ms) with no transcript archives', async () => {
     const h = harness({ evidence: null });
-    await twoPasses(h, [rec('a', { hibernatedAt: Math.floor(NOW / 1000), supervisedAt: Math.floor((NOW - 15 * DAY) / 1000) })], LIVE);
+    await twoPasses(h, [rec('a', { hibernatedAt: NOW - 15 * DAY, supervisedAt: Math.floor((NOW - 20 * DAY) / 1000) })], LIVE);
     expect(h.ccd).toHaveLength(1);
+  });
+
+  it('a pane that ended an hour ago keeps the row after 20 idle days: hibernated, stopped, or a journal pane-end act', async () => {
+    const old = Math.floor((NOW - 20 * DAY) / 1000);
+    const hour = 60 * 60_000;
+    const cases: [string, Harness, SessionRecord][] = [
+      ['hibernated', harness({ evidence: NOW - 20 * DAY }), rec('a', { spawn: { at: old, rc: 0 }, hibernatedAt: NOW - hour })],
+      ['stopped', harness({ evidence: NOW - 20 * DAY }), rec('a', { spawn: { at: old, rc: 0 }, stopped: { at: Math.floor((NOW - hour) / 1000), surface: 'agent' } })],
+      ...['hibernate', 'unsupervise', 'stop'].map((act): [string, Harness, SessionRecord] =>
+        [act, harness({ evidence: NOW - 20 * DAY, acts: [{ act, at: NOW - hour, outcome: 'done' }] }), rec('a', { spawn: { at: old, rc: 0 } })]),
+    ];
+    for (const [name, h, r] of cases) {
+      await twoPasses(h, [r], LIVE);
+      expect(h.ccd, name).toEqual([]);
+    }
   });
 
   it('a transcript that could not be read keeps the row however old the other evidence is', async () => {
