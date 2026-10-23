@@ -15349,7 +15349,7 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   local api_bin=""
   [ "$INST_ROLE" = server ] || _inst_atomic "$tree/ccd/ccrc-api" "$bin/ccrc-api" 755
   [ "$INST_ROLE" = server ] || api_bin=", ccrc-api"
-  # The GPT lane's four common executables, BEFORE the platform `if` below, so
+  # The GPT lane's five common executables, BEFORE the platform `if` below, so
   # on BOTH arms — but ROLE-gated by this function's ONE `if [ "$INST_ROLE"
   # != server ]` block (spec §11 says so, and why). The history sweep's shim
   # below is role-gated too, by a one-line `[ "$INST_ROLE" = server ] ||` test
