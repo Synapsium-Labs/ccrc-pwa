@@ -4,10 +4,9 @@
 // screen, the same sentence for a question the sheet cannot answer yet. `DialogSheet` is the one controller and the one
 // sender: it decides which surface shows through `askSource`, and on an AskUserQuestion it shows no pane text.
 //
-// The hook's envelope ages out and `ask_cleared` arrives 30 minutes into an unanswered ask ONLY when no menu
-// corresponding to its call is up (D-6324, Task T1a): while the pane shows such a menu, the review screen of a
-// multi-question ask included, the session stream keeps the aged envelope. When it does arrive, the source moves to the
-// transcript's copy of the question (`askSource`), and these parts draw it unchanged.
+// The hook's envelope ages out and `ask_cleared` arrives 30 minutes into an unanswered ask only when the server no
+// longer keeps it (D-6324, Task T1a; the rule is `server/src/askkey.ts`'s, not restated here). When it does arrive, the
+// source moves to the transcript's copy of the question (`askSource`), and these parts draw it unchanged.
 //
 // What is on the pane is read by `askLive.ts`; this file only renders it. Every row is `@ccrc/ui`'s `OptionRow`, and
 // every class here is one chat.css already grounds (`.dlg-*`, `.opts`, `.ask-envelope-more*`).
