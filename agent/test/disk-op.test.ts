@@ -27,6 +27,8 @@ interface Rig { seams: Partial<DiskSeams>; statfsCalls: string[]; statCalls: str
 function rig(opts: {
   devs?: Record<string, number>;
   broken?: Record<string, () => Promise<never> | Error>;
+  /** Paths whose `statfs` alone misbehaves (stat answers). */
+  statfsBroken?: Record<string, () => Promise<never> | Error>;
   mountinfo?: string | null;
   env?: NodeJS.ProcessEnv;
   files?: Record<string, string>;
@@ -39,15 +41,15 @@ function rig(opts: {
     const hit = Object.keys(devs).filter((k) => p === k || p.startsWith(`${k}/`)).sort((a, b) => b.length - a.length)[0];
     return hit === undefined ? dev(1) : devs[hit]!;
   };
-  const trip = async (p: string): Promise<void> => {
-    const f = opts.broken?.[p];
+  const trip = async (p: string, table = opts.broken): Promise<void> => {
+    const f = table?.[p];
     if (f === undefined) return;
     const r = f();
     if (r instanceof Error) throw r;
     await r;
   };
   const seams: Partial<DiskSeams> = {
-    statfs: async (p) => { statfsCalls.push(p); await trip(p); return FS_ANSWER; },
+    statfs: async (p) => { statfsCalls.push(p); await trip(p, opts.statfsBroken); return FS_ANSWER; },
     stat: async (p) => { statCalls.push(p); await trip(p); return { dev: devOf(p) }; },
     readMountinfo: () => (opts.mountinfo === undefined ? null : opts.mountinfo),
     readFile: (p) => {
@@ -94,6 +96,24 @@ describe('measureDisk', () => {
     // The other roots were still measured.
     expect(out.filesystems.flatMap((f) => f.roots)).toContain('projects');
     expect(out.filesystems.flatMap((f) => f.roots)).not.toContain('worktrees');
+  });
+
+  it('a stat that answers but a statfs that never does lands in missing within the deadline', async () => {
+    const r = rig({ statfsBroken: { '/h/worktrees': NEVER }, deadlineMs: 50 });
+    const t0 = Date.now();
+    const out = await measureDisk(HOME, r.seams);
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(r.statCalls).toContain('/h/worktrees');
+    expect(r.statfsCalls).toContain('/h/worktrees');
+    expect(out.missing).toContainEqual({ label: 'worktrees', why: 'timeout' });
+  });
+
+  it('concurrent measurements on never-answering paths start at most two stat syscalls in all', async () => {
+    const r = rig({ broken: { '/h/worktrees': NEVER, '/h/projects': NEVER, '/h/.cc-tmp': NEVER }, deadlineMs: 50 });
+    const outs = await Promise.all([measureDisk(HOME, r.seams), measureDisk(HOME, r.seams), measureDisk(HOME, r.seams)]);
+    const hung = ['/h/worktrees', '/h/projects', '/h/.cc-tmp'].flatMap((p) => r.statCalls.filter((c) => c === p));
+    expect(hung.length).toBeLessThanOrEqual(2);
+    expect(outs[1]).toBe(outs[0]);
   });
 
   it('a stat that never settles is called once across two measureDisk calls, and the second still answers in time', async () => {

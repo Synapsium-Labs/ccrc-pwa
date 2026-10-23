@@ -95,21 +95,24 @@ type Outcome =
   | { kind: 'missing'; why: DiskMissingWhy };
 
 /** A probe that missed its deadline is abandoned, but its syscall still holds one of libuv's four threadpool threads
- *  until the kernel answers, and unlike a short-lived CLI this agent never exits to free it. So every probe still
- *  unsettled is remembered (per `stat` seam), and while a path's earlier probe is pending, or `MAX_HUNG` probes are
- *  already pending, a new probe answers `timeout` at once and starts no syscall: hung threads stay below the pool
- *  size and the agent's other file reads keep their threads. */
+ *  until the kernel answers, and unlike a short-lived CLI this agent never exits to free it. So every probe is counted
+ *  from the moment its syscall STARTS until it settles (per `stat` seam, which every connection shares), and while that
+ *  path already has a probe pending, or `MAX_HUNG` probes are pending, a new probe answers `timeout` at once and
+ *  starts no syscall: threads held stay below the pool size and the agent's other file reads keep theirs. */
 const MAX_HUNG = 2;
-const hungBySeam = new WeakMap<object, Map<string, Promise<unknown>>>();
+interface Pending { tokens: Set<symbol>; paths: Map<string, number> }
+const pendingBySeam = new WeakMap<object, Pending>();
 
 /** `stat` + `statfs` of one path, raced against the deadline. The timer is local to this call (a deadline, not a
- *  scheduler); a probe that never answers is abandoned, not awaited, and remembered until it settles. */
+ *  scheduler); a probe that never answers is abandoned, not awaited, and stays counted until it settles. */
 async function probe(seams: DiskSeams, p: string): Promise<Outcome> {
-  const hung = hungBySeam.get(seams.stat) ?? new Map<string, Promise<unknown>>();
-  hungBySeam.set(seams.stat, hung);
-  if (hung.has(p) || hung.size >= MAX_HUNG) return { kind: 'missing', why: 'timeout' };
+  const pending = pendingBySeam.get(seams.stat) ?? { tokens: new Set<symbol>(), paths: new Map<string, number>() };
+  pendingBySeam.set(seams.stat, pending);
+  if (pending.paths.has(p) || pending.tokens.size >= MAX_HUNG) return { kind: 'missing', why: 'timeout' };
+  const token = Symbol(p);
+  pending.tokens.add(token);
+  pending.paths.set(p, (pending.paths.get(p) ?? 0) + 1);
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let done = false;
   const deadline = new Promise<Outcome>((resolve) => {
     timer = setTimeout(() => resolve({ kind: 'missing', why: 'timeout' }), seams.deadlineMs);
   });
@@ -121,15 +124,15 @@ async function probe(seams: DiskSeams, p: string): Promise<Outcome> {
     } catch (e) {
       return { kind: 'missing', why: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'failed' };
     } finally {
-      done = true;
-      hung.delete(p);
+      pending.tokens.delete(token);
+      const n = (pending.paths.get(p) ?? 1) - 1;
+      if (n <= 0) pending.paths.delete(p); else pending.paths.set(p, n);
     }
   })();
   try {
     return await Promise.race([read, deadline]);
   } finally {
     clearTimeout(timer);
-    if (!done) hung.set(p, read);
   }
 }
 
@@ -167,9 +170,24 @@ function mountFor(entries: readonly MountEntry[], majmin: string, p: string): Mo
   return pool.reduce<MountEntry | null>((best, e) => (best === null || e.mountPoint.length > best.mountPoint.length ? e : best), null);
 }
 
+/** One measurement per agent process at a time: a request that arrives while one runs (a reconnect leaves the old
+ *  connection's measurement going) awaits that run's answer instead of starting probes of its own. Keyed by the
+ *  `stat` seam, which every connection shares. */
+const running = new WeakMap<object, { home: string; run: Promise<DiskOpReply> }>();
+
 /** Measure every work root once. Never throws for a disk fault: a fault is a `missing` row. */
-export async function measureDisk(home: string, given: Partial<DiskSeams> = {}): Promise<DiskOpReply> {
+export function measureDisk(home: string, given: Partial<DiskSeams> = {}): Promise<DiskOpReply> {
   const seams: DiskSeams = { ...realDiskSeams(), ...given };
+  const held = running.get(seams.stat);
+  if (held !== undefined && held.home === home) return held.run;
+  const run = measureOnce(home, seams).finally(() => {
+    if (running.get(seams.stat)?.run === run) running.delete(seams.stat);
+  });
+  running.set(seams.stat, { home, run });
+  return run;
+}
+
+async function measureOnce(home: string, seams: DiskSeams): Promise<DiskOpReply> {
   const tmpEnv = seams.env['TMPDIR'];
   const tmp = tmpEnv !== undefined && tmpEnv !== '' ? tmpEnv : '/tmp';
   const cfg = configDirs(home, seams);
