@@ -838,6 +838,16 @@ describe('_transcript_last_turn_ts (D-3102, D-3104)', () => {
   it('an unparseable line is skipped rather than trusted', () => {
     expect(read(write([row({ timestamp: ISO(1789000000) }), '{"type":"assistant","mess']))).toBe('0:1789000000');
   });
+  it('a fractional-second stamp is read at whole seconds (the 19-character truncation, ARCH-65 pin)', () => {
+    expect(read(write([
+      row({ timestamp: '2026-10-01T00:00:00.123456Z' }),
+      row({ timestamp: '2026-10-01T00:00:07.9Z' }),
+    ]))).toBe('0:1790812807');
+  });
+  it('a partial FIRST line (a window cut mid-record) is skipped and the rest still answers (ARCH-65 pin)', () => {
+    expect(read(write(['ssistant","timestamp":"2026-10-01T00:09:00.000Z","message":{}}', row({ timestamp: ISO(1789000000) })])))
+      .toBe('0:1789000000');
+  });
   it('no real turn in the window: rc 1', () => {
     expect(read(write([
       row({ type: 'user', message: { role: 'user', content: '<local-command-stdout>ok</local-command-stdout>' } }),
