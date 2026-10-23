@@ -8239,6 +8239,43 @@ describe('one verb question (ARCH-71): ccdCan(state, row) (D-5866)', () => {
   });
 });
 
+// D-5861 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1g, Step 4;
+// ARCH-76 (#811); spec §5.1 rule 3). The change-latch ratchet, placed after the capability ratchet above and ahead of
+// the next appended block. "Warn once until it changes" is `changeLatch` (`server/src/changeLatch.ts`): no `last*` field
+// of `FleetWatcher` is compared with a key before a `console.warn` and assigned in the same method
+// (`consolidationCensus.ts`'s `changeLatchSites`, a parse.ts-based query). The count may only shrink, and it is 0.
+// `DelegationLane#lastMarkWarnHour` has the same shape and is another series' file, so it is reported
+// (`changeLatchReported`), never counted, until a later PR moves it. The census is loaded inside the rows, so this
+// block adds no import line.
+describe('one change latch (ARCH-76): changeLatch (D-5861)', () => {
+  it('no hand-rolled change latch remains', async () => {
+    const { changeLatchSites } = await import('./consolidationCensus.js');
+    expect(changeLatchSites().map((x) => `${x.file}:${x.line} ${x.text.trim()}`),
+      'use changeLatch() from server/src/changeLatch.ts instead of a last* field').toEqual([]);
+  });
+
+  it('CONTROL: the census sees a planted latch', async () => {
+    const { changeLatchSites } = await import('./consolidationCensus.js');
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tree = mk(path.join(tmpdir(), 'change-latch-ratchet-'));
+    try {
+      md(path.join(tree, 'server/src'), { recursive: true });
+      wf(path.join(tree, 'server/src/watch.ts'), [
+        'class FleetWatcher {',
+        '  f(key: string): void {',
+        '    if (key !== this.lastFooWhy) console.warn(key);',
+        '    this.lastFooWhy = key;',
+        '  }',
+        '}',
+      ].join('\n'));
+      expect(changeLatchSites(tree)).toHaveLength(1);
+    } finally {
+      rm(tree, { recursive: true, force: true });
+    }
+  });
+});
+
 // D-5841 (D3, #755; plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Durability). APPENDED. The
 // brief watch has ONE home: its two timers, its decider and the wave brief's subject are defined in
 // `server/src/coord/briefwatch.ts` alone, and the subject is spelled on no other source code line, so `dispatchRun`'s
