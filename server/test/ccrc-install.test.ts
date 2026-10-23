@@ -762,7 +762,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     `[ "$1" = /dev/fd/3 ] && [ "$2" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_UPDATE_HEALTH_S', 'CCRC_UPDATE_DEADLINE_MS', 'CCRC_RELEASE_BASE_URL', 'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
   // makes one call per install. Zeroed here rather than per test, for the

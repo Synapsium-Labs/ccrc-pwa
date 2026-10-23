@@ -19342,12 +19342,12 @@ _ccrc_knob() {   # <KEY> <default> [file]
 
 # ── _keep_knob <KEY> <default> [<lowest>] — the one reader and validator of a keep (D-6589) ──
 # `_ccrc_knob`, then `_keep_ok`, then the lowest bound (default 0): rc 0 sets KEEP (decimal, so 0002 is 2) and KEEP_FROM,
-# the phrase a prune line prints; rc 1 clears KEEP and sets KEEP_WHY, `_ccrc_knob`'s sentence when the value could not
+# the phrase a prune line prints; rc 1 clears KEEP and KEEP_FROM and sets KEEP_WHY, `_ccrc_knob`'s sentence when it could not
 # be measured (so an unmeasured file never reaches `_keep_why` with an empty value, naming neither the file nor the
 # line), else `_keep_why`'s. CCRC_BACKUP_KEEP, CCRC_BACKUP_DATA_KEEP and CCRC_VERSIONS_KEEP read through it.
 _keep_knob() {   # <KEY> <default> [<lowest>]
-  _ccrc_knob "$1" "$2" || { KEEP=""; KEEP_WHY="$KNOB_WHY"; return 1; }
-  _keep_ok "$KNOB" && [ "$((10#$KNOB))" -ge "${3:-0}" ] || { KEEP=""; KEEP_WHY="$(_keep_why "$1" "$KNOB" "${3:-0}")"; return 1; }
+  _ccrc_knob "$1" "$2" || { KEEP=""; KEEP_FROM=""; KEEP_WHY="$KNOB_WHY"; return 1; }
+  _keep_ok "$KNOB" && [ "$((10#$KNOB))" -ge "${3:-0}" ] || { KEEP=""; KEEP_FROM=""; KEEP_WHY="$(_keep_why "$1" "$KNOB" "${3:-0}")"; return 1; }
   KEEP=$((10#$KNOB)); KEEP_WHY=""
   case "$KNOB_FROM" in environment) KEEP_FROM="the environment" ;; file) KEEP_FROM="the box's ccrc.env" ;; *) KEEP_FROM="the default" ;; esac
 }
@@ -23639,7 +23639,7 @@ _bak_list() {
   return 0
 }
 
-# Keep the newest ${CCRC_BACKUP_KEEP:-10} TIMESTAMPED backups —
+# Keep the newest CCRC_BACKUP_KEEP (default 10) TIMESTAMPED backups —
 # `deploy.sh`'s `prune_backups` glob exactly (`[0-9]{8}-[0-9]{6}`, the shape
 # `_upd_backup`'s `date +%Y%m%d-%H%M%S` writes), because the directory also
 # holds hand-made siblings (a real `pre-flip-agent-dist` exists on the fleet
@@ -23649,26 +23649,27 @@ _bak_list() {
 # Wave 9 R10g (D-3825, D-3826): the removal set is cut by `_bak_keepset`, the helper `_bak_gc` shares — this run's own dir,
 # every dir named at or after UPD_BAK_FLOOR (`cmd_backup` sets it before it backs up), the newest earlier tree backup, the newest
 # earlier valid coordination snapshot and the newest earlier one that holds data (D-4641) are never removed — and the prune holds
-# ~/.ccrc/update.lock. Where `_bak_gc` WARNs and returns,
-# this verb says "prune skipped" and returns 0: the backup was taken, and its echo and its invalid-KEEP refusal (the two
-# `_ccrc_die`s) are unchanged. A floor that is not recorded (only a direct call reaches it) prunes nothing.
+# ~/.ccrc/update.lock. Where `_bak_gc` WARNs and returns, this verb says "prune skipped" and returns 0, unless a setting was
+# refused: the backup was taken. Each keep is `_keep_knob`'s (D-6589), and a refused one stops only its own act (D-6590): it is
+# one stderr line in `_ccrc_die`'s form, said before the lock, and the other act runs; both refused return at once. Every
+# return after a refusal is 1, so `ccrc backup` exits 1. A floor that is not recorded (only a direct call reaches it) prunes nothing.
 _bak_prune() {
-  local keep="${CCRC_BACKUP_KEEP:-10}"
-  _keep_ok "$keep" || _ccrc_die "$(_keep_why CCRC_BACKUP_KEEP "$keep") — nothing was pruned"
-  _bak_data_keep || _ccrc_die "$BAK_DATA_KEEP_WHY — nothing was pruned or thinned"
-  keep=$((10#$keep))   # `0002` is two: the loop below is ARITHMETIC, where a leading 0 is octal (or an error)
+  local keep="" kwhy="" dwhy="" r=0   # `_keep_knob` makes KEEP decimal (`0002` is two): the loop below is ARITHMETIC
+  _keep_knob CCRC_BACKUP_KEEP 10 && keep="$KEEP" || { kwhy=1; r=1; echo "$PROG: $KEEP_WHY — nothing was pruned" >&2; }
+  _bak_data_keep || { dwhy=1; r=1; echo "$PROG: $BAK_DATA_KEEP_WHY — nothing was thinned" >&2; }
+  [ -z "$kwhy" ] || [ -z "$dwhy" ] || return 1
   if ! [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
     echo "backup: prune skipped — this run's start time was not recorded, so nothing can say which backups are its own; nothing was pruned"
-    return 0
+    return "$r"
   fi
   local took=0 lrc=0
   [ -n "$UPD_LOCK_FD" ] || took=1
   _ver_lock_try || lrc=$?
   case "$lrc" in
     0) ;;
-    1) echo "backup: prune skipped — another ccrc run holds ~/.ccrc/update.lock; nothing was pruned"; return 0 ;;
-    2) echo "backup: prune skipped — flock is not on PATH, so ~/.ccrc/update.lock cannot be taken; nothing was pruned"; return 0 ;;
-    *) echo "backup: prune skipped — ~/.ccrc/update.lock could not be measured; nothing was pruned"; return 0 ;;
+    1) echo "backup: prune skipped — another ccrc run holds ~/.ccrc/update.lock; nothing was pruned"; return "$r" ;;
+    2) echo "backup: prune skipped — flock is not on PATH, so ~/.ccrc/update.lock cannot be taken; nothing was pruned"; return "$r" ;;
+    *) echo "backup: prune skipped — ~/.ccrc/update.lock could not be measured; nothing was pruned"; return "$r" ;;
   esac
   _bak_list
   local n=${#BAK_DIRS[@]} i d
@@ -23677,18 +23678,18 @@ _bak_prune() {
   if [ "$krc" -ne 0 ]; then
     echo "backup: prune skipped — the coordination snapshot classifier failed (${BAK_SNAP_WHY:-no reason given}), so nothing can say which backup holds the newest valid snapshot; nothing was pruned"
     if [ "$took" -eq 1 ]; then _upd_unlock; fi
-    return 0
+    return "$r"
   fi
-  for ((i = 0; i < n - keep; i++)); do
+  [ -n "$kwhy" ] || for ((i = 0; i < n - keep; i++)); do
     d="${BAK_DIRS[$i]}"
     _bak_removable "$d" || continue
     rm -rf -- "${BAK_DIRS[$i]}" \
       || _ccrc_die "could not prune ${BAK_DIRS[$i]} — the newer backups above it are all intact"
     echo "backup: pruned ${BAK_DIRS[$i]} (keeping the newest $keep timestamped backups; hand-made siblings are never touched)"
   done
-  _bak_thin backup "backup:" || :
+  [ -n "$dwhy" ] || _bak_thin backup "backup:" || :
   if [ "$took" -eq 1 ]; then _upd_unlock; fi
-  return 0
+  return "$r"
 }
 
 # ── _bak_keepset — which three earlier dirs a prune keeps beyond the floor (wave 9 R10g, D-3825) ──
@@ -23848,9 +23849,9 @@ _bak_snap_class() {
 # sweep. A failed gate (exit 4, restored), --no-gate, every --from restore child, a sweep that died, and a refused
 # rollback never get here. It NEVER DIES and never writes update.json: a `_ccrc_die` here would turn a completed
 # update into a `failed` report. rc 0 done or nothing to do; rc 1 skipped or a removal failed; every caller writes
-# `|| :`. It keeps the newest $CCRC_BACKUP_KEEP timestamped dirs of any origin (the ONE bounded validator,
+# `|| :`. It keeps the newest CCRC_BACKUP_KEEP timestamped dirs of any origin (the ONE bounded validator,
 # `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them (neither counts a link, D-5319);
-# read from the process env only), and four
+# read by `_keep_knob`, the environment else ccrc.env, D-6589), and four
 # more that can only LEAVE the removal set: this run's own backup by its exact path; every dir named at or after
 # this run's lock second (UPD_BAK_FLOOR) — both D-3593; and, among the dirs neither of those protects, the newest tree backup (D-3594; a
 # `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest VALID coordination
@@ -23859,7 +23860,7 @@ _bak_snap_class() {
 # a v1 with a member present, or a legacy one), so an empty-box snapshot never evicts the last one with data. The sets are independent. The lock was released before the sweep (design §10), so it is RE-TAKEN (D-3592) without dying: any other holder
 # means nothing is pruned. An UPDATE (never a rollback by flip: a flip takes no backup, so it adds no data set to thin, and its tree's
 # helper may predate `thin`, D-6355; a rollback by re-install runs `cmd_update` and thins here as an update) then thins the coordination data set of the backups past the newest CCRC_BACKUP_DATA_KEEP (`_bak_thin`,
-# D-6346), under the same lock; an invalid CCRC_BACKUP_DATA_KEEP stops the prune and the thinning alike (D-6347). It still never
+# D-6346), under the same lock; a refused keep stops only its own act, and a refusal returns 1 (D-6590, amending D-6347). It still never
 # writes update.json: `cmd_update` re-stamps the report before it calls this (D-6356). An update passes `thin` a time budget (D-6464):
 # `--until`, the re-stamp's instant (UPD_THIN_AT) plus `_upd_deadline_ms`, less a margin of 235 s. The margin is 150 s for one full
 # verification `thin` starts just before the bound (Step 7's largest per-set figure, the estimate `thin` itself uses until it has timed
@@ -23871,13 +23872,10 @@ _bak_snap_class() {
 # bound past the server's deadline (review 817 F4, a residual carried to wave 24). No UPD_THIN_AT (a direct call) passes no bound;
 # `ccrc backup` passes none, as it holds no lease.
 _bak_gc() {   # <lead word: update|rollback>
-  local lead="$1" keep="${CCRC_BACKUP_KEEP:-10}"
-  if ! _keep_ok "$keep"; then
-    echo "$lead: backups: WARN: $(_keep_why CCRC_BACKUP_KEEP "$keep") — nothing pruned"
-    return 1
-  fi
-  keep=$((10#$keep))
-  _bak_data_keep || { echo "$lead: backups: WARN: $BAK_DATA_KEEP_WHY — nothing pruned or thinned"; return 1; }
+  local lead="$1" keep="" ksrc="" kwhy="" dwhy=""   # KEEP_FROM is taken at once: `_bak_data_keep` calls `_keep_knob` next
+  _keep_knob CCRC_BACKUP_KEEP 10 && { keep="$KEEP"; ksrc="$KEEP_FROM"; } || { kwhy=1; echo "$lead: backups: WARN: $KEEP_WHY — nothing pruned"; }
+  [ "$lead" != update ] || _bak_data_keep || { dwhy=1; echo "$lead: backups: WARN: $BAK_DATA_KEEP_WHY — nothing thinned"; }
+  [ -z "$kwhy" ] || { [ "$lead" = update ] && [ -z "$dwhy" ]; } || return 1
   if ! [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
     echo "$lead: backups: WARN: this run's lock time was not recorded, so nothing can say which backups are its own — nothing pruned"
     return 1
@@ -23900,20 +23898,21 @@ _bak_gc() {   # <lead word: update|rollback>
     if [ "$took" -eq 1 ]; then _upd_unlock; fi
     return 1
   fi
-  for ((i = 0; i < n - keep; i++)); do
+  [ -n "$kwhy" ] || for ((i = 0; i < n - keep; i++)); do
     d="${BAK_DIRS[$i]}"
     _bak_removable "$d" || continue   # D-3593's own-dir and floor clauses live there now
     shown="$d"; case "$d" in "$HOME"/*) shown="\$HOME${d#"$HOME"}" ;; esac
     if rm -rf -- "$d" 2>/dev/null; then
-      echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup, the newest earlier valid coordination snapshot and the newest earlier one that holds data; hand-made siblings are never touched)"
+      echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups (CCRC_BACKUP_KEEP from $ksrc), every one named at or after this run took its lock, this run's own, the newest earlier tree backup, the newest earlier valid coordination snapshot and the newest earlier one that holds data; hand-made siblings are never touched)"
     else
       echo "$lead: backups: WARN: could not prune $shown — every newer backup is intact"
       rc=1
     fi
   done
   [[ "${UPD_THIN_AT:-}" =~ ^[1-9][0-9]{0,10}$ ]] && until=$(( 10#$UPD_THIN_AT + $(_upd_deadline_ms) / 1000 - margin ))
-  [ "$lead" != update ] || _bak_thin update "$lead: backups:" "$until" || rc=1
+  [ "$lead" != update ] || [ -n "$dwhy" ] || _bak_thin update "$lead: backups:" "$until" || rc=1
   if [ "$took" -eq 1 ]; then _upd_unlock; fi
+  [ -z "$kwhy$dwhy" ] || rc=1
   return "$rc"
 }
 
@@ -24178,24 +24177,24 @@ _ver_sweep_leftovers() {   # <lead>
 # or a rollback, whose spine runs under its parent's lock
 # (D-3451); it says nothing unless it removes
 # something or skips. `prune` is `ccrc versions --prune`, which also removes
-# incomplete versions. Both first refuse a KEEP value `_keep_ok` does not
-# accept (WARN and rc 1 for `auto`, which its callers ignore), then read the
+# incomplete versions. Both first refuse a KEEP `_keep_knob` refuses, the
+# knob unmeasured or invalid (WARN and rc 1 for `auto`, which its callers ignore), then read the
 # layout (only `linked`/`migrated` prunes), then sweep a dead process's
 # leftovers ONCE (`_ver_sweep_leftovers`) — all before any return that could
 # end the prune early.
 _ver_gc() {
-  local pfx="$1" mode="$2" keep="${CCRC_VERSIONS_KEEP:-3}" lead n i cur
+  local pfx="$1" mode="$2" keep="" lead n i cur
   local rc=0 lrc=0 prc=0 ncomp=0 npart=0 gone
   lead="$pfx: versions:"; [ "$pfx" = versions ] && lead="versions:"
-  if ! _keep_ok "$keep"; then
+  if ! _keep_knob CCRC_VERSIONS_KEEP 3; then
     if [ "$mode" = auto ]; then
-      echo "$lead WARN: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — nothing pruned"
+      echo "$lead WARN: $KEEP_WHY — nothing pruned"
     else
-      echo "versions: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — nothing was pruned"
+      echo "versions: $KEEP_WHY — nothing was pruned"
     fi
     return 1
   fi
-  keep=$((10#$keep))   # decimal: `0002` is two, whatever a later arithmetic context would make of a leading 0
+  keep="$KEEP"   # decimal (`_keep_knob`): `0002` is two, whatever a later arithmetic context would make of a leading 0
   _ver_layout
   case "$VER_LAYOUT" in
     linked|migrated) ;;
@@ -24289,7 +24288,7 @@ _ver_gc() {
 # lists what is left. Exit 0 listed or pruned; 1 a prune skipped or a
 # removal failed; 2 usage.
 cmd_versions() {
-  local prune=0 keep="${CCRC_VERSIONS_KEEP:-3}" grc=0 lrc=0 prc=0 n mark cpl line
+  local prune=0 keep="" grc=0 lrc=0 prc=0 n mark cpl line
   while [ $# -gt 0 ]; do
     case "$1" in
       --prune) prune=1 ;;
@@ -24303,13 +24302,13 @@ cmd_versions() {
   # reads (final review F8) — so it WARNs, lists, and marks every verdict
   # unmeasured.
   local keep_ok=1
-  if ! _keep_ok "$keep"; then
+  if ! _keep_knob CCRC_VERSIONS_KEEP 3; then
     [ "$prune" -eq 0 ] \
-      || _ccrc_die "versions: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — nothing was pruned"
+      || _ccrc_die "versions: $KEEP_WHY — nothing was pruned"
     keep_ok=0
-    echo "versions: WARN: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — listing only; nothing would be pruned"
+    echo "versions: WARN: $KEEP_WHY — listing only; nothing would be pruned"
   else
-    keep=$((10#$keep))
+    keep="$KEEP"
   fi
   if [ "$prune" -eq 1 ]; then
     _upd_lock
@@ -24340,7 +24339,7 @@ cmd_versions() {
     linked|migrated)
       if [ "$lrc" -eq 0 ]; then _ver_protect || prc=$?; else prc=1; fi
       if [ "$keep_ok" -eq 0 ]; then
-        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999"; done
+        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: CCRC_VERSIONS_KEEP could not be used (the WARN above says why)"; done
       elif [ "$prc" -ne 0 ]; then
         echo "versions: WARN: $VER_WHY — nothing would be pruned"
         for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: unmeasured"; done
@@ -24379,7 +24378,7 @@ cmd_versions() {
     fi
     printf '  %s %s  %s  %s\n' "$mark" "$n" "$cpl" "${VER_VERDICT[$n]}"
   done
-  [ "$keep_ok" -eq 1 ] || keep="(not a whole number from 0 to 9999)"
+  [ "$keep_ok" -eq 1 ] || keep="(could not be used)"
   echo "versions: ${#VER_NAMES[@]} kept tree(s) under \$HOME/ccrc-versions; CCRC_VERSIONS_KEEP=$keep plus the protected set (pointed-at, previous, the projection's desired tags, running units) — 'ccrc versions --prune' removes the prunable ones"
   return "$grc"
 }

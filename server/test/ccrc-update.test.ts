@@ -10944,8 +10944,8 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
     r = runVersions(home, [], { CCRC_VERSIONS_KEEP: 'three' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).toMatch(/^versions: WARN: CCRC_VERSIONS_KEEP='three' is not a whole number from 0 to 9999 — listing only; nothing would be pruned$/m);
-    expect(r.stdout).toMatch(/^ {2}\* v1\.0\.1 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999$/m);
-    expect(r.stdout).toMatch(/^ {2}  v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999$/m);
+    expect(r.stdout).toMatch(/^ {2}\* v1\.0\.1 {2}complete {2}kept: CCRC_VERSIONS_KEEP could not be used \(the WARN above says why\)$/m);
+    expect(r.stdout).toMatch(/^ {2}  v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP could not be used \(the WARN above says why\)$/m);
     expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
   });
 
@@ -10974,8 +10974,8 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
       expect(r.stdout).toContain(`versions: WARN: ${WHY(HUGE)} — listing only; nothing would be pruned`);
       expect(r.stdout, 'a version was listed as prunable').not.toMatch(/^ {2}[ *] \S+ {2}(?:in)?complete {2}prunable/m);
-      expect(r.stdout).toMatch(/^ {4}v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999$/m);
-      expect(r.stdout).toContain('CCRC_VERSIONS_KEEP=(not a whole number from 0 to 9999)');
+      expect(r.stdout).toMatch(/^ {4}v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP could not be used \(the WARN above says why\)$/m);
+      expect(r.stdout).toContain('CCRC_VERSIONS_KEEP=(could not be used)');
       // The automatic GC keeps its contract: a WARN, rc 1 (its callers ignore it), nothing removed.
       const a = sourcedCcrc(home, `CCRC_VERSIONS_KEEP=${HUGE}; _ver_gc update auto; echo "rc=$?"`);
       expect(a.stdout, a.stderr).toBe(`update: versions: WARN: ${WHY(HUGE)} — nothing pruned\nrc=1\n`);
@@ -13878,27 +13878,32 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(word(home, path.basename(announcedBackupDir(r.stdout, home))), 'this run\'s own').toBe('v1');
     });
 
-    it('W23-B3: a CCRC_BACKUP_DATA_KEEP of 0, 1, 00, 10000, x or ٣ refuses: an update WARNs and prunes and thins nothing; ccrc backup dies after its backup', () => {
+    it('W23-B3: a CCRC_BACKUP_DATA_KEEP of 0, 1, 00, 10000, x or ٣ refuses: an update WARNs and thins nothing, and its count prune runs; ccrc backup says so after its backup, prunes by count and exits 1 (D-6590)', () => {
       const four = NAMES.slice(0, 4);
+      // At CCRC_BACKUP_KEEP=0 the count prune removes the three older dirs; the newest earlier one is the keep-set's (tree, snapshot, data).
+      const [older, kept] = [four.slice(0, 3), ['20250104-000000']];
       const home = box('ccrc-fx-w23-b3-update-');
       stubUpdate(home);
       plantFull(home, four);
-      const before = fingerprint(home, four);
+      const before = fingerprint(home, kept);
       const u = runUpdate(home, [], { CCRC_BACKUP_DATA_KEEP: '1', CCRC_BACKUP_KEEP: '0' });
       expect(u.code, `stderr: ${u.stderr}\nstdout: ${u.stdout}`).toBe(0);
-      expect(u.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999 — nothing pruned or thinned$/m);
-      expect(u.stdout).not.toMatch(/^update: backups: (pruned|thinned)/m);
-      expect(fingerprint(home, four), 'every planted dir is byte-identical').toEqual(before);
+      expect(u.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999 — nothing thinned$/m);
+      expect(u.stdout).not.toMatch(/^update: backups: thinned/m);
+      for (const n of older) expect(u.stdout, n).toMatch(new RegExp(`^update: backups: pruned \\$HOME/ccrc-backups/${n} `, 'm'));
+      for (const n of older) expect(existsSync(dirOf(home, n)), n).toBe(false);
+      expect(fingerprint(home, kept), 'the keep-set\'s dir is byte-identical').toEqual(before);
       for (const v of ['0', '1', '00', '10000', 'x', '٣']) {
         const h = box('ccrc-fx-w23-b3-backup-');
         plantFull(h, four);
-        const b4 = fingerprint(h, four);
+        const b4 = fingerprint(h, kept);
         const r = runBackup(h, [], { CCRC_BACKUP_DATA_KEEP: v, CCRC_BACKUP_KEEP: '0' });
         expect(r.code, `${v}: stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
-        expect(r.stderr, v).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP='[^']*' is not a whole number from 2 to 9999 — nothing was pruned or thinned$/m);
+        expect(r.stderr, v).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP='[^']*' is not a whole number from 2 to 9999 — nothing was thinned$/m);
         expect(r.stdout, v).toMatch(/^backup: \S+/m);
-        expect(readdirSync(backupRoot(h)), `${v}: the backup was taken first`).toHaveLength(5);
-        expect(fingerprint(h, four), v).toEqual(b4);
+        expect(r.stdout, v).not.toMatch(/^backup: thinned/m);
+        expect(readdirSync(backupRoot(h)).sort(), `${v}: the backup was taken first, then the count prune ran`).toEqual([...kept, path.basename(ownDir(r))]);
+        expect(fingerprint(h, kept), v).toEqual(b4);
       }
     });
 
@@ -14079,7 +14084,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       writeFileSync(join(bad, '.ccrc', 'ccrc.env'), 'CCRC_BACKUP_DATA_KEEP=1\n');
       const b = runBackup(bad);
       expect(b.code, `stderr: ${b.stderr}\nstdout: ${b.stdout}`).toBe(1);
-      expect(b.stderr).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999 — nothing was pruned or thinned$/m);
+      expect(b.stderr).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999 — nothing was thinned$/m);
       // The process environment wins over the file.
       const e = box('ccrc-fx-w23-b12-env-');
       plantFull(e, four);
@@ -14211,7 +14216,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       }
     });
 
-    it('W23-B17: a ccrc.env line the reader does not take refuses like an invalid value: an export line, a spaced = and a key led by a vertical tab, nothing pruned or thinned, the file named and never its bytes (D-6365)', () => {
+    it('W23-B17: a ccrc.env line the reader does not take refuses like an invalid value: an export line, a spaced = and a key led by a vertical tab, nothing thinned, the file named and never its bytes (D-6365, D-6590)', () => {
       const four = NAMES.slice(0, 4);
       for (const [tag, text] of [['export', 'export CCRC_BACKUP_DATA_KEEP=9999\n'], ['spaced', 'CCRC_BACKUP_DATA_KEEP = 9999\n'], ['vtab', '\vCCRC_BACKUP_DATA_KEEP=9999\n']] as const) {
         const home = box(`ccrc-fx-w23-b17-${tag}-`);
@@ -14220,7 +14225,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
         writeFileSync(join(home, '.ccrc', 'ccrc.env'), text);
         const r = runBackup(home);
         expect(r.code, `${tag}: stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
-        expect(r.stderr, tag).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take \(it reads only a plain KEY=value line\) — nothing was pruned or thinned$/m);
+        expect(r.stderr, tag).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take \(it reads only a plain KEY=value line\) — nothing was thinned$/m);
         expect(r.stdout + r.stderr, `${tag}: the refusal never prints the file's bytes`).not.toContain('9999');
         expect(fingerprint(home, four), `${tag}: no data set was touched`).toEqual(before);
       }
@@ -14420,28 +14425,37 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(readdirSync(backupRoot(home)).sort(), 'the newest ten are left').toEqual(names.slice(2));
     });
 
-    it('W23-B17: on macOS the same ccrc.env stops the prune: the Darwin model refuses NOTE=café, _bak_gc WARNs, returns 1 and leaves all 12 (review 839 departure 1, review 847)', () => {
+    it('W23-B17: on macOS the same ccrc.env stops the thinning only: the Darwin model refuses NOTE=café for CCRC_BACKUP_DATA_KEEP, _bak_gc WARNs, prunes 12 backups to 10 and returns 1 (review 839 departure 1, review 847, D-6590)', () => {
       const { home, names, g } = pruneTwelve('darwin');
       expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
-      expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env line 2 is not a plain NAME=value line\b.* — nothing pruned or thinned$/m);
+      expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env line 2 is not a plain NAME=value line\b.* — nothing thinned$/m);
+      expect(g.stdout.split('\n').filter((l) => / WARN: /.test(l)), 'the one WARN').toHaveLength(1);
       expect(g.stdout).toMatch(/^rc 1$/m);
-      expect(g.stdout, 'no prune line').not.toMatch(/^update: backups: pruned /m);
-      expect(readdirSync(backupRoot(home)).sort(), 'all twelve are left').toEqual(names);
+      for (const n of names.slice(0, 2)) expect(g.stdout).toMatch(new RegExp(`^update: backups: pruned \\$HOME/ccrc-backups/${n}`, 'm'));
+      expect(readdirSync(backupRoot(home)).sort(), 'the newest ten are left').toEqual(names.slice(2));
     });
 
-    it.skipIf(process.getuid?.() === 0)('W23-B18: a ccrc.env that is there but cannot be read refuses, never falls back to the default: nothing pruned or thinned (D-6365)', () => {
+    /** A whole-file fault refuses both keeps (D-6587, D-6590): each its own WARN, and neither act runs. */
+    const BOTH_UNREADABLE = [
+      'update: backups: WARN: CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env is there but cannot be read — nothing pruned',
+      'update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~/.ccrc/ccrc.env is there but cannot be read — nothing thinned',
+    ];
+    it.skipIf(process.getuid?.() === 0)('W23-B18: a ccrc.env that is there but cannot be read refuses both keeps, never falls back to the default: nothing pruned, nothing thinned, the lock never taken (D-6365, D-6590)', () => {
       const four = NAMES.slice(0, 4);
       const home = box('ccrc-fx-w23-b18-');
       plantFull(home, four);
       const before = fingerprint(home, four);
+      const lock = join(home, '.ccrc', 'update.lock');
+      expect(existsSync(lock), 'no lock file before the call').toBe(false);
       const env = join(home, '.ccrc', 'ccrc.env');
       writeFileSync(env, 'CCRC_BACKUP_DATA_KEEP=9999\n');
       chmodSync(env, 0o000);
       const g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"');
       chmodSync(env, 0o600);
       expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
-      expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env is there but cannot be read — nothing pruned or thinned$/m);
+      for (const line of BOTH_UNREADABLE) expect(g.stdout.split('\n'), line).toContain(line);
       expect(g.stdout).toMatch(/^rc 1$/m);
+      expect(existsSync(lock), 'refused before the lock').toBe(false);
       expect(g.stdout, 'no prune line and no thinning line').not.toMatch(/^update: backups: (pruned|thinned|coordination data sets)/m);
       expect(fingerprint(home, four), 'no data set was touched').toEqual(before);
     });
@@ -14451,11 +14465,13 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       ['a directory', (env: string): void => { mkdirSync(env); }],
       // Opened, a FIFO with no writer blocks for ever, so the row runs under a bound and a hang fails it (review 839 F1).
       ['a FIFO', (env: string): void => { expect(spawnSync('mkfifo', [env]).status).toBe(0); }],
-    ] as const)('W23-B18: %s at ccrc.env cannot be read, so it refuses, never falls back to the default: nothing pruned or thinned (D-6365, review 806 F5, review 839 F1)', (_shape, plant) => {
+    ] as const)('W23-B18: %s at ccrc.env cannot be read, so both keeps refuse, never falling back to the default: nothing pruned, nothing thinned, the lock never taken (D-6365, D-6590, review 806 F5, review 839 F1)', (_shape, plant) => {
       const four = NAMES.slice(0, 4);
       const home = box('ccrc-fx-w23-b18x-');
       plantFull(home, four);
       const before = fingerprint(home, four);
+      const lock = join(home, '.ccrc', 'update.lock');
+      expect(existsSync(lock), 'no lock file before the call').toBe(false);
       const env = join(home, '.ccrc', 'ccrc.env');
       rmSync(env, { force: true });
       plant(env);
@@ -14467,8 +14483,9 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
         if (lstatSync(env, { throwIfNoEntry: false })?.isFIFO()) closeSync(openSync(env, fsConstants.O_RDWR | fsConstants.O_NONBLOCK));
       }
       expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
-      expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env is there but cannot be read — nothing pruned or thinned$/m);
+      for (const line of BOTH_UNREADABLE) expect(g.stdout.split('\n'), line).toContain(line);
       expect(g.stdout).toMatch(/^rc 1$/m);
+      expect(existsSync(lock), 'refused before the lock').toBe(false);
       expect(g.stdout, 'no prune line and no thinning line').not.toMatch(/^update: backups: (pruned|thinned|coordination data sets)/m);
       expect(fingerprint(home, four), 'no data set was touched').toEqual(before);
     });
@@ -14484,6 +14501,231 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(src.split('${UPD_BAK_FLOOR//-/}').length - 1, 'the floor comparison').toBe(1);
       expect(body('_bak_ours'), 'the one spelling').toContain('= "$UPD_BACKUP_DIR" ]');
       for (const fn of ['_bak_keepset', '_bak_removable', '_bak_thin']) expect(body(fn), fn).toMatch(/^ +.*_bak_ours "\$d"/m);
+    });
+
+    describe('W24: a refused keep stops only its own act (D-6590)', () => {
+      const holders: ChildProcess[] = [];
+      afterEach(() => { for (const h of holders.splice(0)) h.kill('SIGKILL'); });
+      const TWELVE = Array.from({ length: 12 }, (_, i) => `202501${String(i + 1).padStart(2, '0')}-000000`);
+      const FOUR = NAMES.slice(0, 4);
+      const GC = (lead: 'update' | 'rollback'): string => `UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc ${lead}; echo "rc $?"`;
+      const lockOf = (home: string): string => join(home, '.ccrc', 'update.lock');
+      const envOf = (home: string): string => join(home, '.ccrc', 'ccrc.env');
+      /** Code-only backups: no data set and no tree, so no keep-set member is among them and only the count decides. */
+      const plantCodeOnly = (home: string, names: string[]): void => { for (const n of names) plantDir(home, n, 'plain'); };
+      const prunedLine = (lead: string, n: string): RegExp => new RegExp(`^${lead}: backups: pruned \\$HOME/ccrc-backups/${n} `, 'm');
+      const lines = (r: Result, pick: RegExp): string[] => r.stdout.split('\n').filter((l) => pick.test(l));
+      /** ONE process holds ~/.ccrc/update.lock (the pruner describe's holder, as a pattern); returns once a fresh probe fails. */
+      const holdLock = (home: string): void => {
+        mkdirSync(join(home, '.ccrc'), { recursive: true });
+        holders.push(spawn(BASH, ['-c', 'exec 9>>"$1" && flock 9 && exec sleep 30', '_', lockOf(home)], { stdio: 'ignore' }));
+        for (const t0 = Date.now(); spawnSync(BASH, ['-c', 'exec 9>>"$1" && flock -n 9', '_', lockOf(home)]).status === 0;) {
+          if (Date.now() - t0 > 10_000) throw new Error('the fixture holder never took the lock');
+          spawnSync('sleep', ['0.05']);
+        }
+      };
+
+      it('W24-B1: an update with CCRC_BACKUP_DATA_KEEP=1 prunes by count and thins nothing', () => {
+        const home = box('ccrc-fx-w24-b1-');
+        plantCodeOnly(home, TWELVE);
+        const g = sourced(home, GC('update'), { CCRC_BACKUP_KEEP: '10', CCRC_BACKUP_DATA_KEEP: '1' });
+        expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+        expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999 — nothing thinned$/m);
+        for (const n of TWELVE.slice(0, 2)) expect(g.stdout, n).toMatch(prunedLine('update', n));
+        expect(readdirSync(backupRoot(home)).sort(), 'the newest ten are left').toEqual(TWELVE.slice(2));
+        expect(g.stdout).not.toMatch(/^update: backups: (thinned|coordination data sets)/m);
+        expect(g.stdout).toMatch(/^rc 1$/m);
+      });
+
+      it('W24-B2: an update with CCRC_BACKUP_KEEP=x thins and prunes nothing by count', () => {
+        const home = box('ccrc-fx-w24-b2-');
+        plantFull(home);
+        const g = sourced(home, GC('update'), { CCRC_BACKUP_KEEP: 'x' });
+        expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+        expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_KEEP='x' is not a whole number from 0 to 9999 — nothing pruned$/m);
+        expect(g.stdout).not.toMatch(/^update: backups: pruned /m);
+        for (const n of NAMES.slice(0, 2)) {
+          expect(listing(home, n), n).toEqual(['agent-dist', 'coordination-thinned.json']);
+          expect(g.stdout, n).toMatch(thinLine('update: backups:', n));
+        }
+        expect(readdirSync(backupRoot(home)).sort(), 'every dir is still there').toEqual(NAMES);
+        expect(g.stdout).toMatch(/^rc 1$/m);
+      });
+
+      it('W24-B3: a rollback never reads CCRC_BACKUP_DATA_KEEP', () => {
+        const home = box('ccrc-fx-w24-b3-');
+        plantCodeOnly(home, TWELVE);
+        const g = sourced(home, GC('rollback'), { CCRC_BACKUP_DATA_KEEP: '1' });
+        expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+        for (const n of TWELVE.slice(0, 2)) expect(g.stdout, n).toMatch(prunedLine('rollback', n));
+        expect(readdirSync(backupRoot(home)).sort()).toEqual(TWELVE.slice(2));
+        expect(g.stdout).not.toMatch(/CCRC_BACKUP_DATA_KEEP/);
+        expect(g.stdout).toMatch(/^rc 0$/m);
+      });
+
+      it('W24-B4: ccrc backup says each refusal on stderr, runs the other act, and exits 1', () => {
+        const DATA = /^ccrc: CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999 — nothing was thinned$/m;
+        const KEEP = /^ccrc: CCRC_BACKUP_KEEP='x' is not a whole number from 0 to 9999 — nothing was pruned$/m;
+        const NO_THIN = /thinned|thinning|coordination data set/;
+        // The data keep refused: the count prune runs at CCRC_BACKUP_KEEP=0, and nothing is thinned.
+        const d = box('ccrc-fx-w24-b4-data-');
+        plantFull(d, FOUR);
+        const kept = fingerprint(d, ['20250104-000000']);
+        const dr = runBackup(d, [], { CCRC_BACKUP_DATA_KEEP: '1', CCRC_BACKUP_KEEP: '0' });
+        expect(dr.code, `stderr: ${dr.stderr}\nstdout: ${dr.stdout}`).toBe(1);
+        expect(dr.stderr).toMatch(DATA);
+        for (const n of FOUR.slice(0, 3)) expect(dr.stdout, n).toMatch(new RegExp(`^backup: pruned \\S+/${n} `, 'm'));
+        expect(readdirSync(backupRoot(d)).sort(), 'the keep-set\'s data keep and this run\'s own').toEqual(['20250104-000000', path.basename(ownDir(dr))]);
+        expect(fingerprint(d, ['20250104-000000'])).toEqual(kept);
+        expect(dr.stdout, 'nothing thinned').not.toMatch(NO_THIN);
+        // The count keep refused: nothing is pruned, and the thinning runs.
+        const k = box('ccrc-fx-w24-b4-keep-');
+        plantFull(k, FOUR);
+        const kr = runBackup(k, [], { CCRC_BACKUP_KEEP: 'x' });
+        expect(kr.code, `stderr: ${kr.stderr}\nstdout: ${kr.stdout}`).toBe(1);
+        expect(kr.stderr).toMatch(KEEP);
+        expect(kr.stdout).not.toMatch(/^backup: pruned /m);
+        for (const n of FOUR.slice(0, 2)) expect(kr.stdout, n).toMatch(thinLine('backup:', n));
+        expect(readdirSync(backupRoot(k))).toHaveLength(5);
+        // Both refused: neither act runs.
+        const b = box('ccrc-fx-w24-b4-both-');
+        plantFull(b, FOUR);
+        const before = fingerprint(b, FOUR);
+        const br = runBackup(b, [], { CCRC_BACKUP_DATA_KEEP: '1', CCRC_BACKUP_KEEP: 'x' });
+        expect(br.code, `stderr: ${br.stderr}\nstdout: ${br.stdout}`).toBe(1);
+        expect(br.stderr).toMatch(DATA);
+        expect(br.stderr).toMatch(KEEP);
+        expect(fingerprint(b, FOUR), 'every planted dir is byte-identical').toEqual(before);
+        expect(readdirSync(backupRoot(b))).toHaveLength(5);
+        // A lock-held skip after a refusal still exits 1 (every early return returns 1 once a refusal was printed).
+        const l = box('ccrc-fx-w24-b4-lock-');
+        plantFull(l, FOUR);
+        holdLock(l);
+        const lr = runBackup(l, [], { CCRC_BACKUP_DATA_KEEP: '1' });
+        expect(lr.code, `stderr: ${lr.stderr}\nstdout: ${lr.stdout}`).toBe(1);
+        expect(lr.stdout).toContain('backup: prune skipped — another ccrc run holds ~/.ccrc/update.lock; nothing was pruned');
+        expect(lr.stderr).toMatch(DATA);
+      }, 120_000);
+
+      it('W24-B5: an update with both refused touches nothing and returns 1 before the lock', () => {
+        const home = box('ccrc-fx-w24-b5-');
+        plantFull(home, FOUR);
+        const before = fingerprint(home, FOUR);
+        expect(existsSync(lockOf(home)), 'no lock file before the call').toBe(false);
+        const g = sourced(home, GC('update'), { CCRC_BACKUP_KEEP: 'x', CCRC_BACKUP_DATA_KEEP: '1' });
+        expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+        expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_KEEP='x' is not a whole number from 0 to 9999 — nothing pruned$/m);
+        expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999 — nothing thinned$/m);
+        expect(g.stdout).toMatch(/^rc 1$/m);
+        expect(fingerprint(home, FOUR), 'every planted dir is byte-identical').toEqual(before);
+        expect(existsSync(lockOf(home)), 'refused before the lock').toBe(false);
+      });
+
+      it('W24-B6: a ccrc.env no reader can scan refuses both keeps at once, in _bak_gc and in ccrc backup', () => {
+        const shapes: (readonly [string, string | Buffer, string])[] = [['a NUL byte', Buffer.from('NOTE=x\0y\n'), 'could not be scanned']];
+        if (process.getuid?.() !== 0) shapes.push(['mode 000', 'NOTE=x\n', 'is there but cannot be read']);
+        for (const [shape, text, clause] of shapes) {
+          const why = (k: string): string => `${k} cannot be measured: ~/.ccrc/ccrc.env ${clause}`;
+          const plant = (home: string): void => {
+            plantFull(home, FOUR);
+            writeFileSync(envOf(home), text);
+            if (shape === 'mode 000') chmodSync(envOf(home), 0o000);
+          };
+          const g0 = box('ccrc-fx-w24-b6-gc-');
+          plant(g0);
+          const before = fingerprint(g0, FOUR);
+          expect(existsSync(lockOf(g0)), `${shape}: no lock file before the call`).toBe(false);
+          let g: Result;
+          try { g = sourced(g0, GC('update')); } finally { chmodSync(envOf(g0), 0o600); }
+          expect(g.code, `${shape}: stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+          expect(g.stdout.split('\n'), shape).toContain(`update: backups: WARN: ${why('CCRC_BACKUP_KEEP')} — nothing pruned`);
+          expect(g.stdout.split('\n'), shape).toContain(`update: backups: WARN: ${why('CCRC_BACKUP_DATA_KEEP')} — nothing thinned`);
+          expect(g.stdout, shape).toMatch(/^rc 1$/m);
+          expect(fingerprint(g0, FOUR), `${shape}: every planted dir is byte-identical`).toEqual(before);
+          expect(existsSync(lockOf(g0)), `${shape}: refused before the lock`).toBe(false);
+          const b0 = box('ccrc-fx-w24-b6-backup-');
+          plant(b0);
+          const b4 = fingerprint(b0, FOUR);
+          let r: Result;
+          try { r = runBackup(b0); } finally { chmodSync(envOf(b0), 0o600); }
+          expect(r.code, `${shape}: stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+          expect(r.stderr.split('\n'), shape).toContain(`ccrc: ${why('CCRC_BACKUP_KEEP')} — nothing was pruned`);
+          expect(r.stderr.split('\n'), shape).toContain(`ccrc: ${why('CCRC_BACKUP_DATA_KEEP')} — nothing was thinned`);
+          expect(fingerprint(b0, FOUR), `${shape}: every planted dir is byte-identical`).toEqual(b4);
+          expect(readdirSync(backupRoot(b0)).filter((n) => !FOUR.includes(n)), `${shape}: this run's own backup is the only new dir`).toEqual([path.basename(ownDir(r))]);
+        }
+      }, 120_000);
+
+      it('W24-B7: the prune line says where its keep came from', () => {
+        for (const [where, file, env] of [
+          ['the box\'s ccrc.env', 'CCRC_BACKUP_KEEP=10\n', {}],
+          ['the environment', null, { CCRC_BACKUP_KEEP: '10' }],
+          ['the default', null, {}],
+        ] as const) {
+          const home = box('ccrc-fx-w24-b7-');
+          plantCodeOnly(home, TWELVE);
+          if (file !== null) writeFileSync(envOf(home), file);
+          const g = sourced(home, GC('update'), env);
+          expect(g.code, `${where}: stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+          const pruned = lines(g, /^update: backups: pruned /);
+          expect(pruned, where).toHaveLength(2);
+          for (const l of pruned) expect(l, where).toContain(`(kept: the newest 10 timestamped backups (CCRC_BACKUP_KEEP from ${where}),`);
+        }
+      });
+
+      /** `ccrc backup` under `env -i`: HOME, the row's PATH and a TMPDIR inside the box, the two bus paths the row's shims
+       *  need (inside the box), and `extra`; no other variable, so no CCRC_ setting reaches it but what `extra` names. */
+      const bareBackup = (home: string, extra: string[] = []): Result => {
+        mkdirSync(join(home, 'tmp'), { recursive: true });
+        replantDoctorStubs(home);
+        const u = updateEnv(home);
+        const list = [`HOME=${home}`, `PATH=${u['PATH'] ?? ''}`, `TMPDIR=${join(home, 'tmp')}`,
+          `XDG_RUNTIME_DIR=${u['XDG_RUNTIME_DIR'] ?? ''}`, `DBUS_SESSION_BUS_ADDRESS=${u['DBUS_SESSION_BUS_ADDRESS'] ?? ''}`, ...extra];
+        assertNoRealTool(Object.fromEntries(list.map((kv) => [kv.slice(0, kv.indexOf('=')), kv.slice(kv.indexOf('=') + 1)])), home);
+        const r = spawnSync('env', ['-i', ...list, BASH, join(REPO, 'ccd', 'ccrc'), 'backup'], { encoding: 'utf8' });
+        return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+      };
+      /** A box with `n` earlier plain backups and `text` appended to its ccrc.env; `env -i` `ccrc backup`; what is left. */
+      const bare = (prefix: string, n: number, text: string, extra: string[] = []): { left: string[]; planted: string[]; own: string } => {
+        const home = box(prefix);
+        const planted = TWELVE.slice(0, n);
+        plantCodeOnly(home, planted);
+        if (text !== '') appendFileSync(envOf(home), text);
+        const r = bareBackup(home, extra);
+        expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+        return { left: readdirSync(backupRoot(home)).sort(), planted, own: path.basename(ownDir(r)) };
+      };
+
+      it('W24-P1: under env -i (a detached run, a timer, an ssh shell), ccrc backup reads CCRC_BACKUP_KEEP from ccrc.env', () => {
+        const { left, planted, own } = bare('ccrc-fx-w24-p1-', 4, 'CCRC_BACKUP_KEEP=2\n');
+        expect(left).toEqual([planted[3], own]);
+      });
+
+      it('W24-P2: a set environment wins over ccrc.env', () => {
+        const { left, planted, own } = bare('ccrc-fx-w24-p2-', 4, 'CCRC_BACKUP_KEEP=2\n', ['CCRC_BACKUP_KEEP=3']);
+        expect(left).toEqual([...planted.slice(2), own]);
+      });
+
+      it('W24-P3: with neither, the default 10', () => {
+        const { left, planted, own } = bare('ccrc-fx-w24-p3-', 11, '');
+        expect(left).toEqual([...planted.slice(2), own]);
+      });
+
+      it('W24-P5: no unit or detached argv carries a CCRC_ setting, so the reader\'s file read is the only source', () => {
+        for (const unit of ['ccrc-update-watchdog.service', 'ccrc-models.service']) {
+          const text = readFileSync(join(REPO, 'deploy', 'systemd', unit), 'utf8');
+          expect(text, unit).not.toMatch(/^EnvironmentFile=/m);
+          expect(text.split('\n').filter((l) => /^Environment=.*CCRC_/.test(l)), unit).toEqual([]);
+        }
+        const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+        for (const fn of ['_upd_detach', '_svc_run_detached']) {
+          const m = new RegExp(`^${fn}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src);
+          expect(m, `ccd/ccrc has no ${fn}`).not.toBeNull();
+          const code = m![0].split('\n').filter((l) => !/^\s*#/.test(l));
+          expect(code.length, `${fn}: its body was read`).toBeGreaterThan(3);
+          expect(code.filter((l) => /--setenv|-E |CCRC_[A-Z0-9_]+=/.test(l)), fn).toEqual([]);
+        }
+      });
     });
   });
 
@@ -14503,10 +14745,12 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       else writeFileSync(envFile(home), text);
       return home;
     };
-    /** `script` in the sourced checkout ccrc, every setting unset first (updateEnv sets one), so a row's environment is its own. */
+    /** `script` in the sourced checkout ccrc, every setting unset first (updateEnv sets one), so a row's environment is its own.
+     *  Its stderr must be empty: the reader never prints. */
     const knob = (home: string, script: string): string => {
       const r = sourcedCcrc(home, `unset ${SETTINGS.join(' ')}; ${script}`);
       expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr, 'the reader printed').toBe('');
       return r.stdout;
     };
 
@@ -14606,6 +14850,15 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       // U+0663 is a decimal digit to a UTF-8 `=~` range, never to `_keep_ok`; under LC_ALL=C its two bytes print as `??`.
       expect(knob(home, `export LC_ALL=C CCRC_BACKUP_KEEP=٣; _keep_knob CCRC_BACKUP_KEEP 10; ${KEEP_ECHO}`))
         .toBe('rc 1 keep  why CCRC_BACKUP_KEEP=\'??\' is not a whole number from 0 to 9999\n');
+    });
+
+    it('W24-R10: a refused keep clears KEEP_FROM too, so a caller never reads the source of the keep before it', () => {
+      // The first call sets KEEP_FROM; the second refuses, once invalid and once unmeasured, and must leave it empty.
+      for (const [shape, text] of [['invalid', 'CCRC_BACKUP_KEEP=x\n'], ['unmeasured', 'export CCRC_BACKUP_KEEP=1\n']] as const) {
+        const home = boxWith('ccrc-fx-w24-r10-', text);
+        expect(knob(home, '_keep_knob CCRC_VERSIONS_KEEP 3; echo "from [$KEEP_FROM]"; _keep_knob CCRC_BACKUP_KEEP 10; echo "rc $? from [$KEEP_FROM]"'), shape)
+          .toBe('from [the default]\nrc 1 from []\n');
+      }
     });
   });
 
