@@ -170,35 +170,40 @@ Each guard, the mutation that removes or weakens it, and the rows expected to go
 | `release-main.test.ts` | J9: `receive` does not tag locally | W26-R1, W26-R9 (publish refuses "HEAD no longer carries") — measured at `54d8dda61`: W26-R1 (no local tag after receive) and W26-R9 (publish refuses "HEAD no longer carries v0.0.2") (2 of 112), exit 1 |
 | `release-main.test.ts` | J10: `receive` accepted with `--tag` alone (the three-flag check deleted) | W26-R7 — measured at `54d8dda61` (the loop replaced by `:`): W26-R7, the three receive-missing-a-flag cases (3 of 112), exit 1; each then exits 1 at a later refusal |
 | `release-main.test.ts` | J11 (fix round 1): `receive`'s wrong-arm refusal deleted (the `elif` branch that refuses `--in`, `--tag` or `--digest` with another arm) | the three W26-R7 wrong-arm cases — measured at `72a4dd26f`: W26-R7 `prepare --tag`, `publish --in` and `compare --digest` (3 of 112), exit 1. `prepare --tag` then runs prepare and exits 0 (red on the exit code); `publish --in` and `compare --digest` still exit 2, on the missing state, so they are red only on the reason the rows now assert |
-| `build-release.test.ts` | B1: the publish job's `if:` deleted | the amended attest-gate row |
-| `build-release.test.ts` | B2: `\|\| always()` appended to the publish job's `if:` | the amended attest-gate row |
-| `build-release.test.ts` | B3: `ref: ${{ github.sha }}` added to the build job's checkout | W26-Y2 |
-| `build-release.test.ts` | B4: `fetch-depth: 0` deleted from the publish job's checkout | W26-Y2 |
-| `build-release.test.ts` | B5: the upload's `path` becomes `release-out/*` | W26-Y3 |
-| `build-release.test.ts` | B6: the download's `path` becomes `release-out` | W26-Y3 |
-| `build-release.test.ts` | B7: the receive step's env drops `CCRC_BUILD_DIGEST` | W26-Y4 |
-| `build-release.test.ts` | B8: the record step moved after the upload | W25-Y3 (amended order) |
-| `build-release.test.ts` | B9: `id: record` deleted from release-main's record step | W26-Y4; and, in `release-job-boundary.test.ts`, W26-G1 and W26-G5 (release-main.yml) |
-| `build-release.test.ts` | B10: the decision check step deleted | W26-Y6, W25-Y3 (amended order) |
-| `build-release.test.ts` | B11: `ref: ${{ needs.build.outputs.tag }}` added to release-main's publish checkout | W26-Y2; and W26-G1 (release-main.yml) |
-| `release-job-boundary.test.ts` | G-a: release-main's build job gets `contents: write` | W26-G1 (release-main.yml) |
-| `release-job-boundary.test.ts` | G-b: release-main's build job gets `id-token: write` | W26-G1 (release-main.yml) |
-| `release-job-boundary.test.ts` | G-c: release-main's build checkout loses `persist-credentials: false` | W26-G1 (release-main.yml) |
-| `release-job-boundary.test.ts` | G-d: release-main's publish job gets a `run: cd server && npm ci` step | W26-G1 (release-main.yml) |
-| `release-job-boundary.test.ts` | G-e: release-main's publish job runs `bash deploy/release-main.sh prepare --out release-out` | W26-G1 (release-main.yml) |
-| `release-job-boundary.test.ts` | G-f: release-main's publish job gets `actions/setup-node@v4` | W26-G1 (release-main.yml) |
-| `release-job-boundary.test.ts` | G-g: release-main's publish job gets `run: node server/scripts/fix-node-pty-helper.mjs` | W26-G1 (release-main.yml) |
-| `release-job-boundary.test.ts` | G-h: top-level `permissions: write-all` in release-main.yml | W26-G1 (release-main.yml) |
-| `release-job-boundary.test.ts` | G-i: release-main's publish job loses `needs: build` | W26-G3 |
-| `release-job-boundary.test.ts` | G-j: the attest step moved into release-main's build job | W26-G1, W26-G3 |
-| `release-job-boundary.test.ts` | G-k: release-main's build job `runs-on: self-hosted` | W26-G1 (release-main.yml) |
-| `release-job-boundary.test.ts` | G-l: release.yml's build job gets `contents: write` | W26-G1 (release.yml) |
-| `release-job-boundary.test.ts` | G-m: release.yml's publish job gets a `run: bash deploy/build-release.sh --out release-out` step | W26-G1 (release.yml) |
-| `release-job-boundary.test.ts` | G-n: release-stable's `full` job gets `contents: write` | W26-G1 (release-stable.yml) |
-| `release-job-boundary.test.ts` | G-o: the marker list loses `npm` | W26-G4 (the three npm cases, each expecting the marker phrase); W26-G6 (the `npm` case) |
-| `release-job-boundary.test.ts` | G-p: `boundaryFindings` skips the job-level `env:` check | W26-G4 (the job-level `BASH_ENV` case) |
-| `release-job-boundary.test.ts` | G-q: `boundaryFindings` skips the `with:` key check | W26-G4 (the publish checkout `ref:` case) |
-| `release-job-boundary.test.ts` | G-r: the reference check skips `needs.<job>.outputs` | W26-G4 (the undeclared-output case) |
+| `build-release.test.ts` | B1: the publish job's `if:` deleted | the amended attest-gate row — measured at `aa4d47280`: the amended attest-gate row ("runs prepare, compare, attests, then publish …") (1 of 58), exit 1 |
+| `build-release.test.ts` | B2: `\|\| always()` appended to the publish job's `if:` | the amended attest-gate row — measured at `aa4d47280`: the amended attest-gate row ("runs prepare, compare, attests, then publish …") (1 of 58), exit 1 |
+| `build-release.test.ts` | B3: `ref: ${{ github.sha }}` added to the build job's checkout | W26-Y2 — measured at `aa4d47280`: W26-Y2 release-main.yml (1 of 58), exit 1 |
+| `build-release.test.ts` | B4: `fetch-depth: 0` deleted from the publish job's checkout | W26-Y2 — measured at `aa4d47280`: W26-Y2 release-main.yml (1 of 58), exit 1 |
+| `build-release.test.ts` | B5: the upload's `path` becomes `release-out/*` | W26-Y3 — measured at `aa4d47280`: W26-Y3 release-main.yml (1 of 58), exit 1 |
+| `build-release.test.ts` | B6: the download's `path` becomes `release-out` | W26-Y3 — measured at `aa4d47280`: W26-Y3 release-main.yml (1 of 58), exit 1 |
+| `build-release.test.ts` | B7: the receive step's env drops `CCRC_BUILD_DIGEST` | W26-Y4 — measured at `aa4d47280`: W26-Y4 release-main.yml (1 of 58), exit 1 |
+| `build-release.test.ts` | B8: the record step moved after the upload | W25-Y3 (amended order) — measured at `aa4d47280`: W25-Y3 (1 of 58), exit 1 |
+| `build-release.test.ts` | B9: `id: record` deleted from release-main's record step | W26-Y4; and, in `release-job-boundary.test.ts`, W26-G1 and W26-G5 (release-main.yml) — measured at `aa4d47280`: `build-release.test.ts` W26-Y4 release-main.yml and the amended attest-gate row ("runs prepare, compare, attests, then publish …") (2 of 58), exit 1; `release-job-boundary.test.ts` W26-G1 and W26-G5 release-main.yml (2 of 66), exit 1. DIFFERS from the expectation in `build-release.test.ts`: the attest-gate row finds the record step by its id, so it reds too |
+| `build-release.test.ts` | B10: the decision check step deleted | W26-Y6, W25-Y3 (amended order) — measured at `aa4d47280`: W26-Y6 and W25-Y3 (2 of 58), exit 1 |
+| `build-release.test.ts` | B11: `ref: ${{ needs.build.outputs.tag }}` added to release-main's publish checkout | W26-Y2; and W26-G1 (release-main.yml) — measured at `aa4d47280`: `build-release.test.ts` W26-Y2 release-main.yml (1 of 58), exit 1; `release-job-boundary.test.ts` W26-G1 release-main.yml (1 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-a: release-main's build job gets `contents: write` | W26-G1 (release-main.yml) — measured at `aa4d47280`: W26-G1 and W26-G2 release-main.yml (2 of 66), exit 1. DIFFERS: a build job holding `write` is a second write job, so W26-G2 reds too |
+| `release-job-boundary.test.ts` | G-b: release-main's build job gets `id-token: write` | W26-G1 (release-main.yml) — measured at `aa4d47280`: W26-G1 and W26-G2 release-main.yml (2 of 66), exit 1. DIFFERS: `id-token: write` makes the build job a second write job, so W26-G2 reds too |
+| `release-job-boundary.test.ts` | G-c: release-main's build checkout loses `persist-credentials: false` | W26-G1 (release-main.yml) — measured at `aa4d47280`: W26-G1 release-main.yml (1 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-d: release-main's publish job gets a `run: cd server && npm ci` step | W26-G1 (release-main.yml) — measured at `aa4d47280`: W26-G1 and W26-G2 release-main.yml (2 of 66), exit 1. DIFFERS: the marker makes publish a second build job, so W26-G2 reds too |
+| `release-job-boundary.test.ts` | G-e: release-main's publish job runs `bash deploy/release-main.sh prepare --out release-out` | W26-G1 (release-main.yml) — measured at `aa4d47280`: W26-G1 and W26-G2 release-main.yml (2 of 66), exit 1. DIFFERS: as G-d |
+| `release-job-boundary.test.ts` | G-f: release-main's publish job gets `actions/setup-node@v4` | W26-G1 (release-main.yml) — measured at `aa4d47280`: W26-G1 release-main.yml (1 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-g: release-main's publish job gets `run: node server/scripts/fix-node-pty-helper.mjs` | W26-G1 (release-main.yml) — measured at `aa4d47280`: W26-G1 release-main.yml (1 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-h: top-level `permissions: write-all` in release-main.yml | W26-G1 (release-main.yml) — measured at `aa4d47280`: W26-G1 release-main.yml (1 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-i: release-main's publish job loses `needs: build` | W26-G3 — measured at `aa4d47280`: W26-G1, W26-G3 and W26-G5 release-main.yml (3 of 66), exit 1. DIFFERS: publish then reads `needs.build` outside its needs, which the reference check (W26-G1) and W26-G5 see too |
+| `release-job-boundary.test.ts` | G-j: the attest step moved into release-main's build job | W26-G1, W26-G3 — measured at `aa4d47280`: W26-G1, W26-G3 and W26-G5 release-main.yml (3 of 66), exit 1. DIFFERS: the publish step's `steps.attest` then names no step of its job, which W26-G5 sees too |
+| `release-job-boundary.test.ts` | G-k: release-main's build job `runs-on: self-hosted` | W26-G1 (release-main.yml) — measured at `aa4d47280`: W26-G1 release-main.yml (1 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-l: release.yml's build job gets `contents: write` | W26-G1 (release.yml) — measured at `aa4d47280`: W26-G1 and W26-G2 release.yml (2 of 66), exit 1. DIFFERS: as G-a |
+| `release-job-boundary.test.ts` | G-m: release.yml's publish job gets a `run: bash deploy/build-release.sh --out release-out` step | W26-G1 (release.yml) — measured at `aa4d47280`: W26-G1 and W26-G2 release.yml (2 of 66), exit 1. DIFFERS: as G-d |
+| `release-job-boundary.test.ts` | G-n: release-stable's `full` job gets `contents: write` | W26-G1 (release-stable.yml) — measured at `aa4d47280`: W26-G1 and W26-G2 release-stable.yml (2 of 66), exit 1. DIFFERS: `full` becomes a second write job, so W26-G2 reds too |
+| `release-job-boundary.test.ts` | G-o: the marker list loses `npm` | W26-G4 (the three npm cases, each expecting the marker phrase); W26-G6 (the `npm` case) — measured at `aa4d47280`: W26-G4 `cd server && npm ci`, `npm install`, `npm run build`, and W26-G6 `npm` (4 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-p: `boundaryFindings` skips the job-level `env:` check | W26-G4 (the job-level `BASH_ENV` case) — measured at `aa4d47280` (the key added to the write job's allowed key set): W26-G4 job-level env case (1 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-q: `boundaryFindings` skips the `with:` key check | W26-G4 (the publish checkout `ref:` case) — measured at `aa4d47280` (the outside-its-set finding no longer pushed): W26-G4 checkout `ref:`, checkout `repository:` and download `github-token:` cases (3 of 66), exit 1. DIFFERS: the two other outside-its-set cases red too |
+| `release-job-boundary.test.ts` | G-r: the reference check skips `needs.<job>.outputs` | W26-G4 (the undeclared-output case) — measured at `aa4d47280` (every `needs` output left unresolved): W26-G4 undeclared-output case (1 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-s: `boundaryFindings` skips the download's and the attest's required `with:` keys (`EXACT_WITH`; this task's own guard, D-6655's "=" read as a whole set) | W26-G4 (the download-without-`path` case) — measured at `aa4d47280` (the check guarded by `&& false`): W26-G4 download-without-path case (1 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-t: `boundaryFindings` skips the download path rule (under `${{ runner.temp }}/`, no `..`; this task's own guard) | W26-G4 (the download-into-the-checkout case) — measured at `aa4d47280` (the check replaced by `if (false)`): W26-G4 download-into-the-checkout case (1 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-u: `boundaryFindings` skips the index-form references (`needs[`, `steps[`; this task's own guard) | W26-G4 (the by-index case) — measured at `aa4d47280` (the loop over an empty list): W26-G4 by-index case (1 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-v: the write job's build-output scan narrowed from any read of `needs` to `needs.` (this task's own widening) | W26-G4 (the `toJSON(needs)` case) — measured at `aa4d47280`: W26-G4 `toJSON(needs)` case (1 of 66), exit 1 |
+| `release-job-boundary.test.ts` | G-w: `boundaryFindings` skips the unreadable-called-workflow finding (a phrase of the brief with no planted case in the plan; this task added the case) | W26-G4 (the unreadable-called-workflow case) — measured at `aa4d47280` (the check replaced by `if (false)`): W26-G4 unreadable-called-workflow case (1 of 66), exit 1 |
 
 Every planted case in W26-G4 is itself a kept mutation row, re-proved on every run (the pattern of `workflow-yaml-parses.test.ts`).
 
