@@ -122,7 +122,6 @@ const where = (s: Site): string => `${s.file}:${s.line}`;
 
 /** The classified set, as the tree stands. No site is `unplaced`. */
 const EXPECTED_SITES: readonly string[] = [
-  'commands.ts | sessionCommands | readRegistry | knownId',
   'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
   'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
   'coord/dispatch.ts | dispatchRun | readRegistryMeasured | gated',
@@ -139,7 +138,6 @@ const EXPECTED_SITES: readonly string[] = [
   'fleet.ts | assembleFleet | readRegistryMeasured | tests-only',
   'lifecycle.ts | listProjects | readRegistryMeasured | reports',
   'registry.ts | readRegistry | readRegistryMeasured | wrapper',
-  'server.ts | prTasks | readRegistry | knownId',
   'watch.ts | detectDialogs | readRegistry | tests-only',
   'watch.ts | sweepHookStates | readRegistryMeasured | tests-only',
   'watch.ts | sweepMail | readRegistryMeasured | holds',
@@ -199,8 +197,8 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
       .toEqual([]);
   });
 
-  it('the classified set is exactly these 25 sites', () => {
-    expect(EXPECTED_SITES).toHaveLength(25);
+  it('the classified set is exactly these 23 sites', () => {
+    expect(EXPECTED_SITES).toHaveLength(23);
     expect(allSites().map(key).sort()).toEqual([...EXPECTED_SITES].sort());
   });
 
@@ -374,11 +372,11 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
       .toEqual(['refuses', 'refuses', 'refuses', 'reports', 'reports']);
     expect(sitesOf('fleet.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('lifecycle.ts', 'readRegistry').map(where)).toEqual([]);
-    expect(sitesOf('server.ts', 'readRegistry'), 'prTasks alone, placed knownId').toHaveLength(1);
+    expect(sitesOf('server.ts', 'readRegistry').map(where), 'prTasks reads one row (D-6434)').toEqual([]);
     expect(sitesOf('coord/routes.ts', 'readRegistry'), 'the two approval routes, placed refuses').toHaveLength(2);
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
-    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(7);
+    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(5);
     expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(18);
   });
 });
