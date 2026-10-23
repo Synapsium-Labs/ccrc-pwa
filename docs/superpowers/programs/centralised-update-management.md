@@ -5933,6 +5933,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
 - **2026-10-23 19:45 UTC — wave 27 landed, and wave 30 dispatched.** PR #1172 merged at 19:42 as `e5892a78e` and cut
   v0.0.592. Run 883 carries review 874's text items. The dispatch call timed out on the client, but the run reads
   dispatched with its brief queued, so it was not sent again.
+- **2026-10-23 20:10 UTC — wave 24's ruling 16: a comment mention no longer names a setting (mail 8759).** The worker's
+  final review measured that the settings scan counts a key's mention on any line, comment lines included, and the
+  example now carries a commented line for each of the seven. A file copied from it, plus one unrelated line the
+  parser model cannot decide, would refuse all seven and stop every update on that box. systemd drops a line whose
+  first non-blank character is `#` or `;`, so such a line cannot set the key. Ruled: it no longer counts, except one
+  holding an inner CR, which keeps counting as the scan already does. The macOS departure for the data keep stays.
 
 - **2026-10-22 14:05 UTC — an operator directive: no new version for a docs-only merge.** Verbatim (in chat): "Docs
   only updates with no changes to code (PRs) should not trigger new build versioning".
