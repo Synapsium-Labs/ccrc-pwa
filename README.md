@@ -4314,7 +4314,8 @@ capability or a shadowed lane stops a loose act too, and the marker alone arms n
 "temp entry would be collected" once per entry and token. Nothing in the tree writes the marker; it is the operator's to
 touch by hand, as `collect-lane-live` is. It needs `collect-loose-v1` in `ccd caps`: without it the census is never asked.
 Its rows read "temp entry collected" and "temp entry would be collected", name the entry (decoded, made one safe line), and
-list no attention item, because a loose entry is no session.
+list no attention item, because a loose entry is no session. When the census is cut, unmeasured, past the population cap, or has quarantine records it could not read, the arm considers
+nothing it cannot vouch for and one box line ("collector / loose temp entries") says why.
 
 **The switch in Settings (child reclamation wave 10).** The lane now has two arms, then one. It is live when either
 holds:

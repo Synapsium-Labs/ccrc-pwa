@@ -5441,7 +5441,7 @@ export class FleetWatcher {
     const nowMono = this.collectClock().mono;
     const entries = collectAttentionViews(this.collectState, this.collectPop, this.collectPopNames);
     return { entries, nowMono, box: {
-      unmeasured: this.collectPop?.unmeasured ?? [], refusedNames: this.collectPop?.refusedNames ?? 0,
+      unmeasured: this.collectPop?.unmeasured ?? [], refusedNames: this.collectPop?.refusedNames ?? 0, looseDoubt: this.collectPop?.looseDoubt ?? null,
       boxProbes: this.collectBoxProbes, passAudits: this.collectPassAudits, flockLatched: this.collectFlockLatched,
       unsettled: this.collectUnsettled(nowMono),
     } };

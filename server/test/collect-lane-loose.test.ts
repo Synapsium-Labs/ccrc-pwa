@@ -372,7 +372,7 @@ describe('the executor’s loose job: its own capabilities, the licence, and the
   it('a withdrawn loose capability before the act leaves shadow, and before the job asks anything it is a lane-wide clear', async () => {
     const r = looseRig();
     r.raise(COLLECT_LOOSE_LIVE_MARKER);
-    r.hooks.audit = () => { r.state.ccdVerbs = FULL_CAPS; };
+    r.hooks.audit = () => { r.state.ccdVerbs = [...FULL_CAPS]; };
     const out = await collectTempRoot(r.deps, r.job(ID_L));
     expect(out.kind).not.toBe('acted');
     expect(verbs(r)).toEqual(['ws-audit']);

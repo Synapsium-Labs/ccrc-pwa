@@ -1265,6 +1265,8 @@ export type CollectUnsettledKind = 'audit' | 'act' | 'job';
 export interface CollectBoxFacts {
   readonly unmeasured: readonly CollectListingDoubt[];
   readonly refusedNames: number;
+  /** Why the loose census gave the lane no loose name (`CollectPopulation.looseDoubt`), or null; ccrc's own words. */
+  readonly looseDoubt?: string | null;
   readonly boxProbes: ReadonlyMap<string, string>;
   readonly passAudits: ReadonlyMap<string, CollectPassClass>;
   readonly flockLatched: boolean;
@@ -1516,6 +1518,9 @@ function collectBoxItems(b: CollectBoxFacts, unvouched: readonly string[]): Chil
       + `${COLLECT_BOX_LABELS.tmpquarantine} are not temp-root ids ccrc acts on (for example a name that begins with a `
       + `dash, is longer than ${TMPROOT_ID_MAX_CHARS} characters, is not a session id’s shape, or is no quarantine `
       + 'record of one), so the collector never audits them. A person looks at them by hand.');
+  }
+  if (b.looseDoubt !== undefined && b.looseDoubt !== null) {
+    line('loose-census', `The temp-root collector kept loose temp entries: ${b.looseDoubt}. Nothing is removed on that account.`);
   }
   if (b.boxProbes.size > 0) {
     const what = [...b.boxProbes].sort(([p], [q]) => (p < q ? -1 : p > q ? 1 : 0)).map(([p, d]) => {

@@ -10487,6 +10487,7 @@ export const COLLECT_BOX_LABELS = {
   tmproots: '~/.cc-sessions/tmproots',
   tmpquarantine: '~/.cc-sessions/tmpquarantine',
   'refused-names': 'unusable names under ~/.cc-sessions',
+  'loose-census': 'collector / loose temp entries',
   'box-probe': 'collector / the fleet box',
   'no-document': 'collector / audits that printed nothing',
   lock: 'collector / temp-root reap locks',
