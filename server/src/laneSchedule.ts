@@ -195,8 +195,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   { name: 'approvalPrune', cadenceMs: APPROVAL_PRUNE_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
   { name: 'digestBeat', cadenceMs: DIGEST_BEAT_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null, startsDue: true },
   // The four lanes that select destructive acts. Child reclaim is the census's own cadence; the other three are its siblings on
-  // the same tick, at the same cadence, and follow it by reference. Child reclaim and the collector throttle on the monotonic
-  // clock (the twice-observed rule's interval is real time); child reclaim has no guard (a pass overtaken while it gathers
+  // the same tick, at the same cadence, and follow it by reference. All four throttle on the monotonic clock (spec K11, §5.1
+  // rule 1b: a cadence is real time, so a wall clock stepped back must not hold a lane for the step, nor one stepped forward
+  // run it early); the expiry and dead-coordinator lanes moved there from `Date.now()` in a commit of their own, and their
+  // verdicts keep reading the wall clock. Child reclaim has no guard (a pass overtaken while it gathers
   // is dropped by its own pass counter), the collector keeps one pass at a time, and the dead-coordinator lane hands its pass to
   // the shutdown seal (`inFlight`). Their failures reach `tick`'s own catch, so no row warns.
   { name: 'childReclaim', cadenceMs: CHILD_RECLAIM_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
@@ -205,11 +207,11 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick; its observation interval is the same real time' },
   },
   {
-    name: 'archivedExpiry', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'wall', flight: 'skip', warnKey: null,
+    name: 'archivedExpiry', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
     derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick, under the same switch' },
   },
   {
-    name: 'deadCoordinator', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'wall', flight: 'join', warnKey: null,
+    name: 'deadCoordinator', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'mono', flight: 'join', warnKey: null,
     derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick, under the same switch' },
   },
 ];

@@ -439,7 +439,7 @@ describe('the declared derivations are references, never a second literal', () =
 
 describe('the four reclaim lanes (D-5862, PR 3)', () => {
   const ROWS: Array<[string, string, string]> = [
-    ['childReclaim', 'mono', 'none'], ['collect', 'mono', 'skip'], ['archivedExpiry', 'wall', 'skip'], ['deadCoordinator', 'wall', 'join'],
+    ['childReclaim', 'mono', 'none'], ['collect', 'mono', 'skip'], ['archivedExpiry', 'mono', 'skip'], ['deadCoordinator', 'mono', 'join'],
   ];
 
   it('each lane is a row at the census\'s cadence, on the clock it throttles on today, with the flight it has today', () => {
