@@ -24,8 +24,10 @@ import { createSpawnPty } from './pty.js';
 
 /**
  * Single authenticated WS connection to a `ccrc-agent` on a REMOTE fleet
- * host, wrapped in reconnect-with-backoff + heartbeat so the rest of the
- * server (Runner/FleetIO consumers) never has to think about the transport.
+ * host, wrapped in a deadline from socket to ready, reconnect-with-backoff and
+ * a heartbeat, and logging one line per kind per stretch without a ready
+ * link, so the rest of the server (Runner/FleetIO consumers) never has to
+ * think about the transport.
  * `connectFleet` is the public entry point — it wires this client into the
  * `Runner`/`FleetIO`/`SpawnPty` seams the rest of the server already speaks.
  */
@@ -74,6 +76,12 @@ interface Pending {
 type TailListener = (msg: TailData | TailReset) => void;
 type PtyListener = (msg: PtyData | PtyExit) => void;
 
+/** The kinds of line that open an episode without a ready link (wave 27, D-6520, D-6527). */
+type LinkLine = 'lost' | 'no-pong' | 'never-ready' | 'no-ready' | 'refused';
+/** One stretch without a ready link that has printed a line: when it opened, which kinds it printed, and how many
+ *  attempts ended without a ready since. Private to the client; never on `state`, never on the wire. */
+interface LinkEpisode { since: number; logged: Set<LinkLine>; failedAttempts: number }
+
 const DEFAULT_HEARTBEAT_MS = 15_000;
 const DEFAULT_RECONNECT_MIN_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
@@ -84,6 +92,22 @@ const HEARTBEAT_MISS_LIMIT = 2;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
+}
+
+/** The phase a pre-ready attempt is in, named only as far as the socket's own `readyState` proves it (D-6520):
+ *  `ws` holds CONNECTING from the constructor until a validated 101, across the TCP connect and the upgrade. */
+function preReadyPhase(readyState: number): string {
+  if (readyState === WebSocket.CONNECTING) return 'connect or upgrade unanswered';
+  if (readyState === WebSocket.OPEN) return 'ready not sent';
+  if (readyState === WebSocket.CLOSING) return 'closing';
+  return 'closed';
+}
+
+/** A peer's close reason, read as untrusted (D-6527): decoded as UTF-8, every character outside printable ASCII
+ *  replaced by `?`, cut to 64 characters; an empty reason prints `-`. */
+function printableReason(reason: Buffer): string {
+  const text = reason.toString('utf8').replace(/[^\x20-\x7e]/g, '?').slice(0, 64);
+  return text === '' ? '-' : text;
 }
 
 /**
@@ -158,8 +182,8 @@ export class LinkNotSentError extends Error {
  * attempt, hello/ready handshake, a request table keyed by numeric id
  * (ids are never reused across reconnects; not required to be — every
  * in-flight request is rejected the moment its socket goes away), a
- * heartbeat that force-closes a silently-dead socket, and exponential
- * reconnect backoff. `state`/`onStateChange` surface connectivity to
+ * deadline that ends an attempt with no ready, a heartbeat that force-closes
+ * a silently-dead socket, and exponential reconnect backoff. `state`/`onStateChange` surface connectivity to
  * callers; `onTail`/`offTail`/`onConnected` are the internal seam
  * `remote/io.ts` (and, from T4, `remote/pty.ts`) build on.
  */
@@ -185,6 +209,7 @@ export class FleetClient {
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private awaitingPong = false;
   private missedPongs = 0;
+  private episode: LinkEpisode | null = null;
 
   private readonly pending = new Map<number, Pending>();
   private readonly tailListeners = new Map<number, TailListener>();
@@ -362,7 +387,11 @@ export class FleetClient {
     let ws: WebSocket;
     try {
       ws = new WebSocket(this.cfg.url);
-    } catch {
+    } catch (err) {
+      // A throw here depends only on the URL, so no `ready` can follow: the boot line, once, naming the error and
+      // never its message, which for an unparsable URL carries the URL (D-6526).
+      this.note('never-ready', 'no ready since the server started (socket not created: '
+        + `${err instanceof Error ? err.name : 'a non-Error throw'}); retrying`);
       this.markDown();
       this.scheduleReconnect();
       return;
@@ -373,7 +402,7 @@ export class FleetClient {
       ws.send(JSON.stringify({ t: 'hello', token: this.cfg.token }));
     });
     ws.on('message', (raw) => this.onMessage(ws, raw));
-    ws.on('close', () => this.onClose(ws));
+    ws.on('close', (code, reason) => this.onClose(ws, code, reason));
     ws.on('error', () => {
       // 'close' always follows 'error' for a ws socket — reconnect logic lives there.
     });
@@ -533,12 +562,19 @@ export class FleetClient {
     this.everConnected = true;
     this.backoffMs = this.cfg.reconnectMinMs;
     this.setState({ connected: true, downSince: null });
+    const ep = this.episode;
+    this.episode = null;
+    if (ep) {
+      console.warn(`ccrc-server: agent link: ready again, ${Date.now() - ep.since}ms after this stretch's first line `
+        + `(${ep.failedAttempts} attempts ended without a ready)`);
+    }
     this.startHeartbeat();
     for (const cb of this.connectListeners) cb(isReconnect);
   }
 
-  private onClose(ws: WebSocket): void {
+  private onClose(ws: WebSocket, code: number, reason: Buffer): void {
     if (ws !== this.socket) return; // a stale handler for a socket we already replaced
+    const wasReady = this.ready;
     // Path-identity spec 2026-10-12 §5.2: right after the guard, before the pending rejections, the synthesized pty
     // exits and `markDown`'s state listeners, so none of them can read the closed connection's node as known.
     this.identity.invalidate('link-down');
@@ -556,6 +592,18 @@ export class FleetClient {
     }
     this.ptyListeners.clear();
     this.markDown();
+    if (wasReady) {
+      if (!this.episode) this.note('lost', `lost (close ${code}); reconnecting`);
+    } else {
+      // No episode is open here only before the first `ready` since start: every later loss of a ready link has
+      // opened one (D-6520).
+      const ep = this.episode
+        ?? this.note('never-ready', `no ready since the server started (close ${code}); retrying`);
+      ep.failedAttempts++;
+      if (code >= 4400 && code <= 4499) {
+        this.note('refused', `agent refused the hello (close ${code} ${printableReason(reason)}); retrying`);
+      }
+    }
     if (this.closed) return;
     this.scheduleReconnect();
   }
@@ -606,6 +654,8 @@ export class FleetClient {
       if (this.awaitingPong) {
         this.missedPongs++;
         if (this.missedPongs >= HEARTBEAT_MISS_LIMIT) {
+          this.note('no-pong', `no pong to ${HEARTBEAT_MISS_LIMIT} heartbeats ${this.cfg.heartbeatMs}ms apart; `
+            + 'terminating the socket and reconnecting');
           this.socket?.terminate(); // -> 'close' -> reconnect
           return;
         }
@@ -627,13 +677,26 @@ export class FleetClient {
    *  when it fires (D-6517). A ready link is left alone; otherwise the CAPTURED socket is terminated, never
    *  `this.socket`, so a deadline outliving its attempt can only reach a socket already closed, where `terminate`
    *  returns at once. `terminate` on CONNECTING aborts the handshake and on OPEN destroys the socket; either way
-   *  `close` follows and `onClose` reconnects with the existing backoff. */
+   *  `close` follows and `onClose` reconnects with the existing backoff. A deadline whose attempt is no longer
+   *  current says nothing: its line and count belong to the current attempt. */
   private armReadyDeadline(ws: WebSocket): void {
     const timer = setTimeout(() => {
-      if (this.ready) return;
+      if (ws !== this.socket || this.ready) return;
+      this.note('no-ready', `no ready within ${this.cfg.readyTimeoutMs}ms (${preReadyPhase(ws.readyState)}); `
+        + 'terminating this attempt and retrying');
       ws.terminate();
     }, this.cfg.readyTimeoutMs);
     timer.unref?.();
+  }
+
+  /** One `ccrc-server: agent link:` line per kind per episode; opens the episode if none is open, and returns it
+   *  (D-6520). */
+  private note(kind: LinkLine, text: string): LinkEpisode {
+    const ep = this.episode ?? (this.episode = { since: Date.now(), logged: new Set(), failedAttempts: 0 });
+    if (ep.logged.has(kind)) return ep;
+    ep.logged.add(kind);
+    console.warn(`ccrc-server: agent link: ${text}`);
+    return ep;
   }
 }
 

@@ -1,4 +1,4 @@
-// Wave 27 (D-6514 to D-6526): the link to the fleet agent cannot wait forever before `ready`.
+// Wave 27 (D-6514 to D-6527): the link to the fleet agent cannot wait forever before `ready`.
 // Every row runs on real timers against an in-process loopback peer (`linkPeer`), never a real agent: a node:http
 // server whose upgrade handling is chosen per attempt, so one port can be silent first and healthy later.
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -6,8 +6,8 @@ import { createServer, type IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
-import type { ConnectedFleet } from '../src/remote/client.js';
-import { connectToAgent } from './remoteHelpers.js';
+import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';
+import { connectToAgent, TOKEN } from './remoteHelpers.js';
 
 type PeerMode =
   | 'silent-upgrade'   // accept TCP, read the upgrade request, never answer
@@ -16,7 +16,8 @@ type PeerMode =
   | 'silent-hello'     // complete the upgrade, read hello, never send ready
   | 'ready'            // answer hello with ready and every ping with pong
   | 'ready-no-pong'    // answer hello with ready, never answer a ping
-  | 'ready-then-drop'; // answer hello with ready, then terminate the socket 100 ms later
+  | 'ready-then-drop'  // answer hello with ready, then terminate the socket 100 ms later
+  | 'refuse-hello';    // complete the upgrade, count the hello, close the socket with 4401 and a long reason
 
 interface LinkPeer {
   port: number;
@@ -64,6 +65,7 @@ async function linkPeer(modeOf: (attempt: number) => PeerMode): Promise<LinkPeer
         if (msg.t === 'hello') {
           hellos++;
           if (mode === 'silent-hello') return;
+          if (mode === 'refuse-hello') { ws.close(4401, REFUSE_REASON); return; }
           ws.send(JSON.stringify({ t: 'ready', v: 1 }));
           if (mode === 'ready-then-drop') setTimeout(() => ws.terminate(), 100);
         } else if (msg.t === 'ping' && mode !== 'ready-no-pong') {
@@ -89,13 +91,31 @@ async function linkPeer(modeOf: (attempt: number) => PeerMode): Promise<LinkPeer
   };
 }
 
+// 120 bytes, with a control character at index 10: the printable form of its first 64 characters is
+// `abcdefghij?` followed by 53 `x`.
+const REFUSE_REASON = `abcdefghij\x07${'x'.repeat(109)}`;
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** The link's own log lines, in order, from a `console.warn` spy. */
 const linkLines = (warn: { mock: { calls: unknown[][] } }): string[] =>
   warn.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('ccrc-server: agent link: '));
 
-describe('W27: the link to the fleet agent cannot wait forever before ready (D-6514 to D-6526)', () => {
+const NO_READY = (ms: number, phase: string): string =>
+  `ccrc-server: agent link: no ready within ${ms}ms (${phase}); terminating this attempt and retrying`;
+const NO_PONG = (ms: number): string =>
+  `ccrc-server: agent link: no pong to 2 heartbeats ${ms}ms apart; terminating the socket and reconnecting`;
+const LOST = (code: number): string => `ccrc-server: agent link: lost (close ${code}); reconnecting`;
+const NEVER_READY = (code: number): string =>
+  `ccrc-server: agent link: no ready since the server started (close ${code}); retrying`;
+const READY_AFTER = (failed: number): RegExp => new RegExp('^ccrc-server: agent link: ready again, \\d+ms after '
+  + `this stretch's first line \\(${failed} attempts ended without a ready\\)$`);
+const NOT_CREATED = (name: string): string =>
+  `ccrc-server: agent link: no ready since the server started (socket not created: ${name}); retrying`;
+const REFUSED = (code: number, reason: string): string =>
+  `ccrc-server: agent link: agent refused the hello (close ${code} ${reason}); retrying`;
+
+describe('W27: the link to the fleet agent cannot wait forever before ready (D-6514 to D-6527)', () => {
   let peer: LinkPeer | undefined;
   let fleet: ConnectedFleet | undefined;
 
@@ -109,23 +129,29 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
 
   it('W27-L1: an upgrade never answered is dropped at the deadline and retried', async () => {
     peer = await linkPeer(() => 'silent-upgrade');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     fleet = connectToAgent(peer.port, { readyTimeoutMs: 150 });
     await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(2), { timeout: 5000 });
     expect(fleet.state.connected).toBe(false);
+    expect(linkLines(warn)[0]).toBe(NO_READY(150, 'connect or upgrade unanswered'));
   });
 
   it('W27-L2: an upgrade answered a byte at a time is dropped too (a wall clock, not idle)', async () => {
     peer = await linkPeer(() => 'trickle-upgrade');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     fleet = connectToAgent(peer.port, { readyTimeoutMs: 150 });
     await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(2), { timeout: 5000 });
+    expect(linkLines(warn)[0]).toBe(NO_READY(150, 'connect or upgrade unanswered'));
   });
 
   it('W27-L3: a hello never answered with ready is dropped at the deadline and retried', async () => {
     // 1000 ms, not 150: this row's line names the OPEN phase, so the first attempt must have upgraded by then.
     peer = await linkPeer(() => 'silent-hello');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     fleet = connectToAgent(peer.port, { readyTimeoutMs: 1000 });
     await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(2), { timeout: 8000 });
     expect(peer.hellos()).toBeGreaterThanOrEqual(1);
+    expect(linkLines(warn)[0]).toBe(NO_READY(1000, 'ready not sent'));
   });
 
   it('W27-L4: once the peer answers, the next attempt reaches ready', async () => {
@@ -174,7 +200,91 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
 
   it('W27-L8: a ready link that misses two pongs is terminated and retried', async () => {
     peer = await linkPeer(() => 'ready-no-pong');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     fleet = connectToAgent(peer.port, { heartbeatMs: 50 });
-    await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(2), { timeout: 5000 });
+    await vi.waitFor(() => {
+      expect(peer!.accepts()).toBeGreaterThanOrEqual(3);
+      expect(linkLines(warn).length).toBeGreaterThanOrEqual(3);
+    }, { timeout: 5000 });
+    expect(linkLines(warn).slice(0, 3)).toEqual([NO_PONG(50), expect.stringMatching(READY_AFTER(0)), NO_PONG(50)]);
+  });
+
+  it('W27-L6: a deadline left over from a replaced attempt speaks for nothing current', async () => {
+    // Attempt 0 is refused at once (the boot line); attempt 1 starts about 500 ms later and never gets ready.
+    // Attempt 0's deadline fires at about 2000 ms, while attempt 1 is current and not ready: it must stay silent,
+    // so the next line is attempt 1's own, at about 2500 ms. Either pre-ready word passes, so the green does not
+    // depend on how fast attempt 1 upgrades; only a stale deadline can print `(closed)`.
+    peer = await linkPeer((n) => (n === 0 ? 'refuse' : 'silent-hello'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    fleet = connectToAgent(peer.port, { readyTimeoutMs: 2000, reconnectMinMs: 500, reconnectMaxMs: 500 });
+    await vi.waitFor(() => expect(linkLines(warn).length).toBeGreaterThanOrEqual(2), { timeout: 8000 });
+    expect(linkLines(warn)[0]).toBe(NEVER_READY(1006));
+    expect(linkLines(warn)[1]).toMatch(new RegExp('^ccrc-server: agent link: no ready within 2000ms '
+      + '\\((connect or upgrade unanswered|ready not sent)\\); terminating this attempt and retrying$'));
+  });
+
+  it('W27-L9: one no-ready line per stretch, naming its phase, and one recovery line with a count', async () => {
+    // 1000 ms, not 150: the attempt meant to reach ready runs under the same deadline, and must not be cut.
+    peer = await linkPeer((n) => (n < 3 ? 'silent-upgrade' : 'ready'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    fleet = connectToAgent(peer.port, { readyTimeoutMs: 1000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 8000 });
+    expect(linkLines(warn)).toEqual([
+      NO_READY(1000, 'connect or upgrade unanswered'), expect.stringMatching(READY_AFTER(3)),
+    ]);
+  });
+
+  it('W27-L10: a ready link that drops logs lost with its close code, then ready again', async () => {
+    // Attempt 1 is refused: counted inside the open episode, and never a boot line, because a link was ready.
+    peer = await linkPeer((n) => (n === 0 ? 'ready-then-drop' : n === 1 ? 'refuse' : 'ready'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    fleet = connectToAgent(peer.port);
+    await vi.waitFor(() => {
+      expect(peer!.accepts()).toBeGreaterThanOrEqual(3);
+      expect(fleet!.state.connected).toBe(true);
+      expect(linkLines(warn)).toHaveLength(2);
+    }, { timeout: 5000 });
+    expect(linkLines(warn)).toEqual([LOST(1006), expect.stringMatching(READY_AFTER(1))]);
+  });
+
+  it('W27-L11: a stretch with no ready since start is logged at its first failed attempt and at its first ready',
+    async () => {
+      peer = await linkPeer((n) => (n < 2 ? 'refuse' : 'ready'));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      fleet = connectToAgent(peer.port);
+      await vi.waitFor(() => {
+        expect(fleet!.state.connected).toBe(true);
+        expect(linkLines(warn)).toHaveLength(2);
+      }, { timeout: 5000 });
+      expect(linkLines(warn)).toEqual([NEVER_READY(1006), expect.stringMatching(READY_AFTER(2))]);
+    });
+
+  it('W27-L13: an attempt whose socket cannot be created prints the boot line once, naming the error, not the URL',
+    async () => {
+      // `new WebSocket` throws synchronously for this URL, so the line is printed inside `connectFleet`; the sleep
+      // gives the retries (30 ms backoff, growing to 100 ms) time to print a second line, which they must not.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      fleet = connectFleet({
+        url: 'not-a-url', token: 'unused', reconnectMinMs: 30, reconnectMaxMs: 100, heartbeatMs: 60_000,
+      });
+      await sleep(500);
+      expect(linkLines(warn)).toEqual([NOT_CREATED('SyntaxError')]);
+      expect(fleet.state.connected).toBe(false);
+    });
+
+  it('W27-L14: an agent that refuses each hello is logged once, with a printable reason and no token', async () => {
+    // A ready link is lost, then every attempt's hello is closed with 4401 and a 120-byte reason that carries a
+    // control character: one `refused` line, the reason cut to 64 printable characters.
+    peer = await linkPeer((n) => (n === 0 ? 'ready-then-drop' : 'refuse-hello'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    fleet = connectToAgent(peer.port);
+    await vi.waitFor(() => {
+      expect(peer!.accepts()).toBeGreaterThanOrEqual(4);
+      expect(linkLines(warn).length).toBeGreaterThanOrEqual(2);
+    }, { timeout: 8000 });
+    const lines = linkLines(warn);
+    expect(lines.filter((l) => l.includes('refused'))).toEqual([REFUSED(4401, `abcdefghij?${'x'.repeat(53)}`)]);
+    expect(lines[0]).toBe(LOST(1006));
+    expect(lines.some((l) => l.includes(TOKEN))).toBe(false);
   });
 });

@@ -126,7 +126,7 @@ One PR, from this workspace's own branch.
 
 ## Not in this wave
 
-- **Logging the agent's own refusal.** A wrong token or a hello timeout closes 4401 before `ready`
+- **Logging the agent's own refusal.** Superseded by D-6527 (ruling 2) for the refusal line; a wrong token or a hello timeout closes 4401 before `ready`
   (agent/src/server.ts:1269-1287). The client discards the close code (`ws.on('close', () => this.onClose(ws))`,
   client.ts:368), so a bad token still retries silently forever, as `remote-connect.test.ts`'s
   `'a bad token surfaces as a fatal (never-connects, permanently down) state'` describes. That is a configuration
@@ -213,7 +213,7 @@ One PR, from this workspace's own branch.
   which before a commit is the previous task's code: it would discard the task's own work and the check would pass.)
   Task 1 Step 3 is the one mutation before a commit, and there `client.ts` is still the base.
   A mutant counts only if vitest collected and ran every row in the file: the summary's failed plus passed equals the
-  file's row count at that task (1 at Task 1, 8 at Task 2, 13 at Task 3). A transform, parse or import error runs no
+  file's row count at that task (1 at Task 1, 8 at Task 2, 14 at Task 3). A transform, parse or import error runs no
   row; that is a broken mutant, not a red. Rewrite it so it parses and run it again; never record it as red.
 - **The absorb step.** Before each task's first edit, run `git fetch origin main` and re-read every anchor that task
   names in the landed text. Absorb `origin/main` with `git merge`, never a rebase or a force push of a published
@@ -262,8 +262,9 @@ One PR, from this workspace's own branch.
   none keeps the process alive. Its closure holds the attempt's socket and the client, both already reachable while
   the attempt lives; a closed socket is held up to 15 s longer. Nothing holds a request frame (the D-5513 row stays
   green).
-- **Log volume.** An episode prints at most two opening lines and one recovery line: its opener (`lost`, `no-pong`,
-  `never-ready` or `no-ready`) and, if a later attempt in it hangs, one `no-ready`. `lost` and `no-pong` need a ready
+- **Log volume.** An episode prints at most three opening lines and one recovery line: its opener (`lost`, `no-pong`,
+  `never-ready` or `no-ready`), if a later attempt in it hangs, one `no-ready`, and, if the agent refuses a hello with
+  a close code from 4400 to 4499, one `refused` (D-6527). `lost` and `no-pong` need a ready
   link and `never-ready` needs none since start, so no two of those share an episode. An ordinary agent restart,
   which every fleet update does, prints two: `lost (close …)` and `ready again, …`. A server restart whose first
   attempt is ready prints nothing. The incident's shape (a ready link lost, then attempts that hang for 65 minutes)
@@ -349,6 +350,8 @@ the task (below).
 | M18 | the deadline is armed at socket creation, before the TCP connect completes (T2) | in `connect`, replace `this.armReadyDeadline(ws);` with `(ws as unknown as { _req: import('node:http').ClientRequest })._req.once('socket', (s) => s.once('connect', () => this.armReadyDeadline(ws)));` (`ws` keeps its request as `_req`, websocket.js `initAsClient`) | W27-L12 (attempt 0 writes its upgrade) | revision probe of the shape, not the row: armed on `connect`, the upgrade was written, 3 of 3 |
 | M19 | a socket that cannot be created is logged (T3) | delete the `this.note('never-ready', …)` call in `connect`'s `catch` | W27-L13 (no line) | unmeasured: added in review |
 | M20 | that line never prints the URL (T3) | in that call, print `err.message` in place of `err.name` | W27-L13 (the line reads `socket not created: Invalid URL: not-a-url`) | revision probe: `ws`'s message for `not-a-url` is `Invalid URL: not-a-url` |
+| M21 | an agent refusal is logged once (T3) | delete the `this.note('refused', …)` call in `onClose` | W27-L14 | unmeasured: added by ruling 2 |
+| M22 | that line prints a sanitised reason (T3) | print the raw reason, `reason.toString()`, with no cut or replacement | W27-L14 | unmeasured: added by ruling 2 |
 
 The deadline's choice to terminate its CAPTURED socket, not `this.socket`, has no row of its own (D-6517): before
 Task 3 a stale deadline can reach only a closed socket, where `terminate` is a no-op, and from Task 3 the
@@ -535,7 +538,7 @@ never reclaimed.
     deadline's guard and its line, the `close` listener's code, `onClose`'s bookkeeping, `startHeartbeat`'s note,
     `onReady`'s recovery line, the `note` call in `connect`'s `catch` (D-6526), the module header comment.
 - `server/test/remote-liveness.test.ts` (new): Task 1 creates it with the peer harness and W27-L8; Task 2 adds W27-L1
-  to W27-L5, W27-L7 and W27-L12; Task 3 adds W27-L6, W27-L9, W27-L10, W27-L11, W27-L13, the log assertions of L1,
+  to W27-L5, W27-L7 and W27-L12; Task 3 adds W27-L6, W27-L9, W27-L10, W27-L11, W27-L13, W27-L14, the log assertions of L1,
   L2, L3 and L7, W27-L8's two-episode extension, and the `connectFleet` import.
 - `server/test/remoteHelpers.ts`: Task 1, the comment above `connectToAgent`.
 - `README.md`: Task 4, one bullet.
@@ -775,6 +778,8 @@ green below is the worker's to measure; the planning probe's figures are named w
   });
   ```
 
+  W27-L12 as landed also awaits one `setImmediate` before `connectToAgent` (D-6528).
+
   `connectToAgent`'s `extra` is `Partial<RemoteFleetConfig>`, so `readyTimeoutMs` is a type error until Step 3 adds
   the field. vitest strips types without checking them, so the rows still run and fail at runtime; `typecheck-tests`
   is the run that sees the type error, and it goes green with Step 3.
@@ -834,11 +839,11 @@ green below is the worker's to measure; the planning probe's figures are named w
 - Test: `server/test/remote-liveness.test.ts`.
 
 **Interfaces:**
-- Produces: `type LinkLine = 'lost' | 'no-pong' | 'never-ready' | 'no-ready'`; `interface LinkEpisode { since: number;
+- Produces: `type LinkLine = 'lost' | 'no-pong' | 'never-ready' | 'no-ready' | 'refused'`; `interface LinkEpisode { since: number;
   logged: Set<LinkLine>; failedAttempts: number }`; `function preReadyPhase(readyState: number): string`; the private
   field `episode: LinkEpisode | null` (null means no stretch without a ready link is open; it is private state, never
   a seam); the private method `note(kind: LinkLine, text: string): LinkEpisode` (it returns the open episode, so a
-  caller never reads `this.episode` back through a non-null assertion); `onClose(ws: WebSocket, code: number)`.
+  caller never reads `this.episode` back through a non-null assertion); `onClose(ws: WebSocket, code: number, reason: Buffer)`.
 
 - [ ] **Step 1: Write the failing rows.**
   - Add the expected lines after `linkLines`, exactly (D-6520's texts):
@@ -1049,7 +1054,7 @@ green below is the worker's to measure; the planning probe's figures are named w
 - [ ] **Step 5: Commit** (before the mutations, as in Task 2).
   `feat(remote): the agent link logs its drops, its deadline and its recovery (wave 27, D-6517, D-6520, D-6522,
   D-6526)`.
-- [ ] **Step 6: Mutation rows** M4b, M5, M7 to M17, M19 and M20, each alone, each restored to HEAD (the Mutation
+- [ ] **Step 6: Mutation rows** M4b, M5, M7 to M17, M19 to M22, each alone, each restored to HEAD (the Mutation
   table). Confirm `git diff --quiet HEAD -- src/remote/client.ts` after the last.
 
 ### Task 4: README says what the link now does (W27-d; D-6523)
@@ -1188,7 +1193,7 @@ green below is the worker's to measure; the planning probe's figures are named w
     earlier review probe). Chosen: keep the row, because it is the only red M18 has and load only deepens the stall
     it makes. The alternative drops it and records "armed at creation rather than at TCP connect" as a named gap.
     Recommendation: keep it; if it ever reds without a mutant, that is a change in Node's loop worth knowing about,
-    and the row's comment says so.
+    and the row's comment says so. As measured in Task 2, it did red unmutated in whole-file runs, from the row's starting phase, not from a change in Node's loop; D-6528 fixes the phase.
 
 ## Coordinator rulings on this plan's readings (2026-10-22)
 
