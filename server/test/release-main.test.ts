@@ -1089,10 +1089,13 @@ describe('release-main.sh: compare — a build identical to the newest release H
     expect(ghReads(home)).toHaveLength(2);
   });
 
-  // A listing that fails (rc) and one that exits 0 with nothing to show
-  // (awk then prints a bare TAB, which the shape check refuses) both release.
+  // Three shapes of a listing that cannot be trusted all release: one that
+  // fails (rc), one that exits 0 with nothing to show (awk then prints a bare
+  // TAB, which the shape check refuses), and one that prints a well-formed
+  // line yet exits 1 (the shape check accepts it, so only the rc half refuses).
   it.each([
     ['comm exits 1', 'exit 1'], ['comm exits 0 and prints nothing', 'exit 0'],
+    ['comm prints one well-formed line and exits 1', "printf '\"ccd/ccrc\"\\tx\\n'; exit 1"],
   ])('W25-C35: a difference that cannot be listed releases with that reason — the line is never empty (%s)', (_name, body) => {
     const home = mkTmp('ccrc-relmain-w25c35-');
     const root = fixture(home, { tags: ['v0.0.1'], assets: ['v0.0.1'] });
