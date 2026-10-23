@@ -218,7 +218,7 @@ B9 and B11 are applied to the workflow file, so each is run against both `build-
 
 ## Deviations found
 
-The coordinator issued a block of twenty numbers, starting at D-6647, to this wave. This plan defines D-6647 to D-6662 below, and D-6663 and D-6664, the first two of the worker's four reserve numbers, issued to Task 4's fix round and Task 5's. The other two are left unnamed here; at Task 6 each one the wave did not use gets its own `unused` entry, so all twenty are accounted for. Every entry opens `- **D-<n>** — `, the form the ledger's definition reader sees (`DEFINITION`, `server/src/coord/ledger.ts:184`); the `- **D-<n>.**` form is invisible to it.
+The coordinator issued a block of twenty numbers, starting at D-6647, to this wave. This plan defines D-6647 to D-6662 below, and D-6663 and D-6664, the first two of the worker's four reserve numbers, issued to Task 4's fix round and Task 5's. The other two, D-6665 and D-6666, were not used; each has its own `unused` entry below, so all twenty are accounted for. Every entry opens `- **D-<n>** — `, the form the ledger's definition reader sees (`DEFINITION`, `server/src/coord/ledger.ts:184`); the `- **D-<n>.**` form is invisible to it.
 
 - **D-6647** — Each release workflow becomes two jobs, `build` and `publish`, in the same file; the attest step stays in that file's `publish` job and never moves into a called workflow.
   - Why: GitHub enforces `GITHUB_TOKEN` permissions and OIDC access per job, and a hosted job is a fresh machine; nothing narrower than a job is a boundary against code the install runs (the wave-25 plan's D-6401 "Not a boundary" and D-6405, both closed by this entry).
@@ -298,6 +298,8 @@ The coordinator issued a block of twenty numbers, starting at D-6647, to this wa
   - Why fix round 2: the re-review of `98c93c515` found the first secrets check read only job `with:`/`env:` and step `with:`/`env:`/`run:`, inside `${{ }}`, case-sensitively, and on build jobs only. A build job's `container.env` or `services.<s>.env` carrying a secret, `${{ SECRETS.PAT }}`, a secret in a step's `if:` or `working-directory:`, and a secret in an allowed publish env key each gave `[]`. The same case gap let `${{ NEEDS.build.outputs.tag }}` past `readsNeeds`, the reference resolution and the `needsIn` check; those now match `needs` and `steps` case-insensitively too (an index form's context is reported lowercased). The coordinator ruled on this (Task 4 fix round 2); G-y is re-measured, and G-ab and G-ac are its mutants.
 - **D-6664** — Task 5's doc texts are amended where they did not match the landed workflows: `release.yml`'s publish job verifies the artifact against its own trigger ref and re-derives nothing, so the CLAUDE.md clause and the spec delta say the re-derivation is `release-main.yml`'s; two wording fixes ride with it, one in the README's "Two trust roots" sentence (its referent) and one in the wave-25 plan's new bullet (W1 and A1 share one target).
   - Why: the task review of `acb4d139a` read the brief's texts against `.github/workflows/release.yml`, whose publish job runs `release-artifact.sh verify --tag "$GITHUB_REF_NAME"`: its tag is its trigger ref, it runs no `receive` and derives nothing. The brief's texts said both workflows' publish jobs re-derive the tag, which is false of that one. The coordinator ruled to amend the texts to the code.
+- **D-6665** — `unused` (run 858): issued to this wave; no departure took it.
+- **D-6666** — `unused` (run 858): issued to this wave; no departure took it.
 
 ## File structure
 
@@ -581,3 +583,10 @@ the worker updates every place the plan states it, in the first task that touche
    workflow actions waits for this wave; it is redone after this wave lands, never merged into it.
 9. **The first release run after landing** is the coordinator's to measure, against D-6659's checklist, read-only.
    The worker asks for nothing on a live run and triggers no workflow.
+
+## As built (run 858)
+
+- **Claims and consents.** Group A was one claim for the whole wave. Group B: CLAUDE.md and the release-rollout spec were claimed once run 722's owner claim on CLAUDE.md lapsed with #1132's landing. Run 722's coordinator had consented to the Deploy-bullet clause first (request 8559, consent 8560, its claim 2312). README.md was edited beside run 774's live owner claim 2306 under its coordinator's scoped consent (request 8558, consent 8564): the two licensed regions only, no new paragraph, heading or anchor, and the attestation-is-not-a-dependency-audit distinction kept. D-6664's referent fix stays inside the licensed "Two trust roots" sentence.
+- **Departures.** D-6663 (Task 4's review: the guard was tightened to allowlists and a whole-job, raw, case-insensitive secrets scan over three fix rounds) and D-6664 (Task 5's review: the doc texts were corrected to the landed `release.yml`). D-6665 and D-6666 were unused. Wave-25 rows that read compare's `GITHUB_OUTPUT` exactly (W25-C2 to C6, C8 twice, C26) now expect the `tag=` line D-6658 adds. The plan's unedited-pin list did not name them, but none of them could stay green unedited.
+- **Ruling 5, the publish job's node.** The base's last release run used runner image `ubuntu-24.04` version `20261012.334.1`. That image's readme lists Node.js 22.23.3 as the runner's default node. `release-notes.mjs` was run on Node 22.16.0, an older 22.x, in a throwaway container: `--tag v0.0.583` against a clone of `49e7f187a` exited 0 and wrote a 155-byte body. It was not run on 22.23.3 itself.
+- **Not run before merge.** No release workflow ran (D-6659). The first run after landing is the coordinator's to measure against D-6659's checklist.
