@@ -4708,10 +4708,14 @@ describe('docs failure vocabulary, redactor and ccd wire types are declared once
     for (const name of FUNCTIONS) expect(holdersOf(FUNCTION_DEF(name)), name).toEqual(['shared/docs.ts']);
   });
 
-  it('spells the redactor patterns in one TS file: no second copy of a rule', () => {
-    // Fragments every copy of rules 2 and 3 must contain however it is escaped or quoted.
+  it('spells the redactor patterns in one file, shared/redact.mjs: no second copy of a rule', () => {
+    // Fragments every copy of rules 2 and 3 must contain however it is escaped or quoted. D-5867 (Task C1l; ARCH-66
+    // (#801)): the rows' one home moved from shared/docs.ts to shared/redact.mjs, which `ALL` (`.ts` and `.tsx`) does
+    // not walk, so it is read by path.
+    const home = readFileSync(path.join(ccrcRoot, 'shared', 'redact.mjs'), 'utf8');
     for (const fragment of ['(?:access_token|token)=', 'gh[opsu]_']) {
-      expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(fragment)).map(rel), fragment).toEqual(['shared/docs.ts']);
+      expect(home.includes(fragment), `${fragment} in shared/redact.mjs`).toBe(true);
+      expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(fragment)).map(rel), fragment).toEqual([]);
     }
   });
 
