@@ -96,6 +96,25 @@ describe('measureDisk', () => {
     expect(out.filesystems.flatMap((f) => f.roots)).not.toContain('worktrees');
   });
 
+  it('a stat that never settles is called once across two measureDisk calls, and the second still answers in time', async () => {
+    const r = rig({ broken: { '/h/worktrees': NEVER }, deadlineMs: 50 });
+    await measureDisk(HOME, r.seams);
+    const first = r.statCalls.filter((p) => p === '/h/worktrees').length;
+    const t0 = Date.now();
+    const out = await measureDisk(HOME, r.seams);
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(first).toBe(1);
+    expect(r.statCalls.filter((p) => p === '/h/worktrees')).toHaveLength(1);
+    expect(out.missing).toContainEqual({ label: 'worktrees', why: 'timeout' });
+  });
+
+  it('at most two probes hang at once: further paths answer timeout without a syscall', async () => {
+    const r = rig({ broken: { '/h/worktrees': NEVER, '/h/projects': NEVER, '/h/.cc-tmp': NEVER }, deadlineMs: 50 });
+    await measureDisk(HOME, r.seams);
+    const hung = ['/h/worktrees', '/h/projects', '/h/.cc-tmp'].filter((p) => r.statCalls.includes(p));
+    expect(hung.length).toBeLessThanOrEqual(2);
+  });
+
   it('a missing root lands in missing, not as zero', async () => {
     const r = rig({ broken: { '/h/worktrees': enoent } });
     const out = await measureDisk(HOME, r.seams);

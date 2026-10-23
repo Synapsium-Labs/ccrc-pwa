@@ -41,13 +41,15 @@ export interface DiskSeams {
   deadlineMs: number;
 }
 
+const realStat = (p: string): Promise<{ dev: number }> => stat(p);
+
 export function realDiskSeams(): DiskSeams {
   return {
     statfs: (p) => statfs(p).then((s) => ({
       bsize: Number(s.bsize), blocks: Number(s.blocks), bfree: Number(s.bfree), bavail: Number(s.bavail),
       files: Number(s.files), ffree: Number(s.ffree),
     })),
-    stat: (p) => stat(p),
+    stat: realStat,
     readMountinfo: () => {
       try { return readFileSync('/proc/self/mountinfo', 'utf8'); } catch { return null; }
     },
@@ -92,10 +94,22 @@ type Outcome =
   | { kind: 'ok'; dev: number; s: DiskStatfs }
   | { kind: 'missing'; why: DiskMissingWhy };
 
+/** A probe that missed its deadline is abandoned, but its syscall still holds one of libuv's four threadpool threads
+ *  until the kernel answers, and unlike a short-lived CLI this agent never exits to free it. So every probe still
+ *  unsettled is remembered (per `stat` seam), and while a path's earlier probe is pending, or `MAX_HUNG` probes are
+ *  already pending, a new probe answers `timeout` at once and starts no syscall: hung threads stay below the pool
+ *  size and the agent's other file reads keep their threads. */
+const MAX_HUNG = 2;
+const hungBySeam = new WeakMap<object, Map<string, Promise<unknown>>>();
+
 /** `stat` + `statfs` of one path, raced against the deadline. The timer is local to this call (a deadline, not a
- *  scheduler); a probe that never answers is abandoned, not awaited. */
+ *  scheduler); a probe that never answers is abandoned, not awaited, and remembered until it settles. */
 async function probe(seams: DiskSeams, p: string): Promise<Outcome> {
+  const hung = hungBySeam.get(seams.stat) ?? new Map<string, Promise<unknown>>();
+  hungBySeam.set(seams.stat, hung);
+  if (hung.has(p) || hung.size >= MAX_HUNG) return { kind: 'missing', why: 'timeout' };
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let done = false;
   const deadline = new Promise<Outcome>((resolve) => {
     timer = setTimeout(() => resolve({ kind: 'missing', why: 'timeout' }), seams.deadlineMs);
   });
@@ -106,12 +120,16 @@ async function probe(seams: DiskSeams, p: string): Promise<Outcome> {
       return { kind: 'ok', dev: st.dev, s };
     } catch (e) {
       return { kind: 'missing', why: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'failed' };
+    } finally {
+      done = true;
+      hung.delete(p);
     }
   })();
   try {
     return await Promise.race([read, deadline]);
   } finally {
     clearTimeout(timer);
+    if (!done) hung.set(p, read);
   }
 }
 
@@ -164,7 +182,8 @@ export async function measureDisk(home: string, given: Partial<DiskSeams> = {}):
   }
   const unique = [...new Set([...byLabel.values()].flat())];
   const outcomes = new Map<string, Outcome>();
-  await Promise.all(unique.map(async (p) => { outcomes.set(p, await probe(seams, p)); }));
+  // In sequence: a stalled volume then holds at most MAX_HUNG threads, never one per path.
+  for (const p of unique) outcomes.set(p, await probe(seams, p));
 
   const missing: DiskMissingRoot[] = [];
   const devLabels = new Map<number, string[]>();
