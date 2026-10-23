@@ -25,6 +25,8 @@
 #     server-composed teardown of an archived workspace, ws-reclaim's sibling)
 #   ws-collect <any tail>                         — likewise (child reclamation wave 7: the
 #     collector of a witnessed child temp root whose workspace is gone)
+#   ws-orphan <any tail>                          — likewise (fleet disk retention: the server's removal of an
+#     orphaned worktree, behind a token the box re-proves)
 #   ws-audit --session <value> --reclaim [--defer-expired] — the token skeleton;
 #   ws-audit --session <value> --expire           — the expiry's token skeleton;
 #   ws-audit --session <value> --collect          — the collector's token skeleton;
@@ -145,7 +147,7 @@ def folds_to(token, word):
 
 def is_protected(argv):
     # CASE-INSENSITIVE, A SUPERSET ON PURPOSE — see WHAT IS PROTECTED above.
-    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect')):
+    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan')):
         return True
     if len(argv) == 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
             and (folds_to(argv[3], '--expire') or folds_to(argv[3], '--collect')):
