@@ -78,7 +78,7 @@ interface Harness {
   clock: { now: number }; listing: { names: string[] | null }; fresh: Record<string, Record<string, unknown>>; rows: Map<string, SessionRecord>; setPane: (p: 'absent' | 'present' | 'unmeasured') => void; ccdAnswer: { stderr: string; ok: boolean };
 }
 const harness = (o: {
-  claims?: Record<string, unknown>; open?: string[]; evidence?: number | null; viewer?: boolean; caps?: string[];
+  claims?: Record<string, unknown>; open?: string[]; evidence?: number | null | 'unreadable'; viewer?: boolean; caps?: string[];
   claimsThrow?: boolean; beforeAct?: (id: string) => void; acts?: { act: string; at: number | null; outcome: string }[];
 } = {}): Harness => {
   const clock = { now: NOW };
@@ -183,10 +183,39 @@ describe('staleArchivePass (L3)', () => {
     }
   });
 
-  it('a hibernated row is a row with no pane: 15 days archives it', async () => {
-    const h = harness();
-    await twoPasses(h, [rec('a', { hibernatedAt: Math.floor((NOW - 15 * DAY) / 1000) })], LIVE);
+  it('a hibernated row whose .supervised is 15 days old and has no transcript archives', async () => {
+    const h = harness({ evidence: null });
+    await twoPasses(h, [rec('a', { hibernatedAt: Math.floor(NOW / 1000), supervisedAt: Math.floor((NOW - 15 * DAY) / 1000) })], LIVE);
     expect(h.ccd).toHaveLength(1);
+  });
+
+  it('a transcript that could not be read keeps the row however old the other evidence is', async () => {
+    const h = harness({ evidence: 'unreadable' });
+    await twoPasses(h, [rec('a', { supervisedAt: Math.floor((NOW - 15 * DAY) / 1000) })], LIVE);
+    expect(h.ccd).toEqual([]);
+  });
+
+  it('a .spawn that is listed but read as absent keeps the row', async () => {
+    const h = harness();
+    await twoPasses(h, [rec('a')], [...LIVE, 'a.spawn']);
+    expect(h.ccd).toEqual([]);
+  });
+
+  it('a claim made, or a claims read that fails, between the verdict and the act stops the archive', async () => {
+    const mk = (mutate: (h: Harness) => void) => {
+      const h: Harness = harness({ beforeAct: () => mutate(h) });
+      return h;
+    };
+    const cases: [string, Harness, string][] = [
+      ['past claim', mk((h) => { h.deps.coord!.childReclaimCoordinatorClaims = (() => new Map([['a', 1]])) as never; }), 'claimant'],
+      ['open coordinator', mk((h) => { h.deps.coord!.openCoordinatorIds = () => ['a']; }), 'claimant'],
+      ['claims throw', mk((h) => { h.deps.coord!.openCoordinatorIds = () => { throw new Error('db'); }; }), 'claims-unreadable'],
+    ];
+    for (const [name, h, why] of cases) {
+      const out = await twoPasses(h, [rec('a')], LIVE);
+      expect(h.ccd, name).toEqual([]);
+      expect(out, name).toEqual([{ kind: 'deferred', id: 'a', why }]);
+    }
   });
 
   it('the newest of the registry stamps and the journal counts: a spawn 2 days ago keeps the row', async () => {
@@ -221,7 +250,7 @@ describe('staleArchivePass (L3)', () => {
   it('a row ccd always refuses does not hold the head of the line: the next due row is archived on the next pass', async () => {
     const h = harness();
     const run = h.deps.runCcd;
-    h.deps.runCcd = async (argv) => (argv.includes('a')
+    (h.deps as { runCcd: StaleArchiveDeps['runCcd'] }).runCcd = async (argv: Parameters<StaleArchiveDeps['runCcd']>[0]) => (argv.includes('a')
       ? (h.ccd.push([...argv]), { ok: false, stdout: '', stderr: 'ccd: worktree is gone\n', killed: false, signal: null } as never)
       : run(argv));
     const recs = [rec('a'), rec('b')];

@@ -132,14 +132,15 @@ export interface ActorFlags {
  * `null` collapses no meaningful distinction; it is purely runtime tolerance
  * for a call-arity gap the type checker already flags.
  */
-const ifNoPaneFlag = (opts: { readonly ifNoPane?: boolean } | null): readonly string[] =>
-  opts !== null && opts.ifNoPane === true ? ['--if-no-pane'] : [];
-
 const decFlags = (dec: ActorFlags | null): readonly string[] =>
   dec === null || dec === undefined
     ? []
     : ['--surface', dec.surface, '--actor', dec.actor,
        ...(dec.reason === null ? [] : ['--reason', dec.reason])];
+
+/** `--if-no-pane`, or nothing: ccd refuses `live` when a pane or an active unit exists (D-6643). */
+const ifNoPaneFlag = (opts: { readonly ifNoPane?: boolean } | null): readonly string[] =>
+  opts !== null && opts.ifNoPane === true ? ['--if-no-pane'] : [];
 
 /**
  * `--defer-expired`, or nothing (child reclamation, spec 2026-09-22 §5.7: the
