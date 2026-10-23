@@ -24,7 +24,7 @@ from typing import List, Protocol, Tuple
 VERSION = "1"
 
 # Every module of the package, in import order: a module imports only modules before it.
-MODULES = ("sse", "errors")
+MODULES = ("sse", "errors", "inbound")
 
 
 class NameSink(Protocol):

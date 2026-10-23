@@ -9,7 +9,7 @@
 // `runBridgeDriver` runs `server/test/fixtures/codexbridge/driver.py`, which loads the package from this tree's
 // `ccd/` directory (first on `sys.path`, as the shim's direct entry does) and runs a list of ops in ONE process.
 import { spawn } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,13 +32,18 @@ const TMP_ROOT = (() => {
   try { return realpathSync(tmpdir()); } catch { return tmpdir(); }
 })();
 
+/** The longest action passed inline in argv; a longer one goes through a file (below). */
+const ARG_INLINE_MAX = 64 * 1024;
+
 /** Spawn `python3 -I driver.py <action>` ASYNCHRONOUSLY (a synchronous child deadlocks against a fake server on this
  *  event loop), in the fixture `home`, which is its cwd and its HOME. `action.pkg` defaults to this tree's `ccd`
  *  directory. The env is built from scratch: PATH and TMPDIR, then the caller's `env`, then the two endpoint
  *  variables (each CLOSED_AUTH_BASE unless `env` names a non-empty value: an empty one would read as unset, which is
  *  a live endpoint), then HOME. No PYTHON* variable is set: `-I` implies `-E`, so the driver's own
  *  `sys.dont_write_bytecode = True` is what keeps a `__pycache__` out of the tree. Past `timeoutMs` (default 10000)
- *  the child is killed with SIGKILL and `timedOut` is true; `status` is then null. */
+ *  the child is killed with SIGKILL and `timedOut` is true; `status` is then null. An action longer than
+ *  ARG_INLINE_MAX is written to `<home>/.driver-action.json` (0600) and passed as `@<path>`: Linux refuses one
+ *  argument past 128 KiB (E2BIG), and a case such as a 700,000-character tool result needs more. */
 export function runBridgeDriver(
   home: string,
   action: object,
@@ -64,9 +69,15 @@ export function runBridgeDriver(
     CCRC_CODEX_AUTH_BASE: named('CCRC_CODEX_AUTH_BASE'),
     HOME: resolved,
   };
-  const full = { pkg: CCD_DIR, ...action };
+  const full = JSON.stringify({ pkg: CCD_DIR, ...action });
+  let arg = full;
+  if (full.length > ARG_INLINE_MAX) {
+    const file = path.join(resolved, '.driver-action.json');
+    writeFileSync(file, full, { mode: 0o600 });
+    arg = '@' + file;
+  }
   return new Promise((resolve, reject) => {
-    const child = spawn(py, ['-I', BRIDGE_DRIVER, JSON.stringify(full)], {
+    const child = spawn(py, ['-I', BRIDGE_DRIVER, arg], {
       cwd: resolved, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';

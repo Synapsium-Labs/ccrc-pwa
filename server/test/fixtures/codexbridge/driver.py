@@ -4,7 +4,8 @@ Spawned by `runBridgeDriver` (`server/test/codexBridgeFixture.ts`) as `python3 -
 fixture HOME, with CCGPT_BRIDGE_UPSTREAM_BASE and CCRC_CODEX_AUTH_BASE always set to loopback URLs. Standard library
 only.
 
-THE ACTION, one JSON object in argv[1]:
+THE ACTION, one JSON object in argv[1], or `@<path>` naming a file that holds it (for an action past Linux's 128 KiB
+limit on one argument, which `runBridgeDriver` writes into the fixture HOME):
   {"pkg": <the ccd directory>, "ops": [{"op": ..., ...}, ...], "consts": {"<module>.<NAME>": value, ...}}
 `sys.dont_write_bytecode = True` is set before anything is imported (`-I` implies `-E`, so PYTHONDONTWRITEBYTECODE
 is ignored and an import would write `__pycache__` into the tree), then `pkg` is put first on `sys.path`, as the
@@ -33,6 +34,15 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    library loaded by path (`spec_from_file_location`, as the bridge loads it), never through sys.path
   endpoints        -> {"CCGPT_BRIDGE_UPSTREAM_BASE", "CCRC_CODEX_AUTH_BASE", "HOME"}: the two endpoint variables and
                    HOME as this process received them (None when unset); URLs and a fixture path, never a credential
+  from-anthropic   {body, headers?, output_config?, stored?} -> {"request": the NeutralRequest as a dict
+                   (`tools_required` sorted), "names": [[family, value], ...]}, or a BridgeError (below) with "names":
+                   `inbound.from_anthropic` with a ListSink; `output_config` is passed only when the op names it, and
+                   `stored` is the lookup stub: a list of {"call": <id>, "turn"} or {"session", "text", "turn"}, each
+                   keyed by `inbound.call_key` / `inbound.text_key`, so a test never spells a key itself; "lookups"
+                   lists the keys asked for, in order
+  inbound-keys     {cut?: [names], text?: [[session, text]], call?: [ids], cache?: [[session, agent]]} -> each list
+                   mapped through cut_name / text_key / call_key / cache_key, and "consts": BILLING_PREFIX,
+                   COMPACTION_MARKER, IMAGE_TOKENS
 A BridgeError prints as {"error": {status, etype, message, headers, state, code, requestId, kind}, "answer":
 {"status", "headers", "body": parsed JSON}, "event": errors.event(e) as text}. An op that raised prints
 {"raised": <class name>}. Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the package failed to import.
@@ -183,6 +193,41 @@ def _run(op, pkg, cb):
             words.add(cls.word)
             todo.extend(cls.__subclasses__())
         return {"words": sorted(words), "CODE_RE": lib.CODE_RE.pattern, "REQUEST_ID_RE": lib.REQUEST_ID_RE.pattern}
+    if name == "from-anthropic":
+        inbound = cb.inbound
+        stored = {}
+        for row in op.get("stored") or []:
+            key = inbound.call_key(row["call"]) if "call" in row else inbound.text_key(row.get("session"), row["text"])
+            stored[key] = row["turn"]
+        lookups = []
+
+        def lookup(key):
+            lookups.append(key)
+            return stored.get(key)
+
+        sink = cb.ListSink()
+        kwargs = {"names": sink, "lookup": lookup}
+        if "output_config" in op:
+            kwargs["output_config"] = op["output_config"]
+        try:
+            req = inbound.from_anthropic(op["body"], op.get("headers") or {}, **kwargs)
+        except errors.BridgeError as e:
+            out = _bridge_error(errors, e)
+            out.update({"names": [list(n) for n in sink.names], "lookups": lookups})
+            return out
+        request = req._asdict()
+        request["tools_required"] = sorted(request["tools_required"])
+        return {"request": request, "names": [list(n) for n in sink.names], "lookups": lookups}
+    if name == "inbound-keys":
+        inbound = cb.inbound
+        return {
+            "cut": [inbound.cut_name(n) for n in op.get("cut") or []],
+            "text": [inbound.text_key(s, t) for s, t in op.get("text") or []],
+            "call": [inbound.call_key(c) for c in op.get("call") or []],
+            "cache": [inbound.cache_key(s, a) for s, a in op.get("cache") or []],
+            "consts": {"BILLING_PREFIX": inbound.BILLING_PREFIX, "COMPACTION_MARKER": inbound.COMPACTION_MARKER,
+                       "IMAGE_TOKENS": inbound.IMAGE_TOKENS},
+        }
     if name == "endpoints":
         keys = ("CCGPT_BRIDGE_UPSTREAM_BASE", "CCRC_CODEX_AUTH_BASE", "HOME")
         return {k: os.environ.get(k) for k in keys}
@@ -193,7 +238,11 @@ def _run(op, pkg, cb):
 def main():
     if len(sys.argv) != 2:
         _usage("one argument: the action as JSON")
-    action = json.loads(sys.argv[1])
+    arg = sys.argv[1]
+    if arg.startswith("@"):
+        with open(arg[1:], encoding="utf-8") as f:
+            arg = f.read()
+    action = json.loads(arg)
     pkg = action["pkg"]
     sys.path.insert(0, pkg)
     try:
