@@ -2932,6 +2932,13 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
     expect(rule('.dlg-reply-input:disabled')).toMatch(/cursor:\s*default/);
     expect(rule('.dlg-reply-input:focus-visible')).toMatch(/border-color:\s*transparent;/);
   });
+
+  it('Deny, the quiet way out, looks disabled while it is (the reconnect gap disables it)', () => {
+    // D-6325 (review 844 M1): every control the gap disables wears a disabled look; `.dlg-later` had none, so a disabled Deny
+    // looked live. Tertiary ink and the default cursor, as `.dlg-reply-send:disabled` and `.ask-tab:disabled` have.
+    expect(rule('.dlg-later:disabled')).toMatch(/color:\s*var\(--ink-tertiary\)/);
+    expect(rule('.dlg-later:disabled')).toMatch(/cursor:\s*default/);
+  });
 });
 
 // — what a refused tap and the foot line say (plan, Task 5) —
