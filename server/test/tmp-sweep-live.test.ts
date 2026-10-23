@@ -578,7 +578,9 @@ describe('the size budget', () => {
     expect(quarantined().length).toBe(2);
     sweep({ plusS: 32 * HOUR });
     const s = session(census());
-    expect(s.bytes, 'only the two entries that stayed').toBe(2 * (400 * KB + 4096));
+    // directory blocks differ by filesystem (tmpfs counts none), so bound by the two surviving 400 KB files
+    expect(s.bytes).toBeGreaterThanOrEqual(2 * 400 * KB);
+    expect(s.bytes).toBeLessThan(3 * 400 * KB);
     expect(s.budget.state, 'the 2 kept entries are under the budget: the episode ended').toBe('ok');
   }, 120_000);
 
@@ -825,6 +827,32 @@ describe('the size budget', () => {
     const r = sweep({ env: { CCD_TMP_BUDGET_GB: 'lots' } });
     expect(r.code).toBe(1);
     expect(r.err).toContain('invalid-budget');
+  }, 120_000);
+
+  it('a huge budget knob with the production unit cannot wrap negative: nothing moves, no episode opens', () => {
+    liveSession();
+    sizes([['a', 400, 3 * 24], ['b', 400, 3 * 24]]);
+    arm();
+    const r = sweep({ env: { CCD_TMP_BUDGET_GB: '9999999999', CCD_TMP_BUDGET_TARGET_GB: '9999999999', CCD_TMP_BUDGET_UNIT_BYTES: '1073741824' } });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('invalid-budget');
+    expect(quarantined().length).toBe(0);
+    const big = sweep({ env: { CCD_TMP_BUDGET_GB: '999999', CCD_TMP_BUDGET_TARGET_GB: '999999', CCD_TMP_BUDGET_UNIT_BYTES: '1073741824' } });
+    expect(big.code).toBe(0);
+    expect(session(census()).budget.state).toBe('ok');
+    expect(quarantined().length).toBe(0);
+  }, 120_000);
+
+  it('a journal left by a pass that died before its census is folded into the next census', () => {
+    liveSession();
+    sweep();
+    const row = { seq: 41, id: 'ws-a', uuid: U.live, name: 'x', kind: 'scratch', bytes: 1, at: census().at, shadow: false, quarantine: 'q', from: 'f', root: 'r' };
+    fs.writeFileSync(`${censusPath()}.journal`, JSON.stringify(row) + '\n');
+    sweep();
+    const c = census();
+    expect(c.moved.map((m) => m.seq)).toContain(41);
+    expect(c.seq).toBeGreaterThanOrEqual(41);
+    expect(fs.existsSync(`${censusPath()}.journal`)).toBe(false);
   }, 120_000);
 
   it('the census is replaced whole by a rename: no temp file is left beside it', () => {

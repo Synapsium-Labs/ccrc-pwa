@@ -154,13 +154,19 @@ _ts_die() { echo "tmp-sweep: $*" >&2; exit 1; }
 [[ "$CCD_TMP_SWEEP_MAX_AGE_DAYS" =~ ^[1-9][0-9]{0,4}$ ]] \
   || _ts_die "invalid-max-age: CCD_TMP_SWEEP_MAX_AGE_DAYS='$CCD_TMP_SWEEP_MAX_AGE_DAYS' is not a positive integer of days — refusing to guess a horizon"
 MAX_MIN=$((CCD_TMP_SWEEP_MAX_AGE_DAYS * 1440))
+# Bounded so GiB x unit stays inside signed 64-bit arithmetic: a wrapped product is negative and would turn
+# "raise the budget" into "every session is over it".
 for _k in CCD_TMP_BUDGET_GB CCD_TMP_BUDGET_TARGET_GB CCD_TMP_BUDGET_UNIT_BYTES; do
-  [[ "${!_k}" =~ ^[1-9][0-9]{0,12}$ ]] || _ts_die "invalid-budget: $_k='${!_k}' is not a positive integer — refusing to guess a budget"
+  _re='^[1-9][0-9]{0,5}$'; [ "$_k" = CCD_TMP_BUDGET_UNIT_BYTES ] && _re='^[1-9][0-9]{0,9}$'
+  [[ "${!_k}" =~ $_re ]] || _ts_die "invalid-budget: $_k='${!_k}' is not a positive integer — refusing to guess a budget"
 done
 # Raise-only: a knob below its default is the default, and the target never passes the budget.
 [ "$CCD_TMP_BUDGET_GB" -ge 20 ] || CCD_TMP_BUDGET_GB=20
 [ "$CCD_TMP_BUDGET_TARGET_GB" -ge 15 ] || CCD_TMP_BUDGET_TARGET_GB=15
 [ "$CCD_TMP_BUDGET_TARGET_GB" -le "$CCD_TMP_BUDGET_GB" ] || CCD_TMP_BUDGET_TARGET_GB="$CCD_TMP_BUDGET_GB"
+
+[ $((CCD_TMP_BUDGET_GB * CCD_TMP_BUDGET_UNIT_BYTES)) -gt 0 ] && [ $((CCD_TMP_BUDGET_TARGET_GB * CCD_TMP_BUDGET_UNIT_BYTES)) -gt 0 ] \
+  || _ts_die "invalid-budget: the budget does not multiply out to a positive byte count"
 
 [ -e "$PAUSE" ] && { echo "tmp-sweep: paused ($PAUSE exists)"; exit 0; }
 
@@ -485,9 +491,21 @@ def load_prev():
     except (OSError, ValueError):
         return {}
 
+JOURNAL = CENSUS + '.journal'
+LIVE_BUDGET_S = 1800
 prev = load_prev()
 seq = prev.get('seq') if isinstance(prev.get('seq'), int) else 0
 moved = [r for r in prev.get('moved', []) if isinstance(r, dict)]
+# rows of a pass that moved entries but died before writing its census: fold them in, never lose a receipt
+try:
+    with open(JOURNAL) as f:
+        for ln in f:
+            try: jr = json.loads(ln)
+            except ValueError: continue
+            if isinstance(jr, dict) and isinstance(jr.get('seq'), int):
+                moved.append(jr); seq = max(seq, jr['seq'])
+except OSError:
+    pass
 # path -> [start, end] of the sweep's own git probe: atimes inside it are the probe's reads, not a touch
 pprobed = prev.get('probed') if isinstance(prev.get('probed'), dict) else {}
 probed = {}
@@ -604,10 +622,14 @@ def delete_quarantined():
     for r in roots:
         q = os.path.join(r['path'], QDIR)
         if os.path.islink(q) or not os.path.isdir(q): continue
-        for u in sorted(os.listdir(q)):
+        try: qus = sorted(os.listdir(q))
+        except OSError: continue
+        for u in qus:
             ud = os.path.join(q, u)
             if os.path.islink(ud) or not os.path.isdir(ud): continue
-            for e in sorted(os.listdir(ud)):
+            try: qes = sorted(os.listdir(ud))
+            except OSError: continue
+            for e in qes:
                 m = re.match(r'^([0-9]+)\.', e)
                 if not m: continue
                 if NOW - int(m.group(1)) / 1e9 < by_p(GRACE_Q, r['p']): continue
@@ -650,7 +672,9 @@ if due:
         for pj in projs:
             pd = os.path.join(r['path'], pj)
             if pj == QDIR or os.path.islink(pd) or not os.path.isdir(pd): continue
-            for u in sorted(os.listdir(pd)):
+            try: pus = sorted(os.listdir(pd))
+            except OSError: bump('unreadable'); continue
+            for u in pus:
                 ud = os.path.join(pd, u)
                 if not UUID_RE.match(u) or u not in LIVE or os.path.islink(ud) or not os.path.isdir(ud): continue
                 if u not in idof:
@@ -702,6 +726,8 @@ if due:
         global seq
         shadow = not ARMED
         dst = None
+        if ARMED and time.time() - WALL0 > LIVE_BUDGET_S:
+            bump('timeBudget'); return False
         if ARMED:
             w = walk(c['path'], c['root']['noatime'], [0])
             need = c['au'] if kind == 'scratch' else c['af']
@@ -727,9 +753,15 @@ if due:
             if dst is None:
                 bump('failed'); return False
         seq += 1
-        newrows.append({'seq': seq, 'id': c['id'], 'uuid': c['uuid'], 'name': c['name'], 'kind': kind, 'bytes': c['bytes'],
-                        'at': now_ms, 'shadow': shadow, 'quarantine': dst,
-                        'from': c['unit'] + '/' + c['sub'] + '/' + c['name'], 'root': c['root']['path']})
+        row = {'seq': seq, 'id': c['id'], 'uuid': c['uuid'], 'name': c['name'], 'kind': kind, 'bytes': c['bytes'],
+               'at': now_ms, 'shadow': shadow, 'quarantine': dst,
+               'from': c['unit'] + '/' + c['sub'] + '/' + c['name'], 'root': c['root']['path']}
+        newrows.append(row)
+        if ARMED and not DRY:
+            try:
+                with open(JOURNAL, 'a') as jf:
+                    jf.write(json.dumps(row) + '\n'); jf.flush(); os.fsync(jf.fileno())
+            except OSError: pass
         # shadow: the entry stays on disk and in every measure; wouldGo only feeds the simulation
         c['gone' if ARMED else 'wouldGo'] = True
         bump('moved' if ARMED else 'wouldMove')
@@ -800,6 +832,8 @@ if not DRY:
     try:
         with open(tmp, 'w') as f: json.dump(out, f)
         os.rename(tmp, CENSUS)
+        try: os.unlink(JOURNAL)
+        except OSError: pass
     except OSError as e:
         print('tmp-sweep: census not written: %s' % e, file=sys.stderr)
         try: os.unlink(tmp)
