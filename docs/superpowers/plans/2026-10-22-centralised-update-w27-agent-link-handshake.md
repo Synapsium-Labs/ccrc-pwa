@@ -126,13 +126,14 @@ One PR, from this workspace's own branch.
 
 ## Not in this wave
 
-- **Logging the agent's own refusal.** Superseded by D-6527 (ruling 2) for the refusal line; a wrong token or a
-  hello timeout closes 4401 before `ready`
-  (agent/src/server.ts:1269-1287). The client discards the close code (`ws.on('close', () => this.onClose(ws))`,
-  client.ts:368), so a bad token still retries silently forever, as `remote-connect.test.ts`'s
-  `'a bad token surfaces as a fatal (never-connects, permanently down) state'` describes. That is a configuration
-  defect, not a wedge, and its own question (Reading 2). This wave reads the close code only for the `lost` and
-  `never-ready` lines.
+- **Logging the agent's own refusal.** Done by D-6527 (ruling 2), so this bullet no longer holds back the refusal
+  line. A wrong token or a hello timeout closes 4401 before `ready` (agent/src/server.ts:1269-1287). At the base the
+  client discards the close code (`ws.on('close', () => this.onClose(ws))`, client.ts:368). Now it reads the code and
+  the reason: the code for the `lost`, `never-ready` and `refused` lines, the reason for `refused` only, through
+  `refusalReason` (D-6522, D-6529). A bad token still retries at the backoff for as long as it stays wrong, as
+  `remote-connect.test.ts`'s `'a bad token surfaces as a fatal (never-connects, permanently down) state'` describes,
+  but the journal now carries one `refused` line per stretch. That remains a configuration defect, not a wedge, and
+  the remedy beyond the log line is its own question (Reading 2).
 - **Surfacing the link's phase in `GET /api/fleet/health` or the PWA.** It would add a field to `FleetState` or the
   wire; the log is this wave's evidence.
 - **`connect()` leaking a socket on a second `start()`** (client.ts:201-204 does not check for a live socket). Only
@@ -159,13 +160,14 @@ One PR, from this workspace's own branch.
     - the constants block (:73-77), one new constant;
     - the private fields (:171-181), one new field;
     - the constructor (:189-199), one new line;
-    - `connect` (:353-372): the arm call, the `close` listener passing its code, and one `note` call in the `catch`
-      (:358-362, D-6526);
+    - `connect` (:353-372): the arm call, the `close` listener passing its code and reason, and one `note` call in
+      the `catch` (:358-362, D-6526);
     - `onReady` (:423-530): the recovery line after `this.setState(…)` (:527);
-    - `onClose` (:532-553): a `code` parameter, and the `lost`, `never-ready` and failed-attempt bookkeeping;
+    - `onClose` (:532-553): `code` and `reason` parameters, the `lost`, `never-ready` and failed-attempt bookkeeping,
+      and the `refused` note (D-6527);
     - `startHeartbeat` (:593-611): one `note` call before the terminate (:601);
-    - new `armReadyDeadline`, `note` and the module function `preReadyPhase`, placed after `stopHeartbeat` (:613-616)
-      for the methods and after `isRecord` (:79) for the function;
+    - new `armReadyDeadline` and `note`, placed after `stopHeartbeat` (:613-616), and the module functions
+      `preReadyPhase` and `refusalReason` (D-6529), placed after `isRecord` (:79);
     - new module types `LinkLine` and `LinkEpisode`, placed after `PtyListener` (:71).
   - `server/test/remoteHelpers.ts`: the comment above `connectToAgent` (:36-38).
   - `README.md`: one new bullet after the "When the agent connection drops" bullet (:3428-3431).
@@ -214,8 +216,9 @@ One PR, from this workspace's own branch.
   which before a commit is the previous task's code: it would discard the task's own work and the check would pass.)
   Task 1 Step 3 is the one mutation before a commit, and there `client.ts` is still the base.
   A mutant counts only if vitest collected and ran every row in the file: the summary's failed plus passed equals the
-  file's row count at that task (1 at Task 1, 8 at Task 2, 15 at Task 3). A transform, parse or import error runs no
-  row; that is a broken mutant, not a red. Rewrite it so it parses and run it again; never record it as red.
+  file's row count at that task (1 at Task 1, 8 at Task 2, 15 at Task 3, 25 after review 852's fix
+  round). A transform, parse or import error runs no row; that is a broken mutant, not a red. Rewrite it so it
+  parses and run it again; never record it as red.
 - **The absorb step.** Before each task's first edit, run `git fetch origin main` and re-read every anchor that task
   names in the landed text. Absorb `origin/main` with `git merge`, never a rebase or a force push of a published
   branch. The coordinator lands the PR.
@@ -251,6 +254,17 @@ One PR, from this workspace's own branch.
 - **The log is evidence, not noise.** One line per kind per episode, a second episode logged afresh, the phase named
   only as far as `readyState` can prove it, the boot stretch logged at both ends, the recovery line counting failed
   attempts. Rows W27-L8 to W27-L11 and W27-L13.
+- **The refusal line, its range, its order and its phase.** An agent that closes a hello with a code from 4400 to
+  4499 prints one `refused` line per stretch, after the line that opened it: never for 4399 or 4500, after the boot
+  line in a boot stretch, and after the `(closing)` line when the socket is still closing. Rows W27-L14 (once, with a
+  printable reason), W27-L21 (order), W27-L22 (range) and W27-L23 (phase).
+- **The token never reaches the journal through a refusal reason.** The window is 8 consecutive characters of the
+  token (all of a shorter token), checked on the full decoded reason before the cut, and an empty token checks
+  nothing. Rows W27-L15 to W27-L20.
+- **The deadline's timer is `unref`'d.** A client that is closed with a long deadline pending lets its process exit.
+  Row W27-L24 runs a child process and races its exit against a bound far below the deadline.
+- **The deadline keeps the backoff.** A timed-out attempt does not reset the delay: only a `ready` does. Row W27-L25
+  (D-6585).
 - **No reader moves.** No `FleetState` field, no wire field, no new `.invalidate(` call, no operator setting.
 
 ## Risk notes
@@ -272,6 +286,10 @@ One PR, from this workspace's own branch.
   prints three lines in all: `lost`, one `no ready within`, and `ready again`. A black hole that starts at a server
   restart prints two (`no ready within`, then `ready again`). Neither prints one line per attempt. A malformed agent
   URL prints one `never-ready` line (`socket not created`) and nothing after it (D-6526).
+  (Amended on review 852.) The worst case has a measured rate. A peer that sends `ready` and then drops the socket at
+  once logs two lines per flap, `lost` and `ready again`: about 120 a minute at the production defaults, which is
+  about 171,000 a day if it flaps all day (review 852). Ruling 4 stands: that is evidence of a real fault. It stays
+  far below journald's default per-service rate limit, so it costs journal space and nothing else.
 - **Test-run stderr.** Suites that force a reconnect (`ws.terminate()` in remote-connect, remote-io and others) now
   print `lost` and `ready again` lines on stderr, and a suite whose first attempt fails (the bad-token row) prints a
   `never-ready` line. No suite asserts an empty `console.warn` across a client (update-inventory filters its spies by
@@ -309,7 +327,8 @@ One PR, from this workspace's own branch.
     retries time to print a second line, which a working dedupe never does. Load means fewer retries, never a red.
 - **Mixed builds.** None: server-only, wire unchanged. An older server keeps the old behaviour until its update.
 - **The deadline and the backoff.** A pre-ready failure does not reset the backoff (only `onReady` does,
-  client.ts:526), so after a long outage the retry interval is 30 s. That is intended and unchanged.
+  client.ts:526), so after a long outage the retry interval is 30 s. That is intended and unchanged, and W27-L25
+  pins that the deadline does not reset it either (D-6585).
 
 ## Mutation table
 
@@ -328,12 +347,16 @@ so the "Expected red" column is the plan's claim for the revised rows and the pr
 where they differ, the worker's measurement decides, and a row that measures green against its expected red stops
 the task (below).
 
+Review 852's fix round re-measured M1 to M23 on the final 25 rows and measured M24 to M36 (As built). Where the
+campaign measured otherwise than this table claimed, the Expected red column is corrected and says so (M3, M4, M21,
+M25, M31). The probe column of M24 to M36 reads "measured in review 852's fix round".
+
 | # | Guard (task) | Mutation | Expected red (at least), at the task's end | Planning probe: mutant / restored |
 |---|---|---|---|---|
 | M1 | the deadline is armed per attempt (T2) | delete the `this.armReadyDeadline(ws)` call in `connect` | W27-L1, L2, L3, L4, L12 | probe: red L1, L2, L3, L4, L6, L9; restored 10/10 green |
 | M2 | it is armed at socket creation, not at `open` (T2) | move the call into the `open` handler | W27-L1, L2, L4, L12 (L3 stays green) | probe: red L1, L2, L4, L9; restored 10/10 green |
-| M3 | it is a wall clock, not an idle timer (T2) | delete the call and pass `{ handshakeTimeout: this.cfg.readyTimeoutMs }` to `new WebSocket` | W27-L2, L3 (L1, L4 stay green) | probe: red L1, L2, L3, L6, L9; restored 10/10 green |
-| M4 | a ready link is left alone (T2) | delete `if (this.ready) return;` from the deadline | W27-L5 | probe: red L5; restored 10/10 green |
+| M3 | it is a wall clock, not an idle timer (T2) | delete the call and pass `{ handshakeTimeout: this.cfg.readyTimeoutMs }` to `new WebSocket` | W27-L2, L3, and (amended on review 852) L1 through Task 3's line assertion: the idle timer ends the silent upgrade, but as a `never-ready` boot line, not a `no ready within` line; L4 stays green | probe: red L1, L2, L3, L6, L9; restored 10/10 green |
+| M4 | a ready link is left alone (T2) | delete `if (this.ready) return;` from the deadline (amended on review 852: from Task 3 the guard is M4b's `if (ws !== this.socket \|\| this.ready) return;`, this spelling has no anchor, and M4 is now the same edit as M4b) | W27-L5 | probe: red L5; restored 10/10 green |
 | M4b | the same guard as Task 3 ships it (T3) | delete `\|\| this.ready` from the deadline's guard `if (ws !== this.socket \|\| this.ready) return;` | W27-L5 (a `no ready within 1000ms (ready not sent)` line and a second accept) | unmeasured: added in review |
 | M5 | the seam reaches the deadline (T2) | the constructor sets `readyTimeoutMs: DEFAULT_READY_TIMEOUT_MS`, ignoring `cfg` | W27-L1, L2, L3, L4, L12 (15 s is past each 5 to 8 s wait) | probe: red L1, L2, L3, L4, L6, L9; restored 10/10 green |
 | M6 | the heartbeat ends a silent ready link (pinned, T1) | delete `this.socket?.terminate()` in the miss-limit branch | W27-L8 | probe: red L8; restored 10/10 green |
@@ -351,9 +374,22 @@ the task (below).
 | M18 | the deadline is armed at socket creation, before the TCP connect completes (T2) | in `connect`, replace `this.armReadyDeadline(ws);` with `(ws as unknown as { _req: import('node:http').ClientRequest })._req.once('socket', (s) => s.once('connect', () => this.armReadyDeadline(ws)));` (`ws` keeps its request as `_req`, websocket.js `initAsClient`) | W27-L12 (attempt 0 writes its upgrade) | revision probe of the shape, not the row: armed on `connect`, the upgrade was written, 3 of 3 |
 | M19 | a socket that cannot be created is logged (T3) | delete the `this.note('never-ready', …)` call in `connect`'s `catch` | W27-L13 (no line) | unmeasured: added in review |
 | M20 | that line never prints the URL (T3) | in that call, print `err.message` in place of `err.name` | W27-L13 (the line reads `socket not created: Invalid URL: not-a-url`) | revision probe: `ws`'s message for `not-a-url` is `Invalid URL: not-a-url` |
-| M21 | an agent refusal is logged once (T3) | delete the `this.note('refused', …)` call in `onClose` | W27-L14, L15 (D-6529) | unmeasured: added by ruling 2 |
+| M21 | an agent refusal is logged once (T3) | delete the `this.note('refused', …)` call in `onClose` | W27-L14, L15 (D-6529), and (amended on review 852) every later row that expects a `refused` line, L16 to L23 | unmeasured: added by ruling 2 |
 | M22 | that line prints a sanitised reason (T3) | print the raw reason, `reason.toString()`, with no cut or replacement | W27-L14, L15 (D-6529) | unmeasured: added by ruling 2 |
 | M23 | a refusal reason that repeats the token is withheld (T3) | delete the token-window check in `refusalReason` | W27-L15 | unmeasured: added by D-6529 |
+| M24 | the token check runs on the full reason, before the cut (T3) | in `refusalReason`, cut to 64 first and check that text: `const full = reason.toString('utf8').slice(0, 64);` | W27-L16 | measured in review 852's fix round |
+| M25 | the window is 8 characters, not the whole token (T3) | replace the window loop with `if (full.includes(token)) return '[withheld: repeats the token]';` | W27-L17, and (amended on review 852) L20: `includes('')` is always true, so an empty token withholds every reason | measured in review 852's fix round |
+| M26 | the window is capped by a short token's length (T3) | a fixed width of 8: drop the `Math.min(…, token.length)` | W27-L19 | measured in review 852's fix round |
+| M27 | an empty token checks nothing (T3) | delete the `width > 0 &&` guard | W27-L20 | measured in review 852's fix round |
+| M28 | the window is no narrower than 8 (T3) | `Math.min(4, token.length)` | W27-L18 | measured in review 852's fix round |
+| M29 | the window is no wider than 8 (T3) | `Math.min(16, token.length)` | W27-L17 | measured in review 852's fix round |
+| M30 | the check runs before the character replacement (T3) | run the check on the text after the printable-ASCII replacement and drop the later `.replace` | none: equivalent for a printable token (D-6529); measured green, 25 of 25 | measured in review 852's fix round |
+| M31 | the refused line follows the boot line (T3) | move the `refused` note before the `never-ready` expression in `onClose`'s pre-ready arm | W27-L21, and (amended on review 852) the other boot-refusal rows, L16 to L20 and L22 | measured in review 852's fix round |
+| M32 | the refused range has an upper bound (T3) | `code >= 4000` in place of `code >= 4400 && code <= 4499` | W27-L22 | measured in review 852's fix round |
+| M33 | the refused range is more than the one code 4401 (T3) | `code === 4401` in place of the range | W27-L22 | measured in review 852's fix round |
+| M34 | the closing phase has its own word (T3) | map CLOSING to `ready not sent` in `preReadyPhase` | W27-L23 | measured in review 852's fix round |
+| M35 | the deadline's timer is `unref`'d (T2) | delete `timer.unref?.();` in `armReadyDeadline` | W27-L24 | measured in review 852's fix round |
+| M36 | the deadline keeps the backoff (T2) | set `this.backoffMs = this.cfg.reconnectMinMs;` in the deadline callback, before `ws.terminate()` | W27-L25 | measured in review 852's fix round |
 
 The deadline's choice to terminate its CAPTURED socket, not `this.socket`, has no row of its own (D-6517): before
 Task 3 a stale deadline can reach only a closed socket, where `terminate` is a no-op, and from Task 3 the
@@ -362,9 +398,12 @@ report to the coordinator before weakening a row or a guard.
 
 ## Deviations found
 
-Sixteen numbers starting at D-6514 were issued to run 833. This plan defines the first fourteen, in order, D-6514
-to D-6527 (D-6527 by the coordinator's ruling on Reading 2). The last two are the worker's reserve: name each only
-where it is defined, never before.
+Eighteen numbers were issued to run 833: sixteen starting at D-6514 at run-open (D-6514 to D-6529), and D-6585 and
+D-6586 for the review-852 fix round. Every one is defined below, in order, and none is left in reserve:
+- The plan defined the first fourteen, D-6514 to D-6527 (D-6527 by the coordinator's ruling on Reading 2).
+- The build spent the last two of the first block as departures: D-6528 and D-6529.
+- The fix round spent D-6585 as a departure, and gave D-6586, which no departure took, its own entry as an unspent
+  number.
 
 Every entry is written `- **D-<n>** — <text>`, the form the server's one definition reader accepts
 (`server/src/coord/ledger.ts#DEFINITION`: after the number it needs `**` and then an em-dash, `(` or `:`). The form
@@ -410,6 +449,9 @@ reader itself).
     `terminate`). The current-socket check is therefore needed only once the deadline logs and counts (Task 3).
   - `this.closed` is not checked: `close()` nulls `this.socket` and terminates the socket itself, so a later fire
     fails the current-socket check.
+  - (Amended on review 852) The timer is `unref`'d, so a deadline that has not fired never keeps the process alive;
+    W27-L24 pins it (M35). The deadline never resets the backoff: only `onReady` does, so a run of timed-out
+    attempts keeps growing the delay to its ceiling; W27-L25 pins it (M36).
 - **D-6518** — No TCP keepalive. Why: `ws` never sets it and it can be set before connect only through a wrapped
   `createConnection` (websocket.js:752-753), a new seam; it detects only an idle half-open socket, after the idle time
   plus probes (Node sets the idle time only; interval and count stay the kernel's 75 s and 9, unmeasured on the
@@ -421,17 +463,27 @@ reader itself).
   prove one round trip later. The deadline is the pre-ready liveness check.
 - **D-6520** — The link logs, from `client.ts` (L4, which owns the socket and the timers and here states facts, not
   policy). An episode opens at the first opening line and closes at the next `ready`. Each opening kind is printed at
-  most once per episode; later fires of the same kind are counted, not printed. The lines are exactly:
+  most once per episode; later fires of the same kind are counted, not printed. (Amended on review 852.) The list
+  is complete with six kinds of line: the five `LinkLine` kinds (`lost`, `no-pong`, `never-ready`, `no-ready` and
+  `refused`), then the recovery line. `refused` never opens an episode: it follows the line that did. The lines are
+  exactly:
   - `ccrc-server: agent link: lost (close <code>); reconnecting`: a ready link's socket closed, printed only when it
     opens the episode (so not after a `no-pong` line; row W27-L8, M14);
   - `ccrc-server: agent link: no pong to <limit> heartbeats <ms>ms apart; terminating the socket and reconnecting`;
   - `ccrc-server: agent link: no ready since the server started (close <code>); retrying`: an attempt closed before
     `ready` while no episode is open, which happens only before the first `ready` since start, because every later
     loss of a ready link opens an episode first (row W27-L11, M16 and M17); when `new WebSocket` itself throws, the
-    same kind prints `(socket not created: <error name>)` in place of `(close <code>)` (D-6526, row W27-L13);
+    same kind prints `(socket not created: <error name>)` in place of `(close <code>)` (D-6526, row W27-L13). (Amended
+    on review 852.) This boot line prints only when an attempt closes before the first `ready` and no other line has
+    opened the stretch: row W27-L9 shows a stretch opened by `no ready within` with no boot line;
   - `ccrc-server: agent link: no ready within <ms>ms (<phase>); terminating this attempt and retrying`, where
     `<phase>` is `connect or upgrade unanswered` for CONNECTING, `ready not sent` for OPEN, `closing` for CLOSING and
     `closed` for CLOSED;
+  - `ccrc-server: agent link: agent refused the hello (close <code> <reason>); retrying` (D-6527, listed here on
+    review 852): an attempt closed before `ready` with a close code from 4400 to 4499. `<reason>` is the peer's close
+    reason after `refusalReason` (D-6529): `[withheld: repeats the token]` when it repeats the token, otherwise
+    printable ASCII only, cut to 64 characters, and `-` when empty. In the boot stretch it follows the `never-ready`
+    line; after a lost ready link it follows `lost`; after a timed-out attempt it follows `no ready within`;
   - `ccrc-server: agent link: ready again, <ms>ms after this stretch's first line (<n> attempts ended without a
     ready)`, on the `ready` that closes an episode.
 
@@ -457,10 +509,13 @@ reader itself).
 - **D-6521** — The wave adds a row for the existing heartbeat terminate (W27-L8), which no test pins at the base
   (planning probe: deleting it left 353 of 353 client-suite tests green). Why: the deadline hands every post-ready
   case to the heartbeat, so the wave's bound rests on it, and mutation-table discipline asks for a red row.
-- **D-6522** — `onClose` gains the close code (`ws.on('close', (code) => this.onClose(ws, code))`), read only for the
-  `lost` and `never-ready` lines. The agent's pre-ready 4401 refusals after a ready link has been lost stay counted,
-  not printed (Not in this wave; Reading 2); a 4401 before the first `ready` since start is printed once, by the
-  `never-ready` line. Why: the code is the one fact that tells an agent restart (1001 or 1006) from a refusal.
+- **D-6522** — `onClose` gains the close code (`ws.on('close', (code) => this.onClose(ws, code))`). Why: the code is
+  the one fact that tells an agent restart (1001 or 1006) from a refusal.
+  - (Amended on review 852) `onClose` reads the close code and the reason (`ws.on('close', (code, reason) =>
+    this.onClose(ws, code, reason))`, D-6527). The code feeds the `lost`, `never-ready` and `refused` lines. The reason
+    feeds only `refused`, through `refusalReason` (D-6529).
+  - The first draft left a 4401 refusal after a lost ready link counted and not printed. That is withdrawn: the
+    `refused` line prints it, once per stretch.
 - **D-6523** — README gains one bullet in "Degraded mode"; the box-token lifecycle spec's "reconnects forever, 1 s
   doubling to 30 s, logging nothing" (2026-10-07-box-token-lifecycle-design.html:366) is left as dated HTML history,
   which stays as it is until revised. Its first two clauses remain true.
@@ -513,6 +568,17 @@ reader itself).
     and `close 4401`, its reason is the 64-byte printable form, and no line contains the token.
   - Mutants: M21 deletes the `refused` note (W27-L14 red); M22 prints the raw reason, with no cut or replacement
     (W27-L14 red) (and D-6529: W27-L15, M23).
+  - (Amended on review 852) Rows W27-L21 (order), W27-L22 (range) and W27-L23 (phase) pin the claims W27-L14 did not:
+    - W27-L21: a boot-time 4401 on attempts 0 to 2, then ready on attempt 3, logs the boot line, one `refused` line,
+      then `ready again` with 3 attempts;
+    - W27-L22: 4399, 4400, 4499 and 4500 each close every hello; the `refused` line prints for 4400 and 4499 only;
+    - W27-L23: a raw 4401 close frame, with the peer's TCP side never ended, leaves the client's socket CLOSING; the
+      deadline's line names the phase `closing`, and the `refused` line follows it.
+  - Mutants M31 to M34: M31 moves the `refused` note before the `never-ready` expression (W27-L21 and the other
+    boot-refusal rows); M32 reads `code >= 4000` (W27-L22); M33 reads `code === 4401` (W27-L22); M34 maps CLOSING to
+    `ready not sent` (W27-L23).
+  - (Amended on review 852) W27-L14's "no line contains the token" assertion cannot fail through `refusalReason`: its
+    reason holds no fragment of the token. W27-L15 to W27-L20 are the rows that guard the token window.
 
 - **D-6528** (the worker, Task 2) — W27-L12 as drafted failed with no mutant applied, three of three whole-file runs,
   and passed alone. Its premise, that expired timers run before the poll phase that completes the TCP connect, holds
@@ -536,6 +602,35 @@ reader itself).
   the check covers the accidental echo only. W27-L15 (a peer that echoes the hello as the close reason) and M23
   (the check deleted) pin it.
 
+  (Amended on review 852.) Rows W27-L16 to W27-L20 pin the window's properties, and mutants M24 to M30 try to break
+  them:
+  - W27-L16: the check runs on the full text: 58 `x` and then the token, so only 6 token characters lie inside the
+    cut (M24: the check on the cut text);
+  - W27-L17: 10 consecutive token characters withhold the reason (M25: `includes(token)`; M29: a window of 16);
+  - W27-L18: 7 consecutive token characters are printed, so the window is 8 and no narrower (M28: a window of 4);
+  - W27-L19: a token shorter than the window, `abc`, withholds a reason that holds all of it (M26: a fixed width of
+    8);
+  - W27-L20: an empty token checks nothing and the reason is printed (M27: the `width > 0` guard deleted; M25 too,
+    because `includes('')` is always true).
+
+  M30 (the check run after the printable-ASCII replacement) is equivalent for a printable token, so no row can red it.
+  The replacement is one-for-one on characters and leaves a printable one as it is, so a window of printable
+  characters occurs in the replaced text exactly where it occurs in the full text. A window that holds a `?` could
+  also match a replaced character, which errs toward withholding; no row's token has one.
+
+  The coordinator's ruling on review 852's F7 (no code change): the link's token is the agent token the operator types
+  at install, with only a non-empty check. So a token of four characters or fewer can withhold a fixed reason such as
+  `unauthorized`. This errs toward not printing, and it stands (W27-L19 pins the short-token rule).
+- **D-6585** (the worker, review 852 fix round) — W27-L25 asserts the time from just before the connect to the fifth
+  accept against 950 ms, not the fourth gap against the minimum, which the ruling's example suggested. Why:
+  - a gap subtracts the earlier accept's time, which load delays, so a stall shortens it;
+  - libuv arms timers from its cached loop time, so a timer armed after a stall inside one loop iteration fires early,
+    and the exact timer sum (about 1150 ms) is not a safe floor either. The 950 ms floor is that sum less slack.
+
+  The mutant that resets the backoff in the deadline callback (M36) measured 613 to 629 ms for the same quantity, far
+  below the floor.
+- **D-6586** — `unused` (run 833): issued to this wave's review-852 fix round; no departure took it.
+
 Any reserve number still undefined at wave-done is defined in this section before the wave-done fingerprint, in the
 house form for an issued number no departure took (as `delegation-broker-wave3-observe.md` writes its run 740
 numbers): the number, an em-dash, `` `unused` (run 833): issued to this wave; no departure took it.`` Then the
@@ -554,7 +649,8 @@ never reclaimed.
     and `refusalReason` (D-6527, D-6529), the module header comment.
 - `server/test/remote-liveness.test.ts` (new): Task 1 creates it with the peer harness and W27-L8; Task 2 adds W27-L1
   to W27-L5, W27-L7 and W27-L12; Task 3 adds W27-L6, W27-L9, W27-L10, W27-L11, W27-L13, W27-L14, W27-L15, the log
-  assertions of L1, L2, L3 and L7, W27-L8's two-episode extension, and the `connectFleet` import.
+  assertions of L1, L2, L3 and L7, W27-L8's two-episode extension, and the `connectFleet` import. Review 852's fix
+  round adds W27-L16 to W27-L25 and the harness they need.
 - `server/test/remoteHelpers.ts`: Task 1, the comment above `connectToAgent`.
 - `README.md`: Task 4, one bullet.
 
@@ -845,19 +941,22 @@ green below is the worker's to measure; the planning probe's figures are named w
 - [ ] **Step 6: Mutation rows** M1 to M5 and M18, each alone, each restored to HEAD (Global Constraints, the Mutation
   table). Confirm `git diff --quiet HEAD -- src/remote/client.ts` after the last; the as-built note records the reds.
 
-### Task 3: the link says what it does (W27-c; D-6517, D-6520, D-6522, D-6526)
+### Task 3: the link says what it does (W27-c; D-6517, D-6520, D-6522, D-6526, D-6527, D-6529)
 
 **Files:**
-- Modify: `server/src/remote/client.ts`: the module types after `PtyListener` (:71), `preReadyPhase` after `isRecord`
-  (:79), the private fields, `connect`'s `catch` (:358-362) and `close` listener (:368), `onReady` (after
-  `this.setState(…)`, :527), `onClose` (:532-553), `startHeartbeat` (:600-602), `armReadyDeadline`, and new `note`.
+- Modify: `server/src/remote/client.ts`: the module types after `PtyListener` (:71), `preReadyPhase` and
+  `refusalReason` after `isRecord` (:79), the private fields, `connect`'s `catch` (:358-362) and `close` listener
+  (:368, passing code and reason), `onReady` (after `this.setState(…)`, :527), `onClose` (:532-553, with its `reason`
+  parameter and its `refused` note), `startHeartbeat` (:600-602), `armReadyDeadline`, and new `note`.
 - Test: `server/test/remote-liveness.test.ts`.
 
 **Interfaces:**
 - Produces: `type LinkLine = 'lost' | 'no-pong' | 'never-ready' | 'no-ready' | 'refused'`;
   `interface LinkEpisode { since: number; logged: Set<LinkLine>; failedAttempts: number }`;
-  `function preReadyPhase(readyState: number): string`; the private field `episode: LinkEpisode | null` (null means no
-  stretch without a ready link is open; it is private state, never a seam);
+  `function preReadyPhase(readyState: number): string`;
+  `function refusalReason(reason: Buffer, token: string): string`;
+  the private field `episode: LinkEpisode | null` (null means no stretch without a ready link is open; it is private
+  state, never a seam);
   the private method `note(kind: LinkLine, text: string): LinkEpisode` (it returns the open episode, so a caller never
   reads `this.episode` back through a non-null assertion);
   `onClose(ws: WebSocket, code: number, reason: Buffer)`.
@@ -877,6 +976,8 @@ green below is the worker's to measure; the planning probe's figures are named w
       + `this stretch's first line \\(${failed} attempts ended without a ready\\)$`);
     const NOT_CREATED = (name: string): string =>
       `ccrc-server: agent link: no ready since the server started (socket not created: ${name}); retrying`;
+    const REFUSED = (code: number, reason: string): string =>
+      `ccrc-server: agent link: agent refused the hello (close ${code} ${reason}); retrying`;
     ```
 
   - Change the header's client import to `import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';`
@@ -965,14 +1066,31 @@ green below is the worker's to measure; the planning probe's figures are named w
       });
     ```
 
+  - Rows W27-L14 to W27-L25 follow, by name only; their code is in `server/test/remote-liveness.test.ts`, not pasted
+    here. Ruling 2 added W27-L14, D-6529 added W27-L15, and review 852's fix round added W27-L16 to W27-L25 with the
+    harness they need (the `close-hello` and `echo-hello` peer modes, `acceptTimes()`, `rawClosePeer`, `refusalLines`):
+    - W27-L14: an agent that refuses each hello is logged once, with a printable reason;
+    - W27-L15: a refusal reason that repeats the token is withheld, never printed;
+    - W27-L16: the token check runs on the full reason, before the 64-character cut;
+    - W27-L17: 8 token characters in a row are enough to withhold the reason;
+    - W27-L18: 7 token characters in a row are printed (the window is 8);
+    - W27-L19: a token shorter than the window withholds a reason that holds all of it;
+    - W27-L20: an empty token checks nothing, so the reason is printed;
+    - W27-L21: a boot-time refusal logs the boot line, one refused line, then ready;
+    - W27-L22: the refused range is 4400 to 4499: 4399 and 4500 print the boot line only;
+    - W27-L23: a close frame with the TCP side never ended logs (closing), then the refused line;
+    - W27-L24: the deadline timer never keeps the process alive;
+    - W27-L25: the deadline keeps the backoff growing: five attempts take at least the timers they wait on.
+
 - [ ] **Step 2: Run them red.** Expected: every line assertion fails (no line at all), W27-L13 included. W27-L7, W27-L12
   and the black-box halves stay green.
 - [ ] **Step 3: Implement.**
   - After `type PtyListener …`:
 
     ```ts
-    /** The kinds of line that open an episode without a ready link (wave 27, D-6520). */
-    type LinkLine = 'lost' | 'no-pong' | 'never-ready' | 'no-ready';
+    /** The kinds of line a stretch without a ready link prints, each at most once per stretch; all but `refused` can
+     *  open one (wave 27, D-6520, D-6527). */
+    type LinkLine = 'lost' | 'no-pong' | 'never-ready' | 'no-ready' | 'refused';
     /** One stretch without a ready link that has printed a line: when it opened, which kinds it printed, and how many
      *  attempts ended without a ready since. Private to the client; never on `state`, never on the wire. */
     interface LinkEpisode { since: number; logged: Set<LinkLine>; failedAttempts: number }
@@ -988,6 +1106,20 @@ green below is the worker's to measure; the planning probe's figures are named w
       if (readyState === WebSocket.OPEN) return 'ready not sent';
       if (readyState === WebSocket.CLOSING) return 'closing';
       return 'closed';
+    }
+
+    /** A peer's close reason, read as untrusted (D-6527, D-6529). A peer that echoes the hello must not put the token in
+     *  the journal, so a reason repeating any 8 consecutive characters of it (all of a shorter token) is withheld; one
+     *  that breaks the token up on purpose already holds it, so this covers the accidental echo. The check runs on the
+     *  full decoded text. Otherwise: every character outside printable ASCII becomes `?`, cut to 64; empty prints `-`. */
+    function refusalReason(reason: Buffer, token: string): string {
+      const full = reason.toString('utf8');
+      const width = Math.min(8, token.length);
+      for (let i = 0; width > 0 && i + width <= token.length; i++) {
+        if (full.includes(token.slice(i, i + width))) return '[withheld: repeats the token]';
+      }
+      const text = full.replace(/[^\x20-\x7e]/g, '?').slice(0, 64);
+      return text === '' ? '-' : text;
     }
     ```
 
@@ -1017,7 +1149,7 @@ green below is the worker's to measure; the planning probe's figures are named w
 
     and its doc comment gains: `A deadline whose attempt is no longer current says nothing: its line and count belong
     to the current attempt.`
-  - `connect`: `ws.on('close', (code) => this.onClose(ws, code));`, and its `catch` becomes (D-6526):
+  - `connect`: `ws.on('close', (code, reason) => this.onClose(ws, code, reason));`, and its `catch` becomes (D-6526):
 
     ```ts
     } catch (err) {
@@ -1030,7 +1162,8 @@ green below is the worker's to measure; the planning probe's figures are named w
       return;
     }
     ```
-  - `onClose(ws: WebSocket, code: number)`: after the stale-socket guard, `const wasReady = this.ready;`. After
+  - `onClose(ws: WebSocket, code: number, reason: Buffer)`: after the stale-socket guard,
+    `const wasReady = this.ready;`. After
     `this.markDown();` and before `if (this.closed) return;`:
 
     ```ts
@@ -1042,6 +1175,9 @@ green below is the worker's to measure; the planning probe's figures are named w
       const ep = this.episode
         ?? this.note('never-ready', `no ready since the server started (close ${code}); retrying`);
       ep.failedAttempts++;
+      if (code >= 4400 && code <= 4499) {
+        this.note('refused', `agent refused the hello (close ${code} ${refusalReason(reason, this.cfg.token)}); retrying`);
+      }
     }
     ```
 
@@ -1072,7 +1208,8 @@ green below is the worker's to measure; the planning probe's figures are named w
   `feat(remote): the agent link logs its drops, its deadline and its recovery (wave 27, D-6517, D-6520, D-6522,
   D-6526)`.
 - [ ] **Step 6: Mutation rows** M4b, M5, M7 to M17, M19 to M23, each alone, each restored to HEAD (the Mutation
-  table). Confirm `git diff --quiet HEAD -- src/remote/client.ts` after the last.
+  table). Confirm `git diff --quiet HEAD -- src/remote/client.ts` after the last. Review 852's fix round adds M24 to
+  M36 and re-measures every mutant on the final 25 rows (As built).
 
 ### Task 4: README says what the link now does (W27-d; D-6523)
 
@@ -1086,13 +1223,18 @@ green below is the worker's to measure; the planning probe's figures are named w
   ```md
   - The server bounds every attempt to reach the agent. An attempt with no `ready` within a fixed deadline of its
     socket being created (a connect or an upgrade never answered, a hello never answered) is terminated and retried
-    with the usual backoff, and a ready link that stops answering the heartbeat is terminated too. The server's log
-    says so, once per kind per stretch without a link, each line starting `ccrc-server: agent link:`: when a ready
-    link is lost, when the heartbeat ends it, when an attempt times out (with the deadline, and whether the attempt
-    was still connecting or upgrading or had sent its hello), when an attempt fails before the first ready since the
-    server started, and when the link is ready again, with the time since that stretch's first line. None of these
-    values is an operator setting.
+    after a delay that grows on each failure and resets once a link is ready, and a ready link that stops answering
+    the server's periodic ping is terminated and retried the same way. The server's log says so, once per kind per
+    stretch without a link, each line starting `ccrc-server: agent link:`: when a ready link is lost (or, in its
+    place, when an unanswered ping ends it), when an attempt times out (with the deadline, and whether the attempt was
+    still connecting or upgrading or had sent its hello), when an attempt closes before the first ready since the
+    server started and no other line has opened the stretch, when the agent refuses the hello (with its close code and
+    a printable cut of its reason, withheld if it repeats the token), and when the link is ready again, with the time
+    since that stretch's first line. None of these values is an operator setting.
   ```
+
+  This is the landed text. It departs from the first draft by the refusal clause (D-6527) and by review 852's F1
+  and F2: the backoff and the ping said in words, and when the boot line prints.
 
   The bullet states no number on purpose. The deadline, the heartbeat interval, the miss limit and the backoff are
   module-private constants in `client.ts`, and no row ties README prose to them (the house pins README values only
@@ -1117,21 +1259,23 @@ green below is the worker's to measure; the planning probe's figures are named w
   - `GROWTH_CHECK=1 ./node_modules/.bin/vitest run test/growth-check.test.ts`. None of this wave's files is a growth
     file; run it to confirm.
   - After `git fetch origin main`, run `deviation-refs`. Then measure the definitions with the server's OWN reader,
-    not a grep that may accept a form the reader rejects. From `server/` this prints `16 16` and the sixteen
-    issued numbers in order, from D-6514, once the reserve has been defined or marked unused (Deviations found):
+    not a grep that may accept a form the reader rejects. From `server/` this prints `18 18` and the eighteen
+    issued numbers in order, D-6514 to D-6529 and then D-6585 and D-6586 (every one is defined, and none is in
+    reserve; see Deviations found):
 
     ```
     ./node_modules/.bin/tsx -e "import { readFileSync } from 'node:fs';
     import { definitionsIn } from './src/coord/ledger.ts';
     const path = '../docs/superpowers/plans/2026-10-22-centralised-update-w27-agent-link-handshake.md';
     const ns = definitionsIn([{ path, text: readFileSync(path, 'utf8') }]).map((d) => d.n)
-      .filter((n) => n >= 6514 && n <= 6529);
+      .filter((n) => n >= 6514 && n <= 6529 || n === 6585 || n === 6586);
     console.log(ns.length, new Set(ns).size, ns.join(' '));"
     ```
 
     At planning time, with the first form, this printed `0 0`; with the entries rewritten it printed `12 12` for
-    D-6514 to D-6525, and with D-6526 added it prints `13 13` for D-6514 to D-6526 (measured at this revision). Check
-    too that none of the sixteen is defined on `origin/main` (the same reader over `git show origin/main:<plan>` for
+    D-6514 to D-6525, and with D-6526 added it prints `13 13` for D-6514 to D-6526 (measured at this revision). With
+    D-6527 to D-6529 defined it printed `16 16`, and with D-6585 and D-6586 it prints `18 18`. Check too that none of
+    the eighteen is defined on `origin/main` (the same reader over `git show origin/main:<plan>` for
     any plan `deviation-refs` names).
 - [ ] **Step 4: The wave-done fingerprint.** The `suite:` line follows worker clause 15: `green` or `red` from the FIRST
   full suite run after the implementation was complete, `unrun` when no full run happened locally. The per-file runs
@@ -1141,12 +1285,14 @@ green below is the worker's to measure; the planning probe's figures are named w
   - The bound (D-6514, D-6516, D-6517): one wall clock per attempt, 15 s, never cleared, acting on its own socket, and
     the recovery bound (deadline plus one backoff, at most 45 s) against 65 minutes.
   - The rejected options and why: `handshakeTimeout` (D-6514), TCP keepalive (D-6518), an earlier heartbeat (D-6519).
-  - The five log lines verbatim, and the boot line's `socket not created` form (D-6520, D-6526); that an ordinary
+  - The six kinds of log line verbatim, and the boot line's `socket not created` form (D-6520, D-6526); that an
+    ordinary
     agent restart now prints two, the incident's shape (a ready link lost, then hung attempts) three, and a black hole
     from a server restart two (Risk notes, "Log volume").
   - The heartbeat's first row (D-6521) and the measured mutation table.
   - That no operator setting, wire field, `FleetState` field or agent change is added.
-  - The function list of Global Constraints.
+  - The function list of Global Constraints, `refusalReason`, `onClose`'s `reason` parameter and its `refused` note
+    included.
   - The PR body ends with the attribution line this session's reminder gives.
 
 ## Readings (for the coordinator to rule; each chosen where no ruling decided it)
@@ -1283,8 +1429,9 @@ the `client.ts` anchors were unchanged from `7ebdff20c`).
 - **Commits, in order:**
   - the plan alone;
   - Task 1, the harness and W27-L8;
-  - Task 2, the deadline;
-  - D-6528, the W27-L12 phase fix;
+  - Task 2, the deadline, with W27-L12 and the `setImmediate` that D-6528 describes: no committed tree held W27-L12
+    without it;
+  - D-6528, which changed only the plan (the entry);
   - Task 3, the log lines and D-6527's refusal line;
   - Task 3's review fix, D-6529;
   - Task 4, the README bullet;
@@ -1294,44 +1441,75 @@ the `client.ts` anchors were unchanged from `7ebdff20c`).
   - README went in under run 774's consent: request 8312, consent 8314. The owner claim was live as 2306 at Task 4
     (re-declared from 2259, 2278 and 2295). Claim 2300's intent was renewed to cite all three. The change is one
     hunk of nine added lines, with no existing line touched.
-- **Deviations:** sixteen defined, D-6514 to D-6529, each once (the server's reader prints `16 16`). Both reserve
-  numbers were spent:
+- **Deviations:** eighteen defined, each once (the server's reader prints `18 18`; it printed `16 16` for D-6514 to
+  D-6529 before the fix round). The first block's two reserve numbers were spent:
   - D-6528: W27-L12's starting phase. The row went red with no mutant applied; it is reported under ruling 12.
   - D-6529: a refusal reason that repeats the token is withheld.
+
+  The fix round's two numbers: D-6585 is the W27-L25 floor, a departure from the ruling's example; D-6586 is unused
+  and has its own entry.
 - **The README bullet** adds one clause for the refusal line (D-6527, D-6529). The consent allows the link's journal
-  lines, and the clause states no number.
-- **Rows:** 15 in `remote-liveness.test.ts`, W27-L1 to W27-L15, all green. W27-L15 is the echoed-hello row of D-6529.
-- **Mutations**, each alone on the committed `client.ts`, each run collecting every row of its task, each restored to
-  green:
+  lines, and the clause states no number. The fix round rewrote the bullet (below).
+- **Rows:** 15 in `remote-liveness.test.ts` at the first wave-done, W27-L1 to W27-L15, all green. W27-L15 is the
+  echoed-hello row of D-6529. The fix round brought it to 25, W27-L1 to W27-L25.
+- **Mutations**, as re-measured in review 852's fix round on the final 25 rows. Each mutant was applied alone to a
+  scratch copy of the branch at 77c949950 and run once over the whole file, so every run collected all 25 rows
+  (failed + passed = 25). Every red was an assertion, with no vitest timeout and no process-cap or harness error. Each
+  mutant was restored with a copy and a byte-for-byte `cmp`. M6's Task 1 base row is kept as history, and the earlier
+  per-task measurements are superseded by this table:
 
-| # | Red rows measured | Rows run (failed+passed) | Note |
+| # | Red rows measured (25 rows) | failed+passed | Note |
 |---|---|---|---|
-| M6 | W27-L8 | 1+0 (Task 1, base) | the heartbeat's terminate has its first row |
-| M1 | W27-L1, L2, L3, L4, L12 | 5+3 | as expected |
-| M2 | W27-L1, L2, L4, L12 | 4+4 | L3 green, as expected |
-| M3 | W27-L2, L3 | 2+6 | L1, L4 green, as expected |
-| M4 | W27-L5 | 1+7 | as expected |
-| M5 | W27-L1, L2, L3, L4, L12 (Task 2); also L6, L9 (Task 3) | 5+3; 7+7 | a superset at Task 3 |
-| M18 | W27-L12 | 1+7 | after D-6528 |
-| M4b | W27-L5 | 1+13 | as expected |
-| M7 | W27-L6, L7 | 2+12 | as expected |
-| M8 | W27-L9, L13, L14 | 3+11 | a superset |
-| M9 | W27-L8, L9, L10, L11 | 4+10 | as expected |
-| M10 | W27-L1, L2, L3, L9 | 4+10 | as expected |
-| M11 | W27-L9, L10, L11 | 3+11 | as expected |
-| M12 | W27-L10, L14 | 2+12 | L14's first line is `lost` |
-| M13 | W27-L8 | 1+13 | as expected |
-| M14 | W27-L8 | 1+13 | as expected |
-| M15 | W27-L8 | 1+13 | as expected |
-| M16 | W27-L6, L11 | 2+12 | its first run also redded L3 once, under load; it did not repeat |
-| M17 | W27-L9, L10 | 2+12 | as expected |
-| M19 | W27-L13 | 1+13 | as expected |
-| M20 | W27-L13 | 1+13 | as expected |
-| M21 | W27-L14, L15 | 2+13 | L15 needs the line too |
-| M22 | W27-L14, L15 | 2+13 | the raw hello carries the token |
-| M23 | W27-L15 | 1+14 | D-6529 |
+| M6 (Task 1, base) | W27-L8 | 1+0 | history: the heartbeat's terminate has its first row |
+| M1 | W27-L1, L2, L3, L4, L6, L9, L12, L23, L25 | 9+16 | L12 reds through its `waitFor` only (below) |
+| M2 | W27-L1, L2, L4, L9, L12, L25 | 6+19 | L3 green, as expected; L12 through its `waitFor` only |
+| M3 | W27-L1, L2, L3, L6, L9, L23 | 6+19 | L1 red against the plan's "stays green", twice: Task 3's line assertion; L4 green |
+| M4 = M4b | W27-L5 | 1+24 | M4's spelling has no anchor since Task 3; one edit, measured once |
+| M5 | W27-L1, L2, L3, L4, L6, L9, L12, L23, L25 | 9+16 | L12 through its `waitFor` only |
+| M6 | W27-L8 | 1+24 | |
+| M7 | W27-L6, L7 | 2+23 | earlier runs also showed L10 or L14 under load: a closed client's deadline printing into a later spy |
+| M8 | W27-L9, L13, L14, L15, L16, L17, L18, L19, L20, L21, L22 | 11+14 | every row that expects one line per kind |
+| M9 | W27-L8, L9, L10, L11, L21 | 5+20 | |
+| M10 | W27-L1, L2, L3, L9 | 4+21 | |
+| M11 | W27-L9, L10, L11, L21 | 4+21 | |
+| M12 | W27-L10, L14 | 2+23 | L14's first line is `lost` |
+| M13 | W27-L8 | 1+24 | |
+| M14 | W27-L8 | 1+24 | |
+| M15 | W27-L8 | 1+24 | |
+| M16 | W27-L6, L11, L16, L17, L18, L19, L20, L21, L22 | 9+16 | the boot-refusal rows expect the `never-ready` line |
+| M17 | W27-L9, L10, L23 | 3+22 | |
+| M18 | W27-L12 | 1+24 | red at `upgraded(0)`: the only mutant family that exercises that assertion |
+| M19 | W27-L13 | 1+24 | |
+| M20 | W27-L13 | 1+24 | |
+| M21 | W27-L14 to L23 | 10+15 | every row that expects a `refused` line |
+| M22 | W27-L14, L15, L16, L17, L19 | 5+20 | |
+| M23 | W27-L15, L16, L17, L19 | 4+21 | |
+| M24 | W27-L16 | 1+24 | |
+| M25 | W27-L17, L20 | 2+23 | L20 beyond the expected L17, twice: `includes('')` is always true |
+| M26 | W27-L19 | 1+24 | |
+| M27 | W27-L20 | 1+24 | |
+| M28 | W27-L18 | 1+24 | |
+| M29 | W27-L17 | 1+24 | |
+| M30 | none | 0+25 | green: the equivalent mutant (D-6529), no row can red it |
+| M31 | W27-L16 to L22 | 7+18 | |
+| M32 | W27-L22 | 1+24 | |
+| M33 | W27-L22 | 1+24 | |
+| M34 | W27-L23 | 1+24 | |
+| M35 | W27-L24 | 1+24 | |
+| M36 | W27-L25 | 1+24 | |
 
-- **Suites run** at the README commit, one file at a time, at a load average of 18 to 45:
+- **M1, M2 and M5 and W27-L12.** All three red W27-L12 only through its `waitFor` (`accepts() >= 2`), never through
+  `upgraded(0)`, so their L12 reds say nothing for or against D-6528. Only the M18 family exercises that assertion.
+- **The review-852 fix round**, on this branch after the as-built commit:
+  - commits, in order: the coordinator's rulings recorded (61acb84b5); rows W27-L16 to W27-L25 and the text fixes to
+    W27-L14's title and `LinkLine`'s comment (36427c5a3); the README rewrite (c5ea2efd5); the L24 and L25 review
+    fixes (b605bedbe and 77c949950); and the plan text edit that wrote this list;
+  - rows W27-L16 to W27-L25: the token window (L16 to L20), the refusal's order, range and phase (L21 to L23), the
+    timer's `unref` (L24) and the backoff (L25, D-6585);
+  - the README bullet, rewritten inside the consented bullet and still stating no number: it says when the boot line
+    prints, the retry delay in words (it grows on each failure and resets once a link is ready), and the ping in
+    words.
+- **Suites run** at the README commit (before review 852), one file at a time, at a load average of 18 to 45:
   - all green: `remote-liveness` 15, `remote-connect` 66, `remote-io` 217, `remote-pty` 6, `remote-runner` 28,
     `remote-tail` 4, `fleet-identity-client` 6, `fleet-identity-composition` 4, `update-inventory` 90,
     `caps-refresh` 8, `citations` 4, `single-definition` 841, `topology-clean` 60, `private-names` 47, `dtbd` 1,
@@ -1344,5 +1522,6 @@ the `client.ts` anchors were unchanged from `7ebdff20c`).
     shares it; this wave did not cause it.
   - `typecheck-tests` went red twice under a load average of 80 to 100, both times on its own 120 s tsc timeout. The
     direct `tsc` runs were clean each time, and the quiet re-run passed 12 of 12.
+- Suites (review 852 fix round): measured by the controller after this edit
 - **The full suite was not run locally.** CI's selection runs it for the PR, so the wave-done's `suite:` word is
   `unrun`.
