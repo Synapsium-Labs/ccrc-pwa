@@ -513,3 +513,181 @@ export function redactRuleTables(root: string = REPO): string[] {
   }
   return out.sort();
 }
+
+/**
+ * D-5862 (Task C1h; ARCH-68 #803; spec K11, §2.3's clock row): the watcher's lane schedule, four queries over
+ * `server/src/watch.ts`, read from its syntax tree (the `typescript-api` the other scanners parse with), never from a
+ * count typed by hand. Exit targets (C1h): `laneClockFields` and `laneClockShapes` list only W4's two clocks (and
+ * `DelegationLane#lastSweepAt`, reported, while another series holds that class); `singleFlightGuards` lists only
+ * `ticking`, `dispatchRun` and `dispatchAgain`, and W4's two; `cadenceLiterals` is empty.
+ * KNOWN WIDTH: a clock or guard reached through a computed name, a field of another class and a literal assembled from
+ * pieces (`60 * 1000`, which is read, but `MINUTE * 5` is not a literal) are other shapes; a cadence compared through
+ * a local alias (`const gap = now - this.lastX; if (gap < 5000)`) is not seen.
+ */
+
+/** The fields that were a lane's throttle clock on `a8a5b9f56`, by name: 25 in `FleetWatcher` (23 on `Date.now()`, 2 on
+ *  the monotonic clock) and W4's two, which a later series moves. */
+export const LANE_CLOCK_NAMES: readonly string[] = [
+  'lastCapsAt', 'lastCatalogueAt', 'lastInventoryAt', 'lastServerCapsAt',
+  'lastTaskSweep', 'lastUsageSweep', 'lastPrSweep', 'lastNameSweep', 'lastDivergenceSweep', 'lastLifecycleSweep',
+  'lastReadinessSweep', 'lastLedgerReconcile', 'lastLedgerFloor',
+  'lastClaimRenew', 'lastClaimLapse', 'lastStallSweep', 'lastIdleNudgeAt', 'lastMailSweep', 'lastAskSweep',
+  'lastApprovalPrune', 'lastDigestBeat',
+  'lastChildReclaimSweep', 'lastCollectSweep', 'lastArchivedExpirySweep', 'lastDeadCoordinatorSweep',
+  'lastStopDoneSweep', 'lastHibernateSweep',
+];
+
+/** The fields that were a lane's single-flight guard on `a8a5b9f56` (the stuck-run stamp, the booleans, the promises and
+ *  the one queued rerun), by name. */
+export const SINGLE_FLIGHT_NAMES: readonly string[] = [
+  'ticking', 'collectSweeping', 'stallSweepRunning', 'idleNudgeRunning', 'archivedExpirySweeping', 'stopDoneSweeping',
+  'hibernateSweeping', 'deadCoordinatorSweeping', 'serverCapsRun', 'deadCoordinatorPassRun', 'inventoryRun',
+  'inventoryRerunPending', 'dispatchRun', 'dispatchAgain', 'prSweepStartedAt',
+];
+
+type TsNode = import('typescript-api').Node;
+
+async function watcherTree(root: string): Promise<{ ts: typeof import('typescript-api').default; sf: import('typescript-api').SourceFile; text: string; file: string } | null> {
+  const abs = path.join(root, 'server/src/watch.ts');
+  if (!existsSync(abs)) return null;
+  const ts = (await import('typescript-api')).default;
+  const text = readFileSync(abs, 'utf8');
+  return { ts, sf: ts.createSourceFile(abs, text, ts.ScriptTarget.Latest, true), text, file: 'server/src/watch.ts' };
+}
+
+/** Each property declaration of the class `cls`, with its name. */
+function classFields(t: NonNullable<Awaited<ReturnType<typeof watcherTree>>>, cls: string): Array<{ name: string; node: TsNode; numeric: boolean }> {
+  const { ts, sf } = t;
+  const out: Array<{ name: string; node: TsNode; numeric: boolean }> = [];
+  sf.forEachChild((st) => {
+    if (!ts.isClassDeclaration(st) || st.name?.text !== cls) return;
+    for (const m of st.members) {
+      if (!ts.isPropertyDeclaration(m) || !ts.isIdentifier(m.name)) continue;
+      const init = m.initializer;
+      const numericInit = init !== undefined && (ts.isNumericLiteral(init)
+        || (ts.isPrefixUnaryExpression(init) && (ts.isNumericLiteral(init.operand) || (ts.isIdentifier(init.operand) && init.operand.text === 'Infinity'))));
+      const numericType = m.type !== undefined && /^number\b|\bnumber\b/.test(m.type.getText(sf)) && !/[<[{]/.test(m.type.getText(sf));
+      out.push({ name: m.name.text, node: m, numeric: numericInit || numericType });
+    }
+  });
+  return out;
+}
+
+const siteOf = (t: NonNullable<Awaited<ReturnType<typeof watcherTree>>>, node: TsNode): CensusSite => {
+  const line = t.sf.getLineAndCharacterOfPosition(node.getStart(t.sf)).line + 1;
+  return { file: t.file, line, text: t.text.split('\n')[line - 1] ?? '' };
+};
+
+/** The named lane clocks (`LANE_CLOCK_NAMES`) still declared as fields of `FleetWatcher` and `DelegationLane`. */
+export async function laneClockFields(root: string = REPO): Promise<CensusSite[]> {
+  const t = await watcherTree(root);
+  if (t === null) return [];
+  const out: CensusSite[] = [];
+  for (const cls of ['FleetWatcher']) {
+    for (const f of classFields(t, cls)) if (LANE_CLOCK_NAMES.includes(f.name)) out.push(siteOf(t, f.node));
+  }
+  return out;
+}
+
+/** `DelegationLane#lastSweepAt`, a cadence clock in a class another series holds: reported by name, never ratcheted. */
+export async function laneClockReported(root: string = REPO): Promise<CensusSite[]> {
+  const t = await watcherTree(root);
+  if (t === null) return [];
+  return classFields(t, 'DelegationLane').filter((f) => f.name === 'lastSweepAt').map((f) => siteOf(t, f.node));
+}
+
+/** Numeric fields of `FleetWatcher` that are compared with a constant and are NOT a lane's throttle: `lastStallJudgedAt` is
+ *  the stall watch's gap rule (slug `stall-clocks-drop-on-an-unobserved-gap`, D-3750), a state test on how long the watch
+ *  went unobserved, which decides whether to drop its clocks and does not decide whether a lane runs. */
+export const LANE_CLOCK_SHAPE_EXEMPT: readonly string[] = ['lastStallJudgedAt'];
+
+/** The structural query: a numeric field of `FleetWatcher` (bar `LANE_CLOCK_SHAPE_EXEMPT`) compared as `<now> - this.X <op> CONST` (`<`, `<=`, `>`, `>=`),
+ *  where `<now>` is any expression and CONST an UPPER_CASE name or a numeric literal. So a new, unnamed clock is caught. */
+export async function laneClockShapes(root: string = REPO): Promise<CensusSite[]> {
+  const t = await watcherTree(root);
+  if (t === null) return [];
+  const { ts, sf } = t;
+  const numeric = new Set(classFields(t, 'FleetWatcher').filter((f) => f.numeric && !LANE_CLOCK_SHAPE_EXEMPT.includes(f.name)).map((f) => f.name));
+  const out: CensusSite[] = [];
+  sf.forEachChild((st) => {
+    if (!ts.isClassDeclaration(st) || st.name?.text !== 'FleetWatcher') return;
+    const visit = (n: TsNode): void => {
+      if (ts.isBinaryExpression(n) && [ts.SyntaxKind.LessThanToken, ts.SyntaxKind.LessThanEqualsToken,
+        ts.SyntaxKind.GreaterThanToken, ts.SyntaxKind.GreaterThanEqualsToken].includes(n.operatorToken.kind)) {
+        const isConst = (e: TsNode): boolean => ts.isNumericLiteral(e) || (ts.isIdentifier(e) && /^[A-Z][A-Z0-9_]*$/.test(e.text))
+          || (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AsteriskToken && isConst(e.left) && isConst(e.right));
+        const stripped = (e: TsNode): TsNode => (ts.isParenthesizedExpression(e) ? stripped(e.expression) : e);
+        const fieldOf = (e: TsNode): string | null => {
+          const b = stripped(e);
+          if (!ts.isBinaryExpression(b) || b.operatorToken.kind !== ts.SyntaxKind.MinusToken) return null;
+          const r = stripped(b.right);
+          return ts.isPropertyAccessExpression(r) && r.expression.kind === ts.SyntaxKind.ThisKeyword && numeric.has(r.name.text) ? r.name.text : null;
+        };
+        if ((fieldOf(n.left) !== null && isConst(stripped(n.right))) || (fieldOf(n.right) !== null && isConst(stripped(n.left)))) out.push(siteOf(t, n));
+      }
+      n.forEachChild(visit);
+    };
+    visit(st);
+  });
+  return out;
+}
+
+/** The single-flight guards (`SINGLE_FLIGHT_NAMES`) still declared as fields of `FleetWatcher`. */
+export async function singleFlightGuards(root: string = REPO): Promise<CensusSite[]> {
+  const t = await watcherTree(root);
+  if (t === null) return [];
+  return classFields(t, 'FleetWatcher').filter((f) => SINGLE_FLIGHT_NAMES.includes(f.name)).map((f) => siteOf(t, f.node));
+}
+
+/** A bare millisecond literal (a numeric literal of 1000 or more, `60_000`, or a product of literals, `60 * 1000`)
+ *  compared against a clock of `FleetWatcher`: `<now> - this.last… <op> LITERAL`. A cadence is a row of `LANE_SCHEDULE`. */
+export async function cadenceLiterals(root: string = REPO): Promise<CensusSite[]> {
+  const t = await watcherTree(root);
+  if (t === null) return [];
+  const { ts, sf } = t;
+  const out: CensusSite[] = [];
+  const literalMs = (e: TsNode): boolean => {
+    if (ts.isParenthesizedExpression(e)) return literalMs(e.expression);
+    if (ts.isNumericLiteral(e)) return Number(e.text.replace(/_/g, '')) >= 1000;
+    return ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AsteriskToken
+      && (ts.isNumericLiteral(e.left) || literalMs(e.left)) && (ts.isNumericLiteral(e.right) || literalMs(e.right))
+      && [e.left, e.right].some((x) => literalMs(x) || (ts.isNumericLiteral(x) && Number(x.text.replace(/_/g, '')) >= 1000));
+  };
+  const clockMinus = (e: TsNode): boolean => {
+    const b = ts.isParenthesizedExpression(e) ? e.expression : e;
+    return ts.isBinaryExpression(b) && b.operatorToken.kind === ts.SyntaxKind.MinusToken && ts.isPropertyAccessExpression(b.right)
+      && b.right.expression.kind === ts.SyntaxKind.ThisKeyword && b.right.name.text.startsWith('last');
+  };
+  const visit = (n: TsNode): void => {
+    if (ts.isBinaryExpression(n) && [ts.SyntaxKind.LessThanToken, ts.SyntaxKind.LessThanEqualsToken,
+      ts.SyntaxKind.GreaterThanToken, ts.SyntaxKind.GreaterThanEqualsToken].includes(n.operatorToken.kind)
+      && ((clockMinus(n.left) && literalMs(n.right)) || (clockMinus(n.right) && literalMs(n.left)))) out.push(siteOf(t, n));
+    n.forEachChild(visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** The three cadences the spec declares as derivations, each `export const NAME = OTHER;` where it lives (`laneSchedule.ts`
+ *  or `watch.ts`): `reference` is true when the declaration's initializer is a bare name, false when it is a literal or an
+ *  expression, and `file` is null when no declaration is found. A derivation is a reference, never a second literal. */
+export const DECLARED_DERIVATIONS: readonly string[] = ['COLLECT_OBSERVE_INTERVAL_MS', 'STALL_SWEEP_MS', 'DELEGATION_SWEEP_MS'];
+
+export async function declaredDerivations(root: string = REPO): Promise<Array<{ name: string; file: string | null; reference: boolean }>> {
+  const ts = (await import('typescript-api')).default;
+  const found = new Map<string, { file: string; reference: boolean }>();
+  for (const rel of ['server/src/laneSchedule.ts', 'server/src/watch.ts']) {
+    const abs = path.join(root, rel);
+    if (!existsSync(abs)) continue;
+    const sf = ts.createSourceFile(abs, readFileSync(abs, 'utf8'), ts.ScriptTarget.Latest, true);
+    sf.forEachChild((st) => {
+      if (!ts.isVariableStatement(st)) return;
+      for (const d of st.declarationList.declarations) {
+        if (ts.isIdentifier(d.name) && DECLARED_DERIVATIONS.includes(d.name.text) && d.initializer !== undefined) {
+          found.set(d.name.text, { file: rel, reference: ts.isIdentifier(d.initializer) });
+        }
+      }
+    });
+  }
+  return DECLARED_DERIVATIONS.map((name) => ({ name, file: found.get(name)?.file ?? null, reference: found.get(name)?.reference ?? false }));
+}
