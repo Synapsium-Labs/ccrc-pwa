@@ -1438,7 +1438,7 @@ function installModelsOp(home: string): void {
   }
 }
 
-/** The four GPT-lane executables, `GPT_LANE_BINS` — the constant
+/** The five GPT-lane executables, `GPT_LANE_BINS` — the constant
  *  ccrc-install.test.ts pins to `_inst_bins`' gate: SYMLINKED into the
  *  fixture's shipped tree (`<home>/ccrc/ccd`, `$BOX_TREE_DIR/ccd`, what the
  *  check compares against) and COPIED into `<home>/.local/bin`, as
@@ -1527,7 +1527,7 @@ function editRosterRow(home: string, id: string, edit: (row: Record<string, any>
 /** A healthy box whose roster also carries Codex lanes (`ids`), each one a
  *  lane ccrc runs end to end: its launcher, a signed-in authDir, its model
  *  registry and a fresh catalogue, and the files rendered from them; the
- *  four GPT-lane executables placed from the shipped tree; a current
+ *  five GPT-lane executables placed from the shipped tree; a current
  *  runtime. Every check still PASSes — healthy()'s contract — so a Codex
  *  case breaks exactly one thing. The ports are FREE ones (`freeLanes`),
  *  never the fixed pure-parse pair: from Task 5 on the check connects to
@@ -11914,7 +11914,7 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     const box = IS_DARWIN ? rx('; usage publishing not applicable on macOS — ccrc places no launchd job for it (decision 17)') : '';
     expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(new RegExp(
       `^${rx(`PASS codex: 1 Codex lane(s): codex-a (ports ${proxyPort}/${litellmPort}, signed in, lane.json current, LiteLLM config current; tiers: none running (a lane is lazy)`)}`
-      + `${usage}${rx(`); runtime ${currentGen(home)} litellm=1.101.0; the four GPT-lane executables match the shipped tree`)}${box}$`))]);
+      + `${usage}${rx(`); runtime ${currentGen(home)} litellm=1.101.0; the five GPT-lane executables match the shipped tree`)}${box}$`))]);
     noRunnerBugLine(r.stdout, 'codex');
     expect(r.code, r.stdout).toBe(0);
   });
@@ -11985,8 +11985,19 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     rmSync(join(binDir(home), 'ccrc-codex'));
     appendFileSync(join(binDir(home), 'ccgpt-usage.py'), '\n# edited on the box\n');
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^FAIL codex: ccrc-codex missing from \$HOME\/\.local\/bin, or not executable — every Codex lane needs all four$/m);
+    expect(r.stdout).toMatch(/^FAIL codex: ccrc-codex missing from \$HOME\/\.local\/bin, or not executable — every Codex lane needs all five$/m);
     expect(r.stdout).toMatch(/^FAIL codex: ccgpt-usage\.py in \$HOME\/\.local\/bin differ from the shipped tree's copies in /m);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // Codex bridge Stage 1, Task 5: the auth library is the fifth GPT-lane file,
+  // and the check names it on its own, never satisfied by a longer sibling.
+  it('a missing ccgpt-auth.py FAILs by name', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-lib-missing-');
+    rmSync(join(binDir(home), 'ccgpt-auth.py'));
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: ccgpt-auth\.py missing from \$HOME\/\.local\/bin, or not executable — every Codex lane needs all five$/m);
+    expect(codexVerdicts(r.stdout).filter((l) => l.startsWith('PASS ')), 'a PASS beside the FAIL').toEqual([]);
     noRunnerBugLine(r.stdout, 'codex');
   });
 
@@ -12006,8 +12017,8 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     unstub(home, 'cmp');
     rmSync(join(binDir(home), 'ccrc-codex'));
     const r = runDoctor(home);
-    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: ccrc-codex missing from \$HOME\/\.local\/bin, or not executable — every Codex lane needs all four$/m);
-    const re = /^WARN codex: cmp is not on PATH, so ccgpt-proxy\.py, ccgpt-usage\.py, ccgpt-runtime in \$HOME\/\.local\/bin could not be compared with the shipped tree — unmeasured, not current$/m;
+    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: ccrc-codex missing from \$HOME\/\.local\/bin, or not executable — every Codex lane needs all five$/m);
+    const re = /^WARN codex: cmp is not on PATH, so ccgpt-auth\.py, ccgpt-proxy\.py, ccgpt-usage\.py, ccgpt-runtime in \$HOME\/\.local\/bin could not be compared with the shipped tree — unmeasured, not current$/m;
     expect(r.stdout, r.stdout).toMatch(re);
     expect(remedyAfter(r.stdout, re)).toBe('  remedy: install diffutils (it ships cmp), then re-run doctor');
     noRunnerBugLine(r.stdout, 'codex');
@@ -12020,17 +12031,17 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     const r = runDoctor(home);
     expect(r.stdout, r.stdout).toMatch(/^FAIL codex: the shipped tree \(.*\/ccrc\/ccd\) has no ccgpt-runtime, /m);
     // The tree-absent file is FAILed, not counted as uncompared: the WARN names
-    // the other three only.
-    expect(r.stdout, r.stdout).toMatch(/^WARN codex: cmp is not on PATH, so ccgpt-proxy\.py, ccgpt-usage\.py, ccrc-codex in \$HOME\/\.local\/bin could not be compared with the shipped tree — unmeasured, not current$/m);
+    // the other four only.
+    expect(r.stdout, r.stdout).toMatch(/^WARN codex: cmp is not on PATH, so ccgpt-auth\.py, ccgpt-proxy\.py, ccgpt-usage\.py, ccrc-codex in \$HOME\/\.local\/bin could not be compared with the shipped tree — unmeasured, not current$/m);
     noRunnerBugLine(r.stdout, 'codex');
   });
 
-  it('with no cmp on PATH and all four placed, the one codex verdict is the WARN naming all four — never a PASS claiming they match (Plan 3b A-5)', async () => {
+  it('with no cmp on PATH and all five placed, the one codex verdict is the WARN naming all five — never a PASS claiming they match (Plan 3b A-5)', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-nocmp-all-');
     unstub(home, 'cmp');
     const r = runDoctor(home);
     expect(codexVerdicts(r.stdout), r.stdout).toEqual([
-      'WARN codex: cmp is not on PATH, so ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex in $HOME/.local/bin could not be compared with the shipped tree — unmeasured, not current',
+      'WARN codex: cmp is not on PATH, so ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex in $HOME/.local/bin could not be compared with the shipped tree — unmeasured, not current',
     ]);
     noRunnerBugLine(r.stdout, 'codex');
   });
@@ -13372,7 +13383,7 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
       `FIX codex: ${n}: not compared — cmp is not on PATH, so $HOME/.local/bin/${n} was left as it is; install diffutils (it ships cmp), then re-run 'ccrc doctor --fix'`;
     const placed = (n: string): string =>
       `FIX codex: placed $HOME/.local/bin/${n} from the shipped tree — it was missing or not executable, and with no cmp on PATH whether its bytes changed was not measured, so no tier is restarted for it`;
-    expect(r.fix).toEqual([placed('ccgpt-proxy.py'), notCompared('ccgpt-usage.py'), notCompared('ccgpt-runtime'), placed('ccrc-codex'), DONE(1)]);
+    expect(r.fix).toEqual([notCompared('ccgpt-auth.py'), placed('ccgpt-proxy.py'), notCompared('ccgpt-usage.py'), notCompared('ccgpt-runtime'), placed('ccrc-codex'), DONE(1)]);
     // The drifted file is NOT claimed restored: it is still exactly its bytes.
     expect(readFileSync(join(r.home, '.local', 'bin', 'ccgpt-usage.py'), 'utf8')).toBe('#!/bin/sh\n# drifted ccgpt-usage.py\n');
     for (const n of ['ccgpt-proxy.py', 'ccrc-codex']) {
@@ -13744,6 +13755,31 @@ describeCodex('ccrc doctor --fix: codex, on a real doctor run (Plan 3a Task 8)',
     expect(r.stdout).toMatch(/^FIX codex: restored \$HOME\/\.local\/bin\/ccgpt-usage\.py from the shipped tree$/m);
     // The re-measurement RAN, and PASSes: "no FAIL" alone is vacuous over a
     // doctor run that ended inside the fixer (the whole-cure-subshell row).
+    expect(afterFix(r.stdout)).toMatch(/^PASS codex: /m);
+    expect(afterFix(r.stdout)).not.toMatch(/^FAIL codex: /m);
+    expect(readFileSync(placed).equals(readFileSync(shipped))).toBe(true);
+    expect(statSync(placed).mode & 0o777).toBe(0o755);
+  });
+
+  // Codex bridge Stage 1, Task 5: the auth library is compared and restored
+  // exactly like the other four, by the same loop over CODEX_LANE_BINS.
+  it('a drifted placed ccgpt-auth.py FAILs, and --fix restores it from the shipped tree', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-fix-codex-auth-lib-');
+    for (const t of FIX_TOOLS) linkReal(home, t);
+    const shipped = join(home, 'ccrc', 'ccd', 'ccgpt-auth.py');
+    const placed = join(home, '.local', 'bin', 'ccgpt-auth.py');
+    expect(existsSync(shipped), 'healthyCodexBox ships no ccgpt-auth.py in its tree').toBe(true);
+    const drifted = '#!/usr/bin/env python3\n# drifted by hand\n';
+    // Unlink first: a write through a link the fixture planted would edit its target.
+    rmSync(placed, { force: true });
+    writeFileSync(placed, drifted, { mode: 0o755 });
+    const r0 = runDoctor(home);
+    expect(r0.stdout, r0.stdout).toMatch(/^FAIL codex: ccgpt-auth\.py in \$HOME\/\.local\/bin differ from the shipped tree's copies in /m);
+    expect(r0.stdout, 'doctor without --fix ran a fixer').not.toMatch(/^FIX /m);
+    expect(readFileSync(placed, 'utf8')).toBe(drifted);
+    const r = runDoctor(home, ['doctor', '--fix']);
+    noBuild(r.stdout);
+    expect(r.stdout).toMatch(/^FIX codex: restored \$HOME\/\.local\/bin\/ccgpt-auth\.py from the shipped tree$/m);
     expect(afterFix(r.stdout)).toMatch(/^PASS codex: /m);
     expect(afterFix(r.stdout)).not.toMatch(/^FAIL codex: /m);
     expect(readFileSync(placed).equals(readFileSync(shipped))).toBe(true);

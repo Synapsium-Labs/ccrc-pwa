@@ -8495,6 +8495,22 @@ describe('ccrc history W2-2a Task 5: the three CCRC_RECALL_ seam names are each 
   });
 });
 
+// CODEX BRIDGE STAGE 1, TASK 5: the auth library's three side-file names (its checkpoint, its status file and its lock)
+// are module constants in ccd/ccgpt-auth.py, and bash and node ask its CLI (`paths`, `secret-files`, `status`) rather
+// than spell them. APPENDED, for the reason the blocks above state: session-hook.test.ts's citation audit cites this
+// file by line. Tests, docs and README.md are prose about the names and are left out; the credential's own name,
+// `auth.json`, is not covered (it is spelled in today's bash, tests and README).
+describe('codex bridge Stage 1 Task 5: the auth library owns its side-file names', () => {
+  it('the auth library\'s side-file names are spelled only in ccd/ccgpt-auth.py', () => {
+    const r = spawnSync('git', ['-C', ccrcRoot, 'grep', '-l', '-e', 'auth.pending.json', '-e', 'auth.status.json',
+      '-e', 'auth.json.lock', '--', ':!server/test', ':!docs', ':!README.md'], { encoding: 'utf8' });
+    // git grep answers 1 for "no match" and above 1 for a failure: neither is the answer this row expects, and a
+    // failure must never read as an empty list.
+    if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/ccgpt-auth.py']);
+  });
+});
+
 // W2-2b Task 1 (W2-D42, W2-D44; O13, O14): the marker's parser, formatter and fold are defined once, in lib.mjs; the arm
 // words are quoted once in ccd/history, on RECALL_ARMS' line; and every ccd/history code line naming headless-on's path
 // is historyPaths' own field or the marker's one read, store.mjs's readBounded at HEADLESS_LIST_MAX_BYTES with no link

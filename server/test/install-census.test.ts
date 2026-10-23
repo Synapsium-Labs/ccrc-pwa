@@ -1909,6 +1909,10 @@ describe('the id-shaped executables: TOOLCHAIN_EXECUTABLES, _inst_bins and _unin
       + 'not place a file of that name, so every Codex lane on an installed box would exec nothing. Place it behind the '
       + 'gate, or point the emitter at what the gate places.')
       .toContain(target);
+    expect([gated.size, [...gated][0]],
+      'the GPT-lane block places five files, ccgpt-auth.py first: the library every other lane file will read its '
+      + 'credential through is placed before them (codex bridge Stage 1, Task 5)')
+      .toEqual([5, 'ccgpt-auth.py']);
   });
 
   it('both GPT_TOOLCHAIN_ACCOUNT_IDS mirrors are one set, and it reserves every id-shaped name the GPT-lane gate places', () => {

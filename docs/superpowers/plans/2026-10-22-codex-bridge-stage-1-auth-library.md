@@ -1310,7 +1310,9 @@ operator notes.
 - Test: `server/test/ccrc-doctor.test.ts`, `server/test/ccrc-account.test.ts`
 
 **Interfaces:**
-- Consumes: `_codex_auth_status`, `_codex_auth paths` (Task 8, Task 4).
+- Consumes: `_codex_auth_status`, `_codex_auth paths` (Task 8, Task 4). `modeOk`/`ownerOk` null (nothing there, or
+  not a regular file, D-6559) is not false: a symlink, a FIFO or a directory at the credential path reads
+  `unreadable` with null mode fields, so it takes the `move it aside` arm, never `chmod 600`.
 - Produces: the FAIL sentences above; `_codex_auth_hold`/`_codex_auth_release` (`CX_AUTH_LOCK_FD`).
 
 - [ ] **Step 1: Change the old-rule pins and write the new tests**
@@ -1325,6 +1327,8 @@ operator notes.
     in, for a present credential whether or not its token expired'`; `'no new WARN line and no new check name'` (the
     `codex` check's output has only PASS/FAIL lines in every case above); `'a check table sourced without ccrc names
     the missing _codex_auth_status'`.
+  - New (D-6559): `'a symlink at auth.json FAILs move it aside, prints no chmod line, and leaves its target
+    untouched'`.
   - `:13130-13134` and `:13552` (`_fix_codex` leaves a second lane's 0000 credential lstat-unchanged): unchanged, and
     must stay green.
   - `ccrc-account.test.ts`: new `'removal takes the auth library's lock around the stop: a holder makes it wait, then
@@ -1353,6 +1357,7 @@ operator notes.
 - D2g (`_codex_auth_status`: read an empty answer as a state) → 1 failed (FAILs an empty status answer …).
 - D1b (doctor: print the `unreadable` arm beside the mode arm) → 1 failed (FAILs a 0000-mode …: a `move it aside`
   line).
+- D1c (doctor: read `modeOk` null as false) → 1 failed (a symlink at auth.json FAILs move it aside …).
 - D3 (removal: do not take `_codex_auth_hold`) → 1 failed (removal takes the auth library's lock …).
 - D4 (removal: proceed on a hold timeout) → 1 failed.
 - D5 (`_codex_auth_hold`: drop the non-regular refusal) → 1 failed (a symlink at the auth lock path …).
@@ -1673,3 +1678,280 @@ report.
   holds it around `_codex_stop_lane`.
 - **Cost if wrong:** a stop that lands inside a refresh's token round trip can spend the refresh token, and the lane
   then needs a sign-in (D-6374).
+
+### D-6540 — `paths_for` refuses a relative authDir
+
+- **Departs from:** the contract's Files paragraph, "`paths_for(auth_dir)`; `auth_dir` is absolute", which states a
+  precondition but no refusal; Task 4 makes a relative `--auth-dir` a usage error in `main` only.
+- **What changed:** `paths_for` raises `ValueError` for anything but an absolute string (`ccd/ccgpt-auth.py:233-234`),
+  pinned by the case at `server/test/codex-auth-lib.test.ts:450`. `main`'s usage refusal stays the CLI's own check.
+- **Why:** every file the library touches is built by this one constructor, so enforcing the precondition here means no
+  caller can resolve an authDir against its own working directory.
+- **Cost if wrong:** a Python caller that passes a relative path gets a `ValueError`, not an `AuthError` word, and must
+  make the path absolute first.
+
+### D-6541 — an empty token string reads `incomplete`
+
+- **Departs from:** the contract's Readings list: "`incomplete`: a backend-family object with no string `access_token`
+  or no string `refresh_token`".
+- **What changed:** `_reading_of` takes a token only when it is a non-empty string (`ccd/ccgpt-auth.py:365-372`), so
+  `""` in either field reads `incomplete`, not `present`.
+- **Why:** a token of no characters can never authenticate a request, so a credential carrying one is not signed in.
+- **Cost if wrong:** none known; the contract line should read "no non-empty string", and the writers' re-read under the
+  lock inherits the same rule.
+
+### D-6542 — a credential nested past the parser's limit is not re-read
+
+- **Departs from:** Task 1's Interfaces: "a JSON parse failure is re-read up to `READ_RETRIES = 3` times, `READ_RETRY_S
+  = 0.05` apart, then answers `unreadable`".
+- **What changed:** a `RecursionError` from the parse answers `unreadable` at once, with its own detail
+  (`ccd/ccgpt-auth.py:522-524`), and `claims_of` answers `{}` for one (`:278`).
+- **Why:** no re-read can heal a file nested past the recursion limit, and a `RecursionError` is not a `ValueError`, so
+  without its own arm it escaped `read` and `claims_of` as a crash.
+- **Cost if wrong:** a file that is nested too deeply only while it is being rewritten would read `unreadable` without
+  the three retries; no known writer produces such a file.
+
+### D-6543 — the library's opens add `O_NONBLOCK` and `O_CLOEXEC`
+
+- **Departs from:** Task 1's Interfaces, "the open is `O_RDONLY|O_NOFOLLOW`", and Task 2's Interfaces, which open the
+  lock `O_RDWR|O_CREAT|O_NOFOLLOW` and the checkpoint `O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW`.
+- **What changed:** the credential's open (`ccd/ccgpt-auth.py:495-496`), the lock's (`:599`) and `recover_pending`'s
+  read of the checkpoint (`:826-827`) add `O_NONBLOCK` and `O_CLOEXEC`, and the checkpoint's write (`:726`) adds
+  `O_CLOEXEC`. A FIFO then opens at once and is refused by the `fstat` that follows.
+- **Why:** a FIFO swapped in between the `lstat` and the open would otherwise block the read, and POSIX leaves a
+  blocking `O_RDWR` open of a FIFO undefined. A child exec'd under `held` must not inherit the lock's descriptor, or the
+  flock outlives the process that took it.
+- **Cost if wrong:** none measured. The swap is a race no row can make, so `O_NONBLOCK` on the read is reviewed by
+  reading; the lock's FIFO refusal is pinned by the case "a FIFO at the lock path is refused as a non-regular file, and
+  nothing is committed" (`server/test/codex-auth-lib.test.ts:712`).
+
+### D-6544 — the test fixture's helpers take more than the plan's signatures
+
+- **Departs from:** Task 1's Interfaces for `codexAuthFixture.ts`: `plantBackendCredential`'s six options, and
+  `runAuthDriver(home, action, env?, o?: {timeoutMs?})` resolving to `{status: number; …}` with only
+  `CCRC_CODEX_AUTH_BASE` named in its child env.
+- **What changed:** `plantBackendCredential` also takes `claimAccountId`, `idClaims` and `accessClaims`
+  (`server/test/codexAuthFixture.ts:61-72`). `runAuthDriver`'s `o` gains `onLine`, called with each JSON line as it is
+  printed (`:203`, `:229-236`), its `status` is `number | null` (`:204`), and the child's env carries `TMPDIR`, this
+  run's temp parent (`:215`).
+- **Why:** the extra claims let a case pin the id-token-first derivation and its fallback to the access token, and
+  `onLine` lets the heal and recover cases act between two ops. A child that SIGKILL ended has no exit code, and a temp
+  file the library makes must stay inside the run's own temp parent.
+- **Cost if wrong:** test-only: later fixture callers rely on the wider signatures.
+
+### D-6545 — the test driver speaks more than the plan's op and fault lists
+
+- **Departs from:** Task 1's `driver.py` paragraph, which lists eleven ops and the faults `enospc-writes`,
+  `enospc-fsync`, `enospc-replace`, `die-before-rename` and `uid`, and which exits 0 or 1.
+- **What changed:** the driver adds the ops `env`, `expired` and `paths`, a top-level `umask`, a per-op `authDir`, a
+  `touch` file on `hold`, `ms` on every line and `class`/`message` on an error, exits 2 on usage and 3 when the library
+  fails to load, and passes an op's optional arguments only when the op names them
+  (`server/test/fixtures/codexauth/driver.py:6-33`, `:196`, `:206-209`, `:281-298`). It also adds the faults
+  `eio-read:N` and `enospc-fsyncdir:N` and the `count-opens` flag, which puts `credentialOpens` on every line (`:43-50`,
+  `:102-163`, `:307`); the EIO case pins the library's `READ_FAILED_REMEDY` (`ccd/ccgpt-auth.py:420-422`, `:517`).
+- **Why:** the `runAuthDriver` case needs an op that runs with no library, and a default can be exercised only when no
+  argument is passed. The read loop's EIO arm, the "without opening it" claim and the directory-fsync arms had no red
+  test without a fault that reaches them.
+- **Cost if wrong:** test-only; the plan's fault list does not name the three new words, so the driver's docstring is
+  their one definition.
+
+### D-6546 — the first reading case is retitled to what it measures
+
+- **Departs from:** Task 1 Step 1's first case, "reads a present backend credential: account id from the id token,
+  expiry from the access token".
+- **What changed:** it is titled "reads a present backend credential: its stored account id and expiry, opening it once"
+  (`server/test/codex-auth-lib.test.ts:95`), and it runs under `count-opens` and expects one open, the counter's
+  positive control.
+- **Why:** the planted file stores `account_id` and `expires_at`, and the stored values win, so the plan's title
+  promised a derivation the case never makes; derivation is the next case's.
+- **Cost if wrong:** none: a title only.
+
+### D-6547 — the fake token server has a case of its own
+
+- **Departs from:** Task 1 Step 1's case list, which tests `runAuthDriver` and no other fixture.
+- **What changed:** "fakeAuthServer answers each route from its queue, and rejects a refresh token it already redeemed"
+  is added under `describe('the fixtures …')` (`server/test/codex-auth-lib.test.ts:2384-2385`).
+- **Why:** `fakeAuthServer` ships in Task 1 but is first used in Task 3, and the race cases there rely on its reuse
+  rejection, so it is pinned when it lands.
+- **Cost if wrong:** none: one added test.
+
+### D-6548 — `recover_pending` can refuse as well as promote and discard
+
+- **Departs from:** Task 2's Interfaces, where `recover_pending` answers only `"none"`, `"promoted"` or `"discarded"`.
+- **What changed:** it refuses a promotion over a credential that reads `unreadable` or belongs to another family, as
+  `commit_record` does (`ccd/ccgpt-auth.py:867`). It raises `Unreadable`, keeping both files, on an `OSError` from the
+  checkpoint's `lstat`, its open or read, the fsync of a checkpoint it would promote, the rename, or a discard's unlink
+  (`:815-821`, `:842-853`, `:860-875`); a failed directory fsync after the rename still answers `"promoted"`
+  (`:876-880`).
+- **Why:** a promotion is a write, and the contract says a foreign or unreadable file is never overwritten; the mtime
+  rule alone misses a file moved into place from a backup. A checkpoint that cannot be read or made durable may be the
+  only copy of a refreshed pair the server has already rotated, so it is never discarded.
+- **Cost if wrong:** `ensure_fresh` and the sign-in answer `credential-unusable` until the operator fixes the disk or
+  the mode, or moves the checkpoint aside, where discarding would have let the lane carry on, possibly into
+  `needs-signin`.
+
+### D-6549 — a commit that fails after its rename binds to the file now in place
+
+- **Departs from:** the contract's unsaved record and Task 2's `commit_record`: on any `OSError` it keeps `(record,
+  identity-measured-under-the-lock)`, the identity of the file the record was to replace.
+- **What changed:** when the `OSError` comes after the rename (the directory fsync), the record is bound to the identity
+  of the file now in place (`ccd/ccgpt-auth.py:738-739`), so the next holder's `retry_unsaved` re-runs the commit, fsync
+  included; pinned by the case "a commit whose directory fsync fails keeps its record bound to the file now in place; the
+  held retry re-runs it, never drops it" (`server/test/codex-auth-lib.test.ts:1085`).
+- **Why:** under the plan's binding, the file already holds the record but no longer has the old identity, so the retry
+  would print a spurious `dropped` for a record that is on disk.
+- **Cost if wrong:** one rewrite of the same record at the next holder.
+
+### D-6550 — a refresh with no id token anywhere stores a null `id_token`
+
+- **Departs from:** the contract's backend format: "`access_token`, `refresh_token`, `id_token` (strings)".
+- **What changed:** `_merge` keeps a stored `id_token` only when it is a non-empty string. With none in the answer or
+  the file, it writes `id_token: null` and the refresh succeeds (`ccd/ccgpt-auth.py:1230-1232`, `:1240`).
+- **Why:** refusing `refresh-response-incomplete` instead would leave the lane unable to refresh for good, against
+  Task 3's `merge` rule, "a credential is never thrown away for a missing field" (ruling 11).
+- **Cost if wrong:** a reader of the file that expects the string the contract names gets null. The library derives
+  `account_id` from the access token instead, and the contract line becomes "string or null".
+
+### D-6551 — the unsaved record keeps its refresh's status fields
+
+- **Departs from:** the contract's "the process keeps `(record, identity)`" and Task 2's signature
+  `commit_record(auth_dir, record) -> bool`.
+- **What changed:** each `_UNSAVED` entry gains a third field, the refresh's `lastRefreshAt` and `lastRequestId`
+  (`ccd/ccgpt-auth.py:330-340`), passed in through a new optional `commit_record(…, refreshed=None)` (`:702`, `:746`).
+  `retry_unsaved`'s `"written"` writes those fields (`:785-791`), and the sign-in passes its own (`:1596`).
+- **Why:** the status on disk was measured on the file the record replaces, and its own write may have failed with the
+  commit, so the only true `lastRefreshAt` for the record is the one kept with it.
+- **Cost if wrong:** additive: a `commit_record` caller that passes no `refreshed` gets a `"written"` status with null
+  refresh fields.
+
+### D-6552 — an unsaved record is not barred by the needs-signin of the file it replaces
+
+- **Departs from:** the `ensure_fresh` algorithm block ("status bars r -> raise it", before the lock and under it) and
+  the contract's "Only `retry_unsaved`, called inside `held`, changes the map".
+- **What changed:** a reading served from the unsaved record is never barred before the lock (`ccd/ccgpt-auth.py:1329`).
+  Under the lock a needs-signin never bars it but a config-error does (`:1283-1284`), and while a needs-signin stands on
+  the replaced file, no failure arm writes a status (`:1344`, `:1363`, `:1367`, `:1385`). A needs-signin refusal of the
+  record's own refresh token drops the record with one stderr line (`:1356-1362`), so the map now has four writers
+  (`:332-337`); `ensure_fresh`'s keep of a record whose commit was refused (D-6560) is that same writer's second act.
+- **Why:** that needs-signin was measured on the file the record replaces and is about that file's refresh token, not
+  the record's. Barring the record would strand a refreshed credential on a full disk, and writing over the standing
+  needs-signin would let another process send a dead token.
+- **Cost if wrong:** while a config-error stands, an unsaved reading waits on the lock instead of being refused at once.
+  An unsaved record whose refresh could not commit leaves the other process's needs-signin on the status file until the
+  disk takes the record.
+
+### D-6553 — a written record keeps a config-error that bars
+
+- **Departs from:** Task 3's "`retry_unsaved`'s `"written"` also rewrites the status file: the same fields, `unsaved:
+  false` and the new file's identity".
+- **What changed:** `"written"` writes `ok` with the record's own fields. The exception is a config-error that is
+  current under this config: it is read before the commit and kept (its `state`, `lastErrorCode` and `lastRequestId`),
+  rebound to the new file with `unsaved: false` (`ccd/ccgpt-auth.py:782-791`).
+- **Why:** a config-error is about ccrc's OAuth client, not one file's token, and another process may write it while
+  this one waits on the lock; writing `ok` over it would let one more request through.
+- **Cost if wrong:** after a config-error, a record written once the disk frees stays barred until the library's config
+  changes, like any credential.
+
+### D-6554 — the token request's deadline bounds the body, not the headers
+
+- **Departs from:** the Global Constraints line "the library's `auth.json.lock` … held for one refresh (at most the
+  token request's timeout)", and Task 3's "timeout `TOKEN_TIMEOUT_S`".
+- **What changed:** `token_request` takes one deadline at its start (`ccd/ccgpt-auth.py:1154`), and `_read_answer` reads
+  a 2xx or an error body under the time left (`:1111-1134`); the sign-in's requests share that reader (`:1425`,
+  `:1436`). The status line, the headers and a chunked answer's size lines are still read by `http.client` under
+  `TOKEN_TIMEOUT_S` per socket operation (`:1117-1119`).
+- **Why:** bounding the header phase too needs a watchdog thread, and the fix rounds were not to add a mechanism.
+- **Cost if wrong:** an endpoint that trickles its headers can hold the lock past `TOKEN_TIMEOUT_S`, and a waiter then
+  answers `auth-lock-busy` at `LOCK_WAIT_S`. Only the TLS-authenticated default endpoint or a loopback test override can
+  answer.
+
+### D-6555 — the computed status's shape
+
+- **Departs from:** Task 4's `status_report` keys and D-6377: both say a status is computed from the credential when no
+  current file exists, but not what each key holds then.
+- **What changed:** in a computed status, `state` is `ok` for a present credential and null for every other reading, and
+  `family` and `expiresAt` are the reading's; the refresh fields and `updatedAt` are null and `unsaved` is false
+  (`ccd/ccgpt-auth.py:1677-1687`). A current status that is a config-error from another config is reported as computed
+  too (D-6558). `mode`, `modeOk` and `ownerOk` are null when nothing is at the path, and since D-6559 when the path is
+  not a regular file (`:1662-1664`, `:1690-1693`), and a file-sourced `state` is reported as the file holds it
+  (`:1669`).
+- **Why:** a caller branches on `credential` for a reading that is not present, and an out-of-vocabulary state must not
+  fold into null.
+- **Cost if wrong:** a caller that reads `state` alone sees null for an absent, foreign or unreadable credential; Tasks
+  8 and 9 read `credential` for those.
+
+### D-6556 — a sign-in records its own time as `lastRefreshAt`
+
+- **Departs from:** Task 4 step 5: "on success `write_status(ok)`", which names no `lastRefreshAt`.
+- **What changed:** a sign-in writes the exchange's time and request id as `lastRefreshAt` and `lastRequestId`
+  (`ccd/ccgpt-auth.py:1596`, `:1629-1630`), pinned at `server/test/codex-auth-cli.test.ts:202-203`.
+- **Why:** it records when the current refresh token was issued, which rollout note 5's watch of an idle lane needs.
+- **Cost if wrong:** Rollout note 4 reads a moved `lastRefreshAt` as "the tier refreshed", and note 5's idle-lane
+  watch (D-6383) reads a still one as idleness, so right after a sign-in both checks must compare against the sign-in's
+  time. A ruling for null changes the pin and `fields` together.
+
+### D-6557 — a sign-in whose rename landed is signed in
+
+- **Departs from:** Task 4 step 5, "a commit that never lands raises `LoginFailed` … with the old file unchanged", which
+  says nothing of a commit that fails after its rename.
+- **What changed:** when every try fails, `sign_in_device` re-reads the file. When the file holds the sign-in's tokens,
+  it answers `"signed-in"`, drops the record `commit_record` bound to the file, and writes `ok` with `unsaved: false`
+  (`ccd/ccgpt-auth.py:1610-1631`). This is pinned by the case at `server/test/codex-auth-cli.test.ts:423-427`, which
+  goes red when `landed` is forced False (`ccd/ccgpt-auth.py:1614`) and when the landed arm's pop is removed (`:1628`).
+- **Why:** the directory fsync is the only failure after the rename, so the file already holds the record. The one-shot
+  CLI exits next, so an unsaved record would claim memory that no process holds.
+- **Cost if wrong:** the directory entry's durability is unconfirmed. A crash that brings the old file back leaves a
+  status bound to the new identity, which then reads as not current, and the operator signs in again.
+
+### D-6558 — the status report ignores a config-error from an older config
+
+- **Departs from:** Task 4's `status_report`, whose `source` is `"file"` whenever `read_status` is current, and
+  Task 3's `read_status` interface, under which a config-error measured under another `configHash` is stale but its
+  file is still current.
+- **What changed:** `status_report` sets aside a current status whose state is `config-error` when `_bars` does not
+  honour it (`ccd/ccgpt-auth.py:1655-1657`), and reports the computed status (`source: "computed"`, D-6555), as if no
+  status file stood. The decision is `_bars`'s (`:950-958`), and `configHash` is compared nowhere else.
+  `sign_in_device`'s already-signed-in answer over such a status (`:1580`) is unchanged. Pinned by the cases at
+  `server/test/codex-auth-cli.test.ts:716` (a changed `CLIENT_ID`: `status` reads computed, `signin` answers
+  already-signed-in, and `status` agrees after it) and `:740` (the config unchanged: `status` still reads the
+  config-error, from the file).
+- **Why:** once the config changes (`ccrc update`, the config-error's remedy), the refresher retries over that status
+  and the sign-in answers already-signed-in over it, so a report that still read `config-error` would hold the lane, and
+  fail it in the doctor, on a state nothing else honours.
+- **Cost if wrong:** between the config change and the next refresh the report reads the credential's computed state
+  (`ok` for a present one) with no `lastErrorCode`, so a new config that the endpoint also refuses shows only once a
+  refresh writes a config-error under it.
+
+### D-6559 — the status report names no mode for a credential path that is not a regular file
+
+- **Departs from:** Task 4's `status_report` keys `mode` (octal string), `modeOk` and `ownerOk`, defined from the
+  credential's `lstat` whatever stands at the path, and Task 9's doctor, whose only credential line for `modeOk` false
+  is the `chmod 600` FAIL.
+- **What changed:** `mode`, `modeOk` and `ownerOk` are null unless the `lstat` is of a regular file
+  (`ccd/ccgpt-auth.py:1662-1664`, `:1693`), and the docstring says so (`:1647-1650`). A symlink, a FIFO or a directory
+  at the credential path then reports `credential: "unreadable"` with null mode fields, so the doctor takes its
+  unreadable arm (move it aside), never `chmod 600`. Pinned by the symlink and FIFO cases at
+  `server/test/codex-auth-cli.test.ts:751`.
+- **Why:** a symlink's `lstat` reads 0777, so `modeOk` false sent the doctor to `chmod 600`, which follows the symlink
+  to its target; no mode of a path that is not a regular file is the credential's.
+- **Cost if wrong:** a caller cannot tell a symlink, a FIFO and a directory apart by `mode`: all three read `unreadable`
+  with null mode fields and the same remedy.
+
+### D-6560 — a commit refused after the token endpoint answered keeps the record unsaved
+
+- **Departs from:** the `ensure_fresh` algorithm block (`saved = commit_record(auth_dir, rec)`), where a record is kept
+  only when the commit cannot write, and Task 2's `commit_record`, whose `Unreadable` and `ForeignFamily` refusals keep
+  nothing.
+- **What changed:** when the commit's re-read under the lock refuses the file (`Unreadable` or `ForeignFamily`) after
+  `token_request` answered, `ensure_fresh` keeps the refreshed record in `_UNSAVED` with this refresh's fields, bound to
+  the identity of the file it read under the lock, then re-raises and writes no status (`ccd/ccgpt-auth.py:1372-1382`).
+  `commit_record` still refuses with the file untouched (`:719-720`). `retry_unsaved` lands the record once that file,
+  still in place, reads again; while it reads unreadable the retry raises that refusal; and it drops the record once
+  another stands there (`:775-780`). Pinned by two cases: `server/test/codex-auth-lib.test.ts:1591`, over an absent
+  file, through the driver's existing `eio-read:1` fault on the commit's re-read, and `:1641`, over the same present
+  file made unreadable during the round trip.
+- **Why:** an answer from the token endpoint means the refresh token the request carried is already rotated, so dropping
+  the refreshed record would lose the only live pair, and the next refresh would answer `needs-signin`.
+- **Cost if wrong:** like any unsaved record it lives only in this process: an exit before the next holder loses it, and
+  a file swapped in at another identity drops it at the next `retry_unsaved`, keeping that file. The refused call still
+  raises its refusal to its caller.
