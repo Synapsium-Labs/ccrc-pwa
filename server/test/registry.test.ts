@@ -27,7 +27,9 @@ const REGISTRY_CENSUS_TAG = 'registry-read-census';
  * names, so they are not part of the cost every row pays: a row pays one read more for each other field it lists, and
  * `registry-bounded-read.test.ts` measures that with a counting `FleetIO`. The helpers' names carry no bare
  * `field(` / `fieldMeasured(` token, so this count sees exactly the unconditional reads (it used to subtract the
- * listed-only ternaries and widen the one `ROUTE_WRITABLE_FIELDS.map` call to its five reads, D-5347).
+ * listed-only ternaries and widen the one `ROUTE_WRITABLE_FIELDS.map` call to its five reads, D-5347). That widening
+ * is dropped because the route map now goes through `listedMeasured`; a bare `field(`/`fieldMeasured(` call inside a
+ * `.map(...)` over N fields would count as 1 here and must be widened again.
  */
 function buildRecordFieldReadCount(src: string): number {
   const body = src.match(/async function buildRecord\([\s\S]*?await Promise\.all\(\[([\s\S]*?)\n  \]\);/);

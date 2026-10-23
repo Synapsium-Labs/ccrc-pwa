@@ -245,7 +245,7 @@ never name one file. Paths are relative to the package's `src/`.
 | C7 Update control plane | `update/**`, `buildinfo.ts`, `coord/updateintentlog.ts` | `fleet/Update*.tsx`, `fleet/WhatsNewSheet.tsx`, `fleet/ReleaseNotes.tsx`, `fleet/HaltBanner.tsx`, `fleet/FleetHostBanner.tsx`, `fleet/movePlan.ts`, `fleet/updateAck.ts`, `fleet/updateHalt.ts`, `fleet/useUpdatesView.ts`, `screens/updates.tsx` |
 | C8 Auth & box token | `auth/**`, `token/**` | `accounts/**`, `components/LoginScreen.tsx`, `fleet/PasskeyNotice.tsx`, `lib/auth.ts`, `lib/passkey.ts`, `screens/AuthSection.tsx` |
 | C9 Docs | `docs/**` | `docs/**`, `screens/DocsScreen.tsx` |
-| K Kernels and platform | `index.ts`, `server.ts`, `deps.ts`, `watch.ts`, `io.ts`, `refuse.ts`, `pwaStatic.ts`, `shutdownseal.ts`, `remote/client.ts`, `remote/io.ts` | `main.tsx`, `app.tsx`, `command/**`, `components/**`, `styles/**`, `lib/**`, `screens/Settings*.tsx`, `screens/AppearanceRow.tsx`, `screens/SkinFieldset.tsx`, `screens/settingsText.ts` |
+| K Kernels and platform | `index.ts`, `server.ts`, `deps.ts`, `watch.ts`, `io.ts`, `refuse.ts`, `pwaStatic.ts`, `shutdownseal.ts`, `bounded.ts`, `remote/client.ts`, `remote/io.ts` | `main.tsx`, `app.tsx`, `command/**`, `components/**`, `styles/**`, `lib/**`, `screens/Settings*.tsx`, `screens/AppearanceRow.tsx`, `screens/SkinFieldset.tsx`, `screens/settingsText.ts` |
 <!-- ring-context-map:end -->
 
 A new file takes its directory's row, or needs a file row in the same PR when its

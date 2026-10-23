@@ -201,7 +201,7 @@ export interface SessionRecord {
   substrate: { at: number; text: string } | null;
   /** Which of `uuid`/`wrapper`/`workdir` — the identity triple — could not be
    *  MEASURED this read: LISTED in the registry directory (so provably not
-   *  absent — `names.includes(id + '.uuid')` is true by construction for
+   *  absent — `names.has(id + '.uuid')` (the listing's Set) is true by construction for
    *  every id `readRegistry`/`readSessionRecord` ever hands to `buildRecord`,
    *  the same "PRESENCE independently of whether the read succeeded"
    *  evidence `held`'s own ladder above already trusts) but the file's own
@@ -798,9 +798,9 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
  * unconditional are the identity triple (`wrapper`, `workdir`, `uuid`) and
  * `hold`, ruled unconditional by the plan (C1); the other fields' one-listing window is accepted (presence as of the
  * listing). The census therefore counts those four, and a row pays one read more for each other field it lists, so a
- * single-id read costs 1 + |listed fields + the four| requests: with 80 rows and 780 files present the read fell from 2512 requests
- * to about 850, and from 81 serial rounds to about 11 (the rows are read with
- * bounded concurrency, `REGISTRY_ROW_CONCURRENCY`).
+ * single-id read costs the listing, plus those four, plus one per other listed field: with 80 rows and 780 files
+ * present the read fell from 2512 requests to about 850, and from 81 serial rounds to about 11 (the rows are read
+ * with bounded concurrency, `REGISTRY_ROW_CONCURRENCY`).
  *
  * Returns null for a DROPPED registry entry — narrowed (architecture doc,
  * increment 1's second half) from the old "missing wrapper/workdir/uuid"
@@ -1267,15 +1267,17 @@ export type RegistryRead =
  * How many rows `readRegistryMeasured` reads at once (desktop polish C1, D-6388). It used to walk the rows one at a
  * time, each row's field reads going out together but the next row waiting for the last of them, so a read of a
  * fleet was one agent round trip per row: 92 serial rounds on the fleet box at a live round of 55 to 85 ms (measured:
- * `peers list` took 4.9 to 8.4 s). At 8 rows in flight the same read is about 12 rounds, about 1 s (derived, not
+ * `peers list` took 4.9 to 8.4 s). Step 0 measured it again: 102 listed rows, a whole-registry read route at 5.9 to
+ * 9.9 s, median 7.0 s (about 69 ms per row); on the 80-row counting fixture 81 gated rounds became 11 and 2512
+ * requests became 849. At 8 rows in flight the same read is about 12 rounds, about 1 s (derived, not
  * measured). 8 is the plan's figure, not a tuned one. The agent link is one WebSocket and a row puts only its listed
  * fields on it together, so the requests in flight are bounded by 8 rows x the 37 fields a row can read (296 at the
  * very most, typically about a hundred), not by 8. The row count is the lever: it cuts the rounds by a factor of 8,
  * while one row's field reads stay together in one round.
  *
- * DEADLOCK RULE (`bounded.ts`): only ROWS are under this bound. A row's own field reads are NOT: a row holds a slot
- * for the whole of its `buildRecord`, and a field read that took a slot of the same pool would wait on slots its own
- * siblings hold. Nothing under `buildRecord` calls `mapBounded`, and nothing may.
+ * Only ROWS are under this bound; a row's own field reads are NOT. Every `mapBounded` call builds its own limiter, so
+ * a `mapBounded` nested inside a row cannot deadlock against this bound, but it would multiply the in-flight count
+ * (8 rows x its own limit); sharing ONE `limiter` across nested levels is what could deadlock (`bounded.ts`).
  */
 export const REGISTRY_ROW_CONCURRENCY = 8;
 

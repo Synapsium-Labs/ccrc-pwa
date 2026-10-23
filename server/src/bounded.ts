@@ -33,7 +33,8 @@ export const limiter = (max: number): Limit => {
  * call. It rejects as `Promise.all` does, with the first rejection; the calls already started or queued still
  * run on, and a rejecting call frees its slot, so the pool drains rather than wedging. `limit` is the bound
  * for THIS call alone, so callers that must share one bound across several maps build a `limiter` and share it.
- * A `limit` that is not an integer >= 1 throws a `RangeError` at once (it would otherwise hang the map).
+ * A `limit` that is not an integer >= 1 throws a `RangeError` SYNCHRONOUSLY, before any call starts, although the
+ * function is typed `Promise<R[]>` (it would otherwise hang the map): a caller reads that throw, not a rejection.
  */
 export const mapBounded = <T, R>(
   items: readonly T[], limit: number, fn: (item: T, index: number) => Promise<R>,
