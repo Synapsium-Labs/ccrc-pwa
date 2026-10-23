@@ -5951,6 +5951,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
 - **2026-10-23 22:25 UTC — monitoring: v0.0.597 released, no anomalies; both boxes still on v0.0.589.**
   `STATUS 2026-10-23T22:25:40Z fleet=v0.0.589 server=v0.0.589 health=v0.0.589 newest=v0.0.597 intent=*:dev/auto=off`
   `backups=fleet:236M/server:7495M disk=fleet:113G/server:23G`
+- **2026-10-23 23:25 UTC — monitoring: v0.0.598 released, no anomalies; both boxes still on v0.0.589.** Wave 32's PR
+  CI ran the trickle row and it passed, its first CI pass after three reds; one run, so the review still reads it.
+  `STATUS 2026-10-23T23:25:41Z fleet=v0.0.589 server=v0.0.589 health=v0.0.589 newest=v0.0.598 intent=*:dev/auto=off`
+  `backups=fleet:236M/server:7495M disk=fleet:110G/server:23G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
