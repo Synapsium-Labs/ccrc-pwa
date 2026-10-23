@@ -925,6 +925,23 @@ describe("onDraft: 'stash' (D-5911)", () => {
       expect(f.state.history).toEqual(['hello from the lane']);
       expect(res).toEqual({ ok: true, draftRestore: 'restored' });
     });
+
+    // D-6367, R29 F2: the absent-box twins of the case above, one per stash path; a box-less capture resets it too.
+    it('a watch that read our box on every poll after its box-less capture keeps the retry Enter (around our own stash)', async () => {
+      const f = fakeCc({ box: [human], swallowEnters: 1, absentCapture: (k) => k === 2 });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(2);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+    });
+
+    it('a watch that read our box on every poll after its box-less capture keeps the retry Enter (over a stash already held)', async () => {
+      const f = fakeCc({ box: [], stash: [human], swallowEnters: 1, absentCapture: (k) => k === 2 });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(2);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(res).toEqual({ ok: true });
+    });
   });
 
   describe('precedence', () => {
