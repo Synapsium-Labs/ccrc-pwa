@@ -1510,7 +1510,8 @@ D-number is defined in that plan's Deviations found. *(Added 2026-10-23.)*
   never opened, and so do a `paths` answer it cannot read, a lock it cannot open, and a lock it created but cannot
   set to 0600. A lane that never signed in has no authDir, holds nothing and gets none. A lock file the hold creates
   is 0600 whatever the umask.
-- **Where it holds nothing.** In two arms the hold answers 0 holding nothing and the stop goes ahead unserialised.
+- **Where it holds nothing.** Besides a lane with no authDir (above), which has no credential to write, in two arms
+  the hold answers 0 holding nothing and the stop goes ahead unserialised.
   With no `flock` binary on the box, the hold takes nothing, as the lane's own lock does, while a running tier still
   locks through the library's own Python `flock`. With no library or no `python3` on the removing shell's PATH
   (`_codex_auth`'s rc 3), the arm is accepted, not proved safe (D-TBD-auth-hold-no-library): a running tier keeps the
