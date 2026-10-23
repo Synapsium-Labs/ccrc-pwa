@@ -2818,6 +2818,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 01:45: the work volume fell to 3.2G at 01:46, then rose to 11.6G at 01:49, freed by another session. Reviews
         839 and 842 dispatched at 01:49. Wave 27 waits for 12.5G, so that the reviews took the first space. STATUS
         unchanged from 23:55 but for the work volume, now 11G.
+      - 02:55: v0.0.578 released, unapplied. The work volume is back under the floor at 7G, and wave 27 waits. The probe
+        noted one slow pass at 02:33 that filed a delegation attempt. The server journal since yesterday holds eight
+        such passes, the first at 11:23, which was not reported then. Each adds one attempt and costs about 6.5 s of
+        block, against 32.7 s before the broker's attempt fix; reported to the broker's coordinator. STATUS: fleet and
+        server v0.0.574, newest v0.0.578, intent dev/auto=off, backups fleet 232M/server 9890M, disk free fleet
+        144G/work volume 7G/server 21G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
