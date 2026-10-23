@@ -224,7 +224,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     peer = await linkPeer(() => 'ready');
     fleet = connectToAgent(peer.port, { connectTimeoutMs: 1000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 5000 });
-    await sleep(2000); // the deadline lies inside this window on purpose: M4 fires it here
+    await sleep(2000); // the deadline lies inside this window on purpose: `onReady` clears it, so only M43 fires it here
     expect(peer.accepts()).toBe(1);
     expect(fleet.state.connected).toBe(true);
   });
@@ -269,9 +269,10 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
 
   it('W27-L6: a deadline left over from a replaced attempt speaks for nothing current', async () => {
     // Attempt 0 is refused at once (the boot line); attempt 1 starts about 500 ms later and never gets ready.
-    // Attempt 0's deadline fires at about 2000 ms, while attempt 1 is current and not ready: it must stay silent,
-    // so the next line is attempt 1's own, at about 2500 ms. Either pre-ready word passes, so the green does not
-    // depend on how fast attempt 1 upgrades; only a stale deadline can print `(closed)`.
+    // Attempt 0's timer is cleared when its refused socket closes and again at the next arm, so it never fires, and
+    // the next line is attempt 1's own, at about 2500 ms. Either pre-ready word passes, so the green does not depend
+    // on how fast attempt 1 upgrades. The row reds only under M7+M40+M42, which together let attempt 0's deadline
+    // survive and speak for a socket that is no longer current (it would print `(closed)`).
     peer = await linkPeer((n) => (n === 0 ? 'refuse' : 'silent-hello'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     fleet = connectToAgent(peer.port, { connectTimeoutMs: 2000, reconnectMinMs: 500, reconnectMaxMs: 500 });
@@ -460,9 +461,9 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
 
   it('W27-L24: the deadline timer never keeps the process alive (D-6517)', async () => {
     // A child process connects with a 60 s deadline to a peer that never answers, closes the client and returns. The
-    // deadline is never cleared, so only `unref` lets the child exit before it fires. The row races the child's exit
-    // against EXIT_BOUND_MS and asserts on the race, so a deadline that holds the process fails this assertion at the
-    // bound (the row's own timeout is longer than the bound), not vitest's clock.
+    // row pins the `close()` clear, with the `unref` behind it (M45 = M35+M41; M35 alone is an equivalent mutant). The
+    // row races the child's exit against EXIT_BOUND_MS and asserts on the race, so a deadline that holds the process
+    // fails this assertion at the bound (the row's own timeout is longer than the bound), not vitest's clock.
     // The child's stderr is the failure message only: a loader warning on another Node version is not the property.
     const EXIT_BOUND_MS = 25_000;
     peer = await linkPeer(() => 'silent-upgrade');
