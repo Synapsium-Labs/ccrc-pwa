@@ -1346,9 +1346,9 @@ export class FleetWatcher {
   /** The stale set last reported, as JSON — one warn per CHANGING set, the
    *  `lastDivergenceJson` idiom, so a standing stale number is not a log
    *  line every 15 minutes forever. */
-  private lastStaleReport: string | null = null;
+  private readonly staleReport = changeLatch<string>();
 
-  /** Per project, the last orphan set this sweep reported — `lastStaleReport`'s
+  /** Per project, the last orphan set this sweep reported — `staleReport`'s
    *  once-per-changing-set idiom, keyed because the reconcile sweep now walks
    *  every project the allocator has issued for rather than a subset of them. */
   private readonly lastOrphanReport = new Map<string, string>();
@@ -7220,8 +7220,7 @@ export class FleetWatcher {
     }
     const stale = store.staleAllocations(now - LEDGER_STALE_MS);
     const json = JSON.stringify(stale.map((s) => [s.project, s.n]));
-    if (stale.length > 0 && json !== this.lastStaleReport) {
-      this.lastStaleReport = json;
+    if (stale.length > 0 && this.staleReport.changed(json)) {
       console.warn(
         `ccrc-server: ${stale.length} allocated deviation number(s) never landed in a plan ` +
         'after 7 days: ' + stale.map((s) => `${s.project} D-${s.n}`).join(', ') +
