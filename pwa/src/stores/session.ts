@@ -365,10 +365,15 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
 const pathsOf = (p: { attachments?: PendingAttachment[] }): string[] | undefined =>
   p.attachments?.length ? p.attachments.map((a) => a.path) : undefined;
 
-/** D-6367: Retry sends `resume` only when the refusal left OUR text in the box (the three codes that follow a typed
- *  message), so the server presses Enter on it instead of answering `draft-present`. Any other refusal retries as today. */
+/** D-6367, R38: Retry sends `resume` (the server presses Enter on the box whole instead of typing again) when the
+ *  refusal may have left OUR text in the box. Every `enter-ignored` qualifies, drafted or not: a landed send can still
+ *  be answered enter-ignored with a blind final read (no draft), and Retry must never type a second copy. The
+ *  server's resume answers `nothing-to-submit` over an empty box (types nothing), presses one Enter over our own
+ *  text, and answers `draft-present` over anything else. `verify-failed` and `type-failed` resume only with a
+ *  non-empty draft; any other refusal retries as today. */
 const retryResumes = (code: string | undefined, draft: string | undefined): boolean =>
-  (code === 'verify-failed' || code === 'enter-ignored' || code === 'type-failed') && typeof draft === 'string' && draft !== '';
+  code === 'enter-ignored' ||
+  ((code === 'verify-failed' || code === 'type-failed') && typeof draft === 'string' && draft !== '');
 
 /** Object URLs die with the pending that owned them. */
 const revoke = (p: PendingSend | undefined): void => {
