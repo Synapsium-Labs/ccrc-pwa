@@ -9,7 +9,7 @@ import { compareReleaseTags } from '../../../shared/semver';
 import { nodeVersion } from '../../../shared/update-arrow';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../../shared/update-summary';
 import { isPlaceableInstant } from '../lib/format';
-import { newestPending } from './useUpdatesView';
+import { newestPending } from './updatesRead';
 
 /** The release that waits: the NEWEST `pendingTag` across the
  *  inventory in semver order (`v0.0.10` above `v0.0.9` — string order has it

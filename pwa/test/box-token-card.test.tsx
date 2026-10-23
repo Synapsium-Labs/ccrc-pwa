@@ -13,7 +13,7 @@ import type { BoxTokenView, RotateAnswer } from '../../shared/box-token';
 import { BOX_TOKEN_PHASES, TOKEN_HOLDS } from '../../shared/box-token';
 import { boxTokenHoldText, boxTokenStateText, boxTokenTransportText } from '../src/screens/settings/SecuritySection';
 import { renderSettings } from './settingsHost';
-import { asUpdatesView } from '../src/fleet/useUpdatesView';
+import { asUpdatesView } from '../src/fleet/updatesRead';
 import { ApiError, api, apiErrorText, createApi, readBoxTokenView } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';

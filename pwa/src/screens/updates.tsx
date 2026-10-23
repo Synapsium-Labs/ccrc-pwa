@@ -46,7 +46,7 @@ import {
 } from '../fleet/settingsText';
 import { WITHDRAWN_KEPT_CLAUSE, rollbackBlockedText } from '../fleet/UpdateMoveSheet';
 import { haltingNodes, updateAllHaltedText } from '../fleet/updateHalt';
-import { isPlaceableInstant, newestPending, nodeVersion, pendingTag } from '../fleet/useUpdatesView';
+import { isPlaceableInstant, newestPending, nodeVersion, pendingTag } from '../fleet/updatesRead';
 import { NO_NOTES_TEXT, NoteText, ReleaseNotes, hasReleaseNotes } from '../fleet/ReleaseNotes';
 import { RELEASE_NOTE_GROUPS, parseReleaseNotes } from '../../../shared/release-notes';
 import { releaseDate } from '../lib/format';

@@ -17,7 +17,8 @@ import {
 } from '../../fleet/settingsText';
 import { planMove, type MoveIntent, type PlannedMove } from '../../fleet/movePlan';
 import { UpdateMoveSheet } from '../../fleet/UpdateMoveSheet';
-import { UPDATES_STALE_TEXT, isPlaceableInstant, type UpdatesPoll } from '../../fleet/useUpdatesView';
+import { UPDATES_STALE_TEXT, type UpdatesPoll } from '../../fleet/useUpdatesView';
+import { isPlaceableInstant } from '../../fleet/updatesRead';
 import { ApiError, api, updateErrorText } from '../../lib/api';
 // `dayClock` and `elapsedWords` come THROUGH the update plane's reading
 // surface, which is where the twenty wire-row-to-sentence helpers moved: the

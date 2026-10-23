@@ -55,7 +55,7 @@ import {
   moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, rollbackBlockers, rollbackHowText,
   type MoveIntent, type PlannedMove, type RollbackBlocker,
 } from './movePlan';
-import { nodeVersion } from './useUpdatesView';
+import { nodeVersion } from './updatesRead';
 import './fleet.css';
 
 export const MOVE_UNREADABLE_TEXT = "Requested — the server's answer could not be read; the screen will re-check.";
