@@ -7,6 +7,7 @@ import type { ProjectRow, RosterWire } from '../../shared/api';
 import { NewSessionSheet } from '../src/fleet/NewSessionSheet';
 import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -38,12 +39,14 @@ const UNKNOWN_POOL_NOTE =
   'One or more project pools are not known from here, so pool matching does not hide those projects.';
 
 /** Open the sheet, land the project list, and pick claude (pool-a) at step 1. */
-const openAtStepTwo = async (projects: ProjectRow[]): Promise<void> => {
+const openAtStepTwo = async (projects: ProjectRow[]): Promise<FleetStore> => {
   const roster = pooled(POOLS);
+  const store = storeWith(roster);
   vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects });
   vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
-  render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
+  render(<NewSessionSheet open onClose={vi.fn()} fleet={store} />);
   fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+  return store;
 };
 
 describe('NewSessionSheet step 2 and the pool line', () => {
@@ -89,7 +92,7 @@ describe('NewSessionSheet step 2 and the pool line', () => {
 
   it('sends crossPool only for a project behind the disclosure', async () => {
     const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
-    await openAtStepTwo([
+    const store = await openAtStepTwo([
       proj('demo', { state: 'tagged', name: 'pool-a' }),
       proj('quiet-basin', { state: 'tagged', name: 'pool-b' }),
     ]);
@@ -99,6 +102,8 @@ describe('NewSessionSheet step 2 and the pool line', () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith({
       wrapper: 'claude', project: 'demo', workdir: '/w/demo',
     }));
+    // The create answers no id: the sheet holds in its starting state until the fleet frame lists the new session.
+    act(() => { store.setState({ sessions: [fleetSession({ id: 'claude-demo', wrapper: 'claude', project: 'demo' })] }); });
     await waitFor(() => expect(screen.getByRole('button', { name: /^Start demo/ })).toBeEnabled());
 
     fireEvent.click(screen.getByRole('button', { name: 'show other pools (1)' }));

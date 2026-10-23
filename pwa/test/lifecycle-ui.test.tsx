@@ -154,9 +154,10 @@ describe('NewSessionSheet', () => {
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
     const onClose = vi.fn();
+    const fleet = makeFleet();
     render(
       <>
-        <NewSessionSheet open onClose={onClose} fleet={makeFleet()} />
+        <NewSessionSheet open onClose={onClose} fleet={fleet} />
         <ToastHost />
       </>,
     );
@@ -177,6 +178,14 @@ describe('NewSessionSheet', () => {
       wrapper: 'claude9',
       project: 'ProjectC',
       workdir: '/root/projects/ProjectC',
+    });
+    // The create answers no id: the sheet closes once the fleet frame lists the new main checkout.
+    act(() => {
+      fleet.setState({
+        sessions: [...fleet.getState().sessions, fleetSession({
+          id: 'claude9:ProjectC', wrapper: 'claude9', project: 'ProjectC', workdir: '/root/projects/ProjectC',
+        })],
+      });
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
