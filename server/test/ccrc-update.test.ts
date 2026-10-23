@@ -1504,7 +1504,8 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     });
     const stop = async (): Promise<number> => {
       if (child.exitCode === null && child.signalCode === null) {
-        await new Promise<void>((resolve) => { child.once('exit', () => resolve()); child.kill('SIGTERM'); });
+        // `close`, not `exit`: Node's docs say the 'exit' event may fire while the child's stdio streams are still open, so the "sent N" line can arrive after it.
+        await new Promise<void>((resolve) => { child.once('close', () => resolve()); child.kill('SIGTERM'); });
       }
       const m = /sent (\d+)/.exec(out);
       return m ? Number(m[1]) : 0;
