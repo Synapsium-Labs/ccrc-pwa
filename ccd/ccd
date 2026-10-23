@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4e7700d65237bef2eae0ae0d6095049ffa536c95e9d9d66692ab0ce0c54354e4
+# ccrc:generated 1 sha256=6df9835f581c0ca39a2db06c8c0593d4d8df25304e53bf5b22c4472ed3d4e0e1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -16153,10 +16153,10 @@ _ws_orphan_registered() {   # tree sp class project slug -> 0 no registry row na
   local p="$1" sp="$2" cls="$3" pj="$4" slug="$5" f id wd q hit
   _WS_ORPHAN_WHY=''
   if [[ "$cls" == ccd-root && -f "$REG/$pj-$slug.uuid" ]]; then _WS_ORPHAN_WHY="registry row $pj-$slug names this slug"; return 1; fi
-  for f in "$REG"/*.workspace; do
-    [[ -e "$f" ]] || continue
-    id=$(basename "$f" .workspace)
-    [[ -f "$REG/$id.workdir" && ! -L "$REG/$id.workdir" ]] || continue   # read in place, as `_ws_gc_manifest_bytes` does: a call into the registry's reader would be one more cross-context reference
+  for f in "$REG"/*.workdir; do   # every row that names a workdir, workspace or plain session alike
+    [[ -e "$f" || -L "$f" ]] || continue
+    id=$(basename "$f" .workdir)
+    [[ -f "$f" && ! -L "$f" && -r "$f" ]] || { _WS_ORPHAN_WHY="the workdir field of registry row $id is not a readable regular file"; return 2; }   # read in place, as `_ws_gc_manifest_bytes` does: a call into the registry's reader would be one more cross-context reference
     wd=$(<"$REG/$id.workdir"); [[ -n "$wd" ]] || continue
     hit=0
     for q in "$p" "$sp"; do [[ "$wd" == "$q" || "$wd" == "$q"/* ]] && hit=1; done

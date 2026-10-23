@@ -129,6 +129,27 @@ describe('the ladder: one case per rung, each red when its rung is deleted', () 
     expect(d.refusal, d.detail).toBe('registered');
   }, 60_000);
 
+  it('4 registered: a plain session row (workdir and uuid, no .workspace) at or inside the tree', () => {
+    const c = claudeTree(); const reg = path.join(h.home, '.cc-sessions');
+    fs.writeFileSync(path.join(reg, 'plain-a.uuid'), 'u\n');
+    fs.writeFileSync(path.join(reg, 'plain-a.workdir'), c);
+    expect(audit(c).refusal).toBe('registered');
+    fs.mkdirSync(path.join(c, 'sub'));
+    fs.writeFileSync(path.join(reg, 'plain-a.workdir'), path.join(c, 'sub'));
+    expect(audit(c).refusal).toBe('registered');
+  }, 60_000);
+
+  it('4 unmeasured: a row whose workdir field is a symlink is unreadable state, not "no row names it"', () => {
+    const c = claudeTree(); const reg = path.join(h.home, '.cc-sessions');
+    fs.writeFileSync(path.join(reg, 'sess-b.workspace'), '');
+    fs.writeFileSync(path.join(h.home, 'real-wd'), c);
+    fs.symlinkSync(path.join(h.home, 'real-wd'), path.join(reg, 'sess-b.workdir'));
+    const d = audit(c);
+    expect(d.verdict, d.detail).toBe('unmeasured');
+    expect(d.token).toBeNull();
+    expect(d.detail).toContain('sess-b');
+  }, 60_000);
+
   it('5 locked: a worktree git has locked', () => {
     const t = claudeTree(); h.git(path.join(h.home, 'projects', 'demo'), 'worktree', 'lock', t);
     expect(audit(t).refusal).toBe('locked');
