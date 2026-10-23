@@ -2456,7 +2456,7 @@ export class FleetWatcher {
       // NEVER awaited: it shells out over the network and `gh` has no
       // --timeout, so awaiting it would stall the dialog detector and the
       // busy->idle push behind GitHub's reachability.
-      void this.sweepPr().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepPr(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       const refreshCaps = this.deps.refreshCaps;
       if (refreshCaps) {
         // NEVER awaited: same reasoning as sweepPr immediately above — caps()
@@ -8169,7 +8169,7 @@ export class FleetWatcher {
    * opposite: no latch at all, and a retry every sweep. It is gone (operator
    * ruling, 2026-09-10 — see `sweepMerged`).
    */
-  private async sweepPr(): Promise<void> {
+  private async sweepPr(fleet?: FleetReadModel): Promise<void> {
     // The same guard tick() already applies before saveSnapshot: with the
     // agent down there is nothing to read and every state keeps its checkedAt.
     if (this.deps.cfg.fleetMode === 'remote' && !this.deps.fleetState?.connected) return;
@@ -8177,13 +8177,14 @@ export class FleetWatcher {
     // Single-flight, but never permanently: the `pr` row's `skip` flight abandons a sweep still running after
     // `PR_SWEEP_STUCK_MS` (not cancelled, there is nothing to cancel; it is simply no longer allowed to hold the lane
     // shut), and only the run that was started last may clear the flight.
-    await this.runLane('pr', () => this.prPass(), anyPending);
+    await this.runLane('pr', () => this.prPass(fleet), anyPending);
   }
 
-  private async prPass(): Promise<void> {
+  private async prPass(fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
-    // [registry-refused:omits] a refused row is never in `records`: no pr-state, no prStates key.
-    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    // A refused row is never in `records`: no pr-state, no prStates key (it omits).
+    const read = await this.fleetFor(fleet);
+    const records = read.listed ? read.records : [];
     const projects = [...new Set(records.filter((r) => r.workspace !== null).map((r) => r.project))];
     for (const project of projects) {
       const back = this.prBackoff.get(project);
