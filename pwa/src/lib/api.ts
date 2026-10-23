@@ -5,6 +5,7 @@
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
+import { isCount, isRecord } from './wire';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
 import type { Dialog, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
@@ -567,10 +568,8 @@ export function moveSkipText(why: MoveSkipWhy | (string & {})): string {
 // word a newer server adds reads as "not reported" rather than as a state this
 // build would have to guess at. Malformed is null; the card says "not reported".
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isWord = <T extends string>(list: readonly T[], v: unknown): v is T =>
   typeof v === 'string' && (list as readonly string[]).includes(v);
-const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 const isInstant = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const orNull = (v: unknown, ok: (x: unknown) => boolean): boolean => v === null || ok(v);
 /** `BoxTokenView['fleetConfirmed']` keyed once, so a word added to the type is a compile error here. */

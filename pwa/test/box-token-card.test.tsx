@@ -104,6 +104,9 @@ describe('readBoxTokenView — the ONE reader of UpdatesView.boxToken', () => {
     ['a fleet word this build does not know', { ...BT(), fleetConfirmed: 'maybe' }],
     ['a count that is not a non-negative integer', { ...BT(), retiredPresented: -1 }],
     ['failures as a string', { ...BT(), failures: '3' }],
+    // ARCH-30 (#544): one count rule for every reader (lib/wire): 2^53 + 1 is not a count.
+    ['a count past the safe integers', { ...BT(), retiredPresented: 2 ** 53 + 1 }],
+    ['a sequence past the safe integers', { ...BT(), currentSeq: 2 ** 53 + 1 }],
     ['banner missing', (() => { const { banner: _b, ...rest } = BT(); return rest; })()],
     ['a lastSync with no word', { ...BT(), lastSync: { at: 5 } }],
     ['a boot recovery from a third source', { ...BT(), lastBootRecovery: { at: 5, source: 'current' } }],
