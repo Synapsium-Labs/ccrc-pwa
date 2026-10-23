@@ -241,11 +241,11 @@ export function pickNewest(hits: readonly GlobHit[]): GlobHit | null {
 export const GLOB_STAT_CONCURRENCY = 32;
 
 /** Runs a call once a slot is free: at most `max` in flight, the rest waiting in arrival order. */
-type Limit = <T>(call: () => Promise<T>) => Promise<T>;
+export type Limit = <T>(call: () => Promise<T>) => Promise<T>;
 
 /** A promise limiter (D-6369). The slot is released in `finally`, so a call that rejects still frees it, and a
  *  freed slot is handed straight to the longest waiter, so the count never dips below the bound while any wait. */
-const limiter = (max: number): Limit => {
+export const limiter = (max: number): Limit => {
   let active = 0;
   const waiting: (() => void)[] = [];
   return async (call) => {
