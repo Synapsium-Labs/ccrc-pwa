@@ -20,6 +20,7 @@ import { WS_ADD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { decOf, eventsOf, readJournal, refusalsOf } from './lifecycleHelpers.js';
 import { DECOY_IDS, plantRow, reapLocks, regListing, type DashId } from './dashIdFixture.js';
 import { stubFn } from './ccdStub.js';
+import { readCcdRefusal, withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 
 let h: CcdHarness;
 
@@ -148,7 +149,9 @@ describe('ws-restore binds its identity pair whole (path-identity spec §2.2, §
         const tail = decTail(d.surface, d.reason);
         const r = run(`${RESTORE_STUBS} cmd_ws_restore --session '${id}' ${tail}`);
         expect.soft(r.code, `--session ${id} ${tail}`).toBe(1);
-        expect.soft(r.stderr.trim(), `--session ${id} ${tail}`).toBe('ccd: bad session id');
+        // refusal-v1 (#560): `_lc_refuse` puts its machine line ahead of the die; the prose is the rest.
+        expect.soft(readCcdRefusal(r.stderr), `--session ${id} ${tail}`).toEqual({ act: 'restore', token: 'bad-session-id' });
+        expect.soft(withoutCcdRefusal(r.stderr).trim(), `--session ${id} ${tail}`).toBe('ccd: bad session id');
         asked.push(id);
       }
     }
@@ -364,7 +367,8 @@ describe('a lone trailing key after the full argv answers the verb\'s usage line
     plantWorkspace(REAL, null, { archived: ARCHIVED_AT });
     const r = run(`${RESTORE_STUBS} cmd_ws_restore --session ${REAL} --session`);
     expect(r.code, r.stdout).toBe(1);
-    expect(r.stderr.trim()).toBe(USAGE_RESTORE);
+    expect(readCcdRefusal(r.stderr)).toEqual({ act: 'restore', token: 'bad-args' });
+    expect(withoutCcdRefusal(r.stderr).trim()).toBe(USAGE_RESTORE);
     expect(refusalsOf(h.home)).toEqual([{ act: 'restore', token: 'bad-args' }]);
     const asked = eventsOf(h.home, 'restore');
     expect(asked.map((e) => String(e['id']))).toEqual([REAL]);
