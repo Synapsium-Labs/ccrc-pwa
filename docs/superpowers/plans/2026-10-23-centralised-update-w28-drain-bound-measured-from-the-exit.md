@@ -82,6 +82,10 @@ the worker's reserve.
   it with a bounded poll (`pidFrom`'s shape) and fails with a clear message if it is absent. `date +%s%3N` is
   GNU-only, and `$EPOCHREALTIME` needs bash 5, while the launcher runs under bash 3.2 on macOS. The node start-up
   happens before the exit, so it only makes the stamp earlier, which is the floor's safe direction.
+- **D-6609** — `unused` (run 856): issued to this wave; no departure took it.
+- **D-6610** — `unused` (run 856): issued to this wave; no departure took it.
+- **D-6611** — `unused` (run 856): issued to this wave; no departure took it.
+- **D-6612** — `unused` (run 856): issued to this wave; no departure took it.
 
 ## File structure
 
@@ -136,3 +140,25 @@ the worker's reserve.
 - **Claims:** take a claim on both test files before editing. No other wave holds one at the base. Landing is
   first-ready against the programme's other open PRs. Measure `git merge-tree` against main and each open head
   before the push.
+
+## As built
+
+Run 856, on the workspace branch from `main` `531797d62`.
+
+- **Commits.** The plan, then the agent twin (Task 1), then the server twin (Task 2), then this note. The two test
+  diffs are line-for-line identical. No source file changed; `update-spawn-twin-bodies.test.ts` stayed green (4/4).
+- **The stamp's reader.** `stampFrom` is `pidFrom`'s own bounded poll with its failure renamed ("the parent wrote no
+  exit stamp in …"), not a second copy of the poll. The case then asserts the stamp is a finite number.
+- **D1, the demonstration** (`deadAt` returning `Date.now() + 300`, scratch copy, the case alone, three runs each).
+  Old form: red 3 of 3 on the floor in both twins (agent 1698, 1681, 1700; server 1710, 1696, 1698, each against
+  1900). New form: green 3 of 3 in both twins. Restored byte-identical (`cmp`) after each.
+- **M1** (the spawner's `exit` handler answers at once, skipping the drain; `agent/src/server.ts` and
+  `server/src/update/spawn.ts` on the scratch copy): red in each twin on the floor (agent `expected 35`, server
+  `expected 9`, each against 1900). Restored, `cmp` clean.
+- **M2** (the stamp line moved below `exit 0`): red in each twin on the missing-stamp failure. Restored, `cmp` clean.
+- **Suites, one file at a time, foreground.** The case alone three times and the whole file three times per twin, all
+  green: agent `test/update-spawn.test.ts` 12/12 x3, server `test/update-spawn.test.ts` 15/15 x3. Then from `server/`:
+  `single-definition` 848/848, `topology-clean` 60/60, `private-names` 47/47, `dtbd` 1/1, `deviation-refs` 31/31
+  (after `git fetch origin main`), and `GROWTH_CHECK=1` `growth-check` 45/45.
+- **Reserve.** D-6609 to D-6612 unspent, each recorded above as `unused`.
+- **Other load-sensitive rows.** None was seen red in either file across these runs.
