@@ -381,6 +381,32 @@ export function resumeNote(
       };
 }
 
+/** D-6442: how many finished runs the Runs board mounts, and how many each Show
+ *  more adds. The cold read returns up to 500 closed runs, and each one is a
+ *  `RunRow`; the newest 20 are what an operator reads, the rest are one door
+ *  away. A fold, not a removal: nothing is dropped from the archive. */
+export const FINISHED_FOLD = 20;
+
+/** The step of the clock a FINISHED row reads, in ms (D-6442). Every readout on
+ *  a closed row (`formatAge` over `dispatchedAt`, `resumeNote`'s title,
+ *  `childReclaimTitle`) is minute-grained, so a 30 s step changes none of them
+ *  by more than the half-minute the board's own slow cadence already allowed. */
+export const FINISHED_CLOCK_MS = 30_000;
+
+/** The board's one tick, floored to `FINISHED_CLOCK_MS`: the `nowMs` a finished
+ *  row is handed. It stays equal across the board's 1 s ticks, so a `memo`'d row
+ *  does not re-render on them. Derived from that tick, never a second timer. */
+export const finishedClock = (nowMs: number): number =>
+  Math.floor(nowMs / FINISHED_CLOCK_MS) * FINISHED_CLOCK_MS;
+
+/** The Show more door's words. `next` is what the click adds, `hidden` what is not
+ *  shown now (so `hidden > next` while more would stay hidden after the click).
+ *  The last batch says no count: nothing stays hidden. */
+export const finishedMoreLabel = (next: number, hidden: number): string => {
+  const head = `Show ${next} more finished run${next === 1 ? '' : 's'}`;
+  return hidden > next ? `${head}, ${hidden} not shown` : head;
+};
+
 /** Board order: the ones that can move first, the ones that are over last.
  *  One constant, shared by the grouping and the sort, so the two cannot drift —
  *  the same shape `sortFleet.ts`'s RANK/BUCKET_ORDER pair has. */
