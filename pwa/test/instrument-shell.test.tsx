@@ -25,6 +25,20 @@
 //   the pool lag dropped with the chrome ............... "the pool-lag readout shows once at the desk when the epochs differ"
 // Fix round 1 (review 826, F1):
 //   the rail's Inbox door without the count ............ "at the desk with mail unread, the rail's Inbox door names and shows the count, and nothing else in the frame does"
+//
+// W2 Task T2g (desk-polish, D-6715): one count at the desk, in the status bar; the list head empty is not drawn.
+// MUTATION TABLE (plan Task T2g Step 3; RUN, each mutant on the working tree, this suite alone unless named, then reverted):
+//   `ListColumn` without `headCount={false}` ........... "at 900, 1280 and 1920 Instrument's list column draws no count line, …", the head-is-the-lag case,
+//                                                         and T2e's census case (the browser leg holds the offset case)
+//   `FleetColumn` passes `headCount` without `|| !desktop`  "at 899 Instrument's list column keeps its count line"
+//   in `FleetScreen`, `poolLag={headCount ? poolLag : null}`  "…the head is the pool lag alone when the epochs differ…", and T2e's "the pool-lag readout shows once at the desk when the epochs differ"
+//   `FleetHead`'s nothing-to-draw `return null` removed  "…and there is no head when they agree", "Refined at 1280 on an empty fleet with no lag draws no …", T2e's census case
+//   Refined's `Sidebar` passes `headCount={false}` ..... "Refined's desk column keeps its count line"
+//   the flag removed and `@media (min-width: 900px) { .shell-nav .fleet-count { display: none } }` in instrument.css
+//                                                       skin-boundary (j) "holds on the real tree" (and three of its siblings, which scan the real sheet), and
+//                                                         "at 900, 1280 and 1920 Instrument's list column draws no count line, …"
+// Row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900, so T2g adds no `flex: none`.
+// Rows 1, 4 and 7 also run in browser/instrument-desk.browser.test.ts (its own table).
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';

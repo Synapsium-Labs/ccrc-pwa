@@ -22,6 +22,15 @@
 //     minmax(0, 1fr) fit-content(60%)`, context `grid-column: 1 / -1`)  "at 1280 (the 340 column) … every row is at most three lines and under 61 px"
 //                                                         (`lines: expected 4 to be less than or equal to 3`), "…exactly three lines" (`expected 4 to be 3`)
 //   the dense body `flex-flow: row nowrap` ............. the same cases (`lines: expected 4 to be 3`, `name: expected false to be true`)
+// W2 desk polish, Task T2g (D-6715; plan Step 3, RUN, this file alone with -t "T2g", each mutant reverted):
+//   `ListColumn` without `headCount={false}` ........... "at 1280x800 the first row starts 27 px higher than after T2e, no less"
+//                                                         (`expected 223 to be less than or equal to 196`)
+//   `FleetHead`'s nothing-to-draw `return null` removed  the same case (`expected 212 to be less than or equal to 196`: the empty head
+//                                                         keeps its padding, and the column's gap beside it)
+//   `.ins-status-summary { max-width: 6ch }` ........... "at 900 the status bar's count is whole, with two open runs" (both pointers;
+//                                                         `expected 211 to be less than or equal to 40`)
+// The plan's row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900 under both pointers, so
+// T2g added no `flex: none`.
 // The state's `flex: 0 0 auto` as `0 1 auto` + `min-width: 0` is NOT red here (a wrapped flex line is decided on max-content
 // sizes before any shrinking, so the layout is identical): test/instrument-list.test.tsx's rule pin catches it.
 // The plain move of the dense block's media prelude (without `(pointer: fine)`) is NOT red here: its floors are
@@ -179,7 +188,7 @@ describe('one head in the list column', () => {
 /** The first row's offset at 1280x800 on `/` after T2e (fd15dd7e0, Step 0 of T2g, both themes, a fine pointer), and what
  *  T2g removes from it: the head (15 px, the pool lag and the count line gone, so no head at all) and the `.fleet` column's
  *  row gap beside it (12 px), written exactly as measured: 223 before, 27 saved. After the change the measured offset is
- *  AFTER_MEASURED_PLACEHOLDER px. */
+ *  196 px, exactly the budget (1280x800, both themes). */
 const AFTER_T2E = 223;
 const SAVING = 27;
 
