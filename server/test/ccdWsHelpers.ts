@@ -581,6 +581,12 @@ export const toolAdjToken = (h: Pick<CcdHarness, 'sh'>): string => {
   return v ? ` ${v}` : '';
 };
 
+/** D-6636: the session's own temp root, as `_spawn_start` splices it after the TMPDIR token — the child's leaf
+ *  when one is given, else the box's `TMPDIR` as the harness's ccd sees it (`/tmp` when unset) — with its leading
+ *  space. Read the box's value through the same shell, so a harness whose TMPDIR differs still pins byte-exact. */
+export const sessionTmpToken = (h: Pick<CcdHarness, 'sh'>, childLeaf?: string): string =>
+  ` CCRC_SESSION_TMPDIR='${childLeaf ?? h.sh('printf %s "${TMPDIR:-/tmp}"')}'`;
+
 export function makeCcdHarness(prefix: string): CcdHarness {
   const home = mkTmp(prefix);
   // BEFORE anything else: sourcing ccd without a roster is fatal by design, so

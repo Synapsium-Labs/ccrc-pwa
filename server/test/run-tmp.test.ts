@@ -18,6 +18,8 @@
 //   - The wiring (T1): THIS run is inside its own run directory, whose owner answers.
 //   - End to end (T5): a real nested vitest under the `globalSetup` DERIVED from `vitest.config.ts`, killed every
 //     way a run is killed, and refused under a TMPDIR too long for a socket.
+//   - A TMPDIR inside a work tree (T7, D-6636): the run's parent moves to `CCRC_SESSION_TMPDIR` when that is outside
+//     every tree, else to `/tmp`, nothing is created inside the tree, and a TMPDIR outside a tree is unchanged.
 //   - `setup()` and its teardown (T6), in a bare `node` child: a run removed under it says so, a run whose rename
 //     failed is left collectible, an inherited refusal is dropped, and a malformed quiet window keeps the default.
 //
@@ -904,5 +906,53 @@ describe('setup() and its teardown, in a bare node child (T6)', () => {
     const seen = await setupChild(base, 'nothing', { [RUN_QUIET_ENV]: '10m' });
     expect(seen.stderr).toContain(`${RUN_QUIET_ENV}="10m" is not a whole number of seconds; using ${RUN_QUIET_S}`);
     expect(existsSync(o.run), 'a fresh dead run was reaped: the quiet gate was off').toBe(true);
+  });
+
+  describe('T7: a TMPDIR inside a work tree is never the run parent (D-6636)', () => {
+    /** A fixture work tree under a short base, with `<tree>/a/.tmp-step0` as the agent-chosen TMPDIR. `gitAsFile`
+     *  spells `.git` as a linked worktree does. */
+    function tree(gitAsFile = false): { root: string; tmp: string } {
+      const root = socketBase();
+      if (gitAsFile) writeFileSync(path.join(root, '.git'), 'gitdir: /nonexistent\n'); else mkdirSync(path.join(root, '.git'));
+      const tmp = path.join(root, 'a', '.tmp-step0');
+      mkdirSync(tmp, { recursive: true });
+      return { root, tmp };
+    }
+    const none = { CCRC_SESSION_TMPDIR: '' };
+
+    it('T7a: with CCRC_SESSION_TMPDIR outside every tree, the run parent is built there, and the tree stays empty', async () => {
+      const t = tree();
+      const session = socketBase();
+      const seen = await setupChild(t.tmp, 'nothing', { CCRC_SESSION_TMPDIR: session });
+      expect(path.dirname(seen.run!)).toBe(session);
+      expect(seen.stderr).toContain(`ccrc-test: TMPDIR ${t.tmp} is inside a work tree; the run's temp moved to ${session}`);
+      expect(readdirSync(t.tmp), 'something was created inside the work tree').toEqual([]);
+    });
+
+    it('T7b: without it, the run parent is /tmp, and the tree stays empty', async () => {
+      const t = tree();
+      const seen = await setupChild(t.tmp, 'nothing', none);
+      expect(path.dirname(seen.run!)).toBe(realpathSync('/tmp'));
+      expect(seen.stderr).toContain(`the run's temp moved to ${realpathSync('/tmp')}`);
+      expect(readdirSync(t.tmp)).toEqual([]);
+    });
+
+    it('T7c: a CCRC_SESSION_TMPDIR that is itself inside a tree (a .git file counts) is not used', async () => {
+      const t = tree(true);
+      const inner = path.join(t.root, 'a', 'session');
+      mkdirSync(inner);
+      const seen = await setupChild(t.tmp, 'nothing', { CCRC_SESSION_TMPDIR: inner });
+      expect(path.dirname(seen.run!)).toBe(realpathSync('/tmp'));
+      expect(readdirSync(inner)).toEqual([]);
+      expect(readdirSync(t.tmp)).toEqual([]);
+    });
+
+    it('T7d: a TMPDIR outside every tree is unchanged — the parent is in it and nothing is said', async () => {
+      const base = socketBase();
+      const session = socketBase();
+      const seen = await setupChild(base, 'nothing', { CCRC_SESSION_TMPDIR: session });
+      expect(path.dirname(seen.run!)).toBe(base);
+      expect(seen.stderr).not.toContain('work tree');
+    });
   });
 });

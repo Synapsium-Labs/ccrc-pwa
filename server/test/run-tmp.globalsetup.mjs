@@ -56,6 +56,13 @@
 // reclamation spec's "a temp root that cannot be made private is not used" is the precedent, and
 // `run-tmp.test.ts`'s T1 is red in such a run.
 //
+// A TEMP ROOT INSIDE A WORK TREE IS NOT USED (D-6636). A `TMPDIR` that sits under a directory holding a `.git`
+// (an agent-authored `TMPDIR=<tree>/.tmp-x`) would strand a run's fixtures in a work tree that a collector must
+// then treat as a repository's own files. `setup` walks up from the physical base for a `.git`; inside a tree it
+// builds the run parent under `CCRC_SESSION_TMPDIR` when that names an existing directory outside every tree,
+// else under `/tmp`, and prints `TMPDIR <…> is inside a work tree; the run's temp moved to <…>`. The 2026-10-08
+// ruling that a too-long `TMPDIR` refuses stands: moving out of the tree is what removes the length.
+//
 // WHAT THIS DOES NOT DO. It never signals another process: its arm exits this one. It does not collect
 // vitest's own `TestProject.tmpDir` (a follow-up), loose `ccrc-*` directories from before it existed (proposal
 // 3 of #316, a follow-up), or a TMPDIR no later run visits.
@@ -317,6 +324,34 @@ async function reapAndReport(base, quietS) {
   }
 }
 
+/** Whether `dir` or any ancestor holds a `.git` (a directory, or the file a linked worktree has). `dir` is already
+ *  physical; a probe that cannot be answered reads as "not a tree", because the walk only ever MOVES a root. */
+export function insideWorkTree(dir) {
+  let d = dir;
+  for (;;) {
+    try { lstatSync(path.join(d, '.git')); return true; } catch { /* no .git here */ }
+    const up = path.dirname(d);
+    if (up === d) return false;
+    d = up;
+  }
+}
+
+/** The directory the run parent is built in (D-6636): `base` itself unless it is inside a work tree, then
+ *  `CCRC_SESSION_TMPDIR` when set, a real directory and outside every tree, else `/tmp`. `moved` is the line to print. */
+export function runBase(base, env = process.env) {
+  if (!insideWorkTree(base)) return { base };
+  let to = '/tmp';
+  const want = env.CCRC_SESSION_TMPDIR;
+  if (want && path.isAbsolute(want)) {
+    try {
+      const real = realpathSync(want);
+      if (lstatSync(real).isDirectory() && !insideWorkTree(real)) to = real;
+    } catch { /* unusable: the box's own /tmp */ }
+  }
+  try { to = realpathSync(to); } catch { /* /tmp itself unreadable: the open below refuses loudly */ }
+  return { base: to, moved: `TMPDIR ${base} is inside a work tree; the run's temp moved to ${to}` };
+}
+
 /** The refusal (D-4497): today's behaviour, said out loud. */
 function refuse(code, where) {
   delete process.env[RUN_DIR_ENV];
@@ -332,6 +367,9 @@ function refuse(code, where) {
 export default async function setup() {
   let base;
   try { base = realpathSync(os.tmpdir()); } catch (e) { return refuse(`tmpdir-${e.code ?? 'realpath'}`, os.tmpdir()); }
+  const placed = runBase(base);
+  if (placed.moved) warn(placed.moved);
+  base = placed.base;
   const quietS = parseQuiet(process.env[RUN_QUIET_ENV]);
   await reapAndReport(base, quietS);
   const opened = await openRun(base);
