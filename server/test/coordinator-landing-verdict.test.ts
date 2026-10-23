@@ -1140,9 +1140,11 @@ const codeLines = (b: string): string[] => b.split('\n').filter((l) => !/^\s*#/.
  *  line or after `&&` or `||`, so jq's `. ==` is not one), `cat`, `read` as a command (at the start, after `&&`, `||`, `;`,
  *  `|`, `(`, `{`, `then` or `do`, so "unreadable: read 1" is not one), `mapfile`, `readarray`, `eval`, `head` or `tail` given a
  *  FILE operand or a `<` redirect (in the same command places as `read`, and after a backtick; `head -n1 <<<"$r3"`, a
- *  here-string, and a bare `head -n1` fed by a pipe are not file reads), and a `$(<` file read. The block's own file-free
- *  reads are its gh calls, numbered 1 to 6 in its comments: read 1's PR view and its paginated reviews, read 2, read 3 (or
- *  read 3b, and the compare under read 3b), read 4, read 5's two endpoints (check runs and statuses) and read 6; it spells
+ *  here-string, and a bare `head -n1` fed by a pipe are not file reads; only `-n` or `-c` with a separate digit count and
+ *  single-token flags are skipped before the operand, so `tail -n +2 file`, `head -n "$n" file` and `head -n1<file` are
+ *  census limits and not caught), and a `$(<` file read. The block's own file-free reads are its gh calls, numbered 1 to 6
+ *  in its comments: read 1's PR view and its paginated reviews, read 2, read 3 (and, after read 3 answers 401 or 403,
+ *  read 3b, with the compare under it), read 4, read 5's two endpoints (check runs and statuses) and read 6; it spells
  *  none of the forms above. This is a finite contract check of exactly those spellings and placements, one line at a time,
  *  and NOT a shell parser and not a proof: other ordinary readers and placements the list does not name are census LIMITS
  *  too, for example `jq` given a path operand, `while read`, a `.` command after `then`, or a `<` redirect into a command
@@ -1156,6 +1158,7 @@ const FILE_FORMS: [string, RegExp][] = [
   // `head` and `tail` as a command given something other than a here-string: a file operand or a `<` redirect. Their flags
   // (`-n1`, `-n 1`, `-1`) are skipped first, so `head -n1 <<<"$r3"` and a bare `| head -n1` pass.
   ['head/tail file', /(^|&&|\|\||[;|({`]|\bthen|\bdo)\s*(head|tail)(\s+(-[nc]\s+\d+|-\S+))*\s+(?<!\s-[nc]\s+)(?!<<<|-)[^\s|;&)]/],
+  // The `(?!<)` only narrows the match so a `$(<<<` here-string is not read as a file read; nothing in the cases depends on it.
   ['$(< file', /\$\(\s*<(?!<)/],
 ];
 const fileForms = (b: string): string[] => codeLines(b).flatMap((l) => FILE_FORMS.filter(([, re]) => re.test(l)).map(([n]) => `${n}: ${l.trim()}`));
@@ -1237,8 +1240,11 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
     expect(b).not.toMatch(/\bexport\b/);
     // The census: the only code that names the variable is the two expansions of the skip condition.
     expect(crIgnoreStrays(b), 'the block names CR_IGNORE other than in the skip condition\'s two expansions').toEqual([]);
-    // And no file is read or sourced, into any variable: the block has no $HOME path, source, `.` command, cat, read, mapfile or eval.
-    expect(fileForms(b), 'the block reads or sources a file, or evals text').toEqual([]);
+    // And the block spells none of the ENUMERATED file-reading forms of FILE_FORMS: a `$HOME` or `~/` path, `source`, a `.`
+    // command, `cat`, `read`, `mapfile`/`readarray`, `eval`, `head`/`tail` given a file operand or a `<` redirect, or a `$(<`
+    // file read. A finite census of those spellings and placements, not a proof about every shell reader: the unenumerated
+    // ordinary ones (jq on a path, `while read`, a `.` after `then`) are census limits, listed at FILE_FORMS.
+    expect(fileForms(b), 'the block spells one of the enumerated file-reading forms').toEqual([]);
   });
 
   it('the CR_IGNORE census rejects an ordinary read into it, a printf -v, a declare and a default, and accepts the block and a comment', () => {
