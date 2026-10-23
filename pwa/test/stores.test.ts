@@ -517,8 +517,8 @@ describe('session store optimistic send', () => {
     const cases: Array<[string, unknown, boolean]> = [
       ['verify-failed + draft', refusal('verify-failed', 'my message'), true],
       ['enter-ignored + draft', refusal('enter-ignored', 'my message'), true],
-      ['type-failed + draft', refusal('type-failed', 'my message'), true],
       ['verify-failed, no draft', refusal('verify-failed'), false],
+      ['type-failed', refusal('type-failed'), false],
       ['draft-present', refusal('draft-present', 'someone else'), false],
       ['not-alive', refusal('not-alive'), false],
       ['box-unreadable', refusal('box-unreadable'), false],
