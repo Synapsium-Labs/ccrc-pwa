@@ -396,7 +396,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
 
   it('W27-L17: 8 token characters in a row are enough to withhold the reason', async () => {
     const token = randomBytes(32).toString('hex');
-    expect(await refusalLines(token, 4401, `bad token ${token.slice(20, 30)} seen`))
+    expect(await refusalLines(token, 4401, `bad token ${token.slice(20, 28)} seen`))
       .toEqual([NEVER_READY(4401), REFUSED(4401, WITHHELD)]);
   });
 

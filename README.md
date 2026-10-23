@@ -3435,10 +3435,11 @@ the last-known-good fleet snapshot instead of going blank:
   the server's periodic ping is terminated and retried the same way. The server's log says so, once per kind per
   stretch without a link, each line starting `ccrc-server: agent link:`: when a ready link is lost (or, in its
   place, when an unanswered ping ends it), when an attempt times out (with the deadline, and whether the attempt was
-  still connecting or upgrading or had sent its hello), when an attempt closes before the first ready since the
-  server started and no other line has opened the stretch, when the agent refuses the hello (with its close code and
-  a printable cut of its reason, withheld if it repeats the token), and when the link is ready again, with the time
-  since that stretch's first line. None of these values is an operator setting.
+  still connecting or upgrading or had sent its hello), when an attempt closes, or its socket cannot be created,
+  before the first ready since the server started and no other line has opened the stretch, when the agent refuses
+  the hello (with its close code and a printable cut of its reason, withheld if it repeats the token), and when
+  the link is ready again, with the time since that stretch's first line. None of these values is an operator
+  setting.
 - `GET /api/fleet/health` → `{mode, connected, downSince, roster, build, projectPools}`, plus
   `builds` (each box's stamp) in remote mode and a `lifecycle` block (the journal mirror's state,
   `unknown` until its first sweep) on a box running the coordination database —

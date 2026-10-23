@@ -349,7 +349,8 @@ the task (below).
 
 Review 852's fix round re-measured M1 to M23 on the final 25 rows and measured M24 to M36 (As built). Where the
 campaign measured otherwise than this table claimed, the Expected red column is corrected and says so (M3, M4, M21,
-M25, M31). The probe column of M24 to M36 reads "measured in review 852's fix round".
+M25, M31). The probe column of M24 to M36 reads "measured in review 852's fix round". Review 860's fix round adds
+M37 and M38, the window mutants (probe column "measured in review 860's fix round").
 
 | # | Guard (task) | Mutation | Expected red (at least), at the task's end | Planning probe: mutant / restored |
 |---|---|---|---|---|
@@ -390,6 +391,8 @@ M25, M31). The probe column of M24 to M36 reads "measured in review 852's fix ro
 | M34 | the closing phase has its own word (T3) | map CLOSING to `ready not sent` in `preReadyPhase` | W27-L23 | measured in review 852's fix round |
 | M35 | the deadline's timer is `unref`'d (T2) | delete `timer.unref?.();` in `armReadyDeadline` | W27-L24 | measured in review 852's fix round |
 | M36 | the deadline keeps the backoff (T2) | set `this.backoffMs = this.cfg.reconnectMinMs;` in the deadline callback, before `ws.terminate()` | W27-L25 | measured in review 852's fix round |
+| M37 | the window is exactly 8, not 9 (T3; review 860) | `Math.min(9, token.length)` | W27-L17 | measured in review 860's fix round |
+| M38 | the window is exactly 8, not 10 (T3; review 860) | `Math.min(10, token.length)` | W27-L17 | measured in review 860's fix round |
 
 The deadline's choice to terminate its CAPTURED socket, not `this.socket`, has no row of its own (D-6517): before
 Task 3 a stale deadline can reach only a closed socket, where `terminate` is a no-op, and from Task 3 the
@@ -474,7 +477,8 @@ reader itself).
     `ready` while no episode is open, which happens only before the first `ready` since start, because every later
     loss of a ready link opens an episode first (row W27-L11, M16 and M17); when `new WebSocket` itself throws, the
     same kind prints `(socket not created: <error name>)` in place of `(close <code>)` (D-6526, row W27-L13). (Amended
-    on review 852.) This boot line prints only when an attempt closes before the first `ready` and no other line has
+    on review 852.) This boot line prints only when an attempt closes, or its socket cannot be created, before the
+    first `ready` since the server started (amended on review 860) and no other line has
     opened the stretch: row W27-L9 shows a stretch opened by `no ready within` with no boot line;
   - `ccrc-server: agent link: no ready within <ms>ms (<phase>); terminating this attempt and retrying`, where
     `<phase>` is `connect or upgrade unanswered` for CONNECTING, `ready not sent` for OPEN, `closing` for CLOSING and
@@ -606,7 +610,8 @@ reader itself).
   them:
   - W27-L16: the check runs on the full text: 58 `x` and then the token, so only 6 token characters lie inside the
     cut (M24: the check on the cut text);
-  - W27-L17: 10 consecutive token characters withhold the reason (M25: `includes(token)`; M29: a window of 16);
+  - W27-L17: exactly 8 consecutive token characters withhold the reason (M25: `includes(token)`; M29: a window of 16;
+    amended on review 860: M37, a window of 9, and M38, a window of 10);
   - W27-L18: 7 consecutive token characters are printed, so the window is 8 and no narrower (M28: a window of 4);
   - W27-L19: a token shorter than the window, `abc`, withholds a reason that holds all of it (M26: a fixed width of
     8);
@@ -629,6 +634,10 @@ reader itself).
 
   The mutant that resets the backoff in the deadline callback (M36) measured 613 to 629 ms for the same quantity, far
   below the floor.
+
+  (Amended on review 860.) The reviewer's reason for keeping the departure: under M36 every gap is about 150 ms (the
+  deadline of 100 ms plus a reset backoff of 50 ms), so the ruling's example form, "the fourth gap at least twice the
+  minimum", stays green and would not catch the flattened backoff. The sum-to-the-fifth-accept form reds it.
 - **D-6586** — `unused` (run 833): issued to this wave's review-852 fix round; no departure took it.
 
 Any reserve number still undefined at wave-done is defined in this section before the wave-done fingerprint, in the
@@ -1227,14 +1236,16 @@ green below is the worker's to measure; the planning probe's figures are named w
     the server's periodic ping is terminated and retried the same way. The server's log says so, once per kind per
     stretch without a link, each line starting `ccrc-server: agent link:`: when a ready link is lost (or, in its
     place, when an unanswered ping ends it), when an attempt times out (with the deadline, and whether the attempt was
-    still connecting or upgrading or had sent its hello), when an attempt closes before the first ready since the
-    server started and no other line has opened the stretch, when the agent refuses the hello (with its close code and
-    a printable cut of its reason, withheld if it repeats the token), and when the link is ready again, with the time
-    since that stretch's first line. None of these values is an operator setting.
+    still connecting or upgrading or had sent its hello), when an attempt closes, or its socket cannot be created,
+    before the first ready since the server started and no other line has opened the stretch, when the agent refuses
+    the hello (with its close code and a printable cut of its reason, withheld if it repeats the token), and when
+    the link is ready again, with the time since that stretch's first line. None of these values is an operator
+    setting.
   ```
 
   This is the landed text. It departs from the first draft by the refusal clause (D-6527) and by review 852's F1
-  and F2: the backoff and the ping said in words, and when the boot line prints.
+  and F2: the backoff and the ping said in words, and when the boot line prints. Review 860's F2 added "or its socket
+  cannot be created" to the boot-line clause (amended on review 860).
 
   The bullet states no number on purpose. The deadline, the heartbeat interval, the miss limit and the backoff are
   module-private constants in `client.ts`, and no row ties README prose to them (the house pins README values only
@@ -1471,7 +1482,8 @@ the `client.ts` anchors were unchanged from `7ebdff20c`).
   - Group A was claim 2300.
   - README went in under run 774's consent: request 8312, consent 8314. The owner claim was live as 2306 at Task 4
     (re-declared from 2259, 2278 and 2295). Claim 2300's intent was renewed to cite all three. The change is one
-    hunk, nine added lines at Task 4 and ten after review 852's fix round, with no existing line touched.
+    hunk, nine added lines at Task 4, ten after review 852's fix round and eleven after review 860's, with no existing
+    line touched.
 - **Deviations:** eighteen defined, each once (the server's reader prints `18 18`; it printed `16 16` for D-6514 to
   D-6529 before the fix round). The first block's two reserve numbers were spent:
   - D-6528: W27-L12's starting phase. The row went red with no mutant applied; it is reported under ruling 12.
@@ -1540,6 +1552,25 @@ the `client.ts` anchors were unchanged from `7ebdff20c`).
   - the README bullet, rewritten inside the consented bullet and still stating no number: it says when the boot line
     prints, the retry delay in words (it grows on each failure and resets once a link is ready), and the ping in
     words.
+- **The review-860 fix round**, on this branch after review 852's:
+  - commits, in order, after the plan text edit above: the plan's as-built suites (21488feb9); the L23 and L24 fixes,
+    with the README hunk's size named in the plan (d0aa1b780); the coordinator's rulings on review 860 recorded
+    (cafaa85d0); and "test(remote): W27-L17 withholds exactly 8 token characters; README and D-6520 cover the socket
+    not created (wave 27, review 860)", which carries the L17 change, the README clause, the plan amendments and this
+    record;
+  - the campaign was re-run at d0aa1b780 for M34 and M35 by review 860 and holds: M34 reds W27-L23 only, M35 reds
+    W27-L24 only;
+  - W27-L17 now carries exactly 8 token characters in a row (`token.slice(20, 28)`, where it carried 10), so its
+    title is true and, with W27-L18 (7 printed), the window is pinned at exactly 8;
+  - the window mutants, measured at this round's tip on a scratch copy over all 25 rows (failed + passed = 25), each
+    by assertion, each restored by copy and a byte-for-byte `cmp`:
+    - M37 (width 9): W27-L17 only, 1+24;
+    - M38 (width 10): W27-L17 only, 1+24;
+    - M25 re-run against the new L17: W27-L17 and W27-L20, 2+23 (as before: `includes('')` is always true);
+    - M29 re-run: W27-L17 only, 1+24;
+    - M30 re-run: none, 0+25, still the equivalent mutant;
+  - the README clause now reads "when an attempt closes, or its socket cannot be created, before the first ready"; the
+    bullet is eleven added lines.
 - **Suites run** at the README commit (before review 852), one file at a time, at a load average of 18 to 45:
   - all green: `remote-liveness` 15, `remote-connect` 66, `remote-io` 217, `remote-pty` 6, `remote-runner` 28,
     `remote-tail` 4, `fleet-identity-client` 6, `fleet-identity-composition` 4, `update-inventory` 90,
