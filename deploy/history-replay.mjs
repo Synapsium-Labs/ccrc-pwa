@@ -2827,16 +2827,136 @@ export function openReplayStore(home) {
   }
 }
 
-/** D-6481: the store's pair index, rebuilt from the store as it is now. openReplayStore builds it once per open, and the
- *  sweep's recordPairs learns pairs between two arm batches of one invocation (a read-only handle sees later commits), so
- *  the arm batch preflight and the judge's input build call this first: a secret learned since the open is masked in the
- *  text built from here on, where a stale index would let it through. Fail-closed only: a rebuilt index holds every pair the
- *  old one did. Answers the new index; it is also kept as `rs.idx`.
- *  @param {ReplayStore} rs  @param {string} home */
-function refreshPairIndex(rs, home) {
-  rs.idx = pairIndexOf(rs.db, home);
-  return rs.idx;
+/** D-6481's bounded retained masking snapshots. These are logical material charges, not a V8 heap claim. */
+const MASKING_SNAPSHOT_MAX = 8;
+const MASKING_SNAPSHOT_MATERIAL_MAX = 16_777_216;
+const MASKING_SNAPSHOT_MATERIAL_TOTAL_MAX = 67_108_864;
+class MaskingSnapshotError extends Error {
+  /** @param {'invalid' | 'material'} kind */
+  constructor(kind) { super(kind); this.kind = kind; }
 }
+const maskingInvalid = () => { throw new MaskingSnapshotError('invalid'); };
+const maskingMaterial = () => { throw new MaskingSnapshotError('material'); };
+/** Data-only exact record shape; getters and unrecognised fields are never admitted to a retained snapshot. */
+function maskingRecord(value, keys) {
+  if (value === null || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) maskingInvalid();
+  const own = Object.keys(value).sort();
+  if (own.length !== keys.length || own.some((key, i) => key !== keys[i])) maskingInvalid();
+  for (const key of keys) if (Object.getOwnPropertyDescriptor(value, key)?.get !== undefined || Object.getOwnPropertyDescriptor(value, key)?.set !== undefined) maskingInvalid();
+  return value;
+}
+/** A concrete PairIndex is deliberately stricter than its public membership-only interface. */
+function maskingIndexChecked(idx) {
+  const index = maskingRecord(idx, ['belt', 'byLen']);
+  if (!(index.byLen instanceof Map) || index.belt === null || index.belt === undefined) maskingInvalid();
+  for (const [len, hashes] of index.byLen) {
+    if (!Number.isSafeInteger(len) || len < 1 || !(hashes instanceof Set)) maskingInvalid();
+    for (const hash of hashes) if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash)) maskingInvalid();
+  }
+  const belt = maskingRecord(index.belt, ['grams', 'overflow', 'texts', 'units', 'widths']);
+  if (!Array.isArray(belt.units) || !Array.isArray(belt.texts) || !Array.isArray(belt.widths)
+    || !Number.isSafeInteger(belt.grams) || belt.grams < 0 || !Number.isSafeInteger(belt.overflow) || belt.overflow < 0
+    || belt.units.length !== belt.texts.length) maskingInvalid();
+  for (let i = 0; i < belt.units.length; i += 1) {
+    if (!(belt.units[i] instanceof Uint8Array) || typeof belt.texts[i] !== 'string') maskingInvalid();
+  }
+  for (const width of belt.widths) {
+    const w = maskingRecord(width, ['pw', 'table', 'w']);
+    if (!Number.isSafeInteger(w.w) || w.w < 1 || !Number.isSafeInteger(w.pw) || !(w.table instanceof Map)) maskingInvalid();
+    for (const [key, collisions] of w.table) {
+      if (!Number.isSafeInteger(key) || !Array.isArray(collisions)) maskingInvalid();
+      for (const collision of collisions) {
+        const c = maskingRecord(collision, ['off', 'unit']);
+        if (!Number.isSafeInteger(c.unit) || c.unit < 0 || c.unit >= belt.units.length || !Number.isSafeInteger(c.off) || c.off < 0) maskingInvalid();
+      }
+    }
+  }
+  return index;
+}
+/** Charge every material occurrence without serialising sensitive values. */
+function maskingMaterialOf(idx, limit) {
+  const add = (n) => { if (!Number.isSafeInteger(n) || n < 0 || total > limit - n) maskingMaterial(); total += n; };
+  const string = (value) => { add(value.length * 2); };
+  const number = () => { add(8); };
+  const record = (keys, values) => { add(64); for (let i = 0; i < keys.length; i += 1) { add(16); string(keys[i]); values[i](); } };
+  const array = (values) => { add(64); for (const value of values) { add(8); value(); } };
+  const map = (entries) => { add(64); for (const [key, value] of entries) { add(32); key(); value(); } };
+  const set = (values) => { add(64); for (const value of values) { add(16); value(); } };
+  let total = 0;
+  const index = maskingIndexChecked(idx);
+  const belt = index.belt;
+  const meterBelt = () => record(['grams', 'overflow', 'texts', 'units', 'widths'], [
+    number, number,
+    () => array(belt.texts.map((text) => () => string(text))),
+    () => array(belt.units.map((unit) => () => add(64 + unit.byteLength))),
+    () => array(belt.widths.map((width) => () => record(['pw', 'table', 'w'], [
+      number,
+      () => map([...width.table].map(([key, collisions]) => [() => number(), () => array(collisions.map((c) => () => record(['off', 'unit'], [number, number]))) ])),
+      number,
+    ]))),
+  ]);
+  record(['belt', 'byLen'], [meterBelt, () => map([...index.byLen].map(([len, hashes]) => [() => number(), () => set([...hashes].map((hash) => () => string(hash)))]))]);
+  return total;
+}
+function maskingIndexSame(a, b) {
+  const aa = maskingIndexChecked(a); const bb = maskingIndexChecked(b);
+  if (aa.byLen.size !== bb.byLen.size) return false;
+  const ai = aa.byLen.entries(); const bi = bb.byLen.entries();
+  for (;;) { const x = ai.next(); const y = bi.next(); if (x.done || y.done) { if (x.done !== y.done) return false; break; }
+    if (x.value[0] !== y.value[0] || x.value[1].size !== y.value[1].size) return false;
+    const xs = x.value[1].values(); const ys = y.value[1].values(); for (;;) { const p = xs.next(); const q = ys.next(); if (p.done || q.done) { if (p.done !== q.done) return false; break; } if (p.value !== q.value) return false; }
+  }
+  const ab = aa.belt; const bbelt = bb.belt;
+  if (ab.grams !== bbelt.grams || ab.overflow !== bbelt.overflow || ab.units.length !== bbelt.units.length || ab.texts.length !== bbelt.texts.length || ab.widths.length !== bbelt.widths.length) return false;
+  for (let i = 0; i < ab.units.length; i += 1) if (!Buffer.from(ab.units[i]).equals(Buffer.from(bbelt.units[i])) || ab.texts[i] !== bbelt.texts[i]) return false;
+  for (let i = 0; i < ab.widths.length; i += 1) {
+    const x = ab.widths[i]; const y = bbelt.widths[i]; if (x.w !== y.w || x.pw !== y.pw || x.table.size !== y.table.size) return false;
+    const xi = x.table.entries(); const yi = y.table.entries(); for (;;) { const p = xi.next(); const q = yi.next(); if (p.done || q.done) { if (p.done !== q.done) return false; break; }
+      if (p.value[0] !== q.value[0] || p.value[1].length !== q.value[1].length) return false;
+      for (let j = 0; j < p.value[1].length; j += 1) if (p.value[1][j].unit !== q.value[1][j].unit || p.value[1][j].off !== q.value[1][j].off) return false;
+    }
+  }
+  return true;
+}
+function maskingSnapshotRefusal(kind) {
+  if (kind === 'material') refuse('input-invalid', 'masking-snapshots-material-cap');
+  refuse('input-invalid', 'masking-snapshot-invalid');
+}
+/** Retain each bounded distinct reading; the returned representative preserves refreshPairIndex's index contract. */
+function refreshPairIndex(rs, home) {
+  let state = rs.maskingSnapshots;
+  if (state === undefined) {
+    try {
+      const seed = maskingIndexChecked(rs.idx); const material = maskingMaterialOf(seed, MASKING_SNAPSHOT_MATERIAL_MAX);
+      if (seed.belt.overflow > 0) refuse('input-invalid', 'masking-snapshot-belt-overflow');
+      state = { snapshots: [{ idx: seed, material }], material };
+      rs.maskingSnapshots = state;
+    } catch (e) {
+      if (e instanceof DriverRefusal) throw e;
+      if (e instanceof MaskingSnapshotError) maskingSnapshotRefusal(e.kind);
+      throw e;
+    }
+  }
+  let candidate; let material;
+  try {
+    candidate = maskingIndexChecked(pairIndexOf(rs.db, home));
+    material = maskingMaterialOf(candidate, MASKING_SNAPSHOT_MATERIAL_MAX);
+    if (candidate.belt.overflow > 0) refuse('input-invalid', 'masking-snapshot-belt-overflow');
+    const retained = state.snapshots.find((snapshot) => maskingIndexSame(snapshot.idx, candidate));
+    if (retained !== undefined) { rs.idx = retained.idx; return retained.idx; }
+  } catch (e) {
+    if (e instanceof DriverRefusal) throw e;
+    if (e instanceof MaskingSnapshotError) maskingSnapshotRefusal(e.kind);
+    refuse('input-invalid', 'masking-snapshot-refresh-failed');
+  }
+  if (state.snapshots.length >= MASKING_SNAPSHOT_MAX) refuse('input-invalid', 'masking-snapshots-count-cap');
+  if (state.material > MASKING_SNAPSHOT_MATERIAL_TOTAL_MAX - material) refuse('input-invalid', 'masking-snapshots-material-cap');
+  state.snapshots.push({ idx: candidate, material }); state.material += material; rs.idx = candidate;
+  return candidate;
+}
+/** @param {ReplayStore} rs @param {string} home */
+function maskingSnapshotsOf(rs, home) { refreshPairIndex(rs, home); return rs.maskingSnapshots.snapshots; }
+const sameMaskingText = (a, b) => Buffer.from(a).equals(Buffer.from(b));
 
 /** A failed open or first read as the driver's word: a StoreError by its word alone (store.mjs: the caller prints the
  *  word, never the message), SQLite's own error as store-read-failed with its message; anything else is a defect.
@@ -6755,35 +6875,44 @@ function questionArmsOf(ctx, q) {
  *  then preflightSpawn (R26): the wrapper's sha, the gate (W2-D55: the budget, then the limits row), and the one spawn,
  *  `--version`, with W2-D56's preflight against ctx.expected. Answers each pending (qid, arm)'s stdin and the version. */
 async function armBatchPreflight(ctx, pending) {
-  refreshPairIndex(ctx.rs, ctx.home);   // D-6481: both arms of every question of this batch are built from one fresh index
+  const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);
   const qs = pending.map((s) => s.q);
   requireListed(ctx.home, ctx.storeId, familiesOf(qs));   // W2-D78 (i)
   refuseRecallOff(ctx.home, [...new Set(qs.map((q) => q.ccrc_id))]);   // W2-D78 (ii)
-  const verdicts = await ctx.deps.recheck(ctx.rs, qs, { configDirs: ctx.configDirs });   // W2-D78 (iii)
+  let baseline = null;
+  for (const snapshot of snapshots) {
+    const view = { ...ctx.rs, idx: snapshot.idx };
+    const verdicts = await ctx.deps.recheck(view, qs, { configDirs: ctx.configDirs });   // every retained reading must permit the full original batch
+    const built = new Map();
+    for (const s of pending) {
+      const v = verdicts.get(s.q.qid);
+      const p = ctx.deps.payloads(view, v.boundaryEntryId, s.q.question, v.cut);
+      if (p.state !== 'payloads') refuse('quiz-unanswerable', `${s.q.qid} payload ${p.why}`);   // D-6469
+      built.set(s.q.qid, new Map([[CONTROL_ARM, p.plain], [TREATMENT_ARM, p.carded]]));
+    }
+    if (baseline === null) { baseline = built; continue; }
+    for (const s of pending) for (const arm of RECALL_ARMS) {
+      if (!sameMaskingText(baseline.get(s.q.qid).get(arm), built.get(s.q.qid).get(arm))) refuse('input-invalid', 'masking-snapshots-disagree arms');
+    }
+  }
   const stdins = new Map();
   const kept = [];
   let shas = null;
   for (const s of pending) {
-    const v = verdicts.get(s.q.qid);
-    const p = ctx.deps.payloads(ctx.rs, v.boundaryEntryId, s.q.question, v.cut);
-    if (p.state !== 'payloads') refuse('quiz-unanswerable', `${s.q.qid} payload ${p.why}`);   // D-6469
-    const byArm = new Map([[CONTROL_ARM, p.plain], [TREATMENT_ARM, p.carded]]);
-    // D-6482: an owed arm is not spawned when its answered sibling's payload, built now, is not the one the sibling answered.
+    const byArm = baseline.get(s.q.qid);
+    // D-6482 runs only after all retained reads agreed; a disagreement never writes an exclusion.
     const answeredArm = s.arms.find((a) => a.state === 'answered');
     if (answeredArm !== undefined) {
       shas ??= armManifestShas(ctx);
       const won = answeredAttempt(answeredArm);
       const then = shas.get(won.name);
       if (then === undefined) refuse('out-refused', `arm-manifest-missing ${won.name}`);
-      if (sha256Hex(byArm.get(answeredArm.arm)) !== then) {
-        excludeOwedArms(ctx, s);
-        continue;
-      }
+      if (sha256Hex(byArm.get(answeredArm.arm)) !== then) { excludeOwedArms(ctx, s); continue; }
     }
     for (const { arm } of s.next) stdins.set(`${s.q.qid} ${arm}`, byArm.get(arm));
     kept.push(s);
   }
-  if (kept.length === 0) return { stdins, version: null, pending: kept };   // every question of the batch was excluded: nothing to preflight or spawn
+  if (kept.length === 0) return { stdins, version: null, pending: kept };
   const pre = await preflightSpawn({ launch: ctx.launch, home: ctx.home, out: ctx.out, lang: ctx.lang, gate: ctx.gate,
     expected: ctx.expected, allowCodeChange: ctx.allowCodeChange });
   for (const st of pre.stamps) ctx.stamps.add(st);
@@ -7339,7 +7468,15 @@ export async function judgeCommand(flags, driverEnv, deps = { loadArmRun, armNod
       pinOutBytes(out, mapRel, judgeMapText(section, run.frozen.sha256, map), 'judge-map');
       const own = run.frozen.list.entries.filter((e) => e.store_id === rs.storeId);   // Q2: this node's questions only
       const picked = judgeItemsOf({ entries: own, answers: deps.readArmAnswers(out, section), arms: RECALL_ARMS, shaMinPrefix: r.labeller.sha_min_prefix });
-      const jobs = judgeJobsOf({ items: picked.items, map, idx: refreshPairIndex(rs, home) });   // D-6481: the index as of the build
+      const snapshots = maskingSnapshotsOf(rs, home);
+      let jobs = null;
+      for (const snapshot of snapshots) {
+        const built = judgeJobsOf({ items: picked.items, map, idx: snapshot.idx });
+        if (jobs === null) { jobs = built; continue; }
+        if (jobs.length !== built.length || jobs.some((job, i) => job.id !== built[i].id || !sameMaskingText(canonicalJson(job.input) + '\n', canonicalJson(built[i].input) + '\n'))) {
+          refuse('input-invalid', 'masking-snapshots-disagree judge');
+        }
+      }
       const judge = await openJudge({ home, accountId: node.account, model: r.judge_model, settingsMode: node.settingsMode, rubricId: r.rubric_id,
         claim, budget: node.budget, limits: node.limits, expected: node.expected, allowCodeChange: run.allowCodeChange === true, lang: driverEnv.LANG });
       const items = await judge.judge(section, jobs);

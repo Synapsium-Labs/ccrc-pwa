@@ -11555,7 +11555,7 @@ const B1T2_ROWS: B1t2RowSpec[] = [
 type B1t2Opts = {
   kept?: 'list' | 'null' | 'tombstone' | 'object' | 'mixed'; learn?: string[]; prune?: string[]; unindex?: string[];
   retime?: Record<string, number>; uncopy?: boolean; twoParents?: boolean; noParent?: boolean; noLeaf?: boolean; badLeaf?: boolean;
-  untimedBoundary?: boolean;
+  untimedBoundary?: boolean; command?: string; summaryText?: string;
 };
 type B1t2Fx = { home: string; entry: Record<string, number>; blob: Record<string, number>; uuid: Record<string, string>; leaf: string };
 
@@ -11589,7 +11589,12 @@ async function b1t2Plant(o: B1t2Opts = {}): Promise<B1t2Fx> {
       is_compact_summary) VALUES (?, 1, ?, ?, ?, 1, ?, 2, ?, ?, ?) RETURNING entry_id`);
   const member = w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
   const lines: Record<number, number> = { 1: 0, 2: 0 };
-  for (const [i, r] of B1T2_ROWS.entries()) {
+  for (const [i, original] of B1T2_ROWS.entries()) {
+    const r = o.command !== undefined && original.key === 'a1'
+      ? { ...original, body: b1t2Bash('toolu_b1t2a1').map((block) => ({ ...(block as Record<string, unknown>), input: { command: o.command } })) }
+      : o.summaryText !== undefined && original.key === 'sn'
+        ? { ...original, body: b1t2Text(o.summaryText) }
+        : original;
     const bytes = Buffer.from(b1t2Lib.canonicalJson(r.body));
     const blobId = blobOf(bytes);
     const uuid = B1T2_UUID(i + 1);
@@ -13690,9 +13695,13 @@ describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 6: the arms-then-jud
 type FwSetup = { home: string; storeId: string; entries: W5b4R[]; argv: string[]; out: string; draft: W5b4R };
 /** Two questions on Task 2's store (a command fact and a sha fact, both on boundary N), the pilot form's inputs and the
  *  arm stub; `batch_max` 2 makes each batch one question. */
-async function fwSetup(over: W5b4R = { limits: { batch_max: 2 } }): Promise<FwSetup> {
-  const fx = await b1t2Plant();
+async function fwSetup(over: W5b4R = { limits: { batch_max: 2 } }, sourceFact: string | null = null): Promise<FwSetup> {
+  const fx = await b1t2Plant({ summaryText: sourceFact === null ? undefined : `Summary: ${sourceFact}` });
   const home = fx.home;
+  if (sourceFact !== null) {
+    mkdirSync(join(home, '.ccrc'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, '.ccrc', 'fixture.token'), `${sourceFact}\n`, { mode: 0o600 });
+  }
   w5b4Node(home);
   const rs0 = D4.openReplayStore(home) as W5b4R;
   const storeId = rs0.storeId as string;
@@ -13745,6 +13754,30 @@ w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4 fix wave: the 
     w5b4Expect(w5b4Runs(clean.s.home)).toHaveLength(4);
   }, 180_000);
 
+  w5b4It('D-6481 CONTROL: a glob-discovered fixture token masks an original frozen question before arm construction', async () => {
+    const value = ['zq', 'source6481', 'transient', 'fixture'].join('-');
+    const s = await fwSetup({ limits: { batch_max: 2 } }, value);
+    const rs = D4.openReplayStore(s.home) as W5b4R;
+    try {
+      w5b4Expect(b1t2Lib.redactField(s.entries[1]!.fact_raw as string, rs.idx)).not.toContain(value);
+    } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('D-6481: removing a source-backed original input before batch 2 exposes the replacement refresh regression', async () => {
+    const value = ['zq', 'source6481', 'transient', 'fixture'].join('-');
+    const s = await fwSetup({ limits: { batch_max: 2 } }, value);
+    const source = join(s.home, '.ccrc', 'fixture.token');
+    let calls = 0;
+    const payloads = (rs: unknown, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      calls += 1;
+      if (calls === 1) rmSync(source);   // removal happens once after batch 1's original-input build
+      return p;
+    };
+    const r = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads });
+    w5b4Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+  }, 180_000);
+
   w5b4It('D-6481: the judge builds its inputs from the pair index as of the build, so a pair learned after the store open masks the reply (CONTROL: no pair, the value reaches the judge)', async () => {
     const value = ['zq', 'judge6481', 'widened02'].join('');
     const run = async (learn: boolean): Promise<string[]> => {
@@ -13758,19 +13791,22 @@ w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4 fix wave: the 
       const out = join(b.home, 'judge-out');
       const r = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home),
         { ...w5b5Deps(w5b5Run([e1]), w5b5NodeOf(b.home), answers), readArmAnswers }));
+      if (learn) {
+        w5b4Expect(r.refusal, 'a newly learned mask must agree with the retained original build').toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree judge' });
+        return [];
+      }
       w5b4Expect(r.refusal).toBeNull();
       return w6Runs(b.home).map((x) => x.stdin as string);
     };
     const stdins = await run(true);
-    w5b4Expect(stdins, 'one judge run per non-correct answer').toHaveLength(2);
-    for (const t of stdins) w5b4Expect(t, 'the learned value is masked in the judge\'s stdin').not.toContain(value);
+    w5b4Expect(stdins, 'a disagreement persists no judge input').toHaveLength(0);
     const control = await run(false);
     w5b4Expect(control.some((t) => t.includes(value)), 'CONTROL: without the pair the value is in the stdin').toBe(true);
   }, 120_000);
 
   w5b4It('D-6482: an owed arm whose answered sibling\'s payload changed is never spawned, it is excluded run-failed with the reason, and the invocation goes on to the next question', async () => {
     const WORD = 'Summary';   // a word of the stored summary, outside every fact: a pair for it changes the payload and fails no re-check clause
-    const run = async (learn: boolean): Promise<{ s: FwSetup; r1: W5b4Result; r2: W5b4Result; q1: W5b4R; q2: W5b4R }> => {
+    const run = async (learn: boolean, damage: null | 'missing-manifest' | 'bad-manifest' | 'wrong-kind' = null): Promise<{ s: FwSetup; r1: W5b4Result; r2: W5b4Result; q1: W5b4R; q2: W5b4R }> => {
       const s = await fwSetup();
       const [q1, q2] = s.entries as [W5b4R, W5b4R];
       // Invocation 1: q1's control run fails at its infrastructure (no result, exit 1) and raises the limits row, so the
@@ -13784,6 +13820,10 @@ w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4 fix wave: the 
       w5b4Expect(w5b4Runs(s.home), 'invocation 1 ran q1\'s two arms').toHaveLength(2);
       w5b4Limits(s.home, 10);
       if (learn) fwLearn(s.home, WORD);   // the sweep learns a pair between the two invocations
+      const batch = join(s.out, 'pilot', 'arms', 'batches', '0001.json');
+      if (damage === 'missing-manifest') rmSync(batch);
+      if (damage === 'bad-manifest') writeFileSync(batch, '{');
+      if (damage === 'wrong-kind') writeFileSync(batch, `${JSON.stringify({ kind: 'wrong', runs: [] })}\n`);
       return { s, r1, r2: await w5b4Arms(s.home, s.argv, real), q1, q2 };
     };
     const rel = (q: W5b4R, arm: string, attempt: number): string => `pilot/arms/${q.qid as string}/${arm}.a${attempt}.run.json`;
@@ -13810,6 +13850,20 @@ w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4 fix wave: the 
     const picked = D4.judgeItemsOf({ entries: s.entries, answers: D4.readArmAnswers(s.out, 'pilot'), arms: W5B4_ARMS, shaMinPrefix: 7 }) as W5b4R;
     w5b4Expect(picked.excluded.run_failed_questions).toBe(1);
     w5b4Expect([...new Set((picked.items as W5b4R[]).map((i) => i.qid))], 'only q2 reaches the judge').toEqual([q2.qid]);
+    const invalidRecord = await run(true);
+    const invalidRel = join(invalidRecord.s.out, 'pilot', 'answers', `${invalidRecord.q1.qid as string}.${W5B4_CONTROL}.json`);
+    writeFileSync(invalidRel, '{');
+    const invalidResult = await w5b4Arms(invalidRecord.s.home, invalidRecord.s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(invalidResult.refusal).toEqual({ word: 'out-refused', detail: `pilot/answers/${invalidRecord.q1.qid as string}.${W5B4_CONTROL}.json is not JSON` });
+    for (const [damage, detail] of [
+      ['missing-manifest', 'arm-manifest-missing'],
+      ['bad-manifest', 'pilot/arms/batches/0001.json is not JSON'],
+      ['wrong-kind', 'pilot/arms/batches/0001.json is not an arm batch manifest'],
+    ] as const) {
+      const damaged = await run(true, damage);
+      w5b4Expect(damaged.r2.refusal?.word, `${damage} refuses from the D-6482 persistence reader`).toBe('out-refused');
+      w5b4Expect(damaged.r2.refusal?.detail, `${damage} detail remains value-free`).toContain(detail);
+    }
     // CONTROL: no pair learned, the payload is the sibling\'s own, so the owed arm spawns and answers.
     const control = await run(false);
     w5b4Expect(control.r2.refusal).toBeNull();
