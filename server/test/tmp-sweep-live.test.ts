@@ -672,14 +672,14 @@ describe('the size budget', () => {
   }, 180_000);
 
   /** One kept-entry case: the shape `build` makes inside entry `a` must hold the budget's hand (git-work-unrescued). */
-  function keptShape(build: (a: string, root: string) => void): void {
+  function keptShape(build: (a: string, root: string) => void, env?: Record<string, string>): void {
     liveSession();
     const [a] = sizes([['repo', 200, 6 * 24], ['b', 400, 5 * 24], ['c', 400, 4 * 24], ['d', 400, 3 * 24]]) as [string];
     build(a, path.dirname(a));
     setTimes(a, NOW0 - 6 * DAY);
     arm();
-    sweep();
-    sweep({ plusS: 25 * HOUR });
+    sweep({ env });
+    sweep({ plusS: 25 * HOUR, env });
     expect(exists(a)).toBe(true);
     expect(session(census()).budget.kept[0]).toEqual({ name: 'repo', why: 'git-work-unrescued' });
   }
@@ -715,6 +715,44 @@ describe('the size budget', () => {
       git(clone, 'remote', 'add', 'origin', sib); git(clone, 'push', '-q', 'origin', 'HEAD'); git(clone, 'fetch', '-q', 'origin');
     });
   }, 180_000);
+
+  it('a clone whose only remote is a sibling bare repository outside the entry but inside the swept root is kept (git-work-unrescued)', () => {
+    keptShape((a, sp) => {
+      const sib = path.join(sp, 'zz-sib.git');
+      execFileSync('git', ['init', '-q', '--bare', sib], { env: GIT_ENV() });
+      git(a, 'init', '-q'); git(a, 'add', '-A'); git(a, 'commit', '-q', '-m', 'w');
+      git(a, 'remote', 'add', 'origin', sib); git(a, 'push', '-q', 'origin', 'HEAD'); git(a, 'fetch', '-q', 'origin');
+    });
+  }, 180_000);
+
+  /** A git that answers one subcommand successfully but not cleanly (or not at all): the answer is unmeasured, so the entry stays. */
+  function noisyGit(sub: string, how: 'warn' | 'fail'): Record<string, string> {
+    const dir = path.join(h.home, `gitnoisy-${sub}-${how}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    const act = how === 'warn' ? 'echo "warning: noisy" >&2' : 'exit 1';
+    fs.writeFileSync(path.join(dir, 'git'), `#!/bin/sh\nfor a in "$@"; do if [ "$a" = "${sub}" ] || [ "$a" = "--is-bare-repository" -a "${sub}" = "rev-parse" ]; then ${act}; fi; done\nexec "${real}" "$@"\n`, { mode: 0o755 });
+    return { PATH: pathWith(dir) };
+  }
+  function pushedShape(a: string): void {
+    const remote = path.join(h.home, 'noisy-remote.git');
+    execFileSync('git', ['init', '-q', '--bare', remote], { env: GIT_ENV() });
+    git(a, 'init', '-q'); git(a, 'add', '-A'); git(a, 'commit', '-q', '-m', 'work');
+    git(a, 'remote', 'add', 'origin', remote); git(a, 'push', '-q', 'origin', 'HEAD'); git(a, 'fetch', '-q', 'origin');
+  }
+  it.each([['status', 'warn'], ['rev-list', 'warn'], ['rev-parse', 'fail']] as const)(
+    'a pushed repository whose git %s answers %s is unmeasured and kept (git-work-unrescued)', (sub, how) => {
+      liveSession();
+      const [a] = sizes([['repo', 200, 6 * 24], ['b', 400, 5 * 24], ['c', 400, 4 * 24], ['d', 400, 3 * 24]]) as [string];
+      pushedShape(a);
+      setTimes(a, NOW0 - 6 * DAY);
+      const env = noisyGit(sub, how);
+      arm();
+      sweep({ env });
+      sweep({ plusS: 25 * HOUR, env });
+      expect(exists(a)).toBe(true);
+      expect(session(census()).budget.kept[0]).toEqual({ name: 'repo', why: 'git-work-unrescued' });
+    }, 180_000);
 
   it('an untracked file is dirty work even when the repository sets status.showUntrackedFiles=no (git-work-unrescued)', () => {
     keptShape((a) => {
