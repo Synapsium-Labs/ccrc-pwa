@@ -40,6 +40,9 @@ const run = (name: string, conclusion: string | null = 'success', status = 'comp
 const pages = (...ps: unknown[]): Answer => ({ code: 200, raw: ps.map((p) => JSON.stringify(p)).join('\n') });
 const runs = (...rs: unknown[]): Answer => ok({ total_count: rs.length, check_runs: rs });
 
+const CR_PAGE_1 = { total_count: 5, check_runs: [run('test (server)'), run('test (agent)'), run('map-build', 'failure')] };
+const CR_PAGE_2 = { total_count: 5, check_runs: [run('test (pwa)'), run('build-pwa', 'skipped')] };
+
 /** This repository on 2026-10-21 (§5.7.7): squash only, a queue rule merging by SQUASH, the four classic checks at
  *  one App id with `enforce_admins` on, no approval required, and a head with no commit status at all. */
 const measured = (): Fixture => ({
@@ -60,9 +63,7 @@ const measured = (): Fixture => ({
   repo: ok({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false, allow_auto_merge: true,
     allow_update_branch: false }),
   // Two pages, as `--paginate` prints them, and a NON-required red beside the four required greens.
-  checkruns: pages(
-    { total_count: 5, check_runs: [run('test (server)'), run('test (agent)'), run('map-build', 'failure')] },
-    { total_count: 5, check_runs: [run('test (pwa)'), run('build-pwa', 'skipped')] }),
+  checkruns: pages(CR_PAGE_1, CR_PAGE_2),
   status: ok({ state: 'pending', statuses: [] }),
 });
 
@@ -79,8 +80,9 @@ const bare = (): Fixture => ({
 const included = (a: Answer): string => a.raw ?? (`HTTP/2.0 ${a.code} X\nX-Github-Request-Id: 0\r\nX-Xss-Protection: 0\r\n\r\n`
   + JSON.stringify(a.body));
 
-// The reviews arm answers a call without --paginate with page 1 of the same fixture only (pages are one line each), as
-// GitHub does, so a block that drops --paginate reads the first page and a case with a request on page 2 goes red.
+// The reviews and the two read 5 arms answer a call without --paginate with page 1 of the same fixture only (pages are
+// one line each), as GitHub does, so a block that drops --paginate reads the first page and a case with its evidence on a
+// later page goes red.
 const STUB = `#!/bin/sh
 first=
 printf '%s\\n' "$*" >> "$FX/calls"
@@ -94,7 +96,9 @@ case "$*" in
   "api repos/{owner}/{repo}") k=repo ;;
   "api repos/{owner}/{repo}/compare/"*) k=compare ;;
   "api --paginate repos/{owner}/{repo}/commits/"*/check-runs) k=checkruns ;;
+  "api repos/{owner}/{repo}/commits/"*/check-runs) k=checkruns; first=1 ;;
   "api --paginate repos/{owner}/{repo}/commits/"*/status) k=status ;;
+  "api repos/{owner}/{repo}/commits/"*/status) k=status; first=1 ;;
   "api repos/{owner}/{repo}/rulesets/"*) k=ruleset ;;
   *) echo "fixture gh: unexpected argv: $*" >&2; exit 90 ;;
 esac
@@ -595,6 +599,184 @@ const MALFORMED: Case[] = [
     'ROUTE U method=squash admin=never strict=no'],
 ];
 
+// ---- Fix round 2: the sources a verdict reads fail closed (read 5, the licence's fields, the required-check entries) ----
+// An empty answer is not an empty list. GitHub's real zero-result answer is an object whose array is empty, so a call
+// that printed no page, a page that is not an object, a field that is not an array and an entry that is not an object
+// are each `STOP unreadable: read 5`, never "no checks"; a genuine empty array is a successful zero-result answer.
+const R5 = 'STOP unreadable: read 5';
+const OTHER_STATUS = { context: 'other/ci', state: 'success' };
+const raw200 = (text: string): Answer => ({ code: 200, raw: text });
+type Source = { label: string; key: 'checkruns' | 'status'; field: string; entry: unknown; populated: Answer[]; emptyOnly: string;
+  emptyAfter: Answer; emptyBefore: Answer };
+const SOURCES: Source[] = [
+  { label: 'check runs', key: 'checkruns', field: 'check_runs', entry: run('map-build'),
+    populated: [pages(CR_PAGE_1, CR_PAGE_2)],
+    emptyOnly: 'WAIT not-reported: build-pwa, test (agent), test (pwa), test (server)',
+    emptyAfter: pages(CR_PAGE_1, CR_PAGE_2, { total_count: 5, check_runs: [] }),
+    emptyBefore: pages({ total_count: 5, check_runs: [] }, CR_PAGE_1, CR_PAGE_2) },
+  { label: 'statuses', key: 'status', field: 'statuses', entry: OTHER_STATUS,
+    populated: [ok({ state: 'success', statuses: [OTHER_STATUS] })],
+    emptyOnly: GOOD_Q,
+    emptyAfter: pages({ state: 'success', statuses: [OTHER_STATUS] }, { state: 'success', statuses: [] }),
+    emptyBefore: pages({ state: 'success', statuses: [] }, { state: 'success', statuses: [OTHER_STATUS] }) },
+];
+const READ5: Case[] = SOURCES.flatMap(({ label, key, field, entry, emptyOnly, emptyAfter, emptyBefore }): Case[] => {
+  const on = (a: Answer): (() => Fixture) => with_(measured, { [key]: a } as Fixture);
+  const goodPage = { total_count: 1, [field]: [entry] };
+  const bad = (name: string, a: Answer): Case => [`unreadable: read 5 ${label}: ${name}`, on(a), R5];
+  return [
+    bad('gh exits 0 with empty stdout, which jq alone slurps into no pages', raw200('')),
+    bad('gh fails but printed a good-looking page', { code: 500, raw: JSON.stringify(goodPage) }),
+    bad('the answer is not JSON', raw200('{')),
+    bad(`a page with no ${field}`, raw200('{"total_count":0}')),
+    bad(`${field} is null`, raw200(JSON.stringify({ [field]: null }))),
+    bad(`${field} is an empty object`, raw200(JSON.stringify({ [field]: {} }))),
+    bad(`${field} is an object whose values are entries, not an array of them`, raw200(JSON.stringify({ [field]: { a: entry } }))),
+    bad(`${field} is a number`, raw200(JSON.stringify({ [field]: 7 }))),
+    bad(`${field} is a string`, raw200(JSON.stringify({ [field]: 'x' }))),
+    bad(`${field} is a boolean`, raw200(JSON.stringify({ [field]: false }))),
+    bad('a page that is null', raw200('null')),
+    bad('a page that is an array', raw200('[]')),
+    bad('a page that is an array of entries', raw200(JSON.stringify([entry]))),
+    bad('a page that is a number', raw200('7')),
+    bad('a page that is a string', raw200('"x"')),
+    bad('page 2 has no field, under a good page 1', pages(goodPage, { total_count: 0 })),
+    bad('page 2 is null, under a good page 1', pages(goodPage, null)),
+    bad('page 2 is a string, under a good page 1', pages(goodPage, 'x')),
+    bad(`page 2 has a null ${field}, under a good page 1`, pages(goodPage, { [field]: null })),
+    bad(`page 2 has an object ${field}, under a good page 1`, pages(goodPage, { [field]: {} })),
+    bad('page 2 is not JSON, under a good page 1', raw200(`${JSON.stringify(goodPage)}\n{`)),
+    bad('an entry that is a number', raw200(JSON.stringify({ [field]: [7] }))),
+    bad('an entry that is a string', raw200(JSON.stringify({ [field]: ['x'] }))),
+    bad('an entry that is null', raw200(JSON.stringify({ [field]: [null] }))),
+    bad('an entry that is an array', raw200(JSON.stringify({ [field]: [[]] }))),
+    bad('an entry that is a boolean', raw200(JSON.stringify({ [field]: [true] }))),
+    bad('an entry on page 2 that is null, beside good ones', pages(goodPage, { [field]: [entry, null] })),
+    ...(key === 'checkruns' ? [bad('an app that is a string, which the projection of its id and slug cannot read',
+      raw200(JSON.stringify({ check_runs: [run('test (server)', 'success', 'completed', 'github-actions')] })))] : []),
+    [`read 5 ${label}: a genuine empty ${field} on its one page is a zero-result answer`,
+      on(raw200(JSON.stringify({ total_count: 0, [field]: [] }))), emptyOnly],
+    [`read 5 ${label}: an empty page after the populated ones adds nothing and is not unreadable`, on(emptyAfter), GOOD_Q],
+    [`read 5 ${label}: an empty page before the populated ones is not unreadable either`, on(emptyBefore), GOOD_Q],
+  ];
+});
+
+/** An unpinned required name with a green Actions run: the verdict can only see its red in the commit statuses. */
+const unpinned = (status: Answer): (() => Fixture) => with_(bare, { ...rules(rsc([{ context: 'ci' }])), checkruns: runs(run('ci')), status });
+/** A required name pinned to the Actions App, red on its check run: the verdict can only see it in the check runs. */
+const pinnedRed = (checkruns: Answer): (() => Fixture) => with_(bare, { ...rules(rsc([{ context: 'ci', integration_id: 15368 }])), checkruns });
+const failingStatus = ok({ state: 'failure', statuses: [{ context: 'ci', state: 'failure' }] });
+const MIXED: Case[] = [
+  ['read 5 control: an unpinned name green as a run and failing as a status is red, whichever source shows it', unpinned(failingStatus),
+    'RED ci [github-actions]'],
+  ['read 5: that red is not routed G when the statuses answer is empty on stdout, exit 0', unpinned(raw200('')), R5],
+  ['read 5: that red is not routed G when the statuses are an object', unpinned(raw200(JSON.stringify({ state: 'failure', statuses: {} }))), R5],
+  ['read 5: that red is not routed G when the statuses field is missing', unpinned(raw200(JSON.stringify({ state: 'failure' }))), R5],
+  ['read 5 control: a pinned name red as a run is red', pinnedRed(runs(run('ci', 'failure'))), 'RED ci [github-actions]'],
+  ['read 5: that red is not a wait when the check runs answer is empty on stdout, exit 0', pinnedRed(raw200('')), R5],
+  ['read 5: that red is not a wait when the check runs are an object', pinnedRed(raw200(JSON.stringify({ check_runs: {} }))), R5],
+  ['read 5: that red is not a wait when the check runs field is missing', pinnedRed(raw200('{"total_count":1}')), R5],
+  ['read 5: a genuine empty check_runs with no report keeps its original not-reported meaning', pinnedRed(runs()), 'WAIT not-reported: ci'],
+  ['read 5: a bounded wait whose second read is an empty answer from the check runs stops unreadable, not a loop or a timeout',
+    with_(measured, { checkruns: [runs(run('test (agent)'), run('test (pwa)'), run('build-pwa')), raw200('')] }), R5,
+    { BOUND_S: '30', POLL_S: '1' }],
+  ['read 5: a bounded wait whose second read is an empty answer from the statuses stops unreadable',
+    with_(measured, { checkruns: [runs(run('test (agent)'), run('test (pwa)'), run('build-pwa')), classicGreen()],
+      status: [ok({ state: 'pending', statuses: [] }), raw200('')] }), R5, { BOUND_S: '30', POLL_S: '1' }],
+];
+
+// The licence reads two numbers and a boolean. jq orders a string above every number, so a count of "0" would be an
+// approval required and a thread-resolution of "true" a value to test; each field is typed at the read that owns it.
+const countRule = (v: unknown, decision = 'REVIEW_REQUIRED'): (() => Fixture) =>
+  with_(bare, { ...rules(pull({ required_approving_review_count: v })), pr: prWith(decision) });
+const REJECTED_COUNTS: [string, unknown][] = [
+  ['the string "0"', '0'], ['the string "1"', '1'], ['an empty string', ''], ['true', true], ['false', false], ['null', null],
+  ['a negative integer', -1], ['a fraction', 1.5], ['one beyond the safe integers', 2 ** 53], ['a number far beyond them', 2 ** 60],
+  ['an array', [1]], ['an object', {}],
+];
+const REJECTED_THREADS: [string, unknown][] = [
+  ['the string "true"', 'true'], ['the string "false"', 'false'], ['the number 1', 1], ['the number 0', 0], ['null', null],
+  ['an array', []], ['an object', {}],
+];
+const protWith = (reviews?: unknown): Answer => ok({ enforce_admins: { enabled: true }, required_linear_history: { enabled: false },
+  required_signatures: { enabled: false }, ...(reviews === undefined ? {} : { required_pull_request_reviews: reviews }) });
+const classicCount = (reviews?: unknown): (() => Fixture) => with_(bare, { protection: protWith(reviews), pr: prWith('REVIEW_REQUIRED') });
+const FIELDS: Case[] = [
+  ...REJECTED_COUNTS.flatMap(([what, v]): Case[] => [
+    [`unreadable: read 2: a pull_request rule's required_approving_review_count is ${what}`, countRule(v), 'STOP unreadable: read 2'],
+    [`unreadable: read 2: ${what} as the count is refused though a queue would avoid licensing admin`,
+      with_(measured, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: v }), queue('SQUASH')) })), 'STOP unreadable: read 2'],
+    [`unreadable: read 3: classic required_approving_review_count is ${what}`, classicCount({ required_approving_review_count: v }),
+      'STOP unreadable: read 3'],
+  ]),
+  ...REJECTED_THREADS.flatMap(([what, v]): Case[] => [
+    [`unreadable: read 2: required_review_thread_resolution is ${what}, on a licence that would weigh it`,
+      with_(preQueue, rules(pull({ required_approving_review_count: 1, required_review_thread_resolution: v }))), 'STOP unreadable: read 2'],
+    [`unreadable: read 2: required_review_thread_resolution is ${what}, where no licence is weighed`,
+      with_(bare, rules(pull({ required_review_thread_resolution: v }))), 'STOP unreadable: read 2'],
+  ]),
+  ...[['a string', 'x'], ['an array', []], ['a number', 7], ['the boolean true', true], ['the boolean false', false], ['an empty string', ''],
+    ['zero', 0]].map(([what, v]): Case =>
+    [`unreadable: read 3: required_pull_request_reviews is ${what as string}, not an object`, classicCount(v), 'STOP unreadable: read 3']),
+  ['unreadable: read 3: a non-object required_pull_request_reviews is refused on route Q too, where the licence is never weighed',
+    with_(measured, (f) => ({ ...f, protection: ok({ ...(measured().protection as Answer).body as object, required_pull_request_reviews: [] }) })),
+    'STOP unreadable: read 3'],
+  // What stays valid: absence, zero, safe integers, booleans, and the sparse classic shapes.
+  ['a count of 0 with REVIEW_REQUIRED licenses nothing (read 2)', countRule(0), 'ROUTE U method=squash admin=never strict=no'],
+  ['a missing count defaults to 0 and licenses nothing (read 2)',
+    with_(bare, { ...rules({ type: 'pull_request', ruleset_id: 11, parameters: {} }), pr: prWith('REVIEW_REQUIRED') }),
+    'ROUTE U method=squash admin=never strict=no'],
+  ['the largest safe integer is a count above 0: with the licence holding, admin is licensed (read 2)',
+    with_(preQueue, rules(pull({ required_approving_review_count: 9007199254740991 }))), 'ROUTE G method=squash admin=licensed strict=no'],
+  ['a boolean false thread resolution waives nothing: the licence holds (read 2)',
+    with_(preQueue, rules(pull({ required_approving_review_count: 1, required_review_thread_resolution: false }))),
+    'ROUTE G method=squash admin=licensed strict=no'],
+  ['a boolean true thread resolution still fails the licence (read 2)',
+    with_(preQueue, rules(pull({ required_approving_review_count: 1, required_review_thread_resolution: true }))),
+    'STOP licence-fails: an approval is missing and --admin could skip conversation resolution'],
+  ['classic required_pull_request_reviews absent: no classic review configuration', classicCount(), 'ROUTE U method=squash admin=never strict=no'],
+  ['classic required_pull_request_reviews null: no classic review configuration', classicCount(null), 'ROUTE U method=squash admin=never strict=no'],
+  ['classic required_pull_request_reviews an object without a count: a sparse shape stays valid', classicCount({}),
+    'ROUTE U method=squash admin=never strict=no'],
+  ['classic required_approving_review_count 0 licenses nothing', classicCount({ required_approving_review_count: 0 }),
+    'ROUTE U method=squash admin=never strict=no'],
+  ['classic required_approving_review_count 2 is a missing approval: licensed', classicCount({ required_approving_review_count: 2 }),
+    'ROUTE U method=squash admin=licensed strict=no'],
+];
+
+// A required-check entry is a name. An entry that names nothing would become a requirement called null.
+const BAD_CHECK_ENTRIES: [string, unknown][] = [
+  ['null', null], ['an empty object', {}], ['an object with only an integration_id', { integration_id: 15368 }],
+  ['a null context', { context: null }], ['an empty context', { context: '' }], ['a numeric context', { context: 7 }],
+  ['an array context', { context: ['x'] }], ['an object context', { context: {} }], ['a boolean context', { context: true }],
+  ['a string', 'x'], ['a number', 7], ['an array', []], ['a boolean', true],
+];
+const ENTRIES: Case[] = [
+  ...BAD_CHECK_ENTRIES.map(([what, e]): Case => [`unreadable: read 2: a required_status_checks entry is ${what}`,
+    with_(bare, rules(rsc([e]))), 'STOP unreadable: read 2']),
+  // The list itself must be an array: iterated, an object would yield its values, and `{}` would yield no checks at all.
+  ['unreadable: read 2: a required_status_checks list that is an empty object', with_(bare, rules(rsc({} as unknown as unknown[]))),
+    'STOP unreadable: read 2'],
+  ['unreadable: read 2: a required_status_checks list that is an object whose values are named entries, not a list of them',
+    with_(bare, rules(rsc({ a: { context: 'build-pwa' } } as unknown as unknown[]))), 'STOP unreadable: read 2'],
+  ['unreadable: read 2: a required_status_checks list that is null', with_(bare, rules(rsc(null as unknown as unknown[]))),
+    'STOP unreadable: read 2'],
+  ['unreadable: read 2: a required_status_checks list that is a string', with_(bare, rules(rsc('build-pwa' as unknown as unknown[]))),
+    'STOP unreadable: read 2'],
+  ['unreadable: read 2: a nameless entry after a good one is still refused', with_(bare, rules(rsc([{ context: 'build-pwa' }, null]))),
+    'STOP unreadable: read 2'],
+  ['unreadable: read 2: a nameless entry before a good one is still refused', with_(bare, rules(rsc([{}, { context: 'build-pwa' }]))),
+    'STOP unreadable: read 2'],
+  ['unreadable: read 2: a nameless entry in a second rule is still refused', with_(bare, rules(rsc([{ context: 'build-pwa' }], 21), rsc([null], 22))),
+    'STOP unreadable: read 2'],
+  ['a genuine empty required_status_checks list is no rule checks', with_(bare, rules(rsc([]))),
+    'ROUTE U method=squash admin=never strict=no'],
+  ['a context keeps its bytes, spaces included: the name is judged as written', with_(bare, {
+    ...rules(rsc([{ context: ' padded name ' }])), checkruns: runs(run(' padded name ')) }), 'ROUTE G method=squash admin=never strict=no'],
+  ['a context is not trimmed: a run under the trimmed name does not satisfy it', with_(bare, {
+    ...rules(rsc([{ context: ' padded name ' }])), checkruns: runs(run('padded name')) }), 'WAIT not-reported:  padded name '],
+];
+
 /** Every argv the block may send: its reads (read 1 with its reviews, and the compare under read 3b), as GETs. */
 const READ = /^(pr view 42 --json baseRefName,headRefOid,state,reviewDecision|api (--paginate |-i )?repos\/\{owner\}\/\{repo\}(\/[^\s]*)?)$/;
 /** The same reads as the block's TEXT spells them, from the word `gh` to the end of its quoted path, followed only by
@@ -705,7 +887,8 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
       .toEqual([`api repos/{owner}/{repo}/compare/main...${HC}`]);
   });
 
-  it.each([...ROUTES, ...CHECKS, ...STOPS, LICENSED_NEVER, ...REQUESTS, ...IGNORES, ...LICENCE, ...MALFORMED])('%s', (_name, fx, line, env) => {
+  it.each([...ROUTES, ...CHECKS, ...STOPS, LICENSED_NEVER, ...REQUESTS, ...IGNORES, ...LICENCE, ...MALFORMED,
+  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES])('%s', (_name, fx, line, env) => {
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);
     expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);
@@ -728,6 +911,16 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   it('reads the head\'s checks only once read 1 has shown the head is handoffCommit', () => {
     const r = verdict(with_(measured, { pr: ok({ baseRefName: 'main', headRefOid: 'f'.repeat(40), state: 'OPEN', reviewDecision: '' }) })());
     expect(r.calls).toEqual(['pr view 42 --json baseRefName,headRefOid,state,reviewDecision']);
+  });
+
+  it('reads the head\'s check runs and its statuses once each, paginated: a later page is part of the answer', () => {
+    const r = verdict(measured());
+    expect(r.out).toBe(`${GOOD_Q}\n`);
+    expect(r.calls.filter((c) => c.includes('/commits/'))).toEqual([
+      `api --paginate repos/{owner}/{repo}/commits/${HC}/check-runs`, `api --paginate repos/{owner}/{repo}/commits/${HC}/status`]);
+    // The stub answers a call without --paginate with page 1 only, so dropping the flag cannot read the later pages.
+    const lost = verdict(with_(measured, { checkruns: pages(CR_PAGE_1, { total_count: 5, check_runs: 7 }) })());
+    expect(lost.out, 'a malformed page 2 of the check runs was not read').toBe(`${R5}\n`);
   });
 
   it('reads the PR\'s reviews once, paginated, right after the head guard and before read 2; a MERGED PR reads none', () => {

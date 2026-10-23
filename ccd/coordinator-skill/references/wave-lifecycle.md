@@ -939,12 +939,20 @@ if [ "$standing" = true ]; then
     || stop "changes-requested: operator decision required; key=$key"
 fi
 
-# Read 2: every rule of every active ruleset on that base. A type this block does not know is a stop.
+# Read 2: every rule of every active ruleset on that base. A type this block does not know is a stop. The fields the
+# approval licence weighs are typed here, where they are read (a present count is a non-negative safe integer, a present
+# thread resolution a boolean; a missing one keeps its default), and every required-check entry must be a named object.
 rules=$(gh api --paginate "repos/{owner}/{repo}/rules/branches/$base" | jq -sc '
+  def cnt: type == "number" and . == floor and . >= 0 and . <= 9007199254740991;
+  def typed($k; f): (has($k) | not) or (.[$k] | f);
   if length > 0 and all(.[]; type == "array")
      and all(.[][]; type == "object" and (.type | type) == "string"
        and (if .type | IN("pull_request", "merge_queue", "required_status_checks") then (.parameters | type) == "object" else true end)
-       and (if .type == "required_status_checks" then (.parameters.required_status_checks | type) == "array" else true end))
+       and (if .type == "pull_request" then (.parameters | typed("required_approving_review_count"; cnt)
+         and typed("required_review_thread_resolution"; type == "boolean")) else true end)
+       and (if .type == "required_status_checks" then (.parameters.required_status_checks | type) == "array"
+         and all(.parameters.required_status_checks[]; type == "object" and (.context | type) == "string" and (.context | length) > 0)
+         else true end))
   then flatten(1) else error("malformed") end') || stop "unreadable: read 2"
 unknown=$(jq -r '[.[].type] - ["pull_request", "merge_queue", "required_status_checks", "required_linear_history",
   "workflows", "code_scanning", "required_deployments", "required_signatures", "non_fast_forward", "deletion",
@@ -955,7 +963,11 @@ unknown=$(jq -r '[.[].type] - ["pull_request", "merge_queue", "required_status_c
 r3=$(gh api -i "repos/{owner}/{repo}/branches/$base/protection" 2>/dev/null)
 c3=$(head -n1 <<<"$r3" | cut -d' ' -f2) b3=$(tr -d '\r' <<<"$r3" | sed '1,/^$/d') via=3
 case "$c3" in
-  200) prot=$(jq -ce 'if type == "object" then . else error("not an object") end' <<<"$b3") || stop "unreadable: read 3" ;;
+  200) prot=$(jq -ce '
+         def cnt: type == "number" and . == floor and . >= 0 and . <= 9007199254740991;
+         if type == "object" and (.required_pull_request_reviews | . == null or (type == "object"
+              and ((has("required_approving_review_count") | not) or (.required_approving_review_count | cnt))))
+         then . else error("not a usable object") end' <<<"$b3") || stop "unreadable: read 3" ;;
   404) [ "$(jq -r .message <<<"$b3")" = "Branch not protected" ] || stop "unreadable: read 3 answered 404"
        prot='{}' ;;
   401|403) via=3b
@@ -1028,9 +1040,13 @@ gates=$(jq -nr --argjson r "$rules" --argjson p "$prot" '
 checks() {
   local cr st
   cr=$(gh api --paginate "repos/{owner}/{repo}/commits/$HC/check-runs" \
-    | jq -sc '[.[].check_runs[] | {name, status, conclusion, app: (.app | {id, slug})}]') || { echo unreadable; return; }
+    | jq -sc 'if length > 0 and all(.[]; type == "object" and (.check_runs | type) == "array") and all(.[].check_runs[]; type == "object")
+      then [.[].check_runs[] | {name, status, conclusion, app: (.app | {id, slug})}] else error("malformed") end') \
+    || { echo unreadable; return; }
   st=$(gh api --paginate "repos/{owner}/{repo}/commits/$HC/status" \
-    | jq -sc '[.[].statuses[] | {context, state}]') || { echo unreadable; return; }
+    | jq -sc 'if length > 0 and all(.[]; type == "object" and (.statuses | type) == "array") and all(.[].statuses[]; type == "object")
+      then [.[].statuses[] | {context, state}] else error("malformed") end') \
+    || { echo unreadable; return; }
   jq -nr --argjson q "$req" --argjson cr "$cr" --argjson st "$st" '
     def runs($x): [$cr[] | select(.name == $x.context and ($x.app == null or .app.id == $x.app))];
     def sts($x): if $x.app == null then [$st[] | select(.context == $x.context)] else [] end;
