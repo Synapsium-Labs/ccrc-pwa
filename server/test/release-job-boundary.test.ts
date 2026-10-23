@@ -353,6 +353,7 @@ const PLANTED: Array<[string, string, string]> = [
   ['a publish step env: is a whole-value expression', plant(RECEIVE_ENV, '        env: ${{ fromJSON(needs.build.outputs.tag) }}\n'), 'job publish step 3 carries an env: that is not a mapping'],
   ['a build job env: is a whole-value expression', afterBuildTimeout('    env: ${{ fromJSON(vars.E) }}\n'), 'job build carries a job-level env: that is not a mapping'],
   ['a publish step with: is a list', plant(PUBLISH_CHECKOUT, '      - uses: actions/checkout@v4\n        with:\n          - fetch-depth: 0\n      - uses: actions/download-artifact@v7\n'), 'job publish step 1 carries a with: that is not a mapping'],
+  ['a publish step env: is present with a null value', plant(RECEIVE_ENV, '        env:\n'), 'job publish step 3 carries an env: that is not a mapping'],
   // D-6727: a build job's verdict is its job's. continue-on-error lets a
   // failed build job pass, and a strategy runs it as several jobs whose
   // outputs one value cannot hold.
