@@ -41,7 +41,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync,
   statSync, lstatSync, chmodSync, readdirSync, appendFileSync, renameSync, rmSync,
-  symlinkSync, readlinkSync, utimesSync,
+  symlinkSync, readlinkSync, utimesSync, openSync, closeSync, constants as fsConstants,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14271,6 +14271,9 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       ['a comment ending in two CRs and no knob', bytes('# note\r\r\n'), 3],
       ['a bare CR inside a value and no knob', bytes('FOO=a\rb\n'), 3],
       ['a quoted value spanning lines over a UTF-8 comment and no knob', bytes('FOO="x\n# café\n"\n'), 3],
+      // Only a whole token counts: an `_OLD` or `OLD_` key beside a value the model refuses still reads 3.
+      ['an _OLD suffix key beside a non-ASCII value', bytes(`${K}_OLD=9999\nNOTE=café\n`), 3],
+      ['an OLD_ prefix key beside a non-ASCII value', bytes(`OLD_${K}=9999\nNOTE=café\n`), 3],
     ];
     const UNTAKEN = `rc 1 keep  why ${K} cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take (it reads only a plain KEY=value line)\n`;
     /** What the unit model cannot decide refuses with its own clause, naming the file (review 817, F1 and F2): each with that clause's opening. */
@@ -14284,6 +14287,8 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       // systemd skips a file whose values are not valid UTF-8, which the model does not check, so it decides neither 9 nor the default.
       ['a lone UTF-8 lead byte ending another key\'s value above the knob', bytes('FOO=', [0xc3], `\n${K}=9\n`), 'line 1 has a non-ASCII byte in a NAME=value line'],
       ['a CR lead', bytes(`\r${K}=4\n`), 'line 1 has a carriage return inside a line'],
+      // A token in a comment counts as naming the knob (review 839), so the model is asked and its refusal stands.
+      ['a comment naming the knob above a non-ASCII value', bytes(`# ${K} is tuned below\nNOTE=café\n`), 'line 2 has a non-ASCII byte in a NAME=value line'],
     ];
     /** `_bak_data_keep` over a ccrc.env holding `text`, the whole shell under LC_ALL=`locale`, on the Linux arm of the unit model
      *  (`_box_unit_env`; a macOS box models its launchd job's bash, `_box_unit_env_shell`, which refuses a CR anywhere). */
@@ -14344,6 +14349,21 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       const span = UNDECIDED[0]!;
       undecided(dataKeep(freshUpdateBox('ccrc-fx-w23-b17p-'), span[1], 'C'), span[2], `${span[0]}, no exposure file`);
       undecided(exposed((exp) => { writeFileSync(exp, 'CCRC_AUTH=on\n'); }, span[1], 'C'), span[2], `${span[0]}, an exposure file beside it`);
+    });
+    it('W23-B17: on macOS the model is asked even when no line names the knob, since the launchd job\'s bash can build the name: a backslash-newline inside it and a quoted declare refuse, a plain file reads 3 (D-6347, D-6365, review 839)', () => {
+      const darwin = (text: Buffer, locale: string): string => {
+        const home = freshUpdateBox('ccrc-fx-w23-b17m-');
+        mkdirSync(join(home, '.ccrc'), { recursive: true });
+        writeFileSync(join(home, '.ccrc', 'ccrc.env'), text);
+        const r = sourced(home, 'CCD_OS=darwin; _bak_data_keep; echo "rc $? keep ${BAK_DATA_KEEP} why ${BAK_DATA_KEEP_WHY}"', { LC_ALL: locale });
+        expect(r.code, r.stderr).toBe(0);
+        return r.stdout;
+      };
+      for (const loc of ['C', ...(UTF8 === null ? [] : [UTF8])]) {
+        undecided(darwin(bytes(`CCRC_ROLE=server\nCCRC_BACKUP_DATA_KEE\\\nP=50\n`), loc), 'line 2 is not a plain NAME=value line', `${loc}: the name split by a backslash-newline`);
+        undecided(darwin(bytes('declare CCRC_BACKUP_DATA_"KEEP"=50\n'), loc), 'line 1 is not a plain NAME=value line', `${loc}: a quoted declare`);
+        expect(darwin(bytes('CCRC_ROLE=server\n'), loc), `${loc}: a plain file that never names the knob`).toBe('rc 0 keep 3 why \n');
+      }
     });
     it.each(UNDECIDED)('W23-B17: the environment\'s 5 wins beside %s, with no refusal (D-6360, D-6365, review 839 F2)', (_shape, text) => {
       expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17v-'), text, 'C', { [K]: '5' })).toBe('rc 0 keep 5 why \n');
@@ -14423,7 +14443,13 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       const env = join(home, '.ccrc', 'ccrc.env');
       rmSync(env, { force: true });
       plant(env);
-      const g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"', {}, join(REPO, 'ccd', 'ccrc'), 60_000);
+      let g: Result;
+      try {
+        g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"', {}, join(REPO, 'ccd', 'ccrc'), 60_000);
+      } finally {
+        // The bound kills bash, not a grandchild blocked opening the FIFO; a writer that opens and closes it lets that one see EOF.
+        if (lstatSync(env, { throwIfNoEntry: false })?.isFIFO()) closeSync(openSync(env, fsConstants.O_RDWR | fsConstants.O_NONBLOCK));
+      }
       expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
       expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env is there but cannot be read — nothing pruned or thinned$/m);
       expect(g.stdout).toMatch(/^rc 1$/m);

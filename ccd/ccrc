@@ -23696,7 +23696,9 @@ _bak_ours() {
 # file, which on Linux no process that thins receives (its one consumer is ccrc.service; on macOS the launchd job sources it, so a knob
 # there reaches a console-driven update as its environment, a residual), and it is asked only when ccrc.env's bytes hold the knob as a
 # whole token, in a comment too: a file that never names the knob cannot set it, so its keep is 3 whatever the model or systemd
-# makes of the rest of it (the coordinator's ruling on review 839). The scan before it refuses what the model does not: ONE positive rule, over bytes (`LC_ALL=C`,
+# makes of the rest of it (the coordinator's ruling on review 839). That premise is systemd's: on macOS the model is asked whatever the
+# scan says, because the launchd job sources the file with bash, which can build the name without spelling it (a backslash-newline
+# inside it, a quoted `declare`), so there a file the model cannot decide still refuses (the review of fix round 4). The scan before it refuses what the model does not: ONE positive rule, over bytes (`LC_ALL=C`,
 # as D-3833 reads ccrc.env, so the box's locale cannot change an answer), on each line with its leading spaces, tabs and CRs gone
 # (the set `_box_env_value` trims): a comment (`#` or `;`, the set `_box_env_unit_whole` skips) is skipped; so is another key's
 # line, `[export ]NAME=` with NAME an identifier other than the knob (as D-3823 reads `export OLD_KEY=…`); a line that begins
@@ -23716,7 +23718,7 @@ _bak_data_keep() {
     case "$g" in 0) why="$f names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 1|4) ;; 3) why="$f is there but cannot be read" ;; *) why="$f could not be scanned" ;; esac
     # ccrc.env alone: a path that cannot exist stands in for the exposure file, which no process that thins receives (review 839). Never
     # the empty spelling, `CCRC_EXPOSURE_FILE=`: the model's own refusal of an undecidable ccrc.env compares its source with that path.
-    if [ "$g" = 1 ]; then CCRC_EXPOSURE_FILE="$f/." _box_unit_env CCRC_BACKUP_DATA_KEEP; case $? in 0) BAK_DATA_KEEP="$BUE_VAL" ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
+    if [ "$g" = 1 ] || { [ "$g" = 4 ] && [ "${CCD_OS:-linux}" = darwin ]; }; then CCRC_EXPOSURE_FILE="$f/." _box_unit_env CCRC_BACKUP_DATA_KEEP; case $? in 0) BAK_DATA_KEEP="$BUE_VAL" ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
     [ -z "$why" ] || { BAK_DATA_KEEP_WHY="CCRC_BACKUP_DATA_KEEP cannot be measured: ${why/#"$HOME"/\~}"; return 1; }
   fi
   BAK_DATA_KEEP="${BAK_DATA_KEEP:-3}"
