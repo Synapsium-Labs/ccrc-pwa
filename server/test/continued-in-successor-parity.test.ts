@@ -2,7 +2,7 @@
 //
 // A `continued-in` marker names a successor UUID, not a path, so each reader
 // has to decide where to look for it. `ccd` (`_follow_continued_in` ->
-// `_ci_transcript_path`) looks only under the session's OWN config dir, at
+// `_ci_addrs`, `_ci_extant`) looks only under the session's OWN config dir, at
 // its own workdir's project dir. The server's walk (`resolveTranscript`) used
 // to look everywhere the ladder looks — the uuid glob over every project dir,
 // then every other account's config dir — so a marker naming a uuid that
@@ -149,6 +149,6 @@ describe('continued-in successor: ccd and the server agree on where it may live 
       configDir: ownCfg(), dir: s.workdir, registryWorkdir: s.workdir, uuid: A,
     });
     expect(r).toMatchObject({ kind: 'found', path: want });
-    expect(h.sh(`_ci_transcript_path ${ID} "$(_cfg_dir ${W})" ${B}`)).toBe(want);
+    expect(h.sh(`_ci_extant "$(_ci_addrs ${ID} "$(_cfg_dir ${W})" ${B})" && printf %s "$_CI_F"`)).toBe(want);
   });
 });
