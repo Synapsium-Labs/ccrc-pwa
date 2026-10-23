@@ -354,7 +354,10 @@ export function parseExpireResult(sessionId: string, stdout: string, stderr: str
  *  the row). `ok:false` is a store this pass could not read: every row is ineligible. */
 export type ExpiryStoreRead =
   | { readonly ok: false; readonly detail: string }
-  | { readonly ok: true; readonly openWorker: boolean; readonly openClaimant: boolean; readonly reviewing: boolean };
+  | { readonly ok: true; readonly openWorker: boolean; readonly openClaimant: boolean; readonly reviewing: boolean;
+      /** A readable-marked CHILD only (spec §4 "What stays excluded"): has it EVER coordinated, over terminal runs too
+       *  (`childReclaimHasCoordinated`)? `null` is a read that threw — doubt keeps. Absent: not asked (not a child). */
+      readonly coordinated?: boolean | null };
 
 export interface ArchivedExpiryInput {
   readonly sessionId: string;
@@ -421,6 +424,7 @@ export function archivedExpiryStoreSkip(store: ExpiryStoreRead): ArchivedExpiryS
   if (!store.ok) return 'store-unreadable';
   if (store.openWorker) return 'open-run';
   if (store.openClaimant) return 'coordinating';
+  if (store.coordinated === true || store.coordinated === null) return 'coordinating';
   if (store.reviewing) return 'review-open';
   return null;
 }

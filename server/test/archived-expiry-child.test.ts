@@ -130,6 +130,14 @@ describe('the verdict: a child mark is the child arm’s (D-6641, spec 2.7.4)', 
     expect(archivedExpiryVerdict({ ...base, child: { kind: 'unreadable' }, childArm: { cap: true, live: true } }))
       .toEqual({ eligible: false, why: 'child' });
   });
+  it('a child that ever coordinated (or whose read is in doubt) is kept; an unasked store is not', () => {
+    const arm = { cap: true, live: true };
+    const st = (coordinated?: boolean | null) => ({ ok: true as const, openWorker: false, openClaimant: false, reviewing: false,
+      ...(coordinated === undefined ? {} : { coordinated }) });
+    expect(archivedExpiryVerdict({ ...base, childArm: arm, store: st(true) })).toEqual({ eligible: false, why: 'coordinating' });
+    expect(archivedExpiryVerdict({ ...base, childArm: arm, store: st(null) })).toEqual({ eligible: false, why: 'coordinating' });
+    expect(archivedExpiryVerdict({ ...base, childArm: arm, store: st(false) })).toEqual({ eligible: true });
+  });
   it('the store rules and the instant apply to a child as to anyone', () => {
     const arm = { cap: true, live: true };
     expect(archivedExpiryVerdict({ ...base, childArm: arm, store: { ok: true, openWorker: true, openClaimant: false, reviewing: false } }))
@@ -199,6 +207,36 @@ describe('the lane: an archived child past its instant (D-6641)', () => {
     f.bindWorker('demo-a');
     await threePasses(f);
     expect(expireArgv(f, 'ws-expire')).toEqual([]);
+  });
+});
+
+describe('a child that coordinated is never taken (spec §4, what stays excluded)', () => {
+  const coordinated = (f: Fixture): void => {
+    const r = f.coord.openRun({ program: 'p', title: 'p', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-a' });
+    if (!('id' in r)) throw new Error('openRun refused');
+    f.coord.closeRun({ runId: r.id, finalState: 'failed', causedBy: 'test', handoffCommit: null, program: 'p', viaClosing: false });
+  };
+  it('lane: a terminal run once claimed by the child keeps it from ws-expire, armed on both markers', async () => {
+    const f = await fixture();
+    f.plant('demo-a', OLD, { child: '7' }); f.touch(EXPIRE_CHILD_LIVE_MARKER); f.touch(EXPIRE_LANE_LIVE_MARKER);
+    coordinated(f);
+    expect(f.coord.childReclaimCoordinatorClaims().has('demo-a')).toBe(true);
+    await threePasses(f);
+    expect(expireArgv(f, 'ws-expire')).toEqual([]);
+  });
+  it('executor: re-read at the act, a coordinated child defers as coordinating', async () => {
+    const f = await fixture();
+    f.plant('demo-a', OLD, { child: '7' }); f.touch(EXPIRE_CHILD_LIVE_MARKER); f.touch(EXPIRE_LANE_LIVE_MARKER);
+    coordinated(f);
+    const calls: string[][] = [];
+    const home = mkTmp('ccrc-expiry-exec2-'); seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: home } as never);
+    const deps = { ...testDeps(home, async (_c: string, a: string[]) => { calls.push(a); return { code: 1, stdout: '', stderr: '' }; }),
+      cfg: { ...cfg, registryDir: f.reg }, coord: f.coord,
+      fleetState: { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: ['ws-audit', 'ws-expire', EXPIRE_CAP, ACTOR_FLAGS_CAP, EXPIRE_CHILD_CAP] } };
+    const result = await expireArchived(deps as never, { sessionId: 'demo-a', archivedAt: OLD, expiresAt: OLD + WEEK, childOf: 7, rowUuid: 'u-demo-a' });
+    expect(result).toMatchObject({ kind: 'deferred', why: 'coordinating' });
+    expect(calls).toEqual([]);
   });
 });
 

@@ -8,6 +8,7 @@ import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, EXPIRE_CAP, EXPIRE_CHILD_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
+import { childReclaimHasCoordinated } from './childReclaim.js';
 import { readSwitches } from '../../../shared/switches.js';
 import {
   EXPIRE_ASKS_AGAIN_CADENCE, EXPIRE_CHILD_LIVE_MARKER, EXPIRE_HALT_WORDS, EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit,
@@ -62,6 +63,8 @@ export interface ExpireArchivedRequest {
   readonly expiresAt: number;
   /** The minting run, when the row carries a readable child marker: `--child-of` rides every call for it (D-6641). */
   readonly childOf?: number;
+  /** The uuid of the registry row the lane judged (`childReclaimRowUuid`), for the child's coordination fence. */
+  readonly rowUuid?: string | null;
 }
 
 /** The executor's answer, as the lane folds it (`ArchivedExpiryOutcome`), plus what the feed row needs. */
@@ -95,7 +98,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
   const first = await expirySwitches(deps);
   if (first.kind === 'paused') return answer({ kind: 'deferred', why: 'paused-at-server', detail: first.detail });
   // 3 — the store's conjuncts, RE-READ for this row now: the lane's read is a pass old.
-  const kept = archivedExpiryStoreSkip(readExpiryStore(deps.coord, sessionId));
+  const kept = archivedExpiryStoreSkip(readExpiryStore(deps.coord, sessionId, childOf === undefined ? undefined : { rowUuid: req.rowUuid ?? null }));
   if (kept !== null) {
     return answer({ kind: 'deferred', why: kept, detail: `the coordination store, re-read at the act, keeps ${sessionId} (${kept})` });
   }
@@ -190,7 +193,7 @@ export function expiryReviewing(coord: Pick<CoordStore, 'runsNamingSession' | 'r
 /** The store's conjuncts for ONE row, AT THE ACT — the destructive-grade reads child reclamation's executor takes at
  *  its own (`openRunsForSession`, `openRunsClaimedBy`), then the review rule. Any read that fails is the store's
  *  failure: `ok:false`, and the act waits. */
-export function readExpiryStore(coord: CoordStore, id: string): ExpiryStoreRead {
+export function readExpiryStore(coord: CoordStore, id: string, child?: { readonly rowUuid: string | null }): ExpiryStoreRead {
   try {
     const worker = coord.openRunsForSession(id);
     if (!worker.ok) return { ok: false, detail: worker.detail };
@@ -200,10 +203,17 @@ export function readExpiryStore(coord: CoordStore, id: string): ExpiryStoreRead 
     const openClaimant = claims.siblings.length > 0;
     if (openWorker || openClaimant) return { ok: true, openWorker, openClaimant, reviewing: false };
     const review = expiryReviewing(coord, id);
-    return review.ok ? { ok: true, openWorker, openClaimant, reviewing: review.reviewing } : review;
+    if (!review.ok) return review;
+    return { ok: true, openWorker, openClaimant, reviewing: review.reviewing, ...(child === undefined ? {} : { coordinated: childEverCoordinated(coord, id, child.rowUuid) }) };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/** A child that EVER coordinated is never taken (spec §4): the reclaim lane's own fence, over terminal runs too.
+ *  A read that throws is `null` — doubt keeps. */
+export function childEverCoordinated(coord: CoordStore, id: string, rowUuid: string | null): boolean | null {
+  try { return childReclaimHasCoordinated(coord, id, Date.now(), rowUuid); } catch { return null; }
 }
 
 /** The lane's LEARNING read (wave 3b): the audit alone, to learn when this archive expires — ccd's own instant, so
