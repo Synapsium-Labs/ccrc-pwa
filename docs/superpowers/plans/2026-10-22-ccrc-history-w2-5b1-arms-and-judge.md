@@ -2067,7 +2067,9 @@ const B1T2_IDS = { LN: 'La1b2c3d4e5f6a7b8c9d0', L2: 'La1b2c3d4ff0011223344', P: 
 /** A leaf id lib's card grammar refuses (uppercase hex): a damaged store's shape. */
 const B1T2_BAD_LEAF = 'LA1B2C3D4E5F6A7B8C9D0';
 const b1t2Text = (text: string): unknown[] => [{ type: 'text', text }];
-const b1t2Bash = (id: string): unknown[] => [{ type: 'tool_use', id, name: 'Bash', input: { command: B1T2_CMD } }];
+/** p1 carries a command of its own: FTS5 answers a rowid-constrained MATCH on a deleted contentless row with ANOTHER row that matches
+ *  the phrase, so a second entry holding the span source's text would hide an unindexed source from the (b) case. */
+const b1t2Bash = (id: string, command: string): unknown[] => [{ type: 'tool_use', id, name: 'Bash', input: { command } }];
 type B1t2RowSpec = { key: string; type: string; provenance: string; ts: number; body: unknown; files: number[]; model?: string; summary?: boolean };
 /** Transcript 1's rows, in order. File 2 is the live copy and holds both boundaries; file 1 is a retired copy that also
  *  holds N, and alone holds the three same-millisecond rows outside N's holding copy. p1 sits after N in the holding copy,
@@ -2080,7 +2082,7 @@ const B1T2_ROWS: B1t2RowSpec[] = [
   { key: 'mIn', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T, body: b1t2Text(`noted ${B1T2_PHRASE} inside`), files: [2] },
   { key: 'bn', type: 'system', provenance: 'harness', ts: B1T2_T, body: b1t2Text('compact boundary one'), files: [1, 2] },
   { key: 'sn', type: 'user', provenance: 'summary', summary: true, ts: B1T2_T + 10, body: b1t2Text('Summary: the fixture card build ran.'), files: [2] },
-  { key: 'p1', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T - 500, body: b1t2Bash('toolu_b1t2p1'), files: [2] },
+  { key: 'p1', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T - 500, body: b1t2Bash('toolu_b1t2p1', 'npm run fixture-other'), files: [2] },
   { key: 'mOutBefore', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T - 1, body: b1t2Text(`noted ${B1T2_PHRASE} before`), files: [1] },
   { key: 'mOut', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T, body: b1t2Text(`noted ${B1T2_PHRASE} at`), files: [1] },
   { key: 'mOutAfter', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T + 1, body: b1t2Text(`noted ${B1T2_PHRASE} after`), files: [1] },
@@ -2477,7 +2479,7 @@ b1t2describe('W2-5b1 Task 2: the as-of pieces', () => {
 cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5b1 Task 2: the as-of pieces'
 ```
 
-Expected: 25 selected, 25 failed, and no collection error. `b1t2Plant` uses only lib, store.mjs and sweep.mjs, so the fixture builds. Each case fails at its first new export:
+Expected: 25 selected, 24 failed and 1 passed, and no collection error (measured at Task 2: the case "a cut of another boundary is the caller's defect" expects a `TypeError`, and `B1T2.cardOf is not a function` is one, so it passes vacuously on the unguarded code; T2-M22 below measures its guard). `b1t2Plant` uses only lib, store.mjs and sweep.mjs, so the fixture builds. Each case fails at its first new export:
 - `armCut`, `cardOf`, `armPayloads`, `recheckQuestion`, `recheckBatch` and `prependCard` throw `TypeError: … is not a function`;
 - the `CARD_PARENTS` case reads `undefined`;
 - the `RECON_DISCARDS` case reads `['body-unrenderable']`;
@@ -2789,7 +2791,7 @@ cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts
 ```
 
 Expected:
-- the first command: 25 passed;
+- the first command: 25 passed (measured, after the fixture correction named under Step 6: p1 carries its own command, because FTS5 answers a rowid-constrained MATCH on a deleted contentless row with another row that matches the phrase, so with the span source's command also in p1 the (b) case's unindexed source stayed answerable);
 - the second: every case passes, W2-5a's `sourceQuiz` describe included. That describe runs the refactored mining over a real sweep's store, so D-6306's discard count and the `sha-short` drop are re-measured.
 
 Two corrections are allowed. Each changes the test file in this task's commit, and the prediction it corrects is recorded in this plan's text by a separate `docs(plan): … (W2-5b1 Task 2)` commit touching only this plan (R25):
@@ -2806,8 +2808,8 @@ Confirm that the named case(s) red, and record each red case's name in the task'
 
 | # | Mutation in `deploy/history-replay.mjs` | Must red |
 |---|---|---|
-| T2-M1 | in `cardOf`, `    parent = hidden ? 'hidden' : 'shown';` + `    if (!hidden) parentId = parents[0];` → `    parent = 'shown';` + `    parentId = parents[0];` (W2-D75's CONTROL) | "at N the card names leaf N and no parent …" |
-| T2-M2 | `displayPrefixes([...family, String(leaf.node_id), …])` → `displayPrefixes([String(leaf.node_id), …])` (the card's own ids only) | "at N …", "at N2 …", "display prefixes run over the family's whole node-id set …" |
+| T2-M1 | in `cardOf`, `    parent = hidden ? 'hidden' : 'shown';` + `    if (!hidden) parentId = parents[0];` → `    parent = 'shown';` + `    parentId = parents[0];` (W2-D75's CONTROL) | "at N the card names leaf N and no parent …" (measured: and the first payload case, which builds the card at N) |
+| T2-M2 | `displayPrefixes([...family, String(leaf.node_id), …])` → `displayPrefixes([String(leaf.node_id), …])` (the card's own ids only) | "at N …", "at N2 …", "display prefixes run over the family's whole node-id set …" (measured 5 red: those three, "a leaf with two depth-1 parents …" and the first payload case) |
 | T2-M3 | `  if (parents.length > 1) parent = 'several';` + `  else if (parents.length === 1) {` → `  if (parents.length >= 1) {` | "a leaf with two depth-1 parents names none …" |
 | T2-M4 | delete `  if (leaf === undefined) return reconDiscard('leaf-absent');` | "store data never throws …" (a `TypeError` escapes) |
 | T2-M5 | the `let line; try { … } catch (e) { … }` block → `  const line = cardLine({ leaf: shown.get(String(leaf.node_id)), parent: parentId === null ? null : shown.get(parentId) });` | "store data never throws …" (its card-unrenderable half) |
@@ -2830,11 +2832,13 @@ Confirm that the named case(s) red, and record each red case's name in the task'
 | P-M1 | in `SAME_MS_SQL`, `  WHERE e.ts_ms = :t` → `  WHERE e.ts_ms <= :t` | "C1: the same-millisecond count …" (counts 2: mOutBefore and mOut) |
 | P-M2 | delete `SAME_MS_SQL`'s `    AND NOT EXISTS (SELECT 1 FROM memberships mb WHERE mb.file_id = :hold AND mb.entry_id = e.entry_id)` line, closing the template literal after the line before it, and delete `hold: ctx.holdingFileId,` from the bound object (W2-5a's M15 shape) | "C1 …" (counts 2: mIn and mOut) |
 | P-M3 | in `boundaryCopyOf`, `  const holding = holdingCopyOf(rs.db, { entry_id: boundary.entry_id, transcript_pk: boundary.transcript_pk });` → `  const holding = rs.db.prepare('SELECT min(file_id) AS file_id FROM memberships WHERE entry_id = ?').get(boundary.entry_id);` (the first copy, never lib's pick) | "C1 …" (admission's file 1 against the cut's file 2) |
-| P-M4 | in `admissionStmts`' `boundaries: db.prepare(` line, `e.ts_ms AS ts_ms` → `(SELECT max(x.ts_ms) FROM entries x WHERE x.transcript_pk = b.transcript_pk) AS ts_ms` | "C1 …" (T_N is the transcript's newest stamp) |
+| P-M4 | in `admissionStmts`' `boundaries: db.prepare(` line (anchor on the unique prefix `boundaries: db.prepare(\`SELECT b.entry_id AS entry_id, e.uuid AS uuid, e.ts_ms AS ts_ms,`: `e.ts_ms AS ts_ms` alone matches 4 times after this task, 3 at the base), `e.ts_ms AS ts_ms` → `(SELECT max(x.ts_ms) FROM entries x WHERE x.transcript_pk = b.transcript_pk) AS ts_ms` | "C1 …" (T_N is the transcript's newest stamp) |
 | K-M1 | in `keptMembersOf`, `uuids: [...new Set(v)] };` → `uuids: [...new Set(v)].slice(1) };` | "C2: on a readable kept list …" |
 | K-M2 | in `keptMembersOf`, `  if (!Array.isArray(v) \|\| !v.every((x) => typeof x === 'string')) return reconDiscard('kept-unreadable');` → `  if (!Array.isArray(v)) return { state: 'kept', uuids: [] };` (the fold W2-D33 forbids) | "C2 CONTROL: a kept list that is tombstone …", "… object …" and "… mixed …" |
 
 P-M1 to P-M4 and K-M1 to K-M2 also red W2-5a cases. That is expected: the parity pins must red on the same faults.
+
+Measured at Task 2 (the Task 2 filter): every row above reds the case(s) it names, `cmp` printing nothing after each restore. Differences from the table: T2-M1 and T2-M2 also red the payload case (above); T2-M3 to T2-M5, T2-M8 to T2-M10 and T2-M12 to T2-M21 red exactly the case named; T2-M6 and T2-M7 red both payload cases; T2-M11 reds the (c) case and the batch case; T2-M16 the fact-unmined case and the batch case. P-M1 and P-M2 counted 2 against 1; P-M3 reds nine cases of the filter, C1 among them (the cut's holding file 2 against admission's file 1); P-M4 read T_N 1760000060010 (the transcript's newest stamp) against 1760000000000; K-M1 reds "C2: on a readable kept list …" and the first payload case (the kept rendering); K-M2 reds the tombstone, object and mixed C2 CONTROLs (3), not the null one. One mutant is added, T2-M22: in `cardOf`, delete the `if (cut.boundaryEntryId !== Number(boundaryEntryId)) { throw new TypeError(…); }` block; it reds "a cut of another boundary is the caller's defect …".
 
 - [ ] **Step 7: Run the neighbours that read these files.** In the foreground, with a timeout of at least 600000 ms. A red file is re-run alone before it is called a break (CLAUDE.md's load flakes):
 
