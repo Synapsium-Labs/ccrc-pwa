@@ -288,6 +288,21 @@ describe('the idle-compact nudge: the throttle sits in tick, the single flight i
     expect(m.mock.calls.length).toBeGreaterThan(0);
   });
 
+  it('a tick at the cadence while a pass still runs spends the slot: the next tick after the pass settles does not start another', async () => {
+    const r = rig();
+    let settle: () => void = () => {};
+    const m = vi.spyOn(r.w, 'sweepIdleCompactNudge').mockImplementation(() => new Promise<void>((res) => { settle = res; }));
+    await tickAt(r, NOW);
+    expect(m.mock.calls.length, 'the first tick did not start the pass').toBe(1);
+    await tickAt(r, NOW + IDLE_NUDGE_SWEEP_MS);
+    expect(m.mock.calls.length, 'a second pass started over the first').toBe(1);
+    settle(); await settleTurns();
+    await tickAt(r, NOW + IDLE_NUDGE_SWEEP_MS + 2_000);
+    expect(m.mock.calls.length, 'the skipped beat did not spend its slot').toBe(1);
+    await tickAt(r, NOW + 2 * IDLE_NUDGE_SWEEP_MS);
+    expect(m.mock.calls.length, 'the next cadence did not run the lane').toBe(2);
+  });
+
   it('the method keeps one pass at a time: a second call while a session\'s nudge never settles starts no other', async () => {
     const r = rig();
     prime(r);
