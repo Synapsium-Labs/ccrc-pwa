@@ -472,7 +472,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
       expect(doorCounts(), `${width}px`).toMatchObject({ inbox: 1, mail: 0, unread: 0 });
       cleanup();
     }
-    // Interrupt records and records at or before the ack are not unread.
+    // Interrupt records are not unread (the ack's own stamp is the next case's).
     stubAt(1280);
     act(() => useFleetStore.setState({ feed: unreadFeed(0) }));
     mount('/');
@@ -563,6 +563,7 @@ describe('the desk (T2g): one count, in the status bar', () => {
     cleanup();
     act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5 } }));
     mount('/');
+    expect(document.querySelector('.shell-nav section[aria-label="Fleet"]')).not.toBeNull();
     expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
   });
 
@@ -577,7 +578,7 @@ describe('the desk (T2g): one count, in the status bar', () => {
     act(() => { setSkin(REFINED); });
     stubAt(1280);
     mount('/', []);
-    expect(document.querySelector('.shell-nav')).not.toBeNull();
+    expect(document.querySelector('.shell-nav section[aria-label="Fleet"]')).not.toBeNull();
     expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
   });
 });

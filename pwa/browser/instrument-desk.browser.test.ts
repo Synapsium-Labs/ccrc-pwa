@@ -1,9 +1,12 @@
-// Instrument's desk, measured in a real Chrome over the production build (W2 desk polish, Task T2e, D-6335). The jsdom
-// suites (test/instrument-shell.test.tsx, test/instrument-list.test.tsx) pin the rules that produce this geometry;
-// this file holds the geometry: no empty fourth column (the reading column is 860 at 1600 and the detail reaches the
-// viewport's edge), one head in the list column (the first row starts higher), and a status row of two lines and
-// about 40 px under a fine pointer (three lines, the name, `waiting · needs you` and the context, when a long name and
-// the state do not fit side by side, and under 61 px), which under a touch screen is the tap floor again.
+// Instrument's desk, measured in a real Chrome over the production build (W2 desk polish, Task T2e, D-6335; T2g, D-6715).
+// The jsdom suites (test/instrument-shell.test.tsx, test/instrument-list.test.tsx) pin the rules that produce this
+// geometry; this file holds the geometry: no empty fourth column (the reading column is 860 at 1600 and the detail
+// reaches the viewport's edge), no head in the list column (T2e removed its chrome and T2g its count line; this fixture
+// has no pool lag, so nothing else draws there and the first row starts higher), a status row of two lines and at most
+// 42 px under a fine pointer when its name and state fit (every row at most three lines and under 61 px: the name,
+// `waiting · needs you` and the context, when a long name and the state do not fit side by side), which under a touch
+// screen is the tap floor again, the status bar's count whole at 900 under both pointers, and the rail's unread pill on
+// its Inbox door's top-right corner.
 //
 // The fixture is 14 sessions across two projects, in every bucket (3 attention, 3 working, 3 done, 3 idle, 2 dead: nine
 // open rows by default), with realistic workspace names of 17 to 25 characters, like a fleet's slugs, because a row's
