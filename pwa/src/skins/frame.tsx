@@ -82,7 +82,10 @@ export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps):
   }, [set]);
   return (
     <SkinSetProvider set={set}>
-      <div className={`app-shell ${set.frameClass}`} data-view={view}>
+      {/* `data-inspector` is a PART FACT, never a skin-id comparison (W2 desk polish T2e, D-6335): `placed` when the set
+          has an Inspector part, `none` when it does not. A skin's sheet keys its inspector track on it, so a set that
+          places no inspector draws no empty column for one (Instrument's 320px fourth track at >=1600, which S12 fills). */}
+      <div className={`app-shell ${set.frameClass}`} data-view={view} data-inspector={Inspector !== null ? 'placed' : 'none'}>
         <a key="skip" className="skip-link" href={`#${CONTENT_ID}`} onClick={skipToContent}>
           Skip to content
         </a>

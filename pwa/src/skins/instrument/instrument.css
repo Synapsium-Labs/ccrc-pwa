@@ -13,7 +13,7 @@
     grid-template-columns: 52px 340px minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
-  /* The fourth column is the inspector's (S12): reserved, empty until then. */
+  /* The fourth column is the inspector's (S12), and exists only with an Inspector part (below, at >=1600). */
   .ins-frame .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
@@ -52,8 +52,15 @@
   }
 }
 
+/* W2 desk polish T2e (D-6335): the list column widens at 1600, and the 320px fourth track appears only with what fills
+   it. `ShellFrame` sets `data-inspector` from the set's Inspector part (a part fact, never a skin id), so Instrument,
+   which places none until S12, draws no empty column: the detail reaches the viewport's edge and the reading column is
+   its full 860 at 1600, not 808. S12 sets the part, and the track comes with it. */
 @media (min-width: 1600px) {
   .ins-frame {
+    grid-template-columns: 52px 420px minmax(0, 1fr);
+  }
+  .ins-frame[data-inspector='placed'] {
     grid-template-columns: 52px 420px minmax(0, 1fr) 320px;
   }
 }
@@ -158,6 +165,14 @@
   /* The track's width: the rail's border leaves 51px of it, and a 52px item would cut its own ring. */
   width: 100%;
   min-height: var(--tap-min);
+}
+/* The Inbox door's unread count (T2e fix round 1, D-6335): the pill is `<CountBadge>`'s (its colours are the primitive's);
+   here it only sits on the door's top-right corner, over the icon's box, and takes no clicks of its own. */
+.ins-rail-count {
+  position: absolute;
+  top: var(--sp-1);
+  right: var(--sp-1);
+  pointer-events: none;
 }
 /* The active item: a 2px accent rail on its leading edge, beside `aria-current="page"`. */
 .ins-rail-item[aria-current='page']::before {
@@ -317,4 +332,66 @@
   padding: 0 var(--sp-2) var(--sp-1) calc(var(--sp-2) * 3);
   font-size: var(--fs-xs);
   overflow-wrap: anywhere;
+}
+
+/* W2 desk polish T2e (D-6335): the two-line dense row. Under a fine pointer at a desk a status row is the name with its
+   state word, then its context, about 40px instead of three lines at 61: no fact is dropped (D-5545), a long name still
+   wraps, and the density is the sheet's own `--row-h` (32 under a fine pointer) instead of `--tap-min`. Under a coarse
+   pointer, or below 900, none of this applies and every row and control keeps the tap floor. CSS only: `SessionLine`
+   keeps its three children, and the wrapping flex row below puts the second (the state word) beside the first. */
+@media (min-width: 900px) and (pointer: fine) {
+  /* A wrapping flex row (fix round 1, ruling on F2): the name and the state word share the first line when they fit
+     side by side, the state at its own width and pushed to the line's end; the context takes a line of its own. A flex
+     line breaks on the items' max-content sizes, so the state drops to its own line ONLY when the name and it do not
+     fit together, and the name then has the whole line: a long needs-you row is three lines (name, state, context),
+     never four, and a short one stays two. A row without a context is one line, on the floor. */
+  .ins-row .sess-body {
+    display: flex;
+    flex-flow: row wrap;
+    align-items: baseline;
+    align-content: center;
+    column-gap: var(--sp-2);
+    row-gap: calc(var(--sp-1) / 2);
+    min-height: var(--row-h);
+  }
+  .ins-row .sess-body > .sess-open {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .ins-row .sess-body > .sess-meta:not(.sess-meta--context) {
+    flex: 0 0 auto;
+    margin-inline-start: auto;
+  }
+  .ins-row .sess-meta--context {
+    flex: 1 0 100%;
+  }
+  /* The shared sheet centres the lamp and the actions button on a three-line stack with a margin worked out from the
+     tap floor; here the lamp sits on the name's line (it is as tall as that line) and the button on the row's middle.
+     The lamp is the row's first cell and is reached as that: a skin's sheet never names the lamp's class, which is
+     StatusDot's (skin-boundary (b)). */
+  .ins-row .sess-line {
+    padding-block: calc(var(--sp-1) / 2);
+  }
+  .ins-row .sess-line > :first-child {
+    margin-top: 0;
+  }
+  /* A row with no context fact (a main checkout) has slack only when it is ONE line, and the name is centred in the
+     floor. So its name's line IS the floor high, the text centred in it, and the lamp sits at that line's middle: on the
+     name's first line whether the state stays beside the name or drops under it (T2e fix rounds 1 and 2, F5). The
+     lamp's own height is the shared sheet's (`--fs-base` x `--lh-tight`). */
+  .ins-row .sess-line:not(:has(.sess-meta--context)) .sess-body > .sess-open {
+    min-height: var(--row-h);
+    align-items: center;
+  }
+  .ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child {
+    margin-top: calc((var(--row-h) - var(--fs-base) * var(--lh-tight)) / 2);
+  }
+  .ins-row .sess-actions {
+    align-self: center;
+    margin-top: 0;
+  }
+  .ins-group-head,
+  .ins-toggle-option {
+    min-height: var(--row-h);
+  }
 }
