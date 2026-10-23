@@ -185,7 +185,7 @@ These twenty numbers, starting at D-6346, were issued to run 775. This plan defi
   - No automatic arm reads an older backup's data set (the map in the header). `_upd_report` reads this run's own only. The keep-set's data keep (`BAK_KEEP_DATA`, D-4641) is the newest earlier valid data set, and at the knob's lowest value, 2, `thin` keeps exactly own plus that one, so both base guarantees survive at every allowed value.
   - The operator asked to keep the code of every kept backup, for quick flips and by-hand recovery.
   - Whole-dir pruning stays the newest-`CCRC_BACKUP_KEEP` rule it is today.
-- **D-6347.** The knob is `CCRC_BACKUP_DATA_KEEP`, default **3**, a whole number from **2** to 9999, validated by `_bak_data_keep` through `_keep_ok` plus a lower bound of 2. `0` and `1` are refused, never clamped. An invalid value stops the prune and the thinning alike: `_bak_gc` WARNs `… — nothing pruned or thinned` and returns 1; `_bak_prune` dies `… — nothing was pruned or thinned`, after the backup was taken, as an invalid `CCRC_BACKUP_KEEP` does. So does a `ccrc.env` refused as unmeasured (D-6365), but the unit model's undecidable answer (its rc 3) refuses only a `ccrc.env` whose bytes hold `CCRC_BACKUP_DATA_KEEP` as a whole token (no `[A-Za-z0-9_]` byte on either side), anywhere, a comment included. A file that never names the knob cannot set it, so its keep is 3 whatever systemd does with the file, and the prune and the thinning run (amended on review 839: as first built in fix round 3, any file the model could not decide stopped the prune, where `main` pruned). That premise is systemd's. On macOS the model is asked whatever the scan says, because the launchd job sources `ccrc.env` with bash, which can build the name without spelling it (the review of fix round 4). `_keep_why` takes an optional third argument, the lowest allowed value (default 0), so the refusal says "from 2 to 9999". Why 2 is the floor:
+- **D-6347.** The knob is `CCRC_BACKUP_DATA_KEEP`, default **3**, a whole number from **2** to 9999, validated by `_bak_data_keep` through `_keep_ok` plus a lower bound of 2. `0` and `1` are refused, never clamped. An invalid value stops the prune and the thinning alike: `_bak_gc` WARNs `… — nothing pruned or thinned` and returns 1; `_bak_prune` dies `… — nothing was pruned or thinned`, after the backup was taken, as an invalid `CCRC_BACKUP_KEEP` does. So does a `ccrc.env` refused as unmeasured (D-6365), but the unit model's undecidable answer (its rc 3) refuses only a `ccrc.env` whose bytes hold `CCRC_BACKUP_DATA_KEEP` as a whole token (no `[A-Za-z0-9_]` byte on either side), anywhere, a comment included. A file that never names the knob cannot set it, so its keep is 3 whatever systemd does with the file, but a NUL byte, which the scan refuses first (D-6365; amended on review 847), and the prune and the thinning run (amended on review 839: as first built in fix round 3, any file the model could not decide stopped the prune, where `main` pruned). That premise is systemd's. On macOS the model is asked whatever the scan says, because the launchd job sources `ccrc.env` with bash, which can build the name without spelling it (the review of fix round 4). `_keep_why` takes an optional third argument, the lowest allowed value (default 0), so the refusal says "from 2 to 9999". Why 2 is the floor:
   - 2 is exactly what the base guarantees: own plus `_bak_keepset`'s `BAK_KEEP_DATA`, the newest earlier one.
   - At 1, a `ccrc backup` run inside an update's unlocked sweep window (`cmd_update`, ccd/ccrc:18638-18653) counts its own backup as the one and thins the update's pre-update backup, which the update still owns and which `_upd_report` is about to read. At 2 that backup is the newest earlier data set and is counted.
 
@@ -1030,6 +1030,23 @@ Three lenses (restore safety, tests and guards, scope and landing) read revision
     | D-6360: the environment wins | the environment check dropped and `${CCRC_BACKUP_DATA_KEEP:-$BUE_VAL}` taken (the review's mutant) | B17: the eight environment rows, the UTF-8 row (nine) |
     | D-6365: a FIFO is not read | `[ -f "$f" ]` made `[ ! -d "$f" ]` | B18: the FIFO row, by its bound |
     | D-6464: a refusal before a time stop exits 3 | `refused = 0` placed first in `timeUp` | T29 (its review 839 case) |
+- **Fix round 5 (review 847), as built.** The coordinator's rulings are recorded verbatim at the end of this plan. The review found nothing wrong in the reader, so this round is test rows and two text lines; no code line changes.
+  - **F1: the end-to-end prune row pins its OS.** Its script ran `. ccd/ccrc` with no `CCD_OS`, so on a macOS runner the Darwin model would refuse `NOTE=café` and the row would red on test-macos, and with it the daily full suite and the stable gate. A shared `pruneTwelve(os)` now prefixes the script with `CCD_OS=<os>;`, as `dataKeep` does.
+    - The Linux row is unchanged otherwise: 12 pruned to 10, rc 0, no WARN.
+    - Its Darwin twin, beside the same `ccrc.env`, expects the WARN with the Darwin model's clause (`line 2 is not a plain NAME=value line`), rc 1, no prune line and all 12 left. That pins ratified departure 1 end to end.
+  - **F2: a NUL refuses in a file that never names the knob.** B17's NUL row gains `NOTE=x\0y\n`, expecting "could not be scanned".
+  - **R8: every position is tested.** B17's refused table gains `${K}_OLD=1\r${K}=9999`, expecting the untaken refusal. systemd ends a line at the bare CR and reads `${K}=9999` as a line of its own; a counter that tests only the first occurrence would read 3. It runs under C and in the UTF-8 row.
+  - **F3: two text lines.** README's "whatever else it holds" is "whatever else it holds but a NUL byte", and the function header's "its keep is 3 whatever the model or systemd makes of the rest of it" gains "but a NUL byte, which the scan refuses first". D-6347's sentence had the same overstatement and gains the same exception (amended on review 847). D-6365 already said it, so it is unchanged.
+  - **Not changed:** CI's red `server 4/11` row (the trickle row, F4/F4b of reviews 167 and 173), which this wave does not touch; the uninstall suite's process-leak exit; and the model's quadratic cost on a long knob-bearing comment line (R7). The coordinator carries the last two.
+  - **Growth.** `ccd/ccrc` is still 38 net code lines over the merge base with `origin/main`, 0 this round: the one changed line is a comment.
+  - **Mutation rows of fix round 5**, each measured red and then restored byte-identical (`cmp`), on `-t 'W23-B1[278]'` in `ccrc-update.test.ts`:
+
+    | Guard | Mutation | Red |
+    |---|---|---|
+    | the Linux row runs the Linux arm | the Darwin term on the model's guard always true (the review's M3) | B17: the Linux end-to-end row, the eight knob-less READ rows, the UTF-8 row (ten); the Darwin twin stays green |
+    | the Darwin twin runs the Darwin arm | the twin's `CCD_OS=darwin` dropped from its script, on a Linux runner (a test mutation) | B17: the Darwin twin |
+    | D-6365: a NUL refuses, knob or none | the NUL refusal gated on a `CCRC_BACKUP` substring (the review's M2) | B17: the NUL row |
+    | D-6365: every position is tested | a first-occurrence counter, `index()` plus a neighbour check (the review's M6) | B17: the `_OLD`-then-knob CR row, the UTF-8 row (two) |
 
 ## Coordinator rulings on review 794 (2026-10-22)
 
@@ -1273,3 +1290,28 @@ Recorded verbatim from the coordinator's fourth fix-round mail, with one substit
 > Gates as before, one file at a time. Measure every new row red, then green.
 > Landing as before: first-ready, with merge-tree measured against main and against #1149's head.
 > Send wave-done in the same turn as the push.
+
+## Coordinator rulings on review 847 (2026-10-23)
+
+Recorded verbatim from the coordinator's fifth fix-round mail, with one substitution: as before, the review report's path is written as "the review's report", because this repository is public. The mail names no new deviation number, and the round defines none: it amends D-6347 in place, whose text had F3's overstatement too, and the one reserve number left from fix round 2 stays unnamed here.
+
+> Run 775, wave 23: fix round 5, ruled on review 847 (the review's report; read it whole). Record this verbatim in the plan as "Coordinator rulings on review 847 (2026-10-23)", and write the report's path as "the review's report".
+> No new deviation numbers. Amend D-6347 and D-6365 in place only if their text changes.
+>
+> The review found nothing wrong in the reader. A 400-file fuzz and 33 named fixtures, under three awks and two locales, found no file where systemd sets the knob and the tip reads 3. Stale out-params are never read. Both ratified departures hold. This round is tests and two text lines, and nothing else changes.
+>
+> 1. F1 (important): the end-to-end prune row is not pinned to an OS, so on test-macos the Darwin model refuses NOTE=café and the row reds. That would turn main's daily full-suite red, and with it the stable gate.
+> - Prefix that row's script with CCD_OS=linux, as dataKeep does.
+> - Add a Darwin twin with CCD_OS=darwin, beside the same NOTE=café ccrc.env. It expects the WARN with the Darwin clause, rc 1, and 12 left. That pins ratified departure 1 end to end.
+> - Measure: the review's mutant M3 (the Darwin term always true) still reds the Linux row, and dropping the twin's CCD_OS=darwin reds the twin on a Linux runner.
+> 2. F2: a knob-less NUL row. Add `NOTE=x\0y\n` to B17's NUL rows, expecting "could not be scanned". The review's mutant M2 (the NUL refusal gated on a CCRC_BACKUP substring) must red it.
+> 3. R8, refuted as a defect, but its mutant deletes data sets, so pin it: a row `${K}_OLD=1\r${K}=9999` expecting the refusal (UNTAKEN). Measure M6 (a first-occurrence counter) red on it.
+> 4. F3: README:1212-1213's "whatever else it holds" becomes "whatever else it holds but a NUL byte". The function header's "its keep is 3 whatever the model or systemd makes of the rest of it" gains the same exception. Both stay inside the consented lines.
+>
+> 5. CI's red server 4/11 is the trickle row (ccrc-update.test.ts, F4/F4b of reviews 167 and 173). The wave does not touch it, main's Linux legs are green on it, and it passed twice locally. Your push gives a fresh run. If that row reds again on the new head, put the job log's assertion line in the wave-done, and I decide. Do not re-run a job by hand.
+>
+> Not this wave, carried:
+> - the uninstall suite's process-leak exit, which main shares;
+> - the model's quadratic cost on a long knob-bearing comment line (R7), which predates the wave and is wave 24's one reader.
+>
+> Gates as before, one file at a time. Measure every new row red under its mutant, then green. Landing as before: first-ready, measuring merge-tree against main and against #1149's head. Send wave-done in the same turn as the push.
