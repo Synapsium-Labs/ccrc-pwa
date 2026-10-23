@@ -107,6 +107,71 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     vi.restoreAllMocks();
   });
 
+  it('W27-L1: an upgrade never answered is dropped at the deadline and retried', async () => {
+    peer = await linkPeer(() => 'silent-upgrade');
+    fleet = connectToAgent(peer.port, { readyTimeoutMs: 150 });
+    await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(2), { timeout: 5000 });
+    expect(fleet.state.connected).toBe(false);
+  });
+
+  it('W27-L2: an upgrade answered a byte at a time is dropped too (a wall clock, not idle)', async () => {
+    peer = await linkPeer(() => 'trickle-upgrade');
+    fleet = connectToAgent(peer.port, { readyTimeoutMs: 150 });
+    await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(2), { timeout: 5000 });
+  });
+
+  it('W27-L3: a hello never answered with ready is dropped at the deadline and retried', async () => {
+    // 1000 ms, not 150: this row's line names the OPEN phase, so the first attempt must have upgraded by then.
+    peer = await linkPeer(() => 'silent-hello');
+    fleet = connectToAgent(peer.port, { readyTimeoutMs: 1000 });
+    await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(2), { timeout: 8000 });
+    expect(peer.hellos()).toBeGreaterThanOrEqual(1);
+  });
+
+  it('W27-L4: once the peer answers, the next attempt reaches ready', async () => {
+    // 1000 ms, not 150: the attempt meant to reach ready runs under the same deadline, and must not be cut.
+    peer = await linkPeer((n) => (n < 2 ? 'silent-upgrade' : 'ready'));
+    fleet = connectToAgent(peer.port, { readyTimeoutMs: 1000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 8000 });
+    expect(peer.accepts()).toBe(3);
+  });
+
+  it('W27-L5: a ready inside the deadline holds: the deadline never cuts a ready link', async () => {
+    peer = await linkPeer(() => 'ready');
+    fleet = connectToAgent(peer.port, { readyTimeoutMs: 1000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 5000 });
+    await sleep(2000); // the deadline lies inside this window on purpose: M4 fires it here
+    expect(peer.accepts()).toBe(1);
+    expect(fleet.state.connected).toBe(true);
+  });
+
+  it('W27-L7: close() during the upgrade settles, retries nothing and logs nothing', async () => {
+    peer = await linkPeer(() => 'silent-upgrade');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    fleet = connectToAgent(peer.port, { readyTimeoutMs: 2000 });
+    await vi.waitFor(() => expect(peer!.accepts()).toBe(1), { timeout: 5000 });
+    await fleet.close();
+    fleet = undefined;
+    await sleep(2600);
+    expect(peer.accepts()).toBe(1);
+    expect(linkLines(warn)).toEqual([]);
+  });
+
+  it('W27-L12: the deadline runs from socket creation, before the TCP connect completes', async () => {
+    // A loop held past the deadline right after the socket is created: expired timers run before the poll phase
+    // that completes the TCP connect and writes the upgrade, so attempt 0 ends with no upgrade request sent.
+    // A deadline armed at TCP connect or later would let attempt 0 write its upgrade first.
+    peer = await linkPeer(() => 'silent-upgrade');
+    // Start from the check phase, so the next phase to run is timers: a row that starts inside the timers phase
+    // (after a row that ended on a timer) would reach the poll phase, and the TCP connect, before the deadline.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    fleet = connectToAgent(peer.port, { readyTimeoutMs: 150 });
+    const held = Date.now();
+    while (Date.now() - held < 300) { /* hold the event loop past the deadline */ }
+    await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(2), { timeout: 5000 });
+    expect(peer.upgraded(0)).toBe(false); // M18 is what proves `upgraded` can read true
+  });
+
   it('W27-L8: a ready link that misses two pongs is terminated and retried', async () => {
     peer = await linkPeer(() => 'ready-no-pong');
     fleet = connectToAgent(peer.port, { heartbeatMs: 50 });

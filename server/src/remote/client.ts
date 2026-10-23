@@ -39,6 +39,10 @@ export interface RemoteFleetConfig {
   token: string;
   /** ms between heartbeat pings while connected. Default 15000. */
   heartbeatMs?: number;
+  /** ms from a new socket's creation to the agent's `ready` before that attempt is terminated and retried: one wall
+   *  clock over TCP connect, the upgrade and the hello (wave 27, D-6514). Default 15000. A test seam like the
+   *  fields around it; the composition root passes only `url` and `token`. */
+  readyTimeoutMs?: number;
   /** initial reconnect delay. Default 1000. */
   reconnectMinMs?: number;
   /** reconnect delay ceiling (doubles each failed attempt up to this). Default 30000. */
@@ -74,6 +78,8 @@ const DEFAULT_HEARTBEAT_MS = 15_000;
 const DEFAULT_RECONNECT_MIN_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+// The answer to hello waits no longer than the answer to a request (D-6516).
+const DEFAULT_READY_TIMEOUT_MS = 15_000;
 const HEARTBEAT_MISS_LIMIT = 2;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -191,6 +197,7 @@ export class FleetClient {
       url: cfg.url,
       token: cfg.token,
       heartbeatMs: cfg.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
+      readyTimeoutMs: cfg.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
       reconnectMinMs: cfg.reconnectMinMs ?? DEFAULT_RECONNECT_MIN_MS,
       reconnectMaxMs: cfg.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS,
       requestTimeoutMs: cfg.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -361,6 +368,7 @@ export class FleetClient {
       return;
     }
     this.socket = ws;
+    this.armReadyDeadline(ws);
     ws.on('open', () => {
       ws.send(JSON.stringify({ t: 'hello', token: this.cfg.token }));
     });
@@ -613,6 +621,19 @@ export class FleetClient {
   private stopHeartbeat(): void {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
+  }
+
+  /** One wall-clock bound per attempt, from socket creation to `ready` (wave 27, D-6514). Never cleared: it re-checks
+   *  when it fires (D-6517). A ready link is left alone; otherwise the CAPTURED socket is terminated, never
+   *  `this.socket`, so a deadline outliving its attempt can only reach a socket already closed, where `terminate`
+   *  returns at once. `terminate` on CONNECTING aborts the handshake and on OPEN destroys the socket; either way
+   *  `close` follows and `onClose` reconnects with the existing backoff. */
+  private armReadyDeadline(ws: WebSocket): void {
+    const timer = setTimeout(() => {
+      if (this.ready) return;
+      ws.terminate();
+    }, this.cfg.readyTimeoutMs);
+    timer.unref?.();
   }
 }
 
