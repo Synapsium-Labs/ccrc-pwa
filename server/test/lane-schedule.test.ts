@@ -185,7 +185,7 @@ describe('LaneRunner — kick, stamp, restamp', () => {
 });
 
 describe('LaneRunner — the four flight modes', () => {
-  it('skip: a call during a run is refused, even when forced to ask', async () => {
+  it('skip: a call during a run is refused', async () => {
     const { t, runner } = rig([row({ name: 'pr', flight: 'skip', cadenceMs: 10 })]);
     const gate = deferred();
     const fn = vi.fn(() => gate.promise);
@@ -285,6 +285,11 @@ describe('LaneRunner — the catch', () => {
     const { runner } = rig([row({ name: 'caps' })], (m) => said.push(m));
     await expect(runner.run('caps', async () => { throw new Error('nope'); })).rejects.toThrow('nope');
     expect(said).toEqual([]);
+  });
+
+  it('runNow refuses a skip row: an on-demand caller needs a run to join', () => {
+    const { runner } = rig([row({ name: 'pr', flight: 'skip' })]);
+    expect(() => runner.runNow('pr', async () => {})).toThrow(/skip row/);
   });
 
   it('runNow refuses a row that warns: an on-demand caller owns its own rejection', () => {

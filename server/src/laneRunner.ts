@@ -82,7 +82,9 @@ export class LaneRunner {
   /** An on-demand run (no cadence check): joins a run in flight on a `join` or `join-rerun` row, else starts one.
    *  Only for a row with no `warnKey`: such a caller owns its rejection. */
   runNow<T>(name: string, fn: () => Promise<T> | T): Promise<T> {
-    if (this.rowOf(name).warnKey !== null) throw new Error(`runNow: ${name} has a warnKey, so its rejection is caught by the runner`);
+    const row = this.rowOf(name);
+    if (row.warnKey !== null) throw new Error(`runNow: ${name} has a warnKey, so its rejection is caught by the runner`);
+    if (row.flight === 'skip') throw new Error(`runNow: ${name} is a skip row, which refuses a second caller instead of handing it the run`);
     return this.start(name, fn, true) as Promise<T>;
   }
 
@@ -93,7 +95,7 @@ export class LaneRunner {
     if (cur !== null) {
       const stuck = row.flight === 'skip' && row.staleAfterMs !== undefined && this.at(row.clock) - cur.startedAt > row.staleAfterMs;
       if (row.flight === 'join' || row.flight === 'join-rerun') return cur.promise as Promise<T>;
-      if (row.flight === 'skip' && !stuck) return onDemand ? cur.promise as Promise<T> : null;
+      if (row.flight === 'skip' && !stuck) return null;
     }
     this.stamp(name);
     const token = Symbol(name);
