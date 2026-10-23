@@ -182,8 +182,14 @@ describe('with the marker a nested repository is rescued, then the tree goes', (
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     h.git(path.dirname(dir), 'clone', '-q', '--depth', '1', `file://${src}`, path.basename(dir));
     fs.writeFileSync(path.join(dir, 'edit.txt'), 'dirty\n');
+    const audit = (): { wouldRescue: string[]; rescue: string[] } => {
+      const out = h.sh(`${CHILD_STUBS} cmd_ws_audit --session ${CHILD_ID} --reclaim`);
+      return (JSON.parse(out) as { nestedRescue?: { wouldRescue: string[]; rescue: string[] } }).nestedRescue ?? { wouldRescue: [], rescue: [] };
+    };
+    expect(audit().wouldRescue).toEqual([]);   // D-6632: arming would never rescue it, so the shadow list does not name it
     arm();
     expect(evalOf(h).verdict).toBe('containment-unproven');
+    expect(audit()).toEqual({ wouldRescue: [], rescue: [] });
   }, 120_000);
 
   it('a fetch that fails: nested-rescue-failed, nothing removed', () => {

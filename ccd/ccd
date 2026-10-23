@@ -31607,11 +31607,12 @@ _ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }
 # files) can never be pinned, and a token over it would only buy a retry loop. It stays containment-unproven, as without the marker.
 # A SHALLOW or PARTIAL clone is not rescuable either: a fetch from a shallow source into a full repository rejects every ref
 # (rc 0, nothing lands), so its token would answer nested-rescue-failed on every pass; it stays containment-unproven.
-_ws_nested_rescuable() {
-  _ws_nested_rescue_live && git -C "$1" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
+_ws_nested_rescue_shape() {   # what arming WOULD rescue: marker-independent, so the shadow list never names what the arm refuses
+  git -C "$1" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
     && [[ "$(git -C "$1" rev-parse --is-shallow-repository 2>/dev/null)" == false ]] \
     && [[ -z "$(git -C "$1" config --get-regexp '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$' 2>/dev/null)" ]]
 }
+_ws_nested_rescuable() { _ws_nested_rescue_live && _ws_nested_rescue_shape "$1"; }
 _ws_nested_secrets() {   # nested rel -> its secret-shaped untracked paths join REAP_SENSITIVE and RECLAIM_SECRETS (the pin drops them)
   local e p skip
   while IFS= read -r -d '' e; do
@@ -32099,7 +32100,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
       _ws_nested_secrets "$p" "${p#"$wdreal"/}"
       RECLAIM_RESCUE+="$p"$'\n'; RECLAIM_RESCUEBIND+="$hp"$'\n'; continue
     fi
-    (( rc == 0 )) || { RECLAIM_RESCUE_WOULD+="$p"$'\n'; _reap_refuse containment-unproven "$_WS_FOREIGN_WHY"; return 1; }
+    (( rc == 0 )) || { (( rc == 1 )) && _ws_nested_rescue_shape "$p" && ! _ws_nested_rescue_live && RECLAIM_RESCUE_WOULD+="$p"$'\n'; _reap_refuse containment-unproven "$_WS_FOREIGN_WHY"; return 1; }
     RECLAIM_FOREIGN+="$p"$'\n'
   done <<< "$nested"$'\n'
   # NOR IS ANY CHECKOUT INSIDE IT A GONE ROW'S MOVED TREE (spec §5.5):
