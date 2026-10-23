@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=33fa011c202e67c5d7f9ca4a0a3094ba296703bdb0e965c0cc4cbe2599fe40e4
+# ccrc:generated 1 sha256=1282f1184e86b086783012990081765679ffbf9c45e5b8fe1688c4db14b542e2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -33751,8 +33751,11 @@ _ws_reclaim_reask() {   # id workdir main wdid mainid [cpath cid] -> 0 nothing r
   #   a refusal, or a checkout that vanished in the window (a proof of absence
   #   is no proof of what stands), is 2 here. The second proof's globals are
   #   tested first; the FIRST proof's three (`_WS_NPROOF_GONE`, `_WS_NPROOF_WHY`,
-  #   `_WS_NPROOF_IDENT`) are restored on every exit, because the tail reads
-  #   the first proof's GONE after the removal and `cid` is never reassigned.
+  #   `_WS_NPROOF_IDENT`) are restored on every exit (workspace-lifecycle's
+  #   condition; `cid` is never reassigned). The tail reads the first GONE after
+  #   the removal, but only a path where both proofs answered GONE 0 gets there,
+  #   so no path observes the restore today. It would keep that read the first
+  #   proof's own if an edit let a non-zero second answer through (no licence).
   #   The tail's call arguments and order are unchanged. This NARROWS the
   #   race and does not close it: it is a second proof at one instant, not an
   #   atomic one, and the window from here to git's own opendir stays

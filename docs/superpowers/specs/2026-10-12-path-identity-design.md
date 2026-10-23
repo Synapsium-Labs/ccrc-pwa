@@ -1370,10 +1370,13 @@ into a pass.
   (`_ws_dir_physical`, a root that cannot be resolved answering 2) after the identity compare and runs
   `_ws_reclaim_nested_proven` on that root and the checkout again: no link at any component, each a directory, resolving
   to itself. Only an answer of 0 with the checkout still standing goes on; a refusal, or a checkout that vanished in the
-  window, answers 2 (`worktree-remove-failed`), and the first proof's results, which the tail reads after the removal, are
-  restored on every exit. The call arguments and order of the tail are as before, and the re-ask without a checkout
-  asks nothing more. This narrows the race and does not close it: the second proof is one instant, not an atomic
-  proof, and `reask-to-opendir-window` stands. `ws-expire` reaches the same check, because its tail is the shared one
+  window, answers 2 (`worktree-remove-failed`). The first proof's results are restored on every exit, which is
+  workspace-lifecycle's condition for this proof. The tail does read the first proof's `GONE` after the removal,
+  but only a path where both proofs answered `GONE` 0 reaches that read, so no path observes the restore today; it
+  would keep that read the first proof's own if an edit let a non-zero second answer through, which is a
+  counterfactual and no licence to. The call arguments and order of the tail are as before, and the re-ask without a
+  checkout asks nothing more. This narrows the race and does not close it: the second proof is one instant, not an
+  atomic proof, and `reask-to-opendir-window` stands. `ws-expire` reaches the same check, because its tail is the shared one
   and passes the checkout's path to the same re-ask. A refusal there is the same `worktree-remove-failed`, printed
   past the breadcrumb (`crumb` true), which the server reads as a failed but resumable attempt, never a final one.
 
