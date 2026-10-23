@@ -25,6 +25,9 @@
 //   the pool lag dropped with the chrome ............... "the pool-lag readout shows once at the desk when the epochs differ"
 // Fix round 1 (review 826, F1):
 //   the rail's Inbox door without the count ............ "at the desk with mail unread, the rail's Inbox door names and shows the count, and nothing else in the frame does"
+// T2e review R32, F5 (carried into T2g, D-6715; RUN, this suite alone, then reverted):
+//   `unreadMailCount` without the `isUnseenAt(...)` term  "mail at the ack's own stamp, or before it, is not unread: …"
+//   `isUnseenAt` as `since >= (acks[key] ?? 0)` ........ "mail at the ack's own stamp, or before it, is not unread: …"
 //
 // W2 Task T2g (desk-polish, D-6715): one count at the desk, in the status bar; the list head empty is not drawn.
 // MUTATION TABLE (plan Task T2g Step 3; RUN, each mutant on the working tree, this suite alone unless named, then reverted):
@@ -473,6 +476,25 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     act(() => useFleetStore.setState({ feed: unreadFeed(0) }));
     mount('/');
     expect(within(rail()).getByRole('button', { name: 'Inbox' }).textContent).toBe('Inbox');
+  });
+
+  it('mail at the ack\'s own stamp, or before it, is not unread: the Inbox door draws no badge', () => {
+    stubAt(1280);
+    const stamp = Date.now();
+    act(() => { ack(FEED_ACK_KEY, stamp); });
+    const mail = (seq: number, at: number): NotifyEvent => ({ seq, at, kind: 'mail', sessionId: 'x', title: 'seen', body: '', runId: null });
+    // The ack is the watermark: a record AT it was seen (`isUnseenAt` is a strict `>`), and so was an earlier one.
+    act(() => useFleetStore.setState({ feed: [mail(1, stamp), mail(2, stamp - 1_000)] }));
+    mount('/');
+    const door = within(rail()).getByRole('button', { name: 'Inbox' });
+    expect(door.textContent).toBe('Inbox');
+    expect(door.querySelector('.ins-rail-count')).toBeNull();
+    expect(doorCounts()).toMatchObject({ inbox: 1, unread: 0 });
+    cleanup();
+    // One millisecond past the ack is unread, so the pin above is the boundary and not a feed that counts nothing.
+    act(() => useFleetStore.setState({ feed: [mail(1, stamp), mail(3, stamp + 1)] }));
+    mount('/');
+    expect(within(rail()).getByRole('button', { name: 'Inbox, 1 unread' })).toBeInTheDocument();
   });
 
   it('the pool-lag readout shows once at the desk when the epochs differ', () => {
