@@ -331,7 +331,8 @@ class Reading(NamedTuple):
 # the ok-status fields of the refresh that produced it or None). `read` answers from one while the file's identity
 # still equals its identity, and otherwise ignores it, leaving the map unchanged and printing nothing. Four writers
 # change the map, each under the lock: `commit_record` and `retry_unsaved`; `ensure_fresh`, which drops a record
-# whose own refresh token the endpoint refused as needs-signin (one stderr line, no token); and `sign_in_device`,
+# whose own refresh token the endpoint refused as needs-signin (one stderr line, no token), and keeps a refreshed
+# record whose commit refused the file after the token endpoint answered (D-6560); and `sign_in_device`,
 # which puts back what the map held before its commits when none of them landed, and drops the record of one whose
 # rename landed (the file then holds it). The status fields
 # (`lastRefreshAt`, `lastRequestId`) are kept with the record, not read back from the status file, because that file
@@ -1316,7 +1317,9 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
     refreshed or failed, and is obeyed), re-check the status, then make the one token request. A refusal writes its
     state to the status file and raises it; a transient failure leaves the state as it was and raises RefreshFailed.
     A refresh is committed atomically; a commit that cannot write keeps the record in memory, served by `read` and
-    written by the next holder. `lane` names the lane in a remedy (`ccrc codex login <lane>`)."""
+    written by the next holder. A commit that refuses the file after the token endpoint answered (Unreadable,
+    ForeignFamily) keeps the record in memory too, bound to the file the refresh read under the lock, and raises the
+    refusal (D-6560). `lane` names the lane in a remedy (`ccrc codex login <lane>`)."""
     key = _key(auth_dir)
     r, old = _read_raw(auth_dir)
     _raise_for(r)
@@ -1365,7 +1368,17 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
                              lastRequestId=e.request_id, **failed)
             raise
         refreshed = dict(lastRefreshAt=time.time(), lastRequestId=rid)
-        saved = commit_record(auth_dir, rec, refreshed)
+        try:
+            saved = commit_record(auth_dir, rec, refreshed)
+        except (Unreadable, ForeignFamily):
+            # D-6560: the token endpoint has answered, so the refresh token `r` carried is already spent, and the
+            # commit's re-read refused the file (a lock-ignoring writer tore it or swapped another family's file in
+            # during the round trip, or the read failed). The record is kept unsaved, as the OSError arm keeps one,
+            # bound to the identity read under the lock, `r`'s: the file it was to replace. `retry_unsaved` lands
+            # it while that file is still in place and drops it once another stands there, and `read` never serves
+            # it over a file swapped in, whatever that file holds.
+            _UNSAVED[key] = (dict(rec), r.identity, dict(refreshed))
+            raise
         # The file still on disk when the commit could not write: the identity the unsaved record is bound to.
         bound = _current_identity(p.credential) if saved else _UNSAVED.get(key, (rec, r.identity, None))[1]
         if saved or not standing:
@@ -1627,17 +1640,27 @@ def status_report(auth_dir: str) -> dict:
 
     `source` is `"file"` when the status file is current (`read_status`), else `"computed"` from `read` (a
     credential no library process has written a status for, or one changed since): then `state` is `ok` for a
-    present credential and null otherwise, and the refresh fields are null. `credential` is always `read`'s word.
-    `mode`, `modeOk` (owner-readable, no group or other bits) and `ownerOk` (owned by `os.getuid()`) come from the
-    credential's `lstat`, and are null when nothing is there. Never `account_id`, never a token."""
+    present credential and null otherwise, and the refresh fields are null. A current status whose config-error
+    `_bars` does not honour (one measured under another config) is reported as computed too, exactly as if no status
+    file stood: the refresher retries it and the sign-in answers already-signed-in over it, so it is not the lane's
+    state (D-6558). `credential` is always `read`'s word. `mode`, `modeOk` (owner-readable, no group or other bits)
+    and `ownerOk` (owned by `os.getuid()`) come from the credential's `lstat` when it is a regular file, and are null
+    when nothing is there or when the path is not a regular file (a symlink, a FIFO, a directory), which `read`
+    answers `unreadable`: no mode of such a path is the credential's, so none is named (D-6559). Never
+    `account_id`, never a token."""
     p = paths_for(auth_dir)
     r = read(auth_dir)
     status = read_status(auth_dir)
+    # D-6558: a stale config-error bars nothing (`_bars`), so it is reported as no status file at all.
+    if status is not None and status.get("state") == KIND_CONFIG_ERROR and not _bars(status):
+        status = None
     try:
         st = os.lstat(p.credential)  # type: Optional[os.stat_result]
     except OSError:
         st = None
-    mode = stat.S_IMODE(st.st_mode) if st is not None else None
+    # D-6559: only a regular file's mode and owner are the credential's; a symlink's lstat reads 0777.
+    regular = st is not None and stat.S_ISREG(st.st_mode)
+    mode = stat.S_IMODE(st.st_mode) if regular else None
     if status is not None:
         report = {
             "source": "file",
@@ -1666,7 +1689,7 @@ def status_report(auth_dir: str) -> dict:
         "credential": r.credential,
         "mode": format(mode, "04o") if mode is not None else None,
         "modeOk": (bool(mode & 0o400) and not mode & 0o077) if mode is not None else None,
-        "ownerOk": (st.st_uid == os.getuid()) if st is not None else None,
+        "ownerOk": (st.st_uid == os.getuid()) if regular and st is not None else None,
         "authBase": auth_base_source(),
     })
     return report

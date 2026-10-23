@@ -3,7 +3,7 @@
 // What is here, and the one rule they share: NO TEST CAN REACH A LIVE ENDPOINT. Every token, device-code and exchange
 // request a test makes goes to `fakeAuthServer`, an in-process node server on 127.0.0.1:0, reached through
 // CCRC_CODEX_AUTH_BASE, which the library accepts only for a loopback http:// URL. `runAuthDriver` sets that variable
-// on every spawn, to CLOSED_AUTH_BASE unless the caller's env names one, and builds the child's env from scratch, so
+// on every spawn, to CLOSED_AUTH_BASE unless the caller's env names a non-empty one, and builds the child's env from scratch, so
 // neither an operator's override nor any other variable of the vitest process reaches the library.
 //
 // No token-shaped literal is written in this tree: `syntheticJwt` BUILDS each token at runtime from JSON claims, with
@@ -190,7 +190,7 @@ const TMP_ROOT = (() => {
  *  event loop), in the fixture `home`, which is its cwd and its HOME. `action.lib` defaults to this tree's library.
  *  The env is built from scratch: PATH and TMPDIR (this run's temp parent, so a temp file the library makes stays
  *  inside it), then the caller's `env`, then HOME; and CCRC_CODEX_AUTH_BASE is CLOSED_AUTH_BASE unless `env` names
- *  one. No PYTHON* variable is set: `-I` implies `-E`, which ignores them all, so the driver's own
+ *  a non-empty one (the library reads an empty value as unset, the live endpoint, so `''` names none). No PYTHON* variable is set: `-I` implies `-E`, which ignores them all, so the driver's own
  *  `sys.dont_write_bytecode = True` is what keeps a `.pyc` out of the tree. `onLine` is called with each JSON line as
  *  the driver prints it (one per op, flushed), so a case can act between two ops. Past `timeoutMs` (default 10000)
  *  the child is killed with SIGKILL and `timedOut` is true; `status` is then null (a child a signal ended has no
@@ -209,11 +209,13 @@ export function runAuthDriver(
   if ('HOME' in env) throw new Error('runAuthDriver: env must not set HOME (the fixture owns it)');
   const py = pythonOrSkip();
   if (!py) throw new Error('runAuthDriver called with no python3 — guard with pythonOrSkip() first');
+  const named = env.CCRC_CODEX_AUTH_BASE;
   const childEnv: Record<string, string> = {
     PATH: process.env.PATH ?? '/usr/bin:/bin',
     TMPDIR: tmpdir(),
-    CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE,
     ...env,
+    // An empty value names none: the library reads it as unset, which is the live endpoint.
+    CCRC_CODEX_AUTH_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE,
     HOME: resolved,
   };
   const full = { lib: AUTH_LIB, ...action };

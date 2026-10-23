@@ -527,6 +527,14 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
     expect(w.timedOut).toBe(true);
     expect(Date.now() - started).toBeLessThan(5000);
   });
+
+  it('runAuthDriver given an empty CCRC_CODEX_AUTH_BASE still runs the child against the closed base', async () => {
+    const home = mkTmp('codex-auth-driver-empty-');
+    // The library reads an empty value as unset, which is the live endpoint, so an empty value names none.
+    const d = await runAuthDriver(home, { ops: [{ op: 'env', name: 'CCRC_CODEX_AUTH_BASE' }] }, { CCRC_CODEX_AUTH_BASE: '' });
+    expect(d.status, d.stderr).toBe(0);
+    expect(driverLines(d.stdout)[0].result).toBe(CLOSED_AUTH_BASE);
+  });
 });
 
 // ── Task 2: the lock, the commit, the checkpoint and a full disk ────────────────────────────────────────────────
@@ -1571,6 +1579,58 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
       expect(srv.requests, 'one request in total').toHaveLength(1);
       expect(readFileSync(credPath(dir), 'utf8'), 'the disk stayed full').toBe(old);
       expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
+  // D-6560. `eio-read:N` fails the FIRST N `os.read` calls on the credential in the process, and a refresh reads the
+  // credential before its request unless every read is served from an unsaved record bound to an absent file (whose
+  // re-read reads nothing). So: a commit the full disk refused leaves R0 unsaved over no file; the refresh serves it,
+  // and while the fake endpoint holds its answer a lock-ignoring writer puts a file in place, whose read in the
+  // commit's re-read meets the EIO. The refresh token R0 carried is spent by then; the refreshed record R1 must stay
+  // in memory, bound to the absent file the refresh read under the lock, and land once that file is in place again.
+  it('a commit refused after the token endpoint answered keeps the refreshed record unsaved, and a later retry lands it', async () => {
+    const home = mkTmp('codex-auth-refresh-refused-commit-');
+    const dir = laneDir(home);
+    const side = join(home, 'side');
+    const t = plantBackendCredential(side, { expiresIn: -120 });
+    const r0 = JSON.parse(readFileSync(credPath(side), 'utf8')) as Record<string, unknown>;
+    const answer = issuedAnswer();
+    const barrier = join(home, 'removed');
+    const writer: string[] = [];
+    let planted = false;
+    await withAuth({ token: [{ status: 200, body: answer, delayMs: 1000, headers: { 'x-request-id': 'req-fixture-kept' } }] }, async (srv) => {
+      const poll = setInterval(() => {
+        if (planted || srv.requests.length === 0) return;
+        planted = true;
+        writer.push(...Object.values(plantBackendCredential(dir, { accountId: 'acct-fixture-writer' })));
+      }, 5);
+      try {
+        const r = await runFresh(home, dir, srv.base, [
+          { op: 'commit', record: r0 }, { op: 'ensure_fresh', lane: 'codex-a' },
+          { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'read' }, { op: 'held-retry' }, { op: 'read' },
+        ], { faults: ['enospc-replace:2', 'eio-read:1'] }, {
+          onLine: (l) => {
+            if (l.op !== 'ensure_fresh') return;
+            // The writer's file goes away, so the file the refresh read (none) is in place again.
+            rmSync(credPath(dir));
+            writeFileSync(barrier, '');
+          },
+        });
+        const [commit, refresh, , held, retry, after] = r.lines;
+        expect(commit.result, 'the full disk refused the first commit').toBe(false);
+        expect(planted, 'the writer put its file in place during the round trip').toBe(true);
+        expect(refresh, r.stderr).toMatchObject({ op: 'ensure_fresh', error: 'credential-unusable' });
+        expect(srv.requests, 'one request in total').toHaveLength(1);
+        expect(held).toMatchObject({ op: 'read', credential: 'present', account_id: ISSUED_ACCOUNT_ID });
+        expect(String(held.detail), 'the refreshed record is held in memory').toContain('held in memory');
+        expect(retry.result).toBe('written');
+        expect(after).toMatchObject({ op: 'read', credential: 'present', account_id: ISSUED_ACCOUNT_ID });
+        expect(fileRecord(dir).refresh_token, 'the refreshed record landed, not the spent one').toBe(answer.refresh_token);
+        expect(statusOf(dir)).toMatchObject({ state: 'ok', unsaved: false, lastRequestId: 'req-fixture-kept' });
+        expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer), ...writer]);
+      } finally {
+        clearInterval(poll);
+      }
     });
   });
 

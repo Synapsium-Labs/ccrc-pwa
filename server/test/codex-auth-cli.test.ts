@@ -7,10 +7,10 @@
 // spawned ASYNCHRONOUSLY (a synchronous child deadlocks against a server on this event loop). Tokens are built at
 // runtime by `syntheticJwt`; no token-shaped literal is written here.
 import { describe, it, expect } from 'vitest';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -100,14 +100,23 @@ function plantMarker(dir: string): string {
 type CliResult = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string };
 
 /** Run `python3 -I ccd/ccgpt-auth.py <args>` in the fixture `home` (its cwd and HOME), ASYNCHRONOUSLY. The env is built
- *  from scratch, as `runAuthDriver` builds it: PATH and TMPDIR, CCRC_CODEX_AUTH_BASE (CLOSED_AUTH_BASE unless `env`
- *  names one), then `env`, then HOME. `onChild` sees the child as it starts, so a case can signal it. */
+ *  from scratch, as `runAuthDriver` builds it: PATH and TMPDIR, then `env`, then CCRC_CODEX_AUTH_BASE
+ *  (CLOSED_AUTH_BASE unless `env` names a non-empty one: the library reads an empty value as unset, the live
+ *  endpoint, so `''` names none), then HOME. `onChild` sees the child as it starts, so a case can signal it. */
 function runCli(
   home: string, args: string[], env: Record<string, string> = {}, onChild?: (c: ChildProcess) => void,
 ): Promise<CliResult> {
-  const childEnv: Record<string, string> = {
-    PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmpdir(), CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE, ...env, HOME: home,
-  };
+  const named = env.CCRC_CODEX_AUTH_BASE;
+  return spawnCli(home, args, {
+    PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmpdir(), ...env,
+    CCRC_CODEX_AUTH_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE, HOME: home,
+  }, onChild);
+}
+
+/** `runCli` with `childEnv` exactly as given, CCRC_CODEX_AUTH_BASE included. */
+function spawnCli(
+  home: string, args: string[], childEnv: Record<string, string>, onChild?: (c: ChildProcess) => void,
+): Promise<CliResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(PY as string, ['-I', AUTH_LIB, ...args], { cwd: home, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
@@ -639,7 +648,14 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
       expect(named).toHaveLength(1);
       expect(named[0]).toContain(srv.base);
       expect((await statusOf(home, dir, { CCRC_CODEX_AUTH_BASE: srv.base })).authBase).toBe('override');
-      expect((await statusOf(home, dir, { CCRC_CODEX_AUTH_BASE: '' })).authBase).toBe('default');
+      // The one spawn with an empty CCRC_CODEX_AUTH_BASE, which the library reads as unset (the live endpoint):
+      // runCli replaces an empty value with CLOSED_AUTH_BASE, so this goes past it, and only for `status`, which
+      // makes no request at all.
+      const bare = await spawnCli(home, ['status', '--auth-dir', dir, '--lane', 'codex-a'], {
+        PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmpdir(), CCRC_CODEX_AUTH_BASE: '', HOME: home,
+      });
+      expect(bare.status, bare.stderr).toBe(0);
+      expect((JSON.parse(bare.stdout) as Record<string, unknown>).authBase).toBe('default');
     } finally {
       await srv.close();
     }
@@ -677,6 +693,74 @@ describe.skipIf(!PY)('the command line (codex-bridge spec §2.6)', () => {
     } finally {
       chmodSync(credPath(dir), 0o600);
     }
+  });
+
+  /** A lane whose last refresh the endpoint refused invalid_client: the library's own config-error status, measured
+   *  under the library's config as it stands. */
+  async function configErrorLane(prefix: string): Promise<{ home: string; dir: string }> {
+    const home = mkTmp(prefix);
+    const dir = laneDir(home);
+    plantBackendCredential(dir, { expiresIn: -120 });
+    const srv = await fakeAuthServer({ token: [{ status: 401, body: { error: 'invalid_client' } }] });
+    try {
+      expect((await refreshOnce(home, dir, srv.base)).error).toBe('config-error');
+    } finally {
+      await srv.close();
+    }
+    expect((JSON.parse(readFileSync(statusPath(dir), 'utf8')) as Record<string, unknown>).state).toBe('config-error');
+    return { home, dir };
+  }
+
+  // D-6558: once the config changes (`ccrc update`, the config-error's remedy), the old config-error bars nothing, so
+  // the report must not hold the lane on it.
+  it('status: a config-error from another config reads computed, the sign-in answers already-signed-in, and status agrees', async () => {
+    const { home, dir } = await configErrorLane('codex-auth-stale-config-');
+    const consts = { CLIENT_ID: `${LIB_CLIENT_ID as string}-changed` };
+    const before = await runMain(home, dir, ['status', '--auth-dir', dir, '--lane', 'codex-a'], { consts });
+    expect(before.rc, before.stderr).toBe(0);
+    const stale = JSON.parse(before.stdout) as Record<string, unknown>;
+    expect(stale).toMatchObject({ source: 'computed', state: 'ok', credential: 'present', lastErrorCode: null });
+    expect(stale.state).not.toBe('config-error');
+    const srv = await fakeAuthServer({});
+    try {
+      const signin = await runMain(home, dir, ['signin', '--auth-dir', dir, '--lane', 'codex-a'], {
+        consts, env: { CCRC_CODEX_AUTH_BASE: srv.base },
+      });
+      expect(signin.rc, signin.stderr).toBe(0);
+      expect(signin.stdout).toContain('ccgpt-auth: codex-a: already-signed-in');
+      expect(srv.requests).toHaveLength(0);
+    } finally {
+      await srv.close();
+    }
+    const after = await runMain(home, dir, ['status', '--auth-dir', dir, '--lane', 'codex-a'], { consts });
+    expect(after.rc, after.stderr).toBe(0);
+    expect(JSON.parse(after.stdout)).toMatchObject({ source: 'computed', state: 'ok', credential: 'present' });
+  });
+
+  it('status: a config-error under the unchanged config still reads config-error, from the file', async () => {
+    const { home, dir } = await configErrorLane('codex-auth-live-config-');
+    const r = await runMain(home, dir, ['status', '--auth-dir', dir, '--lane', 'codex-a']);
+    expect(r.rc, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      source: 'file', state: 'config-error', lastErrorCode: 'invalid_client', credential: 'present',
+    });
+  });
+
+  // D-6559: a path that is not a regular file has no mode of the credential's; `read` answers it unreadable, so the
+  // doctor takes its unreadable arm (move it aside), never `chmod 600`, which would follow a symlink to its target.
+  it.each(['symlink', 'fifo'])('status: a %s at the credential path is unreadable and names no mode', async (kind) => {
+    const home = mkTmp('codex-auth-status-nonreg-');
+    const dir = laneDir(home);
+    mkdirSync(dir, { recursive: true });
+    if (kind === 'fifo') {
+      const mk = spawnSync('mkfifo', [credPath(dir)]);
+      expect(mk.status, String(mk.stderr)).toBe(0);
+    } else {
+      const elsewhere = join(home, 'elsewhere');
+      plantBackendCredential(elsewhere);
+      symlinkSync(credPath(elsewhere), credPath(dir));
+    }
+    expect(await statusOf(home, dir)).toMatchObject({ credential: 'unreadable', mode: null, modeOk: null, ownerOk: null });
   });
 
   it("status: ownerOk false when the file is not this uid's", async () => {
