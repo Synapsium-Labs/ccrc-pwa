@@ -1634,6 +1634,52 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
     });
   });
 
+  // D-6560, the present-file arm: the refresh reads a present credential X under the lock, and while the fake
+  // endpoint holds its answer X is chmod 000. chmod moves none of the identity's fields (ino, mtime, size), so the
+  // commit's re-read is refused (EACCES) over the same X: the refreshed record stays unsaved, bound to X, `read` serves
+  // it from memory, and once X reads again (chmod 600) the held retry lands it.
+  it.skipIf(process.getuid?.() === 0)('a commit refused over the same present file keeps the refreshed record unsaved, and the retry lands it once the file reads again', async () => {
+    const home = mkTmp('codex-auth-refresh-refused-present-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const answer = issuedAnswer();
+    const barrier = join(home, 'readable');
+    let locked = false;
+    await withAuth({ token: [{ status: 200, body: answer, delayMs: 1000, headers: { 'x-request-id': 'req-fixture-kept' } }] }, async (srv) => {
+      const poll = setInterval(() => {
+        if (locked || srv.requests.length === 0) return;
+        locked = true;
+        chmodSync(credPath(dir), 0o000);
+      }, 5);
+      try {
+        const r = await runFresh(home, dir, srv.base, [
+          { op: 'ensure_fresh', lane: 'codex-a' }, { op: 'read' }, { op: 'wait', path: barrier, timeoutMs: 5000 },
+          { op: 'held-retry' }, { op: 'read' },
+        ], {}, {
+          onLine: (l) => {
+            if (l.op !== 'read' || existsSync(barrier)) return;
+            chmodSync(credPath(dir), 0o600);
+            writeFileSync(barrier, '');
+          },
+        });
+        const [refresh, held, , retry, after] = r.lines;
+        expect(locked, 'the file was made unreadable during the round trip').toBe(true);
+        expect(refresh, r.stderr).toMatchObject({ op: 'ensure_fresh', error: 'credential-unusable' });
+        expect(srv.requests, 'one request in total').toHaveLength(1);
+        expect(held).toMatchObject({ op: 'read', credential: 'present', account_id: ISSUED_ACCOUNT_ID });
+        expect(String(held.detail), 'the refreshed record is held in memory').toContain('held in memory');
+        expect(retry.result).toBe('written');
+        expect(after).toMatchObject({ op: 'read', credential: 'present', account_id: ISSUED_ACCOUNT_ID });
+        expect(fileRecord(dir).refresh_token, 'the refreshed record landed, not the spent one').toBe(answer.refresh_token);
+        expect(statusOf(dir)).toMatchObject({ state: 'ok', unsaved: false, lastRequestId: 'req-fixture-kept' });
+        expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+      } finally {
+        clearInterval(poll);
+        chmodSync(credPath(dir), 0o600);
+      }
+    });
+  });
+
   it('a full disk that also fails the status write loses nothing: the retry writes state ok with this refresh\'s fields, never the stale state on disk', async () => {
     const home = mkTmp('codex-auth-refresh-enospc-status-');
     const dir = laneDir(home);

@@ -199,7 +199,7 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
       expect(cred).toMatchObject({ access_token: t.access, refresh_token: t.refresh, id_token: t.id, account_id: 'acct-fixture-signin' });
       const st = JSON.parse(readFileSync(statusPath(dir), 'utf8')) as Record<string, unknown>;
       expect(st).toMatchObject({ state: 'ok', lastErrorCode: null, lastRequestId: 'req-fixture-signin', unsaved: false });
-      // D-6556 (pending the controller's ruling): a sign-in records its own time as lastRefreshAt.
+      // D-6556: a sign-in records its own time as lastRefreshAt.
       expect(typeof st.lastRefreshAt).toBe('number');
       expect(lstatSync(statusPath(dir)).mode & 0o7777).toBe(0o600);
       expect(existsSync(pendingPath(dir))).toBe(false);
@@ -846,5 +846,16 @@ describe.skipIf(!PY)('the command line (codex-bridge spec §2.6)', () => {
       expect(r.stderr).toMatch(/^usage: /);
     }
     expect(existsSync(dir)).toBe(false);
+  });
+
+  // runCli's own guard: the library reads an empty CCRC_CODEX_AUTH_BASE as unset (the live endpoint), so runCli
+  // replaces it with CLOSED_AUTH_BASE, which is set and non-empty: status reads authBase override, never default.
+  it('runCli given an empty CCRC_CODEX_AUTH_BASE still runs against the closed base: status says authBase override', async () => {
+    const home = mkTmp('codex-auth-empty-base-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const r = await runCli(home, ['status', '--auth-dir', dir, '--lane', 'codex-a'], { CCRC_CODEX_AUTH_BASE: '' });
+    expect(r.status, r.stderr).toBe(0);
+    expect((JSON.parse(r.stdout) as Record<string, unknown>).authBase).toBe('override');
   });
 });

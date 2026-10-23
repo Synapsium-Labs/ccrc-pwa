@@ -764,7 +764,8 @@ def retry_unsaved(auth_dir: str) -> str:
     needs-signin met on the record's own token never reaches here: `ensure_fresh` drops the record. The one thing
     carried is a config-error that bars under this config: it is about ccrc's OAuth client, not a file's token, so
     its `state`, `lastErrorCode` and `lastRequestId` stay, bound to the new file, and no request follows until the
-    config changes. `"still-unsaved"`: the commit failed again and the record stays."""
+    config changes. `"still-unsaved"`: the commit failed again and the record stays. A raise: while that file,
+    still in place, reads `unreadable`, the commit's refusal (Unreadable) propagates and the record stays (D-6560)."""
     p = paths_for(auth_dir)
     key = _key(auth_dir)
     entry = _UNSAVED.get(key)
