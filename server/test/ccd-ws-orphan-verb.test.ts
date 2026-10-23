@@ -235,6 +235,23 @@ describe('the rescue arm', () => {
     for (const f of foreign) expect(refs).not.toContain(`refs/ccrc/attic/orphan/${sha16(t)}/${f}`);
   }, 120_000);
 
+  it('--rescue pins EVERY sha of a tree whose HEAD reflog is longer than 200, or keeps the tree', () => {
+    const t = claudeTree();
+    pushCommit(t, 'claude/agent-a');
+    // 240 amends: more distinct HEAD-reflog shas than the shared-helper cap of 200
+    const gen = spawnSync('bash', ['-c', 'for i in $(seq 1 240); do git commit -q --amend -m "a$i" || exit 1; done'], { cwd: t, env: h.env(), encoding: 'utf8' });
+    expect(gen.status, gen.stderr).toBe(0);
+    const shas = [...new Set(h.git(t, 'reflog', 'show', 'HEAD', '--format=%H').split('\n').filter(Boolean))];
+    expect(shas.length).toBeGreaterThan(200);
+    const r = orphan(t, rescueOf(t), '--rescue');
+    if (fs.existsSync(t)) {
+      expect(r.doc['failed'], JSON.stringify(r.doc)).toBe('pin-failed');
+    } else {
+      const refs = h.git(main(), 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/orphan/${sha16(t)}/`).split('\n').filter(Boolean);
+      for (const s of shas) expect(refs).toContain(`refs/ccrc/attic/orphan/${sha16(t)}/${s}`);
+    }
+  }, 180_000);
+
   it('a failed pin removes nothing', () => {
     const t = claudeTree();
     pushCommit(t, 'claude/agent-a');

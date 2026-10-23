@@ -13578,12 +13578,14 @@ _ws_attic_pin() {   # main id workdir tip [reflog-scope, default --all] -> echoe
   # The fifth argument is the reflog scope: `--all` (reclaim, unchanged) or `HEAD`
   # (the orphan rescue, which must pin the tree's OWN history, not every reflog
   # of the shared repository that a 200-cap would then fill with foreign shas).
-  local main="$1" id="$2" workdir="$3" tip="$4" scope="${5:---all}" sha n=0
+  # The sixth argument is the cap (default 200; 0 = uncapped, which the orphan rescue
+  # uses so a long reflog is pinned whole and the caller can demand n == its own count).
+  local main="$1" id="$2" workdir="$3" tip="$4" scope="${5:---all}" cap="${6:-200}" sha n=0
   while read -r sha; do
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
     git -C "$main" cat-file -e "${sha}^{commit}" 2>/dev/null || continue
     git -C "$main" update-ref "refs/ccrc/attic/$id/$sha" "$sha" 2>/dev/null && n=$(( n + 1 ))
-  done < <( { [[ -d "$workdir" ]] && git -C "$workdir" reflog show "$scope" --format=%H 2>/dev/null | sort -u | head -200; \
+  done < <( { [[ -d "$workdir" ]] && git -C "$workdir" reflog show "$scope" --format=%H 2>/dev/null | sort -u | awk -v c="$cap" 'c == 0 || NR <= c'; \
               printf '%s\n' "$tip"; } | sort -u )
   echo "$n"
 }
@@ -16371,7 +16373,7 @@ _ws_orphan_failed() {   # id tx word detail -> the post-start failure, journaled
 }
 
 _ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s16, p and the decision words are cmd_ws_orphan's)
-  local tok="$1" rescue="$2" want sp m cls br head tx n=0 err bres=left
+  local tok="$1" rescue="$2" want sp m cls br head tx n=0 err bres=left want_n sha
   _ws_orphan_ladder "$p" || :
   [[ "$_WS_ORPHAN_VERDICT" != unmeasured ]] || { _ws_orphan_failed "$id" "" probe-unmeasured "nothing was removed: $_WS_ORPHAN_WHY"; return 1; }
   want="$_WS_ORPHAN_TOKEN"
@@ -16395,8 +16397,10 @@ _ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s1
   tx=$(_lc_tx)
   _lc_intent destroy "$id" "$tx" verb ws-orphan meas.mode "$cls" meas.state "$( ((rescue)) && echo rescue || echo plain)" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   if (( rescue )); then   # the pin first: a failed pin stops the act with the tree whole
-    n=$(_ws_attic_pin "$m" "orphan/$s16" "$p" "$head" HEAD)
-    { [[ "$n" =~ ^[1-9][0-9]*$ ]] && git -C "$m" rev-parse --verify --quiet "refs/ccrc/attic/orphan/$s16/$head" >/dev/null 2>&1; } \
+    want_n=$({ git -C "$p" reflog show HEAD --format=%H 2>/dev/null; printf '%s\n' "$head"; } | sort -u \
+      | while read -r sha; do [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && git -C "$m" cat-file -e "${sha}^{commit}" 2>/dev/null && echo x; done | wc -l | tr -d ' ')
+    n=$(_ws_attic_pin "$m" "orphan/$s16" "$p" "$head" HEAD 0)
+    { [[ "$n" =~ ^[1-9][0-9]*$ && "$n" == "$want_n" ]] && git -C "$m" rev-parse --verify --quiet "refs/ccrc/attic/orphan/$s16/$head" >/dev/null 2>&1; } \
       || { _ws_orphan_failed "$id" "$tx" pin-failed "nothing was removed: HEAD of $p could not be pinned under refs/ccrc/attic/orphan/$s16/"; return 1; }
   fi
   _ws_orphan_gap pinned
