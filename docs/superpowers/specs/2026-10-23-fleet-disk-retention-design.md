@@ -1,8 +1,8 @@
 # Fleet disk retention: live scratch, orphan worktrees, loose temp entries and a disk alarm
 
-**Spec** · 2026-10-23 · Status: draft for review. It implements the operator's four rulings of 2026-10-23 on #1119; the rulings are fixed, and only the open questions in §9 need the operator · Owner: the ccrc coordinator · Issue: #1119 (the incident, with the rulings as its comment) · Plan: `docs/superpowers/plans/2026-10-23-fleet-disk-retention.md`
+**Spec** · 2026-10-23 · Status: draft for review, rev 1. It implements the operator's four rulings of 2026-10-23 on #1119, the operator's answers to rev 0's open questions, and the operator's four lifecycle-exit rulings G1 to G4 of the same day (posted on #1167 and #1119); the rulings are fixed, and only the questions in §9.2 need the operator · Owner: the ccrc coordinator · Issue: #1119 (the incident, with the rulings as its comment) · Plan: `docs/superpowers/plans/2026-10-23-fleet-disk-retention.md`
 
-**Related:** `2026-08-11-artifact-lifecycle-policy.md` (rows 5, 6 and 9, Tier C, Open Questions 6 and "declared byte budget per box"), `2026-09-22-child-workspace-reclamation-design.md` §5.10 (`ws-collect`), `docs/superpowers/programs/child-reclamation-contract.md` (R38, R57, R59), `2026-10-20-workspace-disk-and-registry-truth-design.md` (#840: §6 Q1's orphan rule, the `archivedHeld` block, the stale-lock rule D-5945), `2026-10-12-path-identity-design.md` with open PR #1132 (W3: which tree `git worktree remove` may delete), `docs/superpowers/plans/2026-10-08-server-test-run-tmp-parent.md` (#337, its deferred Task 5 and "proposal 3, the sweeper"), `2026-10-19-ccrc-consolidation-wave-design.md` (K1 retire reasons, K6 funnel, K12 switches), #298, #316, #317, #318.
+**Related:** `2026-08-11-artifact-lifecycle-policy.md` (rows 5, 6 and 9, Tier C, Open Questions 6 and "declared byte budget per box"), `2026-09-22-child-workspace-reclamation-design.md` §5.10 (`ws-collect`), `docs/superpowers/programs/child-reclamation-contract.md` (R38, R57, R59), `2026-10-20-workspace-disk-and-registry-truth-design.md` (#840: §6 Q1's orphan rule, the `archivedHeld` block, the stale-lock rule D-5945), `2026-10-12-path-identity-design.md` with open PR #1132 (W3: which tree `git worktree remove` may delete), `docs/superpowers/plans/2026-10-08-server-test-run-tmp-parent.md` (#337, its deferred Task 5 and "proposal 3, the sweeper"), `2026-10-19-ccrc-consolidation-wave-design.md` (K1 retire reasons, K6 funnel, K12 switches), `2026-09-24-workspace-lifecycle-design.md` (L3, rung 2′: expiry and children), the stop-done and hibernation lanes (`server/src/stopDone.ts`, `server/src/coord/hibernate.ts`), #298, #316, #317, #318.
 
 ## In short
 
@@ -11,13 +11,18 @@ The fleet work volume filled to 99% twice in two days. Four classes held most of
 - **Ruling 1, live scratch.** `ccd-tmp-sweep` gains a **live arm**. Inside a live session's `scratchpad/` and `tasks/`, it moves a top-level entry that has been untouched for 14 days and that no process holds (cwd, fd, file mapping or `TMPDIR`) into a quarantine, and deletes it 24 hours later if still unheld. The server mails the session what was moved. A **budget notice** at 20 GiB per session goes to the session and its coordinator. #1119 item 1, the cap on finished task `.output` logs, rides the same arm.
 - **Ruling 2, orphan worktrees.** A new server lane, shaped like the temp-root collector, removes a linked worktree that no registry row names, under #840 §6 Q1's rule: clean, HEAD on a remote, no holder, idle 7 days, an audit token, never `--force`. It covers the ccd worktree root and `<project>/.claude/worktrees` and `<project>/.superpowers/worktrees`. Anything else is left and reported. A tree that fails only "HEAD on a remote" can be rescued (its commits pinned under the attic) and then removed, behind its own arm. This resolves the lifecycle policy's Open Question 6.
 - **Ruling 3, `~/.cc-tmp`.** D-5888 is reversed. `ws-collect` gains a **loose arm**: an entry of `~/.cc-tmp` with no witness and no `.child`/`.uuid` row, ctime-quiet for 48 hours and unheld, is collected through the same quarantine, token and re-proof as a witnessed leaf. #337's two deferred follow-ups land with it: vitest's own `tmpDir` joins the run's signal arm, and `ccd-tmp-sweep` collects a dead run's `ccrc-testrun-*` root that no later run revisits.
-- **Ruling 4, the disk alarm.** The agent reports `statfs` for every fleet work filesystem. `GET /api/fleet/health` carries a `disk` block. The server raises a banner and an operator notification at 85% and a critical one at 92%. At critical, each sweep measures its own filesystem and runs in **pressure mode** with shorter, fixed ages. Doctor's `_check_disk` measures the work filesystems rather than `$HOME` alone. The box-local disk guard is retired once this ships.
+- **Ruling 4, the disk alarm.** The agent reports `statfs` for every fleet work filesystem and whether each listed work mount is mounted. `GET /api/fleet/health` carries a `disk` block. The server raises a banner and an operator notification at 85% and a critical one at 92%. At critical, each sweep measures its own filesystem and runs in **pressure mode** with shorter, fixed ages. Doctor's `_check_disk` measures the work filesystems rather than `$HOME` alone. ccrc takes over the box-local disk guard's bind-mount check, and the guard is deleted.
+- **Wave 5, lifecycle exits (G1 to G4).** Four classes of workspace never left the fleet. Each gets an exit through the lane that already owns its neighbour:
+  - **G3:** the reclaim and expiry ladder's rung 9 stops refusing a nested repository whose work is on none of its remotes. It **rescues it into the attic, then proceeds**. The orphan ladder's nested-checkout rung gets the same rescue. The source is fixed too: test runs and workflow steps keep their temp under the session's `TMPDIR`, never inside the tree.
+  - **G2:** a child kept as held, run-absent, under review or behind a terminal refusal, and idle 7 days, is reclaimed through the normal pin, and its coordinator is mailed. A child that coordinated is still never taken.
+  - **Archived children:** `ws-expire` accepts an archived child 7 days after its archive, so "archived" always means "gone in 7 days".
+  - **G1/G4:** a non-child, non-coordinator session with no pane for 14 days is archived, and expires 7 days later. Trees nested inside coordinators' workspaces go through the orphan-tree rules.
 
-Every destructive arm ships in shadow, writes "would" rows first, and is armed by a marker with no writer in the tree. Nineteen tasks, one PR each, in four waves (§8).
+Every destructive arm ships in shadow, writes "would" rows first, and is armed by a marker with no writer in the tree. Thirty-one tasks, one PR each, in five waves (§8).
 
 ## 1. The problem, measured
 
-Code citations are to `origin/main` `a68c90f15`. Line numbers are hints, written `≈:`, and each names its function. Box figures were measured read-only on a fleet host on 2026-10-22 and 2026-10-23 (the issue body and its rulings comment); this design took no new measurement on any box.
+Code citations are to `origin/main` `a68c90f15`. Line numbers are hints, written `≈:`, and each names its function. Box figures were measured read-only on a fleet host on 2026-10-22 and 2026-10-23 (the issue body, its rulings comments, and rev 1's trace of the `.tmp-step0` trees, §1.4).
 
 ### 1.1 What filled the volume
 
@@ -45,7 +50,21 @@ Two passes by hand freed about 18 GiB and then about 118 GiB. Each deleted nothi
 
 ### 1.3 Where Claude Code's scratch lives
 
-Two in-repo measurements disagree on `<T>`. The 2026-10-17 routing plan (≈:536-545) says `<T>` is `$CLAUDE_CODE_TMPDIR`, else the literal `/tmp`, and that `TMPDIR` is not consulted. The child-reclamation ledger (`docs/superpowers/programs/child-reclamation.md` ≈:2937) says the scratchpad follows `TMPDIR`. A workstation running Claude Code 2.1.308 today keeps its scratchpad under `/tmp/claude-<uid>` while `TMPDIR` names another directory, which supports the first. The live arm therefore takes its roots from a measured list (§2.1), and the plan's first fleet task measures it read-only before anything is built on either answer.
+Two in-repo measurements disagree on `<T>`. The 2026-10-17 routing plan (≈:536-545) says `<T>` is `$CLAUDE_CODE_TMPDIR`, else the literal `/tmp`, and that `TMPDIR` is not consulted. The child-reclamation ledger (`docs/superpowers/programs/child-reclamation.md` ≈:2937) says the scratchpad follows `TMPDIR`. A workstation running Claude Code 2.1.308 keeps its scratchpad under `/tmp/claude-<uid>` while `TMPDIR` names another directory.
+
+**Settled (rev 1):** the operator's ops pass observed **both** on a fleet host. One child's scratch sat under `~/.cc-tmp/<id>/claude-<uid>/…/scratchpad`, and the 194 GiB of live scratch sat under `/tmp/claude-<uid>`. The live arm therefore walks both kinds of root (§2.1), and the operator ruled that a child leaf's scratch is swept under the same rules (§9.1 Q7).
+
+### 1.4 Workspaces that never leave (rev 1)
+
+A trace of a coordinated child's lifecycle against `main` found why the fleet listed Done 11, Dead 50 and Archived 16 of 110 rows, all holding disk, while 12 worked:
+
+- **Stranded by a nested repository (G3).** A workflow script's shared prompt told every step to `export TMPDIR="$PWD/.tmp-step0"` inside its isolated worktree (`<project>/.claude/worktrees/wf_<run>-<n>`). Nothing in ccrc or Claude Code chose that path. The agent writing the script did. The suite's per-run parent (#316) then refused, because its `live.sock` path passed the 108-byte socket limit under that deep `TMPDIR`. So fixtures, test-fixture git repositories among them, went loose into the tree. Those repositories hold commits on no remote. The ladder's rung 9 calls that `containment-unproven`, which is **terminal** (spec 2026-09-22 ≈:400, contract §3 ≈:160). Nothing ever asked again, and the untracked files also kept Claude Code from cleaning its own worktrees.
+- **Kept children (G2).** `childReclaimSweepVerdict` (≈:616-710) keeps a child for good on `held` (≈:621), `minting-run-absent` (≈:630), `review-report-live` or `review-report-stale` (≈:687-690), and `terminal-refusal` (≈:623). Nothing in the sweep ever retries a terminal child. Its input carries no idle time at all (`ChildReclaimSweepInput` ≈:416-452).
+- **Archived children.** `ws-expire` refuses any row with a `.child` marker (`_ws_expire_not_child` ≈:34870), and the expiry lane skips them (`archivedExpiryVerdict` ≈:387). Child reclaim, meanwhile, does not consider archive. `close.ts` archives a failed child whose reclaim decision is no (≈:569-571), and from then on no lane owns it.
+- **Dead non-children (G1).** No lane archives a session that lost its pane. `ws-archive` is composed only by the archive door and by `close.ts`. The stop-done and hibernation lanes hibernate, and hibernation is not an exit.
+- **Coordinators' nested trees (G4).** A coordinator's workspace is never reclaimed (rule 4, R37), so the Claude Code worktrees inside it, `<workdir>/.claude/worktrees/*`, have no exit at all.
+
+**Context, not design input:** the operator armed `expire-lane-live` on a fleet host on 2026-10-23, with the go-ahead given that day. Its shadow feed had shown overdue archived workspaces since 2026-09-30. `collect-lane-live` was already present. Neither changes this design. Archived workspaces now leave in 7 days, which is why the exits above all route into archive or the existing pin.
 
 ## 2. Decisions
 
@@ -58,7 +77,7 @@ Each ruling's design names the existing owner it extends, the exact rule, and th
 **Roots.** The sweep walks each of these that exists, is a directory owned by this uid, and resolves physically where it should:
 1. today's root, `${TMPDIR:-/tmp}/claude-<uid>`;
 2. `/tmp/claude-<uid>`, when it differs from (1) (§1.3);
-3. `<physical ~/.cc-tmp>/<id>/claude-<uid>` for each witnessed child leaf, when Step 0 finds Claude Code's scratch there.
+3. `<physical ~/.cc-tmp>/<id>/claude-<uid>` for each witnessed child leaf whose row is live (observed on a fleet host, §1.3; ruled §9.1 Q7).
 
 A root is listed in the census with the arm that read it, so a root added or missing is visible.
 
@@ -140,7 +159,7 @@ Any rung that cannot be measured answers `unmeasured`, which is retried. The tok
 - census every 6 hours (hourly under pressure); audits at most 2 per pass (4 under pressure); at most one act per pass fleet-wide, on the `KeyedQueue` key;
 - **licence:** two audits of one unchanged token at least one hour apart; the second is the act job's own;
 - **gates:** `reclaim-paused`; ccd's `orphan-v1` capability (`ccdCan`); the arming markers; the maintenance mode when it lands;
-- **arming:** shadow unless `$REG/orphan-tree-live` exists; the rescue arm is shadow unless `$REG/orphan-tree-rescue-live` also exists. Neither marker has a writer in the tree;
+- **arming:** shadow unless `$REG/orphan-tree-live` exists; the rescue arm is shadow unless `$REG/orphan-tree-rescue-live` also exists. Neither marker has a writer in the tree. The rescue marker is set only after the main arm has run live for a week (ruled, §9.1 Q1);
 - **feed:** `kind:'coord'`, `record-only`, one row per change of (path, outcome): `orphan worktree removed`, `orphan worktree would be removed`, `orphan worktree left` with the refusal's sentence;
 - **health:** the `disk` block's `orphanTrees` carries counts by class and outcome, and bytes where an audit measured them (`du -skx`, bounded at 30 s, report only).
 
@@ -209,7 +228,7 @@ A sweep's age floor is a safety property, so the server can never lower one. Eac
 | orphan trees, idle | 7 days | 3 days |
 | orphan trees, census cadence | 6 hours | 1 hour |
 
-**Retiring the box-local guard.** The box's own disk guard watches the same two thresholds and the work volume's bind mounts. Once the banner, the notification and doctor have shipped, and `CCRC_WORK_MOUNTS` lists the bind targets, the guard is redundant and the operator removes its timer (§8).
+**Deleting the box-local guard (ruled, §9.1 Q5).** The box's own disk guard watches the same two thresholds, whether the work volume is mounted, and whether each of its bind mounts is live. ccrc takes over all three. `CCRC_WORK_MOUNTS` lists the volume's mount point and every bind target, and the agent answers each `mounted` from `/proc/self/mountinfo`. A listed path that is not a mount point is `critical`, and the notice names it, so a silently absent volume pages as plainly as a full one. Once the banner, the notification and doctor have shipped, and one real or fixture-driven warn has reached the banner and the push, the operator deletes the guard's script, service and timer (§8).
 
 ### 2.6 Shared pieces
 
@@ -230,41 +249,152 @@ A read-only entry, `ccd path-users --json <path>…`, exposes it to `ccd-tmp-swe
 
 `ccd path-users`, `ws-audit --orphans`, `ws-audit --orphan-hex`, `ws-audit --collect-census` and `ws-audit --loose-hex` are read-only.
 
+Wave 5 adds **no new verb**. It widens three verbs that are already forbidden to sessions and already the server's, each through a flag the server composes and the box re-proves: `ws-reclaim --stale`, `ws-expire --child-of` and `ws-archive --if-no-pane` (§2.7). `FORBIDDEN_CCD_VERBS` already names all three heads. CLAUDE.md's SAFETY lines for `ws-expire` ("never a child") and `ws-reclaim` change to say exactly what the new forms take (§2.7.6).
+
+### 2.7 Wave 5: lifecycle exits (rulings G1 to G4)
+
+Each exit is built on the lane that owns its neighbour, and none adds a lane where an existing lane can take the case. The new arms are child reclaim's stale arm, expiry's child arm, and a stale-archive arm. Each ships shadowed behind its own marker.
+
+#### 2.7.1 G3: rung 9 rescues a nested repository, then proceeds
+
+**Today.** Rung 9 of `_ws_reclaim_ladder` (`ccd/ccd` ≈:30929-30991) pins and removes a nested checkout of this repository. A nested checkout of another repository must prove itself clean, with every commit on one of its own remotes (`_ws_reclaim_foreign_clean` ≈:30563-30616). Otherwise the rung answers `containment-unproven`, which both lanes treat as terminal (`CHILD_RECLAIM_TOKEN_KIND`, `coord/childReclaim.ts` ≈:78-93; `EXPIRE_TOKEN_KIND`, `archivedExpiry.ts` ≈:41-61). The spec called this "reap, and note" and refused it (2026-09-22 ≈:484-492). The operator has now ruled the other way.
+
+**The rescue.** When `_ws_reclaim_foreign_clean` fails for a nested repository `N` (dirty, hidden-flag edits, or commits on none of its remotes), the ladder classes `N` as **rescuable** rather than refusing. The pin phase then does three things for each rescuable `N`, before anything is removed:
+1. **Captures its uncommitted state.** It makes a WIP commit inside `N` the way `_ws_wip_commit` (≈:31462) does for this repository: `commit-tree` from a scratch index copy, with untracked files that are not ignored added to it. No ref moves in `N`.
+2. **Fetches it into the attic.** `git -C <main> fetch --no-tags --no-write-fetch-head <N> '+refs/*:refs/ccrc/attic/<id>/nested/<pathhex>/refs/*'`, plus the WIP commit as `refs/ccrc/attic/<id>/nested/<pathhex>/wip`, every git call contained like the rest of the pin (`_ws_reclaim_contained` ≈:31151). The commits then live in the main repository's object store under the one attic namespace `refs/ccrc/*`, which nothing garbage-collects (policy row 15).
+3. **Re-proves it.** Every rescued sha must resolve under the attic ref before the tail may run. A failure is `nested-rescue-failed`, retryable, and nothing is removed.
+
+The tail then removes the tree as it does today: its foreign checkouts go with the `--force` removal that follows the pin (≈:34219). The tombstone's `containment` gains `rescued: [{path, refs, wip, bytes}]` beside `sameRepository` and `foreignProven` (≈:32343-32366).
+
+**Bounds.** A nested repository whose objects missing from the main store exceed `WS_NESTED_RESCUE_MAX_MB` (512 MiB, raise-only) answers `nested-rescue-too-large`. That word is terminal: it is reported on the banner, and nothing is taken. The fetch runs under the pin's existing time bound. A nested repository that cannot be read stays `unmeasured`.
+
+**Why refs, not a bundle file.** The attic is already the record that `_reg_purge` cannot reach and that survives reaps. A bundle file would be a new artifact class with its own lifecycle row and a second record of the same fact. The cost is that a foreign history's objects enter the project repository's store. They are reachable only from `refs/ccrc/*`, which no push carries.
+
+**The token** binds the rescue: `nestedRescue=<pathhex>:<HEAD or ->:<status digest>` for each rescuable `N`, in `REAP_CHILDDIGEST`'s inputs (≈:31010). A nested repository that changes between the audit and the act fails the token.
+
+**Arming.** ccd reads `$REG/nested-rescue-live` at the audit and again inside the lock. Without the marker, rung 9 answers `containment-unproven` exactly as today, and the audit document carries `nestedRescue: {wouldRescue: [...]}` so the shadow feed can show what it would rescue. The other `containment-unproven` producers (a leaf link, a shared or nested registry row, a workdir of another repository, a gitdir that is not its own, a moved tree; ≈:30740-30864, ≈:30989) are unchanged and stay terminal.
+
+**Because the ladder is shared,** the rescue applies to `ws-reclaim` and `ws-expire` alike, in both evals and both resumes.
+
+**The orphan ladder gets the same arm (§2.3, rung 11).** A nested checkout of the tree's own repository blocks a tree today. Under the arm, a same-repository nested checkout is pinned under `refs/ccrc/attic/orphan/<sha16>/nested/<pathhex>/`, and a foreign one is rescued as above. The orphan tree is still removed without `--force`, and git refuses a tree with untracked files. So the verb first removes the rescued nested directory itself: the same `_ws_leaf_remove` the collector uses, after a holder ask, inside the lock and after the re-prove. Only then does it run `git worktree remove`. A tree whose only blocker is rung 11 gets a rescue token, as rung 9 does under §2.3's rescue.
+
+#### 2.7.2 G3's source: temp under `TMPDIR`, never inside a tree
+
+The trees were stranded by an agent-authored instruction (§1.4). Two fixes, and neither touches Claude Code:
+- **The suite refuses a temp root inside a work tree.** `run-tmp.globalsetup.mjs` resolves `os.tmpdir()` physically. If any ancestor holds a `.git`, it does not build its run parent there. It uses `CCRC_SESSION_TMPDIR` instead, when that is set and itself lies outside every work tree, and otherwise the box's own `/tmp`. It prints its `ccrc-test:` line naming the move. `mkTmp` (`server/test/tmpHelpers.ts` ≈:49) follows it through the run parent. The 2026-10-08 ruling that a too-long `TMPDIR` refuses rather than degrades still stands: a tree-relative `TMPDIR` was the long one here, and moving out of the tree removes the length.
+- **ccd exports the session's own temp root.** Each spawn exports `CCRC_SESSION_TMPDIR`: the child's `~/.cc-tmp/<id>`, or the box's `TMPDIR` for any other session. An agent that overrides `TMPDIR` later cannot hide where the session's temp belongs.
+- **The skills say it.** The coordinator and worker skills gain one clause each: a workflow script, a worker brief or a test step never sets `TMPDIR` or writes scratch inside a work tree. It uses the session's `TMPDIR`. The clauses are pinned verbatim, so this is its own reviewed change.
+
+#### 2.7.3 G2: kept children are reclaimed after 7 idle days
+
+**Population.** A child whose sweep verdict is `held`, `minting-run-absent`, `review-report-live`, `review-report-stale` or `terminal-refusal`. Never `coordinating`: `has-coordinated` stays excluded (rule 4, R37, R40). Never the doubt words, which mean "measure again".
+
+**Idle, measured on both sides.** The server knows run and mail activity. The box knows pane activity. Each must agree before anything moves:
+- **Server (L1, `childReclaimSweep.ts`):** the newest of the minting run's latest `run_events.at`, the latest `run_events.at` of any run naming the session, the latest mail delivery to or from the session, and the session's `statusUpdatedAt`. All must be older than `CHILD_STALE_IDLE_MS` (7 days). Any one unreadable means not stale.
+- **Box (ccd, a new ladder rung on the stale arm only):** the newest of the current uuid's transcript mtime (`_transcript_path`), `.lastend`, `.spawn`, `.woke` and `.supervised`, and tmux's `#{window_activity}` when a pane is up. All must be older than `WS_STALE_IDLE_S` (604800 s, raise-only). Anything unmeasured refuses `not-idle`.
+
+**The act is the normal reclaim.** `ws-reclaim --expect <tok> --child-of <run> --session <id> --stale <word> [--hold-digest <sha256>]`. The stale word changes exactly one rung:
+- `--stale held`: rung 4 passes a hold whose content hashes to `--hold-digest`; any other hold, or a changed one, refuses `held`;
+- `--stale run-absent`, `--stale review`: no rung changes. Those keeps were the server's alone;
+- `--stale terminal`: no rung changes. The child is simply **asked again** once per 7 idle days. If the ladder now passes, which G3's rescue will often make true, it is reclaimed. If it still refuses terminally, it stays kept, and its banner row comes back with the new date.
+
+The token binds `stale=<word>`, the hold digest and the box's idle instant. Everything else is today's pin and tail: the pin captures the branch, the WIP and any review report under `refs/ccrc/attic/<id>/`, and the tail removes the tree and the child's temp root.
+
+**The coordinator is told.** After a reclaim done on the stale arm, the server sends system mail from the `operator` role to the minting run's `claimedBy` (`resolveCoordinator(runId)`), kind `status`. The mail names the child, why it was stale, and the attic refs it can re-dispatch from (`git worktree add <path> refs/ccrc/attic/<id>/<sha>`). A run-absent child has no coordinator to tell, so a `kind:'coord'` feed row records it instead.
+
+**Arming.** The verdict answers `stale-eligible:<word>` and the lane acts only when `$REG/child-stale-reclaim-live` exists. Without it, it records "child would be reclaimed (stale)" once per child and word. `reclaim-paused` and the coming per-reason off switch (ARCH-77) stop it with the rest of child reclaim.
+
+**What this reverses.** R32 and R34 ("a person's hold is never released") are amended: a hold now protects for 7 idle days. R41's kept list loses `minting-run-absent`, `reviewed-run-absent` and `review-report-stale`, which become stale-eligible. D-5942's "nothing reclaims it before that" is superseded: the review report is preserved by the pin, and the mail names where. The spec's §5.9 line "a child under a hold is never asked" (2026-09-22 ≈:1021) is amended the same way.
+
+#### 2.7.4 Archived children expire after 7 days
+
+**Box.** `ws-audit --session <id> --expire --child-of <run>` and `ws-expire --expect <tok> --session <id> --child-of <run>`. Without `--child-of`, a child refuses `child`, exactly as today, so an older server changes nothing. With it, `_ws_expire_not_child` (≈:34870) passes only when the marker parses as a run id equal to `--child-of`. An unreadable marker still refuses. The token binds `childOf`. Every other expiry rule stands unchanged: rung 2′'s seven days from `.archived` (`WS_EXPIRE_AFTER_S`), the tightened presence rung (no pane up, no cwd user), and no `--defer-expired`. The tail is the shared tail, so the child's pin, its temp root and its tombstone are reclaim's.
+
+**Server.** `archivedExpiryVerdict` (≈:387) stops skipping a `child` mark when `$REG/expire-child-live` exists. It still skips an `unreadable` mark, and its store rules (`open-run`, `coordinating`, `review-open`) apply to children as they do to anyone. Without the marker, an archived child past its 7 days is recorded "would be expired (child)". The child reclaim lane keeps its own population, so an archived child that becomes reclaim-eligible first is reclaimed first. Both verbs take the same reap lock, so the two cannot race.
+
+#### 2.7.5 G1 and G4: dead non-children are archived; coordinators' nested trees are collected
+
+**G1, the stale-archive arm.** It is a new arm, because no lane archives today. Its verdict lives beside the expiry lane's (`server/src/archivedExpiry.ts` gains `staleArchiveVerdict`), since archive is the step before expiry and the two share their population read.
+
+A row is archived when all of these hold:
+- it is a workspace (`workspace !== null`), with no `.child` marker in any reading, not archived and not held;
+- it has never been a run's `claimedBy`, in any state or generation (`childReclaimCoordinatorClaims` and `openCoordinatorIds` both empty for it);
+- no pane, measured on two passes at least an hour apart;
+- **no pane for 14 days:** the newest of its latest `spawn`, `start` and `supervise` acts in the lifecycle mirror (`lifecycle_events`), `.supervised`, `.spawn`, `.woke` and its current transcript's mtime is older than `STALE_ARCHIVE_AFTER_MS` (14 days). No evidence at all means unmeasured, and the row is kept. A hibernated row counts as having no pane (§9.2 Q3);
+- nobody is viewing it (retire defers on `visible`, D-5242).
+
+**The act** is `ws-archive --session <id> --if-no-pane --reason stale`. The new flag refuses `live` when a tmux session or an active unit exists at the act, so an archive can never kill a pane that came back. `.archivedreason`'s grammar gains `stale`. The archive starts expiry's seven days.
+
+**Pacing and arming.** Hourly, at most one act per pass fleet-wide, shadow until `$REG/stale-archive-live`. Each act writes a `kind:'coord'` feed row. There is no mail, because the session is not running.
+
+**G4: coordinators' nested trees.** The orphan census's `claude` and `superpowers` classes widen from `<main>/.claude/worktrees/*` to `<checkout>/.claude/worktrees/*` for any checkout of the repository, the main checkout or a linked workspace. Rung 4 then distinguishes two cases. A registry row whose workdir is the tree, or lies inside it, still refuses `registered`. A row whose workdir **contains** the tree passes, and the census names it as `inside: <id>`. The server's lane takes such a tree only when that containing row is a coordinator (any run's `claimedBy`). For any other containing row it reports "goes with its workspace": that row's own reclaim or expiry pins and removes its nested checkouts at rung 9. Every other orphan rule is unchanged: clean, HEAD on a remote, no holder, idle 7 days, never `--force`, and Q1's rescue arm.
+
+#### 2.7.6 SAFETY text
+
+- `ws-reclaim`: "…the SERVER's act on a CHILD workspace only … or, on its stale arm, a child that its sweep kept and both the server and the box measure idle seven days, never one that coordinated."
+- `ws-expire`: "…on an ARCHIVED workspace only, seven days after its archive (never a main checkout; a child only through `--child-of` naming its marker's run)…"
+- `ws-archive` stays forbidden to sessions. Its new `--if-no-pane` form is the server's stale-archive arm.
+
+#### 2.7.7 How wave 5 meets #840 P4-4 to P4-6 and the consolidation wave
+
+P4-4 (gone-branch refusal), P4-5 (stale `index.lock`) and P4-6 (permission prune) are planned and not on `main`. Each edits a different rung of the same ladder (HEAD, rung 6, rung 8), and G3 edits rung 9. If P4-4 to P4-6 are in flight, the wave-5 ladder task rebases after them. Otherwise it lands first, and they rebase. Either order keeps one ladder. The orphan ladder's rung 7 calls P4-5's helper once it lands. In the consolidation wave, the stale arm is a per-reason evidence row of `child-spent`, the expiry child arm is a row of `archive-expired`, and the stale archive is an edge of the sleep→retire graph (`decideRetire` and `decideSleep`, K1). None is a new lane shape.
+
 ## 3. Ownership, before and after
 
 | Class | Before | After |
 |---|---|---|
 | Dead session units under `claude-<uid>` | `ccd-tmp-sweep`, 7 days | unchanged; 2 days under pressure |
-| Live session `scratchpad/` and `tasks/` entries | **none** | `ccd-tmp-sweep` live arm: 14 days untouched, unheld, quarantine 24 h, mailed |
+| Live session `scratchpad/` and `tasks/` entries, under `/tmp` and inside live child leaves | **none** | `ccd-tmp-sweep` live arm: 14 days untouched, unheld, quarantine 24 h, mailed |
 | Finished task `.output` over 1 GiB | **none** | `ccd-tmp-sweep` live arm: capped to head and tail |
 | Per-session temp bytes | **not measured** | tmp-sweep census; budget notice at 20 GiB to the session and its coordinator |
 | `ccrc-testrun-*` roots no later run visits | **none** (the next run under the same `TMPDIR` only) | `ccd-tmp-sweep` test-run arm; vitest's `tmpDir` in the run's own arm |
+| Test temp written inside a work tree | **nothing stops it** | the suite moves its run parent out of any work tree; ccd exports `CCRC_SESSION_TMPDIR`; the skills say it |
 | Witnessed `~/.cc-tmp/<id>` leaves with no row | `ws-collect` | unchanged |
 | Unwitnessed leaves and loose `~/.cc-tmp` entries | **the operator's** (D-5888, R57, R59) | `ws-collect` loose arm: 48 h ctime-quiet, unheld, token-bound identity |
 | ccd-root orphan worktrees (policy row 5) | `ws-gc --prune`, operator only | orphan-tree lane (server, `ws-orphan`); `ws-gc --prune` stays for the operator on the same rules |
-| `.claude/worktrees` (policy row 6) | **UNASSIGNED** (Open Q6) | orphan-tree lane, class `claude` |
-| `.superpowers/worktrees` | **undeclared** | orphan-tree lane, class `superpowers` |
+| `.claude/worktrees` and `.superpowers/worktrees` of any checkout, coordinators' workspaces included (policy row 6) | **UNASSIGNED** (Open Q6); inside a coordinator, **no exit** | orphan-tree lane, classes `claude` and `superpowers` |
 | Other linked worktrees | reported by `ws-gc` | reported by the census, `other`, never removed |
-| Fleet work filesystem fill | box-local guard; doctor on `$HOME` only | agent `disk` op → health `disk` block → banner and notice; doctor on every work filesystem |
+| A child stranded by a nested repository with work on no remote | **terminal** `containment-unproven`, never asked again | rung 9 rescues the repository into the attic, then the ladder proceeds |
+| Children kept as held, run-absent, under review or behind a terminal refusal | **kept for good** | child reclaim's stale arm after 7 idle days, measured on both sides; the coordinator is mailed |
+| Children that coordinated | never reclaimed | unchanged (rule 4) |
+| Archived children | **no owner** (expiry skips them, reclaim does not look) | expiry's child arm, 7 days after the archive |
+| Dead non-child, non-coordinator workspaces | **no owner** | stale-archive arm after 14 days with no pane, then expiry 7 days later |
+| Fleet work filesystem fill and work-mount liveness | box-local guard; doctor on `$HOME` only | agent `disk` op → health `disk` block → banner and notice; doctor on every work filesystem; the guard is deleted |
 | Transcripts and sidecars | #317 / #840 P4-7..9 | unchanged (out of scope) |
 
 ## 4. Why it is safe
 
 - **Fail toward keeping.** Every unreadable, unmeasured, truncated or ambiguous answer keeps the candidate and says why. A walk past its bound is `unmeasured`. A census past its cap audits nothing new.
 - **Holders.** One probe, extended only toward refusing: cwd, every fd, every file mapping and `TMPDIR`, on both spellings, asked at the pass and again nearest each act. Processes of another uid cannot be read without root; the fleet runs one uid, and this is a stated residual.
-- **Quiet floors.** Every rule waits for every entry to be quiet, not the candidate's top level. Ctime is used wherever an entry could be renamed or chmodded into place. The floors are box-measured and a server argument cannot lower one.
-- **Reversibility.** The live arm and both collect arms move before they delete. The live arm's 24 h grace is the session's window to put an entry back.
-- **Tokens and licences.** Both server lanes act only on a token the box recomputes inside its lock, seen twice an interval apart, so a tree or entry that changes between the audit and the act is refused.
-- **Arming and kill switches.** Each new destructive arm ships in shadow and is armed by its own marker, none of which has a writer in the tree: `~/.ccrc/tmp-sweep-live-arm`, `$REG/collect-loose-live`, `$REG/orphan-tree-live`, `$REG/orphan-tree-rescue-live`. `tmp-sweep-paused` stops the box sweep, `reclaim-paused` stops both server lanes, and the collect switch stops the loose arm with the witnessed one.
-- **Disjoint collectors.** tmp-sweep acts only inside units it measures live, or on units it measures dead; `ws-collect` only on `~/.cc-tmp` entries with no row; the orphan lane only on worktrees with no row; reclaim and expire only on rows. A path is in at most one population.
-- **No herd.** Server lanes act at most once per pass fleet-wide. Nothing restarts a session. Account switching is untouched: none of this code runs on the swap path.
-- **SAFETY.** The new verbs are the server's (§2.6.2). Every test uses a fixture HOME (`makeCcdHarness`). Nobody runs a new verb against a live box from a shell or a test.
+- **Quiet floors.** Every rule waits for every entry to be quiet, not the candidate's top level. Ctime is used wherever an entry could be renamed or chmodded into place. The floors are box-measured, and a server argument cannot lower one. Wave 5's idle clocks are measured on both sides, and either side alone can refuse.
+- **Lossless where work can exist.** Every wave-5 exit ends in the existing pin before the tail removes anything: the branch, the WIP and the reflogs under `refs/ccrc/attic/<id>/`, and now each nested repository's refs and WIP. The pin is re-proved before the tail runs, and a pin that fails stops the act. The orphan lane removes only clean trees whose HEAD is on a remote, or rescued ones.
+- **Reversibility.** The live arm and both collect arms move before they delete. The live arm's 24 h grace is the session's window to put an entry back. A stale-reclaimed child is re-dispatched from its attic refs, and the mail says how.
+- **Tokens and licences.** Every server act runs on a token the box recomputes inside its lock, seen twice an interval apart. A tree or entry that changes between the audit and the act is refused. Each widened verb binds its new input into the token: `stale` and the hold digest, `childOf` for expiry, and each rescued nested repository.
+- **Arming and kill switches.** Each new destructive arm ships in shadow and is armed by its own marker, none of which has a writer in the tree:
+  - `~/.ccrc/tmp-sweep-live-arm`;
+  - `$REG/collect-loose-live`;
+  - `$REG/orphan-tree-live` and `$REG/orphan-tree-rescue-live`;
+  - `$REG/nested-rescue-live`, read by ccd itself;
+  - `$REG/child-stale-reclaim-live`;
+  - `$REG/expire-child-live`;
+  - `$REG/stale-archive-live`.
+
+  `tmp-sweep-paused` stops the box sweep. `reclaim-paused` stops every server lane here. The collect switch stops the loose arm with the witnessed one.
+- **What stays excluded.** A child that coordinated, a main checkout, an unreadable child marker, a row someone is viewing, and a pane that is up at the act.
+- **Disjoint collectors.** tmp-sweep acts only inside units it measures live, or on units it measures dead. `ws-collect` acts only on `~/.cc-tmp` entries with no row. The orphan lane acts only on worktrees no row is or lies inside. Reclaim and expire act only on rows, and they share one reap lock. A path is in at most one population, except an archived child, which both reclaim and expiry may take; whichever holds the lock first takes it.
+- **No herd.** Each server lane acts at most once per pass fleet-wide. Nothing restarts a session. Account switching is untouched: none of this code runs on the swap path.
+- **SAFETY.** The new and widened verbs are the server's (§2.6.2, §2.7.6). Every test uses a fixture HOME (`makeCcdHarness`). Nobody runs a destructive verb against a live box from a shell or a test.
 
 ## 5. Wire and deploy
 
-- **Agent:** a new op, `disk`, in `ready.ops`. A new `NODE_FILES` key, `tmpSweep: 'tmp-sweep.json'`. New grant prefixes: `['ws-audit','--orphans']`, `['ws-audit','--orphan-hex']`, `['ws-audit','--collect-census']`, `['ws-audit','--loose-hex']` and `['ws-orphan','--expect']`, with `'ws-orphan': '--expect'` in `REQUIRED_VERB_FLAG`. `ws-gc` stays in `UNGRANTABLE_VERBS`.
-- **ccd capabilities:** `path-users-v1`, `collect-loose-v1`, `orphan-v1`. The server's `CCD_CAN` rows refuse without them, so each server lane is inert on a box whose ccd predates it.
-- **Server ↔ PWA:** `FleetHealth.disk`, optional, through `readDiskHealth`. A new banner id. New feed titles in their lanes' tables.
+- **Agent:**
+  - a new op, `disk`, in `ready.ops`;
+  - a new `NODE_FILES` key, `tmpSweep: 'tmp-sweep.json'`;
+  - new grant prefixes: `['ws-audit','--orphans']`, `['ws-audit','--orphan-hex']`, `['ws-audit','--collect-census']`, `['ws-audit','--loose-hex']` and `['ws-orphan','--expect']`, with `'ws-orphan': '--expect'` in `REQUIRED_VERB_FLAG`;
+  - `ws-gc` stays in `UNGRANTABLE_VERBS`;
+  - wave 5's flags ride grants that already exist: `['ws-reclaim','--expect']`, `['ws-expire','--expect']`, `['ws-audit','--session']` and `['ws-archive','--session']`.
+- **ccd capabilities:** `path-users-v1`, `collect-loose-v1`, `orphan-v1`, `nested-rescue-v1`, `reclaim-stale-v1`, `expire-child-v1` and `archive-if-no-pane-v1`. The server's `CCD_CAN` rows refuse without them, so each arm is inert on a box whose ccd predates it. A server that composes `--stale`, `--child-of` or `--if-no-pane` never does so without the capability, because an older ccd would reject the extra argument as a usage error.
+- **Server ↔ PWA:** `FleetHealth.disk`, optional, through `readDiskHealth`. A new banner id. New feed titles in their lanes' tables. New kept and stale words in `CHILD_RECLAIM_SKIP` and the L0 kept-word table.
 - **No `FLEET_PROTO` bump** and no coord.db migration. Everything is additive and absence-permits.
 - **Order:** agent lane first, as `ccrc rollout` does by default. A server reading a field the agent does not yet send reads unmeasured.
 
@@ -272,15 +402,28 @@ A read-only entry, `ccd path-users --json <path>…`, exposes it to `ccd-tmp-swe
 
 - `shared/lifecycle.ts`:
   - `claude-tmp-session-dirs`: the collector names the live arm, its 14 days, its quarantine and its pressure ages; the bound becomes "session lifetime + 7 days, and 14 days untouched inside a live session".
-  - `child-tmp-roots`: the D-5888 comment says it is reversed by the loose arm.
-  - new `cc-tmp-loose-entries` (`~/.cc-tmp/<name>` with no witness and no row; pattern S; collector `ws-collect` loose arm).
+  - `child-tmp-roots`: the D-5888 comment says it is reversed by the loose arm; the collector adds the live arm for scratch inside a live leaf.
+  - new `cc-tmp-loose-entries` (`~/.cc-tmp/<name>` with no witness and no row; pattern S; collector the `ws-collect` loose arm).
   - `server-test-run-dirs`: the collector adds the test-run arm.
-  - new `ccd-orphan-worktrees` and `agent-worktrees` (`.claude/worktrees`, `.superpowers/worktrees`; pattern W; collector the orphan-tree lane).
+  - new `ccd-orphan-worktrees` and `agent-worktrees` (`.claude/worktrees`, `.superpowers/worktrees` of any checkout; pattern W; collector the orphan-tree lane).
   - new `tmp-sweep-census` (`~/.ccrc/tmp-sweep.json`; pattern X).
-- `2026-08-11-artifact-lifecycle-policy.md`: rows 5, 6 and 9 name their collectors; foreign worktrees move from Tier C to Tier B; Open Question 6 is marked RESOLVED 2026-10-23 with option (a), and the "declared byte budget per box" question cites the 85/92 alarm and the 20 GiB session budget as a partial answer.
-- `child-reclamation-contract.md`: R38 and R59 amended (§2.4).
-- `README.md`: the tmp-sweep section, the collector section, a new orphan-tree section, and Fleet health's field list.
-- `CLAUDE.md`: the SAFETY line for `ws-orphan`, and the load-flake bullet if a new suite walks the real `/proc`.
+  - new `child-workspaces` (pattern W; collectors: ws-reclaim on close and by the sweep, its stale arm at 7 idle days, and expiry once archived; bound "the run's close, or 7 idle days when kept, or 7 days after an archive; never while it coordinated").
+  - new `archived-workspaces` (pattern W; collector ws-expire, children included; bound 7 days after the archive).
+  - new `attic-nested-rescues` (`refs/ccrc/attic/<id>/nested/<pathhex>/*` in the project repository; pattern O, like the attic refs; ruling: policy Open Q4 still holds the attic's horizon).
+- `2026-08-11-artifact-lifecycle-policy.md`:
+  - rows 5, 6 and 9 name their collectors, and foreign worktrees move from Tier C to Tier B;
+  - row 4 (archived) names the stale-archive inflow and the child arm;
+  - row 15 (attic refs) names the nested rescue;
+  - Open Question 6 is RESOLVED 2026-10-23 with option (a);
+  - the "declared byte budget per box" question cites the 85/92 alarm and the 20 GiB session budget as a partial answer.
+- `2026-09-22-child-workspace-reclamation-design.md` and `child-reclamation-contract.md`:
+  - R38 and R59 (loose entries, §2.4);
+  - the rung-9 row (≈:400) and its "reap, and note" paragraph (≈:484-492), with the contract's §3 `containment-unproven` row (≈:160): nested repositories are rescued under the arm;
+  - R32 and R34 (holds), R41's kept list, and §5.9's "a child under a hold is never asked": the stale arm (§2.7.3);
+  - R37 and R40 unchanged.
+- `2026-09-24-workspace-lifecycle-design.md`: rung 2′ (≈:326-330), the eligibility line (≈:360) and "an expiry never touches a row with a child marker" (≈:433-434) name the `--child-of` form.
+- `README.md`: the tmp-sweep section, the collector section, a new orphan-tree section, the child-reclaim and expiry sections, and Fleet health's field list.
+- `CLAUDE.md`: the SAFETY lines for `ws-orphan`, `ws-reclaim` and `ws-expire` (§2.7.6), and the load-flake bullet if a new suite walks the real `/proc`.
 
 ## 7. Tests
 
@@ -289,8 +432,13 @@ The plan carries each task's red-first cases and mutation table. In summary:
 - **tmp-sweep:** a live unit's old entry moves to quarantine and is deleted a pass later; a young file deep under an old directory keeps it; an atime-fresh file keeps it (and is ignored on a `noatime` fixture); a held entry stays; `scratchpad/` itself and the unit itself are never candidates; an unmapped live unit is skipped; shadow writes rows and moves nothing; the census shape and `seq`; the output cap's head, marker and tail; the test-run arm's listener, quiet and holder rules; pressure ages from a fake `df`.
 - **Mail and budget:** one mail per pass per session, deduplicated; no mail for shadow rows; the notice's band crossing and re-arm; the coordinator copy.
 - **Loose collect:** every census class; hex names, including option-like and dotted ones; the floor; a recreated name fails the token; the open-run hold exempts loose entries; shadow under the loose marker; resume from a loose record.
-- **Orphan trees:** every census class; every ladder rung's refusal, red when that rung is deleted; the rescue token only for rung 9; the verb's lock, recompute, pin, re-ask and no `--force` (a mutant that adds it is red); `branch -d` for `ccd-root` only; the lane's licence, pacing, arming and feed rows.
+- **Orphan trees:** every census class, trees inside a coordinator's workspace included; every ladder rung's refusal, red when that rung is deleted; the rescue token for rung 9 and rung 11; the verb's lock, recompute, pin, re-ask and no `--force` (a mutant that adds it is red); `branch -d` for `ccd-root` only; the lane's licence, pacing, arming and feed rows.
 - **Alarm:** each threshold with hysteresis and the two-measurement debounce; inode-driven levels; a missing expected mount is critical; one push per episode level; the block absent before the first measure and with an older agent; doctor's per-filesystem lines; the bash twins equal L0.
+- **Nested rescue:** a child whose tree holds a test-fixture repository with unpushed commits and untracked files. Under the marker, the audit mints a token naming it, the pin fetches its refs and its WIP into the attic, and the tail removes the tree. Every rescued sha resolves afterwards. Without the marker, `containment-unproven` as today. A repository over the size bound is `nested-rescue-too-large`. A nested commit made between the audit and the act gives `state-changed`. The other `containment-unproven` producers stay terminal. The expiry ladder behaves the same.
+- **Temp source:** a run started with `TMPDIR` inside a fixture work tree builds its parent under `CCRC_SESSION_TMPDIR`, or under `/tmp`, and says so; one outside any tree behaves as today; the spawn exports `CCRC_SESSION_TMPDIR`.
+- **Stale reclaim:** each kept word at 6 days is kept and at 8 days is stale-eligible; `coordinating` never is; any idle input unreadable keeps; the box refuses `not-idle` when the transcript is fresh even though the server says stale; `--stale held` with a changed hold refuses `held`; a terminal child is re-asked once per 7 idle days; the coordinator mail names the attic refs; a run-absent child writes a feed row; shadow writes "would"; the per-reason marker gates.
+- **Expiry child arm:** without `--child-of` a child refuses `child`; with a matching marker it expires through the shared tail and its temp root goes; a mismatched or unreadable marker refuses; the lane skips children without the marker and records "would"; an older ccd (no capability) is never sent the flag.
+- **Stale archive:** a non-child, never-claimant workspace with no pane for 15 days is archived on its second observation; 13 days, a viewer, a hold, any claim or a child marker keeps it; no evidence keeps it; `--if-no-pane` refuses when a pane came back; `.archivedreason` reads `stale`.
 - **UI:** the banner at 360, 390, 1280 and 1920 wide, in both skins and both themes, shown at warn and critical and hidden otherwise.
 
 ## 8. Rollout
@@ -298,31 +446,46 @@ The plan carries each task's red-first cases and mutation table. In summary:
 1. **Wave 1, see it** (DR-1 to DR-6): vocabulary, the agent op, the health block, the notice, the banner, doctor. Nothing deletes. After it deploys, the operator watches one real crossing or a fixture-driven one.
 2. **Wave 2, live scratch** (DR-7 to DR-12): the probe, the live arm in shadow, the output cap, the test-run arm, vitest's `tmpDir`, mail and the budget notice. The budget notice is live at once. After a week of shadow rows, the operator arms `tmp-sweep-live-arm`.
 3. **Wave 3, loose `~/.cc-tmp`** (DR-13 to DR-15), in shadow until `collect-loose-live`.
-4. **Wave 4, orphan worktrees** (DR-16 to DR-19), in shadow until `orphan-tree-live`; rescue until `orphan-tree-rescue-live`.
-5. **Then** the operator retires the box-local guard (§2.5) and lists `CCRC_WORK_MOUNTS`.
+4. **Wave 4, orphan worktrees** (DR-16 to DR-19), in shadow until `orphan-tree-live`. The rescue stays shadowed until `orphan-tree-rescue-live`, a week after the main arm went live.
+5. **Wave 5, lifecycle exits** (DR-20 to DR-31). The temp-source fix (DR-24, DR-25) lands first, because it stops the inflow. Then the nested rescue (DR-20, DR-21), then the stale reclaim, the expiry child arm and the stale archive, each shadowed until its marker. Arm the nested rescue first: it is what turns most terminal children into ordinary reclaims.
+6. **Then** the operator deletes the box-local guard (§2.5), with `CCRC_WORK_MOUNTS` listing the work volume and its bind targets.
 
-Every ccd change deploys agent lane first. Waves 2 to 4 are independent of each other once DR-7 lands, and each waits for #1132 where it edits the same ladder region (the plan's Gates).
+Every ccd change deploys agent lane first. Waves 2 to 5 are independent of each other once DR-7 lands, except as the plan's dependency table says. Each waits for #1132 where it edits the same ladder region (the plan's Gates).
 
-## 9. Open questions for the operator
+## 9. Questions for the operator
 
-1. **Rescue then remove.** May a clean, idle, unheld tree whose HEAD is on no remote be removed after its commits are pinned under `refs/ccrc/attic/orphan/`? **Recommendation:** yes, behind its own marker, after the main arm has run live for a week.
-2. **Reads count as touches.** Should a file read in the last 14 days (its atime, under `relatime`) keep a live entry? **Recommendation:** yes. It keeps more, and an atime never makes the sweep delete.
-3. **Arming by marker or by Settings.** The three new arms ship with hand-touched markers. **Recommendation:** markers now; Settings switches in the PWA epic, as the collect switch did in its wave 10.
-4. **Pressure ages.** Confirm or change the table in §2.5.3.
-5. **The guard's mount half.** Should `CCRC_WORK_MOUNTS` carry the work volume's bind targets so the box-local guard can be removed entirely? **Recommendation:** yes. Without it, keep the guard's mount check and retire only its fill check.
-6. **Who hears the budget notice.** The session and its coordinator. Should the operator's feed also record each crossing? **Recommendation:** record-only, never pushed; the disk alarm is the operator's page.
-7. **Scratch inside a live child's leaf.** If Step 0 finds Claude Code's scratch under `~/.cc-tmp/<id>/claude-<uid>`, the live arm sweeps there too. Confirm.
-8. **The output cap.** 1 GiB, keeping 64 MiB at each end. Confirm.
-9. **Claude Code's branches.** Leave the branches of removed `claude` and `superpowers` trees, and never remove `other`-class trees. Confirm.
+### 9.1 Resolved (operator, 2026-10-23)
+
+1. **Rescue then remove:** yes. The rescue arm has its own marker, `orphan-tree-rescue-live`, set only after a week of the main arm running live.
+2. **Reads count as touches:** yes, as recommended.
+3. **Arming:** hand-touched markers now, Settings switches in the PWA epic, as recommended.
+4. **Pressure ages:** the table in §2.5.3, as recommended.
+5. **The guard's mount half:** yes. `CCRC_WORK_MOUNTS` carries the bind targets, ccrc takes over the bind-mount liveness check, and the box guard is deleted entirely.
+6. **Who hears the budget notice:** the session and its coordinator. The operator's feed records each crossing, never pushed, as recommended.
+7. **Scratch inside a live child's leaf:** yes. A child leaf's `~/.cc-tmp/<id>/claude-<uid>` scratch is swept under the same rules. Both locations were observed on a fleet host (§1.3).
+8. **The output cap:** 1 GiB, keeping 64 MiB at each end, as recommended.
+9. **Claude Code's branches:** leave them, and never remove `other`-class trees, as recommended.
+
+### 9.2 Open (wave 5)
+
+1. **Hand holds.** G2 names `held`. That covers a programme's hold, and also a hold the operator set by hand (`POST /api/sessions/:id/hold`), which R34 says is never released. Does a hand hold also lapse after 7 idle days? **Recommendation:** yes, as ruled, with the hold's text quoted in the coordinator mail. If not, the exclusion is one row in the verdict.
+2. **The nested-rescue size bound.** 512 MiB of objects per nested repository, beyond which the child stays terminal and is reported. Confirm or change.
+3. **Hibernated rows and G1.** Does a hibernated workspace count as "no pane" for the 14 days? **Recommendation:** yes. Hibernation follows 6 idle hours, so 14 days asleep is abandonment, and the archive kills nothing.
+4. **"Non-coordinator" for G1.** Never a run's `claimedBy`, in any state or generation, or only not one now? **Recommendation:** never. It is the conservative reading and matches rule 4.
+5. **G4's scope.** The orphan rules for trees nested inside coordinators only, as ruled, while trees inside other workspaces go with their workspace's own exit. **Recommendation:** as ruled. Confirm that a tree inside a non-coordinator's workspace waits for that workspace.
+6. **Terminal children re-asked.** A `terminal-refusal` child is re-audited once per 7 idle days. If it is still terminal, it stays and is reported again. **Recommendation:** as described. The alternative, forcing past a terminal word, would have no rule to stand on.
+7. **Review children.** The stale arm reclaims a review child while the run it reviewed is still open, reversing D-5942's rejection. The pin keeps the report, and the mail names where. Confirm.
 
 ## 10. Out of scope and follow-ups
 
 - **#1119 item 3, work inside transcript directories:** a follow-up issue. Sketch: a doctor line, and a health count of non-transcript files above a size under `<config>/projects/<cwd>/<uuid>/`; a skill rule saying where working files go. Its collection needs a transcript-retention ruling (policy Open Q1).
-- **Skill text for long output** (#1119 item 1's second half): the coordinator and worker skills' clauses are pinned verbatim, so a new clause is its own reviewed change.
+- **Skill text for long output** (#1119 item 1's second half): it rides DR-25's skill change (one clause: redirect long command output to a rotated file or `tail`).
 - **Transcript dedupe** (#317, #840 P4-7 to P4-9): unchanged.
-- **Settings switches** for the new arms (§9 Q3).
+- **Settings switches** for the new arms (§9.1 Q3).
 - **A PWA card** for the `holders` view beyond the banner line: the PWA epic.
 
 ## 11. Review log
 
 **rev 0 (2026-10-23).** Written against `origin/main` `a68c90f15`, the rulings comment on #1119, and the open PRs measured that day (#1132 holds `ccd/ccd`, `CLAUDE.md` and the reclamation contract; #1114 holds `ccd/ccd`; #1164 holds `BannerStack.tsx`; #1162 holds `watch.ts`; #1149 holds `shared/api.ts` and `CLAUDE.md`; #1154 holds `shared/lifecycle.ts`).
+
+**rev 1 (2026-10-23).** The operator answered rev 0's nine questions (§9.1) and added rulings G1 to G4 (§1.4, §2.7). Re-checked against `origin/main` `bd895fbe4`, where every file cited is byte-unchanged from `a68c90f15`. #840 P4-4 to P4-6 were confirmed not on `main` (§2.7.7). The `.tmp-step0` trees were traced read-only to an agent-authored workflow prompt (§1.4). §2.5's guard retirement became deletion. Twelve tasks were added, DR-20 to DR-31.

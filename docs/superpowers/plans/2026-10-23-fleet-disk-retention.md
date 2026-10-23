@@ -1,14 +1,14 @@
 # Fleet disk retention: live scratch, orphan worktrees, loose temp entries and a disk alarm — Implementation Plan
 
-> **For agentic workers:** nineteen PRs, Tasks DR-1 to DR-19, one task per PR. REQUIRED SUB-SKILL: superpowers:subagent-driven-development, with superpowers:test-driven-development for every red-first step. Routing is per task (**Routing** line). Band 1 is mechanical and may go to `handoff-run`; band 2 is spec-able and may go to `handoff-run` when the weekly pace says so, with the orchestrator reviewing the diff; band 3 is written and reviewed natively and never handed off. Hand off only tasks whose change is literal: workers have stalled on deep `ccd/ccd` edits. Workers do not edit §Deviations and decisions.
+> **For agentic workers:** thirty-one PRs, Tasks DR-1 to DR-31, one task per PR. REQUIRED SUB-SKILL: superpowers:subagent-driven-development, with superpowers:test-driven-development for every red-first step. Routing is per task (**Routing** line). Band 1 is mechanical and may go to `handoff-run`; band 2 is spec-able and may go to `handoff-run` when the weekly pace says so, with the orchestrator reviewing the diff; band 3 is written and reviewed natively and never handed off. Hand off only tasks whose change is literal: workers have stalled on deep `ccd/ccd` edits. Workers do not edit §Deviations and decisions.
 
-**Spec:** `docs/superpowers/specs/2026-10-23-fleet-disk-retention-design.md` (rev 0), implementing the operator's rulings of 2026-10-23 on #1119.
+**Spec:** `docs/superpowers/specs/2026-10-23-fleet-disk-retention-design.md` (rev 1), implementing the operator's rulings of 2026-10-23 on #1119, their answers to rev 0's questions, and lifecycle-exit rulings G1 to G4 (posted on #1167 and #1119).
 
 **Issue:** #1119.
 
-**Base:** `origin/main` `a68c90f15`. Anchors are `≈:` hints into that commit and each names its function. Re-ground every anchor in Step 0, because #1132 and #1114 move `ccd/ccd`.
+**Base:** `origin/main` `a68c90f15`, re-checked at `bd895fbe4` for rev 1 (every cited file byte-unchanged). Anchors are `≈:` hints into that commit and each names its function. Re-ground every anchor in Step 0, because #1132 and #1114 move `ccd/ccd`.
 
-**Deploy class.** Waves 1 and 2's server and PWA tasks are SERVER. Agent tasks (DR-2, DR-12's node-file half, DR-14, DR-18) are AGENT and deploy first. ccd tasks (DR-6, DR-7 to DR-10, DR-13, DR-16, DR-17) are FLEET, deployed agent lane first like any `ccd` change. No task restarts a session, and each takes effect at the next ordinary release. No destructive arm is armed by any task.
+**Deploy class.** Waves 1 and 2's server and PWA tasks are SERVER. Agent tasks (DR-2, DR-12's node-file half, DR-14, DR-18) are AGENT and deploy first. ccd tasks (DR-6, DR-7 to DR-10, DR-13, DR-16, DR-17, DR-20, DR-22, DR-25, DR-26, DR-28, DR-30, and DR-24's spawn half) are FLEET, deployed agent lane first like any `ccd` change. No task restarts a session, and each takes effect at the next ordinary release. No destructive arm is armed by any task.
 
 ## Gates
 
@@ -21,14 +21,17 @@ Open PRs measured at `a68c90f15` (`gh pr list --state open --json number,files`)
 | #1164 (update banner) | `pwa/src/fleet/BannerStack.tsx` | DR-5 rebases past it |
 | #1162 (delegation) | `server/src/watch.ts` | DR-3, DR-4, DR-12, DR-15, DR-19 rebase past it |
 | #1149 (release) | `shared/api.ts`, `CLAUDE.md` | DR-3, DR-12, DR-17 rebase past it |
-| #1154 (history W2-2b) | `shared/lifecycle.ts` | DR-8, DR-10, DR-15, DR-19 rebase past it |
+| #1154 (history W2-2b) | `shared/lifecycle.ts` | DR-8, DR-10, DR-15, DR-19, DR-27, DR-29 rebase past it |
+| #840 P4-4 to P4-6 (planned, no PR yet) | the reclaim ladder (HEAD, rung 6, rung 8) | DR-20 rebases after them if they open first; otherwise they rebase after DR-20. DR-16's rung 7 calls P4-5's stale-lock helper once it lands |
+
+Wave 5 also edits `ccd/ccd` regions #1132 moves (the ladder, the expire evals, the spawn lines), so DR-20, DR-22, DR-24, DR-26 and DR-28 land after #1132 too.
 
 Consolidation: none of these tasks waits for W1b or W4. Each new tick follows today's `last*` clock pattern and each new marker joins `shared/switches.ts`, so W1b's schedule table and W4's `decideRetire` fold them as rows.
 
 ## Global constraints
 
 - **Public repo.** Fixtures use neutral names (`project-a`, `lane-a`). Never write a host, a mount path of a deployment, an account or lane name, another project's name, an absolute home path or a private tracker id.
-- **SAFETY.** FIXTURE HOMEs only (`makeCcdHarness`, `server/test/ccdWsHelpers.ts`). No test runs a verb against a live `$HOME`. Nobody runs `ws-collect`, `ws-orphan`, `ws-gc --prune` or the tmp sweep's live arm against a live box. Nobody touches tmux, `~/.cc-sessions`, `~/.cc-limits` or `claude-session@*` out of band. Nobody creates an arming marker on a live box.
+- **SAFETY.** FIXTURE HOMEs only (`makeCcdHarness`, `server/test/ccdWsHelpers.ts`). No test runs a verb against a live `$HOME`. Nobody runs `ws-collect`, `ws-orphan`, `ws-reclaim`, `ws-expire`, `ws-archive`, `ws-gc --prune` or the tmp sweep's live arm against a live box. Nobody touches tmux, `~/.cc-sessions`, `~/.cc-limits` or `claude-session@*` out of band. Nobody creates an arming marker on a live box.
 - **Account switching is never blocked.** No task's code runs on the swap path.
 - **Shadow first.** Every destructive arm ships shadowed behind a marker with no writer in the tree. `single-definition.test.ts`'s no-writer pin covers each new marker.
 - **Wire: additive only.** No `FLEET_PROTO` bump, no coord.db migration. Every new field has one reader.
@@ -42,10 +45,11 @@ Consolidation: none of these tasks waits for W1b or W4. Each new tick follows to
 2. **One owner per class.** The live and test-run arms are `ccd-tmp-sweep`'s; the loose arm is `ws-collect`'s; the orphan lane reuses `ws-gc`'s rules. Flag any second probe, collector, mailer or notifier.
 3. **Floors are box-measured.** No server argument lowers an age.
 4. **Fail toward keeping.** Every unmeasured, truncated or ambiguous answer keeps the candidate and names why.
+5. **Wave 5 is lossless.** Every new exit ends in the existing pin, re-proved before the tail. A child that coordinated is never taken. A widened verb binds its new input into the token, and is never sent to a ccd without the capability.
 
 ## Tasks
 
-Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR-13 to DR-15 (loose `~/.cc-tmp`), **4** DR-16 to DR-19 (orphan worktrees).
+Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR-13 to DR-15 (loose `~/.cc-tmp`), **4** DR-16 to DR-19 (orphan worktrees), **5** DR-20 to DR-31 (lifecycle exits).
 
 | Task | Band | Lane | Depends on |
 |---|---|---|---|
@@ -68,6 +72,18 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
 | DR-17 ccd `ws-orphan` verb | 3 | FLEET | DR-16 |
 | DR-18 orphan grants | 1 | AGENT + SERVER | DR-17 |
 | DR-19 orphan-tree lane (shadow) | 3 | SERVER | DR-18 |
+| DR-20 rung 9 rescues a nested repository (ccd) | 3 | FLEET | #1132; P4-4..6 coordination |
+| DR-21 rescue words and shadow rows (server) | 2 | SERVER | DR-20 |
+| DR-22 orphan rung 11 rescue; census sees nested trees (G4, ccd) | 3 | FLEET | DR-17, DR-20 |
+| DR-23 orphan lane takes trees inside coordinators (G4) | 2 | SERVER | DR-19, DR-22 |
+| DR-24 test temp never inside a work tree; `CCRC_SESSION_TMPDIR` | 2 | FLEET + SERVER | #1132 |
+| DR-25 skill clauses: temp and long output | 3 | FLEET (skills) | DR-24 |
+| DR-26 `ws-reclaim --stale` (ccd) | 3 | FLEET | #1132, DR-20 |
+| DR-27 child reclaim's stale arm (shadow) and coordinator mail | 3 | SERVER | DR-26 |
+| DR-28 `ws-expire --child-of` (ccd) | 3 | FLEET | #1132 |
+| DR-29 expiry lane's child arm (shadow) | 3 | SERVER | DR-28 |
+| DR-30 `ws-archive --if-no-pane`, reason `stale` (ccd) | 2 | FLEET | none |
+| DR-31 stale-archive arm (shadow) | 3 | SERVER | DR-30 |
 
 ### Task DR-1: one disk vocabulary and its decider (D-TBD-disk-vocabulary; spec §2.5)
 
@@ -237,7 +253,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
 - Modify `server/test/tmp-sweep.test.ts` (characterization) and create `server/test/tmp-sweep-live.test.ts`; extend `server/test/disk-twins.test.ts` and `server/test/lifecycle.test.ts`.
 - Modify `README.md` (the tmp sweep's section).
 
-- [ ] **Step 0: Measure, read-only.** On a fixture, then from the fleet's own read-only evidence that the operator or a doctor line already reports: where Claude Code's scratch sits for a child with `TMPDIR` set (spec §1.3). Record the answer in §Decisions. No command is run on a live box by this task.
+- [ ] **Step 0: Re-ground.** Both scratch locations were observed on a fleet host (spec §1.3: `/tmp/claude-<uid>` and a child leaf's `~/.cc-tmp/<id>/claude-<uid>`), and the operator ruled the second is swept too (spec §9.1 Q7). Build fixtures for both. No command is run on a live box by this task.
 - [ ] **Step 1: Characterize** (green on main): today's whole `tmp-sweep.test.ts`, untouched.
 - [ ] **Step 2: Red.**
   - "a live unit's `scratchpad/<old>` is listed as would-move in shadow and stays";
@@ -486,28 +502,250 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/fleet-health.test.ts --maxWorkers=2
 
+### Task DR-20: ccd's rung 9 rescues a nested repository into the attic (D-TBD-nested-rescue-ccd; spec §2.7.1) — GATED: after #1132; coordinate with #840 P4-4 to P4-6
+
+**Routing:** band 3 (the shared reclaim and expiry ladder, and the pin). **Lane:** FLEET.
+
+**Files:**
+- Modify `ccd/ccd`:
+  - rung 9 of `_ws_reclaim_ladder` (≈:30929-30991): a failing `_ws_reclaim_foreign_clean` (≈:30563) marks the repository rescuable when `$REG/nested-rescue-live` exists. Without it, `containment-unproven` as today. Read the marker at the audit and again inside the lock, and bind `nestedRescue=<pathhex>:<HEAD|->:<status digest>` into `REAP_CHILDDIGEST` (≈:31010);
+  - the audit document gains `nestedRescue: {wouldRescue, rescue}`;
+  - the pin (`_ws_reclaim_pin_contained` ≈:32198): for each rescuable repository, step (1a) stops refusing and calls a new `_ws_nested_rescue`. It makes a scratch-index WIP commit inside the nested repository (`_ws_wip_commit`'s shape, untracked non-ignored files included), runs a contained `git -C <main> fetch --no-tags --no-write-fetch-head <N> '+refs/*:refs/ccrc/attic/<id>/nested/<pathhex>/refs/*'`, writes the WIP as `…/wip`, measures the bytes the fetch added, and refuses `nested-rescue-too-large` above `WS_NESTED_RESCUE_MAX_MB` (512, raise-only). It then re-proves that every rescued sha resolves (`nested-rescue-failed` otherwise);
+  - the tombstone's `containment.rescued` (≈:32343-32366);
+  - caps `nested-rescue-v1`.
+- Modify `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md` (the rung-9 row ≈:400 and ≈:484-492) and `docs/superpowers/programs/child-reclamation-contract.md` (§3 ≈:160).
+- Create `server/test/ccd-nested-rescue.test.ts`. Its fixture builds a child tree holding a fixture repository with two unpushed commits, an untracked file and no remote.
+
+- [ ] **Step 0: Re-ground** on post-#1132 `main`. If P4-4 to P4-6 have opened PRs, rebase after them. Read rung 9, the pin's step (1a), `_ws_wip_commit` and the tombstone writer. Confirm the tail's `--force` removal takes foreign checkouts with the tree (≈:34219).
+- [ ] **Step 1: Characterize** (green on main): the fixture answers `containment-unproven` at the reclaim audit and at the expire audit.
+- [ ] **Step 2: Red.**
+  - "without the marker: `containment-unproven` and `wouldRescue` names the path";
+  - "with the marker: a token; the reclaim pins, fetches both commits and the WIP into `refs/ccrc/attic/<id>/nested/<hex>/`, and the tree is gone; each rescued sha resolves; the tombstone lists the rescue";
+  - "a commit made in the nested repository between the audit and the act gives `state-changed`";
+  - "over the size bound: `nested-rescue-too-large`, nothing removed";
+  - "a fetch that fails: `nested-rescue-failed`, nothing removed";
+  - "a leaf link and a shared row still answer `containment-unproven` under the marker";
+  - "the expiry ladder rescues the same fixture".
+- [ ] **Step 3: Green.** Run `ccrc restamp`.
+- [ ] **Step 4: Mutation table, RUN.** Rows for: the marker ignored; the WIP skipped (the untracked file lost); the re-prove skipped; the rescue bound out of the token; the size bound lowered; rescue applied to a leaf-link refusal.
+- [ ] **Step 5: Verify.**
+
+      bash -n ccd/ccd
+      cd server && ./node_modules/.bin/vitest run test/ccd-nested-rescue.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-ladder.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/ccd-ws-expire-ladder.test.ts --maxWorkers=2
+
+### Task DR-21: the server knows the rescue words and shows the shadow (D-TBD-nested-rescue-server; spec §2.7.1)
+
+**Routing:** band 2. **Lane:** SERVER.
+
+**Files:**
+- Modify `server/src/coord/childReclaim.ts` (`CHILD_RECLAIM_TOKEN_KIND` ≈:78-93) and `server/src/archivedExpiry.ts` (`EXPIRE_TOKEN_KIND` ≈:41-61): `nested-rescue-too-large` terminal, `nested-rescue-failed` retry.
+- Modify `server/src/wsaudit.ts` (`SENTENCES`): both sentences.
+- Modify both lanes' audit parsers to read `nestedRescue` and record one "would rescue a nested repository" feed row per child and token while the marker is absent.
+- Modify `shared/switches.ts`: `NESTED_RESCUE_LIVE_MARKER` and its row (owner C4, no writer).
+- Create `server/test/nested-rescue-words.test.ts`; modify `server/test/switches.test.ts` and `server/test/single-definition.test.ts`.
+
+- [ ] **Step 1: Red.** Each word's kind on both lanes; the sentences; one shadow row per child and token; the marker has no writer. **Step 2: Green.** **Step 3: Mutation table, RUN** (a word classed retry/terminal the wrong way round; a shadow row per pass). **Step 4: Verify.**
+
+      cd server && ./node_modules/.bin/vitest run test/nested-rescue-words.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/switches.test.ts --maxWorkers=2
+
+### Task DR-22: the orphan ladder's nested-checkout rung rescues, and its census sees nested trees (D-TBD-orphan-nested-g4; spec §2.7.1, §2.7.5)
+
+**Routing:** band 3. **Lane:** FLEET.
+
+**Files:**
+- Modify `ccd/ccd` (DR-16's `_ws_orphan_ladder` and census, DR-17's `cmd_ws_orphan`):
+  - rung 11 under `$REG/nested-rescue-live`: a same-repository nested checkout is pinned under `refs/ccrc/attic/orphan/<sha16>/nested/<pathhex>/`, and a foreign one goes through DR-20's `_ws_nested_rescue`. The document carries a rescue token;
+  - the verb, on that token, rescues, removes each rescued nested directory with `_ws_leaf_remove` after a holder ask, then runs `git worktree remove` without `--force`;
+  - the census's `claude` and `superpowers` classes cover `<checkout>/.claude/worktrees/*` and `<checkout>/.superpowers/worktrees/*` for every checkout of the repository. Rung 4 lets a containing row pass and names it `inside: <id>`; a row whose workdir is the tree, or lies inside it, still refuses `registered`.
+- Extend `server/test/ccd-orphan-audit.test.ts` and `server/test/ccd-ws-orphan-verb.test.ts`.
+
+- [ ] **Step 1: Red.** "a tree inside a registered workspace is classed `claude` with `inside`"; "a row whose workdir is inside the tree still refuses"; "nested foreign repository without the marker: `nested-checkout`; with it: rescued, then the tree is removed and git saw no `--force`"; "a holder in the nested directory stops the act".
+- [ ] **Step 2: Green.** Run `ccrc restamp`. **Step 3: Mutation table, RUN** (the containing-row pass widened to an inside row; `--force` used instead of removing the rescued directory). **Step 4: Verify.**
+
+      bash -n ccd/ccd
+      cd server && ./node_modules/.bin/vitest run test/ccd-orphan-audit.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/ccd-ws-orphan-verb.test.ts --maxWorkers=2
+
+### Task DR-23: the orphan lane takes trees nested inside coordinators (D-TBD-orphan-lane-g4; spec §2.7.5)
+
+**Routing:** band 2. **Lane:** SERVER.
+
+**Files:**
+- Modify `server/src/orphanTreeLane.ts`: a census row with `inside: <id>` is a candidate only when that id is a run's `claimedBy` (`childReclaimCoordinatorClaims` or `openCoordinatorIds`). Otherwise it reports "goes with its workspace". The rescue token is used only under `orphan-tree-rescue-live`.
+- Extend `server/test/orphan-tree-lane.test.ts`.
+
+- [ ] **Step 1: Red.** Inside a coordinator: a candidate. Inside a worker: reported only. The claim read unreadable: not a candidate. **Step 2: Green.** **Step 3: Verify.**
+
+      cd server && ./node_modules/.bin/vitest run test/orphan-tree-lane.test.ts --maxWorkers=2
+
+### Task DR-24: test temp never lands inside a work tree (D-TBD-temp-outside-trees; spec §2.7.2)
+
+**Routing:** band 2. **Lane:** FLEET (the spawn export) + SERVER (test harness), one PR. Either may deploy first: the harness falls back to `/tmp` when the variable is absent.
+
+**Files:**
+- Modify `server/test/run-tmp.globalsetup.mjs` (`setup` ≈:331-367): resolve `os.tmpdir()` physically, and walk up for a `.git`. Inside a work tree, build the run parent under `CCRC_SESSION_TMPDIR` when it is set and outside every tree, else under `/tmp`, and print `ccrc-test: TMPDIR <…> is inside a work tree; the run's temp moved to <…>`. Update the header's "WHAT THIS DOES NOT DO".
+- Modify `ccd/ccd` (`_spawn_start` ≈:23486, beside the `tmpenv` splice ≈:23822): export `CCRC_SESSION_TMPDIR` in both spawn lines, set to the child's `~/.cc-tmp/<id>` or the spawn's own `TMPDIR`.
+- Modify `server/test/run-tmp.test.ts` and the spawn suites that pin the launch statement (`ccd-spawn-child-settings.test.ts`, `ccd-spawn-account-settings.test.ts`), reading the fragment from ccd's composer as #1132 does.
+
+- [ ] **Step 1: Red.** A run with `TMPDIR=<fixture tree>/.tmp-step0` builds its parent under `CCRC_SESSION_TMPDIR`, or under `/tmp` without it, and nothing is created inside the tree. A run outside any tree is unchanged. The spawn line exports the variable for a child and for a plain session.
+- [ ] **Step 2: Green.** Run `ccrc restamp`. **Step 3: Mutation table, RUN** (the walk stops at the first directory; the export dropped from one spawn line). **Step 4: Verify.**
+
+      bash -n ccd/ccd
+      cd server && ./node_modules/.bin/vitest run test/run-tmp.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/ccd-spawn-child-settings.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/ccd-spawn-account-settings.test.ts --maxWorkers=2
+
+### Task DR-25: the skills say where temp and long output go (D-TBD-skill-temp-output; spec §2.7.2, §10)
+
+**Routing:** band 3 (pinned skill clauses). **Lane:** FLEET (skills ride `ccrc update`'s install spine).
+
+**Files:**
+- Modify `ccd/coordinator-skill/SKILL.md` and `ccd/worker-skill/SKILL.md`. Each gains one clause: a workflow script, a brief or a test step never sets `TMPDIR` to, or writes scratch inside, a work tree; it uses the session's `TMPDIR` (`CCRC_SESSION_TMPDIR`); long command output goes to a file there, or through `tail`.
+- Modify `server/test/coordinator-skill.test.ts` and `server/test/worker-skill.test.ts`: the clause counts and the verbatim pins. Update CLAUDE.md's "seventeen clauses" sentences.
+
+- [ ] **Step 1: Red** (the new verbatim pins). **Step 2: Green.** **Step 3: Verify.**
+
+      cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/worker-skill.test.ts --maxWorkers=2
+
+### Task DR-26: ccd's reclaim takes a stale child (D-TBD-reclaim-stale-ccd; spec §2.7.3)
+
+**Routing:** band 3. **Lane:** FLEET.
+
+**Files:**
+- Modify `ccd/ccd` (`_ws_reclaim_eval` ≈:30656, rung 4 ≈:30720-30722, `cmd_ws_reclaim`):
+  - `--stale held|run-absent|review|terminal` and `--hold-digest <sha256>`;
+  - under `--stale held`, rung 4 passes only a hold whose content's sha256 equals the digest;
+  - on every stale word, a new rung after rung 4, `_ws_reclaim_stale_idle`: the newest of the current uuid's transcript mtime (`_transcript_path`), `.lastend`, `.spawn`, `.woke` and `.supervised`, and `#{window_activity}` of a live pane, must be older than `WS_STALE_IDLE_S` (604800, raise-only). Otherwise `not-idle`; unmeasured stays unmeasured;
+  - the binding gains `stale=`, `holdDigest=` and `idleAt=`;
+  - caps `reclaim-stale-v1`. The flags are accepted on the audit (`ws-audit --session <id> --reclaim --stale …`) and on the verb.
+- Create `server/test/ccd-reclaim-stale.test.ts`.
+
+- [ ] **Step 1: Characterize** (green on main): a held child refuses `held`.
+- [ ] **Step 2: Red.** "`--stale held` with the digest of the current hold, idle 8 days: a token, then the normal pin and tail"; "a changed hold: `held`"; "a transcript touched yesterday: `not-idle`"; "a live pane active 2 days ago: `not-idle`"; "no evidence at all: unmeasured"; "without `--stale`, everything as today"; "the token changes when the hold changes".
+- [ ] **Step 3: Green.** Run `ccrc restamp`. **Step 4: Mutation table, RUN** (the digest ignored; the idle rung skipped; mtime of the wrong uuid; the bound lowered). **Step 5: Verify.**
+
+      bash -n ccd/ccd
+      cd server && ./node_modules/.bin/vitest run test/ccd-reclaim-stale.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-verb.test.ts --maxWorkers=2
+
+### Task DR-27: child reclaim's stale arm, in shadow, and the coordinator mail (D-TBD-reclaim-stale-lane; spec §2.7.3)
+
+**Routing:** band 3 (the reclaim decider). **Lane:** SERVER.
+
+**Files:**
+- Modify `server/src/childReclaimSweep.ts`:
+  - the input gains `idle: {runAt, mailAt, statusAt} | 'unmeasured'`;
+  - after the verdict answers `held`, `minting-run-absent`, `review-report-live`, `review-report-stale` or `terminal-refusal`, a stale step answers `stale-eligible` with that word when every idle input is older than `CHILD_STALE_IDLE_MS` (7 days). `coordinating` never reaches it;
+  - a terminal child is re-asked at most once per `CHILD_STALE_IDLE_MS` of idleness;
+  - the `CHILD_RECLAIM_SKIP` sentences of the stale-eligible words say when they lapse.
+- Modify `shared/api.ts` (the L0 kept-word table ≈:4076-4081): the kept words that now lapse say so; no word is removed.
+- Modify `server/src/watch.ts` (the sweep's input ≈:4228-4471): compose `idle` from `run_events`, the mail store and `statusUpdatedAt`; pass `--stale` and the hold digest through `CCD_ARGV.wsReclaimAudit`/`wsReclaim` (`server/src/ccdargv.ts` ≈:526-538, new optional arguments) only when `ccdCan` sees `reclaim-stale-v1`; shadow unless `$REG/child-stale-reclaim-live`.
+- Modify `server/src/coord/childReclaim.ts`: after a stale-arm `done`, queue system mail from `operator` to `resolveCoordinator(runId)`, kind `status`, naming the attic refs from the tombstone; a run-absent child writes a `kind:'coord'` feed row instead.
+- Modify `shared/switches.ts` (`CHILD_STALE_RECLAIM_LIVE_MARKER`), `shared/lifecycle.ts` (`child-workspaces`), and the contract (R32, R34, R41) and the reclamation spec (§5.9 ≈:1021).
+- Create `server/test/child-reclaim-stale.test.ts`; modify `server/test/child-reclaim-sweep-policy.test.ts`, `server/test/switches.test.ts`, `server/test/single-definition.test.ts`, `server/test/lifecycle.test.ts`.
+
+- [ ] **Step 0: Re-ground.** The verdict order (≈:616-710), the terminal set from the mirror (`watch.ts` ≈:4413), `recordChildReclaimKeptFeed`, and `queueSystemMail`.
+- [ ] **Step 1: Red.** Each word at 6 days: kept; at 8 days: `stale-eligible`. `coordinating` at 30 days: kept. Any idle input unmeasured: kept. Shadow: "child would be reclaimed (stale)" once. Armed: the reclaim argv carries `--stale` and the digest. The mail names the refs. A run-absent child: a feed row and no mail. A terminal child is asked again after 7 more idle days and not before. A box without the capability is never sent the flag.
+- [ ] **Step 2: Green.** **Step 3: Mutation table, RUN** (`coordinating` let through; the ceiling `>=` 0; the capability ignored; the mail sent in shadow). **Step 4: Verify.**
+
+      cd server && ./node_modules/.bin/vitest run test/child-reclaim-stale.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep-policy.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/child-reclaim-prose.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/lifecycle.test.ts --maxWorkers=2
+
+### Task DR-28: ccd's expiry accepts an archived child (D-TBD-expire-child-ccd; spec §2.7.4)
+
+**Routing:** band 3. **Lane:** FLEET.
+
+**Files:**
+- Modify `ccd/ccd`: `cmd_ws_expire` (≈:35303-35340) and the expire audit accept `--child-of <run>`. `_ws_expire_not_child` (≈:34870-34879) passes only when the marker parses as a run id equal to it; an unreadable marker still refuses `child`. `_WS_LADDER_BIND` (≈:35165) gains `childOf=`. Both evals and both resumes apply it. Caps `expire-child-v1`.
+- Modify `CLAUDE.md` (the `ws-expire` SAFETY line, spec §2.7.6) and `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md` (≈:326-330, ≈:360, ≈:433-434).
+- Create `server/test/ccd-ws-expire-child.test.ts`.
+
+- [ ] **Step 1: Red.** "without `--child-of`: `child`"; "a matching marker, archived 8 days, no pane: expired through the shared tail, and the child's temp root is gone"; "a mismatched marker: `child`"; "an unreadable marker: `child`"; "archived 6 days: `not-expired`"; "a crash at `children` resumes with the binding".
+- [ ] **Step 2: Green.** Run `ccrc restamp`. **Step 3: Mutation table, RUN** (the marker compare dropped; `childOf` left out of the binding). **Step 4: Verify.**
+
+      bash -n ccd/ccd
+      cd server && ./node_modules/.bin/vitest run test/ccd-ws-expire-child.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/ccd-ws-expire-audit.test.ts --maxWorkers=2
+
+### Task DR-29: the expiry lane's child arm, in shadow (D-TBD-expire-child-lane; spec §2.7.4)
+
+**Routing:** band 3. **Lane:** SERVER.
+
+**Files:**
+- Modify `server/src/archivedExpiry.ts` (`archivedExpiryVerdict` ≈:387): a `child` mark is eligible under `$REG/expire-child-live` and still skips without it, with a "would be expired (child)" observation. An `unreadable` mark always skips. The header's "never a child" sentence changes.
+- Modify `server/src/coord/expireArchived.ts` and `server/src/ccdargv.ts` (≈:542-547): the audit and verb carry `--child-of` only with `expire-child-v1`.
+- Modify `shared/switches.ts` (`EXPIRE_CHILD_LIVE_MARKER`), `shared/lifecycle.ts` (`archived-workspaces`), and the policy's row 4.
+- Create `server/test/archived-expiry-child.test.ts`; modify `server/test/archived-expiry-policy.test.ts`, `server/test/switches.test.ts`, `server/test/single-definition.test.ts`.
+
+- [ ] **Step 1: Red.** An archived child past `expiresAt`: shadow row without the marker, act with it. `unreadable`: skip. An open run, `coordinating` or `review-open`: skip, as for anyone. No capability: never sent the flag. **Step 2: Green.** **Step 3: Mutation table, RUN.** **Step 4: Verify.**
+
+      cd server && ./node_modules/.bin/vitest run test/archived-expiry-child.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/archived-expiry-lane.test.ts --maxWorkers=2
+
+### Task DR-30: `ws-archive --if-no-pane` and the `stale` reason (D-TBD-archive-if-no-pane; spec §2.7.5)
+
+**Routing:** band 2 (a small refusal added to an existing verb). **Lane:** FLEET.
+
+**Files:**
+- Modify `ccd/ccd` (`cmd_ws_archive` ≈:9988-10172): `--if-no-pane` refuses `live` before the manifest when a tmux session for the id exists or the unit answers anything other than `inactive`/`failed`. `--reason stale` writes `.archivedreason` `stale`. Caps `archive-if-no-pane-v1`.
+- Modify `shared/api.ts` if `.archivedreason`'s words are a closed L0 vocabulary (Step 0).
+- Create `server/test/ccd-ws-archive-if-no-pane.test.ts`.
+
+- [ ] **Step 1: Red.** No pane: archived, reason `stale`. A pane up: `live`, nothing written. An active unit: `live`. Without the flag: as today. **Step 2: Green.** Run `ccrc restamp`. **Step 3: Verify.**
+
+      bash -n ccd/ccd
+      cd server && ./node_modules/.bin/vitest run test/ccd-ws-archive-if-no-pane.test.ts --maxWorkers=2
+
+### Task DR-31: the stale-archive arm, in shadow (D-TBD-stale-archive-lane; spec §2.7.5)
+
+**Routing:** band 3. **Lane:** SERVER.
+
+**Files:**
+- Modify `server/src/archivedExpiry.ts` (L1): `staleArchiveVerdict(row, facts, nowMs)` with spec §2.7.5's rules, `STALE_ARCHIVE_AFTER_MS` (14 days), and two pane-absent sightings at least an hour apart.
+- Create `server/src/coord/staleArchive.ts` (L3): `ccdCan('archive-if-no-pane-v1')`, the switches nearest the argv (`reclaim-paused`, `stale-archive-live`), presence (`visible` defers), then `CCD_ARGV.wsArchive(id, {ifNoPane: true, reason: 'stale'})`.
+- Modify `server/src/watch.ts`: `sweepStaleArchive` hourly (`lastStaleArchiveSweep`), at most one act per pass, on the `KeyedQueue` key; the facts from the registry, the lifecycle mirror (`lifecycle_events`, the newest `spawn`/`start`/`supervise`), the transcript's mtime through `FleetIO`, and the claim reads; a `kind:'coord'` feed row per act or would-act.
+- Modify `server/src/ccdargv.ts` (`wsArchive` ≈:516): the optional flags.
+- Modify `shared/switches.ts` (`STALE_ARCHIVE_LIVE_MARKER`) and the policy's row 4.
+- Create `server/test/stale-archive.test.ts`; modify `server/test/switches.test.ts` and `server/test/single-definition.test.ts`.
+
+- [ ] **Step 1: Red.** A never-claimant workspace with no pane for 15 days, seen twice: archived (armed), would-archive (shadow). 13 days: kept. A viewer, a hold, a child marker, any past claim or a main checkout: kept. No evidence: kept. Hibernated 15 days: archived. A pane back at the act: ccd's `live`, recorded and nothing else. **Step 2: Green.** **Step 3: Mutation table, RUN** (one sighting; current claims only; evidence missing read as old; the viewer ignored). **Step 4: Verify.**
+
+      cd server && ./node_modules/.bin/vitest run test/stale-archive.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/switches.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts --maxWorkers=2
+
 ## Operator acts
 
 None is required to build or land any task. Each of these is the operator's, whenever they choose:
 
-- **Answer spec §9's questions.** Q1 decides whether DR-17's rescue arm is ever armed; the rest confirm defaults.
+- **Answer spec §9.2's questions** (wave 5). §9.1's are answered.
 - **Arm the live arm** (`~/.ccrc/tmp-sweep-live-arm`) after a week of DR-8's shadow rows.
 - **Arm the loose arm** (`$REG/collect-loose-live`) after its shadow rows, with the collect lane live.
-- **Arm the orphan lane** (`$REG/orphan-tree-live`), then, if Q1 is yes, the rescue arm (`$REG/orphan-tree-rescue-live`).
-- **List the work mounts** in the fleet agent's `CCRC_WORK_MOUNTS`, then **retire the box-local disk guard** (its timer and service) once a warn crossing has reached the banner and the push.
+- **Arm the orphan lane** (`$REG/orphan-tree-live`), then, a week after it runs live, the rescue arm (`$REG/orphan-tree-rescue-live`, ruled §9.1 Q1).
+- **List the work mounts** (the work volume's mount point and every bind target) in the fleet agent's `CCRC_WORK_MOUNTS`. Then **delete the box-local disk guard** (its script, service and timer) once a warn crossing and a missing-mount fixture have reached the banner and the push (ruled §9.1 Q5).
+- **Wave 5's arms, in this order:** `$REG/nested-rescue-live` (it turns most terminal children into ordinary reclaims), then `$REG/child-stale-reclaim-live`, `$REG/expire-child-live` and `$REG/stale-archive-live`, each after a week of its shadow rows. `expire-lane-live` was armed on 2026-10-23, and `collect-lane-live` was already present.
 
 ## Rollback
 
 - **Server and PWA tasks:** a revert. Every new block is optional; an older PWA ignores it.
 - **Agent tasks:** `ccrc rollback`. A server asking an absent op or grant reads unmeasured or skips by capability.
 - **ccd and tmp-sweep tasks:** `ccrc rollback`, fleet lane. A quarantine left by a rolled-back tmp sweep is plain directories under `.ccd-tmp-quarantine/`; the older sweep's dead arm collects them with their unit. A loose record left behind is read by no older ccd and harms nothing; its slot sits in `.ccd-quarantine` for the operator.
+- **Wave 5's ccd flags:** an older ccd rejects `--stale`, `--child-of` and `--if-no-pane` as usage errors, and the server never sends them without the capability. Attic refs a rescue wrote stay and harm nothing.
 - **Arms:** removing a marker returns its arm to shadow at the next pass.
 
 ## Deviations and decisions
 
 ### To be issued for this work
 
-The allocator (`POST /api/ledger/deviations`) is box-token gated and was not reached while planning, so each entry below is `D-TBD-<slug>` until a block is issued. The coordinator allocates one block of nineteen before the first task starts, and replaces each placeholder in one commit before any task PR cites it.
+The allocator (`POST /api/ledger/deviations`) is box-token gated and was not reached while planning, so each entry below is `D-TBD-<slug>` until a block is issued. The coordinator allocates one block of thirty-one before the first task starts, and replaces each placeholder in one commit before any task PR cites it.
 
 - **D-TBD-disk-vocabulary** (DR-1): `shared/disk.ts` holds the work-root table, 85/92 with a 2-point clear, the pressure-age table and `readDiskHealth`; `diskVerdict` takes the larger of bytes and inodes, needs two measurements to change level, and reads nothing measured as `unmeasured`.
 - **D-TBD-agent-disk-op** (DR-2): the agent's `disk` op takes no arguments, statfs's its own table under a 5 s deadline, groups by `st_dev`, and answers `CCRC_WORK_MOUNTS`' mount points.
@@ -528,20 +766,38 @@ The allocator (`POST /api/ledger/deviations`) is box-token gated and was not rea
 - **D-TBD-orphan-verb** (DR-17): `ws-orphan`, never `--force`, `branch -d` for `ccd-root` only, the attic-pin rescue on a rescue token; forbidden to sessions.
 - **D-TBD-orphan-grants** (DR-18): three grant prefixes and the required `--expect`.
 - **D-TBD-orphan-lane** (DR-19): the lane, its licence and pacing, two markers, the feed rows; resolves policy Open Q6 with option (a).
+- **D-TBD-nested-rescue-ccd** (DR-20): under `nested-rescue-live`, rung 9 classes a nested repository with work on no remote as rescuable. The pin WIP-commits it, fetches its refs and the WIP into `refs/ccrc/attic/<id>/nested/<pathhex>/`, re-proves each sha and bounds the bytes at 512 MiB. Then the ladder proceeds. Both lanes get it, and the token binds it. Reverses the 2026-09-22 spec's "reap, and note" refusal for nested repositories only.
+- **D-TBD-nested-rescue-server** (DR-21): `nested-rescue-too-large` is terminal and `nested-rescue-failed` is retry on both lanes; shadow rows name what would be rescued.
+- **D-TBD-orphan-nested-g4** (DR-22): orphan rung 11 rescues; the census sees `.claude/worktrees` and `.superpowers/worktrees` of every checkout, and a containing row passes rung 4 as `inside`.
+- **D-TBD-orphan-lane-g4** (DR-23): a nested tree is a candidate only inside a coordinator's workspace.
+- **D-TBD-temp-outside-trees** (DR-24): the suite moves a run parent out of any work tree; every spawn exports `CCRC_SESSION_TMPDIR`.
+- **D-TBD-skill-temp-output** (DR-25): one clause each in the coordinator and worker skills, on temp placement and long output.
+- **D-TBD-reclaim-stale-ccd** (DR-26): `ws-reclaim --stale <word> [--hold-digest]`; a hold passes only by digest; a box-measured 7-day idle rung; the token binds both.
+- **D-TBD-reclaim-stale-lane** (DR-27): kept children (`held`, `minting-run-absent`, review, terminal) become `stale-eligible` after 7 idle days on the server's facts; `coordinating` never does. Shadow until `child-stale-reclaim-live`. The coordinator is mailed the attic refs. Amends R32, R34 and R41, and supersedes D-5942's "nothing reclaims it before that".
+- **D-TBD-expire-child-ccd** (DR-28): `ws-expire --child-of` expires an archived child whose marker names that run, through the shared tail; the binding carries `childOf`.
+- **D-TBD-expire-child-lane** (DR-29): the expiry lane stops skipping a readable child mark under `expire-child-live`.
+- **D-TBD-archive-if-no-pane** (DR-30): `ws-archive --if-no-pane` refuses `live`; the reason word `stale`.
+- **D-TBD-stale-archive-lane** (DR-31): a workspace that is not a child and was never a claimant, with no pane for 14 days, is archived, one per pass, shadow until `stale-archive-live`.
 
 ### Decisions recorded while planning
 
 - **Mail goes through the server, never from the box.** A box script has no sender identity (`POST /api/mail` needs a registry row and its uuid).
 - **One holder probe.** The tmp sweep asks ccd's probe through `ccd path-users`, rather than growing `_ts_holder`; `_ts_holder` stays for the dead arm and is characterized only.
 - **Pressure is box-measured.** No server argument lowers a floor.
-- **The orphan lane's `--remotes` rule is stricter than `ws-gc`'s `origin/HEAD` ancestry** on purpose: the ruling asks for HEAD on a remote, and a tree on a pushed feature branch passes it while `origin/HEAD` ancestry would not.
+- **The orphan lane's `--remotes` rule differs from `ws-gc`'s `origin/HEAD` ancestry** on purpose: the ruling asks for HEAD on a remote, and a tree on a pushed feature branch passes it while `origin/HEAD` ancestry would not.
+- **Nested rescue goes into attic refs, not a bundle file** (spec §2.7.1): one record, one namespace, no new artifact class.
+- **Idle for a stale child is measured on both sides.** The server knows runs and mail, and the box knows the pane and the transcript. Either can refuse.
+- **No new verb in wave 5.** Three existing server verbs gain one flag each, behind a capability.
+- **The `.tmp-step0` source is an agent-authored workflow prompt**, traced read-only on a fleet host. So the fix is in the suite, the spawn environment and the skills, not in Claude Code.
 
 ## Out of scope
 
-- #1119 item 3 (work inside transcript directories) and the skill text for long output: follow-up issues (spec §10).
+- #1119 item 3 (work inside transcript directories): a follow-up issue (spec §10). The skill text for long output now rides DR-25.
 - Transcript dedupe (#317, #840 P4-7 to P4-9).
 - Settings switches for the new arms; a PWA card beyond the banner line.
 
 ## Review log
 
 **rev 0 (2026-10-23).** Written with the spec's rev 0 against `origin/main` `a68c90f15` and the 32 open PRs measured that day.
+
+**rev 1 (2026-10-23).** The operator's answers to the spec's §9 and rulings G1 to G4. DR-8's Step 0 became a re-ground, because both scratch locations were observed. Wave 5 added DR-20 to DR-31. #840 P4-4 to P4-6 were confirmed not on `main` and added to the Gates.
