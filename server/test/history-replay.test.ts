@@ -13755,4 +13755,54 @@ w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4 fix wave: the 
     const control = await run(false);
     w5b4Expect(control.some((t) => t.includes(value)), 'CONTROL: without the pair the value is in the stdin').toBe(true);
   }, 120_000);
+
+  w5b4It('D-6482: an owed arm whose answered sibling\'s payload changed is never spawned, it is excluded run-failed with the reason, and the invocation goes on to the next question', async () => {
+    const WORD = 'Summary';   // a word of the stored summary, outside every fact: a pair for it changes the payload and fails no re-check clause
+    const run = async (learn: boolean): Promise<{ s: FwSetup; r1: W5b4Result; r2: W5b4Result; q1: W5b4R; q2: W5b4R }> => {
+      const s = await fwSetup();
+      const [q1, q2] = s.entries as [W5b4R, W5b4R];
+      // Invocation 1: q1's control run fails at its infrastructure (no result, exit 1) and raises the limits row, so the
+      // re-run batch stops at its gate; the treatment arm answers. q1 now owes its control arm an attempt 2.
+      w5b4Act(s.home, q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }), 1);
+      w5b4Act(s.home, q1, W5B4_CONTROL, '.exit', '1', 1);
+      w5b4Act(s.home, q1, W5B4_CONTROL, '.limits', w5b4LimitsRow(90), 1);
+      const real = { recheck: D4.recheckBatch, payloads: D4.armPayloads };
+      const r1 = await w5b4Arms(s.home, s.argv, real);
+      w5b4Expect(r1.refusal?.word).toBe('limits-threshold');
+      w5b4Expect(w5b4Runs(s.home), 'invocation 1 ran q1\'s two arms').toHaveLength(2);
+      w5b4Limits(s.home, 10);
+      if (learn) fwLearn(s.home, WORD);   // the sweep learns a pair between the two invocations
+      return { s, r1, r2: await w5b4Arms(s.home, s.argv, real), q1, q2 };
+    };
+    const rel = (q: W5b4R, arm: string, attempt: number): string => `pilot/arms/${q.qid as string}/${arm}.a${attempt}.run.json`;
+    const learned = await run(true);
+    const { s, q1, q2 } = learned;
+    w5b4Expect(learned.r2.refusal, 'the invocation goes on: no refusal').toBeNull();
+    w5b4Expect(learned.r2.code).toBe(0);
+    w5b4Expect(existsSync(join(s.out, rel(q1, W5B4_CONTROL, 2))), 'the owed arm was never spawned').toBe(false);
+    w5b4Expect(w5b4Runs(s.home), 'invocation 2 spawned only q2\'s two arms').toHaveLength(4);
+    for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(s.out, rel(q2, arm, 1))), `q2 ${arm} ran`).toBe(true);
+    w5b4Expect(w5b4Answer(s.out, 'pilot', q1, W5B4_CONTROL)).toMatchObject({ question_state: 'run-failed', arm_state: 'run-failed', reason: 'arm-payload-changed',
+      run: null, answer_field: null, correct: null });
+    w5b4Expect((w5b4Answer(s.out, 'pilot', q1, W5B4_CONTROL).attempts as W5b4R[]).map((t) => [t.class, t.code]), 'its recorded attempt stays').toEqual([['infra-failed', 1]]);
+    const sibling = w5b4Answer(s.out, 'pilot', q1, W5B4_TREATMENT);
+    w5b4Expect(sibling, 'the answered sibling keeps its answer (R14)').toMatchObject({ question_state: 'run-failed', arm_state: 'answered' });
+    w5b4Expect(Object.hasOwn(sibling, 'reason'), 'the reason is the excluded arm\'s alone').toBe(false);
+    for (const arm of W5B4_ARMS) w5b4Expect(w5b4Answer(s.out, 'pilot', q2, arm)).toMatchObject({ question_state: 'answered', arm_state: 'answered' });
+    const summary = w5b4Summary(s.out, 'pilot');
+    w5b4Expect(summary.counts).toEqual({ questions: 2, answered: 1, run_failed: 1, rerun_owed: 0, not_run: 0 });
+    w5b4Expect(summary.payload_changed, 'the summary names the excluded count and qids').toEqual({ count: 1, qids: [q1.qid] });
+    w5b4Expect(summary.stop).toBeNull();
+    w5b4Expect(learned.r2.stderr).toContain(`excluded ${q1.qid as string}: arm-payload-changed`);
+    // The judge settles the question as it settles any run-failed one (R14, R20): both its arms excluded, none judged.
+    const picked = D4.judgeItemsOf({ entries: s.entries, answers: D4.readArmAnswers(s.out, 'pilot'), arms: W5B4_ARMS, shaMinPrefix: 7 }) as W5b4R;
+    w5b4Expect(picked.excluded.run_failed_questions).toBe(1);
+    w5b4Expect([...new Set((picked.items as W5b4R[]).map((i) => i.qid))], 'only q2 reaches the judge').toEqual([q2.qid]);
+    // CONTROL: no pair learned, the payload is the sibling\'s own, so the owed arm spawns and answers.
+    const control = await run(false);
+    w5b4Expect(control.r2.refusal).toBeNull();
+    w5b4Expect(w5b4Runs(control.s.home), 'CONTROL: q1\'s attempt 2 and q2\'s two arms').toHaveLength(5);
+    w5b4Expect(w5b4Answer(control.s.out, 'pilot', control.q1, W5B4_CONTROL)).toMatchObject({ question_state: 'answered', arm_state: 'answered', run: `pilot/arms/${control.q1.qid as string}/${W5B4_CONTROL}.a2` });
+    w5b4Expect(Object.hasOwn(w5b4Summary(control.s.out, 'pilot'), 'payload_changed'), 'CONTROL: nothing excluded').toBe(false);
+  }, 240_000);
 });

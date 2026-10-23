@@ -6453,6 +6453,10 @@ export const ARM_ATTEMPTS_MAX = 2;
 export const ARM_BATCH_KIND = 'ccrc-history-w2-arm-batch';
 export const ANSWER_KIND = 'ccrc-history-w2-answer';
 export const ARMS_SUMMARY_KIND = 'ccrc-history-w2-arms-summary';
+/** D-6482: the reason an owed arm is excluded as run-failed when its answered sibling's payload, as built now, is no longer the
+ *  one the sibling answered: a report word on the answer record and the summary, never a DRIVER_REASONS word and never an
+ *  arm state. Spelled here once. */
+export const ARM_PAYLOAD_CHANGED = 'arm-payload-changed';
 const ARM_BATCH_FILE_RE = /^[0-9]{4}\.json$/;
 /** questionCountsOf's key for each of the gate's QUESTION_OUTCOMES. */
 const QUESTION_COUNT_KEYS = Object.freeze({ answered: 'answered', 'run-failed': 'run_failed', rerun: 'rerun_owed', 'not-run': 'not_run' });
@@ -6602,8 +6606,10 @@ export function expectedForNode(record, storeId) {
  *  rate per arm as an exact {num, den}. Pure.
  *  @param {{section: string, recordSha256: string, storeId: string, budget: object, spend: number, batches: number,
  *    stop: {word: string, kind: string, detail: string} | null, stamps: Iterable<string>,
- *    questions: Array<{qid: string, state: string, arms: Array<{arm: string, answer: object | null}>}>}} o */
-export function armsSummaryOf({ section, recordSha256, storeId, budget, spend, batches, stop, stamps, questions }) {
+ *    questions: Array<{qid: string, state: string, arms: Array<{arm: string, answer: object | null}>}>,
+ *    payloadChanged?: string[]}} o  `payloadChanged` (D-6482) are the qids excluded for a changed payload; the summary names
+ *  their count and qids only when there are some. */
+export function armsSummaryOf({ section, recordSha256, storeId, budget, spend, batches, stop, stamps, questions, payloadChanged = [] }) {
   const zero = () => ({ answered: 0, value: 0, unknown: 0, absent: 0, correct: 0, uptake_questions: 0, uptake_calls: 0, via_agent: 0, errored: 0 });
   const arms = Object.fromEntries(RECALL_ARMS.map((arm) => [arm, zero()]));
   for (const q of questions) {
@@ -6624,6 +6630,8 @@ export function armsSummaryOf({ section, recordSha256, storeId, budget, spend, b
     stamps: [...stamps].sort(), counts: questionCountsOf(questions.map((q) => q.state)), arms,
     absent_rate: Object.fromEntries(RECALL_ARMS.map((arm) => [arm, { num: arms[arm].absent, den: arms[arm].answered }])),
     questions: questions.map((q) => ({ qid: q.qid, state: q.state })),
+    // D-6482: the questions excluded for a changed payload, present only when there are some.
+    ...(payloadChanged.length === 0 ? {} : { payload_changed: { count: payloadChanged.length, qids: [...payloadChanged] } }),
   };
 }
 
@@ -6701,7 +6709,29 @@ function armAttemptsOf(ctx, q, arm) {
     if (cls === 'answered') break;
   }
   const state = questionOutcome(attempts.map((t) => t.class));
+  if (state === 'not-run' || state === 'rerun') {
+    // D-6482: an arm excluded for a changed payload has its record (with the reason) already, and owes nothing.
+    const reason = excludedReasonOf(ctx, q, arm);
+    if (reason !== null) return { attempts, state: 'run-failed', next: null, reason };
+  }
   return { attempts, state, next: state === 'not-run' || state === 'rerun' ? attempts.length + 1 : null };
+}
+/** D-6482: the reason an arm's answer record carries, when it carries `arm-payload-changed` (null when there is no record, or
+ *  an ordinary one). Anything at the record's path that is not a regular file, or is not JSON, refuses `out-refused`. */
+function excludedReasonOf(ctx, q, arm) {
+  const rel = answerRel(ctx.section, q.qid, arm);
+  const st = lstatOrNull(ctx.out, rel);
+  if (st === null) return null;
+  if (!st.isFile()) refuse('out-refused', `${rel} is not a regular file`);
+  const read = readPlain(path.join(ctx.out, rel), OUT_JSON_CAP);
+  if (read.state !== 'bytes') refuse('out-refused', `${rel} ${read.state === 'bad' ? badWord(read) : read.state}`);
+  let r;
+  try {
+    r = JSON.parse(read.bytes.toString('utf8'));
+  } catch {
+    refuse('out-refused', `${rel} is not JSON`);
+  }
+  return plainObject(r) && r.kind === ANSWER_KIND && r.reason === ARM_PAYLOAD_CHANGED ? ARM_PAYLOAD_CHANGED : null;
 }
 const answeredAttempt = (a) => a.attempts.find((t) => t.class === 'answered') ?? null;
 /** One question's arms, its state, and the (arm, attempt) jobs it owes; a settled question owes none (a run-failed one
@@ -6731,17 +6761,76 @@ async function armBatchPreflight(ctx, pending) {
   refuseRecallOff(ctx.home, [...new Set(qs.map((q) => q.ccrc_id))]);   // W2-D78 (ii)
   const verdicts = await ctx.deps.recheck(ctx.rs, qs, { configDirs: ctx.configDirs });   // W2-D78 (iii)
   const stdins = new Map();
+  const kept = [];
+  let shas = null;
   for (const s of pending) {
     const v = verdicts.get(s.q.qid);
     const p = ctx.deps.payloads(ctx.rs, v.boundaryEntryId, s.q.question, v.cut);
     if (p.state !== 'payloads') refuse('quiz-unanswerable', `${s.q.qid} payload ${p.why}`);   // D-6469
     const byArm = new Map([[CONTROL_ARM, p.plain], [TREATMENT_ARM, p.carded]]);
+    // D-6482: an owed arm is not spawned when its answered sibling's payload, built now, is not the one the sibling answered.
+    const answeredArm = s.arms.find((a) => a.state === 'answered');
+    if (answeredArm !== undefined) {
+      shas ??= armManifestShas(ctx);
+      const won = answeredAttempt(answeredArm);
+      const then = shas.get(won.name);
+      if (then === undefined) refuse('out-refused', `arm-manifest-missing ${won.name}`);
+      if (sha256Hex(byArm.get(answeredArm.arm)) !== then) {
+        excludeOwedArms(ctx, s);
+        continue;
+      }
+    }
     for (const { arm } of s.next) stdins.set(`${s.q.qid} ${arm}`, byArm.get(arm));
+    kept.push(s);
   }
+  if (kept.length === 0) return { stdins, version: null, pending: kept };   // every question of the batch was excluded: nothing to preflight or spawn
   const pre = await preflightSpawn({ launch: ctx.launch, home: ctx.home, out: ctx.out, lang: ctx.lang, gate: ctx.gate,
     expected: ctx.expected, allowCodeChange: ctx.allowCodeChange });
   for (const st of pre.stamps) ctx.stamps.add(st);
-  return { stdins, version: pre.version };
+  return { stdins, version: pre.version, pending: kept };
+}
+/** D-6482: each planned run's stdin sha as the section's manifests recorded it, by run name; a run planned twice (a stopped
+ *  attempt planned again, which keeps its number) reads from the last manifest that names it. An unreadable or non-JSON
+ *  manifest refuses `out-refused` (D-6309's rule). */
+function armManifestShas(ctx) {
+  const rel = armBatchDir(ctx.section);
+  const shas = new Map();
+  if (lstatOrNull(ctx.out, rel) === null) return shas;
+  let names;
+  try {
+    names = readdirSync(path.join(ctx.out, rel)).filter((n) => ARM_BATCH_FILE_RE.test(n)).sort();
+  } catch (e) {
+    refuse('out-refused', `${rel} unreadable ${errCode(e)}`);
+  }
+  for (const n of names) {
+    const read = readPlain(path.join(ctx.out, rel, n), OUT_JSON_CAP);
+    if (read.state !== 'bytes') refuse('out-refused', `${rel}/${n} ${read.state === 'bad' ? badWord(read) : read.state}`);
+    let m;
+    try {
+      m = JSON.parse(read.bytes.toString('utf8'));
+    } catch {
+      refuse('out-refused', `${rel}/${n} is not JSON`);
+    }
+    if (!plainObject(m) || m.kind !== ARM_BATCH_KIND || !Array.isArray(m.runs)) refuse('out-refused', `${rel}/${n} is not an arm batch manifest`);
+    for (const r of m.runs) if (plainObject(r) && typeof r.name === 'string' && typeof r.stdin_sha256 === 'string') shas.set(r.name, r.stdin_sha256);
+  }
+  return shas;
+}
+/** D-6482 (departing from W2-D80, where run-failed came only from two infrastructure failures): the question's owed arm is
+ *  excluded as run-failed, its reason `arm-payload-changed`, and the question with it, so it is excluded from both arms
+ *  under W2-D80's rule and counts in W2-D89's run-failed share. The owed arm's answer record is written here, at once (the
+ *  record is what the next pass reads, so the arm is never spawned in a later pass); the answered sibling keeps its answer
+ *  (R14) and its record is written by the next pass as a run-failed question's. No spawn, no re-run consumed. */
+function excludeOwedArms(ctx, s) {
+  const state = 'run-failed';
+  ensurePlainDir(ctx.out, `${ctx.section}/answers`);
+  for (const a of s.arms) {
+    if (a.next === null) continue;
+    const rel = answerRel(ctx.section, s.q.qid, a.arm);
+    if (lstatOrNull(ctx.out, rel) !== null) refuse('out-refused', `${rel} already exists`);
+    writePlain(ctx.out, rel, canonicalJson(answerRecordOf(ctx, { ...s, state }, { ...a, state, reason: ARM_PAYLOAD_CHANGED })) + '\n');
+  }
+  process.stderr.write(`ccrc history-replay: arms ${ctx.section} excluded ${s.q.qid}: ${ARM_PAYLOAD_CHANGED}\n`);
 }
 
 /** W2-D56's preflight before a spawn batch, the one spelling the writer (`openWriter`), the arms (armBatchPreflight) and
@@ -6795,7 +6884,7 @@ function answerRecordOf(ctx, s, a) {
   return {
     kind: ANSWER_KIND, v: 1, section: ctx.section, record_sha256: ctx.recordSha256, store_id: q.store_id,
     qid: q.qid, arm: a.arm, ccrc_id: q.ccrc_id, generation: q.generation, boundary_uuid: q.boundary_uuid, fact_kind: q.kind,
-    question_state: s.state, arm_state: a.state,
+    question_state: s.state, arm_state: a.state, ...(a.reason === undefined ? {} : { reason: a.reason }),
     attempts: a.attempts.map((t) => ({ name: t.name, class: t.class, code: t.code, signal: t.signal, tokens: t.tokens, error_fields: t.errorFields })),
     run: won === null ? null : won.name,
     answer_field: ans === null ? null : ans.answer_field, correct: ans === null ? null : ans.correct,
@@ -6858,7 +6947,8 @@ function writeArmsSummary(ctx, states, stop) {
     return { arm: a.arm, answer: won === null ? null : armAnswerOf(s.q, won.facts, ctx.shaMinPrefix) };
   }) }));
   const summary = armsSummaryOf({ section: ctx.section, recordSha256: ctx.recordSha256, storeId: ctx.storeId, budget: ctx.budget,
-    spend: spentSoFar(ctx.out), batches: armBatchCount(ctx), stop, stamps: ctx.stamps, questions });
+    spend: spentSoFar(ctx.out), batches: armBatchCount(ctx), stop, stamps: ctx.stamps, questions,
+    payloadChanged: states.filter((s) => s.arms.some((a) => a.reason === ARM_PAYLOAD_CHANGED)).map((s) => s.q.qid) });
   const rel = armsSummaryRel(ctx.section);
   ensurePlainDir(ctx.out, `${ctx.section}/arms`);
   writePlain(ctx.out, rel, canonicalJson(summary) + '\n');
@@ -6937,7 +7027,8 @@ export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBat
           const pending = states.filter((s) => s.next.length > 0).slice(0, perBatch);
           if (pending.length === 0) break;
           const pre = await armBatchPreflight(ctx, pending);
-          const planned = pending.flatMap((s) => s.next.map(({ arm, attempt }) => ({ qid: s.q.qid, arm, attempt,
+          if (pre.pending.length === 0) continue;   // D-6482: every question of the batch was excluded; the next pass reads them as run-failed
+          const planned = pre.pending.flatMap((s) => s.next.map(({ arm, attempt }) => ({ qid: s.q.qid, arm, attempt,
             job: armJob(ctx, s.q, arm, attempt, pre.stdins.get(`${s.q.qid} ${arm}`)) })));
           writeArmManifest(ctx, pre.version, planned);
           await runBatch(planned.map((p) => p.job), { gate, claim, concurrency: record.limits.concurrency });
