@@ -18,7 +18,7 @@ import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
 import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
-import { decideRoute, parseRouteRequest, type RouteTrailEvent } from './route.js';
+import { decideRoute, parseRouteRequest } from './route.js';
 import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
@@ -325,12 +325,6 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
       return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
     }
   }
-}
-
-/** The target session's whole routing trail: the run events of every run it touches, as the L1 fold reads them. */
-function routeTrail(coord: CoordStore, sid: string): RouteTrailEvent[] {
-  return coord.runsTouching(sid).flatMap((r) =>
-    coord.runEvents(r.id).map((e) => ({ at: e.at, runId: r.id, runSessionId: r.sessionId, detail: e.detail })));
 }
 
 /**
@@ -1883,7 +1877,8 @@ export function registerCoordRoutes(
         run: coord.run(id),
         // D-5866: the `route` row; `routeSet`, the class rung's pair below, is answered by the same `ROUTE_CAP`.
         ccdCanRoute: ccdCan(deps.fleetState, 'route'),
-        trail: (sid) => routeTrail(coord, sid),
+        trail: (sid) => coord.runsTouching(sid).flatMap((r) =>
+          coord.runEvents(r.id).map((e) => ({ at: e.at, runId: r.id, runSessionId: r.sessionId, detail: e.detail }))),
         measure: (sid, field) => fieldMeasured(deps.io, deps.cfg.registryDir, sid, field),
       });
       if (!decision.ok) return refuseRoute(reply, decision.refused, decision.extra);

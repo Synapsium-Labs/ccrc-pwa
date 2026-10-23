@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import type { CollectToken } from '../../shared/api.js';
 import { codeOnly } from './sourceScan.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcRoot = path.resolve(here, '..', 'src');
@@ -298,7 +299,7 @@ const GATES = {
     re: /if \(!verbSupported\(a\.fleetState, CCD_ARGV\.hibernate\('x', null\)\)\) return null;/,
   },
   /** The routing door asks the predicate of the stored id it is about to write. */
-  'routing-door': { file: 'coord/routes.ts', scope: 'POST /api/runs/:id/route', re: /if \(!isRegistryId\(sid\)\) \{/ },
+  'routing-door': { file: 'coord/route.ts', scope: 'decideRoute', re: /if \(!isRegistryId\(sid\)\) return refused\('bad-session'\);/ },
   /** Advance re-checks the stored id before `verifyDone`, and only there: the last gate of its decider's table
    *  (ARCH-33), on a forward edge only, so a retreat to `working` composes no argv and is left alone. */
   'advance-gate': {
@@ -463,7 +464,7 @@ const CENSUS: readonly CensusRow[] = [
 /** The files whose gates ask the predicate themselves. */
 const GATE_FILES = [
   'server.ts', 'registry.ts', 'watch.ts',
-  'coord/routes.ts', 'coord/openRun.ts', 'coord/advance.ts', 'coord/dispatchDecide.ts', 'coord/close.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
+  'coord/routes.ts', 'coord/route.ts', 'coord/openRun.ts', 'coord/advance.ts', 'coord/dispatchDecide.ts', 'coord/close.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
   'coord/expireArchived.ts',
 ] as const;
 
@@ -644,6 +645,13 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     }
     expect([...readChecked].sort(), 'every READ_ABOVE and DECIDED_ABOVE pin was exercised by a call')
       .toEqual([...Object.keys(READ_ABOVE), ...Object.keys(DECIDED_ABOVE)].sort());
+  });
+
+  it('the route handler asks decideRoute and refuses on its refusal before CCD_ARGV.route / routeSet (spec 2.3)', () => {
+    const code = codeOnly(sourceOfSymbol(path.join(srcRoot, 'coord/routes.ts'), 'registerCoordRoutes'));
+    expect(code).toMatch(
+      /\bdecideRoute\(\{[\s\S]*?if \(!decision\.ok\) return refuseRoute\(reply, decision\.refused, [\s\S]*?CCD_ARGV\.route(Set)?\(/,
+    );
   });
 
   it('CONTROL: the expiry step-0 pin reads the capability in either form, and not another row or token (D-5866)', () => {

@@ -233,11 +233,20 @@ describe('decideRoute: the ladder, S5-R17 and the ceiling', () => {
     const d = await decideRoute(facts(kind(), { reg: { effort: ok('ultracode') }, trail: [demoteEv('effort', 'high', 'medium')] }).facts);
     expect(d).toMatchObject({ ok: false, refused: 'no-effort-rungs' });
   });
-  it('S5-R17 runs before the ceiling guard: the replaced escalation can hit it', async () => {
+  it('S5-R17 runs before the ladder: the replaced effort escalation from max is refused by the ladder\'s own ceiling', async () => {
     const d = await decideRoute(facts(kind(), {
       reg: { class: ok('opus'), effort: ok('max'), degraded: ok('sonnet') }, trail: [demoteEv('effort', 'high', 'medium')],
     }).facts);
     expect(d).toMatchObject({ ok: false, refused: 'ceiling' });
+  });
+  it('S5-R17 runs before the degraded-ceiling guard: the replaced class escalation is judged against the lane, not the stale reversal', async () => {
+    // The record intends opus, the lane serves haiku (degraded), and the standing demotion opus->sonnet disagrees with
+    // the measured haiku, so S5-R17 replaces its reversal (which would re-intend opus) with the move haiku->sonnet.
+    // The guard must judge that replacement; run on the stale reversal it would refuse 'ceiling'.
+    const m = await moveOf(facts(kind('ceiling'), {
+      reg: { class: ok('opus'), effort: ok('high'), degraded: ok('haiku') }, trail: [demoteEv('class', 'opus', 'sonnet')],
+    }));
+    expect(m).toMatchObject({ mode: 'escalate', field: 'class', from: 'haiku', to: 'sonnet' });
   });
   it('S5-R17 applies to a kind ask only, never to a demote', async () => {
     const m = await moveOf(facts(worker({ by: 'demote', field: 'effort' }), { reg: { effort: ok('high') }, trail: [demoteEv('effort', 'high', 'medium')] }));

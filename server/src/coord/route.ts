@@ -9,6 +9,7 @@ import {
   EFFORT_LADDER, classRungEffortReset, demote, escalate,
   type Demotion, type RungCurrent, type RungTarget,
 } from '../../../shared/routing-ladder.js';
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { CLASSES, type ModelClass } from '../../../shared/models.js';
 
 /**
@@ -110,7 +111,7 @@ export type RouteRunFacts = Pick<RunSummary, 'state' | 'sessionId' | 'claimedBy'
 
 /** A registry field, measured: its content, or WHY it has none. `absent` is a
  *  fact about the record; `unreadable` is transient and says nothing about it. */
-export type RegistryRead = { ok: true; content: string } | { ok: false; reason: 'absent' | 'unreadable' };
+export type RegistryRead = { ok: true; content: string } | { ok: false; reason: ReadFailure };
 
 /** One run event on the target session's trail, with the run it came from. */
 export interface RouteTrailEvent {
