@@ -187,13 +187,14 @@ describe('GET /api/sessions/:id/commands', () => {
     const tdir = path.join(home, '.claude-a', 'projects', workdir.replace(/[/._]/g, '-'));
     mkdirSync(tdir, { recursive: true });
     const content = [
-      '- superpowers:brainstorming: You MUST use this before any creative work.',
-      '- some-skill',
-      '- vastai: Rent GPUs.',
-      '- plugin:skill-name',
+      '- plugin-a:skill-b: Described skill.',
+      '- skill-a',
+      '- skill-c: Another described skill.',
+      '- plugin-a:skill-d',
+      '- **Note**',
       '  (an indented note, not a skill)',
       'Prose that is neither shape.',
-      '- handoff: Hand off a task.',
+      '- skill-e: Last described skill.',
     ].join('\n');
     writeFileSync(path.join(tdir, `${uuid}.jsonl`), JSON.stringify({ attachment: { type: 'skill_listing', isInitial: true, content } }) + '\n');
     const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
@@ -202,11 +203,11 @@ describe('GET /api/sessions/:id/commands', () => {
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${id}/commands` });
     expect(res.statusCode).toBe(200);
     expect((res.json() as { skills: unknown[] }).skills).toEqual([
-      { name: 'superpowers:brainstorming', desc: 'You MUST use this before any creative work.', kind: 'skill' },
-      { name: 'some-skill', desc: '', kind: 'skill' },
-      { name: 'vastai', desc: 'Rent GPUs.', kind: 'skill' },
-      { name: 'plugin:skill-name', desc: '', kind: 'skill' },
-      { name: 'handoff', desc: 'Hand off a task.', kind: 'skill' },
+      { name: 'plugin-a:skill-b', desc: 'Described skill.', kind: 'skill' },
+      { name: 'skill-a', desc: '', kind: 'skill' },
+      { name: 'skill-c', desc: 'Another described skill.', kind: 'skill' },
+      { name: 'plugin-a:skill-d', desc: '', kind: 'skill' },
+      { name: 'skill-e', desc: 'Last described skill.', kind: 'skill' },
     ]);
     await app.close();
   });
@@ -412,6 +413,26 @@ describe('GET /api/sessions/:id/commands reads a bounded tail (D-6434)', () => {
     expect(xAt).toBeGreaterThanOrEqual(S - 5 * CHUNK);
     expect(xAt + x.length).toBeLessThanOrEqual(S - 4 * CHUNK);
     expect(names(await rig(all))).toEqual(['h2', 'hd']);
+  });
+
+  it('a bare name in a delta keeps the description it had', async () => {
+    const file = bytes(full('- a: described\n- b: kept'), filler(3000), delta('- a\n- c: new'), filler(3000));
+    expect((await rig(file)).skills).toEqual([
+      { name: 'a', desc: 'described', kind: 'skill' },
+      { name: 'b', desc: 'kept', kind: 'skill' },
+      { name: 'c', desc: 'new', kind: 'skill' },
+    ]);
+  });
+
+  it('a line that will not decode is skipped', async () => {
+    // A newer full listing whose description carries a lone 0xFF byte (not UTF-8): the older valid one answers.
+    const bad = Buffer.concat([
+      Buffer.from('{"attachment":{"type":"skill_listing","isInitial":true,"content":"- z: bad '),
+      Buffer.from([0xff]),
+      Buffer.from(' byte"}}\n'),
+    ]);
+    const file = Buffer.concat([bytes(full('- a: valid'), filler(3000)), bad, bytes(filler(3000))]);
+    expect(names(await rig(file))).toEqual(['a']);
   });
 
   it('deltas and no full listing: built-ins only', async () => {

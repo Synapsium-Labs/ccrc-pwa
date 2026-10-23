@@ -20,8 +20,9 @@ export const BUILTINS: SlashCommand[] = [
 ];
 
 const SKILL_LINE = /^-\s+(\S+):\s+(.+)$/;
-/** A bare `- name` line: Claude Code trims descriptions under its budget (D-6434), and the skill is still invocable. */
-const BARE_SKILL_LINE = /^-\s+(\S*[^\s:])$/;
+/** A bare `- name` line: Claude Code trims descriptions under its budget (D-6434), and the skill is still invocable.
+ *  The name is a skill-name charset (`plugin:skill` allowed), so a one-token prose bullet such as `- **Note**` is not one. */
+const BARE_SKILL_LINE = /^-\s+([A-Za-z0-9][\w.-]*(?::[\w.-]+)*)$/;
 
 /**
  * Parse the skills out of a Claude Code `skill_listing` attachment's markdown
@@ -66,13 +67,19 @@ function listingsIn(lines: readonly Uint8Array[]): Listing[] {
 }
 
 /** The skills the listings (oldest first) leave: the LAST full listing's, then each later delta's in order — a new
- *  name appends, a repeated name keeps its place and takes the newer description. Null when none is full. */
+ *  name appends, a repeated name keeps its place and takes the newer description, unless that is empty (a bare name
+ *  in a delta keeps the description it had). Null when none is full. */
 function answerOf(listings: readonly Listing[]): SlashCommand[] | null {
   let at = listings.length - 1;
   while (at >= 0 && !listings[at]!.full) at--;
   if (at < 0) return null;
   const byName = new Map<string, SlashCommand>();
-  for (const l of listings.slice(at)) for (const c of parseSkillListing(l.content)) byName.set(c.name, c);
+  for (const l of listings.slice(at)) {
+    for (const c of parseSkillListing(l.content)) {
+      const had = byName.get(c.name);
+      byName.set(c.name, c.desc === '' && had ? { ...c, desc: had.desc } : c);
+    }
+  }
   return [...byName.values()];
 }
 
