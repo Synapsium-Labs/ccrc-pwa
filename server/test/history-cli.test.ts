@@ -2513,6 +2513,7 @@ describe('W2-D43 and W2-D46: the counter line on the env path carries its arm (W
     writeMarker(box, storeIdOf(box), [[ID, G1], [AL_ID2, '-']]);
     const post = run();
     expect(ans(post.r), `after the admission: ${post.r.stderr}`).toEqual([5, 'store-read-failed']);
+    expect(post.r.stderr, 'CONTROL: it is the planted fault, not another read failure').toContain('ccrc history: store-read-failed: fixture-planted-read-fault');
     expect(post.lines, 'a read failure after the admission: exactly one counter line').toHaveLength(1);
     expect(Object.keys(post.lines[0]!).sort()).toEqual(ENV_KEYS);
     expect(post.lines[0]).toMatchObject({ ev: 'recall', id: ID, gen: G1, cmd: 'tree', rc: 5, arm: 'treatment' });
