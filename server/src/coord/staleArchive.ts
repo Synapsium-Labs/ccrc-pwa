@@ -7,7 +7,7 @@ import type { NoticeRecord } from '../notice.js';
 import type { FleetIO, MeasuredDirectoryRead } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import { configDirFor } from '../config.js';
-import { ARCHIVE_IF_NO_PANE_CAP, CCD_ARGV, capSupported, sweepDec } from '../ccdargv.js';
+import { ARCHIVE_IF_NO_PANE_CAP, CCD_ARGV, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { readSwitches } from '../../../shared/switches.js';
 import {
@@ -77,7 +77,12 @@ export interface StaleArchiveMemory {
   readonly sightings: Map<string, { firstAt: number; lastAt: number }>;
   /** Ids already recorded as "would archive" in the current unbroken run of eligible passes. */
   readonly would: Set<string>;
+  /** Ids whose last act failed, and when: a row ccd keeps refusing must not hold the head of the line (D-6643). */
+  readonly failed: Map<string, number>;
 }
+
+/** How long a failed id is passed over when the pass picks its one act. */
+export const STALE_ARCHIVE_RETRY_MS = 24 * 3_600_000;
 
 export type StaleArchiveOutcome =
   | { readonly kind: 'archived'; readonly id: string }
@@ -194,8 +199,14 @@ export async function staleArchivePass(
     }
     return out;
   }
-  const { rec } = due[0]!;
-  out.push(await act(deps, mem, rec, dec, coord));
+  const failed = mem.failed;
+  for (const [id, at] of [...failed]) if (!seen.has(id) || now - at >= STALE_ARCHIVE_RETRY_MS) failed.delete(id);
+  // The longest idle row that has not failed within a day; when every due row has, the oldest is asked again.
+  const pick = due.find((d) => !failed.has(d.rec.id)) ?? due[0]!;
+  const outcome = await act(deps, mem, pick.rec, dec, coord);
+  if (outcome.kind === 'failed') failed.set(pick.rec.id, now);
+  else failed.delete(pick.rec.id);
+  out.push(outcome);
   return out;
 }
 
@@ -224,6 +235,8 @@ async function act(
     const claimed = claimedIds(deps, coord);
     if (claimed === null) return { kind: 'deferred', id, why: 'claims-unreadable' };
     if (claimed.has(id)) return { kind: 'deferred', id, why: 'claimant' };
+    // The capability, asked again nearest the argv (the pass asked it at the top).
+    if (!ccdCan(deps.fleetState, 'wsArchive') || !capSupported(deps.fleetState, ARCHIVE_IF_NO_PANE_CAP)) return { kind: 'deferred', id, why: 'cap' };
     let res: Awaited<ReturnType<RunCcd>>;
     try {
       res = await deps.runCcd(CCD_ARGV.wsArchive(id, { ...dec, reason: 'stale' }, { ifNoPane: true }));

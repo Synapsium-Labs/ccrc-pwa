@@ -1591,7 +1591,7 @@ export class FleetWatcher {
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
   private lastStaleArchiveSweep = 0;
   private staleArchiveSweeping = false;
-  private readonly staleArchiveMemory: StaleArchiveMemory = { sightings: new Map(), would: new Set() };
+  private readonly staleArchiveMemory: StaleArchiveMemory = { sightings: new Map(), would: new Set(), failed: new Map() };
   private readonly hibernateStartedAt = Date.now();
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;

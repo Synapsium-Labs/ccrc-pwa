@@ -98,7 +98,7 @@ const harness = (o: {
     presence: { isVisible: () => o.viewer === true },
     notice: (e) => { feed.push({ title: e.title, body: e.body }); },
     runCcd: async (argv) => { ccd.push([...argv]); return { ok: ccdAnswer.ok, stdout: '', stderr: ccdAnswer.stderr, killed: false, signal: null } as never; },
-    fleetState: { ccdVerbs: o.caps ?? [ARCHIVE_IF_NO_PANE_CAP, ACTOR_FLAGS_CAP] } as never,
+    fleetState: { ccdVerbs: o.caps ?? ['ws-archive', ARCHIVE_IF_NO_PANE_CAP, ACTOR_FLAGS_CAP] } as never,
     pane: async () => pane,
     transcriptMtimeMs: async () => (o.evidence === undefined ? NOW - 15 * DAY : o.evidence === null ? 'none' : o.evidence),
     wokeAtMs: async () => null,
@@ -108,7 +108,7 @@ const harness = (o: {
     log: () => {},
     now: () => clock.now,
   };
-  return { deps, listing, fresh, rows, mem: { sightings: new Map(), would: new Set() }, ccd, feed, clock, setPane: (p) => { pane = p; }, ccdAnswer };
+  return { deps, listing, fresh, rows, mem: { sightings: new Map(), would: new Set(), failed: new Map() }, ccd, feed, clock, setPane: (p) => { pane = p; }, ccdAnswer };
 };
 const pass = (h: Harness, records: SessionRecord[], names: string[]) => {
   h.listing.names = names;
@@ -216,6 +216,23 @@ describe('staleArchivePass (L3)', () => {
     const out = await twoPasses(h, [rec('a')], LIVE);
     expect(h.ccd).toEqual([]);
     expect(out.map((o) => o.kind)).toEqual(['deferred']);
+  });
+
+  it('a row ccd always refuses does not hold the head of the line: the next due row is archived on the next pass', async () => {
+    const h = harness();
+    const run = h.deps.runCcd;
+    h.deps.runCcd = async (argv) => (argv.includes('a')
+      ? (h.ccd.push([...argv]), { ok: false, stdout: '', stderr: 'ccd: worktree is gone\n', killed: false, signal: null } as never)
+      : run(argv));
+    const recs = [rec('a'), rec('b')];
+    const first = await twoPasses(h, recs, LIVE);
+    expect(first.map((o) => o.kind)).toEqual(['failed']);
+    h.clock.now += 3_600_000;
+    const second = await pass(h, recs, LIVE);
+    expect(second.map((o) => [o.kind, o.id])).toEqual([['archived', 'b']]);
+    h.clock.now += 25 * 3_600_000;
+    const third = await pass(h, recs, LIVE);
+    expect(third.map((o) => [o.kind, o.id])).toEqual([['failed', 'a']]);
   });
 
   it('at most one act a pass, fleet-wide', async () => {
