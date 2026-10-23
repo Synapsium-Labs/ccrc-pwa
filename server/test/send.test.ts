@@ -899,8 +899,9 @@ describe('sendPrompt resumeIfOwn (F3 / bug #21)', () => {
 
 // D-6367: Retry's whole-box resume. A send refused with our own text left in the box (`verify-failed`, `enter-ignored`)
 // used to Retry into `draft-present`, because the server saw a non-empty box. `resumeIfOwn: 'whole'` reads the box WHOLE
-// (every visual row, wrapped lines and blank rows included) and presses Enter only when it renders exactly the composed
-// text. It never types, and an empty box answers `nothing-to-submit` (a landed send can still have been answered
+// (every visual row, wrapped lines and blank rows included) and presses Enter only when it renders the composed text:
+// equal up to whitespace, which wrapping moves and a blank row is (no non-space character added or removed, so one Enter
+// sends our own non-space characters and no second copy exists). It never types, and an empty box answers `nothing-to-submit` (a landed send can still have been answered
 // `enter-ignored`, so retyping would be a second copy).
 describe("sendPrompt resumeIfOwn: 'whole' (D-6367, Retry resumes our own text)", () => {
   const RULE = '─'.repeat(60);

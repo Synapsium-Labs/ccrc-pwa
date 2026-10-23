@@ -919,8 +919,13 @@ export function ownRenderedBox(ansiPane: string, parts: readonly string[], prove
  * (the provenance guard, 1, stays with its caller) and the tail it answers (or `null`). `head` is guard 4's and 5's
  * only difference: `'tail'` (`ownRenderedBox`) lets the first run be a suffix of ours, which a box at the row cap
  * shows when its head scrolled out; `'whole'` (`sendPrompt`'s `resumeIfOwn: 'whole'`) needs the first run to EQUAL
- * ours, so every visual row is ours and nothing is hidden or added. A resume cannot have this call's provenance
- * (an earlier call typed the text): the ownership claim is the client's `resume` plus this exact correspondence.
+ * ours, so nothing of ours is hidden above the window and no row is added. A resume cannot have this call's
+ * provenance (an earlier call typed the text): the ownership claim is the client's `resume` plus this correspondence.
+ *
+ * WHAT IT PROVES, no more: the box equals our text UP TO WHITESPACE (`squash` erases every space, newline and blank
+ * row, which wrapping moves), so no non-space character is added or removed. That is enough for a resume: one Enter
+ * sends exactly our non-space characters, and no second copy of them exists. It does NOT prove a bare chip row's
+ * content in `'whole'` mode (no provenance: a human would have to paste over 800 characters at exactly that position).
  */
 function renderedAsTyped(ansiPane: string, parts: readonly string[], head: 'tail' | 'whole'): string | null {
   const rows = boxRows(ansiPane);
@@ -1257,8 +1262,9 @@ export type OnDraft = 'refuse' | 'replace' | 'stash';
  * `resumeIfOwn: 'whole'` (D-6367): Retry's resume of text a refused send left in
  * the box (`verify-failed`, `enter-ignored`). A mode of the same option, with the
  * caller's claim "that text is mine": the box is read WHOLE and Enter is pressed
- * only when it renders exactly the composed text, wrapped lines and blank rows
- * included (`renderedAsTyped`, the correspondence `ownRenderedBox` proves). Any
+ * only when it renders the composed text up to whitespace, wrapped lines and blank
+ * rows read as the rows they are (`renderedAsTyped`, the correspondence
+ * `ownRenderedBox` proves: no non-space character added or removed). Any
  * other box is `draft-present`; an EMPTY box is `nothing-to-submit`, because the
  * earlier send may have landed and nothing is ever retyped. It types, clears and
  * stashes nothing (`onDraft` is not consulted).
