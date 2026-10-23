@@ -760,6 +760,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   });
 
   it('a tap during the gap sends nothing', () => {
+    holdClosingContent();
     const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
     const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
@@ -779,9 +780,27 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     expect(tab).not.toHaveBeenCalled();
     expect(store.getState(), 'a tap in the gap changed the store').toBe(state);
 
-    // Hiding is not a send: the scrim and the close still work in the gap.
-    reconnect();
+    // Hiding is not a send: the scrim and the close still work in the gap, and make no call.
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(panel()?.getAttribute('data-state'), 'the scrim in the gap').toBe('closed');
+    cleanup();
+    // The × is the desktop arm's (`min-width: 900px`); a phone has the scrim and the handle.
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q === '(min-width: 900px)', media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    try {
+      mount(connected(askFixture(1)));
+      drop();
+      expect(panel()?.getAttribute('data-state')).toBe('open');
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+      expect(panel()?.getAttribute('data-state'), 'the close button in the gap').toBe('closed');
+    } finally {
+      vi.unstubAllGlobals();
+    }
     expect(option).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+    expect(tab).not.toHaveBeenCalled();
   });
 
   // F3 of review 843: the gap is read-only in what it SHOWS, not only at the send. Every control that sends is disabled
