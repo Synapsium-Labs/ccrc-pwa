@@ -8100,19 +8100,28 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   };
   /** Every tracked or new untracked .ts file under server/test, its pins' count per ratcheted file (W1a's and W1b's,
    *  D-6114), and how many files were listed and parsed. Scanned once and shared by both ratchets and D-6111's guard. */
-  let pinScan: { counts: Record<string, number>; listed: number; parsed: number } | undefined;
+  /** The security censuses' test files (#554: they are exempt from the ratchet and migrate one at a time, each in its own
+   *  PR). Their pins are tallied in `exempt` for information and carry no ceiling, so a security PR that adds a route
+   *  or a pin never goes red here. */
+  const SECURITY_CENSUS_TESTS: readonly string[] = ['server/test/auth-gate.test.ts', 'server/test/box-token-census.test.ts',
+    'server/test/token-policy.test.ts', 'server/test/token-claim-route.test.ts', 'server/test/notify-token.test.ts'];
+  let pinScan: { counts: Record<string, number>; exempt: Record<string, number>; listed: number; parsed: number } | undefined;
   const literalSourcePinScan = (): NonNullable<typeof pinScan> => {
     if (pinScan) return pinScan;
     const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'server/test/*.ts'],
       { cwd: ccrcRoot, encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
     const counts: Record<string, number> = Object.fromEntries(RATCHET_FILES.map((f) => [f, 0]));
+    const exempt: Record<string, number> = {};
     const files = new Set(r.stdout.split('\0').filter((x) => x && existsSync(path.join(ccrcRoot, x))));
     const before = pinParses;
     for (const f of files) {
-      for (const pin of literalSourcePins(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)) counts[pin.target]! += 1;
+      for (const pin of literalSourcePins(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)) {
+        if (SECURITY_CENSUS_TESTS.includes(f)) exempt[pin.target] = (exempt[pin.target] ?? 0) + 1;
+        else counts[pin.target]! += 1;
+      }
     }
-    pinScan = { counts, listed: files.size, parsed: pinParses - before };
+    pinScan = { counts, exempt, listed: files.size, parsed: pinParses - before };
     return pinScan;
   };
   /** The shared scan's counts for `files` alone, in their order (D-6114: one scan serves both ratchets). */
@@ -8153,7 +8162,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       "const agent = readFileSync(path.join(root, 'agent', 'src', 'server.ts'), 'utf8');",
       "expect(agent.indexOf('listen(')).toBeGreaterThan(0);",
     ))).toEqual(['3 coord/routes.ts toContain app.post(', '4 coord/childReclaim.ts toMatch /x/',
-      '6 update/routes.ts toContain app.get(']);   // ARCH-06: update/routes.ts is ratcheted too, a security census that keeps its pins
+      '6 update/routes.ts toContain app.get(']);   // the counting rule sees it; whether it is ratcheted depends on the reading test file
     expect(pins(L(
       "describe('a', () => { const src = readFileSync(join(dir, 'server.ts'), 'utf8'); expect(src).toContain('a'); });",
       "describe('b', () => { const src = readFileSync(join(dir, 'other.ts'), 'utf8'); expect(src).toContain('b'); });",
@@ -8243,12 +8252,26 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   // ARCH-06 (#554), the whole-tree slice. W1a's and W1b's rows above keep their own ceilings; this is every OTHER
   // server/src file, measured on merge day. A file absent from the table has a ceiling of 0, so the first literal pin
   // over a file nobody pinned before is red. Lower a row when a pin moves onto `scan/symbols.ts`; never raise one.
-  // The security censuses (`auth/gate.ts`, `update/routes.ts`, `token/*`) keep their literal pins here until each
-  // migrates, one per PR (the ticket's risk line); their rows are in the table and shrink with them.
+  // The security censuses' test files (SECURITY_CENSUS_TESTS) are exempt, as the ticket says: their pins are not counted
+  // here and have no row, so each migrates in its own PR. Another test's pin over those src files still counts.
   /** The files whose pin count exceeds their ceiling (absent = 0), in `files`' order. A named function so a fixture can
    *  prove the check is red on a new pin. */
   const overCeiling = (counts: Record<string, number>, ceiling: Record<string, number>, files: readonly string[]): string[] =>
     files.filter((f) => (counts[f] ?? 0) > (ceiling[f] ?? 0));
+
+  it('CONTROL (fixture, ARCH-06): a new pin in a security census test file is exempt, in any other test file it counts', () => {
+    const { exempt } = literalSourcePinScan();
+    expect(Object.keys(exempt).length, 'the exempt tally saw no security census pin').toBeGreaterThan(0);
+    expect(SECURITY_CENSUS_TESTS.every((f) => existsSync(path.join(ccrcRoot, f))), 'an exempt file is gone').toBe(true);
+    const gate = 'server/src/auth/gate.ts';
+    const extra = literalSourcePins("expect(readFileSync(path.join(srcRoot, 'auth', 'gate.ts'), 'utf8')).toContain('x');", 'probe.ts');
+    expect(extra.map((x) => x.target)).toEqual([gate]);
+    // The scan's rule: a pin read from an exempt file never reaches `counts`, so a new one cannot be over a ceiling.
+    expect(SECURITY_CENSUS_TESTS.includes('server/test/auth-gate.test.ts')).toBe(true);
+    expect(SECURITY_CENSUS_TESTS.includes('server/test/other.test.ts')).toBe(false);
+    expect(literalSourcePinScan().counts[gate] ?? 0, 'auth/gate.ts has no row: only a non-census test may pin it').toBe(0);
+    expect(overCeiling({ [gate]: 1 }, {}, [gate])).toEqual([gate]);
+  });
 
   it('CONTROL (fixture, ARCH-06): one new indexOf source pin over an unpinned file is counted, and over its ceiling', () => {
     const code = "const src = readFileSync(path.join(srcDir, 'coord', 'rundefs.ts'), 'utf8');\nexpect(src.indexOf('x')).toBe(1);";
@@ -8263,7 +8286,6 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/askbody.ts': 1,
       'server/src/askkey.ts': 1,
       'server/src/askwindow.ts': 1,
-      'server/src/auth/gate.ts': 19,
       'server/src/auth/sessions.ts': 6,
       'server/src/auth/webauthn.ts': 2,
       'server/src/childReclaimSweep.ts': 7,
@@ -8316,13 +8338,11 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/remote/io.ts': 1,
       'server/src/remote/runner.ts': 1,
       'server/src/stopDoneSweep.ts': 5,
-      'server/src/token/door.ts': 5,
-      'server/src/token/policy.ts': 3,
       'server/src/turnidle.ts': 9,
       'server/src/update/converge.ts': 12,
       'server/src/update/dispatch.ts': 8,
       'server/src/update/resolve.ts': 2,
-      'server/src/update/routes.ts': 2,
+      'server/src/update/routes.ts': 1,
     };
     const { counts } = literalSourcePinScan();
     const taken = new Set([...W1A_FILES, ...W1B_FILES]);

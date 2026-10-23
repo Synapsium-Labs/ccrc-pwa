@@ -133,6 +133,21 @@ describe('scan/symbols.ts keys a source slice on a symbol (D-5854)', () => {
     expect(t.indexOf('private lane')).toBeLessThan(t.indexOf('void this.lane(1)'));
   });
 
+  it('sqlStatementsIn lower-cases the table and reads every statement of a multi-statement string (the sessionId census sees both)', () => {
+    writeFileSync(file, [
+      'export class Store {',
+      "  sneak(id: string): void { this.db.prepare('UPDATE RUNS SET sessionId = ? WHERE id = ?').run('x', id); }",
+      "  sneakMulti(): void { this.db.exec('DELETE FROM mail WHERE id = 0; UPDATE runs SET sessionId = 1 WHERE id = 1'); }",
+      '}', ''].join('\n'));
+    // The census's own filter (coord-store.test.ts): an UPDATE of `runs` whose SET names sessionId.
+    const writers = (name: string): number => sqlStatementsIn(symbolOf(file, name))
+      .filter((q) => q.verb === 'UPDATE' && q.table === 'runs' && /\bsessionId\b/i.test(q.set ?? '')).length;
+    expect(sqlStatementsIn(symbolOf(file, 'Store.sneak'))[0]!.table).toBe('runs');
+    expect(writers('Store.sneak')).toBe(1);
+    expect(writers('Store.sneakMulti')).toBe(1);
+    expect(sqlStatementsIn(symbolOf(file, 'Store.sneakMulti')).map((q) => `${q.verb} ${q.table}`)).toEqual(['DELETE mail', 'UPDATE runs']);
+  });
+
   it('sqlStatementsIn follows code that moves: the same statements after a method is added above', () => {
     writeFileSync(file, SQL_FIXTURE);
     const before = sqlStatementsIn(symbolOf(file, 'Store.clear')).map((q) => q.text);

@@ -70,7 +70,7 @@ export function callsIn(symbol: SourceSymbol): CallSite[] {
 /** One SQL statement held in the source: the string expression (a literal, a template or a `+` chain) that opens as
  *  a statement. `text` is the cooked statement, each `${…}` shown as `${}`; `table` the first table it names
  *  (`INSERT INTO t`, `UPDATE t`, `DELETE FROM t`, `FROM t`), lower-cased as written, else `null`; `set` an UPDATE's SET
- *  list (from `SET` to `WHERE` or the end), else `null`. `partial` is true when the text is only a FRAGMENT of a `+` chain
+ *  list (from `SET` to `WHERE` or the end), else `null`. A string expression holding several `;`-separated statements yields one per piece (a `;` inside a quoted SQL literal would split it: out of width). `partial` is true when the text is only a FRAGMENT of a `+` chain
  *  that has a non-literal part (a conditional SET, a variable), so `set` may be cut short; `source` is then the raw
  *  source of the whole chain (else of the expression), and a census must read it, not `set`. */
 export interface SqlStatement {
@@ -97,11 +97,16 @@ const TABLE_OF: Record<string, RegExp> = {
 const statementsOf = (parsed: ParsedFile, from: number, to: number): SqlStatement[] => {
   const out: SqlStatement[] = [];
   for (const e of stringExpressions(parsed.text, parsed.path)) {
-    const verb = SQL_VERB.exec(e.text)?.slice(1).find((g) => g !== undefined)?.toUpperCase();
-    if (verb === undefined || e.start < from || e.end > to) continue;
-    const table = (TABLE_OF[verb] ?? /\bFROM\s+(\w+)/i).exec(e.text)?.[1] ?? null;
-    const set = verb === 'UPDATE' ? /\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(e.text)?.[1] ?? null : null;
-    out.push({ verb, table, set, text: e.text, partial: e.partial, source: parsed.text.slice(e.chainStart, e.chainEnd), file: parsed.path, start: e.start, end: e.end, line: e.line });
+    if (e.start < from || e.end > to) continue;
+    // One expression can hold several statements (`'DELETE …; UPDATE …'`): each `;`-separated piece is classified on its
+    // own, and every piece keeps the expression's span, line and source.
+    for (const text of e.text.split(';')) {
+      const verb = SQL_VERB.exec(text)?.slice(1).find((g) => g !== undefined)?.toUpperCase();
+      if (verb === undefined) continue;
+      const table = (TABLE_OF[verb] ?? /\bFROM\s+(\w+)/i).exec(text)?.[1]?.toLowerCase() ?? null;
+      const set = verb === 'UPDATE' ? /\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(text)?.[1] ?? null : null;
+      out.push({ verb, table, set, text, partial: e.partial, source: parsed.text.slice(e.chainStart, e.chainEnd), file: parsed.path, start: e.start, end: e.end, line: e.line });
+    }
   }
   return out;
 };
