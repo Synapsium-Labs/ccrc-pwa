@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e81dd88faa7b8997c5ea3f4b4e94a541e6cd9057f3b536ac5a768fbaf91fc0b8
+# ccrc:generated 1 sha256=11b4b01b10d780b65d97de726fabe6f0b26e8a5a84abfcdd85ba08db8f3eea10
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -39644,25 +39644,18 @@ _ws_loose_unmeasured_doc() {   # why -> the census' unmeasured answer, exit 1 (t
 }
 _ws_loose_census_records() {   # -> _WS_CREC_JSON (the records' rows) and _WS_CREC_BAD (unread ones, and any past the bound).
   #                                A killed verb's entry sits in the quarantine, which the listing does not walk: only its record names it
-  local LC_ALL=C d f n hex line seen=0 outf errf err rc
+  local LC_ALL=C f n hex line seen=0
   _WS_CREC_JSON=''; _WS_CREC_BAD=0
-  d=$(_ws_loose_rec_dir)
-  [[ -e "$d" || -L "$d" ]] || return 0
-  [[ -d "$d" && ! -L "$d" ]] || { _WS_CREC_BAD=1; return 0; }
-  outf=$(_plat_mktemp) && errf=$(_plat_mktemp) || { _WS_CREC_BAD=1; return 0; }
-  find -P "$d" -mindepth 1 -maxdepth 1 -name '*.*' -print0 >"$outf" 2>"$errf"; rc=$?
-  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
-  if (( rc != 0 )) || [[ -n "$err" ]]; then rm -f "$outf"; _WS_CREC_BAD=1; return 0; fi   # an unlistable directory is unmeasured, never empty
-  while IFS= read -r -d '' f; do
-    n="${f##*/}"; [[ "$n" =~ ^[0-9a-f]{16}\.[0-9]+\.[0-9]+$ ]] || continue
+  _ws_loose_records_of '*' || { _WS_CREC_BAD=1; return 0; }   # an unlistable directory is unmeasured, never empty
+  for f in "${_WS_LOOSE_RECS[@]}"; do
+    n="${f##*/}"
     if (( ++seen > WS_LOOSE_CENSUS_MAX )); then _WS_CREC_BAD=$(( _WS_CREC_BAD + 1 )); continue; fi
     { line=$(head -c 4096 -- "$f"); } 2>/dev/null; hex=''
     [[ "$line" =~ ^v=1\ name=([0-9a-f]+)\  ]] && hex="${BASH_REMATCH[1]}"
     if [[ -n "$hex" ]] && _ws_loose_record_read "$f" "$hex" && _ws_loose_unhex "$hex" && _ws_loose_sha16 "$hex" && [[ "$_WS_LOOSE_SHA" == "${n%%.*}" ]]; then
       _WS_CREC_JSON+="${_WS_CREC_JSON:+,}{\"hex\":\"$hex\",\"record\":\"$n\"}"
     else _WS_CREC_BAD=$(( _WS_CREC_BAD + 1 )); fi
-  done < "$outf"
-  rm -f "$outf"
+  done
 }
 _ws_loose_census() {   # ccd ws-audit --collect-census — READ-ONLY: the top-level entries of `~/.cc-tmp`, classed, as hex
   local LC_ALL=C root outf errf err rc n name hex cls out='' first=1 seen=0 trunc=false
@@ -39771,9 +39764,10 @@ _ws_loose_rows() {   # name path -> 0 no registry row lies at, inside or through
 }
 
 _ws_loose_rec_dir() { printf '%s' "$REG/tmpquarantine-loose"; }
-_ws_loose_records_of() {   # sha -> 0 with _WS_LOOSE_RECS = every record of that entry's name (exact `<sha>.<ns>.<pid>`); 2 unlistable
-  local LC_ALL=C sha="${1-}" d outf errf err rc f
+_ws_loose_records_of() {   # sha|'*' -> 0 with _WS_LOOSE_RECS = every record of that entry's name (exact `<sha>.<ns>.<pid>`; '*' = any 16-hex sha); 2 unlistable
+  local LC_ALL=C sha="${1-}" pat d outf errf err rc f
   _WS_LOOSE_RECS=(); _WS_LOOSE_WHY=''
+  pat="$sha"; [[ "$sha" != '*' ]] || pat='[0-9a-f]{16}'
   d=$(_ws_loose_rec_dir)
   [[ ! -L "$d" ]] || { _WS_LOOSE_WHY="$d is a link, which ccd never follows, so the loose records were never listed"; return 2; }
   _ws_reclaim_absent "$d"; rc=$?
@@ -39783,7 +39777,7 @@ _ws_loose_records_of() {   # sha -> 0 with _WS_LOOSE_RECS = every record of that
   find -P "$d" -mindepth 1 -maxdepth 1 -name "$sha.*" -print0 >"$outf" 2>"$errf"; rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   if (( rc != 0 )) || [[ -n "$err" ]]; then rm -f "$outf"; _WS_LOOSE_WHY="could not list $d (find exit $rc)"; return 2; fi
-  while IFS= read -r -d '' f; do [[ "${f##*/}" =~ ^$sha\.[0-9]+\.[0-9]+$ ]] && _WS_LOOSE_RECS+=("$f"); done < "$outf"
+  while IFS= read -r -d '' f; do [[ "${f##*/}" =~ ^$pat\.[0-9]+\.[0-9]+$ ]] && _WS_LOOSE_RECS+=("$f"); done < "$outf"
   rm -f "$outf"
 }
 _ws_loose_record_write() {   # hex slot token -> 0 written and PROVEN by reading it back; 1 not written (_WS_LOOSE_WHY)
