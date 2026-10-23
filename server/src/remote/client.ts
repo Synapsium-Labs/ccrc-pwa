@@ -103,10 +103,17 @@ function preReadyPhase(readyState: number): string {
   return 'closed';
 }
 
-/** A peer's close reason, read as untrusted (D-6527): decoded as UTF-8, every character outside printable ASCII
- *  replaced by `?`, cut to 64 characters; an empty reason prints `-`. */
-function printableReason(reason: Buffer): string {
-  const text = reason.toString('utf8').replace(/[^\x20-\x7e]/g, '?').slice(0, 64);
+/** A peer's close reason, read as untrusted (D-6527, D-6529). A peer that echoes the hello must not put the token in
+ *  the journal, so a reason repeating any 8 consecutive characters of it (all of a shorter token) is withheld; one
+ *  that breaks the token up on purpose already holds it, so this covers the accidental echo. The check runs on the
+ *  full decoded text. Otherwise: every character outside printable ASCII becomes `?`, cut to 64; empty prints `-`. */
+function refusalReason(reason: Buffer, token: string): string {
+  const full = reason.toString('utf8');
+  const width = Math.min(8, token.length);
+  for (let i = 0; width > 0 && i + width <= token.length; i++) {
+    if (full.includes(token.slice(i, i + width))) return '[withheld: repeats the token]';
+  }
+  const text = full.replace(/[^\x20-\x7e]/g, '?').slice(0, 64);
   return text === '' ? '-' : text;
 }
 
@@ -183,8 +190,8 @@ export class LinkNotSentError extends Error {
  * (ids are never reused across reconnects; not required to be — every
  * in-flight request is rejected the moment its socket goes away), a
  * deadline that ends an attempt with no ready, a heartbeat that force-closes
- * a silently-dead socket, and exponential reconnect backoff. `state`/`onStateChange` surface connectivity to
- * callers; `onTail`/`offTail`/`onConnected` are the internal seam
+ * a silently-dead socket, and exponential reconnect backoff.
+ * `state`/`onStateChange` surface connectivity to callers; `onTail`/`offTail`/`onConnected` are the internal seam
  * `remote/io.ts` (and, from T4, `remote/pty.ts`) build on.
  */
 export class FleetClient {
@@ -601,7 +608,7 @@ export class FleetClient {
         ?? this.note('never-ready', `no ready since the server started (close ${code}); retrying`);
       ep.failedAttempts++;
       if (code >= 4400 && code <= 4499) {
-        this.note('refused', `agent refused the hello (close ${code} ${printableReason(reason)}); retrying`);
+        this.note('refused', `agent refused the hello (close ${code} ${refusalReason(reason, this.cfg.token)}); retrying`);
       }
     }
     if (this.closed) return;

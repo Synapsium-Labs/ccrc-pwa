@@ -126,7 +126,8 @@ One PR, from this workspace's own branch.
 
 ## Not in this wave
 
-- **Logging the agent's own refusal.** Superseded by D-6527 (ruling 2) for the refusal line; a wrong token or a hello timeout closes 4401 before `ready`
+- **Logging the agent's own refusal.** Superseded by D-6527 (ruling 2) for the refusal line; a wrong token or a
+  hello timeout closes 4401 before `ready`
   (agent/src/server.ts:1269-1287). The client discards the close code (`ws.on('close', () => this.onClose(ws))`,
   client.ts:368), so a bad token still retries silently forever, as `remote-connect.test.ts`'s
   `'a bad token surfaces as a fatal (never-connects, permanently down) state'` describes. That is a configuration
@@ -213,7 +214,7 @@ One PR, from this workspace's own branch.
   which before a commit is the previous task's code: it would discard the task's own work and the check would pass.)
   Task 1 Step 3 is the one mutation before a commit, and there `client.ts` is still the base.
   A mutant counts only if vitest collected and ran every row in the file: the summary's failed plus passed equals the
-  file's row count at that task (1 at Task 1, 8 at Task 2, 14 at Task 3). A transform, parse or import error runs no
+  file's row count at that task (1 at Task 1, 8 at Task 2, 15 at Task 3). A transform, parse or import error runs no
   row; that is a broken mutant, not a red. Rewrite it so it parses and run it again; never record it as red.
 - **The absorb step.** Before each task's first edit, run `git fetch origin main` and re-read every anchor that task
   names in the landed text. Absorb `origin/main` with `git merge`, never a rebase or a force push of a published
@@ -352,6 +353,7 @@ the task (below).
 | M20 | that line never prints the URL (T3) | in that call, print `err.message` in place of `err.name` | W27-L13 (the line reads `socket not created: Invalid URL: not-a-url`) | revision probe: `ws`'s message for `not-a-url` is `Invalid URL: not-a-url` |
 | M21 | an agent refusal is logged once (T3) | delete the `this.note('refused', …)` call in `onClose` | W27-L14 | unmeasured: added by ruling 2 |
 | M22 | that line prints a sanitised reason (T3) | print the raw reason, `reason.toString()`, with no cut or replacement | W27-L14 | unmeasured: added by ruling 2 |
+| M23 | a refusal reason that repeats the token is withheld (T3) | delete the token-window check in `refusalReason` | W27-L15 | unmeasured: added by D-6529 |
 
 The deadline's choice to terminate its CAPTURED socket, not `this.socket`, has no row of its own (D-6517): before
 Task 3 a stale deadline can reach only a closed socket, where `terminate` is a no-op, and from Task 3 the
@@ -510,7 +512,7 @@ reader itself).
     with a reason of 120 bytes that carries a control character. The log has exactly one line containing `refused`
     and `close 4401`, its reason is the 64-byte printable form, and no line contains the token.
   - Mutants: M21 deletes the `refused` note (W27-L14 red); M22 prints the raw reason, with no cut or replacement
-    (W27-L14 red).
+    (W27-L14 red) (and D-6529: W27-L15, M23).
 
 - **D-6528** (the worker, Task 2) — W27-L12 as drafted failed with no mutant applied, three of three whole-file runs,
   and passed alone. Its premise, that expired timers run before the poll phase that completes the TCP connect, holds
@@ -521,6 +523,18 @@ reader itself).
   assertions are unchanged and M18 still reds it alone (1 failed, 7 passed); unmutated the file ran 8 of 8 green,
   three of three, at a load average of 50 to 98. Reported in the wave-done under ruling 12: the row was not
   weakened, its starting phase was fixed.
+- **D-6529** (the worker, Task 3 review) — The `refused` line printed a peer-chosen close reason after a character
+  replacement and a cut to 64, which a reason that echoes the client's own hello frame
+  (`{"t":"hello","token":"…"}`, all printable ASCII) survives: the box token would reach the journal, against
+  D-6527's own sentence that the line never prints the token. `refusalReason(reason, token)` replaces
+  `printableReason`: when the full decoded reason contains any 8 consecutive characters of the token (all of it, when
+  the token is shorter than 8; no check for an empty token), the line prints `[withheld: repeats the token]` in
+  place of the reason. Eight characters, because a shorter window matches ordinary words in an ordinary reason and
+  withholds it for nothing, and a longer one lets a partial echo through. The check runs on the full decoded text,
+  before the replacement and the cut, because the cut would otherwise hide a token that starts past the 64th
+  character, and the replacement could split one. A peer that deliberately breaks the token up already holds it, so
+  the check covers the accidental echo only. W27-L15 (a peer that echoes the hello as the close reason) and M23
+  (the check deleted) pin it.
 
 Any reserve number still undefined at wave-done is defined in this section before the wave-done fingerprint, in the
 house form for an issued number no departure took (as `delegation-broker-wave3-observe.md` writes its run 740
@@ -536,10 +550,11 @@ never reclaimed.
     call in `connect`, `armReadyDeadline`, and the new field's doc comment.
   - Task 3: `LinkLine`, `LinkEpisode`, `preReadyPhase`, the `episode` field, `note`, the current-socket half of the
     deadline's guard and its line, the `close` listener's code, `onClose`'s bookkeeping, `startHeartbeat`'s note,
-    `onReady`'s recovery line, the `note` call in `connect`'s `catch` (D-6526), the module header comment.
+    `onReady`'s recovery line, the `note` call in `connect`'s `catch` (D-6526), the `refused` note in `onClose`
+    and `refusalReason` (D-6527, D-6529), the module header comment.
 - `server/test/remote-liveness.test.ts` (new): Task 1 creates it with the peer harness and W27-L8; Task 2 adds W27-L1
-  to W27-L5, W27-L7 and W27-L12; Task 3 adds W27-L6, W27-L9, W27-L10, W27-L11, W27-L13, W27-L14, the log assertions of L1,
-  L2, L3 and L7, W27-L8's two-episode extension, and the `connectFleet` import.
+  to W27-L5, W27-L7 and W27-L12; Task 3 adds W27-L6, W27-L9, W27-L10, W27-L11, W27-L13, W27-L14, W27-L15, the log
+  assertions of L1, L2, L3 and L7, W27-L8's two-episode extension, and the `connectFleet` import.
 - `server/test/remoteHelpers.ts`: Task 1, the comment above `connectToAgent`.
 - `README.md`: Task 4, one bullet.
 
@@ -839,11 +854,13 @@ green below is the worker's to measure; the planning probe's figures are named w
 - Test: `server/test/remote-liveness.test.ts`.
 
 **Interfaces:**
-- Produces: `type LinkLine = 'lost' | 'no-pong' | 'never-ready' | 'no-ready' | 'refused'`; `interface LinkEpisode { since: number;
-  logged: Set<LinkLine>; failedAttempts: number }`; `function preReadyPhase(readyState: number): string`; the private
-  field `episode: LinkEpisode | null` (null means no stretch without a ready link is open; it is private state, never
-  a seam); the private method `note(kind: LinkLine, text: string): LinkEpisode` (it returns the open episode, so a
-  caller never reads `this.episode` back through a non-null assertion); `onClose(ws: WebSocket, code: number, reason: Buffer)`.
+- Produces: `type LinkLine = 'lost' | 'no-pong' | 'never-ready' | 'no-ready' | 'refused'`;
+  `interface LinkEpisode { since: number; logged: Set<LinkLine>; failedAttempts: number }`;
+  `function preReadyPhase(readyState: number): string`; the private field `episode: LinkEpisode | null` (null means no
+  stretch without a ready link is open; it is private state, never a seam);
+  the private method `note(kind: LinkLine, text: string): LinkEpisode` (it returns the open episode, so a caller never
+  reads `this.episode` back through a non-null assertion);
+  `onClose(ws: WebSocket, code: number, reason: Buffer)`.
 
 - [ ] **Step 1: Write the failing rows.**
   - Add the expected lines after `linkLines`, exactly (D-6520's texts):
@@ -1054,7 +1071,7 @@ green below is the worker's to measure; the planning probe's figures are named w
 - [ ] **Step 5: Commit** (before the mutations, as in Task 2).
   `feat(remote): the agent link logs its drops, its deadline and its recovery (wave 27, D-6517, D-6520, D-6522,
   D-6526)`.
-- [ ] **Step 6: Mutation rows** M4b, M5, M7 to M17, M19 to M22, each alone, each restored to HEAD (the Mutation
+- [ ] **Step 6: Mutation rows** M4b, M5, M7 to M17, M19 to M23, each alone, each restored to HEAD (the Mutation
   table). Confirm `git diff --quiet HEAD -- src/remote/client.ts` after the last.
 
 ### Task 4: README says what the link now does (W27-d; D-6523)
@@ -1193,7 +1210,8 @@ green below is the worker's to measure; the planning probe's figures are named w
     earlier review probe). Chosen: keep the row, because it is the only red M18 has and load only deepens the stall
     it makes. The alternative drops it and records "armed at creation rather than at TCP connect" as a named gap.
     Recommendation: keep it; if it ever reds without a mutant, that is a change in Node's loop worth knowing about,
-    and the row's comment says so. As measured in Task 2, it did red unmutated in whole-file runs, from the row's starting phase, not from a change in Node's loop; D-6528 fixes the phase.
+    and the row's comment says so. As measured in Task 2, it did red unmutated in whole-file runs, from the row's
+    starting phase, not from a change in Node's loop; D-6528 fixes the phase.
 
 ## Coordinator rulings on this plan's readings (2026-10-22)
 

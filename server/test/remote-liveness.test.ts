@@ -17,7 +17,8 @@ type PeerMode =
   | 'ready'            // answer hello with ready and every ping with pong
   | 'ready-no-pong'    // answer hello with ready, never answer a ping
   | 'ready-then-drop'  // answer hello with ready, then terminate the socket 100 ms later
-  | 'refuse-hello';    // complete the upgrade, count the hello, close the socket with 4401 and a long reason
+  | 'refuse-hello'     // complete the upgrade, count the hello, close the socket with 4401 and a long reason
+  | 'echo-hello';      // complete the upgrade, count the hello, close the socket with 4401 and the hello as reason
 
 interface LinkPeer {
   port: number;
@@ -66,6 +67,7 @@ async function linkPeer(modeOf: (attempt: number) => PeerMode): Promise<LinkPeer
           hellos++;
           if (mode === 'silent-hello') return;
           if (mode === 'refuse-hello') { ws.close(4401, REFUSE_REASON); return; }
+          if (mode === 'echo-hello') { ws.close(4401, raw.toString()); return; }
           ws.send(JSON.stringify({ t: 'ready', v: 1 }));
           if (mode === 'ready-then-drop') setTimeout(() => ws.terminate(), 100);
         } else if (msg.t === 'ping' && mode !== 'ready-no-pong') {
@@ -286,5 +288,23 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     expect(lines.filter((l) => l.includes('refused'))).toEqual([REFUSED(4401, `abcdefghij?${'x'.repeat(53)}`)]);
     expect(lines[0]).toBe(LOST(1006));
     expect(lines.some((l) => l.includes(TOKEN))).toBe(false);
+  });
+
+  it('W27-L15: a refusal reason that repeats the token is withheld, never printed', async () => {
+    // The peer closes each hello with the hello frame itself as the reason: all printable ASCII, 47 bytes, so it
+    // would survive the cut and the character replacement and put the token in the journal.
+    peer = await linkPeer((n) => (n === 0 ? 'ready-then-drop' : 'echo-hello'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    fleet = connectToAgent(peer.port);
+    await vi.waitFor(() => {
+      expect(peer!.accepts()).toBeGreaterThanOrEqual(3);
+      expect(linkLines(warn).length).toBeGreaterThanOrEqual(2);
+    }, { timeout: 8000 });
+    const lines = linkLines(warn);
+    expect(lines.filter((l) => l.includes('refused')))
+      .toEqual([REFUSED(4401, '[withheld: repeats the token]')]);
+    for (let i = 0; i + 8 <= TOKEN.length; i++) {
+      expect(lines.some((l) => l.includes(TOKEN.slice(i, i + 8)))).toBe(false);
+    }
   });
 });
