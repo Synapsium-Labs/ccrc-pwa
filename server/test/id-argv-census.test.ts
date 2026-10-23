@@ -299,10 +299,11 @@ const GATES = {
   },
   /** The routing door asks the predicate of the stored id it is about to write. */
   'routing-door': { file: 'coord/routes.ts', scope: 'POST /api/runs/:id/route', re: /if \(!isRegistryId\(sid\)\) \{/ },
-  /** Advance re-checks the stored id before `verifyDone`, and only there. */
+  /** Advance re-checks the stored id before `verifyDone`, and only there: the last gate of its decider's table
+   *  (ARCH-33), on a forward edge only, so a retreat to `working` composes no argv and is left alone. */
   'advance-gate': {
-    file: 'coord/routes.ts', scope: 'POST /api/runs/:id/advance',
-    re: /if \(to === 'awaiting-review' \|\| to === 'merging'\) \{\s*if \(!isRegistryId\(run\.sessionId\)\) return reply\.code\(409\)\.send\(\{ ok: false, reject: \{ code: 'bad-session' \} \}\);/,
+    file: 'coord/advance.ts', scope: 'GATES',
+    re: /\['storedId', \(c\) => \(\(c\.f\.to === 'awaiting-review' \|\| c\.f\.to === 'merging'\) && !isRegistryId\(c\.run!\.sessionId\)\)\s*\?\s*\{ reject: \{ code: 'bad-session' \} \}/,
   },
   /** Dispatch re-checks the stored id straight after the hold verdict, before any read: the decider's request step
    *  (ARCH-22), which `dispatchRun` runs first and which stops it on any refusal. */
@@ -462,7 +463,7 @@ const CENSUS: readonly CensusRow[] = [
 /** The files whose gates ask the predicate themselves. */
 const GATE_FILES = [
   'server.ts', 'registry.ts', 'watch.ts',
-  'coord/routes.ts', 'coord/openRun.ts', 'coord/dispatchDecide.ts', 'coord/close.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
+  'coord/routes.ts', 'coord/openRun.ts', 'coord/advance.ts', 'coord/dispatchDecide.ts', 'coord/close.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
   'coord/expireArchived.ts',
 ] as const;
 
