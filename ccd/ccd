@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8b6ea8198adae19c7d65abc9936c0bb5c981cdd7f46195f15f2d98310f0b1ace
+# ccrc:generated 1 sha256=9d44acdf5926f96e5f0718e8cd16d3fccb904e63e763bd387ac74e8f6a6973d0
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31607,10 +31607,17 @@ _ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }
 # files) can never be pinned, and a token over it would only buy a retry loop. It stays containment-unproven, as without the marker.
 # A SHALLOW or PARTIAL clone is not rescuable either: a fetch from a shallow source into a full repository rejects every ref
 # (rc 0, nothing lands), so its token would answer nested-rescue-failed on every pass; it stays containment-unproven.
+# A LINKED WORKTREE of the nested repository (its detached HEAD names a commit no ref does, and the worktree lives outside the tree
+# being removed) and LFS or annex content (in `.git/lfs` or `.git/annex`, which a fetch never moves) hold work the rescue cannot
+# carry, so a repository with either stays containment-unproven.
 _ws_nested_rescue_shape() {   # what arming WOULD rescue: marker-independent, so the shadow list never names what the arm refuses
-  git -C "$1" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
+  local c
+  c=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [[ -n "$c" ]] \
+    && git -C "$1" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
     && [[ "$(git -C "$1" rev-parse --is-shallow-repository 2>/dev/null)" == false ]] \
-    && [[ -z "$(git -C "$1" config --get-regexp '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$' 2>/dev/null)" ]]
+    && [[ -z "$(git -C "$1" config --get-regexp '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter)|filter\.lfs\..*)$' 2>/dev/null)" ]] \
+    && [[ "$(git -C "$1" worktree list --porcelain 2>/dev/null | grep -c '^worktree ')" == 1 ]] \
+    && [[ ! -e "$c/lfs/objects" && ! -e "$c/annex" ]]
 }
 _ws_nested_rescuable() { _ws_nested_rescue_live && _ws_nested_rescue_shape "$1"; }
 _ws_nested_secrets() {   # nested rel -> its secret-shaped untracked paths join REAP_SENSITIVE and RECLAIM_SECRETS (the pin drops them)
@@ -31637,18 +31644,24 @@ _ws_nested_bind() {   # nested rel -> `nestedRescue=<pathhex>:<HEAD or ->:<statu
   printf 'nestedRescue=%s:%s:%s' "$(_ws_hex "$2")" "$h" "$d"
 }
 _ws_store_kb() { git -C "$1" count-objects -v 2>/dev/null | awk -F': ' '$1 == "size" || $1 == "size-pack" { s += $2 } END { print s + 0 }'; }
+_ws_nested_same() {   # main nested base wip -> 0 when `$base/` already holds THIS rescue: same HEAD, same WIP tree, no ref of it moved
+  local w
+  [[ "$(git -C "$1" rev-parse --verify --quiet "$3/head" 2>/dev/null)" == "$(git -C "$2" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null)" ]] || return 1
+  if [[ -n "$4" ]]; then w=$(git -C "$1" rev-parse --verify --quiet "$3/wip^{tree}" 2>/dev/null); [[ -n "$w" && "$w" == "$(git -C "$2" rev-parse "$4^{tree}" 2>/dev/null)" ]] || return 1
+  else ! git -C "$1" rev-parse --verify --quiet "$3/wip" >/dev/null 2>&1 || return 1; fi
+  ! git -C "$1" for-each-ref --format='%(objectname) %(refname)' "$3/refs/" | sed "s# $3/# #" | grep -vxFf <(git -C "$2" for-each-ref --format='%(objectname) %(refname)') | grep -q .
+}
 _ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_RESCUE_ENTRY (one JSON object); 1 with
   #                         RECLAIM_PIN_WORD (nested-rescue-too-large | nested-rescue-failed) and RECLAIM_PIN_WHY.
   # Run under `_ws_reclaim_contained`. Moves no ref in the nested repository; adds refs only under `$base`.
-  local main="$1" n="$2" base="$3" id="$4" childof="$5" prefix="$6" wip b a q ref want got specs=() errf orph tips
+  local main="$1" n="$2" base="$3" id="$4" childof="$5" prefix="$6" wip b a q ref want got specs=() errf orph tips base0 reuse=0 blob tries=0 wantl gotl
   RECLAIM_PIN_WORD=nested-rescue-failed; RECLAIM_RESCUE_ENTRY=""
   _ws_wip_commit "$n" "$id" "$childof" "$prefix" || { RECLAIM_PIN_WHY="could not capture the uncommitted work of the nested repository at $n: $RECLAIM_WIP_WHY"; return 1; }
   wip="$RECLAIM_WIP_SHA"
   git -C "$n" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
     || { RECLAIM_PIN_WHY="the nested repository at $n has no commit at HEAD — there is nothing to pin it by, so it stays"; return 1; }
   errf=$(_plat_mktemp) || { RECLAIM_PIN_WHY="could not make a scratch file to rescue $n"; return 1; }
-  # APPEND-ONLY: a name the attic already holds is never force-moved (a second same-named repository would orphan the first's tips).
-  [[ -z "$(git -C "$main" for-each-ref --count=1 "$base/" 2>/dev/null)" ]] || base="$base/again-$(date +%s)-$$-$RANDOM"
+  base0="$base"   # the base is chosen (and claimed) only at landing, below
   specs=("+refs/*:$base/refs/*")
   # A commit only a reflog names (a stash below the newest, a reset-away tip) is in no ref: it is fetched by sha too.
   orph=$(git -C "$n" rev-list --reflog --not --all 2>/dev/null) \
@@ -31678,8 +31691,22 @@ _ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_R
     rm -f "$errf"; RECLAIM_PIN_WORD=nested-rescue-too-large
     RECLAIM_PIN_WHY="rescuing the nested repository at $n would add $(( a / 1024 )) MiB to the project, over the $WS_NESTED_RESCUE_MAX_MB MiB bound — nothing was taken"; return 1
   fi
+  # APPEND-ONLY: a name the attic already holds is never force-moved (a second same-named repository would orphan the first's tips),
+  # except by the rescue of the SAME tree (the settle re-pin), which lands in place. A base is CLAIMED by a create-only `update-ref`,
+  # so two rescues choosing at once cannot both take one name; the loser takes the next.
+  if [[ -n "$(git -C "$main" for-each-ref --count=1 "$base/" 2>/dev/null)" ]]; then
+    if _ws_nested_same "$main" "$n" "$base" "$wip"; then reuse=1; else base="$base0/again-$(date +%s)-$$-$RANDOM"; fi
+  fi
+  if (( ! reuse )); then
+    blob=$(git -C "$main" hash-object -w --stdin </dev/null 2>/dev/null) || { rm -f "$errf"; RECLAIM_PIN_WHY="could not claim a place in the attic for the nested repository at $n"; return 1; }
+    until git -C "$main" update-ref "$base/claim" "$blob" "" 2>/dev/null; do
+      (( ++tries < 8 )) || { rm -f "$errf"; RECLAIM_PIN_WHY="could not claim a place in the attic for the nested repository at $n"; return 1; }
+      base="$base0/again-$(date +%s)-$$-$RANDOM"
+    done
+  fi
+  specs=("${specs[@]//$base0/$base}")
   git -C "$main" -c gc.auto=0 -c uploadpack.allowAnySHA1InWant=true fetch -q --no-tags --no-write-fetch-head "$n" "${specs[@]}" >/dev/null 2>"$errf" \
-    || { RECLAIM_PIN_WHY="could not fetch the nested repository at $n into the attic: $(head -1 "$errf")"; rm -f "$errf"; return 1; }
+    || { RECLAIM_PIN_WHY="could not fetch the nested repository at $n into the attic: $(head -1 "$errf")"; rm -f "$errf"; (( reuse )) || git -C "$main" update-ref -d "$base/claim" 2>/dev/null; return 1; }
   rm -f "$errf"
   # RE-PROVE (spec §2.7.1 step 3): every ref tip, HEAD, the WIP and each reflog-only tip resolve under the attic.
   while read -r want ref; do
@@ -31687,6 +31714,12 @@ _ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_R
     got=$(git -C "$main" rev-parse --verify --quiet "$base/$ref" 2>/dev/null)
     [[ "$got" == "$want" ]] || { RECLAIM_PIN_WHY="$ref of the nested repository at $n did not land under $base/"; return 1; }
   done < <({ git -C "$n" for-each-ref --format='%(objectname) %(refname)'; git -C "$n" rev-parse --verify --quiet "HEAD^{commit}" | sed 's/$/ head/'; [[ -z "$wip" ]] || echo "$wip wip"; for want in $tips; do echo "$want reflog/$want"; done; } 2>/dev/null)
+  # ... and the re-prove is TOTAL, not list-based: every commit any ref, any worktree HEAD or any reflog of the nested repository
+  # reaches must be reachable from what landed, so a commit no listing above names (a linked worktree's detached HEAD) fails here.
+  wantl=$(git -C "$n" rev-list --all --reflog 2>/dev/null | LC_ALL=C sort -u; exit "${PIPESTATUS[0]}") \
+    && gotl=$(git -C "$main" for-each-ref --format='%(objectname)' "$base/refs/" "$base/head" "$base/wips/" "$base/reflog/" 2>/dev/null | git -C "$main" rev-list --stdin 2>/dev/null | LC_ALL=C sort -u) \
+    && [[ -z "$(comm -23 <(printf '%s\n' "$wantl") <(printf '%s\n' "$gotl") | grep .)" ]] \
+    || { RECLAIM_PIN_WHY="the nested repository at $n holds commits that did not all land under $base/ — it stays"; return 1; }
   RECLAIM_PIN_WORD=""
   RECLAIM_RESCUE_ENTRY=$(printf '{"path":%s,"refs":%s,"wip":%s,"bytes":%s}' "$(_json_str "${prefix%/}")" "$(_json_str "$base/")" \
     "$( [[ -n "$wip" ]] && _json_str "$wip" || echo null)" "$(( (a - b) * 1024 ))")
@@ -31810,7 +31843,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # run the programs of a tree nothing has proved nobody is in — a caller outside it is a defect.
   local id="$1" defer="$2"
   local project workdir regbranch branch wthead main mainreal common
-  local op clients elsewhere elsrc nested p pcommon ptop rc h hs clipsjson hp wdreal
+  local op clients elsewhere elsrc nested p pcommon ptop rc h hs clipsjson hp wdreal wouldwhy=""
   # NO BINDING, NO TOKEN: a ladder entered without its caller's rungs 1-2 would
   # mint a token that names no verb and no population. A defect, measured as
   # nothing — unmeasured, never a refusal word and never a token.
@@ -32100,9 +32133,16 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
       _ws_nested_secrets "$p" "${p#"$wdreal"/}"
       RECLAIM_RESCUE+="$p"$'\n'; RECLAIM_RESCUEBIND+="$hp"$'\n'; continue
     fi
-    (( rc == 0 )) || { (( rc == 1 )) && _ws_nested_rescue_shape "$p" && ! _ws_nested_rescue_live && RECLAIM_RESCUE_WOULD+="$p"$'\n'; _reap_refuse containment-unproven "$_WS_FOREIGN_WHY"; return 1; }
+    if (( rc != 0 )); then
+      # Without the marker, keep walking: the list names only what arming would clear, so every refusing repository must be rescuable.
+      if (( rc == 1 )) && ! _ws_nested_rescue_live && _ws_nested_rescue_shape "$p"; then
+        RECLAIM_RESCUE_WOULD+="$p"$'\n'; [[ -n "$wouldwhy" ]] || wouldwhy="$_WS_FOREIGN_WHY"; continue
+      fi
+      RECLAIM_RESCUE_WOULD=""; _reap_refuse containment-unproven "$_WS_FOREIGN_WHY"; return 1
+    fi
     RECLAIM_FOREIGN+="$p"$'\n'
   done <<< "$nested"$'\n'
+  [[ -z "$wouldwhy" ]] || { _reap_refuse containment-unproven "$wouldwhy"; return 1; }
   # NOR IS ANY CHECKOUT INSIDE IT A GONE ROW'S MOVED TREE (spec §5.5):
   # asked after the scan, over its answer — `_ws_reclaim_moved_check` says why.
   _ws_reclaim_moved_check "$nested"; rc=$?

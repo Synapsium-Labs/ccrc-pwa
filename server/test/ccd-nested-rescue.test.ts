@@ -19,8 +19,8 @@ const hex = (s: string): string => Buffer.from(s).toString('hex');
 const REL = 'vendor/other';
 
 /** A repository of another project nested in `wt`: two commits on no remote, plus an untracked file. */
-function plantNested(wt: string): { dir: string; tip: string } {
-  const dir = path.join(wt, REL);
+function plantNested(wt: string, rel: string = REL): { dir: string; tip: string } {
+  const dir = path.join(wt, rel);
   fs.mkdirSync(dir, { recursive: true });
   h.git(dir, 'init', '-q', '-b', 'main');
   for (const n of ['1', '2']) {
@@ -298,4 +298,117 @@ describe('scratch-rescue keeps a session\'s scratch repository in the project at
     expect(r.code).toBe(1);
     expect((JSON.parse(r.stdout) as { failed: string }).failed).toBe('nested-rescue-failed');
   }, 60_000);
+});
+
+describe('the rescue is total: what a ref listing cannot name keeps the tree (D-6632)', () => {
+  it('a commit only a LINKED worktree of the nested repository holds is not lost: containment-unproven, the tree stays', () => {
+    const c = makeChild(h);
+    const n = plantNested(c.wt);
+    const ext = path.join(h.home, 'ext-wt');
+    h.git(n.dir, 'worktree', 'add', '-q', '--detach', ext);
+    fs.writeFileSync(path.join(ext, 'det.txt'), 'only here\n');
+    h.git(ext, 'add', 'det.txt'); h.git(ext, 'commit', '-q', '-m', 'detached work');
+    arm();
+    const a = evalOf(h);
+    expect(a.verdict, 'a nested repository with a linked worktree is not rescuable').toBe('containment-unproven');
+    expect(childReclaimVerb(h, a.token).code).not.toBe(0);
+    intact(c, n.dir);
+    expect(fs.existsSync(path.join(ext, 'det.txt')), 'the external worktree is untouched').toBe(true);
+  }, 120_000);
+
+  it('scratch-rescue of a repository with a linked worktree fails the total re-prove instead of claiming a rescue', () => {
+    const c = makeChild(h);
+    const scratch = path.join(h.home, 'scratch-area', 'sandbox');
+    fs.mkdirSync(scratch, { recursive: true });
+    h.git(scratch, 'init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(scratch, 'a.txt'), 'a\n');
+    h.git(scratch, 'add', 'a.txt'); h.git(scratch, 'commit', '-q', '-m', 'a');
+    const ext = path.join(h.home, 'scratch-ext');
+    h.git(scratch, 'worktree', 'add', '-q', '--detach', ext);
+    fs.writeFileSync(path.join(ext, 'det.txt'), 'only here\n');
+    h.git(ext, 'add', 'det.txt'); h.git(ext, 'commit', '-q', '-m', 'detached');
+    const r = h.run(`cmd_scratch_rescue --session ${CHILD_ID} "${scratch}"`);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect((JSON.parse(r.stdout) as { failed: string }).failed).toBe('nested-rescue-failed');
+    expect(c.main).toBeTruthy();
+  }, 90_000);
+
+  it('a nested repository with LFS content stays containment-unproven (git fetch never moves it)', () => {
+    const c = makeChild(h);
+    const n = plantNested(c.wt);
+    fs.mkdirSync(path.join(n.dir, '.git', 'lfs', 'objects'), { recursive: true });
+    arm();
+    expect(evalOf(h).verdict).toBe('containment-unproven');
+    intact(c, n.dir);
+  }, 120_000);
+
+  it('a nested repository with annex content stays containment-unproven', () => {
+    const c = makeChild(h);
+    const n = plantNested(c.wt);
+    fs.mkdirSync(path.join(n.dir, '.git', 'annex'), { recursive: true });
+    arm();
+    expect(evalOf(h).verdict).toBe('containment-unproven');
+    intact(c, n.dir);
+  }, 120_000);
+
+  it('the size bound defaults to 512 MiB', () => {
+    expect(h.sh('echo "$WS_NESTED_RESCUE_MAX_MB"').trim()).toBe('512');
+  }, 60_000);
+});
+
+describe('the rescue is taken once, and named once (D-6632)', () => {
+  it('the settle re-pin of an unchanged tree reuses its own base: no again-* namespace, one record', () => {
+    const c = makeChild(h);
+    plantNested(c.wt);
+    arm();
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const names = h.git(c.main, 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/${CHILD_ID}/nested/`).split('\n');
+    expect(names.filter((n) => n.includes('again-')), 'no second copy under again-*').toEqual([]);
+    expect(names.length).toBeGreaterThan(0);
+  }, 120_000);
+
+  it('two scratch-rescues of same-named repositories started together never orphan each other', () => {
+    const c = makeChild(h);
+    const tips: string[] = [];
+    const dirs: string[] = [];
+    for (const parent of ['one', 'two']) {
+      const scratch = path.join(h.home, 'scratch-area', parent, 'sandbox');
+      fs.mkdirSync(scratch, { recursive: true });
+      h.git(scratch, 'init', '-q', '-b', 'main');
+      fs.writeFileSync(path.join(scratch, `${parent}.txt`), `${parent}\n`);
+      h.git(scratch, 'add', '.'); h.git(scratch, 'commit', '-q', '-m', parent);
+      tips.push(h.git(scratch, 'rev-parse', 'HEAD')); dirs.push(scratch);
+    }
+    h.sh(`( cmd_scratch_rescue --session ${CHILD_ID} "${dirs[0]}" >/dev/null & cmd_scratch_rescue --session ${CHILD_ID} "${dirs[1]}" >/dev/null & wait ) || true`);
+    const named = h.git(c.main, 'for-each-ref', '--format=%(objectname)', `refs/ccrc/attic/${CHILD_ID}/`).split('\n');
+    for (const t of tips) expect(named, `tip ${t} is named by an attic ref`).toContain(t);
+  }, 90_000);
+});
+
+describe('wouldRescue names only what arming would clear (D-6632)', () => {
+  it('a rescuable repository beside a shallow one: the shadow list is empty, the refusal stays', () => {
+    const c = makeChild(h);
+    plantNested(c.wt, 'vendor/aaa');
+    const src = path.join(h.home, 'shallow-src');
+    fs.mkdirSync(src, { recursive: true });
+    h.git(src, 'init', '-q', '-b', 'main');
+    for (const k of [1, 2]) { fs.writeFileSync(path.join(src, `s${k}.txt`), `${k}\n`); h.git(src, 'add', `s${k}.txt`); h.git(src, 'commit', '-q', '-m', `s${k}`); }
+    const sh = path.join(c.wt, 'vendor', 'zzz');
+    h.git(path.dirname(sh), 'clone', '-q', '--depth', '1', `file://${src}`, path.basename(sh));
+    fs.writeFileSync(path.join(sh, 'edit.txt'), 'dirty\n');
+    const out = JSON.parse(h.sh(`${CHILD_STUBS} cmd_ws_audit --session ${CHILD_ID} --reclaim`)) as
+      { nestedRescue?: { wouldRescue: string[] } };
+    expect(out.nestedRescue?.wouldRescue ?? []).toEqual([]);
+    expect(evalOf(h).verdict).toBe('containment-unproven');
+  }, 120_000);
+
+  it('two rescuable repositories: both are named, not only the first refused', () => {
+    const c = makeChild(h);
+    plantNested(c.wt, 'vendor/aaa');
+    plantNested(c.wt, 'vendor/bbb');
+    const out = JSON.parse(h.sh(`${CHILD_STUBS} cmd_ws_audit --session ${CHILD_ID} --reclaim`)) as
+      { nestedRescue: { wouldRescue: string[] } };
+    expect(out.nestedRescue.wouldRescue).toHaveLength(2);
+  }, 120_000);
 });
