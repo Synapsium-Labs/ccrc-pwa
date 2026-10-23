@@ -1229,8 +1229,11 @@ _rt_patch_source() {
 #     `auth-library-absent` on every call; LiteLLM's own refresh is never reached.
 #   - loaded, `get_access_token` is the library's `tier_access_token(token_dir, lane)`,
 #     its AuthError a 401 `<word>: <sentence>`, and `get_account_id` the library's read.
-#     A credential file other than `<token_dir>/auth.json` (CHATGPT_AUTH_FILE reaching the
-#     tier) is a 401 `config-error`, and no file is read.
+#     A token dir that is not an absolute path (CHATGPT_TOKEN_DIR: the launcher passes an
+#     absolute one, and a line in the lane's runtime.env, sourced after it, can replace it)
+#     is a 401 `config-error` of its own, naming that variable; a credential file other
+#     than `<token_dir>/auth.json` (CHATGPT_AUTH_FILE reaching the tier) is a 401
+#     `config-error` too. Either way no file is read.
 # Unset, the part is INERT: an interpreter an older ccrc started, the probe's own
 # scenarios, or anything else keeps stock LiteLLM, so a rollback stays safe. A class
 # missing any of the five names is left stock, said on stderr, and the probe refuses that
