@@ -58,7 +58,7 @@ describe('--child on ws-add writes the marker the first spawn reads', () => {
       'the run id and nothing else — no newline a string-exact reader would trip on').toBe('7');
     expect(h.reg(ID, 'rc'), '--no-rc still means what it meant').toBe('off');
     expect(newSessions()).toHaveLength(1);
-    expect(newSessions()[0]).toContain(`TMPDIR='${path.join(h.home, '.cc-tmp', ID)}'`);
+    expect(newSessions()[0]).toContain(` TMPDIR='${path.join(h.home, '.cc-tmp', ID)}'`);
   });
 
   it('the equals form binds the same value', () => {
@@ -78,7 +78,8 @@ describe('--child on ws-add writes the marker the first spawn reads', () => {
     const r = wsAdd('--no-rc demo');
     expect(r.status, r.out).toBe(0);
     expect(h.reg(ID, 'child')).toBeNull();
-    expect(newSessions()[0]).not.toContain('TMPDIR=');
+    expect(newSessions()[0]).not.toMatch(/(^|\s)TMPDIR=/);
+    expect(newSessions()[0]).toContain(` CCRC_SESSION_TMPDIR='${h.sh('printf %s "${TMPDIR:-/tmp}"')}'`);
   });
 });
 
@@ -162,7 +163,7 @@ describe('the marker is loud when it cannot land, and dies with the row', () => 
     expect(r.out).toContain(`ccd: warn: could not write ${path.join(h.home, '.cc-sessions', `${ID}.child`)}`);
     expect(h.reg(ID, 'child')).toBeNull();
     expect(h.reg(ID, 'uuid'), 'the workspace was still created').not.toBeNull();
-    expect(newSessions()[0], 'and, being no child, it is not contained').not.toContain('TMPDIR=');
+    expect(newSessions()[0], 'and, being no child, it is not contained').not.toMatch(/(^|\s)TMPDIR=/);
   });
 
   it('_reg_purge takes the marker with the rest of the row — measured on the file, not the inventory', () => {

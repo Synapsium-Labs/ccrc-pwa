@@ -137,7 +137,7 @@ describe.each(CHMODS)('_child_tmpdir — three answers, told apart, under %s', (
         h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start demo-quiet-mesa new`, chmodEnv());
         const news = newSessions();
         expect(news).toHaveLength(1);
-        expect(news[0]).not.toContain('TMPDIR=');
+        expect(news[0]).not.toMatch(/(^|\s)TMPDIR=/);
       },
     );
 
@@ -219,8 +219,9 @@ describe.each(CHMODS)('_spawn_start exports TMPDIR for a child, and only for a c
       h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start demo-quiet-mesa new`, chmodEnv());
       const news = newSessions();
       expect(news).toHaveLength(1);
-      const want = `TMPDIR='${leaf('demo-quiet-mesa')}'`;
+      const want = ` TMPDIR='${leaf('demo-quiet-mesa')}'`;
       expect(news[0]!.split(want).length - 1, news[0]).toBe(1);
+      expect(news[0], 'the session root is the leaf for a child').toContain(` CCRC_SESSION_TMPDIR='${leaf('demo-quiet-mesa')}'`);
       // Inside the `env` prefix, before the wrapper — not trailing after the
       // claude argv, where it would be an argument rather than an environment.
       expect(news[0]!.indexOf(want)).toBeLessThan(news[0]!.indexOf(`/.local/bin/claude'`));
@@ -230,7 +231,8 @@ describe.each(CHMODS)('_spawn_start exports TMPDIR for a child, and only for a c
     it('a row with NO marker spawns with no TMPDIR at all — byte-identical to before', () => {
       seed('demo-quiet-mesa', null);
       h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start demo-quiet-mesa new`, chmodEnv());
-      expect(newSessions()[0]).not.toContain('TMPDIR=');
+      expect(newSessions()[0]).not.toMatch(/(^|\s)TMPDIR=/);
+      expect(newSessions()[0], 'the session root is the box TMPDIR').toContain(` CCRC_SESSION_TMPDIR='${h.sh('printf %s "${TMPDIR:-/tmp}"')}'`);
       expect(fs.existsSync(tmpRoot())).toBe(false);
     });
 
@@ -240,7 +242,7 @@ describe.each(CHMODS)('_spawn_start exports TMPDIR for a child, and only for a c
       seed('demo-quiet-mesa', null);
       h.sh('_reg_set demo-quiet-mesa rc off');
       h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start demo-quiet-mesa new`, chmodEnv());
-      expect(newSessions()[0]).not.toContain('TMPDIR=');
+      expect(newSessions()[0]).not.toMatch(/(^|\s)TMPDIR=/);
     });
 
     it('BOTH spawn lines carry it when the --resume attempt dies and the retry runs', () => {
@@ -250,7 +252,7 @@ describe.each(CHMODS)('_spawn_start exports TMPDIR for a child, and only for a c
       expect(news).toHaveLength(2);
       expect(news[0]).toContain('--resume');
       expect(news[1]).toContain('--session-id');
-      for (const line of news) expect(line).toContain(`TMPDIR='${leaf('demo-quiet-mesa')}'`);
+      for (const line of news) expect(line).toContain(` TMPDIR='${leaf('demo-quiet-mesa')}'`);
     });
 
     it('a child whose root is unusable STILL SPAWNS — uncontained, warned, never refused', () => {
@@ -262,7 +264,7 @@ describe.each(CHMODS)('_spawn_start exports TMPDIR for a child, and only for a c
       expect(r.out).toContain('could not be made a private directory');
       const news = newSessions();
       expect(news).toHaveLength(1);
-      expect(news[0]).not.toContain('TMPDIR=');
+      expect(news[0]).not.toMatch(/(^|\s)TMPDIR=/);
     });
 });
 

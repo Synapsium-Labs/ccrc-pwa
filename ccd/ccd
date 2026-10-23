@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7f4f5da49c67ad88c8ca60dea6726eada65ee45b596f5723abfbb9d4304031a7
+# ccrc:generated 1 sha256=8b6ea8198adae19c7d65abc9936c0bb5c981cdd7f46195f15f2d98310f0b1ace
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23814,8 +23814,8 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # THE CHILD'S TEMP ROOT (spec §5.2), composed ONCE, here, into the one `env`
   # string BOTH spawn lines below splice — for `$rcflag`'s reason: the resume
   # retry may not spawn a differently-contained pane than the attempt it
-  # replaces. EMPTY for every non-child, so a non-child's spawn line is
-  # byte-identical to what it was before (`ccd-spawn-split.test.ts` pins it).
+  # replaces. EMPTY for every non-child, so a non-child spawn line carries no TMPDIR
+  # of its own (only the session-root token below; `ccd-spawn-split.test.ts` pins it).
   # `_child_tmpdir`'s rc 2 has already said on stderr why a child spawns
   # uncontained; the spawn proceeds either way.
   local tmpenv="" ctmp
@@ -23825,7 +23825,12 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   _delegation_spool_dir "$id" || true
   # D-5241: the tool-child priority, on both spawn lines for `$tmpenv`'s reason.
   local adjenv; adjenv=$(_tool_adj_env)
-  resenv="$resenv${adjenv:+ $adjenv}${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}"
+  # D-6636: the session's OWN temp root, exported on both spawn lines (they splice `$resenv`) so an agent that later
+  # overrides TMPDIR cannot hide where its temp belongs; the test suite moves its run parent here when TMPDIR is in a
+  # work tree. A quote in the path would break the single-quoted splice: such a path is not exported.
+  local sesstmp="${ctmp:-${TMPDIR:-/tmp}}" sesstmpenv=""
+  [[ "$sesstmp" == *"'"* ]] || sesstmpenv="CCRC_SESSION_TMPDIR='$sesstmp'"
+  resenv="$resenv${adjenv:+ $adjenv}${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}${sesstmpenv:+ $sesstmpenv}"
   local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
   # THE CHILD'S DENY FILE AND SHELL PIN (plan Task 15, D-5299, D-5391), composed
   # ONCE, here, into the flags and the `env` string BOTH spawn lines splice, for
