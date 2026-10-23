@@ -396,10 +396,10 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
       stubAt(width);
       mount('/');
       expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, unread: 0, bell: 1 });
-      // The list column's head keeps its readouts and drops its chrome.
-      expect(document.querySelector('.shell-nav .fleet-head'), `${width}px`).not.toBeNull();
+      // The list column's head drops its chrome and, with no count line (T2g) and no lag in this fixture, is not drawn.
+      expect(document.querySelector('.shell-nav .fleet-head'), `${width}px`).toBeNull();
       expect(document.querySelector('.shell-nav .fleet-head .wordmark'), `${width}px`).toBeNull();
-      expect(document.querySelector('.shell-nav .fleet-count'), `${width}px: the count line stays`).not.toBeNull();
+      expect(document.querySelector('.shell-nav .fleet-count'), `${width}px: no count line`).toBeNull();
       cleanup();
     }
     // Below 900 nothing changed: the head holds its chrome, and the rail and the bar are not mounted.
