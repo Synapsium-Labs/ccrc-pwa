@@ -4827,9 +4827,9 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     expect(t9Fs.readdirSync(t9Path.join(out, 'probe')).sort(), 'the streams live under out/probe').toEqual([
       'spelling-1.jsonl', 'spelling-1.run.json', 'spelling-2.jsonl', 'spelling-2.run.json', 'spelling-3.jsonl', 'spelling-3.run.json',
     ]);
-    // The driver's whole subcommand set, in registration order: W2-4's two, then W2-5a Task 7's six (Task 1's grammar
-    // cases use an unregistered name).
-    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify']);
+    // The driver's whole subcommand set, in registration order: W2-4's two, W2-5a Task 7's six, then W2-5b1's, in task
+    // order (Task 1's grammar cases use an unregistered name).
+    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker']);
   });
 
   // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
@@ -8938,6 +8938,7 @@ import * as r7gate from '../../deploy/history-gate.mjs';
 import { RECALL_OFF_KEYS as R7_KEYS, canonicalJson as r7Canon, historyPaths as r7Paths, sha256Hex as r7Sha } from '../../ccd/history/lib.mjs';
 import { mkTmp as r7MkTmp } from './tmpHelpers.js';
 import { REPO as R7_REPO, scrubbedEnv as r7Scrubbed } from './historyHelpers.js';
+import { HEADLESS_LIST_MAX_BYTES as W5B3_MAX, asOfBinds as w5b3Binds, formatHeadlessList as w5b3Format, parseHeadlessList as w5b3Parse } from '../../ccd/history/lib.mjs';
 
 r7describe('W2-5a Task 7: the record subcommands', () => {
   type R7 = Record<string, any>;
@@ -9254,7 +9255,8 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect(run7(null, null, ['open', '--draft', '--template']).stderr).toBe(refusalLine('args-invalid', 'open wants exactly one of --draft, --finalize and --template'));
       r7expect(run7(null, null, ['verify']).stderr).toBe(refusalLine('args-invalid', 'verify wants exactly one of --registry and --section'));
       r7expect(run7(null, null, ['verify', '--registry', '--section', 'ab']).stderr).toBe(refusalLine('args-invalid', 'verify wants exactly one of --registry and --section'));
-      r7expect(run7(null, null, ['verify', '--section', 'quiz']).stderr).toBe(refusalLine('args-invalid', 'section "quiz": this build verifies ab only'));
+      // W2-5b1 Task 3: verify reads ab, pilot and quiz; any other section is refused before its flags are read (edited in place, R27).
+      r7expect(run7(null, null, ['verify', '--section', 'judge']).stderr).toBe(refusalLine('args-invalid', 'section "judge": verify reads ab, pilot or quiz'));
     });
 
     r7it('no W2-5a subcommand takes --allow-code-change: before window start a code change is a superseding draft (W2-D6, W2-D24)', () => {
@@ -10585,6 +10587,308 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
         .toEqual(['record-invalid', 'amendments[0].detail.claude_code_version out-of-range']);
       const exception = { kind: 'freeze-exception', node_label_ref: null, at_ms: AFTER, detail: { surface: 'ccd/history/lib.mjs', ruling: 'fixture ruling' } };
       r7expect(load(flags(amended7(c, exception)), { nowMs: AFTER }).record.amendments[0].kind, 'another kind is not ranged').toBe('freeze-exception');
+    });
+  });
+
+  // ── W2-5b1 Task 3: marker, verify --section pilot|quiz, and the headless-on reader (W2-D84, W2-D76, W2-D78 (i), W2-D24; D-5781) ──
+  // Nested in W2-5a Task 7's describe for its signed fixtures (chain7's draft, final and frozen list; home7, run7, tree7,
+  // snapshot7). The marker is planted by the test at historyPaths(home).headlessOn. marker and verify spawn nothing; the
+  // arm preflight's reader (requireListed) is called in-process here, and with the stub's log in Task 4.
+  r7describe('W2-5b1 Task 3: marker and verify section pilot and quiz', () => {
+    type Found = { state: string; sha256: string | null; missing: string[]; extra: string[] };
+    type Plant = { text: string } | { dir: true } | { link: true } | null;
+    type Refusal = { word: string; detail: string } | null;
+    const markerPath = (home: string): string => r7Paths(home).headlessOn;
+    /** marker's argv over a chain: pilot reads part 1; quiz and ab read part 2 beside its draft and frozen list (W2-D84). */
+    const markerArgv = (c: R7, section: string, label: string): string[] => (section === 'pilot'
+      ? ['marker', '--section', section, ...inp('record', c.d), '--node-label', label]
+      : ['marker', '--section', section, ...inp('record', c.f), ...inp('part1', c.d), ...inp('frozen', c.fz), '--node-label', label]);
+    const verifyArgv = (c: R7, section: string): string[] => (section === 'pilot'
+      ? ['verify', '--section', section, ...inp('record', c.d)]
+      : ['verify', '--section', section, ...inp('record', c.f), ...inp('part1', c.d), ...inp('frozen', c.fz)]);
+    /** One marker pair line (W2-D44): `<ccrc_id> <generation>`. */
+    const line = (f: Ref): string => `${f.ccrc_id} ${f.generation}\n`;
+    const PILOT_A = `store ${STORE_A}\n${line(PILOT_FAMILY)}`;
+    const QUIZ_A = `store ${STORE_A}\n${line(A_T1)}${line(A_T2)}`;
+    const QUIZ_B = `store ${STORE_B}\n${line(B_T1)}`;
+    const AB_A = `ccrc history recall-off a-c1 --generation ${A_C1.generation}\nccrc history recall-off a-c2 --generation ${A_C2.generation}\n`;
+    const AB_B = `ccrc history recall-off b-c1 --generation ${B_C1.generation}\n`;
+    /** Put `what` where the marker lives: its text, a directory, a link to a file holding QUIZ_A, or nothing. */
+    function plant(home: string, what: Plant): void {
+      const p = markerPath(home);
+      r7fs.mkdirSync(r7path.dirname(p), { recursive: true });
+      r7fs.rmSync(p, { recursive: true, force: true });
+      if (what === null) return;
+      if ('dir' in what) { r7fs.mkdirSync(p); return; }
+      if ('link' in what) {
+        const target = r7path.join(r7MkTmp('ccrc-w2-5b1-t3-link-'), 'marker');
+        r7fs.writeFileSync(target, QUIZ_A, { mode: 0o600 });
+        r7fs.symlinkSync(target, p);
+        return;
+      }
+      r7fs.writeFileSync(p, what.text, { mode: 0o600 });
+    }
+    const found = (r: { stdout: string }): Found => JSON.parse(r.stdout).found as Found;
+    /** A synchronous call's refusal as {word, detail}; null when it returns. Any other throw fails the case. */
+    function refusalOf(fn: () => unknown): Refusal {
+      try {
+        fn();
+        return null;
+      } catch (e) {
+        if (e instanceof r7drv.DriverRefusal) return { word: (e as R7).word, detail: (e as R7).detail };
+        throw e;
+      }
+    }
+    /** Three leaves and a condensed node over the first, in `home`'s store (home7's). L000001: its boundary stamped at
+     *  1,000 and no stored summary, so it is shown under the all-visible cut (CONTROL), unless `storedOnTimed` gives it
+     *  a stored summary. L000002: stamped at 2,000, with a stored summary blob and no copy holding its boundary, so its
+     *  read-time pick is NULL and D-6284 hides it. L000003: its boundary's ts_ms is NULL, which no cut ever shows. */
+    function plantLeaves(home: string, storedOnTimed = false): void {
+      const w = r7Store.openWriter(r7Paths(home).dbFile) as unknown as { exec: (sql: string) => void; prepare: (sql: string) => { run: (...a: unknown[]) => unknown } };
+      try {
+        w.exec('BEGIN');
+        w.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 0xb3), Buffer.from([0]));
+        w.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'a-t1', ?, 'demo', 1)").run(A_T1.generation);
+        w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(gen(7000));
+        const entry = w.prepare("INSERT INTO entries (entry_id, uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 1, 'system', 'harness', 1, 0, 0, 1, ?)");
+        const boundary = w.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, 1, ?)');
+        ([[1, 1_000], [2, 2_000], [3, null]] as Array<[number, number | null]>).forEach(([id, ts]) => { entry.run(id, gen(7000 + id), ts); boundary.run(id, id); });
+        const node = w.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, summary_blob_id, boundary_entry_id, parser_version, created_ms) VALUES (?, 1, 1, 1, ?, ?, 'ok', ?, ?, 1, 1)");
+        node.run('L000001', 'native_leaf', 0, storedOnTimed ? 1 : null, 1);
+        node.run('L000002', 'native_leaf', 0, 1, 2);
+        node.run('L000003', 'raw_leaf', 0, null, 3);
+        node.run('N000001', 'condensed', 1, null, null);
+        w.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, 1)').run('N000001', 'L000001');
+        w.exec('COMMIT');
+      } finally {
+        r7Store.closeWriter(w as never);
+      }
+    }
+
+    r7it('marker prints one node\'s exact text on stdout and its sha256 on stderr, with no store on the box: pilot from part 1, quiz from part 2, ab as recall-off commands with --generation (W2-D84, W2-D76, D-5781)', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      for (const [section, label, want] of [
+        ['pilot', 'node-a', PILOT_A], ['quiz', 'node-a', QUIZ_A], ['quiz', 'node-b', QUIZ_B], ['ab', 'node-a', AB_A], ['ab', 'node-b', AB_B],
+      ] as Array<[string, string, string]>) {
+        const r = run7(null, home, markerArgv(c, section, label));
+        r7expect([r.code, r.stdout, r.stderr], `${section} ${label}`).toEqual([0, want, `sha256 ${r7Sha(want)}\n`]);
+      }
+    });
+
+    r7it('the W2-D84 round trip: marker\'s text parses to exactly its pairs and formats back to the same bytes; planted as printed, verify reads ok and requireListed lists every pair', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      for (const [section, text, fams] of [['pilot', PILOT_A, [PILOT_FAMILY]], ['quiz', QUIZ_A, [A_T1, A_T2]]] as Array<[string, string, Ref[]]>) {
+        const r = run7(null, home, markerArgv(c, section, 'node-a'));
+        r7expect([r.code, r.stdout], section).toEqual([0, text]);
+        const parsed = w5b3Parse(r.stdout);
+        r7expect(parsed, section).toEqual({ ok: true, storeId: STORE_A, pairs: fams.map((f) => ({ ccrcId: f.ccrc_id, generation: f.generation })) });
+        r7expect(w5b3Format(parsed as never), section).toBe(r.stdout);
+        plant(home, { text: r.stdout });
+        const v = run7(null, home, verifyArgv(c, section));
+        r7expect(v.code, v.stderr).toBe(0);
+        r7expect(v.stderr).toBe(`sha256 ${r7Sha(v.stdout)}\n`);
+        const out = JSON.parse(v.stdout);
+        r7expect([out.kind, out.v, out.section, out.store_id, out.record_sha256, out.expected_sha256, out.found, out.ok], section).toEqual([
+          r7drv.VERIFY_HEADLESS_KIND, 1, section, STORE_A, section === 'pilot' ? c.d.sha : c.f.sha, r7Sha(text),
+          { state: 'ok', sha256: r7Sha(text), missing: [], extra: [] }, true]);
+        r7expect(refusalOf(() => r7drv.requireListed(home, STORE_A, fams)), section).toBeNull();
+      }
+    });
+
+    r7it('marker and verify write nothing: the HOME tree, the store and a planted marker are byte-identical after every section (W2-D84)', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      plant(home, { text: PILOT_A });
+      const before = snapshot7(home);
+      r7expect(before.some((l) => l.startsWith('.ccrc/history/headless-on ')), 'CONTROL: the snapshot lists the marker').toBe(true);
+      for (const argv of [markerArgv(c, 'pilot', 'node-a'), markerArgv(c, 'quiz', 'node-b'), markerArgv(c, 'ab', 'node-a'), verifyArgv(c, 'pilot'), verifyArgv(c, 'quiz')]) {
+        r7expect(run7(null, home, argv).code, argv.slice(0, 3).join(' ')).toBe(0);
+      }
+      r7expect(snapshot7(home)).toEqual(before);
+    });
+
+    r7it.each([
+      ['absent', null, 'absent'],
+      ['a directory', { dir: true }, 'unreadable'],
+      ['a link to the right text, never followed', { link: true }, 'unreadable'],
+      ['one byte over the 65,536-byte bound', { text: '#'.repeat(W5B3_MAX + 1) }, 'over-cap'],
+      ['a space before the store line', { text: ` ${QUIZ_A}` }, 'malformed'],
+      ['the right pairs under another store line', { text: QUIZ_A.replace(STORE_A, STORE_B) }, 'store-other'],
+      ['a pair missing and one extra', { text: `store ${STORE_A}\n${line(A_T1)}zz-extra ${gen(1)}\n` }, 'pairs-differ'],
+      ['the same pairs after a comment', { text: `# written by hand\n${QUIZ_A}` }, 'bytes-differ'],
+      ['the same pairs in another order', { text: `store ${STORE_A}\n${line(A_T2)}${line(A_T1)}` }, 'bytes-differ'],
+      ['the same pairs without the final newline', { text: QUIZ_A.slice(0, -1) }, 'bytes-differ'],
+    ] as Array<[string, Plant, string]>)('verify --section quiz reports %s as itself, never folded, and ok is false (W2-D84)', (_name, what, state) => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      plant(home, what);
+      const r = run7(null, home, verifyArgv(c, 'quiz'));
+      r7expect(r.code, r.stderr).toBe(0);
+      const f = found(r);
+      r7expect(f.state).toBe(state);
+      r7expect(r7drv.HEADLESS_ON_STATES).toContain(state);
+      r7expect(JSON.parse(r.stdout).ok).toBe(false);
+      r7expect(f.sha256, 'the sha256 of the text read, or null when none was read')
+        .toBe(what !== null && 'text' in what && state !== 'over-cap' ? r7Sha(what.text) : null);
+      r7expect([f.missing, f.extra]).toEqual(state === 'pairs-differ' ? [[`a-t2 ${A_T2.generation}`], [`zz-extra ${gen(1)}`]] : [[], []]);
+    });
+
+    r7it('verify --section pilot reads part 1 and holds the marker to the pilot pairs; the quiz text there is pairs-differ, and over_hide is the quiz section\'s alone', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      plant(home, { text: PILOT_A });
+      const ok = run7(null, home, verifyArgv(c, 'pilot'));
+      r7expect([found(ok).state, JSON.parse(ok.stdout).over_hide]).toEqual(['ok', null]);
+      plant(home, { text: QUIZ_A });
+      const f = found(run7(null, home, verifyArgv(c, 'pilot')));
+      r7expect([f.state, f.missing, f.extra]).toEqual(['pairs-differ', [`pilot-0 ${PILOT_FAMILY.generation}`], [`a-t1 ${A_T1.generation}`, `a-t2 ${A_T2.generation}`]]);
+    });
+
+    r7it('marker and verify refuse, each with its word: no section or an unknown one, a flag the form never reads, no label or two, a label the record does not name, the wrong part, a node holding no family of the section, a store the record does not name', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      const err = (argv: string[], h: string | null = null): string => run7(null, h, argv).stderr;
+      r7expect(err(['marker', ...inp('record', c.d)])).toBe(refusalLine('args-invalid', 'section-required'));
+      r7expect(err(['marker', '--section', 'judge'])).toBe(refusalLine('args-invalid', 'section "judge": marker prints pilot, quiz, ab'));
+      r7expect(err(['verify', '--section', 'judge'])).toBe(refusalLine('args-invalid', 'section "judge": verify reads ab, pilot or quiz'));
+      r7expect(err(['marker', '--section', 'quiz', '--census', '/c'])).toBe(refusalLine('args-invalid', '--census is not a marker --section quiz flag'));
+      r7expect(err(['marker', '--section', 'ab', '--out', '/o'])).toBe(refusalLine('args-invalid', '--out is not a marker --section ab flag'));
+      r7expect(err(['verify', '--section', 'pilot', ...inp('frozen', c.fz)])).toBe(refusalLine('args-invalid', '--frozen is not a verify --section pilot flag'));
+      r7expect(err(['marker', '--section', 'pilot', ...inp('record', c.d)])).toBe(refusalLine('args-invalid', 'node-label-required'));
+      r7expect(err([...markerArgv(c, 'pilot', 'node-a'), '--node-label', 'node-b'])).toBe(refusalLine('args-invalid', 'marker prints one node: --node-label given 2 times'));
+      r7expect(err(markerArgv(c, 'quiz', 'node-x'))).toBe(refusalLine('args-invalid', 'node-label "node-x" names no node of the record'));
+      r7expect(err(['marker', '--section', 'pilot', ...inp('record', c.f), '--node-label', 'node-a'])).toBe(refusalLine('record-invalid', 'record part "final", wanted draft'));
+      const none = `pilot lists no family on store ${STORE_B}: that node has no headless-on marker`;
+      r7expect(err(markerArgv(c, 'pilot', 'node-b'))).toBe(refusalLine('input-invalid', none));
+      r7expect(err(verifyArgv(c, 'pilot'), home7(STORE_B))).toBe(refusalLine('input-invalid', none));
+      r7expect(err(verifyArgv(c, 'quiz'), home7(STORE_C))).toBe(refusalLine('input-invalid', `store ${STORE_C} is not one of the record's nodes`));
+    });
+
+    r7it('marker and verify take no --allow-code-change: Q23 grants it to arms, judge and report only', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      for (const [form, argv] of [['marker --section quiz', markerArgv(c, 'quiz', 'node-a')], ['verify --section quiz', verifyArgv(c, 'quiz')]] as Array<[string, string[]]>) {
+        r7expect(run7(null, home, [...argv, '--allow-code-change']).stderr, form)
+          .toBe(refusalLine('args-invalid', `--allow-code-change is not a ${form} flag`));   // Task 1 declared it; no form here lists it
+      }
+    });
+
+    // W2-D24: every --record consumer re-checks the code it runs under, right after the record validates (R23: W2-5a's titles,
+    // this task's own rows).
+    const rows: Array<[string, (c: R7) => string[]]> = [
+      ['marker --section pilot', (c) => markerArgv(c, 'pilot', 'node-a')],
+      ['marker --section quiz', (c) => markerArgv(c, 'quiz', 'node-a')],
+      ['marker --section ab', (c) => markerArgv(c, 'ab', 'node-a')],
+      ['verify --section pilot', (c) => verifyArgv(c, 'pilot')],
+      ['verify --section quiz', (c) => verifyArgv(c, 'quiz')],
+    ];
+    r7it.each(rows)('code-changed before any other input is read, re-checks the code it runs under: %s', (_sub, argv) => {
+      const home = home7(null);   // no store: verify's next read would refuse store-unreadable store-missing
+      const c = chain7(home);
+      const r = run7(tree7({ edit: 'deploy/measure-history.py' }), home, argv(c));
+      r7expect([r.code, r.stdout, r.stderr]).toEqual([2, '', refusalLine('code-changed', 'changed deploy/measure-history.py')]);
+    });
+    r7it.each(rows)('code-unmeasured, never code-changed, for a gate_code file that cannot be read: %s', (_sub, argv) => {
+      const home = home7(null);
+      const c = chain7(home);
+      r7expect(run7(tree7({ drop: 'deploy/measure-history.py' }), home, argv(c)).stderr).toBe(refusalLine('code-unmeasured', 'deploy/measure-history.py is absent'));
+    });
+    r7it('CONTROL: under an unchanged copy of the tree, marker prints and verify reaches the store it was built to miss', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      const tree = tree7();
+      for (const [sub, argv] of rows) {
+        const r = run7(tree, home, argv(c));
+        if (sub.startsWith('marker')) r7expect([r.code, r.stderr], sub).toEqual([0, `sha256 ${r7Sha(r.stdout)}\n`]);
+        else r7expect(r.stderr, sub).toBe(refusalLine('store-unreadable', 'store-missing'));
+      }
+    });
+
+    r7it('a family list no marker can carry is record-invalid, never an internal error: RangeError past either bound, TypeError for a grammar fault', () => {
+      const fam = (i: number, id = `fam-${String(i).padStart(4, '0')}`): Ref => ({ store_id: STORE_A, ccrc_id: id, generation: gen(10_000 + i) });
+      const rec = (families: Ref[]): R7 => ({ pilot: { families }, quiz: { families } });
+      const text = (families: Ref[], section: 'pilot' | 'quiz'): Refusal => refusalOf(() => r7drv.headlessTextOf(rec(families), section, STORE_A));
+      r7expect(text(Array.from({ length: 1000 }, (_, i) => fam(i)), 'quiz'), 'CONTROL: 1,000 pairs').toBeNull();
+      const many = text(Array.from({ length: 1001 }, (_, i) => fam(i)), 'quiz');
+      r7expect(many?.word).toBe('record-invalid');
+      r7expect(many?.detail).toMatch(new RegExp(`^quiz marker for store ${STORE_A} cannot be formatted: RangeError: `));
+      // 224-character ids (SPOOL_ID_MAX): 262 bytes a line, so 200 fit and 300 pass 65,536 bytes before 1,000 pairs.
+      const long = Array.from({ length: 300 }, (_, i) => fam(i, `${'x'.repeat(220)}${String(i).padStart(4, '0')}`));
+      r7expect(text(long.slice(0, 200), 'pilot'), 'CONTROL: 200 long ids fit').toBeNull();
+      r7expect(text(long, 'pilot')?.detail).toMatch(new RegExp(`^pilot marker for store ${STORE_A} cannot be formatted: RangeError: `));
+      const named = text([fam(1, 'store')], 'quiz');
+      r7expect(named?.word).toBe('record-invalid');
+      r7expect(named?.detail).toMatch(new RegExp(`^quiz marker for store ${STORE_A} cannot be formatted: TypeError: `));
+    });
+
+    r7it('W2-D78 (i), the arm preflight\'s reader: requireListed passes a batch whose every pair is on this store\'s marker, and refuses family-unlisted otherwise, naming why', () => {
+      const home = home7(null);
+      const listed = (store: string, fams: Ref[]): Refusal => refusalOf(() => r7drv.requireListed(home, store, fams));
+      r7expect(listed(STORE_A, [A_T1])).toEqual({ word: 'family-unlisted', detail: 'headless-on absent' });
+      plant(home, { text: QUIZ_A });
+      r7expect(listed(STORE_A, [A_T1, A_T2]), 'CONTROL: every pair listed').toBeNull();
+      r7expect(listed(STORE_A, [A_T1, A_C1, A_C2])).toEqual({ word: 'family-unlisted', detail: `not listed for store ${STORE_A}: a-c1 ${A_C1.generation}, a-c2 ${A_C2.generation}` });
+      r7expect(listed(STORE_A, [{ ...A_T2, generation: gen(1) }]), 'the generation is part of the pair')
+        .toEqual({ word: 'family-unlisted', detail: `not listed for store ${STORE_A}: a-t2 ${gen(1)}` });
+      r7expect(listed(STORE_B, [{ ...A_T1, store_id: STORE_B }]), 'the store line')
+        .toEqual({ word: 'family-unlisted', detail: `headless-on names store ${STORE_A}, not this store ${STORE_B}` });
+      plant(home, { text: `store ${STORE_A}\n` });
+      r7expect(listed(STORE_A, [A_T1]), 'zero pairs list nothing').toEqual({ word: 'family-unlisted', detail: `not listed for store ${STORE_A}: a-t1 ${A_T1.generation}` });
+      for (const [what, p] of [['malformed', { text: ` ${QUIZ_A}` }], ['over-cap', { text: '#'.repeat(W5B3_MAX + 1) }], ['unreadable', { dir: true }], ['unreadable', { link: true }]] as Array<[string, Plant]>) {
+        plant(home, p);
+        r7expect(listed(STORE_A, [A_T1]), `${what} ${JSON.stringify(p)}`).toEqual({ word: 'family-unlisted', detail: `headless-on ${what}` });
+      }
+    });
+
+    r7it('O13: the driver names the marker\'s field on one code line, readHeadlessOn\'s bounded read; no line spells its path text; no code line pairs a write verb with it', () => {
+      const text = r7fs.readFileSync(r7path.join(R7_REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+      const code = text.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+      // single-definition.test.ts' O13 verb list, restated (that one is closed over its describe).
+      const VERB = /\b(?:writeFile|appendFile|rename|unlink|rm|rmdir|mkdir|copyFile|cp|symlink|link|truncate|open)(?:Sync)?\s*\(/;
+      const pairsWrite = (l: string): boolean => { const m = VERB.exec(l); return m !== null && /\.headlessOn\b/.test(l.slice(m.index + m[0].length)); };
+      r7expect(pairsWrite('rmSync(historyPaths(home).headlessOn, { force: true });'), 'CONTROL: a write').toBe(true);
+      r7expect(pairsWrite('writeFileSync(P.headlessOn, text);'), 'CONTROL: a write').toBe(true);
+      r7expect(pairsWrite('const read = readBounded(historyPaths(home).headlessOn, HEADLESS_LIST_MAX_BYTES, false);'), 'CONTROL: the read').toBe(false);
+      r7expect(code.filter((l) => l.includes('.headlessOn')).map((l) => l.trim()))
+        .toEqual(['const read = readBounded(historyPaths(home).headlessOn, HEADLESS_LIST_MAX_BYTES, false);']);
+      r7expect(text.split('\n').filter((l) => l.includes('/headless-on')), 'comment or code').toEqual([]);
+      r7expect(code.filter(pairsWrite)).toEqual([]);
+    });
+
+    r7it('verify --section quiz counts the leaves lib\'s node rule hides under the stated all-visible cut: D-6284\'s over-hide on this node, read-only (Q16)', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      plantLeaves(home);
+      plant(home, { text: QUIZ_A });
+      const before = snapshot7(home);
+      const r = run7(null, home, verifyArgv(c, 'quiz'));
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(snapshot7(home), 'read-only').toEqual(before);
+      const out = JSON.parse(r.stdout);
+      r7expect(out.over_hide).toEqual({ cut: 'all-visible', binds: w5b3Binds(r7drv.ALL_VISIBLE_CUT as never), leaves: 3, hidden: 2, hidden_ids: ['L000002', 'L000003'],
+        hidden_ids_max: r7drv.OVER_HIDE_IDS_MAX });
+      // The stated binds: every timed row shown; no holding copy, no exempt boundary or summary, no kept member.
+      r7expect(out.over_hide.binds).toEqual({ asof_ts: Number.MAX_SAFE_INTEGER, asof_file: -1, asof_line: -1, asof_boundary: -1, asof_summary: null, asof_kept: '[]' });
+      r7expect(out.found.state, 'CONTROL: the marker half is unchanged by the count').toBe('ok');
+    });
+
+    r7it('CONTROL: a stored summary on the timed leaf hides it too (lib\'s D-6284 arm, not a copy), a store with no leaf counts nothing, and the ids are capped at 1,000 with the total always given (R10, R29)', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      plant(home, { text: QUIZ_A });
+      r7expect(JSON.parse(run7(null, home, verifyArgv(c, 'quiz')).stdout).over_hide).toMatchObject({ leaves: 0, hidden: 0, hidden_ids: [] });
+      plantLeaves(home, true);
+      r7expect(JSON.parse(run7(null, home, verifyArgv(c, 'quiz')).stdout).over_hide).toMatchObject({ leaves: 3, hidden: 3, hidden_ids: ['L000001', 'L000002', 'L000003'] });
+      const rs = r7drv.openReplayStore(home) as R7;
+      try {
+        r7expect(r7drv.overHideOf(rs.db, 1), 'the ids are capped; the count is the total').toMatchObject({ leaves: 3, hidden: 3, hidden_ids: ['L000001'], hidden_ids_max: 1 });
+        r7expect(r7drv.overHideOf(rs.db, 3), 'CONTROL (R29): at the cap every hidden id is listed beside the same total').toMatchObject({ hidden: 3, hidden_ids: ['L000001', 'L000002', 'L000003'], hidden_ids_max: 3 });
+        r7expect(r7drv.OVER_HIDE_IDS_MAX, 'R29: the default cap is 1,000 ids').toBe(1000);
+      } finally {
+        rs.close();
+      }
     });
   });
 });

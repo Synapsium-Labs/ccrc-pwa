@@ -4905,6 +4905,12 @@ const SUBCOMMAND_FLAGS = Object.freeze({
     'pilot-result', 'pilot-result-sha256', 'spend-budget', 'window-start', 'window-end', 'q18-decision'], optional: [...PRED_INPUT, 'prior-final', 'prior-final-sha256'] },
   'verify --registry': { required: ['registry', ...DRAFT_INPUT, 'census', 'census-sha256'], optional: [...PRED_INPUT] },
   'verify --section ab': { required: ['section', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
+  // W2-5b1 Task 3 (W2-D84): marker prints one node (--node-label, once); pilot reads part 1, quiz and ab read part 2.
+  'marker --section pilot': { required: ['section', ...DRAFT_INPUT, 'node-label'], optional: [...PRED_INPUT] },
+  'marker --section quiz': { required: ['section', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256', 'node-label'], optional: [...PRED_INPUT] },
+  'marker --section ab': { required: ['section', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256', 'node-label'], optional: [...PRED_INPUT] },
+  'verify --section pilot': { required: ['section', ...DRAFT_INPUT], optional: [...PRED_INPUT] },
+  'verify --section quiz': { required: ['section', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
 });
 
 const copyJson = (v) => JSON.parse(JSON.stringify(v));
@@ -5905,13 +5911,15 @@ async function verifyAb(flags, env) {
   }
 }
 
-/** `verify --registry | --section ab` (W2-D84, this PR's half): read-only on one node; a finding is data, exit 0. */
+/** `verify --registry | --section ab | --section pilot | --section quiz` (W2-D84): read-only on one node; a finding is
+ *  data, exit 0. --registry and --section ab are W2-5a Task 7's; pilot and quiz are W2-5b1 Task 3's (verifyHeadless). */
 export async function verifyCommand(flags, env) {
   const registry = flags.registry === true;
   if (registry === (flags.section !== undefined)) refuse('args-invalid', 'verify wants exactly one of --registry and --section');
   if (registry) return verifyRegistry(flags, env);
-  if (flags.section !== 'ab') refuse('args-invalid', `section ${JSON.stringify(flags.section)}: this build verifies ab only`);
-  return verifyAb(flags, env);
+  if (flags.section === 'ab') return verifyAb(flags, env);
+  if (flags.section === 'pilot' || flags.section === 'quiz') return verifyHeadless(flags.section, flags, env);
+  return refuse('args-invalid', `section ${JSON.stringify(flags.section)}: verify reads ab, pilot or quiz`);
 }
 
 HANDLERS.set('pilot-source', (flags, env) => pilotSourceCommand(flags, env));
@@ -6178,6 +6186,199 @@ export async function recheckBatch(rs, entries, ctx) {
   if (failed.length > 0) refuse('quiz-unanswerable', failed.join('; '));
   return passed;
 }
+
+// ── W2-5b1 Task 3: marker, verify --section pilot|quiz, and the headless-on reader (W2-D84, W2-D76, W2-D78 (i), W2-D24; D-5781) ──
+// marker --record <draft|final> --section pilot|quiz|ab --node-label <label> prints ONE node's text, writing nothing
+// (W2-D84). It reads the record and nothing else: no HOME, no store, no spawn.
+//   pilot  the headless-on marker listing exactly part 1's pilot.families on that node's store (W2-D76, D-5781);
+//   quiz   the headless-on marker listing exactly part 2's quiz.families on that node's store;
+//   ab     one `ccrc history recall-off <id> --generation <G>` line per control family on that node's store; the
+//          generation is always printed, because the W2 flow writes no legacy control file (W2-D27).
+// Its text goes to stdout, so `> file` holds the marker's exact bytes, and `sha256 <hex>` of those bytes goes to
+// stderr. The marker text is lib's formatHeadlessList, the one producer of it, over the pairs in familyKey order.
+// Its TypeError (a grammar fault) and RangeError (a bound: for long ids 65,536 bytes binds before 1,000 pairs) are
+// record-invalid, the word D-6309 gives a record the gate signs and the driver cannot run. A store holding no family
+// of the section has no marker (input-invalid).
+// verify --section pilot|quiz runs read-only on a node (W2-D84): the local store is one of the record's nodes, the
+// marker is read once (readHeadlessOn), and the sha256 of what was read is held to the sha256 of the text marker
+// prints for this store. Every other answer is its own state, never folded (HEADLESS_ON_STATES). --section quiz also
+// counts the leaves lib's node rule hides under the stated all-visible cut (ALL_VISIBLE_CUT): D-6284's over-hide on
+// this node (Q16). The arm preflight's W2-D78 (i) is requireListed, over the same reader; Task 4 composes it.
+// W2-D24: both re-check the code they run under right after the record validates. Neither declares
+// --allow-code-change (Q23 grants it to arms, judge and report only). Neither has --out.
+// O13 and W2-D44: the marker is reached only as historyPaths(home).headlessOn, on readHeadlessOn's one line, a read
+// through store.mjs's readBounded at HEADLESS_LIST_MAX_BYTES that never follows a link. No line spells the marker's
+// path text, and no line pairs a write verb with that field; history-replay.test.ts pins all three.
+
+/** marker's sections (W2-D84). */
+export const MARKER_SECTIONS = Object.freeze(['pilot', 'quiz', 'ab']);
+export const VERIFY_HEADLESS_KIND = 'ccrc-history-w2-verify-headless';
+/** verify --section pilot|quiz's answers for the marker, never folded (W2-D84: "each mismatch kind is reported").
+ *  `absent`, `unreadable` (a directory, a link, any other failure) and `over-cap` are readBounded's own; `malformed` is
+ *  parseHeadlessList's refusal; `store-other` a store line naming another store; `pairs-differ` a pair missing or extra;
+ *  `bytes-differ` the same pairs in other bytes (a comment, another order, a duplicate, no final newline). */
+export const HEADLESS_ON_STATES = Object.freeze(['ok', 'absent', 'unreadable', 'over-cap', 'malformed', 'store-other', 'pairs-differ', 'bytes-differ']);
+/** The stated all-visible cut of Q16, as lib's asOfBinds turns it into binds: every timed row is shown (ts_ms at most
+ *  Number.MAX_SAFE_INTEGER), no copy's later rows are hidden (file -1 holds nothing), no boundary or summary is exempt
+ *  (entry -1, null), and no kept member is added. A NULL ts_ms is never shown under any cut (D-5766), so the count is
+ *  D-6284's over-hide plus any leaf whose boundary or summary row is untimed. */
+export const ALL_VISIBLE_CUT = Object.freeze({ asof: 'all-visible', tsCut: Number.MAX_SAFE_INTEGER, boundaryEntryId: -1, summaryEntryId: null,
+  keptUuids: Object.freeze([]), holdingFileId: -1, boundaryLine: -1 });
+/** R10: the most hidden leaf ids verify --section quiz lists; the count beside them is always the total. */
+export const OVER_HIDE_IDS_MAX = 1000;
+
+/** One marker pair as its line reads (W2-D44): `<ccrc_id> <generation>`, `-` for the legacy one. */
+const markerLine = (p) => `${p.ccrcId} ${p.generation === '' ? '-' : p.generation}`;
+/** @param {{ccrc_id: string, generation: string}} f */
+const familyMarkerLine = (f) => markerLine({ ccrcId: f.ccrc_id, generation: f.generation });
+
+/** The pairs a section's marker lists on one store, in familyKey order by code unit (byFamilyKey): part 1's
+ *  pilot.families for the pilot (W2-D76, D-5781), part 2's quiz.families (the frozen list's, validator-held) for the
+ *  quiz. A store holding none has no marker: input-invalid, never a bare store line the seam reads as unlisted.
+ *  @param {any} record  @param {'pilot' | 'quiz'} section  @param {string} storeId
+ *  @returns {Array<{ccrcId: string, generation: string}>} */
+export function headlessPairsOf(record, section, storeId) {
+  const families = section === 'pilot' ? record.pilot.families : record.quiz.families;
+  const pairs = families.filter((f) => f.store_id === storeId).sort(byFamilyKey).map((f) => ({ ccrcId: f.ccrc_id, generation: f.generation }));
+  if (pairs.length === 0) refuse('input-invalid', `${section} lists no family on store ${storeId}: that node has no headless-on marker`);
+  return pairs;
+}
+/** The marker text for one store: lib's formatHeadlessList, its errors as record-invalid (D-6309's word).
+ *  @param {any} record  @param {'pilot' | 'quiz'} section  @param {string} storeId  @returns {string} */
+export function headlessTextOf(record, section, storeId) {
+  const pairs = headlessPairsOf(record, section, storeId);
+  try {
+    return formatHeadlessList({ storeId, pairs });
+  } catch (e) {
+    if (!(e instanceof TypeError) && !(e instanceof RangeError)) throw e;
+    return refuse('record-invalid', `${section} marker for store ${storeId} cannot be formatted: ${e.name}: ${e.message}`);
+  }
+}
+/** ab's lines for one store: each control family's command with its generation (W2-D27), in familyKey order, or ''.
+ *  An id idOk refuses, or a generation that is not a UUID, is never printed as a shell line.
+ *  @param {any} record  @param {string} storeId  @returns {string} */
+export function abCommandsOf(record, storeId) {
+  return record.assignment.filter((a) => a.store_id === storeId && a.arm === CONTROL_ARM).sort(byFamilyKey).map((a) => {
+    if (!idOk(a.ccrc_id) || !UUID_RE.test(a.generation)) refuse('record-invalid', `ab family ${JSON.stringify(a.ccrc_id)} ${JSON.stringify(a.generation)} cannot be printed as a command`);
+    return `ccrc history recall-off ${a.ccrc_id} --generation ${a.generation}\n`;
+  }).join('');
+}
+
+/** The headless-on marker's one read in this file (W2-D44, W2-D84, W2-D78 (i)): store.mjs's readBounded at the
+ *  marker's bound, never following a link, then lib's parseHeadlessList. Five answers, none folded into another:
+ *  value (with the text and the parsed list), malformed (with the text), absent, over-cap and unreadable.
+ *  @param {string} home */
+export function readHeadlessOn(home) {
+  const read = readBounded(historyPaths(home).headlessOn, HEADLESS_LIST_MAX_BYTES, false);
+  if (read.state === 'absent' || read.state === 'over-cap') return { state: read.state };
+  if (read.state !== 'value') return { state: 'unreadable' };
+  const list = parseHeadlessList(read.value);
+  return list.ok ? { state: 'value', text: read.value, list } : { state: 'malformed', text: read.value };
+}
+/** The marker against the text marker prints for this store (W2-D84), pure. `ok` is the sha256 comparison alone. The
+ *  sha256 is the text's as read: for a marker that is valid UTF-8 that is its bytes' sha256; one holding an invalid
+ *  byte reads with U+FFFD (D-5768), which formatHeadlessList's text never holds, so it is malformed and never ok.
+ *  @param {ReturnType<typeof readHeadlessOn>} read  @param {string} expected  @param {string} storeId */
+export function headlessStateOf(read, expected, storeId) {
+  const sha = read.text === undefined ? null : sha256Hex(read.text);
+  const none = { sha256: sha, missing: [], extra: [] };
+  if (read.state !== 'value') return { state: read.state, ...none };
+  if (sha === sha256Hex(expected)) return { state: 'ok', ...none };
+  if (read.list.storeId !== storeId) return { state: 'store-other', ...none };
+  const want = parseHeadlessList(expected);
+  if (!want.ok) throw new TypeError('headlessStateOf: the expected text does not parse; formatHeadlessList never prints such a text');
+  const wanted = want.pairs.map(markerLine);
+  const got = new Set(read.list.pairs.map(markerLine));
+  const missing = wanted.filter((l) => !got.has(l));
+  const extra = [...got].filter((l) => !wanted.includes(l)).sort();
+  return { state: missing.length + extra.length > 0 ? 'pairs-differ' : 'bytes-differ', sha256: sha, missing, extra };
+}
+
+/** W2-D78 (i), pure: why a batch is unlisted, or null. Fail closed: every answer but a parsed value is unlisted; the
+ *  store line must be this store; each (ccrc_id, generation) must be a listed pair, by id AND generation.
+ *  @param {ReturnType<typeof readHeadlessOn>} read  @param {string} storeId
+ *  @param {Array<{store_id: string, ccrc_id: string, generation: string}>} families  @returns {string | null} */
+export function unlistedOf(read, storeId, families) {
+  if (read.state !== 'value') return `headless-on ${read.state}`;
+  if (read.list.storeId !== storeId) return `headless-on names store ${read.list.storeId}, not this store ${storeId}`;
+  const listed = new Set(read.list.pairs.map(markerLine));
+  const missing = families.filter((f) => f.store_id !== storeId || !listed.has(familyMarkerLine(f)));
+  return missing.length === 0 ? null : `not listed for store ${storeId}: ${missing.map(familyMarkerLine).join(', ')}`;
+}
+/** W2-D78 (i), the arm preflight's read: refuses family-unlisted unless every batch pair is on this store's marker.
+ *  Read-only, before any spawn; Task 4 calls it before every arm batch.
+ *  @param {string} home  @param {string} storeId  @param {Array<{store_id: string, ccrc_id: string, generation: string}>} families */
+export function requireListed(home, storeId, families) {
+  const why = unlistedOf(readHeadlessOn(home), storeId, families);
+  if (why !== null) refuse('family-unlisted', why);
+}
+
+/** D-6284's over-hide on this node (Q16, R10): every leaf of the store, bound as one JSON array to lib's node rule
+ *  (asOfHiddenNodesSql, through Task 2's prepared armStmts statement, so the rule is named on one line) under
+ *  asOfBinds(ALL_VISIBLE_CUT). The total is always given; the ids listed are the first `max`, sorted. Read-only; nothing
+ *  gates on it. An SQLite failure is store-unreadable (storeRefusal), never an internal error.
+ *  @param {{prepare: (sql: string) => {all: (...a: any[]) => any[]}}} db  @param {number} [max] */
+export function overHideOf(db, max = OVER_HIDE_IDS_MAX) {
+  try {
+    const ids = db.prepare("SELECT node_id FROM nodes WHERE kind <> 'condensed' ORDER BY node_id").all().map((r) => String(r.node_id));
+    const binds = asOfBinds(ALL_VISIBLE_CUT);
+    const hidden = ids.length === 0 ? [] : armStmts(db).hidden.all({ ...binds, asof_nodes: JSON.stringify(ids) }).map((r) => String(r.node_id)).sort();
+    return { cut: 'all-visible', binds, leaves: ids.length, hidden: hidden.length, hidden_ids: hidden.slice(0, max), hidden_ids_max: max };
+  } catch (e) {
+    return storeRefusal(e);
+  }
+}
+
+export function verifyHeadlessReport({ recordSha256, storeId, section, expectedSha256, found, overHide }) {
+  return { kind: VERIFY_HEADLESS_KIND, v: 1, record_sha256: recordSha256, store_id: storeId, section, expected_sha256: expectedSha256,
+    found, ok: found.state === 'ok', over_hide: overHide };
+}
+
+/** Text on stdout as it is, `sha256 <hex>` of exactly those bytes on stderr (W2-D84: the content plus its sha256). */
+function printTextWithSha(text) {
+  process.stdout.write(text);
+  process.stderr.write(`sha256 ${sha256Hex(text)}\n`);
+  return EXIT.OK;
+}
+
+/** `marker --record <draft|final> --section pilot|quiz|ab --node-label <label>` (W2-D84). The section is checked before
+ *  its form's flags; the record validates, then the code it runs under (W2-D24); then the node is looked up by label.
+ *  @param {Flags} flags  @returns {Promise<number>} */
+export async function markerCommand(flags) {
+  const section = flags.section;
+  if (section === undefined) refuse('args-invalid', 'section-required');
+  if (typeof section !== 'string' || !MARKER_SECTIONS.includes(section)) refuse('args-invalid', `section ${JSON.stringify(section)}: marker prints ${MARKER_SECTIONS.join(', ')}`);
+  checkFlags(`marker --section ${section}`, flags);
+  const labels = /** @type {string[]} */ (flags['node-label']);
+  if (labels.length !== 1) refuse('args-invalid', `marker prints one node: --node-label given ${labels.length} times`);
+  const rec = loadRecordInput(flags, section === 'pilot' ? 'draft' : 'final');
+  recheckCode(rec.record);   // W2-D24 (marker)
+  const node = rec.record.nodes.find((n) => n.label === labels[0]);
+  if (node === undefined) refuse('args-invalid', `node-label ${JSON.stringify(labels[0])} names no node of the record`);
+  return printTextWithSha(section === 'ab' ? abCommandsOf(rec.record, node.store_id) : headlessTextOf(rec.record, section, node.store_id));
+}
+
+/** `verify --section pilot|quiz` (W2-D84), read-only on this node: the record validates, then the code (W2-D24), then
+ *  the run's one store open (W2-5a's R3) names this node, which must be one of the record's. */
+async function verifyHeadless(section, flags, env) {
+  checkFlags(`verify --section ${section}`, flags);
+  const home = subcommandHome(env);
+  const rec = loadRecordInput(flags, section === 'pilot' ? 'draft' : 'final');
+  recheckCode(rec.record);   // W2-D24 (verify --section pilot|quiz)
+  const rs = openReplayStore(home);
+  try {
+    const storeId = rs.storeId;
+    requireNamedNode(rec.record, storeId);
+    const expected = headlessTextOf(rec.record, section, storeId);
+    const found = headlessStateOf(readHeadlessOn(home), expected, storeId);
+    const overHide = section === 'quiz' ? overHideOf(rs.db) : null;
+    return printWithSha(verifyHeadlessReport({ recordSha256: rec.sha256, storeId, section, expectedSha256: sha256Hex(expected), found, overHide }));
+  } finally {
+    rs.close();
+  }
+}
+
+HANDLERS.set('marker', markerCommand);
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
 // when main runs. Importing the module (the tests do) runs nothing. The exit code is set, never forced, so stderr drains.
