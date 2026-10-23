@@ -70,6 +70,16 @@ describe('the act: a token from the audit removes the tree', () => {
     expect(branches()).not.toContain('ws/still-cove');
   }, 60_000);
 
+  it('a `ccd-root` branch checked out in a second worktree is kept (branch-kept)', () => {
+    const t = ccdRoot();
+    const other = path.join(h.home, 'other-checkout');
+    h.git(main(), 'worktree', 'add', '--force', other, 'ws/still-cove');
+    const r = orphan(t, tokenOf(t));
+    expect(r.doc).toMatchObject({ removed: true, branch: 'branch-kept' });
+    expect(fs.existsSync(t)).toBe(false);
+    expect(branches()).toContain('ws/still-cove');
+  }, 60_000);
+
   it('a `ccd-root` branch git will not delete with -d is kept (branch-kept), and the tree is still gone', () => {
     const t = ccdRoot();
     // a commit pushed under another name is on a remote (the tree passes), yet not merged into the main checkout's HEAD
@@ -184,13 +194,19 @@ describe('the rescue arm', () => {
   it('--rescue pins HEAD and the reflog shas under the attic, then removes', () => {
     const t = claudeTree();
     pushCommit(t, 'claude/agent-a');
+    // amend away the commit: it survives only in this tree's own reflog, which `worktree remove` deletes
+    const amendedAway = h.git(t, 'rev-parse', 'HEAD');
+    h.git(t, 'commit', '--amend', '-m', 'b');
     const head = h.git(t, 'rev-parse', 'HEAD');
+    expect(head).not.toBe(amendedAway);
     const r = orphan(t, rescueOf(t), '--rescue');
     expect(r.code, JSON.stringify(r.doc)).toBe(0);
     expect(r.doc).toMatchObject({ removed: true });
     expect(fs.existsSync(t)).toBe(false);
     const refs = h.git(main(), 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/orphan/${sha16(t)}/`).split('\n');
     expect(refs).toContain(`refs/ccrc/attic/orphan/${sha16(t)}/${head}`);
+    expect(refs).toContain(`refs/ccrc/attic/orphan/${sha16(t)}/${amendedAway}`);
+    expect(Number(r.doc['pinned'])).toBeGreaterThanOrEqual(2);
   }, 60_000);
 
   it('a failed pin removes nothing', () => {

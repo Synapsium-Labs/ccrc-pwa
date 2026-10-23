@@ -8225,7 +8225,8 @@ export interface LifecycleMeas {
   /** The prompt's exit status on a re-spawn (`cmd_ensure`, `ccd:11240`).
    *  Carried unconverted, like `archivedAt`. */
   readonly rc: number | null;
-  /** The start mode `cmd_start` resolved before spawning. */
+  /** The start mode `cmd_start` resolved before spawning; `ws-orphan` reuses
+   *  the key for the orphan class it acted on. */
   readonly mode: string | null;
   /** `${CCD_IN_UNIT:-0}` — whether `cmd_ensure` ran inside the supervising
    *  unit or as an outside request for one (`ccd:12035`). */
@@ -8245,7 +8246,8 @@ export interface LifecycleMeas {
    *  whether there is a git-side record to clean up (`cmd_ws_rm`'s intent). */
   readonly registered: number | null;
   /** A `ws-gc` sweep's classification of the row it is about to reclaim —
-   *  `dead-reg` or `orphan`, never anything else the encoder has seen. */
+   *  `dead-reg` or `orphan`, never anything else the encoder has seen; `ws-orphan`
+   *  reuses the key for `rescue` or `plain`. */
   readonly state: string | null;
   /** How many bytes `ws-reap` measured before destroying the worktree, or
    *  `null` when `_ws_gc_bytes` did not return a plain integer. */
