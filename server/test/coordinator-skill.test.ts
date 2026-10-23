@@ -3043,6 +3043,31 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     for (const a of actions) expect(prose, `§5b lost or reworded: ${a.slice(0, 70)}…`).toContain(a);
   });
 
+  // The paragraph that carries the changed landing sentence (every PR lands by the route §5b reads), pinned whole and
+  // normalized from its heading to its last sentence, so the sentence cannot be paraphrased into an admin fallback and no
+  // exception can be appended to it. It is distinct from the exact old-phrase exclusion above, which stays.
+  it('pins the whole One PR per child paragraph, from its heading to redispatching, so its landing sentence cannot be reworded and no exception can be appended (the one-PR action pin)', () => {
+    const at = wl.indexOf('**One PR per child');
+    expect(at, 'wave-lifecycle.md lost its One PR per child paragraph').toBeGreaterThanOrEqual(0);
+    const end = wl.indexOf('**Landing on a native-queue project**', at);
+    expect(end, 'the One PR per child paragraph lost the paragraph that follows it').toBeGreaterThan(at);
+    const para = flat(wl.slice(at, end)).trim();
+    const whole = [
+      '**One PR per child — the PR decides `sessionId`, not the project.** A CHILD is a workspace carrying the `$REG/<id>.child` marker — ordinarily one the server minted for a run, on a box whose `ccd` records it — and a MARKED child carries at most one PR.',
+      'A fresh child always branches from the project\'s default branch — `ccd ws-add` sets `base` from `git symbolic-ref refs/remotes/origin/HEAD` — so it carries NONE of a spent producer\'s unmerged commits.',
+      'If this producer\'s MARKED workspace opened a PR — the ordinary case for a wave that shipped code — it is SPENT: open wave N+1 WITHOUT its `sessionId`, even in the same project, and close the producer exactly as the cross-project arm below closes it: `final:true`, then require `released:true`, then require its own closed row\'s `state` to be `done` (`"$API" runs list --closed 1`) — and, if wave N+1 depends on an interface from this producer, independently prove that producer\'s PR merged at the exact SHA before dispatching wave N+1, because the closed row proves fingerprint and terminal state, never merge.',
+      'Here, with no cross-project `producerSha` to read, the exact SHA is the producer run\'s own verified `handoffCommit`: prove the merge with `gh pr view <pr> --json state,headRefOid`, answering MERGED with `headRefOid` equal to it — the coordinator lands every PR with `--match-head-commit <handoffCommit>`, by the route §5b reads from the repository\'s own rules, for exactly this reason — and on a native-queue project it lands with the same binding, as "Landing on a native-queue project" below says.',
+      'An UNMARKED producer — every workspace minted without a marker: by a box whose ccd did not yet mark children, or by a dispatch that journaled `child-omitted` (§2) — is never refused this way; dropping its `sessionId` anyway is still safe and follows the same one-PR rule.',
+      'The same-project arm is for a producer whose workspace opened no PR — a research or measurement wave — and only for that.',
+      'Naming a spent workspace is refused `workspace-spent`, with `pr` naming the PR, and nothing is opened; `spent-unmeasured` means the server could not read the evidence either way — retry the same open, and do not drop `sessionId` on its account.',
+      'If the PR lands after you opened wave N+1 on the workspace, the DISPATCH refuses `workspace-spent` instead (§2); with `unbound:true` it has already released the workspace and unbound the run — dispatch it again and a fresh child is minted, again from the default branch and carrying none of the spent producer\'s code, so if wave N+1 depends on that code, wait for the same merge proof before redispatching.',
+    ].join(' ');
+    expect(para).toBe(whole);
+    // The two things the sentence must say, stated beside the exact pin so a failing diff names them.
+    expect(para).toContain('by the route §5b reads from the repository\'s own rules');
+    expect(para, 'the One PR per child paragraph lands by --admin again').not.toContain('--admin');
+  });
+
   it('gates the queue enqueue on a complete checks answer and stops when it is unread, never widening the gate (the queue checks gate)', () => {
     const at = wl.indexOf('**Landing on a native-queue project**');
     const para = flat(wl.slice(at, wl.indexOf('**Same project:**', at)));
@@ -3327,6 +3352,27 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(block).toContain('stop "changes-requested: operator decision required; key=$key"');
     // The WHOLE ignore condition, summary-only guard included: deleting it must red this file, not only the verdict's.
     expect(block).toContain('[ -n "$CR_IGNORE" ] && [ "$CR_IGNORE" = "$key" ] && jq -e \'.reviews | length > 0\' <<<"$sel" >/dev/null');
+  });
+
+  // The request-stop conditional, pinned whole and normalized from its `if` through its `fi`. The `toContain` pins above name
+  // the ignore condition and the stop; this one also refuses ANYTHING added inside the conditional, such as a second
+  // disjunct on the skip-stop line that reads a file (`head`, `tail`, `$(< path)`, `jq path`, `while read`, `.`): the runtime
+  // requirement is that no durable file override exists by any spelling, and the exact-key ignore is invocation-only. This
+  // is the finite mechanism for the conditional itself; the verdict file's census and fixture cases are its companions.
+  it('pins the whole request-stop conditional, if through fi, so nothing is added to or lost from the skip-stop line (the request-stop pin)', () => {
+    const open = 'if [ "$standing" = true ]; then';
+    expect(block.split(open), 'the block must carry exactly one request-stop conditional').toHaveLength(2);
+    const from = block.indexOf(open);
+    const close = block.indexOf('\nfi', from);
+    expect(close, 'the request-stop conditional lost its fi').toBeGreaterThan(from);
+    const cond = flat(block.slice(from, close + '\nfi'.length)).trim();
+    const whole = [
+      'if [ "$standing" = true ]; then',
+      '[ -n "$CR_IGNORE" ] && [ "$CR_IGNORE" = "$key" ] && jq -e \'.reviews | length > 0\' <<<"$sel" >/dev/null \\',
+      '|| stop "changes-requested: operator decision required; key=$key"',
+      'fi',
+    ].join(' ');
+    expect(cond).toBe(whole);
   });
 
   it('keeps route Q word for word in clause 15 and adds the merge-method settings to what it never writes (spec §5.7.6)', () => {

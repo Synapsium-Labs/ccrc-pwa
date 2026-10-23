@@ -130,7 +130,9 @@ const VIRTUAL_CLOCK = `sleep() {
 }
 `;
 
-/** `homeFiles` are written into the fixture HOME before the run (a name relative to HOME, then its content). The second
+/** `homeFiles` are written into the fixture HOME before the run (a name relative to HOME, nested names allowed: their parent
+ *  directories are created; then its content). HOME is also the block's working directory, so a relative name such as
+ *  `.git/ccrc-cr-ignore` is a file in the block's cwd. The second
  *  argument is all the block sees besides PATH, HOME and the fixture directory, so a variable it does not name is unset.
  *  With `clock`, the block runs under the virtual clock above and `clock.late` holds the answers that replace the reads'
  *  once the `VS_LATE`th sleep (named in that second argument) has run. */
@@ -144,7 +146,10 @@ function verdict(fx: Fixture, env: Record<string, string> = {}, homeFiles: Recor
   writeFileSync(path.join(bin, 'gh'), STUB, { mode: 0o755 });
   writeFileSync(path.join(dir, 'calls'), '');
   writeFileSync(path.join(dir, 'sleeps'), '');
-  for (const [name, text] of Object.entries(homeFiles)) writeFileSync(path.join(home, name), text);
+  for (const [name, text] of Object.entries(homeFiles)) {
+    mkdirSync(path.dirname(path.join(home, name)), { recursive: true });
+    writeFileSync(path.join(home, name), text);
+  }
   const put = (stem: string, k: Key, a: Answer): void => {
     writeFileSync(`${stem}.out`, k === 'protection' ? included(a) : (a.raw ?? JSON.stringify(a.body ?? null)));
     writeFileSync(`${stem}.rc`, a.code === 200 ? '0' : '1');
@@ -1130,15 +1135,28 @@ const ghSpelled = (b: string): string[] => {
 const stderrHits = (t: string): string[] => t.split('\n').flatMap((l) => (l.match(/2>|&>|\|&/g) ?? []).map(() => l));
 /** The block's code lines (comment-only lines dropped). */
 const codeLines = (b: string): string[] => b.split('\n').filter((l) => !/^\s*#/.test(l));
-/** The forms by which a block could take a value, or code, from a file or run text it builds: a `$HOME` or `~/` path, `source`
- *  or a `.` command (at the start of a line or after `&&` or `||`, so jq's `. ==` is not one), `cat`, `read` as a command
- *  (at the start, after `&&`, `||`, `;`, `|`, `(`, `{`, `then` or `do`, so "unreadable: read 1" is not one), `mapfile`,
- *  `readarray` and `eval`. The block reads nothing but its six gh reads and so spells none of them; any file-based
- *  override fails here whatever variable it fills. A contract check of the ordinary spellings, not a shell parser:
- *  an encoded or indirect spelling (a computed command, a here-document fed to a shell) is the carried limit. */
+/** The ENUMERATED spellings by which the block could take a value, or code, from a file or from run text it builds, and the
+ *  placements the census looks at them in. Spellings: a `$HOME` or `~/` path, `source` or a `.` command (at the start of a
+ *  line or after `&&` or `||`, so jq's `. ==` is not one), `cat`, `read` as a command (at the start, after `&&`, `||`, `;`,
+ *  `|`, `(`, `{`, `then` or `do`, so "unreadable: read 1" is not one), `mapfile`, `readarray`, `eval`, `head` or `tail` given a
+ *  FILE operand or a `<` redirect (in the same command places as `read`, and after a backtick; `head -n1 <<<"$r3"`, a
+ *  here-string, and a bare `head -n1` fed by a pipe are not file reads), and a `$(<` file read. The block's own file-free
+ *  reads are its gh calls, numbered 1 to 6 in its comments: read 1's PR view and its paginated reviews, read 2, read 3 (or
+ *  read 3b, and the compare under read 3b), read 4, read 5's two endpoints (check runs and statuses) and read 6; it spells
+ *  none of the forms above. This is a finite contract check of exactly those spellings and placements, one line at a time,
+ *  and NOT a shell parser and not a proof: other ordinary readers and placements the list does not name are census LIMITS
+ *  too, for example `jq` given a path operand, `while read`, a `.` command after `then`, or a `<` redirect into a command
+ *  not listed, beside the encoded or indirect spellings (a computed command, a here-document fed to a shell). What does
+ *  not change is the runtime requirement: the block has no durable file override by any spelling, and the operator's
+ *  exact-key ignore is invocation-only. The behaviour cases (a key in a file under HOME or in `.git`, CR_IGNORE unset,
+ *  still stops) and the whole-conditional pin in coordinator-skill.test.ts defend that requirement where this list cannot. */
 const FILE_FORMS: [string, RegExp][] = [
   ['$HOME', /\$\{?HOME\b/], ['~/', /(^|[\s"'=:])~\//], ['source', /\bsource\b/], ['. file', /(^|&&|\|\|)\s*\.\s+\S/],
   ['cat', /\bcat\b/], ['read', /(^|&&|\|\||[;|({]|\bthen|\bdo)\s*(IFS=\S*\s+)?read\s/], ['mapfile', /\b(mapfile|readarray)\b/], ['eval', /\beval\b/],
+  // `head` and `tail` as a command given something other than a here-string: a file operand or a `<` redirect. Their flags
+  // (`-n1`, `-n 1`, `-1`) are skipped first, so `head -n1 <<<"$r3"` and a bare `| head -n1` pass.
+  ['head/tail file', /(^|&&|\|\||[;|({`]|\bthen|\bdo)\s*(head|tail)(\s+(-[nc]\s+\d+|-\S+))*\s+(?<!\s-[nc]\s+)(?!<<<|-)[^\s|;&)]/],
+  ['$(< file', /\$\(\s*<(?!<)/],
 ];
 const fileForms = (b: string): string[] => codeLines(b).flatMap((l) => FILE_FORMS.filter(([, re]) => re.test(l)).map(([n]) => `${n}: ${l.trim()}`));
 /** The lines of the block's CODE (comment-only lines dropped) that name CR_IGNORE once the skip condition's two permitted
@@ -1241,7 +1259,9 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
       'export CR_IGNORE',
       ': "${CR_IGNORE:=x}"',
     ]) expect(crIgnoreStrays(plant(line)), `the census passed: ${line}`).toHaveLength(1);
-    // The file-reading census rejects any file-based override, whatever variable it fills, and accepts the block and a comment.
+    // The file-reading census rejects each ENUMERATED ordinary spelling planted below (see FILE_FORMS: a finite list, not a
+    // shell parser; other ordinary readers and placements, such as jq on a path, `while read` or a `.` after `then`, are
+    // census limits) and accepts the block, its here-string `head`, and a comment.
     expect(fileForms(b)).toEqual([]);
     expect(fileForms(plant('# source "$HOME/x"; cat y; read -r z; eval w'))).toEqual([]);
     for (const line of [
@@ -1261,7 +1281,39 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
       'p="$HOME/x"',
       'p="${HOME}/x"',
       'p=~/x',
+      // The two ordinary unencoded spellings a review applied to the skip-stop line, and their plain relatives: `head` and
+      // `tail` given a file operand or a `<` redirect, and a `$(<` file read with no `~` or `$HOME` in it.
+      'head -n1 .git/ccrc-cr-ignore',
+      'tail -n1 .git/ccrc-cr-ignore',
+      'k=$(head -n1 .git/ccrc-cr-ignore)',
+      'k=$(tail -n 1 ./x)',
+      'k=$(head -1 < ./x)',
+      'if [ -f ./x ]; then head -n 1 ./x; fi',
+      'k=`head -c 8 ./x`',
+      '[ "$(< .git/ccrc-cr-ignore)" = "$key" ]',
+      'k=$(<./x)',
     ]) expect(fileForms(plant(line)), `the file census passed: ${line}`).not.toEqual([]);
+    // The block's own `head` reads a here-string, which is no file: these pass, as does a bare `head` fed by a pipe and a
+    // comment naming the spellings.
+    for (const line of [
+      'c=$(head -n1 <<<"$x" | cut -d\' \' -f2)',
+      'head -n 1 <<<"$x"',
+      'tail -n1 <<<"$x"',
+      'k=$(printf x | head -n1)',
+      'k=$(printf x | tail -n 2 | cut -d, -f1)',
+      '# head -n1 .git/x; k=$(< .git/x); tail ./y',
+    ]) expect(fileForms(plant(line)), `the file census rejected: ${line}`).toEqual([]);
+    expect(b, 'the block\'s own here-string head is gone, so the control above proves nothing').toContain('head -n1 <<<"$r3"');
+    // The same two additions placed where the review put them, on the skip-stop line with both permitted CR_IGNORE
+    // expansions untouched. The CR_IGNORE census cannot see them (neither names the variable); the file census must.
+    const stopLine = '    || stop "changes-requested: operator decision required; key=$key"\n';
+    expect(b.split(stopLine), 'the skip-stop line lost its anchor').toHaveLength(2);
+    for (const arm of ['[ "$(head -n1 .git/ccrc-cr-ignore)" = "$key" ]', '[ "$(< .git/ccrc-cr-ignore)" = "$key" ]']) {
+      const planted = b.replace(stopLine, `    || ${arm} || stop "changes-requested: operator decision required; key=$key"\n`);
+      expect(planted).not.toBe(b);
+      expect(crIgnoreStrays(planted), `the CR_IGNORE census was expected to miss: ${arm}`).toEqual([]);
+      expect(fileForms(planted), `the file census passed an addition on the skip-stop line: ${arm}`).toHaveLength(1);
+    }
     // The permitted expansions are exactly the two of the skip condition, each once: a third copy or a lost one is refused.
     const cond = '[ -n "$CR_IGNORE" ] && [ "$CR_IGNORE" = "$key" ]';
     expect(b.split(cond), 'the skip condition changed shape').toHaveLength(2);
@@ -1280,6 +1332,21 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
       const r = verdict(fx(), {}, { '.ccrc-cr-ignore': text });
       expect(r.out, `a key in $HOME/.ccrc-cr-ignore (${how}) skipped the stop; stderr: ${r.stderr}`).toBe(`${askLine(false, 7)}\n`);
     }
+  });
+
+  it('CR_IGNORE comes from the invoking shell only: the exact key in .git/ccrc-cr-ignore in the working directory, with CR_IGNORE unset, still stops', () => {
+    // The block's working directory is the fixture HOME, so `.git/ccrc-cr-ignore` below is a fixture file in its cwd, never
+    // this repository's own .git. A key read from there would be the same standing licence as one read from HOME.
+    const fx = withReviews(measured, '', rev(7, CR));
+    const control = verdict(fx(), keyFor(false, 7));
+    expect(control.out, `stderr: ${control.stderr}`).toBe(`${GOOD_Q}\n`);
+    for (const [how, text] of [['with a newline', `${keyOf(false, 7)}\n`], ['without one', keyOf(false, 7)]] as const) {
+      const r = verdict(fx(), {}, { '.git/ccrc-cr-ignore': text });
+      expect(r.out, `a key in .git/ccrc-cr-ignore (${how}) skipped the stop; stderr: ${r.stderr}`).toBe(`${askLine(false, 7)}\n`);
+    }
+    // And with the file beside the HOME one, still no skip.
+    const both = verdict(fx(), {}, { '.git/ccrc-cr-ignore': keyOf(false, 7), '.ccrc-cr-ignore': keyOf(false, 7) });
+    expect(both.out, `stderr: ${both.stderr}`).toBe(`${askLine(false, 7)}\n`);
   });
 
   it('judges a gh call as one logical line: a write split over a backslash continuation is refused', () => {
