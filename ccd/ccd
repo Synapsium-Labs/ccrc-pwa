@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0da425910e89c66e3192b768f430ceacb87a8866ed31075ff4bbeb163edfc017
+# ccrc:generated 1 sha256=e81dd88faa7b8997c5ea3f4b4e94a541e6cd9057f3b536ac5a768fbaf91fc0b8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -39579,7 +39579,7 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
 # in-use probe, the checkout and row questions, the removal helper and the pause. What is its own: the lock
 # `$REG/.collect-loose.lock` (no reap lock: there is no id), the record family `$REG/tmpquarantine-loose/`, and names
 # that cross the wire as hex, so no entry's name is ever read as an option. Linux only, like the witnessed arm.
-_DISK_CRITICAL_PCT=92   # pinned equal to L0's DISK_CRITICAL_PCT by disk-twins (the statfs twin of the agent's reading)
+_DISK_CRITICAL_PCT=92   # equal to L0's DISK_CRITICAL_PCT; the disk-twins pin that reads this line arrives with DR-6
 WS_LOOSE_CENSUS_MAX=1024
 WS_LOOSE_FLOOR_S=172800            # 48 h: twice the witnessed floor
 WS_LOOSE_PRESSURE_FLOOR_S=86400    # 24 h under pressure, never below the witnessed 24 h floor
@@ -39644,12 +39644,16 @@ _ws_loose_unmeasured_doc() {   # why -> the census' unmeasured answer, exit 1 (t
 }
 _ws_loose_census_records() {   # -> _WS_CREC_JSON (the records' rows) and _WS_CREC_BAD (unread ones, and any past the bound).
   #                                A killed verb's entry sits in the quarantine, which the listing does not walk: only its record names it
-  local LC_ALL=C d f n hex line seen=0
+  local LC_ALL=C d f n hex line seen=0 outf errf err rc
   _WS_CREC_JSON=''; _WS_CREC_BAD=0
   d=$(_ws_loose_rec_dir)
   [[ -e "$d" || -L "$d" ]] || return 0
   [[ -d "$d" && ! -L "$d" ]] || { _WS_CREC_BAD=1; return 0; }
-  for f in "$d"/*; do
+  outf=$(_plat_mktemp) && errf=$(_plat_mktemp) || { _WS_CREC_BAD=1; return 0; }
+  find -P "$d" -mindepth 1 -maxdepth 1 -name '*.*' -print0 >"$outf" 2>"$errf"; rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc != 0 )) || [[ -n "$err" ]]; then rm -f "$outf"; _WS_CREC_BAD=1; return 0; fi   # an unlistable directory is unmeasured, never empty
+  while IFS= read -r -d '' f; do
     n="${f##*/}"; [[ "$n" =~ ^[0-9a-f]{16}\.[0-9]+\.[0-9]+$ ]] || continue
     if (( ++seen > WS_LOOSE_CENSUS_MAX )); then _WS_CREC_BAD=$(( _WS_CREC_BAD + 1 )); continue; fi
     { line=$(head -c 4096 -- "$f"); } 2>/dev/null; hex=''
@@ -39657,7 +39661,8 @@ _ws_loose_census_records() {   # -> _WS_CREC_JSON (the records' rows) and _WS_CR
     if [[ -n "$hex" ]] && _ws_loose_record_read "$f" "$hex" && _ws_loose_unhex "$hex" && _ws_loose_sha16 "$hex" && [[ "$_WS_LOOSE_SHA" == "${n%%.*}" ]]; then
       _WS_CREC_JSON+="${_WS_CREC_JSON:+,}{\"hex\":\"$hex\",\"record\":\"$n\"}"
     else _WS_CREC_BAD=$(( _WS_CREC_BAD + 1 )); fi
-  done
+  done < "$outf"
+  rm -f "$outf"
 }
 _ws_loose_census() {   # ccd ws-audit --collect-census — READ-ONLY: the top-level entries of `~/.cc-tmp`, classed, as hex
   local LC_ALL=C root outf errf err rc n name hex cls out='' first=1 seen=0 trunc=false
@@ -39717,16 +39722,16 @@ _ws_loose_idle() {   # path type -> 0 with _WS_IDLE_NEWEST_NS and _WS_IDLE_COUNT
 
 _ws_loose_floor() {   # -> 0 with _WS_LOOSE_FLOOR (whole seconds) and _WS_LOOSE_PRESSURE (1 under _disk_pressure);
   #                      2 with _WS_FLOOR_WHY when the raise knob WS_COLLECT_LOOSE_FLOOR_S is set and not a whole number
-  # max(48 h, knob): the knob only raises. Under pressure on the box's own file system the floor is 24 h, never lower:
-  # the witnessed arm's floor is the lowest any collector keeps (spec §2.5.3).
+  # max(base, knob): the knob only raises. The base is 48 h; under pressure on the box's own file system it is 24 h, never
+  # lower: the witnessed arm's floor is the lowest any collector keeps (spec §2.5.3).
   local b="$WS_LOOSE_FLOOR_S" o="${WS_COLLECT_LOOSE_FLOOR_S-}"
   _WS_FLOOR_WHY=''; _WS_LOOSE_FLOOR=''; _WS_LOOSE_PRESSURE=0
+  if _disk_pressure "$HOME/.cc-tmp"; then _WS_LOOSE_PRESSURE=1; b="$WS_LOOSE_PRESSURE_FLOOR_S"; fi
   if [[ -n "$o" ]]; then
     [[ "$o" =~ ^[0-9]+$ ]] || { _WS_FLOOR_WHY="WS_COLLECT_LOOSE_FLOOR_S is set and is not a whole number of seconds, so the raised floor it asks for was never read"; return 2; }
     [[ "$o" =~ ^0*([1-9][0-9]*)?$ ]]; o="${BASH_REMATCH[1]:-0}"
     if (( ${#o} > 9 )); then b=999999999; elif (( 10#$o > b )); then b=$(( 10#$o )); fi
   fi
-  if _disk_pressure "$HOME/.cc-tmp"; then _WS_LOOSE_PRESSURE=1; b="$WS_LOOSE_PRESSURE_FLOOR_S"; fi
   _WS_LOOSE_FLOOR="$b"
 }
 
