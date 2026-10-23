@@ -6,7 +6,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { callsIn, sourceOfSymbol, symbolOf, REPO_ROOT } from './scan/symbols.js';
+import { callsIn, sourceOfSymbol, sqlStatementsIn, sqlStatementsInFile, symbolOf, REPO_ROOT } from './scan/symbols.js';
 
 const FIXTURE = [
   'export class Watcher {',
@@ -94,4 +94,49 @@ describe('scan/symbols.ts keys a source slice on a symbol (D-5854)', () => {
     expect(symbolOf('server/test/scan/symbols.ts', 'sourceOfSymbol').file)
       .toBe(path.join(REPO_ROOT, 'server/test/scan/symbols.ts'));
   });
+
+  it('sqlStatementsIn lists a symbol\'s SQL (a method, an arrow-function property, a nested function), a `+` chain and a template whole', () => {
+    writeFileSync(file, SQL_FIXTURE);
+    const at = (name: string): string[] => sqlStatementsIn(symbolOf(file, name)).map((q) => `${q.verb} ${q.table}`);
+    expect(at('Store.bind')).toEqual(['UPDATE runs']);
+    expect(at('Store.clear')).toEqual(['UPDATE runs', 'DELETE mail']);
+    expect(at('Store.stamp')).toEqual(['UPDATE runs']);
+    expect(at('Store.clear.drop')).toEqual(['DELETE mail']);
+    const [chain] = sqlStatementsIn(symbolOf(file, 'Store.clear'));
+    expect(chain).toMatchObject({ set: ' sessionId = NULL, workspace = NULL ', line: 10 });
+    expect(chain!.text).toBe('UPDATE runs SET sessionId = NULL, workspace = NULL WHERE id = ?');
+    expect(sqlStatementsIn(symbolOf(file, 'Store.stamp'))[0]!.text).toBe('UPDATE runs SET closedAt = CASE WHEN ? IN ${} THEN ? END WHERE id = ?');
+    // A comment that quotes SQL, and a string that is not a statement, are not statements.
+    expect(at('Store.quiet')).toEqual([]);
+    expect(sqlStatementsInFile(file).map((q) => q.table)).toEqual(['runs', 'runs', 'mail', 'runs', 'runs']);
+  });
+
+  it('sqlStatementsIn follows code that moves: the same statements after a method is added above', () => {
+    writeFileSync(file, SQL_FIXTURE);
+    const before = sqlStatementsIn(symbolOf(file, 'Store.clear')).map((q) => q.text);
+    writeFileSync(file, SQL_FIXTURE.replace('class Store {\n', 'class Store {\n  helper(): void {}\n'));
+    expect(sqlStatementsIn(symbolOf(file, 'Store.clear')).map((q) => q.text)).toEqual(before);
+  });
 });
+
+const SQL_FIXTURE = [
+  'export class Store {',
+  "  bind(id: number): void { this.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(1, id); }",
+  '  // UPDATE runs SET sessionId = ? WHERE id = ?  (a comment, not a statement)',
+  '  quiet(): string { return "update the world"; }',
+  '  stamp = (id: number): void => {',
+  '    this.db.prepare(`UPDATE runs SET closedAt = CASE WHEN ? IN ${TERMINAL} THEN ? END WHERE id = ?`).run(id);',
+  '  };',
+  '  clear(id: number): void {',
+  '    this.db.prepare(',
+  "      'UPDATE runs SET sessionId = NULL, workspace = NULL ' +",
+  "      'WHERE id = ?').run(id);",
+  "    const drop = (m: number): void => { this.db.prepare('DELETE FROM mail WHERE id = ?').run(m); };",
+  '    drop(id);',
+  '  }',
+  '  reconstruct(): void {',
+  "    this.db.prepare('INSERT INTO runs (id, sessionId) VALUES (?, ?)').run(1, 2);",
+  '  }',
+  '}',
+  '',
+].join('\n');

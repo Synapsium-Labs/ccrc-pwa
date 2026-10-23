@@ -383,3 +383,46 @@ export function stringPieces(text: string, fileName = 'source.ts'): StringPiece[
   visit(sf);
   return out;
 }
+
+/** A string-valued expression: a string literal, a template, or a `+` chain of them (how a long SQL statement is
+ *  written across lines). `text` is the cooked value with each `${…}` replaced by `${}`; `start`/`end` span the
+ *  whole expression in the source; `line` is 1-based, where it starts. */
+export interface StringExpression {
+  text: string;
+  start: number;
+  end: number;
+  line: number;
+}
+
+/** The maximal string-valued expressions of a source text, in source order (ARCH-06: `sqlStatementsIn` reads the SQL a
+ *  store holds). A chain counts only when every operand is a string literal, a template or a parenthesised chain, so
+ *  `'a' + x` is two expressions, not one. KNOWN WIDTH: a substitution's own text is not read, and a template nested
+ *  inside a `${…}` is an expression of its own. */
+export function stringExpressions(text: string, fileName = 'source.ts'): StringExpression[] {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
+  const out: StringExpression[] = [];
+  /** The cooked value of `n` when it is wholly string text, else `null`. */
+  const valueOf = (n: ts.Node): string | null => {
+    if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) return n.text;
+    if (ts.isTemplateExpression(n)) return n.head.text + n.templateSpans.map((s) => '${}' + s.literal.text).join('');
+    if (ts.isParenthesizedExpression(n)) return valueOf(n.expression);
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const l = valueOf(n.left);
+      const r = l === null ? null : valueOf(n.right);
+      return r === null ? null : l + r;
+    }
+    return null;
+  };
+  const visit = (node: ts.Node): void => {
+    const v = valueOf(node);
+    if (v !== null && !ts.isParenthesizedExpression(node)) {
+      out.push({ text: v, start: node.getStart(sf), end: node.getEnd(), line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1 });
+      // A template's substitutions can hold strings of their own.
+      if (ts.isTemplateExpression(node)) node.templateSpans.forEach((s) => visit(s.expression));
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}

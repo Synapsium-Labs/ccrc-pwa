@@ -8,15 +8,15 @@
  * the code as long as the symbol keeps its name. What it cannot follow is a REWRITE: a pin over text a change rewrites
  * is re-pointed by that change, by name, in its own commit.
  *
- * Built on `scan/parse.ts` (D-5853), the one parser importer: syntax only, no type checker. `sqlStatementsIn` arrives
- * with the slice that needs it (ARCH-06's later slices).
+ * Built on `scan/parse.ts` (D-5853), the one parser importer: syntax only, no type checker. `sqlStatementsIn` reads the
+ * SQL a symbol holds, so a census of a store's writers follows a method that moves.
  * KNOWN WIDTH: what `parse.ts` does not key (a computed member name, an object-literal method, a function bound through
  * `as`, a call or parentheses) is not a symbol here either; an overloaded or twice-declared name throws as ambiguous.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseSource, type CallSite, type ParsedFile, type SymbolSpan } from './parse.js';
+import { parseSource, stringExpressions, type CallSite, type ParsedFile, type SymbolSpan } from './parse.js';
 
 /** The repository root: a relative `file` is resolved against it (`server/src/watch.ts`). */
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -65,4 +65,50 @@ export function sourceOfSymbol(file: string, name: string): string {
  *  `line` in the file). */
 export function callsIn(symbol: SourceSymbol): CallSite[] {
   return parsedFile(symbol.file).calls.filter((c) => c.start >= symbol.start && c.end <= symbol.end);
+}
+
+/** One SQL statement held in the source: the string expression (a literal, a template or a `+` chain) that starts with
+ *  a statement verb. `text` is the cooked statement, each `${…}` shown as `${}`; `table` the first table it names
+ *  (`INSERT INTO t`, `UPDATE t`, `DELETE FROM t`, `FROM t`), lower-cased as written, else `null`; `set` an UPDATE's SET
+ *  list (from `SET` to `WHERE` or the end), else `null`. */
+export interface SqlStatement {
+  verb: string;
+  table: string | null;
+  set: string | null;
+  text: string;
+  file: string;
+  start: number;
+  end: number;
+  line: number;
+}
+
+const SQL_VERB = /^\s*(SELECT|INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|WITH)\b/i;
+const TABLE_OF: Record<string, RegExp> = {
+  INSERT: /^\s*INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)/i, REPLACE: /^\s*REPLACE\s+INTO\s+(\w+)/i,
+  UPDATE: /^\s*UPDATE\s+(?:OR\s+\w+\s+)?(\w+)/i, DELETE: /^\s*DELETE\s+FROM\s+(\w+)/i,
+};
+
+const statementsOf = (parsed: ParsedFile, from: number, to: number): SqlStatement[] => {
+  const out: SqlStatement[] = [];
+  for (const e of stringExpressions(parsed.text, parsed.path)) {
+    const verb = SQL_VERB.exec(e.text)?.[1]?.toUpperCase();
+    if (verb === undefined || e.start < from || e.end > to) continue;
+    const table = (TABLE_OF[verb] ?? /\bFROM\s+(\w+)/i).exec(e.text)?.[1] ?? null;
+    const set = verb === 'UPDATE' ? /\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(e.text)?.[1] ?? null : null;
+    out.push({ verb, table, set, text: e.text, file: parsed.path, start: e.start, end: e.end, line: e.line });
+  }
+  return out;
+};
+
+/** Every SQL statement inside `symbol`'s span, in source order, nested functions' statements included. A statement
+ *  is a string expression whose text starts with a statement verb, so a comment that quotes SQL is not one. KNOWN
+ *  WIDTH: SQL assembled from a variable (`'UPDATE ' + table`) or a `.join` is not a string expression. */
+export function sqlStatementsIn(symbol: SourceSymbol): SqlStatement[] {
+  return statementsOf(parsedFile(symbol.file), symbol.start, symbol.end);
+}
+
+/** Every SQL statement in `file` (the whole census); compare `start` with a symbol's span to ask which symbol holds it. */
+export function sqlStatementsInFile(file: string): SqlStatement[] {
+  const parsed = parsedFile(file);
+  return statementsOf(parsed, 0, parsed.text.length);
 }
