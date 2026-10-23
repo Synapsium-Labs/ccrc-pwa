@@ -2533,9 +2533,9 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     declineRowsWait(option, [chat()], 'envelope');
     cleanup();
 
-    // The route to the transcript's sheet in production: the commit goes from the envelope's boxes, the next screen
-    // arrives as a PARSED pane carrying the transcript's copy of its question, then `ask_cleared` hands it over. The
-    // lock is the call's, so it survives the hand-off.
+    // The hand-off to the transcript's sheet (DERIVED sequence, as above): the commit goes from the envelope's boxes, a
+    // recorded screen carrying the transcript's copy of a question stands for the next screen, then `ask_cleared` hands
+    // it over. The lock is the call's, so it survives the hand-off.
     const next = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
     fireEvent.click(commit('Next'));
     show(next.store, aged(DRINK_FEATURES_TOOLS, pane('cc300-ask-q2-of-2-single'), 0));
