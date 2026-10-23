@@ -2,7 +2,7 @@
 // transcript/resolve.ts into bounded.ts. Four cases, green on the old code (characterization), so the move
 // commit changes only this file's import.
 import { describe, expect, it } from 'vitest';
-import { limiter } from '../src/bounded.js';
+import { limiter, mapBounded } from '../src/bounded.js';
 
 /** A call the test settles by hand, so it controls exactly when each slot frees. */
 const gate = () => {
@@ -88,5 +88,50 @@ describe('the bounded pool (the limiter)', () => {
     waiterGate.resolve();
     await Promise.all([a, b, w]);
     expect(inFlight).toBe(0);
+  });
+});
+
+describe('mapBounded', () => {
+  it('mapBounded answers in input order when calls finish in reverse', async () => {
+    const gates = Array.from({ length: 4 }, gate);
+    const run = mapBounded([10, 20, 30, 40], 4, async (n, i) => { await gates[i].promise; return n + 1; });
+    await settle();
+    for (const g of [...gates].reverse()) { g.resolve(); await settle(); }
+    expect(await run).toEqual([11, 21, 31, 41]);
+  });
+
+  it('mapBounded never exceeds limit in flight', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const gates = Array.from({ length: 7 }, gate);
+    const run = mapBounded(gates, 3, async (g) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await g.promise;
+      inFlight -= 1;
+    });
+    await settle();
+    expect(inFlight).toBe(3);
+    for (const g of gates) { g.resolve(); await settle(); }
+    await run;
+    expect(peak).toBe(3);
+  });
+
+  it('mapBounded passes the index and answers an empty list', async () => {
+    expect(await mapBounded(['a', 'b'], 1, async (x, i) => `${x}${i}`)).toEqual(['a0', 'b1']);
+    expect(await mapBounded([], 3, async () => 1)).toEqual([]);
+  });
+
+  it('mapBounded rejects as Promise.all does, and every started call still frees its slot', async () => {
+    const started: number[] = [];
+    const run = mapBounded([0, 1, 2, 3], 1, async (n) => {
+      started.push(n);
+      if (n === 1) throw new Error('boom');
+      return n;
+    });
+    await expect(run).rejects.toThrow('boom');
+    await settle();
+    // the failing call freed its slot, so the pool drained rather than wedging
+    expect(started).toEqual([0, 1, 2, 3]);
   });
 });
