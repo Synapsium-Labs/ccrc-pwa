@@ -24,9 +24,9 @@
 //     because they are right, not because a scanner demands them.
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import fs, {
-  chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,7 +41,11 @@ import {
   refuseLitellmStart, registerLaneCleanup, resistLitellmTerm, slowLitellmListen, spawnFakeLitellm, spawnListener, systemctlCalls, systemdRunArgv,
   systemdRunCalls, trackChild, unitPid,
 } from './codexLaneFixture.js';
-import type { FakeRuntime, FakeRuntimeOptions } from './codexLaneFixture.js';
+import type { FakeRuntime } from './codexLaneFixture.js';
+import {
+  AUTH_LIB, AUTH_ROUTES, driverLines, fakeAuthServer, plantBackendCredential, runAuthDriver,
+  syntheticJwt, type AuthAnswer, type AuthScript,
+} from './codexAuthFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -142,6 +146,26 @@ const litellmCode = (stamp: string, h: string): string =>
   createHash('sha256').update(fs.readFileSync(stamp)).update(fs.readFileSync(authLib(h))).digest('hex');
 /** Where `_codex_auth_lib` names the library: `plantCodexBins` places it there. */
 const authLib = (h: string): string => join(h, '.local', 'bin', 'ccgpt-auth.py');
+
+/** Drive the auth library's own refresher once over the authDir `dir` (an expired backend credential planted there
+ *  first) against a fake endpoint whose one token answer is `answer`, so the status file a case reads is the library's
+ *  own, never a hand-made one (codex-bridge Stage 1, Task 8). `word` is the refusal the refresh must end in, and the
+ *  state the status file must then hold. The driver runs under `home`, a fixture HOME, as every library spawn does. */
+async function refusedRefresh(home: string, dir: string, answer: AuthAnswer, word: string): Promise<void> {
+  plantBackendCredential(dir, { expiresIn: -120 });
+  const srv = await fakeAuthServer({ token: [answer] });
+  try {
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'ensure_fresh', lane: 'codex-a' }] },
+      { CCRC_CODEX_AUTH_BASE: srv.base });
+    expect(r.timedOut, r.stderr).toBe(false);
+    expect(driverLines(r.stdout)[0]?.['error'], r.stdout + r.stderr).toBe(word);
+    expect(srv.requests.map((q) => q.path)).toEqual([AUTH_ROUTES.token]);
+  } finally {
+    await srv.close();
+  }
+  const status = JSON.parse(fs.readFileSync(join(dir, 'auth.status.json'), 'utf8')) as Record<string, unknown>;
+  expect(status['state']).toBe(word);
+}
 
 describe('_codex_row — one codex lane, read from accounts.json by exec.kind', () => {
   it('sets the six CX_ fields from the row, and says nothing', async () => {
@@ -1590,8 +1614,10 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
    *    the shipped file);
    *  - the codex roster, and a class registry and lane.json per lane, both
    *    written through the real verb;
-   *  - an OAuth login (existence only), and a litellm.yaml per lane rendered by
-   *    the real renderer (`plantLaneConfig`, ruling R20);
+   *  - a backend credential per lane (`plantBackendCredential`, fresh: what
+   *    `ccrc codex start` reads through the auth library, codex-bridge Stage 1
+   *    Task 8), and a litellm.yaml per lane rendered by the real renderer
+   *    (`plantLaneConfig`, ruling R20);
    *  - the fake runtime. */
   async function lifeBox(opts: { userManager: boolean; ids?: string[] }): Promise<Life> {
     const home = box('ccrc-codex-life-', { userManager: opts.userManager });
@@ -1611,7 +1637,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
       const init = ccrc(home, ['models', id, 'init', 'codex']);
       expect(init.code, init.stderr).toBe(0);
       fs.mkdirSync(join(home, authDir), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(join(home, authDir, 'auth.json'), '{"fixture":"test-token-not-a-secret"}\n', { mode: 0o600 });
+      plantBackendCredential(join(home, authDir));
       expect(plantLaneConfig(home, id)).toBe(litellmYaml(home, id));
     });
     return { home, lanes, rt, shimFile };
@@ -2158,7 +2184,10 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
   // `mintsKey`: not-logged-in and runtime-absent refuse BEFORE the gateway key is
   // generated; a lane that cannot run gets no key.
   const REFUSALS: Array<[string, (h: string) => void, RegExp, boolean]> = [
-    ['not-logged-in', (h) => fs.rmSync(join(h, codexAuthDir('codex-a'), 'auth.json')), /ccrc codex login codex-a/, false],
+    // Codex-bridge Stage 1, Task 8: read through the auth library, whose word
+    // the sentence names; existence is no longer all ccrc checks.
+    ['not-logged-in', (h) => fs.rmSync(join(h, codexAuthDir('codex-a'), 'auth.json')),
+      /is not signed in: the auth library reads its credential in ~\/\S+ as absent\. Sign the lane in with 'ccrc codex login codex-a'/, false],
     ['runtime-absent', (h) => fs.rmSync(join(h, '.ccrc', 'runtime', 'codex', 'current')), /ccgpt-runtime build/, false],
     // Ruling R4: this task renders nothing. Task 6's `_codex_litellm_ensure`
     // replaces this refusal with the render call, and moves this row.
@@ -2175,6 +2204,113 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     for (const t of ['litellm', 'shim']) expect(fs.existsSync(join(laneDir(home, 'codex-a'), `${t}.pid`)), t).toBe(false);
     expect(litellmEvidence(home, lanes['codex-a']!.litellmPort)).toBeNull();
     expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'runtime.env'))).toBe(mintsKey);
+  }, 60_000);
+
+  // ── the credential, read through the auth library (codex-bridge Stage 1, Task 8) ─
+  // `start` reads `_codex_auth_status` before the lane lock: a lane whose
+  // credential cannot serve is refused with nothing locked, minted or started.
+  // Each status the cases read is the library's own (`refusedRefresh`), and
+  // every library `start` runs is under this file's CLOSED_AUTH_BASE default,
+  // where a token request is refused at once.
+  /** `ccrc codex start codex-a`, refused as `code` with `remedy` before the
+   *  lane lock: no `.lock`, no gateway key, no pidfile, no spawn. */
+  function refusedBeforeLock(home: string, code: string, remedy: RegExp): string {
+    const d = laneDir(home, 'codex-a');
+    const r = codex(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(1);
+    const line = r.stderr.split('\n').find((l) => l.startsWith(`ccrc codex: ${code}: `));
+    expect(line, r.stderr).toBeDefined();
+    expect(line).toMatch(remedy);
+    expect(line).toMatch(/Nothing was started\.$/);
+    expect(r.stdout).toBe('');
+    expect(fs.existsSync(join(d, '.lock')), `${code}: the lane lock was taken`).toBe(false);
+    expect(fs.existsSync(join(d, 'runtime.env')), `${code}: a gateway key was minted`).toBe(false);
+    for (const t of ['litellm', 'shim']) expect(fs.existsSync(join(d, `${t}.pid`)), t).toBe(false);
+    expect(systemdRunCalls(home)).toEqual([]);
+    return line!;
+  }
+
+  it('start refuses needs-signin and credential-unusable before the lane lock, and starts an expired token', async () => {
+    const { home, lanes } = await lifeBox({ userManager: false, ids: ['codex-a'] });
+    const dir = join(home, lanes['codex-a']!.authDir);
+    const cred = join(dir, 'auth.json');
+    await refusedRefresh(home, dir, { status: 400, body: { error: 'invalid_grant' } }, 'needs-signin');
+    expect(refusedBeforeLock(home, 'needs-signin', /'ccrc codex login codex-a'/)).toContain('needs-signin');
+    // A credential that does not parse reads `unreadable`: never started on, and the doctor names it.
+    fs.writeFileSync(cred, '{"access_token": ', { mode: 0o600 });
+    expect(refusedBeforeLock(home, 'credential-unusable', /'ccrc doctor'/)).toContain(' as unreadable');
+    // An expired present credential STARTS: in litellm mode the tier refreshes on its next request, and start
+    // itself never refreshes, so the file is the one planted.
+    plantBackendCredential(dir, { expiresIn: -120 });
+    const before = sha256(cred);
+    const r = codex(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^ccrc codex: codex-a: litellm started \(.*\), shim started \(/m);
+    expect(sha256(cred), 'start rewrote the credential').toBe(before);
+  }, 60_000);
+
+  it('start refuses a foreign-family credential: credential-unusable, the file untouched', async () => {
+    // Review Focus 2: the Codex CLI's own auth.json, and its API-key form.
+    const shapes: Array<[string, object]> = [
+      ['the Codex CLI\'s own', {
+        OPENAI_API_KEY: null,
+        tokens: { id_token: syntheticJwt({ sub: 'fixture' }), access_token: syntheticJwt({ sub: 'fixture' }),
+          refresh_token: 'rtok-fixture-cli', account_id: null },
+        last_refresh: '2026-01-01T00:00:00Z',
+      }],
+      ['its API-key form', { OPENAI_API_KEY: 'fixture-key-not-a-secret', tokens: null }],
+    ];
+    for (const [label, body] of shapes) {
+      const { home, lanes } = await lifeBox({ userManager: false, ids: ['codex-a'] });
+      const dir = join(home, lanes['codex-a']!.authDir);
+      const cred = join(dir, 'auth.json');
+      fs.writeFileSync(cred, JSON.stringify(body), { mode: 0o600 });
+      const st = fs.statSync(cred, { bigint: true });
+      const bytes = sha256(cred);
+      const listing = fs.readdirSync(dir).sort();
+      const line = refusedBeforeLock(home, 'credential-unusable', /'ccrc doctor'/);
+      expect(line, label).toContain(' as foreign-family');
+      const after = fs.statSync(cred, { bigint: true });
+      expect([sha256(cred), after.ino, after.mtimeNs], `${label}: the credential was touched`)
+        .toEqual([bytes, st.ino, st.mtimeNs]);
+      expect(fs.readdirSync(dir).sort(), `${label}: something was written beside the credential`).toEqual(listing);
+    }
+  }, 60_000);
+
+  it('start names ccrc update then ccrc codex login for config-error', async () => {
+    const { home, lanes } = await lifeBox({ userManager: false, ids: ['codex-a'] });
+    const dir = join(home, lanes['codex-a']!.authDir);
+    await refusedRefresh(home, dir, { status: 401, body: { error: 'invalid_client' } }, 'config-error');
+    const line = refusedBeforeLock(home, 'credential-unusable', /config-error/);
+    const update = line.indexOf("'ccrc update'");
+    expect(update, line).toBeGreaterThan(-1);
+    expect(line.indexOf("'ccrc codex login codex-a'"), line).toBeGreaterThan(update);
+    expect(line, 'a config-error is not the doctor\'s to cure').not.toContain('ccrc doctor');
+  }, 60_000);
+
+  it('status --json carries auth.state, auth.credential and auth.authBase', async () => {
+    const { home, lanes } = await lifeBox({ userManager: false, ids: ['codex-a'] });
+    const dir = join(home, lanes['codex-a']!.authDir);
+    const auth = (): Record<string, unknown> | null => {
+      const r = codex(home, ['status', 'codex-a', '--json']);
+      expect(r.code, r.stderr).toBe(0);
+      return (JSON.parse(r.stdout) as Record<string, unknown>)['auth'] as Record<string, unknown> | null;
+    };
+    const ok = auth();
+    // The library's status report, minus the file's mode and owner (the doctor's to read).
+    expect(Object.keys(ok ?? {}).sort()).toEqual([
+      'authBase', 'credential', 'expiresAt', 'family', 'lastErrorCode', 'lastRefreshAt', 'lastRequestId', 'modeOk',
+      'source', 'state', 'unsaved', 'updatedAt',
+    ]);
+    // `override`: this file's env() keeps the loopback CCRC_CODEX_AUTH_BASE ghContainedEnv sets.
+    expect(ok).toMatchObject({ credential: 'present', state: 'ok', source: 'computed', authBase: 'override' });
+    await refusedRefresh(home, dir, { status: 400, body: { error: 'invalid_grant' } }, 'needs-signin');
+    expect(auth()).toMatchObject({ credential: 'present', state: 'needs-signin', source: 'file' });
+    fs.rmSync(join(dir, 'auth.json'));
+    expect(auth()).toMatchObject({ credential: 'absent', state: null });
+    // No library: status still answers, exit 0, with no auth to report.
+    fs.rmSync(authLib(home));
+    expect(auth()).toBeNull();
   }, 60_000);
 
   // Ruling R3: `_codex_row`'s rc 2 for a malformed id reaches the exit status;
@@ -2231,6 +2367,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     const stopped = { state: 'stopped', via: null, pid: null };
     expect(status()).toEqual({
       id: 'codex-a', tiers: { litellm: stopped, shim: stopped }, runtime: { generation: gen }, lane: { json: 'current' },
+      auth: expect.objectContaining({ credential: 'present', state: 'ok' }),
     });
     const lj = join(laneDir(home, 'codex-a'), 'lane.json');
     const good = fs.readFileSync(lj, 'utf8');
@@ -2482,11 +2619,13 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     const { home } = await lifeBox({ userManager: false, ids: ['codex-a'] });
     const PATH = pathWithout(home, 'node');
     const r = codex(home, ['login', 'codex-a'], { PATH });
-    // Past the probe: the lane library ran and reached the fake runtime,
-    // whose default interpreter has no arm for the Authenticator program and
-    // so exits 96 — never `missing-dependency`.
+    // Past the probe: the lane library ran and reached the auth library
+    // (codex-bridge Stage 1, Task 8), which reads the box's present
+    // credential and answers already-signed-in with no request — never
+    // `missing-dependency`.
     expect(r.stderr).not.toMatch(/missing-dependency/);
-    expect(r.stderr).toMatch(/^ccrc codex: login-failed: /m);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^ccgpt-auth: codex-a: already-signed-in: /m);
   }, 60_000);
 
   // Review fix round 1, findings spec-5/mut-5: the missing-dependency
@@ -3080,6 +3219,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
         tiers: { litellm: { state: 'running', via: 'systemd', pid: lit }, shim: { state: 'running', via: 'systemd', pid: shim } },
         runtime: { generation: path.basename(rt.gen) },
         lane: { json: 'current' },
+        auth: expect.objectContaining({ credential: 'present', state: 'ok' }),
       });
     }, 120_000);
 
@@ -3240,41 +3380,57 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
   });
 });
 
-// `ccrc codex login <id>` (Plan 2b-2 Task 8, spec §9.3). The runtime here is a
-// FIXTURE generation, planted by the fixture's one runtime planter (ruling
-// R28), whose `bin/python` runs the REAL interpreter on the REAL `-c` program
-// ccrc passes, with a stub `litellm.llms.chatgpt.authenticator` first on
-// sys.path — so the program's import, its call and the environment it sees are
-// all measured, and no network or real litellm is involved.
-describe.skipIf(!pythonOrSkip())('ccrc codex login — the lane\'s own runtime signs it in', () => {
-  const PY = pythonOrSkip() ?? '';
+// `ccrc codex login <id>` (Plan 2b-2 Task 8, spec §9.3; codex-bridge Stage 1,
+// Task 8). The auth library signs the lane in: `ccd/ccgpt-auth.py`'s
+// device-code sign-in, run as a command over the roster's authDir, the copy
+// `_codex_auth_lib` names. No Codex runtime is built in these boxes, so a
+// login that still needed one would answer runtime-absent. Every case runs
+// `ccrc` ASYNCHRONOUSLY against a `fakeAuthServer` passed as
+// CCRC_CODEX_AUTH_BASE (a synchronous child deadlocks against a server on
+// this event loop), or under the CLOSED_AUTH_BASE default `ghContainedEnv`
+// sets, so no case can reach a live endpoint. Tokens are built at runtime by
+// `syntheticJwt`; none is written here.
+describe.skipIf(!pythonOrSkip())('ccrc codex login — the auth library signs the lane in', () => {
   const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   const RUNTIME_SRC = join(ROOT, 'ccd', 'ccgpt-runtime');
-  // A generation name carries an `XXXX-XXXX`-shaped run (`…000Z-4242`), which is
-  // exactly what `ccd-account-auth` publishes as a device code — case A1 uses it.
-  // It is the builder's `gen-<YYYYmmddTHHMMSSZ>-<pid>` shape, which
-  // `plantFakeRuntime`'s `generationName` requires.
-  const GEN = 'gen-20260923T000000Z-4242';
-  const TOKEN = 'test-token-not-a-secret';
   // The lane's authDir, relative to HOME, as the ROSTER names it: `codexRoster`
   // writes exactly `codexAuthDir(id)`, so this is the roster's value, not an
   // assumption about it.
   const AUTH_REL = codexAuthDir('codex-a');
-  type LoginMode = 'writes' | 'writes-nothing' | 'stamps-then-raises';
-
-  const shq = (s: string): string => {
-    expect(s, 'a fixture path carries a single quote').not.toContain("'");
-    return `'${s}'`;
-  };
+  // A device code in the shape `ccd-account-auth` publishes: the FIRST
+  // `XXXX-XXXX` run it sees, so nothing ccrc prints before the library's lines
+  // may carry one.
+  const USER_CODE = 'QW7R-9KZ2';
   const firstCode = (s: string): string | undefined => /[A-Z0-9]{4}-[A-Z0-9]{4}/.exec(s)?.[0];
-  const recPath = (home: string, name: string): string => join(home, 'login-rec', name);
-  const rec = (home: string, name: string): string => readFileSync(recPath(home, name), 'utf8');
-  const ranRuntime = (home: string): boolean => existsSync(recPath(home, 'argv0'));
+
+  /** A fresh set of tokens the fake exchange answers with. */
+  const issued = (): { access: string; refresh: string; id: string } => {
+    const now = Math.floor(Date.now() / 1000);
+    const claim = { 'https://api.openai.com/auth': { chatgpt_account_id: 'acct-fixture-login' } };
+    return {
+      access: syntheticJwt({ exp: now + 3600, iat: now, ...claim }),
+      refresh: `rtok-fixture-${randomBytes(16).toString('hex')}`,
+      id: syntheticJwt({ exp: now + 3600, iat: now, email: 'lane-a@example.invalid', ...claim }),
+    };
+  };
+  const usercode = (): AuthAnswer => ({ status: 200, body: { device_auth_id: 'dauth-fixture-1', user_code: USER_CODE } });
+  const approved = (): AuthAnswer => ({
+    status: 200, body: { authorization_code: 'acode-fixture-1', code_challenge: 'cchal-fixture-1', code_verifier: 'cver-fixture-1' },
+  });
+  /** A whole sign-in that succeeds at the first poll. */
+  const fullSignin = (t: { access: string; refresh: string; id: string }): AuthScript => ({
+    usercode: [usercode()], deviceToken: [approved()],
+    token: [{ status: 200, body: { access_token: t.access, refresh_token: t.refresh, id_token: t.id } }],
+  });
+  const SIGNIN_PATHS = [AUTH_ROUTES.usercode, AUTH_ROUTES.deviceToken, AUTH_ROUTES.token];
+  const credOf = (home: string): Record<string, unknown> =>
+    JSON.parse(readFileSync(join(home, AUTH_REL, 'auth.json'), 'utf8')) as Record<string, unknown>;
 
   /** A deployed-shaped box: ccrc under <home>/ccrc/ccd (so `$CCRC_HERE/../deploy`
-   *  resolves for `models init`), `deploy`/`shared` linked whole, and the REAL
-   *  `ccgpt-runtime` on both paths a caller might name it by (the placed one
-   *  and ccrc's sibling), with `codexRoster`'s `codex-a` lane. */
+   *  resolves for `models init`), `deploy`/`shared` linked whole, the REAL
+   *  `ccgpt-runtime` placed with no generation built, the auth library placed
+   *  where `_codex_auth_lib` names it (a copy, as `_inst_bins` places it), and
+   *  `codexRoster`'s `codex-a` lane. */
   const loginBox = async (): Promise<string> => {
     const home = mkTmp('ccrc-codex-login-');
     const ccd = join(home, 'ccrc', 'ccd');
@@ -3286,267 +3442,256 @@ describe.skipIf(!pythonOrSkip())('ccrc codex login — the lane\'s own runtime s
     symlinkSync(join(ROOT, 'shared'), join(home, 'ccrc', 'shared'));
     mkdirSync(join(home, '.local', 'bin'), { recursive: true });
     symlinkSync(RUNTIME_SRC, join(home, '.local', 'bin', 'ccgpt-runtime'));
+    fs.copyFileSync(AUTH_LIB, authLib(home));
+    chmodSync(authLib(home), 0o755);
     const [proxyPort, litellmPort] = await freePorts(2);
     codexRoster(home, [{ id: 'codex-a', proxyPort: proxyPort!, litellmPort: litellmPort! }]);
-    mkdirSync(join(home, 'login-rec'), { recursive: true });
     return home;
   };
 
-  /** The OPTIONS `plantFakeRuntime` plants the login runtime from (ruling R28):
-   *  `generationName: GEN` and an interpreter body. The generation, `current`
-   *  and the stamp are the fixture's, in the builder's own bytes, so the real
-   *  `ccgpt-runtime python` finds this runtime and the real `check` accepts it.
-   *  This function writes only what is not a runtime: the stub authenticator
-   *  package, OUTSIDE the runtime tree at `<home>/login-stub`, in `mode`.
-   *  Every call site is `plantFakeRuntime(home, loginRuntime(home, mode))`. */
-  const loginRuntime = (home: string, mode: LoginMode): FakeRuntimeOptions => {
-    const recDir = join(home, 'login-rec');
-    const stub = join(home, 'login-stub');
-    const pkg = join(stub, 'litellm', 'llms', 'chatgpt');
-    mkdirSync(pkg, { recursive: true });
-    // Import time is when real litellm reads the cost-map switch, so it is
-    // recorded at import time here.
-    writeFileSync(join(stub, 'litellm', '__init__.py'), [
-      'import json, os',
-      `with open(os.path.join(${JSON.stringify(recDir)}, "import-env.json"), "w") as f:`,
-      '    json.dump({"LITELLM_LOCAL_MODEL_COST_MAP": os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")}, f)',
-    ].join('\n') + '\n');
-    writeFileSync(join(stub, 'litellm', 'llms', '__init__.py'), '');
-    writeFileSync(join(pkg, '__init__.py'), '');
-    // The two env reads, the makedirs and the two writes the runtime's real
-    // authenticator makes (read from its source, litellm 1.101.0).
-    writeFileSync(join(pkg, 'authenticator.py'), [
-      'import json, os',
-      `REC = ${JSON.stringify(recDir)}`,
-      `MODE = ${JSON.stringify(mode)}`,
-      `TOKEN = ${JSON.stringify(TOKEN)}`,
-      'class Authenticator:',
-      '    def __init__(self):',
-      '        self.token_dir = os.getenv("CHATGPT_TOKEN_DIR", os.path.expanduser("~/.config/litellm/chatgpt"))',
-      '        self.auth_file = os.path.join(self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json"))',
-      '        if not os.path.exists(self.token_dir):',
-      '            os.makedirs(self.token_dir, exist_ok=True)',
-      '    def get_access_token(self):',
-      '        with open(os.path.join(REC, "authenticator.json"), "w") as f:',
-      '            json.dump({"tokenDir": self.token_dir, "authFile": self.auth_file,',
-      '                       "env": sorted(k for k in os.environ',
-      '                                     if k.startswith(("CHATGPT_", "LITELLM_", "OPENAI_")))}, f)',
-      '        print("Sign in with ChatGPT using device code:")',
-      '        print("1) Visit https://orchard-api/device")',
-      '        print("2) Enter code: WXYZ-4321", flush=True)',
-      '        if MODE == "stamps-then-raises":',
-      '            with open(self.auth_file, "w") as f:',
-      '                json.dump({"device_code_requested_at": 1}, f)',
-      '            raise RuntimeError("fixture: the device code was never approved")',
-      '        if MODE == "writes":',
-      '            with open(self.auth_file, "w") as f:',
-      '                json.dump({"access_token": TOKEN}, f)',
-      '        return TOKEN',
-    ].join('\n') + '\n');
-    // THE INTERPRETER BODY (`plantFakeRuntime`'s `python` option), which owns
-    // every arm. `check`'s three `-I -c` reads are answered as the fixture's
-    // default fake answers them: the version itself (the default `version`,
-    // 1.101.0, which the stamp records), and the stamp read and the probe hash
-    // exec'd on the box's real python3. The Authenticator program is recorded,
-    // then run. Isolated mode (-I) ignores PYTHONPATH, so the stub path is
-    // inserted by a wrapper program rather than by the environment. Every other
-    // argv or program exits 90, so a path this fixture never modelled reds.
-    const python = [
-      '#!/bin/sh',
-      'case "$1 $2" in',
-      '  "-I -c") : ;;',
-      '  *) echo "fixture runtime python: unexpected argv: $*" >&2; exit 90 ;;',
-      'esac',
-      'case "$3" in',
-      '  *importlib.metadata*) echo 1.101.0; exit 0 ;;',
-      `  *json.load*|*hashlib*) exec ${shq(PY)} "$@" ;;`,
-      '  *Authenticator*)',
-      `    printf '%s\\n' "$0" >> ${shq(join(recDir, 'argv0'))}`,
-      `    printf '%s\\n' "$#" > ${shq(join(recDir, 'argc'))}`,
-      `    printf '%s' "$3" > ${shq(join(recDir, 'program'))}`,
-      `    exec ${shq(PY)} -I -c 'import sys; sys.dont_write_bytecode = True; sys.path.insert(0, sys.argv[1]); `
-        + 'src = sys.argv[2]; sys.argv = ["-c"]; exec(compile(src, "<string>", "exec"), {"__name__": "__main__"})\' '
-        + `${shq(stub)} "$3" ;;`,
-      'esac',
-      'echo "fixture runtime python: unexpected program: $3" >&2',
-      'exit 90',
-    ].join('\n') + '\n';
-    return { generationName: GEN, python };
-  };
-
-  /** ccrc under `umask 022`, so the mode case measures ccrc's umask rather than
-   *  the runner's; every variable the login scrubs, and every ccrc knob, is
-   *  removed from the developer's environment before a case adds its own. The
-   *  `CCRC_` prefix covers the lane library's two, `CCRC_CODEX_PROBE_S` and
-   *  `CCRC_CODEX_READY_S` (ruling R23): `start`, which A8 runs, is a reader of
-   *  both. */
+  /** ccrc under `umask 022`, so the mode case measures the library's modes
+   *  rather than the runner's; every CHATGPT_, LITELLM_, OPENAI_ and CCRC_
+   *  variable is removed from the developer's environment before
+   *  `ghContainedEnv` (which sets CCRC_CODEX_AUTH_BASE to CLOSED_AUTH_BASE)
+   *  and a case's own `extra` are added. Spawned, never spawnSync'd; killed
+   *  past 15 s, inside vitest's own bound. */
   const runCcrc = (home: string, args: string[], extra: NodeJS.ProcessEnv = {}):
-    { code: number; stdout: string; stderr: string } => {
+    Promise<{ code: number; stdout: string; stderr: string }> => {
     const base: NodeJS.ProcessEnv = { ...process.env, HOME: home };
     for (const k of Object.keys(base)) {
       if (/^(CHATGPT_|LITELLM_|OPENAI_|CCRC_)/.test(k)) delete base[k];
     }
-    const r = spawnSync('bash', ['-c', 'umask 022 && exec "$BASH" "$0" "$@"',
-      join(home, 'ccrc', 'ccd', 'ccrc'), ...args], {
-      encoding: 'utf8', cwd: home, timeout: 120_000,
-      env: { ...ghContainedEnv(home, base, { systemd: true, tmux: true }), ...extra },
+    const e = { ...ghContainedEnv(home, base, { systemd: true, tmux: true }), ...extra };
+    expect(e['CCRC_CODEX_AUTH_BASE'], 'a login case with no loopback endpoint').toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    return new Promise((resolve, reject) => {
+      const c = spawn('bash', ['-c', 'umask 022 && exec "$BASH" "$0" "$@"', join(home, 'ccrc', 'ccd', 'ccrc'), ...args],
+        { cwd: home, env: e, stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '';
+      let err = '';
+      const timer = setTimeout(() => c.kill('SIGKILL'), 15_000);
+      c.stdout.on('data', (x: Buffer) => { out += x.toString(); });
+      c.stderr.on('data', (x: Buffer) => { err += x.toString(); });
+      c.once('error', (x) => { clearTimeout(timer); reject(x); });
+      c.once('close', (code) => { clearTimeout(timer); resolve({ code: code ?? -1, stdout: out, stderr: err }); });
     });
-    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   };
 
-  it('A1: runs the RESOLVED runtime\'s Authenticator over the roster\'s authDir, scrubbed, cost map local', async () => {
+  it("A1: signs in through the library over the roster's authDir, against the fake endpoint, with no runtime", async () => {
     const home = await loginBox();
-    const rt = plantFakeRuntime(home, loginRuntime(home, 'writes'));
     const auth = join(home, AUTH_REL);
-    const r = runCcrc(home, ['codex', 'login', 'codex-a'], {
-      // Three ambient variables the runtime reads or could, one per prefix. The
-      // second is the dangerous one: the real authenticator os.path.join()s it
-      // onto the token dir, so an absolute value moves the credential out.
-      CHATGPT_TOKEN_DIR: join(home, 'ambient-token-dir'),
-      CHATGPT_AUTH_FILE: join(home, 'ambient', 'elsewhere.json'),
-      OPENAI_API_KEY: 'ambient-not-a-secret',
-      LITELLM_LOG: 'DEBUG',
-    });
-    expect(r.code, r.stderr).toBe(0);
-    // The interpreter is the generation `ccgpt-runtime python` RESOLVED, never
-    // one reached through `current` (D-3480: sys.prefix would follow it).
-    // `rt.python` is `<gen>/bin/python` under this HOME, the spelling the
-    // builder prints.
-    expect(rec(home, 'argv0').trim().split('\n')).toEqual([rt.python]);
-    expect(rec(home, 'argc').trim()).toBe('3');
-    const program = rec(home, 'program');
-    expect(program).toContain('from litellm.llms.chatgpt.authenticator import Authenticator');
-    expect(program).toContain('Authenticator().get_access_token()');
-    const a = JSON.parse(rec(home, 'authenticator.json')) as
-      { tokenDir: string; authFile: string; env: string[] };
-    expect(a.tokenDir).toBe(auth);
-    expect(a.authFile).toBe(join(auth, 'auth.json'));
-    expect(a.env).toEqual(['CHATGPT_TOKEN_DIR', 'LITELLM_LOCAL_MODEL_COST_MAP']);
-    expect(JSON.parse(rec(home, 'import-env.json'))).toEqual({ LITELLM_LOCAL_MODEL_COST_MAP: 'True' });
-    expect(existsSync(join(auth, 'auth.json'))).toBe(true);
-    for (const p of ['ambient-token-dir', 'ambient']) {
-      expect(existsSync(join(home, p)), `${p} was written — an ambient variable reached the runtime`).toBe(false);
+    const t = issued();
+    const srv = await fakeAuthServer(fullSignin(t));
+    try {
+      const r = await runCcrc(home, ['codex', 'login', 'codex-a'], {
+        CCRC_CODEX_AUTH_BASE: srv.base,
+        // Ambient variables LiteLLM's authenticator read: the library reads none
+        // of them, so none moves the credential out of the roster's authDir.
+        CHATGPT_TOKEN_DIR: join(home, 'ambient-token-dir'),
+        CHATGPT_AUTH_FILE: join(home, 'ambient', 'elsewhere.json'),
+        OPENAI_API_KEY: 'ambient-not-a-secret',
+        LITELLM_LOG: 'DEBUG',
+      });
+      expect(r.code, r.stderr).toBe(0);
+      expect(srv.requests.map((q) => q.path)).toEqual(SIGNIN_PATHS);
+      expect(credOf(home)).toMatchObject({ access_token: t.access, refresh_token: t.refresh, id_token: t.id });
+      expect(existsSync(join(auth, 'auth.status.json')), 'the sign-in wrote no status').toBe(true);
+      expect(existsSync(join(home, '.ccrc', 'runtime', 'codex', 'current')), 'a runtime was built').toBe(false);
+      for (const p of ['ambient-token-dir', 'ambient']) {
+        expect(existsSync(join(home, p)), `${p} was written — an ambient variable steered the sign-in`).toBe(false);
+      }
+      // The device lines reach the operator, and NOTHING ccrc printed before
+      // them is shaped like a device code.
+      expect(r.stdout).toContain(`2) Enter code: ${USER_CODE}`);
+      expect(firstCode(r.stdout), 'ccrc printed a device-code-shaped run before the library did').toBe(USER_CODE);
+      expect(r.stdout).toMatch(/^ccgpt-auth: codex-a: signed-in\nccrc codex: codex-a: logged in/m);
+      for (const s of [t.access, t.refresh, t.id]) expect(r.stdout + r.stderr, 'a token was printed').not.toContain(s);
+      // Again: the credential is present, so the library answers already-signed-in with no request.
+      const again = await runCcrc(home, ['codex', 'login', 'codex-a'], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(again.code, again.stderr).toBe(0);
+      expect(srv.requests).toHaveLength(SIGNIN_PATHS.length);
+      expect(again.stdout).toMatch(
+        /^ccgpt-auth: codex-a: already-signed-in: .*records needs-signin; run this again then\nccrc codex: codex-a: logged in/m);
+    } finally {
+      await srv.close();
     }
-    // The device flow reaches the operator, and NOTHING ccrc printed before it
-    // is shaped like a device code — `ccd-account-auth` publishes the FIRST one.
-    expect(r.stdout).toContain('1) Visit https://orchard-api/device');
-    expect(firstCode(r.stdout), 'ccrc printed a device-code-shaped run before the runtime did').toBe('WXYZ-4321');
-    expect(r.stdout).toMatch(/^ccrc codex: codex-a: logged in/m);
-    // get_access_token() RETURNS the access token: it is discarded, never shown.
-    expect(r.stdout + r.stderr).not.toContain(TOKEN);
   });
 
-  it('A2: login-failed when the runtime exits 0 but leaves no auth.json', async () => {
+  it("A2: login-failed when the library's sign-in fails, and nothing is written", async () => {
     const home = await loginBox();
-    plantFakeRuntime(home, loginRuntime(home, 'writes-nothing'));
-    const r = runCcrc(home, ['codex', 'login', 'codex-a']);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc codex: login-failed: .*no auth\.json/m);
-    expect(r.stderr).toContain('ccrc codex login codex-a');
-    expect(existsSync(join(home, AUTH_REL, 'auth.json'))).toBe(false);
-    expect(r.stdout).not.toMatch(/logged in/);
+    const t = issued();
+    const srv = await fakeAuthServer({ ...fullSignin(t), token: [{ status: 400, body: { error: 'invalid_grant' } }] });
+    try {
+      const r = await runCcrc(home, ['codex', 'login', 'codex-a'], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.code).toBe(1);
+      expect(srv.requests.map((q) => q.path)).toEqual(SIGNIN_PATHS);
+      // The library's own line, then ccrc's, which names the library's word.
+      expect(r.stderr).toMatch(/^ccgpt-auth: login-failed: the token exchange was refused/m);
+      expect(r.stderr.trimEnd().split('\n').at(-1)).toMatch(
+        /^ccrc codex: login-failed: .*\(login-failed\).*Retry with: ccrc codex login codex-a$/);
+      expect(existsSync(join(home, AUTH_REL)), 'a failed sign-in wrote into the authDir').toBe(false);
+      expect(r.stdout).not.toMatch(/logged in/);
+    } finally {
+      await srv.close();
+    }
+    // Another family's file: the library refuses before any request, and ccrc names its word.
+    const foreign = await loginBox();
+    mkdirSync(join(foreign, AUTH_REL), { recursive: true });
+    const cred = join(foreign, AUTH_REL, 'auth.json');
+    writeFileSync(cred, JSON.stringify({ OPENAI_API_KEY: 'fixture-key-not-a-secret', tokens: null }), { mode: 0o600 });
+    const bytes = readFileSync(cred, 'utf8');
+    const none = await fakeAuthServer(fullSignin(t));
+    try {
+      const r = await runCcrc(foreign, ['codex', 'login', 'codex-a'], { CCRC_CODEX_AUTH_BASE: none.base });
+      expect(r.code).toBe(1);
+      expect(none.requests).toEqual([]);
+      expect(r.stderr).toMatch(/^ccrc codex: login-failed: .*\(foreign-family\)/m);
+      expect(readFileSync(cred, 'utf8')).toBe(bytes);
+    } finally {
+      await none.close();
+    }
   });
 
-  it('A3: login-failed when the runtime fails AFTER stamping auth.json — existence alone is not a login', async () => {
-    // The real authenticator writes {"device_code_requested_at": …} into
-    // auth.json BEFORE it polls, so an abandoned device flow leaves the file.
+  it('A3: an abandoned LiteLLM marker (incomplete) is signed in again', async () => {
+    // LiteLLM's device flow wrote {"device_code_requested_at": …} into auth.json
+    // BEFORE it polled, so an abandoned one left a credential with no token.
     const home = await loginBox();
-    plantFakeRuntime(home, loginRuntime(home, 'stamps-then-raises'));
-    const r = runCcrc(home, ['codex', 'login', 'codex-a']);
-    expect(existsSync(join(home, AUTH_REL, 'auth.json')),
-      'the fixture did not stamp auth.json — this case would measure nothing').toBe(true);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc codex: login-failed: .*exited 1/m);
-    expect(r.stdout).not.toMatch(/logged in/);
+    mkdirSync(join(home, AUTH_REL), { recursive: true });
+    writeFileSync(join(home, AUTH_REL, 'auth.json'),
+      JSON.stringify({ device_code_requested_at: Math.floor(Date.now() / 1000) - 60 }), { mode: 0o600 });
+    const t = issued();
+    const srv = await fakeAuthServer(fullSignin(t));
+    try {
+      const r = await runCcrc(home, ['codex', 'login', 'codex-a'], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.code, r.stderr).toBe(0);
+      expect(srv.requests.map((q) => q.path)).toEqual(SIGNIN_PATHS);
+      expect(r.stdout).toMatch(/^ccgpt-auth: codex-a: signed-in$/m);
+      const cred = credOf(home);
+      expect(cred).toMatchObject({ access_token: t.access, refresh_token: t.refresh });
+      expect(Object.keys(cred), 'the marker survived the sign-in').not.toContain('device_code_requested_at');
+    } finally {
+      await srv.close();
+    }
   });
 
   it('A4: a NEW authDir and its auth.json are owner-only; an ADOPTED authDir keeps its mode', async () => {
     const home = await loginBox();
-    plantFakeRuntime(home, loginRuntime(home, 'writes'));
     const auth = join(home, AUTH_REL);
-    expect(runCcrc(home, ['codex', 'login', 'codex-a']).code).toBe(0);
+    const srv = await fakeAuthServer(fullSignin(issued()));
+    try {
+      const r = await runCcrc(home, ['codex', 'login', 'codex-a'], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.code, r.stderr).toBe(0);
+    } finally {
+      await srv.close();
+    }
     expect(statSync(auth).mode & 0o777).toBe(0o700);
     expect(statSync(join(auth, 'auth.json')).mode & 0o777).toBe(0o600);
 
-    // Adoption is by path (spec §9.2): ccrc passes a directory it did not make
-    // and never re-modes it.
+    // Adoption is by path (spec §9.2): the library signs into a directory it
+    // did not make and never re-modes it.
     const adopted = await loginBox();
-    plantFakeRuntime(adopted, loginRuntime(adopted, 'writes'));
     const dir = join(adopted, AUTH_REL);
     mkdirSync(dir, { recursive: true });
     chmodSync(dir, 0o755);
-    expect(runCcrc(adopted, ['codex', 'login', 'codex-a']).code).toBe(0);
+    const srv2 = await fakeAuthServer(fullSignin(issued()));
+    try {
+      const r = await runCcrc(adopted, ['codex', 'login', 'codex-a'], { CCRC_CODEX_AUTH_BASE: srv2.base });
+      expect(r.code, r.stderr).toBe(0);
+    } finally {
+      await srv2.close();
+    }
     expect(statSync(dir).mode & 0o777, 'login re-moded an adopted authDir').toBe(0o755);
+    expect(statSync(join(dir, 'auth.json')).mode & 0o777).toBe(0o600);
   });
 
-  it('A5: runtime-absent, naming the build, when no runtime has been built — and nothing is created', async () => {
+  it('A5: no library: auth-library-absent, nothing created', async () => {
     const home = await loginBox();
-    const r = runCcrc(home, ['codex', 'login', 'codex-a']);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc codex: runtime-absent: /m);
-    expect(r.stderr).toContain('ccgpt-runtime build');
-    expect(existsSync(join(home, AUTH_REL))).toBe(false);
+    fs.rmSync(authLib(home));
+    const srv = await fakeAuthServer(fullSignin(issued()));
+    try {
+      const r = await runCcrc(home, ['codex', 'login', 'codex-a'], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/^ccrc codex: auth-library-absent: .*'ccrc update'/m);
+      expect(r.stderr).not.toMatch(/runtime-absent|login-failed/);
+      expect(srv.requests).toEqual([]);
+      expect(existsSync(join(home, AUTH_REL))).toBe(false);
+      expect(r.stdout).not.toMatch(/logged in/);
+    } finally {
+      await srv.close();
+    }
   });
 
-  it('A6: a lane that is not codex-kind is refused before the runtime runs', async () => {
+  it('A6: a lane that is not codex-kind is refused before the library runs', async () => {
     const home = await loginBox();
-    plantFakeRuntime(home, loginRuntime(home, 'writes'));
-    const r = runCcrc(home, ['codex', 'login', 'claude']);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc codex: not-codex: /m);
-    expect(ranRuntime(home), 'the runtime ran for a lane that is not codex').toBe(false);
+    const srv = await fakeAuthServer(fullSignin(issued()));
+    try {
+      const r = await runCcrc(home, ['codex', 'login', 'claude'], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/^ccrc codex: not-codex: /m);
+      expect(srv.requests, 'the library signed in a lane that is not codex').toEqual([]);
+    } finally {
+      await srv.close();
+    }
   });
 
   it('A7: login is behind the same role gate as the rest of ccrc codex', async () => {
     const home = await loginBox();
-    plantFakeRuntime(home, loginRuntime(home, 'writes'));
     writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\n');
-    const r = runCcrc(home, ['codex', 'login', 'codex-a']);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc codex: server-role: /m);
-    expect(ranRuntime(home)).toBe(false);
+    const srv = await fakeAuthServer(fullSignin(issued()));
+    try {
+      const r = await runCcrc(home, ['codex', 'login', 'codex-a'], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/^ccrc codex: server-role: /m);
+      expect(srv.requests).toEqual([]);
+      expect(existsSync(join(home, AUTH_REL))).toBe(false);
+    } finally {
+      await srv.close();
+    }
   });
 
   it('A8: what login writes is exactly what start\'s not-logged-in gate reads', async () => {
     const home = await loginBox();
-    plantFakeRuntime(home, loginRuntime(home, 'writes'));
-    expect(runCcrc(home, ['models', 'codex-a', 'init', 'codex']).code).toBe(0);
-    const current = join(home, '.ccrc', 'runtime', 'codex', 'current');
-    const hide = (): void => renameSync(current, `${current}.hidden`);
-    const show = (): void => renameSync(`${current}.hidden`, current);
-    // BEFORE: the runtime is hidden too, so a start that checked the runtime
-    // before auth would answer runtime-absent here — this half pins the order.
-    hide();
-    const before = runCcrc(home, ['codex', 'start', 'codex-a']);
+    expect((await runCcrc(home, ['models', 'codex-a', 'init', 'codex'])).code).toBe(0);
+    // BEFORE: no runtime is built in this box either, so a start that checked
+    // the runtime before the credential would answer runtime-absent here — this
+    // half pins the order. Start runs under the CLOSED_AUTH_BASE default.
+    const before = await runCcrc(home, ['codex', 'start', 'codex-a']);
     expect(before.code).toBe(1);
     expect(before.stderr).toMatch(/^ccrc codex: not-logged-in: /m);
     expect(before.stderr).toContain('ccrc codex login codex-a');
-    show();
-    expect(runCcrc(home, ['codex', 'login', 'codex-a']).code).toBe(0);
-    // AFTER: the auth gate passes on what login left, and start stops at the
-    // next gate — before any tier function, so no process is started.
-    hide();
-    const after = runCcrc(home, ['codex', 'start', 'codex-a']);
+    const srv = await fakeAuthServer(fullSignin(issued()));
+    try {
+      expect((await runCcrc(home, ['codex', 'login', 'codex-a'], { CCRC_CODEX_AUTH_BASE: srv.base })).code).toBe(0);
+    } finally {
+      await srv.close();
+    }
+    // AFTER: the credential gate passes on what login left, and start stops at
+    // the next gate — before any tier function, so no process is started.
+    const after = await runCcrc(home, ['codex', 'start', 'codex-a']);
     expect(after.code).toBe(1);
-    expect(after.stderr, 'start calls a lane login just signed in "not logged in"').not.toMatch(/not-logged-in/);
+    expect(after.stderr, 'start refused a lane login just signed in')
+      .not.toMatch(/not-logged-in|needs-signin|credential-unusable/);
     expect(after.stderr).toMatch(/^ccrc codex: runtime-absent: /m);
   });
 
   it('A9: takes exactly one well-formed lane id, and a usage refusal exits 2', async () => {
     const home = await loginBox();
-    plantFakeRuntime(home, loginRuntime(home, 'writes'));
-    // Exit 2, not 1: `ccrc codex` exits 2 on a usage refusal (ruling R3, the
-    // `ccd/ccrc` header's rule). The first two rows are the ARITY, which is
-    // `cmd_codex`'s parse (Task 5, ruling R18): `_codex_login` checks none, so
-    // these rows pin that login rides that parse. The third is a malformed id,
-    // which `_codex_row` answers as usage at rc 2 (Task 4), and which login
-    // must pass on as it came.
-    for (const argv of [['codex', 'login'], ['codex', 'login', 'codex-a', 'extra'],
-      ['codex', 'login', 'NOT_AN_ID']]) {
-      const r = runCcrc(home, argv);
-      expect(r.code, argv.join(' ')).toBe(2);
-      expect(r.stderr).toMatch(/^ccrc codex: usage: /m);
+    const srv = await fakeAuthServer(fullSignin(issued()));
+    try {
+      // Exit 2, not 1: `ccrc codex` exits 2 on a usage refusal (ruling R3, the
+      // `ccd/ccrc` header's rule). The first two rows are the ARITY, which is
+      // `cmd_codex`'s parse (Task 5, ruling R18): `_codex_login` checks none, so
+      // these rows pin that login rides that parse. The third is a malformed id,
+      // which `_codex_row` answers as usage at rc 2 (Task 4), and which login
+      // must pass on as it came.
+      for (const argv of [['codex', 'login'], ['codex', 'login', 'codex-a', 'extra'],
+        ['codex', 'login', 'NOT_AN_ID']]) {
+        const r = await runCcrc(home, argv, { CCRC_CODEX_AUTH_BASE: srv.base });
+        expect(r.code, argv.join(' ')).toBe(2);
+        expect(r.stderr).toMatch(/^ccrc codex: usage: /m);
+      }
+      expect(srv.requests).toEqual([]);
+    } finally {
+      await srv.close();
     }
-    expect(ranRuntime(home)).toBe(false);
   });
 });
