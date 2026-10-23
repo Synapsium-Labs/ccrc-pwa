@@ -214,6 +214,17 @@ _ws_gc_scan	C4
 _ws_gc_merged	C4
 _ws_gc_reclaimable	C4
 _ws_gc_prune_row	C4
+_ws_orphan_hex	C4
+_ws_orphan_unhex	C4
+_ws_orphan_stanzas	C4
+_ws_orphan_class	C4
+_ws_orphan_rung	C4
+_ws_orphan_refuse	C4
+_ws_orphan_registered	C4
+_ws_orphan_tail	C4
+_ws_orphan_ladder	C4
+_ws_orphan_census	C4
+_ws_orphan_audit	C4
 cmd_ws_gc	C4
 _cfg_dir	C1
 _ci_unread_put_off	C3
