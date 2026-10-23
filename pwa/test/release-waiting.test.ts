@@ -286,4 +286,11 @@ describe('shownRelease — the dismissal as a high-water mark (D-6327, part b)',
     expect(shownRelease(none, 'v0.0.1')).toBeNull();
     expect(shownRelease(view({ catalogue: { lastOkAt: null, lastError: null } }), null)).toBeNull();
   });
+
+  it('a dismissed value that is not a release tag never hides the line, and never throws', () => {
+    // compareReleaseTags would throw a RangeError on a value that is no release tag; the guard answers first.
+    expect(() => shownRelease(view(), 'latest')).not.toThrow();
+    expect(shownRelease(view(), 'latest')).toEqual(bannerRelease(view()));
+    expect(shownRelease(view(), 'latest')).toEqual({ tag: 'v0.0.9', channel: 'stable' });
+  });
 });

@@ -177,11 +177,15 @@ describe('UpdateIndicator (D-6327)', () => {
     expect(el.previousElementSibling?.matches('.accounts-strip, .accounts-compact'), 'after the accounts strip').toBe(true);
     expect(el).toHaveAttribute('data-form', 'row');
     cleanup();
-    // Instrument on a phone: in the fleet column, where the banner sat (directly after the banner stack's slots).
+    // Instrument on a phone: in the fleet column, after the banner stack's slots (asserted below).
     el = await mount(INSTRUMENT, 899);
     expect(el.closest('section[aria-label="Fleet"]'), 'Instrument 899: in the fleet column').not.toBeNull();
     expect(el.closest('header.shell-accounts, footer.shell-status'), 'and in neither bar').toBeNull();
     expect(el).toHaveAttribute('data-form', 'row');
+    const column = el.closest('section[aria-label="Fleet"]')!;
+    for (const banner of column.querySelectorAll('.banner-slot')) {
+      expect(banner.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING, 'Instrument 899: after every banner slot').toBeTruthy();
+    }
   });
 
   it('nothing renders when no release waits, and nothing before the first updates answer', async () => {
@@ -292,7 +296,7 @@ describe('UpdateIndicator — dismissed until a newer release (D-6327, part b)',
       await until(() => expect(indicators(), `${at}: hidden`).toHaveLength(0));
       expect(screen.queryByRole('button', { name: NAME }), at).toBeNull();
       expect(screen.queryByRole('button', { name: DISMISS }), at).toBeNull();
-      expect(document.body.textContent, `${at}: no stale words, nothing of the line`).not.toContain(WORDS);
+      expect(document.body.textContent, `${at}: nothing of the line is left on the page`).not.toContain(WORDS);
       expect(readDismissed()).toBe('v0.0.9');
       cleanup();
     }
