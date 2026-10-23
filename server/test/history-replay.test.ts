@@ -10746,6 +10746,50 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect([f.state, f.missing, f.extra]).toEqual(['pairs-differ', [`pilot-0 ${PILOT_FAMILY.generation}`], [`a-t1 ${A_T1.generation}`, `a-t2 ${A_T2.generation}`]]);
     });
 
+    // F1 (fix round 1): a marker holding an invalid UTF-8 byte. readBounded decodes with U+FFFD (D-5768), which
+    // formatHeadlessList's text never holds, so the marker is malformed: never ok, never bytes-differ, and unlisted.
+    r7it.each([['quiz', QUIZ_A, [A_T1, A_T2]], ['pilot', PILOT_A, [PILOT_FAMILY]]] as Array<[string, string, Ref[]]>)(
+      'verify --section %s reads a marker holding an invalid UTF-8 byte as malformed, never ok or bytes-differ, and requireListed refuses it family-unlisted (W2-D84, D-5768; F1)', (section, text, fams) => {
+        const home = home7(STORE_A);
+        const c = chain7(home);
+        const bytes = (...parts: Array<string | number[]>): Buffer => Buffer.concat(parts.map((p) => (typeof p === 'string' ? Buffer.from(p, 'utf8') : Buffer.from(p))));
+        const put = (b: Buffer): void => { r7fs.mkdirSync(r7path.dirname(markerPath(home)), { recursive: true }); r7fs.writeFileSync(markerPath(home), b, { mode: 0o600 }); };
+        const stateOf = (): Found & { ok: boolean } => { const r = run7(null, home, verifyArgv(c, section)); r7expect(r.code, r.stderr).toBe(0); return { ...found(r), ok: JSON.parse(r.stdout).ok }; };
+        const listed = (): Refusal => refusalOf(() => r7drv.requireListed(home, STORE_A, fams));
+        // CONTROL: the same text as bytes, no invalid byte, reads ok and lists every pair.
+        put(bytes(text));
+        r7expect([stateOf().state, stateOf().ok, listed()], 'CONTROL').toEqual(['ok', true, null]);
+        const [a, b] = text.split('\n');   // the store line and the first pair line
+        const rest = text.slice(a!.length + 1 + b!.length + 1);
+        for (const [where, planted] of [
+          ['in a comment line', bytes('# ', [0xff], '\n', text)],
+          ['in a pair line', bytes(a!, '\n', b!.slice(0, 2), [0xff], b!.slice(2), '\n', rest)],
+          ['as a lone continuation byte after the last newline', bytes(text, [0x80])],
+        ] as Array<[string, Buffer]>) {
+          put(planted);
+          const f = stateOf();
+          r7expect([f.state, f.ok], where).toEqual(['malformed', false]);
+          r7expect(f.sha256, `${where}: the sha256 of the text as read`).not.toBeNull();
+          r7expect(listed(), where).toEqual({ word: 'family-unlisted', detail: 'headless-on malformed' });
+        }
+      });
+
+    // F2 (fix round 1): verify --section pilot reads part 1 only; a final is refused as marker --section pilot refuses it.
+    r7it('verify --section pilot with a FINAL record is record-invalid, as marker --section pilot is, and nothing is written or spawned; CONTROL: the draft is admitted (W2-D84; F2)', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      plant(home, { text: PILOT_A });
+      const before = snapshot7(home);
+      const want = refusalLine('record-invalid', 'record part "final", wanted draft');
+      const viaFinal = run7(null, home, ['verify', '--section', 'pilot', ...inp('record', c.f)]);
+      r7expect([viaFinal.code, viaFinal.stdout, viaFinal.stderr]).toEqual([2, '', want]);
+      r7expect(run7(null, home, ['marker', '--section', 'pilot', ...inp('record', c.f), '--node-label', 'node-a']).stderr, 'the same refusal marker gives').toBe(want);
+      r7expect(snapshot7(home), 'nothing written').toEqual(before);
+      r7expect(stubLog(home), 'nothing spawned').toBeNull();
+      const ok = run7(null, home, verifyArgv(c, 'pilot'));
+      r7expect([ok.code, found(ok).state], 'CONTROL: the draft is admitted').toEqual([0, 'ok']);
+    });
+
     r7it('marker and verify refuse, each with its word: no section or an unknown one, a flag the form never reads, no label or two, a label the record does not name, the wrong part, a node holding no family of the section, a store the record does not name', () => {
       const home = home7(STORE_A);
       const c = chain7(home);
