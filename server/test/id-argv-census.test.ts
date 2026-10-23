@@ -52,6 +52,7 @@ const ID_BUILDERS = {
   wsArchive: 'id', wsRestore: 'id', wsAudit: 'id', wsReap: 'id',
   wsReclaimAudit: 'id', wsReclaim: 'id', wsExpireAudit: 'id', wsExpire: 'id',
   wsCollectAudit: 'id', wsCollect: 'id', wsAttic: 'id',
+  wsCollectCensus: 'no-id', wsCollectLooseAudit: 'no-id', wsCollectLoose: 'no-id',   // a loose entry's name travels as hex, never as an id (D-6626)
   wsHold: 'id', wsRelease: 'id', wsRename: 'id', wsTitle: 'id',
   coordPause: 'no-id', reclaimPause: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',

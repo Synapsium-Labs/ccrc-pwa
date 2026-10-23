@@ -166,7 +166,9 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', true,
       { surface: 'agent', actor: 'run:7 reclaim sweep', reason: null })])).toBe(true);
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsReclaimAudit('demo-quiet-basin', true)])).toBe(true);
-    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-audit'), 'no second audit grant').toEqual([['ws-audit', '--session']]);
+    // The only other `ws-audit` grants are the loose collect's two read-only modes (D-6626), by name; neither takes the reclaim audit's place.
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-audit' && p[1] !== '--collect-census' && p[1] !== '--loose-hex'),
+      'no second audit grant').toEqual([['ws-audit', '--session']]);
     expect(UNGRANTABLE_VERBS, 'ws-reclaim has a lawful grantable form; it is not ungrantable').not.toContain('ws-reclaim');
   });
 
@@ -499,6 +501,9 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsExpire: ['ws-expire', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-dune', '--surface', 'agent', '--actor', 'expiry sweep'],
     wsCollectAudit: ['ws-audit', '--session', 'demo-quiet-dune', '--collect'],
     wsCollect: ['ws-collect', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-dune', '--surface', 'agent', '--actor', 'collect sweep'],
+    wsCollectCensus: ['ws-audit', '--collect-census'],
+    wsCollectLooseAudit: ['ws-audit', '--loose-hex', '2d7266', '--collect'],
+    wsCollectLoose: ['ws-collect', '--expect', 'a'.repeat(64), '--loose-hex', '2d7266', '--surface', 'agent', '--actor', 'collect sweep'],
     wsAttic: ['ws-attic', '--session', 'demo-quiet-basin'],
     wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:prog-j wave:1/4',
              '--surface', 'pwa', '--actor', 'device:iPhone'],

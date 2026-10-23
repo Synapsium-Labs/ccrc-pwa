@@ -84,6 +84,12 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // `whitelist-subset.test.ts`'s layer 2 proves the FLAGGED shape crosses its own grant.
   wsCollectAudit: ['demo-quiet-dune'],
   wsCollect: ['a'.repeat(64), 'demo-quiet-dune', { surface: 'agent', actor: 'collect sweep', reason: null }],
+  // THE COLLECTOR'S LOOSE ARM (D-6626): the census rides `['ws-audit','--collect-census']`, the audit
+  // `['ws-audit','--loose-hex']`, and the verb the collector's own `['ws-collect','--expect']`; the verb's sample carries a
+  // dec so layer 2 proves the FLAGGED shape crosses with no third prefix.
+  wsCollectCensus: [],
+  wsCollectLooseAudit: ['2d7266'],
+  wsCollectLoose: ['a'.repeat(64), '2d7266', { surface: 'agent', actor: 'collect sweep', reason: null }],
   wsAttic: ['demo-quiet-basin'],
   // The one sample that carries a dec, so `whitelist-subset.test.ts`'s layer 2's `isExecAllowed` check
   // actually proves the FLAGGED shape is reachable under the granted
