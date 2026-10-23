@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CHILD_ID, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
 import { EXP_ID, expireAudit, expireToken, expireVerb, makeArchived } from './wsExpireFixture.js';
@@ -117,6 +118,43 @@ describe('with the marker a nested repository is rescued, then the tree goes', (
     expect(doc(r)['failed']).toBe('nested-rescue-too-large');
     intact(c, n.dir);
     expect(h.git(c.main, 'for-each-ref', `${base(CHILD_ID)}/`), 'the refs of a refused rescue are removed').toBe('');
+  }, 120_000);
+
+  it('the bound holds on EVERY attempt: a 3 MiB blob over a 1 MiB bound is refused twice and the tree stays', () => {
+    const c = makeChild(h);
+    const n = plantNested(c.wt);
+    fs.writeFileSync(path.join(n.dir, 'big.bin'), randomBytes(3 * 1024 * 1024));
+    h.git(n.dir, 'add', 'big.bin'); h.git(n.dir, 'commit', '-q', '-m', 'big');
+    arm();
+    for (const attempt of [1, 2]) {
+      const r = childReclaimVerb(h, evalOf(h).token, { pre: 'WS_NESTED_RESCUE_MAX_MB=1;' });
+      expect(doc(r)['failed'], `attempt ${attempt}: ${r.stdout + r.stderr}`).toBe('nested-rescue-too-large');
+      intact(c, n.dir);
+      expect(h.git(c.main, 'for-each-ref', `${base(CHILD_ID)}/`)).toBe('');
+    }
+  }, 180_000);
+
+  it('a secret-shaped untracked file in the nested repository is declared in the audit\'s sensitive field', () => {
+    const c = makeChild(h);
+    const n = plantNested(c.wt);
+    fs.writeFileSync(path.join(n.dir, '.env'), 'TOKEN=x\n');
+    arm();
+    expect(evalOf(h).verdict).toBe('reclaimable');
+    const audit = JSON.parse(h.sh(`${CHILD_STUBS} cmd_ws_audit --session ${CHILD_ID} --reclaim`)) as { sensitive: string[] };
+    expect(audit.sensitive).toContain(`${REL}/.env`);
+  }, 120_000);
+
+  it('a nested repository with no commit yet stays containment-unproven under the marker (no token to retry forever)', () => {
+    const c = makeChild(h);
+    const dir = path.join(c.wt, REL);
+    fs.mkdirSync(dir, { recursive: true });
+    h.git(dir, 'init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(dir, 'scratch.txt'), 'never committed\n');
+    arm();
+    expect(evalOf(h).verdict).toBe('containment-unproven');
+    const scratch = h.run(`cmd_scratch_rescue --session ${CHILD_ID} "${dir}"`);
+    expect(scratch.code).toBe(1);
+    expect((JSON.parse(scratch.stdout) as { failed: string }).failed).toBe('nested-rescue-failed');
   }, 120_000);
 
   it('a fetch that fails: nested-rescue-failed, nothing removed', () => {

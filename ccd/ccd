@@ -31603,6 +31603,17 @@ _ws_reclaim_foreign_clean() {   # path -> 0 when the checkout of ANOTHER reposit
 # attic, and re-proves each landed. Without the marker rung 9 is unchanged and only names what it would rescue.
 WS_NESTED_RESCUE_MAX_MB=512   # bytes the rescue may add to the project's store; the kill rule raises it, nothing lowers it
 _ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }
+# Rescuable = the marker AND a HEAD that resolves: `_ws_wip_commit` needs HEAD^{tree}, so an unborn repository (only untracked
+# files) can never be pinned, and a token over it would only buy a retry loop. It stays containment-unproven, as without the marker.
+_ws_nested_rescuable() { _ws_nested_rescue_live && git -C "$1" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1; }
+_ws_nested_secrets() {   # nested rel -> its secret-shaped untracked paths join REAP_SENSITIVE and RECLAIM_SECRETS (the pin drops them)
+  local e p skip
+  while IFS= read -r -d '' e; do
+    case "$e" in '?? '*) p="${e#?? }" ;; [RC]*) IFS= read -r -d '' skip || :; continue ;; *) continue ;; esac
+    _ws_reclaim_secret_path "$p" && { REAP_SENSITIVE+=("$2/$p"); RECLAIM_SECRETS+=("$2/$p"); }
+  done < <(git -C "$1" -c core.quotePath=false status --porcelain=v1 -z --untracked-files=all 2>/dev/null)
+  return 0
+}
 _ws_hex() { printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n'; }
 _ws_lines_json() {   # lines -> a JSON array of strings
   local out="[" first=1 l; while IFS= read -r l; do [[ -n "$l" ]] || continue; (( first )) || out+=","; first=0; out+="$(_json_str "$l")"; done <<< "$1"; printf '%s]' "$out"
@@ -31622,11 +31633,13 @@ _ws_store_kb() { git -C "$1" count-objects -v 2>/dev/null | awk -F': ' '$1 == "s
 _ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_RESCUE_ENTRY (one JSON object); 1 with
   #                         RECLAIM_PIN_WORD (nested-rescue-too-large | nested-rescue-failed) and RECLAIM_PIN_WHY.
   # Run under `_ws_reclaim_contained`. Moves no ref in the nested repository; adds refs only under `$base`.
-  local main="$1" n="$2" base="$3" id="$4" childof="$5" prefix="$6" wip b a ref want got specs=() errf orph tips
+  local main="$1" n="$2" base="$3" id="$4" childof="$5" prefix="$6" wip b a q ref want got specs=() errf orph tips
   RECLAIM_PIN_WORD=nested-rescue-failed; RECLAIM_RESCUE_ENTRY=""
   _ws_wip_commit "$n" "$id" "$childof" "$prefix" || { RECLAIM_PIN_WHY="could not capture the uncommitted work of the nested repository at $n: $RECLAIM_WIP_WHY"; return 1; }
   wip="$RECLAIM_WIP_SHA"
-  b=$(_ws_store_kb "$main"); errf=$(_plat_mktemp) || { RECLAIM_PIN_WHY="could not make a scratch file to rescue $n"; return 1; }
+  git -C "$n" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
+    || { RECLAIM_PIN_WHY="the nested repository at $n has no commit at HEAD — there is nothing to pin it by, so it stays"; return 1; }
+  errf=$(_plat_mktemp) || { RECLAIM_PIN_WHY="could not make a scratch file to rescue $n"; return 1; }
   specs=("+refs/*:$base/refs/*")
   # A commit only a reflog names (a stash below the newest, a reset-away tip) is in no ref: it is fetched by sha too.
   orph=$(git -C "$n" rev-list --reflog --not --all 2>/dev/null) \
@@ -31636,14 +31649,22 @@ _ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_R
   for want in $tips; do specs+=("+$want:$base/reflog/$want"); done
   git -C "$n" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 && specs+=("+HEAD:$base/head")
   [[ -z "$wip" ]] || specs+=("+$wip:$base/wip" "+$wip:$base/wips/$wip")
+  # THE BOUND IS MEASURED BEFORE ANYTHING LANDS, in a throwaway repository that borrows the project's store as an alternate, so the
+  # answer is the same on every attempt: a refused rescue must not leave its objects in the store for the next one to find already paid.
+  # `transfer.unpackLimit` keeps the objects loose, so one the store already holds is skipped rather than kept in a pack.
+  q=$(_plat_mktemp_d) && git init -q --bare "$q" 2>/dev/null \
+    && git -C "$main" rev-parse --path-format=absolute --git-path objects >"$q/objects/info/alternates" 2>/dev/null \
+    || { rm -rf "$q"; rm -f "$errf"; RECLAIM_PIN_WHY="could not make a scratch repository to measure the rescue of $n"; return 1; }
+  git -C "$q" -c gc.auto=0 -c transfer.unpackLimit=2147483647 -c uploadpack.allowAnySHA1InWant=true fetch -q --no-tags --no-write-fetch-head "$n" "${specs[@]}" >/dev/null 2>"$errf" \
+    || { RECLAIM_PIN_WHY="could not fetch the nested repository at $n to measure it: $(head -1 "$errf")"; rm -rf "$q"; rm -f "$errf"; return 1; }
+  a=$(_ws_store_kb "$q"); rm -rf "$q"; b=0
+  if (( a > WS_NESTED_RESCUE_MAX_MB * 1024 )); then
+    rm -f "$errf"; RECLAIM_PIN_WORD=nested-rescue-too-large
+    RECLAIM_PIN_WHY="rescuing the nested repository at $n would add $(( a / 1024 )) MiB to the project, over the $WS_NESTED_RESCUE_MAX_MB MiB bound — nothing was taken"; return 1
+  fi
   git -C "$main" -c gc.auto=0 -c uploadpack.allowAnySHA1InWant=true fetch -q --no-tags --no-write-fetch-head "$n" "${specs[@]}" >/dev/null 2>"$errf" \
     || { RECLAIM_PIN_WHY="could not fetch the nested repository at $n into the attic: $(head -1 "$errf")"; rm -f "$errf"; return 1; }
-  rm -f "$errf"; a=$(_ws_store_kb "$main")
-  if (( a - b > WS_NESTED_RESCUE_MAX_MB * 1024 )); then
-    git -C "$main" for-each-ref --format='%(refname)' "$base/" | while IFS= read -r ref; do git -C "$main" update-ref -d "$ref"; done
-    RECLAIM_PIN_WORD=nested-rescue-too-large
-    RECLAIM_PIN_WHY="rescuing the nested repository at $n would add $(( (a - b) / 1024 )) MiB to the project, over the $WS_NESTED_RESCUE_MAX_MB MiB bound — nothing was taken"; return 1
-  fi
+  rm -f "$errf"
   # RE-PROVE (spec §2.7.1 step 3): every ref tip, HEAD, the WIP and each reflog-only tip resolve under the attic.
   while read -r want ref; do
     [[ -n "$want" ]] || continue
@@ -32056,8 +32077,9 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     fi
     _ws_reclaim_foreign_clean "$p"; rc=$?
     (( rc == 2 )) && { _ws_reclaim_unmeasured "$_WS_FOREIGN_WHY"; return 1; }
-    if (( rc == 1 )) && _ws_nested_rescue_live; then   # D-6632: rescuable, not refused; the token binds it
+    if (( rc == 1 )) && _ws_nested_rescuable "$p"; then   # D-6632: rescuable, not refused; the token binds it
       hp=$(_ws_nested_bind "$p" "${p#"$wdreal"/}") || { _ws_reclaim_unmeasured "could not read the nested repository at $p"; return 1; }
+      _ws_nested_secrets "$p" "${p#"$wdreal"/}"
       RECLAIM_RESCUE+="$p"$'\n'; RECLAIM_RESCUEBIND+="$hp"$'\n'; continue
     fi
     (( rc == 0 )) || { RECLAIM_RESCUE_WOULD+="$p"$'\n'; _reap_refuse containment-unproven "$_WS_FOREIGN_WHY"; return 1; }
@@ -33348,7 +33370,7 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
       || { RECLAIM_PIN_WHY="could not resolve the repository of the checkout at $cpath"; return 1; }
     if [[ "$cpcommon" != "$mainreal" ]]; then
       _ws_reclaim_foreign_clean "$cpath"; rc=$?
-      if (( rc == 1 )) && _ws_nested_rescue_live; then resc+=("$cpath"); continue; fi   # D-6632: rescued below, once every checkout is proven
+      if (( rc == 1 )) && _ws_nested_rescuable "$cpath"; then resc+=("$cpath"); continue; fi   # D-6632: rescued below, once every checkout is proven
       (( rc == 0 )) \
         || { RECLAIM_PIN_WHY="$_WS_FOREIGN_WHY — it would be removed with the tree, and nothing of it can be pinned here"; return 1; }
       continue
