@@ -1051,7 +1051,7 @@ export class FleetWatcher {
    *  itself should not reject any more except for a bug outside either
    *  connection's own try/catch (e.g. inside `resolveAndProject`'s own
    *  queueing, which `sweepThenProject` already handles separately). */
-  private lastInventoryRejectWarn: string | null = null;
+  private readonly inventoryRejectWarn = changeLatch<string>();
   /** C4 (final fix wave): set when a caller of `triggerInventory()` (the
    *  `ready` hook) JOINS a sweep already in flight rather than starting one.
    *  The joiner's own connection state may be exactly what changed since the
@@ -1774,11 +1774,10 @@ export class FleetWatcher {
     // condition from two different call sites (or two turns of one retry
     // loop) carry two different stacks, which would defeat the dedupe.
     const message = err instanceof Error ? err.message : String(err);
-    if (message !== this.lastInventoryRejectWarn) {
+    if (this.inventoryRejectWarn.changed(message)) {
       const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
       console.warn('ccrc-server: the inventory sweep rejected — a throw outside the per-row ' +
         `measurement+apply catch (C1) or the projection path (both are their own arms/warnings): ${detail}`);
-      this.lastInventoryRejectWarn = message;
     }
   }
 
@@ -1795,7 +1794,7 @@ export class FleetWatcher {
    *  recovery warns again. */
   private dispatchInventorySweep(): Promise<void> {
     return this.inventoryNow().then(
-      () => { this.lastInventoryRejectWarn = null; },
+      () => { this.inventoryRejectWarn.clear(); },
       (err: unknown) => { this.warnInventoryRejected(err); },
     );
   }
