@@ -43,6 +43,7 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
@@ -109,6 +110,7 @@ const linkReal = (home: string, name: string): void => {
  *  answers df on ~/worktrees". */
 function stubDf(home: string): void {
   stub(home, 'df', [
+    ...FIXTURE_DF_INODES_LINES,
     'if [ "$1" = "-Pk" ] && [ -n "$2" ]; then',
     // The stale/dead-mount shape `_check_disk`'s own header names: df exits
     // non-zero printing NOTHING. `fixture-df-fail-<root>` triggers it for a

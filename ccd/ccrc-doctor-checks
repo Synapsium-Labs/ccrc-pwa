@@ -2280,7 +2280,7 @@ _check_name() {
 # Spec §5's "disk headroom (including the backup dir)", widened by D-6618 (spec
 # 2026-10-23 §2.5.2): a ccd workspace is a full clone per session, every deploy
 # leaves another `~/ccrc-backups/<ts>/` (each deploy.sh arm's `mkdir -p ~/ccrc-backups/$TS`), and `~/.ccrc/coord.db` is a WAL
-# database that `server/src/coord/db.ts:144-145` says outright has NO backup to
+# database that `server/src/coord/db.ts#openCoordDb` says outright has NO backup to
 # fall back on. On a box whose work volume is a second filesystem, `$HOME`'s
 # free space says nothing about the one that fills, so this resolves the SAME
 # roots the server and the agent measure and prints one line per filesystem.
@@ -2350,11 +2350,19 @@ _check_disk() {
 
   # The roster's config dirs: the one input that is runtime data. Sourced in a
   # subshell so the roster's functions and variables stay out of this shell.
-  local cfgdirs="" a
-  if [ -r "$HOME/.ccrc/accounts.sh" ]; then
-    cfgdirs="$( . "$HOME/.ccrc/accounts.sh" 2>/dev/null \
-      && declare -F _ccrc_cfg_dir >/dev/null 2>&1 \
-      && for a in "${CCRC_ACCOUNTS[@]}"; do _ccrc_cfg_dir "$a" 2>/dev/null || :; done )" || cfgdirs=""
+  # A projection that is there but cannot be read (unreadable, fails to source,
+  # no `_ccrc_cfg_dir`) leaves the config-dirs root UNMEASURED, said out loud
+  # below; one that is absent only means no account has been projected yet.
+  local cfgdirs="" a cfg_unreadable=0
+  if [ -e "$HOME/.ccrc/accounts.sh" ]; then
+    if [ -r "$HOME/.ccrc/accounts.sh" ]; then
+      cfgdirs="$( . "$HOME/.ccrc/accounts.sh" 2>/dev/null \
+        && declare -F _ccrc_cfg_dir >/dev/null 2>&1 \
+        && for a in "${CCRC_ACCOUNTS[@]}"; do _ccrc_cfg_dir "$a" 2>/dev/null || :; done )" || cfgdirs=""
+      ( . "$HOME/.ccrc/accounts.sh" 2>/dev/null && declare -F _ccrc_cfg_dir >/dev/null 2>&1 ) || cfg_unreadable=1
+    else
+      cfg_unreadable=1
+    fi
   fi
 
   # Resolve every template to (label, path) pairs, in table order.
@@ -2380,6 +2388,7 @@ _check_disk() {
   # One df pair per root, grouped by mount point. A mount point is the sixth
   # field onward (it may hold spaces); the figures are the second to fourth.
   local -a mounts=() unmeasured=()
+  [ "$cfg_unreadable" -eq 0 ] || unmeasured+=("config-dirs (roster projection unreadable)")
   local -A m_labels=() m_size=() m_avail=() m_bpct=() m_ipct=() m_seen=() m_root=()
   local pair out line last f1 size used avail f5 mnt i1 ino iused ifree i5 imnt
   local total ipct

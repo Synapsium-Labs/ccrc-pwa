@@ -6049,6 +6049,21 @@ describe('ccrc doctor: disk, every work filesystem', () => {
     expect(line).toMatch(/^FAIL disk: /);
     expect(line).toContain('config-dirs');
   });
+
+  it.each([
+    ['fails to source', 'return 1\n'],
+    ['lacks _ccrc_cfg_dir', 'CCRC_ACCOUNTS=(lane-a)\n'],
+  ])('a roster projection that %s is a WARN naming config-dirs, never a silent PASS', (_n, body) => {
+    const home = healthy('ccrc-doctor-disk-config-broken-');
+    mkdirSync(join(home, '.claude-a'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), body);
+    stubDfMap(home, [
+      { prefix: join(home, '.claude-a'), mount: '/mnt/cfg', sizeKiB: 100 * GIB, usedKiB: 99 * GIB, availKiB: 1 * GIB },
+      { prefix: '*', mount: '/', sizeKiB: 100 * GIB, usedKiB: 10 * GIB, availKiB: 90 * GIB },
+    ]);
+    const lines = diskLines(runDoctor(home).stdout);
+    expect(lines.find((l) => l.includes('config-dirs')), lines.join('\n')).toMatch(/^WARN disk: .*roster projection unreadable/);
+  });
 });
 
 // D-6618 (plan Task DR-6) characterization: the three verdicts on $HOME's filesystem at their edges, green on the

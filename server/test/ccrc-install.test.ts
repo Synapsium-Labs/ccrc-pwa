@@ -78,6 +78,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { renderCcdEntry } from './ccdWsHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
@@ -288,6 +289,7 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
   // disk is that afternoon. Same table shape as the doctor suite's.
   stub('df', [
     'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
+    ...FIXTURE_DF_INODES_LINES,
     '[ "$1" = "-Pk" ] && [ -n "$2" ] || { echo "fixture df: unexpected argv: $*" >&2; exit 90; }',
     'echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
     'echo "/dev/fixture0    104857600  20971520 42991616      21% /"',
