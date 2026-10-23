@@ -535,4 +535,13 @@ describe('adversarial cases (the branch verifier)', () => {
     expect(res).toMatchObject({ ok: false, error: 'draft-present' });
     expect(keysOf(calls)).toEqual([]);
   });
+  it('a resume whose claim equals the visible rows of a capped box is draft-present (rows may hide above the window)', async () => {
+    // The claim is exactly lines 20..39, what TALL40 shows. The box is at the row cap, so rows above the window may hold
+    // lines 0..19 that were never claimed; one Enter would submit them too.
+    const claimed = TEXT.tall40.split('\n').slice(20).join('\n');
+    const { tmux, calls } = phaseTmux({ start: TALL40, typed: TALL40 });
+    const res = await sendPrompt(deps(tmux), 'lane-a', claimed, { resumeIfOwn: 'whole' });
+    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
+    expect(keysOf(calls)).toEqual([]);
+  });
 });
