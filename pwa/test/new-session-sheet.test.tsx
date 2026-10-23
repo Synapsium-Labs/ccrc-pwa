@@ -647,12 +647,14 @@ describe('NewSessionSheet — success opens the new session', () => {
     await flush();
     // The create had succeeded: the dismissal says so once, as the in-flight dismissal does.
     expect(screen.getAllByText('Starting demo on team·max…')).toHaveLength(1);
-    await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(55_000); }); // that toast has expired by now
+    expect(screen.queryByText('Starting demo on team·max…')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); }); // past the wait's old 60 s bound
     showFrame(store, [NEW_ROW]);
     await flush();
     expect(window.location.pathname).toBe('/');
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getAllByText('Starting demo on team·max…')).toHaveLength(1); // the bound's own toast is not a second one
+    expect(screen.queryByText('Starting demo on team·max…')).toBeNull(); // the bound says nothing a second time
   });
 
   it('past 60 s without a frame it toasts and closes, as before, and navigates nowhere', async () => {

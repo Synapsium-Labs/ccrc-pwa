@@ -390,7 +390,10 @@ export function NewSessionSheet({
       }
       // The create answers no id, so the sheet stays in its starting state until /ws/fleet lists the new main checkout.
       const row = await waitForRow(() => startedSessionFor(fleet.getState().sessions, wrapper, project.name, preLive));
-      if (mine !== generation.current) return;
+      if (mine !== generation.current) {
+        toast(said); // dismissed during the wait: the create succeeded, so it is said once, with no sheet and no navigation
+        return;
+      }
       if (row === null) toast(said);
       onClose();
       if (row !== null) navigate(`/s/${encodeURIComponent(row.id)}`);
