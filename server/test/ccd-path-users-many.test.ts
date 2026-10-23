@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-path-users-many-'); });
@@ -180,7 +180,7 @@ describe('ccd path-users', () => {
   it('the dispatcher and `ccd caps` carry the entry', () => {
     const caps = h.sh('cmd_caps');
     expect(caps).toContain('path-users-v1');
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'ccd', 'ccd'), 'utf8');
+    const src = fs.readFileSync(CCD, 'utf8');
     expect(src).toMatch(/^ {2}path-users\) +shift; cmd_path_users "\$@" ;;$/m);
   }, 60_000);
 });
