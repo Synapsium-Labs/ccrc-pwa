@@ -43,7 +43,7 @@ import { api } from '../lib/api';
 import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
 import { wsUrl } from '../lib/ws';
-import { PINNED_WINDOW_COLS } from '../../../shared/api';
+import { PINNED_WINDOW_COLS, PTY_EXIT_CLOSE } from '../../../shared/api';
 import { BASE_CONSOLE_FONT_PX, consoleFit, type ConsoleFit } from './consoleFit';
 import { rowText } from './drawerModel';
 import {
@@ -59,6 +59,15 @@ import './chat.css';
  *  history view opens by so the gesture reads as a scroll rather than a jump. */
 
 type Conn = 'connecting' | 'open' | 'down';
+
+/** A drawer never sits open on a dead pty (D-6368): the server closes the
+ *  socket with PTY_EXIT_CLOSE when the pty exits, and the drawer re-attaches by
+ *  itself, ONCE per this window. The bound is what makes it once: a link that is
+ *  still down answers the re-dial with a failed open, which is a second
+ *  pty-exit close right away, and that must end at Reconnect rather than loop.
+ *  30 s is long enough for a re-dial that failed to be judged by its own close,
+ *  short enough that a pty which died again much later heals the same way. */
+const REATTACH_BOUND_MS = 30_000;
 
 /** keyCode 229: a key an input method is handling, whose text xterm reads back
  *  out of its textarea a task later rather than from the key. */
@@ -93,6 +102,10 @@ export function TerminalDrawer({
   const [conn, setConn] = useState<Conn>('connecting');
   // Bumped by Reconnect — re-runs the attach effect for a fresh fit + dial.
   const [attempt, setAttempt] = useState(0);
+  // When the drawer last re-attached by itself on a pty-exit close (D-6368). A
+  // ref, because the re-attach re-runs the attach effect and the bound has to
+  // outlive that run.
+  const lastReattachRef = useRef<number | null>(null);
   // The xterm host, held as STATE via callback ref: the sheet portals its
   // content in a later commit than this component's effects, so a plain ref
   // would still be null when the attach effect first runs. Keying the effect
@@ -432,7 +445,25 @@ export function TerminalDrawer({
     ws.onmessage = (ev: MessageEvent) => {
       if (typeof ev.data === 'string') term.write(ev.data); // raw utf8 frames
     };
-    ws.onclose = down;
+    // A pty-exit close re-attaches (D-6368) through the same `attempt` bump the
+    // Reconnect button uses, so the effect re-run sets 'connecting' before
+    // anything renders: no 'connection lost' flashes first. Inside the bound, or
+    // for any other close (a missing event or code included), it is today's
+    // connection-lost state and its Reconnect. Browsers fire `onerror` before
+    // `onclose` for a dead socket, never for a clean server close, so a 4000
+    // reaches here alone.
+    ws.onclose = (ev?: CloseEvent) => {
+      if (ev?.code === PTY_EXIT_CLOSE) {
+        const now = Date.now();
+        const last = lastReattachRef.current;
+        if (last === null || now - last > REATTACH_BOUND_MS) {
+          lastReattachRef.current = now;
+          setAttempt((a) => a + 1);
+          return;
+        }
+      }
+      down();
+    };
     ws.onerror = down;
     // ONLY when this socket is not already carrying the session (review F2).
     // The gate runs at UPGRADE time, so an open pty survives an auth-lost
