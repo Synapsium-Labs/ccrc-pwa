@@ -839,14 +839,16 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           // (`ReconnectingSocket.connect` reports `connecting`, and a drop reports `down`), so the flag is already down
           // before any open and `onOpen` below needs no reset of its own. From the drop to that first frame nothing is
           // live: the sheet keeps what it showed, read-only (`DialogSheet`).
-          onState: (conn) => set(conn === 'open' ? { conn } : { conn, askFrameSeen: false }),
+          // `dialog` falls with it (review 843's F1): a new stream frames the menu it sees before its first `ask` frame,
+          // but never the absence of one, so a menu kept from before the drop would be read as current once that frame
+          // arrived, and offered live. The sheet's hold keeps its own copy. A connect whose first pane read fails shows no
+          // menu until the next tick frames one.
+          onState: (conn) => set(conn === 'open' ? { conn } : { conn, askFrameSeen: false, dialog: null }),
           // Re-stated on EVERY open, automatic reconnects included: the
           // server's presence registry is keyed per connection, so a reconnect
           // starts with no claim at all and a session the operator is still
           // looking at would quietly start pushing notifications again.
-          onOpen: () => {
-            reportVisible();
-          },
+          onOpen: () => reportVisible(),
           makeSocket: deps.makeSocket,
         });
         socket.start();
