@@ -71,8 +71,12 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     + 'echo "the codex lane library must never reach curl" >&2\nexit 97\n', { mode: 0o755 });
   // Nothing ambient steers the library: its own knobs, the tiers' variables,
   // and COLUMNS (which truncates `ps`'s argv — a case sets it deliberately).
+  // CCRC_CODEX_AUTH_BASE is the one CCRC_CODEX_ name kept: `ghContainedEnv`
+  // sets it to a loopback endpoint (codex-bridge Stage 1, Task 6), so no auth
+  // library this suite reaches can ask a live one.
   for (const k of Object.keys(e)) {
-    if (/^(CCRC_CODEX_|CCGPT_)/.test(k) || ['CHATGPT_TOKEN_DIR', 'LITELLM_MASTER_KEY', 'COLUMNS'].includes(k)) {
+    if ((/^(CCRC_CODEX_|CCGPT_)/.test(k) && k !== 'CCRC_CODEX_AUTH_BASE')
+      || ['CHATGPT_TOKEN_DIR', 'LITELLM_MASTER_KEY', 'COLUMNS'].includes(k)) {
       delete e[k];
     }
   }
@@ -132,6 +136,12 @@ const laneJson = (h: string, id: string): Record<string, unknown> =>
   JSON.parse(fs.readFileSync(join(laneDir(h, id), 'lane.json'), 'utf8')) as Record<string, unknown>;
 const litellmYaml = (h: string, id: string): string => join(laneDir(h, id), 'litellm.yaml');
 const sha256 = (p: string): string => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+/** The litellm tier's code identity (codex-bridge Stage 1, Task 6): the sha256 of the
+ *  generation's stamp's bytes followed by the placed auth library's. */
+const litellmCode = (stamp: string, h: string): string =>
+  createHash('sha256').update(fs.readFileSync(stamp)).update(fs.readFileSync(authLib(h))).digest('hex');
+/** Where `_codex_auth_lib` names the library: `plantCodexBins` places it there. */
+const authLib = (h: string): string => join(h, '.local', 'bin', 'ccgpt-auth.py');
 
 describe('_codex_row — one codex lane, read from accounts.json by exec.kind', () => {
   it('sets the six CX_ fields from the row, and says nothing', async () => {
@@ -1295,7 +1305,8 @@ describe('_codex_started_json and _codex_tier_stale — "running the update" is 
     const r = lib(h, '_codex_started_json litellm && _codex_started_json shim');
     expect(r.code, r.stderr).toBe(0);
     const [lit, sh] = r.stdout.trim().split('\n').map((l) => JSON.parse(l) as unknown);
-    expect(lit).toEqual({ generation: gen, code: sha256(stamp) });
+    // The litellm tier runs the auth library too, so its code is the stamp followed by it.
+    expect(lit).toEqual({ generation: gen, code: litellmCode(stamp, h) });
     expect(sh).toEqual({ generation: gen, code: sha256(shim) });
     expect(r.stdout).not.toContain('/current');
   });
@@ -1312,6 +1323,14 @@ describe('_codex_started_json and _codex_tier_stale — "running the update" is 
     record(h);
     plantFakeRuntime(h);
     expect(stale(h)).toBe('litellm=0 shim=0');
+  });
+
+  it('a library change makes the litellm tier stale', async () => {
+    const { h } = await planted('ccrc-codex-stale-authlib-');
+    record(h);
+    expect(stale(h)).toBe('litellm=1 shim=1');
+    fs.appendFileSync(authLib(h), '# a newer auth library\n');
+    expect(stale(h)).toBe('litellm=0 shim=1');
   });
 
   it('a changed shim file makes only the shim stale; a rewritten stamp only LiteLLM', async () => {
@@ -1597,6 +1616,56 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     });
     return { home, lanes, rt, shimFile };
   }
+
+  // ── the tier's auth library (codex-bridge Stage 1, Task 6) ─────────────────
+  // `_codex_start_tier` alone, its platform helper replaced by a recorder that
+  // prints the nohup answer a start gives, so each case reads the exact argv a
+  // spawn would have run and nothing is started.
+  const SVC_RECORDER = '_svc_run_supervised() { printf \'%s\\n\' "$@" > "$HOME/svc-$TIER"; echo "nohup 999999"; }';
+  const startTier = (home: string, tier: string): Result =>
+    lib(home, `${SVC_RECORDER}\nTIER=${tier}; _codex_start_tier codex-a ${tier}`);
+  const svcArgs = (home: string, tier: string): string[] | null => {
+    const f = join(home, `svc-${tier}`);
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : null;
+  };
+  /** The NAME=VALUE pairs handed to the helper, before its `--`. */
+  const pairs = (argv: string[]): string[] => argv.slice(0, argv.indexOf('--')).filter((x) => /^[A-Z_]+=/.test(x));
+
+  it('the litellm tier is started with CCRC_CODEX_AUTH_LIB and CCRC_CODEX_LANE', async () => {
+    const { home } = await lifeBox({ userManager: false, ids: ['codex-a'] });
+    const r = startTier(home, 'litellm');
+    expect(r.code, r.stderr).toBe(0);
+    const argv = svcArgs(home, 'litellm')!;
+    expect(pairs(argv)).toEqual(expect.arrayContaining([
+      `CCRC_CODEX_AUTH_LIB=${authLib(home)}`, 'CCRC_CODEX_LANE=codex-a']));
+  });
+
+  it('the shim tier is not', async () => {
+    const { home } = await lifeBox({ userManager: false, ids: ['codex-a'] });
+    const r = startTier(home, 'shim');
+    expect(r.code, r.stderr).toBe(0);
+    expect(pairs(svcArgs(home, 'shim')!).filter((p) => p.startsWith('CCRC_CODEX_'))).toEqual([]);
+  });
+
+  it('no library: auth-library-absent, nothing started, and no stamp sentence', async () => {
+    const { home } = await lifeBox({ userManager: false, ids: ['codex-a'] });
+    fs.rmSync(authLib(home));
+    const r = startTier(home, 'litellm');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc codex: auth-library-absent: .*'ccrc update'/m);
+    // Never the runtime's refusal: the runtime is current and its stamp readable.
+    expect(r.stderr).not.toMatch(/runtime-absent|\.ccrc-runtime\.json/);
+    expect(svcArgs(home, 'litellm'), 'a tier was started with no auth library').toBeNull();
+    expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'litellm.started'))).toBe(false);
+  });
+
+  it('no library: the shim tier still starts', async () => {
+    const { home } = await lifeBox({ userManager: false, ids: ['codex-a'] });
+    fs.rmSync(authLib(home));
+    const r = startTier(home, 'shim');
+    expect(r.code, r.stderr).toBe(0);
+    expect(svcArgs(home, 'shim')).not.toBeNull();
+  });
 
   // ── L0: the instrument, before anything leans on it ────────────────────────
   it.skipIf(!PY)('L0 the instrument: the fake manager requests a per-unit Python supervisor stop, waits for exact-child completion, refuses a second live unit of one name, and its stop ends only what this HOME started', async () => {
@@ -2941,7 +3010,8 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
       // Ruling R1: CHATGPT_TOKEN_DIR's last `_`-segment is DIR, so the helper
       // passes it. This is the cross-task pin on Task 2's name rule.
       expect(setenv(lit).sort()).toEqual(
-        [`CHATGPT_TOKEN_DIR=${join(home, a.authDir)}`, `HOME=${home}`, 'LITELLM_LOCAL_MODEL_COST_MAP=True'].sort());
+        [`CCRC_CODEX_AUTH_LIB=${join(home, '.local', 'bin', 'ccgpt-auth.py')}`, 'CCRC_CODEX_LANE=codex-a',
+          `CHATGPT_TOKEN_DIR=${join(home, a.authDir)}`, `HOME=${home}`, 'LITELLM_LOCAL_MODEL_COST_MAP=True'].sort());
       // Ruling R45: `-I`, so the working directory ($HOME) is not on sys.path.
       // L23 measures what that buys, with the real interpreter.
       expect(after(lit)).toEqual([py, '-I', '-m', 'litellm.proxy.proxy_cli', '--config', litellmYaml(home, 'codex-a'),
@@ -2985,7 +3055,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
       // The record is Task 4's `_codex_started_json` output, nothing else, so
       // Task 4's `_codex_tier_stale` reads a fresh start as current (1) for both.
       expect(JSON.parse(fs.readFileSync(join(d, 'litellm.started'), 'utf8')))
-        .toEqual({ generation: rt.gen, code: sha256(rt.stamp) });
+        .toEqual({ generation: rt.gen, code: litellmCode(rt.stamp, home) });
       expect(JSON.parse(fs.readFileSync(join(d, 'shim.started'), 'utf8')))
         .toEqual({ generation: rt.gen, code: sha256(shimFile) });
       expect(lib(home, '_codex_tier_stale codex-a litellm; a=$?; _codex_tier_stale codex-a shim; echo "$a $?"').stdout)

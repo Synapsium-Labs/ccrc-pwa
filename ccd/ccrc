@@ -11951,6 +11951,7 @@ _codex_say() {   # <code> <sentence> — the one refusal shape, `ccrc codex: <co
 
 _codex_lane_dir()    { printf '%s' "$HOME/.ccrc/codex/$1"; }
 _codex_shim_file()   { printf '%s' "$HOME/.local/bin/ccgpt-proxy.py"; }
+_codex_auth_lib()    { printf '%s' "$HOME/.local/bin/ccgpt-auth.py"; }
 _codex_runtime_cli() { printf '%s' "$HOME/.local/bin/ccgpt-runtime"; }
 _codex_litellm_yaml() { printf '%s' "$(_codex_lane_dir "$1")/litellm.yaml"; }
 
@@ -12606,24 +12607,32 @@ _codex_tier_is_our_handle() {   # <rc of the _codex_tier_ours call just made>
 }
 
 # The record `_codex_start_tier` writes to `<tier>.started`, computed NOW:
-# `{"generation":"<resolved gen dir>","code":"<sha256 of the tier's code file>"}`
-# — the litellm tier's code is the generation's `.ccrc-runtime.json`, the shim's
-# is the placed `ccgpt-proxy.py`. ONE DEFINITION: the start half writes exactly
+# `{"generation":"<resolved gen dir>","code":"<sha256 of the tier's code files>"}`
+# — the litellm tier's code is the generation's `.ccrc-runtime.json` followed by
+# the placed auth library, `ccgpt-auth.py` (`_codex_auth_lib`), which the tier
+# loads through ccrc's LiteLLM patch (codex-bridge Stage 1, Task 6): the sha256
+# of the stamp's bytes and then the library's, so a library change reads as
+# stale and `_inst_codex_tiers` restarts the tier onto it. The shim's code is
+# the placed `ccgpt-proxy.py`. ONE DEFINITION: the start half writes exactly
 # this output and `_codex_tier_stale` compares against exactly this output, so
 # "stale" cannot mean two things. rc 1 when it cannot be computed: no runtime
 # (`ccgpt-runtime python` says `absent`) or an unreadable code file.
 _codex_started_json() {   # <tier>
-  local py gen code sum
+  local py gen sum f
+  local -a files=()
   py="$("$(_codex_runtime_cli)" python 2>/dev/null)" || return 1
   gen="${py%/bin/python}"
   { [ "$gen" != "$py" ] && [ -d "$gen" ]; } || return 1
   case "${1:-}" in
-    litellm) code="$gen/.ccrc-runtime.json" ;;
-    shim)    code="$(_codex_shim_file)" ;;
+    litellm) files=("$gen/.ccrc-runtime.json" "$(_codex_auth_lib)") ;;
+    shim)    files=("$(_codex_shim_file)") ;;
     *) return 1 ;;
   esac
-  { [ -f "$code" ] && [ -r "$code" ]; } || return 1
-  sum="$(_plat_sha256 < "$code" 2>/dev/null)" || return 1
+  for f in "${files[@]}"; do
+    { [ -f "$f" ] && [ -r "$f" ]; } || return 1
+  done
+  # The file's `set -o pipefail` makes a `cat` that fails part-way fail this too.
+  sum="$(cat -- "${files[@]}" 2>/dev/null | _plat_sha256 2>/dev/null)" || return 1
   sum="${sum%% *}"
   [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || return 1
   jq -cn --arg g "$gen" --arg c "$sum" '{generation: $g, code: $c}'
@@ -12947,6 +12956,12 @@ _codex_shim_absent() {   # <id> [<tail>]
 #   Both arms start a tier in $HOME, and `-m` without `-I` puts the working
 #   directory first on sys.path, so a `~/litellm/` would load instead of the
 #   generation's litellm, the one `ccgpt-runtime`'s own `-I` probe proved.
+# - THE LITELLM TIER REFRESHES THROUGH THE AUTH LIBRARY (codex-bridge Stage 1,
+#   Task 6, D-6372): its spawn carries `CCRC_CODEX_AUTH_LIB` (`_codex_auth_lib`)
+#   and `CCRC_CODEX_LANE`, which arm the authenticator part of ccrc's LiteLLM
+#   patch (`ccgpt-runtime`). With no readable library it is refused
+#   `auth-library-absent` before anything is computed or started; the shim
+#   tier neither gets the two variables nor needs the file.
 # - The gateway key reaches LiteLLM ONLY as `runtime.env`, an EnvironmentFile
 #   (spec §5.4). The shim gets no env file, because it is value-blind
 #   (m-tiers §5).
@@ -12975,6 +12990,14 @@ _codex_start_tier() {   # <id> <tier> -> rc 0 + "systemd <unit>" | "nohup <pid>"
   fi
   if ! "$(_codex_runtime_cli)" python >/dev/null 2>&1; then
     _codex_say runtime-absent "no LiteLLM runtime is current on this box, so $id's $tier tier has no interpreter to start from. Build one with 'ccgpt-runtime build' (or 'ccrc update', which builds it), then re-run."
+    return 1
+  fi
+  # The litellm tier reads and refreshes its credential through the auth
+  # library, which `_codex_started_json` also hashes into its record, so a
+  # missing one is named here, before that call, and never read as a runtime
+  # with no readable stamp. The shim tier does not load it.
+  if [ "$tier" = litellm ] && ! { [ -f "$(_codex_auth_lib)" ] && [ -r "$(_codex_auth_lib)" ]; }; then
+    _codex_say auth-library-absent "$(_codex_auth_lib) is not a readable file, so $id's litellm tier would have no auth library to read and refresh its credential through, and would answer every request 401. Run 'ccrc update', which places it, then re-run. Nothing was started."
     return 1
   fi
   if ! rec="$(_codex_started_json "$tier")"; then
@@ -13006,6 +13029,7 @@ _codex_start_tier() {   # <id> <tier> -> rc 0 + "systemd <unit>" | "nohup <pid>"
     ans="$( [ -z "${CX_LOCK_FD:-}" ] || exec {CX_LOCK_FD}>&-
       _svc_run_supervised "$unit" "$log" "$d/runtime.env" \
         "CHATGPT_TOKEN_DIR=$HOME/$CX_AUTH" LITELLM_LOCAL_MODEL_COST_MAP=True "HOME=$HOME" \
+        "CCRC_CODEX_AUTH_LIB=$(_codex_auth_lib)" "CCRC_CODEX_LANE=$id" \
         -- "$py" -I -m litellm.proxy.proxy_cli --config "$(_codex_litellm_yaml "$id")" --host 127.0.0.1 --port "$CX_LITELLM" )"; rc=$?
   else
     ans="$( [ -z "${CX_LOCK_FD:-}" ] || exec {CX_LOCK_FD}>&-

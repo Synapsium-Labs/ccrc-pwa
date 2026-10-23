@@ -13169,6 +13169,8 @@ function runFixCodex(c: FixCodexCase = {}): {
     _codex_runtime_cli: '_codex_runtime_cli() { printf \'%s\' "$HOME/.local/bin/ccgpt-runtime"; }',
     // The lane library's own one-liner: which placed file a shim tier runs.
     _codex_shim_file: ccrcLine(/^_codex_shim_file\(\) .*$/m, '_codex_shim_file'),
+    // And the one the litellm tier loads its credential through (codex-bridge Stage 1, Task 6).
+    _codex_auth_lib: ccrcLine(/^_codex_auth_lib\(\) .*$/m, '_codex_auth_lib'),
     _models_roster_path: '_models_roster_path() { printf \'%s\' "$HOME/.ccrc/accounts.json"; }',
     _models_node: [
       '_models_node() {',
@@ -13288,7 +13290,7 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
   const commit = (home: string, id: string): string => `_models_node materialise --file ${home}/.ccrc/accounts.json --id ${id}`;
   const check = (home: string, id: string): string => `${commit(home, id)} --check true`;
   const held = (id: string): string => `_models_litellm_lane_held ${id} lock=${id}`;
-  const TIERS_LINE = "FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, which restarts every running ccrc-owned tier that measures stale, on any lane (its lines above)";
+  const TIERS_LINE = "FIX codex: tiers: this fix replaced code a running tier runs (the shim, the runtime or the auth library), so it re-ran the install step 'ccrc update' runs, which restarts every running ccrc-owned tier that measures stale, on any lane (its lines above)";
   const tiersAsked = (r: { calls: string[] }): string[] => r.calls.filter((l) => l.startsWith('_inst_codex_tiers'));
 
   it('a converged lane: every measurement is asked, and nothing is placed, rebuilt, rendered or restarted', () => {
@@ -13374,6 +13376,15 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
       expect(r.calls[r.calls.length - 1], n).toBe('_inst_codex_tiers role=fleet');
       expect(tiersAsked(r), n).toHaveLength(1);
     }
+  });
+
+  it('--fix restoring a drifted ccgpt-auth.py asks _inst_codex_tiers, like the shim', () => {
+    // The litellm tier loads the library, and its `.started` code hashes it (codex-bridge Stage 1, Task 6).
+    const r = runFixCodex({ role: 'fleet', bins: { 'ccgpt-auth.py': 'drift' } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.fix).toEqual(['FIX codex: restored $HOME/.local/bin/ccgpt-auth.py from the shipped tree', TIERS_LINE, DONE(1)]);
+    expect(r.calls[r.calls.length - 1]).toBe('_inst_codex_tiers role=fleet');
+    expect(tiersAsked(r)).toHaveLength(1);
   });
 
   it('with no cmp on PATH, only a missing or non-executable file is placed, every other is named "not compared", and no tier is asked', () => {
@@ -13533,7 +13544,7 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
 
   it('a tier restart that cannot finish is said', () => {
     const r = runFixCodex({ bins: { 'ccgpt-proxy.py': 'drift' }, tiersDegraded: true });
-    expect(r.fix).toContain("FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, and that step could not restart every stale tier (its lines above say which)");
+    expect(r.fix).toContain("FIX codex: tiers: this fix replaced code a running tier runs (the shim, the runtime or the auth library), so it re-ran the install step 'ccrc update' runs, and that step could not restart every stale tier (its lines above say which)");
   });
 
   it('a roster two lanes share a port in is refused by both writers: each lane is named NOT rendered with models-op\'s own code, and nothing is written', () => {

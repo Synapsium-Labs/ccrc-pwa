@@ -55,6 +55,16 @@
 # probe streams a no-delta response through the patched runtime, and the
 # patch's bytes are hashed into probeSha256 after the probe's, so an edit to
 # either rebuilds every box once.
+# The patch has TWO PARTS since codex-bridge Stage 1 (D-6372): that stream
+# part, and an authenticator part, INERT unless the tier's environment names
+# ccrc's auth library (`CCRC_CODEX_AUTH_LIB`, which `ccrc codex start` sets on
+# the litellm tier only). Armed, LiteLLM's `Authenticator.get_access_token` and
+# `get_account_id` go through that library (its lock, re-read and atomic
+# write), LiteLLM's own write of the credential is a no-op and its device-code
+# sign-in raises a 401 `needs-signin`; a library that fails to load fails
+# closed, a 401 `auth-library-absent` on every token request. The probe's auth
+# scenario is that part's acceptance test, in a fresh interpreter of the
+# generation with a stub library, so the probe's own scenarios stay unarmed.
 #
 # ── THE BUILD, STAGE BY STAGE ────────────────────────────────────────────
 # venv, pip, patch, probe, stamp, swap — in that order, and a failure names
@@ -703,7 +713,13 @@ _rt_probe_source() {
 # CREDENTIAL-FREE: HOME and CHATGPT_TOKEN_DIR point into a fresh temp dir holding
 # a synthetic token, and every CHATGPT_*/LITELLM_*/OPENAI_* variable is scrubbed
 # first, because LiteLLM's Authenticator mkdirs its token dir and can rewrite
-# auth.json — this must never touch a lane's own.
+# auth.json — this must never touch a lane's own. So are the auth library's two,
+# CCRC_CODEX_AUTH_LIB and CCRC_CODEX_AUTH_BASE: the probe runs with its caller's
+# environment, and an armed authenticator here would refresh a lane's credential.
+#
+# IT GATES ON THE PATCH'S AUTHENTICATOR PART (codex-bridge Stage 1, D-6372),
+# right after the transformation imports, in a fresh interpreter of its own
+# (below): auth-patch-not-applied, auth-device-flow-alive.
 #
 # IT GATES ON THE SHIM'S OUTPUT SHAPE. ccgpt-proxy.py rewrites both system
 # doors before LiteLLM sees a request: the top-level system stays the system
@@ -749,7 +765,8 @@ sys.addaudithook(_deny)
 
 _tmp = tempfile.mkdtemp(prefix="ccgpt-runtime-probe.")
 atexit.register(shutil.rmtree, _tmp, True)
-for _k in [k for k in os.environ if k.startswith(("CHATGPT_", "LITELLM_", "OPENAI_"))]:
+for _k in [k for k in os.environ if k.startswith(("CHATGPT_", "LITELLM_", "OPENAI_"))
+           or k in ("CCRC_CODEX_AUTH_LIB", "CCRC_CODEX_AUTH_BASE")]:
     del os.environ[_k]
 os.environ.update(HOME=_tmp, CHATGPT_TOKEN_DIR=os.path.join(_tmp, "tok"), LITELLM_LOCAL_MODEL_COST_MAP="True")
 os.makedirs(os.environ["CHATGPT_TOKEN_DIR"])
@@ -801,6 +818,138 @@ try:
     from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig  # noqa: F401
 except Exception as e:
     fail("transformation-import", f"{type(e).__name__}: {e}")
+
+# THE AUTH SCENARIO (codex-bridge Stage 1, D-6372): the patch's authenticator
+# part, armed in a FRESH interpreter, this generation's own under `-I`, so its
+# .pth loads the patch there, with CCRC_CODEX_AUTH_LIB naming a stub library
+# written into this probe's temp dir. The stub answers a fixed non-secret token
+# for the probe's token dir and raises its AuthError for a second one. This
+# process stays unarmed: its scrub above removed the library's two variables
+# before its authenticator import, so every scenario below runs as it did. The
+# child installs the same socket-denying audit hook before it imports anything,
+# then checks, in this order: the device flow raises a 401 with no network
+# attempt (auth-device-flow-alive); the five names carry `_ccrc_auth`,
+# get_access_token answers the stub's token, and a raising dir surfaces as a
+# GetAccessTokenError with status 401 (auth-patch-not-applied). It is handed
+# the file of the patch THIS process loaded, and loads that one when its own
+# .pth loaded another or none: a borrowed interpreter (the opt-in suite's)
+# carries the patch on PYTHONPATH, which `-I` hides from the child.
+_AUTH_FAILS = ("auth-patch-not-applied", "auth-device-flow-alive")
+_AUTH_STUB = """import os
+CREDENTIAL_NAME = "auth.json"
+GOOD = os.path.normpath(%s)
+
+
+class AuthError(Exception):
+    word = "needs-signin"
+
+
+class _Reading(object):
+    account_id = "probe"
+
+
+def tier_access_token(auth_dir, lane=None):
+    if os.path.normpath(auth_dir) == GOOD:
+        return ("probe-not-a-secret", "probe")
+    raise AuthError("probe: this token dir is dead")
+
+
+def read(auth_dir):
+    return _Reading()
+"""
+_AUTH_SCENARIO = """import os, sys
+sys.dont_write_bytecode = True
+_attempts = []
+
+
+def _deny(event, args):
+    if event in ("socket.connect", "socket.getaddrinfo", "socket.sendto", "socket.sendmsg",
+                 "socket.gethostbyname", "socket.gethostbyname_ex", "socket.gethostbyaddr"):
+        _attempts.append(event)
+        raise OSError("behaviour_probe: network denied")
+
+
+sys.addaudithook(_deny)
+
+
+def say(name, detail):
+    print("auth_scenario: FAIL %s: %s" % (name, detail), flush=True)
+    sys.exit(0)
+
+
+_want, _dead = sys.argv[1], sys.argv[2]
+_have = sys.modules.get("ccrc_litellm_patch")
+if _want and os.path.realpath(getattr(_have, "__file__", None) or "") != os.path.realpath(_want):
+    import importlib.util
+    sys.meta_path[:] = [f for f in sys.meta_path if getattr(f, "_ccrc_finder", False) is not True]
+    _spec = importlib.util.spec_from_file_location("ccrc_litellm_patch", _want)
+    _mod = importlib.util.module_from_spec(_spec)
+    sys.modules["ccrc_litellm_patch"] = _mod
+    _spec.loader.exec_module(_mod)
+try:
+    from litellm.llms.chatgpt import authenticator as _m
+    A, E = _m.Authenticator, _m.GetAccessTokenError
+except Exception as e:
+    say("auth-patch-not-applied", "the authenticator did not import armed: " + type(e).__name__)
+
+
+def killed(fn):
+    n = len(_attempts)
+    try:
+        fn()
+    except E as e:
+        return getattr(e, "status_code", None) == 401 and len(_attempts) == n
+    except Exception:
+        return False
+    return False
+
+
+if not (killed(lambda: A()._login_device_code()) and killed(lambda: A()._wait_for_access_token(0.1))):
+    say("auth-device-flow-alive", "a device-flow method did not raise a 401 at once (%d network attempt(s))"
+        % len(_attempts))
+_names = ("get_access_token", "get_account_id", "_login_device_code", "_wait_for_access_token", "_write_auth_file")
+_stock = [n for n in _names if getattr(getattr(A, n, None), "_ccrc_auth", False) is not True]
+if _stock:
+    say("auth-patch-not-applied", "left stock: " + ", ".join(_stock))
+try:
+    _token = A().get_access_token()
+except Exception as e:
+    say("auth-patch-not-applied", "get_access_token raised " + type(e).__name__)
+if _token != "probe-not-a-secret":
+    say("auth-patch-not-applied", "get_access_token did not answer the library's token")
+os.environ["CHATGPT_TOKEN_DIR"] = _dead
+try:
+    A().get_access_token()
+    say("auth-patch-not-applied", "a dead token dir answered a token")
+except E as e:
+    if getattr(e, "status_code", None) != 401:
+        say("auth-patch-not-applied", "a dead token dir answered status %r, not 401" % (getattr(e, "status_code", None),))
+except Exception as e:
+    say("auth-patch-not-applied", "a dead token dir raised " + type(e).__name__ + ", not GetAccessTokenError")
+print("auth_scenario: PASS", flush=True)
+"""
+import subprocess
+
+_auth_stub = os.path.join(_tmp, "ccgpt-auth-stub.py")
+with open(_auth_stub, "w") as _f:
+    _f.write(_AUTH_STUB % (json.dumps(os.environ["CHATGPT_TOKEN_DIR"]),))
+_auth_patch = getattr(sys.modules.get("ccrc_litellm_patch"), "__file__", None) or ""
+try:
+    _auth_run = subprocess.run(
+        [sys.executable, "-I", "-c", _AUTH_SCENARIO, _auth_patch, os.path.join(_tmp, "tok-dead")],
+        env=dict(os.environ, CCRC_CODEX_AUTH_LIB=_auth_stub, CCRC_CODEX_LANE="probe"),
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+except Exception as e:
+    fail("auth-patch-not-applied", f"the auth scenario did not run: {type(e).__name__}")
+_auth_lines = [l for l in _auth_run.stdout.decode("utf-8", "replace").splitlines() if l.startswith("auth_scenario: ")]
+if _auth_lines[-1:] != ["auth_scenario: PASS"]:
+    _auth_name = "auth-patch-not-applied"
+    _auth_detail = f"exit {_auth_run.returncode}: {_auth_run.stderr.decode('utf-8', 'replace')[-200:]}"
+    if _auth_lines and _auth_lines[-1].startswith("auth_scenario: FAIL "):
+        _n, _, _d = _auth_lines[-1][len("auth_scenario: FAIL "):].partition(": ")
+        if _n in _AUTH_FAILS:
+            _auth_name, _auth_detail = _n, _d
+    fail(_auth_name, _auth_detail)
 
 _sent = []
 _stream_body = [None]  # what a stream scenario has the sink serve; None serves _SSE
@@ -1026,7 +1175,9 @@ _rt_patch_source() {
 # ccgpt-runtime writes this file and a one-line ccrc_litellm_patch.pth into each
 # generation's site-packages, `patch-source` prints it, and the behaviour probe is its
 # acceptance test: a generation where the probe's no-delta stream loses a tool call's
-# arguments never becomes current.
+# arguments, or whose authenticator part does not apply, never becomes current.
+# It has two parts: the stream part (THE DEFECT, THE FIX) and, since codex-bridge
+# Stage 1, the authenticator part (THE AUTHENTICATOR PART).
 #
 # THE DEFECT. A lane's /v1/messages request reaches Codex through LiteLLM's
 # chat-completions bridge, whose stream iterator turns each Responses event into a
@@ -1056,6 +1207,32 @@ _rt_patch_source() {
 # once, after that module has executed. A class without `chunk_parser` is left as it
 # is, and an error inside the fallback is written to stderr and never breaks a stream.
 # A process that never imports the bridge never touches it.
+#
+# THE AUTHENTICATOR PART (codex-bridge Stage 1, spec 2026-10-15 §2.6, D-6372). LiteLLM's
+# Authenticator refreshes inside a request with no lock, truncates the credential in
+# place, writes derived fields back on a read, and falls from a failed refresh into a
+# device-code sign-in that polls for 15 minutes inside the request. When the process's
+# environment names ccrc's auth library (CCRC_CODEX_AUTH_LIB, set by `ccrc codex start` on
+# the litellm tier only) the same finder waits for the authenticator's module too, and
+# replaces five of the class's names, each marked `_ccrc_auth`:
+#   - `_login_device_code` and `_wait_for_access_token` raise the module's
+#     GetAccessTokenError, status 401, `needs-signin: ...`, and `_write_auth_file` is a
+#     no-op that says so once on stderr and never formats its argument. These three hold
+#     whether or not the library loads.
+#   - the library is loaded once per process from that path, by file (under -I a sibling
+#     module is not on sys.path), with no bytecode written. A library that fails to load
+#     FAILS CLOSED: one stderr line naming the path and the exception's type, never its
+#     arguments, and `get_access_token` and `get_account_id` raise a 401
+#     `auth-library-absent` on every call; LiteLLM's own refresh is never reached.
+#   - loaded, `get_access_token` is the library's `tier_access_token(token_dir, lane)`,
+#     its AuthError a 401 `<word>: <sentence>`, and `get_account_id` the library's read.
+#     A credential file other than `<token_dir>/auth.json` (CHATGPT_AUTH_FILE reaching the
+#     tier) is a 401 `config-error`, and no file is read.
+# Unset, the part is INERT: an interpreter an older ccrc started, the probe's own
+# scenarios, or anything else keeps stock LiteLLM, so a rollback stays safe. A class
+# missing any of the five names is left stock, said on stderr, and the probe refuses that
+# generation.
+import os
 import sys
 
 _PREFIX = "litellm."
@@ -1065,6 +1242,17 @@ _MARK = "_ccrc_done_fallback"
 _CALL_DELTA = {"function_call": ("response.function_call_arguments.delta", "arguments"),
                "custom_tool_call": ("response.custom_tool_call_input.delta", "input")}
 _TEXT_DELTA = "response.output_text.delta"
+_AUTH_MODULE = "litellm.llms.chatgpt.authenticator"
+_AUTH_CLASS = "Authenticator"
+_AUTH_ERROR = "GetAccessTokenError"
+_AUTH_LIB_ENV = "CCRC_CODEX_AUTH_LIB"
+_AUTH_LANE_ENV = "CCRC_CODEX_LANE"
+_AUTH_MARK = "_ccrc_auth"
+_AUTH_DONE = "_ccrc_auth_applied"
+_AUTH_NAMES = ("get_access_token", "get_account_id", "_login_device_code", "_wait_for_access_token",
+               "_write_auth_file")
+_DEVICE_FLOW = ("_login_device_code", "_wait_for_access_token")
+_AUTH_LIB = []  # the library this process loaded, or None for a load that failed: once per process
 
 
 def _warn(what):
@@ -1162,11 +1350,127 @@ def _apply(module):
             _warn("not applied: %s: %s" % (type(e).__name__, e))
 
 
+def _lane():
+    return os.environ.get(_AUTH_LANE_ENV) or "<lane>"
+
+
+def _load_auth_library(path):
+    """The auth library at `path`, loaded once per process, or None when it did not load."""
+    if _AUTH_LIB:
+        return _AUTH_LIB[0]
+    lib = None
+    was = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ccgpt_auth", path)
+        if spec is None or spec.loader is None:
+            raise ImportError("no loader")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["ccgpt_auth"] = mod
+        spec.loader.exec_module(mod)
+        for name in ("tier_access_token", "read", "AuthError", "CREDENTIAL_NAME"):
+            getattr(mod, name)
+        lib = mod
+    except (Exception, SystemExit) as e:
+        sys.modules.pop("ccgpt_auth", None)
+        _warn("ccrc's auth library %s did not load (%s), so every token request answers 401 "
+              "auth-library-absent until ccrc update places it" % (path, type(e).__name__))
+    finally:
+        sys.dont_write_bytecode = was
+    _AUTH_LIB.append(lib)
+    return lib
+
+
+def _patch_authenticator(module):
+    path = os.environ.get(_AUTH_LIB_ENV)
+    if not path:
+        return  # INERT: stock LiteLLM
+    cls = getattr(module, _AUTH_CLASS, None)
+    err = getattr(module, _AUTH_ERROR, None)
+    if not isinstance(cls, type) or not isinstance(err, type):
+        _warn("%s has no %s class or no %s; left stock" % (_AUTH_MODULE, _AUTH_CLASS, _AUTH_ERROR))
+        return
+    if getattr(cls, _AUTH_DONE, False):
+        return
+    missing = [n for n in _AUTH_NAMES if not callable(getattr(cls, n, None))]
+    if missing:
+        _warn("%s has no %s; left stock, so LiteLLM's own code reads and writes this lane's credential"
+              % (_AUTH_CLASS, ", ".join(missing)))
+        return
+    lib = _load_auth_library(path)
+    warned = []
+
+    def device_flow_killed(self, *args, **kwargs):
+        raise err(status_code=401, message="needs-signin: a Codex lane never signs in inside a request; "
+                                           "run ccrc codex login %s" % _lane())
+
+    def write_disabled(self, *args, **kwargs):
+        if not warned:
+            warned.append(True)
+            _warn("LiteLLM's write of the lane's credential is disabled: ccrc's auth library is its one writer")
+        return None
+
+    if lib is None:
+        def get_access_token(self):
+            raise err(status_code=401, message="auth-library-absent: ccrc's auth library did not load in this "
+                                               "tier (its log names the path), so the lane's credential is "
+                                               "read by nothing; run ccrc update")
+
+        def get_account_id(self):
+            return get_access_token(self)
+    else:
+        def credential_dir(self):
+            d = getattr(self, "token_dir", None)
+            f = getattr(self, "auth_file", None)
+            if (not isinstance(d, str) or not isinstance(f, str) or not os.path.isabs(d)
+                    or os.path.normpath(f) != os.path.join(os.path.normpath(d), lib.CREDENTIAL_NAME)):
+                raise err(status_code=401, message="config-error: this tier's credential file is not %s in "
+                                                   "its token dir (is CHATGPT_AUTH_FILE set?), and ccrc reads no "
+                                                   "other file; unset it and restart the tier" % lib.CREDENTIAL_NAME)
+            return d
+
+        def get_access_token(self):
+            d = credential_dir(self)
+            try:
+                token, _account = lib.tier_access_token(d, os.environ.get(_AUTH_LANE_ENV) or None)
+            except lib.AuthError as e:
+                raise err(status_code=401, message="%s: %s" % (e.word, e)) from None
+            return token
+
+        def get_account_id(self):
+            return lib.read(credential_dir(self)).account_id
+
+    plan = [("get_access_token", get_access_token), ("get_account_id", get_account_id),
+            ("_write_auth_file", write_disabled)] + [(n, device_flow_killed) for n in _DEVICE_FLOW]
+    for name, fn in plan:
+        setattr(fn, _AUTH_MARK, True)
+        setattr(cls, name, fn)
+    setattr(cls, _AUTH_DONE, True)
+
+
+def _apply_authenticator(module):
+    try:
+        _patch_authenticator(module)
+    except Exception as e:
+        _warn("authenticator part not applied: %s" % (type(e).__name__,))
+
+
+def _target(name):
+    """What a loaded module of this name is handed to: the authenticator part, the stream part, or nothing."""
+    if name == _AUTH_MODULE:
+        return _apply_authenticator
+    if name.startswith(_PREFIX) and name.endswith(_SUFFIX):
+        return _apply
+    return None
+
+
 class _Finder(object):
     _ccrc_finder = True  # what a later run of this module recognises; the class itself is new each run
 
     def find_spec(self, name, path=None, target=None):
-        if not (name.startswith(_PREFIX) and name.endswith(_SUFFIX)):
+        apply = _target(name)
+        if apply is None:
             return None
         for finder in sys.meta_path:
             if finder is self or not hasattr(finder, "find_spec"):
@@ -1182,7 +1486,7 @@ class _Finder(object):
 
         def exec_module(module):
             inner(module)
-            _apply(module)
+            apply(module)
 
         try:
             spec.loader.exec_module = exec_module
@@ -1198,8 +1502,9 @@ class _Finder(object):
 if not any(getattr(f, "_ccrc_finder", False) is True for f in sys.meta_path):
     sys.meta_path.insert(0, _Finder())
 for _name, _module in list(sys.modules.items()):
-    if _name.startswith(_PREFIX) and _name.endswith(_SUFFIX):
-        _apply(_module)
+    _fn = _target(_name)
+    if _fn is not None:
+        _fn(_module)
 PATCH
 }
 
