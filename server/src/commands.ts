@@ -20,17 +20,23 @@ export const BUILTINS: SlashCommand[] = [
 ];
 
 const SKILL_LINE = /^-\s+(\S+):\s+(.+)$/;
+/** A bare `- name` line: Claude Code trims descriptions under its budget (D-6434), and the skill is still invocable. */
+const BARE_SKILL_LINE = /^-\s+(\S*[^\s:])$/;
 
 /**
  * Parse the skills out of a Claude Code `skill_listing` attachment's markdown
- * content ("- name: description" lines). Names keep their `plugin:skill` form
- * (e.g. "superpowers:brainstorming"), which is exactly what `/`-invocation wants.
+ * content ("- name: description" lines, or a bare "- name" with an empty
+ * description). Names keep their `plugin:skill` form (e.g.
+ * "superpowers:brainstorming"), which is exactly what `/`-invocation wants.
  */
 export function parseSkillListing(content: string): SlashCommand[] {
   const out: SlashCommand[] = [];
   for (const line of content.split('\n')) {
-    const m = SKILL_LINE.exec(line.trim());
-    if (m) out.push({ name: m[1]!, desc: m[2]!.trim(), kind: 'skill' });
+    const t = line.trim();
+    const m = SKILL_LINE.exec(t);
+    if (m) { out.push({ name: m[1]!, desc: m[2]!.trim(), kind: 'skill' }); continue; }
+    const bare = BARE_SKILL_LINE.exec(t);
+    if (bare) out.push({ name: bare[1]!, desc: '', kind: 'skill' });
   }
   return out;
 }

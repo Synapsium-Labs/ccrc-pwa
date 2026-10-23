@@ -171,6 +171,46 @@ describe('GET /api/sessions/:id/commands', () => {
     await app.close();
   });
 
+  // Claude Code trims descriptions under its budget (D-6434, bare-name-skill-lines): measured, 86 of 723 recorded
+  // listings carry bare `- name` lines, one listing with 48 names of which the described-only rule parsed 10.
+  it('a listing that mixes described and bare names lists every skill, the bare ones with no description', async () => {
+    const home = mkTmp('ccrc-cmd-bare-');
+    seedRoster(home);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const id = 'claude-a-project-j-bare';
+    const workdir = '/data/projects/project-j';
+    const uuid = '6'.repeat(36);
+    for (const [k, v] of Object.entries({ wrapper: 'claude-a', project: 'project-j', workdir, uuid, started: '1' })) {
+      writeFileSync(path.join(reg, `${id}.${k}`), v);
+    }
+    const tdir = path.join(home, '.claude-a', 'projects', workdir.replace(/[/._]/g, '-'));
+    mkdirSync(tdir, { recursive: true });
+    const content = [
+      '- superpowers:brainstorming: You MUST use this before any creative work.',
+      '- some-skill',
+      '- vastai: Rent GPUs.',
+      '- plugin:skill-name',
+      '  (an indented note, not a skill)',
+      'Prose that is neither shape.',
+      '- handoff: Hand off a task.',
+    ].join('\n');
+    writeFileSync(path.join(tdir, `${uuid}.jsonl`), JSON.stringify({ attachment: { type: 'skill_listing', isInitial: true, content } }) + '\n');
+    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${id}/commands` });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { skills: unknown[] }).skills).toEqual([
+      { name: 'superpowers:brainstorming', desc: 'You MUST use this before any creative work.', kind: 'skill' },
+      { name: 'some-skill', desc: '', kind: 'skill' },
+      { name: 'vastai', desc: 'Rent GPUs.', kind: 'skill' },
+      { name: 'plugin:skill-name', desc: '', kind: 'skill' },
+      { name: 'handoff', desc: 'Hand off a task.', kind: 'skill' },
+    ]);
+    await app.close();
+  });
+
   it('unknown session id returns 404', async () => {
     const home = mkTmp('ccrc-cmd-');
     seedRoster(home);
