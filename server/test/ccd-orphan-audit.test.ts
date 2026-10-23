@@ -20,7 +20,7 @@ const wsroot = (): string => path.join(real(h.home), 'worktrees');
 /** The probes this suite is not about: nobody holds anything, and the newest change is `days` old.
  *  `cwd`/`many` replace a probe's stub; `many: false` leaves the REAL holder probe; `days: 'unmeasured'` / `'real'` swap the idle walk. */
 const NOW = Math.floor(Date.now() / 1000);   // fixed per run: the same tree must mint the same token twice
-interface Stubs { days?: number | 'unmeasured' | 'real'; cwd?: string; many?: boolean }
+interface Stubs { days?: number | 'unmeasured' | 'real'; cwd?: string; many?: boolean | 'unmeasured' }
 const stubs = (o: Stubs = {}): string => {
   const days = o.days ?? 8;
   const idle = days === 'real' ? ''
@@ -28,7 +28,7 @@ const stubs = (o: Stubs = {}): string => {
       : `_ws_collect_idle() { _WS_IDLE_NEWEST_NS="${NOW - days * 86400}000000000"; _WS_IDLE_COUNT=7; _WS_IDLE_WHY=''; _WS_IDLE_DETAIL=''; return 0; };`;
   const many = o.many === false ? ''
     : '_ws_path_users_many() { local i; _WS_PATH_USERS_RCS=(); _WS_PATH_USERS_PIDS_OF=(); _WS_PATH_USERS_WHY_OF=();'
-      + ' for i in "$@"; do _WS_PATH_USERS_RCS+=(0); _WS_PATH_USERS_PIDS_OF+=(""); _WS_PATH_USERS_WHY_OF+=(""); done; return 0; };';
+      + ` for i in "$@"; do _WS_PATH_USERS_RCS+=(${o.many === 'unmeasured' ? 2 : 0}); _WS_PATH_USERS_PIDS_OF+=(""); _WS_PATH_USERS_WHY_OF+=(""); done; return 0; };`;
   return `${o.cwd ?? '_ws_cwd_users() { return 0; };'} ${many} ${idle}`;
 };
 
@@ -213,6 +213,21 @@ describe('the ladder: one case per rung, each red when its rung is deleted', () 
     expect(held.refusal).toBe('in-use');
     const unm = audit(t, stubs({ cwd: '_ws_cwd_users() { _WS_CWD_USERS_WHY="the walk failed"; return 2; };' }));
     expect(unm.verdict).toBe('unmeasured'); expect(unm.token).toBeNull();
+  }, 60_000);
+
+  it('12 an unmeasured holder probe is never nobody', () => {
+    const t = claudeTree();
+    const d = audit(t, stubs({ many: 'unmeasured' }));
+    expect(d.verdict).toBe('unmeasured'); expect(d.token).toBeNull(); expect(d.refusal).toBe('unmeasured');
+  }, 60_000);
+
+  it('the token binds the tree’s own identity: the same tree recreated under its name mints another', () => {
+    const t = claudeTree(); const a = audit(t);
+    fs.renameSync(t, `${t}.old`); execFileSync('cp', ['-a', `${t}.old`, t]);
+    const b = audit(t);
+    fs.rmSync(`${t}.old`, { recursive: true, force: true });
+    expect(a.token).toBeTruthy(); expect(b.verdict, b.detail).toBe('token');
+    expect(b.token).not.toBe(a.token);
   }, 60_000);
 
   it('13 changed-recently: a 6-day-old change refuses, an 8-day-old one passes, and the file is read by ctime', () => {
