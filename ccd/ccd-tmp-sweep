@@ -578,8 +578,11 @@ def walk(path, noatime, ctr=None):
         except OSError:
             r['ok'], r['why'] = False, 'unreadable'
             return r
+        # a repository is a `.git` child or a bare git dir (HEAD, objects/, refs/); a bare one can hold the only copy
+        names = {k.name for k in kids}
+        bare = os.path.basename(p) != '.git' and {'HEAD', 'objects', 'refs'} <= names
         for k in kids:
-            if k.name == '.git':
+            if k.name == '.git' or (bare and k.name == 'HEAD'):
                 if len(r['repos']) < REPO_CAP: r['repos'].append(p)
                 else: r['reposTruncated'] = True
             try:
@@ -589,18 +592,36 @@ def walk(path, noatime, ctr=None):
                 return r
     return r
 
+def local_remote(rp, urls):
+    """True when a remote URL of rp is a local path inside a swept root: that copy goes with the sweep, so it is no remote."""
+    rts = [os.path.realpath(x) for r in roots for x in (r['path'], r['literal'])]
+    for u in urls:
+        u = u.strip()
+        if u.startswith('file://'): u = u[7:]
+        elif re.match(r'^[A-Za-z][A-Za-z0-9+.-]*://', u) or re.match(r'^[^/]*@?[^/:]+:', u): continue
+        full = os.path.realpath(u if os.path.isabs(u) else os.path.join(rp, u))
+        if any(full == t or full.startswith(t.rstrip('/') + '/') for t in rts): return True
+    return False
+
 def unpushed(repos):
-    """True when any repository holds work on no remote, or when that cannot be told."""
+    """True when any repository holds work on no remote, or when that cannot be told. Like ccd's reclaim rule a
+    commit only a reflog names counts, and a git that complains is an unmeasured answer, so it keeps."""
     env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
     for rp in repos:
         try:
             base = ['git', '--no-optional-locks', '-C', rp, '-c', 'core.fsmonitor=', '-c', 'safe.directory=*']
-            s = subprocess.run(base + ['status', '--porcelain'], capture_output=True, text=True, timeout=30, env=env)
-            c = subprocess.run(base + ['rev-list', '-n1', '--all', '--not', '--remotes'], capture_output=True, text=True, timeout=30, env=env)
+            bare = subprocess.run(base + ['rev-parse', '--is-bare-repository'], capture_output=True, text=True, timeout=30, env=env)
+            if bare.returncode != 0: return True
+            s = None
+            if bare.stdout.strip() != 'true':
+                s = subprocess.run(base + ['status', '--porcelain'], capture_output=True, text=True, timeout=30, env=env)
+            u = subprocess.run(base + ['config', '--get-regexp', r'^remote\..*\.(pushurl|url)$'], capture_output=True, text=True, timeout=30, env=env)
+            c = subprocess.run(base + ['rev-list', '-n1', '--all', '--reflog', '--not', '--remotes'], capture_output=True, text=True, timeout=30, env=env)
         except (OSError, subprocess.SubprocessError):
             return True
-        if s.returncode != 0 or c.returncode != 0 or s.stdout.strip() or c.stdout.strip():
-            return True
+        if s is not None and (s.returncode != 0 or s.stdout.strip()): return True
+        if u.returncode not in (0, 1) or c.returncode != 0 or c.stderr.strip() or c.stdout.strip(): return True
+        if local_remote(rp, [ln.split(None, 1)[1] for ln in u.stdout.splitlines() if ' ' in ln]): return True
     return False
 
 def physical(rootphys, rel):

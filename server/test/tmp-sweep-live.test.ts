@@ -671,6 +671,51 @@ describe('the size budget', () => {
     expect(session(census()).budget.kept[0]).toEqual({ name: 'repo', why: 'git-work-unrescued' });
   }, 180_000);
 
+  /** One kept-entry case: the shape `build` makes inside entry `a` must hold the budget's hand (git-work-unrescued). */
+  function keptShape(build: (a: string, root: string) => void): void {
+    liveSession();
+    const [a] = sizes([['repo', 200, 6 * 24], ['b', 400, 5 * 24], ['c', 400, 4 * 24], ['d', 400, 3 * 24]]) as [string];
+    build(a, path.dirname(a));
+    setTimes(a, NOW0 - 6 * DAY);
+    arm();
+    sweep();
+    sweep({ plusS: 25 * HOUR });
+    expect(exists(a)).toBe(true);
+    expect(session(census()).budget.kept[0]).toEqual({ name: 'repo', why: 'git-work-unrescued' });
+  }
+
+  it('a bare repository holding the only copy of a commit is kept (git-work-unrescued)', () => {
+    keptShape((a) => {
+      const bare = path.join(a, 'work.git');
+      execFileSync('git', ['init', '-q', '--bare', bare], { env: GIT_ENV() });
+      const clone = fs.mkdtempSync(path.join(h.home, 'gone-clone-'));
+      git(clone, 'init', '-q'); fs.writeFileSync(path.join(clone, 'w'), 'x'); git(clone, 'add', '-A'); git(clone, 'commit', '-q', '-m', 'w');
+      git(clone, 'push', '-q', bare, 'HEAD');
+      fs.rmSync(clone, { recursive: true, force: true });
+    });
+  }, 180_000);
+
+  it('a commit only a reflog names is work on no remote: kept (git-work-unrescued)', () => {
+    keptShape((a) => {
+      git(a, 'init', '-q'); git(a, 'add', '-A'); git(a, 'commit', '-q', '-m', 'a');
+      fs.writeFileSync(path.join(a, 'b'), 'b'); git(a, 'add', '-A'); git(a, 'commit', '-q', '-m', 'b');
+      git(a, 'reset', '-q', '--hard', 'HEAD~1');
+      const remote = path.join(h.home, 'reflog-remote.git');
+      execFileSync('git', ['init', '-q', '--bare', remote], { env: GIT_ENV() });
+      git(a, 'remote', 'add', 'origin', remote); git(a, 'push', '-q', 'origin', 'HEAD'); git(a, 'fetch', '-q', 'origin');
+    });
+  }, 180_000);
+
+  it('a clone whose only remote is a sibling bare repository inside the swept root is kept (git-work-unrescued)', () => {
+    keptShape((a) => {
+      const sib = path.join(a, 'sibling.git');
+      execFileSync('git', ['init', '-q', '--bare', sib], { env: GIT_ENV() });
+      const clone = path.join(a, 'clone'); fs.mkdirSync(clone);
+      git(clone, 'init', '-q'); fs.writeFileSync(path.join(clone, 'w'), 'x'); git(clone, 'add', '-A'); git(clone, 'commit', '-q', '-m', 'w');
+      git(clone, 'remote', 'add', 'origin', sib); git(clone, 'push', '-q', 'origin', 'HEAD'); git(clone, 'fetch', '-q', 'origin');
+    });
+  }, 180_000);
+
   /** A repository entry whose work a remote has, beside a recent entry that cannot go: the repository is the only way under. */
   function pushedRepo(): string {
     const [a] = sizes([['repo', 400, 6 * 24], ['recent', 1000, 1]]) as [string];
