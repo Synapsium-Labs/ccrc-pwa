@@ -157,7 +157,7 @@ One PR, from this workspace's own branch.
     - the module header (:25-31) and the `FleetClient` class doc (:150-159), comments only;
     - `RemoteFleetConfig` (:37-48), one new optional field;
     - the constants block (:73-77), one new constant;
-    - the private fields (:171-181), two new fields;
+    - the private fields (:171-181), one new field;
     - the constructor (:189-199), one new line;
     - `connect` (:353-372): the arm call, the `close` listener passing its code, and one `note` call in the `catch`
       (:358-362, D-6526);
@@ -351,8 +351,8 @@ the task (below).
 | M18 | the deadline is armed at socket creation, before the TCP connect completes (T2) | in `connect`, replace `this.armReadyDeadline(ws);` with `(ws as unknown as { _req: import('node:http').ClientRequest })._req.once('socket', (s) => s.once('connect', () => this.armReadyDeadline(ws)));` (`ws` keeps its request as `_req`, websocket.js `initAsClient`) | W27-L12 (attempt 0 writes its upgrade) | revision probe of the shape, not the row: armed on `connect`, the upgrade was written, 3 of 3 |
 | M19 | a socket that cannot be created is logged (T3) | delete the `this.note('never-ready', …)` call in `connect`'s `catch` | W27-L13 (no line) | unmeasured: added in review |
 | M20 | that line never prints the URL (T3) | in that call, print `err.message` in place of `err.name` | W27-L13 (the line reads `socket not created: Invalid URL: not-a-url`) | revision probe: `ws`'s message for `not-a-url` is `Invalid URL: not-a-url` |
-| M21 | an agent refusal is logged once (T3) | delete the `this.note('refused', …)` call in `onClose` | W27-L14 | unmeasured: added by ruling 2 |
-| M22 | that line prints a sanitised reason (T3) | print the raw reason, `reason.toString()`, with no cut or replacement | W27-L14 | unmeasured: added by ruling 2 |
+| M21 | an agent refusal is logged once (T3) | delete the `this.note('refused', …)` call in `onClose` | W27-L14, L15 (D-6529) | unmeasured: added by ruling 2 |
+| M22 | that line prints a sanitised reason (T3) | print the raw reason, `reason.toString()`, with no cut or replacement | W27-L14, L15 (D-6529) | unmeasured: added by ruling 2 |
 | M23 | a refusal reason that repeats the token is withheld (T3) | delete the token-window check in `refusalReason` | W27-L15 | unmeasured: added by D-6529 |
 
 The deadline's choice to terminate its CAPTURED socket, not `this.socket`, has no row of its own (D-6517): before

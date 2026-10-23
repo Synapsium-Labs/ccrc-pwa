@@ -1,4 +1,4 @@
-// Wave 27 (D-6514 to D-6527): the link to the fleet agent cannot wait forever before `ready`.
+// Wave 27 (D-6514 to D-6529): the link to the fleet agent cannot wait forever before `ready`.
 // Every row runs on real timers against an in-process loopback peer (`linkPeer`), never a real agent: a node:http
 // server whose upgrade handling is chosen per attempt, so one port can be silent first and healthy later.
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -117,7 +117,7 @@ const NOT_CREATED = (name: string): string =>
 const REFUSED = (code: number, reason: string): string =>
   `ccrc-server: agent link: agent refused the hello (close ${code} ${reason}); retrying`;
 
-describe('W27: the link to the fleet agent cannot wait forever before ready (D-6514 to D-6527)', () => {
+describe('W27: the link to the fleet agent cannot wait forever before ready (D-6514 to D-6529)', () => {
   let peer: LinkPeer | undefined;
   let fleet: ConnectedFleet | undefined;
 
