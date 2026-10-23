@@ -283,6 +283,13 @@ describe.skipIf(!LINUX)('pressure and the floor', () => {
     expect(docFor(bad)['collect']).toMatchObject({ unmeasured: 'floor' });
   }, 60_000);
 
+  it('under pressure the raise knob still raises: 7 days at 25 h quiet answers changed-recently with floorS 604800', () => {
+    const p = mkLoose('stray-dir');
+    const r = docFor(audit('stray-dir', `${PRESSURE} WS_COLLECT_LOOSE_FLOOR_S=604800; ${clockAfter(p, 25)}`));
+    expect(r['verdict']).toBe('changed-recently');
+    expect(r['collect']).toMatchObject({ floorS: 604800, pressure: true });
+  }, 60_000);
+
   it('_disk_pressure reads df: bytes or inodes at 92 percent or more, nothing else', () => {
     expect(fs.readFileSync(CCD, 'utf8')).toContain('_DISK_CRITICAL_PCT=92');
     const bin = path.join(h.home, 'fakebin'); fs.mkdirSync(bin);
@@ -444,6 +451,16 @@ describe.skipIf(!LINUX)('the verb: ws-collect --expect <token> --loose-hex <hex>
     const c = census();
     expect(c['records']).toEqual([]);
     expect(c['recordsUnmeasured']).toBe(1);
+  }, 60_000);
+
+  it('an unlistable record directory is counted unmeasured, never an empty list', () => {
+    const rec = path.join(regDir(), 'tmpquarantine-loose');
+    fs.mkdirSync(rec, { recursive: true });
+    fs.writeFileSync(path.join(rec, '0123456789abcdef.1.2'), 'garbage\n');
+    // The suite runs as root where a mode bit cannot make a directory unreadable, so the listing itself fails here.
+    const c = census(`find() { case "$*" in *tmpquarantine-loose*) echo 'find: denied' >&2; return 1 ;; esac; command find "$@"; };`);
+    expect(c['records']).toEqual([]);
+    expect(c['recordsUnmeasured']).toBeGreaterThanOrEqual(1);
   }, 60_000);
 
   it('a pause read in the lock stops the verb before anything moves', () => {
