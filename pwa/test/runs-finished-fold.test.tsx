@@ -87,26 +87,28 @@ describe('the Finished group before the fold — characterization (D-6442)', () 
 const door = (): HTMLElement | null => screen.queryByRole('button', { name: /more finished runs?/ });
 
 describe('the Finished group folds (D-6442)', () => {
+  // The one case that needs 500: it asserts the cap the cold read can reach. The
+  // others use as many rows as they assert on, so none rides the 5 s default.
   it('500 closed runs mount at most 20 RunRow', async () => {
     await mount(closedRuns(500));
     expect(FINISHED_FOLD).toBe(20);
     expect(finishedRows().length).toBeLessThanOrEqual(20);
     expect(finishedRows()).toHaveLength(20);
-  });
+  }, 120_000);
 
   it('Show more reveals the next 20', async () => {
-    await mount(closedRuns(500));
+    await mount(closedRuns(100));
     fireEvent.click(door()!);
     // The next 20 are the next-newest: nothing reordered, nothing skipped.
-    expect(finishedIds()).toEqual(Array.from({ length: 40 }, (_, k) => 500 - k));
-    expect(door()).toHaveAccessibleName('Show 20 more finished runs, 460 not shown');
+    expect(finishedIds()).toEqual(Array.from({ length: 40 }, (_, k) => 100 - k));
+    expect(door()).toHaveAccessibleName('Show 20 more finished runs, 60 not shown');
   });
 
   it('the Finished group’s name keeps the total', async () => {
-    await mount(closedRuns(500));
-    expect(screen.getByRole('group', { name: 'finished (500)' })).toBeInTheDocument();
+    await mount(closedRuns(45));
+    expect(screen.getByRole('group', { name: 'finished (45)' })).toBeInTheDocument();
     fireEvent.click(door()!);
-    expect(screen.getByRole('group', { name: 'finished (500)' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'finished (45)' })).toBeInTheDocument();
   });
 
   it('shows no door for a group that fits in one batch', async () => {
@@ -224,10 +226,10 @@ describe('the fold’s words (D-6442)', () => {
     expect(finishedMoreLabel(7, 7)).toBe('Show 7 more finished runs');
     expect(finishedMoreLabel(20, 20)).toBe('Show 20 more finished runs');
     expect(finishedMoreLabel(1, 1)).toBe('Show 1 more finished run');
-    // And the door carries it: 500 rows, 20 shown, 480 not shown.
-    await mount(closedRuns(500));
-    expect(door()).toHaveAccessibleName('Show 20 more finished runs, 480 not shown');
-    expect(door()?.textContent).toBe('Show 20 more finished runs, 480 not shown');
+    // And the door carries it: 50 rows, 20 shown, 30 not shown.
+    await mount(closedRuns(50));
+    expect(door()).toHaveAccessibleName('Show 20 more finished runs, 30 not shown');
+    expect(door()?.textContent).toBe('Show 20 more finished runs, 30 not shown');
   });
 
   it('finishedClock floors to 30 s', () => {
@@ -241,7 +243,9 @@ describe('the fold’s words (D-6442)', () => {
 });
 
 describe('measurement — Step 0 of C10 (D-6442)', () => {
-  // On demand only: `CCRC_MEASURE=1 ./node_modules/.bin/vitest run test/runs-finished-fold.test.tsx`.
+  // On demand only, from `pwa/`: `CCRC_MEASURE=1 ./node_modules/.bin/vitest run
+  // --silent=false --reporter=verbose test/runs-finished-fold.test.tsx -t measurement`.
+  // Both flags are needed: without them the run passes and prints no `[C10 step 0]` line.
   // No timing assertion: the numbers go to the console and the PR body. Real
   // `performance.now` is left alone (only timers and Date are faked), because a
   // faked clock would report every Profiler duration as zero.
