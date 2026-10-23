@@ -143,9 +143,9 @@ const EXPECTED_SITES: readonly string[] = [
   'watch.ts | detectDialogs | readRegistry | tests-only',
   'watch.ts | sweepHookStates | readRegistryMeasured | tests-only',
   'watch.ts | sweepMail | readRegistryMeasured | holds',
-  'watch.ts | sweepNames | readRegistry | omits',
-  'watch.ts | sweepPr | readRegistry | omits',
-  'watch.ts | sweepTasks | readRegistryMeasured | omits',
+  'watch.ts | namesPass | readRegistry | omits',
+  'watch.ts | prPass | readRegistry | omits',
+  'watch.ts | tasksPass | readRegistryMeasured | omits',
   'watch.ts | tick | readRegistryMeasured | omits',
 ];
 
