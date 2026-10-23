@@ -212,6 +212,7 @@ describe('remote SpawnPty — terminal drawer over the agent WS', () => {
     expect((pty as unknown as { queue: unknown[] }).queue).toEqual([]);
     expect((pty as unknown as { closed: boolean }).closed).toBe(true);
     pty.write('after');
+    expect((pty as unknown as { queue: unknown[] }).queue).toEqual([]);
     expect(sendPty).not.toHaveBeenCalledWith(expect.objectContaining({ ev: 'input' }));
     expect(exits).toBe(1);
   });
@@ -220,7 +221,7 @@ describe('remote SpawnPty — terminal drawer over the agent WS', () => {
     const fake = makeFakeSpawn();
     await connected(fake.spawn);
     const sendPty = vi.spyOn(fleet!.client, 'sendPty');
-    vi.spyOn(fleet!.client, 'request').mockResolvedValue({ t: 'res', id: 1 });
+    vi.spyOn(fleet!.client, 'request').mockResolvedValue({ t: 'res', id: 1, ok: true });
 
     const pty = new RemotePty(fleet!.client as FleetClient, 'sess-a', 80, 24);
     let exits = 0;
@@ -232,6 +233,7 @@ describe('remote SpawnPty — terminal drawer over the agent WS', () => {
     expect((pty as unknown as { queue: unknown[] }).queue).toEqual([]);
     expect((pty as unknown as { closed: boolean }).closed).toBe(true);
     pty.write('after');
+    expect((pty as unknown as { queue: unknown[] }).queue).toEqual([]);
     expect(sendPty).not.toHaveBeenCalledWith(expect.objectContaining({ ev: 'input' }));
     expect(exits).toBe(1);
   });
