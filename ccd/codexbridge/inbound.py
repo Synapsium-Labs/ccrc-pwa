@@ -137,11 +137,9 @@ def _unsupported(what: str, value: object, names: NameSink) -> errors.BridgeErro
 
 # ── headers ──────────────────────────────────────────────────────────────────────────────────────────────────────
 def _header_values(headers: Mapping[str, str], name: str) -> List[str]:
-    """Every value of one header: `get_all` on an http.client message (case-insensitive already), else a
-    case-insensitive scan of a plain mapping."""
-    get_all = getattr(headers, "get_all", None)
-    if get_all is not None:
-        return [v for v in (get_all(name) or []) if isinstance(v, str)]
+    """Every value of one header, from one case-insensitive scan of `items()`: a plain mapping yields each name
+    once, and an http.client message yields every repeated line, so both read the same way. `name` is one of the
+    lower-case header constants above."""
     out = []
     for k, v in getattr(headers, "items", lambda: [])():
         if isinstance(k, str) and k.lower() == name and isinstance(v, str):
@@ -172,7 +170,7 @@ def _drop_billing(text: str) -> str:
     """A text without its billing line: Claude Code's first system block is `x-anthropic-billing-header: …;`, whose
     suffix varies between requests and would break the prefix cache. Only the block's FIRST line is removed: the
     rest of a block (or of a string system value) that starts with the billing line is kept, so no system text after
-    it is lost (D-TBD-inbound-billing-first-line)."""
+    it is lost (a departure named in the Task 2 report)."""
     if not text.startswith(BILLING_PREFIX):
         return text
     newline = text.find("\n")
