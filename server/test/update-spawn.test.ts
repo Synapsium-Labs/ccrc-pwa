@@ -46,11 +46,21 @@ async function untilDead(pid: number): Promise<boolean> {
   return false;
 }
 /** The moment a process is observed gone (polled every 5 ms). A drain bound is measured from the PARENT'S exit, so the
- *  measurement must not include the script's own start-up: `Date.now()` before the spawn would. */
+ *  measurement must not include the script's own start-up: `Date.now()` before the spawn would. It serves the CEILINGS
+ *  only (D-6607): the poll can see a death late under load, by more than 100 ms on a loaded runner, which only makes an
+ *  upper bound easier but makes a floor read short of the drain that really ran. A floor measures from the parent's own
+ *  exit stamp (`EXIT_STAMP`, `stampFrom`). */
 async function deadAt(pid: number): Promise<number> {
   for (let i = 0; i < 4000; i += 1) { if (!alive(pid)) return Date.now(); await new Promise((r) => setTimeout(r, 5)); }
   throw new Error(`pid ${pid} never exited`);
 }
+/** The parent's own exit time, in milliseconds, written just before its `exit 0` by the test's own node (D-6608):
+ *  `date +%s%3N` is GNU-only, and `$EPOCHREALTIME` needs bash 5 where the launcher runs under bash 3.2 on macOS. The
+ *  node start-up happens before the exit, so it only makes the stamp earlier, the floor's safe direction. */
+const EXIT_STAMP = `'${process.execPath}' -e 'process.stdout.write(String(Date.now()))' > "$DIR/exit.ms"`;
+/** Poll to the parent's exit stamp (`pidFrom`'s bounded poll): a stamp that never arrives fails by name. */
+const stampFrom = (file: string): Promise<number> =>
+  pidFrom(file).catch(() => { throw new Error(`the parent wrote no exit stamp in ${file}`); });
 /** The room a kill-path case gives its scripts to write their pid files before the bound can fire. */
 const KILL_BOUND_MS = 3000;
 /** A grandchild in its OWN session that inherits (and so holds) the parent's stdout and stderr pipes. The node that
@@ -131,7 +141,7 @@ describe('boundedUpdateSpawn — the real process-group spawner (server role)', 
 
   it('a grandchild that left the group and holds the pipes does not stop the answer: a parent that exits 0 answers within the drain bound, stdout null', async () => {
     const dir = fixtureDir();
-    const file = script(dir, `echo $$ > "$DIR/parent.pid"\n${ESCAPEE}\necho parent-done\nexit 0`);
+    const file = script(dir, `echo $$ > "$DIR/parent.pid"\n${ESCAPEE}\necho parent-done\n${EXIT_STAMP}\nexit 0`);
     const running = boundedUpdateSpawn(file, [], { env: ENV, timeoutMs: 10_000 });
     const parent = await pidFrom(path.join(dir, 'parent.pid'));
     pids.push(parent);   // recorded before the answer, so a red run still cleans up
@@ -142,8 +152,12 @@ describe('boundedUpdateSpawn — the real process-group spawner (server role)', 
     const answeredAt = running.then(() => Date.now());
     const r = await running;
     const took = await answeredAt - await parentGone;   // from the PARENT'S exit, not from before the spawn
+    // The floor measures from the parent's own stamp, written before it exits (D-6607): the drain is armed by the
+    // exit, so `answeredAt - stamp` is at least the drain under any load, where a late `deadAt` poll reads it short.
+    const stamp = await stampFrom(path.join(dir, 'exit.ms'));
+    expect(Number.isFinite(stamp), `the exit stamp is not a number: ${stamp}`).toBe(true);
     expect(r).toMatchObject({ code: 0, killed: false, stdout: null });
-    expect(took).toBeGreaterThanOrEqual(UPDATE_SPAWN_DRAIN_MS - 100);
+    expect(await answeredAt - stamp).toBeGreaterThanOrEqual(UPDATE_SPAWN_DRAIN_MS - 100);
     expect(took).toBeLessThan(UPDATE_SPAWN_DRAIN_MS + 1500);
     expect(took).toBeLessThan(UPDATE_OP_TIMEOUT_MS);
   }, 20_000);

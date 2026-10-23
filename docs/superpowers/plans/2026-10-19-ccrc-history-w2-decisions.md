@@ -285,7 +285,7 @@ flowchart LR
 
 ### W2-6 (deploy): the report-only counters (required, despite the name)
 
-**Ships:** `deploy/history-counters.mjs`, a standalone entry. It is not imported by history-replay.mjs, and it imports `turnsOf`, the window builder and `COUNTERS_DEF_V1` from the gate. It provides the five spec counters (compliance, echo hits, lag, `card_served`, `card_id_mismatch`) plus re-discovery, each by arm and by producer (W2-D86 to W2-D88). It also adds the single-definition pin naming the two callers of `turnsOf`, a pin that its definitions match `COUNTERS_DEF_V1`, one README line, and the §10.2:2729-2730 errata.
+**Ships:** `deploy/history-counters.mjs`, a standalone entry. It is not imported by history-replay.mjs, and it imports `turnsOf`, the window builder and `COUNTERS_DEF_V1` from the gate. It provides the five spec counters (compliance, echo hits, lag, `card_served`, `card_id_mismatch`) plus re-discovery, each by arm and by producer (W2-D86 to W2-D88). It also adds the single-definition pin naming the two callers of `turnsOf`, a pin that its definitions match `COUNTERS_DEF_V1`, one README paragraph (amended in place by the coordinator, 2026-10-23, W2-6 plan U16), and the §10.2:2729-2730 errata.
 
 **Files:**
 - create `deploy/history-counters.mjs`;

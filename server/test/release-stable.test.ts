@@ -9,7 +9,7 @@
 // Fixture: a real one-commit repo (the `--points-at HEAD` question is git's;
 // the script is COPIED into its deploy/ so `${BASH_SOURCE[0]}` resolves
 // there), a stub gh that answers `release view` and `api …/releases/latest`
-// from fixture files and RECORDS every argv, npm/curl poisons. Never the
+// from fixture files and RECORDS every argv, npm/curl/node poisons. Never the
 // network.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
@@ -17,10 +17,12 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFile
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { pathsIgnore } from './workflowTrigger.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const SCRIPT = join(REPO, 'deploy', 'release-stable.sh');
+const WORKFLOW = join(REPO, '.github', 'workflows', 'release-main.yml');
 
 const GIT_ENV = {
   GIT_AUTHOR_NAME: 'ccrc fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
@@ -167,6 +169,200 @@ describe('release-stable.sh: what it refuses', () => {
     const r = run(root, home, [], { latest: 'v1.2.4' });
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/promoted v1\.2\.3 to stable, but GitHub's latest is v1\.2\.4/);
+  });
+});
+
+/** Commit the given files (path -> text) on top of the fixture's HEAD. */
+function commitFiles(root: string, files: Record<string, string>, msg = 'a merge'): void {
+  for (const [rel, text] of Object.entries(files)) {
+    mkdirSync(path.dirname(join(root, rel)), { recursive: true });
+    writeFileSync(join(root, rel), text);
+  }
+  git(root, 'add', '-A');
+  git(root, 'commit', '-q', '-m', msg);
+}
+
+const REFUSAL_HEAD = 'release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD ';
+
+describe('release-stable.sh: the refusal of a HEAD with no release tag says what is true (W25, D-6398)', () => {
+  /** The refusal is the whole answer: exit 2, nothing on stdout, no gh call,
+   *  and ONE line on stderr. The fixture's PATH poisons node, npm and curl. */
+  function refused(home: string, r: Result): string {
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stdout).toBe('');
+    expect(ghArgv(home)).toEqual([]);
+    expect(r.stderr.split('\n').filter((l) => l !== '')).toHaveLength(1);
+    expect(r.stderr.endsWith('\n')).toBe(true);
+    return r.stderr;
+  }
+  const docsOnly = { 'README.md': '# fixture, edited\n', 'docs/a.md': 'a\n' };
+  const shipped = { 'server/src/x.ts': 'export const x = 1;\n' };
+  const pointerTail = (full: string): string =>
+    `A main merge whose build came out unchanged cuts no release either: the release-main run for ${full} printed "built unchanged" or what differed, or was cancelled before it started because a later merge's run replaced it, and then that later run's line covers this merge`;
+  const DOCS_WHY = "HEAD's merge changed only docs/ or the root's Markdown, so no release-main run started for it.";
+
+  it('W25-T1: a HEAD whose merge changed a shipped path is refused in one line naming the release, the full sha and "built unchanged"', () => {
+    const home = mkTmp('ccrc-relstable-t1-');
+    const root = fixture(home, { tagHead: 'v1.2.3' });
+    commitFiles(root, shipped);
+    const short = git(root, 'rev-parse', '--short', 'HEAD');
+    const full = git(root, 'rev-parse', 'HEAD');
+    const err = refused(home, run(root, home));
+    expect(err).toBe(
+      `${REFUSAL_HEAD}${short} carries no vX.Y.Z tag; the newest release it contains is v1.2.3). ${pointerTail(full)}. stable now sits past v1.2.3 and cannot move back (fast-forward only); the next release cut from a descendant of ${short} is the next commit it can promote. Nothing was changed\n`);
+    expect(err).toContain('v1.2.3');
+    expect(err).toContain(full);
+    expect(err).toContain('built unchanged');
+  });
+
+  it('W25-T1b: a HEAD whose merge changed only docs/ and the root Markdown says no release-main run started, and names the release', () => {
+    const home = mkTmp('ccrc-relstable-t1b-');
+    const root = fixture(home, { tagHead: 'v1.2.3' });
+    commitFiles(root, { 'docs/x.md': 'x\n', 'README.md': '# fixture, edited\n' });
+    const short = git(root, 'rev-parse', '--short', 'HEAD');
+    const full = git(root, 'rev-parse', 'HEAD');
+    const err = refused(home, run(root, home));
+    expect(err).toBe(
+      `${REFUSAL_HEAD}${short} carries no vX.Y.Z tag; the newest release it contains is v1.2.3). ${DOCS_WHY} stable now sits past v1.2.3 and cannot move back (fast-forward only); the next release cut from a descendant of ${short} is the next commit it can promote. Nothing was changed\n`);
+    expect(err).not.toContain(full);
+    expect(err).not.toContain('built unchanged');
+  });
+
+  it('W25-T1c: the docs rule is root-anchored and ends at the directory; a Markdown file below the root, a docs directory below the root, one non-docs path among docs paths, a docs- prefix or a root file named docs all point at the run', () => {
+    const cases: Array<[string, Record<string, string>]> = [
+      ['skill', { 'ccd/x/SKILL.md': 'x\n' }],
+      ['nested', { 'pwa/src/docs/a.ts': 'x\n' }],
+      ['mixed', { 'docs/a.md': 'a\n', 'server/src/x.ts': 'x\n' }],
+      ['root-non-md', { 'LICENSE': 'x\n' }],
+      ['docs-prefix', { 'docs-site/a.ts': 'x\n' }],
+      ['root-docs-file', { 'docs': 'x\n' }],
+    ];
+    for (const [name, files] of cases) {
+      const home = mkTmp(`ccrc-relstable-t1c-${name}-`);
+      const root = fixture(home, { tagHead: 'v1.2.3' });
+      commitFiles(root, files);
+      const full = git(root, 'rev-parse', 'HEAD');
+      const err = refused(home, run(root, home));
+      expect(err, name).toContain(`${pointerTail(full)}. stable now sits past`);
+      expect(err, name).not.toContain('no release-main run started');
+    }
+  });
+
+  it('W25-T1d: an empty HEAD commit (no changed path) points at the run; "only docs" needs at least one path', () => {
+    const home = mkTmp('ccrc-relstable-t1d-');
+    const root = fixture(home, { tagHead: 'v1.2.3' });
+    git(root, 'commit', '-q', '--allow-empty', '-m', 'an empty merge');
+    const full = git(root, 'rev-parse', 'HEAD');
+    const err = refused(home, run(root, home));
+    expect(err).toContain(`${pointerTail(full)}. stable now sits past`);
+    expect(err).not.toContain('no release-main run started');
+  });
+
+  it('W25-T9: a shipped file renamed under docs/ points at the run — a rename is listed by both its names (--no-renames)', () => {
+    const home = mkTmp('ccrc-relstable-t9-');
+    const root = fixture(home);
+    commitFiles(root, { 'deploy/x.sh': 'echo shipped\n' }, 'a shipped script');
+    git(root, 'tag', 'v1.2.3');
+    mkdirSync(join(root, 'docs'));
+    git(root, 'mv', 'deploy/x.sh', 'docs/x.sh');
+    git(root, 'commit', '-q', '-m', 'move it to docs');
+    expect(git(root, 'diff', '--name-status', 'HEAD^', 'HEAD'), 'git itself sees a rename').toMatch(/^R100\tdeploy\/x\.sh\tdocs\/x\.sh$/);
+    const full = git(root, 'rev-parse', 'HEAD');
+    const err = refused(home, run(root, home));
+    expect(err).toContain(`${pointerTail(full)}. stable now sits past v1.2.3`);
+    expect(err).not.toContain('no release-main run started');
+  });
+
+  // The script's case arms are a second copy of release-main.yml's
+  // paths-ignore list (D-6512). This row reads that list from the workflow and
+  // asks the script to classify sample paths for each pattern: inside and
+  // outside, at the root and at depth. A pattern with no samples here, or a
+  // sampled pattern the workflow no longer has, is red, so the two copies
+  // change together. "Outside" samples are outside every pattern.
+  const TRIGGER_SAMPLES: Record<string, { inside: string[]; outside: string[] }> = {
+    'docs/**': {
+      inside: ['docs/a.md', 'docs/sub/deep/b.ts'],
+      outside: ['docs.txt', 'docs-site/a.ts', 'pwa/src/docs/a.ts', 'server/docs/sub/c.json'],
+    },
+    '*.md': {
+      inside: ['README.md', 'NOTES.md'],
+      outside: ['LICENSE', 'ccd/x/SKILL.md', 'server/README.md'],
+    },
+  };
+  it('W25-T8: every paths-ignore pattern in release-main.yml has an arm here, and the arms classify its samples as the trigger does', () => {
+    const patterns = pathsIgnore(readFileSync(WORKFLOW, 'utf8'));
+    expect(patterns.length, 'the trigger has patterns').toBeGreaterThan(0);
+    let n = 0;
+    for (const pattern of patterns) {
+      const samples = TRIGGER_SAMPLES[pattern];
+      if (samples === undefined) throw new Error(`release-stable.sh has no arm for ${pattern}`);
+      for (const [where, list] of [['inside', samples.inside], ['outside', samples.outside]] as const) {
+        for (const p of list) {
+          const home = mkTmp('ccrc-relstable-t8-');
+          const root = fixture(home, { tagHead: 'v1.2.3' });
+          commitFiles(root, { [p]: 'x\n' });
+          const full = git(root, 'rev-parse', 'HEAD');
+          const err = refused(home, run(root, home));
+          const label = `${pattern} ${where}: ${p}`;
+          if (where === 'inside') expect(err, label).toContain(` ${DOCS_WHY} stable now sits past`);
+          else expect(err, label).toContain(`${pointerTail(full)}. stable now sits past`);
+          n++;
+        }
+      }
+    }
+    expect(Object.keys(TRIGGER_SAMPLES).sort(), 'a sampled pattern is no longer in the trigger').toEqual([...patterns].sort());
+    expect(n).toBeGreaterThan(0);
+  });
+
+  it('W25-T3: only a release HEAD contains is named; a tag on a side branch is not', () => {
+    const home = mkTmp('ccrc-relstable-t3-');
+    const root = fixture(home, { tagHead: 'v1.2.3' });
+    git(root, 'checkout', '-q', '-b', 'side', 'v1.2.3');
+    commitFiles(root, { 'side.txt': 'side\n' }, 'a side commit');
+    git(root, 'tag', 'v9.9.9');
+    git(root, 'checkout', '-q', 'stable');
+    commitFiles(root, docsOnly);
+    const err = refused(home, run(root, home));
+    expect(err).toContain('the newest release it contains is v1.2.3)');
+    expect(err).not.toContain('v9.9.9');
+  });
+
+  it('W25-T4: the newest contained release is the highest version, not the last in lexical order', () => {
+    const home = mkTmp('ccrc-relstable-t4-');
+    const root = fixture(home);
+    git(root, 'commit', '-q', '--allow-empty', '-m', 'one');
+    git(root, 'tag', 'v1.9.9');
+    git(root, 'commit', '-q', '--allow-empty', '-m', 'two');
+    git(root, 'tag', 'v1.9.10');
+    commitFiles(root, docsOnly);
+    const err = refused(home, run(root, home));
+    expect(err).toContain('the newest release it contains is v1.9.10)');
+    expect(err).toContain('stable now sits past v1.9.10 and');
+  });
+
+  it('W25-T5: a one-commit HEAD with no release anywhere says HEAD contains none, points at the run, and says its changed paths could not be read', () => {
+    const home = mkTmp('ccrc-relstable-t5-');
+    const root = fixture(home);
+    const short = git(root, 'rev-parse', '--short', 'HEAD');
+    const full = git(root, 'rev-parse', 'HEAD');
+    const err = refused(home, run(root, home));
+    expect(err).toBe(
+      `${REFUSAL_HEAD}${short} carries no vX.Y.Z tag, and it contains no release tag). ${pointerTail(full)} (HEAD's changed paths could not be read). stable now points at ${short} and cannot move back (fast-forward only); the first release cut from a descendant of ${short} is the next commit it can promote. Nothing was changed\n`);
+  });
+
+  it('W25-T7: no push, force, reset or tag^{commit} command in the refusal, with or without a contained release', () => {
+    for (const [name, tagHead, files] of [['t7a', 'v1.2.3', docsOnly], ['t7b', undefined, docsOnly], ['t7c', 'v1.2.3', shipped]] as const) {
+      const home = mkTmp(`ccrc-relstable-${name}-`);
+      const root = fixture(home, tagHead === undefined ? {} : { tagHead });
+      commitFiles(root, files);
+      const err = refused(home, run(root, home));
+      expect(err).not.toMatch(/git push|--force|push -f|\+refs|git reset|\^\{commit\}|<tag>/);
+    }
+  });
+
+  it('pin: the code (comments aside) calls neither release-main.sh nor node, and measures nothing', () => {
+    const code = readFileSync(SCRIPT, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code).not.toMatch(/deploy\/release-main\.sh|\bnode\b|\bmeasure\b/);
   });
 });
 

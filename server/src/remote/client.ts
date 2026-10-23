@@ -42,9 +42,9 @@ export interface RemoteFleetConfig {
   /** ms between heartbeat pings while connected. Default 15000. */
   heartbeatMs?: number;
   /** ms from a new socket's creation to the agent's `ready` before that attempt is terminated and retried: one wall
-   *  clock over TCP connect, the upgrade and the hello (wave 27, D-6514). Default 15000. A test seam like the
-   *  fields around it; the composition root passes only `url` and `token`. */
-  readyTimeoutMs?: number;
+   *  clock over TCP connect, the upgrade and the hello (wave 27, D-6514; #1160's name, D-6724). Default 15000. A test
+   *  seam like the fields around it; the composition root passes only `url` and `token`. */
+  connectTimeoutMs?: number;
   /** initial reconnect delay. Default 1000. */
   reconnectMinMs?: number;
   /** reconnect delay ceiling (doubles each failed attempt up to this). Default 30000. */
@@ -84,11 +84,14 @@ type LinkLine = 'lost' | 'no-pong' | 'never-ready' | 'no-ready' | 'refused';
 interface LinkEpisode { since: number; logged: Set<LinkLine>; failedAttempts: number }
 
 const DEFAULT_HEARTBEAT_MS = 15_000;
+// The heartbeat only starts at `ready`, so without this deadline a socket that never reaches `ready` is unwatched:
+// a peer that accepts TCP and never answers the upgrade (an agent mid-shutdown or mid-reboot behind the listen
+// backlog) stranded the controller on a half-open socket for over an hour. Generous against a slow link — the
+// whole handshake is two small frames — and equal to the default request timeout (wave 27, D-6516).
+const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_RECONNECT_MIN_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
-// The answer to hello waits no longer than the answer to a request (D-6516).
-const DEFAULT_READY_TIMEOUT_MS = 15_000;
 const HEARTBEAT_MISS_LIMIT = 2;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -215,6 +218,7 @@ export class FleetClient {
   private backoffMs: number;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private connectTimer: NodeJS.Timeout | null = null;
   private awaitingPong = false;
   private missedPongs = 0;
   private episode: LinkEpisode | null = null;
@@ -230,7 +234,7 @@ export class FleetClient {
       url: cfg.url,
       token: cfg.token,
       heartbeatMs: cfg.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
-      readyTimeoutMs: cfg.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
+      connectTimeoutMs: cfg.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
       reconnectMinMs: cfg.reconnectMinMs ?? DEFAULT_RECONNECT_MIN_MS,
       reconnectMaxMs: cfg.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS,
       requestTimeoutMs: cfg.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -373,6 +377,7 @@ export class FleetClient {
       this.reconnectTimer = null;
     }
     this.stopHeartbeat();
+    this.clearConnectDeadline();
     // Path-identity spec 2026-10-12 §5.2: this path never reaches `onClose`. The socket is nulled below, so the
     // 'close' event's handler returns at its stale-socket guard, and this path therefore invalidates on its own.
     // `state.connected` is left as it was: changing it would change shutdown for every other reader.
@@ -405,7 +410,7 @@ export class FleetClient {
       return;
     }
     this.socket = ws;
-    this.armReadyDeadline(ws);
+    this.armConnectDeadline(ws);
     ws.on('open', () => {
       ws.send(JSON.stringify({ t: 'hello', token: this.cfg.token }));
     });
@@ -471,6 +476,7 @@ export class FleetClient {
     // trigger among them) already reads the new epoch, with nothing measured under it.
     this.identity.invalidate('awaiting-inventory');
     this.ready = true;
+    this.clearConnectDeadline();
     // Mutated directly rather than pushed through setState, whose change
     // detection compares only connected/downSince — a reconnect to an upgraded
     // agent must still refresh this.
@@ -589,6 +595,7 @@ export class FleetClient {
     this.socket = null;
     this.ready = false;
     this.stopHeartbeat();
+    this.clearConnectDeadline();
     this.rejectAllPending(new Error('disconnected'));
     // The agent kills every open pty on disconnect (per its own connection-
     // close handler) — synthesize the same `exit` locally for anything still
@@ -654,6 +661,28 @@ export class FleetClient {
     this.pending.clear();
   }
 
+  /** One wall-clock bound per attempt, from socket creation to `ready` (wave 27, D-6514; #1160's timer, D-6724).
+   *  `onReady`, `onClose` and `close()` clear it, and it re-checks when it fires (D-6517): a ready link is left alone;
+   *  otherwise the CAPTURED socket is terminated, never `this.socket`. `terminate` on CONNECTING aborts the handshake
+   *  and on OPEN destroys the socket; either way `close` follows and `onClose` reconnects with the existing backoff.
+   *  A deadline whose attempt is no longer current says nothing: its line and count belong to the current attempt. */
+  private armConnectDeadline(ws: WebSocket): void {
+    this.clearConnectDeadline();
+    this.connectTimer = setTimeout(() => {
+      this.connectTimer = null;
+      if (ws !== this.socket || this.ready) return; // a stale timer for a socket we already replaced
+      this.note('no-ready', `no ready within ${this.cfg.connectTimeoutMs}ms (${preReadyPhase(ws.readyState)}); `
+        + 'terminating this attempt and retrying');
+      ws.terminate(); // -> 'close' -> onClose -> reconnect (ws emits it for a CONNECTING socket too)
+    }, this.cfg.connectTimeoutMs);
+    this.connectTimer.unref?.();
+  }
+
+  private clearConnectDeadline(): void {
+    if (this.connectTimer) clearTimeout(this.connectTimer);
+    this.connectTimer = null;
+  }
+
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.awaitingPong = false;
@@ -679,22 +708,6 @@ export class FleetClient {
   private stopHeartbeat(): void {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
-  }
-
-  /** One wall-clock bound per attempt, from socket creation to `ready` (wave 27, D-6514). Never cleared: it re-checks
-   *  when it fires (D-6517). A ready link is left alone; otherwise the CAPTURED socket is terminated, never
-   *  `this.socket`, so a deadline outliving its attempt can only reach a socket already closed, where `terminate`
-   *  returns at once. `terminate` on CONNECTING aborts the handshake and on OPEN destroys the socket; either way
-   *  `close` follows and `onClose` reconnects with the existing backoff. A deadline whose attempt is no longer
-   *  current says nothing: its line and count belong to the current attempt. */
-  private armReadyDeadline(ws: WebSocket): void {
-    const timer = setTimeout(() => {
-      if (ws !== this.socket || this.ready) return;
-      this.note('no-ready', `no ready within ${this.cfg.readyTimeoutMs}ms (${preReadyPhase(ws.readyState)}); `
-        + 'terminating this attempt and retrying');
-      ws.terminate();
-    }, this.cfg.readyTimeoutMs);
-    timer.unref?.();
   }
 
   /** One `ccrc-server: agent link:` line per kind per episode; opens the episode if none is open, and returns it

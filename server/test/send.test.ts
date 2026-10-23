@@ -3,10 +3,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { sendPrompt, submitEnter, draftOf, draftOfMeasured, isMailResidue } from '../src/inject/send.js';
+import { sendPrompt, submitEnter, answerDialogText, draftOf, draftOfMeasured, isMailResidue, refusalShape, ECHO_BUDGET_MS, ECHO_POLL_MS, SUBMIT_TRIES } from '../src/inject/send.js';
+import { parseDialog } from '../src/pane/dialog.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
 
+/** D-6366: the echo polls a free sleep takes: the wait is the larger of ECHO_TRIES polls and ECHO_BUDGET_MS. */
+const ECHO_WAIT_POLLS = ECHO_BUDGET_MS / ECHO_POLL_MS;
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const noSleep = async () => {};
 
@@ -743,7 +746,7 @@ describe('sendPrompt', () => {
   // fragment). Widening the PWA gate on `code` alone would ship exactly that.
   it('the ATTACHMENT path keeps its residue draft for DISPLAY and never sets the flag', async () => {
     const NONMATCH = '❯ \n';
-    const panes = [...Array(14).fill(NONMATCH), '❯ stubborn leftover\n'];
+    const panes = [...Array(ECHO_WAIT_POLLS + 2).fill(NONMATCH), '❯ stubborn leftover\n'];
     const { tmux } = fakeTmux(panes);
     const res = await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', '', { attachments: ['/c/clip-1.png'] },
@@ -1453,7 +1456,7 @@ describe('sendPrompt with attachments', () => {
     // when the clear doesn't take, mirroring the replaceDraft C-u check above.
     const NONMATCH = '❯ \n'; // empty box — never echoes the attachment path
     const panes = [
-      ...Array(14).fill(NONMATCH),      // initial + 12 echo polls + the failure-path `after` read
+      ...Array(ECHO_WAIT_POLLS + 2).fill(NONMATCH), // initial + the echo polls + the failure-path `after` read
       '❯ stubborn leftover\n',          // post-C-u re-capture — still holds text
     ];
     const { tmux, calls } = fakeTmux(panes);
@@ -1480,7 +1483,7 @@ describe('the failed-send cleanup actually empties the box', () => {
     // fails in the first place. So every read the cleanup takes says "the box is
     // empty" while both typed lines are really sitting in it, and a clear that
     // stops when the box reads empty stops after ONE press and strands the whole
-    // prompt. (A finite `staleFrames: 14` — initial check + 12 echo polls + the
+    // prompt. (A finite `staleFrames: ECHO_WAIT_POLLS + 2` — initial check + the echo polls + the
     // failure-path plain capture — is the largest staleness whose LAST frame is
     // fresh again, and would hide exactly this.)
     const { tmux, calls, box } = boxTmux({ staleFrames: Infinity });
@@ -1555,7 +1558,7 @@ describe('the failed-send cleanup actually empties the box', () => {
     // above, so reporting a dead pane that way told the caller the box had been
     // emptied when the truth is "unknown". The two clear sites now agree on what
     // a null capture means.
-    const { tmux } = boxTmux({ staleFrames: 14, dieFrom: 15 }); // dies on the first post-C-u read
+    const { tmux } = boxTmux({ staleFrames: ECHO_WAIT_POLLS + 2, dieFrom: ECHO_WAIT_POLLS + 3 }); // dies on the first post-C-u read
     const res = await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'what is this', { attachments: [P] },
     );
@@ -1586,7 +1589,7 @@ describe('a menu that opens mid-clear stops the clear', () => {
   });
 
   it('the attachment cleanup stops pressing and reports no residual draft', async () => {
-    const panes = [...Array(14).fill('❯ \n'), MENU];
+    const panes = [...Array(ECHO_WAIT_POLLS + 2).fill('❯ \n'), MENU];
     const { tmux, calls } = fakeTmux(panes);
     const res = await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'what is this', { attachments: [P] },
@@ -2210,5 +2213,134 @@ describe('a typed line is never silently dropped (D-5046)', () => {
     expect(res).toEqual({ ok: false, error: 'type-failed' });
     expect(sendKeysCalls(calls)).toEqual([SK('-l', '--', 'hello')]);
     expect(box.lines).toEqual(['']);
+  });
+});
+
+// D-6366: what ends the proof after Enter, and what does not. A reply lost on the way back (a failed `send-keys` exit,
+// a capture that fails) says nothing about the box, so the proof reads the box again instead of giving up unread.
+describe('a lost reply after Enter does not end the proof (D-6366)', () => {
+  const OURS = '❯ hello there\n';
+  const EMPTY = '❯ \n';
+
+  /** A pane that answers by what was done to it: empty, then our text once typed, then `afterEnter` capture by
+   *  capture (the last repeats; `null` is a failed capture) once an Enter was pressed. */
+  function enterRig(o: { enterCode: number; afterEnter?: (string | null)[]; before?: string }) {
+    const afterEnter = o.afterEnter ?? [EMPTY];
+    let typed = false;
+    let entered = false;
+    let post = 0;
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'send-keys') {
+        if (args.includes('-l')) typed = true;
+        if (args.at(-1) === 'Enter') { entered = true; return { code: o.enterCode, stdout: '', stderr: '' }; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        if (!entered) return { code: 0, stdout: typed ? OURS : (o.before ?? EMPTY), stderr: '' };
+        const pane = afterEnter[Math.min(post++, afterEnter.length - 1)] ?? null;
+        return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { tmux: new Tmux(run), calls };
+  }
+  // A frozen clock: no capture stalls, so the blind-run deadline (`SUBMIT_BLIND_MS`) never ends a watch here; the poll count does.
+  const send = (tmux: Tmux) => sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep, now: () => 0 }, 'x', 'hello there');
+
+  it('a failed Enter press whose box then reads empty is ok', async () => {
+    // The press landed and its reply was lost; the next five captures fail (a link drop), then the box reads empty.
+    // Five outlast the two single-capture watches and the final read of a proof that gives up on a failed capture.
+    const { tmux } = enterRig({ enterCode: 1, afterEnter: [null, null, null, null, null, EMPTY] });
+    expect(await send(tmux)).toEqual({ ok: true });
+  });
+
+  it('a box that reads blind through both Enters and then reads without our text is ok', async () => {
+    // The final read after two Enters is the last chance to learn the text left; it asks.
+    const { tmux } = enterRig({ enterCode: 1, afterEnter: [...Array(2 * SUBMIT_TRIES).fill(null), EMPTY] });
+    expect(await send(tmux)).toEqual({ ok: true });
+  });
+
+  it('a box that reads blind through both Enters and then reads OTHER text is ok too', async () => {
+    // Other non-empty text that does not start with ours is what a taken turn and a busy session's queue hint look like.
+    const { tmux } = enterRig({ enterCode: 1, afterEnter: [...Array(2 * SUBMIT_TRIES).fill(null), '❯ some other text\n'] });
+    expect(await send(tmux)).toEqual({ ok: true });
+  });
+
+  it('submitEnter ("Send it") under a failed capture mid-watch presses one Enter, no second key, and answers ok', async () => {
+    // The rescue route shares the watch: a dropped read no longer ends its proof, and it never presses again.
+    const { tmux, calls } = fakeTmux(['❯ a stuck draft\n', null, null, '❯ \n']);
+    const res = await submitEnter({ tmux, queue: new KeyedQueue(), sleep: noSleep, now: () => 0 }, 'x', 'a stuck draft');
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', 'Enter']]);
+  });
+
+  it('a failed Enter press whose box still holds our text is enter-ignored', async () => {
+    const { tmux } = enterRig({ enterCode: 1, afterEnter: [OURS] });
+    expect(await send(tmux)).toMatchObject({ ok: false, error: 'enter-ignored', draft: 'hello there', submittable: true });
+  });
+
+  it('a box that reads blind to the end is enter-ignored with no claim about the box', async () => {
+    const { tmux } = enterRig({ enterCode: 1, afterEnter: [null] });
+    const res = await send(tmux);
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+    expect(res).not.toHaveProperty('draft');
+    expect(res).not.toHaveProperty('submittable');
+  });
+
+  it("a box holding someone else's text still refuses", async () => {
+    // Pins the guard BEFORE anything is typed: the box holds a human's draft, so the send refuses `draft-present` with no
+    // key sent, even on a rig whose Enter would fail. (What the proof reads AFTER an Enter is the cases above and below.)
+    const { tmux, calls } = enterRig({ enterCode: 1, before: '❯ a human mid-sentence\n' });
+    expect(await send(tmux)).toMatchObject({ ok: false, error: 'draft-present', draft: 'a human mid-sentence' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+});
+
+// D-6366: the `/prompt` route's log line describes a refusal's box by its shape alone, never its text.
+describe('refusalShape (D-6366)', () => {
+  it('a paste-chip draft is one row and a chip', () => {
+    expect(refusalShape({ ok: false, error: 'draft-present', draft: '[Pasted text #1 +42 lines]' })).toBe('rows=1 chip');
+  });
+
+  it('a multi-row draft counts its rows and is no chip', () => {
+    expect(refusalShape({ ok: false, error: 'draft-present', draft: 'one\ntwo\nthree' })).toBe('rows=3 no-chip');
+  });
+
+  it('a refusal with no box reading says so', () => {
+    expect(refusalShape({ ok: false, error: 'not-alive' })).toBe('no-box-reading');
+  });
+});
+
+// D-6366: the ask's answer routes keep the fixed poll count; only `sendPrompt`'s two echo loops follow the budget.
+describe("answerDialogText's echo wait (D-6366)", () => {
+  const panes = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
+  const fixture = (name: string): string => readFileSync(path.join(panes, name), 'utf8');
+
+  it("answerDialogText's echo wait is still ECHO_TRIES polls", async () => {
+    const open = fixture('cc300-ask-same-labels-q2.txt');
+    const focused = fixture('cc300-ask-freetext-walk-2-focused.txt');
+    // The typed text never renders: the pane keeps showing the empty free-text row.
+    const calls: string[][] = [];
+    let literal = false;
+    let capturesAfterLiteral = 0;
+    let idx = 0;
+    const script = [open, focused];
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'send-keys' && args.includes('-l')) literal = true;
+      if (args[0] === 'capture-pane') {
+        if (literal) capturesAfterLiteral++;
+        return { code: 0, stdout: script[Math.min(idx++, script.length - 1)]!, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const res = await answerDialogText(
+      { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: noSleep }, 'lane-a:project-a', parseDialog(open)!.id, 3, 'only in staging',
+    );
+    expect(res).toEqual({ ok: false, error: 'echo-failed' });
+    expect(capturesAfterLiteral).toBe(12);   // today's count, a literal on purpose: raising ECHO_TRIES moves this route too
+    expect(sendKeysCalls(calls).some((c) => c.at(-1) === 'Enter')).toBe(false);
   });
 });

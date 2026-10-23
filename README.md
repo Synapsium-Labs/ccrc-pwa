@@ -63,7 +63,7 @@ spec  →  plan  →  waves of subagents  →  per-PR review lenses  →  whole-
 | **Account pools** | Tag projects and accounts into pools; placement, swaps and rescues stay inside one, and a blocked session with no room left in its pool strands, loudly, instead of crossing. |
 | **An optional session gate** | Passkeys or a passphrase, off by default, and it fails shut on every ambiguity rather than open. `ccrc expose` arms it. |
 | **One whitelisted socket** | Split across two boxes, the server never SSHes the fleet host. It drives it through a closed set of whitelisted operations, and nothing else. |
-| **Signed releases, updates that undo themselves** | Every merge to `main` becomes a provenance-attested `dev` release, and `stable` is a promotion behind a full-suite gate. A box moves with one verb or one tap in Settings, behind a health gate that restores the previous build when it fails. |
+| **Signed releases, updates that undo themselves** | Every merge to `main` that changes what ships becomes a provenance-attested `dev` release (a merge that changes only `docs/` or the root's Markdown starts no release run, and one whose build comes out identical, a tests-only merge for one, cuts none), and `stable` is a promotion behind a full-suite gate. A box moves with one verb or one tap in Settings, behind a health gate that restores the previous build when it fails. |
 | **Public in one verb** | `ccrc expose` writes the Caddy config for a DuckDNS name, your own domain or a bare IP, arms the session gate, and prints the root steps instead of running them. |
 | **A doctor that names the fix** | `ccrc doctor` prints one verdict per check, with a remedy under every WARN and FAIL, and the install's own exit code is doctor's. |
 
@@ -87,6 +87,11 @@ registers the session hook and the ccrc skills in every account home the roster 
 and ends by running `ccrc doctor`, whose exit code is the install's. The server comes up
 on `127.0.0.1:7788`. Keep the checkout out of `~/ccrc`: that is where the installed tree's
 link goes, and a real directory there is moved aside and removed after a green install.
+
+A checkout of a `main` head that no release names (a merge that changed nothing that ships)
+installs with no `version` in its stamp, so it raises no update floor, and a later bare
+`ccrc update` may move it to an older stable release. For a versioned build, check out a release
+tag before `bash install.sh` (`git checkout vX.Y.Z`), or install with `--release`.
 
 Then:
 
@@ -151,8 +156,10 @@ rides:
 bash install.sh --release [vX.Y.Z] --role fleet
 ```
 
-**Which release you get.** Every merge to `main` publishes a release, born a prerelease —
-the `dev` channel; `stable` moves only by promotion, so it can trail `dev` by many
+**Which release you get.** Every merge to `main` that changes what ships publishes a release, born a
+prerelease — the `dev` channel. A merge that changes only `docs/` or the root's Markdown starts no
+release run; any other merge builds, and it releases unless its tarball matches the newest published
+release it contains. A merge that publishes none is in the next release. `stable` moves only by promotion, so it can trail `dev` by many
 releases. A bare `--release` installs the newest **stable** release (`latest/download`
 never serves a prerelease); name a tag to take any published build, a `dev` one included.
 The repository's Releases page, or `gh release list -R Synapsium-Labs/ccrc-pwa`, lists both
@@ -445,6 +452,7 @@ bash install.sh
 ```
 
 Keep the checkout out of `~/ccrc` — that name is the installed tree's link ("Quickstart", above).
+Check out a release tag first if the box should carry a version and an update floor ("Quickstart", above).
 
 The owner in that URL is `CCRC_RELEASE_OWNER`'s value — defined once in
 `install.sh` and matched by `ccd/ccrc`, so `ccrc update` later downloads from
@@ -737,11 +745,20 @@ Design: `docs/superpowers/specs/2026-08-21-stage4-release-design.md`. Runbook st
 (`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`) is the two-box worked proof of the
 install and update verbs in this section.
 
-**The pipeline.** Every push to `main` runs `.github/workflows/release-main.yml`, thin like its
+**The pipeline.** Every push to `main` that changes anything outside `docs/` and the root's Markdown runs
+`.github/workflows/release-main.yml` (a push of only those starts no run), thin like its
 siblings: `deploy/release-main.sh prepare` derives the next patch tag from the highest `vX.Y.Z`, tags
 it LOCALLY and runs `deploy/build-release.sh` (the one builder — refuses a dirty tree and an untagged
-HEAD); `actions/attest-build-provenance` then signs the tarball's digest with the workflow's own OIDC
-identity (keyless — the repo holds no signing secret); and `release-main.sh publish` pushes the tag and
+HEAD) into a candidate directory. `release-main.sh compare` then downloads the newest release HEAD
+contains, checks it against its own `SHA256SUMS`, and compares the two tarballs entry by entry: path,
+type, mode, size, content and link target, setting aside only `build.json`'s `sha`, `builtAt` and
+`version` and MANIFEST's line for `build.json`. When every entry matches, the merge cuts no release:
+the local tag is dropped, nothing is attested, pushed or published, and one line in the log and the
+job summary reads `built unchanged: <N> entries identical to vX.Y.Z`. Anything else releases, and the
+line names the first entry that differs, or why it could not compare; a merge that changes
+`release-main.yml` or `release-main.sh` always releases, so the comparer never approves its own change.
+Where it releases, `actions/attest-build-provenance` signs the tarball's digest with the workflow's own
+OIDC identity (keyless — the repo holds no signing secret); and `release-main.sh publish` pushes the tag and
 publishes the tarball, `SHA256SUMS` and the bundle `ccrc-<tag>.tar.gz.sigstore.json` with `gh release
 create --verify-tag --prerelease`, deleting the tag again if the publish never completes (nothing
 reaches origin before that push). A hand-pushed `vX.Y.0`/`vX.0.0` tag rides `release.yml` instead —
@@ -756,8 +773,17 @@ that carries the tag as `version` (`ccrc version` prints it; `/health` emits a s
 its channel — `dev` while set, `stable` once cleared — and its bytes never change. Promotion is a
 fast-forward push of a released commit to the `stable` branch (`git push origin <tag>^{commit}:refs/heads/stable`
 from any checkout with the tag fetched; the branch's ruleset refuses force pushes and deletion, and
-the script refuses a HEAD that carries no release tag or more than one — a merge commit carries none, so
-it cannot be promoted; D-3130 says why there is no linear-history rule), which runs `release-stable.yml`. Its
+the script refuses a HEAD that carries no release tag or more than one — a merge commit carries none,
+and neither does a `main` merge that changed nothing that ships, so neither can be promoted; D-3130 says
+why there is no linear-history rule), which runs `release-stable.yml`. `main`'s head often carries no
+release now, so push a release's own commit (`git push origin vX.Y.Z^{commit}:refs/heads/stable`), not
+`main`'s head. When that commit is not the head the daily run tested, the gate runs the full suite on it
+first. A push of an untagged head is refused after its gate, and the refusal names the newest release it
+contains; it says when that head's merge changed only `docs/` or the root's Markdown, so no release-main run
+started for it, and otherwise points at the release-main run for that head, which says `built unchanged` or
+what differed, or was cancelled before it started because a later merge's run replaced it, and then that
+later run's line covers this head; `stable` then stays on that head until a release cut from a descendant of
+it is pushed. Its
 `gate` job first looks for a green `full-suite` job on that commit from a trusted run — `ci.yml`'s daily or manual
 full run on `main`, or an earlier stable gate, never a pull request's — and, finding none, runs `ci.yml` in full
 mode; only then does `deploy/release-stable.sh` run (a red gate leaves the branch moved and no flag flipped, which
@@ -843,7 +869,10 @@ the first that fails; macOS runs the same window and re-check in-process, with n
 session stopped on purpose while the sweep walks (its unit settled `inactive` with ccd's
 `~/.cc-sessions/<id>.stopped` stamp present or its registry row purged; a stop with neither still fails) passes on a
 line of its own, as it does in `deploy.sh agent`'s sweep (a serial loop with no re-check); then the from→to report, and, after a passed gate and a
-finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP` from the process environment, default 10).
+finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP` from the process environment, default 10) and the coordination
+data set thinned out of every backup past the newest `CCRC_BACKUP_DATA_KEEP` (default 3, at least 2; the environment, else
+`~/.ccrc/ccrc.env`) that carry one, by an update or `ccrc backup`, never a rollback by flip (a rollback by re-install
+thins as the update it runs).
 Rolling back is `ccrc rollback` (below), which, like any move below the floor, prints the coord.db restore commands rather than
 auto-restoring. **Across a two-box fleet, `ccrc rollout [--to] [--server-first] [--check] [--force]`** (with `--channel`,
 `--downgrade` and `--allow-unsigned`, below) from a machine holding `~/.ccrc/deploy.env`
@@ -1176,7 +1205,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `status`, `version` | what this box is (its build, role, services, sessions and whether the two boxes agree); the build it runs — both read-only |
 | `update`, `rollback`, `versions`, `channel`, `rollout`, `watchdog` | this section |
 | `backup`, `logs`, `uninstall` | the maintenance verbs, below |
-| `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
+| `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`, `thinned`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
 | `expose duckdns\|byo\|ip\|status` | a public name and a certificate ("Exposure", above) |
 | `passwd` | set or rotate the PWA passphrase ("The session gate", below) |
 | `adopt`, `wrappers` | rediscover the roster from `~/.local/bin`; write the wrappers the roster marks generated ("Accounts", below) |
@@ -1194,13 +1223,36 @@ newest earlier one that holds data (each chosen on its own, so a newer snapshot 
 with data; `deploy/coordination-snapshot.mjs` decides what is valid, and a classifier that cannot run or answers out of
 its table prunes nothing and says why), and nothing at all, exit 0, while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or
 the lock cannot be measured; hand-made siblings are never touched), as update and rollback do after a passed gate.
+After its prune, and only an update or `ccrc backup` (never a rollback by flip, which takes no backup; a rollback by re-install thins as the update it runs), the run thins the coordination
+data set (D-6346): of the backups that carry one, the newest `CCRC_BACKUP_DATA_KEEP` keep it, counting this run's own first, and
+every older one loses its `coord.db`, delegation journal, checkpoint and manifest and keeps the rest (its code, `memory/`, the
+units). The knob is a whole number from 2 to 9999, default 3, read from the process environment and else from
+`~/.ccrc/ccrc.env` alone, never `~/.ccrc/exposure.env`, which no process that thins receives on Linux; `0` and `1` are refused and an
+invalid value stops the prune and the thinning alike. So does a `ccrc.env` that is
+there but cannot be read, or that names the knob on a line the reader does not take. Read as bytes, after its leading spaces and
+tabs, a line is skipped when it is a comment (`#` or `;`) or another key's `[export ]NAME=`, read when it begins
+`CCRC_BACKUP_DATA_KEEP=`, its value taken as systemd's `EnvironmentFile=` takes it (spaces and tabs around it trimmed), and
+refused when it names the knob as a whole word any other way, `export CCRC_BACKUP_DATA_KEEP=` included; a line holding a CR
+past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file that names the knob anywhere, a comment
+included, but that the box's model of systemd cannot decide (a value a quote or a backslash carries across lines, a CR that leads
+a line or sits inside one, a non-ASCII byte in an assignment) refuses too: unmeasured is not unset (D-6365). On Linux a `ccrc.env`
+that never names the knob reads as the default, whatever else it holds but a NUL byte, since systemd cannot set it from that file; on macOS,
+whose launchd job sources the file with bash, one the model cannot decide still refuses. A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
+a dir is read on presence and size (a `coord.db` with no manifest is also opened for its header and tables), so damage of the
+same length there is not seen (D-6350, D-6364). On an update, `thin` also works to a time budget inside the console's deadline:
+it starts no full verification that could not finish in time, leaves the rest for the next update and exits 0 unless a dir was refused (D-6464). The newest data set from
+before a schema migration (a `coord.db` `user_version` lower than the newest kept set's) is kept as well, one at most, so the
+snapshot an older build's by-hand restore needs survives a failed migrating update (D-6358). A thinned dir holds
+`coordination-thinned.json`, written before anything is deleted, which says when, by which verb and by which rule;
+`ccrc coordination-snapshot validate` calls it `thinned`, not damaged. The update that first installs this retention cannot thin (it
+runs the previous tree's prune), so a box's first thinning is its next completed update or `ccrc backup`.
 Each backup dir also holds the delegation journal and checkpoint (`delegation-events.log`, `delegation-checkpoint.json`)
 and the manifest that describes them with the `coord.db` snapshot (`coordination-snapshot.json`), written last, after
 every member is durable. `ccrc coordination-snapshot validate|restore|recover` classifies such a dir, replaces the live
 journal, checkpoint and `coord.db` (with its WAL and SHM) from a valid one as a single set — only with `ccrc.service`
 measured inactive, asked again once its marker is durable — and finishes an interrupted restore from that marker; delegation
 recovery refuses to run while the marker stands, and so does the server's boot (it exits 1 naming `recover`). Its exits are
-`validate` 0 for `v1` and `legacy`, 1 for `none`, 2 for `invalid`, and 70 for a usage error or a helper that cannot run (SQLite included); `restore` and `recover` 0 done, 1 failed, 2 refused before any live change (an invalid source, a pending earlier restore, an unreadable marker, a missing `~/.ccrc`, a running or unmeasured service, a held update lock), 70 usage or a helper that cannot run. A restore that is rolled back puts the old set back whole: any file it did not place and that is not old is moved, never deleted, into `~/.ccrc/coordination-restore.foreign/<id>/`, and the report names it (exit 1, or 70 when the failure was the helper's own); a rollback that cannot finish says so and keeps the marker and stage for `recover` (`recover` exits 1; `restore` exits with its original failure's code, 1, or 70 when that failure was the helper's own).
+`validate` 0 for `v1` and `legacy`, 1 for `none` and for `thinned` (a backup whose data set the retention dropped, D-6346), 2 for `invalid`, and 70 for a usage error or a helper that cannot run (SQLite included); `restore` refuses a `thinned` source as `source-thinned` (exit 2); `restore` and `recover` 0 done, 1 failed, 2 refused before any live change (an invalid source, a pending earlier restore, an unreadable marker, a missing `~/.ccrc`, a running or unmeasured service, a held update lock), 70 usage or a helper that cannot run. A restore that is rolled back puts the old set back whole: any file it did not place and that is not old is moved, never deleted, into `~/.ccrc/coordination-restore.foreign/<id>/`, and the report names it (exit 1, or 70 when the failure was the helper's own); a rollback that cannot finish says so and keeps the marker and stage for `recover` (`recover` exits 1; `restore` exits with its original failure's code, 1, or 70 when that failure was the helper's own).
 Rollback arm 3 never copies the sidecars back: they are authority a running server wrote since the backup. Capture refuses a
 journal or checkpoint that does not validate, so `ccrc backup`, `ccrc update` and the fallback deploy stop on a damaged journal. A torn tail is not damage: the server cuts it off its own journal, keeping the bytes in `~/.ccrc/delegation-events.torn/` and saying so in its log and in `/api/fleet/health`'s `delegation.lastTailHeal`;
 capture, which never writes the journal, leaves it out of the snapshot (`delegation.journalTailOmitted` in the manifest, one warning line) and succeeds.
@@ -5876,6 +5928,36 @@ anything: `generation-mismatch` when `--generation` names another generation or 
 `generation-unreadable` when it cannot be read. `--clear-all` prints how many files it removed and the
 names it skipped (a directory, a FIFO, a socket or a device, or an entry it could not measure or remove), which the operator removes by hand.
 
+**The headless seam (W2's replay eval).** The read verbs have one caller outside any pane: W2's replay
+driver, `deploy/history-replay.mjs`, which runs each eval arm as a headless `claude -p` and sets three
+variables: `CCRC_RECALL_SESSION`, the session's id; `CCRC_RECALL_ARM`, `control` or `treatment`; and
+`CCRC_RECALL_ASOF`, the uuid of the compaction boundary the run replays from. Nothing else is meant to set
+them. A variable counts as set only when it is non-empty; with none set, every verb works exactly as above,
+and `status`, `doctor` and the operator verbs ignore all three. The seam is armed only by
+`~/.ccrc/history/headless-on`, which nothing in ccrc writes: the operator writes it for an eval window, from
+the W2 open record, and removes it when the window closes. Its first line that is not a `#` comment is
+`store <store_id>`, naming this box's store; every later line is empty, a `#` comment, or
+`<ccrc_id> <generation>` for one admitted family, with `-` as the generation of a family that has none.
+A carriage return, whitespace at either end of a line, any other line, a second store line, more than 64 KiB
+or more than 1,000 families (a line each, duplicates counted) makes the whole file malformed, and it is read
+only as a regular file, never through a link. After a macOS or server-role box's exit 9, the seam's refusals
+come in this order, each exit 2: `headless-in-pane` when any of the three is set inside a pane (`TMUX_PANE`
+defined, even empty), before tmux is asked; `headless-unarmed` with no marker; `headless-malformed` when the
+marker cannot be read or breaks its grammar; `no-identity` with no session id, and `bad-id` for one outside
+ccd's id grammar; `headless-unlisted` for a session id no marker line names, or a marker that lists none;
+`headless-arm-unknown` for an arm that is unset or neither word; and `asof-invalid` for a boundary that is
+unset or not a uuid. Once the store is open, a store line naming another store is `headless-unlisted` too;
+the boundary must be a boundary on a main transcript of a confirmed epoch of exactly one family with that
+id, or the answer is `asof-invalid`; and a family whose generation the marker does not list beside the id is
+`headless-unlisted`. The family and its generation come from that boundary, never from the registry or
+`CCRC_SESSION_GENERATION`. Then the family answers exit 8 when its recall is
+switched off, and `control` answers exit 8 too. Under `treatment` every verb reads the store as of the
+boundary: rows, nodes and epochs after it are absent; `--project`, `--workspace` and `--session` still
+widen the scope, the cut applies to every family in it, and a family with nothing visible is left out;
+`--workspace` anchors on the working directory of the boundary's epoch; and a family whose stored
+project is not the session's answers exit 2 `cross-project`. A call is counted only once its family is
+admitted, and its counter line carries the arm; under `~/.ccrc/history-off` nothing is counted.
+
 ---
 
 *Everything below is the internals reference — the architecture and the
@@ -6498,7 +6580,8 @@ bash deploy/deploy.sh agent <host>   # fleet: back up → rsync → ccd pair, cc
 
 `deploy/deploy.sh` is the FALLBACK — it pushes a working tree onto a box that is **already installed**,
 writes no `~/.ccrc/installed` record, and stamps `version` only when a release tag points at the built
-commit (auto-tagging makes that the ordinary case on `main`). A box it deploys therefore reports
+commit (true of a `main` head whose merge changed what ships; a merge that touches only docs or the
+server and agent tests leaves the head untagged, and such a box raises no update floor). A box it deploys therefore reports
 `install: incomplete` from `ccrc version`, and `incomplete` or `unversioned` from `ccrc update --check`.
 Skills ship on its agent arm only; the path is a release and `ccrc rollout` ("Releases" above). Still **no default target** — exit 2.
 
@@ -6548,7 +6631,8 @@ missing everything recent) and, last and still before the `rsync`, the delegatio
 journal and checkpoint with their manifest (`deploy/coordination-snapshot.mjs`;
 a failed capture aborts the deploy) — and, after a green deploy, prunes that directory
 to the newest `CCRC_BACKUP_KEEP` (default 10) timestamped backups, never a
-hand-made sibling. A backup copy that *fails* aborts the deploy before
+hand-made sibling (deploy never thins a coordination data set: the next update or `ccrc backup` on the box thins the dirs
+it wrote, like any other). A backup copy that *fails* aborts the deploy before
 `rsync --delete` can destroy the state it failed to save.
 The agent deploy installs `ccd` BEFORE restarting the agent — the agent
 caches `ccd caps` at boot, so the reverse order pins a stale verb set.
@@ -6582,7 +6666,10 @@ PWA raises its amber banner until the server lane runs. That is expected, not a 
 agent lane prints the same sentence as it goes — and the second deploy clears
 it.
 
-**Restore** (manual, from the target box — pick the `<ts>` to roll back to). The first remedy is `ccrc rollback`:
+**Restore** (manual, from the target box — pick the `<ts>` to roll back to). A backup's coordination data set is restorable
+only from a `<ts>` that `ccrc coordination-snapshot validate --from ~/ccrc-backups/<ts>` calls `v1`; retention
+thins every backup past the newest `CCRC_BACKUP_DATA_KEEP`, and `restore` refuses such a dir by name as `source-thinned`, so pick
+among the newest backups and the one kept from before a schema migration. The first remedy is `ccrc rollback`:
 to a version still kept under `~/ccrc-versions` it is a flip with no download. The `cp -a` lines below write
 THROUGH `~/ccrc` into the version directory it points at, which then holds a MIXED tree under its release's name —
 its digest then reads it as written through, and removing its `.ccrc-installed` as well, as arm 3 does, makes it

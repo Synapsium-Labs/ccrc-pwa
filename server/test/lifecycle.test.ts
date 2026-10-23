@@ -1220,8 +1220,9 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.creators).toEqual(['operator shell']);
     expect(c!.collector).toBeNull();
     expect(c!.ruling).toContain('touched by hand; persists until removed');
-    // B1's two; W2 adds headless-on and W3 the steer markers, each to this root in its own PR
-    expect(c!.root).toBe('~/.ccrc/history-off, ~/.ccrc/history-max-gb');
+    // B1's two and W2-2b's headless-on (W2-D49), each spelled from ~/.ccrc as lib's SWITCHES is; W3 adds the steer
+    // markers to this root in its own PR
+    expect(c!.root).toBe('~/.ccrc/history-off, ~/.ccrc/history-max-gb, ~/.ccrc/history/headless-on');
   });
 
   it('declares history-backups: an operator-made O class with no collector, created by --op backup, its stale .tmp removed by the next backup', () => {
@@ -1355,6 +1356,34 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     const g = '0189abcd-1234-4678-9abc-0123456789ab';
     expect(UUID_RE.test(g), 'CONTROL: a generation the grammar takes').toBe(true);
     expect(c!.tier).toContain(`at most ${Buffer.byteLength(`${g}\n`)} B`);
+  });
+
+  // ── ccrc history W2-2b (spec 2026-10-05 §9.4, O17; W2-D9, W2-D49, W2-D44; D-5768) ──────────────────────────────────
+  // headless-on joins B1's switches row: the one switch with content, a store line and one line per listed family. The
+  // manifest is L0 and imports nothing, so the row names HEADLESS_LIST_MAX_BYTES as text and carries its KiB figure; this
+  // case holds the figure to lib's constant and to the grammar, and the paths to SWITCHES, as the B3 numbers are above.
+  it('the history-switches tier is lib\'s: headless-on is bounded at HEADLESS_LIST_MAX_BYTES in KiB, which the marker grammar takes exactly, with one store line plus one line per family (W2-2b Task 5)', async () => {
+    const { HEADLESS_LIST_MAX_BYTES, SWITCHES, parseHeadlessList, formatHeadlessList } = await import('../../ccd/history/lib.mjs');
+    const c = LIFECYCLE.find((x) => x.name === 'history-switches');
+    expect(c, 'shared/lifecycle.ts declares no history-switches class').toBeTruthy();
+    expect(c!.root.split(', '), 'the row spells a switch otherwise than lib\'s SWITCHES')
+      .toEqual([SWITCHES.off, SWITCHES.maxGb, SWITCHES.headlessOn].map((s) => `~/${s}`));
+    expect(HEADLESS_LIST_MAX_BYTES % 1024, 'CONTROL: the bound is a whole number of KiB').toBe(0);
+    expect(c!.tier).toBe('<64 B each; `headless-on` bounded at ' + `${HEADLESS_LIST_MAX_BYTES / 1024}` + ' KiB (HEADLESS_LIST_MAX_BYTES), one store line plus one line per listed family');
+    // The grammar takes exactly the bound the row states: a marker of HEADLESS_LIST_MAX_BYTES bytes parses, one more does not.
+    const STORE = ['1b2c3d4e', '5f60', '4a7b', '8c9d', '0e1f2a3b4c5d'].join('-');
+    const GEN = ['2c3d4e5f', '6071', '4b8c', '9d0e', '1f2a3b4c5d6e'].join('-');
+    const head = `store ${STORE}\nwrap-a-demo ${GEN}\nwrap-b-demo -\n#`;
+    const sized = (n: number): string => `${head}${'x'.repeat(n - Buffer.byteLength(head) - 1)}\n`;
+    expect(Buffer.byteLength(sized(HEADLESS_LIST_MAX_BYTES)), 'CONTROL: the fixture is the bound exactly').toBe(HEADLESS_LIST_MAX_BYTES);
+    expect(parseHeadlessList(sized(HEADLESS_LIST_MAX_BYTES)).ok, 'a marker of exactly the bound is refused').toBe(true);
+    const over = parseHeadlessList(sized(HEADLESS_LIST_MAX_BYTES + 1));
+    expect(over.ok, 'a marker one byte over the bound parses').toBe(false);
+    expect((over as { reason?: string }).reason).toBe('headless-malformed');
+    // "one store line plus one line per listed family": the formatter's text for two families, a legacy one among them.
+    const text = formatHeadlessList({ storeId: STORE, pairs: [{ ccrcId: 'wrap-a-demo', generation: GEN }, { ccrcId: 'wrap-b-demo', generation: '' }] });
+    expect(text.split('\n').filter((l) => l !== '' && !l.startsWith('#'))).toEqual([`store ${STORE}`, `wrap-a-demo ${GEN}`, 'wrap-b-demo -']);
+    expect(parseHeadlessList(text).ok, 'CONTROL: the formatter\'s text is a marker the grammar takes').toBe(true);
   });
 });
 

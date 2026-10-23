@@ -64,32 +64,36 @@ describe("the collector's header says what the code does (path-identity spec §7
     expect(pause, 'the witness-only arm reads the pause before its token').toBeGreaterThan(arm);
   });
 
-  it('the budget sums one grace: "about 73 s", with no "79 s" and no wave-9 clause', () => {
+  it('the budget sums one grace: "about 78 s", with no "79 s" and no wave-9 clause', () => {
     const h = header();
     const at = h.indexOf('BOUNDED, AND');
     expect(at, 'the budget paragraph').toBeGreaterThan(-1);
     const budget = h.slice(at);
-    // The knobs the paragraph names, read as text from ccd and the runner, each exactly once.
+    // The knobs the paragraph names, read as text from ccd and the runner, each exactly once. Since path-identity W3
+    // the row pass's one identity walk is among them.
     const idle = one(ccdSrc, /^WS_COLLECT_IDLE_SCAN_S=(\d+)\b/gm, 'WS_COLLECT_IDLE_SCAN_S');
     const users = one(ccdSrc, /^WS_PATH_USERS_SCAN_S=(\d+)\b/gm, 'WS_PATH_USERS_SCAN_S');
     const scan = one(ccdSrc, /^REAP_SCAN_SECONDS=(\d+)\b/gm, 'REAP_SCAN_SECONDS');
+    const walk = one(ccdSrc, /^WS_RECLAIM_WALK_S=(\d+)\b/gm, 'WS_RECLAIM_WALK_S');
     const grace = one(ccdSrc, /grace="\$\{CCD_TIMEOUT_KILL_AFTER:-(\d+)\}"/g, "_plat_timeout's default grace");
     const graceMax = one(ccdSrc, /\[ "\$grace" -gt (\d+) \] && grace=\1\b/g, "_plat_timeout's grace ceiling");
     const rowS = one(readRel('server/src/remote/runner.ts'), /^[ \t]*'ws-audit':[ \t]*([\d_]+),/gm,
       "CCD_VERB_TIMEOUT_MS['ws-audit']") / 1000;
-    const probes = idle + users + scan;
+    const probes = idle + users + scan + walk;
     expect(budget).toContain(`\`WS_COLLECT_IDLE_SCAN_S\` (${idle} s)`);
     expect(budget).toContain(`\`WS_PATH_USERS_SCAN_S\` (${users} s)`);
     expect(budget).toContain(`\`REAP_SCAN_SECONDS\` (${scan} s)`);
+    expect(budget).toContain(`\`WS_RECLAIM_WALK_S\` (${walk} s)`);
     expect(budget).toContain('A probe that reaches its bound ends the audit, so ONE `_plat_timeout` TERM-to-KILL grace is paid');
     expect(budget).toContain(`${grace} s by default, at most ${graceMax} s`);
     expect(budget).toContain(
       `about ${probes + grace} s, or ${probes + graceMax} s at the widest grace, against ws-audit's ${rowS} s runner row`);
-    expect(budget).toContain('about 73 s');
+    expect(budget).toContain('about 78 s');
     expect(budget).toContain('(`collect-audit-budget.test.ts` holds the sum)');
-    expect(budget).toContain('The row pass has no bound of its own;');
+    expect(budget).toContain("The row pass's git reads of a gone row's repository have no bound of their own");
     expect(budget).toContain('it fails closed.');
-    for (const gone of ['79 s', '94 s', 'A budget keyed on the mode is wave 9', 'NOT ALWAYS INSIDE', 'each `_plat_timeout` adds']) {
+    for (const gone of ['79 s', '94 s', 'A budget keyed on the mode is wave 9', 'NOT ALWAYS INSIDE', 'each `_plat_timeout` adds',
+      'The row pass has no bound of its own;']) {
       expect(budget, gone).not.toContain(gone);
     }
   });

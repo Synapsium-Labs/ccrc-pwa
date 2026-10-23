@@ -188,7 +188,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
   it('W27-L1: an upgrade never answered is dropped at the deadline and retried', async () => {
     peer = await linkPeer(() => 'silent-upgrade');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    fleet = connectToAgent(peer.port, { readyTimeoutMs: 150 });
+    fleet = connectToAgent(peer.port, { connectTimeoutMs: 150 });
     await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(2), { timeout: 5000 });
     expect(fleet.state.connected).toBe(false);
     expect(linkLines(warn)[0]).toBe(NO_READY(150, 'connect or upgrade unanswered'));
@@ -197,7 +197,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
   it('W27-L2: an upgrade answered a byte at a time is dropped too (a wall clock, not idle)', async () => {
     peer = await linkPeer(() => 'trickle-upgrade');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    fleet = connectToAgent(peer.port, { readyTimeoutMs: 150 });
+    fleet = connectToAgent(peer.port, { connectTimeoutMs: 150 });
     await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(2), { timeout: 5000 });
     expect(linkLines(warn)[0]).toBe(NO_READY(150, 'connect or upgrade unanswered'));
   });
@@ -206,7 +206,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     // 1000 ms, not 150: this row's line names the OPEN phase, so the first attempt must have upgraded by then.
     peer = await linkPeer(() => 'silent-hello');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    fleet = connectToAgent(peer.port, { readyTimeoutMs: 1000 });
+    fleet = connectToAgent(peer.port, { connectTimeoutMs: 1000 });
     await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(2), { timeout: 8000 });
     expect(peer.hellos()).toBeGreaterThanOrEqual(1);
     expect(linkLines(warn)[0]).toBe(NO_READY(1000, 'ready not sent'));
@@ -215,14 +215,14 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
   it('W27-L4: once the peer answers, the next attempt reaches ready', async () => {
     // 1000 ms, not 150: the attempt meant to reach ready runs under the same deadline, and must not be cut.
     peer = await linkPeer((n) => (n < 2 ? 'silent-upgrade' : 'ready'));
-    fleet = connectToAgent(peer.port, { readyTimeoutMs: 1000 });
+    fleet = connectToAgent(peer.port, { connectTimeoutMs: 1000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 8000 });
     expect(peer.accepts()).toBe(3);
   });
 
   it('W27-L5: a ready inside the deadline holds: the deadline never cuts a ready link', async () => {
     peer = await linkPeer(() => 'ready');
-    fleet = connectToAgent(peer.port, { readyTimeoutMs: 1000 });
+    fleet = connectToAgent(peer.port, { connectTimeoutMs: 1000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 5000 });
     await sleep(2000); // the deadline lies inside this window on purpose: M4 fires it here
     expect(peer.accepts()).toBe(1);
@@ -232,7 +232,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
   it('W27-L7: close() during the upgrade settles, retries nothing and logs nothing', async () => {
     peer = await linkPeer(() => 'silent-upgrade');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    fleet = connectToAgent(peer.port, { readyTimeoutMs: 2000 });
+    fleet = connectToAgent(peer.port, { connectTimeoutMs: 2000 });
     await vi.waitFor(() => expect(peer!.accepts()).toBe(1), { timeout: 5000 });
     await fleet.close();
     fleet = undefined;
@@ -249,7 +249,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     // Start from the check phase, so the next phase to run is timers: a row that starts inside the timers phase
     // (after a row that ended on a timer) would reach the poll phase, and the TCP connect, before the deadline.
     await new Promise<void>((resolve) => setImmediate(resolve));
-    fleet = connectToAgent(peer.port, { readyTimeoutMs: 150 });
+    fleet = connectToAgent(peer.port, { connectTimeoutMs: 150 });
     const held = Date.now();
     while (Date.now() - held < 300) { /* hold the event loop past the deadline */ }
     await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(2), { timeout: 5000 });
@@ -274,7 +274,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     // depend on how fast attempt 1 upgrades; only a stale deadline can print `(closed)`.
     peer = await linkPeer((n) => (n === 0 ? 'refuse' : 'silent-hello'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    fleet = connectToAgent(peer.port, { readyTimeoutMs: 2000, reconnectMinMs: 500, reconnectMaxMs: 500 });
+    fleet = connectToAgent(peer.port, { connectTimeoutMs: 2000, reconnectMinMs: 500, reconnectMaxMs: 500 });
     await vi.waitFor(() => expect(linkLines(warn).length).toBeGreaterThanOrEqual(2), { timeout: 8000 });
     expect(linkLines(warn)[0]).toBe(NEVER_READY(1006));
     expect(linkLines(warn)[1]).toMatch(new RegExp('^ccrc-server: agent link: no ready within 2000ms '
@@ -285,7 +285,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     // 1000 ms, not 150: the attempt meant to reach ready runs under the same deadline, and must not be cut.
     peer = await linkPeer((n) => (n < 3 ? 'silent-upgrade' : 'ready'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    fleet = connectToAgent(peer.port, { readyTimeoutMs: 1000 });
+    fleet = connectToAgent(peer.port, { connectTimeoutMs: 1000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 8000 });
     expect(linkLines(warn)).toEqual([
       NO_READY(1000, 'connect or upgrade unanswered'), expect.stringMatching(READY_AFTER(3)),
@@ -379,7 +379,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     fleet = connectFleet({
       url: `ws://127.0.0.1:${peer.port}`, token, reconnectMinMs: 30, reconnectMaxMs: 100, heartbeatMs: 60_000,
-      readyTimeoutMs: 5000,
+      connectTimeoutMs: 5000,
     });
     await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(accepts), { timeout: 8000 });
     return linkLines(warn);
@@ -421,7 +421,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     fleet = connectFleet({
       url: `ws://127.0.0.1:${peer.port}`, token, reconnectMinMs: 30, reconnectMaxMs: 100, heartbeatMs: 60_000,
-      readyTimeoutMs: 5000,
+      connectTimeoutMs: 5000,
     });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 8000 });
     expect(linkLines(warn))
@@ -447,7 +447,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       fleet = connectFleet({
         url: `ws://127.0.0.1:${raw.port}`, token: randomBytes(32).toString('hex'), reconnectMinMs: 5000,
-        reconnectMaxMs: 5000, heartbeatMs: 60_000, readyTimeoutMs: 3000,
+        reconnectMaxMs: 5000, heartbeatMs: 60_000, connectTimeoutMs: 3000,
       });
       await vi.waitFor(() => expect(linkLines(warn).length).toBeGreaterThanOrEqual(2), { timeout: 8000 });
       expect(linkLines(warn)).toEqual([NO_READY(3000, 'closing'), REFUSED(4401, 'unauthorized')]);
@@ -470,7 +470,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     const script = [
       'const { connectFleet } = await import(process.env.CLIENT_URL);',
       'const f = connectFleet({ url: process.env.PEER_URL, token: \'unused\', reconnectMinMs: 30, reconnectMaxMs: 100,',
-      '  heartbeatMs: 60000, readyTimeoutMs: 60000 });',
+      '  heartbeatMs: 60000, connectTimeoutMs: 60000 });',
       'await new Promise((r) => setTimeout(r, 300));',
       'await f.close();',
     ].join('\n');
@@ -509,7 +509,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     peer = await linkPeer(() => 'silent-upgrade');
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const t0 = Date.now();
-    fleet = connectToAgent(peer.port, { readyTimeoutMs: 100, reconnectMinMs: 50, reconnectMaxMs: 400 });
+    fleet = connectToAgent(peer.port, { connectTimeoutMs: 100, reconnectMinMs: 50, reconnectMaxMs: 400 });
     await vi.waitFor(() => expect(peer!.accepts()).toBeGreaterThanOrEqual(5), { timeout: 8000 });
     expect(peer.acceptTimes()[4]! - t0).toBeGreaterThanOrEqual(950);
   });

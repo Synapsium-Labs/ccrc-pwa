@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { makeCcdHarness, seedAccountsSh, type CcdHarness, toolAdjToken as adj } from './ccdWsHelpers.js';
+import { paneFragment } from './worktreeIdentityFixture.js';   // path-identity W3 (R8): the pane's entry-identity writer, read from ccd's composer
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-route-spawn-'); });
@@ -42,7 +43,7 @@ const spawnBoth = (id: string): string[] => {
 /** Today's argv, spelled from ccd's own `_resume_env` (one definition, read twice —
  *  the `ccd-spawn-split.test.ts` rule). */
 const today = (sidflag: string): string =>
-  `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)} '${h.home}/.local/bin/claude'  ${sidflag} --dangerously-skip-permissions`;
+  `cd '${h.home}' && ${paneFragment(h, 'myid', h.home)}true; cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)} '${h.home}/.local/bin/claude'  ${sidflag} --dangerously-skip-permissions`;
 /** The NON-Anthropic lane every inert case needs: a roster whose `gpt` account is
  *  `exec.kind: 'external'`, plus the wrapper on PATH. `_is_anthropic_backend` reads
  *  the roster, so the account row IS the fixture. */
@@ -70,7 +71,7 @@ describe('_spawn_start carries the routing record (routing spec 2026-09-14 §5.2
     const [primary, retry] = spawnBoth('myid');
     const env = h.sh('_resume_env');
     const expected = (sidflag: string): string =>
-      `cd '${h.home}' && exec env COLORTERM=truecolor ${env}${adj(h)} CLAUDE_CODE_SUBAGENT_MODEL=sonnet '${h.home}/.local/bin/claude' `
+      `cd '${h.home}' && ${paneFragment(h, 'myid', h.home)}true; cd '${h.home}' && exec env COLORTERM=truecolor ${env}${adj(h)} CLAUDE_CODE_SUBAGENT_MODEL=sonnet '${h.home}/.local/bin/claude' `
       + `--model opus --settings '{"enableWorkflows":true,"ultracode":true}' --effort ultracode ${sidflag} --dangerously-skip-permissions`;
     expect(primary).toBe(expected(`--resume '${UUID}'`));
     expect(retry).toBe(expected(`--session-id '${UUID}'`));
@@ -275,7 +276,7 @@ describe('_spawn_start: CLAUDE_CODE_SHELL_PREFIX names ccd-tool-adj on Linux onl
     const env = h.sh('_resume_env');
     const [primary, retry] = spawnOn('linux');
     const expected = (sidflag: string): string =>
-      `cd '${h.home}' && exec env COLORTERM=truecolor ${env} ${token()} '${h.home}/.local/bin/claude'  ${sidflag} --dangerously-skip-permissions`;
+      `cd '${h.home}' && ${paneFragment(h, 'myid', h.home, 'linux')}true; cd '${h.home}' && exec env COLORTERM=truecolor ${env} ${token()} '${h.home}/.local/bin/claude'  ${sidflag} --dangerously-skip-permissions`;
     expect(primary).toBe(expected(`--resume '${UUID}'`));
     expect(retry).toBe(expected(`--session-id '${UUID}'`));
   });
@@ -286,7 +287,7 @@ describe('_spawn_start: CLAUDE_CODE_SHELL_PREFIX names ccd-tool-adj on Linux onl
     const [primary, retry] = spawnOn('darwin');
     expect(primary).not.toContain('CLAUDE_CODE_SHELL_PREFIX');
     expect(retry).not.toContain('CLAUDE_CODE_SHELL_PREFIX');
-    expect(primary).toBe(`cd '${h.home}' && exec env COLORTERM=truecolor ${env} '${h.home}/.local/bin/claude'  --resume '${UUID}' --dangerously-skip-permissions`);
+    expect(primary).toBe(`cd '${h.home}' && ${paneFragment(h, 'myid', h.home, 'darwin')}true; cd '${h.home}' && exec env COLORTERM=truecolor ${env} '${h.home}/.local/bin/claude'  --resume '${UUID}' --dangerously-skip-permissions`);
   });
 
   it('the composed line, run by a shell, hands the child the prefix and WRAPS an existing one', () => {

@@ -35,7 +35,7 @@ export async function bootAgent(fixture: RemoteFixture, extra: Partial<AgentOpts
 
 /** `reconnectMinMs`/`reconnectMaxMs` default fast, so a reconnect row is quick; `heartbeatMs` defaults SLOW
  *  (60 s), so no row sees a heartbeat miss it did not ask for. Pass `heartbeatMs` down to test the heartbeat
- *  (remote-liveness.test.ts's W27-L8) and `readyTimeoutMs` to test the deadline before ready. */
+ *  (remote-liveness.test.ts's W27-L8) and `connectTimeoutMs` to test the deadline before ready. */
 export function connectToAgent(port: number, extra: Partial<RemoteFleetConfig> = {}): ConnectedFleet {
   return connectFleet({
     url: `ws://127.0.0.1:${port}`,
