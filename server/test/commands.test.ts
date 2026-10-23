@@ -9,7 +9,9 @@ import { ccdRunner } from '../src/lifecycle.js';
 import { parseSkillListing, BUILTINS } from '../src/commands.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { mkTmp } from './tmpHelpers.js';
-import { seedRoster } from './helpers.js';
+import { seedRoster, testDeps } from './helpers.js';
+import { seedRow } from './idGateFixture.js';
+import { countingIO } from './countingIO.js';
 
 describe('parseSkillListing', () => {
   it('parses "- name: desc" lines, keeping plugin:skill names', () => {
@@ -178,5 +180,34 @@ describe('GET /api/sessions/:id/commands', () => {
     const res = await app.inject({ method: 'GET', url: '/api/sessions/nope/commands' });
     expect(res.statusCode).toBe(404);
     await app.close();
+  });
+});
+
+describe('GET /api/sessions/:id/commands reads one registry row (D-6434)', () => {
+  /** A fixture HOME of `rows` registry rows (the target plus `rows - 1` others); the IO calls one request makes. */
+  async function callsFor(rows: number): Promise<Record<string, number>> {
+    const home = mkTmp('ccrc-cmd-rows-');
+    for (let i = 0; i < rows - 1; i++) seedRow(home, `project-a-other-${i}`);
+    const id = 'project-a-ws-a';
+    const uuid = '9'.repeat(36);
+    const workdir = '/data/projects/project-a';
+    seedRow(home, id, { wrapper: 'claude', uuid, workdir });
+    const tdir = path.join(home, '.claude', 'projects', workdir.replace(/[/._]/g, '-'));
+    mkdirSync(tdir, { recursive: true });
+    writeFileSync(path.join(tdir, `${uuid}.jsonl`), JSON.stringify({ attachment: { type: 'skill_listing', content: '- a: b' } }) + '\n');
+    const c = countingIO();
+    const app = await buildServer({ ...testDeps(home, async () => ({ code: 1, stdout: '', stderr: '' })), io: c.io });
+    c.reset();
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${id}/commands` });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { skills: { name: string }[] }).skills.map((s) => s.name)).toEqual(['a']);
+    const calls = c.calls();
+    await app.close();
+    return calls;
+  }
+
+  it('commands: 8 rows cost what 80 do', async () => {
+    // Compared per method, so a failure prints the call that grew with the registry.
+    expect(await callsFor(8)).toEqual(await callsFor(80));
   });
 });

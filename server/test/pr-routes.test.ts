@@ -6,6 +6,8 @@ import type { Runner } from '../src/exec.js';
 import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedRow } from './idGateFixture.js';
+import { countingIO } from './countingIO.js';
 
 /** A registry home with one workspace session, so `knownId` resolves — and its worktree really there, which the
  *  archive door measures before it acts (workspace lifecycle §5.2). */
@@ -205,6 +207,35 @@ describe('GET /api/sessions/:id/pr', () => {
     expect(res.json().pr).toMatchObject({ phase: 'unknown', reason: 'unsupported' });
     expect(calls).toEqual([]);
     await a.close();
+  });
+});
+
+describe('GET /api/sessions/:id/pr reads one registry row (D-6434)', () => {
+  /** A fixture HOME of `rows` registry rows (the target plus `rows - 1` others); the IO calls one request makes. */
+  async function callsFor(rows: number): Promise<Record<string, number>> {
+    const home = mkTmp('ccrc-pr-rows-');
+    for (let i = 0; i < rows - 1; i++) seedRow(home, `project-a-other-${i}`);
+    const id = 'project-a-ws-a';
+    seedRow(home, id, { wrapper: 'claude', uuid: 'u' });
+    const tasksDir = path.join(home, '.claude', 'tasks', 'u');
+    mkdirSync(tasksDir, { recursive: true });
+    writeFileSync(path.join(tasksDir, '1.json'), JSON.stringify({
+      id: '1', subject: 'Wire the route', activeForm: 'Wiring the route', description: '', status: 'in_progress',
+    }));
+    const c = countingIO();
+    const run: Runner = async () => ({ code: 0, stdout: LINE, stderr: '' });
+    const a = await buildServer({ ...testDeps(home, run), io: c.io });
+    c.reset();
+    const res = await a.inject({ method: 'GET', url: `/api/sessions/${id}/pr` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().draft.body).toContain('- [ ] Wire the route');
+    const calls = c.calls();
+    await a.close();
+    return calls;
+  }
+
+  it('pr: 8 rows cost what 80 do', async () => {
+    expect(await callsFor(8)).toEqual(await callsFor(80));
   });
 });
 

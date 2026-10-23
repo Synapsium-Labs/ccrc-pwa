@@ -1,5 +1,5 @@
 import type { Deps } from './deps.js';
-import { readRegistry } from './registry.js';
+import { readSessionRecord } from './registry.js';
 import { readLiveState } from './livestate.js';
 import { resolveTranscript } from './transcript/resolve.js';
 import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
@@ -49,9 +49,10 @@ function lastSkillListing(jsonl: string): string {
 
 /** Built-ins plus the session's skills (from its transcript's skill_listing). */
 export async function sessionCommands(deps: Deps, id: string): Promise<{ builtins: SlashCommand[]; skills: SlashCommand[] }> {
-  // [registry-refused:knownId] the route's knownId refuses a non-registry id before this read.
-  const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
-  if (!rec) return { builtins: BUILTINS, skills: [] };
+  // One row, not the registry: every answer but `found` is "no row" here, as it was for the sweep's miss.
+  const read = await readSessionRecord(deps.io, deps.cfg, id);
+  if (read.kind !== 'found') return { builtins: BUILTINS, skills: [] };
+  const rec = read.record;
   const cfgDir = configDirFor(deps.cfg, rec.wrapper);
   let cwd = rec.workdir;
   if (cfgDir && (await deps.tmux.hasSession(id))) {

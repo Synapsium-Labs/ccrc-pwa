@@ -48,7 +48,7 @@ import {
   type InterruptVerdict, type SendDeps,
 } from './inject/send.js';
 import { answerAsk, readAskAnswer, type AskDeps } from './inject/ask.js';
-import { freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
+import { freshAskAt, measuredIdentity, readRegistryMeasured, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
@@ -3736,8 +3736,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // wrapper, i.e. no task list could be looked for at all — and `draftPr`
   // treats that as "print no Plan section", same as an empty list.
   const prTasks = async (id: string): Promise<TaskItem[] | null> => {
-    // [registry-refused:knownId] GET /pr's knownId refuses a non-registry id before this read.
-    const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
+    const read = await readSessionRecord(deps.io, deps.cfg, id);
+    const rec = read.kind === 'found' ? read.record : undefined;
     const cfgDir = rec ? configDirFor(deps.cfg, rec.wrapper) : undefined;
     return rec && cfgDir ? (await readTasks(deps.io, cfgDir, rec.uuid)).tasks : null;
   };
