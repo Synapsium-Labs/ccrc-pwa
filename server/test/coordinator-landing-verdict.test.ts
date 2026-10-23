@@ -984,13 +984,26 @@ const ghSpelled = (b: string): string[] => {
 };
 /** Every line of the block that redirects stderr, once per redirect: `2>`, `&>` and `|&`. */
 const stderrHits = (t: string): string[] => t.split('\n').flatMap((l) => (l.match(/2>|&>|\|&/g) ?? []).map(() => l));
+/** The block's code lines (comment-only lines dropped). */
+const codeLines = (b: string): string[] => b.split('\n').filter((l) => !/^\s*#/.test(l));
+/** The forms by which a block could take a value, or code, from a file or run text it builds: a `$HOME` or `~/` path, `source`
+ *  or a `.` command (at the start of a line or after `&&` or `||`, so jq's `. ==` is not one), `cat`, `read` as a command
+ *  (at the start, after `&&`, `||`, `;`, `|`, `(`, `{`, `then` or `do`, so "unreadable: read 1" is not one), `mapfile`,
+ *  `readarray` and `eval`. The block reads nothing but its six gh reads and so spells none of them; any file-based
+ *  override fails here whatever variable it fills. A contract check of the ordinary spellings, not a shell parser:
+ *  an encoded or indirect spelling (a computed command, a here-document fed to a shell) is the carried limit. */
+const FILE_FORMS: [string, RegExp][] = [
+  ['$HOME', /\$\{?HOME\b/], ['~/', /(^|[\s"'=:])~\//], ['source', /\bsource\b/], ['. file', /(^|&&|\|\|)\s*\.\s+\S/],
+  ['cat', /\bcat\b/], ['read', /(^|&&|\|\||[;|({]|\bthen|\bdo)\s*(IFS=\S*\s+)?read\s/], ['mapfile', /\b(mapfile|readarray)\b/], ['eval', /\beval\b/],
+];
+const fileForms = (b: string): string[] => codeLines(b).flatMap((l) => FILE_FORMS.filter(([, re]) => re.test(l)).map(([n]) => `${n}: ${l.trim()}`));
 /** The lines of the block's CODE (comment-only lines dropped) that name CR_IGNORE once the skip condition's two permitted
  *  expansions are removed. The variable's only legitimate use is those two reads of the invoking shell's value; an
  *  assignment, a `read` or `mapfile` into it, `printf -v`, `declare`, `export`, a default or a third expansion all leave
  *  the name behind, or change the count of the two, and come back here. A contract-grade census of the ordinary spellings,
  *  not a shell parser: an encoded or indirect spelling (a computed name, `eval`, a here-document) is the carried limit. */
 const crIgnoreStrays = (b: string): string[] => {
-  let code = b.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  let code = codeLines(b).join('\n');
   for (const use of ['[ -n "$CR_IGNORE" ]', '[ "$CR_IGNORE" = "$key" ]']) {
     if (code.split(use).length !== 2) return [`the skip condition lost or repeated ${use}`];
     code = code.replace(use, '');
@@ -1062,6 +1075,8 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
     expect(b).not.toMatch(/\bexport\b/);
     // The census: the only code that names the variable is the two expansions of the skip condition.
     expect(crIgnoreStrays(b), 'the block names CR_IGNORE other than in the skip condition\'s two expansions').toEqual([]);
+    // And no file is read or sourced, into any variable: the block has no $HOME path, source, `.` command, cat, read, mapfile or eval.
+    expect(fileForms(b), 'the block reads or sources a file, or evals text').toEqual([]);
   });
 
   it('the CR_IGNORE census rejects an ordinary read into it, a printf -v, a declare and a default, and accepts the block and a comment', () => {
@@ -1082,6 +1097,27 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
       'export CR_IGNORE',
       ': "${CR_IGNORE:=x}"',
     ]) expect(crIgnoreStrays(plant(line)), `the census passed: ${line}`).toHaveLength(1);
+    // The file-reading census rejects any file-based override, whatever variable it fills, and accepts the block and a comment.
+    expect(fileForms(b)).toEqual([]);
+    expect(fileForms(plant('# source "$HOME/x"; cat y; read -r z; eval w'))).toEqual([]);
+    for (const line of [
+      '[ -f "$HOME/.ccrc-cr-ignore.sh" ] && . "$HOME/.ccrc-cr-ignore.sh"',
+      '. ./override.sh',
+      'true && . ./override.sh',
+      'source ./override.sh',
+      'cat "$HOME/x"',
+      'k=$(cat ./x)',
+      'eval "$x"',
+      'read -r k < ./x',
+      'if [ -f ./x ]; then read -r k < ./x; fi',
+      'IFS= read -r k < ./x',
+      'readarray -t k < ./x',
+      'mapfile -t k < ./x',
+      'k=$(< ~/x)',
+      'p="$HOME/x"',
+      'p="${HOME}/x"',
+      'p=~/x',
+    ]) expect(fileForms(plant(line)), `the file census passed: ${line}`).not.toEqual([]);
     // The permitted expansions are exactly the two of the skip condition, each once: a third copy or a lost one is refused.
     const cond = '[ -n "$CR_IGNORE" ] && [ "$CR_IGNORE" = "$key" ]';
     expect(b.split(cond), 'the skip condition changed shape').toHaveLength(2);
