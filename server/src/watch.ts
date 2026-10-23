@@ -1072,7 +1072,7 @@ export class FleetWatcher {
   private readonly projectionWhy = changeLatch<string | null>();
   /** Plan W3 Task 3: the last reason a release-push decision failed, so a coord.db that cannot be read
    *  warns once per change of reason on the inventory lane's minute beat (`changeLatch`'s idiom). */
-  private lastReleasePushFailure: string | null = null;
+  private readonly releasePushFailure = changeLatch<string>();
   /** Plan W3 Task 3 (D-3314): true once THIS process's sweep has actually REWRITTEN the rows the push decides
    *  on — never merely "a sweep finished" (W5 review 161, F-H: a sweep can finish with the server row
    *  unreachable, refused or errored, none of which rewrites it — `sweptEnoughToDecide` is the exact
@@ -2049,7 +2049,7 @@ export class FleetWatcher {
       const nodes = coord.nodes();
       n = releaseToNotify({ fleetIntent, releases: coord.releases(), nodes });
       if (n === null) {
-        this.lastReleasePushFailure = null;
+        this.releasePushFailure.clear();
         return { did: 'skipped', why: 'nothing-to-notify' };
       }
       marked = coord.markReleaseNotified(n.tag, now);
@@ -2066,11 +2066,10 @@ export class FleetWatcher {
       summary = summaryFromSides(sides);
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
-      if (detail !== this.lastReleasePushFailure) console.warn(`ccrc-server: update: the release push was not decided (${detail}) — nothing was marked or sent`);
-      this.lastReleasePushFailure = detail;
+      if (this.releasePushFailure.changed(detail)) console.warn(`ccrc-server: update: the release push was not decided (${detail}) — nothing was marked or sent`);
       return { did: 'failed', detail };
     }
-    this.lastReleasePushFailure = null;
+    this.releasePushFailure.clear();
     if (!marked.ok) return { did: 'refused', tag: n.tag, why: marked.why };
     if (!n.push) return { did: 'marked', tag: n.tag };
     const copy = releasePushCopy(n, summary);
