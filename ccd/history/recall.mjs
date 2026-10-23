@@ -25,12 +25,13 @@ import {
   EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, SCOPE_FAMILIES_JSON_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinalJson, readEnvelope, nextLine,
   REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
   GREP_LIMIT_DEFAULT, encodeCursor, decodeCursor, canonicalJson, sha256Hex,
-  guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths,
+  guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths, asOfEntrySql, asOfBinds, asOfCut,
   DESCRIBE_EXCERPT, GIST_MAX, costRow, producerOf, pickHoldingCopy, redactDisplayWindow, parseDescribeArgs, displayToken, foldOneLine, topicsOfColumn,
 } from './lib.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { childrenOf, parentOf, ftsGateFactsOn, blobPlainText, blobPlainTextMeasured, lineageEntries, recoverOpenOn } from './store.mjs';
+import { blobReadStmts, keptOf } from './derive.mjs';
 import * as xlib from './lib.mjs';
 import * as xstore from './store.mjs';
 import { basename as xbasename } from 'node:path';
@@ -83,6 +84,56 @@ export function inParts(xs) {
 const marks = (xs) => xs.map(() => '?').join(', ');
 /** A time at minute precision, locale-free. */
 const isoOf = (ms) => (ms === null || ms === undefined ? 'unknown' : `${new Date(Number(ms)).toISOString().slice(0, 16)}Z`);
+
+// ── The as-of cut's reads (W2-2a Task 3; W2-D35, W2-D36, W2-D38) ────────────────────────────────────────────────────
+// The cut (lib's asOfCut) rides on rc.scope.cut, read through cutOf and bound through cutBinds (both below bindFor, Task
+// 2). Each helper here asks one of lib's statements and answers a set (cutHidesASource answers whether cutVisibleEntries'
+// set misses a row under a node). With no cut they prepare nothing, so a read with
+// nothing set prepares exactly the statements it prepared before W2-2a (W2-D45).
+// A node, epoch or row the cut hides is ABSENT (W2-D36): each site filters it before scope, so it is never out of scope,
+// never one of an ambiguous prefix's candidates and never counted.
+
+/** Of `ids`, the node ids the cut hides, by lib's asOfHiddenNodesSql: a leaf by its boundary entry, any other node by every
+ *  leaf under it, whenever it was formed. An empty set with no cut. */
+function cutHiddenNodes(rc, ids) {
+  const cut = cutOf(rc);
+  if (cut === null || ids.length === 0) return new Set();
+  const sql = xlib.asOfHiddenNodesSql();
+  const rows = rc.db.prepare(sql).all(bindFor(sql, { ...cutBinds(rc), asof_nodes: JSON.stringify([...new Set(ids)]) }));
+  return new Set(rows.map((r) => r.node_id));
+}
+
+/** Of these epochs' session uuids, the ones the cut shows (one of their transcripts holds a row it shows). null with no
+ *  cut, which shows every epoch. */
+function cutVisibleEpochs(rc, uuids) {
+  const cut = cutOf(rc);
+  if (cut === null) return null;
+  if (uuids.length === 0) return new Set();
+  const sql = xlib.asOfVisibleEpochsSql();
+  const rows = rc.db.prepare(sql).all(bindFor(sql, { ...cutBinds(rc), asof_epochs: JSON.stringify([...new Set(uuids)]) }));
+  return new Set(rows.map((r) => r.cc_session_uuid));
+}
+
+/** Of these entry ids, the ones the cut shows (lib's asOfVisibleEntriesSql, W2-D34's rule). null with no cut. */
+function cutVisibleEntries(rc, entryIds) {
+  const cut = cutOf(rc);
+  if (cut === null) return null;
+  if (entryIds.length === 0) return new Set();
+  const sql = xlib.asOfVisibleEntriesSql();
+  const ids = JSON.stringify([...new Set(entryIds.map(Number))]);
+  const rows = rc.db.prepare(sql).all(bindFor(sql, { ...cutBinds(rc), asof_entries: ids }));
+  return new Set(rows.map((r) => Number(r.entry_id)));
+}
+
+/** Whether the as-of cut hides a source row under node `id`: its own (a leaf) or any descendant leaf's (a parent), listed
+ *  by store.mjs's lineageEntries and judged by cutVisibleEntries (lib's asOfVisibleEntriesSql). false with no cut, and
+ *  then nothing is read (W2-D45). describe drops the node's tool_use refs when it answers true (R8). */
+function cutHidesASource(rc, id) {
+  if (cutOf(rc) === null) return false;
+  const ids = lineageEntries(rc.db, id).map((x) => x.entryId);
+  const shown = cutVisibleEntries(rc, ids);
+  return ids.some((e) => !shown.has(e));
+}
 
 const FAMILY_BY_KEY_SQL = 'SELECT session_pk, ccrc_id, generation, first_seen_ms, merged_into FROM sessions WHERE ccrc_id = ? AND generation = ?';
 const FAMILY_BY_PK_SQL = 'SELECT session_pk, ccrc_id, generation, first_seen_ms, merged_into FROM sessions WHERE session_pk = ?';
@@ -154,18 +205,44 @@ function eofOf(db, transcriptPks) {
   return out;
 }
 
+const VISIBLE = new WeakMap();
+/** W2-D37, with W2-D35's epoch rule: the scope's families and transcripts as the header and the --json scope count and
+ *  name them. With no cut, the scope's own lists. Under an as-of cut (rc.scope.cut, W2-D38), a transcript counts iff it
+ *  holds an entry lib's one predicate leaves visible, and a family iff one of its confirmed epochs is visible by lib's
+ *  epoch statement (cutVisibleEpochs), so a transcript, an epoch or a family that holds only what the cut hides is never
+ *  counted, never named and never read for the lag. rc.scope itself is not narrowed (R5): each read site applies the cut
+ *  in its own SQL. Once per context. */
+export function visibleScope(rc) {
+  if (cutOf(rc) === null) return { families: rc.scope.families, transcriptPks: rc.scope.transcriptPks };
+  const known = VISIBLE.get(rc);
+  if (known !== undefined) return known;
+  const tsql = `SELECT DISTINCT e.transcript_pk AS pk FROM entries e
+    WHERE e.transcript_pk IN (SELECT value FROM json_each(:tpks))${cutAnd(rc, 'e')}`;
+  const transcriptPks = rc.db.prepare(tsql).all(bindFor(tsql, { tpks: JSON.stringify(rc.scope.transcriptPks), ...cutBinds(rc) }))
+    .map((r) => Number(r.pk)).sort((a, b) => a - b);
+  const epochs = rc.db.prepare(`SELECT session_pk AS pk, cc_session_uuid AS u FROM epochs
+    WHERE confirmed_ms IS NOT NULL AND session_pk IN (SELECT value FROM json_each(?))`).all(JSON.stringify(rc.scope.families.map((f) => f.sessionPk)));
+  const shown = cutVisibleEpochs(rc, epochs.map((r) => r.u));
+  const held = new Set(epochs.filter((r) => shown.has(r.u)).map((r) => Number(r.pk)));
+  const out = Object.freeze({ families: rc.scope.families.filter((f) => held.has(f.sessionPk)), transcriptPks });
+  VISIBLE.set(rc, out);
+  return out;
+}
+
 const HEADERS = new WeakMap();
 /** §8.3's header for this read: the scope, coverage, indexed-through and lag. lag is now minus the oldest
  *  end-of-file mark in scope; it reads `unmeasured` while any file in scope has none, and while a recovery step
- *  is registered (§8.8: no tick has reached end-of-file). Computed once per context. */
+ *  is registered (§8.8: no tick has reached end-of-file). Its counts and its lag read only what the as-of cut leaves visible
+ *  (visibleScope; W2-D37). Computed once per context. */
 export function scopeHeader(rc) {
   const known = HEADERS.get(rc);
   if (known !== undefined) return known;
   const recovering = recoverOpenOn(rc.db);
-  const lag = scopeLag({ eofMs: eofOf(rc.db, rc.scope.transcriptPks), nowMs: rc.nowMs, recovering });
+  const vis = visibleScope(rc);
+  const lag = scopeLag({ eofMs: eofOf(rc.db, vis.transcriptPks), nowMs: rc.nowMs, recovering });
   const line = headerLine({
-    kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project, families: rc.scope.families.length,
-    transcripts: rc.scope.transcriptPks.length, indexedThroughMs: lag.indexedThroughMs, lagS: lag.lagS,
+    kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project, families: vis.families.length,
+    transcripts: vis.transcriptPks.length, indexedThroughMs: lag.indexedThroughMs, lagS: lag.lagS,
   });
   const h = Object.freeze({ line, indexedThroughMs: lag.indexedThroughMs, lagS: lag.lagS });
   HEADERS.set(rc, h);
@@ -195,21 +272,24 @@ function nodeItem(n, parentById, family, rc) {
   };
 }
 
-/** The JSON scope mirrors cli.mjs's scopeJson exactly, including its cap-fitting family prefix. */
-function jsonScope(rc) {
+/** The --json scope object (§8.3), defined once: cli.mjs's envelope prints it and tree's cap fitting measures it. A widened
+ *  scope names only a bounded prefix, and `families_total` is complete. Under an as-of cut both name and count only what
+ *  is visible (visibleScope; W2-D37). */
+export function scopeJsonOf(rc) {
+  const vis = visibleScope(rc);
   return {
     kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project,
-    families: rc.scope.families.slice(0, SCOPE_FAMILIES_JSON_MAX)
+    families: vis.families.slice(0, SCOPE_FAMILIES_JSON_MAX)
       .map((f) => ({ ccrc_id: f.ccrcId, generation: f.generation, first_seen_ms: f.firstSeenMs })),
-    families_total: rc.scope.families.length,
-    transcripts: rc.scope.transcriptPks.length,
+    families_total: vis.families.length,
+    transcripts: vis.transcriptPks.length,
   };
 }
 
 /** Render the actual final JSON representation whose length the cap promises. */
 function renderJson(rc, head, items, shown, total, next) {
   return `${JSON.stringify(redactFinalJson(readEnvelope({
-    exit: EXIT.OK, storeId: rc.storeId, scope: jsonScope(rc),
+    exit: EXIT.OK, storeId: rc.storeId, scope: scopeJsonOf(rc),
     header: { indexedThroughMs: head.indexedThroughMs, lagS: head.lagS }, items, shown, total,
     next: next === null ? null : nextLine(next),
   }), rc.pairIdx))}\n`;
@@ -239,14 +319,22 @@ export function runTree(rc, a) {
   const db = rc.db;
   const head = scopeHeader(rc);
   const cols = selectColumns(rc.version, 'nodes', NODE_COLS, rc.schema);
-  const nodes = [];
+  const stored = [];
   for (const part of inParts(rc.scope.sessionPks)) {
-    nodes.push(...db.prepare(`SELECT ${cols} FROM nodes n WHERE n.session_pk IN (${marks(part)}) AND EXISTS (SELECT 1 FROM epochs e WHERE e.session_pk = n.session_pk AND e.seq = n.epoch_seq AND e.confirmed_ms IS NOT NULL)`).all(...part));
+    stored.push(...db.prepare(`SELECT ${cols} FROM nodes n WHERE n.session_pk IN (${marks(part)}) AND EXISTS (SELECT 1 FROM epochs e WHERE e.session_pk = n.session_pk AND e.seq = n.epoch_seq AND e.confirmed_ms IS NOT NULL)`).all(...part));
   }
+  // W2-D35: a node the as-of cut hides is absent (W2-D36): not listed, not counted in N, and no display prefix below is
+  // measured against it.
+  const hiddenTree = cutHiddenNodes(rc, stored.map((n) => n.node_id));
+  const nodes = hiddenTree.size === 0 ? stored : stored.filter((n) => !hiddenTree.has(n.node_id));
   const byId = new Map(nodes.map((n) => [n.node_id, n]));
   const prefixes = displayPrefixes([...byId.keys()]);
   const show = (id) => prefixes.get(id) ?? id;
-  const parentById = new Map(nodes.map((n) => [n.node_id, parentOf(db, n.node_id)]));
+  // A parent the cut hides is no parent: its visible children are then roots of their epoch, as they were before it formed.
+  const parentById = new Map(nodes.map((n) => {
+    const p = parentOf(db, n.node_id);
+    return [n.node_id, p !== null && hiddenTree.has(p) ? null : p];
+  }));
   const rootsByEpoch = new Map();
   for (const n of nodes) {
     if (parentById.get(n.node_id) !== null) continue;
@@ -265,9 +353,15 @@ export function runTree(rc, a) {
       if (child !== undefined) walk(child, level + 1);
     }
   };
-  for (const f of rc.scope.families) {
+  // R8: a family heading names only a family the as-of cut leaves visible (visibleScope, W2-D35's epoch rule), so a family
+  // with no visible epoch is never named by tree, nor its generation. With no cut, the scope's own families.
+  for (const f of visibleScope(rc).families) {
     out.push({ text: `family ${f.ccrcId} generation=${f.generation === '' ? '(none)' : f.generation} first-seen=${isoOf(f.firstSeenMs)}`, node: null });
-    for (const e of epochs.all(f.sessionPk)) {
+    const listed = epochs.all(f.sessionPk);
+    // W2-D35: an epoch shows iff one of its transcripts holds a row the as-of cut shows; null with no cut shows them all.
+    const shownEpochs = cutVisibleEpochs(rc, listed.map((e) => e.cc_session_uuid));
+    for (const e of listed) {
+      if (shownEpochs !== null && !shownEpochs.has(e.cc_session_uuid)) continue;
       out.push({ text: `  epoch ${e.seq} ${e.cause} started=${isoOf(e.started_ms)} session=${String(e.cc_session_uuid).slice(0, 8)}`, node: null });
       const roots = (rootsByEpoch.get(`${f.sessionPk}:${e.seq}`) ?? [])
         .sort((x, y) => (Number(x.earliest_ms ?? 0) - Number(y.earliest_ms ?? 0)) || (x.node_id < y.node_id ? -1 : 1));
@@ -322,7 +416,7 @@ export function runTree(rc, a) {
 
 /** Room kept for what the CLI prints around a verb's blocks: Task 11's header, `shown K of N`, `next:` and a hint
  *  line; with --json, the envelope's fixed fields and its scope, which names at most a handful of families plus
- *  `families_total` (Task 11's scopeJson and lib's SCOPE_FAMILIES_JSON_MAX), so it is bounded whatever the project holds. A verb's own blocks fill
+ *  `families_total` (scopeJsonOf and lib's SCOPE_FAMILIES_JSON_MAX), so it is bounded whatever the project holds. A verb's own blocks fill
  *  OUTPUT_CAP minus this (Tasks 13 and 15). */
 const FRAME_RESERVE = 1200;
 
@@ -356,29 +450,108 @@ function bindFor(sql, all) {
   return out;
 }
 
+// ── The as-of cut at every entry read (W2-2a Task 2; W2-D35, W2-D36, W2-D38) ─────────────────────────────────────
+// lib's asOfEntrySql is the ONE spelling of W2-D34's rule (D-5766 (history-w2-asof-time-cut)), and asOfBinds its
+// values. This module only says where the rule is spliced. Every statement here that returns or counts entries
+// splices it before its scope term, its ORDER BY and its LIMIT, so a hidden row answers exactly as a row that was never
+// stored: exit 3, never out-of-scope (W2-D36; C27's order). With no cut, each splice is '' and the statement is
+// unchanged.
+
+/** This read's as-of cut (lib's asOfCut answer, W2-D38), or null for none. A context with no `cut` key reads as none. */
+function cutOf(rc) {
+  return rc.scope.cut ?? null;
+}
+
+/** The cut over one entries alias, as one parenthesised SQL term; '' with no cut. The alias exposes entry_id, uuid and
+ *  ts_ms. */
+function cutTerm(rc, alias) {
+  return cutOf(rc) === null ? '' : `(${asOfEntrySql(alias)})`;
+}
+
+/** cutTerm as an `AND` clause; '' with no cut. */
+function cutAnd(rc, alias) {
+  return cutOf(rc) === null ? '' : ` AND ${cutTerm(rc, alias)}`;
+}
+
+/** The cut's named parameters' values, {} with no cut. bindFor keeps each statement's own. */
+function cutBinds(rc) {
+  const cut = cutOf(rc);
+  return cut === null ? {} : asOfBinds(cut);
+}
+
+/** The ids among `ids` the cut leaves visible, in `ids`' order; `ids` itself with no cut. The statement is prepared per
+ *  call, never cached: EXPAND_STMTS is per handle, and a cut is per read. */
+function visibleEntryIds(rc, ids) {
+  if (cutOf(rc) === null || ids.length === 0) return ids;
+  const sql = `SELECT e.entry_id AS entry_id FROM entries e WHERE e.entry_id IN (SELECT value FROM json_each(:ids))${cutAnd(rc, 'e')}`;
+  const keep = new Set(rc.db.prepare(sql).all(bindFor(sql, { ids: JSON.stringify(ids.map(Number)), ...cutBinds(rc) })).map((r) => Number(r.entry_id)));
+  return ids.filter((id) => keep.has(Number(id)));
+}
+
+/** Whether the row stored under `uuid` is visible: true with no cut; false for a hidden row and for no row. */
+function uuidVisible(rc, uuid) {
+  if (cutOf(rc) === null) return true;
+  const sql = `SELECT e.entry_id AS entry_id FROM entries e WHERE e.uuid = :uuid${cutAnd(rc, 'e')}`;
+  return rc.db.prepare(sql).get(bindFor(sql, { uuid, ...cutBinds(rc) })) !== undefined;
+}
+
+/** W2-D39's store half (R2): the as-of cut at the boundary whose uuid is `asof`, measured on `rc.db` (nothing else of `rc`
+ *  is read) and decided by lib's asOfCut, whose answer it returns unchanged: `{ ok: true, cut }`, or exit 2
+ *  `asof-invalid` (D-5765 (history-w2-asof-invalid-word)). It measures the entries row of `asof` joined to its
+ *  boundaries row and that row's transcript (main: agent_id ''); the transcript's files and whether each holds N, the copy
+ *  picked by lib's pickHoldingCopy as producerOfLeaf picks it; that copy's rows in derive.mjs's copyRows column names,
+ *  in file order; and kept(N) through derive.mjs's keptOf, the set derivation spans with (W2-D34, option (a)). Only
+ *  tests call it in W2-2a; W2-2b's env path sets rc.scope.cut from it (W2-D46 step 7). */
+export function asOfCutOf(rc, asof) {
+  // The transcript is the boundaries row's, the one derive.mjs spans with and producerOfLeaf reads, never the entries
+  // row's: the two columns are written independently and can differ. D-6281 (history-w2-asof-boundary-transcript)
+  const b = rc.db.prepare(`SELECT e.entry_id AS entry_id, e.uuid AS uuid, bd.transcript_pk AS transcript_pk, t.agent_id AS agent_id,
+      bd.anchor_uuid AS anchor_uuid, bd.kept_blob_id AS kept_blob_id
+    FROM entries e JOIN boundaries bd ON bd.entry_id = e.entry_id JOIN transcripts t ON t.transcript_pk = bd.transcript_pk
+    WHERE e.uuid = :uuid`).get({ uuid: asof });
+  if (b === undefined) return asOfCut({ asof, boundary: null, copy: null, kept: new Set() });
+  const boundary = { entryId: Number(b.entry_id), uuid: b.uuid, main: b.agent_id === '', anchorUuid: b.anchor_uuid ?? null };
+  const files = rc.db.prepare(`SELECT f.file_id AS file_id, f.source_key AS source_key, mb.line AS line FROM ingest_files f
+      LEFT JOIN memberships mb ON mb.file_id = f.file_id AND mb.entry_id = :entry
+    WHERE f.transcript_pk = :tpk ORDER BY f.file_id`).all({ entry: b.entry_id, tpk: b.transcript_pk });
+  const held = pickHoldingCopy(files.map((f) => ({ fileId: Number(f.file_id), live: f.source_key === '', holds: f.line !== null })));
+  const copy = held === null ? null : {
+    fileId: held,
+    rows: rc.db.prepare(`SELECT m.line AS line, e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.provenance AS provenance,
+        e.is_compact_summary AS is_compact_summary, e.ts_ms AS ts_ms
+      FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = :file ORDER BY m.line`).all({ file: held }),
+  };
+  const kept = keptOf(blobReadStmts(rc.db), b.kept_blob_id === null ? null : Number(b.kept_blob_id), { bytes: 0 });
+  return asOfCut({ asof, boundary, copy, kept });
+}
+
 /** `refs`: every referrer of a blob `matchSql` selects as (blob_id, rank). That is the FTS MATCH here, and the
  *  regex child's blob list in Task 14. `ref_key` is the referrer's own immutable identity, unique across the three
  *  routes (an entry by its id, a variant by its entry and blob, a sidecar by its primary key: transcript, name,
  *  blob), so the ranked order can be total. A variant whose blob is the entry's first body is that entry's own row
- *  (§6.2: the first body also gets a variant row once a second appears), so it is not counted twice. */
+ *  (§6.2: the first body also gets a variant row once a second appears), so it is not counted twice.
+ *  Under an as-of cut each arm keeps only the referrers whose entry is visible, inside the CTE, so before the scope
+ *  filter, the ranking, the LIMIT and the count (W2-D35, W2-D36; C27). A variant follows its entry, and a sidecar the
+ *  entry it is linked to. A sidecar linked to none is absent: lib's predicate is never true over the LEFT JOIN's NULL row. */
 function referrerSql(rc, matchSql) {
   const e = (alias) => versioned(rc, 'entries', alias, REFERRER_ENTRY_COLS);
   return `WITH m(blob_id, rank) AS (${matchSql}),
   refs(via, entry_id, uuid, transcript_pk, ts_ms, role, provenance, tool_name, blob_id, name, rank, ref_key) AS (
     SELECT 'entry', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank,
         'entry:' || e.entry_id
-      FROM m JOIN ${e('e')} ON e.blob_id = m.blob_id
+      FROM m JOIN ${e('e')} ON e.blob_id = m.blob_id${cutAnd(rc, 'e')}
     UNION ALL
     SELECT 'variant', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank,
         'variant:' || e.entry_id || ':' || v.blob_id
       FROM m JOIN ${versioned(rc, 'entry_variants', 'v', ['entry_id', 'blob_id'])} ON v.blob_id = m.blob_id
         JOIN ${e('e')} ON e.entry_id = v.entry_id
-      WHERE v.blob_id <> e.blob_id
+      WHERE v.blob_id <> e.blob_id${cutAnd(rc, 'e')}
     UNION ALL
     SELECT 'sidecar', s.entry_id, se.uuid, s.transcript_pk, COALESCE(se.ts_ms, s.first_seen_ms), NULL, 'tool', NULL,
         m.blob_id, s.name, m.rank, 'sidecar:' || s.transcript_pk || ':' || s.name || ':' || s.blob_id
       FROM m JOIN ${versioned(rc, 'sidecars', 's', ['transcript_pk', 'name', 'blob_id', 'entry_id', 'first_seen_ms'])} ON s.blob_id = m.blob_id
-        LEFT JOIN ${versioned(rc, 'entries', 'se', ['entry_id', 'uuid', 'ts_ms'])} ON se.entry_id = s.entry_id
+        LEFT JOIN ${versioned(rc, 'entries', 'se', ['entry_id', 'uuid', 'ts_ms'])} ON se.entry_id = s.entry_id${cutOf(rc) === null ? '' : `
+      WHERE ${cutTerm(rc, 'se')}`}
   )`;
 }
 
@@ -439,8 +612,12 @@ function iso(ms) {
  *  RV19). A node outside it is exit 2 out-of-scope, never 3; prefix uniqueness is computed among the scope's
  *  nodes. Node ids are hex after the kind letter, so `wanted + 'g'` bounds the prefix range on the primary key. */
 export function resolveNodeInScope(rc, wanted) {
-  const rows = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'session_pk'], rc.schema)} FROM nodes
+  const stored = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'session_pk'], rc.schema)} FROM nodes
     WHERE node_id >= ? AND node_id < ?`).all(wanted, `${wanted}g`);
+  // W2-D36: a node the as-of cut hides is absent BEFORE scope, so it is neither in scope nor out of it. It answers 3, never
+  // out-of-scope, and never makes a prefix ambiguous. One filter for describe, grep --node and expand's node target.
+  const hiddenHere = cutHiddenNodes(rc, stored.map((x) => x.node_id));
+  const rows = hiddenHere.size === 0 ? stored : stored.filter((x) => !hiddenHere.has(x.node_id));
   const mine = new Set(rc.scope.sessionPks);
   const verdict = resolveScopedId({
     wanted,
@@ -487,6 +664,7 @@ function grepParams(rc, a, nodes, extra) {
     role: a.role, tool: a.tool, since: a.sinceMs, before: a.beforeMs,
     nodes: nodes === null ? null : JSON.stringify(nodes),
     pool: RANK_POOL, now_ms: rc.nowMs,
+    ...cutBinds(rc),
   };
 }
 
@@ -606,16 +784,25 @@ function hitItem(rc, hit, snippet, nodeId, family) {
 /** The group key of rows no leaf covers yet: grep's live tail (§8.4). */
 const LIVE_TAIL = '';
 
+/** W2-D37: the as-of boundary this call reads under, rc.scope.cut's `asof` (W2-D38), or null when no cut is set. */
+function asOfOf(rc) {
+  const cut = cutOf(rc);
+  return cut === null ? null : cut.asof;
+}
+
 /** The hint a refused cursor carries. */
 const STALE_CURSOR = 'that --cursor belongs to another query, scope or filter; run the query again without it';
 
-/** What a grep cursor is bound to: the query, the scope and every filter. A cursor from another query or scope
- *  is refused, never applied to the wrong list. */
+/** What a grep cursor is bound to: the query, the scope, every filter and, only under an as-of cut, its boundary
+ *  (W2-D37). A cursor from another query, scope or cut, or from none, is refused, never applied to the wrong list. With no
+ *  cut the key is the one every earlier build printed. */
 function grepKey(rc, a) {
+  const asof = asOfOf(rc);
   return sha256Hex(canonicalJson({
     words: a.regex === null ? sanitizeFtsQuery(a.words.join(' ')) : null, regex: a.regex,
     scope: [rc.scope.kind, rc.scope.id, rc.scope.generation],
     role: a.role, tool: a.tool, since: a.sinceMs, before: a.beforeMs, node: a.node, sort: a.sort, recall: a.includeRecall,
+    ...(asof === null ? {} : { asof }),
   })).slice(0, 20);
 }
 
@@ -651,33 +838,56 @@ function grepArgv(rc, a, cursor) {
 }
 
 /** Display prefixes for every node of the scope (§6.1): unique within the scope, never shorter than
- *  NODE_ID_DISPLAY_MIN. */
+ *  NODE_ID_DISPLAY_MIN. Under an as-of cut, computed over the visible nodes only (W2-D35), so a hidden neighbour never
+ *  lengthens a visible node's prefix. */
 function scopePrefixes(rc) {
   const ids = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id'], rc.schema)} FROM nodes
     WHERE session_pk IN (SELECT value FROM json_each(?))`).all(JSON.stringify(rc.scope.sessionPks)).map((r) => r.node_id);
-  return displayPrefixes(ids);
+  const hiddenPre = cutHiddenNodes(rc, ids);
+  return displayPrefixes(hiddenPre.size === 0 ? ids : ids.filter((id) => !hiddenPre.has(id)));
 }
 
 /** Each entry's covering leaf, through node_sources_entry (§8.4). node_sources holds leaf edges only (§6.3). Two
  *  fork leaves can hold one shared row (DM36, DM37); it groups under the lower node_id, deterministically. Only a
  *  leaf of the scope's own families counts: an entry is store-global, so another family's leaf can hold the same
- *  row, and that leaf is not this scope's to show. */
+ *  row, and that leaf is not this scope's to show. Under an as-of cut only a VISIBLE leaf counts (W2-D35), and the
+ *  hidden ones are dropped BEFORE the lower id is taken: a row a hidden leaf and a visible one share groups under the
+ *  visible one, and a row only a hidden leaf covers (kept(N) under ASOF=N, leaf N+1's) has none, so renderHits groups
+ *  it under the live tail and no hidden leaf's id or gist prints (C31). */
 function coveringLeaves(rc, entryIds) {
   if (entryIds.length === 0) return new Map();
-  const rows = rc.db.prepare(`SELECT ns.entry_id AS entry_id, min(ns.node_id) AS node_id
+  if (cutOf(rc) === null) {
+    const rows = rc.db.prepare(`SELECT ns.entry_id AS entry_id, min(ns.node_id) AS node_id
       FROM ${versioned(rc, 'node_sources', 'ns', ['node_id', 'entry_id'])}
       JOIN ${versioned(rc, 'nodes', 'n', ['node_id', 'session_pk'])} ON n.node_id = ns.node_id
       WHERE ns.entry_id IN (SELECT value FROM json_each(?)) AND n.session_pk IN (SELECT value FROM json_each(?))
       GROUP BY ns.entry_id`).all(JSON.stringify(entryIds), JSON.stringify(rc.scope.sessionPks));
-  return new Map(rows.map((r) => [r.entry_id, r.node_id]));
+    return new Map(rows.map((r) => [r.entry_id, r.node_id]));
+  }
+  const pairs = rc.db.prepare(`SELECT ns.entry_id AS entry_id, ns.node_id AS node_id
+      FROM ${versioned(rc, 'node_sources', 'ns', ['node_id', 'entry_id'])}
+      JOIN ${versioned(rc, 'nodes', 'n', ['node_id', 'session_pk'])} ON n.node_id = ns.node_id
+      WHERE ns.entry_id IN (SELECT value FROM json_each(?)) AND n.session_pk IN (SELECT value FROM json_each(?))`)
+    .all(JSON.stringify(entryIds), JSON.stringify(rc.scope.sessionPks));
+  const hiddenLeaves = cutHiddenNodes(rc, pairs.map((r) => r.node_id));
+  const out = new Map();
+  for (const r of pairs) {
+    if (hiddenLeaves.has(r.node_id)) continue;
+    const had = out.get(r.entry_id);
+    if (had === undefined || r.node_id < had) out.set(r.entry_id, r.node_id);   // ASCII ids: SQLite's BINARY min
+  }
+  return out;
 }
 
-/** The time range and gist of each group's leaf. */
-function leafHeads(rc, ids) {
+/** The time range and gist of each group's leaf. A leaf the as-of cut hides has no head (W2-D35), so neither its range nor
+ *  its gist can print. Exported as a test seam (the describePageEnd precedent): renderHits hands it only ids coveringLeaves
+ *  has already cut, so no read verb can show this guard red on its own. */
+export function leafHeads(rc, ids) {
   if (ids.length === 0) return new Map();
   const rows = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'earliest_ms', 'latest_ms', 'gist'], rc.schema)}
     FROM nodes WHERE node_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids));
-  return new Map(rows.map((r) => [r.node_id, r]));
+  const hiddenHeads = cutHiddenNodes(rc, ids);
+  return new Map(rows.filter((r) => !hiddenHeads.has(r.node_id)).map((r) => [r.node_id, r]));
 }
 
 /** One page of hits (§8.3, §8.4), grouped under their covering leaves plus a live tail.
@@ -842,6 +1052,9 @@ export function runRegex(rc, a, deps = {}) {
     provenance: [...(a.includeRecall ? INDEXED_PROVENANCE : SEARCHABLE_PROVENANCE)],
     prefilter: regexPrefilter(a.regex),
     pattern: guard.source,
+    // W2-D38: the cut, as the very values the parent binds for lib's one predicate (cutBinds, lib's asOfBinds), so the
+    //  child applies that predicate itself; null with no cut. The key is always present: the child refuses a job without it.
+    cut: cutOf(rc) === null ? null : cutBinds(rc),
     pairs: pairsOf(rc.pairIdx),
     // §8.3 layer 4: the parent's units, so the child masks what this process's output would. stdin only.
     belt: rc.pairIdx.belt == null ? [] : [...rc.pairIdx.belt.texts],
@@ -916,19 +1129,27 @@ function refsOf(rc, id) {
     WHERE node_id = ? ORDER BY kind, value`).all(id);
 }
 
-/** A leaf's sources in order, each with its blob's raw length. */
+/** A leaf's sources in order, each with its blob's raw length. Under an as-of cut a source row the cut hides (a NULL-ts
+ *  row, W2-D34) is absent from the list and from its count (W2-D36). */
 function sourcesOf(rc, id) {
-  return rc.db.prepare(`SELECT e.uuid AS uuid, e.type AS type, e.role AS role, b.raw_len AS raw_len
+  const cutSet = cutOf(rc) !== null;
+  const rows = rc.db.prepare(`SELECT e.uuid AS uuid, e.type AS type, e.role AS role, b.raw_len AS raw_len${cutSet ? ', e.entry_id AS entry_id' : ''}
       FROM ${versioned(rc, 'node_sources', 'ns', ['node_id', 'entry_id', 'ord'])}
         JOIN ${versioned(rc, 'entries', 'e', ['entry_id', 'uuid', 'type', 'role', 'blob_id'])} ON e.entry_id = ns.entry_id
         JOIN ${versioned(rc, 'blobs', 'b', ['blob_id', 'raw_len'])} ON b.blob_id = e.blob_id
       WHERE ns.node_id = ? ORDER BY ns.ord`).all(id);
+  const shownRows = cutVisibleEntries(rc, cutSet ? rows.map((r) => r.entry_id) : []);
+  return shownRows === null ? rows : rows.filter((r) => shownRows.has(Number(r.entry_id)));
 }
 
 /** A condensed node's children in order (Task 9's node_children, parent → children). */
 function childRowsOf(rc, id) {
   const st = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', DESCRIBE_NODE_COLS, rc.schema)} FROM nodes WHERE node_id = ?`);
-  return childrenOf(rc.db, id).slice().sort((x, y) => x.ord - y.ord).map((c) => st.get(c.childId)).filter((r) => r !== undefined);
+  const kids = childrenOf(rc.db, id).slice().sort((x, y) => x.ord - y.ord).map((c) => st.get(c.childId)).filter((r) => r !== undefined);
+  // W2-D36: a child the as-of cut hides is absent, from the list and from children_total. Under the parent rule a visible
+  // parent holds one only in a damaged store: a condensed child with no leaf under it (R4).
+  const hiddenKids = cutHiddenNodes(rc, kids.map((k) => k.node_id));
+  return hiddenKids.size === 0 ? kids : kids.filter((k) => !hiddenKids.has(k.node_id));
 }
 
 /** The line of a leaf's summary row in its holding copy `at` ({ file_id, line: the boundary's }), picked as lib's
@@ -972,12 +1193,17 @@ function producerOfLeaf(rc, n) {
   if (held === null) return 'unknown';
   const at = copies.find((c) => Number(c.file_id) === held);
   const from = summaryLine(rc, n.boundary_entry_id, at) ?? at.line;
-  const after = rc.db.prepare(`SELECT e.model AS model
+  const witnessCut = cutOf(rc) !== null;
+  const after = rc.db.prepare(`SELECT e.model AS model${witnessCut ? ', e.entry_id AS entry_id' : ''}
       FROM ${versioned(rc, 'memberships', 'mb', ['file_id', 'entry_id', 'line'])}
         JOIN ${versioned(rc, 'entries', 'e', ['entry_id', 'type', 'model'])} ON e.entry_id = mb.entry_id
       WHERE mb.file_id = ? AND mb.line > ? AND e.type = 'assistant' ORDER BY mb.line`);
   function* models() {
-    for (const r of after.iterate(at.file_id, from)) yield r.model;
+    for (const r of after.iterate(at.file_id, from)) {
+      // W2-D36: a witness the as-of cut hides is absent, so a leaf's producer never names the model of a hidden reply.
+      if (witnessCut && !cutVisibleEntries(rc, [r.entry_id]).has(Number(r.entry_id))) continue;
+      yield r.model;
+    }
   }
   return producerOf(models());
 }
@@ -1096,7 +1322,9 @@ export function runDescribe(rc, a, deps = {}) {
   if (n === undefined) return notFound();
   const pre = scopePrefixes(rc);
   const disp = (x) => pre.get(x) ?? x;
-  const parent = parentOf(rc.db, id);
+  // W2-D35: a parent the as-of cut hides is absent: no parent line, and parent_id is null.
+  const storedParent = parentOf(rc.db, id);
+  const parent = storedParent !== null && cutHiddenNodes(rc, [storedParent]).has(storedParent) ? null : storedParent;
   const producer = producerOfNode(rc, n);
   const sm = summaryOf(rc, n);
   const summary = sm.state === 'text' ? sm.text : null;
@@ -1151,7 +1379,12 @@ export function runDescribe(rc, a, deps = {}) {
 
   const gistAll = n.gist === null ? null : redactForDisplay(n.gist, rc.pairIdx);
   const topicsAll = topicsOfColumn(n.topics).map((t) => redactForDisplay(t, rc.pairIdx));
-  const refsAll = refsOf(rc, id).map((r) => ({ kind: r.kind, value: redactForDisplay(r.value, rc.pairIdx), origin: r.origin }));
+  // R8: under an as-of cut, a ref mined from source rows (origin tool_use) is dropped when a source row under this node,
+  // its own or a descendant leaf's, is one the cut hides: node_refs names no row, so it may come from that row. Refs of
+  // origin model and meta come from the summary written at N and stay (R6). files are read from refsAll, so they follow.
+  const minedHidden = cutHidesASource(rc, id);
+  const refsAll = refsOf(rc, id).filter((r) => !(minedHidden && r.origin === 'tool_use'))
+    .map((r) => ({ kind: r.kind, value: redactForDisplay(r.value, rc.pairIdx), origin: r.origin }));
   const filesAll = refsAll.filter((r) => r.kind === 'path').map((r) => r.value);
   const excerptMax = summary === null ? 0 : Math.min(summary.length, pairSafeEnd(summary, 0, DESCRIBE_EXCERPT));
   const label = n.depth > 0 ? 'children' : 'sources';
@@ -1341,6 +1574,19 @@ function expandHolding(s, files, entryId) {
   return null;
 }
 
+/** --around's neighbours of `hold` in its copy: `n` of them on `side` ('before' or 'after'), nearest first. With no cut,
+ *  expand's cached `before` and `after` statements, unchanged. Under an as-of cut each membership is joined to its entry
+ *  and the visible ones are kept BEFORE the LIMIT (W2-D36, C27's order), so a hidden row never takes a visible
+ *  neighbour's place: `--after 2` past one hidden row reads the two visible rows beyond it. Prepared per call: a cut is
+ *  per read, and EXPAND_STMTS is per handle. */
+function aroundRows(rc, s, hold, side, n) {
+  if (cutOf(rc) === null) return (side === 'before' ? s.before : s.after).all(hold.fileId, hold.line, n);
+  const sql = `SELECT mb.entry_id AS entry_id, mb.line AS line FROM memberships mb JOIN entries e ON e.entry_id = mb.entry_id
+    WHERE mb.file_id = :file AND mb.line ${side === 'before' ? '<' : '>'} :line${cutAnd(rc, 'e')}
+    ORDER BY mb.line ${side === 'before' ? 'DESC' : 'ASC'} LIMIT :n`;
+  return rc.db.prepare(sql).all(bindFor(sql, { file: hold.fileId, line: hold.line, n, ...cutBinds(rc) }));
+}
+
 /** A condensed node's source entries in leaf order (its children's ord, depth first), then node_sources.ord. */
 function expandLineage(rc, s, nodeId, kind) {
   const leaves = [];
@@ -1373,7 +1619,9 @@ function expandResolve(rc, s, a) {
   const files = expandScopedFiles(s, rc);
   const scopeTranscripts = new Set(rc.scope.transcriptPks);
   const entryNamed = (uuid) => {
-    const e = s.entryByUuid.get(uuid);
+    const stored = s.entryByUuid.get(uuid);
+    // W2-D36: a row the as-of cut hides answers as one never stored, decided BEFORE the scope: exit 3, never out-of-scope.
+    const e = stored === undefined || !uuidVisible(rc, uuid) ? undefined : stored;
     const hold = e === undefined ? null : expandHolding(s, files, e.entry_id);
     const verdict = xlib.entryScopeVerdict({ found: e !== undefined, inScope: e !== undefined && (scopeTranscripts.has(e.transcript_pk) || hold !== null) });
     return { verdict, e, hold };
@@ -1385,9 +1633,9 @@ function expandResolve(rc, s, a) {
     if (verdict !== 'ok') return { refuse: refuseEntry(verdict) };
     const ids = [];
     if (hold !== null) {
-      for (const r of s.before.all(hold.fileId, hold.line, a.before).reverse()) ids.push(r.entry_id);
+      for (const r of aroundRows(rc, s, hold, 'before', a.before).reverse()) ids.push(r.entry_id);
       ids.push(e.entry_id);
-      for (const r of s.after.all(hold.fileId, hold.line, a.after)) ids.push(r.entry_id);
+      for (const r of aroundRows(rc, s, hold, 'after', a.after)) ids.push(r.entry_id);
     } else ids.push(e.entry_id);
     return {
       key: `around:${e.uuid}:${a.before}:${a.after}`, entryIds: ids, whole: false,
@@ -1406,7 +1654,7 @@ function expandResolve(rc, s, a) {
   const found = resolveNodeInScope(rc, a.target);
   if (!found.ok) return { refuse: found.result };
   const node = s.node.get(found.id);
-  return { key: found.id, args: [found.id], entryIds: expandLineage(rc, s, found.id, node.kind), whole: false };
+  return { key: found.id, args: [found.id], entryIds: visibleEntryIds(rc, expandLineage(rc, s, found.id, node.kind)), whole: false };
 }
 
 /** The expansion's items: each entry, then the sidecars linked to it. Sidecars are read by their transcript (the
@@ -1557,7 +1805,8 @@ function expandPairedPath(rc, s, e, body) {
   let uuid = e.parent_uuid;
   for (let hop = 0; hop < EXPAND_PAIR_WALK && typeof uuid === 'string'; hop += 1) {
     const r = s.hop.get(uuid);
-    if (r === undefined) return null;
+    // A hidden ancestor is absent (W2-D36): the walk ends there, and its tool_use never names the outline's file.
+    if (r === undefined || !uuidVisible(rc, uuid)) return null;
     const b = expandBlob(s, r.blob_id, false);
     if (b.state === 'bytes') {
       const p = xlib.toolUseInputPath(expandParse(b.bytes), ids[0]);
@@ -1735,7 +1984,9 @@ export function runExpand(rc, a) {
   const r = expandResolve(rc, s, want);
   if (r.refuse !== undefined) return r.refuse;
   const items = expandItems(s, r.entryIds);
-  const at = xlib.decideExpandCursor({ cursor: decoded, key: r.key, total: items.length });
+  // W2-D37: the key a cursor is checked against, and minted with, names the as-of cut, only when one is set.
+  const ckey = xlib.expandCursorKey(r.key, asOfOf(rc));
+  const at = xlib.decideExpandCursor({ cursor: decoded, key: ckey, total: items.length });
   if (!at.ok) return refusal('bad-args', 'that --cursor belongs to another expansion');
   const scope = rc.scopeArgs ?? [];
   const blocks = [];
@@ -1753,7 +2004,7 @@ export function runExpand(rc, a) {
     if (item.partial) { next = { i, o: item.to }; break; }
   }
   const nextArgs = next === null ? null
-    : ['expand', ...r.args, ...scope, ...(a.json ? ['--json'] : []), '--cursor', xlib.encodeCursor({ v: 1, resource: 'expand', t: r.key, i: next.i, o: next.o })];
+    : ['expand', ...r.args, ...scope, ...(a.json ? ['--json'] : []), '--cursor', xlib.encodeCursor({ v: 1, resource: 'expand', t: ckey, i: next.i, o: next.o })];
   const hint = a.cursor === null ? xlib.delegateHint(expandEstimate(s, items, r.whole)) : null;
   return { exit: xlib.EXIT.OK, header: null, blocks, items: out, total: items.length, shown, next: nextArgs, ...(hint === null ? {} : { hint }) };
 }

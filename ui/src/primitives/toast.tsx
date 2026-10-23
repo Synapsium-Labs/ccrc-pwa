@@ -77,8 +77,9 @@ export function ToastHost(): ReactNode {
   if (items.length === 0) return null;
   return (
     // Sits above the home bar AND above the composer when one is mounted —
-    // --composer-h is published by SessionScreen and defaults to 0px.
-    <div className="toast-host pointer-events-none fixed inset-x-0 bottom-[calc(var(--sp-6)+var(--safe-bottom)+var(--composer-h,0px))] z-toast grid justify-items-center gap-2 px-4">
+    // --composer-h is published by SessionScreen and defaults to 0px; --phone-nav-h
+    // by whatever is fixed to a phone's bottom edge (W2 Task S5's `+ New`, D-5471).
+    <div className="toast-host pointer-events-none fixed inset-x-0 bottom-[calc(var(--sp-6)+var(--safe-bottom)+var(--composer-h,0px)+var(--phone-nav-h,0px))] z-toast grid justify-items-center gap-2 px-4">
       {items.map((item) => {
         const dismiss = (): void => setItems((cur) => cur.filter((i) => i.id !== item.id));
         const action = item.action;

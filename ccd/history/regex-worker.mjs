@@ -23,10 +23,12 @@
 //    history-permanent-failures-classified);
 //  - prints one JSON line per matching blob, {blob_id, match}, then {done, scanned, matched}.
 // It reads no environment variable and trusts only its job. Every column it names exists at schema v1, and
-// migrations are additive (§6.11), so it needs no version-aware select.
+// migrations are additive (§6.11), so it needs no version-aware select. Under an as-of cut (W2-D38), the job's `cut`
+// holds the very values the parent binds for lib's one predicate (asOfBinds), and the child applies that predicate,
+// asOfEntrySql, which names schema v1 columns only; a sidecar follows its entry (W2-D35). A job without the key is refused.
 import { readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { entryIndexText, makeBelt, makePairIndex } from './lib.mjs';
+import { asOfEntrySql, entryIndexText, makeBelt, makePairIndex } from './lib.mjs';
 import { blobPlainText, openReader } from './store.mjs';
 
 /** Every statement this child iterates, or reads through while it iterates, referenced until it exits (CT9). */
@@ -39,17 +41,21 @@ const BODY_SQL = 'SELECT z, raw_len FROM blobs WHERE blob_id = ?';
 /** The in-scope candidate blobs in blob_id order, ids only, each with a stored body (z not pruned): those an in-scope
  *  entry of a listed provenance references (its first body or a variant), and those an in-scope sidecar holds when
  *  `tool` is listed. A prefilter is lib's regexPrefilter: the exact-token MATCH text of a whole-word literal the
- *  pattern must contain (never a prefix query); it narrows the candidates without changing the answer. */
-function candidateSql(withPrefilter) {
+ *  pattern must contain (never a prefix query); it narrows the candidates without changing the answer.
+ *  Under an as-of cut (`withCut`, W2-D38), lib's one predicate keeps only the entries it leaves visible, in the entry
+ *  branch and the variant branch alike, and a sidecar is a candidate only through a visible entry (W2-D35), so one with
+ *  no entry is never one. With no cut, the text is the one every earlier build ran. */
+function candidateSql(withPrefilter, withCut) {
+  const visible = (alias) => (withCut ? ` AND (${asOfEntrySql(alias)})` : '');
   return `WITH cand(blob_id) AS (
       SELECT e.blob_id FROM entries e
-        WHERE e.transcript_pk IN (SELECT value FROM json_each(:tpks)) AND e.provenance IN (SELECT value FROM json_each(:provs))
+        WHERE e.transcript_pk IN (SELECT value FROM json_each(:tpks)) AND e.provenance IN (SELECT value FROM json_each(:provs))${visible('e')}
       UNION
       SELECT v.blob_id FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id
-        WHERE e.transcript_pk IN (SELECT value FROM json_each(:tpks)) AND e.provenance IN (SELECT value FROM json_each(:provs))
+        WHERE e.transcript_pk IN (SELECT value FROM json_each(:tpks)) AND e.provenance IN (SELECT value FROM json_each(:provs))${visible('e')}
       UNION
-      SELECT s.blob_id FROM sidecars s
-        WHERE s.transcript_pk IN (SELECT value FROM json_each(:tpks)) AND 'tool' IN (SELECT value FROM json_each(:provs)))
+      SELECT s.blob_id FROM sidecars s${withCut ? ' JOIN entries se ON se.entry_id = s.entry_id' : ''}
+        WHERE s.transcript_pk IN (SELECT value FROM json_each(:tpks)) AND 'tool' IN (SELECT value FROM json_each(:provs))${visible('se')})
     SELECT c.blob_id AS blob_id, EXISTS (SELECT 1 FROM sidecars s2 WHERE s2.blob_id = c.blob_id) AS is_sidecar
       FROM cand c JOIN blobs b ON b.blob_id = c.blob_id
       WHERE b.z IS NOT NULL${withPrefilter ? '\n        AND c.blob_id IN (SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH :pre)' : ''}
@@ -60,16 +66,20 @@ function candidateSql(withPrefilter) {
  *  transaction also covers each body read, so a body the candidate row saw stored is still stored; the null check is
  *  belt only. */
 export function scanRegexJob(job) {
+  // W2-D38: `cut` is a required key. null is "no cut"; a job without the key is malformed, never read as uncut.
+  if (!Object.hasOwn(job, 'cut')) throw new Error('the job names no cut');
+  const cut = job.cut;
   const re = new RegExp(job.pattern);
   const idx = makePairIndex(job.pairs, makeBelt(job.belt ?? []));
   const db = openReader(job.dbPath);
   try {
-    const stmt = db.prepare(candidateSql(job.prefilter !== null));
+    const stmt = db.prepare(candidateSql(job.prefilter !== null, cut !== null));
     const bodyOf = db.prepare(BODY_SQL);
     HELD.push(stmt, bodyOf);
     const base = {
       tpks: JSON.stringify(job.transcriptPks), provs: JSON.stringify(job.provenance),
       ...(job.prefilter === null ? {} : { pre: job.prefilter }),
+      ...(cut === null ? {} : cut),
     };
     const matches = [];
     let scanned = 0;

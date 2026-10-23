@@ -5851,3 +5851,1671 @@ describe.skipIf(process.platform === 'darwin')('W2-1 Task 5: RP8 end to end, RP1
     expect(fs.readdirSync(hist(box, 'recall-off')), 'nothing written for the unreadable id').toEqual([ID_B]);
   }, HEAVY);
 });
+
+// ── W2-2a Task 2 (W2-D35, W2-D36): the as-of cut at every entry read in recall.mjs ─────────────────────────────
+// One family's transcript holds, in file order:
+//   1. two stamped rows;
+//   2. a NULL-ts row, then a NULL-ts row that boundary N keeps;
+//   3. a NULL-ts tool_use and its stamped tool_result;
+//   4. boundary N and its summary;
+//   5. post-boundary rows stamped exactly T_N, before T_N and after it;
+//   6. RANK_POOL + 1 post-boundary rows that outrank row 1 on every sort.
+// A second copy of the transcript, in another account's home, gives a visible row and a hidden row each a variant
+// body. Three sidecars are linked: one to a visible row, one to a hidden row, one to no row. A second family of the
+// same project holds one row stamped before T_N and one after. Every case reads in process (GRX.rc) twice: once with
+// rc.scope.cut set to boundary N's cut, and once without it (the CONTROL). The cut is W2-D38's literal shape, measured
+// from the store as W2-D34 defines it (cutAt); cut-A6 checks that this task's store half, asOfCutOf, measures the same
+// cut (R2).
+describe.skipIf(process.platform === 'darwin')('W2-D36: hidden means absent at every entry read in recall.mjs (W2-2a Task 2)', () => {
+  const XID = 'claude-a-w2cut';
+  const OID = 'claude-a-w2cutb';
+  const XT = 'a2c20001';
+  const OT = 'a2c20002';
+  const XU = t16uuid(XT, 0);
+  const OU = t16uuid(OT, 0);
+  const c = (i: number): string => t16uuid(XT, i);
+  const o = (i: number): string => t16uuid(OT, i);
+  const POOL = libRead.RANK_POOL + 1;
+  const PAIRED = '/home/u/tree/demo/zqcutpaired.ts';
+  const BIG = JSON.stringify(Array.from({ length: 120 }, (_, i) => ({ id: i, name: `item ${i}`, tags: ['a', 'b'] })), null, 1);
+  type Cut = Readonly<{
+    asof: string; tsCut: number; boundaryEntryId: number; summaryEntryId: number | null;
+    keptUuids: readonly string[]; holdingFileId: number; boundaryLine: number;
+  }>;
+  type XResult = { exit: number; reason?: string; blocks: string[]; items: Array<Record<string, unknown>>; total: number; next: string[] | null };
+  let box: rH.HistoryBox;
+  let cut: Cut;
+  let leaf = '';
+
+  const noTs = (row: rFx.Row): rFx.Row => { const r = { ...row }; delete r['timestamp']; return r; };
+  /** Rows 1 to 11. `variant` is the second copy, whose rows 2 and 9 carry one more word each. */
+  const head = (variant: boolean): rFx.Row[] => [
+    rFx.userRow({ uuid: c(1), ts: t16ts(1), sessionId: XU, text: 'zqcutvis1 an older note with a single zqcutpool among many other plain words here' }),
+    rFx.assistantRow({ uuid: c(2), ts: t16ts(2), parentUuid: c(1), sessionId: XU, text: `zqcutvis2 the answer${variant ? ' zqcutvarvis' : ''}`,
+      requestId: 'req_w2cut_2', msgId: 'msg_w2cut_2' }),
+    noTs(rFx.userRow({ uuid: c(3), ts: t16ts(3), parentUuid: c(2), sessionId: XU, text: 'zqcutnull1 a row with no timestamp' })),
+    noTs(rFx.userRow({ uuid: c(4), ts: t16ts(4), parentUuid: c(3), sessionId: XU, text: 'zqcutkept1 a kept row with no timestamp' })),
+    noTs(rFx.toolUseRow({ uuid: c(5), ts: t16ts(5), parentUuid: c(4), sessionId: XU, toolUseId: 'toolu_01W2CUTPAIR', name: 'Read',
+      input: { file_path: PAIRED }, requestId: 'req_w2cut_5', msgId: 'msg_w2cut_5' })),
+    rFx.toolResultRow({ uuid: c(6), ts: t16ts(6), parentUuid: c(5), sessionId: XU, toolUseId: 'toolu_01W2CUTPAIR', content: BIG }),
+    rFx.boundaryRow({ uuid: c(7), ts: t16ts(10), parentUuid: c(6), sessionId: XU, trigger: 'manual', headUuid: c(4), anchorUuid: c(8),
+      tailUuid: c(4), allUuids: [c(4)] }),
+    rFx.summaryRow({ uuid: c(8), ts: t16ts(11), parentUuid: c(7), sessionId: XU, text: t16summary('zqcutsum') }),
+    rFx.assistantRow({ uuid: c(9), ts: t16ts(10), parentUuid: c(8), sessionId: XU, text: `zqcutsame stamped at the cut${variant ? ' zqcutvarhid' : ''}`,
+      requestId: 'req_w2cut_9', msgId: 'msg_w2cut_9' }),
+    rFx.userRow({ uuid: c(10), ts: t16ts(5), parentUuid: c(9), sessionId: XU, text: 'zqcutback stamped before the cut' }),
+    rFx.assistantRow({ uuid: c(11), ts: t16ts(12), parentUuid: c(10), sessionId: XU, text: 'zqcutlate stamped after the cut',
+      requestId: 'req_w2cut_11', msgId: 'msg_w2cut_11' }),
+  ];
+  const pool = (): rFx.Row[] => Array.from({ length: POOL }, (_, i) =>
+    rFx.userRow({ uuid: c(100 + i), ts: t16ts(100 + i), sessionId: XU, text: `zqcutpool zqcutpool zqcutpool p${i}` }));
+
+  /** W2-D38's cut for boundary `uuid`, measured as W2-D34 defines it:
+   *  - T_N is the boundary's own stamp (the fixture gives it one);
+   *  - the holding copy is lib's pickHoldingCopy (a live copy first, then the lowest file_id);
+   *  - the summary is the row the boundary's anchor names;
+   *  - kept(N) is what the fixture's boundary keeps. */
+  function cutAt(db: RDatabaseSync, uuid: string, kept: string[]): Cut {
+    const b = db.prepare(`SELECT e.entry_id AS entry_id, e.ts_ms AS ts_ms, e.transcript_pk AS tpk, bd.anchor_uuid AS anchor
+      FROM entries e JOIN boundaries bd ON bd.entry_id = e.entry_id WHERE e.uuid = ?`).get(uuid) as unknown as
+      { entry_id: number; ts_ms: number | null; tpk: number; anchor: string } | undefined;
+    expect(b, 'CONTROL: boundary N is stored with its boundaries row').toBeDefined();
+    expect(b!.ts_ms, 'CONTROL: boundary N carries its own stamp').not.toBeNull();
+    const copies = db.prepare(`SELECT f.file_id AS file_id, f.source_key AS source_key, mb.line AS line FROM ingest_files f
+      LEFT JOIN memberships mb ON mb.file_id = f.file_id AND mb.entry_id = ? WHERE f.transcript_pk = ? ORDER BY f.file_id`)
+      .all(b!.entry_id, b!.tpk) as unknown as Array<{ file_id: number; source_key: string; line: number | null }>;
+    const held = libRead.pickHoldingCopy(copies.map((x) => ({ fileId: Number(x.file_id), live: x.source_key === '', holds: x.line !== null })));
+    expect(held, 'CONTROL: a copy holds boundary N').not.toBeNull();
+    const at = copies.find((x) => Number(x.file_id) === held)!;
+    const sum = db.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(b!.anchor) as unknown as { entry_id: number } | undefined;
+    return Object.freeze({
+      asof: uuid, tsCut: Number(b!.ts_ms), boundaryEntryId: Number(b!.entry_id), summaryEntryId: sum === undefined ? null : Number(sum.entry_id),
+      keptUuids: Object.freeze([...kept].sort()), holdingFileId: Number(held), boundaryLine: Number(at.line),
+    });
+  }
+
+  beforeAll(async () => {
+    box = rH.makeHistoryBox('ccrc-hist-w2cut-');
+    const t = t16seed(box, { id: XID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000c2a1', uuid: XU, rows: [...head(false), ...pool()] });
+    t16seed(box, { id: OID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000c2a2', uuid: OU, rows: [
+      rFx.userRow({ uuid: o(1), ts: t16ts(3), sessionId: OU, text: 'zqcutbearly stamped before the cut' }),
+      rFx.userRow({ uuid: o(2), ts: t16ts(50), parentUuid: o(1), sessionId: OU, text: 'zqcutblate stamped after the cut' }),
+    ] });
+    // The second copy is ingested after the first, so its two differing bodies are variants, and the first copy (the
+    // lower file_id) holds boundary N.
+    rH.plantTranscript(box, 'claude-b', path.basename(path.dirname(t)), XU, head(true));
+    const dir = path.join(path.dirname(t), XU, 'tool-results');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'zqcutvisside.txt'), 'zqcutsidevis a sidecar of a visible row\n');
+    fs.writeFileSync(path.join(dir, 'zqcuthidside.txt'), 'zqcutsidehid a sidecar of a hidden row\n');
+    fs.writeFileSync(path.join(dir, 'zqcutorphan.txt'), 'zqcutsideorphan a sidecar of no row\n');
+    t16scan(box);
+    const store = await import('../../ccd/history/store.mjs');
+    const w = store.openWriter(libRead.historyPaths(box.home).dbFile);
+    try {
+      const id = (u: string): number => Number((w.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(u) as { entry_id: number }).entry_id);
+      const link = w.prepare('UPDATE sidecars SET entry_id = ? WHERE name LIKE ?');
+      expect(Number(link.run(id(c(6)), '%zqcutvisside.txt').changes), 'CONTROL: the visible row\'s sidecar').toBe(1);
+      expect(Number(link.run(id(c(3)), '%zqcuthidside.txt').changes), 'CONTROL: the hidden row\'s sidecar').toBe(1);
+      expect(Number(link.run(null, '%zqcutorphan.txt').changes), 'CONTROL: the orphan').toBe(1);
+    } finally { store.closeWriter(w); }
+    leaf = t16leafOf(box, XID);
+    const db = rH.openStoreRO(box);
+    try { cut = cutAt(db, c(7), [c(4)]); } finally { db.close(); }
+  }, 600_000);
+
+  const withCut = (rc: GrepRc, on: boolean): GrepRc => ({ ...rc, scope: { ...rc.scope, cut: on ? cut : null } }) as unknown as GrepRc;
+  /** `fn` over ONE read handle: with the cut, then without it (the CONTROL). The handle is closed after. */
+  async function both<T>(fn: (mod: GrepMod, rc: GrepRc) => T | Promise<T>): Promise<{ cut: T; none: T }> {
+    const mod = await GRX.recall();
+    const rc = await GRX.rc(box, XID);
+    try { return { cut: await fn(mod, withCut(rc, true)), none: await fn(mod, withCut(rc, false)) }; } finally { rc.db.close(); }
+  }
+  const grep = async (argv: string[]): Promise<{ cut: GrepVerbResult; none: GrepVerbResult }> => {
+    const a = await GRX.grepArgs([...argv, '--json']);
+    return both((mod, rc) => mod.runGrep(rc, a));
+  };
+  const hitUuids = (r: GrepVerbResult): unknown[] => r.items.map((x) => x['entry_uuid']);
+  const expandArgs = (a: Record<string, unknown>): Record<string, unknown> => ({ target: null, around: null, before: 5, after: 5, cursor: null, json: true, ...a });
+  const expand = (a: Record<string, unknown>): Promise<{ cut: XResult; none: XResult }> =>
+    both((mod, rc) => mod.runExpand!(rc, expandArgs(a)) as unknown as XResult);
+  /** Every item of an expansion, following its own cursors (at most 20 pages). */
+  const pages = (mod: GrepMod, rc: GrepRc, a: Record<string, unknown>): { exit: number; items: Array<Record<string, unknown>>; total: number } => {
+    const base = expandArgs(a);
+    let r = mod.runExpand!(rc, base) as unknown as XResult;
+    const items = [...r.items];
+    for (let k = 0; r.exit === 0 && r.next !== null && k < 20; k += 1) {
+      r = mod.runExpand!(rc, { ...base, cursor: r.next[r.next.indexOf('--cursor') + 1] }) as unknown as XResult;
+      items.push(...r.items);
+    }
+    return { exit: r.exit, items, total: r.total };
+  };
+  const entryUuids = (x: { items: Array<Record<string, unknown>> }): unknown[] => x.items.filter((i) => i['kind'] === 'entry').map((i) => i['uuid']);
+  const sidecarNames = (x: { items: Array<Record<string, unknown>> }): string => x.items.filter((i) => i['kind'] === 'sidecar').map((i) => String(i['name'])).join(' ');
+
+  it('cut-A0: CONTROL: the fixture is what the cases assume (W2-D34\'s positional hide and its NULL-ts rows)', () => {
+    const db = rH.openStoreRO(box);
+    try {
+      const ts = (u: string): unknown => (db.prepare('SELECT ts_ms FROM entries WHERE uuid = ?').get(u) as { ts_ms: unknown }).ts_ms;
+      expect([ts(c(3)), ts(c(4)), ts(c(5))], 'three NULL-ts rows before the boundary').toEqual([null, null, null]);
+      expect(Number(ts(c(9))), 'a post-boundary row stamped exactly T_N').toBe(cut.tsCut);
+      expect(Number(ts(c(10))), 'a post-boundary row stamped before T_N').toBeLessThan(cut.tsCut);
+      const line = (u: string): number => Number((db.prepare(`SELECT m.line AS line FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+        WHERE m.file_id = ? AND e.uuid = ?`).get(cut.holdingFileId, u) as { line: number }).line);
+      expect(line(c(6)), 'the tool_result is before the boundary in the holding copy').toBeLessThan(cut.boundaryLine);
+      for (const u of [c(9), c(10), c(11), c(100)]) expect(line(u), `${u} is after the boundary in the holding copy`).toBeGreaterThan(cut.boundaryLine);
+      expect(cut.summaryEntryId, 'the boundary names its summary row').not.toBeNull();
+    } finally { db.close(); }
+  });
+
+  it('cut-A1: grep, the entry arm: a NULL-ts row and every post-boundary row of the holding copy are exit 3; a kept row and an earlier stamped row are hits', async () => {
+    for (const [word, u] of [['zqcutnull1', c(3)], ['zqcutsame', c(9)], ['zqcutback', c(10)], ['zqcutlate', c(11)]] as const) {
+      const r = await grep([word]);
+      expect(r.none.exit, `CONTROL ${word}: with no cut it is a hit`).toBe(0);
+      expect(hitUuids(r.none), `CONTROL ${word}`).toContain(u);
+      expect([r.cut.exit, r.cut.total, r.cut.items], word).toEqual([3, 0, []]);
+    }
+    for (const [word, u] of [['zqcutvis2', c(2)], ['zqcutkept1', c(4)]] as const) {
+      const r = await grep([word]);
+      expect(r.cut.exit, `${word} stays visible`).toBe(0);
+      expect([...new Set(hitUuids(r.cut))], word).toEqual([u]);
+      expect(r.cut.total, `${word}: the cut takes nothing from a visible row`).toBe(r.none.total);
+    }
+  }, HEAVY);
+
+  it('cut-A2: grep, the variant arm: a hidden entry\'s variant body is no hit, a visible entry\'s is', async () => {
+    const db = rH.openStoreRO(box);
+    try {
+      const n = (u: string): number => Number((db.prepare(`SELECT count(*) AS n FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id
+        WHERE e.uuid = ? AND v.blob_id <> e.blob_id`).get(u) as { n: number }).n);
+      expect([n(c(2)), n(c(9))], 'CONTROL: the second copy gave each row one variant body').toEqual([1, 1]);
+    } finally { db.close(); }
+    const hid = await grep(['zqcutvarhid']);
+    expect([hid.none.exit, hitUuids(hid.none)], 'CONTROL: with no cut the variant is a hit').toEqual([0, [c(9)]]);
+    expect([hid.cut.exit, hid.cut.total, hid.cut.items]).toEqual([3, 0, []]);
+    const vis = await grep(['zqcutvarvis']);
+    expect([vis.cut.exit, hitUuids(vis.cut), vis.cut.total], 'a visible entry\'s variant stays').toEqual([0, [c(2)], 1]);
+  }, HEAVY);
+
+  it('cut-A3: grep, the sidecar arm: a sidecar follows its entry, and one linked to no entry is absent', async () => {
+    const db = rH.openStoreRO(box);
+    try {
+      const rows = db.prepare("SELECT name, entry_id FROM sidecars WHERE name LIKE '%zqcut%'").all() as unknown as Array<{ name: string; entry_id: number | null }>;
+      expect(rows.map((x) => [path.basename(x.name), x.entry_id === null]).sort(), 'CONTROL: three sidecars, the orphan unlinked').toEqual([
+        ['zqcuthidside.txt', false], ['zqcutorphan.txt', true], ['zqcutvisside.txt', false]]);
+    } finally { db.close(); }
+    for (const word of ['zqcutsidehid', 'zqcutsideorphan']) {
+      const r = await grep([word]);
+      expect([r.none.exit, r.none.total], `CONTROL ${word}: with no cut it is a hit`).toEqual([0, 1]);
+      expect([r.cut.exit, r.cut.total, r.cut.items], word).toEqual([3, 0, []]);
+    }
+    const vis = await grep(['zqcutsidevis']);
+    expect([vis.cut.exit, vis.cut.total], 'a visible row\'s sidecar stays').toEqual([0, 1]);
+    expect(String(vis.cut.items[0]!['sidecar'])).toContain('zqcutvisside');
+  }, HEAVY);
+
+  it('cut-A4: C27 under the cut: RANK_POOL + 1 hidden rows outrank one visible hit on every sort, and the hit is returned with total 1', async () => {
+    const db = rH.openStoreRO(box);
+    try {   // CONTROL: globally, the visible row's blob is outside the top RANK_POOL on rank
+      const blob = (db.prepare('SELECT blob_id AS b FROM entries WHERE uuid = ?').get(c(1)) as { b: number }).b;
+      const top = (db.prepare(`SELECT rowid AS r FROM blobs_fts WHERE blobs_fts MATCH ? ORDER BY rank LIMIT ${libRead.RANK_POOL}`).all('zqcutpool') as unknown as
+        Array<{ r: number }>).map((x) => x.r);
+      expect(top).toHaveLength(libRead.RANK_POOL);
+      expect(top).not.toContain(blob);
+    } finally { db.close(); }
+    for (const sort of ['relevance', 'recency', 'hybrid']) {
+      const r = await grep(['zqcutpool', '--sort', sort]);
+      expect([r.none.exit, r.none.total], `CONTROL ${sort}: with no cut every row is a hit`).toEqual([0, POOL + 1]);
+      expect(hitUuids(r.none), `CONTROL ${sort}: the visible row is not on the uncut page`).not.toContain(c(1));
+      expect([r.cut.exit, hitUuids(r.cut), r.cut.total, r.cut.next], sort).toEqual([0, [c(1)], 1, null]);
+    }
+  }, HEAVY);
+
+  it('cut-A5: grep --regex: the child matches the hidden row, and the referrer join keeps it out (exit 3)', async () => {
+    const r = await grep(['--regex', 'zqcutnul+1']);
+    expect([r.none.exit, hitUuids(r.none)], 'CONTROL: with no cut the regex hit is returned').toEqual([0, [c(3)]]);
+    expect([r.cut.exit, r.cut.total, r.cut.items]).toEqual([3, 0, []]);
+    const vis = await grep(['--regex', 'zqcutkep+t1']);
+    expect([vis.cut.exit, hitUuids(vis.cut)], 'a visible row\'s regex match stays').toEqual([0, [c(4)]]);
+  }, HEAVY);
+
+  it('cut-A6: asOfCutOf, the store half, measures the cut cutAt measures; a row that is no boundary, an unknown uuid and a sidechain boundary are asof-invalid', async () => {
+    const mod = (await GRX.recall()) as unknown as { asOfCutOf(rc: { db: RDatabaseSync }, asof: string): unknown };
+    const REFUSED = { ok: false, rc: 2, reason: 'asof-invalid' };
+    const at = (asof: string): unknown => {
+      const db = rH.openStoreRO(box);
+      try { return mod.asOfCutOf({ db }, asof); } finally { db.close(); }
+    };
+    expect(at(c(7)), 'CONTROL: the store half deep-equals the cut cutAt measured').toEqual({ ok: true, cut });
+    expect(at(c(1)), 'a stored row that is no boundary').toEqual(REFUSED);
+    expect(at('0189abcd-1234-4678-9abc-0000000000ff'), 'a uuid no row has').toEqual(REFUSED);
+    const store = await import('../../ccd/history/store.mjs');
+    const w = store.openWriter(libRead.historyPaths(box.home).dbFile);
+    const side = (from: string, to: string): number =>
+      Number(w.prepare('UPDATE transcripts SET agent_id = ? WHERE cc_session_uuid = ? AND agent_id = ?').run(to, XU, from).changes);
+    try {
+      expect(side('', 'zqcutside'), 'CONTROL: the transcript is made a sidechain').toBe(1);
+      expect(at(c(7)), 'a boundary on a sidechain transcript').toEqual(REFUSED);
+    } finally {
+      side('zqcutside', '');
+      store.closeWriter(w);
+    }
+    expect(at(c(7)), 'CONTROL: restored, the store half cuts again').toEqual({ ok: true, cut });
+  }, HEAVY);
+
+  it('cut-A7: asOfCutOf finds N\'s holding copy among the files of the boundaries row\'s transcript, the key derivation uses, not the entries row\'s (D-6281)', async () => {
+    const mod = (await GRX.recall()) as unknown as { asOfCutOf(rc: { db: RDatabaseSync }, asof: string): unknown };
+    const REFUSED = { ok: false, rc: 2, reason: 'asof-invalid' };
+    const at = (asof: string): unknown => {
+      const db = rH.openStoreRO(box);
+      try { return mod.asOfCutOf({ db }, asof); } finally { db.close(); }
+    };
+    const store = await import('../../ccd/history/store.mjs');
+    const w = store.openWriter(libRead.historyPaths(box.home).dbFile);
+    const one = (sql: string, ...a: Array<string | number>): { n: number } => w.prepare(sql).get(...a) as unknown as { n: number };
+    const nId = Number(cut.boundaryEntryId);
+    const tpkOfBoundary = one('SELECT transcript_pk AS n FROM boundaries WHERE entry_id = ?', nId).n;
+    const tpkOther = one('SELECT t.transcript_pk AS n FROM transcripts t WHERE t.cc_session_uuid = ?', OU).n;
+    const fileOther = one('SELECT file_id AS n FROM ingest_files WHERE transcript_pk = ? ORDER BY file_id LIMIT 1', tpkOther).n;
+    try {
+      expect(one('SELECT transcript_pk AS n FROM entries WHERE entry_id = ?', nId).n, 'CONTROL: the two columns agree at first').toBe(tpkOfBoundary);
+      expect(tpkOther, 'CONTROL: another main transcript with a file of its own').not.toBe(tpkOfBoundary);
+      expect(Number(w.prepare('UPDATE entries SET transcript_pk = ? WHERE entry_id = ?').run(tpkOther, nId).changes), 'CONTROL: the entries row names the other transcript').toBe(1);
+      expect(at(c(7)), 'no file of the entries row\'s transcript holds N: the boundaries row\'s transcript decides, and its copy cuts').toEqual({ ok: true, cut });
+      expect(Number(w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, 1)').run(fileOther, nId).changes), 'CONTROL: the other transcript\'s file now holds N too').toBe(1);
+      expect(at(c(7)), 'with a copy in each transcript, the cut is still the boundaries row\'s transcript\'s copy').toEqual({ ok: true, cut });
+    } finally {
+      w.prepare('DELETE FROM memberships WHERE file_id = ? AND entry_id = ?').run(fileOther, nId);
+      w.prepare('UPDATE entries SET transcript_pk = ? WHERE entry_id = ?').run(tpkOfBoundary, nId);
+      store.closeWriter(w);
+    }
+    expect(at(c(7)), 'CONTROL: restored, the store half cuts again').toEqual({ ok: true, cut });
+    expect(at(c(1)), 'CONTROL: a stored row that is no boundary is still refused').toEqual(REFUSED);
+  }, HEAVY);
+
+  /** The store half over a writer's plant, for cut-A8 to cut-A10: `at` answers asOfCutOf on a fresh read handle. */
+  async function storeHalf(): Promise<{
+    at(asof: string): unknown; w: RDatabaseSync; close(): void;
+    one<T>(sql: string, ...a: Array<string | number>): T; all<T>(sql: string, ...a: Array<string | number>): T[];
+  }> {
+    const mod = (await GRX.recall()) as unknown as { asOfCutOf(rc: { db: RDatabaseSync }, asof: string): unknown };
+    const store = await import('../../ccd/history/store.mjs');
+    const w = store.openWriter(libRead.historyPaths(box.home).dbFile) as RDatabaseSync;
+    return {
+      at: (asof) => { const db = rH.openStoreRO(box); try { return mod.asOfCutOf({ db }, asof); } finally { db.close(); } },
+      w, close: () => store.closeWriter(w),
+      one: <T,>(sql: string, ...a: Array<string | number>): T => w.prepare(sql).get(...a) as unknown as T,
+      all: <T,>(sql: string, ...a: Array<string | number>): T[] => w.prepare(sql).all(...a) as unknown as T[],
+    };
+  }
+
+  it('cut-A8: the store half reads N\'s holding copy in file order: a NULL-ts boundary takes T_N from the stamped row BEFORE it, not one after it (F1, W2-D33)', async () => {
+    const h = await storeHalf();
+    const nId = Number(cut.boundaryEntryId);
+    const was = h.one<{ ts_ms: number }>('SELECT ts_ms FROM entries WHERE entry_id = ?', nId).ts_ms;
+    try {
+      expect(Number(h.w.prepare('UPDATE entries SET ts_ms = NULL WHERE entry_id = ?').run(nId).changes), 'CONTROL: the plant took, N has no stamp of its own').toBe(1);
+      // T_N from the fixture's own rows, by a query with its own ORDER BY m.line: the newest stamp at or before N's line
+      const before = h.one<{ ts_ms: number }>(`SELECT e.ts_ms AS ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+        WHERE m.file_id = ? AND m.line < ? AND e.ts_ms IS NOT NULL ORDER BY m.line DESC LIMIT 1`, cut.holdingFileId, cut.boundaryLine).ts_ms;
+      const after = h.all<{ ts_ms: number }>(`SELECT e.ts_ms AS ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+        WHERE m.file_id = ? AND m.line > ? AND e.ts_ms IS NOT NULL ORDER BY m.line`, cut.holdingFileId, cut.boundaryLine).map((r) => Number(r.ts_ms));
+      expect(h.one<{ ts_ms: number | null }>('SELECT ts_ms FROM entries WHERE entry_id = ?', nId).ts_ms, 'CONTROL: N\'s ts_ms IS NULL').toBeNull();
+      expect(Number(before), 'CONTROL: the stamp before N is the tool_result\'s, an earlier time than N\'s old stamp').toBe(
+        Number(h.one<{ ts_ms: number }>('SELECT ts_ms FROM entries WHERE uuid = ?', c(6)).ts_ms));
+      expect(Number(before), 'CONTROL: it is not the cut the fixture had with N\'s own stamp').not.toBe(cut.tsCut);
+      expect(after.length, 'CONTROL: stamped rows follow N in the copy').toBeGreaterThan(0);
+      expect(after.some((t) => t > Number(before)), 'CONTROL: one of them carries a LATER stamp, the answer a reversed walk would give').toBe(true);
+      expect(h.at(c(7)), 'T_N is the stamp before N').toEqual({ ok: true, cut: { ...cut, tsCut: Number(before) } });
+    } finally {
+      h.w.prepare('UPDATE entries SET ts_ms = ? WHERE entry_id = ?').run(was, nId);
+      h.close();
+    }
+    const db = rH.openStoreRO(box);
+    try { expect(Number((db.prepare('SELECT ts_ms FROM entries WHERE uuid = ?').get(c(7)) as { ts_ms: number }).ts_ms), 'CONTROL: restored').toBe(cut.tsCut); } finally { db.close(); }
+  }, HEAVY);
+
+  it('cut-A9: the store half reads N\'s holding copy in file order: a self-anchored boundary\'s summary is the first compact summary AFTER it, not one before it (F1, W2-D33)', async () => {
+    const h = await storeHalf();
+    const nId = Number(cut.boundaryEntryId);
+    const was = h.one<{ anchor_uuid: string }>('SELECT anchor_uuid FROM boundaries WHERE entry_id = ?', nId).anchor_uuid;
+    try {
+      expect(Number(h.w.prepare('UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = ?').run(c(7), nId).changes), 'CONTROL: N is anchored on itself').toBe(1);
+      expect(Number(h.w.prepare('UPDATE entries SET is_compact_summary = 1 WHERE uuid = ?').run(c(2)).changes), 'CONTROL: a compact summary BEFORE N in the copy').toBe(1);
+      const compact = h.all<{ uuid: string; entry_id: number; line: number }>(`SELECT e.uuid AS uuid, e.entry_id AS entry_id, m.line AS line
+        FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+        WHERE m.file_id = ? AND e.is_compact_summary = 1 AND NOT (e.type = 'user' AND e.provenance = 'harness') ORDER BY m.line`, cut.holdingFileId);
+      expect(compact.map((r) => r.uuid), 'CONTROL: non-echo compact summaries on both sides of N, in file order').toEqual([c(2), c(8)]);
+      expect(Number(compact[0]!.line) < cut.boundaryLine && cut.boundaryLine < Number(compact[1]!.line), 'CONTROL: before N, then after N').toBe(true);
+      const firstAfter = h.one<{ entry_id: number }>(`SELECT e.entry_id AS entry_id FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+        WHERE m.file_id = ? AND m.line > ? AND e.is_compact_summary = 1 AND NOT (e.type = 'user' AND e.provenance = 'harness')
+        ORDER BY m.line LIMIT 1`, cut.holdingFileId, cut.boundaryLine).entry_id;
+      expect(Number(firstAfter), 'the independent query names the row after N').toBe(Number(compact[1]!.entry_id));
+      expect(h.at(c(7)), 'the summary is the first compact summary after N').toEqual({ ok: true, cut: { ...cut, summaryEntryId: Number(firstAfter) } });
+    } finally {
+      h.w.prepare('UPDATE entries SET is_compact_summary = 0 WHERE uuid = ?').run(c(2));
+      h.w.prepare('UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = ?').run(was, nId);
+      h.close();
+    }
+    expect(h.at(c(7)), 'CONTROL: restored, the store half cuts as it did').toEqual({ ok: true, cut });
+  }, HEAVY);
+
+  it('cut-A10: the store half picks N\'s holding copy among the files that HOLD N: a live file with a lower id that lacks N changes nothing (F3, W2-D39)', async () => {
+    const h = await storeHalf();
+    const nId = Number(cut.boundaryEntryId);
+    let planted: number | null = null;
+    try {
+      const tpk = h.one<{ n: number }>('SELECT transcript_pk AS n FROM boundaries WHERE entry_id = ?', nId).n;
+      const lowest = h.one<{ n: number }>('SELECT min(file_id) AS n FROM ingest_files').n;
+      planted = Number(lowest) - 1;
+      expect(Number(h.w.prepare("INSERT INTO ingest_files (file_id, dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, 4242, 4242, '', ?, 'live', 1)")
+        .run(planted, tpk).changes), 'CONTROL: the plant took').toBe(1);
+      const mine = h.all<{ file_id: number; source_key: string; held: number }>(`SELECT f.file_id AS file_id, f.source_key AS source_key,
+          EXISTS (SELECT 1 FROM memberships m WHERE m.file_id = f.file_id AND m.entry_id = ?) AS held
+        FROM ingest_files f WHERE f.transcript_pk = ? ORDER BY f.file_id`, nId, tpk);
+      expect(mine[0], 'CONTROL: the planted file is N\'s transcript\'s lowest id, live, and holds nothing').toEqual({ file_id: planted, source_key: '', held: 0 });
+      expect(mine.length, 'CONTROL: the transcript has other files').toBeGreaterThan(1);
+      expect(mine.filter((f) => f.held === 1).map((f) => Number(f.file_id)), 'CONTROL: the real holder is another file, and it is the cut\'s').toContain(cut.holdingFileId);
+      expect(Number(planted) < cut.holdingFileId, 'CONTROL: the planted id is below the holder\'s').toBe(true);
+      expect(h.at(c(7)), 'the cut is the cut before the plant').toEqual({ ok: true, cut });
+    } finally {
+      if (planted !== null) h.w.prepare('DELETE FROM ingest_files WHERE file_id = ?').run(planted);
+      h.close();
+    }
+    const db = rH.openStoreRO(box);
+    try { expect(db.prepare('SELECT count(*) AS n FROM ingest_files WHERE file_id = ?').get(planted!), 'CONTROL: removed').toEqual({ n: 0 }); } finally { db.close(); }
+  }, HEAVY);
+
+  it('cut-B1: expand <uuid> of a hidden row is exit 3 with no reason; a kept NULL-ts row still expands', async () => {
+    for (const u of [c(3), c(9), c(11)]) {
+      const r = await expand({ target: u });
+      expect(r.none.exit, `CONTROL ${u}: with no cut it expands`).toBe(0);
+      expect([r.cut.exit, r.cut.reason, r.cut.items], u).toEqual([3, undefined, []]);
+    }
+    const kept = await expand({ target: c(4) });
+    expect([kept.cut.exit, entryUuids(kept.cut)], 'kept(N) is visible').toEqual([0, [c(4)]]);
+  }, HEAVY);
+
+  it('cut-B2: a hidden row outside the scope is exit 3, never out-of-scope: the cut runs before the scope', async () => {
+    const late = await expand({ target: o(2) });
+    expect([late.none.exit, late.none.reason], 'CONTROL: with no cut it is out of scope').toEqual([2, 'out-of-scope']);
+    expect([late.cut.exit, late.cut.reason]).toEqual([3, undefined]);
+    const early = await expand({ target: o(1) });
+    expect([early.none.exit, early.none.reason]).toEqual([2, 'out-of-scope']);
+    expect([early.cut.exit, early.cut.reason], 'CONTROL: a visible row outside the scope stays out of scope').toEqual([2, 'out-of-scope']);
+    const around = await expand({ around: o(2), before: 0, after: 0 });
+    expect([around.cut.exit, around.cut.reason], '--around names it the same way').toEqual([3, undefined]);
+  }, HEAVY);
+
+  it('cut-B3: expand --around runs the cut before its LIMIT: a window past hidden rows reaches the visible rows beyond them', async () => {
+    const fwd = await expand({ around: c(1), before: 0, after: 2 });
+    expect(entryUuids(fwd.none), 'CONTROL: with no cut the window holds the NULL-ts row').toEqual([c(1), c(2), c(3)]);
+    expect(sidecarNames(fwd.none), 'CONTROL: the hidden row brings its sidecar').toContain('zqcuthidside');
+    expect(entryUuids(fwd.cut)).toEqual([c(1), c(2), c(4)]);
+    expect(sidecarNames(fwd.cut)).not.toContain('zqcuthidside');
+    expect(fwd.cut.total).toBe(fwd.cut.items.length);
+    const back = await expand({ around: c(6), before: 3, after: 0 });
+    expect(entryUuids(back.none), 'CONTROL').toEqual([c(3), c(4), c(5), c(6)]);
+    expect(entryUuids(back.cut), '--before 3 past two hidden rows reaches the stamped rows before them').toEqual([c(1), c(2), c(4), c(6)]);
+    const hidden = await expand({ around: c(3), before: 1, after: 1 });
+    expect([hidden.cut.exit, hidden.cut.reason], 'a hidden anchor is exit 3').toEqual([3, undefined]);
+  }, HEAVY);
+
+  it('cut-B4: expand <leaf N> lists only visible entries and the sidecars of visible entries, and its total counts them', async () => {
+    const r = await both((mod, rc) => pages(mod, rc, { target: leaf }));
+    expect([r.none.exit, r.cut.exit]).toEqual([0, 0]);
+    expect(entryUuids(r.none), 'CONTROL: with no cut the lineage holds the NULL-ts rows').toEqual(expect.arrayContaining([c(3), c(5)]));
+    expect(sidecarNames(r.none), 'CONTROL').toContain('zqcuthidside');
+    expect(entryUuids(r.cut)).toEqual(entryUuids(r.none).filter((u) => u !== c(3) && u !== c(5)));
+    expect(sidecarNames(r.cut)).not.toContain('zqcuthidside');
+    expect(sidecarNames(r.cut), 'a visible row keeps its sidecar').toContain('zqcutvisside');
+    expect(r.cut.total).toBe(r.cut.items.length);
+    expect(r.none.total - r.cut.total, 'two hidden entries and one hidden sidecar').toBe(3);
+  }, HEAVY);
+
+  it('cut-B5: a hidden tool_use never names the outline\'s file', async () => {
+    const r = await expand({ around: c(6), before: 0, after: 0 });
+    const item = (x: XResult): Record<string, unknown> => x.items.find((i) => i['kind'] === 'entry' && i['uuid'] === c(6))!;
+    expect(item(r.none)['outline_kind'], 'CONTROL: with no cut the paired path makes it a code outline').toBe('code');
+    expect(String(item(r.none)['outline']), 'CONTROL: the code outline names the file').toContain('zqcutpaired');
+    expect(item(r.cut)['outline_kind'], 'the kind is code in both arms: a shape check, not the guard').toBe('code');
+    expect(String(item(r.cut)['outline']), 'no visible pair: the outline names no file').toContain('Code exploration summary:');
+    expect(JSON.stringify(r.cut.items) + r.cut.blocks.join('\n')).not.toContain('zqcutpaired');
+  }, HEAVY);
+
+  it('cut-D1: the predicate is spelled once, in lib: recall.mjs splices asOfEntrySql and asOfBinds once each and copies neither', () => {
+    const src = fs.readFileSync(path.join(REPO, 'ccd', 'history', 'recall.mjs'), 'utf8');
+    expect(src, 'no copy of the predicate text').not.toContain(libRead.asOfEntrySql('e'));
+    expect(src.match(/\basOfEntrySql\(/g) ?? [], 'one splice point, cutTerm').toHaveLength(1);
+    expect(src.match(/\basOfBinds\(/g) ?? [], 'one binding point, cutBinds').toHaveLength(1);
+  });
+});
+
+// ── W2-2a Task 3 (W2-D35, W2-D36): the node cut ─────────────────────────────────────────────────────────────────────
+// The as-of cut (lib's asOfCut, Task 1) rides on rc.scope.cut. W2-2a turns no CCRC_RECALL_* variable into a cut (W2-2b's
+// W2-D40 does), so every case here runs in-process over a ReadContext built by GRX.rc, with a cut this describe measures
+// from the store by W2-D38's own fields. One box:
+//   - family A: eight manual compactions, so eight leaves and the parent over them, and a reply with no timestamp inside
+//     leaf 1's span (hidden under every cut, W2-D34);
+//   - written by hand after derivation, with no sweep after it: two crafted leaves of A that share 19 hex digits (VIS, bound
+//     to boundary 1, and HID, bound to boundary 8, whose id sorts below every derived leaf's and which also covers u(1), a
+//     row leaf 1 covers), a condensed node of A with no leaf under it (EMPTY), also listed as a child of the parent (a
+//     damaged store, R4), a second epoch of A whose transcript holds only rows stamped after both cuts, and two crafted
+//     leaves of family B, out of A's scope (OUT_VIS on boundary 1, OUT_HID on boundary 8);
+//   - refs written by hand (R8, SEC-2): one mined ref (origin tool_use) each on leaf 1, leaf 7 and the parent, and one
+//     summary ref (origin model) each on leaf 1 and the parent.
+// Cut 7 is ASOF = boundary 7; cut 8 is ASOF = boundary 8, each measured by this describe's cutAt; case 1 checks that
+// Task 2's store half, asOfCutOf, measures the same two cuts (R2).
+describe.skipIf(process.platform === 'darwin')('W2-D35: the as-of cut hides nodes, epochs and their ids at every read door (W2-2a Task 3)', () => {
+  type W35Cut = Readonly<{
+    asof: string; tsCut: number; boundaryEntryId: number; summaryEntryId: number | null; keptUuids: readonly string[];
+    holdingFileId: number; boundaryLine: number;
+  }>;
+  type W35Rc = GrepRc & { gen: string | null; scopeArgs: string[]; scope: GrepRc['scope'] & { cut?: W35Cut | null } };
+  type W35Recall = {
+    runGrep(rc: W35Rc, a: RGrepArgs): GrepVerbResult;
+    runTree(rc: W35Rc, a: { depth: number; json: boolean }): GrepVerbResult;
+    runDescribe(rc: W35Rc, a: { target: string; full: boolean; cursor: string | null; json: boolean }): GrepVerbResult;
+    runExpand(rc: W35Rc, a: { target: string; around: null; before: number; after: number; cursor: null; json: boolean }): GrepVerbResult;
+    leafHeads(rc: W35Rc, ids: string[]): Map<string, { node_id: string; gist: string | null }>;
+    asOfCutOf(rc: { db: RDatabaseSync }, asof: string): unknown;
+  };
+  type W35Derive = {
+    blobReadStmts(db: RDatabaseSync): Record<string, unknown>;
+    keptOf(s: Record<string, unknown>, blobId: number | null, budget: { bytes: number }): Set<string>;
+  };
+  const A = 'claude-a-w2d35';
+  const B = 'claude-b-w2d35';
+  const TXA = '2d35aaaa-0000-4000-8000-000000000001';
+  const TXB = '2d35bbbb-0000-4000-8000-000000000002';
+  const GA = '0189abcd-1234-4678-9abc-00000000d351';
+  const GB = '0189abcd-1234-4678-9abc-00000000d352';
+  const T0W = Date.UTC(2026, 9, 2, 10, 0, 0);
+  const ts = (k: number): string => new Date(T0W + k * 1000).toISOString();
+  const ms = (k: number): number => T0W + k * 1000;
+  /** Row uuids. Cycle c: u(5c-4) the ask, u(5c-3) the reply, u(5c-2) the kept follow-up, u(5c-1) the boundary, u(5c) the summary. */
+  const u = (i: number): string => `2d35eeee-0000-4000-8000-${i.toString(16).padStart(12, '0')}`;
+  const bnd = (c: number): string => u(5 * c - 1);
+  const kept = (c: number): string => u(5 * c - 2);
+  const hex20 = (head: string, last: string): string => `${head}${'0'.repeat(20 - head.length - last.length)}${last}`;
+  const VIS = `L${hex20('000001', '2')}`;
+  const HID = `L${hex20('000001', '1')}`;   // the lower of the two, and below every derived leaf's id
+  const EMPTY = `N${hex20('e0e0e0', '1')}`;
+  const OUT_VIS = `L${hex20('d00d00', '1')}`;
+  const OUT_HID = `L${hex20('d00d01', '1')}`;
+  /** The shortest display prefix any read verb prints for an id: its letter and NODE_ID_DISPLAY_MIN (6) hex digits. */
+  const pre7 = (id: string): string => id.slice(0, 7);
+  const all = (r: GrepVerbResult): string => JSON.stringify(r);
+  const ans = (r: GrepVerbResult): unknown[] => [r.exit, r.reason];
+
+  let box: rH.HistoryBox;
+  let R: W35Recall;
+  let L: string[] = [];   // L[c - 1] is leaf c, found by its boundary
+  let P = '';
+  let parentCreatedMs = 0;
+  let cut7: W35Cut;
+  let cut8: W35Cut;
+
+  function rowsA(): rFx.Row[] {
+    const rows: rFx.Row[] = [];
+    const base = { sessionId: TXA, cwd: '/home/u/worktrees/p/quiet-basin' };
+    for (let c = 1; c <= 8; c += 1) {
+      rows.push(rFx.userRow({ ...base, uuid: u(5 * c - 4), ts: ts(5 * c), text: `zqw2d35ask${c} fixture request` }));
+      const reply = rFx.assistantRow({ ...base, uuid: u(5 * c - 3), ts: ts(5 * c + 1), text: `zqw2d35reply${c} fixture answer`,
+        requestId: `req_w2d35_${c}`, msgId: `msg_w2d35_${c}` });
+      if (c === 1) delete reply['timestamp'];   // leaf 1's NULL-ts row: hidden under every cut (W2-D34)
+      rows.push(reply);
+      rows.push(rFx.userRow({ ...base, uuid: kept(c), ts: ts(5 * c + 2), text: `zqw2d35kept${c} fixture follow-up` }));
+      rows.push(rFx.boundaryRow({ ...base, uuid: bnd(c), ts: ts(5 * c + 3), trigger: 'manual', headUuid: kept(c), anchorUuid: u(5 * c),
+        tailUuid: kept(c), allUuids: [kept(c)] }));
+      rows.push(rFx.summaryRow({ ...base, uuid: u(5 * c), ts: ts(5 * c + 4), text: [
+        'This session is being continued from a previous conversation. The summary below covers the earlier portion.',
+        '<summary>', '1. Primary Request and Intent:', `   The fixture request ${c}.`,
+        '8. Current Work:', `   Wrote zqw2d35gist${c} of the fixture.`,
+        '9. Optional Next Step:', `   Continue past zqw2d35gist${c}.`, '</summary>',
+      ].join('\n') }));
+    }
+    return rows;
+  }
+
+  /** W2-D38's fields for ASOF = `boundaryUuid`, measured from the store: the boundary's own stamp (every boundary here has
+   *  one), its holding copy by lib's pickHoldingCopy rule (a live copy first, then the lowest file_id) and its line there,
+   *  the summary row its anchor names, and kept(N) through derive.mjs's keptOf. */
+  function cutAt(db: RDatabaseSync, d: W35Derive, boundaryUuid: string): W35Cut {
+    const b = db.prepare(`SELECT e.entry_id AS entry_id, e.ts_ms AS ts_ms, e.transcript_pk AS tpk, b.anchor_uuid AS anchor,
+        b.kept_blob_id AS kept FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id WHERE e.uuid = ?`).get(boundaryUuid) as
+      { entry_id: number; ts_ms: number; tpk: number; anchor: string; kept: number | null };
+    const hold = db.prepare(`SELECT f.file_id AS file_id, m.line AS line FROM ingest_files f
+        JOIN memberships m ON m.file_id = f.file_id AND m.entry_id = ?
+      WHERE f.transcript_pk = ? ORDER BY (f.source_key = '') DESC, f.file_id LIMIT 1`).get(b.entry_id, b.tpk) as { file_id: number; line: number };
+    const summary = db.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(b.anchor) as { entry_id: number };
+    const keptSet = d.keptOf(d.blobReadStmts(db), b.kept === null ? null : Number(b.kept), { bytes: 0 });
+    return Object.freeze({
+      asof: boundaryUuid, tsCut: Number(b.ts_ms), boundaryEntryId: Number(b.entry_id), summaryEntryId: Number(summary.entry_id),
+      keptUuids: Object.freeze([...keptSet].sort()), holdingFileId: Number(hold.file_id), boundaryLine: Number(hold.line),
+    });
+  }
+
+  /** A ReadContext for A's family with `cut` on its scope; undefined leaves the key out, as every pre-W2-2a context does. */
+  async function rcOf(cut: W35Cut | null | undefined): Promise<W35Rc> {
+    const rc = await GRX.rc(box, A);
+    return { ...rc, gen: rc.scope.generation, scopeArgs: [], scope: { ...rc.scope, ...(cut === undefined ? {} : { cut }) } };
+  }
+  /** `f` over a fresh read handle carrying `cut`, closed after. */
+  async function under<T>(cut: W35Cut | null | undefined, f: (rc: W35Rc) => T): Promise<T> {
+    const rc = await rcOf(cut);
+    try { return f(rc); } finally { rc.db.close(); }
+  }
+  /** `f` with the damaged store's one leafless child (EMPTY) taken from the parent P, then put back: D-6283's CONTROL, the same tree with
+   *  every condensed node over a leaf. */
+  async function withoutEmptyChild<T>(f: () => Promise<T>): Promise<T> {
+    const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+    try {
+      w.prepare('DELETE FROM node_children WHERE node_id = ? AND child_id = ?').run(P, EMPTY);
+      return await f();
+    } finally {
+      w.prepare('INSERT OR IGNORE INTO node_children (node_id, child_id, ord) VALUES (?, ?, 8)').run(P, EMPTY);
+      w.close();
+    }
+  }
+  const describeOf = (target: string) => (rc: W35Rc): GrepVerbResult => R.runDescribe(rc, { target, full: false, cursor: null, json: true });
+  const expandOf = (target: string) => (rc: W35Rc): GrepVerbResult =>
+    R.runExpand(rc, { target, around: null, before: 5, after: 5, cursor: null, json: true });
+  const treeOf = (rc: W35Rc): GrepVerbResult => R.runTree(rc, { depth: 2, json: true });
+  const treeIds = (r: GrepVerbResult): string[] => r.items.map((i) => String(i['node_id'])).sort();
+
+  beforeAll(async () => {
+    box = rH.makeHistoryBox('ccrc-hist-w2d35-');
+    rH.seedFamily(box, { id: A, project: 'demo', uuid: TXA, generation: GA, rows: rowsA() });
+    rH.seedFamily(box, { id: B, project: 'demo', uuid: TXB, generation: GB, accountId: 'claude-b',
+      rows: [rFx.userRow({ uuid: u(100), ts: ts(100), sessionId: TXB, text: 'zqw2d35other family row' })] });
+    for (let i = 0; i < 2; i += 1) { const s = rH.runSweep(box); expect(s.code, s.stderr).toBe(0); }   // derivation shares the run budget
+    const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+    try {
+      const leaves = w.prepare(`SELECT n.node_id AS node_id, e.uuid AS b FROM nodes n JOIN entries e ON e.entry_id = n.boundary_entry_id
+        WHERE n.kind <> 'condensed'`).all() as { node_id: string; b: string }[];
+      L = [1, 2, 3, 4, 5, 6, 7, 8].map((c) => leaves.find((r) => r.b === bnd(c))?.node_id ?? '');
+      const parents = w.prepare("SELECT node_id, created_ms FROM nodes WHERE kind = 'condensed'").all() as { node_id: string; created_ms: number }[];
+      P = parents.length === 1 ? parents[0]!.node_id : '';
+      parentCreatedMs = parents.length === 1 ? Number(parents[0]!.created_ms) : 0;
+      type Home = { session_pk: number; epoch_seq: number; transcript_pk: number };
+      const a = w.prepare('SELECT session_pk, epoch_seq, transcript_pk FROM nodes WHERE node_id = ?').get(L[0]!) as Home;
+      const b = w.prepare(`SELECT s.session_pk AS session_pk, e.seq AS epoch_seq, t.transcript_pk AS transcript_pk FROM sessions s
+          JOIN epochs e ON e.session_pk = s.session_pk JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid
+        WHERE s.ccrc_id = ? AND e.confirmed_ms IS NOT NULL`).get(B) as Home;
+      const entryOf = (uuid: string): number => Number((w.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(uuid) as { entry_id: number }).entry_id);
+      const ins = w.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics,
+        summary_blob_id, boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars,
+        directive_flag, capped, parser_version, created_ms)
+        VALUES (?, ?, ?, ?, ?, ?, 'fixture', ?, NULL, NULL, ?, NULL, ?, ?, 0, 0, 0, 0, 0, 1, ?)`);
+      const now = Date.now();
+      ins.run(VIS, a.session_pk, a.epoch_seq, a.transcript_pk, 'native_leaf', 0, 'zqw2d35craftvis gist', entryOf(bnd(1)), ms(8), ms(8), now);
+      ins.run(HID, a.session_pk, a.epoch_seq, a.transcript_pk, 'native_leaf', 0, 'zqw2d35crafthid gist', entryOf(bnd(8)), ms(43), ms(43), now);
+      ins.run(EMPTY, a.session_pk, a.epoch_seq, a.transcript_pk, 'condensed', 1, 'zqw2d35craftempty gist', null, ms(8), ms(8), now);
+      ins.run(OUT_VIS, b.session_pk, b.epoch_seq, b.transcript_pk, 'native_leaf', 0, 'zqw2d35outvis gist', entryOf(bnd(1)), ms(8), ms(8), now);
+      ins.run(OUT_HID, b.session_pk, b.epoch_seq, b.transcript_pk, 'native_leaf', 0, 'zqw2d35outhid gist', entryOf(bnd(8)), ms(43), ms(43), now);
+      // EMPTY is also a child of the parent (a damaged store, R4): the parent stays visible by its leaves, EMPTY never is.
+      w.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)').run(P, EMPTY, 8);
+      // HID also covers u(1), which leaf 1 covers: two in-scope leaves share one row, and HID's id is the lower.
+      w.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, ?)').run(HID, entryOf(u(1)), 0);
+      const ref = w.prepare("INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, 'path', ?, 'model')");
+      ref.run(VIS, '/home/u/tree/zqw2d35refvis');
+      ref.run(HID, '/home/u/tree/zqw2d35refhid');
+      // R8 (SEC-2): refs a derivation mines from source rows (origin tool_use). Leaf 1 holds u(2), hidden under every cut, so
+      // its mined ref may come from that row; leaf 7 (leaf N under cut 7) holds no hidden row; the parent holds u(2) through
+      // leaf 1. The model refs beside them stand for what the summary written at N names, and stay.
+      const mined = w.prepare("INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, 'path', ?, 'tool_use')");
+      mined.run(L[0]!, '/home/u/tree/zqw2d35minedrow1');
+      mined.run(L[6]!, '/home/u/tree/zqw2d35minedrow7');
+      mined.run(P, '/home/u/tree/zqw2d35minedparent');
+      ref.run(L[0]!, '/home/u/tree/zqw2d35modelrow1');
+      ref.run(P, '/home/u/tree/zqw2d35modelparent');
+      const seq = Number((w.prepare('SELECT max(seq) AS m FROM epochs WHERE session_pk = ?').get(a.session_pk) as { m: number }).m) + 1;
+      w.prepare('INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, started_ms, confirmed_ms) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(a.session_pk, seq, TXB, 'clear', 'fixture', ms(99), ms(99));
+      const d = (await import('../../ccd/history/derive.mjs')) as unknown as W35Derive;
+      cut7 = cutAt(w, d, bnd(7));
+      cut8 = cutAt(w, d, bnd(8));
+    } finally { w.close(); }
+    R = (await import('../../ccd/history/recall.mjs')) as unknown as W35Recall;
+  }, 4 * HEAVY);
+
+  it('the fixture: eight leaves by their boundaries, one parent over them formed after both cuts, a NULL-ts reply in leaf 1, kept(7) in leaf 8', () => {
+    expect(L.every((id) => /^L[0-9a-f]{20}$/.test(id)), L.join(' ')).toBe(true);
+    expect(P).toMatch(/^N[0-9a-f]{20}$/);
+    const db = rH.openStoreRO(box);
+    try {
+      const kids = (db.prepare('SELECT child_id FROM node_children WHERE node_id = ?').all(P) as { child_id: string }[]).map((r) => r.child_id);
+      expect(kids.sort(), 'the parent condenses the eight leaves, and (crafted) the leafless EMPTY').toEqual([...L, EMPTY].sort());
+      const a1 = db.prepare('SELECT ts_ms FROM entries WHERE uuid = ?').get(u(2)) as { ts_ms: number | null } | undefined;
+      expect(a1, 'the reply without a timestamp is stored').toBeDefined();
+      expect(a1!.ts_ms).toBeNull();
+      const src = (leaf: string): string[] => (db.prepare(`SELECT e.uuid AS uuid FROM node_sources ns JOIN entries e ON e.entry_id = ns.entry_id
+        WHERE ns.node_id = ? ORDER BY ns.ord`).all(leaf) as { uuid: string }[]).map((r) => r.uuid);
+      expect(src(L[0]!), 'leaf 1 holds the NULL-ts reply').toEqual([u(1), u(2)]);
+      expect(src(L[7]!), 'kept(7) belongs to leaf 8 (G12)').toEqual([kept(7), u(36), u(37)]);
+      expect([src(HID), L.every((id) => HID < id)], 'u(1) is shared: HID covers it too, and HID\'s id is below every derived leaf\'s').toEqual([[u(1)], true]);
+      expect(R.asOfCutOf({ db }, bnd(7)), 'CONTROL: the store half (Task 2) measures cut 7').toEqual({ ok: true, cut: cut7 });
+      expect(R.asOfCutOf({ db }, bnd(8)), 'CONTROL: and cut 8').toEqual({ ok: true, cut: cut8 });
+    } finally { db.close(); }
+    expect([cut7.tsCut, cut7.keptUuids], 'cut 7 is boundary 7\'s stamp and kept(7)').toEqual([ms(38), [kept(7)]]);
+    expect(cut8.tsCut).toBe(ms(43));
+    expect(parentCreatedMs, 'the parent was formed after both boundaries; its visibility never reads that').toBeGreaterThan(cut8.tsCut);
+  });
+
+  it('C31: under ASOF=N a grep hit on a kept(N) row groups under the live tail, and neither leaf N+1\'s id nor its gist prints; a row a hidden lower-id leaf shares groups under its visible leaf (coveringLeaves)', async () => {
+    const a = await GRX.grepArgs(['zqw2d35kept7']);
+    const open = await under(undefined, (rc) => R.runGrep(rc, a));
+    expect(open.exit, all(open)).toBe(0);
+    expect(open.items.map((i) => [i['entry_uuid'], i['node_id']]), 'CONTROL: with no cut the kept(7) row groups under leaf 8').toEqual([[kept(7), L[7]]]);
+    expect(open.blocks.join('\n'), 'CONTROL: leaf 8\'s header carries its gist').toContain('zqw2d35gist8');
+    const r = await under(cut7, (rc) => R.runGrep(rc, a));
+    expect(r.exit, all(r)).toBe(0);
+    expect(r.items.map((i) => [i['entry_uuid'], i['node_id']]), 'the kept(7) row is visible; its only covering leaf is not').toEqual([[kept(7), null]]);
+    expect(r.blocks[0]!.split('\n')[0]).toBe('── live tail (rows no leaf covers yet)');
+    expect(all(r), 'no display of leaf 8\'s id').not.toContain(pre7(L[7]!));
+    expect(all(r), 'leaf 8\'s gist').not.toContain('zqw2d35gist8');
+    // u(1) has two in-scope covering leaves: leaf 1 (visible under cut 7) and HID (boundary 8, hidden), whose id is the
+    // lower. Hidden leaves are dropped BEFORE the lower id is taken, so u(1) groups under leaf 1, never the live tail.
+    const ask = await GRX.grepArgs(['zqw2d35ask1']);
+    const shared = await under(undefined, (rc) => R.runGrep(rc, ask));
+    expect(shared.items.map((i) => [i['entry_uuid'], i['node_id']]), 'CONTROL: with no cut u(1) groups under the lower id, HID').toEqual([[u(1), HID]]);
+    const sharedCut = await under(cut7, (rc) => R.runGrep(rc, ask));
+    expect(sharedCut.items.map((i) => [i['entry_uuid'], i['node_id']]), 'the visible leaf that covers it').toEqual([[u(1), L[0]]]);
+    expect(all(sharedCut), 'HID\'s id').not.toContain(HID);
+    expect(all(sharedCut), 'HID\'s gist').not.toContain('zqw2d35crafthid');
+  }, HEAVY);
+
+  it('leafHeads answers no head for a leaf the cut hides (a test seam: no read verb reaches it with an id coveringLeaves has not cut)', async () => {
+    const open = await under(undefined, (rc) => [...R.leafHeads(rc, [L[6]!, L[7]!]).keys()].sort());
+    expect(open, 'CONTROL').toEqual([L[6]!, L[7]!].sort());
+    const cut = await under(cut7, (rc) => [...R.leafHeads(rc, [L[6]!, L[7]!]).keys()]);
+    expect(cut).toEqual([L[6]]);
+  });
+
+  it('tree under ASOF=7: a hidden leaf, its parent, a hidden crafted leaf, a leafless node and an epoch with no visible row are absent; N counts the visible', async () => {
+    const open = await under(undefined, treeOf);
+    expect(open.exit, all(open)).toBe(0);
+    expect(treeIds(open), 'CONTROL').toEqual([...L, P, VIS, HID, EMPTY].sort());
+    expect(open.total).toBe(12);
+    expect(open.items.find((i) => i['node_id'] === L[0])?.['parent_id'], 'CONTROL: leaf 1 sits under the parent').toBe(P);
+    expect(open.blocks.some((l) => /^ {2}epoch \d+ clear started=\S+ session=2d35bbbb$/.test(l)), 'CONTROL: the second epoch is listed').toBe(true);
+    expect(open.blocks.some((l) => l.startsWith(`    ${VIS} native_leaf depth=0 `)), 'CONTROL: HID beside it makes VIS\'s prefix its whole id').toBe(true);
+    const r = await under(cut7, treeOf);
+    expect(r.exit, all(r)).toBe(0);
+    expect(treeIds(r)).toEqual([...L.slice(0, 7), VIS].sort());
+    expect(r.total, 'N counts the visible nodes only').toBe(8);
+    for (const i of r.items) expect(i['parent_id'], `${String(i['node_id'])}: a hidden parent is no parent`).toBeNull();
+    expect(r.blocks.some((l) => /^ {2}epoch \d+ startup /.test(l)), 'the epoch with visible rows stays').toBe(true);
+    expect(r.blocks.some((l) => l.includes('session=2d35bbbb')), 'the epoch whose transcript holds only hidden rows').toBe(false);
+    expect(r.blocks.some((l) => l.startsWith(`    ${pre7(VIS)} native_leaf depth=0 `)), 'hidden HID no longer lengthens VIS\'s prefix').toBe(true);
+    for (const h of [L[7]!, P, EMPTY]) expect(all(r), h).not.toContain(pre7(h));
+    expect(all(r)).not.toContain(HID);
+    for (const g of ['zqw2d35gist8', 'zqw2d35crafthid', 'zqw2d35craftempty']) expect(all(r), g).not.toContain(g);
+  }, HEAVY);
+
+  it('tree under ASOF=8: a parent shows once every leaf under it does, whenever it was formed, but not while a condensed node under it has no leaf (D-6283, R4 at every depth)', async () => {
+    // Every leaf under P is visible under cut 8, and so is P's rolled-up gist; its leafless child EMPTY is not, so P goes with it.
+    const r = await under(cut8, treeOf);
+    expect(r.exit, all(r)).toBe(0);
+    expect(treeIds(r)).toEqual([...L, VIS, HID].sort());
+    expect(r.total).toBe(10);
+    expect(r.items.find((i) => i['node_id'] === L[0])?.['parent_id'], 'a hidden parent is no parent').toBeNull();
+    expect(all(r), 'the leafless condensed node, fail closed').not.toContain(pre7(EMPTY));
+    expect(all(r), 'and the parent over it').not.toContain(pre7(P));
+    expect(r.blocks.some((l) => l.includes('session=2d35bbbb'))).toBe(false);
+    // CONTROL: the same tree with the leafless child taken away shows the parent under the same cut.
+    const intact = await withoutEmptyChild(() => under(cut8, treeOf));
+    expect(treeIds(intact), 'CONTROL: C intact').toEqual([...L, P, VIS, HID].sort());
+    expect(intact.total).toBe(11);
+    expect(intact.items.find((i) => i['node_id'] === L[0])?.['parent_id']).toBe(P);
+    expect(all(intact), 'the leafless node stays hidden on its own').not.toContain(pre7(EMPTY));
+    expect(treeIds(await under(undefined, treeOf)), 'CONTROL: with no cut the parent shows over its leafless child').toContain(P);
+  }, HEAVY);
+
+  it('a hidden node answers exit 3 at describe, grep --node and expand, never out-of-scope, and its refs never print; a visible out-of-scope node stays 2', async () => {
+    const node = await GRX.grepArgs(['--node', L[7]!, 'zqw2d35ask8']);
+    const grepNode = (rc: W35Rc): GrepVerbResult => R.runGrep(rc, node);
+    const opened: Array<[string, (rc: W35Rc) => GrepVerbResult]> = [
+      ['describe leaf 8', describeOf(L[7]!)], ['describe the parent', describeOf(P)], ['describe HID', describeOf(HID)],
+      ['describe the leafless node', describeOf(EMPTY)], ['expand leaf 8', expandOf(L[7]!)], ['grep --node leaf 8', grepNode],
+    ];
+    for (const [name, f] of opened) {
+      const r = await under(undefined, f);
+      expect(r.exit, `CONTROL, ${name}: ${all(r)}`).toBe(0);
+    }
+    expect(all(await under(undefined, describeOf(HID))), 'CONTROL: HID\'s refs print with no cut').toContain('zqw2d35refhid');
+    expect(ans(await under(undefined, describeOf(OUT_HID))), 'CONTROL: B\'s leaf is out of scope with no cut').toEqual([2, 'out-of-scope']);
+    const hidden: Array<[string, (rc: W35Rc) => GrepVerbResult]> = [
+      ...opened, ['describe leaf 8 by its prefix', describeOf(pre7(L[7]!))], ['describe B\'s hidden leaf', describeOf(OUT_HID)],
+      ['expand the parent', expandOf(P)],
+    ];
+    for (const [name, f] of hidden) {
+      const r = await under(cut7, f);
+      expect(ans(r), name).toEqual([3, undefined]);
+      expect(all(r), name).not.toContain('zqw2d35refhid');
+    }
+    expect(ans(await under(cut7, describeOf(OUT_VIS))), 'a visible node of another family is still out of scope').toEqual([2, 'out-of-scope']);
+  }, 2 * HEAVY);
+
+  it('a hidden id never makes a prefix ambiguous, and display prefixes are computed over the visible nodes only (resolveNodeInScope, scopePrefixes)', async () => {
+    const open = await under(undefined, describeOf(pre7(VIS)));
+    expect(ans(open), 'CONTROL: with no cut both crafted leaves match the prefix').toEqual([2, 'bad-args']);
+    expect(open.hint ?? '').toContain(HID);
+    const openVis = await under(undefined, describeOf(VIS));
+    expect(openVis.blocks[0], 'CONTROL: HID makes VIS\'s display prefix its whole id').toMatch(new RegExp(`^node ${VIS} native_leaf `));
+    const r = await under(cut7, describeOf(pre7(VIS)));
+    expect(r.exit, all(r)).toBe(0);
+    expect(r.items[0]!['node_id']).toBe(VIS);
+    expect(r.blocks[0]).toMatch(new RegExp(`^node ${pre7(VIS)} native_leaf `));
+    expect(all(r)).not.toContain(HID);
+    expect(all(r), 'a visible node\'s refs still print').toContain('zqw2d35refvis');
+  }, HEAVY);
+
+  it('describe drops a hidden parent, a hidden source row, a hidden witness of its producer and a hidden child, and keeps each one the cut shows', async () => {
+    type Item = { parent_id: string | null; sources: Array<{ uuid: string }>; sources_total: number; producer: string };
+    const item = (r: GrepVerbResult): Item => r.items[0] as unknown as Item;
+    const shape = (r: GrepVerbResult): unknown[] => [item(r).parent_id, item(r).sources.map((s) => s.uuid), item(r).sources_total];
+    expect(shape(await under(undefined, describeOf(L[0]!))), 'CONTROL').toEqual([P, [u(1), u(2)], 2]);
+    const r1 = await under(cut7, describeOf(L[0]!));
+    expect(r1.exit, all(r1)).toBe(0);
+    expect(shape(r1)).toEqual([null, [u(1)], 1]);
+    expect(r1.blocks.some((l) => l.startsWith('parent ')), 'no parent line').toBe(false);
+    expect(all(r1), 'no display of the hidden parent').not.toContain(pre7(P));
+    expect(all(r1), 'the NULL-ts reply\'s uuid').not.toContain(u(2));
+    expect(item(await under(cut8, describeOf(L[0]!))).parent_id, 'under ASOF=8 the parent holds a leafless child, so it is hidden and not named (D-6283)').toBeNull();
+    expect(item(await withoutEmptyChild(() => under(cut8, describeOf(L[0]!)))).parent_id, 'CONTROL: with the child away the parent is visible, so it is named').toBe(P);
+    expect(item(await under(undefined, describeOf(L[6]!))).producer, 'CONTROL: leaf 7\'s producer is the reply after its summary').toBe('anthropic');
+    expect(item(await under(cut7, describeOf(L[6]!))).producer, 'under ASOF=7 that reply is hidden').toBe('unknown');
+    expect(item(await under(cut8, describeOf(L[6]!))).producer, 'under ASOF=8 it is visible again').toBe('anthropic');
+    // childRowsOf: under R4 a visible parent holds a hidden child only in a damaged store (EMPTY, a leafless condensed child).
+    type Kids = { children: Array<{ id: string }>; children_total: number };
+    const kids = (r: GrepVerbResult): unknown[] => { const k = r.items[0] as unknown as Kids; return [k.children.map((c) => c.id).sort(), k.children_total]; };
+    expect(kids(await under(undefined, describeOf(P))), 'CONTROL: with no cut the leafless child is listed and counted').toEqual([[...L, EMPTY].sort(), 9]);
+    // D-6283: a parent over a hidden child is hidden itself, so childRowsOf's filter has nothing left to drop on a visible parent.
+    const hid8 = await under(cut8, describeOf(P));
+    expect(ans(hid8), 'under ASOF=8 the parent over the leafless child is hidden').toEqual([3, undefined]);
+    expect(all(hid8), 'no display of the hidden child').not.toContain(pre7(EMPTY));
+    const p8 = await withoutEmptyChild(() => under(cut8, describeOf(P)));
+    expect(p8.exit, all(p8)).toBe(0);
+    expect(kids(p8), 'CONTROL: C intact, under ASOF=8 the parent lists and counts its eight leaves').toEqual([[...L].sort(), 8]);
+  }, HEAVY);
+
+  it('nodes_fts has no reader on the read path, so node text reaches a read verb only through its node', () => {
+    const src = (f: string): string => fs.readFileSync(path.join(REPO, 'ccd', 'history', f), 'utf8');
+    for (const f of ['recall.mjs', 'regex-worker.mjs', 'cli.mjs']) expect(src(f).match(/\bnodes_fts\b/g) ?? [], f).toEqual([]);
+    expect(src('derive.mjs'), 'CONTROL: the writer spells the table name the scan looks for').toMatch(/\bnodes_fts\b/);
+  });
+
+  it('W2-D45: with no cut, or a null one, no read verb prepares a cut statement; under a cut each of the three is prepared', async () => {
+    const MARKS: Record<string, RegExp> = { nodes: /\basof_down\b/, epochs: /:asof_epochs\b/, entries: /:asof_entries\b/ };
+    const grep = await GRX.grepArgs(['zqw2d35kept7']);
+    const prepared = async (cut: W35Cut | null | undefined): Promise<string[]> => {
+      const rc = await rcOf(cut);
+      const calls: string[] = [];
+      const spied: W35Rc = { ...rc, db: GRX.spyDb(rc.db, calls) };
+      try {
+        expect(R.runTree(spied, { depth: 2, json: true }).exit).toBe(0);
+        expect(R.runDescribe(spied, { target: L[0]!, full: false, cursor: null, json: true }).exit).toBe(0);
+        expect(R.runGrep(spied, grep).exit).toBe(0);
+      } finally { rc.db.close(); }
+      return calls;
+    };
+    for (const cut of [undefined, null]) {
+      const calls = await prepared(cut);
+      for (const [k, re] of Object.entries(MARKS)) expect(calls.filter((s) => re.test(s)), `${String(cut)}: ${k}`).toEqual([]);
+    }
+    const withCut = await prepared(cut7);
+    for (const [k, re] of Object.entries(MARKS)) expect(withCut.some((s) => re.test(s)), `CONTROL: the cut prepares its ${k} statement`).toBe(true);
+  }, HEAVY);
+
+  it('R8 (SEC-2): describe drops the refs mined from source rows (origin tool_use), and the files derived from them, of a node with a hidden source row, its own or a descendant leaf\'s; the summary\'s refs stay, and so do the mined refs of a node whose rows are all visible', async () => {
+    type Refs = { refs: Array<{ value: string; origin: string }>; refs_total: number; files: string[]; files_total: number };
+    const refs = (r: GrepVerbResult): Refs => r.items[0] as unknown as Refs;
+    // Leaf 1: its NULL-ts reply u(2) is hidden under every cut, and a ref mined from its rows may name that row.
+    const open1 = await under(undefined, describeOf(L[0]!));
+    expect(open1.exit, all(open1)).toBe(0);
+    expect(refs(open1).refs.some((x) => x.value.includes('zqw2d35minedrow1') && x.origin === 'tool_use'), 'CONTROL: with no cut leaf 1\'s mined ref prints').toBe(true);
+    expect(refs(open1).files.some((f) => f.includes('zqw2d35minedrow1')), 'CONTROL: and its path is among the files').toBe(true);
+    const cut1 = await under(cut7, describeOf(L[0]!));
+    expect(cut1.exit, all(cut1)).toBe(0);
+    expect(all(cut1), 'the hidden-row path, in refs, files and every line').not.toContain('zqw2d35minedrow1');
+    expect(all(cut1), 'the summary\'s ref stays (R6)').toContain('zqw2d35modelrow1');
+    expect([refs(cut1).refs_total, refs(cut1).files_total], 'neither count holds it')
+      .toEqual([refs(open1).refs_total - 1, refs(open1).files_total - 1]);
+    // Leaf 7 is leaf N under cut 7, and every source row of it is visible: its mined ref stays.
+    expect(all(await under(cut7, describeOf(L[6]!))), 'leaf N\'s mined ref, every row under it visible').toContain('zqw2d35minedrow7');
+    // The parent holds u(2) through leaf 1. It is visible under cut 8 (its leafless child away, D-6283): its mined ref goes, its summary's ref stays.
+    expect(all(await under(undefined, describeOf(P))), 'CONTROL: the parent\'s mined ref with no cut').toContain('zqw2d35minedparent');
+    const p8 = await withoutEmptyChild(() => under(cut8, describeOf(P)));   // D-6283: with its leafless child in place the parent is hidden
+    expect(p8.exit, all(p8)).toBe(0);
+    expect(all(p8), 'a hidden descendant source drops the parent\'s mined ref').not.toContain('zqw2d35minedparent');
+    expect(all(p8), 'the parent\'s summary ref stays (R6)').toContain('zqw2d35modelparent');
+  }, HEAVY);
+
+  it('the node rule under a cut with no summary entry: the predicate is NULL, not false, for a hidden boundary, and only asOfHiddenNodesSql\'s coalesce keeps the node hidden', async () => {
+    const IDS = [...L, P, VIS, HID, EMPTY];
+    const hiddenBy = (c: W35Cut): Promise<string[]> => under(c, (rc) => {
+      const rows = rc.db.prepare(libRead.asOfHiddenNodesSql()).all({ ...libRead.asOfBinds(c), asof_nodes: JSON.stringify(IDS) }) as unknown as Array<{ node_id: string }>;
+      return rows.map((r) => r.node_id).sort();
+    });
+    const HIDDEN = [L[7]!, P, HID, EMPTY].sort();
+    expect(cut7.summaryEntryId, 'CONTROL: cut 7 has a summary').not.toBeNull();
+    expect(await hiddenBy(cut7), 'CONTROL: with its summary the cut hides leaf 8, the parent over it, the crafted leaf bound to boundary 8 and the leafless node').toEqual(HIDDEN);
+    // Each variant drops the summary; the second takes the positional arm away (no holding file), the third the stamp arm (T_N past every stamp).
+    const variants: Array<[string, W35Cut]> = [
+      ['stamp and position', { ...cut7, summaryEntryId: null }],
+      ['the stamp alone', { ...cut7, summaryEntryId: null, holdingFileId: -1 }],
+      ['the position alone', { ...cut7, summaryEntryId: null, tsCut: ms(100) }],
+    ];
+    for (const [name, c] of variants) {
+      expect(libRead.asOfBinds(c).asof_summary, `${name}: the summary parameter is NULL`).toBeNull();
+      expect(await hiddenBy(c), `${name}: a leaf stamped after T_N or after N in its holding copy is hidden, and what stands over it`).toEqual(HIDDEN);
+      const tree = await under(c, treeOf);
+      expect(tree.exit, all(tree)).toBe(0);
+      expect(treeIds(tree), `${name}: the tree shows the other leaves only`).toEqual([...L.slice(0, 7), VIS].sort());
+      for (const h of [L[7]!, P, EMPTY]) expect(all(tree), `${name}: ${h}`).not.toContain(pre7(h));
+      expect(all(tree), `${name}: the crafted leaf (its prefix is VIS's too, so its whole id)`).not.toContain(HID);
+    }
+    const open = await under(undefined, treeOf);
+    expect(treeIds(open), 'CONTROL: with no cut the same nodes are visible').toEqual([...L, P, VIS, HID, EMPTY].sort());
+  }, HEAVY);
+
+  it('D-6283: a node is hidden when any condensed node at or below it has no leaf below it, at any depth and through a cycle; describe, expand, --node, tree and the refs follow', async () => {
+    const GP = `N${hex20('9a9a9a', '1')}`;   // over P, which holds EMPTY
+    const Q = `N${hex20('9b9b9b', '1')}`;    // over leaf 1 and the cycle Z1 <-> Z2, which no leaf is under
+    const Z1 = `N${hex20('9c9c9c', '1')}`;
+    const Z2 = `N${hex20('9c9c9c', '2')}`;
+    const TOP = `N${hex20('9d9d9d', '1')}`;   // over Q
+    const W = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+    const home = W.prepare('SELECT session_pk, epoch_seq, transcript_pk FROM nodes WHERE node_id = ?').get(P) as { session_pk: number; epoch_seq: number; transcript_pk: number };
+    const ins = W.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics,
+      summary_blob_id, boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars,
+      directive_flag, capped, parser_version, created_ms)
+      VALUES (?, ?, ?, ?, 'condensed', 2, 'fixture', ?, NULL, NULL, NULL, NULL, ?, ?, 0, 0, 0, 0, 0, 1, ?)`);
+    const link = W.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)');
+    const now = Date.now();
+    for (const [id, gist] of [[GP, 'zqw2d35gp'], [Q, 'zqw2d35q'], [Z1, 'zqw2d35z1'], [Z2, 'zqw2d35z2'], [TOP, 'zqw2d35top']] as const) {
+      ins.run(id, home.session_pk, home.epoch_seq, home.transcript_pk, `${gist} gist`, ms(8), ms(8), now);
+    }
+    link.run(GP, P, 0);
+    link.run(Q, L[0]!, 0); link.run(Q, Z1, 1); link.run(Z1, Z2, 0); link.run(Z2, Z1, 0);
+    link.run(TOP, Q, 0);
+    W.close();
+    const drop = (): void => {
+      const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+      try {
+        for (const id of [GP, Q, Z1, Z2, TOP]) { w.prepare('DELETE FROM node_children WHERE node_id = ? OR child_id = ?').run(id, id); w.prepare('DELETE FROM nodes WHERE node_id = ?').run(id); }
+      } finally { w.close(); }
+    };
+    try {
+      const up = [GP, Q, Z1, Z2, TOP];
+      const exits = async (cut: W35Cut | null | undefined, ids: string[]): Promise<number[]> =>
+        Promise.all(ids.map(async (id) => (await under(cut, describeOf(id))).exit));
+      expect(await exits(undefined, [P, ...up]), 'CONTROL: with no cut every one of them describes').toEqual([0, 0, 0, 0, 0, 0]);
+      const r = await under(cut8, treeOf);
+      expect(r.exit, all(r)).toBe(0);
+      expect(treeIds(r), 'under ASOF=8 every node with a leafless condensed node at or below it is gone, whatever its depth').toEqual([...L, VIS, HID].sort());
+      for (const id of [P, ...up]) {
+        expect(all(r), id).not.toContain(pre7(id));
+        const d = await under(cut8, describeOf(id));
+        expect(ans(d), `describe ${id}`).toEqual([3, undefined]);
+        expect(all(d), `describe ${id}`).not.toContain('zqw2d35modelparent');
+      }
+      expect(ans(await under(cut8, expandOf(GP))), 'expand the grandparent').toEqual([3, undefined]);
+      expect(ans(await under(cut8, expandOf(P))), 'expand the parent').toEqual([3, undefined]);
+      const node = await GRX.grepArgs(['--node', P, 'zqw2d35ask8']);
+      expect(ans(await under(cut8, (rc) => R.runGrep(rc, node))), 'grep --node the parent').toEqual([3, undefined]);
+      // CONTROL: each shape reads visible once its leafless part is gone: P's child away, then Z1 and Z2 away from Q.
+      const gone = await withoutEmptyChild(async () => {
+        const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+        try { w.prepare('DELETE FROM node_children WHERE node_id = ? OR node_id = ?').run(Z1, Z2); w.prepare('DELETE FROM node_children WHERE node_id = ? AND child_id = ?').run(Q, Z1); } finally { w.close(); }
+        return exits(cut8, [P, GP, Q, TOP, Z1, Z2]);
+      });
+      expect(gone, 'CONTROL: with the leafless parts away, the parent, its ancestors and the chain over leaf 1 show; Z1 and Z2, now childless, stay hidden').toEqual([0, 0, 0, 0, 3, 3]);
+    } finally { drop(); }
+    expect(treeIds(await under(cut8, treeOf)), 'CONTROL: the store is put back').toEqual([...L, VIS, HID].sort());
+  }, 2 * HEAVY);
+});
+
+// ── W2-2a whole-branch fix wave (D-6282): a leaf is hidden when its summary row is ───────────────────────────────────────────
+// Family X compacts four times; each cycle c is an ask, a reply, a kept follow-up, boundary c and its summary row. Cut = ASOF
+// boundary 4. Leaf 1's summary row has no timestamp, leaf 2's is stamped after T_N (but sits before N in the file), leaf 3's is
+// stamped before T_N, and leaf 4 is N, whose summary is stamped after T_N and stays visible through the cut's own summary.
+// Every leaf's boundary entry is stamped at or before T_N and sits at or before N, so the boundary alone shows all four.
+describe.skipIf(process.platform === 'darwin')('D-6282: a leaf other than N is hidden when its summary row is hidden (W2-2a whole-branch fix wave)', () => {
+  type LCut = Readonly<{
+    asof: string; tsCut: number; boundaryEntryId: number; summaryEntryId: number | null; keptUuids: readonly string[];
+    holdingFileId: number; boundaryLine: number;
+  }>;
+  type LRc = GrepRc & { gen: string | null; scopeArgs: string[]; scope: GrepRc['scope'] & { cut?: LCut | null } };
+  type LRecall = {
+    runGrep(rc: LRc, a: RGrepArgs): GrepVerbResult;
+    runTree(rc: LRc, a: { depth: number; json: boolean }): GrepVerbResult;
+    runDescribe(rc: LRc, a: { target: string; full: boolean; cursor: string | null; json: boolean }): GrepVerbResult;
+    runExpand(rc: LRc, a: { target: string; around: null; before: number; after: number; cursor: null; json: boolean }): GrepVerbResult;
+    asOfCutOf(rc: { db: RDatabaseSync }, asof: string): { ok: boolean; cut: LCut };
+  };
+  const X = 'claude-a-w2d36';
+  const TXC = '2d36cccc-0000-4000-8000-000000000001';
+  const GX = '0189abcd-1234-4678-9abc-00000000d361';
+  const T0 = Date.UTC(2026, 9, 3, 10, 0, 0);
+  const tsOf = (k: number): string => new Date(T0 + k * 1000).toISOString();
+  const msOf = (k: number): number => T0 + k * 1000;
+  /** Cycle c: u(5c-4) the ask, u(5c-3) the reply, u(5c-2) the kept follow-up, u(5c-1) the boundary, u(5c) its summary. */
+  const u = (i: number): string => `2d36eeee-0000-4000-8000-${i.toString(16).padStart(12, '0')}`;
+  const bnd = (c: number): string => u(5 * c - 1);
+  const sum = (c: number): string => u(5 * c);
+  const pre7 = (id: string): string => id.slice(0, 7);
+  const all = (r: GrepVerbResult): string => JSON.stringify(r);
+  let box: rH.HistoryBox;
+  let R: LRecall;
+  let L: string[] = [];
+  let cut: LCut;
+
+  function rows(): rFx.Row[] {
+    const out: rFx.Row[] = [];
+    const base = { sessionId: TXC, cwd: '/home/u/worktrees/p/quiet-basin' };
+    for (let c = 1; c <= 4; c += 1) {
+      out.push(rFx.userRow({ ...base, uuid: u(5 * c - 4), ts: tsOf(10 * c), text: `zqw2d36ask${c} fixture request` }));
+      out.push(rFx.assistantRow({ ...base, uuid: u(5 * c - 3), ts: tsOf(10 * c + 1), text: `zqw2d36reply${c} fixture answer`, requestId: `req_w2d36_${c}`, msgId: `msg_w2d36_${c}` }));
+      out.push(rFx.userRow({ ...base, uuid: u(5 * c - 2), ts: tsOf(10 * c + 2), text: `zqw2d36kept${c} fixture follow-up` }));
+      out.push(rFx.boundaryRow({ ...base, uuid: bnd(c), ts: tsOf(10 * c + 3), trigger: 'manual', headUuid: u(5 * c - 2), anchorUuid: sum(c), tailUuid: u(5 * c - 2), allUuids: [u(5 * c - 2)] }));
+      const row = rFx.summaryRow({ ...base, uuid: sum(c), ts: tsOf(c === 2 ? 90 : 10 * c + 4), text: [
+        'This session is being continued from a previous conversation. The summary below covers the earlier portion.',
+        '<summary>', '1. Primary Request and Intent:', `   The fixture request ${c}.`,
+        '8. Current Work:', `   Wrote zqw2d36gist${c} of the fixture.`,
+        '9. Optional Next Step:', `   Continue past zqw2d36gist${c}.`, '</summary>',
+      ].join('\n') });
+      if (c === 1) delete row['timestamp'];   // leaf 1's summary row has no stamp: hidden under every cut (W2-D34)
+      out.push(row);
+    }
+    return out;
+  }
+
+  async function rcOf(c: LCut | null | undefined): Promise<LRc> {
+    const rc = await GRX.rc(box, X);
+    return { ...rc, gen: rc.scope.generation, scopeArgs: [], scope: { ...rc.scope, ...(c === undefined ? {} : { cut: c }) } };
+  }
+  async function under<T>(c: LCut | null | undefined, f: (rc: LRc) => T): Promise<T> {
+    const rc = await rcOf(c);
+    try { return f(rc); } finally { rc.db.close(); }
+  }
+  const describeOf = (target: string) => (rc: LRc): GrepVerbResult => R.runDescribe(rc, { target, full: false, cursor: null, json: true });
+  const expandOf = (target: string) => (rc: LRc): GrepVerbResult => R.runExpand(rc, { target, around: null, before: 5, after: 5, cursor: null, json: true });
+  const treeOf = (rc: LRc): GrepVerbResult => R.runTree(rc, { depth: 3, json: true });
+  const leafIds = (r: GrepVerbResult): string[] => r.items.filter((i) => i['kind'] === 'native_leaf').map((i) => String(i['node_id'])).sort();
+  const ans = (r: GrepVerbResult): unknown[] => [r.exit, r.reason];
+  /** `f` after `sql` ran on the store, then the store put back by `undo`. */
+  async function patched<T>(sql: string, args: Array<string | number | null>, undo: string, undoArgs: Array<string | number | null>, f: () => Promise<T>): Promise<T> {
+    const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+    try {
+      expect(Number(w.prepare(sql).run(...args).changes), `CONTROL: ${sql} took`).toBe(1);
+      return await f();
+    } finally {
+      w.prepare(undo).run(...undoArgs);
+      w.close();
+    }
+  }
+
+  beforeAll(async () => {
+    box = rH.makeHistoryBox('ccrc-hist-w2d36-');
+    rH.seedFamily(box, { id: X, project: 'demo', uuid: TXC, generation: GX, rows: rows() });
+    for (let i = 0; i < 2; i += 1) { const s = rH.runSweep(box); expect(s.code, s.stderr).toBe(0); }
+    R = (await import('../../ccd/history/recall.mjs')) as unknown as LRecall;
+    const db = rH.openStoreRO(box);
+    try {
+      const leaves = db.prepare(`SELECT n.node_id AS node_id, e.uuid AS b FROM nodes n JOIN entries e ON e.entry_id = n.boundary_entry_id
+        WHERE n.kind <> 'condensed'`).all() as unknown as { node_id: string; b: string }[];
+      L = [1, 2, 3, 4].map((c) => leaves.find((r) => r.b === bnd(c))?.node_id ?? '');
+      const got = R.asOfCutOf({ db }, bnd(4));
+      expect(got.ok, JSON.stringify(got)).toBe(true);
+      cut = got.cut;
+    } finally { db.close(); }
+  }, 4 * HEAVY);
+
+  it('the fixture: four derived leaves, each naming its summary row\'s blob; leaf 1\'s row has no stamp, leaf 2\'s is stamped after T_N, leaf 3\'s before, N\'s after and exempt', () => {
+    expect(L.every((id) => /^L[0-9a-f]{20}$/.test(id)), L.join(' ')).toBe(true);
+    const db = rH.openStoreRO(box);
+    try {
+      const stamp = (uuid: string): number | null => (db.prepare('SELECT ts_ms FROM entries WHERE uuid = ?').get(uuid) as { ts_ms: number | null }).ts_ms;
+      expect([stamp(sum(1)), stamp(sum(2)), stamp(sum(3)), stamp(sum(4))]).toEqual([null, msOf(90), msOf(34), msOf(44)]);
+      expect(cut.tsCut, 'T_N is boundary 4\'s own stamp').toBe(msOf(43));
+      expect([stamp(bnd(1)), stamp(bnd(2)), stamp(bnd(3))].every((t) => t !== null && t <= cut.tsCut), 'every other boundary is stamped at or before T_N').toBe(true);
+      for (let c = 1; c <= 4; c += 1) {
+        const same = db.prepare(`SELECT (n.summary_blob_id = e.blob_id) AS same FROM nodes n JOIN entries e ON e.uuid = ? WHERE n.node_id = ?`).get(sum(c), L[c - 1]!) as { same: number };
+        expect(same.same, `leaf ${c} names the blob of its summary row (the pick)`).toBe(1);
+      }
+      expect(cut.summaryEntryId, 'N\'s summary is the cut\'s own').toBe(Number((db.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(sum(4)) as { entry_id: number }).entry_id));
+    } finally { db.close(); }
+  });
+
+  it('tree and describe: leaves 1 and 2 are hidden under ASOF=4, leaves 3 and 4 shown; with no cut all four are', async () => {
+    const open = await under(undefined, (rc) => R.runTree(rc, { depth: 3, json: true }));
+    expect(open.exit, all(open)).toBe(0);
+    expect(leafIds(open), 'CONTROL: with no cut all four').toEqual([...L].sort());
+    const r = await under(cut, (rc) => R.runTree(rc, { depth: 3, json: true }));
+    expect(r.exit, all(r)).toBe(0);
+    expect(leafIds(r)).toEqual([L[2]!, L[3]!].sort());
+    for (const g of ['zqw2d36gist1', 'zqw2d36gist2']) expect(all(r), g).not.toContain(g);
+    for (const id of [L[0]!, L[1]!]) expect(all(r), id).not.toContain(pre7(id));
+    for (const g of ['zqw2d36gist3', 'zqw2d36gist4']) expect(all(r), `${g} stays`).toContain(g);
+    for (const [k, id] of [[1, L[0]!], [2, L[1]!]] as const) {
+      expect(all(await under(undefined, describeOf(id))), `CONTROL: leaf ${k} describes with no cut`).toContain(`zqw2d36gist${k}`);
+      for (const target of [id, pre7(id)]) {
+        const d = await under(cut, describeOf(target));
+        expect(ans(d), `describe ${target}`).toEqual([3, undefined]);
+        expect(all(d), `describe ${target}`).not.toContain(`zqw2d36gist${k}`);
+      }
+    }
+    for (const [k, id] of [[3, L[2]!], [4, L[3]!]] as const) {
+      const d = await under(cut, describeOf(id));
+      expect(d.exit, all(d)).toBe(0);
+      expect(all(d), `leaf ${k}'s gist`).toContain(`zqw2d36gist${k}`);
+    }
+  }, HEAVY);
+
+  it('grep: a hit under a leaf with a hidden summary row groups under the live tail and prints neither its id nor its gist; --node and expand of it are exit 3', async () => {
+    for (const k of [1, 2]) {
+      const a = await GRX.grepArgs([`zqw2d36ask${k}`]);
+      const open = await under(undefined, (rc) => R.runGrep(rc, a));
+      expect(open.items.map((i) => i['node_id']), `CONTROL ${k}: with no cut the row groups under its leaf`).toEqual([L[k - 1]]);
+      expect(open.blocks.join('\n'), `CONTROL ${k}: the leaf header carries its gist`).toContain(`zqw2d36gist${k}`);
+      const r = await under(cut, (rc) => R.runGrep(rc, a));
+      expect(r.exit, all(r)).toBe(0);
+      expect(r.items.map((i) => i['node_id']), `the row is visible, its only leaf is not`).toEqual([null]);
+      expect(r.blocks[0]!.split('\n')[0]).toBe('── live tail (rows no leaf covers yet)');
+      expect(all(r)).not.toContain(pre7(L[k - 1]!));
+      expect(all(r)).not.toContain(`zqw2d36gist${k}`);
+      const node = await GRX.grepArgs(['--node', L[k - 1]!, `zqw2d36ask${k}`]);
+      expect(ans(await under(cut, (rc) => R.runGrep(rc, node))), `grep --node leaf ${k}`).toEqual([3, undefined]);
+      expect(ans(await under(cut, expandOf(L[k - 1]!))), `expand leaf ${k}`).toEqual([3, undefined]);
+    }
+    const a3 = await GRX.grepArgs(['zqw2d36ask3']);
+    const r3 = await under(cut, (rc) => R.runGrep(rc, a3));
+    expect(r3.items.map((i) => i['node_id']), 'leaf 3 groups its row, its summary row being visible').toEqual([L[2]]);
+    expect(r3.blocks.join('\n')).toContain('zqw2d36gist3');
+  }, 2 * HEAVY);
+
+  it('CONTROLs: the same leaves are visible once their summary rows are stamped at or before T_N; a leaf with no stored summary and no pick is judged by its boundary alone; an anchor on the boundary itself picks the first summary after it', async () => {
+    const seen = async (): Promise<number[]> => Promise.all([L[0]!, L[1]!].map(async (id) => (await under(cut, describeOf(id))).exit));
+    expect(await seen(), 'both are hidden to begin with').toEqual([3, 3]);
+    const stamped = await patched('UPDATE entries SET ts_ms = ? WHERE uuid = ?', [msOf(30), sum(2)], 'UPDATE entries SET ts_ms = ? WHERE uuid = ?', [msOf(90), sum(2)], seen);
+    expect(stamped, 'leaf 2\'s summary row stamped at or before T_N: leaf 2 shows, leaf 1 stays hidden').toEqual([3, 0]);
+    const nulled = await patched('UPDATE entries SET ts_ms = ? WHERE uuid = ?', [msOf(30), sum(1)], 'UPDATE entries SET ts_ms = NULL WHERE uuid = ? AND ? IS NOT NULL', [sum(1), 1], seen);
+    expect(nulled, 'leaf 1\'s summary row stamped: leaf 1 shows, leaf 2 stays hidden').toEqual([0, 3]);
+    // A leaf with no stored summary_blob_id (a raw leaf as derivation writes one) and no pick is judged by its boundary alone (D-6282);
+    // one whose stored blob is kept while its pick goes is hidden, the D-6284 rule (history-recall's D-6284 describe below pins it).
+    const blobless = <T,>(f: () => Promise<T>): Promise<T> => patched('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?', [L[1]!],
+      'UPDATE nodes SET summary_blob_id = (SELECT blob_id FROM entries WHERE uuid = ?) WHERE node_id = ?', [sum(2), L[1]!], f);
+    const raw = await patched('UPDATE boundaries SET anchor_uuid = NULL WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [bnd(2)],
+      'UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [sum(2), bnd(2)], () => blobless(seen));
+    expect(raw, 'no stored summary and no anchor, no pick (a raw leaf): leaf 2 is judged by its boundary alone and shows').toEqual([3, 0]);
+    const rawKept = await patched('UPDATE boundaries SET anchor_uuid = NULL WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [bnd(2)],
+      'UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [sum(2), bnd(2)], seen);
+    expect(rawKept, 'CONTROL: the same with its stored summary kept (D-6284): the pick is gone, so leaf 2 is hidden').toEqual([3, 3]);
+    const self = await patched('UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [bnd(2), bnd(2)],
+      'UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [sum(2), bnd(2)], seen);
+    expect(self, 'the anchor names the boundary itself: the pick is the first summary row after it, leaf 2\'s own, hidden').toEqual([3, 3]);
+    const db = rH.openStoreRO(box);
+    const kindOf = db.prepare('SELECT provenance FROM entries WHERE uuid = ?').get(sum(2)) as { provenance: string };
+    db.close();
+    const echo = await patched('UPDATE entries SET provenance = ? WHERE uuid = ?', ['harness', sum(2)],
+      'UPDATE entries SET provenance = ? WHERE uuid = ?', [kindOf.provenance, sum(2)], () => blobless(seen));
+    expect(echo, 'the anchored row is an echo row (user, harness), which summaryRowFor refuses: no pick, and (no stored summary) leaf 2 shows').toEqual([3, 0]);
+    const echoKept = await patched('UPDATE entries SET provenance = ? WHERE uuid = ?', ['harness', sum(2)],
+      'UPDATE entries SET provenance = ? WHERE uuid = ?', [kindOf.provenance, sum(2)], seen);
+    expect(echoKept, 'CONTROL: the same with its stored summary kept (D-6284): leaf 2 is hidden').toEqual([3, 3]);
+    expect(await seen(), 'CONTROL: the store is put back').toEqual([3, 3]);
+  }, 2 * HEAVY);
+
+  // ── review 778's F2 and F7 (D-6284): a leaf's STORED summary, and a summary row outside N's holding copy ─────────────────
+  // Nested here for the fixture: leaf 3 is the target. Its boundary is stamped at or before T_N and its summary row S3 before T_N,
+  // so under ASOF=4 it is visible (the CONTROL of each case). Each case plants the later state of the store by SQL, as cut-A7
+  // does, and puts it back: the sweep retires a copy on an inode recycle and ingests the live one that replaces it, and
+  // derivation never re-derives a boundary that has a node, so the stored summary_blob_id outlives the copy that named it.
+  describe('D-6284: a leaf other than N is hidden when its stored summary is no longer the read-time pick\'s (review 778 F2), and when its summary row sits outside N\'s holding copy, stamped after T_N (F7)', () => {
+    type Seen = { describe: unknown[]; tree: string[]; node: unknown[]; expand: unknown[]; grep: unknown[]; gist: boolean };
+    const VISIBLE = (): Seen => ({ describe: [0, undefined], tree: [L[2]!, L[3]!].sort(), node: [0, undefined], expand: [0, undefined], grep: [L[2]], gist: true });
+    const HIDDEN = (): Seen => ({ describe: [3, undefined], tree: [L[3]!], node: [3, undefined], expand: [3, undefined], grep: [null], gist: false });
+    /** Leaf 3 at every door cheap to check: describe, tree (leaves 3 and 4 only: the other two are the D-6282 describe's), grep --node, expand, a grep hit on its ask row, and whether its gist is printed. */
+    async function observe(c: LCut | null | undefined): Promise<Seen> {
+      const d = await under(c, describeOf(L[2]!));
+      const t = await under(c, treeOf);
+      const n = await GRX.grepArgs(['--node', L[2]!, 'zqw2d36ask3']);
+      const g = await GRX.grepArgs(['zqw2d36ask3']);
+      const gr = await under(c, (rc) => R.runGrep(rc, g));
+      return {
+        describe: ans(d), tree: leafIds(t).filter((id) => id === L[2] || id === L[3]), node: ans(await under(c, (rc) => R.runGrep(rc, n))), expand: ans(await under(c, expandOf(L[2]!))),
+        grep: gr.items.map((i) => i['node_id']), gist: [d, t, gr].some((r) => all(r).includes('zqw2d36gist3')),
+      };
+    }
+    /** `f` with `plant` applied to the store, then every undo run in reverse order and the store closed. */
+    async function planted<T>(plant: (w: RDatabaseSync, undo: Array<() => void>) => void, f: () => Promise<T>): Promise<T> {
+      const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+      const undo: Array<() => void> = [];
+      try { plant(w, undo); return await f(); } finally { for (const u of undo.reverse()) u(); w.close(); }
+    }
+    const idOf = (w: RDatabaseSync, uuid: string): number => Number((w.prepare('SELECT entry_id AS n FROM entries WHERE uuid = ?').get(uuid) as { n: number }).n);
+    /** A new live copy of the cut's holding copy's transcript, empty; its undo removes its memberships and then it. */
+    function newCopy(w: RDatabaseSync, undo: Array<() => void>): number {
+      const fb = Number((w.prepare('SELECT max(file_id) AS n FROM ingest_files').get() as { n: number }).n) + 1;
+      expect(Number(w.prepare(`INSERT INTO ingest_files (file_id, dev, ino, source_key, transcript_pk, status, parser_version)
+        SELECT ?, 777, 777, '', transcript_pk, status, parser_version FROM ingest_files WHERE file_id = ?`).run(fb, cut.holdingFileId).changes), 'CONTROL: the live copy took').toBe(1);
+      undo.push(() => { w.prepare('DELETE FROM memberships WHERE file_id = ?').run(fb); w.prepare('DELETE FROM ingest_files WHERE file_id = ?').run(fb); });
+      return fb;
+    }
+    function retire(w: RDatabaseSync, undo: Array<() => void>): void {
+      expect(Number(w.prepare("UPDATE ingest_files SET source_key = 'retired' WHERE file_id = ?").run(cut.holdingFileId).changes), 'CONTROL: the first copy is retired').toBe(1);
+      undo.push(() => { w.prepare("UPDATE ingest_files SET source_key = '' WHERE file_id = ?").run(cut.holdingFileId); });
+    }
+    /** What the store says of leaf 3's pick: its entry id (NULL for none), whether the cut shows that row, and the stored blob against the pick's. */
+    function pickOfLeaf3(): { entry: number | null; shown: boolean | null; stored: number | null; pickBlob: number | null } {
+      const db = rH.openStoreRO(box);
+      try {
+        const pick = db.prepare(libRead.asOfSummaryPickSql()).get({ asof_nodes: JSON.stringify([L[2]]) }) as unknown as { entry_id: number | null };
+        const entry = pick.entry_id === null ? null : Number(pick.entry_id);
+        const shown = entry === null ? null
+          : db.prepare(libRead.asOfVisibleEntriesSql()).all({ ...libRead.asOfBinds(cut), asof_entries: JSON.stringify([entry]) }).length === 1;
+        const stored = (db.prepare('SELECT summary_blob_id AS b FROM nodes WHERE node_id = ?').get(L[2]!) as { b: number | null }).b;
+        const pickBlob = entry === null ? null : Number((db.prepare('SELECT blob_id AS b FROM entries WHERE entry_id = ?').get(entry) as { b: number }).b);
+        return { entry, shown, stored: stored === null ? null : Number(stored), pickBlob };
+      } finally { db.close(); }
+    }
+
+    it('the stored summary names a blob the read-time pick no longer finds: copy F_a, which held leaf 3\'s summary row, is retired and a live copy without it holds the boundary (a NULL pick)', async () => {
+      expect(await observe(cut), 'CONTROL: before the plant, leaf 3 is visible under ASOF=4').toEqual(VISIBLE());
+      const before = pickOfLeaf3();
+      expect([before.shown, before.stored !== null, before.stored === before.pickBlob], 'CONTROL: the pick is shown and is the stored blob').toEqual([true, true, true]);
+      const sumId = ((): number => { const w = rH.openStoreRO(box); try { return Number((w.prepare('SELECT entry_id AS n FROM entries WHERE uuid = ?').get(sum(3)) as { n: number }).n); } finally { w.close(); } })();
+      await planted((w, undo) => {
+        const fb = newCopy(w, undo);
+        w.prepare('INSERT INTO memberships (file_id, entry_id, line) SELECT ?, entry_id, line FROM memberships WHERE file_id = ? AND entry_id <> ?').run(fb, cut.holdingFileId, sumId);
+        retire(w, undo);
+      }, async () => {
+        const now = pickOfLeaf3();
+        expect([now.entry, now.stored === before.stored], 'CONTROL: the read-time pick is NULL, the stored blob is what derivation stored').toEqual([null, true]);
+        expect(await observe(undefined), 'CONTROL: with no cut leaf 3 is visible at every door').toEqual(VISIBLE());
+        expect(await observe(cut), 'under ASOF=4 leaf 3 is hidden at every door and its gist is printed nowhere').toEqual(HIDDEN());
+      });
+      expect(await observe(cut), 'CONTROL: the store is put back').toEqual(VISIBLE());
+    }, 3 * HEAVY);
+
+    it('the read-time pick names another blob than the stored one: a self-anchored leaf 3 whose live copy holds a different compact summary after its boundary, stamped at or before T_N (a pick the cut shows)', async () => {
+      expect(await observe(cut), 'CONTROL: before the plant, leaf 3 is visible under ASOF=4').toEqual(VISIBLE());
+      const before = pickOfLeaf3();
+      const other = 'ffffffff-0000-4000-8000-000000000001';
+      await planted((w, undo) => {
+        const b3 = idOf(w, bnd(3));
+        expect(Number(w.prepare('UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = ?').run(bnd(3), b3).changes), 'CONTROL: leaf 3 is anchored on its own boundary').toBe(1);
+        undo.push(() => { w.prepare('UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = ?').run(sum(3), b3); });
+        expect(Number(w.prepare(`INSERT INTO entries (uuid, transcript_pk, type, ts_ms, is_compact_summary, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id)
+          SELECT ?, transcript_pk, type, ?, 1, provenance, prov_version, struct_rank_ns, struct_file_id, (SELECT blob_id FROM entries WHERE uuid = ?)
+          FROM entries WHERE uuid = ?`).run(other, msOf(35), sum(1), sum(3)).changes), 'CONTROL: a second compact summary, another blob').toBe(1);
+        undo.push(() => { w.prepare('DELETE FROM entries WHERE uuid = ?').run(other); });
+        const fb = newCopy(w, undo);
+        const line = Number((w.prepare('SELECT line AS n FROM memberships WHERE file_id = ? AND entry_id = ?').get(cut.holdingFileId, b3) as { n: number }).n);
+        w.prepare('INSERT INTO memberships (file_id, entry_id, line) SELECT ?, entry_id, CASE WHEN line > ? THEN line + 1 ELSE line END FROM memberships WHERE file_id = ?').run(fb, line, cut.holdingFileId);
+        w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)').run(fb, idOf(w, other), line + 1);
+        retire(w, undo);
+      }, async () => {
+        const now = pickOfLeaf3();
+        const db = rH.openStoreRO(box);
+        try {
+          expect(now.entry, 'CONTROL: the read-time pick is the second summary row').toBe(Number((db.prepare('SELECT entry_id AS n FROM entries WHERE uuid = ?').get(other) as { n: number }).n));
+        } finally { db.close(); }
+        expect(now.shown, 'CONTROL: the cut shows that row, so the D-6282 arm alone keeps leaf 3').toBe(true);
+        expect([now.stored === before.stored, now.pickBlob !== now.stored], 'CONTROL: the stored blob is unchanged and is not the pick\'s').toEqual([true, true]);
+        expect(await observe(undefined), 'CONTROL: with no cut leaf 3 is visible at every door').toEqual(VISIBLE());
+        expect(await observe(cut), 'under ASOF=4 leaf 3 is hidden at every door and its gist is printed nowhere').toEqual(HIDDEN());
+      });
+      expect(await observe(cut), 'CONTROL: the store is put back').toEqual(VISIBLE());
+    }, 3 * HEAVY);
+
+    it('F7: a summary row outside N\'s holding copy, stamped after T_N, hides its leaf whose boundary the cut shows; stamped at or before T_N it does not', async () => {
+      expect(await observe(cut), 'CONTROL: before the plant, leaf 3 is visible under ASOF=4').toEqual(VISIBLE());
+      let b3 = 0;
+      let s3 = 0;
+      await planted((w, undo) => {
+        b3 = idOf(w, bnd(3));
+        s3 = idOf(w, sum(3));
+        const fb = newCopy(w, undo);
+        w.prepare('INSERT INTO memberships (file_id, entry_id, line) SELECT ?, entry_id, line FROM memberships WHERE file_id = ?').run(fb, cut.holdingFileId);
+        const gone = w.prepare('SELECT entry_id, line FROM memberships WHERE file_id = ? AND entry_id IN (?, ?)').all(cut.holdingFileId, b3, s3) as unknown as Array<{ entry_id: number; line: number }>;
+        expect(gone.length, 'CONTROL: N\'s holding copy held the boundary and the summary row').toBe(2);
+        w.prepare('DELETE FROM memberships WHERE file_id = ? AND entry_id IN (?, ?)').run(cut.holdingFileId, b3, s3);
+        undo.push(() => { for (const g of gone) w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)').run(cut.holdingFileId, g.entry_id, g.line); });
+      }, async () => {
+        const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+        try {
+          const held = (e: number): unknown => w.prepare('SELECT count(*) AS n FROM memberships WHERE file_id = ? AND entry_id = ?').get(cut.holdingFileId, e);
+          expect([held(b3), held(s3)], 'CONTROL: neither the boundary nor the summary row is in N\'s holding copy').toEqual([{ n: 0 }, { n: 0 }]);
+          expect(await observe(cut), 'summary row stamped at or before T_N: leaf 3 shows (the stamp is what hides it below)').toEqual(VISIBLE());
+          expect(Number(w.prepare('UPDATE entries SET ts_ms = ? WHERE entry_id = ?').run(msOf(90), s3).changes), 'CONTROL: the plant took').toBe(1);
+          try {
+            expect(msOf(90), 'CONTROL: stamped after T_N').toBeGreaterThan(cut.tsCut);
+            expect(await observe(undefined), 'CONTROL: with no cut leaf 3 is visible at every door').toEqual(VISIBLE());
+            expect(await observe(cut), 'stamped after T_N, outside the holding copy: leaf 3 is hidden at every door').toEqual(HIDDEN());
+          } finally { w.prepare('UPDATE entries SET ts_ms = ? WHERE entry_id = ?').run(msOf(34), s3); }
+        } finally { w.close(); }
+      });
+      expect(await observe(cut), 'CONTROL: the store is put back').toEqual(VISIBLE());
+    }, 4 * HEAVY);
+  });
+});
+
+// ── W2-2a Task 4 (W2-D37, W2-D38): the remaining doors of the as-of cut ──────────────────────────────────────────
+// The regex child applies lib's one predicate with the values the parent binds; the grep and expand cursors are bound to
+// the cut; the header and the --json scope count and name only what the cut leaves visible. In-process: no W2-2a CLI path
+// sets a cut (W2-2b's env path does), so every cut here rides on rc.scope.cut, built by Task 2's store half.
+//
+// The fixture: one family whose first transcript holds boundary N (e6, kept(N) = [e5]) and boundary N+1 (e13), then a
+// /clear epoch and another family of the project, both stamped long after N. Under N: e1-e3 are visible by stamp; e4 has
+// no stamp and is outside kept(N), so it is hidden; e5 has no stamp but is kept(N), so it is visible; e8 is after N;
+// e9 is stamped before T_N but written after N's boundary in its holding copy (the positional clause), and a second copy
+// of the transcript rewrites its body, so hidden e9 has a variant; out44.txt is the sidecar of hidden e11; orphan44.txt is
+// a sidecar no row names (a NULL entry_id).
+describe.skipIf(process.platform === 'darwin')('W2-D37 and W2-D38: the regex child, the cursors and the header under an as-of cut (W2-2a Task 4)', () => {
+  const ID = 'claude-a-asof4';
+  const OID = 'claude-a-asof4o';
+  const G = '0189abcd-1234-4678-9abc-00000000a5f4';
+  const GO = '0189abcd-1234-4678-9abc-00000000b5f4';
+  const T1 = 'a5f40001';
+  const T2 = 'a5f40002';
+  const TO = 'a5f40003';
+  const U1 = t16uuid(T1, 0);
+  const U2 = t16uuid(T2, 0);
+  const UO = t16uuid(TO, 0);
+  const e = (i: number): string => t16uuid(T1, i);
+  const LONG = `zqasoflong ${'plain words '.repeat(3000)}end`;
+  const STALE_GREP = 'that --cursor belongs to another query, scope or filter; run the query again without it';
+  const STALE_EXPAND = 'that --cursor belongs to another expansion';
+  type Cut = {
+    asof: string; tsCut: number; boundaryEntryId: number; summaryEntryId: number | null; keptUuids: readonly string[];
+    holdingFileId: number; boundaryLine: number;
+  };
+  type CutRc = GrepRc & { scope: { cut?: Cut | null } };
+  type Job = Record<string, unknown> & { cut: Record<string, unknown> | null };
+  type Recall = {
+    runGrep(rc: CutRc, a: RGrepArgs, deps?: GrepDeps): GrepVerbResult;
+    runExpand(rc: CutRc, a: Record<string, unknown>): GrepVerbResult;
+    runTree(rc: CutRc & { scopeArgs: string[] }, a: { depth: number; json: boolean }): GrepVerbResult;
+    scopeHeader(rc: CutRc): { line: string; indexedThroughMs: number | null; lagS: number | null };
+    scopeJsonOf(rc: CutRc): { kind: string; id: string; project: string | null; families: Array<{ ccrc_id: string; generation: string; first_seen_ms: number }>; families_total: number; transcripts: number };
+    asOfCutOf(rc: CutRc, asof: string): { ok: true; cut: Cut } | { ok: false; rc: 2; reason: 'asof-invalid' };
+  };
+  type Worker = { scanRegexJob(job: Record<string, unknown>): { matches: Array<{ blob_id: number; match: string }>; scanned: number } };
+  const L = libRead as unknown as { asOfBinds(c: Cut): Record<string, unknown>; expandCursorKey(k: string, a: string | null): string };
+  let box: rH.HistoryBox;
+  const rec = async (): Promise<Recall> => (await import('../../ccd/history/recall.mjs')) as unknown as Recall;
+  const withCut = (rc: GrepRc, cut: Cut | null): CutRc => ({ ...rc, scope: { ...rc.scope, cut } });
+  /** The cut at boundary `uuid`, through Task 2's store half (W2-D39, R2): every case's cut comes through it, and the
+   *  fixture case's CONTROL deep-equals it against the cut sqlCutAt measures. */
+  const cutAt = async (rc: GrepRc, uuid: string): Promise<Cut> => {
+    const r = (await rec()).asOfCutOf(rc, uuid);
+    if (!r.ok) throw new Error(`fixture: boundary ${uuid} gave no cut (${r.reason})`);
+    return r.cut;
+  };
+  /** W2-D38's cut for boundary `uuid`, measured with SQL as W2-D34 defines it, without asOfCutOf (R2), as Task 2's cutAt
+   *  measures it: the boundary's own stamp, its holding copy by lib's pickHoldingCopy (a live copy first, then the lowest
+   *  file_id) and its line there, the summary row its anchor names, and the kept set the fixture's boundary keeps. */
+  function sqlCutAt(db: RDatabaseSync, uuid: string, kept: string[]): Cut {
+    const b = db.prepare(`SELECT e.entry_id AS entry_id, e.ts_ms AS ts_ms, e.transcript_pk AS tpk, bd.anchor_uuid AS anchor
+      FROM entries e JOIN boundaries bd ON bd.entry_id = e.entry_id WHERE e.uuid = ?`).get(uuid) as unknown as
+      { entry_id: number; ts_ms: number; tpk: number; anchor: string };
+    const copies = db.prepare(`SELECT f.file_id AS file_id, f.source_key AS source_key, mb.line AS line FROM ingest_files f
+      LEFT JOIN memberships mb ON mb.file_id = f.file_id AND mb.entry_id = ? WHERE f.transcript_pk = ? ORDER BY f.file_id`)
+      .all(b.entry_id, b.tpk) as unknown as Array<{ file_id: number; source_key: string; line: number | null }>;
+    expect(copies.filter((x) => x.line !== null), 'CONTROL: two copies hold boundary N').toHaveLength(2);
+    const held = libRead.pickHoldingCopy(copies.map((x) => ({ fileId: Number(x.file_id), live: x.source_key === '', holds: x.line !== null })));
+    const at = copies.find((x) => Number(x.file_id) === held)!;
+    const sum = db.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(b.anchor) as unknown as { entry_id: number };
+    return {
+      asof: uuid, tsCut: Number(b.ts_ms), boundaryEntryId: Number(b.entry_id), summaryEntryId: Number(sum.entry_id),
+      keptUuids: [...kept].sort(), holdingFileId: Number(held), boundaryLine: Number(at.line),
+    };
+  }
+  /** A spawn seam that records each job the parent writes on the child's stdin. With `real`, the child runs as runRegex runs
+   *  it; otherwise it answers "no match" at once, for a case that reads only the job. */
+  const spyOn = (jobs: Job[], real: boolean): GrepDeps['spawn'] => ((cmd: string, args: string[], opts: { input: string }) => {
+    jobs.push(JSON.parse(opts.input) as Job);
+    return real ? spawnSync(cmd, args, opts as never)
+      : { status: 0, signal: null, error: undefined, stdout: `${JSON.stringify({ done: true, scanned: 0, matched: 0 })}\n`, stderr: '' };
+  }) as unknown as GrepDeps['spawn'];
+  const cursorOf = (next: string[] | null): string => {
+    expect(next, 'CONTROL: the page has a next line').not.toBeNull();
+    return next![next!.indexOf('--cursor') + 1]!;
+  };
+  const uuids = (r: GrepVerbResult): unknown[] => r.items.map((x) => x['entry_uuid']);
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-asof4-');
+    const noStamp = (r: rFx.Row): rFx.Row => { const o = { ...r }; delete o['timestamp']; return o; };
+    /** The first transcript's rows. `variant` is its second copy, which rewrites e9's body (a hidden row's variant). */
+    const rows1 = (variant: boolean): rFx.Row[] => [
+      rFx.userRow({ uuid: e(1), ts: t16ts(1), sessionId: U1, text: 'zqasofpage first zqasofpre' }),
+      rFx.assistantRow({ uuid: e(2), ts: t16ts(2), parentUuid: e(1), sessionId: U1, text: 'zqasofpage second', requestId: 'req_a5f4_2', msgId: 'msg_a5f4_2' }),
+      rFx.userRow({ uuid: e(3), ts: t16ts(3), parentUuid: e(2), sessionId: U1, text: LONG }),
+      noStamp(rFx.userRow({ uuid: e(4), ts: t16ts(4), parentUuid: e(3), sessionId: U1, text: 'zqasofnull a row with no stamp' })),
+      noStamp(rFx.userRow({ uuid: e(5), ts: t16ts(5), parentUuid: e(4), sessionId: U1, text: 'zqasofkept kept by boundary N' })),
+      rFx.boundaryRow({ uuid: e(6), ts: t16ts(6), parentUuid: e(5), sessionId: U1, trigger: 'manual', headUuid: e(5), anchorUuid: e(7), tailUuid: e(5), allUuids: [e(5)] }),
+      rFx.summaryRow({ uuid: e(7), ts: t16ts(7), parentUuid: e(6), sessionId: U1, text: t16summary('zqa5f4n') }),
+      rFx.userRow({ uuid: e(8), ts: t16ts(8), parentUuid: e(7), sessionId: U1, text: 'zqasofpage third zqasofpost' }),
+      rFx.userRow({ uuid: e(9), ts: t16ts(5), parentUuid: e(8), sessionId: U1,
+        text: variant ? 'zqasofvar a later copy rewrote this row' : 'zqasofstep stamped before N, written after it' }),
+      rFx.toolUseRow({ uuid: e(10), ts: t16ts(10), parentUuid: e(9), sessionId: U1, toolUseId: 'toolu_01A5F4SIDE', name: 'Bash', input: { command: 'cat out44.log' }, requestId: 'req_a5f4_10', msgId: 'msg_a5f4_10' }),
+      rFx.toolResultRow({ uuid: e(11), ts: t16ts(11), parentUuid: e(10), sessionId: U1, toolUseId: 'toolu_01A5F4SIDE', content: 'Output too large. Full output saved to: tool-results/out44.txt' }),
+      rFx.userRow({ uuid: e(12), ts: t16ts(12), parentUuid: e(11), sessionId: U1, text: 'zqasofmore kept by boundary N+1' }),
+      rFx.boundaryRow({ uuid: e(13), ts: t16ts(13), parentUuid: e(12), sessionId: U1, trigger: 'manual', headUuid: e(12), anchorUuid: e(14), tailUuid: e(12), allUuids: [e(12)] }),
+      rFx.summaryRow({ uuid: e(14), ts: t16ts(14), parentUuid: e(13), sessionId: U1, text: t16summary('zqa5f4m') }),
+    ];
+    const t = t16seed(box, { id: ID, project: 'demo', generation: G, uuid: U1, rows: rows1(false) });
+    // A second copy in another account's home, read after the first (t16scan below), so e9's rewritten body is a variant
+    // and the first copy (the lower file_id) still holds N: the DM2b shape, as Task 2's fixture has it.
+    rH.plantTranscript(box, 'claude-b', path.basename(path.dirname(t)), U1, rows1(true));
+    const dir = path.join(path.dirname(t), U1, 'tool-results');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'out44.txt'), 'zqasofside the sidecar body\n');
+    fs.writeFileSync(path.join(dir, 'orphan44.txt'), 'zqasoforphan nobody names this file\n');
+    // A /clear after N: epoch 2 of the same family, its one row stamped long after T_N (the history-card precedent).
+    rH.plantSession(box, ID, { uuid: U2 });
+    rH.plantTranscript(box, Object.keys(box.accountHome)[0]!, rH.SEED_SLUG, U2,
+      [rFx.userRow({ uuid: t16uuid(T2, 1), ts: t16ts(30), sessionId: U2, text: 'zqasofclear after the clear' })]);
+    rH.spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: U2, src: 'clear', gen: G });
+    const cleared = (): boolean => {
+      const db = rH.openStoreRO(box);
+      try {
+        return Number((db.prepare(`SELECT count(*) AS n FROM epochs ep WHERE ep.cc_session_uuid = ? AND ep.confirmed_ms IS NOT NULL
+          AND EXISTS (SELECT 1 FROM transcripts t JOIN entries x ON x.transcript_pk = t.transcript_pk WHERE t.cc_session_uuid = ep.cc_session_uuid)`)
+          .get(U2) as { n: number }).n) === 1;
+      } finally { db.close(); }
+    };
+    for (let i = 0; i < 4 && !cleared(); i += 1) { const s = rH.runSweep(box); expect(s.code, s.stderr).toBe(0); }
+    expect(cleared(), 'CONTROL: the /clear epoch is confirmed and holds its row').toBe(true);
+    // Another family of the same project, wholly after N.
+    t16seed(box, { id: OID, project: 'demo', generation: GO, uuid: UO,
+      rows: [rFx.userRow({ uuid: t16uuid(TO, 1), ts: t16ts(40), sessionId: UO, text: 'zqasofother another family' })] });
+    t16scan(box);
+  }, 6 * HEAVY);
+
+  it('the fixture: boundary N keeps a row with no stamp, N+1 follows, a hidden row has a variant, a /clear epoch and another family come after N, and the store half measures the SQL-measured cut', async () => {
+    const rc = await GRX.rc(box, ID);
+    try {
+      const cut = await cutAt(rc, e(6));
+      expect([cut.asof, cut.tsCut, [...cut.keptUuids]], 'N, T_N and kept(N)').toEqual([e(6), Date.parse(t16ts(6)), [e(5)]]);
+      const measured = ((): Cut => {
+        const db = rH.openStoreRO(box);
+        try { return sqlCutAt(db, e(6), [e(5)]); } finally { db.close(); }
+      })();
+      expect((await rec()).asOfCutOf(rc, e(6)), 'CONTROL (R2): the store half deep-equals the cut measured with SQL, all seven fields')
+        .toEqual({ ok: true, cut: measured });
+      const variants = Number((rc.db.prepare(`SELECT count(*) AS n FROM entry_variants v JOIN entries x ON x.entry_id = v.entry_id
+        WHERE x.uuid = ? AND v.blob_id <> x.blob_id`).get(e(9)) as { n: number }).n);
+      expect(variants, 'CONTROL: the second copy gave hidden e9 one variant body').toBe(1);
+      const ts = (u: string): unknown => (rc.db.prepare('SELECT ts_ms AS t FROM entries WHERE uuid = ?').get(u) as { t: number | null }).t;
+      expect([ts(e(4)), ts(e(5)), ts(e(9))], 'two rows with no stamp; one written after N, stamped before T_N').toEqual([null, null, Date.parse(t16ts(5))]);
+      expect(rc.db.prepare(`SELECT s.name AS name, x.uuid AS uuid FROM sidecars s LEFT JOIN entries x ON x.entry_id = s.entry_id
+        WHERE s.name IN ('orphan44.txt', 'out44.txt') ORDER BY s.name`).all(), 'one sidecar linked to e11, one linked to nothing')
+        .toEqual([{ name: 'orphan44.txt', uuid: null }, { name: 'out44.txt', uuid: e(11) }]);
+      expect(rc.scope.transcriptPks, 'two confirmed epochs: the first transcript and the /clear one').toHaveLength(2);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D38: the parent hands the regex child the cut as the values it binds, and a row the cut hides is no --regex hit', async () => {
+    const recall = await rec();
+    const rc = await GRX.rc(box, ID);
+    try {
+      const cutN = await cutAt(rc, e(6));
+      const jobs: Job[] = [];
+      const spawn = spyOn(jobs, true);
+      const a = await GRX.grepArgs(['--regex', '[z]qasofpos[t]']);
+      const open = recall.runGrep(rc, a, { spawn, budgetMs: 60_000 });
+      expect([open.exit, uuids(open)], 'CONTROL: with no cut, the row after N is a hit').toEqual([0, [e(8)]]);
+      expect(Object.hasOwn(jobs[0]!, 'cut'), 'with no cut the job says so, never by leaving the key out').toBe(true);
+      expect(jobs[0]!.cut).toBeNull();
+      const cut = recall.runGrep(withCut(rc, cutN), a, { spawn, budgetMs: 60_000 });
+      expect([cut.exit, cut.items, cut.total, cut.hint], 'exit 3 with the reach line, nothing shown or counted').toEqual([3, [], 0, libRead.SEARCH_REACH]);
+      expect(jobs[1]!.cut, 'the job carries lib asOfBinds of the cut, through JSON').toEqual(JSON.parse(JSON.stringify(L.asOfBinds(cutN))));
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D38: the child applies the lib predicate itself: hidden rows, a row with no stamp, a positional hide, a hidden row\'s variant and the sidecars of a hidden row or of none are never scanned', async () => {
+    const recall = await rec();
+    const worker = (await import('../../ccd/history/regex-worker.mjs')) as unknown as Worker;
+    const rc = await GRX.rc(box, ID);
+    try {
+      const cutN = await cutAt(rc, e(6));
+      const jobs: Job[] = [];
+      const spawn = spyOn(jobs, false);
+      const a = await GRX.grepArgs(['--regex', '[z]qasofpr[e]']);
+      recall.runGrep(rc, a, { spawn });
+      recall.runGrep(withCut(rc, cutN), a, { spawn });
+      expect(jobs, 'CONTROL: one job each, as the parent wrote them').toHaveLength(2);
+      const label = new Map<number, string>();
+      const byUuid = (u: string, l: string): void => { label.set(Number((rc.db.prepare('SELECT blob_id AS b FROM entries WHERE uuid = ?').get(u) as { b: number }).b), l); };
+      const byName = (n: string, l: string): void => { label.set(Number((rc.db.prepare('SELECT blob_id AS b FROM sidecars WHERE name = ?').get(n) as { b: number }).b), l); };
+      byUuid(e(1), 'pre'); byUuid(e(8), 'post'); byUuid(e(9), 'step'); byUuid(e(4), 'null'); byUuid(e(5), 'kept');
+      byName('out44.txt', 'side'); byName('orphan44.txt', 'orphan');
+      label.set(Number((rc.db.prepare(`SELECT v.blob_id AS b FROM entry_variants v JOIN entries x ON x.entry_id = v.entry_id
+        WHERE x.uuid = ? AND v.blob_id <> x.blob_id`).get(e(9)) as { b: number }).b), 'stepvar');
+      const P = 'zqasof(?:pre|post|step|null|kept|side|orphan|var)';
+      const scan = (j: Job) => worker.scanRegexJob({ ...j, pattern: P, prefilter: null });
+      const open = scan(jobs[0]!);
+      expect(open.matches.map((m) => label.get(m.blob_id)).sort(), 'CONTROL: with no cut, the child matches every one')
+        .toEqual(['kept', 'null', 'orphan', 'post', 'pre', 'side', 'step', 'stepvar']);
+      const cut = scan(jobs[1]!);
+      expect(cut.matches.map((m) => label.get(m.blob_id)).sort(), 'under N: the row before N and kept(N) only').toEqual(['kept', 'pre']);
+      expect(cut.scanned, 'a hidden candidate is not even scanned').toBeLessThan(open.scanned);
+      const noKey: Record<string, unknown> = { ...jobs[1]!, pattern: P, prefilter: null };
+      delete noKey['cut'];
+      expect(() => worker.scanRegexJob(noKey), 'a job with no cut key is malformed, never read as uncut').toThrow('the job names no cut');
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D38: a kept row reaches the child with the cut, and a row with no stamp outside kept(N) does not: --regex end to end', async () => {
+    const recall = await rec();
+    const rc = await GRX.rc(box, ID);
+    try {
+      const rcN = withCut(rc, await cutAt(rc, e(6)));
+      const run = async (r: CutRc, pattern: string) => recall.runGrep(r, await GRX.grepArgs(['--regex', pattern]), { budgetMs: 60_000 });
+      const kept = await run(rcN, '[z]qasofkep[t]');
+      expect([kept.exit, uuids(kept)], 'kept(N) is visible whatever its stamp').toEqual([0, [e(5)]]);
+      const nul = await run(rcN, '[z]qasofnul[l]');
+      expect([nul.exit, nul.items], 'a row with no stamp outside kept(N) is absent').toEqual([3, []]);
+      const open = await run(rc, '[z]qasofnul[l]');
+      expect([open.exit, uuids(open)], 'CONTROL: with no cut it is a hit').toEqual([0, [e(4)]]);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37: a grep cursor is bound to its cut: minted with none, under N or under N+1, it resumes only under the same one', async () => {
+    const recall = await rec();
+    const rc = await GRX.rc(box, ID);
+    try {
+      const rcN = withCut(rc, await cutAt(rc, e(6)));
+      const rcM = withCut(rc, await cutAt(rc, e(13)));
+      const page = async (r: CutRc, cursor: string | null) =>
+        recall.runGrep(r, await GRX.grepArgs(['zqasofpage', '--limit', '1', ...(cursor === null ? [] : ['--cursor', cursor])]));
+      const u = await page(rc, null);
+      const n = await page(rcN, null);
+      const m = await page(rcM, null);
+      expect([u.total, n.total, m.total], 'CONTROL: the count each cut leaves (e8 is after N, before N+1)').toEqual([3, 2, 3]);
+      const [cu, cn, cm] = [cursorOf(u.next), cursorOf(n.next), cursorOf(m.next)];
+      expect((await page(rc, cu)).exit, 'CONTROL: no cut, then no cut').toBe(0);
+      const nn = await page(rcN, cn);
+      expect([nn.exit, uuids(nn)], 'CONTROL: N then N, the second page').toEqual([0, [e(1)]]);
+      expect((await page(rcM, cm)).exit, 'CONTROL: N+1 then N+1').toBe(0);
+      for (const [name, r, c] of [['none then N', rcN, cu], ['N then none', rc, cn], ['N then N+1', rcM, cn], ['N+1 then N', rcN, cm]] as const) {
+        const s = await page(r, c);
+        expect([s.exit, s.reason, s.hint, s.items, s.total], name).toEqual([2, 'bad-args', STALE_GREP, [], 0]);
+      }
+      // With no cut the key is the one every earlier build printed: its hashed object holds no asof.
+      expect(libRead.decodeCursor(cu, 'grep')!.q).toBe(libRead.sha256Hex(libRead.canonicalJson({
+        words: libRead.sanitizeFtsQuery('zqasofpage'), regex: null, scope: ['family', ID, G],
+        role: null, tool: null, since: null, before: null, node: null, sort: 'recency', recall: false,
+      })).slice(0, 20));
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37: a --regex cursor is bound to its cut the same way, and refused before any child is spawned', async () => {
+    const recall = await rec();
+    const rc = await GRX.rc(box, ID);
+    try {
+      const rcN = withCut(rc, await cutAt(rc, e(6)));
+      const jobs: Job[] = [];
+      const spawn = spyOn(jobs, true);
+      const argv = (cursor: string | null) => GRX.grepArgs(['--regex', '[z]qasofpag[e]', '--limit', '1', ...(cursor === null ? [] : ['--cursor', cursor])]);
+      const n = recall.runGrep(rcN, await argv(null), { spawn, budgetMs: 60_000 });
+      expect([n.exit, n.total], 'CONTROL: under N two hits, e8 hidden').toEqual([0, 2]);
+      expect(recall.runGrep(rc, await argv(null), { spawn, budgetMs: 60_000 }).total, 'CONTROL: with no cut, three').toBe(3);
+      const cn = cursorOf(n.next);
+      const spawned = jobs.length;
+      const s = recall.runGrep(rc, await argv(cn), { spawn, budgetMs: 60_000 });
+      expect([s.exit, s.reason, s.hint], 'N then none').toEqual([2, 'bad-args', STALE_GREP]);
+      expect(jobs.length, 'refused before the child').toBe(spawned);
+      const ok = recall.runGrep(rcN, await argv(cn), { spawn, budgetMs: 60_000 });
+      expect([ok.exit, uuids(ok)], 'CONTROL: N then N').toEqual([0, [e(1)]]);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37: an expand cursor is bound to its cut, with its target and given alone; with no cut its key is the target itself; alone, it resolves its target under the call\'s own cut first', async () => {
+    const recall = await rec();
+    const rc = await GRX.rc(box, ID);
+    try {
+      const rcN = withCut(rc, await cutAt(rc, e(6)));
+      const rcM = withCut(rc, await cutAt(rc, e(13)));
+      const X = (r: CutRc, cursor: string | null, target: string | null) =>
+        recall.runExpand(r, { target, around: null, before: 5, after: 5, cursor, json: true });
+      const mint = (r: CutRc): string => {
+        const p = X(r, null, e(3));
+        expect(p.exit, 'CONTROL: the long row is visible').toBe(0);
+        return cursorOf(p.next);
+      };
+      const [cu, cn, cm] = [mint(rc), mint(rcN), mint(rcM)];
+      expect(libRead.decodeCursor(cu, 'expand')!.t, 'no cut: the key every earlier build printed').toBe(e(3));
+      expect(libRead.decodeCursor(cn, 'expand')!.t).toBe(L.expandCursorKey(e(3), e(6)));
+      const how = (target: string | null): string => (target === null ? 'alone' : 'with its target');
+      for (const [name, r, c] of [['none', rc, cu], ['N', rcN, cn], ['N+1', rcM, cm]] as const) {
+        for (const target of [e(3), null]) {
+          const p = X(r, c, target);
+          expect([p.exit, Number(p.items[0]?.['from'] ?? 0) > 0], `CONTROL ${name} then ${name}, ${how(target)}: the second page`).toEqual([0, true]);
+        }
+      }
+      for (const [name, r, c] of [['none then N', rcN, cu], ['N then none', rc, cn], ['N then N+1', rcM, cn], ['N+1 then N', rcN, cm]] as const) {
+        for (const target of [e(3), null]) {
+          const p = X(r, c, target);
+          expect([p.exit, p.reason, p.hint, p.items], `${name}, ${how(target)}`).toEqual([2, 'bad-args', STALE_EXPAND, []]);
+        }
+      }
+      // A bare --cursor resolves its target under the call's own cut BEFORE the key check: a window minted under N+1 around
+      // e8, which N hides, answers exit 3 under N, never the stale refusal, so it tells nothing about what N+1 showed.
+      const win = recall.runExpand(rcM, { target: null, around: e(8), before: 5, after: 5, cursor: null, json: true });
+      expect(win.exit, 'CONTROL: under N+1 the window around e8 is visible, and e3 outgrows its first page').toBe(0);
+      const cw = cursorOf(win.next);
+      expect(X(rcM, cw, null).exit, 'CONTROL: N+1 then N+1, alone').toBe(0);
+      const gone = X(rcN, cw, null);
+      expect([gone.exit, gone.reason], 'N+1 then N, alone, on a target N hides').toEqual([3, undefined]);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37: the header and the --json scope count only the transcripts the cut leaves visible, in the same grammar', async () => {
+    const recall = await rec();
+    const rc = await GRX.rc(box, ID);
+    try {
+      const rcN = withCut(rc, await cutAt(rc, e(6)));
+      const GRAMMAR = /^scope=family\(claude-a-asof4, (\d+) transcripts\) coverage=this-box indexed-through=\S+ lag=\S+$/;
+      expect(GRAMMAR.exec(recall.scopeHeader(rc).line)?.[1], 'CONTROL: with no cut, the /clear transcript counts').toBe('2');
+      expect(GRAMMAR.exec(recall.scopeHeader(rcN).line)?.[1], 'under N, the /clear transcript holds nothing visible').toBe('1');
+      expect(recall.scopeJsonOf(rc).transcripts, 'CONTROL').toBe(2);
+      expect(recall.scopeJsonOf(rcN)).toEqual({
+        kind: 'family', id: ID, project: 'demo', families: [{ ccrc_id: ID, generation: G, first_seen_ms: rc.scope.families[0]!.firstSeenMs }],
+        families_total: 1, transcripts: 1,
+      });
+      // One definition: cli.mjs's --json envelope prints recall.mjs's object, and builds none of its own.
+      const read = (f: string): string => fs.readFileSync(path.join(REPO, 'ccd', 'history', f), 'utf8');
+      const cliText = read('cli.mjs');
+      expect(cliText).toContain('scope: scopeJsonOf(rc),');
+      expect(cliText).not.toMatch(/^function scopeJson\(/m);
+      expect(cliText).not.toContain('transcripts: rc.scope.transcriptPks.length');
+      expect(cliText).not.toContain('families_total:');
+      expect(read('recall.mjs')).not.toMatch(/^function jsonScope\(/m);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37: a widened header counts and names only the families with a visible epoch', async () => {
+    const recall = await rec();
+    const a = await GRX.rc(box, ID);
+    const b = await GRX.rc(box, OID);
+    try {
+      const proj: GrepRc = { ...a, scope: { ...a.scope, kind: 'project', id: ID, generation: null, project: 'demo',
+        sessionPks: [...a.scope.sessionPks, ...b.scope.sessionPks],
+        transcriptPks: [...a.scope.transcriptPks, ...b.scope.transcriptPks].sort((x, y) => x - y),
+        families: [...a.scope.families, ...b.scope.families] } };
+      const projN = withCut(proj, await cutAt(a, e(6)));
+      expect(recall.scopeHeader(proj).line, 'CONTROL').toMatch(/^scope=project\(demo, 2 families\) coverage=this-box /);
+      expect(recall.scopeHeader(projN).line).toMatch(/^scope=project\(demo, 1 families\) coverage=this-box /);
+      expect(recall.scopeJsonOf(proj).families_total, 'CONTROL').toBe(2);
+      const j = recall.scopeJsonOf(projN);
+      expect([j.families_total, j.transcripts, j.families.map((f) => f.ccrc_id)]).toEqual([1, 1, [ID]]);
+      expect(JSON.stringify(j), 'the hidden family is not named, nor is its generation').not.toMatch(new RegExp(`${OID}|${GO}`));
+    } finally { a.db.close(); b.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37 and R8 (SEC-1): a widened tree heads only the families with a visible epoch, so a family the cut hides prints no heading, id or generation', async () => {
+    const recall = await rec();
+    const a = await GRX.rc(box, ID);
+    const b = await GRX.rc(box, OID);
+    try {
+      const proj: GrepRc = { ...a, scope: { ...a.scope, kind: 'project', id: ID, generation: null, project: 'demo',
+        sessionPks: [...a.scope.sessionPks, ...b.scope.sessionPks],
+        transcriptPks: [...a.scope.transcriptPks, ...b.scope.transcriptPks].sort((x, y) => x - y),
+        families: [...a.scope.families, ...b.scope.families] } };
+      const tree = (r: CutRc): GrepVerbResult => recall.runTree({ ...r, scopeArgs: [] }, { depth: 2, json: true });
+      /** Each family heading's first three words: `family <id> generation=<g>`. */
+      const heads = (r: GrepVerbResult): string[] => r.blocks.filter((l) => l.startsWith('family ')).map((l) => l.split(' ').slice(0, 3).join(' '));
+      const open = tree(proj);
+      expect(open.exit, JSON.stringify(open)).toBe(0);
+      expect(heads(open), 'CONTROL: with no cut both families head the tree, each with its generation')
+        .toEqual([`family ${ID} generation=${G}`, `family ${OID} generation=${GO}`]);
+      const r = tree(withCut(proj, await cutAt(a, e(6))));
+      expect(r.exit, JSON.stringify(r)).toBe(0);
+      expect(heads(r), 'only the visible family heads the tree').toEqual([`family ${ID} generation=${G}`]);
+      expect(JSON.stringify(r), 'the hidden family is not named anywhere in the answer, nor is its generation').not.toMatch(new RegExp(`${OID}|${GO}`));
+    } finally { a.db.close(); b.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37: the lag is read over visible transcripts only: a hidden transcript with no end-of-file mark leaves the cut header measured', async () => {
+    const recall = await rec();
+    const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+    const u2 = Number((w.prepare('SELECT transcript_pk AS pk FROM transcripts WHERE cc_session_uuid = ?').get(U2) as { pk: number }).pk);
+    const u1 = Number((w.prepare('SELECT transcript_pk AS pk FROM transcripts WHERE cc_session_uuid = ?').get(U1) as { pk: number }).pk);
+    const LIVE = "FROM ingest_files WHERE source_key = '' AND status = 'live' AND transcript_pk = ?";
+    const orig = (w.prepare(`SELECT eof_ms AS m ${LIVE}`).get(u2) as { m: number | null }).m;
+    let rc: GrepRc | null = null;
+    try {
+      w.prepare(`UPDATE ingest_files SET eof_ms = NULL WHERE source_key = '' AND transcript_pk = ?`).run(u2);
+      rc = await GRX.rc(box, ID);
+      const rcN = withCut(rc, await cutAt(rc, e(6)));
+      expect(recall.scopeHeader(rc).line, 'CONTROL: with no cut, the /clear transcript has no mark').toMatch(/ indexed-through=unmeasured lag=unmeasured$/);
+      const eofMs = (w.prepare(`SELECT eof_ms AS m ${LIVE}`).all(u1) as Array<{ m: number | null }>).map((r) => r.m);
+      expect(eofMs.length > 0 && eofMs.every((m) => typeof m === 'number'), 'CONTROL: the first transcript is read to its end').toBe(true);
+      expect(recall.scopeHeader(rcN).line).toBe(libRead.headerLine({
+        kind: 'family', id: ID, project: 'demo', families: 1, transcripts: 1,
+        ...libRead.scopeLag({ eofMs: eofMs as number[], nowMs: rc.nowMs, recovering: false }),
+      }));
+    } finally {
+      w.prepare(`UPDATE ingest_files SET eof_ms = ? WHERE source_key = '' AND transcript_pk = ?`).run(orig, u2);
+      w.close();
+      rc?.db.close();
+    }
+  }, HEAVY);
+
+  it('W2-D38: the child spells no predicate of its own, the parent hands it lib asOfBinds through cutBinds, and the expand key suffix is spelled once, in lib', () => {
+    const read = (f: string): string => fs.readFileSync(path.join(REPO, 'ccd', 'history', f), 'utf8');
+    const worker = read('regex-worker.mjs');
+    expect(worker).toMatch(/^import \{[^}]*\basOfEntrySql\b[^}]*\} from '\.\/lib\.mjs';$/m);
+    for (const own of ['ts_ms', 'memberships', 'boundary_line', 'kept_blob_id']) expect(worker, own).not.toContain(own);
+    expect(read('recall.mjs').split('cut: cutOf(rc) === null ? null : cutBinds(rc),').length - 1, 'the job line').toBe(1);
+    for (const f of ['recall.mjs', 'regex-worker.mjs', 'cli.mjs']) expect(read(f), f).not.toContain(':asof:');
+    expect(read('lib.mjs').split("':asof:'").length - 1).toBe(1);
+  });
+});

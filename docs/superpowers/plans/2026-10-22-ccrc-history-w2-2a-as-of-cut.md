@@ -937,7 +937,9 @@ restore
 mut ccd/history/lib.mjs ' OR ${e}.entry_id = :asof_summary' ' OR ${e}.entry_id = ?'
 (cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'asOfEntrySql and asOfBinds')
 restore
-# Expected RED (predicted): 'named parameters only': the text contains '?'.
+# Expected RED (measured: 4 failed | 6 passed; predicted: 1 failed): 'named parameters only' (the text contains '?'),
+# and, because the bound asof_summary now names no parameter, the positional-hide CONTROL, 'the cut decides by entry' and
+# the real-schema case, each with node:sqlite's `Unknown named parameter 'asof_summary'`.
 ```
 
 After the last mutant, one more call:
@@ -1098,7 +1100,7 @@ Expected: one commit line, then `1`, `1`, `1`. Any other count: make no edit, an
 grep -c '^  guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths,$' ccd/history/recall.mjs
 grep -c "^import { childrenOf, parentOf, ftsGateFactsOn, blobPlainText, blobPlainTextMeasured, lineageEntries, recoverOpenOn } from './store.mjs';\$" ccd/history/recall.mjs
 grep -c '^function bindFor(sql, all) {$' ccd/history/recall.mjs
-grep -c "^      FROM m JOIN \${e('e')} ON e.blob_id = m.blob_id\$" ccd/history/recall.mjs
+grep -cF "      FROM m JOIN \${e('e')} ON e.blob_id = m.blob_id" ccd/history/recall.mjs
 grep -c '^      WHERE v.blob_id <> e.blob_id$' ccd/history/recall.mjs
 grep -c "ON se.entry_id = s.entry_id\$" ccd/history/recall.mjs
 grep -c '^    pool: RANK_POOL, now_ms: rc.nowMs,$' ccd/history/recall.mjs
@@ -1113,7 +1115,7 @@ grep -c 'function cutOf\|function cutTerm\|function cutAnd\|function cutBinds\|f
 grep -c 'W2-2a Task 2' server/test/history-recall.test.ts
 ```
 
-Expected: `1` for each of the first thirteen lines, and `0` for the last three (recall.mjs names no derive.mjs yet, the names are free, and nothing is appended yet). A `0` on an anchor line: re-read the region, re-anchor by the same content and record it in the notes; never widen an assertion.
+Expected: `1` for each of the first thirteen lines (measured: the fourth line printed `0` under plain `grep -c` because GNU grep reads the mid-pattern `$` as an anchor, so it is a fixed-string `grep -cF` above, which prints `1`), and `0` for the last three (recall.mjs names no derive.mjs yet, the names are free, and nothing is appended yet). A `0` on an anchor line: re-read the region, re-anchor by the same content and record it in the notes; never widen an assertion.
 
 Then record the base counts. Step 7 compares against them. In the foreground, with a timeout of at least 600000 ms, one suite per tool call:
 
@@ -1153,7 +1155,7 @@ describe.skipIf(process.platform === 'darwin')('W2-D36: hidden means absent at e
   const c = (i: number): string => t16uuid(XT, i);
   const o = (i: number): string => t16uuid(OT, i);
   const POOL = libRead.RANK_POOL + 1;
-  const PAIRED = '/home/u/tree/demo/zqcutpaired.json';
+  const PAIRED = '/home/u/tree/demo/zqcutpaired.ts';
   const BIG = JSON.stringify(Array.from({ length: 120 }, (_, i) => ({ id: i, name: `item ${i}`, tags: ['a', 'b'] })), null, 1);
   type Cut = Readonly<{
     asof: string; tsCut: number; boundaryEntryId: number; summaryEntryId: number | null;
@@ -1430,9 +1432,10 @@ describe.skipIf(process.platform === 'darwin')('W2-D36: hidden means absent at e
   it('cut-B5: a hidden tool_use never names the outline\'s file', async () => {
     const r = await expand({ around: c(6), before: 0, after: 0 });
     const item = (x: XResult): Record<string, unknown> => x.items.find((i) => i['kind'] === 'entry' && i['uuid'] === c(6))!;
-    expect(item(r.none)['outline_kind'], 'CONTROL: with no cut the paired path makes it a json outline').toBe('json');
-    expect(String(item(r.none)['outline']), 'CONTROL: the outline names the file').toContain('zqcutpaired');
-    expect(item(r.cut)['outline_kind'], 'no visible pair: the default kind').toBe('code');
+    expect(item(r.none)['outline_kind'], 'CONTROL: with no cut the paired path makes it a code outline').toBe('code');
+    expect(String(item(r.none)['outline']), 'CONTROL: the code outline names the file').toContain('zqcutpaired');
+    expect(item(r.cut)['outline_kind'], 'the kind is code in both arms: a shape check, not the guard').toBe('code');
+    expect(String(item(r.cut)['outline']), 'no visible pair: the outline names no file').toContain('Code exploration summary:');
     expect(JSON.stringify(r.cut.items) + r.cut.blocks.join('\n')).not.toContain('zqcutpaired');
   }, HEAVY);
 
@@ -1469,7 +1472,7 @@ Expected (predicted, written before the code): `12 failed | 1 passed`.
 - `cut-B2`: `[2, 'out-of-scope']` against `[3, undefined]`.
 - `cut-B3`: `[c(1), c(2), c(3)]` against `[c(1), c(2), c(4)]`.
 - `cut-B4`: the cut's list still holds `c(3)`.
-- `cut-B5`: `'json'` against `'code'`.
+- `cut-B5`: the cut's outline names the file (`Code exploration summary (zqcutpaired.ts)`) against `Code exploration summary:` (measured: the first draft paired a `.json` path, whose JSON outline never prints the file's name, so its CONTROL `toContain('zqcutpaired')` failed before the code existed; the fixture now pairs a `.ts` path, whose code outline does name it, and the 'json' against 'code' prediction is replaced by this one. The fixed B5 was never run red before the code: its red was measured through M10, at the line `no visible pair: the outline names no file`).
 - `cut-D1`: `[]` against length 1 (`asOfEntrySql(` is not in recall.mjs yet).
 
 Any other failure first (a CONTROL, the beforeAll) is the fixture's: fix the fixture, never the expectation. If `cut-A0` reds, the fixture is not what W2-D34's cases need. For example, a NULL-ts row may not be stored as NULL, or the second copy may have become the holding copy. Re-measure it and fix the rows.
@@ -1730,8 +1733,19 @@ run 'cut-A1|cut-A2'; restore
 mut "$R" 'ON se.entry_id = s.entry_id${cutOf(rc) === null ? '"'"''"'"' : `
       WHERE ${cutTerm(rc, '"'"'se'"'"')}`}' 'ON se.entry_id = s.entry_id'
 run 'cut-A3'; restore
-# Expected RED (predicted): zqcutsidehid's cut arm [0, 1, …] against [3, 0, []]. The loop stops there; the orphan's
-# arm, next in the loop, answers the same way under this mutant, so its absence comes from this WHERE.
+# Expected RED (predicted): zqcutsidehid's cut arm [0, 1, …] against [3, 0, []]. Under M3, A3's loop stops at
+# zqcutsidehid, so the orphan's absence is measured by M3b below, not by M3.
+# Measured: red at zqcutsidehid, `[0, 1, …]` against `[3, 0, []]`.
+```
+
+```bash
+. .superpowers/sdd/history-w2-2a/t2/mut.sh
+# M3b: the sidecar arm keeps a sidecar linked to no entry (the orphan), and still cuts a hidden entry's.
+mut "$R" '      WHERE ${cutTerm(rc, '"'"'se'"'"')}`}' '      WHERE (se.entry_id IS NULL OR ${cutTerm(rc, '"'"'se'"'"')})`}'
+run 'cut-A3'; restore
+# Expected RED (predicted): zqcutsidehid's arm passes (its entry is cut), and the loop's next word, zqcutsideorphan,
+# answers [0, 1, …] against [3, 0, []].
+# Measured: red at zqcutsideorphan, `[0, 1, …]` against `[3, 0, []]` (sidecar zqcutorphan.txt returned).
 ```
 
 ```bash
@@ -1743,6 +1757,20 @@ run 'cut-A1|cut-A4|cut-A5'; restore
 # Expected RED (predicted): 1 failed | 2 passed. A4: relevance's cut arm is [3, [], 0, null] (the top RANK_POOL are all
 # hidden, so the filtered page is empty) against [0, [c(1)], 1, null]. A1 and A5 stay GREEN: a post-LIMIT filter is
 # right for a small result, so only C27's shape tells the two apart.
+# Measured: 1 failed | 2 passed (as predicted): A4 [3, [], 0, null] against [0, [c(1)], 1, null]; A1 and A5 green. The
+# shared entry arm is uncut here, so the empty pool answers exit 3 with total 0 at A1's and A5's hidden words.
+```
+
+```bash
+. .superpowers/sdd/history-w2-2a/t2/mut.sh
+# M4b: only the ranked pool is uncut, and filtered in JS after its LIMIT (countSql keeps the cut).
+mut "$R" 'function rankedSql(rc, matchSql, sort) {
+  return `${referrerSql(rc, matchSql)}' 'function rankedSql(rc, matchSql, sort) {
+  return `${referrerSql({ ...rc, scope: { ...rc.scope, cut: null } }, matchSql)}'
+mut "$R" '    const pool = rc.db.prepare(rs).all(bindFor(rs, all));' '    const pool = rc.db.prepare(rs).all(bindFor(rs, all)).filter((h) => h.via !== '"'"'entry'"'"' || visibleEntryIds(rc, [h.entry_id]).length === 1);'
+run 'cut-A1|cut-A4|cut-A5'; restore
+# Expected RED (predicted): 1 failed | 2 passed. A4: [3, [], 0, null] against [0, [c(1)], 1, null]; A1 and A5 stay GREEN.
+# Measured: 1 failed | 2 passed (as predicted): A4 [3, [], 0, null] against [0, [c(1)], 1, null]; A1 and A5 green.
 ```
 
 ```bash
@@ -1802,6 +1830,8 @@ run 'cut-B4'; restore
 mut "$R" '    if (r === undefined || !uuidVisible(rc, uuid)) return null;' '    if (r === undefined) return null;'
 run 'cut-B5'; restore
 # Expected RED (predicted): outline_kind 'json' against 'code'.
+# Measured: red at B5's no-visible-pair line: the cut's outline is 'Code exploration summary (zqcutpaired…' against
+# 'Code exploration summary:' (predicted: outline_kind 'json' against 'code'; the fixture pairs a .ts path now).
 ```
 
 ```bash
@@ -1931,6 +1961,8 @@ The loop prints nothing: no mutant is left in a file the commit takes (a `NOT RE
 ### Task 3: the node cut: leaves, parents, epochs and their ids at every read door (W2-D35, W2-D36)
 
 Task 1 gave lib one definition of the cut (`asOfCut`, the entry predicate `asOfEntrySql` and its values `asOfBinds`), riding on `rc.scope.cut` (W2-D38). Task 2 applied the predicate where a read verb picks ROWS, and gave recall.mjs `cutOf`, `cutAnd`, `cutBinds` and the store half `asOfCutOf`. A read verb also shows NODES: a leaf's id and gist head every grep group, describe and `--node` resolve ids, tree lists nodes under epochs, and every one of those prints display prefixes measured against the scope's other ids. At the Task 2 commit none of that knows the cut, so under `ASOF=N` a grep hit on a kept(N) row is still grouped under leaf N+1, with leaf N+1's id and gist printed above it: exactly the leak C31 names. This task closes it (W2-D35), and makes every hidden node and epoch ABSENT rather than out of scope (W2-D36).
+
+**Changed after the whole-branch review (D-6282, D-6283; see "## Deviations found").** Two rules below read differently in the shipped code: a leaf other than N's is also hidden when its summary row is hidden (D-6282), and a node is hidden when any condensed node at or below it has no leaf below it, not only when the top has none (D-6283). The ASOF=8 tree, describe and mined-ref expectations for the parent P below changed with the second: P sits over the leafless EMPTY, so P is hidden under ASOF=8 as well, and the cases that need a visible P under that cut take EMPTY away from it first (the "C intact" CONTROL).
 
 The rules, from W2-D35, in lib's one statement (`asOfHiddenNodesSql`, below):
 - **A leaf** (any `kind` but `condensed`) is visible iff its `boundary_entry_id`'s entry is visible under W2-D34. A NULL `boundary_entry_id`, or one naming no stored entry, is not visible.
@@ -2118,8 +2150,8 @@ describe.skipIf(process.platform === 'darwin')('W2-D35: the as-of cut hides node
   const bnd = (c: number): string => u(5 * c - 1);
   const kept = (c: number): string => u(5 * c - 2);
   const hex20 = (head: string, last: string): string => `${head}${'0'.repeat(20 - head.length - last.length)}${last}`;
-  const VIS = `L${hex20('000000', '2')}`;
-  const HID = `L${hex20('000000', '1')}`;   // the lower of the two, and below every derived leaf's id
+  const VIS = `L${hex20('000001', '2')}`;
+  const HID = `L${hex20('000001', '1')}`;   // the lower of the two, and below every derived leaf's id
   const EMPTY = `N${hex20('e0e0e0', '1')}`;
   const OUT_VIS = `L${hex20('d00d00', '1')}`;
   const OUT_HID = `L${hex20('d00d01', '1')}`;
@@ -2462,7 +2494,7 @@ Expected (predicted before the code): `9 failed | 2 passed`.
 - leafHeads: `R.leafHeads is not a function` (it is not exported yet).
 - both tree cases: the item ids still hold leaf 8, the parent, HID and EMPTY.
 - the exit-3 case: `describe leaf 8` answers `[ 0, undefined ]` under the cut.
-- the prefix case: `describe L000000` answers `[ 2, 'bad-args' ]` under the cut.
+- the prefix case: `describe L000001` answers `[ 2, 'bad-args' ]` under the cut (measured: with the ids as first written, `hex20('000000', …)`, the shared prefix `L000000` is all zeros, which `extractNodeId` refuses before any lookup (`a node id cannot be all zeros: L000000`), so the case failed at its no-cut CONTROL; the crafted ids now start `000001`, still below every derived leaf's id (predicted: `000000`)). The run measured `9 failed | 2 passed`, as predicted.
 - the describe case: `parent_id` is still the parent under cut 7.
 - W2-D45: its two no-cut halves pass; its CONTROL fails, because no cut statement exists yet.
 - the R8 case: its CONTROLs pass, then `expected '…' not to contain 'zqw2d35minedrow1'`: describe of leaf 1 under cut 7 still prints every ref.
@@ -2955,7 +2987,7 @@ restore
 mut ccd/history/recall.mjs '  return displayPrefixes(hiddenPre.size === 0 ? ids : ids.filter((id) => !hiddenPre.has(id)));' '  return displayPrefixes(ids);'
 (cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t "$F")
 restore
-# Expected RED (predicted): 1 failed | 10 passed, the prefix case: describe's node line under cut 7 shows VIS's whole id, not L000000.
+# Expected RED (predicted): 1 failed | 10 passed, the prefix case: describe's node line under cut 7 shows VIS's whole id, not L000001.
 ```
 
 ```bash
@@ -2965,6 +2997,7 @@ mut ccd/history/recall.mjs '  const nodes = hiddenTree.size === 0 ? stored : sto
 (cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t "$F")
 restore
 # Expected RED (predicted): 2 failed | 9 passed, both tree cases (leaf 8, the parent, HID and EMPTY listed under cut 7; EMPTY under cut 8).
+# Measured: 3 failed | 8 passed. The W2-D45 case reds too: with the node list unfiltered, the cut tree reads `readEnvelope: shown 16 of 12 is not a count` (predicted: 2 failed | 9 passed).
 ```
 
 ```bash
@@ -2992,7 +3025,7 @@ mut ccd/history/recall.mjs '  const rows = hiddenHere.size === 0 ? stored : stor
 (cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t "$F")
 restore
 # Expected RED (predicted): 2 failed | 9 passed: the exit-3 case ('describe leaf 8': [0, undefined]; 'describe HID' prints zqw2d35refhid;
-# 'describe B's hidden leaf': [2, 'out-of-scope']) and the prefix case (describe L000000: [2, 'bad-args']).
+# 'describe B's hidden leaf': [2, 'out-of-scope']) and the prefix case (describe L000001: [2, 'bad-args']).
 ```
 
 ```bash
@@ -3061,6 +3094,7 @@ restore
 # Expected RED (predicted): the W2-D45 case, whose no-cut halves now see an asof_down statement. With no cut cutBinds answers {}, so
 # the statement's asof_ parameters read NULL and every node reads hidden: other cases' no-cut CONTROLs red too. Write the measured
 # failing names in the run's notes; the W2-D45 case must be among them.
+# Measured: 8 failed | 3 passed. Red: C31, leafHeads, tree under ASOF=7, the exit-3 case, the prefix case, the describe case, W2-D45 and the R8 case; green: the fixture, tree under ASOF=8 and the nodes_fts case.
 ```
 
 ```bash
@@ -3841,7 +3875,7 @@ Predicted, written before the run:
     - the header case: `expected '2' to be '1'`;
     - the widened case: `project(demo, 2 families)` under N;
     - the widened tree case: its CONTROL passes, then `only the visible family heads the tree` holds both headings, the hidden family's with its generation: Task 3's epoch filter drops its epoch, never its heading;
-    - the lag case: the cut header reads `indexed-through=unmeasured lag=unmeasured`;
+    - the lag case: measured: the cut header counts two transcripts, `expected 'scope=family(claude-a-asof4, 2 transc…' to be 'scope=family(claude-a-asof4, 1 transc…'` (predicted: the cut header reads `indexed-through=unmeasured lag=unmeasured`; both hold on the unguarded code, and the transcript count differs first);
     - the scan case: the worker holds no `asOfEntrySql` import.
 
 A different count means a prediction is wrong. Read the first failing line of each case before writing any code. When a CONTROL is what failed, correct the fixture, never the guard.
@@ -5335,7 +5369,7 @@ This plan defines exactly two departures, both in "## Deviations found" at its e
 - **The ledger's "Later" item is not taken by this PR, with evidence.** The item waits for "the first wave after 5h-2 that may change a base reading or the widened rules (D-5745's)". A base reading is a door's rev 3.6 reading (`BASE_RULES`, R11 of the 5h-2 plan); the widened rules are D-5745's. W2-2a changes which rows, nodes and epochs reach the doors, and so may change which texts a door is handed, but never what a door prints for a given text. Step 3 measures that by comparing every top-level declaration of `lib.mjs` at the merge-base and at HEAD and requiring the 67 redaction declarations byte-identical; its CONTROL runs the same script over 5h-2's own change (`3af16cf97` to `02d75ae5f`), which must red and name 33 of them. A second grep checks that no changed line in `recall.mjs`, `regex-worker.mjs` or `cli.mjs` names a door. So the item stays open for a later wave, and the PR body says so in one paragraph.
 - **growth-check lists no W2-2a file.** `GROWTH_FILES` is `ccd/ccd`, `ccd/ccrc`, `ccd/session-hook.sh`, `server/src/watch.ts`, `server/src/coord/store.ts`, `server/src/coord/routes.ts`, `server/src/server.ts`, `server/src/sessionws.ts` and `pwa/src/lib/api.ts`. The check is armed (D-6178), and a listed file over `GROWTH_LIMIT` (40 net code lines) needs an operator-named exemption (D-6211) or an added waiver entry under its own D-number (D-6223). W2-2a edits none of the nine, adds no waiver and no exemption, and edits none of `GROWTH_MACHINERY`, so every row reads `delta +0` and `GROWTH_OVER: (none)`. A growth in `lib.mjs`, `recall.mjs` or `cli.mjs`, however large, is not measured by it.
 - **The doors are counted by title, then read.** The security property is that a cut-hidden row, node, epoch, id or count never leaks through any door. Tasks 1 to 5 own the doors and their cases; Step 4 lists every added test title and counts, per door, the titles that name it and those that carry a CONTROL, then the worker reads each case to confirm it asserts absence under the cut and presence without it. A door with no case, or a case with no CONTROL anywhere in it, is a finding against the task the door table below names, reported to the coordinator and never added here.
-- **No commit by default (R7).** Every edit this PR makes is in Tasks 1 to 5. If a step measures a figure that differs from a prediction in this plan's text, the correction is this task's one commit (below), touching only this plan's text. The PR carries five commits, or six.
+- **No commit by default (R7).** Every edit this PR makes is in Tasks 1 to 5. If a step measures a figure that differs from a prediction in this plan's text, the correction is this task's one commit (below), touching only this plan's text. The PR carries five commits, or six (measured: nine, the five task commits, two from the whole-branch review's fix waves, this one for the figures here it corrected and one from review 778's fix round; the R7 row above states the plan's original prediction).
 - **Free-space cases are box state, not breaks (R7).** Three cases, two in `history-holds` and one in `history-export`, read the box's real free space and fail on a box below the store's free-space floor, at the base too. A red there is re-run alone; if it still reds, the worker names each case by title, records the assertion line and the free space of the test volume (`df -P --output=avail` on the fixture root, a number only), and says so in the PR body. CI on the quiet box is the arbiter, and only for a file its selection ran.
 
 **The cut's doors, and the task whose cases pin each** (W2-D34 to W2-D39 as section 2 of the decisions assigns them; the Task column is filled from the File Structure, R5). A door with no case in its task is a finding against that task:
@@ -5410,7 +5444,7 @@ sed -n '3p' "$SPEC" | grep -c 'rev 3\.6'
 
 Expected:
 - `only W2-2a files`; `0` (no never-edit path); `0` (the PR creates no file: W2-D5, and the plan is on `main` before dispatch, R7);
-- one line per new lib export, each `d.mts 1` (count them: `skipLibCheck` hides a duplicate): `asOfCut`, `asOfEntrySql`, `asOfBinds`, `asOfHiddenNodesSql`, `asOfVisibleEpochsSql`, `asOfVisibleEntriesSql`, `expandCursorKey`, `recallSeamEngaged` and `decideSeamInPane`, and no upper-case name (`ASOF_KEY_SEP` is module-private, so O14's `VOCABS` binds nothing new). An upper-case line is a finding against the task that added it;
+- one line per new lib export, each `d.mts 1` (count them: `skipLibCheck` hides a duplicate): `asOfCut`, `asOfEntrySql`, `asOfBinds`, `asOfHiddenNodesSql`, `asOfVisibleEpochsSql`, `asOfVisibleEntriesSql`, `expandCursorKey`, `recallSeamEngaged` and `decideSeamInPane` (measured: ten, with `asOfSummaryPickSql`, the D-6282 pick's test seam, which the fix wave added), and no upper-case name (`ASOF_KEY_SEP` and `ASOF_PICK_CTES` are module-private, so O14's `VOCABS` binds nothing new). An upper-case line is a finding against the task that added it;
 - `asof-invalid 2 refused 2 reasons 54 refusals 36 asOfCut function` (53 and 35 at `cd622b2f6`: W2-2a adds exactly one word, C16's; `headless-in-pane` is already a word, at about lib.mjs:46);
 - `CCRC_RECALL_ARM CCRC_RECALL_ASOF CCRC_RECALL_SESSION CCRC_SESSION_GENERATION CLAUDECODE HOME TMUX_PANE`, then `four-name 0` (1 at `cd622b2f6`);
 - `every new env read is one of the seven, by name`; `no new mjs line citation` (D-5893's ratchet); `no D-number range`;
@@ -5423,19 +5457,19 @@ Any other path, a `d.mts` count other than 1, an unexplained `UNBOUND`, an eight
 ```bash
 MB=$(git merge-base origin/main HEAD)
 PLAN=docs/superpowers/plans/2026-10-22-ccrc-history-w2-2a-as-of-cut.md
-for d in D-5765 D-5766; do printf '%s %s\n' "$d" "$(grep -c "^- \*\*$d\*\* — " "$PLAN")"; done
+for d in D-5765 D-5766 D-6281 D-6282 D-6283 D-6284; do printf '%s %s\n' "$d" "$(grep -c "^- \*\*$d\*\* — " "$PLAN")"; done
 grep -cE '^- \*\*D-[0-9]+\*\* — ' "$PLAN"
 grep '^- \*\*D-5765\*\* — `history-w2-asof-invalid-word`' "$PLAN" | grep -c 'W2-D39'
 grep '^- \*\*D-5766\*\* — `history-w2-asof-time-cut`' "$PLAN" | grep -c 'W2-D34'
-for d in D-5765 D-5766; do git log --format="$d %h %s" -S"- **$d** — " "$MB"..HEAD -- "$PLAN"; done
-for d in D-5765 D-5766; do printf '%s at merge-base %s\n' "$d" "$(git show "$MB:$PLAN" 2>/dev/null | grep -c "^- \*\*$d\*\* — ")"; done
+for d in D-5765 D-5766 D-6281 D-6282 D-6283 D-6284; do git log --format="$d %h %s" -S"- **$d** — " "$MB"..HEAD -- "$PLAN"; done
+for d in D-5765 D-5766 D-6281 D-6282 D-6283 D-6284; do printf '%s at merge-base %s\n' "$d" "$(git show "$MB:$PLAN" 2>/dev/null | grep -c "^- \*\*$d\*\* — ")"; done
 grep -c 'D-5765\|D-5766' ccd/history/lib.mjs
-for d in D-5765 D-5766; do printf '%s defined in %s plan(s)\n' "$d" "$(grep -lE "^(#{2,4} |- \*\*)$d\b" docs/superpowers/plans/*.md | wc -l)"; done
+for d in D-5765 D-5766 D-6281 D-6282 D-6283 D-6284; do printf '%s defined in %s plan(s)\n' "$d" "$(grep -lE "^(#{2,4} |- \*\*)$d\b" docs/superpowers/plans/*.md | wc -l)"; done
 git diff "$MB" HEAD -- docs ":(exclude)$PLAN" | grep -cE '^\+(#{2,4} |- \*\*)D-[0-9]+'
 git grep -n 'D-TBD-[a-z0-9]' -- "$PLAN" ccd/history server/test || echo 'no D-TBD token'
 ```
 
-Expected: `D-5765 1` and `D-5766 1`; `2` (the plan defines those two numbers and no other); `1` and `1` (each entry in the em-dash form under its slug, naming its decision); no `git log` line (the PR adds no entry: both came with the plan, R7); `D-5765 at merge-base 1` and `D-5766 at merge-base 1`; `4` (Task 1's comments cite both: `REASON_ROWS`, the section header and two doc comments); `D-5765 defined in 1 plan(s)` and `D-5766 defined in 1 plan(s)`; `0` (no other document defines a number); `no D-TBD token`.
+Expected: `1` for each of `D-5765`, `D-5766`, `D-6281`, `D-6282`, `D-6283` and `D-6284`, one line apiece; `2` (the plan defines those two numbers and no other; measured: `6`, the two plus the four review numbers D-6281, D-6282, D-6283 and D-6284, which the whole-branch review's fix waves and review 778's fix round took from the run's block, each defined once in the commit that first cites it); `1` and `1` (each entry in the em-dash form under its slug, naming its decision); no `git log` line for D-5765 or D-5766 (the PR adds no entry: both came with the plan, R7; measured: one line each for D-6281, D-6282, D-6283 and D-6284, whose entries the fix commits added); `D-5765 at merge-base 1` and `D-5766 at merge-base 1` (and `0` for each of the four review numbers, D-6281, D-6282, D-6283 and D-6284); `4` (Task 1's comments cite both: `REASON_ROWS`, the section header and two doc comments); `D-5765 defined in 1 plan(s)`, `D-5766 defined in 1 plan(s)`, `D-6281 defined in 1 plan(s)`, `D-6282 defined in 1 plan(s)`, `D-6283 defined in 1 plan(s)` and `D-6284 defined in 1 plan(s)` (corrected in place by the coordinator's ledger PR, 2026-10-22, review 791 F-D: the loop and this text named D-5765 and D-5766 only); `0` (no other document defines a number); `no D-TBD token`.
 
 A count of definitions above 2, or a `git log` line, is either a number from this run's block that the worker used for a departure found while executing (defined in the commit that first cites it, named in the wave-done and listed in the PR body), or a finding. Never add a second definition, and never renumber.
 
@@ -5486,7 +5520,7 @@ git diff -U0 "$MB" HEAD -- ccd/history/recall.mjs ccd/history/regex-worker.mjs c
   || echo 'no changed line names a door'
 ```
 
-Expected (the CONTROL measured on a read-only checkout of `cd622b2f6`, which holds both commits): `33` and `rc 1` (5h-2's change, `3af16cf97` to `02d75ae5f`, changed 33 redaction declarations, `BASE_RULES` and `composeDoor` among them, so the scan sees a rules change). Then `redaction declarations: 67; changed: none`, then `every changed declaration: ` followed by the names Tasks 1 to 5 add or edit in `lib.mjs`: `ASOF_KEY_SEP`, `REASON_ROWS`, `VERB_TABLES`, `asOfBinds`, `asOfCut`, `asOfEntrySql`, `asOfHiddenNodesSql`, `asOfVisibleEntriesSql`, `asOfVisibleEpochsSql`, `decideSeamInPane`, `expandCursorKey`, `expandResumeOf` and `recallSeamEngaged`, and no other; then `rc 0`. Then `no changed line names a door`. The script compared `02d75ae5f` with `cd622b2f6` at planning time and printed `changed: none` (W2-1 moved no rule either).
+Expected (the CONTROL measured on a read-only checkout of `cd622b2f6`, which holds both commits): `33` and `rc 1` (5h-2's change, `3af16cf97` to `02d75ae5f`, changed 33 redaction declarations, `BASE_RULES` and `composeDoor` among them, so the scan sees a rules change). Then `redaction declarations: 67; changed: none`, then `every changed declaration: ` followed by the names Tasks 1 to 5 add or edit in `lib.mjs`: `ASOF_KEY_SEP`, `REASON_ROWS`, `VERB_TABLES`, `asOfBinds`, `asOfCut`, `asOfEntrySql`, `asOfHiddenNodesSql`, `asOfVisibleEntriesSql`, `asOfVisibleEpochsSql`, `decideSeamInPane`, `expandCursorKey`, `expandResumeOf` and `recallSeamEngaged`, and no other (measured: also `ASOF_PICK_CTES` and `asOfSummaryPickSql`, which the D-6282 fix wave added); then `rc 0`. Then (measured, not `no changed line names a door`) four lines: `refsAll`'s `redactForDisplay` line removed and re-added with the same arguments when the filter on mined refs was spliced in, and `regex-worker.mjs`'s import line, removed and re-added with `asOfEntrySql` beside `entryIndexText`, `makeBelt` and `makePairIndex`. The expected result reads "no changed line changes what a door is called with": each of the four is read, and none changes a door's arguments. The script compared `02d75ae5f` with `cd622b2f6` at planning time and printed `changed: none` (W2-1 moved no rule either).
 
 So W2-2a changes no base reading and no widened rule: it changes which rows, nodes and epochs reach the doors, and therefore which texts a door is handed, never what a door prints for a text. The ledger's "Later" item on the display doors and the widened rules waits for a wave that changes one of those, so it stays open and this PR does not take it; the PR body states this with the two counts above. A redaction name in the `changed:` list, a door named on a changed line in a way that changes its arguments, or a changed declaration no task names, is a finding: report it to the coordinator, who rules whether this PR has become that wave.
 
@@ -5694,7 +5728,11 @@ This task's drifts are the header's rows for Task 6.
 ---
 ## Deviations found
 
-D-5765 and D-5766 were issued on 2026-10-19 in the W2 decisions document's block, and this plan is the one that defines them (decisions §6's "Defined in"). Each is defined once, here, and lands on `main` with the plan before dispatch (R7); Task 1 cites both in lib.mjs's comments, Task 6 checks each entry is here once, and the PR defines no number. Every other number this plan cites is defined on `main` and cited bare. A departure found while executing takes the next number from the run's block and is defined here in the commit that first cites it.
+D-5765 and D-5766 were issued on 2026-10-19 in the W2 decisions document's block, and this plan is the one that defines them (decisions §6's "Defined in"). Each is defined once, here, and lands on `main` with the plan before dispatch (R7); Task 1 cites both in lib.mjs's comments, Task 6 checks each entry is here once, and the PR defines no number but the departures its reviews found (the whole-branch review's three and review 778's one), below. Every other number this plan cites is defined on `main` and cited bare. A departure found while executing takes the next number from the run's block and is defined here in the commit that first cites it.
 
 - **D-5765** — `history-w2-asof-invalid-word` (Task 1; W2-D39, with W2-D34's T_N): the as-of cut's refusal is spelled `asof-invalid`, an exit-2 word in lib's `REASON_ROWS`, so `REFUSALS` holds it (C16, its one word). The spec names the seam (`CCRC_RECALL_ASOF=<boundary uuid>`, §8.2) but no word for an ASOF that names no usable boundary, and §8.3's exit-2 row holds none: the spelling is this plan's. W2-2a ships the store half, decided by lib's `asOfCut` over what recall.mjs's `asOfCutOf` measured: no `boundaries` row has the uuid (or the row measured is not the ASOF's), the boundary sits on a sidechain transcript (`agent_id` not `''`), **no copy holds it**, or no stamp lies at or before it in its holding copy. The "no copy holds N" arm is a fourth condition beside W2-D39's "a boundary row, a main transcript, and T_N": the positional hide (W2-D34) is defined only inside N's holding copy, so the cut fails closed rather than drop that clause. No `memberships` row is deleted at the base, so only a damaged store reaches it; it takes no number of its own, and the coordinator amended W2-D39 in place to list it (R1). W2-2b adds the pre-store half (an empty or non-UUID ASOF, W2-D42) and the family half (W2-D40) under the same word; no door prints it before W2-2b's env path. Erratum E2 (decisions §6) adds the word to §8.3's exit-2 row, amended in place by W2-5b, never by W2-2a. SKILL.md is not edited: its exit-2 row is generic (W2-D48's rule). Pins: history-lib's C16 case, its `REASON_ROWS` case beside this entry's comment, and the arms' case with its CONTROL (Task 1, mutants M9, M10, M11 and M13); history-recall's cut-A6, the store half's unknown uuid, non-boundary row and sidechain boundary (Task 2: mutant M11 the sidechain arm, M12 the kept(N) set and M15 the holding-copy pick under its deep-equal CONTROL, M16 the non-boundary-row arm).
 - **D-5766** — `history-w2-asof-time-cut` (Task 1; W2-D34, W2-D38): "as of boundary N" is decided by time and by position, not by position alone. T_N is N's `ts_ms`, else the newest non-null stamp at or before N in N's holding copy (lib's `stampAtOrBefore`, W2-D33). An entry is visible iff its `ts_ms` is non-null and at most T_N and it is not a row of N's holding copy at a line after N's `boundary_line`; or it is N's boundary entry; or N's summary entry (derivation's `summaryRowFor` pick); or a member of kept(N) present in the store (N's `kept_blob_id`, option (a)). Every other entry is absent: every NULL-ts entry, before the boundary too, and every row after N in its holding copy, whatever its stamp. lib's `asOfEntrySql` is the one predicate, with `asOfBinds` its values, keyed on entries, never on blobs. This departs from spec §8.2's "`ASOF` makes every verb treat rows, nodes and epochs after that boundary as absent" (about :1531 at cd622b2f6; erratum E11), which hides by position alone: the time cut also hides NULL-ts rows before the boundary, keeps kept(N) and N's summary visible after it, and outside the holding copy decides by stamp. Why: the store has no order across transcripts and copies, a position is defined only inside one file, and a stamp is the one coordinate every entry carries (W2-D34; SEAM-b1, pick (a)); the positional clause closes the holding copy, where a boundary's answers are written. Residual, named: a row outside N's holding copy (another transcript, or another copy of N's) that was written after N but stamped at or before T_N, in the same millisecond or after a backward clock step, stays visible, and Baseline B does not cover it (its part 3 stops at the first operator or assistant row after the boundary, W2-D68), so a fact repeated in such a row is visible to treatment and absent from B. W2-5a counts, per admitted question, the FTS hits for F_raw on entries visible under the cut, outside N's holding copy and stamped exactly T_N, as `asof_same_ms_hits`, reported and never gating; a backward clock step is not measurable and stays named in decisions §7. Also residual: kept(N) is derive's `keptOf` set, which folds a NULL `kept_blob_id`, a tombstoned or undecodable kept blob and a non-array body into an empty set, so the cut then hides a kept row rewritten after N (fail closed). Erratum E11 is amended in place by W2-5b, with "absent means exit 3, before scope" (W2-D36), which Tasks 2 to 4 of this plan build. Pins: history-lib's positional-hide CONTROL (rows after N in its holding copy stamped exactly T_N and before T_N hidden, the same fixture without the cut showing them) and its per-entry case (the same-millisecond row in another copy visible, named); Task 1's mutants M1 to M8 and M17.
+- **D-6281** — `history-w2-asof-boundary-transcript` (whole-branch review; W2-D39, R2, Review Focus 3): `asOfCutOf` finds N's transcript from the boundaries row, not the entries row. The plan prescribed `asOfCutOf`'s SQL as `JOIN transcripts t ON t.transcript_pk = e.transcript_pk` with `:tpk` bound from `e.transcript_pk`, the entries row's column. Measured: the two columns are written independently and can diverge. `ENTRY_UPSERT`'s `ON CONFLICT(uuid)` never updates `entries.transcript_pk` (sweep.mjs), and `replayBoundaryRow` takes the boundary's transcript from the export record's (cc_session_uuid, agent_id) but finds the entry by uuid alone, so an entry stored first under one transcript can gain its boundaries row under another. derive.mjs keys on the BOUNDARIES row's `transcript_pk` throughout: `todo` filters the main transcript (`agent_id = ''`) on `b.transcript_pk`, `holdingCopy` picks among `s.files.all(b.transcript_pk)` and `insNode` stores `b.transcript_pk`, which `producerOfLeaf` then reads as `n.transcript_pk`. With the entries column, `asOfCutOf` looked for N's holding copy among the files of a transcript derivation never spanned N in: a spurious `asof-invalid` when no file there holds N, another copy's file and line when one does, and the `main` test answered by the wrong transcript's `agent_id`. Now `asOfCutOf` selects `bd.transcript_pk`, joins `transcripts` on it for `main`, and binds it as the files query's `:tpk`, so the cut's holding copy is the one derivation's `pickHoldingCopy` picks (Review Focus 3). No other column changes: the entry, its summary and kept(N) are still read as before. Pins: history-recall's cut-A7 plants a boundary whose `entries.transcript_pk` names another main transcript, first with no file there holding N (the old code answered `asof-invalid`), then with a file there holding N too (the old code would pick that file), and asserts the cut deep-equals the one measured on the boundaries row's transcript, with CONTROLs that the columns agreed at first, that the plant took, and that the restored store cuts again; mutants M4 (both uses of `e.transcript_pk` restored) and M5 (the `:tpk` bind alone restored) of the fix wave are red under it.
+- **D-6282** — `history-w2-asof-leaf-summary-row` (whole-branch review; W2-D35, R4): a leaf other than N's is visible iff its boundary entry is visible AND, when it has a summary row, that row is visible. The door is `asOfHiddenNodesSql`, hence every read of a node: describe, tree, grep's leaf header and `--node`, expand, and the prefix and scope rules. The plan prescribed W2-D35's rule as written, "a leaf iff its boundary entry", which left a visible leaf whose summary row the cut hides printing that row's text (describe's gist, excerpt and `--full` pages, tree's gist, grep's leaf header and the leaf's model and meta refs) while grep and expand treat the row as absent (the finding: a compaction whose summary row is stamped after T_N, has no stamp, or sits outside N's holding copy). "Its summary row" is summaryRowFor's pick over the leaf's holding copy, the rule derivation and `asOfCut` use. Measured: it is identifiable from stored columns with no schema change and no re-derivation per read: the holding copy is pickHoldingCopy's over the files of `boundaries.transcript_pk` that hold the boundary (live first, then the lowest `file_id`), and the row is the `boundaries.anchor_uuid` row among that copy's memberships (an echo row, `user` with provenance `harness`, never), or, when the anchor names the boundary itself, the first non-echo compact summary after the boundary in it; in the D-6282 fixture (one transcript, one file) each derived leaf's `summary_blob_id` is the `blob_id` of the row the fixture names as its summary, which pins that fixture against derivation and nothing about the copy order. A leaf with no pick (a raw leaf) is judged by its boundary alone, as before (D-6284 narrows this: a leaf whose stored `summary_blob_id` is not NULL is hidden when its pick is NULL), and N's own summary stays exempt through `asof_summary`, unchanged: N's leaf is skipped by the arm. Parents and epochs follow by the existing rules. The code: two CTEs, `asof_hold` and `asof_pick`, and one clause in the leaf term of the HAVING, in lib's one statement (the rule stays in lib; the predicate is reused). This is the coordinator's ruling in the operator's place under the directive of 2026-10-19 (the answer to the worker's mail 7893). The pick itself is pinned apart from the statement: history-lib's seeded equivalence case builds 250 stores (about 730 leaves; several files per transcript, live and retired, divergent memberships, anchors none, empty, self, other, echo and missing) and holds `asOfSummaryPickSql`, the same CTE text, to `pickHoldingCopy` plus `asOfCut`'s `summaryRowFor` pick on every leaf; the review-fix mutants M18 (live copy ranked last), M19 (highest file_id first), M20 to M26 (the self arm's line test and echo test, the anchor arm's echo test, the summary order, the holding test, the transcript join, the compact-summary test) are each red under it. Pins of the statement's arms: history-recall's D-6282 describe (a family of four compactions, ASOF = the fourth: leaf 1's summary row without a stamp, leaf 2's stamped after T_N, leaf 3's before, N's after and exempt): tree, describe by id and by prefix, grep's leaf header (the row groups under the live tail), `--node` and expand are exit 3 or absent for leaves 1 and 2, with CONTROLs for no cut, for a summary stamped at or before T_N, for a leaf with no anchor, for an anchor on the boundary itself and for an echo row; the fix wave's mutants M9 (the summary clause dropped), M13 (the anchor-on-the-boundary arm dropped), M14 (the echo test dropped) and M10 (N's exemption dropped, red in the no-summary case of the node rule).
+- **D-6283** — `history-w2-asof-leafless-descendant` (whole-branch review; W2-D35, R4): a node is hidden under any cut when any condensed node at or below it has no leaf below it. This is R4's test applied to every descendant, not only the top. The door is `asOfHiddenNodesSql`: describe, tree, `--node`, expand, the prefix and scope rules, and with them the refs and rolled-up text a hidden node prints. The plan hid a leafless condensed node itself (R4) but judged a parent only by its leaves, so a parent over a leafless condensed child stayed visible on its other leaves and printed that child's rolled-up gist, topics and refs (`parentRollup` takes each child's text). Measured: the form "a condensed node with no `node_children` rows" is not the same as "no leaf below it" on this store, whose constraints allow a cycle of condensed nodes (`node_children` is keyed on the pair alone) and a chain ending in a childless condensed node, so the code uses the semantic form: a recursive `asof_up` walks from the leaves of the walk down, kept to its nodes, and a condensed node in the walk that it does not reach has no leaf below it. A cycle with no leaf is hidden, with everything over it. The Task 3 expectations changed: the ASOF=8 tree case now hides P (P sits over the leafless EMPTY) and the describe, parent_id and mined-ref expectations for P under that cut moved with it, each with a CONTROL on the same tree with EMPTY taken away, where P is visible under the cut; childRowsOf's filter has no visible parent left to act on and stays as defence in depth. This is the coordinator's ruling in the operator's place under the directive of 2026-10-19 (the answer to the worker's mail 7893). Pins: history-recall's D-6283 case (a grandparent over P over EMPTY, and a node over leaf 1 and a leafless two-node cycle: all hidden under ASOF=8 at describe, expand, `--node` and tree, visible with no cut and visible under the cut once the leafless parts are removed) and the flipped ASOF=8 tree case; the fix wave's mutants M11 (the arm dropped), M12 (the childless-node form in its place, red on the cycle) and M16 (the walk up cut off).
+- **D-6284** — `history-w2-asof-leaf-stored-summary` (review 778, F2; W2-D35, D-6282): under a cut, a leaf other than N's is also hidden when its stored `nodes.summary_blob_id` is not NULL and either its read-time pick (`asof_pick`) is NULL or the pick's entry carries another `blob_id`. N's own leaf stays exempt, as under D-6282; a leaf whose `summary_blob_id` is NULL keeps D-6282's rule (judged by its boundary, and by its pick's visibility when it has one). The door is `asOfHiddenNodesSql`, hence every read of a node. What the read doors print comes from the derived row: `summaryOf` (recall.mjs) reads the STORED `nodes.summary_blob_id`, and describe's excerpt and the `--full` pages come from it; describe's gist, tree's `nodeLine` and grep's leaf header print `nodes.gist`, which derivation writes from the same pick (corrected in place by the coordinator's ledger PR, 2026-10-22, review 791 F-C: this entry said describe's gist and excerpt, tree's `nodeLine` and grep's leaf header all come from the stored blob). D-6282 judged the leaf by the pick it re-computes at read time, so when the pick came back NULL the leaf was judged by its boundary alone and failed open, printing text from a row the cut hides. The review's scenario: leaf L is derived from copy F_a, which holds its summary row S, stamped after T_N; derive.mjs never re-derives a boundary that has a node; later the sweep retires F_a on an inode recycle and ingests a live copy F_b that holds the boundary but not S; `asof_hold` now picks F_b, `asof_pick` is NULL, L is visible under N and prints S's text. The ruling (the coordinator's, in the operator's place under the directive of 2026-10-19, mail 7966, extending ruling 7894's L2 and D-6282) closes it fail closed rather than naming it a residual. The blob half (a pick that names another blob) was licensed only if two facts hold, each measured at 9fe784454 and re-verified by one grep each at this commit. (1) Derivation stores exactly the picked entry's `blob_id`: derive.mjs's `copyRows` selects `e.blob_id`; `copyPlan` fills `copy.picks` with `summaryRowFor` over the holding copy; `deriveOne` reads `copy.picks.get(b.uuid)`; `leafFields` takes `summary = copy.rows[copy.index.get(pick.uuid)]`; and the leaf insert writes `summary === null ? null : summary.blob_id` into `summary_blob_id` (about :428); `parseFailedFields` uses the same pick; the condensed insert (about :611) writes NULL. (2) Nothing moves either value afterwards: no `UPDATE nodes` in `ccd/history` sets `summary_blob_id` (derive.mjs `setParent`, the parse-failed rewrite whose comment says `summary_blob_id` stays, reparse's kind, status and gist rewrite and the topics rewrite; sweep.mjs's `session_pk` merge), and no statement sets `entries.blob_id` after the insert: `ENTRY_UPSERT`'s `DO UPDATE SET` omits `blob_id` (D-4346's comment: it keeps its first `blob_id`), and every other `UPDATE entries` sets only `exported_ms` and `exported_seg`; reparse and the re-clean and recover paths write no node or entry blob column. The code is one more AND term in the leaf term of the HAVING in lib's one statement, inside the existing `NOT coalesce((…), 0)` (the predicate stays three-valued safe); `ASOF_PICK_CTES` and `asOfSummaryPickSql`'s columns do not change. One existing D-6282 CONTROL changed with it: the raw-leaf and echo-anchor shapes now take leaf 2's stored summary away first, since a leaf that keeps its stored summary while its pick goes is exactly what this rule hides, and each shape has a CONTROL with the summary kept (hidden). Pins: history-recall's D-6284 describe, nested in the D-6282 describe for its fixture: leaf 3 visible under N before the plant and with no cut, then hidden at describe, tree, `--node`, expand and a grep hit with its gist printed nowhere, in two planted states (F_a retired and a live copy without S, so the pick is NULL; a self-anchored leaf whose live copy holds another non-echo compact summary stamped at or before T_N, so the pick is shown and names another blob), each with CONTROLs on the pick and the stored blob; history-lib's seeded equivalence case now gives its entries a `blob_id` (shared across entries) and its nodes a `summary_blob_id` written by derivation's rule from the JS pick, and asserts the SQL pick's entry carries the stored blob on every leaf. Mutants, measured: D1 (a NULL pick passes) is red at the first planted state and D2 (the blob comparison dropped) is red at the second, each at its own case alone; M9 (the D-6282 pick-visibility term dropped) is red at three D-6282 cases and at the F7 case below; M18 and M23 are still red at the seeded case. Review 778's F7 is pinned beside it with no new rule: a leaf whose summary row sits outside N's holding copy (a second copy holds it; N's copy holds neither the boundary nor the row), stamped after T_N, is hidden under N at the same doors, and shows with the row stamped at or before T_N.

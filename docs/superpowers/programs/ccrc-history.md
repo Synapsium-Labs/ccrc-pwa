@@ -12,7 +12,8 @@ W2: `2026-10-19-ccrc-history-w2-decisions.md`, the authority every W2 plan cites
 (`2026-10-19-ccrc-history-w2-3-gate-module.md`, `2026-10-19-ccrc-history-w2-4-driver-core.md`); the other W2 plans
 are written as their PRs become dispatchable. Wave 5h-2: `2026-10-19-ccrc-history-w5h2-redaction-and-ops.md`. W2-1:
 `2026-10-21-ccrc-history-w2-1-recall-off-and-exports.md`; W2-2a: `2026-10-22-ccrc-history-w2-2a-as-of-cut.md`; W2-5a:
-`2026-10-22-ccrc-history-w2-5a-quiz-builder.md`; each approved under the operator's directive of 2026-10-19.
+`2026-10-22-ccrc-history-w2-5a-quiz-builder.md`; W2-2b: `2026-10-22-ccrc-history-w2-2b-headless-seam.md`; W2-5b1:
+`2026-10-22-ccrc-history-w2-5b1-arms-and-judge.md`; each approved under the operator's directive of 2026-10-19.
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-ridge`   Workspace: **a fresh child per wave** (one PR per child)
 
 **What this program is.** ccrc keeps its own lossless, searchable copy of every Claude Code session transcript on
@@ -32,15 +33,16 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 | 5 | W1-B4 "sole-copy export" (ruled Q6, e) | fleet | #623 | **merged** 2026-10-19 04:14Z as `ad65fb394` at head `2eca753d7` (run 587; reviews 614, 621, 623, 624 and 625; four fix rounds); **live on every session-hosting node before the earliest W1-k date, at the latest 2026-12-19** |
 | 5h-1 | B4's export hardening ("Owed from B4", items 1–8): the check after a bind in bounded, resumable batches, with doctor's rule for a check that cannot finish; a carried segment that counts only when whole and this store's; a vanished segment that re-arms the check; replay that marks by the last carrier; `expand`'s variants and `ENTRY_UPSERT`'s tie; the history-off advice for a carry; B4's errata | fleet | #737 | **merged** 2026-10-20 12:58Z as `3af16cf97` at head `adcea723e` (run 626; reviews 644, 675, 689 and 700; three fix rounds) |
 | 5h-2 | B2's owed items 1–5 ("Owed from B2") and B3's errata ("Owed from B3"): the named value class widened (the `Bearer` and box-token header classes stay as they are), with stored text re-cleaned as a sweep phase; the relay's look-behind window; the op marker's identity; `lag-high`'s remedy; the errata. B2's item 6 stays later | fleet | #1010 | **merged** 2026-10-21 15:39Z as `02d75ae5f` at head `90bfaadf9` (run 702; reviews 711, 721, 725, 744, 749 and 753; five fix rounds) |
-| 6 | W2: the replay eval and its gate (ruled Q7, Q14), in eight PRs on two lanes (rows below); the W2 decisions document is the authority | fleet + deploy | — | the build runs now; the window waits on the operator's acts (decisions §5) |
+| 6 | W2: the replay eval and its gate (ruled Q7, Q14), in nine PRs on two lanes (rows below; W2-5b split in two, S1); the W2 decisions document is the authority | fleet + deploy | — | the build runs now; the window waits on the operator's acts (decisions §5) |
 | W2-1 | the recall-off verb and its generation checks, the per-tick presence record, the exports the deploy lane reads | fleet | #1105 | **merged** 2026-10-22 02:23Z as `cd622b2f6` at head `69105d4f9` (run 755; reviews 761 and 763; one fix round) |
-| W2-2a | the as-of cut | fleet | — | run 764, opened 2026-10-22 when W2-1 merged; its plan merges first, then it dispatches when no running worker claims any of its paths (W2-D3) |
-| W2-2b | the headless seam | fleet | — | after W2-2a |
+| W2-2a | the as-of cut | fleet | #1126 | **merged** 2026-10-22 15:55Z as `ecbab815e` at head `d119d6e90` (run 764; reviews 778 and 791; one fix round) |
+| W2-2b | the headless seam | fleet | #1154 | run 809, dispatched 2026-10-22 after its plan merged (#1146); wave-done at `b25a12846`; review 829 dispatched |
 | W2-3 | `deploy/history-gate.mjs`, pure: windows, bootstrap, assignment, the gate, the quiz's labeller and admission, the open-record validator; `measure-history.py`'s raw rows and census | deploy | #856 | **merged** 2026-10-20 08:27Z as `36d0a92c1` at head `99325dc26` (run 636; reviews 664, 680 and 686; two fix rounds) |
 | W2-4 | `deploy/history-replay.mjs`, the driver core: the spawn contract, account admission, `--out`, limits and budget, preflights, step 0a and the probe | deploy | #826 | **merged** 2026-10-20 13:28Z as `780c8126c` at head `8660b6cf9` (run 637; reviews 657, 681, 696 and 701; three fix rounds) |
-| W2-5a | reconstruction, admission, the quiz builder and the open-record subcommands | deploy | — | run 765, opened 2026-10-22 when W2-1 merged; runs alongside W2-2a; its plan merges first, then it dispatches when no running worker claims any of its paths |
-| W2-5b | the arms, the judge, the hand-check, uptake, the marker and the report | deploy | — | after W2-2b, W2-3 and W2-5a; merges before open-record part 1 |
-| W2-6 | the report-only counters | deploy | — | after W2-5b |
+| W2-5a | reconstruction, admission, the quiz builder and the open-record subcommands | deploy | #1134 | **merged** 2026-10-22 17:54Z as `c34f82830` at head `ac30619a3` (run 765; reviews 795 and 811; one fix round) |
+| W2-5b1 | the arms and the judge: `marker`, `verify` for the pilot and quiz sections, `arms` and `judge` | deploy | — | run 828; its plan merges first, then it dispatches after W2-2b merges |
+| W2-5b2 | the pilot and the verdict: `step0b`, `fidelity`, `pilot-result`, `open --amend`, `handcheck`, `report`, `open --finalize`'s derived budget, README's driver paragraph and the spec errata | deploy | — | after W2-5b1; its plan is drafted while W2-5b1 builds; merges before open-record part 1 |
+| W2-6 | the report-only counters | deploy | — | after W2-5b1; beside W2-5b2 only on a line-disjoint plan the coordinator rules on (Q29) |
 | 7 | W3: steering (session-written leaves) | fleet (hook) | — | only if the operator records the W2 gate as passed |
 | 8 | W4: subagents and `touched` | fleet | — | only if the operator records the W2 gate as passed, and never before wave 5 is live |
 
@@ -552,6 +554,288 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
     - Section 5's act 9 is amended in place: one pilot node, and `pilot-source` runs once there. So is W2-D71 (R10):
       the quiz draws from every family with an admitted boundary, never only the census's active list, ordered across
       nodes by a per-family seeded key.
+  - **W2-2a (run 764, PR #1126), 2026-10-22.** Dispatched on base `4f9d7ac4d` (#1118, which carried its plan). Every
+    ruling below is the coordinator's, made in the operator's place under the directive of 2026-10-19.
+    - **Ruling 7894, on the worker's question 7893.** The worker's own whole-branch review found two doors that
+      W2-D35, as written, leaves open:
+      - L2: a visible leaf other than N printed its summary row's text when the cut hides that row (its boundary
+        visible, its summary row stamped after T_N, with no stamp, or outside N's holding copy);
+      - L3 (a damaged store only): a visible parent over a leafless condensed child printed the child's rolled-up
+        gist, topics and refs.
+      Both were ruled fail closed, one number each from run 764's block, defined in the W2-2a plan: D-6282, a leaf with
+      a summary pick is visible only if that row is too; D-6283, a node is hidden when any condensed node at or below
+      it has no leaf below it. The ruling also accepted the worker's in-hand items, D-6281 among them (the store half
+      keys N's transcript on the boundaries row's transcript, as derivation does), and BM25 ordering under
+      `--sort relevance` or `hybrid` as a named PR residual (recency, the default, and `--regex` are unaffected).
+      D-6283 flipped Task 3's ASOF=8 expectation for the parent, inside the PR.
+    - **Wave-done (7932):** PR #1126 at `9fe784454`, 8 commits, 10 files (the File Structure plus the plan), using
+      D-6281, D-6282 and D-6283. Re-measured: head equals tip, 25 checks success and 5 skipped, 0 threads, a clean
+      merge-tree probe, and private-name scans at 0 (fixture paths only). Seven of the eight commits edit the plan, for
+      measured predictions as the brief ordered, against the plan header's "only Task 6". Advanced to awaiting-review;
+      review run 778 dispatched.
+    - **Review 778** (at `9fe784454`): three Opus lenses, three Sonnet refuters per finding; 8 confirmed (1 important,
+      7 minor) and 1 refuted, and every suite reproduced the worker's counts.
+      - F1 (important): nothing pinned the order of the store half's copy rows (an `ORDER BY m.line DESC` mutant stayed
+        green over the whole history-recall file). For a boundary N with no stamp, or anchored on itself, a wrong order
+        fails open.
+      - F2: D-6282's arm judges a leaf by the pick it re-computes at read time, so it failed open when that pick is NULL
+        for a leaf that derivation summarised (a holding copy retired for a live one without the summary row).
+      - F3: the store half's holds test was unpinned (fail closed). F4: `VERB_TABLES` lacked `boundaries` for grep,
+        expand and tree. F5 and F6: the PR body's Task 4 mutant figure, and the plan-edit departure it did not name.
+        F7: D-6282's pin covered only a summary row inside N's holding copy.
+      - The ring question: the R8 ref-survival decider in recall.mjs is a fair follow-up, not a blocker, on the
+        condition that it lands in lib before a second consumer exists (W2-5b's card parent).
+    - **Ruling 7966, fix round 1:** fix all. F2 is closed fail closed with one number. Its blob half (a pick naming
+      another blob) was adopted only if two facts measured true: derivation stores the picked entry's `blob_id`, and
+      nothing moves either value afterwards; otherwise the NULL half alone, with the rest named as a fail-open residual.
+      The refuted record nit was folded in: Task 6 Step 2 checks every number the plan defines.
+    - **Fix round 1 (7993):** one commit, `d119d6e90`. F1: cut-A8 and cut-A9. F2: D-6284, both halves, on the two facts
+      measured true. F3: cut-A10. F4: `boundaries` in `VERB_TABLES`. F5 and F6: the body. F7: the outside-copy case.
+      The body's read-time-pick residual was dropped as closed. Re-measured clean; advanced to awaiting-review, and the
+      scoped re-review run 791 dispatched.
+    - **Review 791** (at `d119d6e90`): 6 minor confirmed, 1 refuted. Every pin reds its own case, and no consistent
+      leaf is hidden over 1,200 seeded and transcript-shaped stores. The findings:
+      - F-A: the seeded case's D-6284 blob assertion cannot red alone;
+      - F-B: D-6284's over-hide is permanent, and holds under any cut;
+      - F-C: the plan's D-6284 entry says the gist comes from the stored blob, where the gist doors print `nodes.gist`;
+      - F-D: Task 6 Step 2's "defined in N plan(s)" loop checks two numbers, not six;
+      - F-E: the PR body's title count (81, measured 88);
+      - F-F: no census pins `VERB_TABLES`.
+    - **The coordinator's ruling on review 791: merge without another round.** The coordinator patched #1126's body:
+      the title count (88); D-6284's over-hide as its price (permanent until the holding copy again carries the stored
+      blob, under any cut; a lossless rotation onto a prefix copy measured 26 of 2,512 leaves hidden under an
+      all-visible cut); the reparse-then-revert residual (F-C's narrow fail-open shape); and "Notes for review: reviews
+      778 and 791". F-C and F-D are corrected in place in the W2-2a plan by this file's PR; F-A and F-F are under
+      "Later".
+  - **W2-2a landed:** #1126 entered the merge queue at 15:27Z at `d119d6e90` and merged on 2026-10-22 at 15:55Z as
+    `ecbab815e`. Run 764 is closed. The numbers it defines, each in the W2-2a plan: D-5765, D-5766, D-6281, D-6282,
+    D-6283 and D-6284. The rest of run 764's block is unused.
+  - **W2-D35 amended in place** in the decisions document, by this file's PR, as ruling 7894 said it would be. Under a
+    cut, a leaf other than N is also hidden when its summary row is hidden, or when its stored summary blob is no longer
+    what the read-time pick names (D-6282, D-6284); and a node is hidden when any condensed node at or below it has no
+    leaf below it (D-6283). Each fails closed.
+  - **W2-5a (run 765, PR #1134), 2026-10-22.** Every ruling below is the coordinator's, made in the operator's
+    place under the directive of 2026-10-19.
+    - **Ruling 7904, on the worker's question 7903.** R10's sentence ("a refusal that needs no store and no spawn
+      answers before `--out` exists") also covers four refusals that the plan's Task 7 answered only inside
+      `openWriter`, after `prepareOut`: account-refused, roster-invalid, a limits row at the threshold at open, and
+      wrapper-unmeasured. Ruled: pilot-source and quiz-source pre-check each before `prepareOut`, through the same
+      functions. `openWriter` keeps its calls as the authority, so a state that changes in between still refuses at
+      open, leaving an empty `--out`, which the entry names. Each refusal gets a case, a CONTROL and a mutant that
+      asserts the directory. One number from run 765's block.
+    - **Ruling 7942, on the worker's whole-branch review (7930).** Six items, one number each from run 765's block,
+      and the rest with none:
+      - A: a key after a JSON `\n` reached the writer's stdin and `--out`. A `tool_use` input is redacted as values,
+        through lib's `redactFinalJson`, before it is serialised, and no site in the PR redacts text already serialised
+        as JSON.
+      - B: a leaf-span fact is placed by its raw spelling, else its JSON-escaped one, else dropped under a counted
+        word. A data case reached after `--out` or after spend never exits INTERNAL.
+      - C: legacy families (generation `''`) are excluded in both modes, fidelity included, and counted, so the 60/12
+        floor is honest.
+      - D: preflight splits into its no-spawn half, which the pre-check calls, and the version comparison. Open's
+        words and their order are unchanged, and there is no stand-in version.
+      - E: W2-D63's 40-character SHA sampling is built in W2-5a. Shorter SHA facts are dropped under a counted word,
+        pinned at 40 with a CONTROL at 7.
+      - F: the pilot seed is pinned in `--out`: read back when present, drawn only when absent.
+      - G and the rest, with no numbers: the depth CONTROL and its throw side, the writes-nothing pins, the empty-value
+        refusals, sourcing in store order, the family-order-key parity pin, the plan-text sync and a stale comment.
+    - **Wave-done (8020):** PR #1134 at `1f3677cf1`, 30 commits, 3 files. Its suite line read red, shallow: the shared
+      after-all fixture cleanup overran its hook timeout under load, fixed in `dcc6cbe67`. It uses the departures
+      W2-5a's PR defines, each defined once. The worker applied A's number to two more sites: the excerpt pair line's
+      tool name, which a scoped re-review found, and `renderKeptMember`'s role tag. Its PR body names its precedence
+      changes and its carried items. Re-measured clean; one external app's check, not a required one, reads
+      action_required. Advanced to awaiting-review. Review run 795's dispatch was refused at the concurrency cap (14 of
+      14), and it was dispatched once a slot freed.
+    - **Review 795** (at `1f3677cf1`): three Opus lenses, three Sonnet refuters per finding, 33 agents with none lost;
+      5 confirmed (1 important, 4 minor) and 5 refuted, and every suite and 13 mutants reproduced.
+    - **Ruling 8124, fix round 1:**
+      - F1 (important): a signed record's out-of-range values (`pilot_budget`, `limits.threshold_pct`,
+        `limits.max_age_ms`, `quiz.target` and the quiz caps) got past `--out` and then exited INTERNAL. They are
+        refused as an invalid record before `--out`, under the departure for 7942's B (a data case reached after
+        `--out` never exits INTERNAL).
+      - F2: the pilot-seed resume pin must red on the respawn, not only on the seed file being absent.
+      - F3 and F5: plan text (the pre-check's two order changes, and the counts and words not yet synced).
+      - F4: both extension sites stay under A's number, as W2-D54 conformance on the writer-stdin path. The record's
+        attribution is corrected: "no text reaches a spawn stdin or a file under `--out` unredacted" is the brief's
+        must-hold (a), not A's text.
+      - R-3, refuted by the majority but raised as critical: lib's layer-1 redaction leaves a recorded-only pair value
+        glued to a preceding alphanumeric (a literal backslash-n included) once its secret file is no longer loaded.
+        It is lib-side, so it is accepted as a named residual in the PR body and carried to a lib redaction follow-up.
+    - **Fix round 1 (8137):** three commits, tip `ac30619a3`. F1: `refuseOutOfRangeValues`, the first call in
+      `refuseWriterAdmission`, refuses the seven fields `record-invalid` before `prepareOut` in both subcommands and
+      writes nothing; one case per field through `open --draft --overrides`, each with a CONTROL at the boundary, plus an
+      all-fields case and a unit case; D-6309's entry names the fields. One word changed: a threshold of 0 or below now
+      answers `record-invalid`, not `limits-threshold`. F2: the fake writer's items depend on the seed, so a fresh seed
+      reds on a third spawn. F3 to F5 and the record nit: plan text and the PR body. No new number. history-replay 773
+      of 773; re-measured clean; advanced to awaiting-review, and the scoped re-review run 811 dispatched.
+    - **Review 811** (at `ac30619a3`): three Opus lenses, three Sonnet refuters per finding, 33 agents with none lost;
+      10 panel findings confirmed and merged into 7, all minor, none breaking a must-hold; 12 mutants and a control
+      measured, and the suites green at the tip (history-replay 773).
+      - F1: FW-H1's sentence and the wave-done overstated what dropping the range check reds: 8 of the 9 D-6309
+        cases, four on the `--out` directory, one on `batchGate`'s `TypeError` after `--out`, three on the word.
+      - F2: the threshold row (0 before 101) and the `max_age_ms` row can red only on the word, never on the `--out`
+        hazard.
+      - F3: D-6309's entry recorded one word change of four: the `max_age_ms` word, the fresh-row condition and the
+        precedence ahead of admission went unrecorded, and no case pins that precedence.
+      - F4: `settings_mode`, outside the seven fields, still throws after `--out` for a hand-assembled record that
+        validates; the driver's own builder cannot produce one.
+      - F5: the unit case's title claims "writes nothing" with no write assertion. F6: Review Focus 4 gave D-6311's
+        mutants to D-6309. F7: the header's Task 1, 2, 4 and 6 bullets left out their fix-round numbers.
+    - **The coordinator's ruling on review 811: merge without another round.** The coordinator patched #1134's body:
+      H1's real reach, D-6309's other word changes, the carries and the notes for review. F1, F3, F6 and F7 are
+      corrected in place in the W2-5a plan by this file's PR; F2, F3's precedence pin, F4 and F5 are W2-5b2's
+      ("Carried constraints").
+  - **W2-5a landed:** #1134 entered the merge queue at `ac30619a3` and merged on 2026-10-22 at 17:54Z as `c34f82830`
+    (run 765; the worker's whole-branch review, reviews 795 and 811; one fix round). Run 765 is closed. The numbers it
+    defines, each in the W2-5a plan: D-5780, D-6277, D-6278, D-6279, D-6280, D-6301, D-6302, D-6303, D-6304, D-6305,
+    D-6306, D-6307, D-6308, D-6309, D-6310, D-6311, D-6312 and D-6313. The rest of run 765's block is unused.
+  - **W2-2b's plan (2026-10-22).** Six Opus drafters wrote one task each against W2-2a's head `d119d6e90`, before it
+    merged, and an Opus integrator assembled it with the coordinator's rulings R1 to R12. Five Opus lenses
+    (conformance, code reality, seam safety, test discipline, cross-task consistency) reviewed it, each finding with a
+    Sonnet refuter: 26 confirmed and folded, 0 refuted. A convergence pass of two Opus lenses (executability, and a
+    re-check of the seam), with refuters, confirmed 5 more, all folded. Every count and red in the plan is a prediction
+    nobody has run.
+    - The plan defines D-5767, D-5768 and D-5769, the decisions document's W2-2b departures: the env path takes its
+      family and generation from `CCRC_RECALL_ASOF` (D-5767), the marker's grammar (D-5768), and the two new refusal
+      words `headless-malformed` and `headless-arm-unknown` (D-5769).
+    - The rulings, each the coordinator's, made in the operator's place under the directive of 2026-10-19:
+      - R1: the marker is read on one code line, only on the headless path, and folded once by `headlessMarkerOf`;
+        `decideHeadless` is pure, calls W2-2a's `recallSeamEngaged` and `decideSeamInPane`, and answers in W2-D46
+        step 1's order.
+      - R2: `parseHeadlessList` takes text; a U+FFFD, an over-cap text, an empty line before the store line, an id
+        spelled `store` and whitespace at either end of a line are each malformed (D-5768).
+      - R3: `decideAsOfFamily` is strict (a transcript confirmed by more than one family refuses `asof-invalid`), the
+        store line is checked before any ASOF row is read, and the anchor rule lives in lib (D-5767).
+      - R4: Task 3 owns the env branch and sets `seen.id`, `seen.gen` and `seen.arm` at step 4's admission; Task 4 owns
+        `recallLine`, the drain skip and their pins.
+      - R5: step 4's own refusals write no counter line: they did not admit.
+      - R5a, amending R5 after the plan review's CONF-1: R5's `asof-invalid` is step 4's family refusal; D-5765's store
+        half runs at step 7 with the cut, after admission, and is counted.
+      - R6: the spool's `arm` is not narrowed to `RECALL_ARMS`.
+      - R7: W2-D41's env-only cross-project guard applies to every scope verdict that used a registry project, the
+        default family scope included.
+      - R8: Task 3 edits W2-2a's history-cli case in place (seam set, no pane: `no-identity` becomes
+        `headless-unarmed`), the PR's one in-place test edit.
+      - R9: the plan merges to `main` before dispatch, carrying D-5767, D-5768 and D-5769.
+      - R10: `deploy/history-gate.mjs`' `ASSIGNMENT_ARMS` is a second spelling of the arm words; W2-2b's PR body names
+        it as a residual, and W2-5b adds the parity pin ("Carried constraints").
+      - R11: README's seam paragraph goes inside "Session history: lossless recall", after the box-verbs and
+        operator-verbs paragraph.
+      - R12: the history-switches row names root and tier exactly as W2-D49 does, with no "(removed at W2 close)".
+  - **W2-2b (run 809, PR #1154), 2026-10-22, so far.** Every ruling below is the coordinator's, made in the operator's
+    place under the directive of 2026-10-19.
+    - Dispatched once #1146, which carried its plan, merged as `30ba2d662` and the disk cleared `ccd`'s workspace floor.
+      Two claim holders' consents went to its worker with the brief: one on `single-definition.test.ts`, and one on
+      README, scoped, with conditions.
+    - **Ruling 8216 (A), on the worker's question 8215.** The worker's own whole-branch review (four Opus lenses; nothing
+      critical or important) confirmed one gap: on the env path, `--workspace`'s anchor (`cwd_real ?? cwd`) was trimmed
+      by `decideScope`'s workspace arm, so a cwd with whitespace at either end read a sibling directory's family or
+      answered `not-indexed`. Ruled: fixed in the PR, the env source untrimmed and the tmux trim kept, with an in-place
+      edit of `decideScope` licensed. It is a departure W2-2b's PR defines, and a scoped re-review read the fix clean.
+    - README's consented paragraph grew to 29 lines with Task 5's fix round (a departure W2-2b's PR defines). Its claim
+      holder confirmed the 29 lines (8246) and re-declared its claim under a new number (8256); the worker was told both
+      (8249, 8259).
+    - **Wave-done (8268):** PR #1154 at `b25a12846`, 9 commits, 12 files (the File Structure plus the plan). The suite
+      line reads red, from history-export's free-space case on a full temp volume, red at the merge-base too. The last
+      commit fixes a test fixture CodeQL flagged, with nothing dismissed. Re-measured clean; advanced to
+      awaiting-review, and review run 829 dispatched.
+  - **W2-5b split in two (2026-10-22).** An Opus scoping pass against `c34f82830` (W2-5b's 18 ships, 24 carries and the
+    spec errata it owns; about 9,000 to 10,500 added lines) recommended two serial PRs. Every ruling below is the
+    coordinator's, made in the operator's place under the directive of 2026-10-19, and each plan names them so the
+    operator can change them.
+    - **S1, two serial PRs on the deploy lane.** W2-5b1, "the arms and the judge", ships `marker`, `verify --section
+      pilot|quiz`, `arms` and `judge`, in the driver and its test file only, with no README and no spec. W2-5b2, "the
+      pilot and the verdict", ships `step0b`, `fidelity`, `pilot-result`, `open --amend`, `handcheck` and `report`,
+      edits `open --finalize`, and carries README's driver paragraph and the spec errata. Both wait for W2-2b (W2-D2);
+      W2-5b2 dispatches after W2-5b1 merges, its plan drafted while W2-5b1 builds. The decisions document's W2-5b entry
+      is divided between them, not changed.
+    - **S2, the carries outside W2-5b's files.** R8's ref-survival decider is moot for W2-5b: the card's parent is W2-D35's
+      node rule, already lib's, so it stays under "Later". The arm-word parity is a set-equality pin in the test file,
+      with the gate's order unchanged and no import added. Report words are driver-local. The driver-side range check
+      (D-6309's rule) extends to `spend_budget` and every part-2 field a W2-5b consumer reads, before `--out`; the
+      validator change stays later. The read instant is each gathered measure-history file's mtime, labelled as a proxy,
+      plus the report's own instant. lib's R-3 is a named residual: the judge's stdin and the sheet carry redacted replies.
+    - **Q1 to Q31, the scoping questions**, grouped:
+      - Surface and place: Q1 separate subcommands sharing one `--out`, each spending and resuming on its own; Q2 arms
+        and judge per node in that node's `--out`, the sheet and the report on the reporting node over the gathered
+        files, each with its sha; Q25 a fresh `--out` for the post-part-1 pilot and one per node for the window, refusing
+        an `--out` that holds `pilot-source.json`.
+      - Batches and runs: Q3 both arms of a question side by side at concurrency 2, 5 questions per 10-job batch in
+        frozen qid order, the preflight before each; Q4 run names per attempt, a driver timeout `infra-failed`, one
+        re-run, then run-failed; Q14 a per-batch manifest with the measured version and the run names; Q24 `not-run`
+        stays emergent, and `DRIVER_REASONS`' stop/refusal partition is pinned, each word classified once; Q30 the batch
+        summary prints the stop word and the not-run count, with no automatic retry; Q31 every `error` field a run
+        prints is recorded, and `authentication_failed` stays unmeasured, a named residual.
+      - Spend: Q5 a per-node share, ceil(spend_budget × node questions / all questions), printed and enforced by that
+        node's ledger; Q6 the judge runs in the usage pilot, the extrapolation is ceil(1.25 × n_questions × the pilot's
+        spend per question, arms and judge), recorded with its inputs, and `--spend-budget` stays the operator's echo,
+        refused on a mismatch; Q7 a charge is the larger of the result usage and the assistant-message sum, subagents
+        included, both recorded.
+      - The pilot: Q8 fidelity spawns in box mode, with no marker; Q9 `fidelity` takes `--pilot` and its sha and checks
+        them against part 1; Q10 a failed pilot fails closed, and a control exit 8 that is not `is_error` makes uptake
+        `unmeasured`, never a failure; Q11 step 0b asks the first usage question in qid order with a nonexistent synthetic
+        transcript path, and a subagent's tool list is inferred from `parent_tool_use_id`; Q12 a mid-window re-pilot is
+        step 0b on a listed quiz family plus fidelity, its sha the amendment's `repilot_sha256`; Q26 a skill missing under
+        `--restricted` is recorded and halts, for a re-run with `--settings-mode fallback`; Q27 `open --finalize` refuses a
+        failed pilot unless `--accept-failed-pilot` is given, printed and recorded as the operator's act.
+      - Records: Q13 the detail schemas of `open --amend`'s three kinds; Q23 the pilot subcommands take no
+        `--allow-code-change`, and arms, judge and report accept it after window start only, stamping every output and
+        the verdict.
+      - The as-of pieces: Q16 D-6284's over-hide is measured per node, read-only, in `verify --section quiz`; Q20 display
+        prefixes over the family's whole node-id set, and the card line, one blank line, then the payload; Q21 the
+        re-check is the one `screenRedaction`, any answerable source, and the frozen source entry visible under the cut;
+        Q22 the two parity pins against lib's cut.
+      - The verdict: Q15 `unrealised` comes from the per-node `verify --section ab` outputs, sha-checked; Q17 the read
+        instant as S2 says; Q18 positional judge ids from the `'judge-order'` shuffle, the id map in its own file; Q19 the
+        label file's grammar, a missing judge-failed label leaving the verdict `incomplete` and a missing sampled label
+        refusing; Q28 the report's vocabularies as S2 says.
+      - Q29: W2-6 may run beside W2-5b2 under W2-D3 if its plan shows the two line-disjoint; the coordinator rules on that
+        plan before dispatching them together.
+  - **W2-5b1's plan (2026-10-22).** Six Opus drafters wrote one task each against `main` at `c34f82830`, before W2-2b
+    merged, and the coordinator ruled their open questions as R1 to R26. An Opus integrator assembled it. Five Opus
+    lenses (conformance, code reality, the must-holds, test discipline, cross-task consistency) reviewed it, each finding
+    with a Sonnet refuter: 27 confirmed and folded, 1 refuted. The coordinator ruled R27 to R32 on what the review raised,
+    and a convergence pass of two Opus lenses (executability, and a re-check of the must-holds), with refuters, confirmed
+    4 more, all folded, and refuted 1. Every count, red and fixture assumption in the plan is a prediction nobody has run.
+    - The rulings, each the coordinator's, made in the operator's place under the directive of 2026-10-19:
+      - Names and layout: R8 every consumer takes the owning task's names; R9 tests may nest in W2-5a Task 7's describe,
+        each titled "W2-5b1 Task <N>:"; R22 Task 6's census reads those titles; R24 Q16 lives in Task 3's verify and Q25 in
+        Task 4's arms; R26 Task 4 factors `refuseSpawnAdmission` and `preflightSpawn` out of W2-5a's writer code, W2-5a's
+        behaviour and pins unchanged.
+      - Refusals: R2 family-unlisted, family-recall-off and quiz-unanswerable are refusals, not stops; R11 a store with no
+        family of the section refuses `input-invalid`, `formatHeadlessList`'s throws refuse `record-invalid`, and no new
+        `DRIVER_REASONS` word unless a task's Interfaces names one; R12 a pilot family sits on a node the record names;
+        R13 `verify` takes no `--allow-code-change`; R20 the judge refuses `input-invalid` until every (qid, arm) of the
+        node's section is answered or run-failed; R30 the range refusals for a version move have one spelling.
+      - The batch: R4 the record's `limits.batch_max` and `concurrency` are honoured within the driver's bounds; R28
+        `batch_max`'s floor is 2, so a batch holds both arms; R6 the re-mine reads every rostered config dir; R7 no
+        family-moved check in clause (a); R14 re-runs are per arm; R15 the summary after `interrupted` is printed, not
+        written; R17 the spend-share line goes to stderr and the summary.
+      - Payloads and the judge: R5 the card line is not redacted, being lib's grammar over two node ids and a constant;
+        R16 the answer record keeps the raw reply under the 0700 `--out`, redacted at each spawn and at the sheet, a
+        named residual; R18 the judge-order map covers every frozen pair, so ids are global; R19 a failed judge run folds
+        into malformed: one retry, then judge-failed.
+      - Over-hide: R10 a whole-store count with its binds stated and the hidden leaf ids capped; R29 the cap is 1,000,
+        and the total is always given.
+      - Tests and the record: R21 the arms-then-judge walk is Task 6's; R23 each owning task adds its own W2-D24 re-check
+        cases; R25 plan-text commits carry build-time numbers and corrected predictions; R27 narrows R23, licensing three
+        in-place edits of W2-5a cases, each named in its commit and the PR body; R31 red-first cases, CONTROLs and mutants
+        for `readArmAnswers`' refusals and the pilot-only settings-mode check; R32 the fixtures' assumptions are
+        predictions the worker measures, fixing the fixture, never the guard.
+      - R1 step 0b's main-thread count is W2-5b2's, and R3 is the four departures below.
+    - The plan defines four departures, issued for it while planning:
+      - D-6467 (Task 1): every spawn's charge, in every mode, is the larger of the result usage and the assistant-message
+        sum, subagents included, charged unconditionally. It departs from decisions section 7's C6, which measures in the
+        pilot first and charges only if the spend is missing. W2-4's pinned probe spend moves from 15 to 60.
+      - D-6468 (Task 2): W2-D78(iii)(a) runs as the one `screenRedaction` over a re-mined candidate, where W2-D78 reads
+        F_raw alone; a question also refuses on F, a repo root or its leaf, and a source pruned or tombstoned after the
+        freeze refuses at (a).
+      - D-6469 (Task 4): a fourth clause beyond W2-D78(iii)'s three: a question whose arm-time payload no longer
+        reconstructs refuses `quiz-unanswerable` before any spawn of the batch, and is never dropped.
+      - D-6470 (Task 5): the judge's `answer_field` is capped at the reply's 16 KiB, beyond W2-D79's letter, which caps
+        the reply only, so the judge's stdin is bounded.
+    - Run 828 is open for W2-5b1 (wave 12), with the 20 numbers issued for it at run-open. It dispatches after W2-2b
+      merges, on the merge of this file's PR or later.
 - **Later (coordinator), from the build:**
   - The check after a bind runs two DISTINCT scans, over `blobs.exported_seg` and `entries.exported_seg`, on every
     check step. `exported_seg` sits after `z` and has no index, so a check spanning N steps likely reads the blob table
@@ -587,7 +871,7 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
   - **From W2-1's plan (rulings R1 and R3):** W2-5a rewords `deploy/history-replay.mjs`'s header sentence "never
     loads node:sqlite in any form" once the driver imports W2-1's exports. The next fleet PR that holds
     `ccd/session-hook.sh` corrects its comment that the CLI reads 4,096 bytes of `recall-off/<id>`: since W2-D29 it
-    reads up to `CONTROL_FILE_MAX`, and the hook still fails closed. W2-5a's plan takes the first of these.
+    reads up to `CONTROL_FILE_MAX`, and the hook still fails closed. W2-5a took the first of these (#1134).
   - **From W2-1's reviews and PR body:**
     - `history-holds` and `history-export` hold cases that read the box's real free space, so on a box below the
       store's free-space floor three of them fail, at the base as well. Hermetic fixtures would stop a full box from
@@ -601,6 +885,31 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
     - An adopt carries the old box's `seen_ms`, so a clock that ran ahead there narrows the next interval; an adopt
       mid-window is outside the W2 procedure.
     - `deploy/history-gate.mjs`'s `assembleReports` doc does not mention `recall_off`.
+  - **From W2-2a's reviews (778 and 791) and its PR body:**
+    - Pin "D-6284 hides no consistent leaf": run `asOfHiddenNodesSql` over the seeded stores under an all-visible cut
+      and assert that no leaf is hidden that the base shows (review 791 F-A; the seeded case's blob assertion cannot red
+      alone). Review 791 measured it by script, at 0.
+    - A census of the tables each verb's statements name against its `VERB_TABLES` row, so that dropping `boundaries`
+      or `memberships` reds (review 791 F-F).
+    - For D-6284's over-hide: re-point `summary_blob_id` when a copy rotates to a row of equal content, so a leaf that
+      a lossless rotation hid comes back.
+    - derive.mjs's `refreshLeaf` (reparse) re-derives gist and topics from the read-time pick while keeping
+      `summary_blob_id`. It is pre-existing; D-6284 fails closed there, and the reparse-then-revert shape is #1126's
+      named residual.
+    - A lib `summaryMetaOf` that derive adopts, since `asOfCut`'s meta mapping duplicates derive's.
+    - `producerOfLeaf`'s per-witness prepare under a cut: splice the cut into the witness statement.
+    - `cutHidesASource` checking refs before it walks the lineage.
+    - `scanRegexJob` refusing a malformed cut.
+  - **From W2-5a's reviews 795 and 811, and W2-5b's split:**
+    - Tighten W2-3's gate validator to range-check the record fields review 795 F1 names, and `spend_budget` and
+      `settings_mode` with them. Until then the driver refuses them before `--out`: D-6309's rule, extended by W2-5b1 (S2)
+      and, for `settings_mode`, by W2-5b2 ("Carried constraints").
+    - lib's `redactField` and its glued-prefix limit for a recorded-only pair value (R-3), named as a residual in W2-5a's
+      PR body and in W2-5b's.
+    - A read-instant field in measure-history's families output (S2); W2-5b2's report records a labelled mtime proxy
+      until then.
+    - R8's ref-survival decider moves from recall.mjs into lib before a consumer that needs R8's ref rule. W2-5b's card
+      does not: its parent is W2-D35's node rule (S2).
 - **Later, for the operator.**
   - A way to forget a mislearned secret pair. None exists: pairs are permanent by design (D-4587). My
     recommendation is to keep it that way.
@@ -624,18 +933,43 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 
 - **Order.** Part A merged first (#300), then B1 (#315), then B2 (#404), then B3 (#425), then B4 (#623), then 5h-1
   (#737), then 5h-2 (#1010), then W2-1 (#1105), which builds on them and on W2-3 (#856) and W2-4 (#826). W2-2a (fleet
-  lane) and W2-5a (deploy lane) build on W2-1 and run alongside each other, on disjoint files.
+  lane) and W2-5a (deploy lane) built on W2-1 alongside each other, on disjoint files, and both merged (#1126, #1134).
+  W2-2b (fleet lane, #1154), built on W2-2a, is in review. W2-5b1 (deploy lane) dispatches after W2-2b merges (W2-D2),
+  on the merge of the docs PR that carries its plan; W2-5b2 after W2-5b1 merges; W2-6 after W2-5b1, and beside W2-5b2
+  only on a plan that shows the two line-disjoint (Q29).
 - **Peers.** The worker reads `GET /api/claims?project=ccrc-pwa` before each first edit of an existing file. Wave 5h's
   hot files are `ccd/history/*.mjs`, `ccd/history/recall.mjs` and the history tests; whichever PR lands second merges
   main and keeps both sides. Path-identity W3 (its plan, #1055) has this programme's acknowledgement for four
   line-neutral in-place hunks in `ccd/ccd` and one in `ccd/ccrc`; it never edits `session-hook.test.ts`, and it mails
   this programme's coordinator before taking its census fallback (its step 4g), which was not agreed in advance. After
   #1099 it takes `main`'s re-measured citation counts on its merged tree (2026-10-22, above).
-- **For W2-5b's plan** (from W2-5a's ruling R8): both parity pins between the driver and lib's cut, once W2-2a has
-  merged (the same-millisecond predicate against `asOfCut`, and the driver's kept(N) members against
-  `asOfCut(N).keptUuids`); README's driver paragraph names the driver's `--no-warnings` shebang; the pilot-result
-  file's shape, which W2-5a reads, is W2-5b's producer contract; and `open --finalize` derives the spend budget and
-  refuses a mismatch (D-6280).
+- **In W2-5b1's plan** (the earlier W2-5b carries it takes):
+  - both parity pins against lib's cut (W2-5a's R8; Q22): the same-millisecond predicate against `asOfCut`, and the
+    driver's kept(N) members against `asOfCut(N).keptUuids`;
+  - the card parent through lib's widened node rule, W2-D35 as amended (D-6282, D-6283 and D-6284), never a second copy
+    (ruling 7894);
+  - the arm words' parity as a set-equality pin between the gate's `ASSIGNMENT_ARMS` and lib's `RECALL_ARMS`, beside the
+    driver's arm-word scan (W2-2b's R10; S2);
+  - D-6284's over-hide measured per node, read-only, in `verify --section quiz` (Q16, R10, R29); W2-5b2's report gathers
+    the counts;
+  - the driver-side range check extended to `spend_budget` and the part-2 fields its consumers read (S2).
+  - not taken: R8's ref-survival decider, moot for W2-5b (S2), stays under "Later".
+- **For W2-5b2's plan:**
+  - from W2-5a: README's driver paragraph names the driver's `--no-warnings` shebang; the pilot-result file's shape,
+    which W2-5a reads, is W2-5b2's producer contract; `open --finalize` derives the spend budget and refuses a mismatch
+    (D-6280), and refuses a failed pilot without `--accept-failed-pilot` (Q27);
+  - from W2-5a's review 811: `settings_mode` refused before `--out` (F4), unless the gate validator follow-up takes it
+    first; the threshold row asks 101 before 0, and the `max_age_ms` row uses a limits row stamped near now, so each
+    per-field row reds on the `--out` hazard rather than on the word (F2); the unit case's "writes nothing" title gets a
+    write assertion or loses the clause (F5); a pin for the range check's precedence ahead of admission, such as a
+    range-bad record on a home with a refused account (F3);
+  - from W2-2b: an env call on a legacy family writes no `gen` on its counter line, so the drain files the row under the
+    registry's current generation; live counters exclude arm rows;
+  - W2-D56's both-arms re-run: after a version re-pilot, both arms of every question with one arm done re-run on the new
+    version, found through W2-5b1's per-batch manifests (Q14). Until then, `arms` after a version move completes the
+    missing arm only (W2-5b1's PR residual);
+  - the spec errata W2-5b owns (E2, E7, E8, E9, E10, E11 and E19 to E24), each citing its number;
+  - W2-6 may run beside W2-5b2 on a line-disjoint plan the coordinator rules on first (Q29).
 - **Operator acts, still owed, in this order on each session-hosting node:**
   1. If the node keeps its store on a volume, link `~/.ccrc/history/db` onto it (spec §9.3: a 0700 root and target).
   2. **Done on both nodes (measured 2026-10-15).** Once the node runs B2 (v0.0.195 or later), run `ccrc history
@@ -665,125 +999,76 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 
 ## Next-wave brief
 
-Two waves dispatch next, one per lane, on the merge of the docs PR that carries their plans or later: W2-2a (run 764,
-fleet lane) and W2-5a (run 765, deploy lane), on disjoint files (route for both: opus, ultracode, subagent sonnet,
-workflow on, compact 40). The briefs of W2-1 (run 755), 5h-2 (run 702), W2-3 (run 636), W2-4 (run 637) and 5h-1 (run
-626) are in this file's history. Each text is the brief as mailed, except that its block's numbers are described here,
-not listed, and the coordinator is named by reference to this file's header. The mailed briefs add what the claims
-read at dispatch.
+One wave dispatches next: W2-5b1 (run 828, deploy lane), after W2-2b (run 809, PR #1154) merges, on the merge of the
+docs PR that carries its plan, or later (route: opus, ultracode, subagent sonnet, workflow on, compact 40). W2-2b is in
+review (run 829). The briefs of W2-2b (run 809), W2-2a (run 764), W2-5a (run 765), W2-1 (run 755), 5h-2 (run 702),
+W2-3 (run 636), W2-4 (run 637) and 5h-1 (run 626) are in this file's history. Each text is the brief as mailed, except
+that its block's numbers are described here, not listed, its base is named by the docs PR's merge rather than a SHA,
+and the coordinator is named by reference to this file's header. The mailed briefs add what the claims read at dispatch.
 
 ```text
-Run 764 - programme ccrc-history, wave W2-2a (wave 9): the as-of cut. Coordinator: the one this ledger's header names.
+Run 828 - programme ccrc-history, wave W2-5b1 (wave 12, deploy lane): the arms and the judge. Coordinator: the one this ledger's header names.
 
-Ledger: docs/superpowers/programs/ccrc-history.md (on main). Read its W2 rows, the "W2-2a's plan" entry and "Carried constraints".
-Plan: docs/superpowers/plans/2026-10-22-ccrc-history-w2-2a-as-of-cut.md. Read its header first, through "Not in this plan". Then do Tasks 1-6 in order, one commit per task (Task 6 commits only to correct a figure in the plan), as its PR paragraph says.
-Authority: docs/superpowers/plans/2026-10-19-ccrc-history-w2-decisions.md (the W2 decisions document, with W2-D35 and W2-D39 as amended in place), then the spec (rev 3.6 as amended; W2-2a never edits it), then the merged code.
+Ledger: docs/superpowers/programs/ccrc-history.md (on main). Read its W2 rows, W2-5b's split and "Carried constraints".
+Plan: docs/superpowers/plans/2026-10-22-ccrc-history-w2-5b1-arms-and-judge.md (about 8,200 lines). Read its header first, through "The PR". Then do Tasks 1-6 in order, one commit per task, as its PR section says.
+Authority: the plan's Decisions table (the coordinator's S, Q and R rulings and the four numbers it defines), then docs/superpowers/plans/2026-10-19-ccrc-history-w2-decisions.md, then the spec (rev 3.6 as amended; W2-5b1 never edits it), then the W2-5a and W2-2b plans as merged, then the merged code.
 
 Execution skill: superpowers:subagent-driven-development.
 Commit on this workspace's own branch. Do not create or switch to a separate feature branch.
 
-What the wave ships: one PR, the plan's Goal. Files: exactly the plan's File Structure, all modify; the PR creates no file. Never a file its Global Constraints list as never touched (the spec, deploy/**, shared/**, README.md, derive.mjs, sweep.mjs, store.mjs and the rest), and never the ledger. If a task seems to need another file, a new test file included, stop and mail me.
+What the wave ships: one PR, the plan's Goal. Files: deploy/history-replay.mjs and server/test/history-replay.test.ts, and the plan itself for build-time numbers or corrected predictions (R25). The PR creates no file. Never README.md or the spec (W2-5b2's), never ccd/**, shared/**, deploy/history-gate.mjs, deploy/measure-history.py, .github/** or the ledger. The in-place edits of earlier cases are only those R27 licenses. If a task seems to need another file or another in-place edit, stop and mail me.
 
-The security property is the wave's point: under a cut, a hidden row, node, epoch, family, id, gist, prefix, ref, count or cursor leaks through no door. Every door has a case with a CONTROL; Task 6's door table and census check it. A door you find uncovered: stop and mail me.
+What must hold (the plan's Global Constraints and Review Focus name each one's pins):
+- No arm spawn before W2-D78's checks and the gate pass (D-6468, D-6469, W2-D56, the per-node share), each refusal with the stub log absent.
+- RP1-arm's exact env, with real arm values.
+- The control payload is byte-identical to W2-5a's. The treatment payload is the card line, a blank line, then the control payload.
+- The card never names a parent hidden under asOfCut(N).
+- No arm word is spelled in the driver.
+- The judge sees no arm token and never judges a correct answer.
+- Every --record consumer re-checks gate_code first.
+- No INTERNAL exit after --out.
+- O13 holds.
+Each has a pin with a CONTROL. A gap you find: stop and mail me.
 
-Rulings: the plan's Decisions table, as written. R1 to R8 were taken by me in the operator's place under the directive of 2026-10-19; the PR body names each so the operator can change them. Never change one yourself.
+Rulings: the plan's Decisions table, as written. S1, S2, Q1 to Q31 and R1 to R32 were taken by me in the operator's place under the directive of 2026-10-19, and the PR body names each so the operator can change them. Never change one yourself.
 
-Base: main at the merge of the docs PR that carries this plan (on top of #1105's merge cd622b2f6), or later. Anchors were measured at cd622b2f6. Re-anchor every Modify by its content; line numbers are hints. Re-read merged code before editing it: the plan text is never ground truth.
+Base: main at the merge of the docs PR that carries this plan, after W2-2b's merge, or later. Anchors were measured at c34f82830, before W2-2b. Task 1 Step 0 stops if W2-2b's lib names are missing. Re-anchor every Modify by content; line numbers are hints; the plan text is never ground truth.
 
-Measuring: run each step and record what it prints. Every red and count in the plan is a prediction written before the code, and nobody has run any of them: measure each, and correct the plan's prediction in the task's own commit if it differs, recording measured over predicted. A red at a CONTROL is the fixture's to fix, never the guard's to weaken. Every mutant must red when its guard is removed; if one cannot, report it. Mutants run through each task's mut.sh helper, one tool call per mutant, restored byte for byte (cmp) before the next. Every -t filter is a regex: keep each regex-safe and selecting at least one test. Key-shaped fixtures are assembled at runtime. Scratch goes under .superpowers/sdd/history-w2-2a/, never git stash.
-
-Public repo: no private name in any file, commit message, PR title or body, and no host, account, session id, IP address or absolute home path anywhere (fixture paths in the /home/u/tree style). Before each push, run `grep -c -i -w -F -f <(cut -f2 "$(git rev-parse --path-format=absolute --git-common-dir)/info/ccrc-private-names" | grep -v '^#')` over your added lines, your commit messages and the PR body. It must print 0. On a non-zero count, get line numbers only (grep -n ... | cut -d: -f1), judge each hit by its line, and never print a matched token.
-
-Peers: read GET /api/claims?project=ccrc-pwa before your first edit to any existing file. Any path another run holds: do not edit it; mail me the path, the lines and why. Whichever PR lands second merges main (never a rebase) and keeps both sides. W2-5a (run 765, deploy lane) runs alongside you on disjoint files.
-
-Live safety (on top of your skill and CLAUDE.md):
-- Never run claude, ccd, ccrc, the history shim, sweep.mjs, cli.mjs, any ccrc history verb or any --op against the live $HOME or a live store. Never read ~/.ccrc, ~/.cc-sessions, ~/.cc-limits or any account home.
-- Fixture HOMEs only (historyHelpers.ts), with tmux, gh and the managers poisoned. No in-process test imports cli.mjs (it sets the worker's umask).
-- Never enable a timer. Never run ccrc update, rollback, deploy or rollout.
-- A test that names a live pid uses process.pid or pid 1. Never kill processes by pattern (pkill -f, killall). Kill only PIDs or process groups you started.
-- Remove the fixture directories your runs create. The volume is short of space: keep scratch small and delete it when a task is done.
-
-Suites: from inside server/, ./node_modules/.bin/vitest run test/<file>.test.ts, in the foreground, with a Bash timeout of at least 600000, one suite per tool call, never a loop. Re-run the CLAUDE.md load flakes in isolation before calling a red real. history-holds and history-export hold 3 cases that read the box's real free space and fail on a full box, at the base too: record them as box state, never as breaks. Task 6 names the whole-PR checks: run all of them.
-
-Departures:
-- The plan defines two numbers, D-5765 and D-5766, in its Deviations found, on main: cite them; never redefine them.
-- For a departure you find while executing, take the next unused number from this run's block: the 20 numbers issued for run 764, listed one by one in the brief as mailed.
-- Define it in the plan's "## Deviations found" in the same commit that first cites it, in the plan's em-dash form.
-- Never call the allocator, and never write a range, in any file or commit message. Run deviation-refs after `git fetch origin main` before each push. Name every number you used in your wave-done.
-
-Not yours: merging, rollout, the window and every operator act in decisions section 5, W2-2b and later PRs, W2-5a, the ledger, and every other ccrc-history PR.
-
-Before wave-done:
-- Run a whole-branch review of your own: four Opus · high lenses (correctness, leaks through every door, decisions and plan conformance, does-it-reproduce) with refuters, pointed at the plan's Review Focus. Fix what it confirms.
-- Read the PR's review threads (gh api graphql, reviewThreads). A CodeQL thread left open blocks the merge even while its check reads green. Fix its cause in code; never resolve a thread or dismiss an alert yourself.
-Open the PR against main, ready for review (not a draft), titled "ccrc history wave W2-2a: the as-of cut", with the body Task 6 gives.
-Wave-done when the PR is open, its checks are green, no review thread is open, and your branch tip is the PR head. Your fingerprint is the workspace branch tip.
-
-Routing (clause 13; routing-matrix row "bulk work larger than one context", as waves 2 to 8):
-- main loop: Opus, ultracode, orchestrating;
-- implementer subagents: Sonnet at effort high (never below); per-task reviewer: Opus at effort high; scouts: Haiku; workflows on, compact threshold 40.
-- Name the model and effort explicitly on every Agent and agent() call.
-- Every subagent and workflow prompt opens with: "You are a subagent of the run 764 worker, not the worker. Do not invoke ccrc-worker. Never run ccrc-api, mail or claims. Return your report."
-- If your session is moved to a GPT lane, mail me at once.
-- Commit after each task. If the session dies, the branch is the resume point.
-
-Questions go through the AskUserQuestion rule in your skill. I answer what the plan, the decisions document and the ledger already decide. A new build question I rule on under the operator's directive of 2026-10-19 and record in the ledger. Acts outside the build go to the operator.
-```
-
-```text
-Run 765 - programme ccrc-history, wave W2-5a (wave 10, deploy lane): reconstruction, admission, the quiz builder and the record subcommands. Coordinator: the one this ledger's header names.
-
-Ledger: docs/superpowers/programs/ccrc-history.md (on main). Read its W2 rows, the "W2-5a's plan" entry and "Carried constraints".
-Plan: docs/superpowers/plans/2026-10-22-ccrc-history-w2-5a-quiz-builder.md (about 11,000 lines). Read its header first, through "Not in this plan". Then do Tasks 1-8 in order, one commit per task (Task 8 has none), as its PR section says. Read each task whole before starting it.
-Authority: docs/superpowers/plans/2026-10-19-ccrc-history-w2-decisions.md (the W2 decisions document, with the coordinator's in-place amendments, W2-D71's and act 9's included), then the spec (rev 3.6 as amended; W2-5a never edits it), then the merged code.
-
-Execution skill: superpowers:subagent-driven-development.
-Commit on this workspace's own branch. Do not create or switch to a separate feature branch.
-
-What the wave ships: one PR, the plan's Goal. Files: deploy/history-replay.mjs and server/test/history-replay.test.ts, and the plan itself only for a build-time Deviations entry or a corrected prediction. The PR creates no file. Never ccd/**, shared/**, the spec, README.md, deploy/history-gate.mjs, deploy/measure-history.py, .github/** or the ledger. If a task seems to need another file, stop and mail me.
-
-What must hold: no text reaches a spawn stdin or a file under --out unredacted; every writer spawn goes through W2-4's spawn contract, account admission, budget and limits; nothing is written outside --out, and a refusal that needs no store or spawn leaves no --out. Each has a pin with a CONTROL. A gap you find: stop and mail me.
-
-Rulings: the plan's Decisions table, as written. R1 to R11 were taken by me in the operator's place under the directive of 2026-10-19; the PR body names each so the operator can change them. Never change one yourself.
-
-Base: main at the merge of the docs PR that carries this plan (on top of #1105's merge cd622b2f6), or later. Anchors were measured at cd622b2f6. Re-anchor every Modify by its content; line numbers are hints. Re-read merged code before editing it: the plan text is never ground truth.
-
-Measuring: run each step and record what it prints. Every red and count in the plan is a prediction written before the code, and nobody has run any of them, the end-to-end fixtures included: measure each, and correct the plan's prediction in the task's own commit if it differs, recording measured over predicted. A red at a CONTROL is the fixture's to fix, never the guard's to weaken. Every mutant must red when its guard is removed; if one cannot, report it. A mutant applied in place is restored byte for byte (cmp) before the next. Every -t filter is a regex: keep each regex-safe and selecting at least one test. Key-shaped fixtures are assembled at runtime. Scratch goes under .superpowers/sdd/history-w2-5a/, never git stash.
+Measuring: run each step and record what it prints. Every red and count in the plan, and every fixture assumption (R32), is an unrun prediction: measure each, and correct a differing prediction in the task's own commit, recording measured over predicted. A red at a CONTROL is the fixture's to fix, never the guard's to weaken. Every mutant must red when its guard is removed; if one cannot, report it. A mutant applied in place is restored byte for byte (cmp) before the next. Every -t filter is a regex: keep each regex-safe and selecting at least one test. Key-shaped fixtures are assembled at runtime; non-ASCII fixtures with String.fromCharCode. Scratch goes under .superpowers/sdd/history-w2-5b1/, never git stash.
 
 Public repo: no private name in any file, commit message, PR title or body, and no host, account, session id, IP address or absolute home path anywhere (fixture paths in the /home/u style). Before each push, run `grep -c -i -w -F -f <(cut -f2 "$(git rev-parse --path-format=absolute --git-common-dir)/info/ccrc-private-names" | grep -v '^#')` over your added lines, your commit messages and the PR body. It must print 0. On a non-zero count, get line numbers only (grep -n ... | cut -d: -f1), judge each hit by its line, and never print a matched token.
 
-Peers: read GET /api/claims?project=ccrc-pwa before your first edit to any existing file. Any path another run holds: do not edit it; mail me the path, the lines and why. Whichever PR lands second merges main (never a rebase) and keeps both sides. W2-2a (run 764, fleet lane) runs alongside you on disjoint files.
+Peers: read GET /api/claims?project=ccrc-pwa before your first edit to any existing file. Any path another run holds: do not edit it; mail me the path, the lines and why. Whichever PR lands second absorbs main only on a measured conflict, by git merge, never a rebase, and keeps both sides.
 
 Live safety (on top of your skill and CLAUDE.md):
-- Never run claude, ccd, ccrc, the history shim, sweep.mjs, cli.mjs, deploy/history-replay.mjs, deploy/history-gate.mjs, deploy/measure-history.py or any ccrc history verb against the live $HOME or a live store. Never read ~/.ccrc, ~/.cc-sessions, ~/.cc-limits or any account home.
-- Every driver run in a test uses a fixture HOME, stub claude and ccrc binaries and a poisoned gh, as W2-4's tests do. Nothing spawns a real model or spends on an account.
-- Never enable a timer. Never run ccrc update, rollback, deploy or rollout.
-- A test that names a live pid uses process.pid or pid 1. Never kill processes by pattern (pkill -f, killall). Kill only PIDs or process groups you started.
-- Remove the fixture directories your runs create. The volume is short of space: keep scratch small and delete it when a task is done.
+- Never run claude, ccd, ccrc, the history shim, sweep.mjs, cli.mjs, deploy/history-replay.mjs, deploy/history-gate.mjs, deploy/measure-history.py or any ccrc history verb against the live $HOME or a live store. Never read ~/.ccrc, ~/.cc-sessions, ~/.cc-limits or any account home. Never write a headless-on marker or a recall-off file anywhere but a fixture HOME.
+- Every driver run in a test uses a fixture HOME, stub claude and ccrc binaries and a poisoned gh, as W2-4's and W2-5a's tests do. Nothing spawns a real model or spends on an account.
+- Never enable a timer, or run ccrc update, rollback, deploy or rollout.
+- A test that names a live pid uses process.pid or pid 1. Never kill processes by pattern. Kill only PIDs or process groups you started.
+- The volume is short of space: keep scratch small; remove the fixtures your runs create.
 
-Suites: from inside server/, ./node_modules/.bin/vitest run test/<file>.test.ts, in the foreground, with a Bash timeout of at least 600000, one suite per tool call, never a loop. Re-run the CLAUDE.md load flakes in isolation before calling a red real. Task 8 names the whole-PR checks: run all of them.
+Suites: from inside server/, ./node_modules/.bin/vitest run test/<file>.test.ts, in the foreground, with a Bash timeout of at least 600000, one suite per tool call, never a loop. Re-run the CLAUDE.md load flakes in isolation before calling a red real. Task 6 names the whole-PR checks: run all of them.
 
 Departures:
-- The plan defines five numbers, D-5780, D-6277, D-6278, D-6279 and D-6280, in its Deviations found, on main: cite them; never redefine them.
-- For a departure you find while executing, take the next unused number from this run's block: the 20 numbers issued for run 765, listed one by one in the brief as mailed.
+- The plan defines four numbers, D-6467, D-6468, D-6469 and D-6470, in its Deviations found, on main: cite them; never redefine them.
+- For a departure you find while executing, take the next unused number from this run's block: the 20 numbers issued for run 828, listed one by one in the brief as mailed.
 - Define it in the plan's "## Deviations found" in the same commit that first cites it, in the plan's em-dash form.
 - Never call the allocator, and never write a range, in any file or commit message. Run deviation-refs after `git fetch origin main` before each push. Name every number you used in your wave-done.
 
-Not yours: merging, rollout, the window and every operator act in decisions section 5, W2-5b and later PRs, W2-2a, the ledger, and every other ccrc-history PR.
+Not yours: merging, rollout, the window and every operator act, W2-5b2, W2-6, every other ccrc-history PR, and the ledger.
 
 Before wave-done:
-- Run a whole-branch review of your own: four Opus · high lenses (correctness, redaction and spawn safety, decisions and plan conformance, does-it-reproduce) with refuters, pointed at the plan's Review Focus. Fix what it confirms.
+- Run a whole-branch review of your own: four Opus · high lenses (correctness, the must-holds adversarially, decisions and plan conformance, does-it-reproduce) with refuters, pointed at the plan's Review Focus. Fix what it confirms.
 - Read the PR's review threads (gh api graphql, reviewThreads). A CodeQL thread left open blocks the merge even while its check reads green. Fix its cause in code; never resolve a thread or dismiss an alert yourself.
-Open the PR against main, ready for review (not a draft), titled "ccrc history wave W2-5a: reconstruction, admission, the quiz builder and the record subcommands", with the body Task 8 gives.
+Open the PR against main, ready for review (not a draft), titled "ccrc history wave W2-5b1: the arms and the judge", with the body Task 6 gives.
 Wave-done when the PR is open, its checks are green, no review thread is open, and your branch tip is the PR head. Your fingerprint is the workspace branch tip.
 
-Routing (clause 13; routing-matrix row "bulk work larger than one context", as waves 2 to 8):
+Routing (clause 13; routing-matrix row "bulk work larger than one context", as waves 2 to 11):
 - main loop: Opus, ultracode, orchestrating;
 - implementer subagents: Sonnet at effort high (never below); per-task reviewer: Opus at effort high; scouts: Haiku; workflows on, compact threshold 40.
 - Name the model and effort explicitly on every Agent and agent() call.
-- Every subagent and workflow prompt opens with: "You are a subagent of the run 765 worker, not the worker. Do not invoke ccrc-worker. Never run ccrc-api, mail or claims. Return your report."
-- If your session is moved to a GPT lane, mail me at once.
-- Commit after each task. If the session dies, the branch is the resume point.
+- Every subagent and workflow prompt opens with: "You are a subagent of the run 828 worker, not the worker. Do not invoke ccrc-worker. Never run ccrc-api, mail or claims. Return your report."
+- If moved to a GPT lane, mail me at once. Commit after each task; the branch is the resume point.
 
-Questions go through the AskUserQuestion rule in your skill. I answer what the plan, the decisions document and the ledger already decide. A new build question I rule on under the operator's directive of 2026-10-19 and record in the ledger. Acts outside the build go to the operator.
+Questions go through your skill's AskUserQuestion rule. New build questions I rule on under the directive of 2026-10-19; acts outside the build go to the operator.
 ```

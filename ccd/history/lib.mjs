@@ -57,6 +57,11 @@ const REASON_ROWS = [
     // `--generation` names another than the registry's (or the registry holds none).
     // D-5764 (history-w2-recall-off-generation-checks)
     'generation-malformed', 'generation-mismatch',
+    // `asof-invalid` (W2-2a, W2-D39): the as-of cut's refusal. Its store half is asOfCut's: the uuid names no boundaries
+    // row, or a boundary on a sidechain transcript, held by no copy, or with no stamp at or before it in its holding copy.
+    // W2-2b adds the pre-store half (an empty or non-UUID seam value) and the family half, under the same word.
+    // D-5765 (history-w2-asof-invalid-word)
+    'asof-invalid',
   ]],
   [EXIT.WRITER_BUSY, ['writer-busy']],
   [EXIT.DB, [
@@ -4219,6 +4224,22 @@ function refuseScope(reason) {
   return { ok: false, rc: EXIT.REFUSED, reason };
 }
 
+/** W2-D45's rule, spelled once: the headless seam (§8.2) is engaged iff at least one of its three values is
+ *  non-empty. The values are what the CLI read from CCRC_RECALL_SESSION, CCRC_RECALL_ARM and CCRC_RECALL_ASOF, each
+ *  null when the variable is undefined; an empty variable reads as unset. No value's grammar is checked here. */
+export function recallSeamEngaged({ session, arm, asof }) {
+  return [session, arm, asof].some((v) => typeof v === 'string' && v !== '');
+}
+
+/** W2-D39, the CLI half of §8.2's "Inside a pane: exit 2 headless-in-pane" (C4, C31). The read verbs run it after
+ *  §8.3's Darwin and role rows and before any tmux spawn. TMUX_PANE is set iff it is defined (W2-D45), so an empty or
+ *  malformed pane is still a pane, and a seam value inside one is refused. Anything else passes to the tmux path
+ *  unchanged, which answers no-identity when there is no pane. */
+export function decideSeamInPane({ pane, recall }) {
+  if (typeof pane === 'string' && recallSeamEngaged(recall)) return refuseScope('headless-in-pane');
+  return { ok: true };
+}
+
 /** The session's id from tmux (§8.2, D-4675 (history-identity-from-tmux)). The
  *  caller ran `tmux display-message -p -t "$TMUX_PANE" '#S'` bounded at
  *  TMUX_DEADLINE_MS, ALWAYS with `-t`, and passes what came back; `tmux` is
@@ -4348,6 +4369,209 @@ export function resolveScopedId({ wanted, inScope, outOfScope }) {
   if (hits.length === 1) return { kind: 'ok', id: hits[0] };
   if (hits.length > 1) return { kind: 'ambiguous', candidates: hits.sort() };
   return outOfScope.some((id) => id.startsWith(wanted)) ? { kind: 'out-of-scope' } : { kind: 'not-found' };
+}
+
+// ── the as-of cut (W2-2a; W2-D34, W2-D38, W2-D39) ──────────────────────────
+// ONE definition of "as of boundary N" (W2-D38): asOfCut decides the cut from what a reader measured, asOfEntrySql is
+// the one SQL predicate that applies it to an entries row, and asOfBinds is that predicate's named parameters' values.
+// Every read verb, the regex child and the replay driver's re-check read these and spell no second rule. A cut is plain
+// data (numbers, strings, one array), so it rides on a ReadContext as `rc.scope.cut` (absent or null: no cut, and a
+// site then adds no clause and no binds). It is keyed on entries, never on blobs: two entries that share one stored
+// body are decided apart. W2-2b's headless seam is the first production caller; until then only tests set it.
+// D-5766 (history-w2-asof-time-cut)
+
+/** The cut at boundary N (W2-D34, W2-D38), from what the reader measured:
+ *  - `asof`: N's uuid, as the caller was given it;
+ *  - `boundary`: the entries row whose uuid is `asof`, joined to its boundaries row and its transcript, as
+ *    `{ entryId, uuid, main, anchorUuid }` (`main`: that transcript's agent_id is ''; `anchorUuid`: the boundaries
+ *    row's anchor_uuid); null when no boundaries row has that uuid;
+ *  - `copy`: N's holding copy, the file pickHoldingCopy picks among the transcript's files that hold N, as
+ *    `{ fileId, rows }`, its rows in file order in derive.mjs's copyRows shape (`entry_id`, `uuid`, `line`, `ts_ms`,
+ *    `type`, `provenance`, `is_compact_summary`); null when no file holds N;
+ *  - `kept`: kept(N), derive.mjs's keptOf over N's kept_blob_id (option (a)), the set derivation spans with.
+ *  The store half of W2-D39's validation answers exit 2 `asof-invalid` when the boundary is absent or is not `asof`'s,
+ *  sits on a sidechain transcript, has no copy holding it, or has no time at or before it. T_N is stampAtOrBefore over
+ *  the copy at N's own row (W2-D33): N's own ts_ms, else the newest non-null stamp before it in that copy; a stamp of
+ *  0 is a time. The summary entry is summaryRowFor's pick over the same copy, the rule derivation uses, so an echo row
+ *  is never it; null when there is none. `keptUuids` is the kept set's strings, once each, sorted, so one cut has one
+ *  form. D-5765 (history-w2-asof-invalid-word) */
+export function asOfCut({ asof, boundary, copy, kept }) {
+  if (boundary === null || boundary.uuid !== asof) return refuseScope('asof-invalid');
+  if (boundary.main !== true) return refuseScope('asof-invalid');
+  const at = copy === null ? -1 : copy.rows.findIndex((r) => Number(r.entry_id) === Number(boundary.entryId));
+  if (at < 0) return refuseScope('asof-invalid');
+  const tsCut = stampAtOrBefore(copy.rows, at);
+  if (tsCut === null) return refuseScope('asof-invalid');
+  const meta = copy.rows.map((r) => ({
+    uuid: r.uuid, isCompactSummary: Number(r.is_compact_summary) === 1, isEcho: r.type === 'user' && r.provenance === 'harness',
+  }));
+  const pick = summaryRowFor({ boundaryUuid: boundary.uuid, anchorUuid: boundary.anchorUuid, rows: meta });
+  const summary = pick.uuid === null ? undefined : copy.rows.find((r) => r.uuid === pick.uuid);
+  return {
+    ok: true,
+    cut: Object.freeze({
+      asof,
+      tsCut,
+      boundaryEntryId: Number(boundary.entryId),
+      summaryEntryId: summary === undefined ? null : Number(summary.entry_id),
+      keptUuids: Object.freeze([...new Set([...kept].filter((u) => typeof u === 'string'))].sort()),
+      holdingFileId: Number(copy.fileId),
+      boundaryLine: Number(copy.rows[at].line),
+    }),
+  };
+}
+
+/** The one SQL predicate of the cut (W2-D34): one parenthesised boolean term over the entries row aliased `alias`, true
+ *  iff the cut leaves that row visible. Its parameters are named only, each `asof_`-prefixed so none collides with a
+ *  caller's own, and asOfBinds(cut) answers exactly their values. An entry is visible iff:
+ *  - its ts_ms is at most T_N (a NULL ts_ms compares NULL, so it never passes), and it is not a row of N's holding copy
+ *    at a line after N's (memberships reached by its primary key, file_id and entry_id); or
+ *  - it is N's boundary entry, or N's summary entry (a NULL summary matches nothing); or
+ *  - its uuid is a member of kept(N), whatever its stamp or line, matched in SQL, so a member with no entries row
+ *    matches nothing.
+ *  Everything else is absent: every NULL-ts row, and every row after N in its holding copy whatever its stamp. Outside
+ *  the holding copy the decision is the stamp alone, so a row written after N in another copy but stamped at or before
+ *  T_N stays visible: the residual W2-5a counts for the same millisecond. The term is three-valued: for a hidden row it is
+ *  never true but NULL or false (NULL for a NULL-ts row, and for every hidden row when N has no summary), and over a LEFT
+ *  JOIN's all-NULL row it is NULL. Use it only as a filter (WHERE, ON, AND); negate it only through coalesce((…), 0).
+ *  `alias` is interpolated, so it must be an SQL name; the inner memberships alias is `asof_hm`. Keyed on entries,
+ *  never on blobs. D-5766 (history-w2-asof-time-cut) */
+export function asOfEntrySql(alias) {
+  if (typeof alias !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) {
+    throw new TypeError(`asOfEntrySql: ${JSON.stringify(alias)} is not an SQL name`);
+  }
+  const e = alias;
+  return `((${e}.ts_ms <= :asof_ts`
+    + ` AND NOT EXISTS (SELECT 1 FROM memberships asof_hm WHERE asof_hm.file_id = :asof_file AND asof_hm.entry_id = ${e}.entry_id AND asof_hm.line > :asof_line))`
+    + ` OR ${e}.entry_id = :asof_boundary OR ${e}.entry_id = :asof_summary`
+    + ` OR ${e}.uuid IN (SELECT value FROM json_each(:asof_kept)))`;
+}
+
+/** asOfEntrySql's named parameters for `cut`, by bare name, the way node:sqlite binds them here (recall.mjs's bindFor):
+ *  exactly the names asOfEntrySql uses, because node:sqlite refuses an unknown named parameter and the regex child
+ *  spreads these unfiltered. kept(N) travels as JSON text for json_each, so the object crosses JSON as it is. */
+export function asOfBinds(cut) {
+  return {
+    asof_ts: cut.tsCut,
+    asof_file: cut.holdingFileId,
+    asof_line: cut.boundaryLine,
+    asof_boundary: cut.boundaryEntryId,
+    asof_summary: cut.summaryEntryId,
+    asof_kept: JSON.stringify(cut.keptUuids),
+  };
+}
+
+// ── The as-of cut's node, epoch and entry statements (W2-2a Task 3; W2-D35, W2-D36, W2-D38) ─────────────────────────
+// Each is ONE statement text, built on asOfEntrySql, so a node, an epoch and a row are judged by the same entry rule, and
+// recall.mjs and W2-5b's card parent (W2-D75) ask the same question. Each binds by name only: asOfBinds(cut)'s parameters
+// plus one JSON array of candidates. None is run without a cut: recall.mjs prepares nothing then (W2-D45).
+
+/** The two CTEs that read a leaf's summary row from the store, shared by asOfHiddenNodesSql and asOfSummaryPickSql so the
+ *  statement and its test read one text. `asof_hold` is pickHoldingCopy's pick over the boundary's transcript's files
+ *  (a live copy, `source_key` '', before a retired one, then the lowest file_id, among those holding the boundary).
+ *  `asof_pick` is summaryRowFor's pick over that copy: the `anchor_uuid` row among its memberships unless it is an echo
+ *  (`user` with provenance `harness`), or, when the anchor names the boundary itself, the first non-echo compact summary
+ *  after the boundary's line; NULL for no pick (no anchor, an empty one, one naming no row of the copy, an echo, no copy).
+ *  They read the walk `asof_down(top, node_id)` for the leaves to pick for. D-6282 (history-w2-asof-leaf-summary-row) */
+const ASOF_PICK_CTES = `
+  asof_hold(node_id, file_id) AS (
+    SELECT n.node_id, (SELECT hf.file_id FROM boundaries hb JOIN ingest_files hf ON hf.transcript_pk = hb.transcript_pk
+        JOIN memberships hm ON hm.file_id = hf.file_id AND hm.entry_id = hb.entry_id
+      WHERE hb.entry_id = n.boundary_entry_id ORDER BY (hf.source_key = '') DESC, hf.file_id LIMIT 1)
+    FROM nodes n WHERE n.kind <> 'condensed' AND n.node_id IN (SELECT node_id FROM asof_down)
+  ),
+  asof_pick(node_id, entry_id) AS (
+    SELECT h.node_id, CASE
+      WHEN pb.anchor_uuid = pe.uuid THEN (SELECT sm.entry_id FROM memberships sm JOIN entries se ON se.entry_id = sm.entry_id
+        WHERE sm.file_id = h.file_id AND se.is_compact_summary = 1 AND NOT (se.type = 'user' AND se.provenance = 'harness')
+          AND sm.line > (SELECT bm.line FROM memberships bm WHERE bm.file_id = h.file_id AND bm.entry_id = pb.entry_id)
+        ORDER BY sm.line LIMIT 1)
+      ELSE (SELECT sm.entry_id FROM memberships sm JOIN entries se ON se.entry_id = sm.entry_id
+        WHERE sm.file_id = h.file_id AND se.uuid = pb.anchor_uuid AND NOT (se.type = 'user' AND se.provenance = 'harness'))
+    END
+    FROM asof_hold h JOIN nodes pn ON pn.node_id = h.node_id JOIN boundaries pb ON pb.entry_id = pn.boundary_entry_id
+      JOIN entries pe ON pe.entry_id = pb.entry_id
+  )`;
+
+/** W2-D35's node rule. Of the node ids bound as a JSON array at `:asof_nodes`, the ones the cut hides (column `node_id`):
+ *  - a leaf (any kind but `condensed`) other than N's is hidden when its boundary entry is not stored or asOfEntrySql hides it
+ *    (W2-D34), or when it has a summary row and asOfEntrySql hides that row (D-6282). Its summary row is summaryRowFor's pick
+ *    over the leaf's holding copy, the rule derivation and asOfCut use, read from the store: the copy is pickHoldingCopy's
+ *    over the boundary's transcript's files (a live copy first, then the lowest file_id, among those holding the boundary),
+ *    and the row is the boundary's `anchor_uuid` row of that copy (an echo row never), or, when the anchor names the boundary
+ *    itself, the first non-echo compact summary after the boundary in it. A leaf with no pick (a raw leaf) is judged by its
+ *    boundary alone (an absent or empty anchor names no row). A leaf whose stored `summary_blob_id` is not NULL is also hidden
+ *    when its read-time pick is NULL or names an entry whose `blob_id` is another blob (D-6284): the read doors print the
+ *    stored blob, so a pick that no longer names it cannot vouch for it, and the rule fails closed. A leaf with a NULL
+ *    `summary_blob_id` is judged as before. N's own leaf is exempt from the summary arms: its summary is
+ *    asof_summary, which the predicate shows, and a cut that names none judges N's leaf by its boundary, N itself;
+ *  - any node is hidden when a leaf under it is hidden, whenever the node was formed: the walk goes down node_children
+ *    (UNION, so a cycle ends it) and never reads `created_ms`;
+ *  - any node is hidden when a `condensed` node at or below it has no leaf below it (R4, fail closed: "every leaf under it is
+ *    visible" holds vacuously there, and only a damaged store has one), however deep, through a cycle or an unstored child.
+ *    A node has a leaf below it when it is one, or a node_children walk up from a leaf, kept to the nodes of the walk down,
+ *    reaches it (D-6283).
+ *  An id that names no node answers nothing. */
+export function asOfHiddenNodesSql() {
+  // Two arms were added by the whole-branch review's rulings. D-6282 (history-w2-asof-leaf-summary-row): ASOF_PICK_CTES read a
+  // leaf's summary row, and the last HAVING term's summary clause applies the predicate to it. history-lib's seeded
+  // equivalence case holds that pick to pickHoldingCopy plus summaryRowFor over several copies and every anchor shape;
+  // history-recall's D-6282 describe holds the clause at each read door.
+  // D-6284 (history-w2-asof-leaf-stored-summary): the read doors print a leaf's STORED summary (nodes.summary_blob_id), which
+  // derivation took from the same pick and nothing moves afterwards, so a leaf that has one is also hidden when the read-time
+  // pick is NULL or names another blob: the second summary arm below. history-lib's seeded case holds the stored blob to the
+  // SQL pick's; history-recall's D-6284 describe holds the arm at each read door.
+  // D-6283 (history-w2-asof-leafless-descendant): asof_up and the middle HAVING term hide a node over a leafless condensed
+  // descendant; history-recall's D-6283 case holds them, including a cycle.
+  return `WITH RECURSIVE asof_down(top, node_id) AS (
+    SELECT value, value FROM json_each(:asof_nodes)
+    UNION
+    SELECT d.top, c.child_id FROM asof_down d JOIN node_children c ON c.node_id = d.node_id
+  ),
+  asof_up(node_id) AS (
+    SELECT dn.node_id FROM asof_down dn JOIN nodes asof_ln ON asof_ln.node_id = dn.node_id WHERE asof_ln.kind <> 'condensed'
+    UNION
+    SELECT c.node_id FROM asof_up u JOIN node_children c ON c.child_id = u.node_id WHERE c.node_id IN (SELECT node_id FROM asof_down)
+  ),
+  ${ASOF_PICK_CTES}
+  SELECT d.top AS node_id
+    FROM asof_down d
+    JOIN nodes asof_n ON asof_n.node_id = d.node_id
+    LEFT JOIN entries asof_b ON asof_b.entry_id = asof_n.boundary_entry_id
+    LEFT JOIN asof_pick asof_p ON asof_p.node_id = d.node_id
+    LEFT JOIN entries asof_s ON asof_s.entry_id = asof_p.entry_id
+    GROUP BY d.top
+    HAVING sum(asof_n.kind <> 'condensed') = 0
+      OR sum(asof_n.kind = 'condensed' AND d.node_id NOT IN (SELECT node_id FROM asof_up)) > 0
+      OR sum(asof_n.kind <> 'condensed' AND NOT coalesce(asof_b.entry_id IS NOT NULL AND (${asOfEntrySql('asof_b')})
+        AND (asof_n.boundary_entry_id = :asof_boundary OR asof_s.entry_id IS NULL OR (${asOfEntrySql('asof_s')}))
+        AND (asof_n.boundary_entry_id = :asof_boundary OR asof_n.summary_blob_id IS NULL
+          OR (asof_s.entry_id IS NOT NULL AND asof_s.blob_id = asof_n.summary_blob_id)), 0)) > 0`;
+}
+
+/** A leaf's summary row as the store gives it: of the node ids bound as a JSON array at `:asof_nodes`, each non-condensed
+ *  one's pick (columns `node_id`, `entry_id`; `entry_id` NULL for no pick), by the same CTEs asOfHiddenNodesSql judges a
+ *  leaf's summary row with. The test seam that holds them to pickHoldingCopy plus summaryRowFor over the same rows;
+ *  no read verb prepares it. D-6282 (history-w2-asof-leaf-summary-row) */
+export function asOfSummaryPickSql() {
+  return `WITH RECURSIVE asof_down(top, node_id) AS (SELECT value, value FROM json_each(:asof_nodes)),
+  ${ASOF_PICK_CTES}
+  SELECT node_id, entry_id FROM asof_pick`;
+}
+
+/** W2-D35's epoch rule. Of the epoch session uuids bound as a JSON array at `:asof_epochs`, the ones the cut shows (column
+ *  `cc_session_uuid`): one of the epoch's transcripts (any agent_id) holds a row asOfEntrySql shows. */
+export function asOfVisibleEpochsSql() {
+  return `SELECT j.value AS cc_session_uuid FROM json_each(:asof_epochs) AS j
+    WHERE EXISTS (SELECT 1 FROM transcripts asof_t JOIN entries asof_e ON asof_e.transcript_pk = asof_t.transcript_pk
+      WHERE asof_t.cc_session_uuid = j.value AND (${asOfEntrySql('asof_e')}))`;
+}
+
+/** Of the entry ids bound as a JSON array at `:asof_entries`, the ones the cut shows (column `entry_id`): W2-D34's rule, for
+ *  a read that lists rows a node holds (describe's sources, a producer's witnesses). */
+export function asOfVisibleEntriesSql() {
+  return `SELECT asof_e.entry_id AS entry_id FROM entries asof_e
+    WHERE asof_e.entry_id IN (SELECT value FROM json_each(:asof_entries)) AND (${asOfEntrySql('asof_e')})`;
 }
 
 // derived from lossless-claw src/tools/lcm-describe-id.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
@@ -8358,17 +8582,34 @@ export function expandArgsOf(parsed) {
   };
 }
 
+/** W2-D37: what joins an expand cursor's key to the as-of boundary it was minted under. No key expand prints holds it: a
+ *  node id is a kind letter and hex, an entry key is a uuid or `x` and 32 hex, and an around key is
+ *  `around:<uuid>:<before>:<after>`. */
+const ASOF_KEY_SEP = ':asof:';
+
+/** W2-D37: an expand cursor's key. With no cut (`asof` null), the expansion's own key, unchanged, so a cursor printed by an
+ *  earlier build still resumes; under an as-of cut, that key, then `:asof:` and boundary N's uuid. A cursor minted under
+ *  one cut, or under none, therefore never equals the key of a call under another, and decideExpandCursor refuses it. A
+ *  uuid `asof` keeps the longest key at 91 characters, inside the cursor grammar's 128. */
+export function expandCursorKey(key, asof) {
+  return asof === null ? key : `${key}${ASOF_KEY_SEP}${asof}`;
+}
+
 /** What a decoded expand cursor names, for `expand --cursor <c>` given alone: its key is the target, or
- *  `around:<uuid>:<before>:<after>`. null when the key names nothing expand could resolve. */
+ *  `around:<uuid>:<before>:<after>`, followed under an as-of cut by expandCursorKey's suffix, which names no target and
+ *  is dropped here; the cut itself is checked against the call's own by decideExpandCursor (W2-D37). null when the key
+ *  names nothing expand could resolve. */
 export function expandResumeOf(cursor) {
   if (cursor === null || typeof cursor.t !== 'string') return null;
-  const m = /^around:([^:]+):([0-9]{1,2}):([0-9]{1,2})$/.exec(cursor.t);
+  const sep = cursor.t.indexOf(ASOF_KEY_SEP);
+  const t = sep === -1 ? cursor.t : cursor.t.slice(0, sep);
+  const m = /^around:([^:]+):([0-9]{1,2}):([0-9]{1,2})$/.exec(t);
   if (m !== null) {
     const before = Number(m[2]);
     const after = Number(m[3]);
     return before > AROUND_MAX || after > AROUND_MAX ? null : { target: null, around: m[1], before, after };
   }
-  return expandTargetOf(cursor.t) === 'bad' ? null : { target: cursor.t, around: null, before: AROUND_DEFAULT, after: AROUND_DEFAULT };
+  return expandTargetOf(t) === 'bad' ? null : { target: t, around: null, before: AROUND_DEFAULT, after: AROUND_DEFAULT };
 }
 
 /** An entry named by uuid: outside the scope is out-of-scope, never not-found (§8.2). */
@@ -8506,13 +8747,14 @@ const READ_CONTEXT_TABLES = Object.freeze(['meta', 'redact_hashes', 'sessions', 
 
 /** Every table each read verb's path reads (recall.mjs, the store.mjs functions it calls, and grep --regex's
  *  child, regex-worker.mjs): the shared context above plus the verb's own statements. All are v1 tables today;
- *  a version that adds a table a verb needs adds it here, in the same PR. blobs_fts is a virtual table the sweep
+ *  a version that adds a table a verb needs adds it here, in the same PR (an as-of cut reads memberships and boundaries
+ *  through asOfHiddenNodesSql's CTEs, so grep, expand and tree list both). blobs_fts is a virtual table the sweep
  *  creates, not a SCHEMA_ADDED one: grep's index gate answers its absence as fts-pending. */
 export const VERB_TABLES = Object.freeze({
-  grep: Object.freeze([...READ_CONTEXT_TABLES, 'blobs', 'entry_variants', 'sidecars', 'nodes', 'node_sources', 'node_children']),
+  grep: Object.freeze([...READ_CONTEXT_TABLES, 'blobs', 'entry_variants', 'sidecars', 'nodes', 'node_sources', 'node_children', 'memberships', 'boundaries']),
   describe: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'node_sources', 'node_children', 'blobs', 'boundaries', 'memberships']),
-  expand: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'node_sources', 'blobs', 'entry_variants', 'sidecars', 'memberships']),
-  tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children']),
+  expand: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'node_sources', 'blobs', 'entry_variants', 'sidecars', 'memberships', 'boundaries']),
+  tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'memberships', 'boundaries']),
 });
 
 /** The tables a store at `version` has: every SCHEMA_ADDED entry at or below it. A newer store has all this

@@ -243,3 +243,60 @@
   flex: none;
   white-space: nowrap;
 }
+
+/* W2 Task S5 (D-5471; spec §5.3, Fleet and Shell, phone rows): Refined's phone header and its `+ New`. Layout only: the
+   readout keeps `.fleet-count`'s face and ink, the doors `Door`'s, the accounts strip its own (fleet.css's
+   `.accounts-strip`), the button `Button`'s primary fill. Neither is mounted at a desk (`useMediaQuery`), so nothing
+   here is width-gated. */
+.ref-phone-head {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-1) 0;
+}
+.ref-phone-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.ref-phone-doors {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* A finger's square: the glyph centred, the badge pinned to its corner so a three-digit count never widens the row.
+   The badge starts at the glyph's middle, so a "99+" covers only the glyph's top-right corner (the glyph is the door's
+   only visible label); what it sticks out over the gap stays the door's neighbour's to tap. */
+.ref-phone-door {
+  position: relative;
+  padding: 0;
+}
+.ref-phone-badge {
+  position: absolute;
+  top: 2px;
+  left: calc(50% + 1px);
+  pointer-events: none;
+}
+.ref-phone-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  min-width: 0;
+  margin: 0;
+  white-space: nowrap;
+}
+/* Today's round `+`'s place, hugging a 640 column on a wide phone; above the home indicator. Its `bottom` is the
+   margin `NewFab` adds to its height when it publishes `--phone-nav-h`. */
+.ref-fab {
+  position: fixed;
+  right: max(var(--sp-4), calc(50vw - 320px + var(--sp-4)));
+  bottom: calc(var(--sp-4) + var(--safe-bottom));
+  z-index: var(--z-header);
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-full);
+  box-shadow: var(--elev-card);
+}

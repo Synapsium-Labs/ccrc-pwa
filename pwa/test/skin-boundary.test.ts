@@ -86,7 +86,7 @@ const selectorOf = (d: Decl): string => [...d.chain].reverse().find((p) => !p.st
  *  `['TopBar.tsx']`, S11 adds `PhoneTopBar.tsx`. */
 type BarRegistry = Readonly<Record<string, string | readonly string[]>>;
 
-const BAR_MODULES: BarRegistry = { [REFINED]: ['AppBar.tsx'], [INSTRUMENT]: ['TopBar.tsx'] };
+const BAR_MODULES: BarRegistry = { [REFINED]: ['AppBar.tsx', 'PhoneHeader.tsx'], [INSTRUMENT]: ['TopBar.tsx'] };
 
 const RENDERS_WORDMARK = /<Wordmark\b/;
 
@@ -367,8 +367,8 @@ describe('(a) each skin bar renders Wordmark (D-5094)', () => {
     expect(wordmark(tree)).toContain(`${REFINED}/AppBar.tsx is listed as a bar module and renders no Wordmark`);
   });
   it('a listed bar module that is missing is red', () => {
-    expect(wordmark(REPO, { ...BAR_MODULES, [REFINED]: ['AppBar.tsx', 'PhoneHeader.tsx'] }))
-      .toContain(`${REFINED}/PhoneHeader.tsx is listed as a bar module and does not exist`);
+    expect(wordmark(REPO, { ...BAR_MODULES, [REFINED]: ['AppBar.tsx', 'PhoneHeader.tsx', 'NoSuchBar.tsx'] }))
+      .toContain(`${REFINED}/NoSuchBar.tsx is listed as a bar module and does not exist`);
   });
   it('a pending skin that renders Wordmark is stale', () => {
     // Both skins list their bars now (S4b, S9), so the case pends one in the registry against the real tree.
