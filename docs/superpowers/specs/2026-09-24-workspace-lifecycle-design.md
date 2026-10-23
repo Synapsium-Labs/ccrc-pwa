@@ -327,7 +327,9 @@ callers) honour reap's `reaping` breadcrumb, and gives every one of them the sam
   - `.archived` is present, and its epoch is at most `now − WS_EXPIRE_AFTER_S` (604 800).
   - The token's input includes that epoch, so any return and re-archive refuses `state-changed`.
   - A `.child` marker that reads as a child, or cannot be read, refuses `child` (retryable). That follows #166
-    R29's direction: an unreadable marker defers.
+    R29's direction: an unreadable marker defers. The one way past is `--child-of <run>` (`expire-child-v1`, fleet
+    disk retention spec §2.7.4): the marker must parse as a run id equal to it. A mismatch, an unreadable marker and
+    a missing marker still refuse `child`, and the token binds the run.
 - **Then wave 3's generic rungs, in wave 3's order.** `paused`; `held`; `attached`; the identity refusal
   `no-worktree-record` (terminal); the vanished-worktree arm; `tree-busy`; `branch-elsewhere`; `tree-unreadable`;
   `containment-unproven`; the fingerprint.
@@ -357,7 +359,8 @@ and nothing else. It has:
 
 A row is eligible when:
 - it is a workspace with `.archived`, epoch at least 7 days old;
-- its child reading is `none` (a `marked` or `unreadable` child is the child lane's);
+- its child reading is `none` (a `marked` or `unreadable` child is the child lane's; an archived child past its seven
+  days is expired only under `$REG/expire-child-live`, through `--child-of`, and an `unreadable` one never);
 - no non-terminal run names it as `sessionId` or as `claimedBy`. An unreadable store makes it ineligible;
 - it is not the `sessionId` of a review run whose reviewed run is non-terminal. This is #166 R16's rule
   applied to unmarked reviewers, because the report lives in that workspace's clips;
@@ -412,8 +415,9 @@ and the README and `wave-lifecycle.md` §6 text above are wave 3b's, planned aft
   included) and `child`; a stamp that is not an epoch ccd writes is unmeasured, never old.
 - **`ws-reap`'s `expire:` arm refuses** (`expire-in-progress`), the twin of its `reclaim:` mirror. The arm that RESUMES
   an interrupted expiry and re-asserts the archive epoch is `ws-expire`'s own. `ws-expire` refuses a row
-  with a child marker, so an `expire:` breadcrumb stands only on an unmarked row; `ws-reclaim`, which runs only on
-  children, never meets one in practice, and answers it `reap-in-progress` wherever it does, as it answers every
+  with a child marker unless it is given `--child-of` naming the marker's run, so an `expire:` breadcrumb stands on an
+  unmarked row, or on a child expired that way; `ws-reclaim`, which runs only on
+  children, meets one only on the latter and and answers it `reap-in-progress` wherever it does, as it answers every
   breadcrumb not its own. A `.reaping` that stands on an ARCHIVED row but cannot be read refuses `reaping-phase-unknown`
   instead of falling through to the fresh arm, as the spawn gate and `ws-expire`'s fork already read such a file.
 - **A return during an expiry refuses, on every path.** Measured: before this wave no spawn path honoured a breadcrumb,
@@ -431,8 +435,8 @@ and the README and `wave-lifecycle.md` §6 text above are wave 3b's, planned aft
   `ws-reclaim` and its audit are: the installed launcher starts them under `bash -p`, and the body refuses them
   otherwise.
 - **The temp root.** The shared tail removes `~/.cc-tmp/<id>` unrecorded, as it does for a reclaim. Only a child is
-  ever given one, and an expiry never touches a row with a child marker, so what stands there was a previous row's
-  under a recycled slug — leaked scratch, not this workspace's.
+  ever given one. An expiry of an unmarked row finds only a previous row's under a recycled slug — leaked scratch,
+  not this workspace's — and an expiry of a child (`--child-of`) removes that child's own temp root through the same tail.
 - **The instrument classifies every act.** §9's measurement reads the journal through three lists that place each of
   ccd's acts exactly once: those that return from an archive, those that end one — `expire` and `reclaim` among them,
   a removal and never a return — and a third, `NEUTRAL_ACTS`, for the rest (3887). A test runs ccd's own list, so a

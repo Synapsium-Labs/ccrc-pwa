@@ -25,8 +25,8 @@ set -uo pipefail
 # this guard and the dispatcher compare exactly again. SOURCE MODE never runs this;
 # the launcher classifies a superset of these shapes; the dispatcher owns every tail.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan ]] \
-     || { [[ $# -eq 4 || $# -eq 5 ]] && [[ "${1-}" == ws-audit && "${2-}" == --session && ( "${4-}" == --reclaim || ( $# -eq 4 && ( "${4-}" == --expire || "${4-}" == --collect ) ) ) ]] \
-          && [[ $# -eq 4 || "${5-}" == --defer-expired ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
+     || { [[ $# -ge 4 && $# -le 6 && "${1-}" == ws-audit && "${2-}" == --session ]] \
+          && [[ ( "${4-}" == --reclaim && ( $# -eq 4 || ( $# -eq 5 && "${5-}" == --defer-expired ) ) ) || ( "${4-}" == --expire && ( $# -eq 4 || ( $# -eq 6 && "${5-}" == --child-of ) ) ) || ( $# -eq 4 && "${4-}" == --collect ) ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
   if ! (( BASH_VERSINFO[0] > 4 || ( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4 ) )) || [[ $- != *p* ]]; then
     printf 'ccd: refused (entry-unprivileged): %s reaches ccd only through its installed direct entry, under Bash >= 4.4 in privileged mode (-p); this is Bash %s with flags %s — nothing was run\n' \
       "$1" "${BASH_VERSION-unknown}" "$-" >&2
@@ -8883,7 +8883,7 @@ EOF
   echo child-argv-v1
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
-  echo reclaim-pause-v1; echo expire-v1; echo ws-expire; echo collect-v1; echo ws-collect; echo collect-loose-v1; echo orphan-v1; echo ws-orphan   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
+  echo reclaim-pause-v1; echo expire-v1; echo expire-child-v1; echo ws-expire; echo collect-v1; echo ws-collect; echo collect-loose-v1; echo orphan-v1; echo ws-orphan   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
   echo docs-tree
   echo docs-show
   echo docs-fetch
@@ -13170,10 +13170,10 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # `--reclaim` is the one exception to that: see "WS-AUDIT --RECLAIM" in the RECLAIM region.
   local mode=reap defer=0
   case "${1-}" in --orphans) shift; _ws_orphan_census "$@"; return ;; --orphan-hex) shift; _ws_orphan_audit "$@"; return ;; esac   # DR-16 (D-6628): the orphan census and ladder, read-only
-  [[ ( $# -eq 2 || $# -eq 3 || $# -eq 4 ) && $1 == --session ]] \
+  [[ ( $# -ge 2 && $# -le 5 ) && $1 == --session ]] \
     || { _ws_loose_route "$@"; _WS_LR=$?; (( _WS_LR == 99 )) || return "$_WS_LR"; die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]"; }   # the loose arm's two forms ride this line
-  if (( $# >= 3 )); then [[ $3 != --expire || $# -ne 3 ]] || { _ws_expire_audit "$2"; return; }; [[ $3 != --collect || $# -ne 3 ]] || { _ws_collect_audit "$2"; return; }   # "WS-AUDIT --EXPIRE" and "WS-AUDIT --COLLECT", in their regions
-    [[ $3 == --reclaim && ( $# -eq 3 || $4 == --defer-expired ) ]] \
+  if (( $# >= 3 )); then [[ $3 != --expire || ( $# -ne 3 && ( $# -ne 5 || $4 != --child-of ) ) ]] || { local EXPIRE_CHILDOF=''; (( $# == 3 )) || { _child_runid_valid "$5" || die "bad run id"; EXPIRE_CHILDOF=$5; }; _ws_expire_audit "$2"; return; }; [[ $3 != --collect || $# -ne 3 ]] || { _ws_collect_audit "$2"; return; }   # "WS-AUDIT --EXPIRE" and "WS-AUDIT --COLLECT", in their regions
+    [[ $3 == --reclaim && $# -le 4 && ( $# -eq 3 || $4 == --defer-expired ) ]] \
       || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]"
     [[ $_WS_AUDIT_INNER == 1 ]] || { _ws_reclaim_audit_contained "$@"; return; }; mode=reclaim   # see "THE AUDIT READS THE LIVE CHILD CONTAINED" (RECLAIM region)
     (( $# == 4 )) && defer=1
@@ -37043,7 +37043,14 @@ _ws_expire_not_child() {   # id -> 0 when NO `.child` marker stands; else rc 1 r
   # is the RECLAIM lane's (spec §5.3, #166 R29's direction: an unreadable
   # marker defers). Presence is the test (`-e`, and `-L` for a dangling link),
   # never the grammar: a marker this box cannot parse is still not "none".
-  local id="$1"
+  local id="$1" mark
+  # `--child-of <run>` (spec §2.7.4, `expire-child-v1`) is the one way past: the marker must PARSE as a run id equal to
+  # it. A mismatch, an unreadable or linked marker and a missing one all still refuse `child`; without the flag, as ever.
+  if [[ -n "${EXPIRE_CHILDOF-}" ]]; then
+    mark=$(_reg_get "$id" child)
+    _child_runid_valid "$mark" && [[ "$mark" == "$EXPIRE_CHILDOF" ]] && return 0
+    _reap_refuse child "$id does not carry a child marker that reads as run $EXPIRE_CHILDOF ($REG/$id.child) — only a child of that run is expired on its word"; return 1
+  fi
   [[ ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] \
     || { _reap_refuse child "$id carries a child marker ($REG/$id.child) — a child is reclaimed by ws-reclaim when its run closes, never expired"; return 1; }
 }
@@ -37175,7 +37182,7 @@ _ws_expire_eval() {   # id -> 0 when the expiry ladder passes (REAP_VERDICT=expi
   [[ -n "$ws" ]] || { _reap_refuse not-a-workspace "$id is a main checkout — a main checkout is never expired"; return 1; }
   _ws_expire_archived "$id" || return 1
   _ws_expire_not_child "$id" || return 1
-  _WS_LADDER_BIND=("mode=expire" "id=$id" "archivedAt=$EXPIRE_ARCHIVED_AT")
+  _WS_LADDER_BIND=("mode=expire" "id=$id" "archivedAt=$EXPIRE_ARCHIVED_AT" ${EXPIRE_CHILDOF:+"childOf=$EXPIRE_CHILDOF"})   # `childOf` only when asked: a plain expiry's token is unchanged
   _ws_reclaim_ladder "$id" 0 || return 1
   REAP_VERDICT=expirable
 }
@@ -37278,7 +37285,7 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
     || { _ws_reclaim_unmeasured "the tombstone at $tomb cannot be read, so which steps of the interrupted expiry already ran is unknown"; return 1; }
   REAP_BRANCH="$tombbranch"; REAP_TIP="$tombtip"
   REAP_TOKEN=$(_ws_reclaim_fingerprint "mode=expire-resume" "id=$id" "archivedAt=$tombarch" \
-    "phase=$phase" "branch=$tombbranch" "tip=$tombtip")
+    "phase=$phase" "branch=$tombbranch" "tip=$tombtip" ${EXPIRE_CHILDOF:+"childOf=$EXPIRE_CHILDOF"})
   REAP_VERDICT=expirable
 }
 
@@ -37319,12 +37326,14 @@ cmd_ws_expire() {   # ccd ws-expire --expect <token> --session <id> [--surface <
   # recomputed here, inside the reap lock, at the instant of deletion; it binds
   # the archive's epoch. stdout is ONE JSON line: `{"expired":…}`, a refusal
   # document at exit 0, or `{"failed":…}` at exit 1 (the breadcrumb resumes it).
-  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 args=()
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_gc=0 args=() EXPIRE_CHILDOF=''
   while (( $# )); do
     case "$1" in
       # THE IDENTITY PAIRS ARE TAKEN WHOLE, as in ws-reclaim's loop (path-identity spec §2.4): a key and its value go
       # to `args` together, and a key with no value goes alone, for the exact-arity rule below to refuse.
       --expect|--session) if (( $# >= 2 )); then args+=("$1" "$2"); shift 2; else args+=("$1"); shift; fi ;;
+      --child-of)  (( $# >= 2 && ! lc_gc )) && _child_runid_valid "$2" || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"   # once, and a legal run id
+                   lc_gc=1; EXPIRE_CHILDOF="$2"; shift 2 ;;
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
