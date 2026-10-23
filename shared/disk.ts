@@ -89,6 +89,10 @@ export interface DiskExpectedMount {
  *  `failed` and `timeout` are unknown (the root may hold bytes nobody read). */
 export type DiskMissingWhy = 'absent' | 'failed' | 'timeout';
 
+const DISK_MISSING_WHY_MAP: Record<DiskMissingWhy, true> = { absent: true, failed: true, timeout: true };
+/** Every `DiskMissingWhy`, derived from the type. */
+export const DISK_MISSING_WHYS = Object.keys(DISK_MISSING_WHY_MAP) as DiskMissingWhy[];
+
 export interface DiskMissingRoot {
   readonly label: string;
   readonly why: DiskMissingWhy;
