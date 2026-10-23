@@ -7080,13 +7080,13 @@ _dr_cx_runtime() {
 #     non-owner cannot run a bare `chmod` (EPERM), and its remedy already ends
 #     in the `chmod 600`, so a credential both foreign-owned and the wrong mode
 #     gets this one line;
-#   - `modeOk` false: `chmod 600 <the path `paths` answers>`, and it is the
-#     ONLY credential line, because a 0000 file also reads `unreadable` (the
-#     library's open is refused) and "move it aside" would discard a credential
-#     a chmod cures. `modeOk`/`ownerOk` null is NOT false (D-6559): nothing is
-#     there, or the path is not a regular file (a symlink, a FIFO, a
-#     directory), whose lstat mode is not the credential's, so it takes the
-#     `unreadable` arm below and never a chmod, which would follow a symlink;
+#   - `modeOk` false: `chmod 600 <the path `paths` answers>`, the only credential
+#     line unless `ownerOk` is false too (the owner line above then stands alone):
+#     a 0000 file also reads `unreadable` (the library's open is refused) and "move
+#     it aside" would discard a credential a chmod cures. `modeOk`/`ownerOk` null
+#     is NOT false (D-6559): nothing is there, or the path is not a regular file (a
+#     symlink, a FIFO, a directory), whose lstat mode is not the credential's, so
+#     it takes the `unreadable` arm below and never a chmod, which would follow a symlink;
 #   - `absent`/`incomplete`: not signed in, `ccrc codex login <id>` (start's
 #     own words for its not-logged-in refusal);
 #   - `unreadable`/`foreign-family`: move it aside, then sign in again;
