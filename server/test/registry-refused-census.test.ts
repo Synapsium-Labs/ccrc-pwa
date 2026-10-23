@@ -143,7 +143,6 @@ const EXPECTED_SITES: readonly string[] = [
   'watch.ts | detectDialogs | readRegistry | tests-only',
   'watch.ts | sweepHookStates | readRegistryMeasured | tests-only',
   'watch.ts | mailPass | readRegistryMeasured | holds',
-  'watch.ts | prPass | readRegistry | omits',
   'watch.ts | fleetFor | readRegistryMeasured | tests-only',
   'watch.ts | tick | readRegistryMeasured | omits',
 ];
@@ -198,8 +197,8 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
       .toEqual([]);
   });
 
-  it('the classified set is exactly these 24 sites', () => {
-    expect(EXPECTED_SITES).toHaveLength(24);
+  it('the classified set is exactly these 23 sites', () => {
+    expect(EXPECTED_SITES).toHaveLength(23);
     expect(allSites().map(key).sort()).toEqual([...EXPECTED_SITES].sort());
   });
 
@@ -271,6 +270,11 @@ describe('tick hands its model to the lanes that would otherwise list the regist
   it('tick() passes registryRead to sweepTasks(', () => {
     expect(body(), 'tick no longer hands the task lane its model: that lane would list the registry itself')
       .toMatch(/\bthis\.sweepTasks\(\s*registryRead\s*\)/);
+  });
+
+  it('tick() passes registryRead to sweepPr(', () => {
+    expect(body(), 'tick no longer hands the PR lane its model: that lane would list the registry itself')
+      .toMatch(/\bthis\.sweepPr\(\s*registryRead\s*\)/);
   });
 
   it('tick() passes registryRead to sweepNames(', () => {
@@ -394,7 +398,7 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     expect(sitesOf('coord/routes.ts', 'readRegistry'), 'the two approval routes, placed refuses').toHaveLength(2);
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
-    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(6);
+    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(5);
     expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(18);
   });
 });
