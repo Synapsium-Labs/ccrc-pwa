@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9c5a78d017cbe49b7d025e5a392f1f9087c4fb02a37641bd0f815b199e63d6c1
+# ccrc:generated 1 sha256=08bbb956ce58665c159be3a08bc48101594c141fe7123d0369f3effca47237b8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -8870,7 +8870,7 @@ EOF
   echo docs-show
   echo docs-fetch
   echo docs-index
-  echo path-users-v1   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
+  echo path-users-v1; echo path-users   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
   # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own
@@ -43671,6 +43671,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi
