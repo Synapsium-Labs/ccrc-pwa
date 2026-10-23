@@ -8,7 +8,8 @@ expectation is changed here, never by hand.
 THE CORPUS. 32 streams ported from the throwaway prototype (8 rebuilt from shapes in this repository: the runtime
 probe's scripted streams in `ccd/ccgpt-runtime` and the patch driver's in `server/test/ccgpt-runtime.test.ts`; 24
 synthetic until the operator's scrubbed recordings replace them, D-6430), then 16 `synth2-` streams: the second guard
-for each rule the prototype guarded once, and the spec §5 reducer list. Every stream is synthetic: tiny texts, ids of
+for each rule the prototype guarded once, and the spec §5 reducer list, then 9 `synth3-` streams for the rule arms
+the Task 3 review found no stream reaching. Every stream is synthetic: tiny texts, ids of
 the form `<prefix>_fx<n>`, encrypted content `ENC-<n>`, neutral tool names.
 
 THE EXPECTATIONS are written here by hand, never computed by the reducer: per stream, `setup` (the reducer's
@@ -436,6 +437,53 @@ stream("synth2-reasoning-message-reasoning-call",
        .completed([], usage(3, 4)),
        expect([T("First I look."), C(3, ARGS[0])], stop="tool_use", use=AU(3, 0, 0, 4),
               reasoning=[["text", "First I look."], ["call", "call_fx3"]]))
+
+# ── synth3: an arm of the reducer's rules no stream above reaches (Task 3 review, fix round 1) ──
+# R14: a text delta for an item past the release cursor is never forwarded live; its text is released at its done.
+stream("synth3-text-ahead-of-cursor",
+       Stream().created().added(0, fc(0, "", status="in_progress")).added(1, msg(1, [], status="in_progress"))
+       .text_delta(1, "Te").text_delta(1, "xt").done(0, fc(0, ARGS[0])).done(1, say(1, "Text"))
+       .completed([], usage(3, 2)),
+       expect([C(0, ARGS[0]), T("Text")], stop="tool_use", use=AU(3, 0, 0, 2)))
+# R10: two consecutive output_text parts are one text block.
+stream("synth3-two-text-parts-merge",
+       Stream().created().done(0, msg(0, [out_text("Hel"), out_text("lo")])).completed([], usage(3, 1)),
+       expect([T("Hello")], stop="end_turn", use=AU(3, 0, 0, 1)))
+# R9: an incomplete message that never streamed live is skipped.
+stream("synth3-incomplete-message-not-live",
+       Stream().created().done(0, say(0, "Cut sho", status="incomplete"))
+       .incomplete("max_output_tokens", [say(0, "Cut sho", status="incomplete")], usage(3, 1)),
+       expect(stop="max_tokens", use=AU(3, 0, 0, 1), names=[["incompleteReason", "max_output_tokens"]],
+              warnings=[W_UNFINISHED]))
+# R5: an item in the final output that never got a done event and is not completed is skipped, not filled.
+stream("synth3-final-output-unfinished-items",
+       Stream().created().done(0, say(0, "ok"))
+       .completed([say(0, "ok"), fc(1, '{"q":', status="incomplete"), fc(2, '{"q":', status="in_progress")],
+                  usage(3, 2)),
+       expect([T("ok")], stop="end_turn", use=AU(3, 0, 0, 2), warnings=[W_UNFINISHED, W_UNFINISHED]))
+# R6: an item held behind a gap (output_index 0 never finished) is released at the terminal.
+stream("synth3-gap-released-at-terminal",
+       Stream().created().added(0, fc(0, "", status="in_progress")).done(1, fc(1, ARGS[1])).completed([], usage(3, 1)),
+       expect([C(1, ARGS[1])], stop="tool_use", use=AU(3, 0, 0, 1)))
+# R6 and R2: the same with a live block open at output_index 0, which is closed before the held item is released.
+stream("synth3-gap-with-live-block",
+       Stream().created().added(0, msg(0, [], status="in_progress")).text_delta(0, "Hi").done(1, fc(1, ARGS[1]))
+       .completed([], usage(3, 2)),
+       expect([T("Hi"), C(1, ARGS[1])], stop="tool_use", use=AU(3, 0, 0, 2)))
+# R14 and R10: a message whose first part is a refusal is never live; its later output_text is sent once, at the done.
+stream("synth3-refusal-first-then-text",
+       Stream().created().added(0, msg(0, [], status="in_progress")).text_delta(0, "Hello", content_index=1)
+       .done(0, msg(0, [refusal_part("no"), out_text("Hello")])).completed([], usage(3, 2)),
+       expect([T("no"), T("Hello")], stop="refusal", use=AU(3, 0, 0, 2)))
+# R14 and R2: the live index finishes as a call, then as reasoning: the live block is closed first, counted.
+stream("synth3-live-index-finishes-as-a-call",
+       Stream().created().text_delta(0, "Hi").done(0, fc(0, ARGS[0])).done(1, say(1, "x")).completed([], usage(3, 2)),
+       expect([T("Hi"), C(0, ARGS[0]), T("x")], stop="tool_use", use=AU(3, 0, 0, 2),
+              counts={"liveTextMismatch": 1}))
+stream("synth3-live-index-finishes-as-reasoning",
+       Stream().created().text_delta(0, "Hi").done(0, rs(0)).done(1, say(1, "After")).completed([], usage(3, 2)),
+       expect([T("Hi"), T("After")], stop="end_turn", use=AU(3, 0, 0, 2), reasoning=[["text", "After"]],
+              counts={"liveTextMismatch": 1}))
 
 
 def main():

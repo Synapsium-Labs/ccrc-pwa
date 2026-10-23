@@ -29,10 +29,12 @@ THE RULES (each is a case or a mutation row in codex-bridge-replay.test.ts):
 - R12 an unmapped item (`web_search_call`, `image_generation_call`, `compaction`, unknown) is skipped and its type
       counted `itemType:<type>`; an unknown event type is counted `eventType:<type>`.
 - R14 live text: an `output_text.delta` of the item at the release cursor is forwarded as a `text_delta` at once
-      (the first content part it names only: a later part is sent at the done event, as a suffix when R10 merges
-      it, else as a block of its own); at the item's done event a missing suffix is sent; a text that does not
-      extend what was sent is counted `liveTextMismatch` and nothing is re-sent. The text keyed and recorded is
-      always the text EMITTED, which is what Claude Code sends back.
+      (content part 0 only, an absent `content_index` read as 0: a later part is sent at the done event, as a
+      suffix when R10 merges it, else as a block of its own, so a message whose first part is a refusal is never
+      live); at the item's done event a missing suffix is sent; a text that does not extend what was sent is
+      counted `liveTextMismatch` and nothing is re-sent, and so is a finished item at the live index that is not a
+      message (the live block is closed before it is released, keeping R2). The text keyed and recorded is always
+      the text EMITTED, which is what Claude Code sends back.
 - R15 usage comes from the terminal event's `usage` (`anthropic_usage`).
 - R16 `response.failed` and a top-level `error` event are classified by `errors.classify_failed`; blocks already
       released stay, and nothing held is released after a failure.
@@ -134,11 +136,6 @@ def _bounded(value: object) -> str:
     return lowered if errors.CODE_RE.fullmatch(lowered) else errors.UNRECOGNISED_CODE
 
 
-def _api_error(what: str) -> errors.BridgeError:
-    """The unavailable row (spec §2.4 "529 or 503"): a stream with no terminal, an unknown incomplete reason."""
-    return errors.BridgeError(503, errors.API_ERROR, "upstream unavailable (%s)" % what, kind="unavailable")
-
-
 def _reject_constant(name: str) -> object:
     raise ValueError("not JSON: " + name)
 
@@ -186,7 +183,7 @@ class Reducer:
         self._seen = set()  # type: set  (every output_index that got a finished item)
         self._finished = {}  # type: Dict[int, dict]
         self._added = {}  # type: Dict[str, int]  (item id -> output_index, from output_item.added)
-        self._live = None  # type: Optional[dict]  ({"oi", "block", "sent", "part"})
+        self._live = None  # type: Optional[dict]  ({"oi", "block", "sent"})
         self._reasoning = []  # type: List[list]  ([item, key])
         self._unkeyed = []  # type: List[int]  (indexes into _reasoning still waiting for their key)
 
@@ -209,7 +206,7 @@ class Reducer:
 
     def finish(self) -> Terminal:
         if self.terminal is None:
-            self._fail(_api_error("the stream closed before a terminal event"), None, "truncated", None)
+            self._fail(errors.unavailable("the stream closed before a terminal event"), None, "truncated", None)
         return self.terminal
 
     # ── the feed ──
@@ -291,11 +288,10 @@ class Reducer:
         delta = d.get("delta")
         if not isinstance(delta, str) or not delta:
             return
-        part = d.get("content_index", 0)
-        if self._live is None:
-            self._live = {"oi": oi, "block": self._open({"type": "text", "text": ""}), "sent": "", "part": part}
-        elif self._live["part"] != part:  # a later part: sent at the done event, as a suffix or a block of its own
+        if _index(d.get("content_index", 0)) != 0:  # a later part: sent at the done event, as a suffix or a block
             return
+        if self._live is None:
+            self._live = {"oi": oi, "block": self._open({"type": "text", "text": ""}), "sent": ""}
         self._delta(self._live["block"], {"type": "text_delta", "text": delta})
         self._live["sent"] += delta
 
@@ -335,6 +331,9 @@ class Reducer:
 
     def _release(self, oi: int, item: dict) -> None:
         kind = item.get("type")
+        if kind != "message" and self._live is not None and self._live["oi"] == oi:  # R14, R2: not the live message
+            self.counts["liveTextMismatch"] += 1
+            self._close_live(None)
         if kind == "message":
             self._message(oi, item)
         elif kind in TOOL_ITEMS:
@@ -439,7 +438,7 @@ class Reducer:
             reason = _bounded(details.get("reason") if isinstance(details, dict) else None)
             self.names.name("incompleteReason", reason)
             if reason not in KNOWN_INCOMPLETE:
-                self._fail(_api_error("an incomplete response: " + reason), resp, kind, reason)
+                self._fail(errors.unavailable("an incomplete response: " + reason), resp, kind, reason)
                 return
         output = resp.get("output")
         for pos, it in enumerate(output if isinstance(output, list) else []):  # R5
@@ -489,8 +488,8 @@ def stop_reason(t: Terminal, emitted_tool_use: bool, refusal: bool) -> Optional[
     return "end_turn"
 
 
-def needs_continuation(t: Terminal, emitted_tool_use: bool) -> bool:
+def needs_continuation(t: Terminal, emitted_tool_use: bool, *, refusal: bool = False) -> bool:
     """True when a non-failed reply asks to be continued (`end_turn:false`, or `interrupted`) and emitted no
-    `tool_use`. The refusal flag still wins in `stop_reason`, which the server asks first: a refused reply's stop
-    reason is `refusal`, never None."""
-    return t.error is None and stop_reason(t, emitted_tool_use, False) is None
+    `tool_use`, exactly when `stop_reason` answers None. The refusal flag wins as it does there: the server passes
+    the reducer's `refusal`, so a refused reply that also says `end_turn:false` is never continued."""
+    return t.error is None and stop_reason(t, emitted_tool_use, refusal) is None

@@ -155,6 +155,7 @@ _STOP_ROWS = (
     ("completed", None, False, False, False), ("completed", None, False, True, False),
     ("incomplete", "max_output_tokens", None, False, False), ("incomplete", "content_filter", None, False, False),
     ("incomplete", "interrupted", None, False, False), ("incomplete", "interrupted", None, True, False),
+    ("completed", None, False, False, True),
 )
 
 
@@ -196,7 +197,7 @@ def _reduce(op, cb):
             "anthropicUsage": reducer.anthropic_usage(t.usage), "stop": None, "continue": False, "error": None}
     if t.error is None:
         term["stop"] = reducer.stop_reason(t, r.emitted_tool_use, r.refusal)
-        term["continue"] = reducer.needs_continuation(t, r.emitted_tool_use) and term["stop"] is None
+        term["continue"] = reducer.needs_continuation(t, r.emitted_tool_use, refusal=r.refusal)
     else:
         term["error"] = {"type": t.error.etype, "status": t.error.status, "message": t.error.message,
                          "code": t.error.code}
@@ -324,7 +325,7 @@ def _run(op, pkg, cb):
         for kind, reason, end_turn, tool, refusal in _STOP_ROWS:
             t = reducer.Terminal(kind, reason, None, reducer.ZERO_USAGE, end_turn)
             rows.append({"in": [kind, reason, end_turn, tool, refusal], "stop": reducer.stop_reason(t, tool, refusal),
-                         "cont": reducer.needs_continuation(t, tool)})
+                         "cont": reducer.needs_continuation(t, tool, refusal=refusal)})
         failed = reducer.Terminal("failed", None, errors.classify_failed(None, now=0), reducer.ZERO_USAGE, None)
         try:
             reducer.stop_reason(failed, False, False)

@@ -47,7 +47,16 @@
   "synth2-long-tool-name",
   "synth2-completed-empty-output-after-dones",
   "synth2-cache-write-only",
-  "synth2-reasoning-message-reasoning-call"
+  "synth2-reasoning-message-reasoning-call",
+  "synth3-text-ahead-of-cursor",
+  "synth3-two-text-parts-merge",
+  "synth3-incomplete-message-not-live",
+  "synth3-final-output-unfinished-items",
+  "synth3-gap-released-at-terminal",
+  "synth3-gap-with-live-block",
+  "synth3-refusal-first-then-text",
+  "synth3-live-index-finishes-as-a-call",
+  "synth3-live-index-finishes-as-reasoning"
  ],
  "streams": {
   "hook-custom-tool-call-no-delta": {
@@ -1816,6 +1825,325 @@
     "cache_read_input_tokens": 0,
     "input_tokens": 3,
     "output_tokens": 6
+   },
+   "warnings": []
+  },
+  "synth3-final-output-unfinished-items": {
+   "blocks": [
+    {
+     "text": "ok",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": [
+    "an unfinished item was skipped",
+    "an unfinished item was skipped"
+   ]
+  },
+  "synth3-gap-released-at-terminal": {
+   "blocks": [
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "two"
+     },
+     "json": "{\"q\": \"two\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 1
+   },
+   "warnings": []
+  },
+  "synth3-gap-with-live-block": {
+   "blocks": [
+    {
+     "text": "Hi",
+     "type": "text"
+    },
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "two"
+     },
+     "json": "{\"q\": \"two\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth3-incomplete-message-not-live": {
+   "blocks": [],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": [
+     [
+      "incompleteReason",
+      "max_output_tokens"
+     ]
+    ]
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "max_tokens",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 1
+   },
+   "warnings": [
+    "an unfinished item was skipped"
+   ]
+  },
+  "synth3-live-index-finishes-as-a-call": {
+   "blocks": [
+    {
+     "text": "Hi",
+     "type": "text"
+    },
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "text": "x",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {
+     "liveTextMismatch": 1
+    },
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth3-live-index-finishes-as-reasoning": {
+   "blocks": [
+    {
+     "text": "Hi",
+     "type": "text"
+    },
+    {
+     "text": "After",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {
+     "liveTextMismatch": 1
+    },
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [
+    [
+     "text",
+     "After"
+    ]
+   ],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth3-refusal-first-then-text": {
+   "blocks": [
+    {
+     "text": "no",
+     "type": "text"
+    },
+    {
+     "text": "Hello",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "refusal",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth3-text-ahead-of-cursor": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "text": "Text",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth3-two-text-parts-merge": {
+   "blocks": [
+    {
+     "text": "Hello",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 1
    },
    "warnings": []
   }

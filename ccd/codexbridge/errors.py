@@ -229,7 +229,9 @@ def _overloaded(code: str, rid: Optional[str]) -> BridgeError:
     return BridgeError(529, OVERLOADED, "upstream overloaded (%s)" % code, None, None, code, rid, "overloaded")
 
 
-def _unavailable(what: str, code: Optional[str], rid: Optional[str]) -> BridgeError:
+def unavailable(what: str, code: Optional[str] = None, rid: Optional[str] = None) -> BridgeError:
+    """The unavailable row (spec §2.4 "529 or 503"), its one writer: the reducer's no-terminal and unknown-reason
+    failures are built here too."""
     return BridgeError(503, API_ERROR, "upstream unavailable (%s)" % what, None, None, code, rid, "unavailable")
 
 
@@ -282,11 +284,11 @@ def classify_http(status: int, body: bytes, headers: Mapping[str, str], *, now: 
     if status == 403 and not isinstance(obj, dict):
         # a 403 whose body is not a JSON object is an edge's page (a Cloudflare challenge), not the backend's refusal;
         # a JSON 403 with no code is the backend's, and takes the other-4xx row below
-        return _unavailable("HTTP 403 that is not the backend's JSON", None, rid)
+        return unavailable("HTTP 403 that is not the backend's JSON", None, rid)
     if 400 <= status < 500:
         return BridgeError(status, INVALID_REQUEST, "the upstream refused the request: %s"
                            % (shown if shown is not None else "HTTP %d" % status), None, None, shown, rid, "refused")
-    return _unavailable("HTTP %d" % status if isinstance(status, int) else "HTTP ?", shown, rid)
+    return unavailable("HTTP %d" % status if isinstance(status, int) else "HTTP ?", shown, rid)
 
 
 def classify_failed(error: Optional[dict], *, now: float) -> BridgeError:
@@ -298,7 +300,7 @@ def classify_failed(error: Optional[dict], *, now: float) -> BridgeError:
     if row is not None:
         return row
     shown = code if code is not None else etype
-    return _unavailable("the response failed: %s" % _says(shown), shown, None)
+    return unavailable("the response failed: %s" % _says(shown), shown, None)
 
 
 def overflow(n: int, m: int) -> BridgeError:

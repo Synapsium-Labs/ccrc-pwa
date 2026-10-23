@@ -168,9 +168,10 @@ describe.skipIf(!PY)('the reducer, against the replay corpus (codex-bridge spec 
     }
   });
 
-  it('the corpus holds the 32 ported streams and the 16 new ones', () => {
-    expect(STREAMS.filter((s) => !s.startsWith('synth2-'))).toHaveLength(32);
+  it('the corpus holds the 32 ported streams, the 16 new ones and the 9 of review round 1', () => {
+    expect(STREAMS.filter((s) => !s.startsWith('synth2-') && !s.startsWith('synth3-'))).toHaveLength(32);
     expect(STREAMS.filter((s) => s.startsWith('synth2-'))).toHaveLength(16);
+    expect(STREAMS.filter((s) => s.startsWith('synth3-'))).toHaveLength(9);
   });
 
   it('the usage sum equals the upstream input_tokens', async () => {
@@ -209,6 +210,31 @@ describe.skipIf(!PY)('the reducer, against the replay corpus (codex-bridge spec 
       expect(out, STREAMS[i]).not.toContain('encrypted_content');
     }
     expect(withReasoning).toBeGreaterThanOrEqual(8);
+  });
+
+  it('with live_text off, nothing is released before the done event, and the fold is the same', async () => {
+    const name = 'synth2-live-text-prefix-then-suffix';
+    const [line] = await run([reduceOp(name, 'whole', { trace: true, live_text: false })]);
+    const trace = line.trace as Array<{ type: string; released: string[] }>;
+    const done = trace.findIndex((t) => t.type === 'response.output_item.done');
+    expect(done).toBeGreaterThan(0);
+    expect(trace.slice(0, done).every((t) => t.released.length === 0)).toBe(true);
+    expect(trace[done].released).toEqual(['content_block_start', 'content_block_delta:text_delta', 'content_block_stop']);
+    line.name = name;
+    check(line.events as Ev[]);
+    expect(result(line)).toEqual(EXPECT.streams[name]);
+  });
+
+  it('the warnings are capped, the last one saying further warnings were dropped', async () => {
+    const call = { type: 'function_call', id: 'fc_fx0', call_id: 'call_fx0', name: 'probe_tool', arguments: '{}' };
+    const done = { type: 'response.output_item.done', output_index: 0, item: call };
+    const [line] = await run([inline([
+      ...Array.from({ length: 70 }, () => done),
+      { type: 'response.completed', response: { id: 'resp_fx1', output: [] } },
+    ])]);
+    expect(line.warnings).toHaveLength(65);
+    expect(line.warnings.slice(0, 64)).toEqual(Array.from({ length: 64 }, () => 'a repeated output_index was dropped'));
+    expect(line.warnings[64]).toBe('further warnings dropped');
   });
 
   it('on a live-text mismatch the emitted text is what the reasoning is keyed by', async () => {
@@ -313,6 +339,8 @@ describe.skipIf(!PY)('the reducer, against the replay corpus (codex-bridge spec 
       { in: ['incomplete', 'content_filter', null, false, false], stop: 'refusal', cont: false },
       { in: ['incomplete', 'interrupted', null, false, false], stop: null, cont: true },
       { in: ['incomplete', 'interrupted', null, true, false], stop: 'tool_use', cont: false },
+      // a refused reply that also says end_turn:false is not continued: the refusal flag wins in both
+      { in: ['completed', null, false, false, true], stop: 'refusal', cont: false },
     ]);
     expect(table.failedRaises).toBe('ValueError');
   });
