@@ -33,7 +33,7 @@ import { MAIL_REPLAY_MS, STALL_LEVELS, WAVE_DONE_SUBJECT, type FleetSession } fr
 import { tmuxTarget } from '../../shared/tmux-target.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { callsIn, symbolOf } from './scan/symbols.js';
+import { callsIn, inlinedSourceOf, symbolOf } from './scan/symbols.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER, mailTurnModeOf } from '../src/turnidle.js';
 
@@ -923,10 +923,17 @@ describe('sweepStalls: wiring', () => {
 
   it('rides tick(): dispatched right after the claim lanes, before primed is set, with no timer of its own', () => {
     const src = readFileSync(path.join(here, '../src/watch.ts'), 'utf8');
-    const claims = src.indexOf('this.lapseClaims(sessions, registryRead.refused);');
-    const lane = src.indexOf('void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(');
+    // ARCH-06 (#554): the order is read off `tick`'s symbol (a body moved into a private method keeps its place in the
+    // flow, `inlinedSourceOf`), not off the file's text, so an extraction that moves tick's statements stays green.
+    const tick = inlinedSourceOf(symbolOf('server/src/watch.ts', 'FleetWatcher.tick'));
+    const at = (needle: string): number => {
+      expect(tick.split(needle), `tick() holds ${needle} exactly once`).toHaveLength(2);
+      return tick.indexOf(needle);
+    };
+    const claims = at('this.lapseClaims(sessions, registryRead.refused);');
+    const lane = at('this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(');
     expect(src).toContain('this.usage, this.currentHeadBranches(), panePids);');   // the pids are assembleFleet's own
-    const primed = src.indexOf('this.primed = true;');
+    const primed = at('this.primed = true;');
     expect(claims).toBeGreaterThan(-1);
     expect(lane).toBeGreaterThan(claims);
     expect(primed).toBeGreaterThan(lane);

@@ -6,7 +6,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { callsIn, sourceOfSymbol, sqlStatementsIn, sqlStatementsInFile, symbolOf, REPO_ROOT } from './scan/symbols.js';
+import { callsIn, inlinedSourceOf, sourceOfSymbol, sqlStatementsIn, sqlStatementsInFile, symbolOf, REPO_ROOT } from './scan/symbols.js';
 
 const FIXTURE = [
   'export class Watcher {',
@@ -109,6 +109,21 @@ describe('scan/symbols.ts keys a source slice on a symbol (D-5854)', () => {
     // A comment that quotes SQL, and a string that is not a statement, are not statements.
     expect(at('Store.quiet')).toEqual([]);
     expect(sqlStatementsInFile(file).map((q) => q.table)).toEqual(['runs', 'runs', 'runs', 'mail', 'runs']);
+  });
+
+  it('inlinedSourceOf keeps an order pin green when a body moves into a private helper, and splices each helper once', () => {
+    writeFileSync(file, FIXTURE);
+    const order = (t: string): number[] => ['this.sweepA();', 'this.n = settle(this.n);', 'this.sweepB(1);'].map((n) => t.indexOf(n));
+    const inOrder = (xs: number[]): boolean => xs.every((x, i) => x >= 0 && (i === 0 || x > xs[i - 1]!));
+    expect(inOrder(order(inlinedSourceOf(symbolOf(file, 'Watcher.tick'))))).toBe(true);
+    // The body moved wholesale into a private method; `tick` only forwards.
+    writeFileSync(file, FIXTURE.replace('  tick(): void {', '  tick(): void { this.tickBody(); }\n  private tickBody(): void {'));
+    expect(inOrder(order(sourceOfSymbol(file, 'Watcher.tick')))).toBe(false);
+    expect(inOrder(order(inlinedSourceOf(symbolOf(file, 'Watcher.tick'))))).toBe(true);
+    // A helper called twice is spliced at its first call only; a free function has nothing to inline.
+    writeFileSync(file, FIXTURE.replace('this.sweepB(1);', 'this.sweepA(); this.sweepB(1);'));
+    expect(inlinedSourceOf(symbolOf(file, 'Watcher.tick')).split('private sweepA').length).toBe(2);
+    expect(inlinedSourceOf(symbolOf(file, 'outer'))).toBe(sourceOfSymbol(file, 'outer'));
   });
 
   it('sqlStatementsIn follows code that moves: the same statements after a method is added above', () => {

@@ -114,3 +114,31 @@ export function sqlStatementsInFile(file: string): SqlStatement[] {
   const parsed = parsedFile(file);
   return statementsOf(parsed, 0, parsed.text.length);
 }
+
+/** `symbol`'s text with each same-class helper it calls (`this.helper(…)`, transitively) spliced in just before its
+ *  first call, once, so an ORDER pin over the symbol survives its body moving into a private method: the code keeps its
+ *  place in the flow, only its home changes. Expect a needle to occur once in the result (a helper called early can
+ *  hold the same text), and assert that. KNOWN WIDTH: only `this.` calls to a method of the symbol's own class are
+ *  followed, and a helper's text is spliced at its first call only. */
+export function inlinedSourceOf(symbol: SourceSymbol): string {
+  const owner = symbol.name.includes('.') ? symbol.name.slice(0, symbol.name.indexOf('.')) : null;
+  if (owner === null) return symbol.text;
+  const parsed = parsedFile(symbol.file);
+  const seen = new Set<string>([symbol.name]);
+  const expand = (s: SymbolSpan): string => {
+    let text = parsed.text.slice(s.start, s.end);
+    const inserts: Array<{ at: number; text: string }> = [];
+    for (const c of parsed.calls) {
+      if (c.start < s.start || c.end > s.end) continue;
+      const m = /^this\.(\w+)$/.exec(c.callee);
+      const name = m === null ? null : `${owner}.${m[1]!}`;
+      const helper = name === null ? [] : parsed.symbols.filter((x) => x.name === name);
+      if (name === null || helper.length !== 1 || seen.has(name)) continue;
+      seen.add(name);
+      inserts.push({ at: c.start - s.start, text: `${expand(helper[0]!)}\n` });
+    }
+    for (const i of inserts.sort((a, b) => b.at - a.at)) text = text.slice(0, i.at) + i.text + text.slice(i.at);
+    return text;
+  };
+  return expand(symbol);
+}
