@@ -502,7 +502,7 @@ describe('NewSessionSheet — success opens the new session', () => {
     const view = render(ui(true));
     const flush = async (): Promise<void> => { await act(async () => {}); };
     await flush();
-    return { store, onClose, flush, close: () => view.rerender(ui(false)) };
+    return { store, onClose, flush, close: () => view.rerender(ui(false)), reopen: () => view.rerender(ui(true)) };
   };
   const pickDemo = async (flush: () => Promise<void>): Promise<void> => {
     fireEvent.click(screen.getByRole('button', { name: /team·max/ }));
@@ -626,6 +626,29 @@ describe('NewSessionSheet — success opens the new session', () => {
     expect(window.location.pathname).toBe('/');
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.queryByText(/^Starting demo/)).toBeNull(); // the bound's toast belongs to a sheet that is still waiting
+  });
+
+  it('a dismissal during the wait ends that wait, so a reopened sheet\'s own start is not cut short by its clock', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession')
+      .mockResolvedValueOnce(undefined) // the first start: answers, then waits for a row that never comes
+      .mockImplementationOnce(() => new Promise<void>(() => {})); // the second start: never answers
+    const { onClose, flush, close, reopen } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled(); // the first wait is running
+    close();
+    reopen();
+    await flush();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
+    // The first wait's 60 s bound would have fired by now had the dismissal not ended it.
+    await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+    expect(screen.getByRole('button', { name: /^(Starting…|Still starting)/ })).toBeDisabled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('past 60 s without a frame it toasts and closes, as before, and navigates nowhere', async () => {
