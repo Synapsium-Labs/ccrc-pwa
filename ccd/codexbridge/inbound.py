@@ -170,7 +170,7 @@ def _drop_billing(text: str) -> str:
     """A text without its billing line: Claude Code's first system block is `x-anthropic-billing-header: …;`, whose
     suffix varies between requests and would break the prefix cache. Only the block's FIRST line is removed: the
     rest of a block (or of a string system value) that starts with the billing line is kept, so no system text after
-    it is lost (a departure named in the Task 2 report)."""
+    it is lost."""
     if not text.startswith(BILLING_PREFIX):
         return text
     newline = text.find("\n")
