@@ -5,11 +5,12 @@
 // about 40 px under a fine pointer (three lines, the name, `waiting · needs you` and the context, when a long name and
 // the state do not fit side by side, and under 61 px), which under a touch screen is the tap floor again.
 //
-// The fixture is 13 sessions of one project in every bucket (2 attention, 3 working, 3 done, 3 idle, 2 dead: eight open
-// rows by default), with realistic workspace names of 17 to 25 characters, like a fleet's slugs, because a row's height
-// is decided by the name beside the state word and a 4-character name hides every wrap. One row is a main checkout
-// (no workspace, so no context fact: a one-line row). Fine pointer is the default context; touch is `openApp`'s
-// `touch: true`.
+// The fixture is 14 sessions across two projects, in every bucket (3 attention, 3 working, 3 done, 3 idle, 2 dead: nine
+// open rows by default), with realistic workspace names of 17 to 25 characters, like a fleet's slugs, because a row's
+// height is decided by the name beside the state word and a 4-character name hides every wrap. Two rows are main
+// checkouts (no workspace, so no context fact): project-a's is a one-line row, and project-b's, which needs the
+// operator, drops its state under a long branch name and is two. Fine pointer is the default context; touch is
+// `openApp`'s `touch: true`.
 //
 // MUTATION TABLE (plan Task T2e Step 3 and fix round 1; RUN, this file alone, each mutant reverted):
 //   the fourth track unconditional ..................... "at 1600 the session's reading column is 860 …"
