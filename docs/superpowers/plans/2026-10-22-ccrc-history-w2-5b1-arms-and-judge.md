@@ -4851,7 +4851,7 @@ The filter selects this task's three describes and W2-4 Task 9's case that holds
 - **The registration case:** `expected [ 'step0a', …(8) ] to deeply equal [ 'step0a', …(9) ]`.
 - **Every pure case:** `TypeError: D4.spendShareOf is not a function`, and the like for `questionStateOf`, `uptakeOf`, `armAnswerOf`, `expectedForNode` (its R30 scan is never reached), `armsSummaryOf`, `armRunName`, `streamEventsOf` and `readArmAnswers` (R31: its first row, the absent directory, throws before any refusal row; the CONTROL, the record read directly, is never reached).
 - **Every stub case:** `w5b4Arms` answers `{ word: 'args-invalid', detail: 'unknown subcommand "arms"' }` where `null` or another refusal is expected. The `BEFORE_OUT` rows fail on the word (`args-invalid` for `code-changed` and so on). Their `--out` and stub-log assertions are never reached. The pilot settings-mode case (R31) fails at its first expectation, `args-invalid` where `record-invalid` `settings_mode out-of-range` is expected.
-- **The end-to-end case:** the same `args-invalid` (darwin skips it). Past that, its fixture assumptions on `w6SourceBox` (the boundary `sb.u(5)` reconstructs, the source `sb.u(2)`, the command fact `sb.cmd`, the family `sb.id` at `sb.gen`) are predictions no planning step measured (R32): if Step 7 shows one does not hold, fix the fixture, never a guard, and record the measured value in this plan (R25).
+- **The end-to-end case:** the same `args-invalid` (darwin skips it). Past that, its fixture assumptions on `w6SourceBox` (the boundary `sb.u(5)` reconstructs, the source `sb.u(2)`, the command fact `sb.cmd`, the family `sb.id` at `sb.gen`) are predictions no planning step measured (R32): if Step 7 shows one does not hold, fix the fixture, never a guard, and record the measured value in this plan (R25). Measured at Step 7: every one of them held (the boundary `sb.u(5)` reconstructs, the source `sb.u(2)`, the command fact `sb.cmd`, the family `sb.id` at `sb.gen`), and the case passed on its first run.
 
 - [ ] **Step 5: Extend the shared pieces.** In `deploy/history-replay.mjs`:
 
@@ -5564,8 +5564,10 @@ t 'an unanswerable question refuses its batch'
 # M4 (D-6469): a discarded payload is skipped instead of refused.
 mut "$F" "    if (p.state !== 'payloads') refuse('quiz-unanswerable', \`\${s.q.qid} payload \${p.why}\`);   // D-6469" "    if (p.state !== 'payloads') continue;"
 t 'a payload that no longer reconstructs'
-# Expected RED: 1 failed: the job's stdin is undefined, so launchRun throws "TypeError: launchRun: stdin must be a string"
-# (a defect, rethrown by w5b4Arms), never the quiz-unanswerable refusal.
+# Expected RED: 1 failed: the job's stdin is undefined, and the manifest write hashes it first (writeArmManifest's
+# sha256Hex(p.job.stdin)), so the error is the TypeError 'The "data" argument must be of type string or an instance of
+# Buffer, TypedArray, or DataView. Received undefined' (a defect, rethrown by w5b4Arms), never the quiz-unanswerable
+# refusal. Measured, over the predicted launchRun message (R25).
 
 # M5 (before --out, W2-D78 (i)): the pre-check over every question removed.
 mut "$F" "    requireListed(home, storeId, familiesOf(questions));" ""
