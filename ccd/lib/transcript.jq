@@ -149,7 +149,7 @@ def continued_in($u):
 # or unparseable is skipped, so a malformed row can only make the answer older.
 def chatter: type == "string"
   and (startswith("<local-command-caveat>") or startswith("<command-name>") or startswith("<local-command-stdout>"));
-def turn_row: try fromjson catch (unsurrogate | try fromjson catch empty);
+def turn_row: . as $l | try fromjson catch ($l | unsurrogate | try fromjson catch empty);
 def turn_ts:
   [turn_row | select(type == "object")
    | select(.type == "user" or .type == "assistant")
