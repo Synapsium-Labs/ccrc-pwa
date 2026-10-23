@@ -2827,6 +2827,17 @@ export function openReplayStore(home) {
   }
 }
 
+/** D-6481: the store's pair index, rebuilt from the store as it is now. openReplayStore builds it once per open, and the
+ *  sweep's recordPairs learns pairs between two arm batches of one invocation (a read-only handle sees later commits), so
+ *  the arm batch preflight and the judge's input build call this first: a secret learned since the open is masked in the
+ *  text built from here on, where a stale index would let it through. Fail-closed only: a rebuilt index holds every pair the
+ *  old one did. Answers the new index; it is also kept as `rs.idx`.
+ *  @param {ReplayStore} rs  @param {string} home */
+function refreshPairIndex(rs, home) {
+  rs.idx = pairIndexOf(rs.db, home);
+  return rs.idx;
+}
+
 /** A failed open or first read as the driver's word: a StoreError by its word alone (store.mjs: the caller prints the
  *  word, never the message), SQLite's own error as store-read-failed with its message; anything else is a defect.
  *  @param {unknown} e  @returns {never} */
@@ -6703,6 +6714,8 @@ function questionArmsOf(ctx, q) {
 }
 
 /** W2-D78 and W2-D56 before one arm batch, composed once. Read-only first:
+ *  (0) the store's pair index refreshed (D-6481, refreshPairIndex), so the re-check and the payloads below read the pairs the
+ *      store holds now, both arms of every question from one index;
  *  (i) every batch family listed in headless-on for this store (Task 3's requireListed: family-unlisted);
  *  (ii) no batch family with a recall-off entry (W2-4's refuseRecallOff: family-recall-off);
  *  (iii) the batch's questions re-checked (Task 2's recheckBatch: quiz-unanswerable naming each failing qid and clause,
@@ -6712,6 +6725,7 @@ function questionArmsOf(ctx, q) {
  *  then preflightSpawn (R26): the wrapper's sha, the gate (W2-D55: the budget, then the limits row), and the one spawn,
  *  `--version`, with W2-D56's preflight against ctx.expected. Answers each pending (qid, arm)'s stdin and the version. */
 async function armBatchPreflight(ctx, pending) {
+  refreshPairIndex(ctx.rs, ctx.home);   // D-6481: both arms of every question of this batch are built from one fresh index
   const qs = pending.map((s) => s.q);
   requireListed(ctx.home, ctx.storeId, familiesOf(qs));   // W2-D78 (i)
   refuseRecallOff(ctx.home, [...new Set(qs.map((q) => q.ccrc_id))]);   // W2-D78 (ii)
@@ -7234,7 +7248,7 @@ export async function judgeCommand(flags, driverEnv, deps = { loadArmRun, armNod
       pinOutBytes(out, mapRel, judgeMapText(section, run.frozen.sha256, map), 'judge-map');
       const own = run.frozen.list.entries.filter((e) => e.store_id === rs.storeId);   // Q2: this node's questions only
       const picked = judgeItemsOf({ entries: own, answers: deps.readArmAnswers(out, section), arms: RECALL_ARMS, shaMinPrefix: r.labeller.sha_min_prefix });
-      const jobs = judgeJobsOf({ items: picked.items, map, idx: rs.idx });
+      const jobs = judgeJobsOf({ items: picked.items, map, idx: refreshPairIndex(rs, home) });   // D-6481: the index as of the build
       const judge = await openJudge({ home, accountId: node.account, model: r.judge_model, settingsMode: node.settingsMode, rubricId: r.rubric_id,
         claim, budget: node.budget, limits: node.limits, expected: node.expected, allowCodeChange: run.allowCodeChange === true, lang: driverEnv.LANG });
       const items = await judge.judge(section, jobs);

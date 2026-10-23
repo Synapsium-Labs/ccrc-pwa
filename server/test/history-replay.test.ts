@@ -13669,3 +13669,90 @@ describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 6: the arms-then-jud
     for (const a of W5B5_ARMS) expect(judgedText, a).not.toContain(a);
   }, 180_000);
 });
+
+// ── W2-5b1 Task 4, final fix wave: the arm batches over a hand-built store whose pairs change between batches ────────
+// D-6481 (the pair index is refreshed before every arm batch) and D-6482 (an owed arm whose sibling's payload changed is
+// excluded as run-failed). Both are cases of "a pair the store learned after the batch before it": the store is Task 2's
+// b1t2Plant, the re-check and the payloads are the real ones, and the pair is learned through a store writer from inside the
+// test (an injected payloads wrapper for D-6481, between two invocations for D-6482). No spawn reaches a model.
+type FwSetup = { home: string; storeId: string; entries: W5b4R[]; argv: string[]; out: string; draft: W5b4R };
+/** Two questions on Task 2's store (a command fact and a sha fact, both on boundary N), the pilot form's inputs and the
+ *  arm stub; `batch_max` 2 makes each batch one question. */
+async function fwSetup(over: W5b4R = { limits: { batch_max: 2 } }): Promise<FwSetup> {
+  const fx = await b1t2Plant();
+  const home = fx.home;
+  w5b4Node(home);
+  const rs0 = D4.openReplayStore(home) as W5b4R;
+  const storeId = rs0.storeId as string;
+  rs0.close();
+  const fam: W5b4Ref = { store_id: storeId, ccrc_id: B1T2_FAM, generation: B1T2_GEN };
+  const made = [b1t2Entry(fx, storeId), b1t2Entry(fx, storeId, { kind: 'sha', fact: B1T2_SHA, fact_raw: B1T2_SHA })];
+  const fz = w5b4SaveText(D4.frozenListText('pilot', W5B4_HEAD, made) as string, 'pilot-frozen.json');
+  const draft = w5b4Draft(home, { stores: [storeId], pilotFamilies: [fam], pilotFrozenSha: fz.sha, over });
+  const d = w5b4Save(draft, 'part1.json');
+  w5b4Marker(home, storeId, [fam]);
+  const out = w5b4Out();
+  return { home, storeId, entries: fz.value.entries as W5b4R[], out, draft,
+    argv: ['arms', '--section', 'pilot', '--out', out, ...w5b4Inp('record', d), ...w5b4Inp('frozen', fz)] };
+}
+/** The value whose learned pair masks question `q`'s fact, and the pair itself (CONTROL: lib's redaction does mask the fact). */
+function fwPairFor(q: W5b4R): { value: string; pair: { len: number; sha256: string } } {
+  const value = q.kind === 'command' ? B1T2_VALUE : B1T2_SHA;
+  const pair = { len: value.length, sha256: b1t2Lib.sha256Hex(value) };
+  return { value, pair };
+}
+/** The store learns `value` as a redaction pair, as the sweep's recordPairs does between two batches. */
+function fwLearn(home: string, value: string): void {
+  const w = b1t2Store.openWriter(b1t2Lib.historyPaths(home).dbFile);
+  w.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, 1)').run(value.length, Buffer.from(b1t2Lib.sha256Hex(value), 'hex'));
+  b1t2Store.closeWriter(w);
+}
+
+w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4 fix wave: the pair index across arm batches', () => {
+  w5b4It('D-6481: a pair learned between batch 1 and batch 2 of one invocation refuses batch 2 quiz-unanswerable clause (a), because the pair index is refreshed per batch', async () => {
+    const run = async (learn: boolean): Promise<{ s: FwSetup; r: W5b4Result; second: W5b4R }> => {
+      const s = await fwSetup();
+      const second = s.entries[1]!;
+      const { value, pair } = fwPairFor(second);
+      w5b4Expect(b1t2Lib.redactField(second.fact_raw as string, b1t2Lib.makePairIndex([pair])), 'CONTROL: the learned pair masks the second question\'s fact').not.toContain(value);
+      let calls = 0;
+      const payloads = (rs: unknown, id: number, question: string, cut: W5b4R): W5b4R => {
+        const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+        calls += 1;
+        if (learn && calls === 1) fwLearn(s.home, value);   // batch 1's only payload: the pair arrives after batch 1's preflight
+        return p;
+      };
+      return { s, second, r: await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads }) };
+    };
+    const learned = await run(true);
+    w5b4Expect(learned.r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${learned.second.qid as string} clause (a) redact-fact` });
+    w5b4Expect(w5b4Runs(learned.s.home), 'batch 1 ran both arms, batch 2 spawned nothing').toHaveLength(2);
+    w5b4Expect(w5b4Versions(learned.s.home), 'batch 2 refused before its --version').toBe(1);
+    const clean = await run(false);
+    w5b4Expect(clean.r.refusal, 'CONTROL: no pair learned, batch 2 runs').toBeNull();
+    w5b4Expect(w5b4Runs(clean.s.home)).toHaveLength(4);
+  }, 180_000);
+
+  w5b4It('D-6481: the judge builds its inputs from the pair index as of the build, so a pair learned after the store open masks the reply (CONTROL: no pair, the value reaches the judge)', async () => {
+    const value = ['zq', 'judge6481', 'widened02'].join('');
+    const run = async (learn: boolean): Promise<string[]> => {
+      const b = w5b5Home('ccrc-w2-5b1-d6481-');
+      writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+      const e1 = w5b5Entry(W6_CMD);
+      const answers = [w5b5Answer(e1.qid, W5B5_ARM0, 'answered', `I tried ${value} first.\nANSWER: ${value}`, false),
+        w5b5Answer(e1.qid, W5B5_ARM1, 'answered', 'ANSWER: UNKNOWN', false)];
+      // The wrapper runs after the store is open and before the inputs are built: the sweep's recordPairs, between two reads.
+      const readArmAnswers = (): unknown[] => { if (learn) fwLearn(b.home, value); return answers; };
+      const out = join(b.home, 'judge-out');
+      const r = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home),
+        { ...w5b5Deps(w5b5Run([e1]), w5b5NodeOf(b.home), answers), readArmAnswers }));
+      w5b4Expect(r.refusal).toBeNull();
+      return w6Runs(b.home).map((x) => x.stdin as string);
+    };
+    const stdins = await run(true);
+    w5b4Expect(stdins, 'one judge run per non-correct answer').toHaveLength(2);
+    for (const t of stdins) w5b4Expect(t, 'the learned value is masked in the judge\'s stdin').not.toContain(value);
+    const control = await run(false);
+    w5b4Expect(control.some((t) => t.includes(value)), 'CONTROL: without the pair the value is in the stdin').toBe(true);
+  }, 120_000);
+});
