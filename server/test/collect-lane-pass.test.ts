@@ -71,7 +71,7 @@ describe('the laneâ€™s constants are derived, and the tick dispatches it (spec Â
     const src = methodOf('tick');
     const dead = src.indexOf('void this.sweepDeadCoordinators(records, registryRead.names)');
     const mine = src.indexOf('void this.sweepTempRootCollect(records, registryRead.names)');
-    const mail = src.indexOf('void this.sweepMail()');
+    const mail = src.indexOf('void this.sweepMail(registryRead)');
     expect([dead, mine, mail].every((i) => i > -1), 'an anchor is gone').toBe(true);
     expect(dead).toBeLessThan(mine);
     expect(mine).toBeLessThan(mail);
