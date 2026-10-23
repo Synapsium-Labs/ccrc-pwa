@@ -350,3 +350,30 @@ describe('on a phone the dismiss moves focus to a displayed landmark, never the 
     }, 90_000);
   }
 });
+
+// A keyboard dismiss is a script focus after a keyboard action, which Chrome marks `:focus-visible`: base.css's page-wide
+// ring would draw along the whole fleet column unless the column's landmark switches it off, as the main landmark does.
+describe('a keyboard dismiss on a phone leaves focus on the fleet column with no ring', () => {
+  for (const view of THEMES.flatMap((theme) => [REFINED, INSTRUMENT].map((skin) => ({ skin, theme, width: 390 })))) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      try {
+        await page.goto(server!.origin + '/');
+        await page.waitForSelector('.update-indicator-dismiss', { timeout: 20_000 });
+        await page.waitForTimeout(300);
+        await page.focus('.update-indicator-dismiss');
+        await page.keyboard.press('Enter');
+        await page.waitForSelector('.update-indicator', { state: 'detached', timeout: 20_000 });
+        const found = await page.evaluate(() => {
+          const el = document.activeElement;
+          return { id: el?.id ?? null, outline: el === null ? null : getComputedStyle(el).outlineStyle };
+        });
+        expect(found.id, 'focus is on the fleet column').toBe('fleet');
+        expect(found.outline, 'and it draws no ring').toBe('none');
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
