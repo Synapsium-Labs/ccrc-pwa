@@ -2213,15 +2213,19 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
   // every library `start` runs is under this file's CLOSED_AUTH_BASE default,
   // where a token request is refused at once.
   /** `ccrc codex start codex-a`, refused as `code` with `remedy` before the
-   *  lane lock: no `.lock`, no gateway key, no pidfile, no spawn. */
-  function refusedBeforeLock(home: string, code: string, remedy: RegExp): string {
+   *  lane lock: no `.lock`, no gateway key, no pidfile, no spawn. `end` is how
+   *  the line ends: start's own refusals say "Nothing was started.", and the
+   *  shared helpers' (`_codex_auth`, `_codex_auth_status`) say "then re-run.".
+   *  `extra` is the run's own env. */
+  function refusedBeforeLock(home: string, code: string, remedy: RegExp,
+    o: { end?: RegExp; extra?: NodeJS.ProcessEnv } = {}): string {
     const d = laneDir(home, 'codex-a');
-    const r = codex(home, ['start', 'codex-a']);
+    const r = codex(home, ['start', 'codex-a'], o.extra);
     expect(r.code, r.stderr).toBe(1);
     const line = r.stderr.split('\n').find((l) => l.startsWith(`ccrc codex: ${code}: `));
     expect(line, r.stderr).toBeDefined();
     expect(line).toMatch(remedy);
-    expect(line).toMatch(/Nothing was started\.$/);
+    expect(line).toMatch(o.end ?? /Nothing was started\.$/);
     expect(r.stdout).toBe('');
     expect(fs.existsSync(join(d, '.lock')), `${code}: the lane lock was taken`).toBe(false);
     expect(fs.existsSync(join(d, 'runtime.env')), `${code}: a gateway key was minted`).toBe(false);
@@ -2286,6 +2290,71 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     expect(update, line).toBeGreaterThan(-1);
     expect(line.indexOf("'ccrc codex login codex-a'"), line).toBeGreaterThan(update);
     expect(line, 'a config-error is not the doctor\'s to cure').not.toContain('ccrc doctor');
+  }, 60_000);
+
+  // Review fix round 1 (T8-SPEC-1, T8-CQ-1): the refusals the Interfaces name
+  // that no case reached — `incomplete`, `auth-library-absent` from start
+  // itself, and `auth-status-unreadable` in each shape `_codex_auth_status`
+  // refuses, plus the unknown-credential-word arm.
+  it('start refuses an incomplete credential (an abandoned sign-in) as not-logged-in, with the login remedy', async () => {
+    const { home, lanes } = await lifeBox({ userManager: false, ids: ['codex-a'] });
+    const cred = join(home, lanes['codex-a']!.authDir, 'auth.json');
+    fs.writeFileSync(cred, JSON.stringify({ device_code_requested_at: Math.floor(Date.now() / 1000) - 60 }),
+      { mode: 0o600 });
+    const line = refusedBeforeLock(home, 'not-logged-in', /'ccrc codex login codex-a'/);
+    expect(line).toContain(' as incomplete. ');
+    expect(line).not.toContain('ccrc update');
+  }, 60_000);
+
+  it('start with no auth library, or no python3, refuses auth-library-absent before the lane lock', async () => {
+    const { home } = await lifeBox({ userManager: false, ids: ['codex-a'] });
+    const PATH = pathWithout(home, 'python3');
+    const py = refusedBeforeLock(home, 'auth-library-absent', /python3 is not on PATH/,
+      { end: /then re-run\.$/, extra: { PATH } });
+    expect(py).toContain(authLib(home));
+    fs.rmSync(authLib(home));
+    const lib = refusedBeforeLock(home, 'auth-library-absent', /'ccrc update'/, { end: /then re-run\.$/ });
+    expect(lib).toContain(`${authLib(home)} is not a readable file`);
+  }, 60_000);
+
+  // A stand-in at the library's path, run as `python3 -IS <lib> status …`:
+  // each prints `out` (when given) and exits `rc`. `status --json` reports
+  // `auth: null` for every one of them, and start refuses each before the lock.
+  const STANDINS: Array<[string, string | null, number]> = [
+    ['no answer, exit 1', null, 1],
+    ['not JSON', 'not json', 0],
+    ['an array', '[]', 0],
+    ['an object with no credential', '{"state": "ok"}', 0],
+    ['a whole object, then exit 1', '{"credential": "present", "state": "ok"}', 1],
+  ];
+  const plantStandin = (home: string, out: string | null, rc: number): void => {
+    fs.rmSync(authLib(home), { force: true });
+    fs.writeFileSync(authLib(home),
+      `import sys\n${out === null ? '' : `sys.stdout.write(${JSON.stringify(out + '\n')})\n`}sys.exit(${rc})\n`,
+      { mode: 0o755 });
+  };
+  const statusAuth = (home: string): unknown => {
+    const r = codex(home, ['status', 'codex-a', '--json']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr, 'status --json named a refusal').toBe('');
+    return (JSON.parse(r.stdout) as Record<string, unknown>)['auth'];
+  };
+
+  it('start refuses auth-status-unreadable for an answer the library\'s status cannot be read from, and status says auth: null', async () => {
+    const { home } = await lifeBox({ userManager: false, ids: ['codex-a'] });
+    for (const [label, out, rc] of STANDINS) {
+      plantStandin(home, out, rc);
+      const line = refusedBeforeLock(home, 'auth-status-unreadable', /'ccrc update'/, { end: /then re-run\.$/ });
+      expect(line, label).toContain(`the auth library answered no status ccrc can read for codex-a (it exited ${rc})`);
+      expect(statusAuth(home), label).toBeNull();
+    }
+  }, 60_000);
+
+  it('start refuses a credential word the library does not define as auth-status-unreadable, naming the word', async () => {
+    const { home } = await lifeBox({ userManager: false, ids: ['codex-a'] });
+    plantStandin(home, '{"credential": "brand-new-word", "state": "ok"}', 0);
+    const line = refusedBeforeLock(home, 'auth-status-unreadable', /'ccrc update'/);
+    expect(line).toContain('"brand-new-word", a word this ccrc does not know');
   }, 60_000);
 
   it('status --json carries auth.state, auth.credential and auth.authBase', async () => {
@@ -3454,9 +3523,10 @@ describe.skipIf(!pythonOrSkip())('ccrc codex login — the auth library signs th
    *  variable is removed from the developer's environment before
    *  `ghContainedEnv` (which sets CCRC_CODEX_AUTH_BASE to CLOSED_AUTH_BASE)
    *  and a case's own `extra` are added. Spawned, never spawnSync'd; killed
-   *  past 15 s, inside vitest's own bound. */
-  const runCcrc = (home: string, args: string[], extra: NodeJS.ProcessEnv = {}):
-    Promise<{ code: number; stdout: string; stderr: string }> => {
+   *  past 15 s, inside vitest's own bound. `onErr`, when given, is called with
+   *  the stderr read so far each time more arrives. */
+  const runCcrc = (home: string, args: string[], extra: NodeJS.ProcessEnv = {},
+    onErr?: (soFar: string) => void): Promise<{ code: number; stdout: string; stderr: string }> => {
     const base: NodeJS.ProcessEnv = { ...process.env, HOME: home };
     for (const k of Object.keys(base)) {
       if (/^(CHATGPT_|LITELLM_|OPENAI_|CCRC_)/.test(k)) delete base[k];
@@ -3470,7 +3540,7 @@ describe.skipIf(!pythonOrSkip())('ccrc codex login — the auth library signs th
       let err = '';
       const timer = setTimeout(() => c.kill('SIGKILL'), 15_000);
       c.stdout.on('data', (x: Buffer) => { out += x.toString(); });
-      c.stderr.on('data', (x: Buffer) => { err += x.toString(); });
+      c.stderr.on('data', (x: Buffer) => { err += x.toString(); onErr?.(err); });
       c.once('error', (x) => { clearTimeout(timer); reject(x); });
       c.once('close', (code) => { clearTimeout(timer); resolve({ code: code ?? -1, stdout: out, stderr: err }); });
     });
@@ -3618,6 +3688,52 @@ describe.skipIf(!pythonOrSkip())('ccrc codex login — the auth library signs th
     } finally {
       await srv.close();
     }
+  });
+
+  // Review fix round 1 (T8-CQ-2): the library's stderr reaches the pane as it
+  // is printed, not when the library exits, so its CCRC_CODEX_AUTH_BASE notice
+  // still comes before its first request (Task 4's contract). A stand-in at the
+  // library's path prints that notice and then waits for a file this case
+  // writes only once the notice has arrived through `ccrc codex login`; a
+  // login that held stderr until exit never lets it see the file.
+  it('A5b: the library\'s stderr is relayed live, while it still runs, and the refusal word is still read', async () => {
+    const home = await loginBox();
+    fs.rmSync(authLib(home));
+    writeFileSync(authLib(home), [
+      'import os, sys, time',
+      'sys.stderr.write("ccgpt-auth: CCRC_CODEX_AUTH_BASE is set: a stand-in notice\\n")',
+      'sys.stderr.flush()',
+      'go = os.path.join(os.environ["HOME"], "login-go")',
+      'for _ in range(60):',
+      '    if os.path.exists(go):',
+      '        sys.stdout.write("ccgpt-auth: codex-a: signed-in\\n")',
+      '        sys.exit(0)',
+      '    time.sleep(0.1)',
+      'sys.stderr.write("ccgpt-auth: login-failed: the go file never appeared\\n")',
+      'sys.exit(1)',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const go = join(home, 'login-go');
+    const r = await runCcrc(home, ['codex', 'login', 'codex-a'], {}, (soFar) => {
+      if (soFar.includes('CCRC_CODEX_AUTH_BASE is set') && !existsSync(go)) writeFileSync(go, '');
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^ccgpt-auth: codex-a: signed-in\nccrc codex: codex-a: logged in$/m);
+    // A refusal still ends in login-failed naming the library's word, and that line comes last.
+    fs.rmSync(go);
+    writeFileSync(authLib(home), [
+      'import sys',
+      'sys.stderr.write("ccgpt-auth: needs-signin: a stand-in refusal\\n")',
+      'sys.stderr.write("a trailing line that is not a refusal\\n")',
+      'sys.exit(1)',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const f = await runCcrc(home, ['codex', 'login', 'codex-a']);
+    expect(f.code).toBe(1);
+    const lines = f.stderr.trimEnd().split('\n');
+    expect(lines.slice(0, 2)).toEqual(['ccgpt-auth: needs-signin: a stand-in refusal',
+      'a trailing line that is not a refusal']);
+    expect(lines.at(-1)).toMatch(/^ccrc codex: login-failed: .*\(needs-signin\) and exited 1 .*Retry with: ccrc codex login codex-a$/);
   });
 
   it('A6: a lane that is not codex-kind is refused before the library runs', async () => {

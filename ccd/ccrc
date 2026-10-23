@@ -13485,8 +13485,9 @@ _codex_cmd_status() {   # <id> <1 = --json>
   done
   if [ "$json" -eq 1 ]; then
     # `auth` (codex-bridge Stage 1, Task 8): the auth library's status report
-    # for the lane, minus the credential file's mode and owner, which are the
-    # doctor's to judge; null when the library cannot answer (absent, or an
+    # for the lane, minus its raw `mode` and `ownerOk`, which are the doctor's
+    # to judge (`modeOk`, the library's own verdict on the mode, stays, as the
+    # report carries it); null when the library cannot answer (absent, or an
     # answer `_codex_auth_status` refuses), because this verb exits 0 whatever
     # it finds and names no refusal of its own.
     auth=null
@@ -13567,9 +13568,12 @@ _codex_cmd_status() {   # <id> <1 = --json>
 # `already-signed-in` (its own line, on stdout, says which); anything else is
 # `login-failed`, naming the library's refusal word, read from its own
 # `ccgpt-auth: <word>: <sentence>` line. The device lines pass through on
-# stdout as the library prints them. Its stderr is held until it exits and
-# then printed, so this function's own login-failed line comes LAST: that is
-# the line `ccd-account-auth`'s pane names as the reason.
+# stdout as the library prints them, and its stderr is relayed line by line as
+# it arrives, so a line it prints before its first request (the
+# CCRC_CODEX_AUTH_BASE notice) reaches the pane before that request. The relay
+# keeps the word of the last such line. This function's own login-failed line
+# is printed only after the library has exited, so it comes LAST: that is the
+# line `ccd-account-auth`'s pane names as the reason.
 #
 # NOTHING IS PRINTED BEFORE THE LIBRARY'S OWN LINES. `ccd-account-auth`
 # publishes the FIRST `XXXX-XXXX`-shaped run it sees as the device code, so a
@@ -13587,17 +13591,25 @@ _codex_cmd_status() {   # <id> <1 = --json>
 # lane lock: it starts and stops no tier (ruling R11's list is the paths that
 # do); the credential's own lock is the library's.
 _codex_login() {   # <id> (one, parsed by cmd_codex) — rc 0 iff the auth library's sign-in exited 0
-  local id="$1" dir rc=0 err='' word
+  local id="$1" dir res rc word re='^ccgpt-auth: ([a-z][a-z-]*): '
   _codex_row "$id" || return $?
   dir="$HOME/$CX_AUTH"
-  # stdout straight through (fd 3, this function's stdout), stderr held.
-  { err="$( (umask 077; _codex_auth signin --auth-dir "$dir" --lane "$id") 2>&1 1>&3 3>&-)" || rc=$?; } 3>&1
-  [ -n "$err" ] && printf '%s\n' "$err" >&2
+  # stdout straight through (fd 3, this function's stdout). stderr goes down
+  # the pipe to the relay, which prints each line to stderr as it arrives and,
+  # once the library has closed it, the last refusal word to the capture; the
+  # library's own rc follows, from PIPESTATUS (bash 3.2 has it, and nothing has
+  # to wait for a process substitution).
+  { res="$( { (umask 077; _codex_auth signin --auth-dir "$dir" --lane "$id") 2>&1 1>&3 3>&- \
+      | { w=''; while IFS= read -r l || [ -n "$l" ]; do
+            printf '%s\n' "$l" >&2
+            if [[ $l =~ $re ]]; then w="${BASH_REMATCH[1]}"; fi
+          done; printf '%s' "$w"; }
+      printf ' %s' "${PIPESTATUS[0]}"; })"; } 3>&1
+  rc="${res##* }"; word="${res% *}"
   case "$rc" in
     0) printf '%s codex: %s: logged in\n' "$PROG" "$id"; return 0 ;;
     3) return 1 ;;   # `_codex_auth` has said auth-library-absent
   esac
-  word="$(printf '%s\n' "$err" | sed -n 's/^ccgpt-auth: \([a-z][a-z-]*\): .*/\1/p' | tail -n 1)"
   _codex_say login-failed "the auth library's sign-in for $id failed${word:+ ($word)} and exited $rc (its own line is above), so $id is not logged in. Retry with: ccrc codex login $id"
   return 1
 }
