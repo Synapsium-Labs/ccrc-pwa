@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8b6ea8198adae19c7d65abc9936c0bb5c981cdd7f46195f15f2d98310f0b1ace
+# ccrc:generated 1 sha256=9c5a78d017cbe49b7d025e5a392f1f9087c4fb02a37641bd0f815b199e63d6c1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -8870,6 +8870,7 @@ EOF
   echo docs-show
   echo docs-fetch
   echo docs-index
+  echo path-users-v1   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
   # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own
@@ -33900,9 +33901,23 @@ _ws_path_users_proc_root() { printf '%s' /proc; }
 WS_PATH_USERS_SCAN_S=10   # bound on the ONE python3 walk of the process table (healthy: well under a second)
 _WS_PATH_USERS_PIDS=''
 _WS_PATH_USERS_WHY=''
+_WS_PATH_USERS_RCS=(); _WS_PATH_USERS_PIDS_OF=(); _WS_PATH_USERS_WHY_OF=()
 _ws_path_users() {   # path -> 0 when no process of this uid uses it; 1 when one does (_WS_PATH_USERS_PIDS:
   #                     their pids, space-separated, each once; _WS_PATH_USERS_WHY: what each uses);
   #                     2 unmeasured (_WS_PATH_USERS_WHY says why) — never "nobody"
+  # THE ONE-PATH CALLER of `_ws_path_users_many`, whose header holds the discipline (DR-7, D-6619).
+  _ws_path_users_many "$1"
+  _WS_PATH_USERS_PIDS="${_WS_PATH_USERS_PIDS_OF[0]}"; _WS_PATH_USERS_WHY="${_WS_PATH_USERS_WHY_OF[0]}"
+  return "${_WS_PATH_USERS_RCS[0]}"
+}
+_ws_path_users_many() {   # path… -> 0 once asked; the answers are parallel arrays, one slot per path in argument order:
+  #                     _WS_PATH_USERS_RCS[i] (0 nobody, 1 a process uses it, 2 unmeasured — never "nobody"),
+  #                     _WS_PATH_USERS_PIDS_OF[i] (their pids, space-separated, each once), _WS_PATH_USERS_WHY_OF[i]
+  # MANY PATHS, ONE WALK (DR-7, D-6619, fleet-disk-retention spec §2.6.1): the table is walked once whatever the number of
+  # paths, and each path keeps its own verdict. A path that cannot be asked (not one plain path, an unresolvable parent) is
+  # unmeasured FOR ITSELF; a walk that cannot finish is unmeasured for every path it was to answer. A FILE MAPPING counts
+  # as use: a process that maps a file under the path (`map_files` link targets, or `maps`' path column when `map_files`
+  # cannot be listed) holds it though it has no fd or cwd there. Both additions can only add holders.
   # WHO USES A PATH, asked of a temp root before ccd removes it. MEASURED
   # 2026-10-04: a reclaim tail removed `~/.cc-tmp/<id>` while the killed pane's
   # processes still ran with `TMPDIR=<leaf>`, and one of them re-created the
@@ -33969,35 +33984,43 @@ _ws_path_users() {   # path -> 0 when no process of this uid uses it; 1 when one
   # chain (the python3 and every process between it and ccd) and any child of
   # those. ccd's ANCESTORS are users like any other.
   # DARWIN ANSWERS UNMEASURED: ccd reads no process environment there.
-  local p="$1" name parent preal phys rc root out pid what pth n=0 shown='' pids='' me=$$ sub=$BASHPID
-  _WS_PATH_USERS_PIDS=''; _WS_PATH_USERS_WHY=''
-  _ws_reclaim_plain_path "$p" \
-    || { _WS_PATH_USERS_WHY="$p is not one plain absolute path, so who uses it was never asked"; return 2; }
-  if [[ "$CCD_OS" == darwin ]]; then
-    _WS_PATH_USERS_WHY="this box is Darwin, where ccd reads no process environment, so who uses $p was never asked"
-    return 2
-  fi
-  name="${p##*/}"; parent="${p%/*}"; [[ -n "$parent" ]] || parent=/
-  _ws_reclaim_absent "$parent"; rc=$?
-  (( rc != 2 )) || { _WS_PATH_USERS_WHY="$_WS_ABSENT_WHY — who uses $p was never asked"; return 2; }
-  if (( rc == 0 )); then
-    phys="$p"   # nothing stands above the leaf: no cwd or fd can be in it; TMPDIR is a string
-  else
-    # WHOLE, through `_ws_dir_physical`: a parent resolving to `<vol>\n` read as
-    # `<vol>` named another directory, and a user of the real leaf went unseen.
-    _ws_dir_physical "$parent" \
-      || { _WS_PATH_USERS_WHY="the directory $parent that holds $p cannot be resolved ($_WS_PHYS_WHY), so who uses $p was never asked"; return 2; }
-    preal="$_WS_PHYS"
-    phys="${preal%/}/$name"
-  fi
+  local p name parent preal phys rc root out pid what pth k i me=$$ sub=$BASHPID
+  local -a pa=() ix=() cnt=() shn=() pds=()
+  _WS_PATH_USERS_RCS=(); _WS_PATH_USERS_PIDS_OF=(); _WS_PATH_USERS_WHY_OF=()
+  for p in "$@"; do
+    i=${#_WS_PATH_USERS_RCS[@]}; _WS_PATH_USERS_RCS[i]=2; _WS_PATH_USERS_PIDS_OF[i]=''; _WS_PATH_USERS_WHY_OF[i]=''
+    _ws_reclaim_plain_path "$p" \
+      || { _WS_PATH_USERS_WHY_OF[i]="$p is not one plain absolute path, so who uses it was never asked"; continue; }
+    if [[ "$CCD_OS" == darwin ]]; then
+      _WS_PATH_USERS_WHY_OF[i]="this box is Darwin, where ccd reads no process environment, so who uses $p was never asked"
+      continue
+    fi
+    name="${p##*/}"; parent="${p%/*}"; [[ -n "$parent" ]] || parent=/
+    _ws_reclaim_absent "$parent"; rc=$?
+    (( rc != 2 )) || { _WS_PATH_USERS_WHY_OF[i]="$_WS_ABSENT_WHY — who uses $p was never asked"; continue; }
+    if (( rc == 0 )); then
+      phys="$p"   # nothing stands above the leaf: no cwd or fd can be in it; TMPDIR is a string
+    else
+      # WHOLE, through `_ws_dir_physical`: a parent resolving to `<vol>\n` read as
+      # `<vol>` named another directory, and a user of the real leaf went unseen.
+      _ws_dir_physical "$parent" \
+        || { _WS_PATH_USERS_WHY_OF[i]="the directory $parent that holds $p cannot be resolved ($_WS_PHYS_WHY), so who uses $p was never asked"; continue; }
+      preal="$_WS_PHYS"
+      phys="${preal%/}/$name"
+    fi
+    pa+=("$p" "$phys"); ix+=("$i")
+  done
+  (( ${#ix[@]} )) || return 0
   root=$(_ws_path_users_proc_root)
   out=$(_plat_timeout "$WS_PATH_USERS_SCAN_S" env LC_ALL=C.UTF-8 python3 -c '
 import os, sys
-root, lit, phys, me, sub = sys.argv[1:6]
+root, me, sub = sys.argv[1:4]
+pairs = [(sys.argv[i], sys.argv[i + 1]) for i in range(4, len(sys.argv), 2)]
 uid = os.getuid()
 VANISHED = (FileNotFoundError, ProcessLookupError)
 def under(p):
-    return any(p == b or p.startswith(b + "/") for b in (lit, phys))
+    # the indices of the asked paths that p is at or under, on either spelling
+    return [i for i, bs in enumerate(pairs) if any(p == b or p.startswith(b + "/") for b in bs)]
 def status(pid):
     # (ppid, uids), or None ONLY on proof the process is gone; anything else is unmeasured
     try:
@@ -34053,6 +34076,32 @@ def uses(base):
             continue
         if under(t):
             found.append(("fd", t))
+    # FILE MAPPINGS (DR-7): a process that maps a file holds it with no fd or cwd there. map_files first; when it
+    # cannot be listed or read (EACCES on the directory or on any link), maps names the same files. A deleted file keeps its mapping, so the suffix is not part of the path.
+    try:
+        ms = []
+        for n in os.listdir(base + "/map_files"):
+            try:
+                ms.append(os.readlink(base + "/map_files/" + n))
+            except VANISHED:
+                continue
+    except VANISHED + (PermissionError,):
+        ms = []
+        try:
+            with open(base + "/maps", "rb") as fh:
+                for ln in fh.read().decode("utf-8", "surrogateescape").split("\n"):
+                    f6 = ln.split(None, 5)
+                    if len(f6) == 6 and f6[5].startswith("/"):
+                        ms.append(f6[5])
+        except FileNotFoundError:
+            if not os.path.isdir(base):
+                return None
+        except (ProcessLookupError, PermissionError):
+            pass
+    for m in ms:
+        m = m[:-10] if m.endswith(" (deleted)") else m
+        if under(m):
+            found.append(("map", m))
     return found
 def uses_of(pid):
     # what of the path process <pid> uses; None ONLY on proof it is gone
@@ -34122,8 +34171,8 @@ def scan():
     # the table is listed again until a listing names no pid this walk has
     # not read; the first user ends it. WS_PATH_USERS_SCAN_S bounds the whole
     # walk (124: unmeasured, never nobody).
-    seen, todo, hit = set(), names, False
-    while todo and not hit:
+    seen, todo, hits = set(), names, set()
+    while todo and len(hits) < len(pairs):
         for pid in todo:
             seen.add(pid)
             if pid in own:
@@ -34135,12 +34184,14 @@ def scan():
             if uid not in uids or ppid in own:
                 continue
             for what, p in uses_of(pid) or []:
-                hit = True
+                ids = under(p)
+                hits.update(ids)
                 # EVERY C0 control byte and DEL reads as "?": a tab or a newline
                 # would split this line, and the rest reach a reader verbatim
                 clean = "".join("?" if ord(c) < 32 or ord(c) == 127 else c for c in p)
-                sys.stdout.buffer.write(os.fsencode("%s\t%s\t%s\n" % (pid, what, clean)))
-        if not hit:
+                for i in ids:
+                    sys.stdout.buffer.write(os.fsencode("%s\t%d\t%s\t%s\n" % (pid, i, what, clean)))
+        if len(hits) < len(pairs):
             try:
                 todo = [n for n in os.listdir(root) if n.isascii() and n.isdigit() and n not in seen]
             except OSError:
@@ -34149,28 +34200,56 @@ try:
     scan()
 except Exception:
     sys.exit(3)
-' "$root" "$p" "$phys" "$me" "$sub" 2>/dev/null); rc=$?
-  if (( rc == 124 )); then
-    _WS_PATH_USERS_WHY="the walk of $root did not finish within ${WS_PATH_USERS_SCAN_S}s, so who uses $p was never asked"
-    return 2
+' "$root" "$me" "$sub" "${pa[@]}" 2>/dev/null); rc=$?
+  if (( rc != 0 )); then   # unmeasured for every path the walk was to answer, each in its own words
+    for k in "${!ix[@]}"; do
+      i=${ix[k]}; p="${pa[2 * k]}"
+      (( rc == 124 )) \
+        && _WS_PATH_USERS_WHY_OF[i]="the walk of $root did not finish within ${WS_PATH_USERS_SCAN_S}s, so who uses $p was never asked" \
+        || _WS_PATH_USERS_WHY_OF[i]="the processes of this box could not be measured ($root, exit $rc), so who uses $p was never asked"
+    done
+    return 0
   fi
-  (( rc == 0 )) \
-    || { _WS_PATH_USERS_WHY="the processes of this box could not be measured ($root, exit $rc), so who uses $p was never asked"; return 2; }
-  [[ -n "$out" ]] || return 0
-  while IFS=$'\t' read -r pid what pth; do
+  for i in "${ix[@]}"; do _WS_PATH_USERS_RCS[i]=0; done
+  pds=()
+  while IFS=$'\t' read -r pid k what pth; do
     [[ -n "$pid" ]] || continue
-    case " $pids " in *" $pid "*) : ;; *) pids+="${pids:+ }$pid" ;; esac
-    n=$(( n + 1 ))
-    (( n <= 5 )) || continue
+    i=${ix[k]}
+    case " ${pds[i]-} " in *" $pid "*) : ;; *) pds[i]+="${pds[i]:+ }$pid" ;; esac
+    cnt[i]=$(( ${cnt[i]:-0} + 1 ))
+    (( cnt[i] <= 5 )) || continue
     case "$what" in
-      tmpdir) shown+="${shown:+, }process $pid carries TMPDIR=$pth" ;;
-      cwd)    shown+="${shown:+, }process $pid has its working directory at $pth" ;;
-      *)      shown+="${shown:+, }process $pid holds $pth open" ;;
+      tmpdir) shn[i]+="${shn[i]:+, }process $pid carries TMPDIR=$pth" ;;
+      cwd)    shn[i]+="${shn[i]:+, }process $pid has its working directory at $pth" ;;
+      map)    shn[i]+="${shn[i]:+, }process $pid maps $pth" ;;
+      *)      shn[i]+="${shn[i]:+, }process $pid holds $pth open" ;;
     esac
   done <<< "$out"
-  (( n <= 5 )) || shown+=", and $(( n - 5 )) more"
-  _WS_PATH_USERS_PIDS="$pids"; _WS_PATH_USERS_WHY="$shown"
-  return 1
+  for i in "${!cnt[@]}"; do
+    (( cnt[i] <= 5 )) || shn[i]+=", and $(( cnt[i] - 5 )) more"
+    _WS_PATH_USERS_RCS[i]=1; _WS_PATH_USERS_PIDS_OF[i]="${pds[i]}"; _WS_PATH_USERS_WHY_OF[i]="${shn[i]}"
+  done
+  return 0
+}
+
+cmd_path_users() {   # ccd path-users [--json] <path>… — who uses each path, one walk; READ-ONLY (DR-7, D-6619)
+  # No lock, no registry write, nothing removed: it only asks `_ws_path_users_many`, so `ccd-tmp-sweep` and every ccd verb
+  # ask ONE probe. Per path: `held` (a process of this uid uses it), `nobody`, or `unmeasured` (never folded into nobody).
+  # Plain: `verdict<TAB>path<TAB>pids<TAB>why`; --json: one object per line, `{"path","verdict","pids":[…],"why"}`.
+  local json=0 i v
+  [[ ${1-} != --json ]] || { json=1; shift; }
+  (( $# )) || die "usage: ccd path-users [--json] <path>…"
+  local -a ps=("$@")
+  _ws_path_users_many "${ps[@]}"
+  for i in "${!ps[@]}"; do
+    case ${_WS_PATH_USERS_RCS[i]} in 0) v=nobody ;; 1) v=held ;; *) v=unmeasured ;; esac
+    if (( json )); then
+      printf '{"path":%s,"verdict":"%s","pids":[%s],"why":%s}\n' "$(_json_str "${ps[i]}")" "$v" \
+        "${_WS_PATH_USERS_PIDS_OF[i]// /,}" "$(_json_str "${_WS_PATH_USERS_WHY_OF[i]}")"
+    else
+      printf '%s\t%s\t%s\t%s\n' "$v" "${ps[i]}" "${_WS_PATH_USERS_PIDS_OF[i]}" "${_WS_PATH_USERS_WHY_OF[i]}"
+    fi
+  done
 }
 
 # ── who works inside a tree: the ONE working-directory probe (path-identity W3, path-identity spec §4.6) ──
@@ -43571,6 +43650,7 @@ case "${1:-}" in
   ws-restore) shift; cmd_ws_restore "$@" ;;
   ws-attic)   shift; cmd_ws_attic "$@" ;;
   ws-audit)   shift; cmd_ws_audit "$@" ;;
+  path-users) shift; cmd_path_users "$@" ;;
   ws-reap)   shift; cmd_ws_reap "$@" ;;
   ws-reclaim) shift; cmd_ws_reclaim "$@" ;;
   ws-expire) shift; cmd_ws_expire "$@" ;;
