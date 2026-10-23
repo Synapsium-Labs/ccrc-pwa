@@ -1522,6 +1522,15 @@ the `client.ts` anchors were unchanged from `7ebdff20c`).
     shares it; this wave did not cause it.
   - `typecheck-tests` went red twice under a load average of 80 to 100, both times on its own 120 s tsc timeout. The
     direct `tsc` runs were clean each time, and the quiet re-run passed 12 of 12.
-- Suites (review 852 fix round): measured by the controller after this edit
+- Suites (review 852 fix round), one file at a time at a load average of 15 to 38, each run under the ruling's
+  process-cap wrapper:
+  - `remote-liveness`: the whole file 25 of 25 three times (about 22 s each), and each of W27-L16 to W27-L25 green
+    alone;
+  - every new row red under its own mutant first, then green (the campaign above);
+  - `remote-connect` 66, `remote-io` 217, `remote-pty` 6, `remote-runner` 28, `remote-tail` 4,
+    `fleet-identity-client` 6, `fleet-identity-composition` 4, `update-inventory` 90, `caps-refresh` 8,
+    `single-definition` 841, `typecheck-tests` 12 and `growth-check` 45, all green;
+  - `citations`, `docs-parity`, `readme-holds`, `pools-prose`, `topology-clean`, `private-names`, `dtbd` and
+    `deviation-refs`, run again at the final tip, are recorded in the wave-done.
 - **The full suite was not run locally.** CI's selection runs it for the PR, so the wave-done's `suite:` word is
   `unrun`.
