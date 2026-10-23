@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=952a0c6eab5d036c1b3359d2d1a8a09eb7c77fe5e7ad85df7ccbf92feffa845b
+# ccrc:generated 1 sha256=b257f19f750174dbe7b41e790cfed651826868b96d47a6caa9c13075daa2c91a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1405,6 +1405,13 @@ SWAP_JITTER=120                 # max seconds of random delay before a dispatche
                                 # concurrent, 17.4 GB) until the box stalled for 9.7 hours.
                                 # Spreading restarts stops a fleet-wide event becoming a herd.
                                 # Set to 0 to dispatch immediately (old behaviour).
+SWAP_PIN_TTL=86400              # D-6181 (D4, "or after 24 h"): the longest a manual-swap pin holds; a pin
+                                # set while a home window was blocked ends at that window's reset when sooner
+HOME_RETURN_SPACING=180         # D-6181 (spec §3.1): min seconds between two non-forced moves onto ONE account.
+                                # Above SWAP_JITTER, so two such moves onto one account never run inside one
+                                # jitter window; a sliding test, never buckets (`_affinity_slot_take`)
+AFFINITY_FLEET_SPACING=30       # D-6181: min seconds between two non-forced moves fleet-wide — at most two
+                                # a minute, whatever their targets; never read by a rescue or a ceiling-leave
 SWAP_BEAT_INTERVAL=30           # seconds between `supervised` re-stamps WHILE a swap carries files
                                 # (§4.2). Well inside `_session_state`'s 120s freshness window, and the
                                 # same cadence `cmd_supervise`'s own watch loop re-stamps on.
@@ -18965,10 +18972,29 @@ _undecidable_cause() {   # word id project -> the operator-facing sentence for t
 # placement, never a reason to leave a limited one wedged. `_auto_swap_check`'s
 # own header makes the same split for the hold file, which sits on the next line.
 #
-# NO EPOCH, SO NO EXPIRY AND NO ARITHMETIC. The file holds one account name. A
-# pin does not time out, because "the operator picked this account" does not
-# become less true after an hour; it ends when the row is no longer on that
-# account, which is a MEASUREMENT (`_swap_pin_tick`) rather than a clock.
+# NO EPOCH IN THE PIN ITSELF. The file holds one account name, and it ends when
+# the row is no longer on that account, which is a MEASUREMENT
+# (`_swap_pin_tick`). It ALSO ends at its expiry (D-6181, D4's ruling: pins
+# that stuck for days were §2's fourth cause), which lives in its own field,
+# `swappinexp` (`_swap_pin_expiry_to`), so the pin's value never changes shape.
+# And it never holds a session on an account at its ceiling: `_swap_pinned`
+# reads `_avail`, the predicate the ceiling-leave itself uses. Both are off
+# while `$REG/swap-pin-expiry-off` stands (today's pin, read on every tick).
+_swap_pin_expiry_off() { [[ -e "$REG/swap-pin-expiry-off" || -L "$REG/swap-pin-expiry-off" ]]; }   # D-6181's brake: present -> today's pin
+
+# A LEGACY PIN (no `swappinexp`: minted before D-6181) is given one on the
+# first tick that reads it — never from its mtime — plus an offset from 0 to
+# SWAP_PIN_TTL derived from the session id, so the pins one deploy sweep reads
+# on one tick expire spread over a further day rather than together. djb2 in
+# bash arithmetic: deterministic, and no fork.
+_swap_pin_legacy_offset_to() {   # var id -> var = 0 .. SWAP_PIN_TTL-1
+  local __po_h=5381 __po_i __po_c
+  for (( __po_i = 0; __po_i < ${#2}; __po_i++ )); do
+    printf -v __po_c '%d' "'${2:__po_i:1}"
+    __po_h=$(( (__po_h * 33 + __po_c) % 2147483647 ))
+  done
+  printf -v "$1" '%s' "$(( __po_h % SWAP_PIN_TTL ))"
+}
 _swap_pin_tick() {   # id measured-wrapper — THE PIN FOLLOWS THE TRUTH (D-3099)
   # `_strand_mark`/`_compact_note`'s rule, applied to a marker that names an
   # ACCOUNT rather than a reason: a pin still on disk after the row has moved
@@ -18980,15 +19006,52 @@ _swap_pin_tick() {   # id measured-wrapper — THE PIN FOLLOWS THE TRUTH (D-3099
   # a read that FAILED is a destructive act on a false reason. Absent is not
   # unreadable; only a pin this tick could read and that names another account
   # is removed.
-  local id="$1" w="$2" pin rc
+  local id="$1" w="$2" pin rc exp at now off
   [[ -e "$REG/$id.swappin" ]] || return 0
   pin=$(_reg_read "$id" swappin); rc=$?
   [[ "$rc" -eq 0 ]] || return 0
-  [[ "$pin" == "$w" ]] && return 0
+  if [[ "$pin" == "$w" ]]; then
+    # THE PIN ENDS AT ITS EXPIRY (D-6181), as it ends when the truth leaves it.
+    _swap_pin_expiry_off && return 0
+    _now_s_to now; _reg_get_to exp "$id" swappinexp; at="${exp%% *}"
+    # An expiry OLDER than its pin is not that pin's (a revert's or an old
+    # supervisor's clear left it beside a pin minted since): it reads legacy.
+    if [[ "$at" =~ ^[0-9]+$ && "${exp#* }" =~ ^(reset|ttl)$ && ! "$REG/$id.swappinexp" -ot "$REG/$id.swappin" ]]; then
+      (( now >= 10#$at )) || return 0
+      rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote" "$REG/$id.swappinexp"
+      echo "$(date '+%F %T') pin-expired $id: pinned to $pin until ${exp#* }" >> "$REG/swap.log"
+      return 0
+    fi
+    _swap_pin_legacy_offset_to off "$id"
+    _reg_set "$id" swappinexp "$(( now + SWAP_PIN_TTL + off )) ttl" 2>/dev/null || true
+    return 0
+  fi
   rm -f -- "$REG/$id.swappin"
-  rm -f -- "$REG/$id.swappinnote"
+  rm -f -- "$REG/$id.swappinnote" "$REG/$id.swappinexp"   # D-6181: every pin clear takes its expiry
   echo "$(date '+%F %T') pin-ended $id: pinned to $pin, now on $w" >> "$REG/swap.log"
   return 0
+}
+
+# THE PIN'S EXPIRY (D-6181, spec §3.3, D4). The pin stays one word; its end is
+# a separate field, `swappinexp` = `<epoch> <reset|ttl>`, so every older reader,
+# a supervisor still on the previous ccd mid-deploy, and a revert all keep
+# holding a new pin. `reset`: the later raw reset of home's windows at or above
+# SWAP_CEILING when the pin was set — the operator moved the session because
+# home was blocked, and that reason ends when the window resets. `ttl`: no home
+# window was blocked, the pin was set on home itself, or that reset lies beyond
+# the bound — the set time plus SWAP_PIN_TTL ("or after 24 h", whichever first).
+_swap_pin_expiry_to() {   # var home target now -> var = "<epoch> reset|ttl"
+  local __pe_out="$1" __pe_home="$2" __pe_tgt="$3" __pe_now="$4" __pe_w __pe_v __pe_r __pe_best=0 __pe_cap
+  __pe_cap=$(( __pe_now + SWAP_PIN_TTL ))
+  if [[ -n "$__pe_home" && "$__pe_tgt" != "$__pe_home" ]]; then
+    for __pe_w in five seven; do
+      _limit_field_to __pe_v "$__pe_home" "$__pe_w" 0
+      [[ "$__pe_v" =~ ^[0-9]+$ ]] && (( 10#$__pe_v >= SWAP_CEILING )) || continue
+      _limit_reset_to __pe_r "$__pe_home" "$__pe_w" && (( __pe_r > __pe_best )) && __pe_best=$__pe_r
+    done
+  fi
+  if (( __pe_best > __pe_now && __pe_best < __pe_cap )); then printf -v "$__pe_out" '%s reset' "$__pe_best"
+  else printf -v "$__pe_out" '%s ttl' "$__pe_cap"; fi
 }
 
 _swap_pinned() {   # id measured-wrapper -> 0 iff a manual-swap pin stands for THIS account (D-3097)
@@ -18999,12 +19062,70 @@ _swap_pinned() {   # id measured-wrapper -> 0 iff a manual-swap pin stands for T
   # session for cosmetic reasons — and the cost of standing down wrongly is one
   # session left where it already was, against an operator's deliberate choice
   # being undone by a file nobody could read.
-  local pin rc
+  local pin rc exp now
   [[ -e "$REG/$1.swappin" ]] || return 1
   pin=$(_reg_read "$1" swappin); rc=$?
   [[ "$rc" -eq 0 ]] || return 0
-  [[ "$pin" == "$2" ]]
+  [[ "$pin" == "$2" ]] || return 1
+  _swap_pin_expiry_off && return 0
+  # D-6181: never at the ceiling (the leave runs; if nothing can take the
+  # session the pin holds again once the account recovers), never past expiry.
+  _avail "$2" || return 1
+  _reg_get_to exp "$1" swappinexp; exp="${exp%% *}"
+  [[ "$exp" =~ ^[0-9]+$ && ! "$REG/$1.swappinexp" -ot "$REG/$1.swappin" ]] && { _now_s_to now; (( now >= 10#$exp )) && return 1; }
+  return 0
 }
+
+# THE AFFINITY SLOTS (D-6181, spec §3.1). A non-forced move while `cur` still
+# serves is the one automatic move that can bring many sessions back at once, so
+# it takes a slot first: none onto its target in the last HOME_RETURN_SPACING,
+# none fleet-wide in the last AFFINITY_FLEET_SPACING. Each file holds the last
+# grant's epoch, and the test is `now - last >= spacing` — sliding, never
+# buckets, so no two grants are ever closer than the spacing. Every supervisor
+# is its own process, so the read and the write happen under one `flock`
+# (`_lc_rotate`'s die-free open: never a `die`, the lock file never unlinked).
+# `.affslot` is a dot-directory, which the registry scanners skip.
+#
+# FAIL OPEN. A broken slot must never freeze the return home: no `flock`, a
+# directory or file that cannot be made or written, or a lock whose holder
+# stamped it more than HOME_RETURN_SPACING ago (a hung taker: the stale lock is
+# broken) all answer 2 — granted, and the caller says `stagger-unwritable`.
+# Only "held" (a live, recent taker) and a grant inside a spacing answer 1.
+_affinity_slot_take() {   # target now -> rc 0 granted | 1 lost | 2 granted, the slot unwritable (fail open)
+  local t="$1" now="$2" d="$REG/.affslot" lfd held="" lt="" lf="" rc=0
+  [[ -n "$t" && "$t" != */* && "$t" != .* && "$now" =~ ^[0-9]+$ ]] || return 2
+  command -v flock >/dev/null 2>&1 || return 2
+  [[ -d "$d" ]] || { mkdir -p -- "$d"; } 2>/dev/null || return 2
+  { exec {lfd}>>"$d/.lock"; } 2>/dev/null || return 2
+  if ! flock -w 2 "$lfd" 2>/dev/null; then
+    { exec {lfd}>&-; } 2>/dev/null
+    _file_read_to held "$d/.lock"
+    [[ "$held" =~ ^[0-9]+$ ]] && (( now - 10#$held >= HOME_RETURN_SPACING )) && return 2
+    return 1
+  fi
+  { printf '%s\n' "$now" > "$d/.lock"; } 2>/dev/null
+  _file_read_to lt "$d/$t"; _file_read_to lf "$d/.fleet"
+  if [[ "$lt" =~ ^[0-9]+$ ]] && (( now - 10#$lt >= 0 && now - 10#$lt < HOME_RETURN_SPACING )); then rc=1
+  elif [[ "$lf" =~ ^[0-9]+$ ]] && (( now - 10#$lf >= 0 && now - 10#$lf < AFFINITY_FLEET_SPACING )); then rc=1
+  else { printf '%s\n' "$now" > "$d/$t" && printf '%s\n' "$now" > "$d/.fleet"; } 2>/dev/null || rc=2
+  fi
+  { exec {lfd}>&-; } 2>/dev/null
+  return "$rc"
+}
+
+# `cur_serves` (D-6181, spec §3.1), defined ONCE: the session's current account
+# still serves it — `_avail` passes, the class gate answers 0, the move is not a
+# pool leave and the session is not hard-blocked. Only such a move (the return
+# home; later the sideways move) is guarded. A move off a `cur` that fails it is
+# a LEAVE, paying overage while it waits, and is never delayed.
+_affinity_cur_serves() {   # id wrapper aff-verb hard-blocked -> rc 0 iff cur still serves
+  local cls=""
+  [[ -z "$4" && "$3" != auto-pool ]] || return 1
+  _avail "$2" || return 1
+  _route_peek_to cls "$1" class; [[ "$cls" == default ]] && cls=""
+  _class_gate "$2" "$cls"
+}
+_swap_stagger_off() { [[ -e "$REG/swap-stagger-off" || -L "$REG/swap-stagger-off" ]]; }   # D-6181's brake: present -> today's undelayed dispatch
 
 _auto_swap_check() {   # id — called each supervise tick. HOME-account affinity:
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
@@ -19602,6 +19723,16 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # boundary — never mid-turn or mid-subagent. The idle gate reads the live process status file;
   # pane heuristics alone miss running subagents (learned 2026-07-03).
   _swap_idle_gate "$id" "$pane" "$wrapper" "$now" || { _standdown_note "$id" idle-gate; return 0; }   # the same gate the act re-runs (D-5240)
+  # THE AFFINITY GUARDS (D-6181, spec §3.1), after the idle gate and only while
+  # `cur` still serves: a draft in the input box stands the move down (the idle
+  # gate's verdict table is untouched), then the per-account and fleet-wide
+  # slots order the arrivals. A slot that cannot be written fails OPEN.
+  if ! _swap_stagger_off && _affinity_cur_serves "$id" "$wrapper" "$aff_verb" "$hard_blocked"; then
+    _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" \
+      && { _standdown_note "$id" draft; return 0; }
+    _affinity_slot_take "$target" "$now"
+    case $? in 1) _standdown_note "$id" stagger; return 0 ;; 2) _standdown_note "$id" stagger-unwritable ;; esac
+  fi
   # The degrade rung rides into the unit with the move; `cmd_swap` stamps it
   # after re-running this same idle gate at the act (D-5240).
   _reg_set "$id" lastswap "$now"
@@ -25366,6 +25497,22 @@ _limit_pick_to() {   # var in text file key -> var and rc as `_limit_json_num_to
 }
 _limit_field() { local __lfw_v __lfw_rc; _limit_field_to __lfw_v "$@"; __lfw_rc=$?; printf '%s' "$__lfw_v"; return "$__lfw_rc"; }   # the printing form (D-4962)
 
+# D-6181: the RAW reset reader. `_limit_field_to` blanks a window whose reset has
+# passed, because a value nobody re-measured since is not a measurement. The
+# pin's expiry asks a different question — WHEN did (or will) home's blocked
+# window reset — so it needs the reset as written, passed or not. Same source,
+# same one read of the file (`_limit_pick_to`); one definition, which D-6182's
+# "window ended" reader is built on rather than growing a second raw reader.
+_limit_reset_to() {   # var wrapper five|seven -> var = that window's `<field>ResetAt` epoch as written; rc 0 | 1 none (no file, no reset)
+  local __lr_out="$1" __lr_f="$LIMITS_DIR/$2.json" __lr_t='' __lr_in=1 __lr_v=''
+  printf -v "$__lr_out" ''
+  [[ -f "$__lr_f" ]] || return 1
+  _limit_text_to __lr_t "$__lr_f" || __lr_in=
+  _limit_pick_to __lr_v "$__lr_in" "$__lr_t" "$__lr_f" "${3}ResetAt"
+  [[ "$__lr_v" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf -v "$__lr_out" '%s' "$__lr_v"
+}
+
 # D-4962 (tick-diet spec §6.3): `_share_pct`'s memo. `_share_pct` runs python3 on every
 # call, and one `_swap_target` call can ask the same lane's share more than once (home's
 # stay gate, then the candidate loop). `_share_pct_to` answers a repeat from a memo that
@@ -28668,9 +28815,14 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   # tick's `_swap_pin_tick` would reach the same conclusion on its next pass;
   # doing it here means the two surfaces never disagree even for one tick.
   if [[ "${CCD_SWAP_AUTO:-}" == 1 ]]; then
-    [[ -e "$REG/$id.swappin" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote"
+    [[ -e "$REG/$id.swappin" || -e "$REG/$id.swappinexp" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote" "$REG/$id.swappinexp"
   else
     _reg_set "$id" swappin "$target"
+    # D-6181: the expiry beside it, never in it; a write that fails leaves a
+    # legacy pin, which the tick gives an expiry on its first read.
+    local pexp pnow; _now_s_to pnow
+    _swap_pin_expiry_to pexp "$(_home_for "$id")" "$target" "$pnow"
+    _reg_set "$id" swappinexp "$pexp" 2>/dev/null || true
   fi
   # `cmd_ensure` runs in this same process at ccd:12815, but only when
   # `systemctl --user start` FAILS — the `||` fallback — and it writes its own
@@ -28788,7 +28940,7 @@ cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (a
   # the affinity arm actually reads, so leaving a pin standing beside it would
   # give one session two answers to the same question — and the pin's would win,
   # silently suppressing the return-home the operator just asked for.
-  [[ -e "$REG/$id.swappin" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote"
+  [[ -e "$REG/$id.swappin" || -e "$REG/$id.swappinexp" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote" "$REG/$id.swappinexp"   # D-6181: with its expiry
   local lc_cross=()
   [[ "$prc" -eq 1 && -n "$cross" ]] \
     && { lc_cross=(dec.crosspool 1); _crosspool_mark "$id" "${pps#named }" "$w"; }
