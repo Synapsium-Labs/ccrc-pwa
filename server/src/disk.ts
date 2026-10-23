@@ -90,13 +90,13 @@ export function diskVerdict(prev: DiskVerdict | null, measured: DiskMeasured, no
   // A held filesystem absent from this pass could not be read: it keeps its level and drifts toward `unmeasured` on the
   // usual two sightings, never toward `ok`. Once drifted it is a ghost, and is dropped unless a root that could not be
   // read (failed or timed out; an absent root holds no bytes) still points at it; a filesystem whose roots now all
-  // report on another device is dropped at once.
+  // report on another device is dropped at once, unless one of those roots could not be read this pass (a label can span devices).
   const unreadable = new Set(measured.missing.filter((m) => m.why !== 'absent').map((m) => m.label));
   const reported = new Set(measured.filesystems.flatMap((f) => f.roots));
   let drifted = 0;
   const carried = [...before.values()].filter((f) => !seen.has(f.dev)).map((f) => step(f, f, 'unmeasured'))
     .filter((f) => {
-      if (f.roots.length > 0 && f.roots.every((r) => reported.has(r))) return false;
+      if (f.roots.length > 0 && f.roots.every((r) => reported.has(r)) && !f.roots.some((r) => unreadable.has(r))) return false;
       if (f.level === 'unmeasured' && !f.roots.some((r) => unreadable.has(r))) { drifted += 1; return false; }
       return true;
     });

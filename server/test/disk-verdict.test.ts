@@ -154,6 +154,15 @@ describe('diskVerdict: hysteresis, debounce, mounts', () => {
     expect([a!.level, b!.level]).toEqual(['critical', 'unmeasured']);
     expect(a!.filesystems.map((f) => f.dev)).toEqual(['8:1', '8:2']);
   });
+  it('a critical filesystem whose root label is shared with another filesystem stays on one unreadable pass', () => {
+    const h = { ...fsAt(10, 0, '8:1'), roots: ['home', 'claude-tmp'] };
+    const t = { ...fsAt(95, 0, '8:2'), roots: ['claude-tmp'] };
+    const start = run([measured([h, t])])[0]!;
+    const bad = { ...measured([h]), missing: [{ label: 'claude-tmp', why: 'timeout' as const }] };
+    const [a] = run([bad], start);
+    expect(a!.level).toBe('critical');
+    expect(a!.filesystems.map((f) => f.dev)).toEqual(['8:1', '8:2']);
+  });
   it('a missing root never reads as fleet ok', () => {
     const m = { ...measured([fsAt(10)]), missing: [{ label: 'r8:1', why: 'timeout' as const }] };
     expect(run([m])[0]!.level).toBe('unmeasured');
