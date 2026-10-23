@@ -175,7 +175,7 @@ describe('no empty fourth column', () => {
 const BEFORE = 352;
 /** What T2e removes from that offset on this fixture, written exactly as measured: 352 before, 223 after, a saving of
  *  129 px, not rounded down (AFTER_OFFSET and BUDGET below). It is the head's chrome (the wordmark and the doors row; the count line
- *  stays), the toggle (44 to 32) and the first group head (44 to 32). */
+ *  stays until T2g), the toggle (44 to 32) and the first group head (44 to 32). */
 const AFTER_OFFSET = 223;
 const BUDGET = BEFORE - AFTER_OFFSET;
 
@@ -233,7 +233,7 @@ describe('one head in the list column', () => {
 });
 
 /** The first row's offset at 1280x800 on `/` after T2e (fd15dd7e0, Step 0 of T2g, both themes, a fine pointer), and what
- *  T2g removes from it: the head (15 px, the pool lag and the count line gone, so no head at all) and the `.fleet` column's
+ *  T2g removes from it: the head (15 px, the count line gone and no lag in this fixture, so no head at all) and the `.fleet` column's
  *  row gap beside it (12 px), written exactly as measured: 223 before, 27 saved. After the change the measured offset is
  *  196 px, exactly the budget (1280x800, both themes). */
 const AFTER_T2E = 223;

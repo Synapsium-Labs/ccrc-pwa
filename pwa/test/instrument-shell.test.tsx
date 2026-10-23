@@ -49,6 +49,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { FleetSession, NotifyEvent, RunSummary } from '../../shared/api';
+import { poolLagText } from '../src/fleet/poolLag';
 import { fleetSession } from './fleetFixture';
 
 // The bell renders only where the browser can push; this one can, so the doors' census counts it (T2e).
@@ -557,7 +558,7 @@ describe('the desk (T2g): one count, in the status bar', () => {
     mount('/');
     const head = document.querySelector('.shell-nav .fleet-head');
     expect(head).not.toBeNull();
-    expect(head!.textContent).toBe('epoch 5 / observed 3');
+    expect(head!.textContent).toBe(poolLagText(5, 3));
     expect(head!.querySelector('.fleet-count, .wordmark')).toBeNull();
     cleanup();
     act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5 } }));
