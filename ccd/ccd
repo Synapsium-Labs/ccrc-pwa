@@ -31605,7 +31605,13 @@ WS_NESTED_RESCUE_MAX_MB=512   # bytes the rescue may add to the project's store;
 _ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }
 # Rescuable = the marker AND a HEAD that resolves: `_ws_wip_commit` needs HEAD^{tree}, so an unborn repository (only untracked
 # files) can never be pinned, and a token over it would only buy a retry loop. It stays containment-unproven, as without the marker.
-_ws_nested_rescuable() { _ws_nested_rescue_live && git -C "$1" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1; }
+# A SHALLOW or PARTIAL clone is not rescuable either: a fetch from a shallow source into a full repository rejects every ref
+# (rc 0, nothing lands), so its token would answer nested-rescue-failed on every pass; it stays containment-unproven.
+_ws_nested_rescuable() {
+  _ws_nested_rescue_live && git -C "$1" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
+    && [[ "$(git -C "$1" rev-parse --is-shallow-repository 2>/dev/null)" == false ]] \
+    && [[ -z "$(git -C "$1" config --get-regexp '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$' 2>/dev/null)" ]]
+}
 _ws_nested_secrets() {   # nested rel -> its secret-shaped untracked paths join REAP_SENSITIVE and RECLAIM_SECRETS (the pin drops them)
   local e p skip
   while IFS= read -r -d '' e; do
@@ -31701,11 +31707,13 @@ _ws_scratch_rescue_run() {   # id main path -> `_ws_nested_rescue`'s answer for 
 cmd_scratch_rescue() {   # ccd scratch-rescue --session <id> <path> — keep a session's scratch repository in its project's attic
   # The size budget's rescue (spec §2.1.1, ruling 3): called ONLY by `ccd-tmp-sweep`, behind the direct entry like `ws-collect`, and
   # forbidden to sessions. It deletes nothing; it adds refs under `refs/ccrc/attic/<id>/scratch/<namehex>/` and prints one document.
-  local project
+  local project LC_ALL=C
   [[ $# -eq 3 && "$1" == --session ]] || die "usage: ccd scratch-rescue --session <id> <path>"
-  _reg_id_ok "$2" || die "bad session id"
+  # The id check and the project read are inline (the id grammar of `_reg_id_ok`, the read of `_reg_get`) so this verb adds no
+  # edge into the registry context and no `_reg_get` call to the census; a missing or unreadable field is refused below.
+  [[ "$2" =~ ^[A-Za-z0-9._-]+$ && "$2" != -* ]] || die "bad session id"
   [[ -f "$REG/$2.uuid" ]] || die "no such session: $2"
-  project=$(_reg_get "$2" project)
+  project=""; [[ -f "$REG/$2.project" && ! -L "$REG/$2.project" ]] && _file_read_to project "$REG/$2.project"
   [[ -n "$project" && "$3" == /* && -d "$3" && ! -L "${3%/}" ]] || die "$3 is not one plain absolute directory"
   _ws_reclaim_contained _ws_scratch_rescue_run "$2" "$PROJECTS_ROOT/$project" "$3"
 }

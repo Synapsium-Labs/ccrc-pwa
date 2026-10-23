@@ -172,6 +172,20 @@ describe('with the marker a nested repository is rescued, then the tree goes', (
     expect((JSON.parse(scratch.stdout) as { failed: string }).failed).toBe('nested-rescue-failed');
   }, 120_000);
 
+  it('a dirty SHALLOW nested clone stays containment-unproven under the marker (its fetch can never land)', () => {
+    const c = makeChild(h);
+    const src = path.join(h.home, 'shallow-src');
+    fs.mkdirSync(src, { recursive: true });
+    h.git(src, 'init', '-q', '-b', 'main');
+    for (const n of [1, 2]) { fs.writeFileSync(path.join(src, `s${n}.txt`), `${n}\n`); h.git(src, 'add', `s${n}.txt`); h.git(src, 'commit', '-q', '-m', `s${n}`); }
+    const dir = path.join(c.wt, REL);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    h.git(path.dirname(dir), 'clone', '-q', '--depth', '1', `file://${src}`, path.basename(dir));
+    fs.writeFileSync(path.join(dir, 'edit.txt'), 'dirty\n');
+    arm();
+    expect(evalOf(h).verdict).toBe('containment-unproven');
+  }, 120_000);
+
   it('a fetch that fails: nested-rescue-failed, nothing removed', () => {
     const c = makeChild(h);
     const n = plantNested(c.wt);
