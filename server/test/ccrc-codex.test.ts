@@ -2347,14 +2347,14 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     return (JSON.parse(r.stdout) as Record<string, unknown>)['auth'];
   };
 
-  it('start refuses auth-status-unreadable for an answer the library\'s status cannot be read from, and status says auth: null', async () => {
+  // Review fix round 3 (T8-FR2-CQ-1): one titled case per stand-in, so a mutant that
+  // lets one through names it in the suite's output and hides none of the rows after it.
+  it.each(STANDINS)('start refuses auth-status-unreadable for an answer the library\'s status cannot be read from, and status says auth: null: %s', async (label, out, rc) => {
     const { home } = await lifeBox({ userManager: false, ids: ['codex-a'] });
-    for (const [label, out, rc] of STANDINS) {
-      plantStandin(home, out, rc);
-      const line = refusedBeforeLock(home, 'auth-status-unreadable', /'ccrc update'/, { end: /then re-run\.$/ });
-      expect(line, label).toContain(`the auth library answered no status ccrc can read for codex-a (it exited ${rc})`);
-      expect(statusAuth(home), label).toBeNull();
-    }
+    plantStandin(home, out, rc);
+    const line = refusedBeforeLock(home, 'auth-status-unreadable', /'ccrc update'/, { end: /then re-run\.$/ });
+    expect(line, label).toContain(`the auth library answered no status ccrc can read for codex-a (it exited ${rc})`);
+    expect(statusAuth(home), label).toBeNull();
   }, 60_000);
 
   it('start refuses a credential word the library does not define as auth-status-unreadable, naming the word', async () => {
