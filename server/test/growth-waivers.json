@@ -35,6 +35,13 @@
       "d": "D-6629",
       "reason": "fleet disk retention DR-17: the ws-orphan verb (lock, recompute, rescue pin, holder re-ask, remove) in ccd/ccd, built on the DR-16 ladder (measured about +100 net code lines against the DR-16 tip)",
       "added": "2026-10-23"
+    },
+    {
+      "file": "ccd/ccd",
+      "maxDelta": 620,
+      "d": "D-6625",
+      "reason": "fleet disk retention DR-13: the loose arm of ws-collect (census, audit, verb, record family, pressure twin) as one new region of ccd/ccd; the verb shares the witnessed arm's helpers and cannot live in another file, because ccd is installed as one digest-checked body (measured +547 net code lines over DR-7, +612 against the merge-base while DR-7 is unmerged)",
+      "added": "2026-10-23"
     }
   ]
 }
