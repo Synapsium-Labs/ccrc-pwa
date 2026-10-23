@@ -230,7 +230,7 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   // carries no marker either. It is also the only one `_inst_bins` places on
   // BOTH platform arms.
   writeFileSync(join(bin, 'ccd-account-auth'), '#!/bin/sh\n# account auth\n', { mode: 0o755 });
-  // The GPT lane's four, which `_inst_bins` places on both platform arms and
+  // The GPT lane's five, which `_inst_bins` places on both platform arms and
   // every role but server — so a `both`/`fleet` box has them and
   // `_uninst_tree_bins` must take them away. UNMARKED, as `_inst_atomic`
   // leaves them. `ccrc-codex` is the launcher every generated Codex wrapper

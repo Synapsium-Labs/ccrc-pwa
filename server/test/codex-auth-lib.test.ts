@@ -89,12 +89,15 @@ const FOREIGN: Array<[string, unknown, string]> = [
 
 describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
   // What this case checks is the STORED account id and expiry (the planting writes both into the file, and the
-  // file's values win); the derivation from the tokens is the next case's.
-  it('reads a present backend credential: its stored account id and expiry', async () => {
+  // file's values win); the derivation from the tokens is the next case's. It also runs under `count-opens`, as the
+  // counter's positive control: a read of a present, regular credential opens it once, so the zero the
+  // non-regular-file case expects comes from a counter that counts.
+  it('reads a present backend credential: its stored account id and expiry, opening it once', async () => {
     const home = mkTmp('codex-auth-present-');
     const dir = laneDir(home);
     const t = plantBackendCredential(dir, { accountId: 'acct-fixture-1', expiresIn: 3600 });
-    const line = await readAt(home, dir);
+    const line = await readAt(home, dir, { faults: ['count-opens'] });
+    expect(line.credentialOpens, 'the read opened the credential once').toBe(1);
     expect(line).toMatchObject({ credential: 'present', family: 'chatgpt-backend', account_id: 'acct-fixture-1' });
     expect(Math.abs(line.expires_at - (Date.now() / 1000 + 3600))).toBeLessThan(5);
     expect(line.access_token).toBe(t.access.length);
@@ -1070,7 +1073,7 @@ describe.skipIf(!PY)('the lock and the commit (codex-bridge spec §2.6, figure 4
 
   // A directory fsync opens the directory for reading, and nothing before it needs to: in a 0300 authDir whose lock
   // already exists, the checkpoint is written, fsynced and renamed into place, and only the directory fsync fails
-  // (EACCES). That is a failed fsync, which this patch can raise, not a lost one, which only a power cut shows.
+  // (EACCES). That is a failed fsync, which a test can raise, not a lost one, which only a power cut shows.
   it.skipIf(process.getuid?.() === 0)('a commit whose directory fsync fails keeps its record bound to the file now in place; the held retry re-runs it, never drops it', async () => {
     const home = mkTmp('codex-auth-dirsync-commit-');
     const dir = laneDir(home);
@@ -1743,9 +1746,11 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
   });
 
   // Another process (C, holding no record) met a needs-signin on the file the unsaved record replaces. This process's
-  // own refresh of the record then fails transiently, or succeeds but cannot commit: neither may clear C's bar.
+  // own refresh of the record then fails transiently, is refused as invalid_client, or succeeds but cannot commit:
+  // none may clear C's bar.
   it.each([
     ['a transient failure', (): Record<string, unknown> => ({ status: 503, body: {} }), 'refresh-failed'],
+    ['an invalid_client', (): Record<string, unknown> => ({ status: 400, body: { error: 'invalid_client' } }), 'config-error'],
     ['a refresh that cannot commit', (): Record<string, unknown> => ({ status: 200, body: issuedAnswer() }), undefined],
   ] as Array<[string, () => Record<string, unknown>, string | undefined]>)('a needs-signin measured on the replaced file stands when the unsaved record meets %s, so a process with no record sends no request', async (_label, answerOf, error) => {
     const home = mkTmp('codex-auth-unsaved-standing-');
@@ -1771,6 +1776,7 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
       expect(r.lines[2].error, r.stdout + r.stderr).toBe(error);
       expect(srv.requests, 'the record\'s refresh was sent').toHaveLength(2);
       expect(statusText(dir), 'the needs-signin stands').toBe(planted);
+      expect(statusIdentity(statusText(dir)), 'bound to the replaced file').toEqual(fileIdentity(dir));
       const c = await runFresh(home, dir, srv.base);
       expect(c.lines[0].error, c.stdout + c.stderr).toBe('needs-signin');
       expect(srv.requests, 'C never sends the dead refresh token').toHaveLength(2);

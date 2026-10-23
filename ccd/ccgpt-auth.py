@@ -804,8 +804,9 @@ def recover_pending(auth_dir: str) -> str:
     checkpoint (an unread checkpoint may be the only copy of a refreshed pair, so it is never discarded), from the
     rename, or from the unlink of a discarded checkpoint. The open's remedy follows its errno: a checkpoint gone
     since the `lstat` (ENOENT) answers `"none"`, as at the `lstat`; a symlink swapped in since (ELOOP) is refused
-    with a remedy that names it; any other errno names `chmod 600` and the disk. A
-    checkpoint that would be promoted but whose fsync failed is refused the same way, never promoted and never
+    with a remedy that names it; EACCES, EPERM and EIO name `chmod 600` and the disk; any other errno (EISDIR from a
+    directory swapped in, ENXIO from a socket, EMFILE) is named with "retry; if it persists, move the checkpoint
+    aside". A checkpoint that would be promoted but whose fsync failed is refused the same way, never promoted and never
     discarded; one that would be discarded is discarded whatever its fsync answered. A failure of the directory fsync
     after the rename still answers `"promoted"`: the checkpoint is in place."""
     p = paths_for(auth_dir)
@@ -842,9 +843,12 @@ def recover_pending(auth_dir: str) -> str:
                 raise Unreadable("the checkpoint " + p.pending + " became a symlink while it was read (ELOOP); ccrc "
                                  "never follows it and keeps the credential as it is; retry, and the next recover "
                                  "removes the symlink")
+            if e.errno in (errno.EACCES, errno.EPERM, errno.EIO):
+                raise Unreadable("the checkpoint " + p.pending + " cannot be read (" + _errno_word(e) + "); ccrc "
+                                 "keeps it and the credential as they are; fix its mode with chmod 600 " + p.pending
+                                 + " or fix the disk, and retry")
             raise Unreadable("the checkpoint " + p.pending + " cannot be read (" + _errno_word(e) + "); ccrc keeps "
-                             "it and the credential as they are; fix its mode with chmod 600 " + p.pending
-                             + " or fix the disk, and retry")
+                             "it and the credential as they are; retry; if it persists, move the checkpoint aside")
         try:
             candidate = _reading_of(json.loads(b"".join(chunks).decode("utf-8")), None, p.pending)
         except (ValueError, RecursionError):
@@ -1303,10 +1307,11 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
     `retry_unsaved` writes the record once the disk takes it (keeping a config-error that bars), and an unexpired
     record is answered. It is never barred by a needs-signin: the status was measured on the file the record
     replaces, and a refusal met there is about that file's token, not the record's, so the record's own refresh
-    writes no status over that needs-signin unless its commit succeeds. A config-error bars it, under the lock,
-    before any request. When the endpoint refuses the unsaved record's own refresh token as needs-signin, the record
-    is dropped (one stderr line, no token), so the needs-signin written, bound to the file on disk, bars every later
-    call and no retry writes ok over it. Otherwise, under `held`: settle a
+    writes no status over that needs-signin unless its commit succeeds: not a refusal, not a transient failure and
+    not a commit that cannot write. A config-error bars it, under the lock, before any request. When the endpoint
+    refuses the unsaved record's own refresh token as needs-signin, the record is dropped (one stderr line, no
+    token), so the needs-signin bound to the file on disk (written then, or already standing) bars every later call
+    and no retry writes ok over it. Otherwise, under `held`: settle a
     checkpoint (`recover_pending`), write an unsaved record (`retry_unsaved`), re-read (another process may have
     refreshed or failed, and is obeyed), re-check the status, then make the one token request. A refusal writes its
     state to the status file and raises it; a transient failure leaves the state as it was and raises RefreshFailed.
@@ -1330,7 +1335,8 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
         _raise_if_barred(auth_dir, lane, unsaved=from_unsaved)
         prev = read_status(auth_dir)
         # A needs-signin another process measured on the file the unsaved record replaces: it stays (that file's
-        # refresh token is dead), so no status this request writes about that file may clear it.
+        # refresh token is dead), so no failure arm below writes a status about that file; only a committed refresh
+        # replaces it.
         standing = from_unsaved and _bars(prev)
         # The unsaved record's own lastRefreshAt, never the status on disk's, which may predate the record's refresh
         # when that refresh's status write failed with its commit.
@@ -1350,7 +1356,8 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
                 sys.stderr.write("ccgpt-auth: dropped an unsaved credential for " + key + ": the token endpoint "
                                  "refused its refresh token; the file on disk is kept\n")
                 sys.stderr.flush()
-            write_status(auth_dir, state=e.word, lastErrorCode=e.code, lastRequestId=e.request_id, **failed)
+            if not standing:
+                write_status(auth_dir, state=e.word, lastErrorCode=e.code, lastRequestId=e.request_id, **failed)
             raise _state_error(e.word, e.code, e.request_id, lane) from None
         except RefreshFailed as e:
             if not standing:

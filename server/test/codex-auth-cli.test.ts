@@ -430,7 +430,7 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
       expect(r.rc, r.stderr).toBe(0);
       expect(r.stdout).toContain('ccgpt-auth: codex-a: signed-in');
       expect(r.stderr).not.toContain('login-failed');
-      expect(r.ms).toBeGreaterThanOrEqual(950); // all three tries ran, so the fault fired at each
+      expect(r.ms).toBeGreaterThanOrEqual(950); // three tries started, so tries 1 and 2 failed; the bound says nothing of try 3
       const cred = JSON.parse(readFileSync(credPath(dir), 'utf8')) as Record<string, unknown>;
       expect(cred).toMatchObject({ access_token: t.access, refresh_token: t.refresh, id_token: t.id });
       expect(existsSync(pendingPath(dir))).toBe(false);
