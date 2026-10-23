@@ -705,7 +705,8 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     `exec ${REAL_NODE} "$@"`,
   ].join('\n') + '\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT',
-    'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+    'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S',
+    'CCRC_UPDATE_DEADLINE_MS', 'CCRC_MODELS_ADVANCE_BUDGET_S']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
   // The health gate (design §11) probes once and decides at a 0 s deadline;
@@ -14483,6 +14484,128 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(src.split('${UPD_BAK_FLOOR//-/}').length - 1, 'the floor comparison').toBe(1);
       expect(body('_bak_ours'), 'the one spelling').toContain('= "$UPD_BACKUP_DIR" ]');
       for (const fn of ['_bak_keepset', '_bak_removable', '_bak_thin']) expect(body(fn), fn).toMatch(/^ +.*_bak_ours "\$d"/m);
+    });
+  });
+
+  describe('W24: ccrc reads its own settings through _ccrc_knob — the environment, else the box\'s ccrc.env, else the default (D-6587, D-6589)', () => {
+    /** D-6588's names, parsed from ccd/ccrc's one CCRC_SETTINGS line and never typed here; with no such line every row reds by this name. */
+    const SETTINGS: readonly string[] = /^CCRC_SETTINGS=\(([A-Z0-9_ ]+)\)$/m.exec(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'))?.[1]?.split(' ')
+      ?? ['CCRC_SETTINGS_LINE_MISSING'];
+    const KEEPS = SETTINGS.filter((k) => k.endsWith('_KEEP'));
+    const ECHO = 'echo "rc $? val ${KNOB} from ${KNOB_FROM} why ${KNOB_WHY}"';
+    const KEEP_ECHO = 'echo "rc $? keep ${KEEP} why ${KEEP_WHY}"';
+    const envFile = (home: string): string => join(home, '.ccrc', 'ccrc.env');
+    /** A fresh box whose ccrc.env holds `text` (null: no file). */
+    const boxWith = (prefix: string, text: string | Buffer | null): string => {
+      const home = freshUpdateBox(prefix);
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      if (text === null) rmSync(envFile(home), { force: true });
+      else writeFileSync(envFile(home), text);
+      return home;
+    };
+    /** `script` in the sourced checkout ccrc, every setting unset first (updateEnv sets one), so a row's environment is its own. */
+    const knob = (home: string, script: string): string => {
+      const r = sourcedCcrc(home, `unset ${SETTINGS.join(' ')}; ${script}`);
+      expect(r.code, r.stderr).toBe(0);
+      return r.stdout;
+    };
+
+    it('W24-R1: the environment wins, else ccrc.env, else the default; an exported empty value is unset', () => {
+      const home = boxWith('ccrc-fx-w24-r1-', 'CCRC_BACKUP_KEEP=5\n');
+      expect(knob(home, `export CCRC_BACKUP_KEEP=7; _ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`)).toBe('rc 0 val 7 from environment why \n');
+      expect(knob(home, `_ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`)).toBe('rc 0 val 5 from file why \n');
+      expect(knob(home, `export CCRC_BACKUP_KEEP=; _ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`), 'an exported empty value').toBe('rc 0 val 5 from file why \n');
+      writeFileSync(envFile(home), 'CCRC_ROLE=server\n');
+      expect(knob(home, `_ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`), 'no line').toBe('rc 0 val 10 from default why \n');
+      rmSync(envFile(home));
+      expect(knob(home, `_ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`), 'no file').toBe('rc 0 val 10 from default why \n');
+    });
+
+    it('W24-R2: file mode reads ccrc.env alone', () => {
+      const home = boxWith('ccrc-fx-w24-r2-', 'CCRC_BACKUP_KEEP=5\n');
+      expect(knob(home, `export CCRC_BACKUP_KEEP=7; _ccrc_knob CCRC_BACKUP_KEEP 10 file; ${ECHO}`)).toBe('rc 0 val 5 from file why \n');
+      writeFileSync(envFile(home), 'CCRC_ROLE=server\n');
+      expect(knob(home, `export CCRC_BACKUP_KEEP=7; _ccrc_knob CCRC_BACKUP_KEEP "" file; ${ECHO}`)).toBe('rc 0 val  from default why \n');
+    });
+
+    it('W24-R3: a name outside CCRC_SETTINGS is never read, from the file or the environment', () => {
+      const home = boxWith('ccrc-fx-w24-r3-', 'CCRC_ACCOUNTS=/x\n');
+      expect(knob(home, `export CCRC_ACCOUNTS=/y; _ccrc_knob CCRC_ACCOUNTS ""; ${ECHO}`))
+        .toBe('rc 1 val  from  why CCRC_ACCOUNTS is not one of ccrc\'s settings (CCRC_SETTINGS), so it is never read from a file\n');
+    });
+
+    it.each(SETTINGS)('W24-R4: %s — unmeasured is not unset: an export line, a NUL byte and an unreadable file each refuse', (k) => {
+      // The NUL and mode-000 shapes name no setting at all, so they also prove a whole-file fault refuses every key (D-6587).
+      const shapes: (readonly [string, string | Buffer, string])[] = [
+        ['an export line', `export ${k}=5\n`, 'names it on a line this reader does not take (it reads only a plain KEY=value line)'],
+        ['a NUL byte', Buffer.from('NOTE=x\u0000y\n', 'utf8'), 'could not be scanned'],
+      ];
+      if (process.getuid?.() !== 0) shapes.push(['mode 000', 'NOTE=x\n', 'is there but cannot be read']);
+      for (const [shape, text, clause] of shapes) {
+        const home = boxWith('ccrc-fx-w24-r4-', text);
+        if (shape === 'mode 000') chmodSync(envFile(home), 0o000);
+        const why = `${k} cannot be measured: ~/.ccrc/ccrc.env ${clause}`;
+        try {
+          expect(knob(home, `_ccrc_knob ${k} ""; ${ECHO}`), shape).toBe(`rc 1 val  from  why ${why}\n`);
+          if (KEEPS.includes(k)) expect(knob(home, `_keep_knob ${k} 3; ${KEEP_ECHO}`), `_keep_knob, ${shape}`).toBe(`rc 1 keep  why ${why}\n`);
+        } finally { chmodSync(envFile(home), 0o600); }
+      }
+    });
+
+    it('W24-R5: the exposure file is never read for a setting', () => {
+      const home = boxWith('ccrc-fx-w24-r5-', 'CCRC_ROLE=server\n');
+      writeFileSync(join(home, '.ccrc', 'exposure.env'), 'CCRC_BACKUP_KEEP=2\n');
+      expect(knob(home, `_ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`)).toBe('rc 0 val 10 from default why \n');
+      // A comment naming the key makes the scan ask the unit model, which still reads ccrc.env alone.
+      writeFileSync(envFile(home), 'CCRC_ROLE=server\n# CCRC_BACKUP_KEEP is set elsewhere\n');
+      expect(knob(home, `_ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`), 'the model asked').toBe('rc 0 val 10 from default why \n');
+    });
+
+    it('W24-R6: another file is read only when the caller names it, and only for that call', () => {
+      const home = boxWith('ccrc-fx-w24-r6-', 'CCRC_ROLE=server\n');
+      writeFileSync(join(home, 'other.env'), 'CCRC_UPDATE_DEADLINE_MS=600000\n');
+      expect(knob(home, `BOX_ENV_FILE="$HOME/other.env" _ccrc_knob CCRC_UPDATE_DEADLINE_MS "" file; ${ECHO}; echo "after $BOX_ENV_FILE"`))
+        .toBe(`rc 0 val 600000 from file why \nafter ${home}/.ccrc/ccrc.env\n`);
+    });
+
+    it('W24-R7: an empty value in ccrc.env reads the default, and says it was named empty', () => {
+      const home = boxWith('ccrc-fx-w24-r7-', 'CCRC_VERSIONS_KEEP=\n');
+      expect(knob(home, `_ccrc_knob CCRC_VERSIONS_KEEP 3; ${ECHO}`)).toBe('rc 0 val 3 from empty why \n');
+      writeFileSync(envFile(home), 'CCRC_UPDATE_DEADLINE_MS=\n');
+      expect(knob(home, `_ccrc_knob CCRC_UPDATE_DEADLINE_MS "" file; ${ECHO}`)).toBe('rc 0 val  from empty why \n');
+    });
+
+    /** Knob-less files the Darwin model cannot decide, each with the clause it refuses with. */
+    const KNOBLESS: readonly (readonly [string, string, string])[] = [
+      ['NOTE=café', 'NOTE=café\n', 'is not a plain NAME=value line'],
+      ['CCRC_PROJECTS_ROOT=~/code', 'CCRC_PROJECTS_ROOT=~/code\n', 'is not a plain NAME=value line'],
+      ['a CRLF file', 'CCRC_ROLE=server\r\n', 'carries a carriage return'],
+    ];
+    it.each(KNOBLESS)('W24-R8: a knob-less ccrc.env the Darwin model cannot decide reads the default for every setting but CCRC_BACKUP_DATA_KEEP, which keeps wave 23\'s departure (%s)', (_shape, text, clause) => {
+      const home = boxWith('ccrc-fx-w24-r8-', text);
+      expect(knob(home, `CCD_OS=linux; _ccrc_knob CCRC_VERSIONS_KEEP 3; ${ECHO}`), 'linux').toBe('rc 0 val 3 from default why \n');
+      expect(knob(home, `CCD_OS=darwin; _ccrc_knob CCRC_VERSIONS_KEEP 3; ${ECHO}`), 'darwin').toBe('rc 0 val 3 from default why \n');
+      const kept = knob(home, `CCD_OS=darwin; _ccrc_knob CCRC_BACKUP_DATA_KEEP 3; ${ECHO}`);
+      expect(kept.startsWith(`rc 1 val  from  why CCRC_BACKUP_DATA_KEEP cannot be measured: ~/.ccrc/ccrc.env line 1 ${clause}`), kept).toBe(true);
+      writeFileSync(envFile(home), `CCRC_VERSIONS_KEEP=2\n${text}`);
+      const named = knob(home, `CCD_OS=darwin; _ccrc_knob CCRC_VERSIONS_KEEP 3; ${ECHO}`);
+      expect(named.startsWith(`rc 1 val  from  why CCRC_VERSIONS_KEEP cannot be measured: ~/.ccrc/ccrc.env line 2 ${clause}`), named).toBe(true);
+    });
+
+    it('W24-R9: _keep_knob is the one bounded keep', () => {
+      const home = boxWith('ccrc-fx-w24-r9-', 'CCRC_BACKUP_KEEP=0002\n');
+      const FROM = `${KEEP_ECHO}; echo "from $KEEP_FROM"`;
+      expect(knob(home, `_keep_knob CCRC_BACKUP_KEEP 10; ${FROM}`)).toBe('rc 0 keep 2 why \nfrom the box\'s ccrc.env\n');
+      expect(knob(home, `export CCRC_BACKUP_KEEP=0005; _keep_knob CCRC_BACKUP_KEEP 10; ${FROM}`)).toBe('rc 0 keep 5 why \nfrom the environment\n');
+      writeFileSync(envFile(home), 'CCRC_BACKUP_KEEP=\n');
+      expect(knob(home, `_keep_knob CCRC_BACKUP_KEEP 10; ${FROM}`), 'named empty').toBe('rc 0 keep 10 why \nfrom the default\n');
+      writeFileSync(envFile(home), 'CCRC_BACKUP_KEEP=x\n');
+      expect(knob(home, `_keep_knob CCRC_BACKUP_KEEP 10; ${KEEP_ECHO}`)).toBe('rc 1 keep  why CCRC_BACKUP_KEEP=\'x\' is not a whole number from 0 to 9999\n');
+      writeFileSync(envFile(home), 'CCRC_BACKUP_DATA_KEEP=1\n');
+      expect(knob(home, `_keep_knob CCRC_BACKUP_DATA_KEEP 3 2; ${KEEP_ECHO}`)).toBe('rc 1 keep  why CCRC_BACKUP_DATA_KEEP=\'1\' is not a whole number from 2 to 9999\n');
+      // U+0663 is a decimal digit to a UTF-8 `=~` range, never to `_keep_ok`; under LC_ALL=C its two bytes print as `??`.
+      expect(knob(home, `export LC_ALL=C CCRC_BACKUP_KEEP=٣; _keep_knob CCRC_BACKUP_KEEP 10; ${KEEP_ECHO}`))
+        .toBe('rc 1 keep  why CCRC_BACKUP_KEEP=\'??\' is not a whole number from 0 to 9999\n');
     });
   });
 

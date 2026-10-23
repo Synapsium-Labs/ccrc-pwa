@@ -19273,6 +19273,85 @@ _upd_rerun_hint() {
   esac
 }
 
+# ── CCRC_SETTINGS — ccrc's own settings, the one list (wave 24, D-6587, D-6588) ──
+# A setting decides what ccrc keeps or removes, how long it waits before judging an update, where it fetches a release
+# from, or whether a step runs at all: an operator sets it once for the box, and an act run with no operator's shell (a
+# console-driven update, the watchdog, a timer) must honour it, so `_ccrc_knob` reads it from ~/.ccrc/ccrc.env too. Every
+# other CCRC_ name ccrc reads stays environment-only, in a reasoned class. This line is the one list: `_ccrc_knob` reads no
+# name outside it, and the census (ccrc-settings-census.test.ts) derives from it, never from a copy.
+CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S)
+
+# ── _ccrc_knob <KEY> <default> [file] — ONE reader for every setting (D-6587) ──
+# The process environment, else ~/.ccrc/ccrc.env alone, else <default>: wave 23's `_bak_data_keep` read with its knob made
+# an argument, so its logic, ruled correct after five review rounds, is spelled once. A non-empty environment value wins
+# (an exported empty one is unset); `file` mode never reads the environment (the doctor's check and the deadline's
+# reading of the server's files). It reads $BOX_ENV_FILE: a caller that needs another file names it with a prefix
+# assignment (`BOX_ENV_FILE="$f" _ccrc_knob …`), which bash keeps for that call alone. A <KEY> outside CCRC_SETTINGS
+# answers rc 1 before anything is read: ccrc.env's CCRC_ACCOUNTS is the server's roster path, never ccrc's array of that
+# name. It never prints and never dies. rc 0: KNOB is the value as a string, unvalidated (validation is the caller's,
+# `_keep_knob` or the act's own parse), and KNOB_FROM says where it came from — `environment`, `file`, `empty` (the file
+# names the key with an empty value, so KNOB is <default>; for the server a named-empty line is not unset) or `default`.
+# rc 1: KNOB and KNOB_FROM are empty and KNOB_WHY is `<KEY> cannot be measured: <why>`, $HOME written as `~`.
+# Unmeasured is not unset (D-6365): a ccrc.env that is there but cannot be read (a dangling link, a directory or a FIFO
+# there included) or holds a NUL byte refuses EVERY key, before any scan of one (a whole-file fault); a line naming the
+# key that this reader does not take refuses that key only (D-6590), naming the file and never its bytes. The VALUE is
+# read through `_box_unit_env`, the tree's byte-wise model of systemd's `EnvironmentFile=` (D-3979; the coordinator's
+# ruling on review 817, F1, F2 and F8), never the two-argument `_box_env_value`, whose `read` runs in the caller's
+# locale: the model trims the value as systemd does, and what it cannot decide refuses with its own clause (BUE_WHY,
+# which names the file and never its bytes): a value a quote or a backslash carries across lines, a CR inside a line (a
+# CR lead included), a non-ASCII byte in an assignment. The model reads ccrc.env alone, never the exposure file, which on
+# Linux no process that acts on a setting receives (its one consumer is ccrc.service); on macOS the launchd job sources
+# it, but a console-driven update never runs there (`_upd_detach_os_check`), so a value in it reaches no act. The model
+# is asked only when ccrc.env's bytes hold the key as a whole token, in a comment too: a file that never names the key
+# cannot set it, so it reads <default> whatever the model or systemd makes of the rest of it but a NUL byte, which the
+# scan refuses first (the coordinator's rulings on reviews 839 and 847). That holds on macOS too (D-6587): a ccrc the
+# launchd job did not start never receives the job's bash reading of the file, and one it did start has that reading as
+# its environment, which wins, so for a ccrc read a file that never spells the key cannot set it on either platform, and
+# asking the model regardless would let one knob-less line it rejects (`CCRC_PROJECTS_ROOT=~/code`, a CRLF file) refuse
+# every setting at once. One exception, wave 23's ratified departure, kept for its one knob: on macOS the model is asked
+# for CCRC_BACKUP_DATA_KEEP whatever the scan says, because the job's bash can build that name without spelling it (a
+# backslash-newline inside it, a quoted `declare`), so there a file the model cannot decide still refuses it. The scan
+# before the model refuses what the model does not: ONE positive rule, over bytes (`LC_ALL=C`, as D-3833 reads
+# ccrc.env, so the box's locale cannot change an answer), on each line with its leading spaces, tabs and CRs gone (the
+# set `_box_env_value` trims): a comment (`#` or `;`, the set `_box_env_unit_whole` skips) is skipped; so is another
+# key's line, `[export ]NAME=` with NAME an identifier other than the key (as D-3823 reads `export OLD_KEY=…`); a line
+# that begins `<KEY>=` is the one the model reads; any other line that names the key as a whole token (no letter, digit
+# or `_` on either side) refuses, `export <KEY>=` included. The same scan says whether any line names it (its exit 4
+# when none does). A line holding a CR past its lead is never skipped, since systemd ends a line at a bare CR and would
+# read what follows as a line of its own (fix round 2's review); a file holding a NUL byte, which bash's `read` drops and
+# systemd cannot read at all (`_box_env_has_nul`, D-3832), and a scan that answers anything but 0, 1 or 4 (an awk that
+# cannot run, or is killed) could not be scanned. Only an absent file, one that never names the key, one the model reads
+# as not naming it, or an empty value there (as with an empty environment variable) reads <default>.
+_ccrc_knob() {   # <KEY> <default> [file]
+  local key="$1" f="$BOX_ENV_FILE" g=0 why=""
+  KNOB=""; KNOB_FROM=""; KNOB_WHY=""
+  case " ${CCRC_SETTINGS[*]} " in *" $key "*) ;; *) KNOB_WHY="$key is not one of ccrc's settings (CCRC_SETTINGS), so it is never read from a file"; return 1 ;; esac
+  [ "${3:-}" = file ] || KNOB="${!key:-}"
+  if [ -n "$KNOB" ]; then KNOB_FROM=environment
+  elif [ -e "$f" ] || [ -L "$f" ]; then
+    if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f"; then g=2; else LC_ALL=C awk -v k="$key" '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t); w = (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]"); n += w } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } w { f = 1; exit } END { exit (f ? 0 : (n ? 1 : 4)) }' "$f" || g=$?; fi; else g=3; fi
+    case "$g" in 0) why="$f names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 1|4) ;; 3) why="$f is there but cannot be read" ;; *) why="$f could not be scanned" ;; esac
+    # ccrc.env alone: a path that cannot exist stands in for the exposure file, which no process that acts on a setting receives
+    # (review 839). Never the empty spelling, `CCRC_EXPOSURE_FILE=`: the model's own refusal of an undecidable ccrc.env compares its
+    # source with that path.
+    if [ "$g" = 1 ] || { [ "$g" = 4 ] && [ "${CCD_OS:-linux}" = darwin ] && [ "$key" = CCRC_BACKUP_DATA_KEEP ]; }; then CCRC_EXPOSURE_FILE="$f/." _box_unit_env "$key"; case $? in 0) KNOB="$BUE_VAL"; if [ -n "$KNOB" ]; then KNOB_FROM=file; elif [ "$BUE_NAMED" = 1 ]; then KNOB_FROM=empty; fi ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
+    [ -z "$why" ] || { KNOB=""; KNOB_WHY="$key cannot be measured: ${why/#"$HOME"/\~}"; return 1; }
+  fi
+  [ -n "$KNOB" ] || { KNOB="$2"; KNOB_FROM="${KNOB_FROM:-default}"; }
+}
+
+# ── _keep_knob <KEY> <default> [<lowest>] — the one reader and validator of a keep (D-6589) ──
+# `_ccrc_knob`, then `_keep_ok`, then the lowest bound (default 0): rc 0 sets KEEP (decimal, so 0002 is 2) and KEEP_FROM,
+# the phrase a prune line prints; rc 1 clears KEEP and sets KEEP_WHY, `_ccrc_knob`'s sentence when the value could not
+# be measured (so an unmeasured file never reaches `_keep_why` with an empty value, naming neither the file nor the
+# line), else `_keep_why`'s. CCRC_BACKUP_KEEP, CCRC_BACKUP_DATA_KEEP and CCRC_VERSIONS_KEEP read through it.
+_keep_knob() {   # <KEY> <default> [<lowest>]
+  _ccrc_knob "$1" "$2" || { KEEP=""; KEEP_WHY="$KNOB_WHY"; return 1; }
+  _keep_ok "$KNOB" && [ "$((10#$KNOB))" -ge "${3:-0}" ] || { KEEP=""; KEEP_WHY="$(_keep_why "$1" "$KNOB" "${3:-0}")"; return 1; }
+  KEEP=$((10#$KNOB)); KEEP_WHY=""
+  case "$KNOB_FROM" in environment) KEEP_FROM="the environment" ;; file) KEEP_FROM="the box's ccrc.env" ;; *) KEEP_FROM="the default" ;; esac
+}
+
 # ── _upd_deadline_ms — the one deadline, read the way the server reads it ──
 # (W4a Task 9). W2's server takes `CCRC_UPDATE_DEADLINE_MS` from ccrc.env
 # through `ccrc.service`'s EnvironmentFile (its `updateDeadlineMs`); this
@@ -23683,48 +23762,11 @@ _bak_ours() {
   [ "$1" = "$UPD_BACKUP_DIR" ] || [ "$((10#${name//-/}))" -ge "$((10#${UPD_BAK_FLOOR//-/}))" ]
 }
 
-# `_bak_data_keep` — the ONE validator of CCRC_BACKUP_DATA_KEEP (D-6347, D-6360): how many backups keep their coordination data set.
-# The process environment, else ~/.ccrc/ccrc.env alone (the order `_upd_deadline_ms` reads its knob in: thinning cannot be undone, and a
-# console-driven move or the watchdog runs under an environment that carries none unless it was set there), else 3. A whole number
-# from 2 to 9999, through `_keep_ok`; 0 and 1 are refused, never clamped. rc 0 sets BAK_DATA_KEEP (decimal); rc 1 sets
-# BAK_DATA_KEEP_WHY to the refusal sentence. Unmeasured is not unset (D-6365): a ccrc.env that is there but cannot be read (a
-# dangling link or a directory there included), or that names the knob on a line this reader does not take, refuses like an
-# invalid value, naming the file and never its bytes. The VALUE is read through `_box_unit_env`, the tree's byte-wise model of
-# systemd's `EnvironmentFile=` (D-3979; the coordinator's ruling on review 817, F1, F2 and F8), never the two-argument
-# `_box_env_value`, whose `read` runs in the caller's locale: the model trims the value as systemd does, and what it cannot decide
-# refuses with its own clause (BUE_WHY, which names the file and never its bytes): a value a quote or a backslash carries across
-# lines, a CR inside a line (a CR lead included), a non-ASCII byte in an assignment. The model reads ccrc.env alone, never the exposure
-# file, which on Linux no process that thins receives (its one consumer is ccrc.service; on macOS the launchd job sources it, so a knob
-# there reaches a console-driven update as its environment, a residual), and it is asked only when ccrc.env's bytes hold the knob as a
-# whole token, in a comment too: a file that never names the knob cannot set it, so its keep is 3 whatever the model or systemd
-# makes of the rest of it but a NUL byte, which the scan refuses first (the coordinator's rulings on reviews 839 and 847). That premise is systemd's: on macOS the model is asked whatever the
-# scan says, because the launchd job sources the file with bash, which can build the name without spelling it (a backslash-newline
-# inside it, a quoted `declare`), so there a file the model cannot decide still refuses (the review of fix round 4). The scan before it refuses what the model does not: ONE positive rule, over bytes (`LC_ALL=C`,
-# as D-3833 reads ccrc.env, so the box's locale cannot change an answer), on each line with its leading spaces, tabs and CRs gone
-# (the set `_box_env_value` trims): a comment (`#` or `;`, the set `_box_env_unit_whole` skips) is skipped; so is another key's
-# line, `[export ]NAME=` with NAME an identifier other than the knob (as D-3823 reads `export OLD_KEY=…`); a line that begins
-# `CCRC_BACKUP_DATA_KEEP=` is the one the model reads; any other line that names the knob as a whole token (no letter,
-# digit or `_` on either side) refuses, `export CCRC_BACKUP_DATA_KEEP=` included. The same scan says whether any line names it (its
-# exit 4 when none does). A line holding a CR past its lead is never skipped,
-# since systemd ends a line at a bare CR and would read what follows as a line of its own (fix round 2's review); a file holding a
-# NUL byte, which bash's `read` drops and systemd cannot read at all (`_box_env_has_nul`, D-3832), and a scan that answers anything but
-# 0, 1 or 4 (an awk that cannot run, or is killed) could not be scanned, and refuse too, whether or not the file names the knob. Only an
-# absent file, one that never names the knob, one the model reads as not naming it, or an empty value there (as with an empty
-# environment variable) falls back to 3. The same fallback is harmless in `_upd_deadline_ms`, whose default deletes nothing.
+# `_bak_data_keep` — CCRC_BACKUP_DATA_KEEP (D-6347, D-6360): how many backups keep their coordination data set. `_keep_knob`'s
+# answer for that knob, default 3, lowest 2 (0 and 1 are refused, never clamped); `_ccrc_knob`'s header argues the read. rc 0 sets
+# BAK_DATA_KEEP (decimal); rc 1 sets BAK_DATA_KEEP_WHY to the refusal sentence. `_bak_thin` and wave 23's rows read these two names.
 _bak_data_keep() {
-  local f="$BOX_ENV_FILE" g=0 why=""
-  BAK_DATA_KEEP="${CCRC_BACKUP_DATA_KEEP:-}"; BAK_DATA_KEEP_WHY=""
-  if [ -z "$BAK_DATA_KEEP" ] && { [ -e "$f" ] || [ -L "$f" ]; }; then
-    if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f"; then g=2; else LC_ALL=C awk -v k=CCRC_BACKUP_DATA_KEEP '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t); w = (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]"); n += w } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } w { f = 1; exit } END { exit (f ? 0 : (n ? 1 : 4)) }' "$f" || g=$?; fi; else g=3; fi
-    case "$g" in 0) why="$f names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 1|4) ;; 3) why="$f is there but cannot be read" ;; *) why="$f could not be scanned" ;; esac
-    # ccrc.env alone: a path that cannot exist stands in for the exposure file, which no process that thins receives (review 839). Never
-    # the empty spelling, `CCRC_EXPOSURE_FILE=`: the model's own refusal of an undecidable ccrc.env compares its source with that path.
-    if [ "$g" = 1 ] || { [ "$g" = 4 ] && [ "${CCD_OS:-linux}" = darwin ]; }; then CCRC_EXPOSURE_FILE="$f/." _box_unit_env CCRC_BACKUP_DATA_KEEP; case $? in 0) BAK_DATA_KEEP="$BUE_VAL" ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
-    [ -z "$why" ] || { BAK_DATA_KEEP_WHY="CCRC_BACKUP_DATA_KEEP cannot be measured: ${why/#"$HOME"/\~}"; return 1; }
-  fi
-  BAK_DATA_KEEP="${BAK_DATA_KEEP:-3}"
-  if _keep_ok "$BAK_DATA_KEEP" && [ "$((10#$BAK_DATA_KEEP))" -ge 2 ]; then BAK_DATA_KEEP=$((10#$BAK_DATA_KEEP)); return 0; fi
-  BAK_DATA_KEEP_WHY="$(_keep_why CCRC_BACKUP_DATA_KEEP "$BAK_DATA_KEEP" 2)"; return 1
+  _keep_knob CCRC_BACKUP_DATA_KEEP 3 2; local rc=$?; BAK_DATA_KEEP="$KEEP"; BAK_DATA_KEEP_WHY="$KEEP_WHY"; return "$rc"
 }
 
 # `_bak_thin <update|backup> <line prefix> [<until>]` — thins the coordination data set of the backups past the newest BAK_DATA_KEEP that carry
