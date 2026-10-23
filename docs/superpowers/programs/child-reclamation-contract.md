@@ -2719,8 +2719,12 @@ composes when a gate forbids it, and 9 more items (three silent-wedge paths amon
        goes on to step 2. This mirrors ccd's `verb-population-refuses-linked-tmproots`.
     2. `readdir`. A null listing is resolved with `statMeasured`: `absent` is empty, and every other answer is
        unmeasured. A FIFO, socket or device is `other` at step 1 and unmeasured here. The two are never folded.
-    3. Names that are not strings, and dot-leading names, are dropped (the witness writer's `.<id>.<pid>.<rand>.tmp`,
-       and review 369 C5's `.<id>.drop.<pid>`).
+    3. Names that are not strings, and dot-leading names, are dropped uncounted (the witness writer's
+       `.<id>.<pid>.<rand>.tmp` among them), save ONE shape, in `tmproots` alone: review 369 C5's compare-and-drop
+       aside, `.<id>.drop.<pid>` (path-identity spec §3.6), whose id joins the population when the id predicate below
+       holds for it. An aside whose id the predicate refuses is dropped uncounted with the rest, and so is every
+       dot-leading name in `tmpquarantine`. (Amended at path-identity's close, as W2's `aside-joins-the-population`
+       asked.)
     4. A listing of more than `COLLECT_POPULATION_MAX` = 1024 names is unmeasured: one box-wide line giving the count
        only. A session that writes 100k names cannot bloat the agent frame or the server's memory.
   - **Stated residual.** A swap of a directory for a link between the lstat and the readdir is not closed by the server,
