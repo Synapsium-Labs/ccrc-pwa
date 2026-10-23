@@ -155,102 +155,64 @@ One PR, from this workspace's own branch.
 
 ## Mutation table
 
-> Fix round 2 (review 818) re-measures this table whole for the artifact comparison; the table below is that measurement, and the first design's rows are in git history at `4ca88f61e`.
+> Fix round 2 (review 818, ruling 8) re-measured this table whole for the artifact comparison and the docs trigger; the first design's rows are in git history at `4ca88f61e`.
 
-Each guard this wave adds, the mutation that removes or weakens it, and the row that goes red. The worker measures each one once, before and after (mutate, run the row, see red, restore), and records the result in the as-built note.
-
-Re-measured in fix round 1 (review 812, F8). Each mutation was applied alone, the whole named file was run, and the file was restored byte-identical. The release-main rows were measured again with `deploy/release-scope.mjs` held stable, after a first pass ran while another fix was mutating the helper (only one row changed: a `git show` failure read as agreement reds W25-R16 alone). A row title shortened for the table keeps its row id.
+Each guard, the mutation that removes or weakens it, and the rows that went red. Each mutation was applied alone, its whole test file was run once, and the file was restored byte-identical (measured sequentially: the release fixtures copy `deploy/` at test time).
+- **When:** the `release-main.test.ts` and `build-release.test.ts` rows were measured at `cfa826d92`, the `release-stable.test.ts` and `settings-screen.test.tsx` rows at `a5498cb54`; neither of those two files nor their targets changed in between.
+- **Readable rows (review 818, F11):** the `say` and `set_output` mutations are M15 and M16.
+- **The channel note's row is restored (F13):** P1.
+- **Survivors: none.**
+- **Retired:** M22, which set the old top-level gate to always true. It was an equivalent mutant, because `normalise` already matches exact top-level names. The gate was removed, and M22′ is the measurable form.
+- **Not counted:** the nine builder rows F2a and F2b also red, because `git archive` refuses a path the fixture lacks.
 
 | File run | Mutation | Red rows, as measured |
 |---|---|---|
-| `release-scope.test.ts` | notShipped tree boundary (startsWith(tree) without /) | W25-S1: notShipped("server/testx/a.ts") is false; W25-S1: notShipped("docsx/a.md") is false |
-| `release-scope.test.ts` | root rules at any depth (atRoot always true) | W25-S1: notShipped("ccd/worker-skill/SKILL.md") is false; W25-S1: notShipped("ccd/coordinator-skill/references/resume.md") is false; W25-S1: notShipped("agent/CLAUDE.md") is false; W25-S1: notShipped("ui/README.md") is false; W25-S1: notShipped("docsx/a.md") is false; W25-S5: a skill file is shipped, and named; W25-G2: no tracked file at or under a build input is on the NOT_SHIPPED list |
-| `release-scope.test.ts` | --no-renames dropped | W25-S6: a move out of a shipped tree into docs still names the shipped side (no rename detection) |
-| `release-scope.test.ts` | diff HEAD^ instead of the tag | W25-S8: the base is the tag, not HEAD^ |
-| `release-scope.test.ts` | dash guard deleted | W25-S9: an unknown ref exits 1 with nothing on stdout, and a dash-leading base is refused before git runs |
-| `release-scope.test.ts` | shippedViolations returns [] | W25-G3: PATHSPEC gains docs; W25-G3: PATHSPEC gains server; W25-G3: PATHSPEC gains README.md; W25-G3: PATHSPEC gains the root as .; W25-G3: PATHSPEC gains ./docs; W25-G3: server tsconfig include gains test; W25-G3: pwa tsconfig paths reach docs; W25-G3: pwa tsconfig typeRoots reach server/test; W25-G3: pwa vite config names docs by URL |
-| `release-scope.test.ts` | tsconfig paths not added | W25-G3: pwa tsconfig paths reach docs |
-| `release-scope.test.ts` | tsconfig rootDirs/typeRoots not added | W25-G3: pwa tsconfig typeRoots reach server/test |
-| `release-scope.test.ts` | PATHSPEC+= count check deleted | W25-G4: a PATHSPEC+= line outside the loop (throws) |
-| `release-scope.test.ts` | ( cd "$ROOT/ count check deleted | W25-G4: an indented ( cd "$ROOT/ line the install parse never sees (throws) |
-| `release-scope.test.ts` | "$ROOT" line scan deleted | W25-G4: a cp of a root file (throws) |
-| `release-scope.test.ts` | archive-line pin deleted | W25-G4: git archive with an extra pathspec (throws) |
-| `release-scope.test.ts` | archive count check deleted | W25-G4: the exact modelled git archive line twice (throws) |
-| `release-scope.test.ts` | scripts comparison deleted | W25-G4: pwa postbuild reading docs (throws); W25-G4: pwa build with another tsconfig (throws); W25-G4: ui prepare script (throws) |
-| `release-scope.test.ts` | file: check deleted | W25-G4: a file: dependency on docs (throws) |
-| `release-scope.test.ts` | vite key check deleted | W25-G4: a vite publicDir (throws) |
-| `release-scope.test.ts` | importEscapes returns [] | W25-G5 a relative import of a server test helper is reported; W25-G5 a raw import of a docs file is reported; W25-G5 a triple-slash reference is reported; W25-G5 a file: dependency subpath is reported; W25-G5 a css @source is reported; W25-G5 a css @import is reported; W25-G5 a css @source of the repository root is reported; W25-G5 an @/ import that climbs out of the alias to a docs file is reported; W25-G5 a css @source of a bare .. (an ancestor of server/test) is reported; W25-G5 a css @import of a bare relative path into docs is reported; W25-G5 a css url( of a bare relative path into docs is reported; W25-G5 a css @import through the @ alias is reported; W25-G5 a JS import of an exact .. is reported; W25-G5 an import.meta.glob of an ancestor of a tree rule is reported; W25-G5 a css source( (throws); W25-G5 a css @plugin (throws); W25-G5 a css @config (throws); W25-G5 a css @reference (throws); W25-G5 a path in a comment is not reported, and a quoted glob is not a comment; W25-G5 an html href is reported |
-| `release-scope.test.ts` | CSS extractor branch deleted | W25-G5 a css @source is reported; W25-G5 a css @import is reported; W25-G5 a css @source of the repository root is reported; W25-G5 a css @source of a bare .. (an ancestor of server/test) is reported; W25-G5 a css @import of a bare relative path into docs is reported; W25-G5 a css url( of a bare relative path into docs is reported; W25-G5 a css @import through the @ alias is reported; W25-G5 a css source( (throws); W25-G5 a css @plugin (throws); W25-G5 a css @config (throws); W25-G5 a css @reference (throws); W25-G5 a path in a comment is not reported, and a quoted glob is not a comment |
-| `release-scope.test.ts` | CSS @import extractor deleted | W25-G5 a css @import is reported; W25-G5 a css @import of a bare relative path into docs is reported; W25-G5 a css @import through the @ alias is reported |
-| `release-scope.test.ts` | CSS @source extractor deleted | W25-G5 a css @source is reported; W25-G5 a css @source of the repository root is reported; W25-G5 a css @source of a bare .. (an ancestor of server/test) is reported; W25-G5 a path in a comment is not reported, and a quoted glob is not a comment |
-| `release-scope.test.ts` | CSS url( extractor deleted | W25-G5 a css url( of a bare relative path into docs is reported |
-| `release-scope.test.ts` | HTML extractor deleted | W25-G5 a path in a comment is not reported, and a quoted glob is not a comment; W25-G5 an html href is reported |
-| `release-scope.test.ts` | triple-slash extractor deleted | W25-G5 a triple-slash reference is reported |
-| `release-scope.test.ts` | file:-name (dep subpath) candidate deleted | W25-G5 a file: dependency subpath is reported |
-| `release-scope.test.ts` | linkEscapes returns [] | W25-G6: no tracked symlink at or under a build input points into NOT_SHIPPED |
-| `release-scope.test.ts` | F1 .. segment check deleted | W25-G4: a cp from dist that climbs out to docs (throws); W25-G4: a cp from dist that climbs out to server/test (throws) |
-| `release-scope.test.ts` | F1 installed-package check on dist deleted | W25-G4: a cp from a dist of a package that is not installed (throws) |
-| `release-scope.test.ts` | F1 dist expansion check deleted | W25-G4: a test of a dist path with an expansion (throws) |
-| `release-scope.test.ts` | F2 source( refusal deleted | W25-G5 a css source( (throws) |
-| `release-scope.test.ts` | F2 @plugin refusal deleted | W25-G5 a css @plugin (throws) |
-| `release-scope.test.ts` | F2 @config refusal deleted | W25-G5 a css @config (throws) |
-| `release-scope.test.ts` | F2 @reference refusal deleted | W25-G5 a css @reference (throws) |
-| `release-scope.test.ts` | F4 @/ resolution deleted | W25-G5 an @/ import that climbs out of the alias to a docs file is reported; W25-G5 a css @import through the @ alias is reported |
-| `release-scope.test.ts` | F4 alias disagreement check deleted | W25-G4: an @ alias that pwa and ui disagree on (throws) |
-| `release-scope.test.ts` | F4 alias underivable check deleted (ui paths) | W25-G4: an @ alias ui/tsconfig.json no longer names (throws) |
-| `release-scope.test.ts` | F4 vite alias key/shape check deleted | W25-G4: an @ alias pwa/vite.config.ts no longer names (throws) |
-| `release-scope.test.ts` | F11 JS exact . / .. deleted | W25-G5 a JS import of an exact .. is reported |
-| `release-scope.test.ts` | F11 CSS values all relative deleted | W25-G5 a css @source of a bare .. (an ancestor of server/test) is reported |
-| `release-scope.test.ts` | F14 HTML comment drop returns src | W25-G5 a path in a comment is not reported, and a quoted glob is not a comment |
-| `release-scope.test.ts` | F14 HTML unterminated comment keeps the rest | W25-G5 a path in a comment is not reported, and a quoted glob is not a comment |
-| `release-scope.test.ts` | F14 CSS comment drop returns src | W25-G5 a path in a comment is not reported, and a quoted glob is not a comment |
-| `release-scope.test.ts` | F14 CSS string-awareness deleted | W25-G5 a css @source is reported; W25-G5 a path in a comment is not reported, and a quoted glob is not a comment |
-| `release-scope.test.ts` | `@import` extractor loses `i` | an upper-case css @IMPORT is reported |
-| `release-scope.test.ts` | `@source` extractor loses `i` | a mixed-case css @Source is reported |
-| `release-scope.test.ts` | `url(` extractor loses `i` | a mixed-case css URL( is reported |
-| `release-scope.test.ts` | `@import\s*` back to `\s+` | a css @import with no space before the string is reported |
-| `release-scope.test.ts` | `@source\s*` back to `\s+` | a css @source with no space before the string is reported |
-| `release-main.test.ts` | only-positive-skips (skip on != changed) | W25-R8, W25-R9, W25-R16, W25-R20, W25-R21, W25-R22 |
-| `release-main.test.ts` | rc ignored in scope_ask | W25-R8, W25-R9, W25-R19 |
-| `release-main.test.ts` | second scope_ask deleted | W25-R15 |
-| `release-main.test.ts` | git show failure read as agreement | W25-R16 |
-| `release-main.test.ts` | base_published always 0 | W25-R1, W25-R10, W25-R14, W25-R24 |
-| `release-main.test.ts` | skip writes built false | W25-R1, W25-R2, W25-R11, W25-R26, W25-R23, W25-P2 |
-| `release-main.test.ts` | unchanged publish branch moved after bundle check | W25-R1 |
-| `release-main.test.ts` | same-as SHAPE check dropped | W25-R13 |
-| `release-main.test.ts` | compgen tripwire deleted | W25-R12 |
-| `release-main.test.ts` | prepare skips on any same-as line | W25-R17 |
-| `release-main.test.ts` | say append deleted | W25-R1, W25-R3 |
-| `: dropped (say)` | \ | \ |
-| `: dropped (set_output)` | \ | \ |
-| `release-main.test.ts` | set_output deleted | W25-R1, W25-R3 |
-| `release-main.test.ts` | unset GH_TOKEN added to decide | W25-R14, W25-R24 |
-| `release-main.test.ts` | prepare calls base_published | the pre-existing rows `refuses when origin already holds the derived tag`, the four `highest [...] → next ...` derive rows and `publish without a bundle refuses`; W25-R1, W25-R3, W25-R7, W25-R15, W25-R20, W25-P4 |
-| `release-main.test.ts` | docs/ literal in script | W25-P3 |
-| `release-main.test.ts` | floor check deleted from measure_change | W25-R20, W25-R21, W25-R22 |
-| `release-main.test.ts` | node_floor_ok returns 0 when no floor read | W25-R21 |
-| `release-main.test.ts` | node_floor_ok returns 0 when version unparsable | W25-R22 |
-| `release-main.test.ts` | exclusion widened: drop -x | W25-R23 |
-| `release-main.test.ts` | exclusion widened: every ?? line | W25-R23 |
-| `release-main.test.ts` | in-tree rm -f deleted | W25-R23 |
-| `release-main.test.ts` | -uall dropped | W25-R23 |
-| `release-main.test.ts` | env -u prefix dropped | W25-R24 |
-| `release-main.test.ts` | env -u list lacks GITHUB_STATE (F13 check) | W25-R24 |
-| `release-main.test.ts` | R25: base copy run BEFORE HEAD helper | W25-R25 |
-| `release-main.test.ts` | R25: base copy run regardless of HEAD answer | three pre-existing `highest [...] → next ...` derive rows; W25-R3, W25-R4, W25-R5, W25-R6, W25-R8, W25-R9, W25-R19, W25-R25 |
-| `release-main.test.ts` | R26: node_floor_ok final return 0 -> 1 | W25-R26 |
-| `build-release.test.ts` | Y1: paths-ignore added | W25-Y1 |
-| `build-release.test.ts` | Y2: decide env block removed | W25-Y2 |
-| `build-release.test.ts` | Y3: setup-node moved above decide | W25-Y3 |
-| `build-release.test.ts` | Y3: setup-node if: dropped | W25-Y3 |
-| `build-release.test.ts` | Y4: env GH_TOKEN on prepare | W25-Y4 |
-| `build-release.test.ts` | Y2: continue-on-error dropped | W25-Y2 |
-| `release-stable.test.ts` | T3: promote NEWEST on unchanged | W25-T1, W25-T2, W25-T3, W25-T4, W25-T6, W25-T7 |
-| `release-stable.test.ts` | T3: --merged HEAD dropped | W25-T3 |
-| `release-stable.test.ts` | T3: sort -V -> sort | W25-T4 |
-| `release-stable.test.ts` | T3: unmeasured worded as unchanged | W25-T6 |
-| `release-stable.test.ts` | T3: printing git push origin $NEWEST^{commit} | W25-T1, W25-T5, W25-T7 |
-| `release-stable.test.ts` | T3: 2>/dev/null dropped | W25-T6 |
+| `release-main.test.ts` | M1 compare forced equal | W25-C2 (content change), W25-C3 (mode-only), W25-C4 (symlink target), W25-C5 (added entry), W25-C6 (removed entry), W25-C7 (build.json other key), W25-C13 (revert merge), W25-C22 (--out inside checkout, shipped merge), W25-C23 (monotonic), W25-C24 (directory mode), W25-C25 (nested build.json), W25-P1 (spellings) |
+| `release-main.test.ts` | M2 wider exclusion (build.json key list + ref) | W25-C7 |
+| `release-main.test.ts` | M3 wider exclusion (MANIFEST body emptied) | W25-C2, W25-C5, W25-C6, W25-C13, W25-C23, W25-C25 (nested build.json) |
+| `release-main.test.ts` | M4 mode dropped | W25-C3, W25-C24 |
+| `release-main.test.ts` | M5 link target dropped | W25-C4 |
+| `release-main.test.ts` | M6 the two empty-fingerprint checks deleted | W25-C8 (both sides), W25-C8 (candidate only) |
+| `release-main.test.ts` | M7 base not limited to contained tags | W25-C11 (side-branch tag), W25-P1 |
+| `release-main.test.ts` | M8 draft check removed | W25-C10 ({"view":"true"}) |
+| `release-main.test.ts` | M9 checksum check removed | W25-C12 (checksum mismatch) |
+| `release-main.test.ts` | M10 self-approval guard removed | W25-C14, W25-C14b |
+| `release-main.test.ts` | M11 the skip keeps the local tag | W25-C1, W25-C23 |
+| `release-main.test.ts` | M12 publish's head check on the unchanged branch removed, anchored on the unchanged branch's `die` line | W25-C16 (state bound to its HEAD) |
+| `release-main.test.ts` | M13 publish accepts an undecided build | W25-C17 |
+| `release-main.test.ts` | M14 the attest tripwire removed | W25-C18 |
+| `release-main.test.ts` | M15 say's guard removed | W25-C19 |
+| `release-main.test.ts` | M16 set_output's guard removed | W25-C19 |
+| `release-main.test.ts` | M17 a skip leaves the candidate in the attest glob | W25-C1 |
+| `release-main.test.ts` | M18 the first-path rule reverted | W25-C2, W25-C5, W25-C6, W25-C13, W25-C23, W25-C25 |
+| `release-main.test.ts` | M19 compare's head check removed | W25-C16 |
+| `release-main.test.ts` | M20 a skip says release | W25-C1 |
+| `release-main.test.ts` | M21 the provisional tag not excluded from the base | 38 rows red: W25-C1 to W25-C14, W25-C14b, W25-C16, W25-C19, W25-C20 (x5), W25-C22, W25-C23, W25-C24, W25-C25, W25-C26, W25-C27 (x2), W25-P1 |
+| `release-main.test.ts` | M22′ nested normalisation (`path.basename(rel) === 'build.json'`) | W25-C25 (nested build.json whose sha differs) |
+| `release-main.test.ts` | M23 directory mode dropped (`'755'`) | W25-C24 |
+| `release-main.test.ts` | M24 the no-top-level build.json and MANIFEST throw deleted | W25-C26 |
+| `release-main.test.ts` | M25 `at.length !== 1` to `> 1` | W25-C27 (base MANIFEST with no build.json line) |
+| `release-main.test.ts` | M26 D-6502 never fires (`contained=""`) | W25-C28 |
+| `release-main.test.ts` | M27 publish's contained branch without its head check | W25-C28 |
+| `build-release.test.ts` | W1 attest `if:` deleted | "runs prepare, compare, attests, then publish ... (D-3122, D-6499)" (no W25 id) |
+| `build-release.test.ts` | W2 GH_TOKEN env on prepare | W25-Y4 |
+| `build-release.test.ts` | W3 setup-node gated by an `if:` | W25-Y3 |
+| `build-release.test.ts` | W4 `continue-on-error: true` on compare | W25-Y2, W25-Y4 |
+| `build-release.test.ts` | A1 attest `if:` gets `\|\| always()` | "runs prepare, compare, attests, then publish ... (D-3122, D-6499)" (no W25 id) |
+| `build-release.test.ts` | F1a paths-ignore line dropped | W25-F1 |
+| `build-release.test.ts` | F1b `'*.md'` to `'**/*.md'` (on the paths-ignore line) | W25-F1 |
+| `build-release.test.ts` | F1c `'docs/**'` to `'**/docs/**'` (on the paths-ignore line) | W25-F1 |
+| `build-release.test.ts` | F1d `workflow_dispatch:` added under `on:` | W25-F1 |
+| `build-release.test.ts` | F1e `paths: ['ccd/**']` added under `push:` | W25-F1 |
+| `build-release.test.ts` | F2a `README.md` added to PATHSPEC | W25-F2 (no PATHSPEC entry is docs) plus 9 builder rows (assembles tarball, sha256sum -c, SHA256SUMS size, MANIFEST names, real ccd body, build.json stamp, --untagged, scripts/, hook refusal), since `git archive` of a missing path fails |
+| `build-release.test.ts` | F2b `docs` added to PATHSPEC | W25-F2 plus the same 9 builder rows |
+| `release-stable.test.ts` | S1 a side-branch tag named | W25-T3 |
+| `release-stable.test.ts` | S2 lexical sort | W25-T4 |
+| `release-stable.test.ts` | S3 a gh call before the refusal | an untagged HEAD is exit 2 — a merge commit has no release to promote; gh never runs (§18 row 2), W25-T1, W25-T3, W25-T4, W25-T5, W25-T7 |
+| `release-stable.test.ts` | S4 a push command in the refusal | W25-T1, W25-T5, W25-T7 |
+| `release-stable.test.ts` | S5 the run pointer dropped | W25-T1, W25-T5 |
+| `release-stable.test.ts` | S6 a measurement reintroduced | pin: the code (comments aside) calls neither release-main.sh nor node, and measures nothing |
+| `settings-screen.test.tsx` | P1 the old channel note | the labels read spec §11.2's words: auto-install, announce, channel and the macOS row |
 
 ## Deviations found
 
@@ -999,7 +961,7 @@ Landing:
 - Claims 2241 and 2246 hold.
 Mail wave-done with the fingerprint when done. A review run follows.
 
-## As built (2026-10-22)
+## As built, fix round 1 (2026-10-22)
 
 **Suite.** `suite: unrun`: no full local run happened after the implementation was complete, because the box sat at a load average of 35 to 70 throughout. CI's full run on the first PR head (`a8c72ff9f`) was green: the PR touches `.github/`, so `select tests` ran in full mode, all twelve server shards and the `test (server)` summary passed, and `test (agent)`, `test (pwa)`, `build-pwa`, `browser (pwa)`, `node floor (22.16.0)`, `probe-macos`, `storybook-a11y` and `typecheck (server)` passed. On that head CodeQL was red on one alert this wave introduced (the guard's HTML comment strip); fix round 1 rewrote both multi-character comment strips as loops (F14), so the alert should clear on the PR's own CodeQL run. An external per-PR review check was red on that head for this PR's `.github/` and test edits; it does not run on `main` and `main` requires no status checks.
 
@@ -1286,3 +1248,51 @@ Deleted: `deploy/release-scope.mjs` and `server/test/release-scope.test.ts`. Cod
 - **CLAUDE.md** (consent 8081): the "Deploy = release + rollout" bullet's mechanism clause names the fingerprint comparison, not `release-scope.mjs`.
 - **The three spec delta notes:** their parenthesis naming `release-scope.mjs`'s `NOT_SHIPPED` becomes the fingerprint comparison, and their last sentence about the refusal drops "and whether anything that ships changed since it".
 - **The PR body:** the live proof is ruling 11's four lines.
+
+## As built, fix round 2 (2026-10-22)
+
+**Suite.** `suite: unrun`: no full local run happened after this round's implementation was complete. The PR touches `.github/`, so CI's `select tests` runs the full server suite on the pushed head, and that run is the arbiter.
+
+**Per-file runs at `cfa826d92`,** one file at a time, `--pool=forks --maxWorkers=1`.
+
+| File | Tests |
+|---|---|
+| release-main | 73 |
+| build-release | 47 |
+| release-stable | 21 |
+| release-notes | 44 |
+| update-states | 32 |
+| oss-metadata | 29 |
+| verify-provenance | 25 |
+| workflow-yaml-parses | 17 |
+| citations | 4 |
+| private-names | 47 |
+| topology-clean | 60 |
+| dtbd | 1 |
+| docs-parity | 54 |
+| deviation-refs | 31 (after `git fetch origin main`) |
+| single-definition | 836 |
+| growth-check | 45 (`GROWTH_CHECK=1`) |
+| typecheck-tests | 12 |
+| pwa settings-screen | 240 |
+
+**The rows the operator's amendment asked for, before and after.**
+- **Before:** W25-F1 and W25-F2 are green on the unmutated tree.
+- **After:** W25-F1 goes red, alone, under each of its five mutations: paths-ignore dropped; `'**/*.md'`; `'**/docs/**'`; `workflow_dispatch` added; a `paths:` key added. W25-F2 goes red with `README.md`, and again with `docs`, added to PATHSPEC.
+
+**The round's review (an Opus correctness and security lens)** found no path to a wrong skip and no new attestation hazard. Its fixes:
+- the mutation table measured (above);
+- rows for a directory's mode, a nested `build.json`, a tree without its top-level files and a MANIFEST without its `build.json` line (W25-C24 to C27);
+- the attest gate pinned as a whole line;
+- D-6502 and its row W25-C28;
+- the `GITHUB_ENV` route recorded in D-6405;
+- the interfaces as built recorded in D-6408 and the round's section;
+- per-test fixture removal in `release-main.test.ts`, so its end-of-file sweep cannot overrun the hook timeout under load.
+
+**Commits:**
+- `fbfdbb244`, `c187760e1`, `2826cdc59`, `834023b4c` and `a5498cb54` (the redesign);
+- `af4a8e9c1` (the operator's amendment: plan and docs);
+- `dc600cd36` (the review: plan);
+- `cfa826d92` (the trigger, D-6502 and the rows);
+- this plan's own commit.
+
