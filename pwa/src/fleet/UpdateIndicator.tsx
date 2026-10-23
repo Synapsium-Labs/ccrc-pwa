@@ -26,7 +26,7 @@
 import type { ReactNode } from 'react';
 import { CloseButton, Door, toast } from '@ccrc/ui';
 import { commandDoor } from '../command/door';
-import { CONTENT_ID } from '../skins/frame';
+import { focusShownLandmark } from '../skins/frame';
 import { useFleetChrome } from './FleetChrome';
 import { dismissRelease, useDismissedRelease } from './releaseDismissal';
 import { releaseWaitingDoorName, releaseWaitingWords, shownRelease, updateBannerText } from './releaseWaiting';
@@ -34,11 +34,12 @@ import { UPDATES_STALE_TEXT } from './useUpdatesView';
 import './fleet.css';
 
 /** Hide the waiting release `tag` on this device until a newer one waits. The control that was tapped leaves the page
- *  with the line, so focus is MOVED first, to the main landmark (never left to fall to the body), and the one toast
- *  says what happened and where the release is still listed. */
+ *  with the line, so focus is MOVED first, to the landmark that is shown (the main landmark at a desk, the fleet
+ *  column's on a phone's fleet view, where main is hidden; never left to fall to the body), and the one toast says what
+ *  happened and where the release is still listed. */
 function dismiss(tag: string): void {
   dismissRelease(tag);
-  document.getElementById(CONTENT_ID)?.focus();
+  focusShownLandmark();
   toast(`${tag} is hidden until a newer release. Settings › Updates still lists it.`, 'info');
 }
 

@@ -31,7 +31,7 @@ import { ackAll, acksSnapshot, prune, subscribeAcks } from '../lib/seen';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import type { FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { useFrameSet } from '../skins/frame';
+import { FLEET_ID, useFrameSet } from '../skins/frame';
 import { useDesk } from '../lib/useMediaQuery';
 import '../fleet/fleet.css';
 
@@ -212,7 +212,7 @@ export function FleetScreen({
   // (`runCard`'s docstring has the two fallbacks and why each is load-bearing).
 
   return (
-    <section aria-label="Fleet" className="fleet" data-conn={conn}>
+    <section id={FLEET_ID} aria-label="Fleet" className="fleet" data-conn={conn} tabIndex={-1}>
       {Head !== null ? <Head /> : (
         <FleetHead
           countLine={sessions.length > 0 ? countLine : null}
