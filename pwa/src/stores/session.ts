@@ -112,9 +112,10 @@ export interface SessionState {
    *  (the automatic reconnect never calls `disconnect()`), so by itself it cannot tell "no envelope" from "not yet
    *  told": an ask surface treats the stream as `none` until this reads true (`askLive.ts`'s `askSource`). It is the
    *  surface's LIVENESS: false when the store is created, the moment the socket is anything but open (the drop, and
-   *  every reconnect attempt, so before any open) and on `disconnect()`; a dialog frame never sets it. While it is
-   *  false the sheet that was showing stays up, read-only, and sends nothing (`the-ask-holds-through-a-reconnect`).
-   *  Per connection, never persisted. */
+   *  every reconnect attempt, so before any open) and on `disconnect()`; a dialog frame never sets it. `dialog` falls
+   *  with it at the drop, so a menu kept from before it is never read as current. While it is false the sheet that was
+   *  showing stays up, read-only, and sends nothing (`the-ask-holds-through-a-reconnect`). Per connection, never
+   *  persisted. */
   askFrameSeen: boolean;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
   /** D-5372: the tasks frame's `touchedAt` (newest task file mtime, epoch ms);
@@ -876,9 +877,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // function — only an explicit teardown (leaving the session screen,
         // a swap/compact cycle) does. This is the belt to that fix's braces:
         // whatever the next connect delivers is authoritative, never a
-        // leftover from before the drop. `dialog` is untouched — the scraped
-        // channel has no analogous "was this fleet host still writing while
-        // we were gone" gap, since the pane is re-scraped fresh every poll.
+        // leftover from before the drop. `dialog` is not cleared here: the
+        // socket's own state lowers it whenever the connection is not open
+        // (`onState`, D-6325), because a new stream frames the menu it sees
+        // but never the absence of one.
         //
         // `mail` gets the identical belt-and-braces (fix round 1, finding 3's
         // named residual): `sessionws.ts`'s own per-connection sentinel now
