@@ -2441,7 +2441,7 @@ export class FleetWatcher {
       // is ~4.3 s of sleeps per message plus one round trip per line
       // (`inject/send.ts:30-40,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
-      void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepMail(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepMail` immediately above — the
       // release CAS and its own registry listing must not sit in front of the
       // dialog detector either. Own clock (`ASK_SWEEP_MS`).
@@ -7135,19 +7135,21 @@ export class FleetWatcher {
    * sweep — every negative assertion about it would pass while it was still
    * running. PUBLIC for the same reason `sweepNames` is.
    */
-  async sweepMail(): Promise<void> {
+  async sweepMail(fleet?: FleetReadModel): Promise<void> {
     if (!this.primed) return;
     const store = this.deps.coord;
     if (!store) return;
-    await this.runLane('mail', () => this.mailPass(store));
+    await this.runLane('mail', () => this.mailPass(store, fleet));
   }
 
-  private async mailPass(store: CoordStore): Promise<void> {
+  private async mailPass(store: CoordStore, fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
 
-    // Fail-shut: a registry we cannot list is a kill-switch we cannot read.
+    // Fail-shut: a registry we cannot list is a kill-switch we cannot read. THIS listing stays fresh (D-5864): it is the
+    // last switch read before the pass delivers, so a switch raised after the tick's listing still holds the lane. Only
+    // the recipients below are selected from the tick's model.
     const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
-    if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) return;
+    if (listing === null || readSwitches(listing)[MAIL_DISABLED_MARKER] === 'set') return;
     // The gate's mode comes from this SAME listing (worker stall watch §4.1,
     // `turnidle.ts`), through the one settings resolution the stall sweep also
     // calls (stall watch settings §9): a chosen level can set it, and strict
@@ -7202,8 +7204,8 @@ export class FleetWatcher {
     // own unreadable listing already does three lines up, rather than
     // silently emptying `records` and letting every row downstream mistake
     // "we could not read the fleet this pass" for "this recipient is gone".
-    // [registry-refused:holds] a refused recipient is held `registry-unmeasurable` below, never parked.
-    const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+    // A refused recipient is held `registry-unmeasurable` below, never parked (it holds).
+    const registryRead = await this.fleetFor(fleet);
     if (!registryRead.listed) return;
     const records = registryRead.records;
     const uuidByToId = new Map(records.map((r) => [r.id, r.uuid] as const));

@@ -142,7 +142,6 @@ const EXPECTED_SITES: readonly string[] = [
   'server.ts | prTasks | readRegistry | knownId',
   'watch.ts | detectDialogs | readRegistry | tests-only',
   'watch.ts | sweepHookStates | readRegistryMeasured | tests-only',
-  'watch.ts | mailPass | readRegistryMeasured | holds',
   'watch.ts | fleetFor | readRegistryMeasured | tests-only',
   'watch.ts | tick | readRegistryMeasured | omits',
 ];
@@ -197,8 +196,8 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
       .toEqual([]);
   });
 
-  it('the classified set is exactly these 23 sites', () => {
-    expect(EXPECTED_SITES).toHaveLength(23);
+  it('the classified set is exactly these 22 sites', () => {
+    expect(EXPECTED_SITES).toHaveLength(22);
     expect(allSites().map(key).sort()).toEqual([...EXPECTED_SITES].sort());
   });
 
@@ -270,6 +269,11 @@ describe('tick hands its model to the lanes that would otherwise list the regist
   it('tick() passes registryRead to sweepTasks(', () => {
     expect(body(), 'tick no longer hands the task lane its model: that lane would list the registry itself')
       .toMatch(/\bthis\.sweepTasks\(\s*registryRead\s*\)/);
+  });
+
+  it('tick() passes registryRead to sweepMail(', () => {
+    expect(body(), 'tick no longer hands the mail lane its model: that lane would list its recipients itself')
+      .toMatch(/\bthis\.sweepMail\(\s*registryRead\s*\)/);
   });
 
   it('tick() passes registryRead to sweepAsks(', () => {
@@ -404,6 +408,6 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
     expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(5);
-    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(18);
+    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(17);
   });
 });
