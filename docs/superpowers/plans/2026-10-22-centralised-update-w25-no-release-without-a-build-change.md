@@ -216,7 +216,7 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 
 ## Deviations found
 
-These twenty numbers, starting at D-6390, were issued to run 793. This plan defines all twenty, in order: D-6390 to D-6402 from the coordinator's draft, and D-6403 to D-6409 from the worker's reserve (D-6403 for the ruling on Reading 10; D-6404 and D-6405 for what Task 2's reviews found; D-6406 and D-6407 for review 812's fix round; D-6408 and D-6409 for review 818's). Fix round 2 also defines D-6499 to D-6501, from the block D-6499 to D-6510 issued to this wave for it (D-6502 for the round's review; D-6503 to D-6510 are unused), and D-6511 to D-6513, the block issued with the operator's docs-trigger amendment. Fix round 2 rewrote D-6390, D-6392, D-6393, D-6398, D-6400, D-6401 and D-6405, and marked D-6391, D-6396, D-6399 (in part), D-6402, D-6403, D-6404, D-6406 and D-6407 superseded where they no longer apply; the amendment marked D-6397 superseded; none was removed.
+These twenty numbers, starting at D-6390, were issued to run 793. This plan defines all twenty, in order: D-6390 to D-6402 from the coordinator's draft, and D-6403 to D-6409 from the worker's reserve (D-6403 for the ruling on Reading 10; D-6404 and D-6405 for what Task 2's reviews found; D-6406 and D-6407 for review 812's fix round; D-6408 and D-6409 for review 818's). Fix round 2 also defines D-6499 to D-6501, from the block D-6499 to D-6510 issued to this wave for it (D-6502 for the round's review; D-6503 to D-6510 each have an `unused` entry below), and D-6511 to D-6513, the block issued with the operator's docs-trigger amendment. Fix round 2 rewrote D-6390, D-6392, D-6393, D-6398, D-6400, D-6401 and D-6405, and marked D-6391, D-6396, D-6399 (in part), D-6402, D-6403, D-6404, D-6406 and D-6407 superseded where they no longer apply; the amendment marked D-6397 superseded; none was removed.
 
 - **D-6390.** The rule is "a merge whose shipped build would be unchanged cuts no release". It is implemented by measuring the artifact (option (b)): every merge builds, and a release is skipped only when the build's fingerprint (D-6408) exactly equals that of the newest release HEAD contains (D-6392). The path classifier (option (a)) is retired. This inverts the first text, which chose (a).
   - Why: two review rounds (812, 818) found eleven families of build inputs that the static guard (D-6396) passed silently, and the last one put `server/test` into the tarball with the guard green. A model of every way the builder, npm, tsc, vite and Tailwind can read a file has no end.
@@ -283,6 +283,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - D-3129's count check on HEAD's own tags is unchanged.
   - Consequence, stated: a test-only fix after a red stable gate builds an unchanged artifact and cuts no release. So nothing is promotable until a release contains that fix: the next merge whose build differs, or a hand-cut `vX.Y.0` tag, which `release.yml` always builds.
   - Rewritten in fix round 2 (review 818). The first text is in git history at `4ca88f61e`.
+  - **Amended on review 842:** the refusal tells a head with no release-main run from one with a run. It measures `git diff --name-only HEAD^ HEAD` under the trigger's own root-anchored rule (`docs/**`, and a root `*.md` with no `/`). When every path matches, it says HEAD's merge changed only `docs/` or the root's Markdown, so no release-main run started for it, and it names the newest release HEAD contains. Otherwise it points at release-main's run for HEAD's sha, as before. When HEAD has no parent, or the diff fails, it takes the pointer form and says HEAD's changed paths could not be read. Exit 2, no gh call, and no push or rewind command, as before. W25-T1 is pinned for the pointer case, W25-T1b for the docs case, and W25-T5 (a one-commit HEAD) for the unreadable case (F1).
 - **D-6399.** Every text that states "every merge is a release" is corrected in place: README, CLAUDE.md, the two script headers, the workflow headers, the `shared/api.ts` docstring, the PWA channel note with its pin, and the radio story.
   - The three specs get one dated delta note each and keep their sentences. Specs are dated history; a note keeps the decision record honest without rewriting it.
   - The PWA note becomes `Every merge that changes the build, minutes after it lands.` (Reading 5).
@@ -360,9 +361,11 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - **Extraction** is `tar -xpzf` into a fresh `mktemp -d` directory outside the checkout. `-p` makes the modes the archive's, not the umask's.
   - **The program.** The function runs under the script's `set -euo pipefail`, and its inline node program reads only `node:fs`, `node:path` and `node:crypto`.
   - **Measured basis:** the v0.0.565/566/567 comparison (D-6390).
+  - **Amended on review 842:** three properties the walk already had are now pinned by rows. A link is read with `lstat` and never followed, so a link retargeted between two byte-identical files releases (W25-C29). The mode is the full `0o7777`, setuid, setgid and sticky bits included, which `tar -xpzf` keeps (W25-C30). Dot-named entries are walked like any other (W25-C31) (F2, F3, F4).
 - **D-6409.** A comparer never approves its own change. When `git diff --name-only <base> HEAD -- .github/workflows/release-main.yml deploy/release-main.sh` lists anything, or fails, the merge releases unconditionally and the line names the first path.
   - `deploy/release-main.sh` is the compare script: it holds the fingerprint and the decision.
   - `deploy/` ships, so a change there also changes the artifact. This rule covers a comparer broken in a way that would hide that.
+  - **Amended on review 842:** the `git diff against <base> failed` arm has a row, W25-C32. And W25-C33 judges a change to `release-main.yml` that is older than `HEAD~1`, so narrowing the guard's range to `HEAD~1 HEAD` reds a behaviour row, not only the spelling pin (F5).
 - **D-6499.** The skip is decided after the build, and a skipped build is never attested.
   - **prepare** builds into `$OUT_DIR/candidate/`, outside the attest step's `release-out/ccrc-*.tar.gz` glob, with the provisional tag local only, and records `built candidate` / `tag` / `head`.
   - **compare, on a skip,** deletes the local tag, leaves the candidate where it is, writes `release=false`, and records `built unchanged` / `same-as <base>` / `head`.
@@ -386,6 +389,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - **The hazard.** "Re-run all jobs" on an old run whose merge was skipped derives the next number from the highest tag. Its base is still that merge's own newest contained tag. If the comparison then fails (an outage, a base release since edited or deleted) or the toolchain has drifted, it would release the old content under a number above every newer release.
   - **The rule.** After its already-tagged check, `prepare` asks `git tag --contains HEAD`. When that lists a release-shaped tag, it builds nothing and records `built contained` / `contained-by <newest such tag>` / `head <sha>`. `compare` then writes `release=false` and decides nothing, and `publish` does nothing; both exit 0.
   - **A state word of its own,** not `built false`, which means "HEAD was tagged at checkout; release.yml owns it" (D-6394's rule against an overloaded value).
+  - **Amended on review 842:** the shape-only contained check stands, as the review's refuters argued: the lane never leaves a release-shaped tag without its release. A publish that fails deletes its pushed tag, a pushed `v*` tag runs `release.yml`, and nothing makes drafts. W25-C34 pins the shape filter: a tag that is not release-shaped (`vnext`, `v1.2.3-rc1`) and contains HEAD leaves the decision to compare (F6).
 - **D-6511.** The trigger. `release-main.yml` runs on exactly `push`, `branches: [main]`, `paths-ignore: ['docs/**', '*.md']`, with no `paths:` key and no other event (the operator's docs-trigger amendment).
   - **What the patterns match.** GitHub's `*` does not cross `/`. So `'*.md'` matches only the root's Markdown, and `'docs/**'` only the root `docs/` tree. The shipped skills under `ccd/` and everything under `pwa/src/docs/` still start the run.
   - **What a match does.** A push in which every changed file matches starts no run: no runner, no build, no release. Any other file in the push starts the normal flow.
@@ -397,10 +401,19 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - **"GitHub evaluates it over the push's own range"** (D-6392's hazard). The base is the newest published release HEAD contains, not the push's before. So a push the filter skips, the 3,000-file case included, can only delay a change to the next run that starts. That run's build includes the change and releases it, so nothing is lost or mislabelled.
   - **Said plainly:** a failed release followed only by docs merges stays unreleased until the next merge outside the two patterns, or until someone re-runs the failed run. There is no other door (the operator's answer 2).
   - **"The trigger pin would miss one"** (the old regex row, which stopped at `$`). It is replaced by an exact pin, row F1 (D-6513).
+  - **Amended on review 842:** W25-F2 now checks behaviour, not the script's text. It builds the fixture's tarball with the real `build-release.sh`, in a fixture repository that carries `docs/x.md` and a root `README.md`, and asserts that `tar -t` lists no entry under `docs/` and no root `.md`. So it catches every form review 842 listed (array entries in any quoting, a `PATHSPEC+=` after the loop, globs, `.`, `./docs`, and a `cp -a "$ROOT/…"` copy), and the review's thirteen mutations each red it. The workflow comment says the same (F7).
 - **D-6513.** The rows, each measured red under its mutation before landing:
   - **W25-F1** (`build-release.test.ts`, `release-main.yml` describe). The `on:` block, read as an exact text block, is exactly the push trigger of D-6511. It goes red if paths-ignore is dropped, if a pattern is widened to `'**/*.md'` or `'**/docs/**'`, if `workflow_dispatch` is added, or if a `paths:` key is added.
   - **W25-F2.** No PATHSPEC entry of `deploy/build-release.sh` is `docs`, sits under `docs/`, or is a root `*.md` file. The entries are parsed from the file, the per-package `scripts/` arm included. It goes red if `README.md` or `docs` is added to PATHSPEC.
   - **Retired:** W25-Y1 (no trigger filter) and the row `'triggers on main pushes and on NOTHING else'`, whose regex stopped at `$`. W25-F1 replaces both.
+- **D-6503** — `unused` (run 793): issued to this wave; no departure took it.
+- **D-6504** — `unused` (run 793): issued to this wave; no departure took it.
+- **D-6505** — `unused` (run 793): issued to this wave; no departure took it.
+- **D-6506** — `unused` (run 793): issued to this wave; no departure took it.
+- **D-6507** — `unused` (run 793): issued to this wave; no departure took it.
+- **D-6508** — `unused` (run 793): issued to this wave; no departure took it.
+- **D-6509** — `unused` (run 793): issued to this wave; no departure took it.
+- **D-6510** — `unused` (run 793): issued to this wave; no departure took it.
 
 
 ## File structure
@@ -1136,7 +1149,7 @@ The coordinator's rulings on review 818 (above) redesign the decision. This sect
   5. Tag locally and run `bash "$ROOT/deploy/build-release.sh" --out "$OUT_DIR/candidate"`. On a failure, delete the local tag and die, as before.
   6. Write the state `built candidate` / `tag <next>` / `head <sha>`, and print `release-main.sh: built <next> as a candidate in $OUT_DIR/candidate — tagged locally (NOT pushed); next: compare`.
 - **`compare`** (`GH_TOKEN`):
-  1. With no state file, exit 2, as `publish` does (as built). Read the state. On `built false` or `built contained` (D-6502), print `release-main.sh: nothing to compare — HEAD was already tagged; release.yml owns it`, write `release=false`, and exit 0. Otherwise the state must read `built candidate`, with `tag` matching `SHAPE` and `head` equal to `git rev-parse HEAD`; anything else dies (exit 1). The candidate `$OUT_DIR/candidate/ccrc-<tag>.tar.gz` must exist, or it dies.
+  1. With no state file, exit 2, as `publish` does (as built). Read the state. On `built false`, print `release-main.sh: nothing to compare — HEAD was already tagged; release.yml owns it`; on `built contained` (D-6502), print `release-main.sh: nothing to compare — HEAD is already contained in <tag>`; either way write `release=false` and exit 0 (as built, review 842 F9). Otherwise the state must read `built candidate`, with `tag` matching `SHAPE` and `head` equal to `git rev-parse HEAD`; anything else dies (exit 1). The candidate `$OUT_DIR/candidate/ccrc-<tag>.tar.gz` must exist, or it dies.
   2. Choose, in order. The first failing check releases with `could not compare (<reason>); releasing <tag>`:
      - the base: `git tag --merged HEAD`, leaving out `<tag>`, through `newest`. Reason when there is none: `HEAD contains no earlier release tag`;
      - the self-approval guard (D-6409), `git diff --name-only "$base" HEAD -- .github/workflows/release-main.yml deploy/release-main.sh`. Reasons: `git diff against <base> failed`, and `<base>..HEAD changes <first path>, which judges this comparison`;
@@ -1170,7 +1183,12 @@ No `continue-on-error` anywhere. The comments obey the existing pins: no `npm ci
 
 **`deploy/release-stable.sh`**: the zero-tag refusal (D-6398, rewritten) takes `NEWEST` as before and prints one line:
 
-`release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD <short> carries no vX.Y.Z tag<tail>). A main merge whose build came out unchanged cuts no release either: the release-main run for <full sha> printed "built unchanged" or what differed. <where> and cannot move back (fast-forward only); the <first|next> release cut from a descendant of <short> is the next commit it can promote. Nothing was changed`
+`release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD <short> carries no vX.Y.Z tag<tail>). <why> <where> and cannot move back (fast-forward only); the <first|next> release cut from a descendant of <short> is the next commit it can promote. Nothing was changed`
+
+- `<why>` (amended on review 842, D-6398), chosen by `git diff --name-only HEAD^ HEAD` under the trigger's rule:
+  - every path is under `docs/` or is root Markdown: `HEAD's merge changed only docs/ or the root's Markdown, so no release-main run started for it.`;
+  - otherwise: `A main merge whose build came out unchanged cuts no release either: the release-main run for <full sha> printed "built unchanged" or what differed.`;
+  - no parent, or the diff fails: the pointer form, with `(HEAD's changed paths could not be read)` before its full stop.
 
 - `<tail>` is `; the newest release it contains is <NEWEST>`, or `, and it contains no release tag`.
 - `<where>` is `stable now sits past <NEWEST>`, or `stable now points at <short>`.
@@ -1218,14 +1236,13 @@ No `continue-on-error` anywhere. The comments obey the existing pins: no `npm ci
   - **W25-C21:** the retired arms are usage errors: `decide`, `measure` and `--base` exit 2.
 - **Source pins** (`'release-main.sh: source pins'`):
   - P1, the gh spellings above;
-  - P2, the four state words;
+  - P2, the five state words: `candidate`, `unchanged`, `contained`, `true` and `false` (as built, review 842 F9);
   - P3, prepare's build literal `deploy/build-release.sh" --out "$OUT_DIR/candidate"`, and no gh in prepare;
   - P4, the guard's two paths, spelled once;
   - P5, `sort -V` spelled once, in `newest`;
   - kept: `set -euo pipefail`, no npm, no `git log`, the named publish argv and the notes file.
 
 `server/test/build-release.test.ts` (`release-main.yml` describe):
-- **W25-Y1:** no trigger filter (kept).
 - **W25-Y2:** the compare step's exact five lines.
 - **W25-Y3:** the step order is checkout, setup-node, prepare, compare, attest, publish, and `setup-node` carries no `if:`.
 - **W25-Y4:** exactly two `GH_TOKEN` lines, in compare and publish. The prepare step has no `env:`, and no `continue-on-error` appears.
@@ -1296,3 +1313,45 @@ Deleted: `deploy/release-scope.mjs` and `server/test/release-scope.test.ts`. Cod
 - `cfa826d92` (the trigger, D-6502 and the rows);
 - this plan's own commit.
 
+## Coordinator rulings on review 842 (2026-10-23)
+
+Verbatim, as received.
+
+Run 793, wave 25: fix round 3, ruled on review 842 (the review's report; read it whole). Record this verbatim in the plan as "Coordinator rulings on review 842 (2026-10-23)", and write the report's path as "the review's report".
+
+The review found no path to a wrong skip, and no attestation of an undecided build. CI ran in full (920 files) and is green, and CodeQL #175 reads fixed. Every finding is a guard that no row reds, or a text the amendment made false. All eleven are fixed in this round.
+
+Deviations: amend D-6398, D-6408, D-6409, D-6502 and D-6512 in place, each saying "amended on review 842". D-6503 upward are your reserve for this round, spent in order. Before wave-done, give each unspent number its own entry in the house form: the number, an em-dash, `unused` (run 793): issued to this wave; no departure took it. That replaces the prose line at plan:219.
+
+1. F1, release-stable on a docs-only head (amends D-6398).
+- Whether a release-main run exists for HEAD depends on HEAD's own merge, not on the range since the release. So measure git diff --name-only HEAD^ HEAD, under the same root-anchored rule as the trigger ('docs/**', root '*.md').
+- When every path matches, the refusal says HEAD's merge changed only docs/ or the root's Markdown, so no release-main run started for it, and names the newest release HEAD contains.
+- Otherwise it points at the run for HEAD's sha, as now.
+- If HEAD has no parent, or the diff fails, take the pointer form and say the paths could not be read.
+- Keep exit 2, no gh call, and no push or rewind command.
+- Re-pin W25-T1 for both cases. Fix the same pointer in the script header, README:781-782, the plan's interface text and the three spec delta notes.
+2. F2, F3 and F4, the fingerprint walk (amends D-6408). Each gets a row whose mutation turns a real shipped change into "built unchanged":
+- F2: a link retargeted between two byte-identical files; mutation lstatSync to statSync.
+- F3: a setuid file and a sticky directory; mutation 0o7777 to 0o777.
+- F4: a mode change on a dot-named entry; mutation: skip names starting with '.'.
+3. F5 (amends D-6409): a row in which git diff against the base fails, expecting `could not compare (git diff against … failed)`. Also add a behaviour row where the judged change is older than HEAD~1, so narrowing the range to HEAD~1 HEAD reds a behaviour row, not only the spelling pin.
+4. F6 (amends D-6502): a row in which a tag that is not release-shaped (vnext, v1.2.3-rc1) contains HEAD. The release is decided by compare. Mutation: newest to tail -n1.
+- The shape-only contained check stands, as the refuters argued: the lane never leaves a release-shaped tag without its release.
+5. F7, the docs pin, by behaviour (amends D-6512).
+- W25-F2 builds the fixture tarball with build-release.sh, in a fixture repo that carries docs/x.md and a root README.md. It asserts that tar -t lists no entry matching ^docs/ or a root .md.
+- So it catches every form the review listed: array literals, PATHSPEC+= after the loop, globs, '.', './docs', and cp -a "$ROOT/…".
+- Measure all thirteen of the review's mutations red, one at a time. The workflow comment and D-6512 then say what the row checks.
+6. F8, the mutation table.
+- Rows for (i), the listing-failure check behind "the line is never empty", and (iii), `!= false` loosened to `= true`, with an empty, null or garbage gh answer at exit 0.
+- Add the four real rows the table misses: the failed download, the missing base, the gh-view exit check, and publish's contained-in-HEAD check.
+- Name (ii), (iv) and (v) in the table as guards with no row, each with its reason (the outcome is unchanged; backstopped by :460; it predates this wave).
+- Correct the count: the table had 46 rows, not the wave-done's 50, and "Survivors: none" holds only for the listed rows.
+7. F9, F10 and F11, and the stale texts.
+- F9: the plan's interface prints `… HEAD is already contained in <tag>` for contained, and "P2, the five state words".
+- F10: CLAUDE.md:297-298 reads "which holds for a main head whose merge released".
+- F11: README:66 reads "a merge that changes only docs/ or the root's Markdown starts no release run".
+- Remove the stale "W25-Y1: no trigger filter (kept)" bullet at plan:1228.
+- The dated child-reclamation record that says "no paths filter" stays as history.
+All of these sit inside the consented README and CLAUDE.md regions (8085, 8081; owner claim 2278 replaced 2259). Re-read ownership before Task 4.
+
+Gates as before, one file at a time. Measure every new row red, then green, and give the before and after in the wave-done. Landing as before: first-ready, measuring merge-tree against main and #1137's head. Send wave-done in the same turn as the push.
