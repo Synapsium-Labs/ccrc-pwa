@@ -835,6 +835,11 @@ describe('_transcript_last_turn_ts (D-3102, D-3104)', () => {
       row({ timestamp: 'not-a-time' }),
     ]))).toBe('0:1789000000');
   });
+  it('a newest turn whose text holds a lone surrogate escape still counts (the retry reads the line, not the error)', () => {
+    const line = row({ timestamp: ISO(1789000900), message: { role: 'assistant', content: [{ type: 'text', text: 'cut \ud83d' }] } });
+    expect(line).toContain('\\ud83d');
+    expect(read(write([row({ timestamp: ISO(1789000000) }), line]))).toBe('0:1789000900');
+  });
   it('an unparseable line is skipped rather than trusted', () => {
     expect(read(write([row({ timestamp: ISO(1789000000) }), '{"type":"assistant","mess']))).toBe('0:1789000000');
   });
