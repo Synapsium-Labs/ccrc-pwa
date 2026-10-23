@@ -527,4 +527,12 @@ describe('adversarial cases (the branch verifier)', () => {
     // TALL40 IS that rendering: 20 rows, lines 20..39. Nothing on screen says lines 0..19 are above the window.
     expect(ownRenderedBox(TALL40, TEXT.tall40.split('\n'), 'proven-empty')).not.toBeNull();
   });
+  it('a resume whose box holds our text with a hidden head (row-capped) is draft-present', async () => {
+    // `ownRenderedBox` accepts TALL40 as ours (a suffix of ours, the box exactly at the cap); a whole-box read must
+    // not, because the first 20 lines are not on screen.
+    const { tmux, calls } = phaseTmux({ start: TALL40, typed: TALL40 });
+    const res = await sendPrompt(deps(tmux), 'lane-a', TEXT.tall40, { resumeIfOwn: 'whole' });
+    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
+    expect(keysOf(calls)).toEqual([]);
+  });
 });

@@ -969,25 +969,6 @@ describe("sendPrompt resumeIfOwn: 'whole' (D-6367, Retry resumes our own text)",
     expect(box.submitted).toEqual([['hello world']]);
   });
 
-  it('a resume whose box holds our text with a hidden head (row-capped) is draft-present', async () => {
-    // Recorded 2.1.300 pane, 220x50: 40 lines of 80 characters, the box row-capped at 20 rows with the marker on line 21.
-    // `ownRenderedBox` accepts this as ours (a suffix of ours, the box exactly at the cap); a whole-box read must not,
-    // because the first 20 lines are not on screen.
-    const WORDS = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu'.split(' ');
-    const recorded = (n: number, tag: string): string => {
-      let s = `${tag} Reply with only the word OK and use no tools.`;
-      for (let i = 0; s.length < n; i++) s += ' ' + WORDS[i % WORDS.length];
-      const end = ` END-${tag}`;
-      return (s.slice(0, n - end.length) + end).slice(0, n);
-    };
-    const tall = Array.from({ length: 40 }, (_, j) => recorded(80, `tall40L${String(j).padStart(2, '0')}`)).join('\n');
-    const pane = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes', 'cc300-paste-tall-40-lines.txt'), 'utf8');
-    const { tmux, calls } = fakeTmux([pane]);
-    const res = await sendPrompt(deps(tmux), 'x', tall, { resumeIfOwn: 'whole' });
-    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
-    expect(sendKeysCalls(calls)).toEqual([]);
-  });
-
   it('the prefix mode is still a different mode: `true` resumes a box that merely starts with our text', async () => {
     // Pins that 'whole' did not widen or narrow `true`: the same longer-draft pane the 'whole' case refuses.
     const ours = 'please review the latest diff of the module';
