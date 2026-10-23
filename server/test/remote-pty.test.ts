@@ -2,8 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { rmSync } from 'node:fs';
 import type { RunningAgent } from '../../agent/src/server.js';
 import type { PtyProcess, PtySpawn } from '../../agent/src/pty.js';
-import type { ConnectedFleet } from '../src/remote/client.js';
-import type { RemotePty } from '../src/remote/pty.js';
+import type { ConnectedFleet, FleetClient } from '../src/remote/client.js';
+import { RemotePty } from '../src/remote/pty.js';
 import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 
 const wait = { timeout: 3000 };
@@ -185,11 +185,21 @@ describe('remote SpawnPty — terminal drawer over the agent WS', () => {
     await vi.waitFor(() => expect(fake.instances[1]!.written).toContain('y'), wait);
     for (const inst of fake.instances) expect(inst.written).not.toContain('x');
     for (const inst of fake.instances) expect(inst.resized).not.toContainEqual({ cols: 99, rows: 33 });
+
+    const sendPty = vi.spyOn(fleet!.client, 'sendPty');
+    stale.kill();
+    expect(sendPty).not.toHaveBeenCalledWith(expect.objectContaining({ ev: 'close' }));
+
+    fresh.write('z');
+    await vi.waitFor(() => expect(fake.instances[1]!.written).toContain('z'), wait);
+    expect(fake.instances[1]!.killed).toBe(false);
+    expect((fleet!.client as unknown as { ptyListeners: Map<number, unknown> }).ptyListeners.has(1)).toBe(true);
   });
 
-  it('a failed open fires exit, so the bridge closes the drawer\'s socket', async () => {
+  it('a rejected open clears queued writes, becomes closed, and fires exit', async () => {
     const fake = makeFakeSpawn();
     await connected(fake.spawn);
+    const sendPty = vi.spyOn(fleet!.client, 'sendPty');
 
     // A session id outside the agent's charset is refused ('forbidden'), deterministically, before any spawn.
     const pty = fleet!.spawnPty('not a session!', 80, 24) as unknown as RemotePty;
@@ -199,7 +209,30 @@ describe('remote SpawnPty — terminal drawer over the agent WS', () => {
 
     await vi.waitFor(() => expect(exits).toBe(1), wait);
     expect(fake.instances.length).toBe(0);
-    pty.write('after');   // closed: dropped at the source
+    expect((pty as unknown as { queue: unknown[] }).queue).toEqual([]);
+    expect((pty as unknown as { closed: boolean }).closed).toBe(true);
+    pty.write('after');
+    expect(sendPty).not.toHaveBeenCalledWith(expect.objectContaining({ ev: 'input' }));
+    expect(exits).toBe(1);
+  });
+
+  it('a resolved open without a numeric ptyId clears queued writes, becomes closed, and fires exit', async () => {
+    const fake = makeFakeSpawn();
+    await connected(fake.spawn);
+    const sendPty = vi.spyOn(fleet!.client, 'sendPty');
+    vi.spyOn(fleet!.client, 'request').mockResolvedValue({ t: 'res', id: 1 });
+
+    const pty = new RemotePty(fleet!.client as FleetClient, 'sess-a', 80, 24);
+    let exits = 0;
+    pty.onExit(() => { exits += 1; });
+    pty.write('queued-before-open');
+
+    await vi.waitFor(() => expect(exits).toBe(1), wait);
+    expect(fake.instances.length).toBe(0);
+    expect((pty as unknown as { queue: unknown[] }).queue).toEqual([]);
+    expect((pty as unknown as { closed: boolean }).closed).toBe(true);
+    pty.write('after');
+    expect(sendPty).not.toHaveBeenCalledWith(expect.objectContaining({ ev: 'input' }));
     expect(exits).toBe(1);
   });
 
