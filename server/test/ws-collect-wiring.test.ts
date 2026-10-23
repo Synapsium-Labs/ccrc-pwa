@@ -29,7 +29,9 @@ describe('the agent grant — ws-collect on its confirmation token, the audit on
   });
 
   it('ws-audit --collect needs NO grant of its own: the one ws-audit grant is the one it always was', () => {
-    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-audit')).toEqual([['ws-audit', '--session']]);
+    // The loose collect's two read-only audit modes are separate grants by name (D-6626); neither is the collect's.
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-audit' && p[1] !== '--collect-census' && p[1] !== '--loose-hex'))
+      .toEqual([['ws-audit', '--session']]);
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsCollectAudit(ID)])).toBe(true);
   });
 });
