@@ -384,7 +384,7 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // over the rest of the fleet — so it reads just that id's row rather than
   // the whole registry (a 24-session fleet's floor is 97 agent-WS
   // operations [registry-read-census:fleet] per `readRegistry` call, before
-  // its listed fields and conditional reconfirmation, for a question about one
+  // its other listed fields and conditional reconfirmation, for a question about one
   // session).
   const read = await readSessionRecord(io, cfg, id);
   // A degraded row must never answer 'dead' — the interrupt route's own
@@ -534,7 +534,7 @@ export async function assembleFleet(
    * off a separately-read set of `SessionRecord`s. If this function took its
    * OWN read instead of the rows `tick()` already has, that would be a
    * SEPARATE whole-fleet sweep, 4 [registry-read-census:fields] unconditional
-   * reads and one per listed field per session, a few hundred ms after the one `tick()` used for
+   * reads and one per other listed field per session, a few hundred ms after the one `tick()` used for
    * `sweepHookStates`/`detectDialogs` — and a
    * row that read clean in tick()'s sweep and degraded in THIS one would
    * still land in `sessions` with `unmeasured` empty (wrong), or vice versa.

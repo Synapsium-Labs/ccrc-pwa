@@ -29,7 +29,7 @@ export type ChildBindVerdict =
  * It re-reads the registry at the instant it decides, never a snapshot:
  * `readSessionRecord` costs one listing plus that session's field reads, 5
  * [registry-read-census:single] agent-WS operations in remote mode before its
- * listed fields (one read each). Its
+ * other listed fields (one read each). Its
  * answers, and none folds into another:
  *   - a listing that FAILED → `spent-unmeasured`: it proves nothing about this
  *     session, so it cannot be "no row". This holds for ANY `sessionId`,

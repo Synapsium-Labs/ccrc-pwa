@@ -160,7 +160,7 @@ export function fleetFixture(rows = 80): FakeRegistry {
   return { files };
 }
 
-/** The registry's field names `buildRecord` reads: its census of what a listing can show. */
+/** The four reads every row pays whatever the listing shows: the identity triple and the hold file. */
 export const identityAndHold = ['uuid', 'wrapper', 'workdir', 'hold'] as const;
 
 /** The small edge scenario: one row per condition the reader tells apart. Its listing is TRUTHFUL (it lists every

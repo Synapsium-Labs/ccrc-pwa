@@ -65,7 +65,7 @@ export interface SessionRecord {
    *                     opened with, and its bytes did not come back.
    *                     TRANSIENT — one dropped agent-WS round trip among the
    *                     4 [registry-read-census:fields] unconditional reads and
-   *                     one read per listed field a session's read fires — so
+   *                     one read per other listed field a session's read fires — so
    *                     it asks to be retried.
    *                     `field()` cannot see this on its own (`io.readFile`
    *                     maps a failed read and a missing file to the same
@@ -459,7 +459,7 @@ export function measuredIdentity(rec: SessionRecord): { uuid: string; wrapper: s
  * The reason a held workspace carries when its `.hold` file is listed in the
  * registry directory but its contents could not be read — one failed op over
  * the agent WS is enough (`readRegistry` fires 4
- * [registry-read-census:fields] unconditional reads, and one more per listed
+ * [registry-read-census:fields] unconditional reads, and one more per other listed
  * field, per session under one request timeout). Held with an unreadable
  * reason, never unheld: the consumer
  * that makes the polarity load-bearing is `coord/dispatch.ts`'s adoption gate,
@@ -672,8 +672,8 @@ function manifestBytes(raw: string | null): number | null {
 //
 // A degraded field must be LOUD without being a flood: a read-storm sweep
 // (4 [registry-read-census:fields] unconditional reads per session, plus one per
-// listed field — a 24-session fleet's floor is 97 agent-WS operations
-// [registry-read-census:fleet] PER `readRegistry` call, before the listed
+// other listed field — a 24-session fleet's floor is 97 agent-WS operations
+// [registry-read-census:fleet] PER `readRegistry` call, before the other listed
 // fields and the conditional reconfirmation listing)
 // would otherwise log the same stuck field dozens of times a minute.
 // `warnOnce` is keyed `id#field`,
@@ -761,7 +761,7 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
 
 /**
  * One session's read — 4 [registry-read-census:fields] unconditional reads plus one
- * per listed field — and the `SessionRecord` it builds — the ONE
+ * per other listed field — and the `SessionRecord` it builds — the ONE
  * parser, shared by `readRegistry`'s whole-fleet sweep and
  * `readSessionRecord`'s single-id read below (C0.3), so there is no second
  * copy of this shape to drift out of sync with the first. `names` is the
@@ -796,9 +796,9 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
  * presence as of the listing, so a field created between the listing and its
  * read is seen on the next read, a few seconds later. The four reads that stay
  * unconditional are the identity triple (`wrapper`, `workdir`, `uuid`) and
- * `hold`, which this function's ladders do not settle from the listing alone. The
- * census therefore counts those four, and a row pays one read more for each field
- * it lists: with 80 rows and 780 files present the read fell from 2512 requests
+ * `hold`, ruled unconditional by the plan (C1); the other fields' one-listing window is accepted (presence as of the
+ * listing). The census therefore counts those four, and a row pays one read more for each other field it lists, so a
+ * single-id read costs 1 + |listed fields + the four| requests: with 80 rows and 780 files present the read fell from 2512 requests
  * to about 850, and from 81 serial rounds to about 11 (the rows are read with
  * bounded concurrency, `REGISTRY_ROW_CONCURRENCY`).
  *
@@ -813,7 +813,7 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
  * row instead of dropping it — see `SessionRecord.unmeasured`.
  */
 async function buildRecord(
-  io: FleetIO, cfg: CcrcConfig, names: string[], id: string, now: number,
+  io: FleetIO, cfg: CcrcConfig, names: ReadonlySet<string>, id: string, now: number,
 ): Promise<SessionRecord | null> {
   // D-6388: a field the listing does not name is not read. The listing this function opened with is the evidence of
   // PRESENCE (every consumer below already resolves a failed read against it), so an unlisted field is settled from
@@ -821,23 +821,23 @@ async function buildRecord(
   // as of the listing), a plain read answers `null`. A LISTED field is read exactly as before, so a listed read that
   // fails stays `unreadable` (never folded to `absent`), and a listed read that answers `absent` is a raced removal.
   const listedField = (f: string): Promise<string | null> =>
-    names.includes(`${id}.${f}`) ? field(io, cfg.registryDir, id, f) : Promise.resolve(null);
+    names.has(`${id}.${f}`) ? field(io, cfg.registryDir, id, f) : Promise.resolve(null);
   const listedMeasured = (f: string, as?: 'trimmed' | 'shell'): Promise<MeasuredRead> =>
-    names.includes(`${id}.${f}`)
+    names.has(`${id}.${f}`)
       ? fieldMeasured(io, cfg.registryDir, id, f, as)
       : Promise.resolve<MeasuredRead>({ ok: false, reason: 'absent' });
   // The six fields that were listed-only before this change (D-5237, D-5242, D-5299, D-5391, D-6163) keep their own
   // answer for an unlisted field: `null`, which their consumers read as "none", not a synthesized `absent`.
   const listedOnlyMeasured = (f: string): Promise<MeasuredRead | null> =>
-    names.includes(`${id}.${f}`) ? fieldMeasured(io, cfg.registryDir, id, f) : Promise.resolve(null);
+    names.has(`${id}.${f}`) ? fieldMeasured(io, cfg.registryDir, id, f) : Promise.resolve(null);
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
     routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, denyRead, shellRead, hibernatedRaw,
     namedRead, titleRaw] = await Promise.all([
     // The identity triple (`wrapper`, `workdir`, `uuid`) and `hold` are read whatever the listing says (D-6388): the
-    // triple's ladder below tells a half-written entry from a raced removal from a read that failed, and `hold`
-    // is the one field whose absence means "released", so neither is settled from the listing alone.
+    // plan (C1) rules them unconditional. Every other field's one-listing window is accepted: its presence is as of
+    // the listing, and a file created after it is seen on the next read.
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), listedField('project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     listedMeasured('started'), listedField('home'),
@@ -883,12 +883,12 @@ async function buildRecord(
     listedField('title'),
   ]);
 
-  // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
+  // The identity-triple ladder. `uuid` first: `names.has(id + '.uuid')`
   // is TRUE BY CONSTRUCTION for every id this function is ever called with —
   // both callers below derive/confirm `id` from that exact listing — so a
   // MEASURED-UNREADABLE `uuid` read can only mean "listed but unreadable",
   // never "absent" (the `unreadable` arm below still relies on this: for
-  // `uuid` specifically, `names.includes(...)` is always true, so it always
+  // `uuid` specifically, `names.has(...)` is always true, so it always
   // takes the `unmeasured` branch, never the final drop). A MEASURED-ABSENT
   // `uuid` read is the one case that guarantee does NOT cover — the race
   // window between the listing this function opened with and this field's
@@ -910,7 +910,7 @@ async function buildRecord(
   // ladder retired. The direction is fail-safe (a proven ENOENT outranks an
   // unconfirmed or failed listing) and is not what this comment changes;
   // only the "same end state" claim above is corrected to say so. A
-  // measured `unreadable` falls back to exactly today's `names.includes(...)`
+  // measured `unreadable` falls back to exactly today's `names.has(...)`
   // rung.
   const unmeasured: IdentityField[] = [];
   const measured: { uuid: string; wrapper: string; workdir: string } = { uuid: '', wrapper: '', workdir: '' };
@@ -923,7 +923,7 @@ async function buildRecord(
         `registry entry ${id} dropped — ${f} read back empty`, false);
       return null;   // narrowed drop, logged — see this function's own docstring
     }
-    if (read.reason === 'unreadable' && names.includes(`${id}.${f}`)) {
+    if (read.reason === 'unreadable' && names.has(`${id}.${f}`)) {
       unmeasured.push(f);
       noteIssue(`${id}#${f}#degraded`, now,
         `registry ${id}.${f} is listed but unreadable — ${f} is unmeasured, not absent`, true);
@@ -935,7 +935,7 @@ async function buildRecord(
     // ENOENT came from the read racing a removal, not from the listing never
     // having named it — an operator grepping this line for a half-written
     // entry deserves the true one.
-    if (read.reason === 'absent' && names.includes(`${id}.${f}`)) {
+    if (read.reason === 'absent' && names.has(`${id}.${f}`)) {
       noteIssue(`${id}#${f}#dropped`, now,
         `registry entry ${id} dropped — ${f} was listed but is gone by the time it was read (raced a removal)`, false);
       return null;   // narrowed drop, logged — see this function's own docstring
@@ -945,10 +945,10 @@ async function buildRecord(
     return null;   // narrowed drop, logged — see this function's own docstring
   }
 
-  const holdListed = names.includes(`${id}.hold`);
-  const substrateListed = names.includes(`${id}.substrate`);
-  const strandedListed = names.includes(`${id}.stranded`);
-  const childListed = names.includes(`${id}.child`);
+  const holdListed = names.has(`${id}.hold`);
+  const substrateListed = names.has(`${id}.substrate`);
+  const strandedListed = names.has(`${id}.stranded`);
+  const childListed = names.has(`${id}.child`);
 
   // §4.3's three-valued read, over the three fields the lifecycle classifier
   // consumes. Same evidence as the identity ladder above: `names` is the
@@ -962,7 +962,7 @@ async function buildRecord(
   // Task 5, THE GOVERNING RULE: a measured `absent` `started`/`supervised`/
   // `stopped` is the ORDINARY case — no stamp was ever written — and is
   // simply not pushed, same as today's answer for a genuinely-absent field.
-  // A measured `unreadable` falls back to exactly today's `names.includes`
+  // A measured `unreadable` falls back to exactly today's `names.has`
   // rung. (One narrow difference from the OLD collapsed-evidence ladder: a
   // field listed at this function's own listing but genuinely gone by its
   // own read — the same race the identity triple can now prove too — used
@@ -979,7 +979,7 @@ async function buildRecord(
   for (const [f, read] of [
     ['started', startedRead], ['supervised', supervisedRead],
   ] as const) {
-    if (!read.ok && read.reason === 'unreadable' && names.includes(`${id}.${f}`)) lifecycleUnmeasured.push(f);
+    if (!read.ok && read.reason === 'unreadable' && names.has(`${id}.${f}`)) lifecycleUnmeasured.push(f);
   }
   // `.stopped` gets the wider net `SessionRecord.lifecycleUnmeasured`'s own
   // docstring explains: unreadable-but-listed (the shared rule above) OR
@@ -989,7 +989,7 @@ async function buildRecord(
   // there is no content to fail to parse when there is proven to be no file.
   if (stoppedRead.ok) {
     if (stopStamp === null) lifecycleUnmeasured.push('stopped');
-  } else if (stoppedRead.reason === 'unreadable' && names.includes(`${id}.stopped`)) {
+  } else if (stoppedRead.reason === 'unreadable' && names.has(`${id}.stopped`)) {
     lifecycleUnmeasured.push('stopped');
   }
 
@@ -1022,12 +1022,12 @@ async function buildRecord(
   // to `'absent'` directly — the case that was impossible to express before
   // `readFileMeasured` existed (a LISTED `.branch` a race genuinely removed
   // before its own bytes were read). `reason === 'unreadable'` falls back to
-  // EXACTLY today's `names.includes(...)` rung, so an older agent (every read
+  // EXACTLY today's `names.has(...)` rung, so an older agent (every read
   // `unreadable`) reproduces today's answer verbatim.
   const branchEvidence: BranchEvidence =
     branchRead.ok ? (branchRead.content === '' ? 'empty' : 'named')
       : branchRead.reason === 'absent' ? 'absent'
-        : (names.includes(`${id}.branch`) ? 'unreadable' : 'absent');
+        : (names.has(`${id}.branch`) ? 'unreadable' : 'absent');
   // The invariant every consumer may rely on, stated once: `branch` is a
   // string exactly when the evidence is `'named'`.
   const branchName = branchEvidence === 'named' && branchRead.ok ? branchRead.content : null;
@@ -1048,7 +1048,7 @@ async function buildRecord(
   // THE LISTING RUNG (whole-branch review, finding #1) — `routeReallyUnreadable`
   // below. `unreadable` is the READ's answer, not this ladder's: every other
   // MEASURED field in this function resolves it against `names` first
-  // (`branchEvidence`'s `names.includes(`${id}.branch`) ? 'unreadable' :
+  // (`branchEvidence`'s `names.has(`${id}.branch`) ? 'unreadable' :
   // 'absent'` rung, and the same one for `held`, `stopped`, `substrate` and
   // `stranded`), because the listing this function opened with proves
   // PRESENCE independently of whether the bytes came back. A file the
@@ -1065,7 +1065,7 @@ async function buildRecord(
   // compatible with ruling S6-R5: a LISTED file whose read failed is still
   // named in `unreadable`, and still makes `route` non-null.
   const routeReallyUnreadable = (f: RouteReadField, r: MeasuredRead): boolean =>
-    !r.ok && r.reason === 'unreadable' && names.includes(`${id}.${f}`);
+    !r.ok && r.reason === 'unreadable' && names.has(`${id}.${f}`);
   const routeFields: RouteFields = {};
   const unreadable: RouteReadField[] = [];
   let allAbsent = true;
@@ -1268,8 +1268,10 @@ export type RegistryRead =
  * time, each row's field reads going out together but the next row waiting for the last of them, so a read of a
  * fleet was one agent round trip per row: 92 serial rounds on the fleet box at a live round of 55 to 85 ms (measured:
  * `peers list` took 4.9 to 8.4 s). At 8 rows in flight the same read is about 12 rounds, about 1 s (derived, not
- * measured). 8 is the plan's figure, not a tuned one: the agent link is one WebSocket, a row puts only its listed
- * fields on it, so 8 rows is a few dozen requests in flight at most, and it still cuts the rounds by a factor of 8. The count of rows is the lever; the field reads of one row stay together in one round.
+ * measured). 8 is the plan's figure, not a tuned one. The agent link is one WebSocket and a row puts only its listed
+ * fields on it together, so the requests in flight are bounded by 8 rows x the 37 fields a row can read (296 at the
+ * very most, typically about a hundred), not by 8. The row count is the lever: it cuts the rounds by a factor of 8,
+ * while one row's field reads stay together in one round.
  *
  * DEADLOCK RULE (`bounded.ts`): only ROWS are under this bound. A row's own field reads are NOT: a row holds a slot
  * for the whole of its `buildRecord`, and a field read that took a slot of the same pool would wait on slots its own
@@ -1282,6 +1284,9 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
   const names = await io.readdir(cfg.registryDir);
   noteWholeFleetListing(names !== null, now);
   if (names === null) return { listed: false };
+  // Membership only, for every row's `buildRecord` (about 40 tests a row): ONE Set per listing, so a read is not
+  // quadratic in the fleet. `names` itself stays the first listing `RegistryRead` carries (D-283).
+  const listing: ReadonlySet<string> = new Set(names);
   // Path identity (spec §2.3): a listed id that is not a registry id is
   // REFUSED here, before the loop. It is never handed to `buildRecord`, so
   // none of its fields is read and none of its `noteIssue` keys is minted. It
@@ -1303,7 +1308,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
   // D-6388: the rows are read with bounded concurrency, not one after another. `mapBounded` answers in INPUT order
   // (`ids` is sorted), so `out` is the sorted order it always was; a dropped row (`null`) is left out after, and the
   // reconfirm sets are filled from the answers in that same order, so they hold what the serial loop left in them.
-  const built = await mapBounded(ids, REGISTRY_ROW_CONCURRENCY, (id) => buildRecord(io, cfg, names, id, now));
+  const built = await mapBounded(ids, REGISTRY_ROW_CONCURRENCY, (id) => buildRecord(io, cfg, listing, id, now));
   const out: SessionRecord[] = [];
   for (const rec of built) {
     if (rec === null) continue;
@@ -1384,7 +1389,7 @@ export type SingleRead =
  * `readRegistry`, narrowed to ONE session (C0.3). Its baseline is one
  * `readdir` plus that id's 4 [registry-read-census:fields] unconditional reads —
  * 5 agent-WS operations [registry-read-census:single] in remote mode, plus one
- * per listed field, instead of `readRegistry`'s whole-fleet floor of 97
+ * per other listed field, instead of `readRegistry`'s whole-fleet floor of 97
  * operations [registry-read-census:fleet] on a 24-session fleet. The
  * conditional reconfirmation listing described below is excluded from both
  * floors. This serves every caller that only asked "what does
@@ -1423,8 +1428,9 @@ export async function readSessionRecord(io: FleetIO, cfg: CcrcConfig, id: string
   const names = await io.readdir(cfg.registryDir);
   noteWholeFleetListing(names !== null, now);
   if (names === null) return { kind: 'unlistable' };
-  if (!names.includes(`${id}.uuid`)) return { kind: 'absent' };   // no field reads worth making
-  const rec = await buildRecord(io, cfg, names, id, now);
+  const listing: ReadonlySet<string> = new Set(names);
+  if (!listing.has(`${id}.uuid`)) return { kind: 'absent' };   // no field reads worth making
+  const rec = await buildRecord(io, cfg, listing, id, now);
   if (rec === null) return { kind: 'absent' };
   if (rec.held === HOLD_UNREADABLE || rec.unmeasured.length > 0) {
     const again = await io.readdir(cfg.registryDir);

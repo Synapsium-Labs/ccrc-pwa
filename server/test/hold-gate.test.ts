@@ -108,7 +108,7 @@ const mergedPushes = (
 
 /** `localIO` with every `<id>.hold` read failing and everything else real —
  *  the shape `remote/io.ts` produces when one of the 4
- *  [registry-read-census:fields] unconditional reads (or a listed field's) a
+ *  [registry-read-census:fields] unconditional reads (or another listed field's) a
  *  session's `readRegistry` fires in parallel times out: null, indistinguishable at `field()` from a file that
  *  is not there. */
 const holdUnreadableIO: FleetIO = {
@@ -369,7 +369,7 @@ describe('SessionRecord.held', () => {
 
   it('an ordinary release landing inside readRegistry\'s own read window is NOT corruption', async () => {
     // `readRegistry` lists the directory, then fires 4
-    // [registry-read-census:fields] unconditional reads (and one per listed
+    // [registry-read-census:fields] unconditional reads (and one per other listed
     // field) per session. A `ccd ws-release`
     // anywhere in that window leaves the name in
     // the listing with no bytes behind it — indistinguishable at `field()`

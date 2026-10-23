@@ -24,7 +24,7 @@ const REGISTRY_CENSUS_TAG = 'registry-read-census';
  * One bare `field(`/`fieldMeasured(` call site in `buildRecord`'s `Promise.all` is one registry read that EVERY row
  * pays. Since desktop polish C1 (D-6388) that is exactly four: the identity triple (`wrapper`, `workdir`, `uuid`) and
  * `hold`. Every other field is read through `listedField` / `listedMeasured`, which read only a field the listing
- * names, so they are not part of the cost every row pays: a row pays one read more for each field it lists, and
+ * names, so they are not part of the cost every row pays: a row pays one read more for each other field it lists, and
  * `registry-bounded-read.test.ts` measures that with a counting `FleetIO`. The helpers' names carry no bare
  * `field(` / `fieldMeasured(` token, so this count sees exactly the unconditional reads (it used to subtract the
  * listed-only ternaries and widen the one `ROUTE_WRITABLE_FIELDS.map` call to its five reads, D-5347).
@@ -667,7 +667,7 @@ describe('PR and archive fields', () => {
 
 // C0.3: readSessionRecord is the SAME parser (buildRecord) as readRegistry,
 // narrowed to one id — one readdir plus that id's 4
-// [registry-read-census:fields] unconditional reads (and one per listed field)
+// [registry-read-census:fields] unconditional reads (and one per other listed field)
 // instead of a whole-fleet sweep.
 // These pin that it agrees with readRegistry's own
 // per-record answer, id-by-id, rather than re-testing every field this file

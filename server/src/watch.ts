@@ -2661,7 +2661,7 @@ export class FleetWatcher {
       // otherwise take its OWN read (`records ?? await readRegistry(...)`),
       // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
       // in remote mode, 4 [registry-read-census:fields] unconditional reads and
-      // one per listed field per session, so a 24-session fleet's floor is 97
+      // one per other listed field per session, so a 24-session fleet's floor is 97
       // agent-WS operations [registry-read-census:fleet] per sweep before conditional
       // reconfirmation, doubled for no reason. Sharing the read also keeps
       // `sweepHookStates`/`detectDialogs` (which already consumed `records`
@@ -4057,7 +4057,7 @@ export class FleetWatcher {
     // Cost is ONE readdir per sweep interval (60 s), not per tick — the lane
     // clock above has already returned on every other call by the time this
     // line runs. D-283 was about the per-tick whole-fleet read, 4 unconditional
-    // reads [registry-read-census:fields] per session in remote mode, plus one per listed field; this is
+    // reads [registry-read-census:fields] per session in remote mode, plus one per other listed field; this is
     // one round trip a minute.
     const registryNames = await this.deps.io.readdir(this.deps.cfg.registryDir);
     if (registryNames === null) {
