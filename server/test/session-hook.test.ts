@@ -9817,6 +9817,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // branch's `cmd_ws_gc` lines above this anchor slide a different `ccd/ccd` line under it,
         // one that happens to carry a token of its row: a coincidental pass, not a repair. Neither
         // corpus document changed, so nothing was re-pointed. S6-R11 covers it, so no D-number.
+        // RE-MEASURED for `ws-archive --if-no-pane` (D-6642), 57 -> 56: ONE LEAVES (`:13567`) and none
+        // enters. The branch's `cmd_ws_archive` lines above this anchor slide a different `ccd/ccd` line
+        // under it, one that happens to carry a token of its row: a coincidental pass, not a repair. Neither
+        // corpus document changed, so nothing was re-pointed. S6-R11 covers it, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9831,7 +9835,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
-        'ccd/ccd:13567',
         'ccd/ccd:13673',
         'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
@@ -10074,6 +10077,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // those sites. S6-R11, no D-number.
       // RE-MEASURED on the merge of `origin/main` at `77c11245` into docs W1, 35 -> 35, FROM THE SAME RUN as
       // the row-pass set above: stated 35, base 35, tree 35, nothing entered or left. S6-R11, no D-number.
+      // RE-MEASURED for `ws-archive --if-no-pane` (D-6642), 38 -> 37, FROM THE SAME RUN as the row-pass set
+      // above: its one leaver mirrors here (`spec:2125 ccd/ccd:13567`) and nothing enters. S6-R11, no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
@@ -10083,7 +10088,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
-        'spec:2125 ccd/ccd:13567',
         'spec:2125 ccd/ccd:13673',
         'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
