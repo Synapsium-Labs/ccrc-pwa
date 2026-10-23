@@ -438,11 +438,21 @@ export function stringExpressions(text: string, fileName = 'source.ts'): StringE
   return out;
 }
 
+/** One parse per (file name, text), kept for the last text of each file: `inlinedSourceOf` asks for many positions of one file. */
+const sourceFiles = new Map<string, { text: string; sf: ts.SourceFile }>();
+const sourceFileOf = (text: string, fileName: string): ts.SourceFile => {
+  const hit = sourceFiles.get(fileName);
+  if (hit && hit.text === text) return hit.sf;
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
+  sourceFiles.set(fileName, { text, sf });
+  return sf;
+};
+
 /** The offset where the statement holding `pos` starts: the innermost statement that sits in a block, a source file or a
  *  case clause (so `void this.x(…)`, `const a = this.x(…)` and `await this.x(…)` all start at their first keyword).
  *  `pos` outside every statement gives `pos`. */
 export function statementStartAt(text: string, pos: number, fileName = 'source.ts'): number {
-  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
+  const sf = sourceFileOf(text, fileName);
   let found = pos;
   const visit = (n: ts.Node): void => {
     if (pos < n.getStart(sf) || pos >= n.getEnd()) return;

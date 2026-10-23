@@ -71,7 +71,7 @@ export function callsIn(symbol: SourceSymbol): CallSite[] {
  *  a statement. `text` is the cooked statement, each `${…}` shown as `${}`; `table` the first table it names
  *  (`INSERT INTO t`, `UPDATE t`, `DELETE FROM t`, `FROM t`), lower-cased as written, else `null`; `set` an UPDATE's SET
  *  list (from `SET` to `WHERE` or the end), else `null`. A string expression holding several `;`-separated statements yields one per piece (a `;` inside a quoted SQL literal would split it: out of width). `partial` is true when the text is only a FRAGMENT of a `+` chain
- *  that has a non-literal part (a conditional SET, a variable), so `set` may be cut short; `source` is then the raw
+ *  that has a non-literal part (a conditional SET, a variable), or when a template substitutes a `${…}` into it, so `set` may be cut short; `source` is then the raw
  *  source of the whole chain (else of the expression), and a census must read it, not `set`. */
 export interface SqlStatement {
   verb: string;
@@ -105,7 +105,7 @@ const statementsOf = (parsed: ParsedFile, from: number, to: number): SqlStatemen
       if (verb === undefined) continue;
       const table = (TABLE_OF[verb] ?? /\bFROM\s+(\w+)/i).exec(text)?.[1]?.toLowerCase() ?? null;
       const set = verb === 'UPDATE' ? /\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(text)?.[1] ?? null : null;
-      out.push({ verb, table, set, text, partial: e.partial, source: parsed.text.slice(e.chainStart, e.chainEnd), file: parsed.path, start: e.start, end: e.end, line: e.line });
+      out.push({ verb, table, set, text, partial: e.partial || e.text.includes('${}'), source: parsed.text.slice(e.chainStart, e.chainEnd), file: parsed.path, start: e.start, end: e.end, line: e.line });
     }
   }
   return out;

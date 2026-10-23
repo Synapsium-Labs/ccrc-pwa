@@ -8194,9 +8194,9 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     // Measured on merge day. Lower a row when a pin moves onto scan/symbols.ts; never raise one.
     const CEILING: Record<string, number> = {
       'server/src/watch.ts': 81,
-      'server/src/server.ts': 31,
+      'server/src/server.ts': 23,
       'server/src/interruptlog.ts': 0,
-      'server/src/coord/routes.ts': 40,
+      'server/src/coord/routes.ts': 38,
       'server/src/coord/childReclaim.ts': 6,
       'server/src/coord/expireArchived.ts': 0,
       'server/src/coord/collectTempRoot.ts': 0,
@@ -8207,8 +8207,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(Object.keys(counts)).toEqual(Object.keys(CEILING));
     for (const f of W1A_FILES) {
       expect(counts[f], `${f}: a new literal source pin — key it on scan/symbols.ts (sourceOfSymbol) `
-        + 'or a parse.ts-based census instead')
-        .toBeLessThanOrEqual(CEILING[f]!);
+        + 'or a parse.ts-based census instead (and lower the row to the new count: the ratchet is exact)')
+        .toBe(CEILING[f]!);
     }
   });
 
@@ -8235,7 +8235,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('literal source pins over W1b\'s files may only shrink (D-6114; ARCH-06\'s counting rule)', () => {
     const CEILING: Record<string, number> = {
       'server/src/watch.ts': 81,
-      'server/src/coord/routes.ts': 40,
+      'server/src/coord/routes.ts': 38,
       'server/src/ccdargv.ts': 6,
       'server/src/registry.ts': 2,
       'server/src/coord/redact.ts': 0,
@@ -8244,8 +8244,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(Object.keys(counts)).toEqual(Object.keys(CEILING));
     for (const f of W1B_FILES) {
       expect(counts[f], `${f}: a new literal source pin — key it on scan/symbols.ts (sourceOfSymbol) `
-        + 'or a parse.ts-based census instead')
-        .toBeLessThanOrEqual(CEILING[f]!);
+        + 'or a parse.ts-based census instead (and lower the row to the new count: the ratchet is exact)')
+        .toBe(CEILING[f]!);
     }
   });
 
@@ -8286,7 +8286,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/askbody.ts': 1,
       'server/src/askkey.ts': 1,
       'server/src/askwindow.ts': 1,
-      'server/src/auth/sessions.ts': 6,
+      'server/src/auth/sessions.ts': 3,
       'server/src/auth/webauthn.ts': 2,
       'server/src/childReclaimSweep.ts': 7,
       'server/src/collectLane.ts': 7,
@@ -8348,6 +8348,9 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     const taken = new Set([...W1A_FILES, ...W1B_FILES]);
     const rest = SRC_FILES.filter((f) => !taken.has(f));
     expect(Object.keys(CEILING).filter((f) => !rest.includes(f)), 'a ceiling row names a file that is gone or has its own table').toEqual([]);
+    for (const f of Object.keys(CEILING)) {
+      expect(counts[f] ?? 0, `${f}: the row is not what the scan measures — lower it when a pin moves (exact, so no slack hides a new pin)`).toBe(CEILING[f]!);
+    }
     expect(overCeiling(counts, CEILING, rest), 'a new literal source pin over these files — key it on scan/symbols.ts '
       + '(sourceOfSymbol, callsIn, sqlStatementsIn) or a parse.ts-based census instead').toEqual([]);
   });

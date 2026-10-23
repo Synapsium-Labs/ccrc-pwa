@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { sqlStatementsInFile, symbolOf } from './scan/symbols.js';
+import { parsedFile, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
          MAIL_RUN_CLOSED_ERROR, toRunSummary } from '../src/coord/store.js';
@@ -4294,6 +4294,26 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     // whose whole chain mentions the column is a writer this census cannot place, so it is red.
     expect(sql.filter((q) => q.verb === 'UPDATE' && q.table === 'runs' && q.partial && /\bsessionId\b/i.test(q.source)).map((q) => q.line),
       'a conditional `UPDATE runs SET …` chain mentions runs.sessionId — route it through bindSession').toEqual([]);
+    // Superset tripwire (the pre-ARCH-06 raw-text census, kept for the spellings no string expression holds: a `.join`
+    // of pieces, a variable): every `UPDATE runs` in the store's raw text whose text up to the next WHERE names the
+    // column must sit inside bindSession (the funnel) or clearSession (the unbind).
+    const raw = parsedFile(STORE).text;
+    const stray = [...raw.matchAll(/UPDATE\s+runs\b/gi)].filter((m) => {
+      const from = m.index!;
+      const rest = raw.slice(from, from + 600);
+      const upTo = rest.search(/\bWHERE\b/i);
+      return /\bsessionId\b/i.test(upTo < 0 ? rest : rest.slice(0, upTo)) && !within({ start: from }, 'bindSession') && !within({ start: from }, 'clearSession');
+    });
+    expect(stray.map((m) => raw.slice(0, m.index).split('\n').length),
+      'an `UPDATE runs` outside bindSession/clearSession names runs.sessionId in the raw text (a .join or variable spelling)').toEqual([]);
+  });
+
+  it('CONTROL (fixture): a template-substituted SET that may name sessionId is partial', () => {
+    const dir = mkTmp('coord-store-census-');
+    const file = path.join(dir, 'store.ts');
+    writeFileSync(file, "class S { m(x: boolean) { return this.db.prepare(`UPDATE runs SET ${x ? 'sessionId = ?' : 'branch = ?'} WHERE id = ?`); } }\n");
+    const [q] = sqlStatementsInFile(file);
+    expect([q?.verb, q?.table, q?.partial, /\bsessionId\b/.test(q?.source ?? '')]).toEqual(['UPDATE', 'runs', true, true]);
   });
 
   it('CONTROL (fixture): a conditional-SET chain that names sessionId is partial and its source shows the column', () => {
