@@ -4,6 +4,7 @@ import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { answeredByBody, approvalRuledBody, askPushBody, withCoordinatorBody } from './askbody.js';
 import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
+import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
@@ -2372,7 +2373,9 @@ export class FleetWatcher {
       // it as one are handed `registryRead.refused` and hold the id, or leave it out (`tick-lanes-hold-a-refused-id`):
       // the stall watch on `StallTick`, the claim lease lanes and the divergence census.
       // [registry-refused:omits] a refused id is in no `records`: no state and no field read here, and the lanes handed `refused` hold it, never read it as absent.
-      const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+      // The tick's ONE selection listing, as the model (D-5864): the lanes that choose their rows from the registry are
+      // handed it below, so they do not list again.
+      const registryRead = buildFleetReadModel(await readRegistryMeasured(this.deps.io, this.deps.cfg));
       // BEFORE the fail-shut return below, and on BOTH arms (D-283 (was D-B4-10)). An
       // unlistable registry is not "nothing is set": it is the exact state
       // `dispatchRun` FAILS SHUT on (`dispatch.ts:106-109`), so it must reach
@@ -2449,7 +2452,7 @@ export class FleetWatcher {
       await this.sweepHookStates(records);
       await this.sweepUsage(records);
       const pending = await this.detectDialogs(this.primed, registryRead.names, records);
-      await this.sweepTasks();
+      await this.sweepTasks(registryRead);
       // NEVER awaited: it shells out over the network and `gh` has no
       // --timeout, so awaiting it would stall the dialog detector and the
       // busy->idle push behind GitHub's reachability.
@@ -3460,15 +3463,21 @@ export class FleetWatcher {
    * map is rebuilt from the registry each sweep, so a de-registered session's
    * progress can't linger.
    */
-  private async sweepTasks(): Promise<void> {
-    await this.runLane('tasks', () => this.tasksPass());
+  private async sweepTasks(fleet?: FleetReadModel): Promise<void> {
+    await this.runLane('tasks', () => this.tasksPass(fleet));
   }
 
-  private async tasksPass(): Promise<void> {
+  /** The model a lane selects its rows from: the tick's, else, for a test that calls a lane with none, one read of
+   *  its own. `tick` hands every lane its model (`registry-refused-census.test.ts` pins the hand-off), so this read
+   *  is reached by tests alone and decides nothing a user sees. */
+  private async fleetFor(fleet?: FleetReadModel): Promise<FleetReadModel> {
+    // [registry-refused:tests-only] `tick()` hands each lane its model; the census pins the hand-off.
+    return fleet ?? buildFleetReadModel(await readRegistryMeasured(this.deps.io, this.deps.cfg));
+  }
+
+  private async tasksPass(fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
-    // Own read, on its own slower clock — never shared with `tick()`'s
-    // (`sweepHookStates` above takes `tick()`'s `records` as a parameter;
-    // this method does not). `readRegistryMeasured`, fail shut on
+    // The tick's listing (D-5864), taken when the lane is due. Fail shut on
     // `{listed:false}` (blocking review findings 1/3): the old `readRegistry`
     // `[]`-on-unlistable answer made a single dropped `io.readdir` here wipe
     // `this.taskProgress` for the WHOLE fleet — the same harm the
@@ -3481,8 +3490,8 @@ export class FleetWatcher {
     // failed listing still consumes this sweep's slot rather than retrying
     // every 2 s tick, the same throttle discipline every other sweep here
     // keeps.
-    // [registry-refused:omits] a refused id is in no `records`: no `taskProgress` entry and no read.
-    const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+    // A refused id is in no `records`: no `taskProgress` entry and no read (it omits).
+    const registryRead = await this.fleetFor(fleet);
     if (!registryRead.listed) return;
     const records = registryRead.records;
     const next = new Map<string, TaskProgress>();
