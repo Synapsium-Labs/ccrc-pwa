@@ -332,8 +332,8 @@ describe('README: the --surface bullet', () => {
     expect(bullet).toMatch(/rollback/i);
     expect(bullet).toMatch(/60/);
     expect(bullet).not.toMatch(/\binstant(ly)?\b/i);
-    const watchTs = readFileSync(path.join(root, 'server', 'src', 'watch.ts'), 'utf8');
-    expect(watchTs).toMatch(/CAPS_REFRESH_MS\s*=\s*60_000/);
+    const laneSchedule = readFileSync(path.join(root, 'server', 'src', 'laneSchedule.ts'), 'utf8');
+    expect(laneSchedule).toMatch(/CAPS_REFRESH_MS\s*=\s*60_000/);
   });
 
   // Fix round 5 (task 14 follow-up, Important #1): round 4's local-mode

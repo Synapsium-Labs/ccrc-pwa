@@ -182,13 +182,14 @@ import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { changeLatch, changeLatchMap } from './changeLatch.js';
-import { SERVER_CAPS_WRITE_MS, writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
+import { writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { runDispatch, type DispatchRunResult } from './update/converge.js';
 import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
-import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
+import { LaneRunner } from './laneRunner.js';
+import type { LaneName } from './laneSchedule.js';
 // THE TEMP-ROOT COLLECTOR'S LANE (child reclamation wave 9, spec §5.10). A block of its own, so no import line above
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
 import { COLLECT_CAP } from './ccdargv.js';
@@ -486,26 +487,6 @@ const PERMANENT_REFUSALS: ReadonlySet<string> = new Set([
   'has-upstream', 'not-a-workspace', 'worktree-unregistered', 'worktree-foreign',
   'registry-branch-drift',
 ]);
-
-/** The fourth lane. A ccd install is a deliberate act by a human who is
- *  waiting, so a minute is the longest anyone should have to wonder whether
- *  the fleet noticed — and the agent's stat gate means an unchanged ccd costs
- *  a stat, not a bash process. */
-const CAPS_REFRESH_MS = 60_000;
-
-/** The catalogue lane's own cadence (design 2026-09-20 §7) — declared in
- *  `catalogue.ts` (`CATALOGUE_POLL_INTERVAL_MS`), which `routes.ts`'s refresh
- *  door also derives its interval from (fix round 2, C3), never a second
- *  copy of the 30-minute figure here. GitHub's unauthenticated listing
- *  budget is 60 requests an hour per IP and a 304 still spends one, so every
- *  30 minutes is 2 scheduled polls an hour, leaving the rest of the budget
- *  to `POST /api/updates/refresh`. */
-const UPDATE_CATALOGUE_MS = CATALOGUE_POLL_INTERVAL_MS;
-
-/** The inventory lane (design 2026-09-20 §8): seven small ~/.ccrc reads per
- *  node, lstat-gated and budget-bounded, once a minute — and at once after a
- *  `ready` frame (`triggerInventory`, wired in `index.ts`). */
-const UPDATE_INVENTORY_MS = 60_000;
 
 /** A thrown value's fs errno (`EACCES`, `EROFS`, …), or null — same stance as `writeOwnProjection`'s `code`
  *  (fix round 1, finding 1): a caller that wants to dedupe compares this, never the message. */
@@ -1021,25 +1002,11 @@ export class FleetWatcher {
    *  one line per change and the success arm's `recovered`. */
   private readonly prSweepFailure = new Map<string, PrState['reason']>();
   private lastPrSweep = 0;
-  /** The fourth lane's clock. Starts at 0 so the first tick after start
-   *  always refreshes — which is what recovers a server that connected to an
-   *  agent whose boot-time caps read had already failed. */
-  private lastCapsAt = 0;
-  /** The catalogue lane's clock. Starts at 0, like `lastCapsAt`, so the first
-   *  tick after a start polls: the catalogue's state is process memory
-   *  (D-3182), and a restarted server should read
-   *  "never checked" for one tick, not for half an hour. */
-  private lastCatalogueAt = 0;
-  /** The inventory lane's clock, and its ONE run in flight. Starts at 0 so
-   *  the first tick after a start sweeps. `inventoryNow()` sets the clock, so
-   *  a `ready`-triggered sweep also defers the minute gate's next one. */
-  private lastInventoryAt = 0;
-  private inventoryRun: Promise<SweepOutcome[]> | null = null;
-  /** The server-caps beat's clock and its ONE write in flight (D-5232's mechanism, Task 9b). Starts at 0 so the first
-   *  tick after a start writes: that tick IS the boot write (`start()` ticks at once). Its own clock, never the
-   *  inventory lane's, so the file is rewritten whether or not this server has a coordination database. */
-  private lastServerCapsAt = 0;
-  private serverCapsRun: Promise<WriteServerCapsResult | null> | null = null;
+  /** The throttle, single flight and catch of the update/caps beats (D-5862): `LANE_SCHEDULE`'s rows read through
+   *  `runLane`. A lane starts due, so the first tick after a start runs every one: that recovers a server that
+   *  connected to an agent whose boot-time caps read had failed, and a restarted server reads "never checked" for one
+   *  tick, not for half an hour (D-3182: the catalogue's state is process memory). */
+  private readonly lanes = new LaneRunner({ wall: () => Date.now(), mono: () => this.deps.monotonicMs?.() ?? performance.now() });
   /** The last server-caps write failure's stable key (`unwritable:<errno>`), so an unwritable ~/.ccrc warns once
    *  per change of reason, not once a minute (`changeLatch`'s idiom); null after a success. */
   private readonly serverCapsWhy = changeLatch<string | null>();
@@ -1052,15 +1019,6 @@ export class FleetWatcher {
    *  connection's own try/catch (e.g. inside `resolveAndProject`'s own
    *  queueing, which `sweepThenProject` already handles separately). */
   private readonly inventoryRejectWarn = changeLatch<string>();
-  /** C4 (final fix wave): set when a caller of `triggerInventory()` (the
-   *  `ready` hook) JOINS a sweep already in flight rather than starting one.
-   *  The joiner's own connection state may be exactly what changed since the
-   *  in-flight sweep read it — joining that promise alone would silently
-   *  measure the join as though nothing had happened. ONE rerun, not a
-   *  queue: every joiner while a run is in flight sets this SAME flag, and
-   *  the first settle after it clears the flag and fires exactly one more
-   *  sweep. */
-  private inventoryRerunPending = false;
   /** C3 (final fix wave): the (label,nodeId,why) tuples this lane already
    *  warned about — a `node-id-collision` or a `refused` sweep outcome is
    *  otherwise named nowhere but the discarded `SweepOutcome[]` (D-3211's
@@ -1710,36 +1668,51 @@ export class FleetWatcher {
    * Single-flight: a beat that finds a write in flight joins it. A failure warns once per change of `code`.
    */
   serverCapsNow(): Promise<WriteServerCapsResult | null> {
-    if (this.serverCapsRun !== null) return this.serverCapsRun;
-    this.lastServerCapsAt = Date.now();
+    return this.lanes.runNow('serverCaps', () => this.serverCapsBeat());
+  }
+
+  /** The beat's body, run by `runLane`: a node that is not a `server` or `both` writes nothing (its stamp still
+   *  stands, so the beat does not retry every tick). */
+  private serverCapsBeat(): Promise<WriteServerCapsResult | null> {
     const { role, ccrcDir } = this.deps.cfg;
     if (role !== 'server' && role !== 'both') return Promise.resolve(null);
-    const run = writeServerCaps(ccrcDir, SERVER_CAPS, Math.floor(Date.now() / 1000)).then((r) => {
+    return writeServerCaps(ccrcDir, SERVER_CAPS, Math.floor(Date.now() / 1000)).then((r) => {
       const key = r.ok ? null : `${r.why}:${r.code ?? 'none'}`;
       if (this.serverCapsWhy.changed(key) && !r.ok) {
         console.warn(`ccrc-server: could not write ~/.ccrc/server-caps (the fleet hook's gated arms stay off until it is written): ${r.detail}`);
       }
       return r;
-    }).finally(() => { this.serverCapsRun = null; });
-    this.serverCapsRun = run;
-    return run;
+    });
   }
+
+  /** A lane's beat (D-5862): `LANE_SCHEDULE`'s row for `name` decides whether it is due, the single flight, and the
+   *  catch. Answers the lane's own promise, never awaited here, or null when throttled. */
+  runLane<T>(name: LaneName, fn: () => Promise<T> | T): Promise<T | undefined> | null { return this.lanes.run(name, fn); }
+  /** An on-demand run's stamp, as `inventoryNow` and `serverCapsNow` set it. */
+  stamp(name: LaneName): void { this.lanes.stamp(name); }
+  /** The lane runs on the next tick. */
+  kick(name: LaneName): void { this.lanes.kick(name); }
+  /** The post-gather re-stamp on the decision clock. */
+  restamp(name: LaneName): void { this.lanes.restamp(name); }
+  /** The run in flight, or null. */
+  inFlight(name: LaneName): Promise<unknown> | null { return this.lanes.inFlight(name); }
 
   /** Resolves once no server-caps write is in flight. For a caller that fired the beat and must read its result. */
   async serverCapsSettled(): Promise<void> {
-    if (this.serverCapsRun !== null) await this.serverCapsRun;
+    const run = this.lanes.inFlight('serverCaps');
+    if (run !== null) await run;
   }
 
   /** Resolves once none of the writers `tick()` fires without awaiting is in flight: the server-caps beat, the
    *  inventory run and the dispatch run it ends in (D-6179). Each writes under `<ccrcDir>`, so a caller that removes
    *  that directory (a test's teardown) awaits this after `stop()`. It loops because a run that settles can start the
    *  next (the dispatch run's follow-up). It does not cover an inventory rerun queued by `triggerInventory()`, which
-   *  starts a few microtasks after `inventoryRun` clears. Never rejects: each lane warns on its own. */
+   *  starts a few microtasks after the inventory run clears. Never rejects: each lane warns on its own. */
   async settled(): Promise<void> {
     for (;;) {
-      const inFlight = [this.serverCapsRun, this.inventoryRun, this.dispatchRun].filter((p) => p !== null);
-      if (inFlight.length === 0) return;
-      await Promise.allSettled(inFlight);
+      const running = [this.lanes.inFlight('serverCaps'), this.lanes.inFlight('inventory'), this.dispatchRun].filter((p) => p !== null);
+      if (running.length === 0) return;
+      await Promise.allSettled(running);
     }
   }
 
@@ -1752,11 +1725,7 @@ export class FleetWatcher {
    * nothing. Resolves `[]` on a server with no coord store.
    */
   inventoryNow(): Promise<SweepOutcome[]> {
-    if (this.inventoryRun !== null) return this.inventoryRun;
-    this.lastInventoryAt = Date.now();
-    const run = this.runInventory().finally(() => { this.inventoryRun = null; });
-    this.inventoryRun = run;
-    return run;
+    return this.lanes.runNow('inventory', () => this.runInventory());
   }
 
   /** C2, reworded by re-review finding 1 (final fix wave): C1 gave each
@@ -1810,13 +1779,8 @@ export class FleetWatcher {
    *  The flag is checked and cleared ONCE the run settles, so a run of
    *  joiners produces exactly one rerun, never a queue. */
   triggerInventory(): void {
-    if (this.inventoryRun !== null) this.inventoryRerunPending = true;
-    void this.dispatchInventorySweep().finally(() => {
-      if (this.inventoryRerunPending) {
-        this.inventoryRerunPending = false;
-        this.triggerInventory();
-      }
-    });
+    this.lanes.requestRerun('inventory', () => this.triggerInventory());
+    void this.dispatchInventorySweep();
   }
 
   /**
@@ -2433,15 +2397,12 @@ export class FleetWatcher {
       // `void this.tick()`, but it now logs instead of swallowing silently
       // (D-3209: a silent `.catch(() => {})` here is exactly what let
       // `catalogueState` read "up to date" after a failed poll).
-      if (this.deps.catalogue && Date.now() - this.lastCatalogueAt >= UPDATE_CATALOGUE_MS) {
-        this.lastCatalogueAt = Date.now();
+      const catalogue = this.deps.catalogue;
+      if (catalogue) {
         // Plan W3 Task 3: a poll that listed a new tag is decided on the poll's own answer, not a minute later
         // on the inventory lane — once this process has swept (D-3314).
-        // `pushReleaseAfterPoll` is synchronous and never throws, so the `.catch` still covers the poll alone.
-        void this.deps.catalogue.poll(Date.now()).then(() => { this.pushReleaseAfterPoll(Date.now()); }).catch((err: unknown) => {
-          console.warn('ccrc-server: the catalogue poller rejected — this is a bug, poll() should ' +
-            `never reject: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
-        });
+        // `pushReleaseAfterPoll` is synchronous and never throws, so the catch (the row's warnKey) still covers the poll alone.
+        void this.runLane('catalogue', () => catalogue.poll(Date.now()).then(() => { this.pushReleaseAfterPoll(Date.now()); }));
       }
 
       // The inventory lane (design 2026-09-20 §8) is gated HERE, beside the
@@ -2460,7 +2421,7 @@ export class FleetWatcher {
       // what reaches `dispatchInventorySweep`'s own catch is a throw outside
       // both. Logged, deduped (C2), same idiom as the catalogue lane just
       // above, never swallowed silently either way.
-      if (this.deps.coord && Date.now() - this.lastInventoryAt >= UPDATE_INVENTORY_MS) {
+      if (this.deps.coord && this.lanes.due('inventory')) {
         void this.dispatchInventorySweep();
       }
 
@@ -2468,7 +2429,7 @@ export class FleetWatcher {
       // is `coord`-gated, and a coord-less server must still keep its fleet's file current. Above the registry's
       // fail-shut return for the same reason as both update lanes (it reads nothing from the registry). NEVER
       // awaited; `serverCapsNow` never rejects (`writeServerCaps` never throws, and its warning is its own).
-      if (Date.now() - this.lastServerCapsAt >= SERVER_CAPS_WRITE_MS) {
+      if (this.lanes.due('serverCaps')) {
         void this.serverCapsNow();
       }
 
@@ -2579,14 +2540,14 @@ export class FleetWatcher {
       // --timeout, so awaiting it would stall the dialog detector and the
       // busy->idle push behind GitHub's reachability.
       void this.sweepPr().catch(() => { /* one bad sweep must not kill the poll */ });
-      if (this.deps.refreshCaps && Date.now() - this.lastCapsAt >= CAPS_REFRESH_MS) {
-        this.lastCapsAt = Date.now();
+      const refreshCaps = this.deps.refreshCaps;
+      if (refreshCaps) {
         // NEVER awaited: same reasoning as sweepPr immediately above — caps()
         // swallows its own failures today, but a wedged-yet-connected agent
         // must not stall assembleFleet behind an up-to-15s request timeout,
         // and a future implementation that DOES reject must not become an
         // unhandled rejection via start()'s `void this.tick()`.
-        void this.deps.refreshCaps().catch(() => { /* one bad refresh must not kill the poll */ });
+        void this.runLane('caps', () => refreshCaps.call(this.deps))?.catch(() => { /* one bad refresh must not kill the poll */ });
       }
       // NEVER awaited, same reasoning as sweepPr above and then some: this one
       // joins the per-session KeyedQueue, which `POST /workspace/reap` can hold

@@ -9,8 +9,18 @@
 // A cadence is how often a lane LOOKS; a safety interval is how long a lane WAITS before it acts on what it saw
 // (`CHILD_RECLAIM_STALL_MS`, `COLLECT_AUDIT_STALL_MS`, the mail and PR backoffs, `DELEGATION_RECOVERY_RETRY_MS`). The
 // two are different facts that happen to share a unit, so a safety interval is never a row and never a row's cadence.
-import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
-import { SERVER_CAPS_WRITE_MS } from './update/serverCaps.js';
+
+/** The catalogue lane's cadence (design 2026-09-20 §7), the SCHEDULED poll's own: `catalogue.ts` re-exports it, so
+ *  `routes.ts`'s refresh-door interval derives `SCHEDULED_POLLS_PER_HOUR` from the SAME constant the watcher polls on
+ *  (D-3218, D-3404), never a second copy. GitHub's unauthenticated listing budget is 60 requests an hour per IP and
+ *  a 304 still spends one, so every 30 minutes is 2 scheduled polls an hour, leaving the rest of the budget to
+ *  `POST /api/updates/refresh`. */
+export const CATALOGUE_POLL_INTERVAL_MS = 30 * 60_000;
+
+/** The server's own server-caps beat: once a minute, a third of `SERVER_CAPS_LEASE_S`, so one missed write never turns
+ *  an arm off. The fleet node's writer (`ccd-update-sync.timer`, `OnUnitActiveSec=60s`) keeps the same period.
+ *  `serverCaps.ts` re-exports it. */
+export const SERVER_CAPS_WRITE_MS = 60_000;
 
 /** The fourth lane. A ccd install is a deliberate act by a human who is waiting, so a minute is the longest anyone
  *  should have to wonder whether the fleet noticed, and the agent's stat gate means an unchanged ccd costs a stat,
@@ -49,18 +59,11 @@ export interface LaneRow {
 export const LANE_SCHEDULE: readonly LaneRow[] = [
   { name: 'caps', cadenceMs: CAPS_REFRESH_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
   {
-    name: 'catalogue', cadenceMs: CATALOGUE_POLL_INTERVAL_MS, clock: 'wall', flight: 'none',
-    derivedFrom: {
-      name: 'CATALOGUE_POLL_INTERVAL_MS',
-      reason: 'GitHub\'s unauthenticated listing budget is 60 requests an hour per IP and a 304 still spends one, so the lane follows the interval the refresh door derives its own from (design 2026-09-20 §7)',
-    },
+    name: 'catalogue', cadenceMs: CATALOGUE_POLL_INTERVAL_MS, derivedFrom: null, clock: 'wall', flight: 'none',
     warnKey: 'ccrc-server: the catalogue poller rejected — this is a bug, poll() should never reject',
   },
   { name: 'inventory', cadenceMs: UPDATE_INVENTORY_MS, derivedFrom: null, clock: 'wall', flight: 'join-rerun', warnKey: null },
-  {
-    name: 'serverCaps', cadenceMs: SERVER_CAPS_WRITE_MS, clock: 'wall', flight: 'join', warnKey: null,
-    derivedFrom: { name: 'SERVER_CAPS_WRITE_MS', reason: 'a third of SERVER_CAPS_LEASE_S, so one missed write never turns an arm off; the writer declares it beside the lease' },
-  },
+  { name: 'serverCaps', cadenceMs: SERVER_CAPS_WRITE_MS, derivedFrom: null, clock: 'wall', flight: 'join', warnKey: null },
 ];
 
 export function laneRow(name: string): LaneRow {

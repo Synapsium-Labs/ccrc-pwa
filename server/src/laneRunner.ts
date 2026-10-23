@@ -18,11 +18,11 @@ export interface LaneClocks {
 }
 
 interface Flight { readonly token: symbol; readonly promise: Promise<unknown>; readonly startedAt: number }
-interface LaneState { stamp: number; flight: Flight | null; again: (() => void) | null }
+interface LaneSlot { stamp: number; flight: Flight | null; again: (() => void) | null }
 
 export class LaneRunner {
   private readonly rows = new Map<string, LaneRow>();
-  private readonly state = new Map<string, LaneState>();
+  private readonly state = new Map<string, LaneSlot>();
 
   constructor(
     private readonly clocks: LaneClocks,
@@ -43,7 +43,7 @@ export class LaneRunner {
     if (row === undefined) throw new Error(`no lane named ${name}`);
     return row;
   }
-  private stateOf(name: string): LaneState { this.rowOf(name); return this.state.get(name)!; }
+  private stateOf(name: string): LaneSlot { this.rowOf(name); return this.state.get(name)!; }
 
   /** Whether the lane's cadence has elapsed on its own clock (pure: it stamps and starts nothing). */
   due(name: string): boolean {
