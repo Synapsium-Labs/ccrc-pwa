@@ -16,7 +16,7 @@ const fsAt = (usedPct: number, inodePct = 0, dev = '8:1'): DiskFilesystem => ({
   files: SIZE, filesFree: Math.round(SIZE - (inodePct * SIZE) / 100), readOnly: false,
 });
 const measured = (fss: DiskFilesystem[], mounts: { path: string; mounted: boolean }[] = []): DiskMeasured =>
-  ({ filesystems: fss, expectedMounts: mounts });
+  ({ filesystems: fss, expectedMounts: mounts, missing: [] });
 const T0 = 1_000_000;
 
 describe('diskLevelOf: the larger of bytes-used and inodes-used', () => {
@@ -87,6 +87,26 @@ describe('diskVerdict: hysteresis, debounce, mounts', () => {
     const none: DiskFilesystem = { ...fsAt(10), sizeBytes: 0, availBytes: 0, files: 0, filesFree: 0 };
     expect(diskLevelOf(none)).toBe('unmeasured');
     expect(run([measured([none])])[0]!.level).toBe('unmeasured');
+  });
+  it('an unmeasured filesystem beside an ok one is never a fleet ok', () => {
+    const none: DiskFilesystem = { ...fsAt(10, 0, '8:2'), sizeBytes: 0, availBytes: 0, files: 0, filesFree: 0 };
+    expect(run([measured([fsAt(10, 0, '8:1'), none])])[0]!.level).toBe('unmeasured');
+  });
+  it('a critical filesystem that reads unmeasured twice beside an ok one never lets the fleet read ok', () => {
+    const none: DiskFilesystem = { ...fsAt(10, 0, '8:2'), sizeBytes: 0, availBytes: 0, files: 0, filesFree: 0 };
+    const start = run([measured([fsAt(10, 0, '8:1'), fsAt(95, 0, '8:2')])])[0]!;
+    const out = run([measured([fsAt(10, 0, '8:1'), none]), measured([fsAt(10, 0, '8:1'), none])], start);
+    expect(out.map((v) => v.level)).toEqual(['critical', 'unmeasured']);
+  });
+  it('a held critical filesystem that vanishes from a measurement does not clear on one pass', () => {
+    const start = run([measured([fsAt(10, 0, '8:1'), fsAt(95, 0, '8:2')])])[0]!;
+    const [a, b] = run([measured([fsAt(10, 0, '8:1')]), measured([fsAt(10, 0, '8:1')])], start);
+    expect([a!.level, b!.level]).toEqual(['critical', 'unmeasured']);
+    expect(a!.filesystems.map((f) => f.dev)).toEqual(['8:1', '8:2']);
+  });
+  it('a missing root never reads as fleet ok', () => {
+    const m = { ...measured([fsAt(10)]), missing: [{ label: 'home', why: 'statfs timed out' }] };
+    expect(run([m])[0]!.level).toBe('unmeasured');
   });
   it('a verdict is stamped with the clock it was given', () => {
     expect(run([measured([fsAt(10)])])[0]!.at).toBe(T0);

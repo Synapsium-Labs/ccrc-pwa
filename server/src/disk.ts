@@ -15,6 +15,8 @@ import {
 export interface DiskMeasured {
   readonly filesystems: readonly DiskFilesystem[];
   readonly expectedMounts: readonly DiskExpectedMount[];
+  /** Roots that could not be read at all (a statfs that timed out, a root that is absent), with the reason. */
+  readonly missing: readonly { readonly label: string; readonly why: string }[];
 }
 
 /** A filesystem's held level and the one differing level seen once, awaiting its second sighting. */
@@ -60,23 +62,33 @@ function targetLevel(fs: DiskFilesystem, held: DiskLevel): DiskLevel {
   return 'ok';
 }
 
-const RANK: Record<DiskLevel, number> = { unmeasured: 0, ok: 1, warn: 2, critical: 3 };
+/** The fleet fold's order: `unmeasured` outranks `ok`, so a filesystem that cannot be read is never hidden by one that
+ *  can; it still ranks below a measured `warn` or `critical`. */
+const RANK: Record<DiskLevel, number> = { ok: 0, unmeasured: 1, warn: 2, critical: 3 };
 
 /** One measurement folded into the memory. A filesystem seen for the first time is taken as it reads (there is no held
  *  level to protect); after that a level changes only when two consecutive measurements agree on the new one. */
 export function diskVerdict(prev: DiskVerdict | null, measured: DiskMeasured, nowMs: number): DiskVerdict {
   const before = new Map((prev?.filesystems ?? []).map((f) => [f.dev, f]));
-  const filesystems = measured.filesystems.map((fs): DiskFilesystemVerdict => {
-    const last = before.get(fs.dev);
-    if (last === undefined) return { ...fs, level: diskLevelOf(fs), pending: null };
-    const target = targetLevel(fs, last.level);
+  const step = (last: DiskFilesystemVerdict, fs: DiskFilesystem, target: DiskLevel): DiskFilesystemVerdict => {
     if (target === last.level) return { ...fs, level: last.level, pending: null };
     if (last.pending === target) return { ...fs, level: target, pending: null };
     return { ...fs, level: last.level, pending: target };
+  };
+  const seen = new Set(measured.filesystems.map((f) => f.dev));
+  const read = measured.filesystems.map((fs): DiskFilesystemVerdict => {
+    const last = before.get(fs.dev);
+    return last === undefined ? { ...fs, level: diskLevelOf(fs), pending: null } : step(last, fs, targetLevel(fs, last.level));
   });
+  // A held filesystem absent from this pass could not be read: it keeps its level and drifts toward `unmeasured` on the
+  // usual two sightings, never toward `ok`.
+  const carried = [...before.values()].filter((f) => !seen.has(f.dev)).map((f) => step(f, f, 'unmeasured'));
+  const filesystems = [...read, ...carried];
   const missingMount = measured.expectedMounts.some((m) => !m.mounted);
-  let level: DiskLevel = 'unmeasured';
+  let level: DiskLevel = filesystems.length === 0 ? 'unmeasured' : 'ok';
   for (const f of filesystems) if (RANK[f.level] > RANK[level]) level = f.level;
+  // Whatever could not be read this pass keeps the fleet off `ok`, while each filesystem's own level stays debounced.
+  if ((measured.missing.length > 0 || carried.length > 0 || measured.filesystems.length === 0) && RANK[level] < RANK.unmeasured) level = 'unmeasured';
   if (missingMount) level = 'critical';
   return { at: nowMs, level, filesystems, expectedMounts: measured.expectedMounts };
 }
