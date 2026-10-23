@@ -2314,7 +2314,8 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // that pretended they were copies would be describing the tree wrongly.
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'mail-disabled'")).map(rel).sort();
     expect(holders).toEqual([
-      'server/src/coord/dispatch.ts',   // the refusal CODE
+      'server/src/coord/dispatch.ts',   // the refusal CODE (the outcome union's member)
+      'server/src/coord/dispatchDecide.ts', // the refusal CODE, decided (ARCH-22, #553)
       'server/src/coord/stall.ts',      // the hold named for the marker it honours
       'shared/api.ts',                  // the refusal-code vocabulary
       'shared/switches.ts',             // the marker literal (its one definition, D-5855)
@@ -6599,7 +6600,7 @@ describe('the turn verdict\'s reads and rule each have one home (D-5238)', () =>
 
   it('dispatch.ts reads no live file of its own: it asks the turnVerdict port', () => {
     const dispatch = stallCode(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'));
-    expect(dispatch).toMatch(/deps\.turnVerdict\(/);
+    expect(dispatch).toMatch(/turnVerdict: deps\.turnVerdict\b/);
     expect(dispatch).not.toMatch(/readLiveStateMeasured|readLiveState\b|panePid\(/);
   });
 });

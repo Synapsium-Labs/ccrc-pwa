@@ -12,6 +12,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER } from '../src/coord/rundefs.js';
 import type { Runner } from '../src/exec.js';
 import { configDirFor } from '../src/config.js';
@@ -30,7 +31,7 @@ function fixture() {
   const base = testDeps(home, run);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const deps: DispatchRunDeps = {
-    coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd, tmux: base.tmux, queue: base.queue,
+    coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd, sendClear: clearSender(base),
     configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
   };
   const open = (): number => {

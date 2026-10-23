@@ -14,7 +14,6 @@ export const OUTWARD_EDGE_EXEMPTIONS: EntrySet = {
   'server/src/config.ts -> server/src/auth/sessions.ts': { reason: "L3 -> L4: the config's default takes the session store's path constant (defaultSessionsPath)", since: '2026-10-20' },
   'server/src/coord/delegation-checkpoint.ts -> server/src/coord/delegation-journal.ts': { reason: "L1 -> L3: the checkpoint builds on the journal's writer, chain and file port", since: '2026-10-20' },
   'server/src/coord/delegation-ingest.ts -> server/src/coord/delegation-journal.ts': { reason: "L1 -> L3: ingest reuses the journal's JSON defect finder (findDelegationJsonDefect)", since: '2026-10-20' },
-  'server/src/coord/dispatch.ts -> server/src/inject/send.ts': { reason: 'L1 -> L3: dispatch calls sendPrompt directly, not through a port', since: '2026-10-20' },
   'server/src/fleet.ts -> server/src/livestate.ts': { reason: "L1 -> L3: the fleet reads the live state's files itself (readLiveState and its verdicts)", since: '2026-10-20' },
   'server/src/push.ts -> server/src/accounts/mask.ts': { reason: "L3 -> L4: push masks a payload with the masker's shape-only instance (SHAPE_ONLY_MASKER)", since: '2026-10-20' },
   'server/src/token/door.ts -> server/src/coord/token.ts': { reason: "L1 -> L3: the token door matches digest slots through coord/token.ts (matchDigestSlots)", since: '2026-10-20' },
