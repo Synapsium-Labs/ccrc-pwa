@@ -1511,3 +1511,45 @@ Gates as before, one file at a time: release-main, build-release, release-stable
 - Measure every new row red, then green, and give the before and after in the wave-done.
 - Landing as before: first-ready against #1137, #1172 and runs 722 and 774. Measure merge-tree against main and against each open head you might meet.
 - Send the wave-done in the same turn as the push. The next review will be a lean one: the rows and the texts.
+
+## As built, fix round 4 (2026-10-23)
+
+**Suite.** No full local run happened. The PR touches `.github/`, so CI's run on the pushed head runs the whole server suite. Review 846 read CI's full run at `4bd6a1bac` green.
+
+**The findings, each fixed:**
+- F1: W25-C37, two cases. A stub `tar` extracts every entry but `ccd/ccrc`, whose mode is the merge's only shipped change, and exits 2, planted on the base's extraction in one case and the candidate's in the other. Each expects the arm's own line: `could not extract v0.0.1's tarball` for the base, and `could not extract the candidate` for the candidate, the text that arm has carried since fix round 2. Guard (ii) moves into the table.
+- F2: W25-T8 ties `release-stable.sh`'s arms to the workflow's paths-ignore, read through W25-F1's reader, now shared in `server/test/workflowTrigger.ts`. The workflow comment and D-6512 name the copy.
+- F3: W25-C35 gains a case where `comm` exits 0 and prints nothing.
+- F4: W25-T1c gains `docs-site/a.ts` and a root file named `docs`.
+- F5: D-6513's W25-F2 bullet describes the behaviour row.
+- F6: the row's comment, D-6512's first bullet and its round-3 amendment say names only, with the reason. Round 3's ruling 5 keeps its record, with a note under it.
+- F7: `why_untagged` runs `git diff --no-renames`; row W25-T9 (`git mv deploy/x.sh docs/x.sh`). The comment no longer names quoting as the only lossy case.
+- F8: the pointer, the script's header, D-6398 and README's promotion paragraph cover a pending run that a later merge's run cancelled.
+- Item 9: W25-C30's setuid case skips on macOS (D-6583). It uses no tool its siblings do not, but BSD tar's `-p` drops a setuid bit whose owner differs from the archive's.
+
+**Rows, before and after** (the Mutation table holds every after):
+- Before, with the tip's `release-stable.sh` and `release-main.yml` under this round's tests: release-stable 6 of 26 red (W25-T1, T1c, T1d, T5 and T8 on the pointer's new words, and T9 on the rename). release-main read 90 of 90 and build-release 46 of 46: their new cases pin behaviour the script already had.
+- After: X13, X14 and X15 each red one case alone (1 of 90). Y13, V1 and V2 each red one row (1 of 26), and V1 and V2 fail with "release-stable.sh has no arm for <pattern>". Y12 reds W25-T1c and W25-T8.
+
+**The process cap.** The ruled `ulimit -u 512` stops every fork on this box, because Linux counts all of the user's tasks against it, about 2,500 at the time. Each vitest call ran under `ulimit -u` set to the current task count plus 1,024, inside `timeout -k 10 600`.
+
+**Per-file runs at `eb576ddcd`,** one file at a time, `--pool=forks --maxWorkers=1`:
+
+| File | Tests |
+|---|---|
+| release-main | 90 |
+| build-release | 46 |
+| release-stable | 26 |
+| release-notes | 44 |
+| workflow-yaml-parses | 17 |
+| docs-parity | 54 |
+| single-definition | 836 |
+| citations | 4 |
+| private-names | 47 |
+| topology-clean | 60 |
+| dtbd | 1 |
+| deviation-refs | 31 |
+| typecheck-tests | 12 |
+| growth-check (`GROWTH_CHECK=1`) | 45 |
+
+**Commits:** `2ac68de32`, `0317c47e0` and `eb576ddcd`, and this note's own.
