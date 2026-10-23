@@ -85,7 +85,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
 | DR-30 `ws-archive --if-no-pane`, reason `stale` (ccd) | 2 | FLEET | none |
 | DR-31 stale-archive arm (shadow) | 3 | SERVER | DR-30 |
 
-### Task DR-1: one disk vocabulary and its decider (D-TBD-disk-vocabulary; spec §2.5)
+### Task DR-1: one disk vocabulary and its decider (D-6613; spec §2.5)
 
 **Routing:** band 2. **Lane:** SERVER (`shared/` and server L1).
 
@@ -115,7 +115,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/rings/shared-imports.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts --maxWorkers=2
 
-### Task DR-2: the agent's `disk` op (D-TBD-agent-disk-op; spec §2.5)
+### Task DR-2: the agent's `disk` op (D-6614; spec §2.5)
 
 **Routing:** band 2. **Lane:** AGENT.
 
@@ -135,7 +135,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd agent && ./node_modules/.bin/vitest run test/disk-op.test.ts --maxWorkers=2
       cd agent && ./node_modules/.bin/vitest run --maxWorkers=2
 
-### Task DR-3: the `disk` block in `/api/fleet/health` (D-TBD-health-disk-block; spec §2.5)
+### Task DR-3: the `disk` block in `/api/fleet/health` (D-6615; spec §2.5)
 
 **Routing:** band 2. **Lane:** SERVER.
 
@@ -155,7 +155,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/fleet-health.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/disk-sweep.test.ts --maxWorkers=2
 
-### Task DR-4: the disk notice (D-TBD-disk-alarm-notice; spec §2.5)
+### Task DR-4: the disk notice (D-6616; spec §2.5)
 
 **Routing:** band 2. **Lane:** SERVER.
 
@@ -172,7 +172,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
 
       cd server && ./node_modules/.bin/vitest run test/disk-notice.test.ts --maxWorkers=2
 
-### Task DR-5: the disk banner (D-TBD-disk-banner; spec §2.5)
+### Task DR-5: the disk banner (D-6617; spec §2.5)
 
 **Routing:** band 2 (the orchestrator checks it at every width and skin before it lands). **Lane:** PWA.
 
@@ -197,7 +197,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd pwa && ./node_modules/.bin/vitest run test/disk-banner.test.tsx --maxWorkers=2
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2
 
-### Task DR-6: doctor measures every work filesystem (D-TBD-doctor-disk-work-fs; spec §2.5.2)
+### Task DR-6: doctor measures every work filesystem (D-6618; spec §2.5.2)
 
 **Routing:** band 2. **Lane:** FLEET (`ccd/ccrc-doctor-checks`).
 
@@ -215,7 +215,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/disk-twins.test.ts --maxWorkers=2
 
-### Task DR-7: one holder probe — file mappings, many paths, `ccd path-users` (D-TBD-path-users-maps-many; spec §2.6.1) — GATED: after #1132
+### Task DR-7: one holder probe — file mappings, many paths, `ccd path-users` (D-6619; spec §2.6.1) — GATED: after #1132
 
 **Routing:** band 3 (every destructive verb asks this probe). **Lane:** FLEET.
 
@@ -237,7 +237,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/ccd-ws-collect-reprove.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/ccd-contexts.test.ts --maxWorkers=2
 
-### Task DR-8: the tmp sweep's live arm, in shadow, and its census (D-TBD-tmp-sweep-live-arm; spec §2.1, §2.5.1)
+### Task DR-8: the tmp sweep's live arm, in shadow, and its census (D-6620; spec §2.1, §2.5.1)
 
 **Routing:** band 3. **Lane:** FLEET (`ccd/ccd-tmp-sweep`).
 
@@ -278,7 +278,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/lifecycle.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts --maxWorkers=2
 
-### Task DR-9: the tmp sweep caps finished task output (D-TBD-tmp-sweep-output-cap; spec §2.1, #1119 item 1)
+### Task DR-9: the tmp sweep caps finished task output (D-6621; spec §2.1, #1119 item 1)
 
 **Routing:** band 3 (it rewrites a live session's file). **Lane:** FLEET.
 
@@ -293,7 +293,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
 
       cd server && ./node_modules/.bin/vitest run test/tmp-sweep-output-cap.test.ts --maxWorkers=2
 
-### Task DR-10: the tmp sweep collects dead test-run roots (D-TBD-tmp-sweep-test-runs; spec §2.2)
+### Task DR-10: the tmp sweep collects dead test-run roots (D-6622; spec §2.2)
 
 **Routing:** band 3. **Lane:** FLEET.
 
@@ -311,7 +311,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/tmp-sweep-test-runs.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/lifecycle.test.ts --maxWorkers=2
 
-### Task DR-11: vitest's own `tmpDir` joins the run's signal arm (D-TBD-vitest-tmpdir-arm; spec §2.2)
+### Task DR-11: vitest's own `tmpDir` joins the run's signal arm (D-6623; spec §2.2)
 
 **Routing:** band 1 (the 2026-10-08 plan's dropped Task 5, written there in full). **Lane:** SERVER (tests only).
 
@@ -327,7 +327,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/run-tmp.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/ccrc-uninstall.test.ts -t 'numeric-PID' --maxWorkers=2
 
-### Task DR-12: the census is read, sessions are told, and the budget notice (D-TBD-tmp-sweep-mail-budget; spec §2.1)
+### Task DR-12: the census is read, sessions are told, and the budget notice (D-6624; spec §2.1)
 
 **Routing:** band 2. **Lane:** AGENT + SERVER (the `NODE_FILES` key is the agent's admission set: deploy the agent first).
 
@@ -346,7 +346,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/tmp-sweep-mail.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/fleet-health.test.ts --maxWorkers=2
 
-### Task DR-13: ccd collects loose `~/.cc-tmp` entries (D-TBD-collect-loose-ccd; spec §2.4) — GATED: after #1132
+### Task DR-13: ccd collects loose `~/.cc-tmp` entries (D-6625; spec §2.4) — GATED: after #1132
 
 **Routing:** band 3. **Lane:** FLEET.
 
@@ -377,7 +377,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/collect-audit-budget.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/disk-twins.test.ts --maxWorkers=2
 
-### Task DR-14: grants for the loose collect (D-TBD-collect-loose-grants; spec §5)
+### Task DR-14: grants for the loose collect (D-6626; spec §5)
 
 **Routing:** band 1. **Lane:** AGENT + SERVER (agent first).
 
@@ -391,7 +391,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd agent && ./node_modules/.bin/vitest run --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/whitelist-subset.test.ts --maxWorkers=2
 
-### Task DR-15: the collect lane's loose arm, in shadow (D-TBD-collect-loose-lane; reverses D-5888; spec §2.4)
+### Task DR-15: the collect lane's loose arm, in shadow (D-6627; reverses D-5888; spec §2.4)
 
 **Routing:** band 3. **Lane:** SERVER.
 
@@ -417,7 +417,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/switches.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts --maxWorkers=2
 
-### Task DR-16: ccd's orphan census and audit (D-TBD-orphan-census-audit; spec §2.3) — GATED: after #1132
+### Task DR-16: ccd's orphan census and audit (D-6628; spec §2.3) — GATED: after #1132
 
 **Routing:** band 3 (it mints the token a destructive verb trusts). **Lane:** FLEET.
 
@@ -441,7 +441,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/ccd-ws-gc.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/ccd-contexts.test.ts --maxWorkers=2
 
-### Task DR-17: ccd's `ws-orphan` verb (D-TBD-orphan-verb; spec §2.3, §2.6.2)
+### Task DR-17: ccd's `ws-orphan` verb (D-6629; spec §2.3, §2.6.2)
 
 **Routing:** band 3. **Lane:** FLEET.
 
@@ -462,7 +462,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/ccd-ws-orphan-verb.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/approvalguard.test.ts --maxWorkers=2
 
-### Task DR-18: grants for the orphan lane (D-TBD-orphan-grants; spec §5)
+### Task DR-18: grants for the orphan lane (D-6630; spec §5)
 
 **Routing:** band 1. **Lane:** AGENT + SERVER (agent first).
 
@@ -476,7 +476,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd agent && ./node_modules/.bin/vitest run --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/whitelist-subset.test.ts --maxWorkers=2
 
-### Task DR-19: the orphan-tree lane, in shadow (D-TBD-orphan-lane; resolves policy Open Q6; spec §2.3)
+### Task DR-19: the orphan-tree lane, in shadow (D-6631; resolves policy Open Q6; spec §2.3)
 
 **Routing:** band 3. **Lane:** SERVER.
 
@@ -502,7 +502,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/fleet-health.test.ts --maxWorkers=2
 
-### Task DR-20: ccd's rung 9 rescues a nested repository into the attic (D-TBD-nested-rescue-ccd; spec §2.7.1) — GATED: after #1132; coordinate with #840 P4-4 to P4-6
+### Task DR-20: ccd's rung 9 rescues a nested repository into the attic (D-6632; spec §2.7.1) — GATED: after #1132; coordinate with #840 P4-4 to P4-6
 
 **Routing:** band 3 (the shared reclaim and expiry ladder, and the pin). **Lane:** FLEET.
 
@@ -535,7 +535,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-ladder.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/ccd-ws-expire-ladder.test.ts --maxWorkers=2
 
-### Task DR-21: the server knows the rescue words and shows the shadow (D-TBD-nested-rescue-server; spec §2.7.1)
+### Task DR-21: the server knows the rescue words and shows the shadow (D-6633; spec §2.7.1)
 
 **Routing:** band 2. **Lane:** SERVER.
 
@@ -551,7 +551,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/nested-rescue-words.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/switches.test.ts --maxWorkers=2
 
-### Task DR-22: the orphan ladder's nested-checkout rung rescues, and its census sees nested trees (D-TBD-orphan-nested-g4; spec §2.7.1, §2.7.5)
+### Task DR-22: the orphan ladder's nested-checkout rung rescues, and its census sees nested trees (D-6634; spec §2.7.1, §2.7.5)
 
 **Routing:** band 3. **Lane:** FLEET.
 
@@ -569,7 +569,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/ccd-orphan-audit.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/ccd-ws-orphan-verb.test.ts --maxWorkers=2
 
-### Task DR-23: the orphan lane takes trees nested inside coordinators (D-TBD-orphan-lane-g4; spec §2.7.5)
+### Task DR-23: the orphan lane takes trees nested inside coordinators (D-6635; spec §2.7.5)
 
 **Routing:** band 2. **Lane:** SERVER.
 
@@ -581,7 +581,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
 
       cd server && ./node_modules/.bin/vitest run test/orphan-tree-lane.test.ts --maxWorkers=2
 
-### Task DR-24: test temp never lands inside a work tree (D-TBD-temp-outside-trees; spec §2.7.2)
+### Task DR-24: test temp never lands inside a work tree (D-6636; spec §2.7.2)
 
 **Routing:** band 2. **Lane:** FLEET (the spawn export) + SERVER (test harness), one PR. Either may deploy first: the harness falls back to `/tmp` when the variable is absent.
 
@@ -598,7 +598,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/ccd-spawn-child-settings.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/ccd-spawn-account-settings.test.ts --maxWorkers=2
 
-### Task DR-25: the skills say where temp and long output go (D-TBD-skill-temp-output; spec §2.7.2, §10)
+### Task DR-25: the skills say where temp and long output go (D-6637; spec §2.7.2, §10)
 
 **Routing:** band 3 (pinned skill clauses). **Lane:** FLEET (skills ride `ccrc update`'s install spine).
 
@@ -611,7 +611,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/worker-skill.test.ts --maxWorkers=2
 
-### Task DR-26: ccd's reclaim takes a stale child (D-TBD-reclaim-stale-ccd; spec §2.7.3)
+### Task DR-26: ccd's reclaim takes a stale child (D-6638; spec §2.7.3)
 
 **Routing:** band 3. **Lane:** FLEET.
 
@@ -632,7 +632,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/ccd-reclaim-stale.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-verb.test.ts --maxWorkers=2
 
-### Task DR-27: child reclaim's stale arm, in shadow, and the coordinator mail (D-TBD-reclaim-stale-lane; spec §2.7.3)
+### Task DR-27: child reclaim's stale arm, in shadow, and the coordinator mail (D-6639; spec §2.7.3)
 
 **Routing:** band 3 (the reclaim decider). **Lane:** SERVER.
 
@@ -658,7 +658,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/child-reclaim-prose.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/lifecycle.test.ts --maxWorkers=2
 
-### Task DR-28: ccd's expiry accepts an archived child (D-TBD-expire-child-ccd; spec §2.7.4)
+### Task DR-28: ccd's expiry accepts an archived child (D-6640; spec §2.7.4)
 
 **Routing:** band 3. **Lane:** FLEET.
 
@@ -674,7 +674,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/ccd-ws-expire-child.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/ccd-ws-expire-audit.test.ts --maxWorkers=2
 
-### Task DR-29: the expiry lane's child arm, in shadow (D-TBD-expire-child-lane; spec §2.7.4)
+### Task DR-29: the expiry lane's child arm, in shadow (D-6641; spec §2.7.4)
 
 **Routing:** band 3. **Lane:** SERVER.
 
@@ -690,7 +690,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/archived-expiry-lane.test.ts --maxWorkers=2
 
-### Task DR-30: `ws-archive --if-no-pane` and the `stale` reason (D-TBD-archive-if-no-pane; spec §2.7.5)
+### Task DR-30: `ws-archive --if-no-pane` and the `stale` reason (D-6642; spec §2.7.5)
 
 **Routing:** band 2 (a small refusal added to an existing verb). **Lane:** FLEET.
 
@@ -704,7 +704,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
       bash -n ccd/ccd
       cd server && ./node_modules/.bin/vitest run test/ccd-ws-archive-if-no-pane.test.ts --maxWorkers=2
 
-### Task DR-31: the stale-archive arm, in shadow (D-TBD-stale-archive-lane; spec §2.7.5)
+### Task DR-31: the stale-archive arm, in shadow (D-6643; spec §2.7.5)
 
 **Routing:** band 3. **Lane:** SERVER.
 
@@ -742,41 +742,41 @@ None is required to build or land any task. Each of these is the operator's, whe
 
 ## Deviations and decisions
 
-### To be issued for this work
+### Issued for this work
 
-The allocator (`POST /api/ledger/deviations`) is box-token gated and was not reached while planning, so each entry below is `D-TBD-<slug>` until a block is issued. The coordinator allocates one block of thirty-one before the first task starts, and replaces each placeholder in one commit before any task PR cites it.
+One contiguous block of thirty-one, D-6613 to D-6643, issued by the allocator (`POST /api/ledger/deviations`) and defined here in the same commit.
 
-- **D-TBD-disk-vocabulary** (DR-1): `shared/disk.ts` holds the work-root table, 85/92 with a 2-point clear, the pressure-age table and `readDiskHealth`; `diskVerdict` takes the larger of bytes and inodes, needs two measurements to change level, and reads nothing measured as `unmeasured`.
-- **D-TBD-agent-disk-op** (DR-2): the agent's `disk` op takes no arguments, statfs's its own table under a 5 s deadline, groups by `st_dev`, and answers `CCRC_WORK_MOUNTS`' mount points.
-- **D-TBD-health-disk-block** (DR-3): `FleetHealth.disk`, optional, absent before the first sweep, `unmeasured` with an older agent.
-- **D-TBD-disk-alarm-notice** (DR-4): one push per rise to warn or critical per episode, a recorded clear, keyed `disk:<dev>:<level>:<episode>`.
-- **D-TBD-disk-banner** (DR-5): banner id `disk`, ranked after `fleet-host`, at warn and critical.
-- **D-TBD-doctor-disk-work-fs** (DR-6): `_check_disk` prints one line per work filesystem; its bash thresholds are pinned equal to L0's.
-- **D-TBD-path-users-maps-many** (DR-7): `_ws_path_users` counts file mappings and answers many paths in one walk; `ccd path-users` is its read-only entry.
-- **D-TBD-tmp-sweep-live-arm** (DR-8): the live arm, its roots, the untouched rule with regular-file atime, the 24 h quarantine, the census and the box-measured pressure ages; shadow until `~/.ccrc/tmp-sweep-live-arm`.
-- **D-TBD-tmp-sweep-output-cap** (DR-9): a finished `.output` over 1 GiB keeps 64 MiB at each end with a marker, by rename.
-- **D-TBD-tmp-sweep-test-runs** (DR-10): a `ccrc-testrun-*` root with no listener, 6 h ctime-quiet and unheld is removed by the tmp sweep.
-- **D-TBD-vitest-tmpdir-arm** (DR-11): the run's signal arm removes vitest's own `tmpDir`.
-- **D-TBD-tmp-sweep-mail-budget** (DR-12): the census is a node file; the server mails receipts from the `operator` role and the 20 GiB band notice to the session and a worker's coordinator.
-- **D-TBD-collect-loose-ccd** (DR-13): the census, the loose audit with a 48 h floor (24 h under pressure, never below 86400 s), the loose verb with its own lock and record family; R38 and R59 amended.
-- **D-TBD-collect-loose-grants** (DR-14): two `ws-audit` grant prefixes and three argv builders.
-- **D-TBD-collect-loose-lane** (DR-15): loose names join the collect population, rule (e) exempts them, and they are shadow until `collect-loose-live`. **Reverses D-5888.**
-- **D-TBD-orphan-census-audit** (DR-16): the census by location and the fourteen-rung ladder that `ws-gc --prune` shares; HEAD must be reachable from `--remotes`, not only `origin/HEAD`.
-- **D-TBD-orphan-verb** (DR-17): `ws-orphan`, never `--force`, `branch -d` for `ccd-root` only, the attic-pin rescue on a rescue token; forbidden to sessions.
-- **D-TBD-orphan-grants** (DR-18): three grant prefixes and the required `--expect`.
-- **D-TBD-orphan-lane** (DR-19): the lane, its licence and pacing, two markers, the feed rows; resolves policy Open Q6 with option (a).
-- **D-TBD-nested-rescue-ccd** (DR-20): under `nested-rescue-live`, rung 9 classes a nested repository with work on no remote as rescuable. The pin WIP-commits it, fetches its refs and the WIP into `refs/ccrc/attic/<id>/nested/<pathhex>/`, re-proves each sha and bounds the bytes at 512 MiB. Then the ladder proceeds. Both lanes get it, and the token binds it. Reverses the 2026-09-22 spec's "reap, and note" refusal for nested repositories only.
-- **D-TBD-nested-rescue-server** (DR-21): `nested-rescue-too-large` is terminal and `nested-rescue-failed` is retry on both lanes; shadow rows name what would be rescued.
-- **D-TBD-orphan-nested-g4** (DR-22): orphan rung 11 rescues; the census sees `.claude/worktrees` and `.superpowers/worktrees` of every checkout, and a containing row passes rung 4 as `inside`.
-- **D-TBD-orphan-lane-g4** (DR-23): a nested tree is a candidate only inside a coordinator's workspace.
-- **D-TBD-temp-outside-trees** (DR-24): the suite moves a run parent out of any work tree; every spawn exports `CCRC_SESSION_TMPDIR`.
-- **D-TBD-skill-temp-output** (DR-25): one clause each in the coordinator and worker skills, on temp placement and long output.
-- **D-TBD-reclaim-stale-ccd** (DR-26): `ws-reclaim --stale <word> [--hold-digest]`; a hold passes only by digest; a box-measured 7-day idle rung; the token binds both.
-- **D-TBD-reclaim-stale-lane** (DR-27): kept children (`held`, `minting-run-absent`, review, terminal) become `stale-eligible` after 7 idle days on the server's facts; `coordinating` never does. Shadow until `child-stale-reclaim-live`. The coordinator is mailed the attic refs. Amends R32, R34 and R41, and supersedes D-5942's "nothing reclaims it before that".
-- **D-TBD-expire-child-ccd** (DR-28): `ws-expire --child-of` expires an archived child whose marker names that run, through the shared tail; the binding carries `childOf`.
-- **D-TBD-expire-child-lane** (DR-29): the expiry lane stops skipping a readable child mark under `expire-child-live`.
-- **D-TBD-archive-if-no-pane** (DR-30): `ws-archive --if-no-pane` refuses `live`; the reason word `stale`.
-- **D-TBD-stale-archive-lane** (DR-31): a workspace that is not a child and was never a claimant, with no pane for 14 days, is archived, one per pass, shadow until `stale-archive-live`.
+- **D-6613** (DR-1): `shared/disk.ts` holds the work-root table, 85/92 with a 2-point clear, the pressure-age table and `readDiskHealth`; `diskVerdict` takes the larger of bytes and inodes, needs two measurements to change level, and reads nothing measured as `unmeasured`.
+- **D-6614** (DR-2): the agent's `disk` op takes no arguments, statfs's its own table under a 5 s deadline, groups by `st_dev`, and answers `CCRC_WORK_MOUNTS`' mount points.
+- **D-6615** (DR-3): `FleetHealth.disk`, optional, absent before the first sweep, `unmeasured` with an older agent.
+- **D-6616** (DR-4): one push per rise to warn or critical per episode, a recorded clear, keyed `disk:<dev>:<level>:<episode>`.
+- **D-6617** (DR-5): banner id `disk`, ranked after `fleet-host`, at warn and critical.
+- **D-6618** (DR-6): `_check_disk` prints one line per work filesystem; its bash thresholds are pinned equal to L0's.
+- **D-6619** (DR-7): `_ws_path_users` counts file mappings and answers many paths in one walk; `ccd path-users` is its read-only entry.
+- **D-6620** (DR-8): the live arm, its roots, the untouched rule with regular-file atime, the 24 h quarantine, the census and the box-measured pressure ages; shadow until `~/.ccrc/tmp-sweep-live-arm`.
+- **D-6621** (DR-9): a finished `.output` over 1 GiB keeps 64 MiB at each end with a marker, by rename.
+- **D-6622** (DR-10): a `ccrc-testrun-*` root with no listener, 6 h ctime-quiet and unheld is removed by the tmp sweep.
+- **D-6623** (DR-11): the run's signal arm removes vitest's own `tmpDir`.
+- **D-6624** (DR-12): the census is a node file; the server mails receipts from the `operator` role and the 20 GiB band notice to the session and a worker's coordinator.
+- **D-6625** (DR-13): the census, the loose audit with a 48 h floor (24 h under pressure, never below 86400 s), the loose verb with its own lock and record family; R38 and R59 amended.
+- **D-6626** (DR-14): two `ws-audit` grant prefixes and three argv builders.
+- **D-6627** (DR-15): loose names join the collect population, rule (e) exempts them, and they are shadow until `collect-loose-live`. **Reverses D-5888.**
+- **D-6628** (DR-16): the census by location and the fourteen-rung ladder that `ws-gc --prune` shares; HEAD must be reachable from `--remotes`, not only `origin/HEAD`.
+- **D-6629** (DR-17): `ws-orphan`, never `--force`, `branch -d` for `ccd-root` only, the attic-pin rescue on a rescue token; forbidden to sessions.
+- **D-6630** (DR-18): three grant prefixes and the required `--expect`.
+- **D-6631** (DR-19): the lane, its licence and pacing, two markers, the feed rows; resolves policy Open Q6 with option (a).
+- **D-6632** (DR-20): under `nested-rescue-live`, rung 9 classes a nested repository with work on no remote as rescuable. The pin WIP-commits it, fetches its refs and the WIP into `refs/ccrc/attic/<id>/nested/<pathhex>/`, re-proves each sha and bounds the bytes at 512 MiB. Then the ladder proceeds. Both lanes get it, and the token binds it. Reverses the 2026-09-22 spec's "reap, and note" refusal for nested repositories only.
+- **D-6633** (DR-21): `nested-rescue-too-large` is terminal and `nested-rescue-failed` is retry on both lanes; shadow rows name what would be rescued.
+- **D-6634** (DR-22): orphan rung 11 rescues; the census sees `.claude/worktrees` and `.superpowers/worktrees` of every checkout, and a containing row passes rung 4 as `inside`.
+- **D-6635** (DR-23): a nested tree is a candidate only inside a coordinator's workspace.
+- **D-6636** (DR-24): the suite moves a run parent out of any work tree; every spawn exports `CCRC_SESSION_TMPDIR`.
+- **D-6637** (DR-25): one clause each in the coordinator and worker skills, on temp placement and long output.
+- **D-6638** (DR-26): `ws-reclaim --stale <word> [--hold-digest]`; a hold passes only by digest; a box-measured 7-day idle rung; the token binds both.
+- **D-6639** (DR-27): kept children (`held`, `minting-run-absent`, review, terminal) become `stale-eligible` after 7 idle days on the server's facts; `coordinating` never does. Shadow until `child-stale-reclaim-live`. The coordinator is mailed the attic refs. Amends R32, R34 and R41, and supersedes D-5942's "nothing reclaims it before that".
+- **D-6640** (DR-28): `ws-expire --child-of` expires an archived child whose marker names that run, through the shared tail; the binding carries `childOf`.
+- **D-6641** (DR-29): the expiry lane stops skipping a readable child mark under `expire-child-live`.
+- **D-6642** (DR-30): `ws-archive --if-no-pane` refuses `live`; the reason word `stale`.
+- **D-6643** (DR-31): a workspace that is not a child and was never a claimant, with no pane for 14 days, is archived, one per pass, shadow until `stale-archive-live`.
 
 ### Decisions recorded while planning
 
