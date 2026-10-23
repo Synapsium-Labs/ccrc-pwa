@@ -13,6 +13,7 @@ import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { WorkflowView } from './workflows.js';
+import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -1204,7 +1205,8 @@ export interface WsAudit {
    *  It used to imply a refusal (drift was one); it no longer does, so a
    *  `reapable` verdict can carry `false` here. */
   headMatchesRegistry: boolean;
-  reaping: string | null;
+  /** ccd's `.reaping` breadcrumb, parsed once at the wire (`parseReapCrumb`); `null` when none stands. */
+  reaping: ReapCrumb | null;
   /* ── THE SESSION BEHIND THE WORKSPACE ──────────────────────────────────────
    * Computed by ccd BEFORE `_ws_reap_eval`'s early refusal, unlike everything
    * in the `null MEANS NOBODY LOOKED` block below — a `not-archived` verdict
@@ -2676,6 +2678,11 @@ const optStr = (o: RawObj, k: string): string | null => {
   if (typeof v !== 'string') throw new MalformedSnapshot(k);
   return v;
 };
+/** An absent, null or empty crumb is none; any other string goes through `parseReapCrumb`. */
+const optReapCrumb = (o: RawObj, k: string): ReapCrumb | null => {
+  const raw = optStr(o, k);
+  return raw === null || raw === '' ? null : parseReapCrumb(raw);
+};
 const optNum = (o: RawObj, k: string): number | null => {
   const v = o[k];
   if (v === undefined || v === null) return null;
@@ -3526,7 +3533,7 @@ export function reviveWsAudit(v: unknown, sentence: string): WsAudit {
     repo: reqStr(o, 'repo'),
     exists: reqBool(o, 'exists'),
     headMatchesRegistry: reqBool(o, 'headMatchesRegistry'),
-    reaping: optStr(o, 'reaping'),
+    reaping: optReapCrumb(o, 'reaping'),
     // optBool/optStr, NOT reqBool — DELIBERATE, and decided beside the writer.
     // An older ccd on the fleet host omits all three; reqBool would throw and
     // the whole sheet would render nothing, against a rolled-back ccd or a
