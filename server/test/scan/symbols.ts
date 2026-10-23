@@ -67,8 +67,8 @@ export function callsIn(symbol: SourceSymbol): CallSite[] {
   return parsedFile(symbol.file).calls.filter((c) => c.start >= symbol.start && c.end <= symbol.end);
 }
 
-/** One SQL statement held in the source: the string expression (a literal, a template or a `+` chain) that starts with
- *  a statement verb. `text` is the cooked statement, each `${…}` shown as `${}`; `table` the first table it names
+/** One SQL statement held in the source: the string expression (a literal, a template or a `+` chain) that opens as
+ *  a statement. `text` is the cooked statement, each `${…}` shown as `${}`; `table` the first table it names
  *  (`INSERT INTO t`, `UPDATE t`, `DELETE FROM t`, `FROM t`), lower-cased as written, else `null`; `set` an UPDATE's SET
  *  list (from `SET` to `WHERE` or the end), else `null`. */
 export interface SqlStatement {
@@ -82,7 +82,9 @@ export interface SqlStatement {
   line: number;
 }
 
-const SQL_VERB = /^\s*(SELECT|INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|WITH)\b/i;
+const SQL_VERB = new RegExp('^\\s*(?:(INSERT)\\s+(?:OR\\s+\\w+\\s+)?INTO\\s|(REPLACE)\\s+INTO\\s|(UPDATE)\\s+(?:OR\\s+\\w+\\s+)?\\w+\\s+SET\\s'
+  + '|(DELETE)\\s+FROM\\s|(SELECT)\\s[\\s\\S]*\\sFROM\\s|(CREATE)\\s+(?:UNIQUE\\s+)?(?:TABLE|INDEX|TRIGGER|VIEW)\\s'
+  + '|(ALTER)\\s+TABLE\\s|(DROP)\\s+(?:TABLE|INDEX|TRIGGER|VIEW)\\s)', 'i');
 const TABLE_OF: Record<string, RegExp> = {
   INSERT: /^\s*INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)/i, REPLACE: /^\s*REPLACE\s+INTO\s+(\w+)/i,
   UPDATE: /^\s*UPDATE\s+(?:OR\s+\w+\s+)?(\w+)/i, DELETE: /^\s*DELETE\s+FROM\s+(\w+)/i,
@@ -91,7 +93,7 @@ const TABLE_OF: Record<string, RegExp> = {
 const statementsOf = (parsed: ParsedFile, from: number, to: number): SqlStatement[] => {
   const out: SqlStatement[] = [];
   for (const e of stringExpressions(parsed.text, parsed.path)) {
-    const verb = SQL_VERB.exec(e.text)?.[1]?.toUpperCase();
+    const verb = SQL_VERB.exec(e.text)?.slice(1).find((g) => g !== undefined)?.toUpperCase();
     if (verb === undefined || e.start < from || e.end > to) continue;
     const table = (TABLE_OF[verb] ?? /\bFROM\s+(\w+)/i).exec(e.text)?.[1] ?? null;
     const set = verb === 'UPDATE' ? /\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(e.text)?.[1] ?? null : null;
@@ -101,7 +103,8 @@ const statementsOf = (parsed: ParsedFile, from: number, to: number): SqlStatemen
 };
 
 /** Every SQL statement inside `symbol`'s span, in source order, nested functions' statements included. A statement
- *  is a string expression whose text starts with a statement verb, so a comment that quotes SQL is not one. KNOWN
+ *  is a string expression whose text opens as one (`UPDATE t SET`, `INSERT INTO`, `DELETE FROM`, `SELECT … FROM`, DDL), so a comment that quotes SQL is not one.
+ *  KNOWN
  *  WIDTH: SQL assembled from a variable (`'UPDATE ' + table`) or a `.join` is not a string expression. */
 export function sqlStatementsIn(symbol: SourceSymbol): SqlStatement[] {
   return statementsOf(parsedFile(symbol.file), symbol.start, symbol.end);

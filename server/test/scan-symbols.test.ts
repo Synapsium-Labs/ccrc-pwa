@@ -108,7 +108,7 @@ describe('scan/symbols.ts keys a source slice on a symbol (D-5854)', () => {
     expect(sqlStatementsIn(symbolOf(file, 'Store.stamp'))[0]!.text).toBe('UPDATE runs SET closedAt = CASE WHEN ? IN ${} THEN ? END WHERE id = ?');
     // A comment that quotes SQL, and a string that is not a statement, are not statements.
     expect(at('Store.quiet')).toEqual([]);
-    expect(sqlStatementsInFile(file).map((q) => q.table)).toEqual(['runs', 'runs', 'mail', 'runs', 'runs']);
+    expect(sqlStatementsInFile(file).map((q) => q.table)).toEqual(['runs', 'runs', 'runs', 'mail', 'runs']);
   });
 
   it('sqlStatementsIn follows code that moves: the same statements after a method is added above', () => {
