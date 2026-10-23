@@ -333,9 +333,9 @@ describe('GET /api/sessions/:id/commands reads a bounded tail (D-6434)', () => {
     // The resolver's own continuation check (an 8 KiB tail window, a stat before it) is on the same path; what the
     // route adds is one stat, four chunks and the head. Nothing reads the file whole.
     const methods = (m: string): Rig['transcriptCalls'] => r.transcriptCalls.filter((c) => c.method === m);
-    for (const whole of ['readFile', 'readFileMeasured', 'readFileFrom', 'readFileB64', 'readFileB64Measured']) {
-      expect(methods(whole), whole).toEqual([]);
-    }
+    // An allow-list: every IO call on the transcript is a stat or a range read, so a whole-file read is a red here.
+    const allowed = new Set(['stat', 'statMeasured', 'readFileFromMeasured', 'readFileFromBytesMeasured']);
+    expect(r.transcriptCalls.filter((c) => !allowed.has(c.method)).map((c) => c.method)).toEqual([]);
     expect(methods('readFileFromMeasured').every((c) => c.offset! >= file.length - 8192)).toBe(true);
     const ranges = methods('readFileFromBytesMeasured');
     expect(ranges).toHaveLength(5);

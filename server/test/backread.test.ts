@@ -44,7 +44,7 @@ describe('walkBack', () => {
   it('a line straddling a boundary is whole in the older segment, which carries the newer chunk\'s first piece', async () => {
     const data = enc.encode('aaaa\nbbbb\ncccc\ndddd\n'); // 20 bytes
     const segs = await drain(memIO(data), data.length, [8, 8, 8]);
-    // newest: bytes 12..20 = "ccc\ndddd\n" is cut at 'c'... its leading piece is the cut one
+    // newest: bytes 12..20 = "cc\ndddd\n" is cut at 'c'... its leading piece is the cut one
     expect(segs.map((s) => s.start)).toEqual([12, 4, 0]);
     expect(lines(segs[0]!)).toEqual(['dddd']);
     expect(lines(segs[1]!)).toEqual(['bbbb', 'cccc']);

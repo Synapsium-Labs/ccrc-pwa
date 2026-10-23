@@ -104,7 +104,8 @@ async function transcriptSkills(io: FleetIO, file: string): Promise<SlashCommand
   if (reachedHead) return []; // the walk read the whole file
   const head = await io.readFileFromBytesMeasured(file, 0, READ_FROM_MAX_BYTES);
   if (!head.ok) return [];
-  // The head's last line is cut unless the read reached EOF.
+  // The head's last line is cut unless the read reached EOF. The cut at the last newline is defensive: a cut
+  // partial JSON line never parses, so listingsIn would skip it anyway.
   const end = head.bytes.length < READ_FROM_MAX_BYTES ? head.bytes.length : head.bytes.lastIndexOf(10) + 1;
   const lines = wholeLines({ bytes: head.bytes.subarray(0, end), cut: 0, start: 0 });
   return answerOf(listingsIn(lines)) ?? [];

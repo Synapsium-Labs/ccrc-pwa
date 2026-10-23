@@ -14,7 +14,11 @@ export type BackStep = { ok: true; segment: BackSegment } | { ok: false; reason:
 
 /** Walk `file` (of `size` bytes) backward, one read of `sizes[i]` bytes at most per `next()`.
  *  `more()` says a read remains: a size is left and the walk has not reached offset 0.
- *  Failure contract: a read that is not ok answers its reason, so a caller tells absent from unreadable. */
+ *  Failure contract: a read that is not ok answers its reason, so a caller tells absent from unreadable.
+ *  Framing relies on `readFileFromBytesMeasured`'s contract that an ok read is exactly `min(maxBytes, size - offset)`
+ *  bytes: `localIO` answers `unreadable` for fewer (`io.ts`, the `bytes.length !== owed` check) and the remote adapter
+ *  likewise (`remote/io.ts`, the `bytes.length !== Math.min(maxBytes, size - offset)` check), so a short read never
+ *  joins non-adjacent bytes into one segment. */
 export function walkBack(io: FleetIO, file: string, size: number, sizes: readonly number[]):
   { more(): boolean; next(): Promise<BackStep> } {
   let end = size;
