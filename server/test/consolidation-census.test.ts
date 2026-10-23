@@ -329,7 +329,7 @@ describe('redactRuleTables: modules that spell redaction rule patterns of their 
       writeFileSync(p, body);
     };
     at('shared/one.mjs', "const B = /\\b(Bearer)\\s+x/g; const A = /Authorization:/; const R = '[REDACTED]';\n");
-    at('server/src/two.ts', "const H = /Authorization/; const Q = /[?&]token=/; const M = '***';\n");
+    at('server/src/two.ts', "const H = /Authorization/; const Q = /[?&](?:access_token|token)=/; const M = '***';\n");
     at('ccd/history/three.mjs', "const REDACTED_MARK = '[redacted]'; const T = /token=/; const B = /Bearer /;\n");
     at('server/src/prose.ts', "// Bearer and Authorization and token= named in a comment\nconst M = '[REDACTED]';\n");
     at('server/src/one-shape.ts', "const B = /Bearer /; const M = '[REDACTED]';\n");
