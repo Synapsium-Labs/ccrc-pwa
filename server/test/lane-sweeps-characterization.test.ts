@@ -50,6 +50,11 @@ type Rig = ReturnType<typeof rig>;
 type Any = Record<string, (...a: unknown[]) => Promise<void>>;
 const call = (r: Rig, name: string, ...a: unknown[]): Promise<void> => (r.w as unknown as Any)[name]!(...a);
 
+/** Replace the watcher's journal mirror with a stub whose `sweep` is the effect the lifecycle lane is watched by. */
+function stubMirror(w: FleetWatcher, mirror: { sweep: () => Promise<void> }): void {
+  vi.spyOn(w as unknown as { mirrorFor(): unknown }, 'mirrorFor').mockReturnValue(mirror);
+}
+
 const REC = { id: 'demo-quiet-basin', project: 'demo' } as unknown as SessionRecord;
 
 interface Lane {
@@ -70,7 +75,7 @@ const LANES: Lane[] = [
     watch: (r) => () => r.registryListings.length },
   { key: 'lifecycle', cadenceMs: LC_SWEEP_MS, run: (r) => call(r, 'sweepLifecycle'), watch: (r) => {
     const sweep = vi.fn(async () => {});
-    vi.spyOn(r.w as never, 'mirrorFor' as never).mockReturnValue({ sweep } as never);
+    stubMirror(r.w, { sweep });
     return () => sweep.mock.calls.length;
   } },
   { key: 'readiness', cadenceMs: READINESS_SWEEP_MS, run: (r) => call(r, 'sweepReadiness'), watch: (r) => () => r.fileReads.length },
@@ -118,7 +123,7 @@ describe('a lane that throws keeps its slot', () => {
   it('lifecycle: a throw rejects the call, the slot is spent, and the next due call runs', async () => {
     const r = rig();
     let calls = 0;
-    vi.spyOn(r.w as never, 'mirrorFor' as never).mockReturnValue({ sweep: async () => { calls += 1; throw new Error('journal unreadable'); } } as never);
+    stubMirror(r.w, { sweep: async () => { calls += 1; throw new Error('journal unreadable'); } });
     at(NOW);
     await expect(r.w.sweepLifecycle()).rejects.toThrow('journal unreadable');
     await r.w.sweepLifecycle();
@@ -179,7 +184,7 @@ describe('a child mark leaving the listing kicks the lifecycle lane', () => {
   it('a child that left the listing runs the lifecycle lane on the next tick, inside its cadence', async () => {
     const r = rig();
     const sweep = vi.fn(async () => {});
-    vi.spyOn(r.w as never, 'mirrorFor' as never).mockReturnValue({ sweep } as never);
+    stubMirror(r.w, { sweep });
     const reg = r.cfg.registryDir;
     plant(reg, 'demo-quiet-basin', true);
     plant(reg, 'demo-still-cove', false);
@@ -199,7 +204,7 @@ describe('a child mark leaving the listing kicks the lifecycle lane', () => {
   it('a fire-and-forget lane whose body never settles delays neither this tick nor the next', async () => {
     const r = rig();
     let calls = 0;
-    vi.spyOn(r.w as never, 'mirrorFor' as never).mockReturnValue({ sweep: () => { calls += 1; return new Promise<void>(() => {}); } } as never);
+    stubMirror(r.w, { sweep: () => { calls += 1; return new Promise<void>(() => {}); } });
     at(NOW);
     await expect(r.w.tick()).resolves.toBeUndefined();
     at(NOW + LC_SWEEP_MS);

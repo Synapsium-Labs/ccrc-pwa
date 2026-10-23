@@ -45,10 +45,12 @@ export class LaneRunner {
   }
   private stateOf(name: string): LaneSlot { this.rowOf(name); return this.state.get(name)!; }
 
-  /** Whether the lane's cadence has elapsed on its own clock (pure: it stamps and starts nothing). */
-  due(name: string): boolean {
+  /** Whether the lane's cadence has elapsed on its own clock (pure: it stamps and starts nothing). `active` picks the
+   *  row's second cadence where it has one (the PR sweep, while a check is pending); a row without one ignores it. */
+  due(name: string, active = false): boolean {
     const row = this.rowOf(name);
-    return this.at(row.clock) - this.stateOf(name).stamp >= row.cadenceMs;
+    const cadence = active && row.activeCadenceMs !== undefined ? row.activeCadenceMs : row.cadenceMs;
+    return this.at(row.clock) - this.stateOf(name).stamp >= cadence;
   }
 
   /** An on-demand run's stamp (`inventoryNow`, `serverCapsNow`): the next beat counts from here. */
@@ -74,8 +76,8 @@ export class LaneRunner {
 
   /** The beat: runs the lane when its cadence has elapsed, else answers null. A run in flight is joined, refused or
    *  overlapped as the row says. */
-  run<T>(name: string, fn: () => Promise<T> | T): Promise<T | undefined> | null {
-    if (!this.due(name)) return null;
+  run<T>(name: string, fn: () => Promise<T> | T, active = false): Promise<T | undefined> | null {
+    if (!this.due(name, active)) return null;
     return this.start(name, fn, false);
   }
 
@@ -93,7 +95,7 @@ export class LaneRunner {
     const st = this.stateOf(name);
     const cur = st.flight;
     if (cur !== null) {
-      const stuck = row.flight === 'skip' && row.staleAfterMs !== undefined && this.at(row.clock) - cur.startedAt > row.staleAfterMs;
+      const stuck = row.flight === 'skip' && row.staleAfterMs !== undefined && this.at(row.clock) - cur.startedAt >= row.staleAfterMs;
       if (row.flight === 'join' || row.flight === 'join-rerun') return cur.promise as Promise<T>;
       if (row.flight === 'skip' && !stuck) return null;
     }

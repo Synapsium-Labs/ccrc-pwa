@@ -392,7 +392,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
     // clock before each call so this test can force a real re-sweep on its
     // own schedule rather than fake timers or a 10 s sleep.
     const forceSweep = async (): Promise<void> => {
-      (watcher as unknown as { lastTaskSweep: number }).lastTaskSweep = 0;
+      watcher.kick('tasks');
       await (watcher as unknown as { sweepTasks: () => Promise<void> }).sweepTasks();
     };
 
@@ -450,7 +450,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
     const watcher = new FleetWatcher(deps, new Bus());
     const forceSweep = async (): Promise<void> => {
-      (watcher as unknown as { lastTaskSweep: number }).lastTaskSweep = 0;
+      watcher.kick('tasks');
       await (watcher as unknown as { sweepTasks: () => Promise<void> }).sweepTasks();
     };
 
@@ -605,7 +605,7 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
     // clock before each call so this test can force a real re-sweep on its
     // own schedule (same idiom as the retain-don't-erase test above).
     const forceSweep = async (): Promise<void> => {
-      (watcher as unknown as { lastTaskSweep: number }).lastTaskSweep = 0;
+      watcher.kick('tasks');
       await (watcher as unknown as { sweepTasks: () => Promise<void> }).sweepTasks();
     };
 
