@@ -16390,7 +16390,7 @@ _ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s1
   sp="$_WS_ORPHAN_TREE"; m="$_WS_ORPHAN_MAIN"; cls="$_WS_ORPHAN_CLASS"; br="$_WS_ORPHAN_BRANCH"; head="$_WS_ORPHAN_HEAD"
   _ws_orphan_gap recomputed
   tx=$(_lc_tx)
-  _lc_intent destroy "$id" "$tx" verb ws-orphan meas.class "$cls" meas.rescue "$rescue" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  _lc_intent destroy "$id" "$tx" verb ws-orphan meas.mode "$cls" meas.state "$( ((rescue)) && echo rescue || echo plain)" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   if (( rescue )); then   # the pin first: a failed pin stops the act with the tree whole
     n=$(_ws_attic_pin "$m" "orphan/$s16" "$p" "$head")
     { [[ "$n" =~ ^[1-9][0-9]*$ ]] && git -C "$m" rev-parse --verify --quiet "refs/ccrc/attic/orphan/$s16/$head" >/dev/null 2>&1; } \
@@ -16406,7 +16406,7 @@ _ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s1
   if [[ "$cls" == ccd-root && "$br" != detached && -n "$br" ]]; then   # a ccd-root tree's branch is ours; -d only, never -D
     if git -C "$m" branch -d -- "$br" >/dev/null 2>&1; then bres=deleted; else bres=branch-kept; fi
   fi
-  _lc_done destroy "$id" "$tx" verb ws-orphan meas.class "$cls" meas.branch "$bres" meas.pinned "$n" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  _lc_done destroy "$id" "$tx" verb ws-orphan meas.mode "$cls" meas.branch "$bres" meas.attic "$( ((rescue)) && echo "$n")" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   printf '{"removed":true,"pathHex":%s,"class":%s,"branch":%s,"pinned":%s}\n' "$(_json_str "$(printf '%s' "$p" | _ws_orphan_hex)")" "$(_json_str "$cls")" "$(_json_str "$bres")" "$n"
 }
 

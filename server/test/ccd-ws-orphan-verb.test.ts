@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, CCD, CCD_ENTRY, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, CCD, CCD_ENTRY, type CcdHarness } from './ccdWsHelpers.js';
 import { readJournal } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -225,7 +225,7 @@ describe('reachable only as the server’s act', () => {
   }, 60_000);
 
   it('the dispatcher routes ws-orphan to its own usage, and the unknown-verb line names it', () => {
-    const env = h.env();
+    const env = ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true });
     const r = spawnSync('bash', ['-p', CCD, 'ws-orphan'], { env, encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(1);
     expect(r.stderr).toContain('usage: ccd ws-orphan');
@@ -234,7 +234,7 @@ describe('reachable only as the server’s act', () => {
   }, 60_000);
 
   it('an unprivileged explicit bash is refused at entry — nothing runs', () => {
-    const r = spawnSync('bash', [CCD, 'ws-orphan', '--expect', 'a'.repeat(64), '--tree-hex', '2f'], { env: h.env(), encoding: 'utf8' });
+    const r = spawnSync('bash', [CCD, 'ws-orphan', '--expect', 'a'.repeat(64), '--tree-hex', '2f'], { env: ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true }), encoding: 'utf8' });
     expect(r.status).toBe(125);
     expect(r.stderr).toContain('refused (entry-unprivileged)');
   }, 60_000);
