@@ -82,6 +82,8 @@ const fixture = async (opts: Opts = {}) => {
   await notifyLog.load();
   const deps = {
     ...testDeps(home, run), cfg, coord, notifyLog,
+    // The lane's cadence reads the monotonic clock (D-5862): the fixture's one fake clock stands for both.
+    monotonicMs: () => clock,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-expire', ...(opts.cap === false ? [] : [EXPIRE_CAP]), ACTOR_FLAGS_CAP] },
     presence: { isVisible: () => false },

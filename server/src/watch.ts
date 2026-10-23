@@ -189,7 +189,7 @@ import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { LaneRunner } from './laneRunner.js';
-import { DIVERGENCE_SWEEP_MS, IDLE_NUDGE_SWEEP_MS, LC_SWEEP_MS, STALL_SWEEP_MS, PR_BACKOFF_MAX_MS, PR_SWEEP_MS, READINESS_SWEEP_MS, type LaneName } from './laneSchedule.js';
+import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_MS, IDLE_NUDGE_SWEEP_MS, LC_SWEEP_MS, STALL_SWEEP_MS, PR_BACKOFF_MAX_MS, PR_SWEEP_MS, READINESS_SWEEP_MS, type LaneName } from './laneSchedule.js';
 // THE TEMP-ROOT COLLECTOR'S LANE (child reclamation wave 9, spec §5.10). A block of its own, so no import line above
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
 import { COLLECT_CAP } from './ccdargv.js';
@@ -219,22 +219,6 @@ import {
 } from './coord/collectTempRoot.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
-
-/** The child-reclaim lane (child-reclamation wave 4, spec §5.7). The
- *  census's cadence, for the census's reason — a child's eligibility moves on
- *  human timescales (a run closes, a re-dispatch binds) — and the
- *  TWICE-OBSERVED rule is measured in these intervals: a child must read
- *  eligible on two passes at least this far apart before anything is
- *  composed. It is also the base of the failure backoff (spec §5.9: "retries
- *  back off in between"). EXPORTED so its suite advances by the real
- *  constant. */
-export const CHILD_RECLAIM_SWEEP_MS = 60_000;
-
-/** The temp-root collector's observation interval (spec §5.10): the lane spends a token only when its executor's own
- *  audit ARRIVED at least this long after an earlier audit of the id answered that same token, on this process's
- *  monotonic clock. The child lane's cadence, for that lane's reason, and DERIVED from it, never a second literal; L1
- *  takes it as an argument (it imports no L4 constant). EXPORTED for its suite. */
-export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;
 
 /** At most this many lane-asked reclaims outstanding at once. Close-path
  *  reclaims are not counted, and neither is a hold-release job: the bound is
@@ -295,7 +279,7 @@ export const HEADS_BOOT_WAIT_MS = 2_500;
 
 /** The mirror lane's cadence, the census's and the readiness lane's live in `laneSchedule.ts`; the suites and `index.ts`
  *  import the two exported ones from here. */
-export { IDLE_NUDGE_SWEEP_MS, LC_SWEEP_MS, READINESS_SWEEP_MS, STALL_SWEEP_MS };
+export { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, IDLE_NUDGE_SWEEP_MS, LC_SWEEP_MS, READINESS_SWEEP_MS, STALL_SWEEP_MS };
 
 /** How much of a transcript's end the nudge lane reads: the compaction summary (~14 KB measured) and the attachments
  *  Claude Code re-injects after it sit well inside 1 MiB, the backlog's own window. */
@@ -948,21 +932,10 @@ export class FleetWatcher {
   /** The census lane's byte-equality guard. `null` (not `'[]'`) so the first sweep always emits, even an empty one —
    *  mirroring `lastRunsJson`'s own initial value, and the reason a HEALTHY fleet is a frame rather than a silence. */
   private lastDivergenceJson: string | null = null;
-  /** The child-reclaim lane's clock (child-reclamation wave 4): the MONOTONIC
-   *  time of the last pass, `null` before the first. Two writers stamp it
-   *  (spec §5.5, §5.7): the gate stamp of a pass that the throttle let in,
-   *  which is all a pass still gathering or overtaken during its gather ever
-   *  writes; and the decision clock of the last pass that was NOT overtaken,
-   *  which re-stamps it after the gather. Not the other lanes' `0`
-   *  never-run idiom, because a monotonic source may start at 0, which would
-   *  make `0` a real stamp. Monotonic so that a backward wall step cannot
-   *  freeze the lane, and a forward one cannot run a pass early: the
-   *  twice-observed rule's interval is real time. */
-  private lastChildReclaimSweep: number | null = null;
   /** The child-reclaim lane's pass counter (spec §5.5, §5.7), bumped as each pass starts its generation gather,
    *  the one await before its loop. A pass whose number is no longer the latest when its gather settles was
    *  OVERTAKEN by a newer pass, and decides nothing. A pass that was NOT overtaken re-stamps the throttle
-   *  (`lastChildReclaimSweep`) with its own decision clock, read after the gather, so the next pass cannot start
+   *  (the `childReclaim` row) with its own decision clock, read after the gather, so the next pass cannot start
    *  until a whole interval after this one decided. Together the two keep any two passes that decide at least
    *  one interval apart on the monotonic clock, so one interval never counts as two sightings, however long a
    *  gather takes. */
@@ -1078,8 +1051,8 @@ export class FleetWatcher {
    *  it, and losing it can only DELAY a collection (two fresh observations, the start hold-off), never cause one. STATED
    *  RESIDUAL (spec §5.10, pacing): a restart re-enters each terminal and verb-failed id at j = 0, about eight extra
    *  terminal audits or failing acts per such id after it.
-   *  - `lastCollectSweep`: the throttle, on the MONOTONIC clock; `null` before the first pass.
-   *  - `collectSweeping`: one pass at a time (`sweepTempRootCollect`), over the gather and the decide-and-enqueue only.
+   *  - the `collect` row of `LANE_SCHEDULE`: the throttle, on the MONOTONIC clock, and one pass at a time (`sweepTempRootCollect`), over
+   *    the gather and the decide-and-enqueue only.
    *  - `collectStartMono`: this lane's start (the watcher's construction), monotonic. No act job is offered until
    *    `CHILD_RECLAIM_STALL_MS` after it.
    *  - `collectGen`: the ONE counter every generation is drawn from, the lane-wide one and every id's (Task 4).
@@ -1110,8 +1083,6 @@ export class FleetWatcher {
    *  - `collectPassSeq`, `collectPassTally`, `collectPassPublished`, `collectPassAudits`: each pass's audits by class
    *    (Task 5's `collectPassClass`), keyed by the pass that queued them; the latest pass whose calls have all settled is
    *    the one the pass-scoped box lines read. */
-  private lastCollectSweep: number | null = null;
-  private collectSweeping = false;
   private readonly collectStartMono: number;
   private collectGen = 0;
   private collectLaneGen = 0;
@@ -1393,13 +1364,7 @@ export class FleetWatcher {
    *  also drops each row's `nextAskAt` (a fresh entry's is `0`) and `failures` (review 382, R6), so a tier or stuck row
    *  (normally asked every four hours) and a row backing off on the ladder are asked again within a few passes,
    *  SOONER; and it restarts the twice-observed sighting and the hour's runs, which DELAY an expiry. */
-  private lastArchivedExpirySweep = 0;
   private archivedExpiryState = new Map<string, ArchivedExpiryEntry>();
-  /** ONE PASS AT A TIME. `tick()` dispatches the lane with `void`, and a pass whose audits and act outlast the cadence
-   *  would otherwise run beside the next one: two acts in one window, and the older pass acting on a `due` list the
-   *  newer has already answered. A pass that finds another running returns at once — so at most one expiry act is
-   *  ever in flight, fleet-wide, and every act's answer is folded onto the entry it was asked for. */
-  private archivedExpirySweeping = false;
   /** The stop-done lane (D-5370, `stopDoneSweep.ts`): its last pass, whether one runs, its one memory (a refused
    *  stop's retry instant), the coordination serialiser `buildServer` hands it, and the process start it holds
    *  `viewer` against (presence is never persisted). */
@@ -1417,12 +1382,10 @@ export class FleetWatcher {
   private readonly hibernateStartedAt = Date.now();
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
-  /** THE DEAD-COORDINATOR LANE (workspace lifecycle wave 4): its clock; ONE PASS AT A TIME, the expiry lane's reason;
+  /** THE DEAD-COORDINATOR LANE (workspace lifecycle wave 4): its clock and its single flight (the `deadCoordinator` row; the expiry lane's reason);
    *  its memory per claimant (IN MEMORY: the run of crashed passes, the backoff, the last outcome and the report — the
    *  durable half, the first-dead anchor, is `coord.db`'s `dead_claimants`); its breaker as the last pass measured it;
    *  and its attention list, which `emitCoord` reads. */
-  private lastDeadCoordinatorSweep = 0;
-  private deadCoordinatorSweeping = false;
   private deadCoordinatorState = new Map<string, DeadCoordinatorEntry>();
   private deadCoordinatorBreakerState: DeadCoordinatorBreaker = { tripped: false };
   /** The breaker's memory: the members it holds with every first-dead instant they have carried, released only on evidence
@@ -1461,7 +1424,6 @@ export class FleetWatcher {
   private deadCoordinatorBreakerLanded = false;
   private deadCoordinatorBreakerSealed = false;
   private deadCoordinatorStopped = false;
-  private deadCoordinatorPassRun: Promise<void> | null = null;
   private deadCoordinatorAttentionList: readonly DeadCoordinatorAttention[] = [];
   /** The coordination serialiser's sweep handle (`CoordRoutesHandle.withSweepAbandon`), handed over by `buildServer`
    *  once `registerCoordRoutes` has built it. Until then the lane measures and records, and ends nothing. */
@@ -1568,8 +1530,8 @@ export class FleetWatcher {
   runLaneSync(name: LaneName, fn: () => void, now?: number): boolean { return this.lanes.runSync(name, fn, now); }
   /** The lane runs on the next tick. */
   kick(name: LaneName): void { this.lanes.kick(name); }
-  /** The post-gather re-stamp on the decision clock. */
-  restamp(name: LaneName): void { this.lanes.restamp(name); }
+  /** The post-gather re-stamp on the decision clock, with the reading the pass decided on when it has one. */
+  restamp(name: LaneName, at?: number): void { this.lanes.restamp(name, at); }
   /** The run in flight, or null. */
   inFlight(name: LaneName): Promise<unknown> | null { return this.lanes.inFlight(name); }
 
@@ -4065,12 +4027,13 @@ export class FleetWatcher {
   async sweepChildReclaim(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
     if (!coord) return;
-    // THE THROTTLE, stamped BEFORE the gather below (spec §5.7), on the
-    // monotonic clock: a tick that lands while this pass gathers is throttled,
-    // so no second pass starts within the interval.
-    const gate = this.childReclaimLaneNow().monoMs;
-    if (this.lastChildReclaimSweep !== null && gate - this.lastChildReclaimSweep < CHILD_RECLAIM_SWEEP_MS) return;
-    this.lastChildReclaimSweep = gate;
+    // THE THROTTLE (spec §5.7) is the lane's row (`runLane('childReclaim')`): stamped BEFORE the gather below, on the
+    // monotonic clock, so a tick that lands while this pass gathers is throttled and no second pass starts within the interval.
+    await this.runLane('childReclaim', () => this.childReclaimPass(coord, records, names));
+  }
+
+  /** One pass of the child-reclaim lane, run by `sweepChildReclaim` once its row says it is due. */
+  private async childReclaimPass(coord: CoordStore, records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     // THE PASS'S ONE AWAIT BEFORE ITS LOOP (spec §5.5): every marked row's
     // registry generation, read concurrently. Gathered whole, here, so the
     // per-child loop below stays synchronous: no await sits between a row's
@@ -4105,7 +4068,7 @@ export class FleetWatcher {
     // start a whole interval after THIS decision, not after the gate stamped
     // above. Without it, a gather that settled just short of an interval would
     // let the next pass decide a moment later: two sightings in one interval.
-    this.lastChildReclaimSweep = mono;
+    this.restamp('childReclaim', mono);
 
     // ONE — the attention list's mirror arms, and the pass's coordination-history
     // read, from the mirror ALONE (spec §5.9: "derived from the lifecycle mirror so
@@ -4808,7 +4771,7 @@ export class FleetWatcher {
    * `collectFresh`). The act job spends only its OWN audit's token (observation 2), the token an earlier audit answered
    * (observation 1) at least `COLLECT_OBSERVE_INTERVAL_MS` before it, with only that token answered between.
    *
-   * IT NEVER AWAITS A CALL IT QUEUED. `collectSweeping` spans the gather and the decide-and-enqueue only. Each call is
+   * IT NEVER AWAITS A CALL IT QUEUED. the `collect` row's flight spans the gather and the decide-and-enqueue only. Each call is
    * tracked by its queued-at stamp (`collectInFlight`), and every pass derives the unsettled lines from those stamps, so a
    * call or job that never settles never stops a later pass.
    *
@@ -4826,20 +4789,12 @@ export class FleetWatcher {
    */
   async sweepTempRootCollect(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
-    if (!coord || this.collectSweeping) return;
-    // THE THROTTLE, on the MONOTONIC clock (spec §5.10): stamped BEFORE the gather, so a pass a gate stops still spends
-    // its interval, and re-stamped after it (`collectPass`) with the pass's decision clock.
-    const gate = this.childReclaimLaneNow().monoMs;
-    if (this.lastCollectSweep !== null && gate - this.lastCollectSweep < CHILD_RECLAIM_SWEEP_MS) return;
-    this.lastCollectSweep = gate;
-    // ONE PASS AT A TIME (spec §5.10): held over the gather and the decide-and-enqueue, so no pass is ever overtaken
-    // while it gathers. The calls a pass queues are NOT under it, and are never awaited: they settle on their own.
-    this.collectSweeping = true;
-    try {
-      await this.collectPass(coord, names);
-    } finally {
-      this.collectSweeping = false;
-    }
+    if (!coord) return;
+    // THE THROTTLE, on the MONOTONIC clock (spec §5.10), and ONE PASS AT A TIME, are the lane's row (`runLane('collect')`):
+    // stamped BEFORE the gather, so a pass a gate stops still spends its interval, and re-stamped after it (`collectPass`)
+    // with the pass's decision clock. The flight is held over the gather and the decide-and-enqueue, so no pass is ever
+    // overtaken while it gathers. The calls a pass queues are NOT under it, and are never awaited: they settle on their own.
+    await this.runLane('collect', () => this.collectPass(coord, names));
   }
 
   /** One pass of the collector's lane, run only while no other pass runs. Its ONE await is the gather. It queues its
@@ -4872,7 +4827,7 @@ export class FleetWatcher {
     // The pass's decision clock, read AFTER the gather; the throttle re-stamped with it, so any two deciding passes are at
     // least one interval apart however long a gather takes.
     const mono = this.childReclaimLaneNow().monoMs;
-    this.lastCollectSweep = mono;
+    this.restamp('collect', mono);
     const [listings, switches] = gathered;
     // THE GATHER'S BRACKET (path-identity spec 2026-10-12 §5.5): an epoch that moved while the gather was out clears every
     // pair and ends the pass. Nothing it listed is read, and no latch is retired from a listing that straddled two
@@ -5378,16 +5333,14 @@ export class FleetWatcher {
    */
   async sweepArchivedExpiry(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
-    if (!coord || this.archivedExpirySweeping) return;
+    if (!coord) return;
+    // THE THROTTLE and ONE PASS AT A TIME are the lane's row (`runLane('archivedExpiry')`). `tick()` dispatches the lane with
+    // `void`, and a pass whose audits and act outlast the cadence would otherwise run beside the next one: two acts in one
+    // window, and the older pass acting on a `due` list the newer has already answered. A call that finds a pass running
+    // returns at once, so at most one expiry act is ever in flight, fleet-wide, and every act's answer is folded onto the
+    // entry it was asked for.
     const now = Date.now();
-    if (this.lastArchivedExpirySweep !== 0 && now - this.lastArchivedExpirySweep < CHILD_RECLAIM_SWEEP_MS) return;
-    this.lastArchivedExpirySweep = now;
-    this.archivedExpirySweeping = true;
-    try {
-      await this.archivedExpiryPass(coord, records, names, now);
-    } finally {
-      this.archivedExpirySweeping = false;
-    }
+    await this.runLane('archivedExpiry', () => this.archivedExpiryPass(coord, records, names, now));
   }
 
   /** One pass of the expiry lane — `sweepArchivedExpiry`'s body, run only while no other pass runs. */
@@ -5525,19 +5478,12 @@ export class FleetWatcher {
    */
   async sweepDeadCoordinators(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
-    if (!coord || this.deadCoordinatorSweeping || this.deadCoordinatorStopped) return;
+    // A call that finds a pass running returns at once, as it always has (the row is `join`, which would hand it the pass to
+    // await): `tick()` never awaits the lane, and a direct caller must not wait on a pass parked on tmux.
+    if (!coord || this.deadCoordinatorStopped || this.inFlight('deadCoordinator') !== null) return;
+    // THE THROTTLE and ONE PASS AT A TIME are the lane's row (`runLane('deadCoordinator')`), whose flight the shutdown seal reads.
     const now = Date.now();
-    if (this.lastDeadCoordinatorSweep !== 0 && now - this.lastDeadCoordinatorSweep < CHILD_RECLAIM_SWEEP_MS) return;
-    this.lastDeadCoordinatorSweep = now;
-    this.deadCoordinatorSweeping = true;
-    const run = this.deadCoordinatorPass(coord, records, names, now);
-    this.deadCoordinatorPassRun = run;
-    try {
-      await run;
-    } finally {
-      this.deadCoordinatorSweeping = false;
-      this.deadCoordinatorPassRun = null;
-    }
+    await this.runLane('deadCoordinator', () => this.deadCoordinatorPass(coord, records, names, now));
   }
 
   /** SEAL THE BREAKER'S STATE (D-4916), synchronously, over a pass that is not running: the shutdown handler's one act on the
@@ -5550,7 +5496,7 @@ export class FleetWatcher {
     this.deadCoordinatorStopped = true;
     const coord = this.deps.coord;
     if (!coord) return { sealed: false, reason: 'no-store' };
-    if (this.deadCoordinatorSweeping) return { sealed: false, reason: 'pass-in-flight' };
+    if (this.inFlight('deadCoordinator') !== null) return { sealed: false, reason: 'pass-in-flight' };
     if (!this.deadCoordinatorBreakerLanded) return { sealed: false, reason: 'no-landed-write' };
     if (this.deadCoordinatorBreakerSealed) return { sealed: false, reason: 'already-sealed' };
     if (this.deadCoordinatorAnchorsPending.size > 0) return { sealed: false, reason: 'changes-pending' };
@@ -5573,7 +5519,7 @@ export class FleetWatcher {
    *  nothing (`pass-in-flight`) and the lane stays stopped. */
   async sealDeadCoordinatorBreaker(boundMs: number): Promise<DeadCoordinatorSealResult> {
     this.deadCoordinatorStopped = true;
-    const run = this.deadCoordinatorPassRun;
+    const run = this.inFlight('deadCoordinator');
     if (run !== null) {
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([

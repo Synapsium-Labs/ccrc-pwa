@@ -16,6 +16,7 @@ import {
 } from './consolidationCensus.js';
 import { capabilityChoiceSites, W4_HELD_FILES } from './consolidationCensus.js';
 import { changeLatchSites, changeLatchReported } from './consolidationCensus.js';
+import { cadenceLiterals, declaredDerivations, laneClockFields, laneClockReported, laneClockShapes, singleFlightGuards } from './consolidationCensus.js';
 
 const show = (name: string, sites: readonly CensusSite[]): void => {
   console.log(`census ${name}: ${sites.length}\n${sites.map((s) => `  ${s.file}:${s.line}  ${s.text.trim()}`).join('\n')}`);
@@ -314,5 +315,77 @@ describe('changeLatchSites: FleetWatcher\'s hand-rolled "warn once until it chan
     show('changeLatchReported', reported);
     expect(reported.map((x) => x.text.trim()).join('\n')).toContain('lastMarkWarnHour');
     expect(changeLatchSites().map((x) => x.text.trim()).join('\n'), 'a DelegationLane latch was counted').not.toContain('lastMarkWarnHour');
+  });
+});
+
+// D-5862 (Task C1h; ARCH-68 #803). The lane-schedule census: the named clocks and guards a lane keeps as fields of the
+// watcher, the structural query for a clock nobody named, the bare cadence literal, and the three derivations.
+describe('the lane schedule census (D-5862)', () => {
+  let tree = '';
+  beforeAll(() => {
+    tree = mkdtempSync(path.join(tmpdir(), 'consolidation-census-lanes-'));
+    const p = path.join(tree, 'server/src/watch.ts');
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, [
+      'export class FleetWatcher {',
+      '  private lastTaskSweep = 0;',                                              // 2: a named clock
+      '  private lastNewSweep = 0;',                                               // 3: an unnamed clock
+      '  private lastQuiet: number | null = null;',                                // 4: an unnamed nullable clock
+      '  private lastJson: string | null = null;',                                 // 5: not numeric
+      '  private lastStallJudgedAt: number | null = null;',                         // 6: exempt gap rule
+      '  private collectSweeping = false;',                                        // 7: a named guard
+      '  private ticking = false;',                                                 // 8: a named guard
+      '  a(now: number): void {',
+      '    if (now - this.lastNewSweep < SWEEP_MS) return;',                       // 10: a shape
+      '    if (this.lastQuiet !== null && Date.now() - this.lastQuiet >= 5000) return;', // 11: a shape and a literal
+      '    if (now - this.lastTaskSweep >= 86_400_000) return;',                   // 12: a shape and a literal
+      '    if (now - this.lastQuiet > 60 * 1000) return;',                         // 13: a shape and a product literal
+      '    if (now - this.lastStallJudgedAt > GAP_MS) return;',                    // 14: exempt
+      '    if (now - this.lastQuiet < 500) return;',                               // 15: a shape, under 1000: not a cadence literal
+      '    if (SWEEP_MS > now - this.lastNewSweep) return;',                       // 16: a shape, written the other way round
+      '    if (now - other.lastQuiet < SWEEP_MS) return;',                         // 17: another object: not seen
+      '  }',
+      '}',
+      'class DelegationLane {',
+      '  private lastSweepAt = 0;',                                                 // 21: reported, not counted
+      '  m(now: number): void { if (now - this.lastSweepAt < SWEEP_MS) return; }',
+      '}',
+      'export const DELEGATION_SWEEP_MS = DIVERGENCE_SWEEP_MS;',
+    ].join('\n'));
+    writeFileSync(path.join(tree, 'server/src/laneSchedule.ts'), [
+      'export const STALL_SWEEP_MS = 60_000;',
+      'export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;',
+    ].join('\n'));
+  });
+  afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
+
+  it('FIXTURE: a named clock and a named guard are found by name', async () => {
+    expect(laneClockFields(tree).map((x) => x.line)).toEqual([2]);
+    expect(singleFlightGuards(tree).map((x) => x.line)).toEqual([7, 8]);
+    expect(laneClockReported(tree).map((x) => x.line)).toEqual([21]);
+  });
+
+  it('FIXTURE: the structural query finds an unnamed clock compared with a constant, the exempt gap rule and another object aside', async () => {
+    expect(laneClockShapes(tree).map((x) => x.line)).toEqual([10, 11, 12, 13, 15, 16]);
+  });
+
+  it('FIXTURE: a bare millisecond literal (1000 or more, a product of literals too) against a last* clock; a constant, a small number and a second object are not', async () => {
+    expect(cadenceLiterals(tree).map((x) => x.line)).toEqual([11, 12, 13]);
+  });
+
+  it('FIXTURE: a derivation is a reference only when its initializer is a bare name', async () => {
+    expect(declaredDerivations(tree)).toEqual([
+      { name: 'COLLECT_OBSERVE_INTERVAL_MS', file: 'server/src/laneSchedule.ts', reference: true },
+      { name: 'STALL_SWEEP_MS', file: 'server/src/laneSchedule.ts', reference: false },
+      { name: 'DELEGATION_SWEEP_MS', file: 'server/src/watch.ts', reference: true },
+    ]);
+  });
+
+  it('REAL: the census runs on the tree, and W4\'s two clocks and the delegation lane\'s are the ones left', async () => {
+    const fields = laneClockFields();
+    show('laneClockFields', fields);
+    expect(fields.map((x) => x.text).join('\n')).toContain('lastStopDoneSweep');
+    expect(laneClockReported().map((x) => x.text).join('\n')).toContain('lastSweepAt');
+    expect(declaredDerivations()).toHaveLength(3);
   });
 });
