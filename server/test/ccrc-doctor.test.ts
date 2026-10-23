@@ -5893,6 +5893,24 @@ describe('ccrc doctor: disk', () => {
   });
 });
 
+// D-6618 (plan Task DR-6) characterization: the three verdicts on $HOME's filesystem at their edges, green on the
+// check as it stood before it measured every work filesystem. They stay true after: the floors did not move.
+describe('ccrc doctor: disk, the $HOME verdicts at their edges', () => {
+  const GIB = 1024 * 1024;
+
+  it('exactly 2 GiB free is a WARN, not a FAIL', () => {
+    const home = healthy('ccrc-doctor-disk-edge2-');
+    stubDf(home, 2 * GIB);
+    expect(lineFor(runDoctor(home).stdout, 'disk')).toMatch(/^WARN disk: 2 GiB free/);
+  });
+
+  it('exactly 10 GiB free is a PASS', () => {
+    const home = healthy('ccrc-doctor-disk-edge10-');
+    stubDf(home, 10 * GIB);
+    expect(lineFor(runDoctor(home).stdout, 'disk')).toMatch(/^PASS disk: 10 GiB free/);
+  });
+});
+
 describe('ccrc doctor: skills — every home carries the SHIPPED skills (release/rollout design §6)', () => {
   const installed = (home: string, suffix: string, name: string): string => join(home, suffix, 'skills', name);
 
