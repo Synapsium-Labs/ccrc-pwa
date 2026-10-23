@@ -1426,7 +1426,11 @@ def _patch_authenticator(module):
         def credential_dir(self):
             d = getattr(self, "token_dir", None)
             f = getattr(self, "auth_file", None)
-            if (not isinstance(d, str) or not isinstance(f, str) or not os.path.isabs(d)
+            if not isinstance(d, str) or not os.path.isabs(d):
+                raise err(status_code=401, message="config-error: this tier's token dir (CHATGPT_TOKEN_DIR) is not "
+                                                   "an absolute path, and ccrc resolves no relative one; unset it "
+                                                   "and restart the tier")
+            if (not isinstance(f, str)
                     or os.path.normpath(f) != os.path.join(os.path.normpath(d), lib.CREDENTIAL_NAME)):
                 raise err(status_code=401, message="config-error: this tier's credential file is not %s in "
                                                    "its token dir (is CHATGPT_AUTH_FILE set?), and ccrc reads no "

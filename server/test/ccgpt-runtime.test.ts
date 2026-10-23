@@ -2198,7 +2198,9 @@ describe.skipIf(!PY)('the patch\'s authenticator part (codex-bridge Stage 1)', (
       for (const a of r.out!.ops) {
         // Never the library's ValueError escaping as a non-GetAccessTokenError.
         expect(a).toMatchObject({ error: 'GetAccessTokenError', status: 401 });
-        expect(a.message).toMatch(/^config-error: /);
+        // The cause named is the token dir, never CHATGPT_AUTH_FILE, which this case does not set.
+        expect(a.message).toMatch(/^config-error: this tier's token dir \(CHATGPT_TOKEN_DIR\) is not an absolute path/);
+        expect(a.message).not.toContain('CHATGPT_AUTH_FILE');
         expect(JSON.stringify(a)).not.toContain(planted.access);
       }
       expect(srv.requests).toEqual([]);
@@ -2211,11 +2213,20 @@ describe.skipIf(!PY)('the patch\'s authenticator part (codex-bridge Stage 1)', (
     const py = standinVenv(home);
     if (py === null) { ctx.skip(); return; }
     const auth = path.join(home, 'auth');
-    plantBackendCredential(auth, { expiresIn: 30 });
+    const planted = plantBackendCredential(auth, { expiresIn: 30 });
     // The new sign-in's credential, a new identity for another account, staged on the
-    // same filesystem so the driver's rename replaces the file as a commit does.
-    const signedIn = plantBackendCredential(path.join(home, 'signin'), { claimAccountId: 'acct-fixture-1' });
-    const srv = await fakeAuthServer({ token: [{ status: 400, body: { error: 'invalid_grant' } }] });
+    // same filesystem so the driver's rename replaces the file as a commit does. Expiring
+    // too, so the next request crosses the status bar (a fresh one is answered before the
+    // status is read): only a needs-signin bound to the credential it was measured on lets
+    // this refresh through.
+    const signedIn = plantBackendCredential(path.join(home, 'signin'), { claimAccountId: 'acct-fixture-1', expiresIn: 30 });
+    const now = Math.floor(Date.now() / 1000);
+    const claim = { [ACCOUNT_CLAIM]: { chatgpt_account_id: 'acct-fixture-1' } };
+    const freshAccess = syntheticJwt({ exp: now + 3600, iat: now, ...claim });
+    const srv = await fakeAuthServer({ token: [
+      { status: 400, body: { error: 'invalid_grant' } },
+      { status: 200, body: { access_token: freshAccess, refresh_token: 'rtok-fixture-rotated', id_token: syntheticJwt({ exp: now + 3600, ...claim }) } },
+    ] });
     try {
       const r = await runOps(py, home,
         { ops: ['token', 'replant', 'token', 'account'], replant: path.join(home, 'signin', 'auth.json') },
@@ -2226,9 +2237,13 @@ describe.skipIf(!PY)('the patch\'s authenticator part (codex-bridge Stage 1)', (
       expect(dead!.message).toMatch(/^needs-signin: /);
       expect(replant).toEqual({ ok: null });
       // No per-process verdict: the needs-signin the first request met is not kept.
-      expect(token).toEqual({ ok: signedIn.access });
+      expect(token).toEqual({ ok: freshAccess });
       expect(account).toEqual({ ok: 'acct-fixture-1' });
-      expect(srv.requests, 'only the dead refresh asked the endpoint').toHaveLength(1);
+      expect(srv.requests.map((q) => [q.path, q.form?.['grant_type'], q.form?.['refresh_token']]),
+        'the dead refresh, then the new sign-in\'s own').toEqual([
+        ['/oauth/token', 'refresh_token', planted.refresh],
+        ['/oauth/token', 'refresh_token', signedIn.refresh],
+      ]);
       expect(r.out!.calls, 'a stand-in method ran').toEqual([]);
     } finally { await srv.close(); }
   });
