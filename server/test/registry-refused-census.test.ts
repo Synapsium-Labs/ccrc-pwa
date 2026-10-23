@@ -270,6 +270,11 @@ describe('tick hands its model to the lanes that would otherwise list the regist
       .toMatch(/\bthis\.sweepTasks\(\s*registryRead\s*\)/);
   });
 
+  it('tick() passes registryRead to sweepAsks(', () => {
+    expect(body(), 'tick no longer hands the ask lane its model: that lane would list the registry itself')
+      .toMatch(/\bthis\.sweepAsks\(\s*registryRead\s*\)/);
+  });
+
   it('tick() passes registryRead to sweepPr(', () => {
     expect(body(), 'tick no longer hands the PR lane its model: that lane would list the registry itself')
       .toMatch(/\bthis\.sweepPr\(\s*registryRead\s*\)/);
