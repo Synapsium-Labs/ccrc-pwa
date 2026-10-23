@@ -314,6 +314,9 @@ const PLANTED: Array<[string, string, string]> = [
   ['a build step reads SECRETS in capitals', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', '        id: compare\n        env:\n          GH_TOKEN: ${{ SECRETS.PAT }}\n'), 'runs the install or the build and reads secrets'],
   ['a build step if: reads a secret', plant("        id: record\n        if: steps.compare.outputs.release == 'true'\n", "        id: record\n        if: steps.compare.outputs.release == 'true' && secrets.PAT != ''\n"), 'runs the install or the build and reads secrets'],
   ['the publish step passes a secret under an allowed key', plant('          GH_TOKEN: ${{ github.token }}\n          CCRC_BUNDLE_PATH', '          GH_TOKEN: ${{ secrets.PAT }}\n          CCRC_BUNDLE_PATH'), 'holds a write permission and reads secrets'],
+  ['a build step reads the bare secrets context', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', '        id: compare\n        env:\n          GH_TOKEN: ${{ secrets }}\n'), 'runs the install or the build and reads secrets'],
+  ['a build step reads secrets through contains()', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', "        id: compare\n        env:\n          GH_TOKEN: ${{ contains(secrets, 'x') }}\n"), 'runs the install or the build and reads secrets'],
+  ['a build step reads secrets through toJSON( secrets )', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', '        id: compare\n        env:\n          GH_TOKEN: ${{ toJSON( secrets ) }}\n'), 'runs the install or the build and reads secrets'],
   ['a publish step passes NEEDS in capitals under another key', receiveEnv('          OTHER: ${{ NEEDS.build.outputs.tag }}\n'), 'passes a build output into env.OTHER'],
 ];
 

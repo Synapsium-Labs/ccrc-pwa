@@ -194,10 +194,12 @@ const shown = (v: unknown): string => (typeof v === 'string' ? v : v === undefin
  *  member, an index or the whole of it (`toJSON(needs)`). */
 const readsNeeds = (v: unknown): boolean =>
   [...scanText(v).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((m) => /(?<![\w.-])needs\b/i.test(m[1] ?? ''));
-/** A value, scanned whole at every depth, that names the `secrets` context:
- *  a member, an index or the whole of it (`toJSON(secrets)`), in any case.
- *  Not only inside `${{ }}`: an `if:` is an expression without one. */
-const readsSecrets = (v: unknown): boolean => /(?<![\w.-])secrets\s*[.[)]/i.test(scanText(v));
+/** A value, scanned whole at every depth, that names the `secrets` context
+ *  at all: the bare word, in any case, followed by anything (a member, an
+ *  index, `${{ secrets }}`, `contains(secrets, …)`, `toJSON( secrets )`).
+ *  Not only inside `${{ }}`: an `if:` is an expression without one. Step
+ *  names are scanned too; no release workflow spells the word anywhere. */
+const readsSecrets = (v: unknown): boolean => /(?<![\w.-])secrets(?![\w-])/i.test(scanText(v));
 
 export interface JobReference {
   /** `outputs.<k>`, `if`, `env.<K>`, or `step <n> if|with.<k>|env.<K>`. */
