@@ -109,11 +109,11 @@ function mk(name: string, o: MkOpts): string {
 
 const stubDir = (): string => path.join(h.home, 'stub');
 /** `ccd`'s path-users entry as a stub: it sources ccd's body (as the suite's harness does) and answers the verb. */
-function ccdStub(fail = false): string {
+function ccdStub(fail = false, delayS = 0): string {
   fs.mkdirSync(stubDir(), { recursive: true });
-  const f = path.join(stubDir(), fail ? 'ccd-fail' : 'ccd-real');
+  const f = path.join(stubDir(), fail ? 'ccd-fail' : delayS ? 'ccd-slow' : 'ccd-real');
   fs.writeFileSync(f, fail ? '#!/bin/sh\nexit 1\n'
-    : '#!/bin/bash\nexec 2>/dev/null\nverb="$1"; shift; args=("$@"); set --\n. "$CCD_SRC" || exit 1\n[ "$verb" = path-users ] || exit 2\ncmd_path_users "${args[@]}"\n', { mode: 0o755 });
+    : `#!/bin/bash\n${delayS ? `sleep ${delayS}\n` : ''}exec 2>/dev/null\nverb="$1"; shift; args=("$@"); set --\n. "$CCD_SRC" || exit 1\n[ "$verb" = path-users ] || exit 2\ncmd_path_users "\${args[@]}"\n`, { mode: 0o755 });
   return f;
 }
 
@@ -439,6 +439,26 @@ describe('the live arm, in shadow and armed', () => {
     expect(fs.readdirSync(path.join(leaf, '.ccd-tmp-quarantine', U.live)).length).toBe(1);
   }, 120_000);
 
+  it('pressure is per root: a leaf on a full filesystem shortens the ages for its own entries only', () => {
+    liveSession();
+    const leaf = path.join(h.home, '.cc-tmp', 'child-a', `claude-${UID_}`);
+    fs.mkdirSync(leaf, { recursive: true });
+    fs.mkdirSync(path.join(reg(), 'tmproots'), { recursive: true });
+    fs.writeFileSync(path.join(reg(), 'tmproots', 'child-a'), 'v=1 id=child-a\n');
+    const inPrimary = mk('in-primary', { ageS: 4 * DAY });
+    const inLeaf = mk('in-leaf', { ageS: 4 * DAY, unitDir: path.join(leaf, PROJ, U.live) });
+    const df = path.join(h.home, 'split-df');
+    fs.writeFileSync(df, '#!/bin/sh\ncase "$3" in *child-a*) p=93;; *) p=10;; esac\n'
+      + 'echo "Filesystem 1024-blocks Used Available Capacity Mounted on"\n'
+      + 'echo "fake 100000 $((p * 1000)) $((100000 - p * 1000)) ${p}% /"\n', { mode: 0o755 });
+    arm();
+    const r = sweep({ env: { CCD_TMP_SWEEP_DF: df } });
+    expect(r.code, r.err).toBe(0);
+    expect(census().pressure, 'one root under pressure').toBe(true);
+    expect(exists(inLeaf), 'the pressured leaf takes the 3-day age').toBe(false);
+    expect(exists(inPrimary), 'the other root keeps the 14-day age').toBe(true);
+  }, 120_000);
+
   it('a root that is a link, or not ours, is not walked', () => {
     liveSession();
     const real = path.join(h.home, 'real-root');
@@ -608,6 +628,15 @@ describe('the size budget', () => {
     fs.writeFileSync(path.join(dir, 'at'), String(whenS()));
     return dir;
   }
+  /** Like touchingGit, but the stamp is `at` plus the wall seconds elapsed since `start` was written: a probe that
+   *  runs late in a pass stamps a late time on the sweep's frozen clock, as a relatime read does. */
+  function lateTouchingGit(file: string): { dir: string; startPass: (atS: number) => void } {
+    const dir = path.join(h.home, 'gitwrap-late');
+    fs.mkdirSync(dir, { recursive: true });
+    const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    fs.writeFileSync(path.join(dir, 'git'), `#!/bin/sh\ntouch -a -d @$(( $(cat "${path.join(dir, 'at')}") + $(date +%s) - $(cat "${path.join(dir, 'start')}") )) "${file}"\nexec "${real}" "$@"\n`, { mode: 0o755 });
+    return { dir, startPass: (atS) => { fs.writeFileSync(path.join(dir, 'at'), String(atS)); fs.writeFileSync(path.join(dir, 'start'), String(Math.floor(Date.now() / 1000))); } };
+  }
   const pathWith = (dir: string): string => `${dir}:${process.env.PATH ?? ''}`;
 
   it('more than 50 repositories in one entry: the cap is a reason to keep it, never a silent stop (git-work-unrescued)', () => {
@@ -681,6 +710,25 @@ describe('the size budget', () => {
     expect(exists(a), r.out + r.err).toBe(false);
   }, 180_000);
 
+  it('a probe that runs seconds into the pass is still the probe: its atime is not a touch at the next pass', () => {
+    liveSession();
+    const a = pushedRepo();
+    fs.writeFileSync(path.join(a, 'w'), 'unpushed');
+    git(a, 'add', '-A'); git(a, 'commit', '-q', '-m', 'local');
+    setTimes(a, NOW0 - 6 * DAY);
+    const late = lateTouchingGit(path.join(a, 'data'));
+    const slow = ccdStub(false, 3);
+    arm();
+    late.startPass(NOW0); sweep({ stub: slow, env: { PATH: pathWith(late.dir) } });
+    late.startPass(NOW0 + 25 * HOUR); sweep({ plusS: 25 * HOUR, stub: slow, env: { PATH: pathWith(late.dir) } });
+    expect(exists(a), 'the unpushed commit keeps it').toBe(true);
+    git(a, 'push', '-q', 'origin', 'HEAD'); git(a, 'fetch', '-q', 'origin');
+    late.startPass(NOW0 + 40 * HOUR);
+    const r = sweep({ plusS: 40 * HOUR, stub: slow, env: { PATH: pathWith(late.dir) } });
+    expect(r.code, r.err).toBe(0);
+    expect(exists(a), r.out + r.err).toBe(false);
+  }, 240_000);
+
   it('a scan that spends its entry bound does not starve the pre-move re-walk: shadow and live agree', () => {
     liveSession();
     sizes([['a', 400, 6 * 24], ['b', 400, 5 * 24], ['c', 400, 4 * 24], ['d', 400, 3 * 24]]);
@@ -730,6 +778,25 @@ describe('the size budget', () => {
     expect(es.every(exists)).toBe(true);
     expect(census().moved.map((m) => [m.name, m.kind, m.shadow])).toEqual([['a', 'budget', true], ['b', 'budget', true]]);
     expect(quarantined()).toEqual([]);
+    const s = session(census());
+    expect(s.bytes, 'the census measures the disk, not the hypothetical one').toBeGreaterThanOrEqual(4 * 400 * KB);
+    expect(s.entries).toBe(4);
+    expect(s.budget.state, 'shadow is never "enforced"').toBe('over');
+    expect(s.budget.overSince).not.toBeNull();
+    expect(s.budget.removedBytes).toBe(0);
+  }, 120_000);
+
+  it('shadow: an over-budget session whose overage is 14-day-old entries still records overSince and its measured bytes', () => {
+    liveSession();
+    const es = sizes([['a', 400, 15 * 24], ['b', 400, 15 * 24], ['c', 400, 15 * 24], ['d', 400, 15 * 24]]);
+    sweep();
+    expect(es.every(exists)).toBe(true);
+    expect(census().moved.map((m) => [m.kind, m.shadow])).toEqual(Array(4).fill(['scratch', true]));
+    const s = session(census());
+    expect(s.bytes).toBeGreaterThanOrEqual(4 * 400 * KB);
+    expect(s.entries).toBe(4);
+    expect(s.budget.overSince).not.toBeNull();
+    expect(s.budget.state).toBe('over');
   }, 120_000);
 
   it('an age-rule move comes first: the budget counts what it left', () => {
