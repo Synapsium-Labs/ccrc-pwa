@@ -8,6 +8,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { buildFleetReadModel } from '../src/fleetReadModel.js';
 import { markerSwitchNames, readSwitches, RECLAIM_PAUSE_MARKER } from '../../shared/switches.js';
+import { MAIL_DISABLED_MARKER } from '../../shared/switches.js';
 import { LATER, MONO_LATER, countBy, primed, rig } from './fleetListingFixture.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -63,5 +64,34 @@ describe('a steady tick lists the registry once for selection', () => {
     const by = countBy(r.listings);
     expect({ mail: by.mailPass, divergences: by.divergencesPass, limits: by.readLimits }).toEqual({ mail: 1, divergences: 1, limits: 1 });
     expect(r.listings.length, 'one selection listing and three act-time or request-time ones').toBe(4);
+  });
+});
+
+describe('a switch raised after the tick\'s listing holds the lane that acts on it (the act-time reads)', () => {
+  it('a mail switch raised right after the tick\'s listing holds the mail lane before it reads its queue', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    const m = r.coord.insertMail({ fromId: 'demo-b', fromUuid: 'u-b', toId: 'demo-a', runId: null, kind: 'status', subject: 's', body: 'b', artifacts: [] });
+    r.coord.queueDelivery(m.id, 'demo-a', 'env');
+    await primed(r);
+    const due = vi.spyOn(r.coord, 'dueDeliveries');
+    r.hooks.afterListing = (caller) => { if (caller === 'tick') r.marker(MAIL_DISABLED_MARKER); };
+    r.at(LATER, MONO_LATER);
+    await r.w.tick();
+    await r.settle();
+    expect(due.mock.calls.length, 'a mail switch raised after the tick\'s listing holds').toBe(0);
+  });
+
+  it('CONTROL: the same tick, with no switch raised, lets the mail lane read its queue', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    const m = r.coord.insertMail({ fromId: 'demo-b', fromUuid: 'u-b', toId: 'demo-a', runId: null, kind: 'status', subject: 's', body: 'b', artifacts: [] });
+    r.coord.queueDelivery(m.id, 'demo-a', 'env');
+    await primed(r);
+    const due = vi.spyOn(r.coord, 'dueDeliveries');
+    r.at(LATER, MONO_LATER);
+    await r.w.tick();
+    await r.settle();
+    expect(due.mock.calls.length).toBeGreaterThan(0);
   });
 });

@@ -39,9 +39,18 @@ export function rig() {
   const listings: string[] = [];
   const reads: string[] = [];
   const stats: string[] = [];
+  /** Runs right after a listing was taken: a switch raised in it is raised AFTER that listing. */
+  const hooks: { afterListing?: (caller: string) => void } = {};
   const io: FleetIO = {
     ...localIO,
-    readdir: async (p: string) => { if (p === cfg.registryDir) { listings.push(callerOf()); } else reads.push(p); return localIO.readdir(p); },
+    readdir: async (p: string) => {
+      if (p !== cfg.registryDir) { reads.push(p); return localIO.readdir(p); }
+      const caller = callerOf();
+      listings.push(caller);
+      const names = await localIO.readdir(p);
+      hooks.afterListing?.(caller);
+      return names;
+    },
     stat: async (p: string) => { stats.push(p); return localIO.stat(p); },
   };
   const t = { mono: MONO0 };
@@ -57,7 +66,7 @@ export function rig() {
   const at = (wall: number, mono: number): void => { vi.spyOn(Date, 'now').mockReturnValue(wall); t.mono = mono; };
   /** Let the fire-and-forget lanes of a tick settle. */
   const settle = async (): Promise<void> => { for (let i = 0; i < 40; i += 1) await new Promise((r) => setTimeout(r, 5)); };
-  return { home, cfg, coord, w, listings, reads, stats, row, marker, unmarker, at, settle };
+  return { home, cfg, coord, w, listings, reads, stats, hooks, row, marker, unmarker, at, settle };
 }
 export type Rig = ReturnType<typeof rig>;
 
