@@ -6,6 +6,8 @@ pipeline this document puts into service) and `2026-08-15-stage2b-ccrc-cli-and-d
 extends). **Fleet names are ROLES** here — the fleet box, the server box — never hosts; real values live in
 `deploy/reference-fleet.md`, gitignored.
 
+> **Delta, 2026-10-22 (centralised update management wave 25, D-6390, D-6398, D-6408, D-6511):** a merge to `main` whose build is unchanged cuts no release: every merge builds, and when the tarball matches the newest release `main`'s head contains entry for entry (only `build.json`'s `sha`, `builtAt` and `version` and MANIFEST's `build.json` line set aside), nothing is tagged, attested or published; a tests-only merge is the usual case. A merge that changes only `docs/` or the root's Markdown starts no release run at all (the workflow's `paths-ignore`). The next merge that changes the build takes the next patch number, and its release contains the skipped merges. Where this document says every merge is a release, read every merge that changes what ships. A push to `stable` still promotes only the release tagged at its HEAD: the tag at HEAD stays the whole input. The refusal of an untagged HEAD now names the newest release HEAD contains, and says either that HEAD's merge changed only `docs/` or the root's Markdown, so no release-main run started for it, or points at the release-main run for that head.
+
 ## 0. In one paragraph
 
 ccrc already has a complete, tested release pipeline — `deploy/build-release.sh`, `.github/workflows/release.yml`,

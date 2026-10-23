@@ -62,7 +62,7 @@ export const NothingChosenYet: Story = {
       name="story-channel"
       options={[
         { value: 'stable' as const, label: 'Stable — promoted releases only.' },
-        { value: 'dev' as const, label: 'Dev — every merge to main.' },
+        { value: 'dev' as const, label: 'Dev — every merge that changes the build.' },
       ]}
       value={null}
       onPick={() => undefined}

@@ -9339,7 +9339,7 @@ export const READER_MIN_COLS = 120;
  * hand-typed SQL tuple of any of these words.
  * ------------------------------------------------------------------------- */
 
-/** A release channel (decision 2): `dev` is every merge, `stable` a promotion
+/** A release channel (decision 2): `dev` is every merge that changes what ships, `stable` a promotion
  *  of an existing release. No we-do-not-know member, on purpose: a channel
  *  token this build cannot name reads `null` (the ClaimState stance, §6) and
  *  the resolver resolves NOTHING for that node — never the fleet default,

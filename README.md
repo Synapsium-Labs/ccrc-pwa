@@ -63,7 +63,7 @@ spec  →  plan  →  waves of subagents  →  per-PR review lenses  →  whole-
 | **Account pools** | Tag projects and accounts into pools; placement, swaps and rescues stay inside one, and a blocked session with no room left in its pool strands, loudly, instead of crossing. |
 | **An optional session gate** | Passkeys or a passphrase, off by default, and it fails shut on every ambiguity rather than open. `ccrc expose` arms it. |
 | **One whitelisted socket** | Split across two boxes, the server never SSHes the fleet host. It drives it through a closed set of whitelisted operations, and nothing else. |
-| **Signed releases, updates that undo themselves** | Every merge to `main` becomes a provenance-attested `dev` release, and `stable` is a promotion behind a full-suite gate. A box moves with one verb or one tap in Settings, behind a health gate that restores the previous build when it fails. |
+| **Signed releases, updates that undo themselves** | Every merge to `main` that changes what ships becomes a provenance-attested `dev` release (a merge that changes only `docs/` or the root's Markdown starts no release run, and one whose build comes out identical, a tests-only merge for one, cuts none), and `stable` is a promotion behind a full-suite gate. A box moves with one verb or one tap in Settings, behind a health gate that restores the previous build when it fails. |
 | **Public in one verb** | `ccrc expose` writes the Caddy config for a DuckDNS name, your own domain or a bare IP, arms the session gate, and prints the root steps instead of running them. |
 | **A doctor that names the fix** | `ccrc doctor` prints one verdict per check, with a remedy under every WARN and FAIL, and the install's own exit code is doctor's. |
 
@@ -87,6 +87,11 @@ registers the session hook and the ccrc skills in every account home the roster 
 and ends by running `ccrc doctor`, whose exit code is the install's. The server comes up
 on `127.0.0.1:7788`. Keep the checkout out of `~/ccrc`: that is where the installed tree's
 link goes, and a real directory there is moved aside and removed after a green install.
+
+A checkout of a `main` head that no release names (a merge that changed nothing that ships)
+installs with no `version` in its stamp, so it raises no update floor, and a later bare
+`ccrc update` may move it to an older stable release. For a versioned build, check out a release
+tag before `bash install.sh` (`git checkout vX.Y.Z`), or install with `--release`.
 
 Then:
 
@@ -151,8 +156,10 @@ rides:
 bash install.sh --release [vX.Y.Z] --role fleet
 ```
 
-**Which release you get.** Every merge to `main` publishes a release, born a prerelease —
-the `dev` channel; `stable` moves only by promotion, so it can trail `dev` by many
+**Which release you get.** Every merge to `main` that changes what ships publishes a release, born a
+prerelease — the `dev` channel. A merge that changes only `docs/` or the root's Markdown starts no
+release run; any other merge builds, and it releases unless its tarball matches the newest published
+release it contains. A merge that publishes none is in the next release. `stable` moves only by promotion, so it can trail `dev` by many
 releases. A bare `--release` installs the newest **stable** release (`latest/download`
 never serves a prerelease); name a tag to take any published build, a `dev` one included.
 The repository's Releases page, or `gh release list -R Synapsium-Labs/ccrc-pwa`, lists both
@@ -445,6 +452,7 @@ bash install.sh
 ```
 
 Keep the checkout out of `~/ccrc` — that name is the installed tree's link ("Quickstart", above).
+Check out a release tag first if the box should carry a version and an update floor ("Quickstart", above).
 
 The owner in that URL is `CCRC_RELEASE_OWNER`'s value — defined once in
 `install.sh` and matched by `ccd/ccrc`, so `ccrc update` later downloads from
@@ -737,11 +745,20 @@ Design: `docs/superpowers/specs/2026-08-21-stage4-release-design.md`. Runbook st
 (`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`) is the two-box worked proof of the
 install and update verbs in this section.
 
-**The pipeline.** Every push to `main` runs `.github/workflows/release-main.yml`, thin like its
+**The pipeline.** Every push to `main` that changes anything outside `docs/` and the root's Markdown runs
+`.github/workflows/release-main.yml` (a push of only those starts no run), thin like its
 siblings: `deploy/release-main.sh prepare` derives the next patch tag from the highest `vX.Y.Z`, tags
 it LOCALLY and runs `deploy/build-release.sh` (the one builder — refuses a dirty tree and an untagged
-HEAD); `actions/attest-build-provenance` then signs the tarball's digest with the workflow's own OIDC
-identity (keyless — the repo holds no signing secret); and `release-main.sh publish` pushes the tag and
+HEAD) into a candidate directory. `release-main.sh compare` then downloads the newest release HEAD
+contains, checks it against its own `SHA256SUMS`, and compares the two tarballs entry by entry: path,
+type, mode, size, content and link target, setting aside only `build.json`'s `sha`, `builtAt` and
+`version` and MANIFEST's line for `build.json`. When every entry matches, the merge cuts no release:
+the local tag is dropped, nothing is attested, pushed or published, and one line in the log and the
+job summary reads `built unchanged: <N> entries identical to vX.Y.Z`. Anything else releases, and the
+line names the first entry that differs, or why it could not compare; a merge that changes
+`release-main.yml` or `release-main.sh` always releases, so the comparer never approves its own change.
+Where it releases, `actions/attest-build-provenance` signs the tarball's digest with the workflow's own
+OIDC identity (keyless — the repo holds no signing secret); and `release-main.sh publish` pushes the tag and
 publishes the tarball, `SHA256SUMS` and the bundle `ccrc-<tag>.tar.gz.sigstore.json` with `gh release
 create --verify-tag --prerelease`, deleting the tag again if the publish never completes (nothing
 reaches origin before that push). A hand-pushed `vX.Y.0`/`vX.0.0` tag rides `release.yml` instead —
@@ -756,8 +773,17 @@ that carries the tag as `version` (`ccrc version` prints it; `/health` emits a s
 its channel — `dev` while set, `stable` once cleared — and its bytes never change. Promotion is a
 fast-forward push of a released commit to the `stable` branch (`git push origin <tag>^{commit}:refs/heads/stable`
 from any checkout with the tag fetched; the branch's ruleset refuses force pushes and deletion, and
-the script refuses a HEAD that carries no release tag or more than one — a merge commit carries none, so
-it cannot be promoted; D-3130 says why there is no linear-history rule), which runs `release-stable.yml`. Its
+the script refuses a HEAD that carries no release tag or more than one — a merge commit carries none,
+and neither does a `main` merge that changed nothing that ships, so neither can be promoted; D-3130 says
+why there is no linear-history rule), which runs `release-stable.yml`. `main`'s head often carries no
+release now, so push a release's own commit (`git push origin vX.Y.Z^{commit}:refs/heads/stable`), not
+`main`'s head. When that commit is not the head the daily run tested, the gate runs the full suite on it
+first. A push of an untagged head is refused after its gate, and the refusal names the newest release it
+contains; it says when that head's merge changed only `docs/` or the root's Markdown, so no release-main run
+started for it, and otherwise points at the release-main run for that head, which says `built unchanged` or
+what differed, or was cancelled before it started because a later merge's run replaced it, and then that
+later run's line covers this head; `stable` then stays on that head until a release cut from a descendant of
+it is pushed. Its
 `gate` job first looks for a green `full-suite` job on that commit from a trusted run — `ci.yml`'s daily or manual
 full run on `main`, or an earlier stable gate, never a pull request's — and, finding none, runs `ci.yml` in full
 mode; only then does `deploy/release-stable.sh` run (a red gate leaves the branch moved and no flag flipped, which
@@ -6543,7 +6569,8 @@ bash deploy/deploy.sh agent <host>   # fleet: back up → rsync → ccd pair, cc
 
 `deploy/deploy.sh` is the FALLBACK — it pushes a working tree onto a box that is **already installed**,
 writes no `~/.ccrc/installed` record, and stamps `version` only when a release tag points at the built
-commit (auto-tagging makes that the ordinary case on `main`). A box it deploys therefore reports
+commit (true of a `main` head whose merge changed what ships; a merge that touches only docs or the
+server and agent tests leaves the head untagged, and such a box raises no update floor). A box it deploys therefore reports
 `install: incomplete` from `ccrc version`, and `incomplete` or `unversioned` from `ccrc update --check`.
 Skills ship on its agent arm only; the path is a release and `ccrc rollout` ("Releases" above). Still **no default target** — exit 2.
 

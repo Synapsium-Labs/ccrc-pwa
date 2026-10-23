@@ -1,10 +1,12 @@
-# Every merge to main becomes a PRERELEASE carrying a provenance bundle
-# (designs 2026-09-18 §3 and 2026-09-20 §4). Thin by design, like release.yml:
-# deploy/release-main.sh owns the derivation, the local tag, the build, the
-# push and the publish — in TWO ARMS, so the attest ACTION can run between
-# them — and both arms are tested locally (server/test/release-main.test.ts).
-# The one expression this file decides, the attest step's `if:`, is pinned
-# in server/test/build-release.test.ts.
+# Every merge to main that starts a run, and whose build differs from the newest
+# release it contains, becomes a PRERELEASE carrying a provenance bundle (designs 2026-09-18 §3 and
+# 2026-09-20 §4). Thin by design, like release.yml: deploy/release-main.sh owns
+# the derivation, the local tag, the build, the comparison, the push and the
+# publish — in THREE ARMS, so the attest ACTION can run between the comparison
+# and the publish — and all three are tested locally
+# (server/test/release-main.test.ts). The expression this file decides, the
+# attest step's `if:`, and the step order and token placement are pinned in
+# server/test/build-release.test.ts.
 #
 # Deliberately NOT gated on ci.yml: the PR's required checks are the gate,
 # before the merge (spec §2, decision 4). There is no post-merge test run to
@@ -16,9 +18,37 @@
 # required.
 name: release-main
 
+# THE TRIGGER (D-6511, the operator's amendment; supersedes D-6397). A merge
+# that changes only docs/ or the root's Markdown starts no run: no runner, no
+# build, no release. Any other merge starts the normal flow, and the build
+# fingerprint still decides every run that starts (D-6512). The facts:
+#   - GitHub's `*` does not cross `/`. So '*.md' is the root's Markdown files
+#     only and 'docs/**' is the root docs/ tree only; the shipped skills under
+#     ccd/ and anything under pwa/src/docs/ still start a run.
+#   - A push in which every changed file matches starts no run at all.
+#   - GitHub's limits: a push of more than 1,000 commits, or a diff that times
+#     out, always runs; a diff of more than 3,000 files runs only if a
+#     non-ignored file is among the first 3,000 the filter returns. The last
+#     case can skip a real change, which is delayed and never lost (D-6512):
+#     the base is the newest release HEAD contains, not the push's before, so
+#     the next run that starts builds the change and releases it.
+#   - No workflow_dispatch: there is no manual release button (the operator's
+#     ruling). A failed release followed only by docs merges stays unreleased
+#     until the next merge outside the two patterns, or until the failed run is
+#     re-run.
+#   - The list is two root-anchored patterns, and is never widened without a
+#     ledger entry. server/test/build-release.test.ts pins this block exactly
+#     (W25-F1) and, by running the builder on a repository that tracks both,
+#     pins that the built tarball holds no entry named under docs/ and no root
+#     Markdown entry (W25-F2; names only).
+#   - The list has a second copy: deploy/release-stable.sh's case arms, which
+#     tell a docs-only head (no run started) from one with a run. W25-T8
+#     (server/test/release-stable.test.ts) reads this list and ties each
+#     pattern to an arm there, so the two change together (D-6512).
 on:
   push:
     branches: [main]
+    paths-ignore: ['docs/**', '*.md']
 
 # Two close merges serialise, so the second derives its tag after the first
 # has pushed. Never cancel: nothing reaches origin before the publish arm's
@@ -49,11 +79,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The next tag is derived from the highest existing one, and the
-          # release script names the artifact by `git tag --points-at HEAD`:
-          # both need the tags present, not a shallow single-commit fetch.
+          # The next tag is derived from the highest existing one, the base is
+          # the newest release tag this commit contains, and the release script
+          # names the artifact by `git tag --points-at HEAD`: all three need the
+          # tags and the history present, not a shallow single-commit fetch.
           fetch-depth: 0
 
+      # Every merge builds, so the toolchain is set up unconditionally: the
+      # release decision is made on the built artifact, not on which paths
+      # changed (D-6390, D-6401).
       - uses: actions/setup-node@v4
         with:
           node-version-file: server/package.json
@@ -64,26 +98,44 @@ jobs:
             pwa/package-lock.json
             ui/package-lock.json
 
-      # Arm 1: refuses dirty/tagged, derives, tags LOCALLY, builds. Nothing
-      # reaches origin here.
-      - name: Derive the next tag and build the artifact
+      # Arm 1: refuses dirty/tagged, derives, tags LOCALLY, builds the candidate
+      # into release-out/candidate, outside the attest glob below. Nothing
+      # reaches origin here. The step has no env: it installs the dependencies,
+      # and it takes no token and runs no gh (D-6401).
+      - name: Derive the next tag and build the candidate
         run: bash deploy/release-main.sh prepare --out release-out
+
+      # Arm 2: sets the candidate against the newest release this commit
+      # contains, by a fingerprint of the two extracted tarballs (D-6390), and
+      # records `release=true` or `release=false`. Only a positive, exact,
+      # non-empty match skips; anything else releases (D-6393), as does a change
+      # to this workflow or to the script (D-6409). It holds the token for the
+      # published-base check and the download. It runs after the install in the
+      # same job, so it is not a boundary against a hostile dependency: two
+      # credentials already reach every step (D-6405). A crash here fails the
+      # job before the attest step, with nothing pushed (D-6499).
+      - name: Compare the build with the newest release it contains
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash deploy/release-main.sh compare --out release-out
 
       # Keyless provenance (design 2026-09-20 §4, §5): THIS workflow's OIDC
       # identity at refs/heads/main signs the tarball's digest; the bundle
       # is published beside the tarball and every `ccrc update` verifies it
       # against exactly this identity (…/release-main.yml@refs/heads/main).
-      # Skipped when prepare built nothing — an already-tagged HEAD is
-      # release.yml's — because the action refuses an empty subject glob;
-      # `hashFiles` is '' when nothing matches.
+      # Runs only on an explicit release decision (D-6499): a skipped build is
+      # never attested, an already-tagged HEAD is release.yml's, and the action
+      # refuses an empty subject glob.
       - uses: actions/attest-build-provenance@v4
         id: attest
-        if: hashFiles('release-out/ccrc-*.tar.gz') != ''
+        if: steps.compare.outputs.release == 'true'
         with:
           subject-path: release-out/ccrc-*.tar.gz
 
-      # Arm 2: copies the bundle to its release name, pushes the tag, publishes
-      # all three artifacts as a prerelease, deletes the tag on failure.
+      # Arm 3: copies the bundle to its release name, pushes the tag, publishes
+      # all three artifacts as a prerelease, deletes the tag on failure. On a
+      # skip it does nothing and the job ends green.
       - name: Push the tag and publish the prerelease
         env:
           GH_TOKEN: ${{ github.token }}
