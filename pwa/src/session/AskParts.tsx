@@ -474,7 +474,7 @@ export function OwnWords({
             className="dlg-reply"
             onSubmit={(e) => {
               e.preventDefault();
-              if (!busy && !locked && !gap && held === null && taken === null) onSend(row);
+              if (!busy && !locked && held === null && taken === null) onSend(row);
             }}
           >
             <input

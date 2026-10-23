@@ -216,7 +216,13 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   const useStore = store ?? getSessionStore(id);
   const storeDialog = useStore((s) => s.dialog);
   /** Decision `ask-answer-returns-next-screen`: an answer route's `next`, into the store (`applyAnswered`). */
-  const applyAnswered = (answeredId: string, next: Dialog | null): void => useStore.getState().applyAnswered(answeredId, next);
+  // D-6325 (review 844 I1): not while the connection has not spoken. The store's `dialog` is null in the gap, which
+  // `applyAnswered` reads as "nothing newer is held" and would write the reply's `next` into it: the old connection's
+  // evidence, which a new stream that frames no menu would then be decided from. The new stream frames the current menu itself.
+  const applyAnswered = (answeredId: string, next: Dialog | null): void => {
+    if (!useStore.getState().askFrameSeen) return;
+    useStore.getState().applyAnswered(answeredId, next);
+  };
   const storeAsk = useStore((s) => s.ask);
   const live = useStore((s) => s.askFrameSeen);
   // D-6325, decision `the-ask-holds-through-a-reconnect` (F2) and its exit (F3). The surface is LIVE exactly while
@@ -320,6 +326,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   const claim = (): boolean => {
     // The gap is read-only (`the-ask-holds-through-a-reconnect`): no answer goes on the old connection's evidence.
     if (!live) return false;
+    // A closing surface is the screen gone: it sends nothing, even where its `inert` content is not honoured.
+    if (closed) return false;
     if (sending.current) return false;
     sending.current = true;
     return true;
@@ -437,8 +445,11 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
       }
       // Landed. Like a tapped option, the sheet stays busy until the pane moves on — unless it already has: the next
       // screen can reach the store before the call's answer does, and must not be held busy by it.
+      // In the gap the store's `dialog` is null (F1), which says nothing about the pane: the call stays landed and the
+      // `[dialogId, closed]` reset decides once the new connection speaks, as it does for a tapped option.
+      const gapNow = !useStore.getState().askFrameSeen;
       const now = useStore.getState().dialog;
-      const waiting = now !== null && (now.id === current.id || showsSent(now, { ...call, state: 'landed' }, kept));
+      const waiting = gapNow || (now !== null && (now.id === current.id || showsSent(now, { ...call, state: 'landed' }, kept)));
       setOwn(waiting ? { text: kept, call: { ...call, state: 'landed' } } : NO_WORDS);
       if (!waiting) setOtherFor(null);
     } catch (err) {
@@ -479,7 +490,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
     try {
       const res = await api.answerDialogMulti(id, current.id, wanted);
       if (res.next !== undefined) applyAnswered(current.id, res.next);
-      const waiting = useStore.getState().dialog?.id === current.id;
+      // As `sendWords`: in the gap the store's `dialog` is null and says nothing, so the commit stays landed.
+      const waiting = !useStore.getState().askFrameSeen || useStore.getState().dialog?.id === current.id;
       setPick(waiting ? { id: current.id, picked: wanted, call: { ...call, state: 'landed' } } : NO_PICK);
     } catch (err) {
       setPick({ id: current.id, picked: wanted, call: null });

@@ -184,10 +184,11 @@ export function SessionScreen({
   const liveAsk = useStore((s) => s.ask);
   const liveDialog = useStore((s) => s.dialog);
   const liveAskFrameSeen = useStore((s) => s.askFrameSeen);
-  // D-6325: pending exactly when the LIVE inputs make the sheet something (`askSource`, the one decider): before this
-  // connection's first ask frame the sheet is nothing, so a control offered then would raise nothing. The card follows the
-  // connection, not the held sheet: in a reconnect's gap `askFrameSeen` is down, so the card reads unanswered without its
-  // Answer control until the new connection decides, while the sheet's own hold through the gap is `DialogSheet`'s.
+  // D-6325: pending exactly when the LIVE inputs make the sheet something (`askSource`, the one decider). On a first
+  // connection, before its first ask frame the sheet is nothing, so a control offered then would raise nothing. A
+  // reconnect's gap is different: the sheet there is the held surface, but the card follows the connection, not the hold,
+  // so while `askFrameSeen` is down it reads unanswered without its Answer control until the new connection decides.
+  // The sheet's own hold through the gap is `DialogSheet`'s.
   const askPending = askSource({ ask: liveAsk, dialog: liveDialog, askFrameSeen: liveAskFrameSeen }).kind !== 'none';
   // Decision `ask-answer-control-says-submit`: while the pane is on an ask's review screen, the transcript's control
   // says what the sheet it raises is waiting on, so a hidden sheet is one labelled click from Submit.
