@@ -3799,7 +3799,9 @@ function answerStmts(db) {
     sidecars: db.prepare(`SELECT name, blob_id, entry_id FROM sidecars WHERE transcript_pk = ?
       AND (entry_id IS NULL OR entry_id IN (SELECT value FROM json_each(?))) ORDER BY name, blob_id`),
     blob: db.prepare('SELECT z, raw_len, fts_indexed, pruned_ms FROM blobs WHERE blob_id = ?'),
-    match: db.prepare('SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH ? AND rowid = ?'),
+    // D-6479: node:sqlite binds a JS number as REAL, and FTS5 then ignores a `rowid = ?` constraint, answering ANY row the
+    // phrase matches. The CAST makes the constraint apply, and checkSource still decides on the returned rowid itself.
+    match: db.prepare('SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH ? AND rowid = CAST(? AS INTEGER)'),
   };
   ANSWER_STMTS.set(db, s);
   return s;
@@ -3847,7 +3849,8 @@ export async function checkSource(db, idx, source, factRaw, tsMs) {
   if (b === undefined) return sourceFail('blob-absent');
   if (Number(b.fts_indexed) !== 1) return sourceFail('not-indexed');
   if (b.pruned_ms !== null || b.z === null) return sourceFail('pruned');
-  if (s.match.get(ftsPhrase(factRaw), source.blobId) === undefined) return sourceFail('no-match');
+  const hit = s.match.get(ftsPhrase(factRaw), source.blobId);
+  if (hit === undefined || Number(hit.rowid) !== Number(source.blobId)) return sourceFail('no-match');
   const t = await indexTextOf(b, source.via === 'sidecar', idx);
   if (t.state !== 'text' || !t.text.includes(factRaw)) return sourceFail('not-verbatim');
   if (row === null) return sourceFail('unlinked');

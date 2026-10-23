@@ -11146,6 +11146,7 @@ const b1t2Lib = b1t2LibMod as unknown as {
   canonicalJson(v: unknown): string;
   sha256Hex(s: string): string;
   historyPaths(home: string): { dbFile: string };
+  ftsPhrase(s: string): string;
   makePairIndex(pairs: Array<{ len: number; sha256: string }>): unknown;
   redactField(text: string, idx: unknown): string;
 };
@@ -11180,9 +11181,9 @@ const B1T2_IDS = { LN: 'La1b2c3d4e5f6a7b8c9d0', L2: 'La1b2c3d4ff0011223344', P: 
 /** A leaf id lib's card grammar refuses (uppercase hex): a damaged store's shape. */
 const B1T2_BAD_LEAF = 'LA1B2C3D4E5F6A7B8C9D0';
 const b1t2Text = (text: string): unknown[] => [{ type: 'text', text }];
-/** p1 carries a command of its own: FTS5 answers a rowid-constrained MATCH on a deleted contentless row with ANOTHER row that matches
- *  the phrase, so a second entry holding the span source's text would hide an unindexed source from the (b) case. */
-const b1t2Bash = (id: string, command: string): unknown[] => [{ type: 'tool_use', id, name: 'Bash', input: { command } }];
+/** p1 carries the span source's own command on purpose: a second blob holding the phrase is what once hid an unindexed
+ *  source from the (b) case, because a rowid bound as a JS number is not applied by FTS5 (D-6479). */
+const b1t2Bash = (id: string): unknown[] => [{ type: 'tool_use', id, name: 'Bash', input: { command: B1T2_CMD } }];
 type B1t2RowSpec = { key: string; type: string; provenance: string; ts: number; body: unknown; files: number[]; model?: string; summary?: boolean };
 /** Transcript 1's rows, in order. File 2 is the live copy and holds both boundaries; file 1 is a retired copy that also
  *  holds N, and alone holds the three same-millisecond rows outside N's holding copy. p1 sits after N in the holding copy,
@@ -11195,7 +11196,7 @@ const B1T2_ROWS: B1t2RowSpec[] = [
   { key: 'mIn', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T, body: b1t2Text(`noted ${B1T2_PHRASE} inside`), files: [2] },
   { key: 'bn', type: 'system', provenance: 'harness', ts: B1T2_T, body: b1t2Text('compact boundary one'), files: [1, 2] },
   { key: 'sn', type: 'user', provenance: 'summary', summary: true, ts: B1T2_T + 10, body: b1t2Text('Summary: the fixture card build ran.'), files: [2] },
-  { key: 'p1', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T - 500, body: b1t2Bash('toolu_b1t2p1', 'npm run fixture-other'), files: [2] },
+  { key: 'p1', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T - 500, body: b1t2Bash('toolu_b1t2p1'), files: [2] },
   { key: 'mOutBefore', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T - 1, body: b1t2Text(`noted ${B1T2_PHRASE} before`), files: [1] },
   { key: 'mOut', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T, body: b1t2Text(`noted ${B1T2_PHRASE} at`), files: [1] },
   { key: 'mOutAfter', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T + 1, body: b1t2Text(`noted ${B1T2_PHRASE} after`), files: [1] },
@@ -11562,6 +11563,47 @@ b1t2describe('W2-5b1 Task 2: the as-of pieces', () => {
         const cut = b1t2CutAt(rs, fx.uuid.bn!);
         b1t2expect([...cut.keptUuids]).toEqual(keepsR1 ? [fx.uuid.r1] : []);
         b1t2expect(B1T2.armPayloads(rs, fx.entry.bn!, B1T2_QUESTION, cut)).toEqual({ state: 'discard', why: word });
+      });
+    });
+  });
+
+  b1t2describe('answerability\'s clause 3 decides on the matched rowid (D-6479)', () => {
+    type Chk = (db: B1t2Db, idx: unknown, src: { via: string; entryId: number | null; blobId: number; name: string | null }, factRaw: string, tsMs: number) =>
+      Promise<{ ok: boolean; clause?: number; why?: string }>;
+    const checkSource = (B1T2 as unknown as { checkSource: Chk }).checkSource;
+    const src = (fx: B1t2Fx, key: string) => ({ via: 'entry', entryId: fx.entry[key]!, blobId: fx.blob[key]!, name: null });
+
+    b1t2it('CONTROL: the source\'s own live index row holds the phrase, so it is answerable (p1 holds the same command, as in the cases below)', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await checkSource(rs.db, rs.idx, src(fx, 'a1'), B1T2_CMD, B1T2_T)).toMatchObject({ ok: true });
+        b1t2expect((await B1T2.answerability(rs.db, rs.idx, { tsMs: B1T2_T, transcriptPk: 1, spanEntryIds: [fx.entry.a1!, fx.entry.r1!] }, B1T2_CMD)).state).toBe('answerable');
+      });
+    });
+
+    b1t2it('the source\'s index row is gone while another blob holds the phrase: no-match, clause 3, unanswerable (never the other blob\'s row)', async () => {
+      const fx = await b1t2Plant({ unindex: ['a1'] });
+      await b1t2With(fx, async (rs) => {
+        const held = (rs.db.prepare('SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH ?').all(b1t2Lib.ftsPhrase(B1T2_CMD)) as Array<{ rowid: number }>).map((r) => Number(r.rowid));
+        b1t2expect(held, 'CONTROL: p1\'s own row holds the phrase and a1\'s is gone').toEqual([fx.blob.p1]);
+        b1t2expect(await checkSource(rs.db, rs.idx, src(fx, 'a1'), B1T2_CMD, B1T2_T)).toEqual({ ok: false, clause: 3, why: 'no-match' });
+        b1t2expect(await B1T2.answerability(rs.db, rs.idx, { tsMs: B1T2_T, transcriptPk: 1, spanEntryIds: [fx.entry.a1!, fx.entry.r1!] }, B1T2_CMD)).toEqual({ state: 'unanswerable' });
+      });
+    });
+
+    b1t2it('the source\'s own blob does not hold the phrase (its row is live) while another blob does: no-match, clause 3', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        // r1 is a live, indexed tool_result whose text is 'card build ok'; p1 holds B1T2_CMD.
+        b1t2expect(await checkSource(rs.db, rs.idx, src(fx, 'r1'), B1T2_CMD, B1T2_T)).toEqual({ ok: false, clause: 3, why: 'no-match' });
+      });
+    });
+
+    b1t2it('at arm time the re-check names clause (b): a source whose index row is gone is unanswerable though p1 holds the same command', async () => {
+      const fx = await b1t2Plant({ unindex: ['a1'] });
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'b', why: 'unanswerable' });
+        await b1t2expect(B1T2.recheckBatch(rs, [b1t2Entry(fx, rs.storeId)], { configDirs: B1T2_DIRS })).rejects.toMatchObject({ word: 'quiz-unanswerable', detail: expect.stringContaining('clause (b) unanswerable') });
       });
     });
   });
