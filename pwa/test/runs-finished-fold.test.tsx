@@ -135,6 +135,31 @@ describe('the Finished group folds (D-6442)', () => {
     expect(finishedRows()).toHaveLength(40);
     expect(document.activeElement).toBe(door());
   });
+
+  it('a middle Show more leaves no flag behind: a later shorter archive moves no focus to the heading', async () => {
+    // Click a middle Show more (40 of 45 shown), then let the archive be re-read
+    // shorter (30 rows, so 40 >= 30 and the door goes). The re-read is real: the
+    // live frame drops the active run, which is the board's own trigger for it.
+    // A flag the click left set would pull focus to the heading with no click.
+    const active = run({ id: 900, state: 'working', closedAt: null, dispatchedAt: T0 - 5_000 });
+    const reads = [closedRuns(45), closedRuns(30)];
+    const store = makeStore();
+    act(() => { store.setState({ runs: [active], runsFrameSeen: true, fleetFrameSeen: true }); });
+    render(<RunsScreen store={store} loadCaps={NO_CAPS}
+      loadRuns={async () => ({ runs: [active, ...(reads.shift() ?? [])] })} />);
+    await act(async () => { await Promise.resolve(); });
+    const d = door()!;
+    d.focus();
+    fireEvent.click(d);
+    expect(finishedRows()).toHaveLength(40);
+    expect(document.activeElement).toBe(door());
+    await act(async () => { store.setState({ runs: [] }); await Promise.resolve(); });
+    expect(reads).toHaveLength(0);
+    expect(screen.getByRole('group', { name: 'finished (30)' })).toBeInTheDocument();
+    expect(finishedRows()).toHaveLength(30);
+    expect(door()).toBeNull();
+    expect(document.activeElement).not.toBe(finishedGroup().querySelector('.runs-group-head'));
+  });
 });
 
 describe('a one-second tick (D-6442)', () => {
@@ -162,6 +187,32 @@ describe('a one-second tick (D-6442)', () => {
     expect(calls().filter((x) => x.state === 'planned').length).toBeGreaterThanOrEqual(6);
     expect(calls().filter((x) => x.state === 'done')).toHaveLength(0);
     expect(document.querySelector('.run-dispatch')?.textContent).toContain('0:48');
+  });
+
+  it('a finished row’s clock still moves: it re-renders once when the 30 s step turns, and not before or after', async () => {
+    // The clock starts one second past a step boundary and the board ticks each
+    // second (a dispatch is pending). The boundary is crossed at the 29th tick. A
+    // clock frozen at mount re-renders no finished row there, and every case above
+    // stays green on it, so this is the one that holds the step moving.
+    vi.useFakeTimers({ now: BOUNDARY + 1_000 });
+    const pending = run({
+      id: 900, program: 'programme-b', programTitle: 'Programme B', state: 'planned', sessionId: null,
+      workspace: null, branch: null, dispatchedAt: null, closedAt: null,
+      dispatchStartedAt: BOUNDARY + 1_000 - 42_000,
+    });
+    await mount(closedRuns(30), [pending]);
+    const finishedCalls = (): number => vi.mocked(runWarnings).mock.calls.filter((c) => (c[0] as RunSummary).state === 'done').length;
+    vi.mocked(runWarnings).mockClear();
+    for (let i = 0; i < 28; i += 1) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    }
+    expect(finishedCalls()).toBe(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(finishedCalls()).toBe(FINISHED_FOLD);
+    for (let i = 0; i < 5; i += 1) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    }
+    expect(finishedCalls()).toBe(FINISHED_FOLD);
   });
 });
 
