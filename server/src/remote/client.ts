@@ -39,6 +39,8 @@ export interface RemoteFleetConfig {
   token: string;
   /** ms between heartbeat pings while connected. Default 15000. */
   heartbeatMs?: number;
+  /** ms allowed from creating a socket to the agent's `ready` frame (TCP connect, upgrade, hello→ready). Default 15000. */
+  connectTimeoutMs?: number;
   /** initial reconnect delay. Default 1000. */
   reconnectMinMs?: number;
   /** reconnect delay ceiling (doubles each failed attempt up to this). Default 30000. */
@@ -71,6 +73,11 @@ type TailListener = (msg: TailData | TailReset) => void;
 type PtyListener = (msg: PtyData | PtyExit) => void;
 
 const DEFAULT_HEARTBEAT_MS = 15_000;
+// The heartbeat only starts at `ready`, so without this deadline a socket that never reaches `ready` is unwatched:
+// a peer that accepts TCP and never answers the upgrade (an agent mid-shutdown or mid-reboot behind the listen
+// backlog) stranded the controller on a half-open socket for over an hour. Generous against a slow link — the
+// whole handshake is two small frames — and equal to the default request timeout.
+const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_RECONNECT_MIN_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
@@ -177,6 +184,7 @@ export class FleetClient {
   private backoffMs: number;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private connectTimer: NodeJS.Timeout | null = null;
   private awaitingPong = false;
   private missedPongs = 0;
 
@@ -191,6 +199,7 @@ export class FleetClient {
       url: cfg.url,
       token: cfg.token,
       heartbeatMs: cfg.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
+      connectTimeoutMs: cfg.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
       reconnectMinMs: cfg.reconnectMinMs ?? DEFAULT_RECONNECT_MIN_MS,
       reconnectMaxMs: cfg.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS,
       requestTimeoutMs: cfg.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -333,6 +342,7 @@ export class FleetClient {
       this.reconnectTimer = null;
     }
     this.stopHeartbeat();
+    this.clearConnectDeadline();
     // Path-identity spec 2026-10-12 §5.2: this path never reaches `onClose`. The socket is nulled below, so the
     // 'close' event's handler returns at its stale-socket guard, and this path therefore invalidates on its own.
     // `state.connected` is left as it was: changing it would change shutdown for every other reader.
@@ -361,6 +371,7 @@ export class FleetClient {
       return;
     }
     this.socket = ws;
+    this.armConnectDeadline(ws);
     ws.on('open', () => {
       ws.send(JSON.stringify({ t: 'hello', token: this.cfg.token }));
     });
@@ -426,6 +437,7 @@ export class FleetClient {
     // trigger among them) already reads the new epoch, with nothing measured under it.
     this.identity.invalidate('awaiting-inventory');
     this.ready = true;
+    this.clearConnectDeadline();
     // Mutated directly rather than pushed through setState, whose change
     // detection compares only connected/downSince — a reconnect to an upgraded
     // agent must still refresh this.
@@ -537,6 +549,7 @@ export class FleetClient {
     this.socket = null;
     this.ready = false;
     this.stopHeartbeat();
+    this.clearConnectDeadline();
     this.rejectAllPending(new Error('disconnected'));
     // The agent kills every open pty on disconnect (per its own connection-
     // close handler) — synthesize the same `exit` locally for anything still
@@ -588,6 +601,21 @@ export class FleetClient {
       entry.reject(err);
     }
     this.pending.clear();
+  }
+
+  private armConnectDeadline(ws: WebSocket): void {
+    this.clearConnectDeadline();
+    this.connectTimer = setTimeout(() => {
+      this.connectTimer = null;
+      if (ws !== this.socket || this.ready) return; // a stale timer for a socket we already replaced
+      ws.terminate(); // -> 'close' -> onClose -> reconnect (ws emits it for a CONNECTING socket too)
+    }, this.cfg.connectTimeoutMs);
+    this.connectTimer.unref?.();
+  }
+
+  private clearConnectDeadline(): void {
+    if (this.connectTimer) clearTimeout(this.connectTimer);
+    this.connectTimer = null;
   }
 
   private startHeartbeat(): void {
