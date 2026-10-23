@@ -614,12 +614,12 @@ def unpushed(repos):
             if bare.returncode != 0: return True
             s = None
             if bare.stdout.strip() != 'true':
-                s = subprocess.run(base + ['status', '--porcelain'], capture_output=True, text=True, timeout=30, env=env)
+                s = subprocess.run(base + ['status', '--porcelain', '--untracked-files=all'], capture_output=True, text=True, timeout=30, env=env)
             u = subprocess.run(base + ['config', '--get-regexp', r'^remote\..*\.(pushurl|url)$'], capture_output=True, text=True, timeout=30, env=env)
             c = subprocess.run(base + ['rev-list', '-n1', '--all', '--reflog', '--not', '--remotes'], capture_output=True, text=True, timeout=30, env=env)
         except (OSError, subprocess.SubprocessError):
             return True
-        if s is not None and (s.returncode != 0 or s.stdout.strip()): return True
+        if s is not None and (s.returncode != 0 or s.stderr.strip() or s.stdout.strip()): return True
         if u.returncode not in (0, 1) or c.returncode != 0 or c.stderr.strip() or c.stdout.strip(): return True
         if local_remote(rp, [ln.split(None, 1)[1] for ln in u.stdout.splitlines() if ' ' in ln]): return True
     return False

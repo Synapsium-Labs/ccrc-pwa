@@ -716,6 +716,17 @@ describe('the size budget', () => {
     });
   }, 180_000);
 
+  it('an untracked file is dirty work even when the repository sets status.showUntrackedFiles=no (git-work-unrescued)', () => {
+    keptShape((a) => {
+      const remote = path.join(h.home, 'quiet-remote.git');
+      execFileSync('git', ['init', '-q', '--bare', remote], { env: GIT_ENV() });
+      git(a, 'init', '-q'); git(a, 'add', '-A'); git(a, 'commit', '-q', '-m', 'work');
+      git(a, 'remote', 'add', 'origin', remote); git(a, 'push', '-q', 'origin', 'HEAD'); git(a, 'fetch', '-q', 'origin');
+      git(a, 'config', 'status.showUntrackedFiles', 'no');
+      fs.writeFileSync(path.join(a, 'untracked-work'), 'not in any commit');
+    });
+  }, 180_000);
+
   /** A repository entry whose work a remote has, beside a recent entry that cannot go: the repository is the only way under. */
   function pushedRepo(): string {
     const [a] = sizes([['repo', 400, 6 * 24], ['recent', 1000, 1]]) as [string];
