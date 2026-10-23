@@ -15063,6 +15063,12 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(deadline(home, 'max'), 'a reading it cannot decide').toBe('900000 rc 1\n');
     });
 
+    it('W24-D7: max on rc 1 prints the largest reading it could decide, never 900000 in its place', () => {
+      const home = boxWith('ccrc-fx-w24-d7-', 'CCRC_UPDATE_DEADLINE_MS=1200000\n');
+      writeFileSync(exposureFile(home), 'CCRC_UPDATE_DEADLINE_MS=6e5\n');
+      expect(deadline(home, 'max')).toBe('1200000 rc 1\n');
+    });
+
     it('W24-K1: past its bound the keep-set makes its first full verification and no other, and answers 3', () => {
       const home = kBox('ccrc-fx-w24-k1-');
       const r = sourcedWith(home, `${FLOOR}; _bak_list; _bak_keepset "$(( $(date +%s) - 1 ))"; echo "rc $? [$BAK_KEEP_SNAP] [$BAK_KEEP_DATA] [$BAK_KEEP_TREE]"`,
@@ -15093,12 +15099,14 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
 
     it('W24-K4: a walk of cheap calls is never stopped: manifest-only and code-only dirs past the bound prune by count', () => {
       const pruned = (n: string): string => `update: backups: pruned $HOME/ccrc-backups/${n} `;
-      const shapes: (readonly [string, readonly (readonly [string, 'v1-empty' | 'plain'])[], readonly string[]])[] = [
-        ['code-only oldest', [['20250101-000000', 'plain'], ['20250102-000000', 'plain'], ['20250103-000000', 'v1-empty'],
+      // A code-only dir is deploy.sh's shape, an `agent-dist` entry and no manifest ('tree'): the newest such is the tree keep, so
+      // the oldest pair keeps its newer one past the count, and a newest one is inside the count anyway.
+      const shapes: (readonly [string, readonly (readonly [string, 'v1-empty' | 'tree'])[], readonly string[]])[] = [
+        ['code-only oldest', [['20250101-000000', 'tree'], ['20250102-000000', 'tree'], ['20250103-000000', 'v1-empty'],
           ['20250104-000000', 'v1-empty'], ['20250105-000000', 'v1-empty'], ['20250106-000000', 'v1-empty'], ['20250107-000000', 'v1-empty']],
-        ['20250101-000000', '20250102-000000', '20250103-000000', '20250104-000000']],
-        ['a deploy.sh backup newest', [['20250101-000000', 'v1-empty'], ['20250102-000000', 'v1-empty'], ['20250103-000000', 'v1-empty'],
-          ['20250104-000000', 'v1-empty'], ['20250105-000000', 'v1-empty'], ['20250106-000000', 'plain']],
+        ['20250101-000000', '20250103-000000', '20250104-000000']],
+        ['a code-only deploy.sh backup newest', [['20250101-000000', 'v1-empty'], ['20250102-000000', 'v1-empty'], ['20250103-000000', 'v1-empty'],
+          ['20250104-000000', 'v1-empty'], ['20250105-000000', 'v1-empty'], ['20250106-000000', 'tree']],
         ['20250101-000000', '20250102-000000', '20250103-000000']],
       ];
       for (const [shape, dirs, gone] of shapes) {
@@ -15169,6 +15177,90 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
         + 'does not take (it reads only a plain KEY=value line) — using 90');
       expect(r.code, 'still waiting at 5 s').toBe(124);
     }, 20_000);
+
+    // ── Task 4 (D-6594): the release mirror is a setting. The rollout pin's twin (the deploying machine's base) has no row here:
+    // no harness in this file reaches `cmd_rollout`'s pin without a real box, and W24-U2 holds `_upd_resolve`'s refusal it runs.
+    const MIRROR = 'http://127.0.0.1:9/releases';
+    const BASE_WHY = 'ccrc: CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take '
+      + '(it reads only a plain KEY=value line)';
+    const DEFAULT_BASE = ((): string => {
+      const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+      const pick = (name: string): string => new RegExp(`^${name}="([^"]+)"$`, 'm').exec(src)?.[1] ?? `${name}_LINE_MISSING`;
+      return `https://github.com/${pick('CCRC_RELEASE_OWNER')}/${pick('CCRC_RELEASE_REPO')}/releases`;
+    })();
+    const curlUrls = (home: string): string[] => (existsSync(join(home, 'curl-argv'))
+      ? readFileSync(join(home, 'curl-argv'), 'utf8').split('\n').filter((l) => l !== '') : []);
+    /** `script` in the sourced checkout ccrc, as `sourcedWith`, but with the recording curl planted over the loopback front that
+     *  `updateEnv` plants (`runUpdate`'s order), so `curl-argv` holds every URL asked. */
+    const sourcedRecording = (home: string, script: string, env: NodeJS.ProcessEnv = {}): Result => {
+      mkdirSync(join(home, 'tmp'), { recursive: true });
+      const e = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), ...env };
+      replantDoctorStubs(home);
+      const r = spawnSync(BASH, ['-c', `. "$1"; ${script}`, 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')], { env: e, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    /** `_upd_release_base` and its rc, sourced under `env -i`, as `<stdout> rc <n>`. */
+    const releaseBase = (home: string, extra: string[] = []): Result => bareSourced(home, '_upd_release_base; echo " rc $?"', extra);
+
+    it('W24-U1: the release base is the environment\'s, else ccrc.env\'s, else the derived default', () => {
+      const home = boxWith('ccrc-fx-w24-u1-', `CCRC_RELEASE_BASE_URL=${MIRROR}\n`);
+      let r = releaseBase(home);
+      expect([r.stdout, r.stderr], 'the file').toEqual([`${MIRROR} rc 0\n`, '']);
+      r = releaseBase(home, ['CCRC_RELEASE_BASE_URL=http://127.0.0.1:8/releases']);
+      expect([r.stdout, r.stderr], 'the environment beside it').toEqual(['http://127.0.0.1:8/releases rc 0\n', '']);
+      rmSync(envFile(home));
+      r = releaseBase(home);
+      expect([r.stdout, r.stderr], 'neither').toEqual([`${DEFAULT_BASE} rc 0\n`, '']);
+    });
+
+    it('W24-U2: a mirror line ccrc cannot read stops the update before anything changes', () => {
+      const home = freshUpdateBox('ccrc-fx-w24-u2-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      appendFileSync(envFile(home), `export CCRC_RELEASE_BASE_URL=${MIRROR}\n`);
+      const tree = treeDigest(join(home, 'ccrc'));
+      const r = runUpdate(home, ['--to', 'v9.9.9'], { CCRC_RELEASE_BASE_URL: '' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      const err = r.stderr.split('\n');
+      expect(err).toContain(BASE_WHY);
+      expect(err).toContain('ccrc: CCRC_RELEASE_BASE_URL could not be read (the line above says why) — nothing on this box was changed');
+      expect(curlUrls(home).filter((u) => !u.endsWith('/api/fleet/health')), 'a release URL was fetched').toEqual([]);
+      expect(treeDigest(join(home, 'ccrc')), '~/ccrc').toEqual(tree);
+    });
+
+    it('W24-U3: _upd_asset_listed answers 3 for the same line, and a rollback says the base, never curl', () => {
+      const home = boxWith('ccrc-fx-w24-u3-', `export CCRC_RELEASE_BASE_URL=${MIRROR}\n`);
+      const s = sourcedRecording(home, '_upd_asset_listed v9.9.9 SHA256SUMS; echo "rc $?"');
+      expect(s.stdout, `stderr: ${s.stderr}`).toBe('rc 3\n');
+      expect(s.stderr.split('\n')).toContain(BASE_WHY);
+      expect(curlUrls(home), 'the host was asked').toEqual([]);
+      const r = rollbackRun(home, ['--to', 'v9.9.9'], { CCRC_RELEASE_BASE_URL: '' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stderr.split('\n')).toContain(BASE_WHY);
+      expect(r.stderr).toContain('rollback: CCRC_RELEASE_BASE_URL could not be read (the line above says why) — nothing on this box was changed');
+      expect(r.stderr).not.toContain('curl failed');
+      expect(curlUrls(home), 'the host was asked').toEqual([]);
+    });
+
+    it('W24-U4: on macOS a knob-less line the Darwin model rejects leaves the release base at its default, and a named base beside it refuses', () => {
+      const knobless = 'CCRC_ROLE=both\nCCRC_PROJECTS_ROOT=~/code\n';
+      const home = boxWith('ccrc-fx-w24-u4-', knobless);
+      let r = bareSourced(home, 'CCD_OS=darwin; _upd_release_base; echo " rc $?"');
+      expect([r.stdout, r.stderr], 'knob-less').toEqual([`${DEFAULT_BASE} rc 0\n`, '']);
+      const u = freshUpdateBox('ccrc-fx-w24-u4-update-');
+      plantOldBox(u, { version: 'v1.0.0' });
+      mkdirSync(join(u, '.ccrc'), { recursive: true });
+      writeFileSync(envFile(u), knobless);
+      // CCD_OS is decided when ccrc is sourced, so the update runs as `cmd_update` in a shell that set it after the source.
+      const up = sourcedRecording(u, 'CCD_OS=darwin; cmd_update --to v9.9.9');
+      expect(curlUrls(u), `stderr: ${up.stderr}`).toContain(`${DEFAULT_BASE}/download/v9.9.9/SHA256SUMS`);
+      expect(up.stderr).not.toContain('CCRC_RELEASE_BASE_URL');
+      writeFileSync(envFile(home), `CCRC_RELEASE_BASE_URL=${MIRROR}\nCCRC_PROJECTS_ROOT=~/code\n`);
+      r = bareSourced(home, 'CCD_OS=darwin; _upd_release_base; echo " rc $?"');
+      expect(r.stdout, 'nothing on stdout').toBe(' rc 1\n');
+      expect(r.stderr.startsWith('ccrc: CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env line 2 is not a plain NAME=value line'), r.stderr)
+        .toBe(true);
+    });
   });
 
   describe('a classifier that cannot run, or answers out of its table, prunes NOTHING and says why (I1, R25)', () => {

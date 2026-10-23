@@ -573,6 +573,34 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the advance step in the hourly refre
     expect(r.stderr.split('\n').filter((l) => l.includes('CCRC_MODELS_ADVANCE_BUDGET_S'))).toEqual([BUDGET_OFF_LINE]);
   }, T);
 
+  it('W24-M1: the advance budget from ccrc.env turns the step off; the environment wins', async () => {
+    // D-6595: the budget is a setting, read through `_ccrc_knob`, so the models timer, which runs with no shell, honours the box's file.
+    await setup();
+    tier(0);
+    fs.rmSync(models('lane-a.advance.json'));
+    fs.writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_MODELS_ADVANCE_BUDGET_S=0\n');
+    let r = refresh({}, spy('_models_advance_lane', 'adv-calls', '"$2"'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(lines('adv-calls'), 'a lane was entered with the file\'s budget of 0').toEqual([]);
+    expect(r.stderr).not.toContain('CCRC_MODELS_ADVANCE_BUDGET_S');
+    r = refresh({ CCRC_MODELS_ADVANCE_BUDGET_S: '250' }, spy('_models_advance_lane', 'adv-calls', '"$2"'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(lines('adv-calls'), 'the environment\'s 250 enters the lane, as the default does').toHaveLength(1);
+  }, T);
+
+  it('W24-M2: a budget line ccrc cannot read turns the step off and says why', async () => {
+    await setup();
+    tier(0);
+    fs.rmSync(models('lane-a.advance.json'));
+    fs.writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'export CCRC_MODELS_ADVANCE_BUDGET_S=250\n');
+    const r = refresh({}, spy('_models_advance_lane', 'adv-calls', '"$2"'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(lines('adv-calls'), 'a lane was entered with the budget unread').toEqual([]);
+    expect(r.stderr.split('\n').filter((l) => l.includes('CCRC_MODELS_ADVANCE_BUDGET_S'))).toEqual(['ccrc: CCRC_MODELS_ADVANCE_BUDGET_S cannot be '
+      + 'measured: ~/.ccrc/ccrc.env names it on a line this reader does not take (it reads only a plain KEY=value line), so the advance '
+      + 'step is off for this run']);
+  }, T);
+
   it("the advance step runs after every lane's refresh, so a canary never delays another lane's LiteLLM render", async () => {
     // D-5213: lane-b's render (its first, so its list changes and its tier is asked) comes before lane-a's canary.
     await setup({ canaryStub: LOGGING_CANARY, laneB: true });

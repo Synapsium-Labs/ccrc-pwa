@@ -11200,7 +11200,7 @@ MODELS_HOOK_S=5
 # whole number is itself, base 10 (`0250` is 250), and 3600 at most, capped by its digit count before `$(( ))` could overflow
 # on it; ANYTHING ELSE (`off`, `-1`, `1.5`) is 0, the step off for this run, said on stderr without the value (D-6266).
 _models_advance_budget_secs() {
-  local s="${CCRC_MODELS_ADVANCE_BUDGET_S:-250}"
+  local s; _ccrc_knob CCRC_MODELS_ADVANCE_BUDGET_S 250 && s="$KNOB" || { echo "$PROG: $KNOB_WHY, so the advance step is off for this run" >&2; s=0; }
   case "$s" in *[!0-9]*) echo "$PROG: CCRC_MODELS_ADVANCE_BUDGET_S is not a whole number of seconds, so the advance step is off for this run" >&2; s=0 ;; esac
   s="${s#"${s%%[!0]*}"}"; [ "${#s}" -le 4 ] || s=3600
   s=$(( 10#${s:-0} )); [ "$s" -le 3600 ] || s=3600
@@ -19085,6 +19085,7 @@ cmd_rollback() {
          [ "$UPD_REPORTING" = 1 ] \
            && _upd_phase failed "rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed"
          exit 2 ;;
+      3) _ccrc_die "rollback: CCRC_RELEASE_BASE_URL could not be read (the line above says why) — nothing on this box was changed" ;;
       *) _ccrc_die "rollback: could not ask the release host whether $to exists within ${CCRC_RELEASE_PROBE_MAX_TIME}s (curl failed, timed out, or the host answered neither 200 nor 404) — nothing on this box was changed" ;;
     esac
   fi
@@ -19333,8 +19334,8 @@ _ccrc_knob() {   # <KEY> <default> [file]
     if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f"; then g=2; else LC_ALL=C awk -v k="$key" '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t); w = (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]"); n += w } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } w { f = 1; exit } END { exit (f ? 0 : (n ? 1 : 4)) }' "$f" || g=$?; fi; else g=3; fi
     case "$g" in 0) why="$f names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 1|4) ;; 3) why="$f is there but cannot be read" ;; *) why="$f could not be scanned" ;; esac
     # The named file alone: a path that cannot exist stands in for the exposure file, which no process that acts on any other
-    # setting receives (review 839; the deadline's `min` and `max` name it as the file instead, D-6602). Never the empty spelling, `CCRC_EXPOSURE_FILE=`: the model's own refusal of an undecidable ccrc.env compares its
-    # source with that path.
+    # setting receives (review 839; the deadline's `min` and `max` name it as the file instead, D-6602). Never the empty
+    # spelling, `CCRC_EXPOSURE_FILE=`: the model's own refusal of an undecidable ccrc.env compares its source with that path.
     if [ "$g" = 1 ] || { [ "$g" = 4 ] && [ "${CCD_OS:-linux}" = darwin ] && [ "$key" = CCRC_BACKUP_DATA_KEEP ]; }; then CCRC_EXPOSURE_FILE="$f/." _box_unit_env "$key"; case $? in 0) KNOB="$BUE_VAL"; if [ -n "$KNOB" ]; then KNOB_FROM=file; elif [ "$BUE_NAMED" = 1 ]; then KNOB_FROM=empty; fi ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
     [ -z "$why" ] || { KNOB=""; KNOB_WHY="$key cannot be measured: ${why/#"$HOME"/\~}"; return 1; }
   fi
@@ -20600,8 +20601,15 @@ _upd_marker_unsigned() {
 # (install.sh's own `BASE=` line carries its own copy of this expression — the release
 # source's deliberate cross-file second, argued in the RELEASE SOURCE
 # header above `CCRC_RELEASE_OWNER`: install.sh runs before any ccrc exists.)
+# A mirror, `CCRC_RELEASE_BASE_URL`, is a setting (wave 24, D-6594): the environment, else the box's ccrc.env, else that
+# default, read through `_ccrc_knob`, so a console update, the watchdog and the deploying machine's rollout pin all fetch
+# from the host the operator named. rc 0 prints the base; rc 1, a ccrc.env line naming it that cannot be read, prints
+# nothing on stdout and one `$PROG:` line on stderr (never `update:`: a rollback and a rollout reach it too), and the
+# caller refuses before anything on the box changes, since fetching from the default host then would read unmeasured as
+# unset. The line names the file, never the value, which can carry `user:pass@`.
 _upd_release_base() {
-  printf '%s' "${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
+  _ccrc_knob CCRC_RELEASE_BASE_URL "https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases" || { echo "$PROG: $KNOB_WHY" >&2; return 1; }
+  printf '%s' "$KNOB"
 }
 
 # `_upd_validate_timeout <name> <default> [what] [max]` — ONE validator for
@@ -20671,7 +20679,7 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   _upd_validate_timeout CCRC_RELEASE_SUMS_MAX_TIME 20
   _upd_validate_timeout CCRC_RELEASE_SUMS_MAX_FILESIZE 4096 \
     'a whole number of bytes from 1 to 1048576' 1048576
-  base="$(_upd_release_base)"
+  base="$(_upd_release_base)" || _ccrc_die "CCRC_RELEASE_BASE_URL could not be read (the line above says why) — nothing on this box was changed"
   if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
   UPD_URL_DIR_SAFE="$(_upd_redact "$UPD_URL_DIR")"
   UPD_STAGE="$(_plat_mktemp_d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
@@ -21666,7 +21674,10 @@ _upd_restore_copy() {
 }
 
 # `_upd_asset_listed <tag> <asset>` — 0 the release carries it; 1 it does not,
-# MEASURED: the host answered 404; 2 unmeasured — anything else. Two callers:
+# MEASURED: the host answered 404; 2 unmeasured — anything else; 3 the release
+# base could not be read (`_upd_release_base`'s own stderr line says why, and
+# no host was asked: a word of its own, since a caller's rc-2 sentence blames
+# curl and the host, wave 24, D-6594). Two callers:
 # arm 2 asks for the previous release's bundle, `rollback` (Task 7) for
 # SHA256SUMS. D-3261: curl -f's exit 22 is ANY status
 # >= 400 (D-3143, `_upd_fetch`), so a 403 rate limit or a 5xx from the release
@@ -21707,9 +21718,11 @@ _upd_asset_listed() {
   # bound that was actually applied.
   _upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME 15 \
     "a whole number of seconds from 1 to 18 (the pre-detach check must answer inside W5's 20-second spawn deadline)" 18
+  # Read before the curl, outside its `2>/dev/null`, so the reader's line reaches the operator.
+  local b; b="$(_upd_release_base)" || return 3
   code="$(curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_PROBE_MAX_TIME" \
-    -o /dev/null -w '%{http_code}' "$(_upd_release_base)/download/$1/$2" 2>/dev/null)" || rc=$?
+    -o /dev/null -w '%{http_code}' "$b/download/$1/$2" 2>/dev/null)" || rc=$?
   [ "$rc" -eq 0 ] && return 0
   [ "$rc" -eq 22 ] && [ "$code" = 404 ] && return 1
   return 2
