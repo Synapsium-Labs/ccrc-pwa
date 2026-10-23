@@ -1393,8 +1393,8 @@ describe('the bounded wait never sleeps past its budget (fix round 2, F9)', () =
     expectWithinBudget(first, 300, 30);
     expect(first.sleeps, 'the loop ends on the name that reported, with the budget unspent').toHaveLength(2);
     expect(first.calls.filter((c) => c.endsWith('/check-runs'))).toHaveLength(3);
-    // Had the pending watch then run, the next verdict is a fresh one: the same repository with the name now passing and
-    // another required name that nothing has reported.
+    // A later run in the same attempt uses BOUND_S=0, as every later run does: with the name now passing and another required
+    // name that nothing has reported, it prints WAIT not-reported and sleeps for nothing. Reporting that line is the prose's job.
     const added = ok({ ...((measured().protection as Answer).body as Record<string, unknown>),
       required_status_checks: { strict: false, contexts: [...CLASSIC, 'added/ci'],
         checks: [...CLASSIC, 'added/ci'].map((c) => ({ context: c, app_id: 15368 })) } });
