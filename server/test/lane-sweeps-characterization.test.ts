@@ -2,9 +2,13 @@
 // throttles on a wall-clock `last*` field: the task, usage, PR, name, divergence, lifecycle, readiness and the two
 // ledger sweeps. Each is driven through its own entry (the method `tick` calls) on a fake wall clock, and what a lane
 // did is read off an effect it cannot do without (a registry listing, a sidecar read, a token read, a mirror sweep, an
-// allocation read). Green on the hand-rolled clocks; the move onto `runLane` runs these rows unchanged, so a lane that
-// stamped late, lost its slot on a throw, forgot the stuck-run boundary or began to delay the tick shows here and not
-// in a fleet. Fixture homes only.
+// allocation read). Pinned per lane: the first call runs, a call inside the cadence skips, a wall clock stepped back
+// holds the lane and stepped forward runs it; a second call while a pass that never settles is running does not start
+// another (the slot is stamped before the work is awaited); a pass that throws rejects the call, spends the slot and
+// leaves the next due call running. Lifecycle is also reached through `tick` (the child-mark kick, a body that never settles
+// delays neither tick), and the PR sweep's stuck-run boundary has its own rows. The wall lanes take no
+// injected monotonic clock, so none is driven here; the monotonic lanes are pinned in the lane-schedule rows. Fixture
+// homes only.
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -116,6 +120,52 @@ describe.each(LANES)('the $key lane (wall clock)', (lane) => {
     at(NOW + HOUR);
     await lane.run(r);
     expect(ran(), 'a step forward did not run the lane').toBeGreaterThan(first);
+  });
+});
+
+const PASS: Record<string, string> = {
+  tasks: 'tasksPass', usage: 'usagePass', names: 'namesPass', divergences: 'divergencesPass',
+  readiness: 'readinessPass', ledgerFloor: 'ledgerFloorPass', ledgerReconcile: 'ledgerReconcilePass', pr: 'prPass',
+};
+type Body = () => Promise<void>;
+/** Make the lane's body `impl` and return a counter of how many times a pass was started. */
+function replaceBody(r: Rig, key: string, impl: Body): () => number {
+  if (key === 'lifecycle') {
+    let n = 0;
+    stubMirror(r.w, { sweep: async () => { n += 1; await impl(); } });
+    return () => n;
+  }
+  const spy = vi.spyOn(r.w as unknown as Record<string, Body>, PASS[key]!).mockImplementation(impl);
+  return () => spy.mock.calls.length;
+}
+const settleTurns = async (): Promise<void> => { for (let i = 0; i < 20; i++) await new Promise((res) => setImmediate(res)); };
+
+describe.each(LANES)('the $key lane: a second call while a pass runs', (lane) => {
+  it('does not start another pass while the first never settles', async () => {
+    const r = rig();
+    const started = replaceBody(r, lane.key, () => new Promise<void>(() => {}));
+    at(NOW);
+    void lane.run(r); await settleTurns();
+    expect(started(), 'the first call did not start a pass').toBe(1);
+    void lane.run(r); await settleTurns();
+    expect(started(), 'a second call overlapped a pass still running').toBe(1);
+    at(NOW + lane.cadenceMs - 1);
+    void lane.run(r); await settleTurns();
+    expect(started(), 'a call inside the cadence overlapped a pass still running').toBe(1);
+  });
+});
+
+describe.each(LANES)('the $key lane: a throw keeps its slot', (lane) => {
+  it('rejects the call, spends the slot, and the next due call runs', async () => {
+    const r = rig();
+    const started = replaceBody(r, lane.key, async () => { throw new Error('pass failed'); });
+    at(NOW);
+    await expect(lane.run(r)).rejects.toThrow('pass failed');
+    await lane.run(r);
+    expect(started(), 'a failed pass did not consume its slot').toBe(1);
+    at(NOW + lane.cadenceMs);
+    await expect(lane.run(r)).rejects.toThrow('pass failed');
+    expect(started(), 'the next due call did not run').toBe(2);
   });
 });
 
