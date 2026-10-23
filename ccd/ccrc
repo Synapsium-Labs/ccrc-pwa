@@ -9150,7 +9150,15 @@ _acct_remove() {
     done
     _codex_lock "$id" >&2 \
       || _acct_refuse 1 codex-reap-failed "codex lane $id's lock could not be taken, so its tiers cannot be stopped without racing a start - the lane library's reason is on stderr. The roster, projection, launcher, registry rows and every account artifact still stand.$usage_note Retry the removal once 'ccrc codex status $id' shows no start in progress."
+    # THE AUTH LIBRARY'S LOCK, after the lane lock and around the stop only
+    # (codex-bridge Stage 1, Task 9; D-6378, D-6384): a refresh in flight
+    # finishes its write before the tier that runs it is stopped, and no
+    # refresh starts until the stop is done. A timeout refuses with nothing
+    # removed; the exit releases both locks.
+    _codex_auth_hold "$id" >&2 \
+      || _acct_refuse 1 codex-reap-failed "codex lane $id's credential lock (the auth library's) could not be taken, so its tiers cannot be stopped without cutting a token refresh short - the reason is on stderr. The roster, projection, launcher, registry rows and every account artifact still stand.$usage_note Retry the removal once the lane's refresh or sign-in has ended."
     _codex_stop_lane "$id" >&2 || :
+    _codex_auth_release
     for tier in $CODEX_TIERS; do
       q=0; _codex_tier_ours "$id" "$tier" >&2 || q=$?
       # This lane's own tier, still there after the stop — the one 2 that
@@ -12912,6 +12920,89 @@ _codex_lock() {   # <id> -> rc 0 held (CX_LOCK_FD set) or no flock (CX_LOCK_FD e
 _codex_unlock() {   # always rc 0
   if [ -n "${CX_LOCK_FD:-}" ]; then exec {CX_LOCK_FD}>&-; fi
   CX_LOCK_FD=''; CX_LOCK_ID=''
+  return 0
+}
+
+# `_codex_auth_hold <id>` — THE AUTH LIBRARY'S LOCK, from bash (codex-bridge
+# Stage 1, Task 9). The library (`ccd/ccgpt-auth.py`, `held`) serialises every
+# write of a lane's credential on an exclusive `flock` of a lock file beside
+# it; account removal takes the same lock around its tier stop, so a stop
+# never lands inside a refresh's token round trip (D-6378, D-6384). The lock
+# file's path and its bound come from the library's own `paths` answer
+# (`lock`, `lockWaitS`): this file spells neither.
+# - A DIFFERENT LOCK FROM `_codex_lock`, legitimately (the plan's two-locks
+#   rule): that one serialises tier starts and stops for up to the readiness
+#   bound; this one is taken inside a request by a long-lived tier and must
+#   never wait out a start. Where both are taken, `_codex_lock` comes first.
+# - THE CONTRACT, `_codex_lock`'s shape. rc 0 with the lock HELD and
+#   CX_AUTH_LOCK_FD set; rc 0 with CX_AUTH_LOCK_FD EMPTY when there is
+#   nothing to hold: an authDir that does not exist (no credential to write),
+#   no `flock` on this box (as `_codex_lock`), or no library or no python3
+#   (`_codex_auth`'s rc 3: then no ccrc process can take this lock either,
+#   because the tier, the sign-in and every reader reach the credential only
+#   through that library). rc 1, with one refusal line and CX_AUTH_LOCK_FD
+#   empty, on a timeout, on a `paths` answer it cannot read, on a lock path
+#   that cannot be opened, and on a symlink or any other non-regular file at
+#   the lock path, which is refused WITHOUT being opened (`held`'s
+#   `O_NOFOLLOW` rule; `exec {fd}>>` would follow it). A lock file this hold
+#   creates gets `chmod 600` right after the open, so a umask that removes
+#   owner bits (0277) leaves no 0400 lock the library's own open would refuse.
+#   `_codex_auth_release` is the ONLY release.
+# - ONE LEVEL, as `_codex_lock`: a second call for the lane this shell holds
+#   is a no-op; a call for another lane releases the first.
+# - THE FD MUST NOT OUTLIVE THE HOLD in a child: `_codex_lock`'s rule carries
+#   over, so any spawn made while it is held closes CX_AUTH_LOCK_FD in its own
+#   substitution. Between hold and release removal runs only
+#   `_codex_stop_lane`, whose spawns are short-lived stop commands.
+_codex_auth_hold() {   # <id> -> rc 0 held (CX_AUTH_LOCK_FD set) or nothing to hold (empty); rc 1 + one refusal line
+  local id="${1:-}" dir out rc=0 lock wait fd created=0
+  if [ -n "${CX_AUTH_LOCK_FD:-}" ]; then
+    [ "${CX_AUTH_LOCK_ID:-}" = "$id" ] && return 0
+    _codex_auth_release
+  fi
+  _codex_row "$id" || return 1
+  dir="$HOME/$CX_AUTH"
+  { [ -e "$dir" ] || [ -L "$dir" ]; } || return 0
+  command -v flock >/dev/null 2>&1 || return 0
+  out="$(_codex_auth paths --auth-dir "$dir" 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 3 ] && return 0
+  lock=''; wait=''
+  if [ "$rc" -eq 0 ]; then
+    lock="$(printf '%s\n' "$out" | jq -er '.lock | select(type == "string" and startswith("/"))' 2>/dev/null)" || lock=''
+    wait="$(printf '%s\n' "$out" | jq -er '.lockWaitS | select(type == "number" and . > 0)' 2>/dev/null)" || wait=''
+  fi
+  if [ -z "$lock" ] || [ -z "$wait" ]; then
+    _codex_say auth-status-unreadable "the auth library answered no lock path and bound ccrc can read for $id (it exited $rc), so $id's credential writes cannot be held off. Run 'ccrc update', which places the library again, then re-run."
+    return 1
+  fi
+  if [ -L "$lock" ] || { [ -e "$lock" ] && [ ! -f "$lock" ]; }; then
+    _codex_say auth-lock-unusable "$lock is a symlink or not a regular file, so ccrc will not open it as $id's credential lock. Remove it, then re-run."
+    return 1
+  fi
+  [ -e "$lock" ] || created=1
+  if ! { exec {fd}>>"$lock"; } 2>/dev/null; then
+    _codex_say auth-lock-unusable "$lock could not be opened, so $id's credential writes cannot be held off. Fix its mode with chmod 600 $lock, or the permissions of $dir, then re-run."
+    return 1
+  fi
+  if [ "$created" -eq 1 ] && ! chmod 600 "$lock" 2>/dev/null; then
+    exec {fd}>&-
+    _codex_say auth-lock-unusable "$lock could not be set to mode 600, so the auth library could not open it again. Fix its mode with chmod 600 $lock, then re-run."
+    return 1
+  fi
+  if ! flock -w "$wait" "$fd"; then
+    exec {fd}>&-   # never held and never published, so this is no release
+    _codex_say auth-lock-busy "another ccrc process has held $id's credential lock ($lock) for ${wait}s: it is refreshing or signing in this lane. Re-run once that has ended."
+    return 1
+  fi
+  CX_AUTH_LOCK_FD="$fd"; CX_AUTH_LOCK_ID="$id"
+  return 0
+}
+
+# THE ONLY RELEASE of `_codex_auth_hold`: closes CX_AUTH_LOCK_FD when set and
+# clears it and CX_AUTH_LOCK_ID. A no-op when nothing is held.
+_codex_auth_release() {   # always rc 0
+  if [ -n "${CX_AUTH_LOCK_FD:-}" ]; then exec {CX_AUTH_LOCK_FD}>&-; fi
+  CX_AUTH_LOCK_FD=''; CX_AUTH_LOCK_ID=''
   return 0
 }
 
@@ -24619,14 +24710,16 @@ _uninst_codex_usage() {
 # when it did not). Every byte the manager says goes to stderr: `_acct_remove`'s
 # stdout is one JSON object.
 #
-# THEN IT WAITS, AND IT NEVER STOPS (D-4049).
+# THEN IT WAITS, AND IT NEVER STOPS (D-4049; D-6378).
 # Disabling the timer does not end the `ccrc-codex-usage@<id>.service` it had
-# already fired: a oneshot runs to the end of its poll, and that poll may be
-# part-way through the Authenticator's write of the lane's `auth.json`. A stop
-# could cut that write short, in the authDir removal deliberately keeps, so
-# nothing here asks for one. A limits row removed under a running poll is
-# written again by it. So the service is read through `_svc_is_active` once a
-# second, for at most `_acct_usage_wait_secs`, with one waiting line on stderr:
+# already fired: a oneshot runs to the end of its poll. The wait had two
+# reasons, and one is gone: since codex-bridge Stage 1 the poll only READS the
+# lane's credential, through the auth library, and never writes it (the tier
+# is the one refresher, and removal takes the library's lock around the tier
+# stop, `_codex_auth_hold`). The other stands, and the wait stays for it: a
+# limits row removed under a running poll is written again by it. Nothing
+# here asks for a stop. So the service is read through `_svc_is_active` once
+# a second, for at most `_acct_usage_wait_secs`, with one waiting line on stderr:
 #   * `inactive`, `failed`: done;
 #   * `active`, `activating` (a oneshot reads it for its WHOLE run — never
 #     `active`), `deactivating`, `reloading`, `refreshing`: in flight;
