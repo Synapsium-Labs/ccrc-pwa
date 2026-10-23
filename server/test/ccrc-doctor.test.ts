@@ -1190,6 +1190,7 @@ function healthy(prefix: string): string {
   // equally satisfied by the real thing, and `statusBox` below already made
   // this exact swap for the same reader.
   linkReal(home, 'jq');
+  linkReal(home, 'awk');
   // A pane scope with nothing parked: `_check_scopes` PASSes, and returns
   // WITHOUT settling, so the healthy fixture costs no extra second.
   plantScope(home, { procs: [4101, 4102] });
@@ -16944,3 +16945,72 @@ function plantHealthyBackupTools(home: string): void {
     `#!${BASH}\n[ "$1" = isexcluded ] || exit 64\nprintf '[Excluded]    %s\\n' "$2"\n`, { mode: 0o755 });
   writeFileSync(join(stubBin(home), 'fdesetup'), `#!${BASH}\n[ "$1" = status ] || exit 64\necho 'FileVault is On.'\n`, { mode: 0o755 });
 }
+
+// ── box-settings (wave 24, D-6599) ─────────────────────────────────────────
+
+describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-6599)', () => {
+  /** ccrc's tree and a ccrc.env holding `lines` after a role line, with the real `awk` ccrc's one reader scans with
+   *  (a box has one; `healthy()`'s contained PATH does not, and a reader that cannot scan WARNs). */
+  const settingsBox = (prefix: string, lines: string[]): string => {
+    const home = mkTmp(prefix);
+    installCcrc(home);
+    containedPath(home);
+    linkReal(home, 'awk');
+    writeCcrcEnv(home, ['CCRC_ROLE=server', ...lines, ''].join('\n'));
+    return home;
+  };
+  /** `_check_box-settings` alone, as `cmd_doctor` runs it (the update-sweep describe's `runUs` shape). */
+  const runBs = (home: string, extraEnv: NodeJS.ProcessEnv = {}): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_box-settings`],
+    { env: { ...doctorEnv(home), ...extraEnv }, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const out = (r: Result): string[] => r.stdout.split('\n').filter((l) => l !== '');
+  const verdict = (r: Result): string => out(r).find((l) => /^(PASS|WARN|FAIL|SKIP) box-settings: /.test(l)) ?? '';
+
+  it('W24-S1: nothing set', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-none-', ['CCRC_FLEET=local']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets none of ccrc's settings\b/m);
+    expect(verdict(r)).toMatch(/; not set there, so the default applies unless the environment sets it: CCRC_BACKUP_KEEP, /);
+    expect(out(r)).toHaveLength(1);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+  });
+
+  it('W24-S2: a set line, and the environment does not change it', () => {
+    const home = settingsBox('ccrc-doctor-bs-set-', ['CCRC_BACKUP_KEEP=5', 'CCRC_AGENT_TOKEN=fixture-token-never-printed']);
+    const r = runBs(home, { CCRC_BACKUP_KEEP: '7' });
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_BACKUP_KEEP=5; not set there/);
+    expect(verdict(r)).toMatch(/CCRC_BACKUP_KEEP=5/);
+    expect(verdict(r)).not.toMatch(/=7/);
+    expect(verdict(r), 'the unset list names the other six, never the one the file sets').not.toMatch(/environment sets it:.*CCRC_BACKUP_KEEP\b/);
+    expect(r.stdout, 'no other line of ccrc.env prints (ruling 7)').not.toMatch(/fixture-token-never-printed|CCRC_AGENT_TOKEN|CCRC_ROLE/);
+    expect(r.code).toBe(0);
+  });
+
+  it('W24-S3: a line the reader refuses WARNs, even beside a set environment', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-export-', ['export CCRC_BACKUP_KEEP=5']), { CCRC_BACKUP_KEEP: '7' });
+    expect(r.stdout).toMatch(/^WARN box-settings: CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take/m);
+    expect(out(r)[1]).toMatch(/^ {2}remedy: rewrite each named line in the box's ccrc\.env as a plain KEY=value line/);
+    expect(out(r)).toHaveLength(2);
+    expect(r.stdout).not.toMatch(/^PASS box-settings/m);
+    expect(r.code).toBe(2);
+  });
+
+  it('W24-S4: a mirror\'s credentials never print', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-url-', ['CCRC_RELEASE_BASE_URL=https://u:hunter2@mirror.example/releases']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=https:\/\/mirror\.example\/releases;/);
+    expect(r.stdout).not.toContain('hunter2');
+    expect(r.code).toBe(0);
+  });
+
+  it('W24-S5: a named-empty line is reported as such', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-empty-', ['CCRC_UPDATE_DEADLINE_MS=']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: /);
+    expect(verdict(r)).toMatch(/CCRC_UPDATE_DEADLINE_MS= \(empty: the default\)/);
+    expect(verdict(r), 'a named-empty line is not listed as unset').not.toMatch(/environment sets it:.*CCRC_UPDATE_DEADLINE_MS\b/);
+    expect(r.code).toBe(0);
+  });
+});
