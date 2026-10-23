@@ -7,8 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { LANE_SCHEDULE, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
-import { CATALOGUE_POLL_INTERVAL_MS } from '../src/update/catalogue.js';
-import { SERVER_CAPS_WRITE_MS } from '../src/update/serverCaps.js';
+import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS } from '../src/laneSchedule.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 const text = (rel: string): string => readFileSync(path.join(SRC, rel), 'utf8');
@@ -47,24 +46,28 @@ describe('LANE_SCHEDULE — the table', () => {
     }
   });
 
-  it('every derivedFrom names a constant that exists, and holds the row\'s value', () => {
-    const catalogue = laneRow('catalogue');
-    expect(catalogue.derivedFrom?.name).toBe('CATALOGUE_POLL_INTERVAL_MS');
-    expect(catalogue.cadenceMs).toBe(CATALOGUE_POLL_INTERVAL_MS);
-    expect(text('update/catalogue.ts')).toMatch(/export const CATALOGUE_POLL_INTERVAL_MS\b/);
+  it('every derivedFrom names a constant that exists, with a reason', () => {
     for (const r of LANE_SCHEDULE) {
       if (r.derivedFrom === null) continue;
       const named = LANE_SCHEDULE.find((o) => o.name === r.derivedFrom!.name);
-      const declared = new RegExp(`export const ${r.derivedFrom.name}\\b`).test(text('update/catalogue.ts') + text('update/serverCaps.ts') + text('laneSchedule.ts'));
+      const declared = new RegExp(`export const ${r.derivedFrom.name}\\b`).test(text('laneSchedule.ts'));
       expect(named !== undefined || declared, `${r.name} is derived from ${r.derivedFrom.name}, which exists nowhere`).toBe(true);
       expect(r.derivedFrom.reason.length, `${r.name}'s derivation carries no reason`).toBeGreaterThan(0);
     }
   });
 
-  it('a derivation is a reference in the source, never a second copy of the figure', () => {
+  it('a shared cadence has one home, here, and its old home re-exports it rather than declaring a second copy', () => {
     const src = text('laneSchedule.ts');
+    expect(src).toMatch(/export const CATALOGUE_POLL_INTERVAL_MS = 30 \* 60_000;/);
+    expect(src).toMatch(/export const SERVER_CAPS_WRITE_MS = 60_000;/);
     expect(src).toMatch(/cadenceMs: CATALOGUE_POLL_INTERVAL_MS\b/);
     expect(src).toMatch(/cadenceMs: SERVER_CAPS_WRITE_MS\b/);
+    expect(text('update/catalogue.ts')).not.toMatch(/export const CATALOGUE_POLL_INTERVAL_MS\b/);
+    expect(text('update/catalogue.ts')).toMatch(/export \{ CATALOGUE_POLL_INTERVAL_MS \} from '..\/laneSchedule.js'/);
+    expect(text('update/serverCaps.ts')).not.toMatch(/export const SERVER_CAPS_WRITE_MS\b/);
+    expect(text('update/serverCaps.ts')).toMatch(/export \{ SERVER_CAPS_WRITE_MS \} from '..\/laneSchedule.js'/);
+    expect(text('watch.ts'), 'the watcher holds a cadence of its own').not.toMatch(/\b(?:CAPS_REFRESH_MS|UPDATE_INVENTORY_MS|UPDATE_CATALOGUE_MS)\s*=/);
+    expect(laneRow('catalogue').cadenceMs).toBe(CATALOGUE_POLL_INTERVAL_MS);
     expect(laneRow('serverCaps').cadenceMs).toBe(SERVER_CAPS_WRITE_MS);
   });
 
