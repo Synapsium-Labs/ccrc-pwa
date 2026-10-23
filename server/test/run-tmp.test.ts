@@ -41,7 +41,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   DEAD_SUFFIX, RUN_DIR_ENV, RUN_OWNER, RUN_PREFIX, RUN_QUIET_ENV, RUN_QUIET_S, RUN_REFUSED_ENV, RUN_SOCKET,
-  RUN_SUN_PATH_MAX, RUN_TMP, condemn, openRun, probeRun, reapRuns,
+  RUN_SUN_PATH_MAX, RUN_TMP, condemn, openRun, probeRun, reapRuns, removeOwnedDir,
 } from './run-tmp.globalsetup.mjs';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -639,6 +639,28 @@ describe('armSignals — a persistent arm that collects the run and always exits
   });
 });
 
+describe('removeOwnedDir — vitest\'s tmpDir on a signal (D-6623)', () => {
+  it('T5g: a directory goes, a symbolic link at the path is left and never followed, absent is fine', () => {
+    const base = socketBase();
+    const dir = path.join(base, 'd');
+    mkdirSync(dir);
+    writeFileSync(path.join(dir, 'f'), 'x');
+    removeOwnedDir(dir);
+    expect(existsSync(dir)).toBe(false);
+    const victim = path.join(base, 'victim');
+    mkdirSync(victim);
+    writeFileSync(path.join(victim, 'keep'), 'x');
+    const link = path.join(base, 'link');
+    symlinkSync(victim, link);
+    removeOwnedDir(link);
+    expect(existsSync(path.join(victim, 'keep')), 'the link was followed').toBe(true);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    removeOwnedDir(path.join(base, 'absent'));
+    removeOwnedDir(victim, -2);
+    expect(existsSync(path.join(victim, 'keep')), 'a foreign-uid directory was removed').toBe(true);
+  });
+});
+
 describe('this run is wired (T1)', () => {
   it('runs inside its own run directory, and that directory\'s owner answers', async () => {
     const refused = process.env[RUN_REFUSED_ENV];
@@ -697,7 +719,21 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
    *  `globalSetup` by absolute path, one fixture test, and a record file. */
   function fixture(): string {
     const fx = mkTmp('ccrc-runtmp-e2e-');
-    const config = { test: { globals: true, include: ['*.fx.test.mjs'], testTimeout: 60_000, globalSetup: globalSetupEntries() } };
+    // `plant.mjs` runs first and, when FX_PLANT names a path, points the project's `tmpDir` at it with a file inside
+    // (vitest makes its own lazily): the arm must remove it on a signal.
+    writeFileSync(path.join(fx, 'plant.mjs'), [
+      "import { mkdirSync, writeFileSync } from 'node:fs';",
+      'export default function plant(project) {',
+      '  const p = process.env.FX_PLANT;',
+      '  if (!p) return;',
+      '  project.tmpDir = p;',
+      "  mkdirSync(p, { recursive: true });",
+      "  writeFileSync(p + '/x', 'x');",
+      '}',
+      '',
+    ].join('\n'));
+    const config = { test: { globals: true, include: ['*.fx.test.mjs'], testTimeout: 60_000,
+      globalSetup: [path.join(fx, 'plant.mjs'), ...globalSetupEntries()] } };
     writeFileSync(path.join(fx, 'vitest.config.mjs'), `export default ${JSON.stringify(config)};\n`);
     writeFileSync(path.join(fx, 'run.fx.test.mjs'), FX_TEST);
     return fx;
@@ -755,13 +791,16 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
 
   it('T5a: GNU timeout\'s double SIGTERM — main, then its group — exits 143 and leaves nothing', async () => {
     const base = socketBase();
-    const n = nested(base, 'sleep');
+    const planted = path.join(base, 'vitest-tmp-planted');
+    const n = nested(base, 'sleep', { FX_PLANT: planted });
     const rec = await firstRecord(n);
+    expect(existsSync(planted), 'the plant never happened, so this case proves nothing').toBe(true);
     process.kill(n.pid, 'SIGTERM');      // GNU timeout signals its child first...
     process.kill(-n.pid, 'SIGTERM');     // ...then its process group: main's second SIGTERM, after vitest's `once`
     expect(await n.exit, n.output()).toEqual({ code: 143, signal: null });
     expect(rec.tmpdir).toMatch(new RegExp(`^${base}/${RUN_PREFIX}[A-Za-z0-9]{6}/${RUN_TMP}$`));
     expect(runsIn(base)).toEqual([]);
+    expect(existsSync(planted), 'vitest\'s tmpDir survived the signal').toBe(false);
   }, 120_000);
 
   it('T5b: a worker that dies outright — teardown still collects the fixture it left', async () => {
@@ -793,11 +832,14 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
 
   it('T5d: SIGHUP to the group — a closed terminal or tmux pane — exits 129 and leaves nothing', async () => {
     const base = socketBase();
-    const n = nested(base, 'sleep');
+    const planted = path.join(base, 'vitest-tmp-planted');
+    const n = nested(base, 'sleep', { FX_PLANT: planted });
     await firstRecord(n);
+    expect(existsSync(planted), 'the plant never happened, so this case proves nothing').toBe(true);
     process.kill(-n.pid, 'SIGHUP');
     expect(await n.exit, n.output()).toEqual({ code: 129, signal: null });
     expect(runsIn(base)).toEqual([]);
+    expect(existsSync(planted), 'vitest\'s tmpDir survived the signal').toBe(false);
   }, 120_000);
 
   it('T5e: a dead run that is not quiet at setup is reaped at TEARDOWN once it is', async () => {
