@@ -1228,8 +1228,8 @@ data set (D-6346): of the backups that carry one, the newest `CCRC_BACKUP_DATA_K
 every older one loses its `coord.db`, delegation journal, checkpoint and manifest and keeps the rest (its code, `memory/`, the
 units). The knob is a whole number from 2 to 9999, default 3, read as every ccrc setting is (below); `0` and `1` are
 refused, and an invalid value, or a line naming the knob that the reader does not take, stops the thinning only, while the
-count prune still runs (D-6590). A `ccrc.env` that is there but cannot be read at all stops both, and each says so.
-Read as bytes, after its leading spaces and
+count prune still runs (D-6590). A `ccrc.env` that is there but cannot be read at all stops each keep it is read for
+(a keep set in the environment is never read from the file), and each says so. Read as bytes, after its leading spaces and
 tabs, a line is skipped when it is a comment (`#` or `;`) or another key's `[export ]NAME=`, read when it begins
 `CCRC_BACKUP_DATA_KEEP=`, its value taken as systemd's `EnvironmentFile=` takes it (spaces and tabs around it trimmed), and
 refused when it names the knob as a whole word any other way, `export CCRC_BACKUP_DATA_KEEP=` included; a line holding a CR
@@ -1290,12 +1290,14 @@ yours, so the file is where a lasting setting goes. A line ccrc cannot read stop
 keep stops the count prune and the data keep the thinning (D-6590), the deadline lets no verification start this run past
 the keep-set's first (D-6591, D-6592), the health gate waits its default 90 seconds (D-6593), the release base stops the
 update before anything on the box changes (D-6594), the models budget turns the advance step off for that run (D-6595),
-and the versions keep stops the versions prune while `ccrc versions` still lists (D-6596). A file ccrc cannot read at all
-(unreadable, or holding a NUL byte) stops every act that reads a setting from it, and each says so. The thinning's time
-bound takes the smallest reading of `CCRC_UPDATE_DEADLINE_MS` the server may hold (the environment, `ccrc.env`, and
-`~/.ccrc/exposure.env`, which the server reads too), and the watchdog the largest (D-6591, D-6602). On macOS a file the
-box's model of systemd cannot decide refuses only the settings it names, and `CCRC_BACKUP_DATA_KEEP` always (D-6587).
-`ccrc doctor`'s `box-settings` check reads `ccrc.env` alone and names a line the reader refuses (D-6599).
+and the versions keep stops the versions prune while `ccrc versions` still lists (D-6596). When `ccrc.env` cannot be
+read at all (unreadable, or holding a NUL byte), every act that reads a setting from it refuses, or falls back as its
+own text says (the health gate waits its 90 seconds; the watchdog uses the largest reading it could decide), and each
+says so. The thinning's time bound takes the smallest reading of `CCRC_UPDATE_DEADLINE_MS` the server may hold (the
+environment, `ccrc.env`, and `~/.ccrc/exposure.env`, which the server reads too), and the watchdog the largest (D-6591,
+D-6602). On macOS a file the box's model of systemd cannot decide refuses only the settings it names, and
+`CCRC_BACKUP_DATA_KEEP` always (D-6587). `ccrc doctor`'s `box-settings` check reads `ccrc.env` alone and names a line
+the reader refuses (D-6599).
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
