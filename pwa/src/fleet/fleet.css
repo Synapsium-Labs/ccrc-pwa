@@ -18,6 +18,14 @@
   gap: var(--sp-3);
 }
 
+/* The fleet column's section takes focus from script only (`tabIndex=-1`): the update line's dismiss on a phone, where
+ * the main landmark is hidden (`focusShownLandmark`). It is not a control, so base.css's page-wide ring stays off it,
+ * as off the main landmark (shell.css): Chrome marks a script focus that follows a keyboard action as `:focus-visible`,
+ * and the ring would draw along the whole column. */
+.fleet:focus-visible {
+  outline: none;
+}
+
 .fleet-head {
   display: flex;
   align-items: baseline;
