@@ -1755,3 +1755,34 @@ the `client.ts` anchors were unchanged from `7ebdff20c`).
     `deviation-refs`, run again at the final tip, are recorded in the wave-done.
 - **The full suite was not run locally.** CI's selection runs it for the PR, so the wave-done's `suite:` word is
   `unrun`.
+
+## As built (wave 30, run 883, 2026-10-23)
+
+Text only, over base `e5892a78e` (the merge of PR #1172): the coordinator's rulings on review 874, applied. No source,
+no behaviour, no new row, no deviation issued; D-6724 and D-6725 are amended in place.
+
+- Commits, in order, on the workspace branch:
+  - "three row comments say what the merged deadline does (wave 30, review 874)": three comments in
+    `server/test/remote-liveness.test.ts`. W27-L5's names M43, since `onReady` clears the timer; W27-L6's says attempt
+    0's timer is cleared when its socket closes and at the next arm, so the row reds only under M7+M40+M42; W27-L24's
+    says the row pins the `close()` clear with the `unref` behind it (M45, with M35 an equivalent mutant). No code
+    line, assertion, title or timing changed;
+  - "wave 27's text says what the merged deadline does (wave 30, review 874)": this plan's Global Constraints consent
+    list, Review Focus, Risk notes and Mutation table, D-6724 ("only combinations red") and D-6725, and the section
+    "Coordinator rulings on review 874 (2026-10-23)", with the review's report written as "the review's report";
+  - this record.
+- The mutation table now records M7+M41 as the smallest red set for W27-L7, M7+M40+M42 for W27-L6, and M35 as an
+  equivalent mutant. Review 874 measured each of those sets; this wave re-measured none of them, since no code
+  changed.
+- Gates, one file at a time, in the foreground, at the second commit (the comments change nothing, so each is the same
+  count as before):
+  - `remote-liveness`: 25 of 25 on four consecutive runs, at a load average of 144 falling to 70. Before them, five of
+    the first nine runs, at a load average of 125 to 180, lost one or two rows to timing, and not the same row twice
+    in a row (W27-L24, then L7 and L15, then L12 by vitest's 20 s clock, then L9, then L24 again); each next run of
+    the same file passed. A comment cannot move a row, so this is load, as the load-flake list says;
+  - `remote-connect` 70, `docs-parity` 54, `citations` 4, `topology-clean` 60, `private-names` 47, `dtbd` 1,
+    `deviation-refs` 31 (after `git fetch origin main`), `GROWTH_CHECK=1` `growth-check` 45;
+  - `single-definition` 846 of 848 on its first run at a load average of 49, 848 of 848 on the re-run;
+  - the changed prose was scanned for private names, hosts and paths: no hits.
+- `git merge-tree` against origin/main at `24551a5b6` is clean (rc 0), and no open PR's head touches either file.
+- The change ships no file, so it should cut no release.
