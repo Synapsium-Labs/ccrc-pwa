@@ -5939,6 +5939,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   parser model cannot decide, would refuse all seven and stop every update on that box. systemd drops a line whose
   first non-blank character is `#` or `;`, so such a line cannot set the key. Ruled: it no longer counts, except one
   holding an inner CR, which keeps counting as the scan already does. The macOS departure for the data keep stays.
+- **2026-10-23 20:25 UTC — monitoring: a new release, v0.0.593, and no anomalies.** Both boxes stay on v0.0.589; auto
+  is off, so nothing moves until a console tap.
+  `STATUS 2026-10-23T20:25:40Z fleet=v0.0.589 server=v0.0.589 health=v0.0.589 newest=v0.0.593 intent=*:dev/auto=off`
+  `backups=fleet:236M/server:7495M disk=fleet:122G/server:23G`
 
 - **2026-10-22 14:05 UTC — an operator directive: no new version for a docs-only merge.** Verbatim (in chat): "Docs
   only updates with no changes to code (PRs) should not trigger new build versioning".
