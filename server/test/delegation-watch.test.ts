@@ -5223,6 +5223,43 @@ describe('D-6471 (wave-3 follow-up 9): an `unreadable` incarnation defers its ho
     expect(standIn(w, 'demo-a'), 'H was deferred under `unreadable`').toMatchObject({ state: 'unmeasured', detail: LOSS });
   });
 
+  /** Review 862 F2: H owed, H+1 listed `changing` (the owner's last listed reason from then on), and H's expiry flushed through
+   *  `failures` journal-write faults at their first byte (a live demo-b line in the expiry hour makes each of those passes journal). */
+  const expiryThroughFaults = async (failures: number): Promise<{ w: World; failed: number }> => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), { 'demo-a': measured() });
+    await passAt(w, at(1), { 'demo-a': unreadable });                                           // H owed
+    await passAt(w, at(60), { 'demo-a': changing });                                            // H+1 listed `changing`
+    const expiryHour = Math.floor(EXPIRED / DELEGATION_HOUR_MS) * DELEGATION_HOUR_MS;
+    writeBucket(w, 'demo-b', iso(expiryHour).replace(/[-:T]/g, '').slice(0, 10), startLine('demo-b', iso(EXPIRED - 60_000)));
+    quiet();
+    const realWrite = DelegationJournalWriter.prototype.write;
+    let failed = 0;
+    vi.spyOn(DelegationJournalWriter.prototype, 'write').mockImplementation(function (this: DelegationJournalWriter, ...args: Parameters<DelegationJournalWriter['write']>) {
+      if (failed < failures) { failed += 1; return Promise.reject(new Error('EIO: a fixture fault at the journal write')); }
+      return realWrite.apply(this, args);
+    });
+    const incs = { 'demo-a': changing, 'demo-b': measured() };
+    await passAt(w, EXPIRED, incs);
+    expect((await w.watcher.delegationApplier())!.failure(), 'the expiry pass failed closed').not.toBeNull();
+    expect(standIn(w, 'demo-a'), 'nothing of it is durable').toBeUndefined();
+    await untilRecovered(w, EXPIRED, incs);
+    return { w, failed };
+  };
+
+  it('R-B (F2 of review 862, PROBE-1, XOWN1): an owed hour stays owed until its gap is durable, so the gap re-staged after a failed flush still says `unreadable`', async () => {
+    const { w, failed } = await expiryThroughFaults(1);
+    expect(failed).toBe(1);
+    expect(standIn(w, 'demo-a'), 'landed after the recovery, deferred under `unreadable`').toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+
+  it('R-B (F2 of review 862, PROBE-2, XOWN1): an owed hour whose expiry gap meets two consecutive failed flushes is still written once a flush succeeds', async () => {
+    const { w, failed } = await expiryThroughFaults(2);
+    expect(failed, 'the second fault hit the first completed pass after the first recovery').toBe(2);
+    expect(standIn(w, 'demo-a'), 'the loss is written').toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+
   it('R-G (capability absent; F5, X2): a read of P while the fleet does not offer the capability never discharges: the owed hour expires as its loss gap', async () => {
     const w = world();
     makeOwner(w, 'demo-a');
