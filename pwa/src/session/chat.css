@@ -991,6 +991,12 @@ button.metachip:active {
 .dlg-later:active {
   color: var(--ink-primary);
 }
+/* Deny is disabled while the connection is not live (the reconnect gap), and a disabled control looks it: the ink the
+   own-words Send and the tab chips take (`.dlg-reply-send:disabled`, `.ask-tab:disabled`), and no pointer. */
+.dlg-later:disabled {
+  color: var(--ink-tertiary);
+  cursor: default;
+}
 
 /* ------------------------------------------------------------------ *
  *  Dialog sheet — the TUI menu gone native. Option rows carry the     *
