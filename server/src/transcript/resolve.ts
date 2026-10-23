@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import { mungePath } from '../munge.js';
+import { limiter, type Limit } from '../bounded.js';
 import { continuationInTail, CONTINUATION_TAIL_BYTES, finishedTurnDecides } from './parse.js';
 
 /**
@@ -239,25 +240,6 @@ export function pickNewest(hits: readonly GlobHit[]): GlobHit | null {
  * searches running at once (one per session stream) each hold their own.
  */
 export const GLOB_STAT_CONCURRENCY = 32;
-
-/** Runs a call once a slot is free: at most `max` in flight, the rest waiting in arrival order. */
-export type Limit = <T>(call: () => Promise<T>) => Promise<T>;
-
-/** A promise limiter (D-6369). The slot is released in `finally`, so a call that rejects still frees it, and a
- *  freed slot is handed straight to the longest waiter, so the count never dips below the bound while any wait. */
-export const limiter = (max: number): Limit => {
-  let active = 0;
-  const waiting: (() => void)[] = [];
-  return async (call) => {
-    if (active < max) active += 1;
-    else await new Promise<void>((go) => { waiting.push(go); });   // the slot arrives already counted
-    try { return await call(); }
-    finally {
-      const next = waiting.shift();
-      if (next === undefined) active -= 1; else next();
-    }
-  };
-};
 
 /**
  * `<configDir>/projects/*​/<uuid>.jsonl`, existence-checked. `complete: false`

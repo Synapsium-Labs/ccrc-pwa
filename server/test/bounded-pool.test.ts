@@ -2,7 +2,7 @@
 // transcript/resolve.ts into bounded.ts. Four cases, green on the old code (characterization), so the move
 // commit changes only this file's import.
 import { describe, expect, it } from 'vitest';
-import { limiter } from '../src/transcript/resolve.js';
+import { limiter } from '../src/bounded.js';
 
 /** A call the test settles by hand, so it controls exactly when each slot frees. */
 const gate = () => {
