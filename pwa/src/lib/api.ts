@@ -1426,7 +1426,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     setStallWatch: (body: StallWatchRequest) =>
       postJsonOr<StallWatchView | 'unreadable'>('/api/coord/stall-watch', 'unreadable', body),
     /** `GET /api/coord/collect-lane` (path-identity spec 2026-10-12 §5.6, §5.7): the Settings page's Temp root
-     *  collector section reads it through `useCollectLaneView`, whose `asCollectLaneView` is the wire guard, so the
+     *  collector section reads it through `useCollectLaneView`, whose `asCollectLaneView` (`fleet/collectLaneRead.ts`) is the wire guard, so the
      *  type here is what the server promises, not what arrived. `getJson`, as `stallWatch` is: a read changes
      *  nothing, so its failure is only a failure, which the hook classifies (404 and 501 through
      *  `settingsReadFailure`, a 503 `state-unmeasurable` as its own kind). Session-gated when armed, open dark; no
