@@ -247,7 +247,7 @@ One PR, from this workspace's own branch.
 
 ## Deviations found
 
-These twenty numbers, starting at D-6587, were issued to run 855. This revision defines sixteen, D-6587 to D-6602 (revision 2 added D-6601 and D-6602 and amended D-6587, D-6589 to D-6592, D-6594, D-6596, D-6598 and D-6600 in place). The block's last four are the worker's reserve: D-6603 and D-6604 are spent (Task 3 Step 0; ruling 16) and defined below, and D-6605 and D-6606 are unspent (Task 7 defines them as unspent, in house form, and they are not defined here).
+These twenty numbers, starting at D-6587, were issued to run 855. This revision defines sixteen, D-6587 to D-6602 (revision 2 added D-6601 and D-6602 and amended D-6587, D-6589 to D-6592, D-6594, D-6596, D-6598 and D-6600 in place). The block's last four are the worker's reserve: D-6603 and D-6604 are spent (Task 3 Step 0; ruling 16) and defined below, and D-6605 and D-6606 are unspent (defined below as unspent, in the as-built commit).
 
 - **D-6587.** **ccrc has ONE reader for its own settings, `_ccrc_knob <KEY> <default> [file]`, generalised from wave 23's `_bak_data_keep`.** Beside it sits **`CCRC_SETTINGS`**, the one list of the names it reads. Both live in `ccd/ccrc` above `_upd_deadline_ms`.
   - **Precedence.**
@@ -422,6 +422,10 @@ These twenty numbers, starting at D-6587, were issued to run 855. This revision 
   - **The data keep's macOS departure is kept** (ruling 10): with `CCD_OS=darwin`, `CCRC_BACKUP_DATA_KEEP` asks the model when the scan answers 4, which a comment-only mention now answers, so a copied example plus one line the Darwin model rejects still refuses that keep.
   - **Pinned by** Task 1's W24-R12 (a copy of `deploy/ccrc.env.example`, read at test time, plus one odd line: every setting reads its default on both platform models, the data keep refused on macOS), W24-R13 (a comment line with a CR inside it still names the setting) and W24-R14 (a real assignment beside the odd line still refuses its key), each on `CCD_OS=linux` and `CCD_OS=darwin`. The mutant that counts comment lines again reds W24-R12, W24-R14 and the rewritten W23 row below.
   - **A W23 row rewritten on purpose** (controller's approval of the worker's NEEDS_CONTEXT). W23-B17's shape `a comment naming the knob above a non-ASCII value` (`# <KEY> is tuned below` then `NOTE=café`, on the Linux arm) moves from the undecided table, where it expected a refusal (`line 2 has a non-ASCII byte in a NAME=value line`), to the read table, where it reads the default 3; its comment now states the new rule. This supersedes review 839's "a token in a comment counts as naming the knob" for every key, the Linux data keep included; only the macOS data keep keeps "always ask".
+- **D-6605.** **Unspent: issued to run 855 as the worker's reserve, not needed by this wave.**
+  - No code, test or document cites it. It is defined only so the issued block is accounted for.
+- **D-6606.** **Unspent: issued to run 855 as the worker's reserve, not needed by this wave.**
+  - No code, test or document cites it. It is defined only so the issued block is accounted for.
 
 ## File structure
 
@@ -1076,3 +1080,180 @@ the worker updates every place the plan states it, in the first task that touche
     never sets; with the example's `# KEY=` lines (D-6597), an ordinary copied file plus one unrelated odd line would
     stop every update fleet-wide. It narrows what counts as an assignment line; it does not loosen what is refused
     (D-6604).
+
+
+## As built (run 855, 2026-10-23)
+
+What shipped on the branch, how it departs from the text above, and what is still open. Written from the worker's
+ledger and the per-task, fix-round and gate reports. A figure that no report measured is said to be unmeasured.
+"Ledger R<n>" names the worker's own numbered rulings (the ledger is not in the repository, so each is stated here).
+"Ruling 16" is the coordinator's ruling to this plan.
+
+### Commits, in order
+
+Branch base `49e7f187a`.
+
+1. `800c9c808` docs(plan): the plan, as ruled.
+2. `6377ba0cd` docs(plan): Task 3 Step 0 measured, the hard-cap term allows 40 s, not 22 (D-6603).
+3. `cd954043b` feat: one reader for ccrc's own settings, the environment, else ccrc.env, else the default (D-6587, D-6589).
+4. `cd2e85411` feat: the keeps read ccrc.env, and each refused keep stops only its own act (D-6590, D-6596).
+5. `6df624aac` test: a rollback whose keep is refused returns before the lock (D-6590; Task 2's fix round 1).
+6. `8b6e713bd` feat: one deadline reading on both sides, the keep-set bounded by it, the gate window from ccrc.env (D-6591, D-6592, D-6593).
+7. `ebc6a6cca` feat: the release mirror and the models budget read ccrc.env (D-6594, D-6595).
+8. `c95e68577` test: a census keeps every ccrc setting on the one reader, and the settings are documented in ccrc.env.example (D-6597, D-6598).
+9. `780894fc5` test: the census's C8 names every second reader it finds, in all three parts at once (D-6598).
+10. `c2746b307` fix: the settings reader prints nothing when its scan cannot run, and refuses as unscanned (D-6587; Task 6's first commit).
+11. `80ca48234` feat(doctor): `box-settings` reads ccrc.env's settings alone, so a line the environment hides is seen (D-6599).
+12. `37763260d` fix: final review, `box-settings` masks a mirror base's userinfo with or without a scheme, and the census and doctor rows close their gaps.
+13. `fd32d90ae` fix: final review, the settings docs say what an unreadable ccrc.env, the deadline and a mirror's userinfo actually do.
+14. `9d6d5c6bf` fix: a comment mention no longer names a setting, so one odd line cannot stop every update (ruling 16, D-6604).
+15. `13de5f941` docs(plan, readme): ruling 16's macOS residual recorded, and its wording made exact (D-6604).
+16. `96b94f097` test(ccrc-install): a fleet box's doctor now says `box-settings` PASS (D-6599; the gate's one red, below).
+17. The as-built commit, which adds this section and defines D-6605 and D-6606 as unspent.
+
+### Consents and claims
+
+- `ccd/ccrc`: beside claim 2314 (request 8539, consent 8542). No edit at or near the platform block.
+- README regions: beside claim 2306, later 2349 (request 8540, consent 8545; the owner's notice of the change is 8704).
+  The settings paragraph went after the maintenance-verbs prose and before the next heading (Ledger R4).
+- The doctor files and the install and uninstall scrub lists: beside claim 2303, later 2350 (requests 8541, 8555, 8737;
+  consents 8543, 8557, 8739). Consent 8557 allowed the scrub lists to be extended in place with no row added; consent
+  8739 allowed the one `awk` link line in `ccrc-doctor.test.ts`'s `healthy()` fixture.
+- This run's own claim: 2321, released and re-taken as 2359 (same paths; the first re-take was refused because its intent
+  ran over 512 bytes), then 2363 for the files whose earlier holders had ended. The `FLEET_BOX_CLASSES` line (commit 16)
+  was made after claim 2350 ended, under claim 2363.
+
+### Deviations spent beyond the plan
+
+- **D-6603** (Task 3 Step 0): the hard-cap term allows 40 s, not 22, measured from `UPDATE_SPAWN_TIMEOUT_MS`, the spawn
+  drain and the re-install child's probe ceiling. W24-K6 pins the figure against the three literals it is made of.
+- **D-6604** (ruling 16): a comment line with no CR inside it no longer counts as naming a setting, with the macOS
+  residual and the one W23 row rewritten on purpose (below).
+- **D-6605** and **D-6606** are unspent.
+
+### Departures from the plan text, each with its ruling
+
+- **`_keep_knob`'s first line also clears `KEEP_FROM`** (Ledger R8, from Task 1's review). D-6589 said the reader's wrapper
+  sets exactly what it names. A stale `KEEP_FROM` after a refusal could reach `_keep_why`; the clear costs no line and
+  W24-R10 pins it.
+- **Mutant M8 is equivalent** (Ledger R7): `${!key:-}` to `${!key-}`. Both forms read an exported empty value as empty,
+  which then falls through to the file. No row was added, and W24-R1's fourth case pins the behaviour.
+- **D-6590's mandated sentence is hedged** (Ledger R21; the retention wording in the final fix). The plan's "a file ccrc
+  cannot read at all stops every act that reads a setting from it" overstated two acts: the health gate waits its 90
+  seconds, and the watchdog uses the largest reading it could decide. The README and the example now say that. The
+  retention sentence "stops both" became "stops each keep it is read for (a keep set in the environment is never read
+  from the file)".
+- **The example's new heading drops its trailing ` ──`** and its deadline block is rewrapped, no word changed (Ledger R15),
+  so that every line stays within 80 columns, which the global constraint ranks above "verbatim".
+- **The DEFAULTS regex** captures `[^\s;&|)]+` instead of `\S+` (Ledger R16), which swallowed a trailing `;`.
+- **C4 is red between Tasks 5 and 6** (Ledger R17): the census checks a call Task 6 adds. The branch was not pushed in
+  between.
+- **U5 was dropped** (Ledger R14): the rollout harness lives in `ccrc-rollout.test.ts`, outside claim group A. U2 covers
+  `_upd_resolve`'s refusal, so the rollout pin's refusal is pinned only through that function.
+- **`_upd_restore`'s arm 2 is left unedited** (Ledger R13). D-6594 said `cmd_rollback` was `_upd_asset_listed`'s only code
+  caller; arm 2 of `_upd_restore` is a second, and its `*)` arm would blame curl for an rc 3. `_upd_restore` is not on the
+  consented function list. A rollback by flip whose gate fails reaches it without an earlier `_upd_resolve`, which is
+  wider than first measured, but still safe: the reader's own line prints first, and the child refuses.
+- **Task 3's four choices** (Ledger R9 to R12):
+  - with the deadline undecided, the hard-cap term is skipped (the bound is the re-stamp less 235 s), as D-6591's text says;
+  - the hard-cap term computes `4 * dl / 1000`, the server's cap floored to seconds, at most 3 s later than the
+    `4 * floor(dl / 1000)` form, inside the margin;
+  - the deadline WARN makes `_bak_gc` return 1, which W24-K4 requires;
+  - K1, K2, K3 and K5 use the real `invalid` fixture through the recording shim, and D4, D5 and the K5 flip row sit in
+    describes whose fixtures are local. These are fixture placements, not behaviour.
+- **Ruling 16 and its consequences.** The W23-B17 row move (Ledger R24, below); the README retention clause, which stated the
+  old rule, rewritten in the same commit (Ledger R25); the macOS residual, four shapes in which bash assigns a key from a line
+  beginning `#` or `;`, accepted under D-6587's argument and recorded in D-6604 with no code change (Ledger R26, since narrowing
+  on Linux only would bring the original bug back on macOS); and the kept `|| /\r./` clause in the awk count (Ledger R27),
+  which is behaviour-neutral, since R13 cannot go red on its removal, kept because it is the ruling's literal wording and
+  documents the inner-CR case.
+- **`healthy()`'s `awk` line** (Task 6): `box-settings` scans with `awk`, which the fixture's contained PATH did not link, so
+  ten existing doctor rows went red. One `linkReal(home, 'awk')` line cleared all ten, under consent 8739.
+- **The remedy's file clause and a silent reader** (Ledger R18, R19): the `box-settings` WARN's remedy also names a
+  whole-file fault, which D-6599's remedy did not; and `_ccrc_knob` prints nothing when its scan cannot run (a missing `awk`
+  printed `command not found`), as D-6587's "never prints" requires. The second is its own commit (`c2746b307`) with W24-R11.
+- **The doctor mask's display edge** (Ledger R23): it ends the authority at the first `/` only, so a base with `?` or `#`
+  before any `/` and an `@` after it loses its host from the printed line. It never shows a credential, and the server
+  refuses such a base. It stands.
+- **Other rulings:** a split of claim group A so that the scrub lists wait for their own consent (Ledger R1); the
+  watchdog-revert suite has no flip pin, so its claim was moot (R2); never rebase (R3); no edit near the platform block
+  (R6); implementers of `ccd/ccrc` and the doctor files ran on Opus, docs-only work on Sonnet (R5); ruling 16 itself,
+  asked as mail 8758 and ruled as 8759 (R20, R22); and `FLEET_BOX_CLASSES` gaining `box-settings: PASS` with one doc-comment
+  sentence (R28).
+
+### W23 rows rewritten on purpose
+
+Each row's old assertion pinned a behaviour this wave changes. No row was weakened to pass.
+
+| Row | Old assertion | New assertion |
+|---|---|---|
+| W23-B3, update half (line fault) | WARN `... nothing pruned or thinned`; no `pruned` or `thinned` line; four planted dirs byte-identical | WARN `... nothing thinned`; `pruned` lines for 20250101..03 (keep 0); the keep-set's dir 20250104 byte-identical |
+| W23-B3, backup loop (six values) | stderr `... nothing was pruned or thinned`; five dirs; four planted byte-identical | stderr `... nothing was thinned`; no `thinned` line; dirs exactly 20250104 and its own |
+| W23-B12, backup half | stderr `... nothing was pruned or thinned` | stderr `... nothing was thinned` |
+| W23-B17, three shapes (export, spaced, vertical tab) | `... (it reads only a plain KEY=value line) nothing was pruned or thinned` | `... nothing was thinned`; fingerprint unchanged |
+| W23-B17, Darwin twin | WARN `... nothing pruned or thinned`; rc 1; no prune line; all twelve dirs left | WARN `... nothing thinned`; one WARN line; rc 1; `pruned` lines for the two oldest; the newest ten left |
+| W23-B18, four whole-file rows (mode 000, dangling link, directory, FIFO) | one WARN, the data keep's, `... nothing pruned or thinned`; rc 1 | two WARNs (`CCRC_BACKUP_KEEP cannot be measured ... nothing pruned`, the data keep's `... nothing thinned`); rc 1; no prune or thin line; no `update.lock` taken |
+| KEEP knob, first row of "the KEEP knob is ONE bounded number" | `kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999` | `kept: CCRC_VERSIONS_KEEP could not be used (the WARN above says why)` |
+| `ccrc versions` argument-surface row | `CCRC_VERSIONS_KEEP=(not a whole number from 0 to 9999)` | `CCRC_VERSIONS_KEEP=(could not be used)` |
+| Three report-sequence rows (a bare rollback by flip; a flip whose spine completed under a failing doctor; the killed-between-flip-and-stamp shape) | `['installing', 'checking', 'restarting', 'done']` | `['installing', 'checking', 'restarting', 'restarting', 'done']`, for the flip's new `restarting` write (D-6601) |
+| W23-B17, "a comment naming the knob above a non-ASCII value" (Linux arm) | refused: `line 2 has a non-ASCII byte in a NAME=value line` | reads the default 3. Ruling 16 retires review 839's "a token in a comment counts as naming the knob" for every key but the macOS data keep (D-6604) |
+
+`update-watchdog-revert.test.ts` has no such pin and was run whole (16 passed). The W23 plan's one Risk-notes sentence about
+the setting's source was replaced by the one this plan's brief gave.
+
+### Measured
+
+- **Growth.** `ccd/ccrc` is +23 net code lines against the merge-base, of a limit of 40 (this wave's stop line is 39); every
+  other counted file is +0. Task 5, Task 6 and the final fixes added none.
+- **Citation debt** is unchanged: `'ccd/ccrc': 5`. One hunk sits below line 11635 (`_models_advance_budget_secs`, one line
+  for one). No added line carries a `file:NNN` citation. The `ccd/ccrc` citation census is unmoved: session-hook's 13 citation
+  rows (the compaction card's anchors, the corpus facts, the debt row, the README census row and the rest) passed unedited.
+- **R7** (the 64 KiB line, `_ccrc_knob CCRC_BACKUP_KEEP 10` over a 65560-byte `ccrc.env`, fixture HOME, three runs each):
+  worst 71 ms on a non-comment line (Linux 60, 63, 71; Darwin model 63, 60, 64), and worst 7 ms when the same line is a
+  comment. Nothing near 5 s.
+- **The gate's first run** (head `13de5f941`): every touched suite and guard was green on its first run except
+  `ccrc-install.test.ts`, whose two `FLEET_BOX_CLASSES` rows were red, deterministically (red again alone). The fleet install's
+  doctor now prints `box-settings: PASS`, which the pinned map did not list. Commit 16 added it with one doc-comment sentence,
+  measured PASS at every stage the rows check (a fresh install, two installs, the doctor, and the provisioned spread); both
+  rows and the describe then passed (4 passed). No other map of doctor classes in `server/test` lists checks by name and
+  missed it: the other hits are positional or per-check rows, green in the gate.
+- **Merge check** (`git merge-tree`, no merge, rc 0 and no conflicted path each): `origin/main` at the gate, the head of
+  open PR #1127, and the head of #1220, which merged during the wave and touched a fixture block just above `healthy()`.
+  The branch's merge-base with `main` is still the plan base.
+- **Load-timeout re-runs**, each green alone: Task 2's citations count row needs a timeout above 20 s under load; Task 4's
+  models-advance row, the release-source pair pin and the D-3443 arm-2 row (load average 50 to 97); Task 6's nine `ccrc-doctor`
+  rows (`Test timed out in 20000ms`, none near `box-settings`; 9 passed in 26 s alone). The gate saw none. Its one call of
+  `ccrc-install.test.ts` hit the 560 s wrapper (size, not a red), so the gate ran that file, `ccrc-update.test.ts` and
+  `ccrc-doctor.test.ts` by describe; the passes added up to each file's `vitest list` total.
+- **Not run.** A full typecheck of the test tree at Task 5 (no `pwa/node_modules` there, and the load); the gate ran
+  `typecheck-tests` (12 passed). The Darwin-only describes (22 skipped in `ccrc-install`, 20 in `ccrc-doctor`, 11 in
+  `macos-platform`) and the Darwin arms under a real `/bin/bash` 3.2: the Darwin rows here run on Linux with `CCD_OS=darwin`,
+  and only `test-macos` runs the real thing. The sourced-shell timings above are Linux only.
+
+### Deferred minors, still open
+
+- A reader helper test does not assert empty stderr (Task 1), and W24-P4 does not assert it either (Task 2).
+- W24-R9's U+0663 row runs under `LC_ALL=C`; a comment could point at the UTF-8 rows that cover the locale case (Task 1).
+- The known-name check joins on `IFS`; theoretical (Task 1).
+- The deadline WARN carries no file or line (Task 3); `box-settings` names the line.
+- On macOS, M2's sentence doubles "so", which the plan's format mandates; K4's title says more than its tree-keep pin shows; U4's second case does not assert where Darwin `cmd_update` stopped (Task 4).
+- The README's "the box's model of systemd" on macOS means the bash-sourcing model, and "the release base stops the update" omits the rollback and rollout pin (Task 5).
+- `_models_advance_budget_secs`'s header lost "said on stderr without the value" and the digit-cap note (Task 5).
+- C8(a) does not go red on a stale `VAR_KEY_BODIES` entry, and `ownerOf` has a one-line-function edge (Task 5).
+- C4 does not count a quoted literal or partial-literal first argument such as `"CCRC_${x}_KEEP"` (final review).
+- The whole-file WARN repeats its clause seven times (about 700 characters), and role independence is tested with `CCRC_ROLE=server` only (Task 6).
+- A mirror base's query-string token prints in `box-settings`' PASS line: not taken, since the ruling allows values to print (final review).
+- The doctor mask's `?` and `#` display edge (Ledger R23, above).
+
+### Follow-ups for the coordinator
+
+- **The sibling scripts' operator settings** (`CCRC_KEEPALIVE_MODEL`, `CCRC_KEEPALIVE_PROMPT`, `CCRC_USAGE_SWEEP_DAYS`,
+  `CCRC_GRAPH_BUDGET`, `CCRC_GRAPH_MAX_WORKERS`): a ledger row for wave 29, with the shared reader file and the census
+  extended to every helper (Reading 9).
+- **`_upd_restore` arm 2's rc-3 line:** a `3)` arm, one line, needs consent for `_upd_restore` (Ledger R13).
+- **`cmd_backup`'s header** still says a lock-held skip exits 0; after a refused setting it exits 1. `cmd_backup` is outside
+  the consented function list.
+- **The macOS server job** appears to exec the server entry even for a fleet role (`_inst_plist_server`). A census scout
+  flagged it, unconfirmed; it is outside this wave and was not changed.
+- **The migration** (D-6600) asks no act of this wave: step 2 is the coordinator's reading of the update inventory, and
+  steps 0, 3, 4 and 5 are the operator's and the soak's coordinator's.
