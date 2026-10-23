@@ -7,7 +7,7 @@
 // from the ledger + the registry + .prhistory after the database is LOST.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { sqlStatementsInFile, symbolOf } from './scan/symbols.js';
 import { openCoordDb, tx } from '../src/coord/db.js';
@@ -4289,6 +4289,21 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     // Premise: the widened regex recognises what it forbids — it finds the
     // funnel's own statement.
     expect(updates[0]!.text).toContain('sessionId');
+    // A `+` chain with a non-literal part splits into fragments, and the fragment that opens with `UPDATE runs SET`
+    // carries a `set` cut at the gap (PR #75 MUT-3's escape, through a conditional SET): any PARTIAL `UPDATE runs`
+    // whose whole chain mentions the column is a writer this census cannot place, so it is red.
+    expect(sql.filter((q) => q.verb === 'UPDATE' && q.table === 'runs' && q.partial && /\bsessionId\b/i.test(q.source)).map((q) => q.line),
+      'a conditional `UPDATE runs SET …` chain mentions runs.sessionId — route it through bindSession').toEqual([]);
+  });
+
+  it('CONTROL (fixture): a conditional-SET chain that names sessionId is partial and its source shows the column', () => {
+    const dir = mkTmp('coord-store-census-');
+    const file = path.join(dir, 'store.ts');
+    writeFileSync(file, "class S { m(x: boolean) { return this.db.prepare('UPDATE runs SET workspace = ?, ' + (x ? 'sessionId = ?' : 'branch = ?') + ' WHERE id = ?'); } }\n");
+    const [q] = sqlStatementsInFile(file);
+    expect([q?.verb, q?.table, q?.partial, q?.set, /\bsessionId\b/.test(q?.source ?? '')]).toEqual(['UPDATE', 'runs', true, ' workspace = ?, ', true]);
+    writeFileSync(file, "class S { m() { return this.db.prepare('UPDATE runs SET sessionId = ? ' + 'WHERE id = ?'); } }\n");
+    expect(sqlStatementsInFile(file).map((x) => x.partial)).toEqual([false]);   // a wholly literal chain is not partial
   });
 
   // Migration 16, child-reclamation spec §5.1, §5.3: the child's BIRTH is

@@ -386,12 +386,18 @@ export function stringPieces(text: string, fileName = 'source.ts'): StringPiece[
 
 /** A string-valued expression: a string literal, a template, or a `+` chain of them (how a long SQL statement is
  *  written across lines). `text` is the cooked value with each `${…}` replaced by `${}`; `start`/`end` span the
- *  whole expression in the source; `line` is 1-based, where it starts. */
+ *  whole expression in the source; `line` is 1-based, where it starts. `partial` is true when the expression is an
+ *  operand of a larger `+` chain that is NOT wholly string text (`'UPDATE t SET a = ?, ' + cond + ' WHERE …'`): its
+ *  `text` is then only a fragment of the statement, and `chainStart`/`chainEnd` span the whole chain (else the
+ *  expression itself), so a census can read the raw source of the statement the fragment belongs to. */
 export interface StringExpression {
   text: string;
   start: number;
   end: number;
   line: number;
+  partial: boolean;
+  chainStart: number;
+  chainEnd: number;
 }
 
 /** The maximal string-valued expressions of a source text, in source order (ARCH-06: `sqlStatementsIn` reads the SQL a
@@ -416,7 +422,12 @@ export function stringExpressions(text: string, fileName = 'source.ts'): StringE
   const visit = (node: ts.Node): void => {
     const v = valueOf(node);
     if (v !== null && !ts.isParenthesizedExpression(node)) {
-      out.push({ text: v, start: node.getStart(sf), end: node.getEnd(), line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1 });
+      // The outermost `+` chain this operand sits in (parentheses looked through): its span is the statement's source.
+      let top: ts.Node = node;
+      while (top.parent && (ts.isParenthesizedExpression(top.parent)
+        || (ts.isBinaryExpression(top.parent) && top.parent.operatorToken.kind === ts.SyntaxKind.PlusToken))) top = top.parent;
+      out.push({ text: v, start: node.getStart(sf), end: node.getEnd(), line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+        partial: top !== node, chainStart: top.getStart(sf), chainEnd: top.getEnd() });
       // A template's substitutions can hold strings of their own.
       if (ts.isTemplateExpression(node)) node.templateSpans.forEach((s) => visit(s.expression));
       return;
@@ -425,4 +436,20 @@ export function stringExpressions(text: string, fileName = 'source.ts'): StringE
   };
   visit(sf);
   return out;
+}
+
+/** The offset where the statement holding `pos` starts: the innermost statement that sits in a block, a source file or a
+ *  case clause (so `void this.x(…)`, `const a = this.x(…)` and `await this.x(…)` all start at their first keyword).
+ *  `pos` outside every statement gives `pos`. */
+export function statementStartAt(text: string, pos: number, fileName = 'source.ts'): number {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
+  let found = pos;
+  const visit = (n: ts.Node): void => {
+    if (pos < n.getStart(sf) || pos >= n.getEnd()) return;
+    if (ts.isStatement(n) && (ts.isBlock(n.parent) || ts.isSourceFile(n.parent) || ts.isCaseOrDefaultClause(n.parent)
+      || ts.isModuleBlock(n.parent))) found = n.getStart(sf);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return found;
 }

@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseSource, stringExpressions, type CallSite, type ParsedFile, type SymbolSpan } from './parse.js';
+import { parseSource, statementStartAt, stringExpressions, type CallSite, type ParsedFile, type SymbolSpan } from './parse.js';
 
 /** The repository root: a relative `file` is resolved against it (`server/src/watch.ts`). */
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -70,12 +70,16 @@ export function callsIn(symbol: SourceSymbol): CallSite[] {
 /** One SQL statement held in the source: the string expression (a literal, a template or a `+` chain) that opens as
  *  a statement. `text` is the cooked statement, each `${…}` shown as `${}`; `table` the first table it names
  *  (`INSERT INTO t`, `UPDATE t`, `DELETE FROM t`, `FROM t`), lower-cased as written, else `null`; `set` an UPDATE's SET
- *  list (from `SET` to `WHERE` or the end), else `null`. */
+ *  list (from `SET` to `WHERE` or the end), else `null`. `partial` is true when the text is only a FRAGMENT of a `+` chain
+ *  that has a non-literal part (a conditional SET, a variable), so `set` may be cut short; `source` is then the raw
+ *  source of the whole chain (else of the expression), and a census must read it, not `set`. */
 export interface SqlStatement {
   verb: string;
   table: string | null;
   set: string | null;
   text: string;
+  partial: boolean;
+  source: string;
   file: string;
   start: number;
   end: number;
@@ -97,14 +101,17 @@ const statementsOf = (parsed: ParsedFile, from: number, to: number): SqlStatemen
     if (verb === undefined || e.start < from || e.end > to) continue;
     const table = (TABLE_OF[verb] ?? /\bFROM\s+(\w+)/i).exec(e.text)?.[1] ?? null;
     const set = verb === 'UPDATE' ? /\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(e.text)?.[1] ?? null : null;
-    out.push({ verb, table, set, text: e.text, file: parsed.path, start: e.start, end: e.end, line: e.line });
+    out.push({ verb, table, set, text: e.text, partial: e.partial, source: parsed.text.slice(e.chainStart, e.chainEnd), file: parsed.path, start: e.start, end: e.end, line: e.line });
   }
   return out;
 };
 
 /** Every SQL statement inside `symbol`'s span, in source order, nested functions' statements included. A statement
  *  is a string expression whose text opens as one (`UPDATE t SET`, `INSERT INTO`, `DELETE FROM`, `SELECT … FROM`,
- *  DDL), so a comment that quotes SQL is not one. KNOWN WIDTH: SQL assembled from a variable (`'UPDATE ' + table`) or a `.join` is not a string expression. */
+ *  DDL), so a comment that quotes SQL is not one. KNOWN WIDTH: SQL assembled from a variable (`'UPDATE ' + table`) or a `.join` is not a string expression. A `+` chain with a non-literal part
+ *  (`'UPDATE t SET a = ?, ' + (x ? 'b = ?' : 'c = ?') + ' WHERE …'`) yields its literal pieces as `partial` statements
+ *  whose `set` is cut at the gap and whose conditional piece opens no statement of its own: read `source` (the whole
+ *  chain's raw text) when a census asks which COLUMNS a writer sets. */
 export function sqlStatementsIn(symbol: SourceSymbol): SqlStatement[] {
   return statementsOf(parsedFile(symbol.file), symbol.start, symbol.end);
 }
@@ -119,7 +126,7 @@ export function sqlStatementsInFile(file: string): SqlStatement[] {
  *  first call, once, so an ORDER pin over the symbol survives its body moving into a private method: the code keeps its
  *  place in the flow, only its home changes. Expect a needle to occur once in the result (a helper called early can
  *  hold the same text), and assert that. KNOWN WIDTH: only `this.` calls to a method of the symbol's own class are
- *  followed, and a helper's text is spliced at its first call only. */
+ *  followed, and a helper's text is spliced before the statement of its first call only (so `void this.helper(…)` and `await …` keep their keyword in front of the call). */
 export function inlinedSourceOf(symbol: SourceSymbol): string {
   const owner = symbol.name.includes('.') ? symbol.name.slice(0, symbol.name.indexOf('.')) : null;
   if (owner === null) return symbol.text;
@@ -135,7 +142,7 @@ export function inlinedSourceOf(symbol: SourceSymbol): string {
       const helper = name === null ? [] : parsed.symbols.filter((x) => x.name === name);
       if (name === null || helper.length !== 1 || seen.has(name)) continue;
       seen.add(name);
-      inserts.push({ at: c.start - s.start, text: `${expand(helper[0]!)}\n` });
+      inserts.push({ at: statementStartAt(parsed.text, c.start, parsed.path) - s.start, text: `${expand(helper[0]!)}\n` });
     }
     for (const i of inserts.sort((a, b) => b.at - a.at)) text = text.slice(0, i.at) + i.text + text.slice(i.at);
     return text;

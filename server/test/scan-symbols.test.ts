@@ -126,6 +126,13 @@ describe('scan/symbols.ts keys a source slice on a symbol (D-5854)', () => {
     expect(inlinedSourceOf(symbolOf(file, 'outer'))).toBe(sourceOfSymbol(file, 'outer'));
   });
 
+  it('inlinedSourceOf splices a helper before the statement of its call, so `void` and `await` stay in front of the call', () => {
+    writeFileSync(file, 'class W {\n  tick(): void {\n    void this.lane(1).catch(() => {});\n  }\n  private lane(n: number): Promise<void> { return Promise.resolve(); }\n}\n');
+    const t = inlinedSourceOf(symbolOf(file, 'W.tick'));
+    expect(t).toContain('void this.lane(1).catch(');
+    expect(t.indexOf('private lane')).toBeLessThan(t.indexOf('void this.lane(1)'));
+  });
+
   it('sqlStatementsIn follows code that moves: the same statements after a method is added above', () => {
     writeFileSync(file, SQL_FIXTURE);
     const before = sqlStatementsIn(symbolOf(file, 'Store.clear')).map((q) => q.text);

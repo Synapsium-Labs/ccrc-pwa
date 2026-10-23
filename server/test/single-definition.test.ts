@@ -7998,7 +7998,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     [...text.matchAll(/['"`/]([\w.-]+\.ts)['"`]/g)].some((m) => SRC_BASENAMES.has(m[1]!));
   /** The server/src files a read's source text names: the basename quoted or after a `/`; a basename that two
    *  directories share (`routes.ts`, `redact.ts`, `io.ts`) resolves to the directory the text (or the reading function's,
-   *  `context`) also quotes, else to the one at server/src's root, else to nothing; nothing too when the text names
+   *  `context`) also quotes, else to the one at server/src's root, else to nothing; a basename only ONE file has resolves
+   *  to that file whatever directory the text spells (`path.join(dirVar, 'delegation-ingest.ts')`); nothing when the text names
    *  another package. */
   const namesSrcFile = (text: string, context = ''): string[] => {
     const all = `${text}\n${context}`;
@@ -8009,7 +8010,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       const same = SRC_FILES.filter((f) => path.basename(f) === base);
       const dir = (f: string): string => path.basename(path.dirname(f));
       const beside = same.filter((f) => dir(f) !== 'src' && new RegExp(`['"\`/]${esc(dir(f))}['"\`/]`).test(all));
-      out.push(...(beside.length ? beside : same.filter((f) => dir(f) === 'src')));
+      out.push(...(beside.length ? beside : same.length === 1 ? same : same.filter((f) => dir(f) === 'src')));
     }
     return out;
   };
@@ -8159,6 +8160,15 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       "const watchSrc = (): string => readFileSync(join(dir, 'watch.ts'), 'utf8');",
       "it('c', () => { const w = watchSrc(); expect(w.indexOf('c')).toBe(1); });",
     ))).toEqual(['1 server.ts toContain a', '4 watch.ts indexOf c']);
+    // A basename one file owns counts when the directory is built elsewhere; a shared one still needs its directory.
+    expect(pins(L(
+      "const a = readFileSync(path.join(dirVar, 'childReclaim.ts'), 'utf8');",
+      "expect(a.indexOf('x')).toBe(1);",
+      "const b = readFileSync(path.join(dirVar, 'delegation-ingest.ts'), 'utf8');",
+      "expect(b).toContain('y');",
+      "const c = readFileSync(path.join(dirVar, 'routes.ts'), 'utf8');",
+      "expect(c).toContain('z');",
+    ))).toEqual(['2 coord/childReclaim.ts indexOf x', '4 coord/delegation-ingest.ts toContain y']);
     // A read whose path sits in a constant resolves one hop through that constant's binding.
     expect(pins(L(
       "const W = path.resolve(dir, '../src/watch.ts');",
@@ -8193,7 +8203,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     }
   });
 
-  it('CONTROL (fixture, D-6114): W1b\'s three files are counted the same way, and `redact.ts` only beside `coord`', () => {
+  it('CONTROL (fixture, D-6114): W1b\'s three files are counted the same way, `redact.ts` whatever directory is spelled, a package\'s own `registry.ts` not', () => {
     const pins = (code: string): string[] =>
       literalSourcePins(code).map((x) => `${x.line} ${x.target.replace('server/src/', '')} ${x.method} ${x.literal}`);
     expect(pins([
@@ -8207,7 +8217,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       "expect(d).toContain('w');",
       "const e = readFileSync(path.join(root, 'pwa', 'src', 'command', 'registry.ts'), 'utf8');",
       "expect(e).toContain('v');",
-    ].join('\n'))).toEqual(['2 ccdargv.ts toContain x', '4 registry.ts indexOf y', '6 coord/redact.ts toMatch /z/']);
+    ].join('\n'))).toEqual(['2 ccdargv.ts toContain x', '4 registry.ts indexOf y', '6 coord/redact.ts toMatch /z/',
+      '8 coord/redact.ts toContain w']);   // ARCH-06: a basename one file owns resolves to it whatever directory the text spells
   });
 
   // D-6114 (Task C0o; ARCH-06 (#554), the W1b slice). The same rule over W1b's files, its own ceiling, so a slice moved
@@ -8262,8 +8273,9 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/coord/close.ts': 8,
       'server/src/coord/collectLaneJournal.ts': 5,
       'server/src/coord/db.ts': 4,
-      'server/src/coord/delegation-checkpoint.ts': 31,
+      'server/src/coord/delegation-checkpoint.ts': 33,
       'server/src/coord/delegation-correlation.ts': 4,
+      'server/src/coord/delegation-ingest.ts': 5,
       'server/src/coord/delegation-journal.ts': 14,
       'server/src/coord/delegation-model.ts': 5,
       'server/src/coord/delegation-policy.ts': 6,
