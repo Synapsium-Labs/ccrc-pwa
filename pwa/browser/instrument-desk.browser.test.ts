@@ -30,6 +30,10 @@
 //                                                         keeps its padding, and the column's gap beside it)
 //   `.ins-status-summary { max-width: 6ch }` ........... "at 900 the status bar's count is whole, with two open runs" (both pointers;
 //                                                         `expected 211 to be less than or equal to 40`)
+// T2e review R32, F7 (carried into T2g; RUN with -t "Inbox count", each mutant reverted):
+//   `.ins-rail-count` without `position: absolute` ..... "at 1280x800 the unread pill sits on the Inbox door's top-right corner, inside the door"
+//                                                         (`top inset 13.203125 vs --sp-1 4: expected 9.203125 to be less than or equal to 2`; both themes)
+//   `.ins-rail-count` without `right: var(--sp-1)` ..... the same case (`right inset 16.203125 vs --sp-1 4: expected 12.203125 to be less than or equal to 2`)
 // The plan's row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900 under both pointers, so
 // T2g added no `flex: none`.
 // The state's `flex: 0 0 auto` as `0 1 auto` + `min-width: 0` is NOT red here (a wrapped flex line is decided on max-content
@@ -89,6 +93,12 @@ const WITH_RUNS: AppFixture = {
   fleetFrames: [{ type: 'fleet', sessions: SESSIONS }, { type: 'runs', runs: RUNS }],
 };
 const SESSION_ROUTE = '/s/project-a-desk-density-pass';
+// The same fleet with three unread mail records in the durable feed (`GET /api/feed`, which the store reads once on its
+// first connect; no ack is stored, so every record is past it): the rail's Inbox door then reads "Inbox, 3 unread".
+const MAIL = [1, 2, 3].map((seq) => ({
+  seq, at: 1_800_000_000_000 + seq, kind: 'mail', sessionId: 'project-a-desk-density-pass', title: 'unread', body: '', runId: null,
+}));
+const WITH_MAIL: AppFixture = { api: { ...FIXTURE.api, '/api/feed': { events: MAIL } }, fleetFrames: FIXTURE.fleetFrames };
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -168,6 +178,42 @@ const BEFORE = 352;
  *  stays), the toggle (44 to 32) and the first group head (44 to 32). */
 const AFTER_OFFSET = 223;
 const BUDGET = BEFORE - AFTER_OFFSET;
+
+describe("the rail's Inbox count (T2e review R32, F7)", () => {
+  for (const theme of THEMES) {
+    it(`at 1280x800 the unread pill sits on the Inbox door's top-right corner, inside the door (${theme})`, async () => {
+      const { ctx, page } = await open(theme, 1280, 800, '/', false, WITH_MAIL);
+      try {
+        await page.waitForSelector('.ins-rail-count', { timeout: 20_000 });
+        const m = await page.evaluate(() => {
+          const door = document.querySelector('.ins-rail-item[aria-label="Inbox, 3 unread"]')!;
+          const pill = door.querySelector('.ins-rail-count')!;
+          // `--sp-1` as the page resolves it: the width of a probe that takes the token.
+          const probe = document.createElement('div');
+          probe.style.cssText = 'position:absolute;visibility:hidden;width:var(--sp-1)';
+          document.body.append(probe);
+          const sp1 = probe.getBoundingClientRect().width;
+          probe.remove();
+          const d = door.getBoundingClientRect();
+          const p = pill.getBoundingClientRect();
+          return {
+            sp1, pillText: pill.textContent,
+            inside: { left: p.left - d.left, top: p.top - d.top, right: d.right - p.right, bottom: d.bottom - p.bottom },
+          };
+        });
+        expect(m.pillText, 'the pill prints the count').toBe('3');
+        expect(m.sp1, '--sp-1 resolves to a length').toBeGreaterThan(0);
+        // Inside the door's box (a pixel of rounding).
+        for (const [edge, gap] of Object.entries(m.inside)) expect(gap, `the pill's ${edge} edge is inside the door`).toBeGreaterThanOrEqual(-1);
+        // On its top-right corner: the `--sp-1` inset from the right and the top edges, give or take the border and a pixel.
+        expect(Math.abs(m.inside.right - m.sp1), `right inset ${m.inside.right} vs --sp-1 ${m.sp1}`).toBeLessThanOrEqual(2);
+        expect(Math.abs(m.inside.top - m.sp1), `top inset ${m.inside.top} vs --sp-1 ${m.sp1}`).toBeLessThanOrEqual(2);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
 
 describe('one head in the list column', () => {
   for (const theme of THEMES) {
