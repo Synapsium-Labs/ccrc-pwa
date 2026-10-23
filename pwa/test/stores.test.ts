@@ -1281,6 +1281,33 @@ describe('session store connect()', () => {
     expect(store.getState().askFrameSeen).toBe(true);
     store.getState().disconnect();
   });
+
+  // D-6325 (review 843's F1): a new stream frames the menu it sees, but never the ABSENCE of one (`nextDialogFrame` sends
+  // nothing for a stream that has seen no menu), so a `dialog` kept from before the drop would be read as current once the
+  // new connection's `ask_cleared` arrives. The drop lowers `dialog` with `askFrameSeen`; the sheet's hold keeps what it
+  // showed in its own ref, and the new connection's `dialog` frame, sent before its `ask` frame, brings the menu back.
+  it('the socket dropping lowers dialog with askFrameSeen, and the new connection\'s dialog frame brings it back', () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
+    store.getState().connect();
+    lastSocket().open();
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().dialog).toEqual(dialogFixture);
+
+    lastSocket().onclose?.(new Event('close') as CloseEvent);
+    expect(store.getState().dialog, 'down: the pre-drop menu is not current').toBeNull();
+    expect(store.getState().askFrameSeen).toBe(false);
+
+    vi.advanceTimersByTime(60_000);
+    lastSocket().open();
+    expect(store.getState().dialog).toBeNull();
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().dialog).toEqual(dialogFixture);
+    expect(store.getState().askFrameSeen).toBe(true);
+    store.getState().disconnect();
+  });
 });
 
 // — fleet store —
