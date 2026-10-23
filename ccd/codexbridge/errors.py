@@ -41,7 +41,8 @@ QUOTA_CODES = frozenset({
     "insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded",
     "project_spend_limit_exceeded", "organization_usage_limit_exceeded",
 })
-# The backend's usage limit, an `error.type` on an HTTP 429 body only (api_bridge.rs:187-218).
+# The backend's usage limit, which it sends as an `error.type` on an HTTP 429 body (api_bridge.rs:187-218). The table
+# reads it as a code or a type, at any HTTP status and in a `response.failed`, as it reads every set here.
 USAGE_LIMIT_TYPES = frozenset({"usage_limit_reached"})
 # Throttling, worth a retry (D-6413). `slow_down` arrives as an HTTP 503 (api_bridge.rs:101-115).
 TRANSIENT_RATE_CODES = frozenset({"rate_limit_exceeded", "slow_down"})
@@ -56,7 +57,9 @@ ALL_CODES = (OVERFLOW_CODES | QUOTA_CODES | USAGE_LIMIT_TYPES | TRANSIENT_RATE_C
              | OVERLOAD_CODES)
 
 # Stage 1's bounds (`ccd/ccgpt-auth.py`'s CODE_RE and REQUEST_ID_RE): a code is kept lower-cased when it matches,
-# else as UNRECOGNISED_CODE; a request id is kept only when it matches.
+# else as UNRECOGNISED_CODE; a request id is kept only when it matches. COPIED, not imported: this module must answer
+# `auth-library-absent` when the library does not load, so it cannot read the library's constants at import.
+# codex-bridge-errors.test.ts loads the library by path and asserts both patterns equal its own.
 CODE_RE = re.compile(r"^[a-z0-9_.-]{1,64}$")
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 UNRECOGNISED_CODE = "unrecognised"
@@ -167,11 +170,16 @@ def _request_id(headers: object) -> Optional[str]:
 def _number(value: object) -> Optional[float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value) if math.isfinite(value) else None
+    try:
+        number = float(value)
+    except OverflowError:  # an integer too large for a float: JSON allows one, and the upstream sends the body
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _retry_after_from_reset(err: Optional[dict], now: float) -> Optional[str]:
-    """Seconds until the limit resets: `resets_at` (epoch seconds), else `resets_in_seconds`; None when unknown or
+    """Seconds until the limit resets: `resets_at` (epoch seconds), else `resets_in_seconds` (a usage-limit body
+    measured on a lane carried that field and no `resets_at`, spec 2026-09-13's S1-R10 row); None when unknown or
     already past."""
     if err is None:
         return None
@@ -272,9 +280,10 @@ def classify_http(status: int, body: bytes, headers: Mapping[str, str], *, now: 
                            dict(NO_RETRY), None, shown, rid, "auth")
     if status == 429:
         return _rate(shown, retry_after, rid)
-    if status == 403 and shown is None:
-        # a 403 with no error code is an edge's page (a Cloudflare challenge), not the backend's refusal
-        return _unavailable("HTTP 403 with no error code", None, rid)
+    if status == 403 and not isinstance(obj, dict):
+        # a 403 whose body is not a JSON object is an edge's page (a Cloudflare challenge), not the backend's refusal;
+        # a JSON 403 with no code is the backend's, and takes the other-4xx row below
+        return _unavailable("HTTP 403 that is not the backend's JSON", None, rid)
     if 400 <= status < 500:
         return BridgeError(status, INVALID_REQUEST, "the upstream refused the request: %s"
                            % (shown if shown is not None else "HTTP %d" % status), None, None, shown, rid, "refused")

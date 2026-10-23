@@ -5,9 +5,13 @@
 // Anthropic error body), and AFTER it, as the `error` event (`event`), which never carries a `message_stop`. Every
 // case runs through `runBridgeDriver` with both endpoint variables at a closed loopback URL; nothing makes a request.
 import { describe, it, expect } from 'vitest';
+import path from 'node:path';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
-import { driverLines, runBridgeDriver } from './codexBridgeFixture.js';
+import { CCD_DIR, driverLines, runBridgeDriver } from './codexBridgeFixture.js';
+
+/** Stage 1's credential library in this tree, which the driver's `auth-lib` op loads by path. */
+const AUTH_LIB = path.join(CCD_DIR, 'ccgpt-auth.py');
 
 const PY = pythonOrSkip();
 
@@ -94,6 +98,23 @@ describe.skipIf(!PY)('the error table (codex-bridge spec §2.4)', () => {
     expectRow(without, { status: 429, etype: 'billing_error', headers: { 'x-should-retry': 'false' }, state: 'limit-paused' });
   });
 
+  it('the usage limit\'s retry-after: resets_in_seconds when no resets_at; none when past, not a number or too large', async () => {
+    const body = (extra: object): object => ({ error: { type: 'usage_limit_reached', message: 'limit', ...extra } });
+    const lines = await run([
+      http(429, body({ resets_in_seconds: 300 })),
+      http(429, body({ resets_at: NOW - 5 })),
+      http(429, body({ resets_in_seconds: true })),
+      http(429, '{"error":{"type":"usage_limit_reached","resets_at":NaN}}'),
+      http(429, '{"error":{"type":"usage_limit_reached","resets_at":Infinity}}'),
+      http(429, `{"error":{"type":"usage_limit_reached","resets_at":1${'0'.repeat(400)}}}`),
+    ]);
+    const [inSeconds, ...none] = lines;
+    expectRow(inSeconds, { status: 429, etype: 'billing_error', headers: { 'retry-after': '300', 'x-should-retry': 'false' }, state: 'limit-paused' });
+    for (const l of none) {
+      expectRow(l, { status: 429, etype: 'billing_error', headers: { 'x-should-retry': 'false' }, state: 'limit-paused' });
+    }
+  });
+
   it('each quota code is limit-paused', async () => {
     const [sets] = await run([{ op: 'sets' }]);
     expect(sets.QUOTA_CODES).toEqual([...QUOTA].sort());
@@ -153,6 +174,14 @@ describe.skipIf(!PY)('the error table (codex-bridge spec §2.4)', () => {
     for (const l of lines) {
       expectRow(l, { status: 503, etype: 'api_error' });
       expect(l.error.kind).toBe('unavailable');
+    }
+  });
+
+  it('a 403 whose body is the backend\'s JSON, with no code, is the other-4xx row, not the edge\'s page', async () => {
+    const lines = await run([http(403, { detail: 'Forbidden' }), http(403, { error: { message: 'm' } })]);
+    for (const l of lines) {
+      expectRow(l, { status: 403, etype: 'invalid_request_error' });
+      expect(l.error.kind).toBe('refused');
     }
   });
 
@@ -225,6 +254,19 @@ describe.skipIf(!PY)('the error table (codex-bridge spec §2.4)', () => {
     expect(none.error.requestId).toBeNull();
   });
 
+  it('header names are read case-insensitively from a plain mapping', async () => {
+    const [l] = await run([http(429, '', { 'Retry-After': '5', 'X-Request-Id': 'req_fx4' })]);
+    expectRow(l, { status: 429, etype: 'rate_limit_error', headers: { 'retry-after': '5' } });
+    expect(l.error.requestId).toBe('req_fx4');
+  });
+
+  it('a top-level error event\'s type "error" is not read as its code', async () => {
+    const [l] = await run([failed({ type: 'error', message: 'm' })]);
+    expectRow(l, { status: 503, etype: 'api_error' });
+    expect(l.error.code).toBeNull();
+    expect(l.error.message).toContain('no code');
+  });
+
   it('ALL_CODES is the union of the seven code sets, and the auth words are Stage 1\'s', async () => {
     const [sets] = await run([{ op: 'sets' }]);
     const seven = ['OVERFLOW_CODES', 'QUOTA_CODES', 'USAGE_LIMIT_TYPES', 'TRANSIENT_RATE_CODES', 'INELIGIBLE_CODES', 'POLICY_CODES', 'OVERLOAD_CODES'];
@@ -234,6 +276,18 @@ describe.skipIf(!PY)('the error table (codex-bridge spec §2.4)', () => {
     expect(sets.POLICY_CODES).toEqual([...POLICY].sort());
     expect(sets.AUTH_DEAD_WORDS).toEqual([...DEAD].sort());
     expect(sets.AUTH_TRANSIENT_WORDS).toEqual([...TRANSIENT].sort());
+  });
+
+  it('the auth words are every AuthError word of Stage 1\'s library, login-failed the one the 401 row takes unnamed', async () => {
+    const [sets, lib] = await run([{ op: 'sets' }, { op: 'auth-lib', lib: AUTH_LIB }]);
+    const named = [...(sets.AUTH_DEAD_WORDS as string[]), ...(sets.AUTH_TRANSIENT_WORDS as string[]), 'login-failed'].sort();
+    expect(lib.words).toEqual(named);
+  });
+
+  it('CODE_RE and REQUEST_ID_RE are Stage 1\'s bounds, copied from its library', async () => {
+    const [sets, lib] = await run([{ op: 'sets' }, { op: 'auth-lib', lib: AUTH_LIB }]);
+    expect(sets.CODE_RE).toBe(lib.CODE_RE);
+    expect(sets.REQUEST_ID_RE).toBe(lib.REQUEST_ID_RE);
   });
 
   const SENTENCE = 'the lane is not signed in; run ccrc codex signin <id>';

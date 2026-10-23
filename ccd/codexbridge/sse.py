@@ -5,11 +5,12 @@ the Codex CLI does (upstream openai/codex @ 092d3ac, codex-rs/codex-api/src/sse/
 line, `event:` and `data:` fields, `:` comments skipped, the `[DONE]` sentinel skipped. It is the prototype's
 incremental scan: bytes are buffered and each feed looks for a line end only from the offset where the last feed's
 look stopped, never from zero, so a byte is examined a bounded number of times however the stream is chunked
-(`scanned` counts every byte examined). A line ends at LF; a CR before it is dropped, so CRLF and LF streams, and a
-CRLF split across two chunks, parse alike.
+(`scanned` counts every byte examined, from the offset each search actually starts at). A line ends at LF; a CR
+before it is dropped, so CRLF and LF streams, and a CRLF split across two chunks, parse alike.
 
 A malformed `data:` field (not JSON, or JSON that is not an object) is an event with `data` None and one warning,
-never fatal; a warning names what was wrong, never the content.
+never fatal; a warning names what was wrong, never the content. A line that is not UTF-8 makes its whole event
+malformed the same way: the event is answered with `data` None, never dropped and never rebuilt from its other lines.
 """
 
 import json
@@ -37,6 +38,7 @@ class SseParser:
         self._name = None  # type: Optional[str]
         self._data = []  # type: List[str]
         self._seen_field = False
+        self._poisoned = False  # a line of this event was not UTF-8
         self.warnings = []  # type: List[str]
         self.scanned = 0
 
@@ -51,12 +53,13 @@ class SseParser:
         self._buf += chunk
         buf = self._buf
         while True:
-            nl = buf.find(b"\n", self._look)
+            start = self._look
+            nl = buf.find(b"\n", start)
+            # counted from `start`, the offset the search was given, so a search that starts earlier counts more
+            self.scanned += (nl + 1 if nl >= 0 else len(buf)) - start
             if nl < 0:
-                self.scanned += len(buf) - self._look
                 self._look = len(buf)
                 break
-            self.scanned += nl - self._look + 1
             line = bytes(buf[self._start:nl])
             self._start = self._look = nl + 1
             if line.endswith(b"\r"):
@@ -94,6 +97,7 @@ class SseParser:
         except UnicodeDecodeError:
             self._warn("a line that is not UTF-8")
             self._seen_field = True
+            self._poisoned = True
             return None
         if line.startswith(":"):
             return None
@@ -109,8 +113,10 @@ class SseParser:
         return None
 
     def _dispatch(self) -> Optional[SseEvent]:
-        name, data_lines, seen = self._name, self._data, self._seen_field
-        self._name, self._data, self._seen_field = None, [], False
+        name, data_lines, seen, poisoned = self._name, self._data, self._seen_field, self._poisoned
+        self._name, self._data, self._seen_field, self._poisoned = None, [], False, False
+        if poisoned:  # its warning was given when the line was read
+            return SseEvent(name, None, name)
         if not seen or not data_lines:
             return None
         text = "\n".join(data_lines)

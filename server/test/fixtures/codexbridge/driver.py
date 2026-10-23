@@ -26,7 +26,12 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
   overflow         {n, m} -> a BridgeError
   capability       {cls, detail} -> a BridgeError
   from-auth        {word, sentence} -> a BridgeError
-  sets             -> {"<SET NAME>": sorted list, ...} for the seven code sets, ALL_CODES and the two word sets
+  sets             -> {"<SET NAME>": sorted list, ...} for the seven code sets, ALL_CODES and the two word sets, and
+                   {"CODE_RE", "REQUEST_ID_RE"}: errors' two patterns as text
+  auth-lib         {lib} -> {"words": every AuthError subclass's `word`, sorted, "CODE_RE", "REQUEST_ID_RE"}: Stage 1's
+                   library loaded by path (`spec_from_file_location`, as the bridge loads it), never through sys.path
+  endpoints        -> {"CCGPT_BRIDGE_UPSTREAM_BASE", "CCRC_CODEX_AUTH_BASE", "HOME"}: the two endpoint variables and
+                   HOME as this process received them (None when unset); URLs and a fixture path, never a credential
 A BridgeError prints as {"error": {status, etype, message, headers, state, code, requestId, kind}, "answer":
 {"status", "headers", "body": parsed JSON}, "event": errors.event(e) as text}. An op that raised prints
 {"raised": <class name>}. Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the package failed to import.
@@ -35,6 +40,7 @@ A BridgeError prints as {"error": {status, etype, message, headers, state, code,
 import ast
 import base64
 import importlib
+import importlib.util
 import json
 import os
 import sys
@@ -149,7 +155,23 @@ def _run(op, pkg, cb):
     if name == "sets":
         names = ("OVERFLOW_CODES", "QUOTA_CODES", "USAGE_LIMIT_TYPES", "TRANSIENT_RATE_CODES", "INELIGIBLE_CODES",
                  "POLICY_CODES", "OVERLOAD_CODES", "ALL_CODES", "AUTH_DEAD_WORDS", "AUTH_TRANSIENT_WORDS")
-        return {n: sorted(getattr(errors, n)) for n in names}
+        out = {n: sorted(getattr(errors, n)) for n in names}
+        out.update({"CODE_RE": errors.CODE_RE.pattern, "REQUEST_ID_RE": errors.REQUEST_ID_RE.pattern})
+        return out
+    if name == "auth-lib":
+        spec = importlib.util.spec_from_file_location("ccgpt_auth", op["lib"])
+        lib = importlib.util.module_from_spec(spec)
+        sys.modules["ccgpt_auth"] = lib
+        spec.loader.exec_module(lib)
+        words, todo = set(), list(lib.AuthError.__subclasses__())
+        while todo:
+            cls = todo.pop()
+            words.add(cls.word)
+            todo.extend(cls.__subclasses__())
+        return {"words": sorted(words), "CODE_RE": lib.CODE_RE.pattern, "REQUEST_ID_RE": lib.REQUEST_ID_RE.pattern}
+    if name == "endpoints":
+        keys = ("CCGPT_BRIDGE_UPSTREAM_BASE", "CCRC_CODEX_AUTH_BASE", "HOME")
+        return {k: os.environ.get(k) for k in keys}
     _usage("unknown op " + json.dumps(name))
     return None
 
