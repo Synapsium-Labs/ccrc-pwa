@@ -461,9 +461,10 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
 
   it('W27-L24: the deadline timer never keeps the process alive (D-6517)', async () => {
     // A child process connects with a 60 s deadline to a peer that never answers, closes the client and returns. The
-    // row pins the `close()` clear, with the `unref` behind it (M45 = M35+M41; M35 alone is an equivalent mutant). The
-    // row races the child's exit against EXIT_BOUND_MS and asserts on the race, so a deadline that holds the process
-    // fails this assertion at the bound (the row's own timeout is longer than the bound), not vitest's clock.
+    // row pins the `close()` clear and the `unref` together: either alone lets the child exit, so neither M41 nor M35
+    // reds it, and only M45 (M35+M41), both removed, does. The row races the child's exit against EXIT_BOUND_MS and
+    // asserts on the race, so a deadline that holds the process fails this assertion at the bound (the row's own
+    // timeout is longer than the bound), not vitest's clock.
     // The child's stderr is the failure message only: a loader warning on another Node version is not the property.
     const EXIT_BOUND_MS = 25_000;
     peer = await linkPeer(() => 'silent-upgrade');

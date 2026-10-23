@@ -271,8 +271,9 @@ One PR, from this workspace's own branch.
   nothing. Rows W27-L15 to W27-L20.
 - **The deadline's timer is `unref`'d.** A client that is closed with a long deadline pending lets its process exit.
   Row W27-L24 runs a child process and races its exit against a bound far below the deadline. Since main's `close()`
-  clear it pins that clear, with the `unref` behind it: M35 alone is an equivalent mutant with no row of its own, and
-  M45 (M35+M41) reds the row (D-6725; amended on review 874).
+  clear it pins the pair, that clear and the `unref` together: either alone lets the child exit, so M35 and M41 are
+  each an equivalent mutant for this row, and only M45 (M35+M41), both removed, reds it (D-6725; amended on review
+  874 and again on review 884).
 - **The deadline keeps the backoff.** A timed-out attempt does not reset the delay: only a `ready` does. Row W27-L25
   (D-6585).
 - **No reader moves.** No `FleetState` field, no wire field, no new `.invalidate(` call, no operator setting.
@@ -407,7 +408,7 @@ current-socket half, M7+M41 and M7+M40+M42, and calls M35 an equivalent mutant.
 | M32 | the refused range has an upper bound (T3) | `code >= 4000` in place of `code >= 4400 && code <= 4499` | W27-L22 | measured in review 852's fix round |
 | M33 | the refused range is more than the one code 4401 (T3) | `code === 4401` in place of the range | W27-L22 | measured in review 852's fix round |
 | M34 | the closing phase has its own word (T3) | map CLOSING to `ready not sent` in `preReadyPhase` | W27-L23 | measured in review 852's fix round |
-| M35 | the deadline's timer is `unref`'d (T2) | delete `this.connectTimer.unref?.();` in `armConnectDeadline` | W27-L24; (amended on main's #1160) green: `close()` clears the timer first, M45 reds it (D-6725); amended on review 874: an equivalent mutant with no row of its own, like M30 | measured in review 852's fix round |
+| M35 | the deadline's timer is `unref`'d (T2) | delete `this.connectTimer.unref?.();` in `armConnectDeadline` | W27-L24; (amended on main's #1160) green: `close()` clears the timer first, M45 reds it (D-6725); amended on review 874: an equivalent mutant with no row of its own, like M30; amended on review 884: M41 is equivalent for W27-L24 too, and only the pair M45 reds it | measured in review 852's fix round |
 | M36 | the deadline keeps the backoff (T2) | set `this.backoffMs = this.cfg.reconnectMinMs;` in the deadline callback, before `ws.terminate()` | W27-L25 | measured in review 852's fix round |
 | M37 | the window is exactly 8, not 9 (T3; review 860) | `Math.min(9, token.length)` | W27-L17 | measured in review 860's fix round |
 | M38 | the window is exactly 8, not 10 (T3; review 860) | `Math.min(10, token.length)` | W27-L17 | measured in review 860's fix round |
@@ -417,7 +418,7 @@ current-socket half, M7+M41 and M7+M40+M42, and calls M35 an equivalent mutant.
 | M42 | the clear at arm (#1160) | delete the `this.clearConnectDeadline();` at the top of `armConnectDeadline` | none alone (D-6725) | measured in the #1160 fix round |
 | M43 | the ready half, both ways (D-6724) | M4 plus M39 | W27-L5, and main's C3 | measured in the #1160 fix round |
 | M44 | the current-socket half, both ways (D-6724) | M7 plus M40 plus M41 | W27-L7 | measured in the #1160 fix round |
-| M45 | the `unref`, behind the `close()` clear (D-6725) | M35 plus M41 | W27-L24 | measured in the #1160 fix round |
+| M45 | the `unref` and the `close()` clear, the pair W27-L24 pins (D-6725; amended on review 884) | M35 plus M41 | W27-L24 | measured in the #1160 fix round |
 | M7+M41 (no number; review 874) | the current-socket half and the `close()` clear: the smallest red set for W27-L7 (amended on review 874) | M7 plus M41 | W27-L7 (1+24), the same as M44; M40 adds nothing to M44's one red | measured in review 874 |
 | M7+M40+M42 (no number; review 874) | the current-socket half, the `onClose` clear and the clear at arm: the smallest red set for W27-L6 (amended on review 874) | M7 plus M40 plus M42 | W27-L6 (1+24) | measured in review 874 |
 
@@ -716,7 +717,8 @@ reader itself).
     in depth with its smallest red set recorded: M43 (W27-L5 and main's C3) for `|| this.ready`; M7+M41 (W27-L7) and
     M7+M40+M42 (W27-L6) for the current-socket half; the `unref` is an equivalent mutant with no row of its own, like
     M30, and W27-L24 is the row for the `close()` clear, with M45 as its pair. The stale comments on W27-L5, L6 and
-    L24 were fixed in wave 30, comments only.
+    L24 were fixed in wave 30, comments only. (Amended on review 884: W27-L24 pins the pair M45, and M35 and M41 are
+    each equivalent for it; see "Coordinator rulings on review 884".)
 
 Any reserve number still undefined at wave-done is defined in this section before the wave-done fingerprint, in the
 house form for an issued number no departure took (as `delegation-broker-wave3-observe.md` writes its run 740
@@ -1585,6 +1587,20 @@ The rulings on review 874:
 (b) The stale text is fixed here.
 (c) The no-ready line #1160's C1 and C2 print to stderr is harmless; no action.
 
+Amended on review 884: W27-L24 pins the pair M45; M35 and M41 are each equivalent for it.
+
+## Coordinator rulings on review 884 (2026-10-23)
+
+Recorded verbatim from the coordinator's fix-round mail, as it asks. The review's report is "the review's report".
+
+Run 883, wave 30: fix round 1, ruled on review 884 (the review's report). Record this verbatim in the plan as "Coordinator rulings on review 884 (2026-10-23)". The review found the wave sound: the test file is code-identical to main once comments are set aside, the rulings are verbatim, every recorded red set reproduces, every gate is green at your tip, and CI is green. Three text findings remain.
+
+1. F1: my ruling (a) on review 874 was imprecise, and you wrote what it said. W27-L24 pins the PAIR, not the `close()` clear: measured, M41 alone (the `close()` clear deleted) leaves the file 25 of 25 green, as M35 alone does, because `close()` nulls the socket and the surviving timer is `unref`'d and returns at its stale guard. Say so: W27-L24's comment says the row pins the `close()` clear and the `unref` together, each of which alone lets the child exit, so neither M41 nor M35 reds it and only M45, both removed, does. Fix the plan's matching lines (about :274 and :718) the same way, and name M41 beside M35 as equivalent for this row. Leave ruling (a)'s verbatim record as it is, and add one line under it: "Amended on review 884: W27-L24 pins the pair M45; M35 and M41 are each equivalent for it."
+2. F2: the As built note's "as the load-flake list says" goes; cite CLAUDE.md's general sentence that the suites are load-sensitive instead. Do not add remote-liveness to the list.
+3. F3: record the gates at your new tip, after this round's commit.
+
+Gates as before, one file at a time, foreground; the comment change touches no code line, so remote-liveness three whole-file runs and the prose-reading gates (docs-parity, citations, topology-clean, private-names, dtbd, deviation-refs after `git fetch origin main`, growth-check with GROWTH_CHECK=1) suffice. Scan the round's prose for private names. Measure merge-tree against main before the push. Push once, wave-done in the same turn. Keep claim 2355.
+
 ## As built (run 833, 2026-10-23)
 
 The worker's record. Measured on the workspace branch over base `a68c90f15` (main did not move during the wave, and
@@ -1765,8 +1781,8 @@ no behaviour, no new row, no deviation issued; D-6724 and D-6725 are amended in 
   - "three row comments say what the merged deadline does (wave 30, review 874)": three comments in
     `server/test/remote-liveness.test.ts`. W27-L5's names M43, since `onReady` clears the timer; W27-L6's says attempt
     0's timer is cleared when its socket closes and at the next arm, so the row reds only under M7+M40+M42; W27-L24's
-    says the row pins the `close()` clear with the `unref` behind it (M45, with M35 an equivalent mutant). No code
-    line, assertion, title or timing changed;
+    says the row pins the `close()` clear with the `unref` behind it (M45, with M35 an equivalent mutant; corrected in
+    fix round 1 below). No code line, assertion, title or timing changed;
   - "wave 27's text says what the merged deadline does (wave 30, review 874)": this plan's Global Constraints consent
     list, Review Focus, Risk notes and Mutation table, D-6724 ("only combinations red") and D-6725, and the section
     "Coordinator rulings on review 874 (2026-10-23)", with the review's report written as "the review's report";
@@ -1779,7 +1795,7 @@ no behaviour, no new row, no deviation issued; D-6724 and D-6725 are amended in 
   - `remote-liveness`: 25 of 25 on four consecutive runs, at a load average of 144 falling to 70. Before them, five of
     the first nine runs, at a load average of 125 to 180, lost one or two rows to timing, and not the same row twice
     in a row (W27-L24, then L7 and L15, then L12 by vitest's 20 s clock, then L9, then L24 again); each next run of
-    the same file passed. A comment cannot move a row, so this is load, as the load-flake list says;
+    the same file passed. A comment cannot move a row, so this is load: CLAUDE.md says the suites are load-sensitive (amended on review 884);
   - `remote-connect` 70, `docs-parity` 54, `citations` 4, `topology-clean` 60, `private-names` 47, `dtbd` 1,
     `deviation-refs` 31 (after `git fetch origin main`), `GROWTH_CHECK=1` `growth-check` 45;
   - `single-definition` 846 of 848 on its first run at a load average of 49, 848 of 848 on the re-run;
