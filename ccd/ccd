@@ -23814,8 +23814,8 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # THE CHILD'S TEMP ROOT (spec §5.2), composed ONCE, here, into the one `env`
   # string BOTH spawn lines below splice — for `$rcflag`'s reason: the resume
   # retry may not spawn a differently-contained pane than the attempt it
-  # replaces. EMPTY for every non-child, so a non-child's spawn line is
-  # byte-identical to what it was before (`ccd-spawn-split.test.ts` pins it).
+  # replaces. EMPTY for every non-child, so a non-child spawn line carries no TMPDIR
+  # of its own (only the session-root token below; `ccd-spawn-split.test.ts` pins it).
   # `_child_tmpdir`'s rc 2 has already said on stderr why a child spawns
   # uncontained; the spawn proceeds either way.
   local tmpenv="" ctmp
