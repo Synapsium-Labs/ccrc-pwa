@@ -38,6 +38,14 @@ export function replyArchiveRefused(reply: FastifyReply, id: string, plan: Refus
   return refuseRoute(reply, error, extra);
 }
 
+type RefusedBody = { ok: false; error: RouteRefusal } & Record<string, unknown>;
+
+/** A refusal body the planner or ccd's answer built, sent through `refuseRoute` so its status is the table's. */
+function sendRefused(reply: FastifyReply, body: RefusedBody): FastifyReply {
+  const { ok: _ok, error, ...extra } = body;
+  return refuseRoute(reply, error, extra);
+}
+
 export async function actArchive(
   reply: FastifyReply, plan: Planned, flags: ArchiveFlags, archiveArgv: CcdArgv | null, ports: ArchiveActPorts,
 ): Promise<FastifyReply | { ok: true; archived: true; stopped: boolean; ended: Planned['ended'] }> {
@@ -49,7 +57,7 @@ export async function actArchive(
     const verdict = flags.interrupt ? 'idle' : await ports.turnVerdict();
     if (verdict !== 'idle') {
       const refused = refusedAtStop(verdict, plan.ended);
-      return reply.code(refused.status).send(refused.body);
+      return sendRefused(reply, refused.body as RefusedBody);
     }
     const res = await ports.runCcd(ports.stopArgv());
     if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr, ...endedSpread });
@@ -72,5 +80,6 @@ export async function actArchive(
     stopped = true;
   }
   const out = archiveOutcome(stopped, plan.ended, archived);
-  return reply.code(out.status).send(out.body);
+  // The 409 arm is a refusal and answers through the one helper; the 200 and the 502 `{ stderr }` arms are not words.
+  return out.status === 409 ? sendRefused(reply, out.body as RefusedBody) : reply.code(out.status).send(out.body);
 }

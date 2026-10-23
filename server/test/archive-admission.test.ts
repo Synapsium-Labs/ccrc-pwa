@@ -3,10 +3,9 @@
 // world, the gate that must refuse it and the word it refuses with, and the probes asked on the way. The order is the
 // contract, so each reorder mutant (recorded in the PR) must turn a row red.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { parsedFile } from './scan/symbols.js';
 import { ARCHIVE_REFUSALS } from '../../shared/api.js';
-import { decideArchive } from '../src/coord/archiveDoor.js';
+import { decideArchive, refusedAtStop, archiveOutcome } from '../src/coord/archiveDoor.js';
 import { ARCHIVE_GATES, admitArchive, type ArchiveAdmissionProbes, type AdmissionRecordRead } from '../src/coord/archiveAdmission.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
 
@@ -87,15 +86,16 @@ describe('admitArchive — the gate-order table', () => {
   });
 });
 
+const ARCHIVE_ROUTE = '/api/sessions/:id/archive';
+
 describe('the archive door is a wiring (ARCH-36 acceptance)', () => {
   it('the handler holds at most five ifs: every gate is a row of admitArchive, every act is archiveAct\'s', () => {
-    // ARCH-06's symbol-keyed source slice has not landed; this slice is the route registration to the next one.
-    const text = readFileSync(fileURLToPath(new URL('../src/server.ts', import.meta.url)), 'utf8');
-    const from = text.indexOf("app.post('/api/sessions/:id/archive'");
-    const to = text.indexOf("app.post('/api/sessions/:id/restore'");
-    expect(from).toBeGreaterThan(0);
-    expect(to).toBeGreaterThan(from);
-    const code = text.slice(from, to).split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    // The handler is the `app.post` call whose path is the archive route, found in the parsed file (no source slicing).
+    const route = parsedFile('server/src/server.ts').calls
+      .filter((c) => c.callee === 'app.post' && c.args[0]?.kind === 'string' && c.args[0].text === ARCHIVE_ROUTE);
+    expect(route).toHaveLength(1);
+    const code = parsedFile('server/src/server.ts').text.slice(route[0]!.start, route[0]!.end)
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
     expect([...code.matchAll(/\bif\s*\(/g)].length).toBeLessThanOrEqual(5);
   });
 
@@ -113,5 +113,17 @@ describe('the archive door is a wiring (ARCH-36 acceptance)', () => {
       expect(w.reply.status).toBe(REFUSAL_STATUS[w.reply.body.error as keyof typeof REFUSAL_STATUS]);
     }
     for (const word of Object.values(ARCHIVE_REFUSALS)) expect(REFUSAL_STATUS).toHaveProperty([word], 409);
+  });
+});
+
+describe('the act-time refusals take the table status (ARCH-36 criterion 3)', () => {
+  it('refusedAtStop and the 409 arm of archiveOutcome carry REFUSAL_STATUS[error]', () => {
+    for (const v of ['busy', 'unmeasured'] as const) {
+      const r = refusedAtStop(v, []);
+      expect(r.status).toBe(REFUSAL_STATUS[(r.body as { error: keyof typeof REFUSAL_STATUS }).error]);
+    }
+    const o = archiveOutcome(false, [], { ok: false, stderr: 'ccd: session-busy\n' });
+    expect(o.status).toBe(409);
+    expect(o.status).toBe(REFUSAL_STATUS[(o.body as { error: keyof typeof REFUSAL_STATUS }).error]);
   });
 });
