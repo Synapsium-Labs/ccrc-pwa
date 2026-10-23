@@ -2088,7 +2088,7 @@ places none. The publisher reads the lane's credential through the auth library 
 sign-in: an expired token fails the poll `token-expired`, and nothing is published until the lane's tier refreshes
 it on its next request; a credential that needs a sign-in fails it naming `ccrc codex login <id>`, and one it
 cannot use (`credential-unusable`) names `ccrc doctor`, or `ccrc update` and then `ccrc codex login <id>` after a
-`config-error`; with no library placed (`auth-library-absent`) it names `ccrc update`. The unit is bounded at 300 s. Doctor's `codex`
+`config-error`; with a library it cannot load (`auth-library-absent`) it names `ccrc update`. The unit is bounded at 300 s. Doctor's `codex`
 check WARNs when a lane's timer is not enabled, when another tool's is, and when the lane's row is missing or
 older than three polls. `ccrc account remove` disables the removed lane's instance and `ccrc uninstall` every
 one, each found through systemd's own enablement links rather than the roster. Because the lane's `telemetry` is

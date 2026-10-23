@@ -1507,13 +1507,16 @@ D-number is defined in that plan's Deviations found. *(Added 2026-10-23.)*
   and the library's serialises credential writes for one refresh. Removal is the only stop that takes both (D-6384).
 - **Its refusals.** The lock's path and bound come from the library's `paths`. A holder past the bound refuses
   `codex-reap-failed`, with nothing removed. So does a symlink or another non-regular file at the lock path, which is
-  never opened. A lane that never signed in has no authDir, holds nothing and gets none. A lock file the hold creates
+  never opened, and so do a `paths` answer it cannot read, a lock it cannot open, and a lock it created but cannot
+  set to 0600. A lane that never signed in has no authDir, holds nothing and gets none. A lock file the hold creates
   is 0600 whatever the umask.
-- **Where it holds nothing.** With no `flock` on the box, or with no library or no `python3` on the removing shell's
-  PATH (`_codex_auth`'s rc 3), the hold answers 0 holding nothing and the stop goes ahead unserialised. That arm is
-  accepted, not proved safe (D-TBD-auth-hold-no-library): a running tier keeps the library it loaded at its start and
-  runs it under the runtime's own interpreter, so it can still take the lock, and a stop inside its refresh can lose
-  a refresh token the endpoint has already rotated, leaving the lane to be signed in again.
+- **Where it holds nothing.** In two arms the hold answers 0 holding nothing and the stop goes ahead unserialised.
+  With no `flock` binary on the box, the hold takes nothing, as the lane's own lock does, while a running tier still
+  locks through the library's own Python `flock`. With no library or no `python3` on the removing shell's PATH
+  (`_codex_auth`'s rc 3), the arm is accepted, not proved safe (D-TBD-auth-hold-no-library): a running tier keeps the
+  library it loaded at its start and runs it under the runtime's own interpreter. In either arm the tier can still
+  take the lock, and a stop inside its refresh can lose a refresh token the endpoint has already rotated, leaving the
+  lane to be signed in again.
 - **The wait for a poll stays, for one reason now** (D-6378). §21.3 says removal never stops the usage service
   because a poll mid-refresh may be writing the credential. That reason is gone: the publisher only reads. The other
   stands, so the wait does: a poll still running writes again the `~/.cc-limits` row the removal deletes.
