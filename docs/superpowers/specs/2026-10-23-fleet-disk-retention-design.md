@@ -1,6 +1,6 @@
 # Fleet disk retention: live scratch, orphan worktrees, loose temp entries and a disk alarm
 
-**Spec** · 2026-10-23 · Status: draft for review, rev 1. It implements the operator's four rulings of 2026-10-23 on #1119, the operator's answers to rev 0's open questions, and the operator's four lifecycle-exit rulings G1 to G4 of the same day (posted on #1167 and #1119); the rulings are fixed, and only the questions in §9.2 need the operator · Owner: the ccrc coordinator · Issue: #1119 (the incident, with the rulings as its comment) · Plan: `docs/superpowers/plans/2026-10-23-fleet-disk-retention.md`
+**Spec** · 2026-10-23 · Status: draft for review, rev 2. It implements the operator's four rulings of 2026-10-23 on #1119, the operator's answers to rev 0's open questions, and the operator's four lifecycle-exit rulings G1 to G4 of the same day (posted on #1167 and #1119); the rulings are fixed, and every question is ruled (§9) · Owner: the ccrc coordinator · Issue: #1119 (the incident, with the rulings as its comment) · Plan: `docs/superpowers/plans/2026-10-23-fleet-disk-retention.md`
 
 **Related:** `2026-08-11-artifact-lifecycle-policy.md` (rows 5, 6 and 9, Tier C, Open Questions 6 and "declared byte budget per box"), `2026-09-22-child-workspace-reclamation-design.md` §5.10 (`ws-collect`), `docs/superpowers/programs/child-reclamation-contract.md` (R38, R57, R59), `2026-10-20-workspace-disk-and-registry-truth-design.md` (#840: §6 Q1's orphan rule, the `archivedHeld` block, the stale-lock rule D-5945), `2026-10-12-path-identity-design.md` with open PR #1132 (W3: which tree `git worktree remove` may delete), `docs/superpowers/plans/2026-10-08-server-test-run-tmp-parent.md` (#337, its deferred Task 5 and "proposal 3, the sweeper"), `2026-10-19-ccrc-consolidation-wave-design.md` (K1 retire reasons, K6 funnel, K12 switches), `2026-09-24-workspace-lifecycle-design.md` (L3, rung 2′: expiry and children), the stop-done and hibernation lanes (`server/src/stopDone.ts`, `server/src/coord/hibernate.ts`), #298, #316, #317, #318.
 
@@ -320,7 +320,7 @@ A row is archived when all of these hold:
 - it is a workspace (`workspace !== null`), with no `.child` marker in any reading, not archived and not held;
 - it has never been a run's `claimedBy`, in any state or generation (`childReclaimCoordinatorClaims` and `openCoordinatorIds` both empty for it);
 - no pane, measured on two passes at least an hour apart;
-- **no pane for 14 days:** the newest of its latest `spawn`, `start` and `supervise` acts in the lifecycle mirror (`lifecycle_events`), `.supervised`, `.spawn`, `.woke` and its current transcript's mtime is older than `STALE_ARCHIVE_AFTER_MS` (14 days). No evidence at all means unmeasured, and the row is kept. A hibernated row counts as having no pane (§9.2 Q3);
+- **no pane for 14 days:** the newest of its latest `spawn`, `start` and `supervise` acts in the lifecycle mirror (`lifecycle_events`), `.supervised`, `.spawn`, `.woke` and its current transcript's mtime is older than `STALE_ARCHIVE_AFTER_MS` (14 days). No evidence at all means unmeasured, and the row is kept. A hibernated row counts as having no pane (ruled, §9.1 item 12);
 - nobody is viewing it (retire defers on `visible`, D-5242).
 
 **The act** is `ws-archive --session <id> --if-no-pane --reason stale`. The new flag refuses `live` when a tmux session or an active unit exists at the act, so an archive can never kill a pane that came back. `.archivedreason`'s grammar gains `stale`. The archive starts expiry's seven days.
@@ -454,7 +454,7 @@ Every ccd change deploys agent lane first. Waves 2 to 5 are independent of each 
 
 ## 9. Questions for the operator
 
-### 9.1 Resolved (operator, 2026-10-23)
+### 9.1 Resolved (operator, 2026-10-23; items 10 to 16 are the wave-5 questions, ruled as recommended in a comment on #1167)
 
 1. **Rescue then remove:** yes. The rescue arm has its own marker, `orphan-tree-rescue-live`, set only after a week of the main arm running live.
 2. **Reads count as touches:** yes, as recommended.
@@ -466,15 +466,15 @@ Every ccd change deploys agent lane first. Waves 2 to 5 are independent of each 
 8. **The output cap:** 1 GiB, keeping 64 MiB at each end, as recommended.
 9. **Claude Code's branches:** leave them, and never remove `other`-class trees, as recommended.
 
-### 9.2 Open (wave 5)
+10. **Hand holds (G2):** yes. A hold the operator set by hand lapses after 7 idle days like a programme's, and the hold's text is quoted in the coordinator mail. R34 is amended accordingly.
+11. **The nested-rescue size bound:** 512 MiB of objects per nested repository. Beyond it, the child stays terminal (`nested-rescue-too-large`) and is reported.
+12. **Hibernated rows and G1:** a hibernated workspace counts as having no pane for the 14 days.
+13. **"Non-coordinator" for G1:** never a run's `claimedBy`, in any state or generation.
+14. **G4's scope:** the orphan rules apply to trees nested inside coordinators' workspaces only. A tree inside any other workspace waits for that workspace's own exit.
+15. **Terminal children:** a `terminal-refusal` child is re-audited once per 7 idle days. If it is still terminal, it stays and is reported again. Nothing forces past a terminal word.
+16. **Review children:** the stale arm reclaims a review child while the run it reviewed is still open. The pin keeps the report, and the mail names where it is. **This explicitly supersedes D-5942's "nothing reclaims it before that".**
 
-1. **Hand holds.** G2 names `held`. That covers a programme's hold, and also a hold the operator set by hand (`POST /api/sessions/:id/hold`), which R34 says is never released. Does a hand hold also lapse after 7 idle days? **Recommendation:** yes, as ruled, with the hold's text quoted in the coordinator mail. If not, the exclusion is one row in the verdict.
-2. **The nested-rescue size bound.** 512 MiB of objects per nested repository, beyond which the child stays terminal and is reported. Confirm or change.
-3. **Hibernated rows and G1.** Does a hibernated workspace count as "no pane" for the 14 days? **Recommendation:** yes. Hibernation follows 6 idle hours, so 14 days asleep is abandonment, and the archive kills nothing.
-4. **"Non-coordinator" for G1.** Never a run's `claimedBy`, in any state or generation, or only not one now? **Recommendation:** never. It is the conservative reading and matches rule 4.
-5. **G4's scope.** The orphan rules for trees nested inside coordinators only, as ruled, while trees inside other workspaces go with their workspace's own exit. **Recommendation:** as ruled. Confirm that a tree inside a non-coordinator's workspace waits for that workspace.
-6. **Terminal children re-asked.** A `terminal-refusal` child is re-audited once per 7 idle days. If it is still terminal, it stays and is reported again. **Recommendation:** as described. The alternative, forcing past a terminal word, would have no rule to stand on.
-7. **Review children.** The stale arm reclaims a review child while the run it reviewed is still open, reversing D-5942's rejection. The pin keeps the report, and the mail names where. Confirm.
+No question in this design is open.
 
 ## 10. Out of scope and follow-ups
 
@@ -489,3 +489,5 @@ Every ccd change deploys agent lane first. Waves 2 to 5 are independent of each 
 **rev 0 (2026-10-23).** Written against `origin/main` `a68c90f15`, the rulings comment on #1119, and the open PRs measured that day (#1132 holds `ccd/ccd`, `CLAUDE.md` and the reclamation contract; #1114 holds `ccd/ccd`; #1164 holds `BannerStack.tsx`; #1162 holds `watch.ts`; #1149 holds `shared/api.ts` and `CLAUDE.md`; #1154 holds `shared/lifecycle.ts`).
 
 **rev 1 (2026-10-23).** The operator answered rev 0's nine questions (§9.1) and added rulings G1 to G4 (§1.4, §2.7). Re-checked against `origin/main` `bd895fbe4`, where every file cited is byte-unchanged from `a68c90f15`. #840 P4-4 to P4-6 were confirmed not on `main` (§2.7.7). The `.tmp-step0` trees were traced read-only to an agent-authored workflow prompt (§1.4). §2.5's guard retirement became deletion. Twelve tasks were added, DR-20 to DR-31.
+
+**rev 2 (2026-10-23).** The operator ruled §9.2's seven questions as recommended, and they move into §9.1 as items 10 to 16. Item 16 supersedes D-5942's "nothing reclaims it before that". No question remains open.

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** thirty-one PRs, Tasks DR-1 to DR-31, one task per PR. REQUIRED SUB-SKILL: superpowers:subagent-driven-development, with superpowers:test-driven-development for every red-first step. Routing is per task (**Routing** line). Band 1 is mechanical and may go to `handoff-run`; band 2 is spec-able and may go to `handoff-run` when the weekly pace says so, with the orchestrator reviewing the diff; band 3 is written and reviewed natively and never handed off. Hand off only tasks whose change is literal: workers have stalled on deep `ccd/ccd` edits. Workers do not edit §Deviations and decisions.
 
-**Spec:** `docs/superpowers/specs/2026-10-23-fleet-disk-retention-design.md` (rev 1), implementing the operator's rulings of 2026-10-23 on #1119, their answers to rev 0's questions, and lifecycle-exit rulings G1 to G4 (posted on #1167 and #1119).
+**Spec:** `docs/superpowers/specs/2026-10-23-fleet-disk-retention-design.md` (rev 2), implementing the operator's rulings of 2026-10-23 on #1119, their answers to rev 0's questions, and lifecycle-exit rulings G1 to G4 (posted on #1167 and #1119).
 
 **Issue:** #1119.
 
@@ -649,7 +649,7 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
 - Create `server/test/child-reclaim-stale.test.ts`; modify `server/test/child-reclaim-sweep-policy.test.ts`, `server/test/switches.test.ts`, `server/test/single-definition.test.ts`, `server/test/lifecycle.test.ts`.
 
 - [ ] **Step 0: Re-ground.** The verdict order (≈:616-710), the terminal set from the mirror (`watch.ts` ≈:4413), `recordChildReclaimKeptFeed`, and `queueSystemMail`.
-- [ ] **Step 1: Red.** Each word at 6 days: kept; at 8 days: `stale-eligible`. `coordinating` at 30 days: kept. Any idle input unmeasured: kept. Shadow: "child would be reclaimed (stale)" once. Armed: the reclaim argv carries `--stale` and the digest. The mail names the refs. A run-absent child: a feed row and no mail. A terminal child is asked again after 7 more idle days and not before. A box without the capability is never sent the flag.
+- [ ] **Step 1: Red.** Each word at 6 days: kept; at 8 days: `stale-eligible`. A hand hold (text outside the programme grammar) at 8 days: `stale-eligible`, and the mail quotes the hold's text (spec §9.1 item 10). A review child whose reviewed run is open, at 8 days: `stale-eligible` (item 16). `coordinating` at 30 days: kept. Any idle input unmeasured: kept. Shadow: "child would be reclaimed (stale)" once. Armed: the reclaim argv carries `--stale` and the digest. The mail names the refs. A run-absent child: a feed row and no mail. A terminal child is asked again after 7 more idle days and not before. A box without the capability is never sent the flag.
 - [ ] **Step 2: Green.** **Step 3: Mutation table, RUN** (`coordinating` let through; the ceiling `>=` 0; the capability ignored; the mail sent in shadow). **Step 4: Verify.**
 
       cd server && ./node_modules/.bin/vitest run test/child-reclaim-stale.test.ts --maxWorkers=2
@@ -726,7 +726,6 @@ Waves: **1** DR-1 to DR-6 (see it), **2** DR-7 to DR-12 (live scratch), **3** DR
 
 None is required to build or land any task. Each of these is the operator's, whenever they choose:
 
-- **Answer spec §9.2's questions** (wave 5). §9.1's are answered.
 - **Arm the live arm** (`~/.ccrc/tmp-sweep-live-arm`) after a week of DR-8's shadow rows.
 - **Arm the loose arm** (`$REG/collect-loose-live`) after its shadow rows, with the collect lane live.
 - **Arm the orphan lane** (`$REG/orphan-tree-live`), then, a week after it runs live, the rescue arm (`$REG/orphan-tree-rescue-live`, ruled §9.1 Q1).
@@ -801,3 +800,5 @@ The allocator (`POST /api/ledger/deviations`) is box-token gated and was not rea
 **rev 0 (2026-10-23).** Written with the spec's rev 0 against `origin/main` `a68c90f15` and the 32 open PRs measured that day.
 
 **rev 1 (2026-10-23).** The operator's answers to the spec's §9 and rulings G1 to G4. DR-8's Step 0 became a re-ground, because both scratch locations were observed. Wave 5 added DR-20 to DR-31. #840 P4-4 to P4-6 were confirmed not on `main` and added to the Gates.
+
+**rev 2 (2026-10-23).** Every spec question is ruled (spec §9.1, items 10 to 16). DR-27's red cases name the hand-hold and review-child rulings; nothing else in the tasks changes.
