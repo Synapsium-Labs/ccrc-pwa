@@ -14858,6 +14858,9 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(knob(home, `_ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`)).toBe('rc 0 val 10 from default why \n');
       // A comment naming the key names nothing (ruling 16, D-6604), so the model is not asked and the exposure file stays unread.
       writeFileSync(envFile(home), 'CCRC_ROLE=server\n# CCRC_BACKUP_KEEP is set elsewhere\n');
+      expect(knob(home, `_ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`), 'a comment names nothing').toBe('rc 0 val 10 from default why \n');
+      // A line that can assign another key and holds the name in its value does name it, so the model IS asked, and still the exposure file stays unread.
+      writeFileSync(envFile(home), 'CCRC_ROLE=server\nFOO=CCRC_BACKUP_KEEP\n');
       expect(knob(home, `_ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`), 'the model asked').toBe('rc 0 val 10 from default why \n');
     });
 
