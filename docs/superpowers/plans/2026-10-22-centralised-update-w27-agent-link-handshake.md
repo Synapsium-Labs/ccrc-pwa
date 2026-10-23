@@ -509,6 +509,16 @@ reader itself).
   - Mutants: M21 deletes the `refused` note (W27-L14 red); M22 prints the raw reason, with no cut or replacement
     (W27-L14 red).
 
+- **D-6528** (the worker, Task 2) — W27-L12 as drafted failed with no mutant applied, three of three whole-file runs,
+  and passed alone. Its premise, that expired timers run before the poll phase that completes the TCP connect, holds
+  only when the row's body starts outside libuv's timers phase. After a row that ends on a timer callback (W27-L1 or
+  W27-L7, measured pairwise), the body starts inside the timers phase, the loop goes on to poll, attempt 0 writes its
+  upgrade, and only the next timers phase fires the deadline (`expected true to be false` at `upgraded(0)`). The row
+  now awaits one `setImmediate` before `connectToAgent`, so the next phase after the held loop is timers. Its
+  assertions are unchanged and M18 still reds it alone (1 failed, 7 passed); unmutated the file ran 8 of 8 green,
+  three of three, at a load average of 50 to 98. Reported in the wave-done under ruling 12: the row was not
+  weakened, its starting phase was fixed.
+
 Any reserve number still undefined at wave-done is defined in this section before the wave-done fingerprint, in the
 house form for an issued number no departure took (as `delegation-broker-wave3-observe.md` writes its run 740
 numbers): the number, an em-dash, `` `unused` (run 833): issued to this wave; no departure took it.`` Then the
