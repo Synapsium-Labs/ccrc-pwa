@@ -321,6 +321,19 @@ describe('UpdateIndicator — dismissed until a newer release (D-6327, part b)',
     expect(third.container.innerHTML).toBe('');
   });
 
+  it("another tab's dismissal hides the mounted line through the storage event", async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(waiting());
+    const { container } = renderFleet(<UpdateIndicator form="row" />);
+    await screen.findByRole('button', { name: DISMISS });
+    // The other tab's write reaches this page as a `storage` event on `window`; this page's own mark is untouched.
+    act(() => {
+      window.localStorage.setItem('ccrc-release-dismissed', 'v0.0.9');
+      window.dispatchEvent(new StorageEvent('storage', { key: 'ccrc-release-dismissed', newValue: 'v0.0.9' }));
+    });
+    await until(() => expect(container.innerHTML).toBe(''));
+    expect(indicators(), 'the line is gone').toHaveLength(0);
+  });
+
   it('a newer waiting release shows it again', async () => {
     act(() => { dismissRelease('v0.0.9'); });
     // The same tag and an older one stay hidden.
