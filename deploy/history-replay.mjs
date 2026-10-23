@@ -2709,7 +2709,8 @@ export async function step0bMechanics({ launch, out, model, settingsMode, lang, 
 /** Every word a boundary is discarded with (R5): reconstruction's come first (W2-D68, W2-D75, W2-D54), then the words
  *  Tasks 2 to 4 append here in place (mining's span words, admission's verdicts, Baseline B's), and `body-unrenderable`
  *  (D-6302, a body that parses and cannot be rendered; mining discards with it too, D-6303) is kept LAST: an appending task
- *  inserts before it. Counts, never refusals, and never a DRIVER_REASONS or GATE_REASONS word. */
+ *  inserts before it, as W2-5b1 Task 2 inserts `card-unrenderable` (a node id the store holds that lib's card grammar
+ *  refuses). Counts, never refusals, and never a DRIVER_REASONS or GATE_REASONS word. */
 export const RECON_DISCARDS = Object.freeze([
   'boundary-absent', 'boundary-uncopied',
   'summary-absent', 'summary-unparseable', 'summary-tombstone', 'summary-over-cap', 'summary-undecodable',
@@ -2720,6 +2721,7 @@ export const RECON_DISCARDS = Object.freeze([
   'no-epoch', 'ts-null', 'before-other', 'before-unknown', 'after-other', 'after-unknown',
   'copy-moved', 'summary-unreadable', 'kept-member-unreadable', 'post-row-unreadable', 'post-over-cap',
   'cwd-unknown', 'cwd-missing', 'cwd-unreadable', 'file-unreadable', 'file-not-regular', 'file-over-cap',
+  'card-unrenderable',
   'body-unrenderable',
 ]);
 /** expandEntryBody's three body-less words (D-6238), each mapped to a discard word of its own. entryBodyOf throws on any
@@ -2769,6 +2771,10 @@ export function summaryIndexOf(copyRows, boundaryUuid, anchorUuid) {
   return pick.uuid === null ? -1 : copyRows.findIndex((r) => r.uuid === pick.uuid);
 }
 
+/** Leaf N's node id, for boundary N's entry id (one `?`): the depth-0 node whose boundary_entry_id is N, the lowest id if
+ *  several are (derivation writes one). The span reader and the card (W2-5b1 Task 2) read leaf N through this one text. */
+const LEAF_OF_BOUNDARY_SQL = 'SELECT node_id FROM nodes WHERE boundary_entry_id = ? AND depth = 0 ORDER BY node_id LIMIT 1';
+
 /** The statements reconstruction reads with, prepared once per open. They read no body: bodies are read only through
  *  bodyOf and expandEntryBody (W2-D74). */
 function replayStmts(db) {
@@ -2786,7 +2792,7 @@ function replayStmts(db) {
     span: db.prepare(`SELECT e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.model AS model, e.provenance AS provenance,
         e.ts_ms AS ts_ms, e.blob_id AS blob_id
       FROM node_sources s JOIN entries e ON e.entry_id = s.entry_id
-      WHERE s.node_id = (SELECT node_id FROM nodes WHERE boundary_entry_id = ? AND depth = 0 ORDER BY node_id LIMIT 1)
+      WHERE s.node_id = (${LEAF_OF_BOUNDARY_SQL})
       ORDER BY s.ord`),
     storeId: db.prepare("SELECT v FROM meta WHERE k = 'store_id'"),
   };
@@ -3770,8 +3776,9 @@ export const QUIZ_STAGES = Object.freeze(['redaction', 'producer', 'admit-baseli
  *  reaches no stage. */
 export const QUOTA_SKIPS = Object.freeze(['cap-family', 'cap-boundary', 'cap-kind']);
 
-/** Why one source fails W2-D70, each word with the clause it belongs to. checkSource answers one of these, and W2-5b's
- *  re-check before an arm batch (W2-D78(iii)(b)) names the clause from it. */
+/** Why one source fails W2-D70, each word with the clause it belongs to. checkSource answers one of these. W2-5b1's
+ *  re-check before an arm batch (W2-D78(iii)(b), ruling Q21: any answerable source) reads answerability, which folds a
+ *  question's sources to answerable, untimed or unanswerable, and names that word, not a clause number. */
 export const SOURCE_FAILS = Object.freeze({
   'entry-absent': 1, provenance: 1, 'not-verbatim': 1,
   'blob-absent': 2, 'not-indexed': 2, pruned: 2,
@@ -4692,24 +4699,16 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
   const baselines = new Map();    // boundary_uuid -> B
   const scopes = new Map();       // family key -> transcript pks
   const memo = new Map();         // leaf_key -> redacted leaf, for the run
-  const s = sourceStmts(rs.db);
   const candidatesOf = (fam) => async () => {
     if (fam === undefined) return [];
     const mined = [];
     for (const b of fam.boundaries) {
-      const span = spanRowsOf(rs, b.entry_id);
-      if (span.state !== 'span') { discard(span.why); continue; }
-      const t = s.transcript.get(b.transcript_pk);
-      const ep = t === undefined ? null : epochOfUuid(rs.db, t.cc_session_uuid);
-      const e = ep === null ? undefined : s.epoch.get(ep.session_pk, ep.seq);
-      const m = mineBoundary({
-        storeId, ccrcId: fam.ccrc_id, generation: fam.generation, boundaryUuid: b.uuid, boundaryTsMs: b.ts_ms, rows: span.rows,
-        pick: (row) => expandEntryBody(rs, row), cwd: e?.cwd ?? null, cwdReal: e?.cwd_real ?? null, configDirs,
-      });
+      const got = mineStoredBoundary(rs, b, fam, configDirs);
       // D-6306: a boundary discarded whole is counted once, under counts.discards; its partial site drops are not merged.
-      if (m.state !== 'mined') { discard(m.why); continue; }
+      if (got.state !== 'mined') { discard(got.why); continue; }
+      const m = got.mined;
       for (const [w, n] of Object.entries(m.counts)) counts.mined[w] += n;
-      byBoundary.set(b.uuid, { row: b, spanEntryIds: span.rows.map((r) => Number(r.entry_id)) });
+      byBoundary.set(b.uuid, { row: b, spanEntryIds: got.spanEntryIds });
       // D-6312 (W2-D63): at a sha_min_prefix of 40 only a 40-character sha can score correct, so a shorter one is dropped
       // here, counted, before deduplication, sampling and the caps: the quotas count eligible facts only.
       const eligible = m.candidates.filter((c) => {
@@ -5985,6 +5984,196 @@ export function loadFinalRecord(flags, { nowMs, root = TREE_ROOT }) {
   const r = rec.record;
   refuseOutOfRangeValues({ budget: r.spend_budget, budgetField: 'spend_budget', limits: r.limits, quotas: null, part2: r });
   return { ...rec, stamps };
+}
+
+// ── W2-5b1 Task 2: the as-of pieces: the card line, the two payloads and the re-check (W2-D75, W2-D78(iii), W2-D38) ──
+// Every as-of decision here is lib's own (W2-D38), never a second spelling: the cut at boundary N is recall.mjs's
+// asOfCutOf over this run's read-only handle, called on one line (armCut); a node is hidden by lib's asOfHiddenNodesSql
+// (W2-D35 as amended: D-6282, D-6283, D-6284), and an entry is visible by lib's asOfVisibleEntriesSql, each bound with
+// lib's asOfBinds. R8's ref rule answers another question (does describe drop a node's refs) and is never composed here
+// (ruling S2).
+// The card line (W2-D75; spec §8.6): lib's cardLine over leaf N's node (LEAF_OF_BOUNDARY_SQL, the node spanRowsOf reads)
+// and its depth-1 parent, named only when lib does not hide it under the cut at N, so the card never names a node that
+// answers exit 3 under the arm's own cut. A leaf with several depth-1 parents names none (fail closed). Both print as
+// lib's displayPrefixes over the family's whole node-id set (ruling Q20), as the sweep's card does.
+// The payloads (ruling Q20; spec §10.2 "Two arms": the driver prepends the card): the plain payload is W2-5a's
+// reconstructPayload text, byte for byte; the carded one is the card line, one blank line, then that same text.
+// The re-check before every arm batch (W2-D78(iii), ruling Q21), each question in batch order, its first failing clause
+// named: (a) the one redaction screen, screenRedaction, over the question's candidate re-mined from the store through
+// mineStoredBoundary (sourceQuiz's own mining: a frozen entry carries no leaf); (b) W2-D70 over leaf N's span, any
+// source (answerability); (c) the frozen source_entry_uuid visible under the cut at boundary_uuid, the cut's own
+// asof-invalid included. A batch with any failure refuses quiz-unanswerable, naming every failing qid and its clause: a
+// frozen question is never dropped silently.
+// A failure on store data is a RECON_DISCARDS word or a clause, never a throw (D-6309's rule: a data case after --out
+// never exits INTERNAL); a caller's defect (a cut of another boundary, a question of another store) is a TypeError.
+
+/** Where the card's parent stands (W2-D75): named (`shown`), no depth-1 parent (`none`), hidden under the cut at N
+ *  (`hidden`), or several depth-1 parents, a damaged store's shape, so none is named (`several`). A report word, never a
+ *  refusal. */
+export const CARD_PARENTS = Object.freeze(['shown', 'none', 'hidden', 'several']);
+
+const ARM_STMTS = new WeakMap();
+/** The reads this section makes, prepared once per handle: lib's node and entry statements, and the boundary, entry and
+ *  node reads the card and the re-check add. The boundary's transcript is the boundaries row's (D-6281). */
+function armStmts(db) {
+  let s = ARM_STMTS.get(db);
+  if (s !== undefined) return s;
+  s = {
+    boundary: db.prepare(`SELECT b.entry_id AS entry_id, e.uuid AS uuid, e.ts_ms AS ts_ms, b.transcript_pk AS transcript_pk
+      FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id WHERE e.uuid = ?`),
+    entryId: db.prepare('SELECT entry_id FROM entries WHERE uuid = ?'),
+    leaf: db.prepare(`SELECT node_id, session_pk FROM nodes WHERE node_id = (${LEAF_OF_BOUNDARY_SQL})`),
+    parents: db.prepare(`SELECT c.node_id AS node_id FROM node_children c JOIN nodes p ON p.node_id = c.node_id
+      WHERE c.child_id = ? AND p.depth = 1 ORDER BY c.node_id`),
+    family: db.prepare('SELECT node_id FROM nodes WHERE session_pk = ? ORDER BY node_id'),
+    hidden: db.prepare(asOfHiddenNodesSql()),
+    visible: db.prepare(asOfVisibleEntriesSql()),
+  };
+  ARM_STMTS.set(db, s);
+  return s;
+}
+
+/** The cut at boundary N (W2-D38): recall.mjs's asOfCutOf over this run's read-only handle (it reads `rc.db` only),
+ *  answered unchanged: `{ ok: true, cut }`, or `{ ok: false, rc, reason: 'asof-invalid' }` (D-5765's store half). The
+ *  driver's one call.
+ *  @param {ReplayStore} rs  @param {string} boundaryUuid */
+export function armCut(rs, boundaryUuid) {
+  return asOfCutOf(rs, boundaryUuid);
+}
+
+/** Boundary N's card line (W2-D75; spec §8.6), under `cut`, the cut at N: lib's cardLine over leaf N's node and its
+ *  depth-1 parent, the parent only when lib's asOfHiddenNodesSql does not hide it (CARD_PARENTS says where it stands),
+ *  both as displayPrefixes over the family's whole node-id set (ruling Q20). No leaf node for N is `leaf-absent`; an id
+ *  lib's grammar refuses is `card-unrenderable`. A cut of another boundary is the caller's defect.
+ *  @param {ReplayStore} rs  @param {number} boundaryEntryId  @param {{ boundaryEntryId: number }} cut
+ *  @returns {{ state: 'card', line: string, leafId: string, parentId: string | null, parent: string }
+ *    | { state: 'discard', why: 'leaf-absent' | 'card-unrenderable' }} */
+export function cardOf(rs, boundaryEntryId, cut) {
+  if (cut.boundaryEntryId !== Number(boundaryEntryId)) {
+    throw new TypeError(`cardOf: the cut is boundary entry ${String(cut.boundaryEntryId)}'s, not ${String(boundaryEntryId)}'s`);
+  }
+  const s = armStmts(rs.db);
+  const leaf = s.leaf.get(boundaryEntryId);
+  if (leaf === undefined) return reconDiscard('leaf-absent');
+  const parents = s.parents.all(leaf.node_id).map((r) => String(r.node_id));
+  let parent = 'none';
+  let parentId = null;
+  if (parents.length > 1) parent = 'several';
+  else if (parents.length === 1) {
+    const hidden = s.hidden.all({ ...asOfBinds(cut), asof_nodes: JSON.stringify(parents) }).length > 0;
+    parent = hidden ? 'hidden' : 'shown';
+    if (!hidden) parentId = parents[0];
+  }
+  const family = s.family.all(leaf.session_pk).map((r) => String(r.node_id));
+  const shown = displayPrefixes([...family, String(leaf.node_id), ...(parentId === null ? [] : [parentId])]);
+  let line;
+  try {
+    line = cardLine({ leaf: shown.get(String(leaf.node_id)), parent: parentId === null ? null : shown.get(parentId) });
+  } catch (e) {
+    if (e instanceof TypeError) return reconDiscard('card-unrenderable');
+    throw e;
+  }
+  return { state: 'card', line, leafId: String(leaf.node_id), parentId, parent };
+}
+
+/** The carded payload (ruling Q20; spec §10.2 "Two arms"): the card line, one blank line, then the plain payload,
+ *  unchanged. Pure.
+ *  @param {string} line  @param {string} payload  @returns {string} */
+export function prependCard(line, payload) {
+  return `${line}\n\n${payload}`;
+}
+
+/** Boundary N's two payloads for one question (W2-D75; ruling Q20): `plain`, W2-5a's reconstructPayload text unchanged,
+ *  and `carded`, prependCard over the card line and `plain`. A reconstruction or card discard answers its RECON_DISCARDS
+ *  word, which the arm engine answers before any spawn. `cut` is the cut at N: armCut's, or recheckQuestion's verdict's.
+ *  @param {ReplayStore} rs  @param {number} boundaryEntryId  @param {string} question  @param {{ boundaryEntryId: number }} cut */
+export function armPayloads(rs, boundaryEntryId, question, cut) {
+  const p = reconstructPayload(rs, boundaryEntryId, question);
+  if (p.state !== 'payload') return p;
+  const card = cardOf(rs, boundaryEntryId, cut);
+  if (card.state !== 'card') return card;
+  return { state: 'payloads', plain: p.text, carded: prependCard(card.line, p.text), card, counts: p.counts };
+}
+
+/** Boundary N's candidates mined from the store (W2-D65): leaf N's span (spanRowsOf), N's epoch's cwd and cwd_real (the
+ *  path facts' base, through derive.mjs's epochOfUuid), and mineBoundary over expand's own body pick (W2-D74). The one
+ *  composition sourceQuiz and the arm-batch re-check share. A span or mining discard answers its RECON_DISCARDS word.
+ *  @param {ReplayStore} rs
+ *  @param {{ entry_id: number, uuid: string, ts_ms: number | null, transcript_pk: number }} b  boundary N
+ *  @param {{ ccrc_id: string, generation: string }} family
+ *  @param {readonly string[]} configDirs  the roster's config dirs (rosterConfigDirs)
+ *  @returns {{ state: 'mined', mined: MinedBoundary, spanEntryIds: number[] } | { state: 'discard', why: string }} */
+export function mineStoredBoundary(rs, b, family, configDirs) {
+  const span = spanRowsOf(rs, b.entry_id);
+  if (span.state !== 'span') return span;
+  const s = sourceStmts(rs.db);
+  const t = s.transcript.get(b.transcript_pk);
+  const ep = t === undefined ? null : epochOfUuid(rs.db, t.cc_session_uuid);
+  const e = ep === null ? undefined : s.epoch.get(ep.session_pk, ep.seq);
+  const m = mineBoundary({
+    storeId: rs.storeId, ccrcId: family.ccrc_id, generation: family.generation, boundaryUuid: b.uuid, boundaryTsMs: b.ts_ms,
+    rows: span.rows, pick: (row) => expandEntryBody(rs, row), cwd: e?.cwd ?? null, cwdReal: e?.cwd_real ?? null, configDirs,
+  });
+  if (m.state !== 'mined') return reconDiscard(m.why);
+  return { state: 'mined', mined: m, spanEntryIds: span.rows.map((r) => Number(r.entry_id)) };
+}
+
+/** W2-D78(iii) for one frozen question (ruling Q21), its clauses in order, the first that fails answered:
+ *  (a) boundary N's candidate, re-mined (mineStoredBoundary) and matched on kind, F and F_raw, passes screenRedaction
+ *      under the run's pair index: `why` is the screen's word, a span or mining discard's word, `boundary-uuid-invalid`
+ *      (a frozen uuid that is not a lowercase UUID), `boundary-absent` or `fact-unmined`;
+ *  (b) some source in leaf N's span passes W2-D70's four clauses at N's own ts_ms (answerability): `unanswerable`,
+ *      `unanswerable-untimed` (clause 4 alone, D-5780) or `boundary-untimed`;
+ *  (c) the frozen source_entry_uuid is visible under the cut at boundary_uuid (armCut, then lib's asOfVisibleEntriesSql;
+ *      a sidecar source is its linked row, W2-D35): the cut's own `asof-invalid`, `source-absent` or `source-hidden`.
+ *  A clean question answers N's entry id and the cut, which armPayloads takes. A question of another store is a defect.
+ *  @param {ReplayStore} rs  @param {FrozenEntry} entry  @param {{ configDirs: readonly string[] }} ctx
+ *  @returns {Promise<{ ok: true, boundaryEntryId: number, cut: object } | { ok: false, clause: 'a' | 'b' | 'c', why: string }>} */
+export async function recheckQuestion(rs, entry, { configDirs }) {
+  if (entry.store_id !== rs.storeId) {
+    throw new TypeError(`recheckQuestion: question ${String(entry.qid)} is store ${String(entry.store_id)}'s, not this store's`);
+  }
+  const s = armStmts(rs.db);
+  const fail = (clause, why) => ({ ok: false, clause, why });
+  // W2-D50: boundary N's uuid becomes the arm's CCRC_RECALL_ASOF, which spawnEnv refuses as a defect unless UUID_RE
+  // holds; a frozen uuid that is not one is data, answered here before any spawn, never a TypeError after --out.
+  if (typeof entry.boundary_uuid !== 'string' || !UUID_RE.test(entry.boundary_uuid)) return fail('a', 'boundary-uuid-invalid');
+  const row = s.boundary.get(entry.boundary_uuid);
+  if (row === undefined) return fail('a', 'boundary-absent');
+  const b = { entry_id: Number(row.entry_id), uuid: row.uuid, ts_ms: row.ts_ms === null ? null : Number(row.ts_ms), transcript_pk: Number(row.transcript_pk) };
+  const got = mineStoredBoundary(rs, b, entry, configDirs);
+  if (got.state !== 'mined') return fail('a', got.why);
+  const c = got.mined.candidates.find((x) => x.kind === entry.kind && x.fact === entry.fact && x.fact_raw === entry.fact_raw);
+  if (c === undefined) return fail('a', 'fact-unmined');
+  const screened = screenRedaction(c, rs.idx);
+  if (screened !== null) return fail('a', screened);
+  if (b.ts_ms === null) return fail('b', 'boundary-untimed');
+  const a = await answerability(rs.db, rs.idx, { tsMs: b.ts_ms, transcriptPk: b.transcript_pk, spanEntryIds: got.spanEntryIds }, entry.fact_raw);
+  if (a.state !== 'answerable') return fail('b', a.state === 'untimed' ? 'unanswerable-untimed' : 'unanswerable');
+  const cut = armCut(rs, entry.boundary_uuid);
+  if (!cut.ok) return fail('c', cut.reason);
+  const src = s.entryId.get(entry.source_entry_uuid);
+  if (src === undefined) return fail('c', 'source-absent');
+  const visible = s.visible.all({ ...asOfBinds(cut.cut), asof_entries: JSON.stringify([Number(src.entry_id)]) });
+  if (visible.length === 0) return fail('c', 'source-hidden');
+  return { ok: true, boundaryEntryId: b.entry_id, cut: cut.cut };
+}
+
+/** W2-D78(iii) over one batch's questions, in batch order (ruling Q21). Every question is re-checked; when any fails, the
+ *  batch refuses quiz-unanswerable before any spawn, naming each failing qid and its clause (`<qid> clause (<a|b|c>)
+ *  <why>`, joined by `; `). A clean batch answers each question's verdict by qid. It reads only, and spawns nothing.
+ *  @param {ReplayStore} rs  @param {readonly FrozenEntry[]} entries  @param {{ configDirs: readonly string[] }} ctx
+ *  @returns {Promise<Map<string, { ok: true, boundaryEntryId: number, cut: object }>>} */
+export async function recheckBatch(rs, entries, ctx) {
+  const passed = new Map();
+  const failed = [];
+  for (const e of entries) {
+    const v = await recheckQuestion(rs, e, ctx);
+    if (v.ok) passed.set(e.qid, v);
+    else failed.push(`${e.qid} clause (${v.clause}) ${v.why}`);
+  }
+  if (failed.length > 0) refuse('quiz-unanswerable', failed.join('; '));
+  return passed;
 }
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised

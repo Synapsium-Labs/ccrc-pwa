@@ -7200,7 +7200,7 @@ describe('W2-5a Task 4: B fails closed on a body that cannot be rendered, D-6304
   it('body-unrenderable is an existing RECON_DISCARDS word, and no word was added for it', () => {
     expect(w5a4Drv.RECON_DISCARDS).toContain('body-unrenderable');
     expect(w5a4Drv.RECON_DISCARDS.at(-1)).toBe('body-unrenderable');
-    expect(w5a4Drv.RECON_DISCARDS).toHaveLength(35 + 1);
+    expect(w5a4Drv.RECON_DISCARDS).toHaveLength(35 + 2);   // the second +1 is W2-5b1 Task 2's 'card-unrenderable'
   });
 });
 
@@ -11087,5 +11087,500 @@ describe('W2-5b1 Task 1: the gate_code re-check verdict and the part 2 ranges, p
     expect(() => w5b1Drv.refuseOutOfRangeValues({ ...good, budget: 0 } as never)).toThrow(/record-invalid: pilot_budget out-of-range$/);
     expect(() => w5b1Drv.refuseOutOfRangeValues({ ...good, quotas: { target: 0, caps: good.quotas.caps } } as never)).toThrow(/record-invalid: quiz.target out-of-range$/);
     expect(() => w5b1Drv.refuseOutOfRangeValues({ ...good, quotas: null } as never)).not.toThrow();
+  });
+});
+
+// ── W2-5b1 Task 2: the as-of pieces (W2-D75, W2-D78(iii), W2-D38; rulings Q20, Q21, Q22) ─────────────────────────────
+import { createHash as b1t2Hash } from 'node:crypto';
+import { readFileSync as b1t2Read } from 'node:fs';
+import { join as b1t2Join } from 'node:path';
+import type { DatabaseSync as B1t2Db } from 'node:sqlite';
+import { describe as b1t2describe, expect as b1t2expect, it as b1t2it } from 'vitest';
+import * as b1t2Drv from '../../deploy/history-replay.mjs';
+import * as b1t2LibMod from '../../ccd/history/lib.mjs';
+import * as b1t2Gate from '../../deploy/history-gate.mjs';
+import * as b1t2StoreMod from '../../ccd/history/store.mjs';
+import * as b1t2SweepMod from '../../ccd/history/sweep.mjs';
+import { mkTmp as b1t2MkTmp } from './tmpHelpers.js';
+import { REPO as B1T2_REPO } from './historyHelpers.js';
+
+type B1t2Cut = { asof: string; tsCut: number; boundaryEntryId: number; summaryEntryId: number | null; keptUuids: readonly string[]; holdingFileId: number; boundaryLine: number };
+type B1t2Rs = { db: B1t2Db; storeId: string; idx: unknown; close(): void };
+type B1t2Discard = { state: 'discard'; why: string };
+type B1t2Card = { state: 'card'; line: string; leafId: string; parentId: string | null; parent: string };
+type B1t2Entry = { boundary_uuid: string; ccrc_id: string; fact: string; fact_raw: string; generation: string; kind: string; qid: string;
+  question: string; repo_roots: string[]; source_entry_uuid: string; store_id: string };
+type B1t2Verdict = { ok: true; boundaryEntryId: number; cut: B1t2Cut } | { ok: false; clause: 'a' | 'b' | 'c'; why: string };
+/** The exports this task adds, and the W2-5a ones it reads, typed for the test: the driver is JavaScript. */
+interface B1t2Api {
+  RECON_DISCARDS: readonly string[];
+  DRIVER_REASONS: readonly string[];
+  CARD_PARENTS: readonly string[];
+  openReplayStore(home: string): B1t2Rs;
+  admitStoreBoundaries(rs: B1t2Rs): { boundaries: Array<{ uuid: string; entry_id: number; ts_ms: number | null; file_id: number | null }> };
+  boundaryCopyOf(rs: B1t2Rs, boundaryEntryId: number): { state: 'copy'; boundary: { kept_blob_id: number | null } } | B1t2Discard;
+  keptMembersOf(rs: B1t2Rs, boundary: { kept_blob_id: number | null }): { state: 'kept'; uuids: string[] } | B1t2Discard;
+  reconstructPayload(rs: B1t2Rs, boundaryEntryId: number, question: string): { state: 'payload'; text: string } | B1t2Discard;
+  composePayload(parts: { summary: string; kept: readonly string[] }, question: string): string;
+  familyScopeOf(db: B1t2Db, f: { ccrc_id: string; generation: string }): number[];
+  asofSameMsHits(db: B1t2Db, ctx: { tsMs: number; holdingFileId: number; transcriptPks: number[] }, factRaw: string): number;
+  answerability(db: B1t2Db, idx: unknown, ctx: { tsMs: number; transcriptPk: number; spanEntryIds: number[] }, factRaw: string): Promise<{ state: string }>;
+  qidOf(e: { store_id: string; ccrc_id: string; generation: string; boundary_uuid: string; kind: string; fact: string }): string;
+  armCut(rs: B1t2Rs, boundaryUuid: string): { ok: true; cut: B1t2Cut } | { ok: false; rc: number; reason: string };
+  cardOf(rs: B1t2Rs, boundaryEntryId: number, cut: B1t2Cut): B1t2Card | B1t2Discard;
+  prependCard(line: string, payload: string): string;
+  armPayloads(rs: B1t2Rs, boundaryEntryId: number, question: string, cut: B1t2Cut):
+    { state: 'payloads'; plain: string; carded: string; card: B1t2Card; counts: Record<string, number> } | B1t2Discard;
+  recheckQuestion(rs: B1t2Rs, entry: B1t2Entry, ctx: { configDirs: readonly string[] }): Promise<B1t2Verdict>;
+  recheckBatch(rs: B1t2Rs, entries: B1t2Entry[], ctx: { configDirs: readonly string[] }): Promise<Map<string, Extract<B1t2Verdict, { ok: true }>>>;
+}
+const B1T2 = b1t2Drv as unknown as B1t2Api;
+const b1t2Lib = b1t2LibMod as unknown as {
+  INDEXED_PROVENANCE: readonly string[];
+  CARD_LINE_RE: RegExp;
+  asOfBinds(cut: B1t2Cut): Record<string, string | number | null>;
+  asOfHiddenNodesSql(): string;
+  asOfVisibleEntriesSql(): string;
+  displayPrefixes(ids: string[]): Map<string, string>;
+  cardLine(o: { leaf: string; parent: string | null }): string;
+  canonicalJson(v: unknown): string;
+  sha256Hex(s: string): string;
+  historyPaths(home: string): { dbFile: string };
+  makePairIndex(pairs: Array<{ len: number; sha256: string }>): unknown;
+  redactField(text: string, idx: unknown): string;
+};
+const b1t2Store = b1t2StoreMod as unknown as {
+  createStore(home: string): void; openWriter(p: string): B1t2Db; closeWriter(db: B1t2Db): void; createFtsTables(db: B1t2Db): void;
+  brotli(b: Buffer): Buffer; CODEC: string;
+};
+const b1t2Sweep = b1t2SweepMod as unknown as {
+  ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, idx: unknown, rawLen: number): Promise<{ text: string | null; overCap?: boolean }>;
+  indexBlob(db: B1t2Db, blobId: number, text: string, idx: unknown, overCap?: boolean): void;
+};
+
+const B1T2_T = 1_760_000_000_000;              // T_N: boundary N's own ts_ms
+const B1T2_T2 = B1T2_T + 60_000;               // T_N2: the next boundary's
+const B1T2_UUID = (n: number): string => `b1720000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+const B1T2_CC = B1T2_UUID(0xcc1);              // the family's one epoch's session uuid
+const B1T2_GEN = B1T2_UUID(0x6e1);
+const B1T2_FAM = 'fam-a';
+const B1T2_MODEL = 'claude-fixture-4';
+/** A value the store learns as a redaction pair after the freeze, assembled at runtime. */
+const B1T2_VALUE = ['zq', 'b1t2', 'widened', 'pkg01'].join('');
+const B1T2_CMD = `npm run fixture-card --workspace ${B1T2_VALUE}`;
+const B1T2_SHA = '9c0ffee1';
+const B1T2_PHRASE = 'zqsame52 marker';
+const B1T2_QUESTION = 'Which npm command built the fixture card?';
+const B1T2_DIRS = ['/home/u/.claude'];
+const B1T2_ELL = String.fromCharCode(0x2026);
+const B1T2_DOT = String.fromCharCode(0xb7);
+/** The family's node ids: LN (N's leaf) and L2 (N2's) share a 9-character prefix; P is their depth-1 parent, formed after
+ *  N; Q is a childless condensed node whose id shares 11 characters with P's. */
+const B1T2_IDS = { LN: 'La1b2c3d4e5f6a7b8c9d0', L2: 'La1b2c3d4ff0011223344', P: 'N0f1e2d3c4b5a69788796', Q: 'N0f1e2d3c4b0000000000' };
+/** A leaf id lib's card grammar refuses (uppercase hex): a damaged store's shape. */
+const B1T2_BAD_LEAF = 'LA1B2C3D4E5F6A7B8C9D0';
+const b1t2Text = (text: string): unknown[] => [{ type: 'text', text }];
+/** p1 carries a command of its own: FTS5 answers a rowid-constrained MATCH on a deleted contentless row with ANOTHER row that matches
+ *  the phrase, so a second entry holding the span source's text would hide an unindexed source from the (b) case. */
+const b1t2Bash = (id: string, command: string): unknown[] => [{ type: 'tool_use', id, name: 'Bash', input: { command } }];
+type B1t2RowSpec = { key: string; type: string; provenance: string; ts: number; body: unknown; files: number[]; model?: string; summary?: boolean };
+/** Transcript 1's rows, in order. File 2 is the live copy and holds both boundaries; file 1 is a retired copy that also
+ *  holds N, and alone holds the three same-millisecond rows outside N's holding copy. p1 sits after N in the holding copy,
+ *  stamped before T_N (a backward clock step). Leaf N's span is a1 and r1; leaf N2's is a2. */
+const B1T2_ROWS: B1t2RowSpec[] = [
+  { key: 'u1', type: 'user', provenance: 'operator', ts: B1T2_T - 50_000, body: b1t2Text('build the fixture card'), files: [1, 2] },
+  { key: 'a1', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T - 40_000,
+    body: [{ type: 'text', text: `at commit ${B1T2_SHA} now` }, { type: 'tool_use', id: 'toolu_b1t2a1', name: 'Bash', input: { command: B1T2_CMD } }], files: [1, 2] },
+  { key: 'r1', type: 'user', provenance: 'tool', ts: B1T2_T - 30_000, body: [{ type: 'tool_result', tool_use_id: 'toolu_b1t2a1', content: 'card build ok' }], files: [1, 2] },
+  { key: 'mIn', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T, body: b1t2Text(`noted ${B1T2_PHRASE} inside`), files: [2] },
+  { key: 'bn', type: 'system', provenance: 'harness', ts: B1T2_T, body: b1t2Text('compact boundary one'), files: [1, 2] },
+  { key: 'sn', type: 'user', provenance: 'summary', summary: true, ts: B1T2_T + 10, body: b1t2Text('Summary: the fixture card build ran.'), files: [2] },
+  { key: 'p1', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T - 500, body: b1t2Bash('toolu_b1t2p1', 'npm run fixture-other'), files: [2] },
+  { key: 'mOutBefore', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T - 1, body: b1t2Text(`noted ${B1T2_PHRASE} before`), files: [1] },
+  { key: 'mOut', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T, body: b1t2Text(`noted ${B1T2_PHRASE} at`), files: [1] },
+  { key: 'mOutAfter', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T + 1, body: b1t2Text(`noted ${B1T2_PHRASE} after`), files: [1] },
+  { key: 'a2', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T + 30_000, body: b1t2Text('second stretch of work'), files: [2] },
+  { key: 'b2', type: 'system', provenance: 'harness', ts: B1T2_T2, body: b1t2Text('compact boundary two'), files: [2] },
+  { key: 's2', type: 'user', provenance: 'summary', summary: true, ts: B1T2_T2 + 10, body: b1t2Text('Summary: the second stretch.'), files: [2] },
+];
+type B1t2Opts = {
+  kept?: 'list' | 'null' | 'tombstone' | 'object' | 'mixed'; learn?: string[]; prune?: string[]; unindex?: string[];
+  retime?: Record<string, number>; uncopy?: boolean; twoParents?: boolean; noParent?: boolean; noLeaf?: boolean; badLeaf?: boolean;
+};
+type B1t2Fx = { home: string; entry: Record<string, number>; blob: Record<string, number>; uuid: Record<string, string>; leaf: string };
+
+/** A store made by store.mjs's createStore under a fresh mkTmp HOME, written through openWriter and closed: one family
+ *  (fam-a, one confirmed epoch with cwd /home/u/tree), transcript 1 with B1T2_ROWS, both boundaries, their leaves, P and
+ *  Q. Every row of an indexed provenance is indexed through the sweep's own functions under an empty pair index, as the
+ *  freeze saw it. The options make the store changes each case reads:
+ *  - `kept`: N's kept list is the default list (r1 twice and an unstored uuid), NULL, a tombstone, a JSON object, or a
+ *    list holding a non-string;
+ *  - `learn`: redaction pairs the store learned after the freeze (redact_hashes rows, which pairIndexOf reads);
+ *  - `prune`, `unindex`, `retime`: a row's blob pruned, its index row deleted, or its ts_ms moved;
+ *  - `uncopy`: no copy holds N; `noLeaf`: N has no leaf node; `badLeaf`: N's leaf id is B1T2_BAD_LEAF;
+ *  - `noParent`: P has no children; `twoParents`: Q is also L2's depth-1 parent. */
+async function b1t2Plant(o: B1t2Opts = {}): Promise<B1t2Fx> {
+  const home = b1t2MkTmp('b1t2-store-');
+  b1t2Store.createStore(home);
+  const w = b1t2Store.openWriter(b1t2Lib.historyPaths(home).dbFile);
+  b1t2Store.createFtsTables(w);
+  const idx0 = b1t2Lib.makePairIndex([]);
+  const fx: B1t2Fx = { home, entry: {}, blob: {}, uuid: {}, leaf: o.badLeaf === true ? B1T2_BAD_LEAF : B1T2_IDS.LN };
+  w.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, ?, ?, 'demo', 1)").run(B1T2_FAM, B1T2_GEN);
+  w.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, cwd, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', '/home/u/tree', 1)").run(B1T2_CC);
+  w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(B1T2_CC);
+  const file = w.prepare("INSERT INTO ingest_files (file_id, dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, 1, ?, ?, 1, 'live', 1)");
+  file.run(1, 7201, 'retired-fixture');
+  file.run(2, 7202, '');
+  const blobOf = (bytes: Buffer): number => Number((w.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?) RETURNING blob_id')
+    .get(b1t2Hash('sha256').update(bytes).digest(), b1t2Store.CODEC, b1t2Store.brotli(bytes), bytes.length) as { blob_id: number | bigint }).blob_id);
+  const ent = w.prepare(`INSERT INTO entries (uuid, transcript_pk, type, model, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms,
+      is_compact_summary) VALUES (?, 1, ?, ?, ?, 1, ?, 2, ?, ?, ?) RETURNING entry_id`);
+  const member = w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+  const lines: Record<number, number> = { 1: 0, 2: 0 };
+  for (const [i, r] of B1T2_ROWS.entries()) {
+    const bytes = Buffer.from(b1t2Lib.canonicalJson(r.body));
+    const blobId = blobOf(bytes);
+    const uuid = B1T2_UUID(i + 1);
+    const id = Number((ent.get(uuid, r.type, r.model ?? null, r.provenance, i, blobId, o.retime?.[r.key] ?? r.ts, r.summary === true ? 1 : 0) as { entry_id: number | bigint }).entry_id);
+    for (const f of r.files) {
+      lines[f] = lines[f]! + 1;
+      if (!(o.uncopy === true && r.key === 'bn')) member.run(f, id, lines[f]!);
+    }
+    fx.entry[r.key] = id;
+    fx.blob[r.key] = blobId;
+    fx.uuid[r.key] = uuid;
+    if (b1t2Lib.INDEXED_PROVENANCE.includes(r.provenance)) {
+      const z = (w.prepare('SELECT z FROM blobs WHERE blob_id = ?').get(blobId) as { z: Uint8Array }).z;
+      const t = await b1t2Sweep.ftsTextOfBlob(z, false, idx0, bytes.length);
+      b1t2Sweep.indexBlob(w, blobId, t.text ?? '', idx0, t.overCap === true);
+    }
+  }
+  const keptBodies: Record<string, unknown> = {
+    list: [fx.uuid.r1, B1T2_UUID(0x999), fx.uuid.r1], tombstone: [fx.uuid.r1, 'tombstoned'], object: { kept: fx.uuid.r1 }, mixed: [fx.uuid.r1, 5],
+  };
+  const kept = o.kept ?? 'list';
+  let keptId: number | null = null;
+  if (kept !== 'null') {
+    keptId = blobOf(Buffer.from(JSON.stringify(keptBodies[kept])));
+    if (kept === 'tombstone') w.prepare('UPDATE blobs SET z = NULL, pruned_ms = 1 WHERE blob_id = ?').run(keptId);
+  }
+  const bnd = w.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, anchor_uuid, kept_blob_id) VALUES (?, 1, ?, ?, ?)');
+  bnd.run(fx.entry.bn!, 1, fx.uuid.sn!, keptId);
+  bnd.run(fx.entry.b2!, 2, fx.uuid.s2!, null);
+  const node = w.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, summary_blob_id, boundary_entry_id,
+      parser_version, created_ms) VALUES (?, 1, 1, 1, ?, ?, 'final', ?, ?, 1, ?)`);
+  if (o.noLeaf !== true) node.run(fx.leaf, 'native_leaf', 0, fx.blob.sn!, fx.entry.bn!, B1T2_T + 100);
+  node.run(B1T2_IDS.L2, 'native_leaf', 0, fx.blob.s2!, fx.entry.b2!, B1T2_T2 + 100);
+  node.run(B1T2_IDS.P, 'condensed', 1, null, null, B1T2_T2 + 200);   // formed after N: its second leaf is N2's
+  node.run(B1T2_IDS.Q, 'condensed', 1, null, null, 1);
+  const source = w.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, ?)');
+  if (o.noLeaf !== true) {
+    source.run(fx.leaf, fx.entry.a1!, 0);
+    source.run(fx.leaf, fx.entry.r1!, 1);
+  }
+  source.run(B1T2_IDS.L2, fx.entry.a2!, 0);
+  const child = w.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)');
+  if (o.noParent !== true) {
+    if (o.noLeaf !== true) child.run(B1T2_IDS.P, fx.leaf, 0);
+    child.run(B1T2_IDS.P, B1T2_IDS.L2, 1);
+  }
+  if (o.twoParents === true) child.run(B1T2_IDS.Q, B1T2_IDS.L2, 0);
+  for (const v of o.learn ?? []) {
+    w.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, 1)').run(v.length, Buffer.from(b1t2Lib.sha256Hex(v), 'hex'));
+  }
+  for (const k of o.prune ?? []) w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = ?').run(B1T2_T, fx.blob[k]!);
+  for (const k of o.unindex ?? []) w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(fx.blob[k]!);
+  b1t2Store.closeWriter(w);
+  return fx;
+}
+/** The driver's own store opener (W2-5a's openReplayStore: read-only, the pair index from the store and the HOME). */
+async function b1t2With<R>(fx: B1t2Fx, fn: (rs: B1t2Rs) => Promise<R> | R): Promise<R> {
+  const rs = B1T2.openReplayStore(fx.home);
+  try { return await fn(rs); } finally { rs.close(); }
+}
+function b1t2CutAt(rs: B1t2Rs, uuid: string): B1t2Cut {
+  const c = B1T2.armCut(rs, uuid);
+  if (!c.ok) throw new Error(`fixture: no cut at ${uuid}: ${c.reason}`);
+  return c.cut;
+}
+/** The frozen entry W2-5a's sourcing would write for the command fact at N (W2-D73's keys), with `over` applied. */
+function b1t2Entry(fx: B1t2Fx, storeId: string, over: Partial<B1t2Entry> = {}): B1t2Entry {
+  const key = { store_id: storeId, ccrc_id: B1T2_FAM, generation: B1T2_GEN, boundary_uuid: fx.uuid.bn!, kind: 'command', fact: B1T2_CMD, ...over };
+  return { fact_raw: B1T2_CMD, question: B1T2_QUESTION, repo_roots: ['/home/u/tree'], source_entry_uuid: fx.uuid.a1!, ...key, qid: B1T2.qidOf(key), ...over } as B1t2Entry;
+}
+/** §8.6's grammar, written out here, not built from lib's constants. */
+const b1t2Line = (leaf: string, parent: string | null): string =>
+  `History: node ${leaf}${B1T2_ELL} (this compaction)${parent === null ? '' : ` ${B1T2_DOT} parent ${parent}${B1T2_ELL}`} ${B1T2_DOT} ~/.local/bin/ccrc history describe ${leaf}`;
+const B1T2_LINE_N = b1t2Line('La1b2c3d4e', null);
+const B1T2_LINE_N2 = b1t2Line('La1b2c3d4f', 'N0f1e2d3c4b5');
+const b1t2Nums = (rows: unknown, col: string): number[] => (rows as Array<Record<string, number>>).map((r) => Number(r[col])).sort((a, b) => a - b);
+
+b1t2describe('W2-5b1 Task 2: the as-of pieces', () => {
+  b1t2describe('the card line (W2-D75, Q20)', () => {
+    b1t2it('at N the card names leaf N and no parent: P has a leaf, N2, formed after N, so lib hides it (CONTROL: lib\'s own statement hides P)', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const cut = b1t2CutAt(rs, fx.uuid.bn!);
+        b1t2expect(B1T2.cardOf(rs, fx.entry.bn!, cut)).toEqual({ state: 'card', line: B1T2_LINE_N, leafId: B1T2_IDS.LN, parentId: null, parent: 'hidden' });
+        const hidden = rs.db.prepare(b1t2Lib.asOfHiddenNodesSql()).all({ ...b1t2Lib.asOfBinds(cut), asof_nodes: JSON.stringify([B1T2_IDS.P]) });
+        b1t2expect((hidden as Array<{ node_id: string }>).map((r) => r.node_id), 'CONTROL: lib hides P under the cut at N').toEqual([B1T2_IDS.P]);
+      });
+    });
+
+    b1t2it('at N2 the card names P: every leaf under it is visible under the cut at N2 (CONTROL for the case above)', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const card = B1T2.cardOf(rs, fx.entry.b2!, b1t2CutAt(rs, fx.uuid.b2!));
+        b1t2expect(card).toEqual({ state: 'card', line: B1T2_LINE_N2, leafId: B1T2_IDS.L2, parentId: B1T2_IDS.P, parent: 'shown' });
+        b1t2expect(b1t2Lib.CARD_LINE_RE.test((card as B1t2Card).line), 'lib\'s grammar takes the line').toBe(true);
+      });
+    });
+
+    b1t2it('display prefixes run over the family\'s whole node-id set (Q20), so the leaf\'s is longer than over the card\'s own ids', async () => {
+      const whole = b1t2Lib.displayPrefixes([B1T2_IDS.LN, B1T2_IDS.L2, B1T2_IDS.P, B1T2_IDS.Q]);
+      b1t2expect([whole.get(B1T2_IDS.LN), whole.get(B1T2_IDS.P)]).toEqual(['La1b2c3d4e', 'N0f1e2d3c4b5']);
+      b1t2expect(b1t2Lib.displayPrefixes([B1T2_IDS.LN, B1T2_IDS.P]).get(B1T2_IDS.LN), 'CONTROL: over the card\'s two ids alone').toBe('La1b2c3');
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const card = B1T2.cardOf(rs, fx.entry.bn!, b1t2CutAt(rs, fx.uuid.bn!)) as B1t2Card;
+        b1t2expect(card.line.startsWith(`History: node La1b2c3d4e${B1T2_ELL} `)).toBe(true);
+      });
+    });
+
+    b1t2it('a leaf with two depth-1 parents names none (several), and one with none names none (none); CARD_PARENTS holds the four words', async () => {
+      b1t2expect(Object.isFrozen(B1T2.CARD_PARENTS) && [...B1T2.CARD_PARENTS]).toEqual(['shown', 'none', 'hidden', 'several']);
+      const two = await b1t2Plant({ twoParents: true });
+      await b1t2With(two, (rs) => {
+        b1t2expect(B1T2.cardOf(rs, two.entry.b2!, b1t2CutAt(rs, two.uuid.b2!)))
+          .toEqual({ state: 'card', line: b1t2Line('La1b2c3d4f', null), leafId: B1T2_IDS.L2, parentId: null, parent: 'several' });
+      });
+      const none = await b1t2Plant({ noParent: true });
+      await b1t2With(none, (rs) => {
+        b1t2expect(B1T2.cardOf(rs, none.entry.bn!, b1t2CutAt(rs, none.uuid.bn!)))
+          .toEqual({ state: 'card', line: B1T2_LINE_N, leafId: B1T2_IDS.LN, parentId: null, parent: 'none' });
+      });
+    });
+
+    b1t2it('store data never throws (D-6309\'s rule): no leaf for N is leaf-absent, and a leaf id lib\'s grammar refuses is card-unrenderable (CONTROL: lib\'s cardLine throws on it)', async () => {
+      b1t2expect(() => b1t2Lib.cardLine({ leaf: 'LA1B2C3', parent: null })).toThrow(TypeError);
+      const noLeaf = await b1t2Plant({ noLeaf: true });
+      await b1t2With(noLeaf, (rs) => {
+        const cut = b1t2CutAt(rs, noLeaf.uuid.bn!);
+        b1t2expect(B1T2.cardOf(rs, noLeaf.entry.bn!, cut)).toEqual({ state: 'discard', why: 'leaf-absent' });
+        b1t2expect(B1T2.armPayloads(rs, noLeaf.entry.bn!, B1T2_QUESTION, cut)).toEqual({ state: 'discard', why: 'leaf-absent' });
+      });
+      const bad = await b1t2Plant({ badLeaf: true });
+      await b1t2With(bad, (rs) => {
+        b1t2expect(B1T2.cardOf(rs, bad.entry.bn!, b1t2CutAt(rs, bad.uuid.bn!))).toEqual({ state: 'discard', why: 'card-unrenderable' });
+      });
+    });
+
+    b1t2it('a cut of another boundary is the caller\'s defect: a TypeError, never a discard', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        b1t2expect(() => B1T2.cardOf(rs, fx.entry.bn!, b1t2CutAt(rs, fx.uuid.b2!))).toThrow(TypeError);
+      });
+    });
+  });
+
+  b1t2describe('the payloads (Q20; spec 10.2 Two arms)', () => {
+    b1t2it('the plain payload is W2-5a\'s composer output byte for byte, and the carded one is the card line, one blank line, then that same text', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const cut = b1t2CutAt(rs, fx.uuid.bn!);
+        const want = B1T2.composePayload({ summary: 'Summary: the fixture card build ran.', kept: ['[tool_result] card build ok'] }, B1T2_QUESTION);
+        b1t2expect(B1T2.reconstructPayload(rs, fx.entry.bn!, B1T2_QUESTION), 'CONTROL: W2-5a\'s reconstruction').toMatchObject({ state: 'payload', text: want });
+        const p = B1T2.armPayloads(rs, fx.entry.bn!, B1T2_QUESTION, cut);
+        if (p.state !== 'payloads') throw new Error(`fixture: payloads discarded ${p.why}`);
+        b1t2expect(p.plain).toBe(want);
+        b1t2expect(p.carded).toBe(`${B1T2_LINE_N}\n\n${want}`);
+        b1t2expect(p.card).toEqual(B1T2.cardOf(rs, fx.entry.bn!, cut));
+        b1t2expect(B1T2.prependCard('line', 'payload')).toBe('line\n\npayload');
+      });
+    });
+
+    b1t2it('no line of the plain payload is a card line; the carded payload\'s first line is one, and its second is empty', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const p = B1T2.armPayloads(rs, fx.entry.bn!, B1T2_QUESTION, b1t2CutAt(rs, fx.uuid.bn!));
+        if (p.state !== 'payloads') throw new Error(`fixture: payloads discarded ${p.why}`);
+        b1t2expect(p.plain.split('\n').filter((l) => b1t2Lib.CARD_LINE_RE.test(l))).toEqual([]);
+        const [first, second] = p.carded.split('\n');
+        b1t2expect([b1t2Lib.CARD_LINE_RE.test(first!), second]).toEqual([true, '']);
+      });
+    });
+  });
+
+  b1t2describe('the re-check before every arm batch (W2-D78(iii), Q21)', () => {
+    b1t2it('CONTROL: a question re-checks clean on the store it was sourced from, and its verdict carries the cut the payloads take', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        const v = await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId), { configDirs: B1T2_DIRS });
+        b1t2expect(v).toEqual({ ok: true, boundaryEntryId: fx.entry.bn, cut: b1t2CutAt(rs, fx.uuid.bn!) });
+        if (!v.ok) return;
+        b1t2expect(B1T2.armPayloads(rs, v.boundaryEntryId, B1T2_QUESTION, v.cut).state).toBe('payloads');
+      });
+    });
+
+    b1t2it('(a): a pair the store learned after the freeze masks F_raw, so the question fails redact-fact (CONTROL: that pair masks the command)', async () => {
+      const pair = { len: B1T2_VALUE.length, sha256: b1t2Lib.sha256Hex(B1T2_VALUE) };
+      b1t2expect(b1t2Lib.redactField(B1T2_CMD, b1t2Lib.makePairIndex([pair])), 'CONTROL').not.toContain(B1T2_VALUE);
+      const fx = await b1t2Plant({ learn: [B1T2_VALUE] });
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'a', why: 'redact-fact' });
+      });
+    });
+
+    b1t2it('(a) comes first: a source pruned after the freeze fails the re-mine, span-tombstone, though (b) fails too (CONTROL: answerability alone answers unanswerable)', async () => {
+      const fx = await b1t2Plant({ prune: ['a1'] });
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'a', why: 'span-tombstone' });
+        const a = await B1T2.answerability(rs.db, rs.idx, { tsMs: B1T2_T, transcriptPk: 1, spanEntryIds: [fx.entry.a1!, fx.entry.r1!] }, B1T2_CMD);
+        b1t2expect(a.state, 'CONTROL').toBe('unanswerable');
+      });
+    });
+
+    b1t2it('(a): a frozen fact boundary N no longer yields is fact-unmined, and a boundary uuid the store does not hold is boundary-absent', async () => {
+      const fx = await b1t2Plant();
+      const gone = 'npm run fixture-gone --workspace pkg-z';
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId, { fact: gone, fact_raw: gone }), { configDirs: B1T2_DIRS }))
+          .toEqual({ ok: false, clause: 'a', why: 'fact-unmined' });
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId, { boundary_uuid: B1T2_UUID(0x997) }), { configDirs: B1T2_DIRS }))
+          .toEqual({ ok: false, clause: 'a', why: 'boundary-absent' });
+        // W2-D50: a frozen uuid that is not a lowercase UUID is data, refused here, never spawnEnv's TypeError after --out.
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId, { boundary_uuid: B1T2_UUID(0xabc).toUpperCase() }), { configDirs: B1T2_DIRS }))
+          .toEqual({ ok: false, clause: 'a', why: 'boundary-uuid-invalid' });
+      });
+    });
+
+    b1t2it('(b): the source\'s index row gone is unanswerable, and its stamp moved past T_N is unanswerable-untimed (W2-D70, D-5780)', async () => {
+      const unindexed = await b1t2Plant({ unindex: ['a1'] });
+      await b1t2With(unindexed, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(unindexed, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'b', why: 'unanswerable' });
+      });
+      const late = await b1t2Plant({ retime: { a1: B1T2_T + 5 } });
+      await b1t2With(late, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(late, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'b', why: 'unanswerable-untimed' });
+      });
+    });
+
+    b1t2it('(c): a frozen source in N\'s holding copy after N, stamped before T_N, is hidden by lib\'s cut (source-hidden; CONTROL: its stamp alone would show it)', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        const cut = b1t2CutAt(rs, fx.uuid.bn!);
+        const p1 = rs.db.prepare('SELECT e.ts_ms AS ts, m.line AS line FROM entries e JOIN memberships m ON m.entry_id = e.entry_id AND m.file_id = ? WHERE e.entry_id = ?')
+          .get(cut.holdingFileId, fx.entry.p1!) as { ts: number; line: number };
+        b1t2expect(p1.ts, 'CONTROL: stamped before T_N').toBeLessThan(cut.tsCut);
+        b1t2expect(p1.line, 'CONTROL: after N in N\'s holding copy').toBeGreaterThan(cut.boundaryLine);
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId, { source_entry_uuid: fx.uuid.p1! }), { configDirs: B1T2_DIRS }))
+          .toEqual({ ok: false, clause: 'c', why: 'source-hidden' });
+      });
+    });
+
+    b1t2it('(c): no copy holds N, so asOfCutOf answers asof-invalid, which is clause (c); a source uuid the store does not hold is source-absent', async () => {
+      const uncopied = await b1t2Plant({ uncopy: true });
+      await b1t2With(uncopied, async (rs) => {
+        b1t2expect(B1T2.armCut(rs, uncopied.uuid.bn!), 'CONTROL: the store half refuses').toMatchObject({ ok: false, reason: 'asof-invalid' });
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(uncopied, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'c', why: 'asof-invalid' });
+      });
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId, { source_entry_uuid: B1T2_UUID(0x998) }), { configDirs: B1T2_DIRS }))
+          .toEqual({ ok: false, clause: 'c', why: 'source-absent' });
+      });
+    });
+
+    b1t2it('recheckBatch refuses quiz-unanswerable naming every failing qid and its clause, in batch order; a clean batch answers each qid\'s verdict', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        const gone = 'npm run fixture-gone --workspace pkg-z';
+        const good = b1t2Entry(fx, rs.storeId);
+        const sha = b1t2Entry(fx, rs.storeId, { kind: 'sha', fact: B1T2_SHA, fact_raw: B1T2_SHA });
+        const unmined = b1t2Entry(fx, rs.storeId, { fact: gone, fact_raw: gone });
+        const shaHidden = b1t2Entry(fx, rs.storeId, { kind: 'sha', fact: B1T2_SHA, fact_raw: B1T2_SHA, source_entry_uuid: fx.uuid.p1! });
+        await b1t2expect(B1T2.recheckBatch(rs, [good, unmined, shaHidden], { configDirs: B1T2_DIRS })).rejects.toMatchObject({
+          word: 'quiz-unanswerable', detail: `${unmined.qid} clause (a) fact-unmined; ${shaHidden.qid} clause (c) source-hidden`,
+        });
+        const clean = await B1T2.recheckBatch(rs, [good, sha], { configDirs: B1T2_DIRS });
+        const cut = b1t2CutAt(rs, fx.uuid.bn!);
+        b1t2expect([...clean.entries()]).toEqual([[good.qid, { ok: true, boundaryEntryId: fx.entry.bn, cut }], [sha.qid, { ok: true, boundaryEntryId: fx.entry.bn, cut }]]);
+      });
+    });
+
+    b1t2it('a question of another store is the caller\'s defect: a TypeError, never a refusal', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        await b1t2expect(B1T2.recheckQuestion(rs, b1t2Entry(fx, 'another-store'), { configDirs: B1T2_DIRS })).rejects.toThrow(TypeError);
+      });
+    });
+  });
+
+  b1t2describe('the parity pins against lib\'s cut (the ledger\'s R8 carry, Q22)', () => {
+    b1t2it('C1: the same-millisecond count reads asOfCutOf\'s T_N and holding file, and counts exactly the entries lib\'s cut shows at T_N outside that file', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const row = B1T2.admitStoreBoundaries(rs).boundaries.find((b) => b.uuid === fx.uuid.bn)!;
+        const cut = b1t2CutAt(rs, fx.uuid.bn!);
+        b1t2expect({ tsMs: row.ts_ms, holdingFileId: row.file_id }).toEqual({ tsMs: cut.tsCut, holdingFileId: cut.holdingFileId });
+        b1t2expect(cut, 'CONTROL: T_N is N\'s own stamp, and the live file 2 holds N beside the retired file 1').toMatchObject({ tsCut: B1T2_T, holdingFileId: 2 });
+        const planted = ['mIn', 'mOutBefore', 'mOut', 'mOutAfter'].map((k) => fx.entry[k]!);
+        const shown = b1t2Nums(rs.db.prepare(b1t2Lib.asOfVisibleEntriesSql()).all({ ...b1t2Lib.asOfBinds(cut), asof_entries: JSON.stringify(planted) }), 'entry_id');
+        b1t2expect(shown, 'CONTROL: lib shows the hits stamped at or before T_N, before N in the holding copy or in another copy, and hides the one after')
+          .toEqual([fx.entry.mIn!, fx.entry.mOutBefore!, fx.entry.mOut!].sort((a, b) => a - b));
+        const sameMsOutside = b1t2Nums(rs.db.prepare(`SELECT e.entry_id AS entry_id FROM entries e WHERE e.entry_id IN (SELECT value FROM json_each(?))
+            AND e.ts_ms = ? AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.file_id = ? AND m.entry_id = e.entry_id)`)
+          .all(JSON.stringify(planted), cut.tsCut, cut.holdingFileId), 'entry_id');
+        const lib = sameMsOutside.filter((id) => shown.includes(id));
+        b1t2expect(lib).toEqual([fx.entry.mOut]);
+        const scope = B1T2.familyScopeOf(rs.db, { ccrc_id: B1T2_FAM, generation: B1T2_GEN });
+        b1t2expect(B1T2.asofSameMsHits(rs.db, { tsMs: row.ts_ms!, holdingFileId: row.file_id!, transcriptPks: scope }, B1T2_PHRASE)).toBe(lib.length);
+      });
+    });
+
+    b1t2it('C2: on a readable kept list the driver\'s kept(N) members are the set asOfCutOf keeps', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const copy = B1T2.boundaryCopyOf(rs, fx.entry.bn!);
+        if (copy.state !== 'copy') throw new Error(`fixture: N answered ${copy.why}`);
+        const k = B1T2.keptMembersOf(rs, copy.boundary);
+        if (k.state !== 'kept') throw new Error(`fixture: kept(N) answered ${k.why}`);
+        b1t2expect(k.uuids, 'CONTROL: the stored list repeats r1 and names a uuid the store does not hold').toEqual([fx.uuid.r1, B1T2_UUID(0x999)]);
+        b1t2expect([...k.uuids].sort()).toEqual([...b1t2CutAt(rs, fx.uuid.bn!).keptUuids]);
+      });
+    });
+
+    b1t2it.each([
+      ['null', 'kept-absent', false], ['tombstone', 'kept-unreadable', false], ['object', 'kept-unreadable', false], ['mixed', 'kept-unreadable', true],
+    ] as Array<[NonNullable<B1t2Opts['kept']>, string, boolean]>)('C2 CONTROL: a kept list that is %s: the driver discards N as %s while asOfCutOf keeps the strings it can read, and the payloads never reach an arm', async (kept, word, keepsR1) => {
+      const fx = await b1t2Plant({ kept });
+      await b1t2With(fx, (rs) => {
+        const copy = B1T2.boundaryCopyOf(rs, fx.entry.bn!);
+        if (copy.state !== 'copy') throw new Error(`fixture: N answered ${copy.why}`);
+        b1t2expect(B1T2.keptMembersOf(rs, copy.boundary)).toEqual({ state: 'discard', why: word });
+        const cut = b1t2CutAt(rs, fx.uuid.bn!);
+        b1t2expect([...cut.keptUuids]).toEqual(keepsR1 ? [fx.uuid.r1] : []);
+        b1t2expect(B1T2.armPayloads(rs, fx.entry.bn!, B1T2_QUESTION, cut)).toEqual({ state: 'discard', why: word });
+      });
+    });
+  });
+
+  b1t2describe('one spelling each (W2-D38, W2-D12, S2)', () => {
+    b1t2it('RECON_DISCARDS gains card-unrenderable directly before body-unrenderable, which stays last, and it is no DRIVER_REASONS or GATE_REASONS word (W2-5a R5)', () => {
+      b1t2expect(B1T2.RECON_DISCARDS.slice(35)).toEqual(['card-unrenderable', 'body-unrenderable']);
+      b1t2expect(new Set(B1T2.RECON_DISCARDS).size).toBe(B1T2.RECON_DISCARDS.length);
+      b1t2expect(B1T2.DRIVER_REASONS.includes('card-unrenderable') || (b1t2Gate.GATE_REASONS as readonly string[]).includes('card-unrenderable')).toBe(false);
+    });
+
+    b1t2it('the driver calls asOfCutOf, cardLine, displayPrefixes, lib\'s node and entry statements and mineBoundary on one code line each, spells leaf N\'s node rule once, and never splices asOfEntrySql, composes R8 or reads card.mjs', () => {
+      const code = b1t2Read(b1t2Join(B1T2_REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n').filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l));
+      const lines = (re: RegExp): string[] => code.filter((l) => re.test(l));
+      for (const re of [/\basOfCutOf\(/, /\bcardLine\(/, /\bdisplayPrefixes\(/, /\basOfHiddenNodesSql\(\)/, /\basOfVisibleEntriesSql\(\)/,
+        /(?<!function )\bmineBoundary\(/, /boundary_entry_id = \? AND depth = 0/]) {
+        b1t2expect(lines(re), String(re)).toHaveLength(1);
+      }
+      b1t2expect(lines(/\basOfEntrySql\b|\bcutHidesASource\b|\blineageEntries\b|card\.mjs/)).toEqual([]);
+    });
   });
 });
