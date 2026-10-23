@@ -4568,6 +4568,13 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(i?.remedy).toContain('~/.ccrc/history/spool/.draining/');
   });
 
+  it('redact-source-unreadable\'s remedy names the codex auth library\'s causes and the log that says which (codex-bridge Stage 1, Task 10, fix round 1)', () => {
+    const i = healthLib.deriveHealth(base({ redactUnreadable: ['/home/u/.local/share/ccrc/codex/lane-a'] })).warn.find((x) => x.word === 'redact-source-unreadable');
+    expect(i?.remedy).toContain('make /home/u/.local/share/ccrc/codex/lane-a readable by this user');
+    expect(i?.remedy).toContain('~/ccrc/ccd/ccgpt-auth.py and python3 are present');
+    expect(i?.remedy).toContain('journalctl --user -u ccd-history-sweep');
+  });
+
   it('spool-planted fires on spool_unreadable alone, and names it apart from the planted counts (FU8, FP5)', () => {
     const i = healthLib.deriveHealth(base({ spoolUnreadable: 3 })).warn.find((x) => x.word === 'spool-planted');
     expect(i?.detail).toContain('3 skipped drain(s) of a draining file or its sidecar the sweep could not read, whose id\'s later files wait behind it');

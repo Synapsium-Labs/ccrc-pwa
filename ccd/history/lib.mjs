@@ -3909,7 +3909,10 @@ function remedyFor(word, h) {
         ? `free space on the filesystem holding ${h.dbPath} until more than ${h.thresholdBytes + h.sizeBytes} bytes are free (the snapshot needs the store's size above the floor)`
         : HEALTH_REMEDIES['migration-refused'];
     case 'redact-source-unreadable':
-      return `make ${h.redactUnreadable.join(', ')} readable by this user; a value never yet seen in them goes unredacted meanwhile`;
+      // A codex lane's authDir is listed here when the tree's auth library could not name its secret files
+      // (codex-bridge Stage 1, Task 10): no library, no python3 or a failed secret-files run. Only the shim's stderr
+      // line says which, and it goes to the sweep's journal, so the remedy points there (fix round 1, M2).
+      return `make ${h.redactUnreadable.join(', ')} readable by this user, or, for a codex lane's auth directory, check that ~/ccrc/ccd/ccgpt-auth.py and python3 are present (the sweep's log names which: ${SWEEP_LOG}); a value never yet seen in them goes unredacted meanwhile`;
     case 'retention-unmeasured':
       return `make cleanupPeriodDays readable in the settings.json of ${h.retentionUnmeasured.join(', ')}`;
     case 'retention-lowered':
