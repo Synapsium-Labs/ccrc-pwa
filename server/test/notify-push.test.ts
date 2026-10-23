@@ -522,6 +522,27 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     expect(p.notify).not.toHaveBeenCalled();
   });
 
+  it('a plain line is ONE global notice frame; a cc swap: line adds the moved session\'s own frame, after it', async () => {
+    const bus = new Bus();
+    const seen: string[] = [];
+    const orig = bus.emit.bind(bus) as (e: string, ...a: unknown[]) => boolean;
+    (bus as unknown as { emit: unknown }).emit = (e: string, ...a: unknown[]) => {
+      if (e === 'notice' || e.startsWith('session:')) seen.push(`${e} ${JSON.stringify(a)}`);
+      return orig(e, ...a);
+    };
+    app = await buildServer({ ...lanesDeps(), mailToken: TOKEN }, bus);
+    {
+      await post(app, { message: 'plain line' });
+      const swap = 'cc swap: s1 moved lane-a -> lane-b (limits)';
+      await post(app, { message: swap });
+      expect(seen).toEqual([
+        'notice [{"message":"plain line"}]',
+        `notice [{"message":${JSON.stringify(swap)}}]`,
+        `session:s1 [{"type":"notice","message":${JSON.stringify(swap)}}]`,
+      ]);
+    }
+  });
+
   it('cc swap: routing is unchanged, with or without the flag, and never reaches the phone', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const bus = new Bus();
