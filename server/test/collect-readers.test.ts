@@ -46,7 +46,8 @@ const uniq = (xs: readonly string[]): string[] => [...new Set(xs)].sort();
 const probesFromCcd = (): string[] => {
   const code = bashCode(ccdSrc);
   const literal = [...code.matchAll(/_ws_collect_unmeasured ([a-z][a-z-]*)\b/g)].map((m) => m[1]!);
-  expect([...code.matchAll(/_ws_collect_unmeasured "idle:\$why"/g)], 'the walk probe is composed once').toHaveLength(1);
+  // Composed once per region: the witnessed collector's, and the loose arm's own (D-6625), which admits the same walk words.
+  expect([...code.matchAll(/_ws_collect_unmeasured "idle:\$why"/g)], 'the walk probe is composed once per region').toHaveLength(2);
   const ev = between('\n_ws_collect_eval() {', '\n_ws_collect_resume_eval() {');
   const cased = /case "\$\{_WS_IDLE_WHY-\}" in ([a-z|-]+)\)/.exec(ev);
   const dflt = /\blocal [^\n]*\bwhy=([a-z-]+)/.exec(ev);
