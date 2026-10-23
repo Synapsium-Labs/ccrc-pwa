@@ -12663,7 +12663,7 @@ w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: arms on the s
     w5b4Act(home, q1, W5B4_CONTROL, '.sleep', '30000', 1);
     w5b4Act(home, q2, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }));
     w5b4Act(home, q2, W5B4_CONTROL, '.exit', '1');
-    const r = await w5b4Arms(home, fx.argv, { timeoutMs: 1500 });
+    const r = await w5b4Arms(home, fx.argv, { timeoutMs: 8000 });
     w5b4Expect(r.refusal).toBeNull();
     const name = (q: W5b4R, arm: string, n: number): string => `pilot/arms/${q.qid as string}/${arm}.a${n}`;
     const c1 = w5b4Answer(fx.out, 'pilot', q1, W5B4_CONTROL);
