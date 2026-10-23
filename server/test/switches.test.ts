@@ -11,7 +11,7 @@ import {
   COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, RECLAIM_PAUSE_MARKER,
 } from '../src/coord/rundefs.js';
 import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER } from '../src/coord/hibernate.js';
-import { EXPIRE_LANE_LIVE_MARKER } from '../src/archivedExpiry.js';
+import { EXPIRE_LANE_LIVE_MARKER, STALE_ARCHIVE_LIVE_MARKER } from '../src/archivedExpiry.js';
 import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 import { DEAD_COORDINATOR_LANE_LIVE_MARKER } from '../src/deadCoordinator.js';
 import { IDLE_NUDGE_DISABLED_MARKER } from '../src/idlenudge.js';
@@ -30,6 +30,7 @@ const TODAY: Record<string, string> = {
   HIBERNATE_DISABLED_MARKER: 'hibernate-disabled',
   HIBERNATE_LIVE_MARKER: 'hibernate-live',
   EXPIRE_LANE_LIVE_MARKER: 'expire-lane-live',
+  STALE_ARCHIVE_LIVE_MARKER: 'stale-archive-live',
   COLLECT_LANE_LIVE_MARKER: 'collect-lane-live',
   DEAD_COORDINATOR_LANE_LIVE_MARKER: 'dead-coordinator-lane-live',
   IDLE_NUDGE_DISABLED_MARKER: 'idle-compact-nudge-disabled',
@@ -41,7 +42,7 @@ const TODAY: Record<string, string> = {
 describe('characterization: every exported marker constant keeps its value (D-5855)', () => {
   const EXPORTED: Record<string, string> = {
     MAIL_DISABLED_MARKER, COORDINATOR_PAUSE_MARKER, RECLAIM_PAUSE_MARKER, STOP_DONE_DISABLED_MARKER,
-    HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, EXPIRE_LANE_LIVE_MARKER, COLLECT_LANE_LIVE_MARKER,
+    HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, EXPIRE_LANE_LIVE_MARKER, STALE_ARCHIVE_LIVE_MARKER, COLLECT_LANE_LIVE_MARKER,
     DEAD_COORDINATOR_LANE_LIVE_MARKER, IDLE_NUDGE_DISABLED_MARKER, MAIL_GATE_STRICT_MARKER, MAIL_GATE_BUSY_MARKER,
     MAIL_GATE_BUSY_SHADOW_MARKER,
   };

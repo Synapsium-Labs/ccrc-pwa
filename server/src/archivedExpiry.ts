@@ -22,7 +22,7 @@ import {
  *  `ws-expire`. It has NO WRITER in the tree: the operator touches it by hand on the fleet box, and
  *  `single-definition.test.ts` pins that, beside `stall-watch-live`. Spelled once, in its `shared/switches.ts` row
  *  (D-5855), and re-exported here. */
-export { EXPIRE_LANE_LIVE_MARKER } from '../../shared/switches.js';
+export { EXPIRE_LANE_LIVE_MARKER, STALE_ARCHIVE_LIVE_MARKER } from '../../shared/switches.js';
 
 /** Every word `ws-expire` and `ws-audit --expire` refuse with — and NO other. `archived-expiry-policy.test.ts` holds
  *  this set equal to what ccd's EXPIRE region and the shared ladder (`_ws_reclaim_ladder`) emit, in both directions,
@@ -410,6 +410,70 @@ export function archivedExpiryStoreSkip(store: ExpiryStoreRead): ArchivedExpiryS
  *  A reviewed run this pass could not read, or that is absent, is doubt — and doubt keeps. */
 export const reviewKeeps = (reviewed: { readonly kind: 'run'; readonly state: RunState } | { readonly kind: 'absent' } | { readonly kind: 'unreadable' }): boolean =>
   reviewed.kind !== 'run' || !(TERMINAL_RUN_STATES as readonly RunState[]).includes(reviewed.state);
+
+// ── the stale-archive arm's verdict (D-6643, fleet disk retention spec §2.7.5) ──────────────────────────────────────
+
+/** A workspace nobody has run for this long is archived: archive is the step before expiry, and it starts expiry's own
+ *  clock. The arm's one age, typed here and nowhere else; the evidence it measures is the newest sign of a run. */
+export const STALE_ARCHIVE_AFTER_MS = 14 * 24 * 60 * 60_000;
+/** Two pane-absent sightings must stand at least this far apart: a pane that is mid-restart, or a tmux that answered
+ *  once wrongly, is not two observations. */
+export const STALE_ARCHIVE_SIGHTING_GAP_MS = 60 * 60_000;
+
+export interface StaleArchiveRow {
+  readonly workspace: string | null;
+  /** The registry's archive epoch (seconds), `null` when the row is not archived. */
+  readonly archivedAt: number | null;
+  readonly child: ChildMark;
+  readonly identityMeasured: boolean;
+  readonly held: string | null;
+}
+
+/** What the arm gathered for one row. Every field that could not be read says so, and says keep. */
+export interface StaleArchiveFacts {
+  /** `ever`: the id has been any run's `claimedBy`, in any state or generation. `unreadable`: the store did not answer. */
+  readonly claims: 'never' | 'ever' | 'unreadable';
+  readonly pane: 'absent' | 'present' | 'unmeasured';
+  /** The first and the latest of the unbroken run of pane-absent passes (ms), or `null` when the latest pass did not
+   *  see the pane absent. */
+  readonly sightings: { readonly firstAt: number; readonly lastAt: number } | null;
+  readonly viewer: boolean;
+  /** The newest sign this workspace ran (ms): the latest of its `spawn`, `start` and `supervise` acts in the journal,
+   *  `.supervised`, `.spawn`, `.woke` and its transcript's mtime. `null` is no evidence at all, and is never read as old. */
+  readonly evidenceAtMs: number | null;
+}
+
+export type StaleArchiveSkip =
+  | 'not-a-workspace' | 'archived' | 'child' | 'identity-unmeasured' | 'held' | 'claimant' | 'claims-unreadable'
+  | 'pane' | 'one-sighting' | 'viewer' | 'no-evidence' | 'recent';
+
+export type StaleArchiveVerdict =
+  | { readonly eligible: true }
+  | { readonly eligible: false; readonly why: StaleArchiveSkip };
+
+/**
+ * IS THIS WORKSPACE ONE THE SERVER MAY ASK CCD TO ARCHIVE NOW (spec §2.7.5, "A row is archived when all of these hold")?
+ * Every conjunct, every doubt a keep: a workspace that is not archived, not held and carries no child mark in any
+ * reading (an `unreadable` one is a child until proven otherwise); it has never been a run's `claimedBy`; its pane was
+ * seen absent on two passes an hour apart; the newest sign of a run is at least `STALE_ARCHIVE_AFTER_MS` old, and
+ * no sign at all is no answer; and nobody is viewing it. The switch, the cap and the one act a pass are the arm's.
+ */
+export function staleArchiveVerdict(row: StaleArchiveRow, f: StaleArchiveFacts, nowMs: number): StaleArchiveVerdict {
+  const skip = (why: StaleArchiveSkip): StaleArchiveVerdict => ({ eligible: false, why });
+  if (row.workspace === null) return skip('not-a-workspace');
+  if (row.archivedAt !== null) return skip('archived');
+  if (row.child.kind !== 'none') return skip('child');
+  if (!row.identityMeasured) return skip('identity-unmeasured');
+  if (row.held !== null) return skip('held');
+  if (f.claims === 'unreadable') return skip('claims-unreadable');
+  if (f.claims === 'ever') return skip('claimant');
+  if (f.pane !== 'absent') return skip('pane');
+  if (f.sightings === null || f.sightings.lastAt - f.sightings.firstAt < STALE_ARCHIVE_SIGHTING_GAP_MS) return skip('one-sighting');
+  if (f.evidenceAtMs === null) return skip('no-evidence');
+  if (nowMs - f.evidenceAtMs < STALE_ARCHIVE_AFTER_MS) return skip('recent');
+  if (f.viewer) return skip('viewer');
+  return { eligible: true };
+}
 
 // ── the lane's memory of one row ─────────────────────────────────────────────
 

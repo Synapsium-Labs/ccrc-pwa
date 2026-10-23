@@ -197,6 +197,9 @@ import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
 import { STOP_DONE_SWEEP_MS } from './stopDone.js';
 import { hibernatePass, type HibernateSweepMemory } from './hibernateSweep.js';
+import {
+  STALE_ARCHIVE_SWEEP_MS, paneFromLiveWord, staleArchivePass, transcriptMtimeVia, wokeAtVia, type StaleArchiveMemory,
+} from './coord/staleArchive.js';
 import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_SWEEP_MS } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
@@ -1586,6 +1589,9 @@ export class FleetWatcher {
   private lastHibernateSweep = 0;
   private hibernateSweeping = false;
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
+  private lastStaleArchiveSweep = 0;
+  private staleArchiveSweeping = false;
+  private readonly staleArchiveMemory: StaleArchiveMemory = { sightings: new Map(), would: new Set() };
   private readonly hibernateStartedAt = Date.now();
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
@@ -2384,6 +2390,31 @@ export class FleetWatcher {
     }
   }
 
+  /** The STALE-ARCHIVE ARM (D-6643, fleet disk retention spec §2.7.5): hourly, one pass at a time, on the tick's rows and
+   *  listing. `staleArchivePass` (`coord/staleArchive.ts`) holds the rest; SHADOW until `$REG/stale-archive-live`. */
+  async sweepStaleArchive(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    const now = Date.now();
+    if (this.staleArchiveSweeping || (this.lastStaleArchiveSweep !== 0 && now - this.lastStaleArchiveSweep < STALE_ARCHIVE_SWEEP_MS)) return;
+    this.lastStaleArchiveSweep = now;
+    this.staleArchiveSweeping = true;
+    try {
+      const reads = turnReadDeps(this.deps, this);
+      const { io, cfg, coord, notifyLog } = this.deps;
+      await staleArchivePass({
+        coord, presence: this.deps.presence, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
+        notice: (e) => { notify({ notifyLog, coord }, e, 'record-only', { degraded: 'stale archive, feed archive degraded' }); },
+        pane: async (rec) => paneFromLiveWord(await liveWordFor(reads, rec)),
+        transcriptMtimeMs: (rec) => transcriptMtimeVia(io, cfg, rec, (a) => this.transcripts.resolve(a)),
+        wokeAtMs: (rec) => wokeAtVia(io, cfg, rec),
+        queueRun: (id, fn) => this.deps.queue.run(id, fn), log: (line) => console.warn(line), now: Date.now,
+      }, this.staleArchiveMemory, records, names);
+    } catch (err) {
+      console.warn(`ccrc-server: sweepStaleArchive failed (${err instanceof Error ? err.message : String(err)}) — no archives this pass`);
+    } finally {
+      this.staleArchiveSweeping = false;
+    }
+  }
+
   /** At an unattended act (the stop-done lane's, hibernation's): the registry record read AGAIN and the frame's row
    *  assembled from it, so a `.hold`, a stop stamp, an archive or a bucket that changed since the tick is seen. */
   private async rowAtAct(rec: SessionRecord): Promise<{ ok: true; row: FleetSession } | { ok: false }> {
@@ -2821,6 +2852,7 @@ export class FleetWatcher {
       if (this.primed) void this.sweepStopDone(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5242: hibernation's SHADOW sweep, never awaited, gated on `primed` like the stop-done lane. It only logs.
       if (this.primed) void this.sweepHibernate(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
+      if (this.primed) void this.sweepStaleArchive(records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
       if (Date.now() - this.lastIdleNudgeAt >= IDLE_NUDGE_SWEEP_MS) {
         this.lastIdleNudgeAt = Date.now();
