@@ -1606,7 +1606,7 @@ cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5
 cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts
 ```
 
-Expected (predicted): the first, 31 passed (five in the arm-word describe, four in the partition, four in the stream describe, four in RP1-arm, seven in the pure describe and seven in the nested loader describe). The second, the whole file green, the cases Step 3 named included. A W2-4 or W2-5a case other than the probe's whose pinned spend moves is a canned stream whose messages sum past its result usage: re-pin it with the probe's Q7 sentence and name it in the report (measured at c34f82830: the T5, T6, T8, W6 and leftover fixtures each carry one message equal to the result's usage, or a result alone, so none is predicted). If the `amended7` CONTROL does not load, the validator refused the fixture: fix the fixture (its `supersedes`, `finalized_ms` or `detail_sha256`), never the loader.
+Expected (predicted): the first, 31 passed (five in the arm-word describe, four in the partition, four in the stream describe, four in RP1-arm, seven in the pure describe and seven in the nested loader describe); measured 32 passed, the 31 plus W2-4 Task 1's `FLAG_SPECS declares exactly …` case, whose edited title also names `W2-5b1 Task 1`. The second, the whole file green, the cases Step 3 named included. A W2-4 or W2-5a case other than the probe's whose pinned spend moves is a canned stream whose messages sum past its result usage: re-pin it with the probe's Q7 sentence and name it in the report (measured at c34f82830: the T5, T6, T8, W6 and leftover fixtures each carry one message equal to the result's usage, or a result alone, so none is predicted). If the `amended7` CONTROL does not load, the validator refused the fixture: fix the fixture (its `supersedes`, `finalized_ms` or `detail_sha256`), never the loader.
 
 - [ ] **Step 6: Measure every new guard red, then green.** From the repository root. Each block makes one exact replacement, asserted to match once, runs one filter, shows it red, and restores the file. Run the block one mutant per tool call (Global Constraints' "One mutant per tool call"); a mutant of two `mut` lines is one call.
 
@@ -1781,7 +1781,7 @@ cmp deploy/history-replay.mjs "$SCRATCH/replay.t1.orig" && cmp server/test/histo
 git status --short   # only this task's two paths
 ```
 
-Then re-run `-t 'W2-5b1 Task 1'` on the restored tree. Expected green (predicted): 31 passed. Which guard each mutant pins:
+Then re-run `-t 'W2-5b1 Task 1'` on the restored tree. Expected green (predicted): 31 passed (measured 32, the `FLAG_SPECS` case counted). Which guard each mutant pins:
 
 | Mutant | Guard |
 |---|---|
