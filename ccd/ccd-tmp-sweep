@@ -603,6 +603,37 @@ def local_remote(rp, urls):
         if any(full == t or full.startswith(t.rstrip('/') + '/') for t in rts): return True
     return False
 
+def logs_unread(base, env):
+    """True when an entry under the logs/ of the git dir or the common dir is a link or unreadable (or that cannot be
+    told): git does not follow a linked logs, so `rev-list --reflog` then reads empty and a reflog-only commit hides.
+    The twin of ccd's `_ws_reclaim_logs_readable`."""
+    dirs = []
+    for arg in (['rev-parse', '--absolute-git-dir'], ['rev-parse', '--path-format=absolute', '--git-common-dir']):
+        r = subprocess.run(base + arg, capture_output=True, text=True, timeout=30, env=env)
+        if r.returncode != 0 or not r.stdout.strip(): return True
+        d = os.path.join(r.stdout.strip(), 'logs')
+        if d not in dirs: dirs.append(d)
+    for d in dirs:
+        if not os.path.lexists(d): continue
+        if os.path.islink(d): return True
+        errs = []
+        for dp, dn, fn in os.walk(d, onerror=errs.append):
+            if errs: return True
+            if not (os.access(dp, os.R_OK) and os.access(dp, os.X_OK)): return True
+            for e in dn + fn:
+                full = os.path.join(dp, e)
+                if os.path.islink(full): return True
+                if not os.access(full, os.R_OK): return True
+        if errs: return True
+    return False
+
+def hidden_flags(base, env):
+    """True when `ls-files -v` tags any path assume-unchanged (lowercase) or skip-worktree (S), or git cannot say:
+    `status` shows neither edit. The twin of ccd's `_ws_reclaim_hidden`."""
+    r = subprocess.run(base + ['ls-files', '-v'], capture_output=True, text=True, timeout=60, env=env)
+    if r.returncode != 0 or r.stderr.strip(): return True
+    return any(ln[:1].islower() or ln[:1] == 'S' for ln in r.stdout.splitlines())
+
 def unpushed(repos):
     """True when any repository holds work on no remote, or when that cannot be told. Like ccd's reclaim rule a
     commit only a reflog names counts, and a git that complains is an unmeasured answer, so it keeps."""
@@ -613,7 +644,9 @@ def unpushed(repos):
             bare = subprocess.run(base + ['rev-parse', '--is-bare-repository'], capture_output=True, text=True, timeout=30, env=env)
             if bare.returncode != 0: return True
             s = None
+            if logs_unread(base, env): return True
             if bare.stdout.strip() != 'true':
+                if hidden_flags(base, env): return True
                 s = subprocess.run(base + ['status', '--porcelain', '--untracked-files=all'], capture_output=True, text=True, timeout=30, env=env)
             u = subprocess.run(base + ['config', '--get-regexp', r'^remote\..*\.(pushurl|url)$'], capture_output=True, text=True, timeout=30, env=env)
             c = subprocess.run(base + ['rev-list', '-n1', '--all', '--reflog', '--not', '--remotes'], capture_output=True, text=True, timeout=30, env=env)

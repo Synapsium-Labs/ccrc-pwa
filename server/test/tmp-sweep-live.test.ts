@@ -754,6 +754,32 @@ describe('the size budget', () => {
       expect(session(census()).budget.kept[0]).toEqual({ name: 'repo', why: 'git-work-unrescued' });
     }, 180_000);
 
+  it.each([['--assume-unchanged'], ['--skip-worktree']])(
+    'a pushed clone with an edit hidden by update-index %s is kept (git-work-unrescued)', (flag) => {
+      keptShape((a) => {
+        const remote = path.join(h.home, 'hidden-remote.git');
+        execFileSync('git', ['init', '-q', '--bare', remote], { env: GIT_ENV() });
+        git(a, 'init', '-q'); git(a, 'add', '-A'); git(a, 'commit', '-q', '-m', 'work');
+        git(a, 'remote', 'add', 'origin', remote); git(a, 'push', '-q', 'origin', 'HEAD'); git(a, 'fetch', '-q', 'origin');
+        const f = 'data';
+        git(a, 'update-index', flag, f);
+        fs.appendFileSync(path.join(a, f), 'edit status cannot see');
+      });
+    }, 180_000);
+
+  it('a reflog-only commit with the logs directory linked (rev-list reads none) is kept (git-work-unrescued)', () => {
+    keptShape((a) => {
+      const remote = path.join(h.home, 'logs-remote.git');
+      execFileSync('git', ['init', '-q', '--bare', remote], { env: GIT_ENV() });
+      git(a, 'init', '-q'); git(a, 'add', '-A'); git(a, 'commit', '-q', '-m', 'a');
+      fs.writeFileSync(path.join(a, 'b'), 'b'); git(a, 'add', '-A'); git(a, 'commit', '-q', '-m', 'b');
+      git(a, 'reset', '-q', '--hard', 'HEAD~1');
+      git(a, 'remote', 'add', 'origin', remote); git(a, 'push', '-q', 'origin', 'HEAD'); git(a, 'fetch', '-q', 'origin');
+      fs.renameSync(path.join(a, '.git', 'logs'), path.join(a, '.git', 'logs.real'));
+      fs.symlinkSync('logs.real', path.join(a, '.git', 'logs'));
+    });
+  }, 180_000);
+
   it('an untracked file is dirty work even when the repository sets status.showUntrackedFiles=no (git-work-unrescued)', () => {
     keptShape((a) => {
       const remote = path.join(h.home, 'quiet-remote.git');
