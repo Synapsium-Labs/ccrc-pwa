@@ -300,35 +300,30 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
   });
 
   it('C8: there is no second reader of a setting', () => {
+    // Each part adds to one list, so a second reader that breaks two parts is named by both.
+    const faults: string[] = [];
     // (a) the box-env readers take the server's keys by name, and a key in a variable only inside the bodies listed.
     const calls = boxEnvCalls();
     const literal = calls.filter((c) => c.key.startsWith('CCRC_')).map((c) => c.key);
-    expect({ unlisted: diff(literal, Object.keys(SERVER_SETTINGS)), unread: diff(Object.keys(SERVER_SETTINGS), literal) }).toEqual({
-      unlisted: [],
-      unread: [],
-    });
-    expect(Object.keys(SERVER_SETTINGS).filter((k) => SETTINGS.includes(k))).toEqual([]);
-    expect(
-      calls.filter((c) => !c.key.startsWith('CCRC_') && !(c.owner in VAR_KEY_BODIES)).map((c) => `${c.file}: ${c.text} in ${c.owner}`),
-      'a key in a variable outside VAR_KEY_BODIES',
-    ).toEqual([]);
+    for (const k of diff(literal, Object.keys(SERVER_SETTINGS))) faults.push(`(a) ${k} is read from a server file but is not in SERVER_SETTINGS`);
+    for (const k of diff(Object.keys(SERVER_SETTINGS), literal)) faults.push(`(a) ${k} is in SERVER_SETTINGS but no longer read`);
+    for (const k of Object.keys(SERVER_SETTINGS).filter((x) => SETTINGS.includes(x))) faults.push(`(a) ${k} is both a server key and a setting`);
+    for (const c of calls.filter((x) => !x.key.startsWith('CCRC_') && !(x.owner in VAR_KEY_BODIES)))
+      faults.push(`(a) ${c.file}: a key in a variable outside VAR_KEY_BODIES: ${c.text} in ${c.owner}`);
 
     // (b) indirection that is neither `${!arr[@]}` nor `${!PREFIX_@}`, and the whole-token awk program, live in `_ccrc_knob` alone.
-    const stray: string[] = [];
     for (const f of FILES) {
       for (const m of CODE[f].matchAll(/\$\{!(?![A-Za-z_][A-Za-z0-9_]*(?:\[@\]|@)\})/g)) {
         const o = ownerOf(CODE[f], m.index!);
-        if (o !== '_ccrc_knob') stray.push(`${f}: an indirection in ${o}`);
+        if (o !== '_ccrc_knob') faults.push(`(b) ${f}: an indirection in ${o}`);
       }
       for (let i = CODE[f].indexOf('index(t, k "=") != 1'); i >= 0; i = CODE[f].indexOf('index(t, k "=") != 1', i + 1)) {
         const o = ownerOf(CODE[f], i);
-        if (o !== '_ccrc_knob') stray.push(`${f}: the whole-token awk program in ${o}`);
+        if (o !== '_ccrc_knob') faults.push(`(b) ${f}: the whole-token awk program in ${o}`);
       }
     }
-    expect(stray).toEqual([]);
 
     // (c) outside `_ccrc_knob`, no line names a setting beside BOX_ENV_FILE or a text tool, but as a reader call's literal first argument.
-    const beside: string[] = [];
     for (const f of FILES) {
       const knob = bodySpan(CODE[f], '_ccrc_knob');
       let at = 0;
@@ -337,9 +332,9 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
         at += l.length + 1;
         if (inKnob || !/BOX_ENV_FILE|\b(?:awk|sed|grep|cut)\b/.test(l)) continue;
         const rest = l.replace(/\b(?:_ccrc_knob|_keep_knob) CCRC_[A-Z0-9_]+/g, '');
-        for (const s of SETTINGS) if (new RegExp('\\b' + s + '\\b').test(rest)) beside.push(`${f}: ${s}: ${l.trim()}`);
+        for (const s of SETTINGS) if (new RegExp('\\b' + s + '\\b').test(rest)) faults.push(`(c) ${f}: ${s} beside a file read: ${l.trim()}`);
       }
     }
-    expect(beside).toEqual([]);
+    expect(faults).toEqual([]);
   });
 });
