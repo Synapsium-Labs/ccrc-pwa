@@ -28,6 +28,7 @@ import { TEST_ROSTER } from './rosterFixture';
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  window.history.replaceState(null, '', '/'); // a case navigates; the location must not leak into the next
 });
 
 // — fixtures —
