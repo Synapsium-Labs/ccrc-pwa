@@ -14917,6 +14917,21 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       }
     });
 
+    it('W24-R11: a scan that cannot run prints nothing and refuses as unscanned', () => {
+      // The read path before the model runs no tool but awk (`_box_env_has_nul` is a bash `read`), so a bin with no awk in it is
+      // the whole fixture PATH: the scan exits 127, and bash would print `awk: command not found` on stderr unless the reader silences it.
+      const home = boxWith('ccrc-fx-w24-r11-', 'CCRC_BACKUP_KEEP=5\n');
+      const bin = join(home, 'no-awk-bin');
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(join(home, 'tmp'), { recursive: true });
+      const r = spawnSync('env', ['-i', `HOME=${home}`, `PATH=${bin}`, `TMPDIR=${join(home, 'tmp')}`, BASH, '-c',
+        `. "$1"; type -P awk || echo 'no awk'; _ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`, 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')],
+      { encoding: 'utf8' });
+      expect(r.stdout).toBe('no awk\nrc 1 val  from  why CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env could not be scanned\n');
+      expect(r.stderr, 'the reader printed').toBe('');
+      expect(r.status).toBe(0);
+    });
+
     // ── Task 3 (D-6591, D-6592, D-6593, D-6601, D-6602, D-6603): one deadline reading on both sides, the keep-set bounded by it,
     // and the gate window from ccrc.env. The watchdog's rows (W24-D4, W24-D5) sit beside its fixture, and the flip run of W24-K5
     // beside the rollback-by-flip fixture.

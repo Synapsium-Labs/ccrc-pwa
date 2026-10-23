@@ -19331,12 +19331,12 @@ _ccrc_knob() {   # <KEY> <default> [file]
   [ "${3:-}" = file ] || KNOB="${!key:-}"
   if [ -n "$KNOB" ]; then KNOB_FROM=environment
   elif [ -e "$f" ] || [ -L "$f" ]; then
-    if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f"; then g=2; else LC_ALL=C awk -v k="$key" '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t); w = (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]"); n += w } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } w { f = 1; exit } END { exit (f ? 0 : (n ? 1 : 4)) }' "$f" || g=$?; fi; else g=3; fi
+    if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f" 2>/dev/null; then g=2; else LC_ALL=C awk -v k="$key" '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t); w = (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]"); n += w } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } w { f = 1; exit } END { exit (f ? 0 : (n ? 1 : 4)) }' "$f" 2>/dev/null || g=$?; fi; else g=3; fi
     case "$g" in 0) why="$f names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 1|4) ;; 3) why="$f is there but cannot be read" ;; *) why="$f could not be scanned" ;; esac
     # The named file alone: a path that cannot exist stands in for the exposure file, which no process that acts on any other
     # setting receives (review 839; the deadline's `min` and `max` name it as the file instead, D-6602). Never the empty
     # spelling, `CCRC_EXPOSURE_FILE=`: the model's own refusal of an undecidable ccrc.env compares its source with that path.
-    if [ "$g" = 1 ] || { [ "$g" = 4 ] && [ "${CCD_OS:-linux}" = darwin ] && [ "$key" = CCRC_BACKUP_DATA_KEEP ]; }; then CCRC_EXPOSURE_FILE="$f/." _box_unit_env "$key"; case $? in 0) KNOB="$BUE_VAL"; if [ -n "$KNOB" ]; then KNOB_FROM=file; elif [ "$BUE_NAMED" = 1 ]; then KNOB_FROM=empty; fi ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
+    if [ "$g" = 1 ] || { [ "$g" = 4 ] && [ "${CCD_OS:-linux}" = darwin ] && [ "$key" = CCRC_BACKUP_DATA_KEEP ]; }; then CCRC_EXPOSURE_FILE="$f/." _box_unit_env "$key" 2>/dev/null; case $? in 0) KNOB="$BUE_VAL"; if [ -n "$KNOB" ]; then KNOB_FROM=file; elif [ "$BUE_NAMED" = 1 ]; then KNOB_FROM=empty; fi ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
     [ -z "$why" ] || { KNOB=""; KNOB_WHY="$key cannot be measured: ${why/#"$HOME"/\~}"; return 1; }
   fi
   [ -n "$KNOB" ] || { KNOB="$2"; KNOB_FROM="${KNOB_FROM:-default}"; }
