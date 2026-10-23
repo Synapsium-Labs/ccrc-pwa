@@ -11,9 +11,11 @@
 //   - a WRITE job holds any `write`. Its steps may use only the actions its
 //     file's allowance names, may run only the exact bodies it names, and may
 //     carry nothing else that chooses which code runs: no job-level env,
-//     defaults or container, no step shell, no environment variable a shell or
-//     a loader reads at start, and a build output only where the allowance
-//     says (D-6648, D-6651);
+//     defaults or container, no step shell, no step environment variable
+//     outside that step's own allowed set, and a build output only where the
+//     allowance says (D-6648, D-6651, D-6663);
+//   - a build job, or a job that calls a workflow, carries no `secrets:` key
+//     and reads no `secrets` context (D-6663);
 //   - every `steps.<id>` and `needs.<job>.outputs.<k>` resolves to an id or an
 //     output that is declared, because a missing one is an empty string at run
 //     time and no release workflow runs before its merge (D-6659).
@@ -141,6 +143,12 @@ export interface WriteAllowance {
   uses: readonly string[];
   runs: readonly string[];
   needsIn: readonly string[];
+  /** Each step's allowed `env:` keys, keyed by its exact trimmed run body,
+   *  or by its action name for a `uses:` step; a step that is not keyed may
+   *  set nothing (D-6663). An allowlist, because the variables that choose
+   *  code at a shell's start (`SHELLOPTS` with `PS4`, `BASH_FUNC_*`, `HOME`
+   *  and the rest) are not a list anyone finishes. */
+  env: Readonly<Record<string, readonly string[]>>;
 }
 
 /** The exact `with:` keys a write job may give each allowed action. A
@@ -154,24 +162,33 @@ export const WITH_KEYS: Readonly<Record<string, readonly string[]>> = {
 };
 const EXACT_WITH = new Set(['actions/download-artifact', 'actions/attest-build-provenance']);
 
-/** The download writes the build's files; under the runner's temp directory
- *  they can never land on the checkout's scripts the next step runs. */
-const DOWNLOAD_ROOT = '${{ runner.temp }}/';
+/** The download writes the build's files; at exactly this path, under the
+ *  runner's temp directory, they can never land on the checkout's scripts
+ *  the next step runs. Exact, because a second expression in the path
+ *  (`${{ env.D }}`) is a value this guard cannot read (D-6663). */
+const DOWNLOAD_PATH = '${{ runner.temp }}/release-in';
 
 const WRITE_JOB_KEYS = new Set(['runs-on', 'timeout-minutes', 'permissions', 'needs', 'if', 'steps']);
 const WRITE_STEP_KEYS = new Set(['name', 'id', 'if', 'uses', 'with', 'env', 'run']);
 /** Variables a shell, node, git or the loader reads before the step's own
- *  line runs, so setting one chooses code the allowance never named. */
+ *  line runs, so setting one chooses code the allowance never named. A
+ *  second check beside the per-step env allowlist (D-6663): one of these is
+ *  refused even when an allowance lists it. */
 const START_ENV = new Set(['BASH_ENV', 'ENV', 'NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'PATH']);
 const setsStartEnv = (key: string): boolean => START_ENV.has(key.toUpperCase()) || /^GIT_/i.test(key);
 
-const actionName = (uses: string): string => uses.replace(/@.*$/, '');
+/** GitHub resolves an action's owner and name without regard to case, so
+ *  every comparison is made on the lowercased name (D-6663). */
+const actionName = (uses: string): string => uses.replace(/@.*$/, '').toLowerCase();
 const shown = (v: unknown): string => (typeof v === 'string' ? v : v === undefined ? 'nothing' : JSON.stringify(v));
 
 /** Each `${{ … }}` in a value that reads the `needs` context at all — a
  *  member, an index or the whole of it (`toJSON(needs)`). */
 const readsNeeds = (v: unknown): boolean =>
   [...scanText(v).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((m) => /(?<![\w.-])needs\b/.test(m[1] ?? ''));
+/** Any `${{ … }}` in a value that reads the `secrets` context at all. */
+const readsSecrets = (v: unknown): boolean =>
+  [...scanText(v).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((m) => /(?<![\w.-])secrets\b/.test(m[1] ?? ''));
 
 export interface JobReference {
   /** `outputs.<k>`, `if`, `env.<K>`, or `step <n> if|with.<k>|env.<K>`. */
@@ -223,7 +240,7 @@ function indexedReferences(job: WorkflowJob): string[] {
   return [...found];
 }
 
-const NO_ALLOWANCE: WriteAllowance = { uses: [], runs: [], needsIn: [] };
+const NO_ALLOWANCE: WriteAllowance = { uses: [], runs: [], needsIn: [], env: {} };
 
 /** One plain sentence per breach of the boundary, naming the job; empty when
  *  the file holds. `allow` is this file's allowance, keyed by write job.
@@ -277,6 +294,12 @@ export function boundaryFindings(
           out.push(`${J} runs the install or the build and its checkout keeps its credential (step ${i + 1})`);
         }
       });
+      // isBuildJob holds every called-workflow job, so this covers both.
+      const values: unknown[] = [...Object.values(job.with), ...Object.values(mapping(job.env))];
+      for (const st of job.steps) values.push(...Object.values(st.with), ...Object.values(st.env), st.run);
+      if (job.keys.includes('secrets') || values.some(readsSecrets)) {
+        out.push(`${J} runs the install or the build and reads secrets`);
+      }
     }
 
     // ── a write job's steps, and what chooses its code (D-6648, D-6651) ──
@@ -301,18 +324,20 @@ export function boundaryFindings(
             if (EXACT_WITH.has(name)) {
               for (const k of keys) if (!(k in s.with)) out.push(`${J} gives ${name} no with: key ${k}, which its set requires`);
             }
-            if (name === 'actions/download-artifact' && 'path' in s.with) {
-              const p = s.with.path;
-              if (typeof p !== 'string' || !p.startsWith(DOWNLOAD_ROOT) || p.includes('..')) {
-                out.push(`${J} downloads the build's artifact into ${shown(p)}, not under ${DOWNLOAD_ROOT}`);
-              }
+            if (name === 'actions/download-artifact' && 'path' in s.with && s.with.path !== DOWNLOAD_PATH) {
+              out.push(`${J} downloads the build's artifact into ${shown(s.with.path)}, not exactly ${DOWNLOAD_PATH}`);
             }
           }
         }
         if (s.run !== null && !allowance.runs.includes(s.run.trim())) {
           out.push(`${J} holds a write permission and runs a step outside its allowlist: ${s.run.trim().slice(0, 80)}`);
         }
-        for (const k of Object.keys(s.env)) if (setsStartEnv(k)) out.push(`${J} holds a write permission and step ${n} sets ${k}`);
+        const stepKey = s.run !== null ? s.run.trim() : s.uses !== null ? actionName(s.uses) : '';
+        const envSet = Object.hasOwn(allowance.env, stepKey) ? allowance.env[stepKey]! : [];
+        for (const k of Object.keys(s.env)) {
+          if (!envSet.includes(k)) out.push(`${J} holds a write permission and step ${n} sets ${k}, outside its env set`);
+          if (setsStartEnv(k)) out.push(`${J} holds a write permission and step ${n} sets ${k}, which a shell or a loader reads at start`);
+        }
         const places: Array<[string, unknown]> = [
           ...Object.entries(s.with).map(([k, v]): [string, unknown] => [`with.${k}`, v]),
           ...Object.entries(s.env).map(([k, v]): [string, unknown] => [`env.${k}`, v]),

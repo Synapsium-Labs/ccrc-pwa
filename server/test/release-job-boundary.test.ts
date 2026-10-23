@@ -38,6 +38,13 @@ const readCalled = (uses: string): string | null => {
 const RECEIVE = 'bash deploy/release-main.sh receive --in "$RUNNER_TEMP/release-in" --tag "$CCRC_BUILD_TAG" --digest "$CCRC_BUILD_DIGEST" --out release-out';
 const VERIFY = 'bash deploy/release-artifact.sh verify --tag "$GITHUB_REF_NAME" --digest "$CCRC_BUILD_DIGEST" --in "$RUNNER_TEMP/release-in" --out release-out';
 const PUBLISH_USES = ['actions/checkout', 'actions/download-artifact', 'actions/attest-build-provenance'];
+/** release.yml's three moved step bodies (D-3127, D-5548), byte for byte. */
+const NAME_BUNDLE = [
+  '[ -f "release-out/ccrc-$GITHUB_REF_NAME.tar.gz" ] || { echo "release.yml: the build named its artifact after another release tag at HEAD (this commit carries more than one); refusing to publish $GITHUB_REF_NAME — delete the extra tag, or cut the minor on a commit release-main did not auto-tag" >&2; exit 1; }',
+  'cp -- "$CCRC_BUNDLE_PATH" "release-out/ccrc-$GITHUB_REF_NAME.tar.gz.sigstore.json"',
+].join('\n');
+const WRITE_NOTES = 'node deploy/release-notes.mjs --tag "$GITHUB_REF_NAME" --out "$RUNNER_TEMP/release-notes.txt" || { echo "::warning::release.yml: could not write the release notes for $GITHUB_REF_NAME; publishing with an empty body"; : > "$RUNNER_TEMP/release-notes.txt"; }';
+const GH_PUBLISH = 'gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag --prerelease --notes-file "$RUNNER_TEMP/release-notes.txt"';
 
 /** By file, then by write job. */
 const ALLOW: Readonly<Record<string, Readonly<Record<string, WriteAllowance>>>> = {
@@ -46,28 +53,30 @@ const ALLOW: Readonly<Record<string, Readonly<Record<string, WriteAllowance>>>> 
       uses: PUBLISH_USES,
       runs: [RECEIVE, 'bash deploy/release-main.sh publish --out release-out'],
       needsIn: ['with.name', 'env.CCRC_BUILD_TAG', 'env.CCRC_BUILD_DIGEST'],
+      env: {
+        [RECEIVE]: ['CCRC_BUILD_TAG', 'CCRC_BUILD_DIGEST'],
+        'bash deploy/release-main.sh publish --out release-out': ['GH_TOKEN', 'CCRC_BUNDLE_PATH'],
+      },
     },
   },
   'release.yml': {
     publish: {
       uses: PUBLISH_USES,
-      runs: [
-        VERIFY,
-        // "Name the provenance bundle" (D-3127), "Write the release notes"
-        // (D-5548) and "Publish the GitHub Release", moved unchanged.
-        [
-          '[ -f "release-out/ccrc-$GITHUB_REF_NAME.tar.gz" ] || { echo "release.yml: the build named its artifact after another release tag at HEAD (this commit carries more than one); refusing to publish $GITHUB_REF_NAME — delete the extra tag, or cut the minor on a commit release-main did not auto-tag" >&2; exit 1; }',
-          'cp -- "$CCRC_BUNDLE_PATH" "release-out/ccrc-$GITHUB_REF_NAME.tar.gz.sigstore.json"',
-        ].join('\n'),
-        'node deploy/release-notes.mjs --tag "$GITHUB_REF_NAME" --out "$RUNNER_TEMP/release-notes.txt" || { echo "::warning::release.yml: could not write the release notes for $GITHUB_REF_NAME; publishing with an empty body"; : > "$RUNNER_TEMP/release-notes.txt"; }',
-        'gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag --prerelease --notes-file "$RUNNER_TEMP/release-notes.txt"',
-      ],
+      // "Name the provenance bundle" (D-3127), "Write the release notes"
+      // (D-5548) and "Publish the GitHub Release", moved unchanged.
+      runs: [VERIFY, NAME_BUNDLE, WRITE_NOTES, GH_PUBLISH],
       needsIn: ['env.CCRC_BUILD_DIGEST'],
+      env: { [VERIFY]: ['CCRC_BUILD_DIGEST'], [NAME_BUNDLE]: ['CCRC_BUNDLE_PATH'], [WRITE_NOTES]: [], [GH_PUBLISH]: ['GH_TOKEN'] },
     },
   },
   // Its job `if:` reads needs.* as a condition, never as a value.
   'release-stable.yml': {
-    promote: { uses: ['actions/checkout'], runs: ['bash deploy/release-stable.sh'], needsIn: [] },
+    promote: {
+      uses: ['actions/checkout'],
+      runs: ['bash deploy/release-stable.sh'],
+      needsIn: [],
+      env: { 'bash deploy/release-stable.sh': ['GH_TOKEN'] },
+    },
   },
 };
 const FILES = Object.keys(ALLOW);
@@ -224,6 +233,7 @@ const BASE_ALLOW: Record<string, WriteAllowance> = {
     uses: PUBLISH_USES,
     runs: ['bash r receive', 'bash r publish'],
     needsIn: ['with.name', 'env.CCRC_BUILD_TAG', 'env.CCRC_BUILD_DIGEST'],
+    env: { 'bash r receive': ['CCRC_BUILD_TAG', 'CCRC_BUILD_DIGEST'], 'bash r publish': ['GH_TOKEN', 'CCRC_BUNDLE_PATH'] },
   },
 };
 
@@ -284,10 +294,19 @@ const PLANTED: Array<[string, string, string]> = [
   ['a write job the allowlist does not know', plant('  publish:\n', '  release:\n'), 'is not on the allowlist'],
   // Beyond the plan's list (this task's own guards, each with its mutation row).
   ['the download names no path', plant(DOWNLOAD_PATH, ''), 'gives actions/download-artifact no with: key path, which its set requires'],
-  ['the download writes into the checkout', plant(DOWNLOAD_PATH, '          path: release-in\n'), 'not under ${{ runner.temp }}/'],
+  ['the download writes into the checkout', plant(DOWNLOAD_PATH, '          path: release-in\n'), 'not exactly ${{ runner.temp }}/release-in'],
   ['a publish env reads the build output by index', plant(RECEIVE_DIGEST, "          CCRC_BUILD_DIGEST: ${{ needs['build'].outputs.digest }}\n"), 'refers to needs by index, which this guard cannot resolve'],
   ['a publish env passes the whole needs context', receiveEnv('          OTHER: ${{ toJSON(needs) }}\n'), 'passes a build output into env.OTHER'],
   ['a job calls a workflow the guard cannot read', `${BASE}  called:\n    permissions:\n      contents: read\n    uses: octo/elsewhere/.github/workflows/x.yml@v1\n`, 'which this guard cannot read'],
+  // D-6663: the write job's step env is an allowlist, build jobs read no
+  // secrets, the download path is exact, and action names ignore case.
+  ['a publish step sets SHELLOPTS and PS4', receiveEnv("          SHELLOPTS: xtrace\n          PS4: '$(sh $RUNNER_TEMP/release-in/SHA256SUMS)'\n"), 'sets PS4, outside its env set'],
+  ['a publish step exports a bash function', receiveEnv("          'BASH_FUNC_git%%': '() { echo; }'\n"), 'sets BASH_FUNC_git%%, outside its env set'],
+  ['a publish step moves HOME', receiveEnv('          HOME: ${{ runner.temp }}/release-in\n'), 'sets HOME, outside its env set'],
+  ['a called-workflow job inherits secrets', `${BASE}  called:\n    permissions:\n      contents: read\n    uses: ./.github/workflows/ci.yml\n    secrets: inherit\n`, 'runs the install or the build and reads secrets'],
+  ['a build step reads a secret', plant('        id: compare\n        env:\n          GH_TOKEN: ${{ github.token }}\n', '        id: compare\n        env:\n          GH_TOKEN: ${{ secrets.PAT }}\n'), 'runs the install or the build and reads secrets'],
+  ['the download path is an expression', plant(DOWNLOAD_PATH, '          path: ${{ runner.temp }}/${{ env.D }}\n        env:\n          D: ../x\n'), 'not exactly ${{ runner.temp }}/release-in'],
+  ['a build checkout spelled with a capital keeps its credential', plant('      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n          persist-credentials: false\n', '      - uses: Actions/checkout@v4\n        with:\n          fetch-depth: 0\n'), 'its checkout keeps its credential'],
 ];
 
 describe('W26-G4: the guard sees each planted breach', () => {
