@@ -956,6 +956,43 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     expect(status()).toBeNull();
   });
 
+  // F1 of review 843: a new stream sends no `dialog` frame when the pane shows no menu (`nextDialogFrame` answers `null` for
+  // a stream that has seen none), so the `ask_cleared` that every resolved connect sends decided from the PRE-DROP menu as
+  // if it were current. The store lowers `dialog` with `askFrameSeen` when the socket leaves `open`, so the menu that went
+  // away during the drop is gone, `askSource` says `none`, and the held surface closes with its exit.
+  it.each([4, 1])(
+    'after a reconnect whose stream sends ask_cleared and no dialog, the pre-drop menu is not offered live: fixture %i',
+    (n) => {
+      holdClosingContent();
+      const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      const interrupt = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never);
+      const store = connected(askFixture(n));
+      mount(store);
+      const before = panel();
+      expect(before?.getAttribute('data-state')).toBe('open');
+
+      drop();
+      reconnect();
+      // The connect pipeline: the menu is gone from the pane, so no `dialog` frame; the envelope is cleared.
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+
+      expect(store.getState().askFrameSeen, 'the new connection has spoken').toBe(true);
+      // No live sheet: the held surface closes with its exit, its controls inert (a browser delivers no tap to them),
+      // and there is no status line.
+      expect(panel(), 'the drawer was unmounted instead of closing').toBe(before);
+      expect(panel()?.getAttribute('data-state'), 'the pre-drop menu is offered live').toBe('closed');
+      const inert = panel()!.querySelector('[inert]');
+      expect(inert, 'nothing marks the held content inert').not.toBeNull();
+      const controls = [...panel()!.querySelectorAll<HTMLElement>('.opts button, .dlg-actions button')];
+      expect(controls.length).toBeGreaterThan(0);
+      for (const control of controls) expect(inert!.contains(control), 'a control outside the inert wrapper').toBe(true);
+      expect(status()).toBeNull();
+      expect(answer).not.toHaveBeenCalled();
+      expect(interrupt).not.toHaveBeenCalled();
+      expect(store.getState().dialog, 'the pre-drop menu is still the store\'s current one').toBeNull();
+    },
+  );
+
   // What the pane could paint on the new connection before its envelope arrives: the NEXT question of fixture 1's ask
   // (another id, other rows), or, for any other menu, the same menu repainted under another id with other words.
   const repainted = (n: number): Dialog => {
