@@ -1016,9 +1016,9 @@ methods=$(jq -nc --argjson s "$r4" --argjson r "$rules" --argjson p "$prot" '
 qs=$(jq -c '[.[] | select(.type == "merge_queue") | (.parameters.merge_method // "unknown") | ascii_downcase] | unique' \
   <<<"$rules") || stop "unreadable: read 2"
 if [ "$qs" != "[]" ]; then
-  route=Q qshow=$(jq -r "$shown" <<<"$qs")
+  route=Q qshow=$(jq -r "$shown" <<<"$qs") || stop "unreadable: read 2"
   jq -e 'length == 1' <<<"$qs" >/dev/null || stop "two-queue-methods: $qshow"
-  method=$(jq -r '.[0]' <<<"$qs")
+  method=$(jq -r '.[0]' <<<"$qs") || stop "unreadable: read 2"
   jq -e --argjson q "$qs" 'any(.[]; . == $q[0])' <<<"$methods" >/dev/null \
     || stop "queue-method-not-allowed: the queue merges by $qshow and the method set is $methods"
   [ "$(jq -r .allow_auto_merge <<<"$r4")" = true ] || stop "auto-merge-off: a merge_queue rule applies"

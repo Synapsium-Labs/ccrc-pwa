@@ -990,11 +990,12 @@ const NAMES: Case[] = [
 ];
 
 // ---- Fix round 3: nothing is lost before a route is chosen (an empty queue method, an empty rule type, a source of many values) ----
-// A value that prints as nothing is still a value. A queue rule or an unknown rule type whose only text is the empty
-// string joined to an empty display and was read as no queue and no unknown type, so a direct route (even a licensed
-// `--admin` one) could be chosen over a rule this block does not understand. The decisions are made on the arrays, and the
-// joined text is only what a stop prints: an empty value shows as `""`, every other value as it is. A source that is
-// one object (read 3's body, read 3b's branch view) is exactly one value, not zero and not several.
+// A value that prints as nothing is still a value. The block used to join the queue methods, and the unknown rule types,
+// into one text and ask whether that text was empty. A queue method of "" or a rule type of "" joins to nothing, so the
+// queue (or the unknown type) was treated as absent, and a direct route, even a licensed `--admin` one, could be chosen
+// over a rule this block does not understand. Now every decision is made on the arrays of values, and the joined text
+// is only what a stop prints: an empty value shows as `""`, every other value as it is. A source that is one object
+// (read 3's body, read 3b's branch view) is exactly one value, not zero and not several.
 const EMPTY = '""';
 const queueRule = (parameters: unknown, id = 11) => ({ type: 'merge_queue', ruleset_id: id, parameters });
 /** The reproduction: an otherwise bare repository whose only gate is an approval that is missing; the rule that stands in the way is
@@ -1032,6 +1033,11 @@ const LOSS: Case[] = [
     ...rules(pull({}), queueRule({})) })), bareNotAllowed('unknown', '["squash"]')],
   ['a queue rule whose merge_method is null keeps its reading: unknown, which is not allowed', with_(measured, (f) => ({ ...f,
     ...rules(pull({}), queueRule({ merge_method: null })) })), bareNotAllowed('unknown', '["squash"]')],
+  ['a queue method with a trailing newline is not the listed method: it stops (the stop text shows the value without its newline, a carried display limit)',
+    with_(measured, (f) => ({ ...f, ...rules(pull({}), queue('SQUASH\n')) })), bareNotAllowed('squash', '["squash"]')],
+  ...([['a number', 7], ['the boolean true', true], ['an array', ['SQUASH']]] as [string, unknown][]).map(([what, v]): Case =>
+    [`unreadable: read 2: a queue rule's merge_method is ${what}`, with_(measured, (f) => ({ ...f, ...rules(pull({}), queueRule({ merge_method: v })) })),
+      'STOP unreadable: read 2']),
   ['a queue rule whose method this block does not list stays not allowed', with_(measured, (f) => ({ ...f,
     ...rules(pull({}), queue('FAST')) })), bareNotAllowed('fast', '["squash"]')],
   ['one queue method that holds a comma is one method, not two: it is not allowed and shows as it is', with_(measured, (f) => ({ ...f,
@@ -1073,9 +1079,8 @@ const LOSS: Case[] = [
   ['unreadable: read 3 answers 200 with an object and then null', with_(measured, { protection: prot200('{}\nnull') }), R3],
   ['unreadable: read 3 answers 200 with an object and then a scalar', with_(measured, { protection: prot200('{}\n7') }), R3],
   ['unreadable: read 3 answers 200 with an object and then an array', with_(measured, { protection: prot200('{}\n[]') }), R3],
-  ['unreadable: read 3 answers 200 with two objects, refused on route Q too', with_(measured, { protection: prot200('{}{}') }), R3],
-  ['read 3 answers 200 with one sparse object: still readable (control)', with_(bare, { protection: prot200('{}') }),
-    'ROUTE U method=squash admin=never strict=no'],
+  ['unreadable: read 3 answers 200 with two objects on a direct route (the bare repository, nothing queued)',
+    with_(bare, { protection: prot200('{}{}') }), R3],
   ['read 3 answers 200 with one object printed over many lines is still one value (control)',
     with_(bare, { protection: prettyProt(sparseProt) }), 'ROUTE U method=squash admin=never strict=no'],
   ['read 3 answers 200 with one object and a trailing blank line is still one value (control)',
