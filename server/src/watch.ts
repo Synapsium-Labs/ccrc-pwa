@@ -2395,7 +2395,7 @@ export class FleetWatcher {
       // busy->idle push behind a reap. Overlapping sweeps are harmless — the
       // attempted-set is written BEFORE the call, so a second sweep's condition 4
       // refuses the pair the first is still running.
-      void this.sweepNames().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepNames(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepNames` above. Own clock: this reads
       // git's admin directory per project, which is not a per-tick cost.
       //
@@ -3556,18 +3556,18 @@ export class FleetWatcher {
    * would pass while it was still running. `tick()` is already public for the
    * same class of reason.
    */
-  async sweepNames(): Promise<void> {
-    await this.runLane('names', () => this.namesPass());
+  async sweepNames(fleet?: FleetReadModel): Promise<void> {
+    await this.runLane('names', () => this.namesPass(fleet));
   }
 
-  private async namesPass(): Promise<void> {
+  private async namesPass(fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
     // The REGISTRY's branch, never the assembled `FleetSession.branch`: that one
     // is the pane's branch, else the worktree HEAD's, else this (fleet.ts), so it
     // lags a rename by however long Claude Code takes to re-render its pane.
-    // Same reason sweepTasks and sweepPr read the registry themselves.
-    // [registry-refused:omits] a refused row is never in `records`, so it is never renamed.
-    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    // A refused row is never in `records`, so it is never renamed (it omits); an unlistable registry has no rows to rename.
+    const read = await this.fleetFor(fleet);
+    const records = read.listed ? read.records : [];
     for (const r of records) {
       // SKIP a degraded row before anything else: an unmeasured `uuid`
       // computes an `incarnation` key (`${r.id}#${identity.uuid}`, below)
