@@ -25,9 +25,8 @@ import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { parseCatalogue } from '../../shared/models.js';
 import { pythonOrSkip } from './ccgptHarness.js';
-import {
-  authAsks, codexAuthDir, deviceFlowMarks, probeArgv0, probeRuntime, probeRuntimeCalls, setAuthStubMode, type ProbeRuntime,
-} from './codexLaneFixture.js';
+import { codexAuthDir, probeArgv0, probeRuntime, probeRuntimeCalls, type ProbeRuntime } from './codexLaneFixture.js';
+import { AUTH_LIB, driverLines, fakeAuthServer, plantBackendCredential, runAuthDriver } from './codexAuthFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -669,35 +668,58 @@ describe('--endpoints: the ownership-whitelist question (§5, §8)', () => {
   });
 });
 
-// ── Plan 3a Task 1: a codex lane's Codex arm reads only what its caller hands it
+// ── Plan 3a Task 1, codex-bridge Stage 1 Task 7: a codex lane's Codex arm reads only what its caller hands it
 // `ccrc`'s `_models_run_probe` exports CHATGPT_TOKEN_DIR (the row's own
-// exec.authDir) and CCRC_CODEX_PYTHON (the interpreter `ccgpt-runtime python`
-// resolved) for an exec.kind "codex" row, and neither for any other row.
+// exec.authDir), CCRC_CODEX_PYTHON (the interpreter `ccgpt-runtime python`
+// resolved) and CCRC_MODELS_AUTH_LIB (the placed auth library) for an
+// exec.kind "codex" row, and no directory or interpreter for any other row.
 // These cases hand the probe those values directly, so what they pin is the
 // PROBE's own contract:
-//   - no default for either input;
+//   - no default for any input;
 //   - three refusals before any interpreter runs;
 //   - the interpreter run isolated and scrubbed;
-//   - an Authenticator that may refresh a token and may never start a device
-//     sign-in;
+//   - a credential READ through the auth library, never refreshed and never
+//     signed in: each reading has its own refusal word (codex-bridge Stage 1,
+//     Task 7), and no reading sends a token request;
 //   - and every caller now takes the codex-lane arm (Plan 4): the last cases.
 // CONTAINMENT FIRST: every case plants a poisoned `litellm` and a poisoned
 // `python` beside it on the fixture PATH. An old or mutated probe that goes
-// looking for a PATH LiteLLM runs a recorder — never the runner's own LiteLLM,
-// whose real Authenticator would start a real device sign-in against a
-// fixture HOME.
-describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no default token directory, its own runtime and never a device sign-in (Plan 3a Task 1)', () => {
+// looking for a PATH LiteLLM runs a recorder, never the runner's own LiteLLM.
+// The fixture runtime wrapper denies every socket and records every
+// `urlopen`, so "no request" is read off its record: a `fakeAuthServer` could
+// see nothing there either way.
+describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no default token directory, its own runtime, and a credential it only reads (Plan 3a Task 1; codex-bridge Stage 1 Task 7)', () => {
   let pr: ProbeRuntime;
   let py: string;
+  let lib: string;
   const authDir = (): string => path.join(home, codexAuthDir('codex-a'));
   // auth.json is compared by lstat (size, mtime, inode) before and after, and
-  // its bytes are never read (no test opens an OAuth file). The stand-in's
-  // device step rewrites it with a longer body, so a write changes the size.
+  // its bytes are never read by a test.
   const authStat = (): { size: number; mtimeMs: number; ino: number } => {
     const s = fs.lstatSync(path.join(authDir(), 'auth.json'));
     return { size: s.size, mtimeMs: s.mtimeMs, ino: s.ino };
   };
+  // What the authDir holds: a reader adds nothing to it (no lock, no status, no checkpoint).
+  const authDirFiles = (): string[] => (fs.existsSync(authDir()) ? fs.readdirSync(authDir()).sort() : []);
   const poisonRan = (): boolean => fs.existsSync(path.join(home, 'python-poison'));
+  // A signed-in lane: the library's backend format, fresh, with its own account id.
+  const signIn = (o: Parameters<typeof plantBackendCredential>[1] = {}): ReturnType<typeof plantBackendCredential> =>
+    plantBackendCredential(authDir(), { accountId: 'acct-codex-a', ...o });
+  // The tier's refresher meets a refusal: the library's own `ensure_fresh`, run by the driver against a fake token
+  // endpoint, writes the status file a reader then reads (needs-signin for invalid_grant, config-error for
+  // invalid_client). Nothing here writes a status by hand.
+  const recordRefusal = async (error: string, word: string): Promise<void> => {
+    signIn({ expiresIn: 30 });
+    const srv = await fakeAuthServer({ token: [{ status: 400, body: { error } }] });
+    try {
+      const r = await runAuthDriver(home, { authDir: authDir(), ops: [{ op: 'ensure_fresh', lane: 'codex-a' }] },
+        { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(driverLines(r.stdout)[0]?.['error'], r.stderr).toBe(word);
+      expect(srv.requests).toHaveLength(1);
+    } finally {
+      await srv.close();
+    }
+  };
 
   beforeEach(() => {
     const bin = path.join(home, '.local', 'bin');
@@ -705,15 +727,19 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
     fs.writeFileSync(path.join(bin, 'litellm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     fs.writeFileSync(path.join(bin, 'python'),
       '#!/bin/sh\nprintf \'%s %s|%s\\n\' "$0" "$*" "${CHATGPT_TOKEN_DIR:-}" >> "$HOME/python-poison"\nexit 1\n', { mode: 0o755 });
+    // The library where `ccrc` places it, beside the shim; `_models_probe_codex_env` names it.
+    lib = path.join(bin, 'ccgpt-auth.py');
+    fs.copyFileSync(AUTH_LIB, lib);
     pr = probeRuntime(home, CODEX_RAW);
     py = path.join(home, 'probe-runtime-python');
     fs.writeFileSync(py, pr.python, { mode: 0o755 });
     fs.mkdirSync(authDir(), { recursive: true });
+    // An empty object: the library reads it `absent`, so a case signs the lane in when it needs a credential.
     fs.writeFileSync(path.join(authDir(), 'auth.json'), '{}');
   });
 
   const codex = (extra: NodeJS.ProcessEnv = {}): Result =>
-    run(['codex-a', 'codex'], { CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py, ...extra });
+    run(['codex-a', 'codex'], { CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py, CCRC_MODELS_AUTH_LIB: lib, ...extra });
 
   it('handed no CHATGPT_TOKEN_DIR it refuses no-token-dir — there is no default directory — and no interpreter runs', () => {
     const r = codex({ CHATGPT_TOKEN_DIR: '' });
@@ -738,15 +764,35 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
     expect(probeArgv0(pr.rec)).toEqual([]);
   });
 
-  it('with no auth.json in the handed directory it refuses not-logged-in, naming ccrc codex login — existence only, before any interpreter runs', () => {
-    fs.rmSync(path.join(authDir(), 'auth.json'));
-    const r = codex();
-    expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/not-logged-in: run ccrc codex login codex-a/);
-    expect(probeArgv0(pr.rec)).toEqual([]);
+  it('no CCRC_MODELS_AUTH_LIB: auth-library-absent, naming ccrc update, before any interpreter runs', () => {
+    signIn();
+    // Unset, a path that does not exist, and a directory: none is a regular readable file.
+    for (const handed of ['', path.join(home, 'no-such-library.py'), path.join(home, '.local')]) {
+      const r = codex({ CCRC_MODELS_AUTH_LIB: handed });
+      expect(r.code, handed).toBe(1);
+      expect(r.stderr).toMatch(/auth-library-absent: run ccrc update — /);
+    }
+    expect(probeArgv0(pr.rec), 'an interpreter ran with no auth library').toEqual([]);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'codex-a.json'))).toBe(false);
+  });
+
+  it('with no credential in the handed directory it refuses not-logged-in, naming ccrc codex login: the library answers, no request is made and nothing is written', () => {
+    // `{}` (beforeEach) and no file at all both read `absent`.
+    for (const shape of ['empty-object', 'no-file'] as const) {
+      if (shape === 'no-file') fs.rmSync(path.join(authDir(), 'auth.json'));
+      const before = authDirFiles();
+      const r = codex();
+      expect(r.code, shape).toBe(1);
+      expect(r.stderr).toMatch(/not-logged-in: run ccrc codex login codex-a — /);
+      expect(authDirFiles(), `${shape}: the reader wrote into the authDir`).toEqual(before);
+    }
+    const calls = probeRuntimeCalls(pr.rec);
+    expect(calls, 'the library answers inside the interpreter').toHaveLength(2);
+    expect(calls.flatMap((c) => c.requests), 'a request was made').toEqual([]);
   });
 
   it('runs the handed interpreter as `-I -`, every ambient CHATGPT_/LITELLM_/OPENAI_ variable gone, the cost map local, reading the handed directory', () => {
+    signIn();
     const r = codex({
       CHATGPT_AUTH_FILE: path.join(home, 'ambient', 'elsewhere.json'),
       OPENAI_API_KEY: 'ambient-not-a-secret',
@@ -766,99 +812,97 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
     expect(curlCalls()).toEqual([]);
   });
 
-  it('sends ChatGPT-Account-Id from Authenticator().get_account_id(), and its own program never opens auth.json (D-3161 closed)', () => {
+  it('sends ChatGPT-Account-Id from the library\'s reading, and only the library opens auth.json', () => {
+    const planted = signIn();
     expect(codex().code).toBe(0);
     const [call] = probeRuntimeCalls(pr.rec);
     expect(call!.requests).toHaveLength(1);
     expect(call!.requests[0]!.url).toMatch(/^https:\/\/chatgpt\.com\/backend-api\/codex\/models\?client_version=/);
-    expect(call!.requests[0]!.headers['authorization']).toBe('Bearer test-token-not-a-secret');
+    // Booleans: a failing `toBe` would print the planted (synthetic) token.
+    expect(call!.requests[0]!.headers['authorization'] === `Bearer ${planted.access}`, 'the bearer is the credential\'s').toBe(true);
     expect(call!.requests[0]!.headers['chatgpt-account-id']).toBe('acct-codex-a');
-    expect(call!.authOpens, 'the probe program opened auth.json itself').toEqual([]);
+    // The wrapper records, for every open of a file named auth.json, the file of the frame that called open().
+    expect(call!.authOpens.length, 'nothing opened auth.json').toBeGreaterThan(0);
+    expect(call!.authOpens.filter((f) => !f.endsWith('ccgpt-auth.py')), 'a caller other than the library opened auth.json')
+      .toEqual([]);
   });
 
-  it('an Authenticator that knows no account id sends no ChatGPT-Account-Id at all', () => {
-    setAuthStubMode(pr.rec, 'no-account-id');
+  it('a credential that carries no account id sends no ChatGPT-Account-Id at all', () => {
+    signIn({ accountId: null, claimAccountId: null });
     expect(codex().code).toBe(0);
     expect(probeRuntimeCalls(pr.rec)[0]!.requests[0]!.headers).not.toHaveProperty('chatgpt-account-id');
   });
 
-  it('a token the runtime can neither use nor refresh is login-required AT ONCE: the device flow never starts, and auth.json is never written', () => {
-    setAuthStubMode(pr.rec, 'device');
+  it('a dead credential is login-required AT ONCE: no request is made, and the credential is never written', () => {
+    // The marker an abandoned device sign-in leaves: backend family, no tokens. The library reads it `incomplete`.
+    fs.writeFileSync(path.join(authDir(), 'auth.json'), JSON.stringify({ device_code_requested_at: 1 }));
     const before = authStat();
+    const files = authDirFiles();
     const r = codex();
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/login-required: run ccrc codex login codex-a/);
-    expect(deviceFlowMarks(pr.rec), 'the device flow started').toEqual([]);
+    expect(r.stderr).toMatch(/login-required: run ccrc codex login codex-a — /);
+    expect(probeRuntimeCalls(pr.rec)[0]!.requests, 'a request was made').toEqual([]);
     expect(authStat(), 'auth.json was written').toEqual(before);
-    // No `Enter code` check here: the program's stdout is the probe's $RAW, never
-    // the caller's. The marks and auth.json's bytes are what bind.
-    expect(probeRuntimeCalls(pr.rec)[0]!.requests).toEqual([]);
+    expect(authDirFiles()).toEqual(files);
   });
 
-  it('another sign-in\'s cooldown is login-required too: the probe never waits on it', () => {
-    setAuthStubMode(pr.rec, 'cooldown');
+  it('a needs-signin the tier recorded for this credential is login-required, FIRST on stderr and never token-expired: no request, the credential unchanged', async () => {
+    await recordRefusal('invalid_grant', 'needs-signin');
     const before = authStat();
-    const r = codex();
-    expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/login-required: run ccrc codex login codex-a/);
-    expect(deviceFlowMarks(pr.rec)).toEqual([]);
-    expect(authStat()).toEqual(before);
-  });
-
-  it('a runtime whose Authenticator lacks a name the guard overrides is refused runtime-api-moved, before any token is asked', () => {
-    setAuthStubMode(pr.rec, 'renamed');
-    const before = authStat();
-    const r = codex();
-    expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/runtime-api-moved: run ccrc update — this runtime's Authenticator has no _login_device_code/);
-    expect(deviceFlowMarks(pr.rec)).toEqual([]);
-    expect(authStat()).toEqual(before);
-  });
-
-  // Fix round 1: on a token it can neither use nor refresh, litellm LOGS its
-  // own warning, the token endpoint's answer in it, before the guard refuses.
-  // `_mark_stale` keeps the first 300 characters of the fetch's stderr, so
-  // anything ahead of the refusal pushes its remedy out of the reason. The
-  // stand-in's handler bound sys.stderr at import, so redirecting stderr
-  // alone would not stop it.
-  it('a dead refresh token is login-required FIRST on stderr: litellm\'s own warning, and the token endpoint\'s answer in it, never reach the stale reason', () => {
-    setAuthStubMode(pr.rec, 'refresh-fails');
     const r = codex();
     expect(r.code).toBe(1);
     expect(r.stderr.startsWith('ccrc-models-probe: the codex catalogue fetch for "codex-a" failed: '
       + 'ccrc-models-probe: login-required: run ccrc codex login codex-a — '), r.stderr).toBe(true);
-    expect(r.stderr.includes('ChatGPT refresh token failed'), 'litellm\'s own warning').toBe(false);
-    expect(r.stderr.includes('stand-in-token-endpoint-body'), 'the token endpoint\'s answer').toBe(false);
-    // The control: the stand-in did take its logging path.
-    expect(authAsks(pr.rec)).toEqual(['get_access_token']);
-    expect(deviceFlowMarks(pr.rec)).toEqual([]);
+    expect(r.stderr.includes('token-expired'), 'the expiry answered ahead of the needs-signin').toBe(false);
+    expect(probeRuntimeCalls(pr.rec)[0]!.requests).toEqual([]);
+    expect(authStat()).toEqual(before);
   });
 
-  // Fix round 1: the guard's `required` names are checked too. The probe needs
-  // get_account_id for its header, so a runtime without it is refused before
-  // the Authenticator is even made.
-  it('a runtime whose Authenticator has no get_account_id is refused runtime-api-moved, before any token is asked', () => {
-    setAuthStubMode(pr.rec, 'no-get-account-id');
+  it('another family\'s file is credential-unusable, naming ccrc doctor, and is never written', () => {
+    // The Codex CLI's own shape: a `tokens` object. The library reads it `foreign-family`.
+    fs.writeFileSync(path.join(authDir(), 'auth.json'), JSON.stringify({ tokens: {} }));
+    const before = authStat();
     const r = codex();
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/runtime-api-moved: run ccrc update — this runtime's Authenticator has no get_account_id/);
-    expect(authAsks(pr.rec), 'a token was asked').toEqual([]);
+    expect(r.stderr).toMatch(/credential-unusable: run ccrc doctor — /);
+    expect(probeRuntimeCalls(pr.rec)[0]!.requests).toEqual([]);
+    expect(authStat()).toEqual(before);
+  });
+
+  it('a config-error the tier recorded is credential-unusable, naming ccrc update, then ccrc codex login', async () => {
+    await recordRefusal('invalid_client', 'config-error');
+    const r = codex();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/credential-unusable: run ccrc update, then ccrc codex login codex-a — /);
     expect(probeRuntimeCalls(pr.rec)[0]!.requests).toEqual([]);
   });
 
-  it('the unattended guard is ONE text, in the probe and in the usage publisher', () => {
-    const START = '# ── unattended-authenticator guard (Plan 3a Task 1)';
-    const END = '# ── end unattended-authenticator guard ──';
-    const block = (file: string): string => {
+  // Review Focus 3: an idle lane whose access token expired. In litellm mode only the tier refreshes, on its next
+  // request; a reader that refreshed would spend the single-use refresh token outside the tier's lock.
+  it('an expired token is never refreshed by a reader: token-expired, no request, the catalogue kept', () => {
+    signIn();
+    expect(codex().code, 'the first, fresh probe').toBe(0);
+    expect((catalogueAt('codex-a') as { models: unknown[] }).models).toHaveLength(9);
+    signIn({ expiresIn: -600 });
+    const before = authStat();
+    const r = codex();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/token-expired: none needed — the lane's tier refreshes it on its next request; if its refresh token is dead, that request records needs-signin/);
+    const calls = probeRuntimeCalls(pr.rec);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.requests, 'the expired run made a request').toEqual([]);
+    expect(authStat(), 'the reader wrote the credential').toEqual(before);
+    const kept = catalogueAt('codex-a') as { models: unknown[]; stale?: unknown };
+    expect(kept.models, 'the catalogue was lost').toHaveLength(9);
+    expect(kept.stale).toBe(true);
+  });
+
+  it('neither the probe nor the publisher imports LiteLLM\'s Authenticator', () => {
+    for (const file of [PROBE, path.join(REPO, 'ccd', 'ccgpt-usage.py')]) {
       const src = fs.readFileSync(file, 'utf8');
-      const a = src.indexOf(START);
-      expect(a, `${file} carries the guard`).toBeGreaterThan(-1);
-      expect(src.indexOf(START, a + 1), `${file} carries it once`).toBe(-1);
-      const b = src.indexOf(END, a);
-      expect(b, `${file} closes it`).toBeGreaterThan(a);
-      return src.slice(a, b + END.length);
-    };
-    expect(block(PROBE)).toBe(block(path.join(REPO, 'ccd', 'ccgpt-usage.py')));
+      expect(src.includes('authenticator import'), `${path.basename(file)} imports the Authenticator`).toBe(false);
+      expect(src.includes('_unattended'), `${path.basename(file)} keeps the unattended guard`).toBe(false);
+    }
   });
 
   it('the codex-lane arm spells no default token directory and no PATH-derived interpreter', () => {
@@ -895,15 +939,11 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
     const codeLines = (file: string): string[] =>
       fs.readFileSync(file, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l));
     const probe = codeLines(PROBE);
-    // Exactly the three that remain: the existence test, its not-logged-in
-    // sentence and the login-required sentence. Counts and booleans, never the
-    // lines: a failing assertion prints its subject, and the default is a real
-    // lane's directory.
-    const authLines = probe.filter((l) => l.includes('auth.json'));
-    expect(authLines.length, 'code lines naming auth.json').toBe(3);
-    expect(authLines.filter((l) => l.includes('[ ! -f "$token_dir/auth.json" ]')), 'the existence test').toHaveLength(1);
-    expect(authLines.filter((l) => l.includes('not-logged-in:')), 'the not-logged-in sentence').toHaveLength(1);
-    expect(authLines.filter((l) => l.includes('sign-in (that would write auth.json')), 'the login-required sentence').toHaveLength(1);
+    // None remain (codex-bridge Stage 1, Task 7): the existence test went, the
+    // library decides absence, and no refusal sentence names the file. A count,
+    // never the lines: a failing assertion prints its subject, and the default
+    // is a real lane's directory.
+    expect(probe.filter((l) => l.includes('auth.json')).length, 'code lines naming auth.json').toBe(0);
     expect(probe.some((l) => /CHATGPT_TOKEN_DIR:?-[^}]/.test(l)), 'a token-directory default').toBe(false);
     for (const file of [PROBE, path.join(REPO, 'ccd', 'ccrc')]) {
       expect(codeLines(file).some((l) => l.includes('CCRC_PROBE_LANE_KIND')), `${path.basename(file)} names the lane-kind marker`).toBe(false);

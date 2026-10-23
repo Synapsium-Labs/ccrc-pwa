@@ -10447,9 +10447,16 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
 #     under $HOME, as CHATGPT_TOKEN_DIR, and the interpreter `ccgpt-runtime
 #     python` resolves as CCRC_CODEX_PYTHON, EMPTY when none resolves, so the
 #     probe refuses `runtime-absent` rather than inheriting a caller's value.
+#     It also exports the placed auth library, `_codex_auth_lib`'s one
+#     spelling, as CCRC_MODELS_AUTH_LIB (codex-bridge Stage 1, Task 7): the
+#     probe reads the lane's credential through it and refuses
+#     `auth-library-absent` without it. The name is the probe's own, never
+#     CCRC_CODEX_AUTH_LIB, so the runtime interpreter's LiteLLM patch is never
+#     armed by it.
 #     The probe has one codex fetch for every caller (Plan 4), and it has no
 #     default directory.
-#   - Every other row: it UNSETS CCRC_CODEX_PYTHON and touches nothing else.
+#   - Every other row: it UNSETS CCRC_CODEX_PYTHON and CCRC_MODELS_AUTH_LIB
+#     and touches nothing else.
 #     That row's CHATGPT_TOKEN_DIR is whatever the scrub above and its secrets
 #     file leave. None, and the probe refuses `no-token-dir`; or a secrets
 #     file's, and it refuses `runtime-absent`, because the interpreter is
@@ -10477,18 +10484,20 @@ _models_probe_codex_env() {   # <accountId> -> 0; _codex_row's rc for a codex ro
   _models_litellm_codex "$1" || kind=$?
   case "$kind" in
     0) ;;
-    1) unset CCRC_CODEX_PYTHON
+    1) unset CCRC_CODEX_PYTHON CCRC_MODELS_AUTH_LIB
        return 0 ;;
-    3) unset CCRC_CODEX_PYTHON
+    3) unset CCRC_CODEX_PYTHON CCRC_MODELS_AUTH_LIB
        _codex_say roster-absent "\$HOME/.ccrc/accounts.json does not exist, so whether lane $1 is exec.kind \"codex\" cannot be told, and its probe does not run: a lane nobody read is never probed. Run 'ccrc install' — it seeds one and never overwrites an existing one."
        return "$MODELS_CODEX_UNTOLD_RC" ;;
-    *) unset CCRC_CODEX_PYTHON
+    *) unset CCRC_CODEX_PYTHON CCRC_MODELS_AUTH_LIB
        return "$MODELS_CODEX_UNTOLD_RC" ;;
   esac
   _codex_row "$1" || return $?
   export CHATGPT_TOKEN_DIR="$HOME/$CX_AUTH"
   CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
   export CCRC_CODEX_PYTHON
+  CCRC_MODELS_AUTH_LIB="$(_codex_auth_lib)"
+  export CCRC_MODELS_AUTH_LIB
   return 0
 }
 
