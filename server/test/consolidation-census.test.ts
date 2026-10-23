@@ -437,21 +437,21 @@ describe('the lane schedule census (D-5862)', () => {
   afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
 
   it('FIXTURE: a named clock and a named guard are found by name', async () => {
-    expect((await laneClockFields(tree)).map((x) => x.line)).toEqual([2]);
-    expect((await singleFlightGuards(tree)).map((x) => x.line)).toEqual([7, 8]);
-    expect((await laneClockReported(tree)).map((x) => x.line)).toEqual([21]);
+    expect(laneClockFields(tree).map((x) => x.line)).toEqual([2]);
+    expect(singleFlightGuards(tree).map((x) => x.line)).toEqual([7, 8]);
+    expect(laneClockReported(tree).map((x) => x.line)).toEqual([21]);
   });
 
   it('FIXTURE: the structural query finds an unnamed clock compared with a constant, the exempt gap rule and another object aside', async () => {
-    expect((await laneClockShapes(tree)).map((x) => x.line)).toEqual([10, 11, 12, 13, 15, 16]);
+    expect(laneClockShapes(tree).map((x) => x.line)).toEqual([10, 11, 12, 13, 15, 16]);
   });
 
   it('FIXTURE: a bare millisecond literal (1000 or more, a product of literals too) against a last* clock; a constant, a small number and a second object are not', async () => {
-    expect((await cadenceLiterals(tree)).map((x) => x.line)).toEqual([11, 12, 13]);
+    expect(cadenceLiterals(tree).map((x) => x.line)).toEqual([11, 12, 13]);
   });
 
   it('FIXTURE: a derivation is a reference only when its initializer is a bare name', async () => {
-    expect(await declaredDerivations(tree)).toEqual([
+    expect(declaredDerivations(tree)).toEqual([
       { name: 'COLLECT_OBSERVE_INTERVAL_MS', file: 'server/src/laneSchedule.ts', reference: true },
       { name: 'STALL_SWEEP_MS', file: 'server/src/laneSchedule.ts', reference: false },
       { name: 'DELEGATION_SWEEP_MS', file: 'server/src/watch.ts', reference: true },
@@ -459,10 +459,10 @@ describe('the lane schedule census (D-5862)', () => {
   });
 
   it('REAL: the census runs on the tree, and W4\'s two clocks and the delegation lane\'s are the ones left', async () => {
-    const fields = await laneClockFields();
+    const fields = laneClockFields();
     show('laneClockFields', fields);
     expect(fields.map((x) => x.text).join('\n')).toContain('lastStopDoneSweep');
-    expect((await laneClockReported()).map((x) => x.text).join('\n')).toContain('lastSweepAt');
-    expect(await declaredDerivations()).toHaveLength(3);
+    expect(laneClockReported().map((x) => x.text).join('\n')).toContain('lastSweepAt');
+    expect(declaredDerivations()).toHaveLength(3);
   });
 });
