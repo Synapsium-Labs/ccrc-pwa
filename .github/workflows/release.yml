@@ -6,6 +6,15 @@
 # tagged checkout, attests what it built, and hands the output to a GitHub
 # Release. The pins in build-release.test.ts hold it to that.
 #
+# TWO JOBS, as in release-main.yml (D-6647, D-6653). `build` runs the
+# builder, which installs and builds every package, so its token can only
+# read, its checkout keeps no credential and it cannot mint the OIDC token
+# that is the signing identity; it records the tarball's digest and uploads
+# the tarball and SHA256SUMS. `publish` installs nothing and never opens the
+# tarball: it checks the downloaded files against the recorded digest, then
+# attests, names the bundle, writes the notes and publishes. The boundary
+# between the two jobs is held by server/test/release-job-boundary.test.ts.
+#
 # Design 2026-09-20 §4: the attest step's identity here is
 # …/release.yml@refs/tags/<tag> — `on: push: tags` makes the OIDC ref the
 # tag, never main — the second of the two identities `ccrc update` accepts;
@@ -18,20 +27,19 @@ on:
     tags: ['v*']
 
 jobs:
-  release:
+  # THE BUILD JOB runs the builder, and with it every install script and build
+  # step the dependencies bring, so it holds contents: read and nothing else.
+  # It has no write token and no id-token, so no code it runs can publish or
+  # sign, and its checkout sets persist-credentials: false, so no credential
+  # is left in the checkout's git config for that code to find.
+  build:
     runs-on: ubuntu-latest
-    # The job holds an open contents:write token for as long as it runs. 30.
+    # 30: the build is most of the run.
     timeout-minutes: 30
-    # contents: write — the release the last step creates. id-token: write
-    # and attestations: write — the permission set `actions/attest`'s README
-    # documents for this exact no-registry-push usage; `attest-build-
-    # provenance@v4` itself is a thin wrapper whose own README documents no
-    # permissions or inputs, only a redirect to `actions/attest` (D-3126).
-    # The OIDC token is the signing identity, no key kept.
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
+    outputs:
+      digest: ${{ steps.record.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,7 +47,10 @@ jobs:
           # --points-at HEAD` and refuses an untagged HEAD — the tag ref must
           # actually be present, not a shallow single-commit fetch.
           fetch-depth: 0
+          persist-credentials: false
 
+      # Its npm cache is restored into this job only, which holds no write
+      # token (D-6652).
       - uses: actions/setup-node@v4
         with:
           # The newest Node satisfying the engines range in server/package.json; the floor
@@ -58,8 +69,74 @@ jobs:
       - name: Build the release artifact
         run: bash deploy/build-release.sh --out release-out
 
-      # Keyless provenance over the tarball, signed by this workflow's
-      # identity at the pushed tag.
+      # Refuses a tarball not named after this run's tag (D-3127's case, a
+      # HEAD carrying a second release-shaped tag, now caught before the
+      # hand-over), a SHA256SUMS that is not its one line, and a build.json
+      # naming another tag or commit; then hands the tarball's digest to the
+      # publish job as a job output (D-6650, D-6653).
+      - name: Record the release files' digest
+        id: record
+        run: bash deploy/release-artifact.sh record --tag "$GITHUB_REF_NAME" --dir release-out
+
+      # The hand-over (D-6657): one artifact named for the tag, holding exactly
+      # the tarball and its SHA256SUMS, kept seven days so a failed publish job
+      # can be re-run alone. Stored as it is: the tarball is compressed already.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ github.ref_name }}
+          path: |
+            release-out/ccrc-${{ github.ref_name }}.tar.gz
+            release-out/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  # THE PUBLISH JOB holds the write token and the OIDC permission, and runs none
+  # of the build's code. contents: write — the release the last step creates.
+  # id-token: write and attestations: write — the permission set
+  # `actions/attest`'s README documents for this exact no-registry-push usage;
+  # `attest-build-provenance@v4` itself is a thin wrapper whose own README
+  # documents no permissions or inputs, only a redirect to `actions/attest`
+  # (D-3126). The OIDC token is the signing identity, no key kept. It installs
+  # nothing and has no setup-node: the notes step runs a dependency-free module
+  # on the runner's own node (D-6651). Its checkout keeps no credential, since
+  # nothing here pushes and the publish step uses GH_TOKEN (D-6653). There is
+  # no release decision: it runs whenever the build job succeeds.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # 10: it downloads, checks, attests and publishes; it builds nothing.
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full depth: the notes are what changed since the previous release
+          # tag, read from git.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Into the runner's temp directory, outside the checkout, so nothing the
+      # build job sent can land on a script this job runs (D-6657).
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ github.ref_name }}
+          path: ${{ runner.temp }}/release-in
+
+      # The artifact must be exactly the two regular files, hash to the digest
+      # the build job recorded and carry exactly that SHA256SUMS line; only
+      # then are they written into release-out/. It never opens the tarball
+      # (D-6650, D-6653).
+      - name: Check the build's artifact against its recorded digest
+        env:
+          CCRC_BUILD_DIGEST: ${{ needs.build.outputs.digest }}
+        run: bash deploy/release-artifact.sh verify --tag "$GITHUB_REF_NAME" --digest "$CCRC_BUILD_DIGEST" --in "$RUNNER_TEMP/release-in" --out release-out
+
+      # Keyless provenance over the verified tarball, signed by this
+      # workflow's identity at the pushed tag.
       - uses: actions/attest-build-provenance@v4
         id: attest
         with:
