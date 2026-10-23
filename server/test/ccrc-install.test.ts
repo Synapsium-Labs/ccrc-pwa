@@ -8554,7 +8554,9 @@ const PROVISIONED_BOX_TOKEN =
  *  each is PASS at every stage. So was the next, which added `update-sweep`
  *  and the four `approval-*` checks: each is SKIP at every stage. Accounts plan A11b added the three backups checks:
  *  `filevault` and `secrets-backup-excluded` SKIP at every stage (darwin's), and `snapshot-posture` SKIPs on the fresh
- *  box (no lane secret) and PASSes on the provisioned one, whose `fleetFiles` state `none`. */
+ *  box (no lane secret) and PASSes on the provisioned one, whose `fleetFiles` state `none`.
+ *  Wave 24 added `box-settings` (D-6599): PASS at every stage, re-measured from both box-token cases' own failing diff
+ *  (a fresh box's ccrc.env sets none of ccrc's settings). */
 const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "accounts": "PASS",
   "approval-digest-mismatch": "SKIP",
@@ -8562,6 +8564,7 @@ const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "approval-key-colocated": "SKIP",
   "approval-verifier-runnable": "SKIP",
   "auth": "SKIP",
+  "box-settings": "PASS",
   "box-token": "PASS",
   "build": "PASS",
   "caddy": "SKIP",
