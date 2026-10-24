@@ -1,5 +1,8 @@
 // The lanes' words (T2c, D-6329): a window's one reading and the row's name. Moved from fleet-pieces.test.tsx; the
 // moved cases' expected words changed in the commit that made them windowReading's and lanesRowLabel's.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import type { AccountUsage } from '../../shared/api';
 import { lanesByFree } from '../src/fleet/laneOrder';
@@ -77,5 +80,32 @@ describe('the lanes\' words', () => {
     const label = laneDoorLabel(lane('lane-a', null, null), [], nowSec);
     expect(label).toBe('lane-a: no reading — opens lane-a on the Accounts screen');
     expect(label).not.toMatch(/0%/);
+  });
+
+  // R48: every window everywhere prints a percentage, and `windowReading` is the one place that says how. A source scan,
+  // parsed with TypeScript so a comment that names "reset" is not counted (as control-census.test.ts reads the app).
+  it('every reading comes from windowReading', () => {
+    for (const file of ['AccountMeterRow.tsx', 'AccountRow.tsx']) {
+      const path = join(__dirname, '..', 'src', 'fleet', file);
+      const src = ts.createSourceFile(file, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+      let imported = false;
+      const resetLiterals: string[] = [];
+      const percentTemplates: string[] = [];
+      const visit = (n: ts.Node): void => {
+        if (ts.isImportDeclaration(n)) {
+          const bindings = n.importClause?.namedBindings;
+          if (bindings !== undefined && ts.isNamedImports(bindings) && bindings.elements.some((e) => (e.propertyName ?? e.name).text === 'windowReading')) imported = true;
+        }
+        // The word itself, whole: a class name (`acct-reset`) or a sentence ("resets") is no reading.
+        if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isJsxText(n)) && n.text.trim().toLowerCase() === 'reset') resetLiterals.push(n.text);
+        // `${...}%`: a template whose last span ends the string on a percent sign.
+        if (ts.isTemplateExpression(n) && n.templateSpans.at(-1)?.literal.text === '%') percentTemplates.push(n.getText(src));
+        ts.forEachChild(n, visit);
+      };
+      visit(src);
+      expect(imported, `${file} imports windowReading`).toBe(true);
+      expect(resetLiterals, `${file} holds no "reset" string of its own`).toEqual([]);
+      expect(percentTemplates, `${file} holds no percentage template of its own`).toEqual([]);
+    }
   });
 });
