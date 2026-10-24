@@ -368,10 +368,10 @@ These twenty numbers, starting at D-6587, were issued to run 855. This revision 
   - **Its scope, stated:** it reads `ccd/ccrc`, `ccd/ccrc-doctor-checks` (which `cmd_doctor` sources) and `deploy/ccrc.env.example`. It does not read the ccd-* sibling scripts, `ccd/ccgpt-runtime`, `ccd/ccrc-models-probe`, `ccd/ccrc-codex` or the `deploy/*.mjs` helpers `ccrc` runs; "Not in this wave" names each of their `CCRC_` reads with a class. C6 alone also knows `CCRC_SIGSTORE_TRUSTED_ROOT` by name (`HELPER_ENV_ONLY`), so the example can never offer it as a line.
   - It derives the settings from `CCRC_SETTINGS` (never a second hand list), and each setting's default from the second argument of its literal `_ccrc_knob`/`_keep_knob` calls.
   - It holds the reasoned `ENV_ONLY` map of D-6588's 42, each with a class and a reason, and the reasoned `SERVER_SETTINGS` list (C8): the literal keys ccrc reads from the server's files.
-  - Its rows C1 to C8 (Task 5) red on: a new environment-only read; a setting expanded or file-read outside the reader; a setting not documented, or documented with a default the code does not use; an exception that is documented as a `ccrc.env` line, or no longer read; the loss of `set -u` (the premise that an unguarded read must spell a default C5 sees, not a proof of completeness, D-6746); and a second reader (indirection, the awk program, a variable or unlisted literal key to the box-env readers, or a setting beside a file read).
+  - Its rows C1 to C8 (Task 5; C9 to C11 were added by fix round 1, D-6746) red on: a new environment-only read; a setting expanded or file-read outside the reader; a setting not documented, or documented with a default the code does not use; an exception that is documented as a `ccrc.env` line, or no longer read; the loss of `set -u` (the premise that an unguarded read must spell a default C5 sees, not a proof of completeness, D-6746); and a second reader (indirection, the awk program, a variable or unlisted literal key to the box-env readers, or a setting beside a file read).
 - **D-6599.** **`ccrc doctor` gains `box-settings`.** For each name in `CCRC_SETTINGS` it reads `ccrc.env` ALONE (`_ccrc_knob "$k" "" file`).
   - **PASS** names what the file sets, `KEY=value` each (a named-empty line as `KEY=` with "(empty: the default)"), and the rest as unset ("the default applies unless the environment sets it").
-  - **WARN** carries each `KNOB_WHY`, with the remedy to rewrite the named line as a plain `KEY=value`.
+  - **WARN** carries each `KNOB_WHY`, with the remedy to rewrite the named line as a plain `KEY=value`. **Amended by fix round 1 (F15, review 891):** when a refusal's cause is model-wide (an unrelated non-ASCII `NAME=value` line or a line with an inner CR on Linux, every model refusal on macOS), the remedy is the model's own fix (`BUE_FIX`: the file and line numbers, never its bytes), once however many settings refuse, since the named line is already plain; a mixed cause gives that fix, then `; for each other refusal, ` and the plain-line clause. A NUL byte never reaches the model and keeps the generic remedy (R36).
   - The line passes through `_upd_redact`, so a mirror's credentials never print.
   - It reports what the reader reads, not whether the value is valid: each act validates its own.
   - Why: once the environment goes, the file is what every run reads, and the environment hides a bad line until then. This is the one read-only way to see the file's verdict, and the soak's steps 0 to 4 use it (D-6600).
@@ -393,7 +393,7 @@ These twenty numbers, starting at D-6587, were issued to run 855. This revision 
   - **`_bak_restamp <detail>`**, new, above `_bak_gc`: the one spelling of the pre-prune re-stamp. Its body is `cmd_update`'s inline one (ccd/ccrc:18661): `UPD_THIN_AT="$(date +%s)"; _upd_report_is_mine && _upd_phase restarting "$1" && _upd_report_readable && { local rb=""; rb="$(jq -er '.updatedAt | numbers' -- "$BOX_UPDATE_JSON" 2>/dev/null)" && [[ "$rb" =~ ^[1-9][0-9]{0,10}$ ]] && UPD_THIN_AT="$rb"; }`. It never dies.
     - `cmd_update`'s line becomes `if [ "$gate_passed" -eq 1 ] && [ "$UPD_FROM" != restore ]; then _bak_restamp "pruning and thinning ~/ccrc-backups"; _bak_gc update || :; fi`, in place: the detail W23-B15 pins is unchanged.
     - `cmd_rollback`'s flip arm gains `_bak_restamp "pruning ~/ccrc-backups"` on the line before `_bak_gc rollback || :`.
-  - **`until`** is computed by `_bak_gc` for both leads whenever `UPD_THIN_AT` is whole seconds: `until = min(UPD_THIN_AT + D, UPD_REPORT_STARTED + 4·D − 40) − 235`, with `D` = `_upd_deadline_ms min` / 1000.
+  - **`until`** is computed by `_bak_gc` for both leads whenever `UPD_THIN_AT` is whole seconds: `until = min(UPD_THIN_AT + D, UPD_REPORT_STARTED + 4·D − 63) − 235` (the term was 22, then 40; D-6603, D-6744), with `D` = `_upd_deadline_ms min` / 1000.
     - The second term is the hard cap (D-3407: `now − updateStartedAt ≥ UPDATE_DEADLINE_HARD_CAP_FACTOR × deadlineMs`, dispatch.ts:241-245, factor 4 at :49), which the re-stamp cannot push out. The bash knows no lease start, but its own report's `startedAt` (`UPD_REPORT_STARTED`, set at its first `_upd_phase`, ccd/ccrc:19902) is no earlier than it, and later by at most the spawn's bound: 22 s, `UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS` (shared/agent-protocol.ts:493, :507). **Amended by D-6603 (Task 3 Step 0): the measured gap is at most 40 s, not 22, so the term is `− 40`.** **Amended again by D-6744 (fix round 1, F2): the term is `− 63`, the sum of the chain's own ceilings.** When `UPD_REPORT_STARTED` is not whole seconds the second term is left out.
     - **The worker measures that "at most 22 s" before Task 3's edit**, reading where `updateStartedAt` is stamped (server/src/update/) against the spawn, and whether a detached child can wait (a lock, `_inst_migrate_resume`) before its first `_upd_phase`. If the gap can exceed 22 s, it takes a reserve number, uses the measured bound, and says so in the wave-done.
     - The literals 4 and 63 are a deliberate cross-language second copy, pinned against the TypeScript constants and the two shell ceilings they are made of by W24-K6 (a text row), never by a comment (the 63 was 22, then 40; D-6603, D-6744).
@@ -444,7 +444,7 @@ These twenty numbers, starting at D-6587, were issued to run 855. This revision 
   - No change in behaviour. The narrowing is said where the code is (the `_bak_gc` bound's comment, `_bak_keepset`'s header), in D-6592 and D-6601 above, and in the example's deadline block.
 - **D-6746.** **The census guards the spellings it names, and is not a proof that no other reader exists** (review 891 F4; the coordinator's ruling 4). It replaces the "complete" premise of this plan's first text and amends D-6598.
   - **Rows added.** C9 (a nameref to a setting: a `local`, `declare` or `typeset` whose option cluster holds `n`, with a setting after it). C10 (a `-v` test of a CCRC_ name, in `[[ ]]`, `[ ]` or `test`, is an environment read, so the name must be a reasoned `ENV_ONLY` exception, never a setting: `[[ -v CCRC_NEW ]] && x="$CCRC_NEW"`). C11, which matters most because sourcing is a whole second reader: `.` or `source`, in command position (first on a line, after `;`, `&`, `|`, `(`, `{` or `!`, or after any run of `if`, `elif`, `while`, `until`, `then`, `do`, `else`, `!`, `builtin`, `command`), of `$BOX_ENV_FILE`, a path ending `ccrc.env` (a quote inside it included), a name bound to either, `<(…)` naming one, or `/dev/stdin <` one. A name bound in a body that declares it `local` is followed in that body alone; any other binding, and `BOX_ENV_FILE`, everywhere. C7's title is now `ccd/ccrc keeps set -u, so a bare read of an unset name aborts and an unguarded read must spell the default C5 sees`.
-  - **The one allowed sourcing site: `_inst_plist_server`.** Its launchd job command string, `set -a; . '$env1'`, is the macOS counterpart of `EnvironmentFile=`: the server's reading of ccrc.env, not ccrc's read of a setting. `SOURCING_BODIES` lists it with its reason and a pinned count of 1, both ways: a second sourcing in it, an unlisted body, or a listed body that no longer sources reds C11.
+  - **The one allowed sourcing site: `_inst_plist_server`.** Its launchd job command string, `set -a; [ -f '$env1' ] && . '$env1'; …`, is the macOS counterpart of `EnvironmentFile=`: the server's reading of ccrc.env, not ccrc's read of a setting. `SOURCING_BODIES` lists it with its reason and a pinned count of 1, both ways: a second sourcing in it, an unlisted body, or a listed body that no longer sources reds C11.
   - **Named residuals** (the census header and here, in place of "complete"). The coordinator's list: `${#NAME}`; an expansion split by a backslash-newline; indirect calls through the timeout helper; environment reads from node or jq; a two-line file loop; C6's spacing and export variants. What the census reviews measured: `eval "$(cat …)"`; `declare -p NAME`; a nameref whose target is held in a variable (`local -n r="$k"`) or assigned after its declaration; a `-v` test of a name held in a variable; a name bound through a second variable; a helper that sources a positional parameter handed the file; `printenv`. And, from the re-review (ruling R29), four sourcing shapes that survive C11: a `case` arm (`x) . "$BOX_ENV_FILE" ;;`), `time . …`, a sourcing in a callee that reads a name its caller declared `local` (dynamic scope), and a sourcing split over lines.
   - **Ruling R29:** those four are named, not caught. D-6746 rules the census guards the spellings it names, no code uses these forms, and each further catch adds pattern risk. Cost: a future sourcing in one of those forms passes the census silently.
   - **Measured.** Each row red on its mutant, restored by cmp: ten mutants for C9 to C11 at first (M1 to M9 and M3b), then 22 after the census review (command positions, scoped bindings, quote, process-substitution and stdin forms, the count pin), with three controls that stay green (`. "$f"` in a body that does not bind it, an unrelated local, jq's `.` filter) and three named residuals measured surviving. The census passes 11 of 11 at the round's tip.
@@ -802,7 +802,7 @@ Tasks 1 to 4 are claim group A, Task 5 group B, Task 6 group C. A bash row sourc
     - the environment's 250 beside it → calls, as the default does.
   - `it('W24-M2: a budget line ccrc cannot read turns the step off and says why')`. ccrc.env `export CCRC_MODELS_ADVANCE_BUDGET_S=250` → no calls; stderr `ccrc: CCRC_MODELS_ADVANCE_BUDGET_S cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take (it reads only a plain KEY=value line), so the advance step is off for this run`.
 - [ ] **Step 2: Run them red.** U1's first row, U2, U3, U4's third case, U5 (if written), M1's first row and M2 red. U4's first two cases are green (the base reads the environment only).
-- [ ] **Step 3: Implement** D-6594 and D-6595 as written. `_upd_asset_listed` takes `local b; b="$(_upd_release_base)" || return 3` before its curl and uses `"$b"` in the URL. `cmd_rollback`'s case gains its `3)` arm (D-6594). `_upd_release_base`'s stderr line is led `$PROG:`. `_models_advance_budget_secs`'s first line becomes `local s; _ccrc_knob CCRC_MODELS_ADVANCE_BUDGET_S 250 && s="$KNOB" || { echo "$PROG: $KNOB_WHY, so the advance step is off for this run" >&2; s=0; }`. Add the two names to the scrub lists that lack them.
+- [ ] **Step 3: Implement** D-6594 and D-6595 as written. `_upd_asset_listed` takes `local b; b="$(_upd_release_base)" || return 3` before its curl and uses `"$b"` in the URL. **Amended by fix round 1 (F8):** as built it is `local b; _upd_release_base >/dev/null && b="$KNOB" || return 3`, in the caller's shell, so `KNOB_WHY` reaches the caller; the subshell form is the mutant W24-U5 and W24-U3 kill. `cmd_rollback`'s case gains its `3)` arm (D-6594). `_upd_release_base`'s stderr line is led `$PROG:`. `_models_advance_budget_secs`'s first line becomes `local s; _ccrc_knob CCRC_MODELS_ADVANCE_BUDGET_S 250 && s="$KNOB" || { echo "$PROG: $KNOB_WHY, so the advance step is off for this run" >&2; s=0; }`. Add the two names to the scrub lists that lack them.
 - [ ] **Step 4: Run them green**, then `ccrc-models-advance.test.ts` whole, the release-source pin describe, `-t '_upd_asset_listed'`, `-t 'release'` in ccrc-update, growth, `citations`.
 - [ ] **Step 5: Mutation rows.**
 
@@ -1401,7 +1401,9 @@ Base `0754e84e2`.
 16. `67079345c` fix(doctor): `box-settings` gives the model's own remedy when one odd line stops the whole file (F15).
 17. `819c24f37` docs(plan): review 891's rulings recorded, D-6744 to D-6749 and D-6605 defined, and every sentence the round changed made true.
 18. `ce117fb1b` docs(readme,example): the model-wide causes, backup's refusal exit and the bound's one overrun are stated (F3, F13, F14).
-19. The as-built commit, `docs(plan): fix round 1 as built (run 855, wave 24)`, which also adds the four R29 survivors to the census header comment (comment lines only).
+19. `857832230` docs(plan): fix round 1 as built (run 855, wave 24); it also adds the four R29 survivors to the census header comment (comment lines only).
+20. `cd50ab271` test(ccrc-update): the F12 row is W24-R16, so no two rows share a name; the recorded rulings name the review's report by file (the controller's; it also edited this section's text).
+21. `docs(plan,readme): the round's last stale sentences made true (fix round 1, docs review)`: the review of dispatch D's ten minors, below.
 
 #### Claims and consents
 
@@ -1462,7 +1464,12 @@ Base `0754e84e2`.
   its `healthy` and check-list subsets ran too: 18), `single-definition` 848, `private-names` 47, `typecheck-tests` 12,
   `session-hook -t 'CITATION DEBT'` 1. This dispatch re-ran `docs-parity` 54, `readme-holds` 17, `citations` 4, `topology-clean` 60,
   `pools-prose` 27, `lifecycle` 83, `dtbd` 1, and `deviation-refs` 31 after `git fetch origin main`.
-- **Not run:** the whole of `ccrc-doctor.test.ts` and of `ccrc-update.test.ts` in one call (each outruns a 600 s call; the
+- **The gate at `cd50ab271`** (`fr1-gate-report.md`): every suite and guard was green on its first run, with no re-runs.
+  `ccrc-update.test.ts` ran by its 40 describes: 707 passed plus 12 Darwin skips, 719 rows. Growth is +26 of 39. `git merge-tree`
+  is clean (rc 0, no conflicted path) against `main` at `1e0e59174` and against #1245's head `4e8cf89f7`. The citation-debt net
+  before base line 11635 is 0: four hunks there are compensating pairs, unequal individually (2499: 4 → 3, 2503: 0 → 1, 2670:
+  12 → 11, 2682: 0 → 1), and session-hook's CITATION DEBT row is green.
+- **Not run (before the gate):** the whole of `ccrc-doctor.test.ts` and of `ccrc-update.test.ts` in one call (each outruns a 600 s call; the
   gate runs them by describe); the Darwin arms under a real bash 3.2.
 
 #### Recorded, no change (R35)
@@ -1498,9 +1505,11 @@ gives 25 lines. Each was read in this round; "unchanged" means it still reads tr
 | 6645 | unchanged | deploy.sh's own prune, `CCRC_BACKUP_KEEP` default 10, environment-only, not this wave's: true. |
 | 6683 | unchanged | retention thins every backup past the newest `CCRC_BACKUP_DATA_KEEP`, and restore refuses such a dir: true. |
 
-Changed lines that name no setting, so they are not hits: the F13 clause in the ccrc-backup sentence (grant 8894), the retention
-explanation "read as every ccrc setting is (below)", and the F14 clause in its model-wide parenthesis (the CR and non-ASCII causes
-"on any line of the file"; grant 8545).
+Changed lines that name no setting, so they are not hits (examples, not a full list; the diff of README.md against `49e7f187a` is
+the list): the F13 clause in the ccrc-backup sentence (grant 8894); the retention explanation "read as every ccrc setting is
+(below)" and the keep and refusal sentences after it (1230 to 1232, grant 8545); ruling 16's comment-line wording and the macOS
+"this knob alone" clause (1237 to 1241); the F14 clause in the model-wide parenthesis (the CR and non-ASCII causes "on any line of
+the file"); and the other lines of the "Turning the step off" hunk (2003 to 2010).
 
 Also grepped, per the plan: "process environment" and "does not set it" in the paragraphs of the hits, none left that says the
 file does not set a setting.
@@ -1521,7 +1530,7 @@ mandated text (Task 5, Step 3):
   assignment-capable line; unnamed settings may still read their defaults), by ruling 11 of review 891 (F14).
 - **The mirror sentence** (`fd32d90ae`) was narrowed from "It may carry user:password@, which ccrc never prints" to "Any
   user:password@ belongs after the scheme (https://user:password@host/...), where ccrc never prints it". Why: at that commit
-  `_upd_redact` masked userinfo only after a scheme (review 891 F7 measured it). Ruling: D-6594 and ruling 7's mask; no
+  `_upd_redact` masked userinfo only after a scheme (review 891 F7 measured it). Ruling: D-6594 and plan reading ruling 7 (the doctor masks userinfo); no
   separate coordinator ruling. After D-6748 `_upd_redact` masks both forms, so the sentence is advice now, not a limit, and
   stays.
 - **The header's first paragraph and the new heading** are as planned (Step 3.1), except that the heading drops its trailing

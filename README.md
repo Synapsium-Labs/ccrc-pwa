@@ -1294,9 +1294,9 @@ update before anything on the box changes (D-6594), the models budget turns the 
 and the versions keep stops the versions prune while `ccrc versions` still lists (D-6596). When `ccrc.env` cannot be
 read at all (unreadable, or holding a NUL byte), every act that reads a setting from it refuses, or falls back as its
 own text says (the health gate waits its 90 seconds; the watchdog uses the largest reading it could decide), and each
-says so. Two causes on an unrelated line are model-wide too, an unrelated non-ASCII (UTF-8) `NAME=value` line and a line with an
-inner CR: they refuse every setting the file names on an assignment-capable line, whichever line the fault sits on, while a setting
-the file does not name may still read its default. The thinning's time bound takes the smallest reading of `CCRC_UPDATE_DEADLINE_MS` the server may hold (the
+says so. Two causes are model-wide too: a non-ASCII (UTF-8) `NAME=value` line, and a line with an inner CR. Each refuses
+every setting the file names on an assignment-capable line, whichever line the fault sits on, while a setting the file does not
+name may still read its default. The thinning's time bound takes the smallest reading of `CCRC_UPDATE_DEADLINE_MS` the server may hold (the
 environment, `ccrc.env`, and `~/.ccrc/exposure.env`, which the server reads too), and the watchdog the largest (D-6591,
 D-6602). On macOS a file the box's model of systemd cannot decide refuses only the settings it names, and
 `CCRC_BACKUP_DATA_KEEP` always (D-6587). `ccrc doctor`'s `box-settings` check reads `ccrc.env` alone and names a line

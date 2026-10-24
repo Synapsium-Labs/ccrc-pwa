@@ -9681,7 +9681,7 @@ _check_snapshot-posture() {
 # before the environment goes: once it does, the file is what every run reads. It reports what the reader reads, never
 # whether a value is valid (each act validates its own). It prints values for those names only, never another line of
 # the file, and through `_upd_redact`; a mirror base's userinfo is masked first, with a scheme or without one (curl
-# reads `user:password@host/...` as http, and `_upd_redact` strips only what follows `://`), so it never prints. A line
+# reads `user:password@host/...` as http; `_upd_redact` now masks it either way too, D-6748, and this check's own mask runs first), so it never prints. A line
 # the reader refuses, or a file it cannot read at all, WARNs with each reason; until it is rewritten, the act that reads
 # that setting refuses or falls back, as its own line says. No role skip: every role reads its own settings.
 # A refusal whose cause is MODEL-WIDE (F15) — a line the model of the file (`_box_unit_env`, which the reader asks in this
