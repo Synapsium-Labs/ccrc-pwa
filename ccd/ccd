@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=60242abc3ec5e8f469348dd8db684afd68d94db7b218183267f8c46b65c075b8
+# ccrc:generated 1 sha256=74141e74047d7a6fdea35fa6d8181b32042eef82c50212ca2224fc4ecca47616
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -8883,7 +8883,7 @@ EOF
   echo child-argv-v1
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
-  echo reclaim-pause-v1; echo expire-v1; echo ws-expire; echo collect-v1; echo ws-collect; echo collect-loose-v1; echo orphan-v1; echo ws-orphan   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
+  echo reclaim-pause-v1; echo expire-v1; echo ws-expire; echo collect-v1; echo ws-collect; echo collect-loose-v1; echo orphan-v1; echo ws-orphan; echo archive-if-no-pane-v1   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
   echo docs-tree
   echo docs-show
   echo docs-fetch
@@ -10024,9 +10024,10 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # which is `ccd:676-689`'s `${2-ccd}` vs `${2:-ccd}` distinction broken in a new
   # place. Same for `--actor ''` and `--reason ''`, which are REFUSED rather
   # than silently read as absent — one policy, everywhere (AUDIT B5).
-  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 nopane=0 lc_args=()
   while (( $# )); do
     case "$1" in
+      --if-no-pane) nopane=1; shift ;;   # the stale-archive arm's guard (`archive-if-no-pane-v1`): refuse `live` below, before anything is written
       --session)   if (( $# >= 2 )); then lc_args+=("$1" "$2"); shift 2; else lc_args+=("$1"); shift; fi ;;
       # An explicit arity check, not a bare `shift 2`: ccd runs `set -uo pipefail`
       # with NO `-e`, so a shift past the end of argv fails, shifts nothing, and this
@@ -10077,6 +10078,17 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # `exit` here would terminate an in-process batch caller at its first
   # already-archived workspace and skip the rest with a success code.
   [[ -f "$REG/$id.archived" ]] && { echo "already archived $id"; return 0; }
+
+  # `--if-no-pane` (the server's stale-archive arm): the archive below kills the pane, so a pane that came back since the
+  # server looked must stop it. FAIL TOWARD KEEPING: only a tmux answer of `gone` AND a unit that says `inactive` or `failed`
+  # pass; a live session, an unanswered probe, an active or activating unit and an EMPTY unit answer (no systemd, or the
+  # manager did not answer) all refuse `live`, before the manifest and before any marker.
+  if (( nopane )); then
+    _session_probe "$id"
+    local npu; npu=$(_svc_is_active "claude-session@$id")
+    [[ "$PROBE_VERDICT" == gone && ( "$npu" == inactive || "$npu" == failed ) ]] \
+      || die "live"
+  fi
 
   local workdir; workdir=$(_reg_get "$id" workdir)
   [[ -n "$workdir" ]] || die "incomplete registry for '$id'"
@@ -10173,6 +10185,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   if [[ "$phase" == merged && "$pr" =~ ^[0-9]+$ ]]; then reason="merged:#$pr"
   elif [[ "$ahead" == 0 ]]; then reason="empty"
   else reason="manual"; fi
+  (( lc_gr )) && [[ "$lc_reason" == stale ]] && reason="stale"   # `--reason stale` is also the archive's WHY (`.archivedreason`); any other --reason word stays a trail word
   _reg_set "$id" archived "$(date +%s)"
   _reg_set "$id" archivedreason "$reason"; rm -f -- "$REG/$id.hibernated"   # an archive ENDS a hibernation (D-5242): the mail lane never wakes an archived row
   # AFTER both markers, so `reason` is the value that actually landed. It is one
