@@ -70,6 +70,7 @@ import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput
 import { randomUUID } from 'node:crypto';
 import type { MeasuredDirectoryRead, MeasuredDisk } from './io.js';
 import { diskMarkFate, diskNotice, diskVerdict, type DiskVerdict } from './disk.js';
+import { newTmpSweepLaneState, runTmpSweepCensusLane } from './tmpSweepLane.js';
 import { clearDiskEpisode, readDiskEpisode, writeDiskEpisode } from './diskepisode.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
@@ -257,6 +258,8 @@ const NAME_SWEEP_MS = 10_000;
 const DIVERGENCE_SWEEP_MS = 60_000;
 /** The disk alarm's clock (D-6615, spec §2.5): one `statfs` pass a minute. */
 const DISK_SWEEP_MS = 60_000;
+/** The tmp sweep census lane's clock (D-6624, spec §2.1): the census is read and its mail queued every 5 minutes. */
+const TMP_SWEEP_CENSUS_MS = 5 * 60_000;
 
 /** The child-reclaim lane (child-reclamation wave 4, spec §5.7). The
  *  census's cadence, for the census's reason — a child's eligibility moves on
@@ -1316,6 +1319,12 @@ export class FleetWatcher {
   private lastDiskSweep = 0;
   private diskState: DiskVerdict | null = null;
   private diskBlock: DiskHealth | null = null;
+  /** The tmp sweep census lane (D-6624): its clock, its memory, the holders it last named and the registry ids of the
+   *  last good listing (`null` until one lands: nothing is mailed without it). */
+  private lastTmpSweepCensus = 0;
+  private readonly tmpSweepLane = newTmpSweepLaneState();
+  private tmpHolders: DiskHealth['holders'] = [];
+  private registryIds: ReadonlySet<string> | null = null;
   private readiness: FleetReadiness | undefined;
   /** The stale set last reported, as JSON — one warn per CHANGING set, the
    *  `lastDivergenceJson` idiom, so a standing stale number is not a log
@@ -2150,7 +2159,7 @@ export class FleetWatcher {
   /** The disk alarm's block as the last sweep held it (D-6615), or `null` before the first sweep: absence on the wire
    *  reads as UNKNOWN, never as a healthy disk. */
   disk(): DiskHealth | null {
-    return this.diskBlock;
+    return this.diskBlock === null ? null : { ...this.diskBlock, holders: this.tmpHolders };
   }
 
   /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
@@ -2452,6 +2461,9 @@ export class FleetWatcher {
       // awaited: a `statfs` of a stalled volume is what hangs (the agent bounds each root, the link bounds the request),
       // and the dialog detector must not wait behind it. Own clock (`DISK_SWEEP_MS`).
       void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
+      // The tmp sweep's census (D-6624) sits beside it for the same reason: a file read, and the holders are wanted
+      // exactly when the registry read fails. Own clock (`TMP_SWEEP_CENSUS_MS`), never awaited.
+      void this.sweepTmpSweepCensus().catch(() => { /* one bad sweep must not kill the poll */ });
 
       // The server-caps beat (D-5232's mechanism, Task 9b) sits BESIDE the inventory lane, never inside it: that lane
       // is `coord`-gated, and a coord-less server must still keep its fleet's file current. Above the registry's
@@ -2532,6 +2544,7 @@ export class FleetWatcher {
         return;
       }
       const records = registryRead.records;
+      this.registryIds = new Set([...records.map((r) => r.id), ...registryRead.refused]);
       // Wave 5: the reclaim chip's registry answer, off THIS listing. Never a
       // second read; see `childMarks`.
       const childMarks = new Map(records.map((r) => [r.id, r.child] as const));
@@ -7161,6 +7174,19 @@ export class FleetWatcher {
     try { if (this.deps.coord?.hasNotice('coord', '', n.dedupeKey) === true) return; } catch { /* send it: a repeat beats silence */ }
     notify(this.deps, { kind: 'coord', sessionId: '', runId: null, title: n.title, body: n.body }, n.mode,
       { tag: 'disk', dedupeKey: n.dedupeKey, degraded: 'feed archive degraded, ring/push unaffected' });
+  }
+
+  /**
+   * The tmp sweep's census (D-6624, spec §2.1): read through the fleet io, the receipts and the once-per-episode
+   * budget notice queued as system mail, `disk.holders` filled with the five largest sessions. The decisions are
+   * `tmpSweep.ts`'s and the reads and mail `tmpSweepLane.ts`'s. PUBLIC for the reason `sweepDisk` is.
+   */
+  async sweepTmpSweepCensus(): Promise<void> {
+    const now = Date.now();
+    if (this.lastTmpSweepCensus !== 0 && now - this.lastTmpSweepCensus < TMP_SWEEP_CENSUS_MS) return;
+    this.lastTmpSweepCensus = now;
+    const { io, cfg, coord } = this.deps;
+    this.tmpHolders = (await runTmpSweepCensusLane({ io, ccrcDir: cfg.ccrcDir, coord }, this.tmpSweepLane, this.registryIds)).holders;
   }
 
   /**

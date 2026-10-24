@@ -138,9 +138,9 @@ describe('the token-sync op words (spec §4.4)', () => {
 });
 
 describe('the ninth node file (spec 4.5, §8 "No secret in the agent\'s read grant")', () => {
-  it('NODE_FILES.tokenGeneration is box-token-generation, and the derived list carries nine names', () => {
+  it('NODE_FILES.tokenGeneration is box-token-generation, and the derived list carries ten names (the tenth is the tmp sweep census, D-6624)', () => {
     expect(NODE_FILES.tokenGeneration).toBe('box-token-generation');
-    expect(NODE_FILE_BASENAMES).toHaveLength(9);
+    expect(NODE_FILE_BASENAMES).toHaveLength(10);
     expect(NODE_FILE_BASENAMES).toContain('box-token-generation');
   });
 
@@ -155,6 +155,7 @@ describe('the ninth node file (spec 4.5, §8 "No secret in the agent\'s read gra
     };
     const reads = await readNodeFiles(recording, ccrcDir, 5_000);
     expect(Object.keys(reads)).not.toContain('tokenGeneration');
+    expect(Object.keys(reads), 'nor the tmp sweep census, which has its own reader (D-6624)').not.toContain('tmpSweep');
     expect(asked.length, 'the sweep read nothing at all').toBeGreaterThan(0);
     expect(asked).not.toContain('box-token-generation');
   });

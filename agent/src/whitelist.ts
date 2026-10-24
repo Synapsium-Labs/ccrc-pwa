@@ -56,9 +56,9 @@ function underClaudeGlob(canonicalHome: string, canonicalTarget: string): boolea
 export type PathMode = 'read' | 'write';
 
 /**
- * The nine `~/.ccrc` NODE FILES (design 2026-09-20 §8; the ninth,
+ * The ten `~/.ccrc` NODE FILES (design 2026-09-20 §8; the ninth,
  * `box-token-generation`, is box-token lifecycle wave 1's and holds an id,
- * never a value) — the one read grant
+ * never a value; the tenth, `tmp-sweep.json`, is the tmp sweep's census, D-6624) — the one read grant
  * in this file that is not a prefix. `~/.ccrc` also holds `agent.env` (this
  * agent's own bearer), `auth.scrypt`, `coord.db`, `deploy.env` and every other
  * secret-bearing file `ccd/ccrc` writes, so an `isUnder(…/.ccrc)` arm would
