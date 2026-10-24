@@ -1,0 +1,39 @@
+{
+  "columns": {
+    "ts-mail-hold": "server/src/pane/dialog.ts turnRunning (BUSY_RE) over the SGR-stripped last 8 rows: the mail lane holds a delivery with turn-running. Anchored, because a false busy held mail.",
+    "ccd-enter": "ccd/ccd _auto_stale_check: the unanchored grep that stands down before pressing Enter on a stale limit prompt. A false busy is the safe error.",
+    "ccd-swap": "ccd/ccd _swap_idle_gate: the unanchored grep that refuses an affinity move mid-turn. A false busy is the safe error.",
+    "ccd-compact": "ccd/ccd _idle_for_keystroke: the unanchored grep behind the compactor's and applier's keystroke. A false busy is the safe error."
+  },
+  "busy": "true means the caller treats the pane as a running turn (holds, stands down or refuses). All captures are judged over their last 8 rows, as every caller windows them.",
+  "captures": {
+    "spinner-row.txt": { "ts-mail-hold": true, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true },
+    "spinner-hint-after.txt": { "ts-mail-hold": true, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true },
+    "spinner-bare-end.txt": { "ts-mail-hold": true, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true },
+    "spinner-sgr-split.txt": { "ts-mail-hold": true, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true },
+    "idle-prompt.txt": { "ts-mail-hold": false, "ccd-enter": false, "ccd-swap": false, "ccd-compact": false },
+    "empty-pane.txt": { "ts-mail-hold": false, "ccd-enter": false, "ccd-swap": false, "ccd-compact": false },
+    "spinner-wrapped-before-phrase.txt": { "ts-mail-hold": false, "ccd-enter": false, "ccd-swap": false, "ccd-compact": false },
+    "stale-spinner-above-window.txt": { "ts-mail-hold": false, "ccd-enter": false, "ccd-swap": false, "ccd-compact": false },
+    "scrollback-mention-midrow.txt": {
+      "ts-mail-hold": false, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true,
+      "divergence": "The phrase sits mid-row in prose. TS anchors the row end, so mail is not held; ccd's grep matches anywhere, so a keystroke is withheld. Intended: for ccd a false busy only waits a tick."
+    },
+    "draft-with-phrase-paren.txt": {
+      "ts-mail-hold": false, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true,
+      "divergence": "A prompt-box draft that contains the phrase. TS excludes rows that start with the prompt glyph; ccd does not. Intended, per the ARCH-24 ticket."
+    },
+    "draft-with-phrase-eol.txt": {
+      "ts-mail-hold": false, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true,
+      "divergence": "A draft row that ends with the phrase. Same reason as draft-with-phrase-paren: the prompt-glyph row is not a spinner for TS."
+    },
+    "quoted-row.txt": {
+      "ts-mail-hold": false, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true,
+      "divergence": "A quoted row (starts with >). TS skips quote rows; ccd matches the phrase wherever it is."
+    },
+    "tool-continuation.txt": {
+      "ts-mail-hold": false, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true,
+      "divergence": "A tool-output continuation row (starts with the continuation glyph). TS skips it; ccd matches it."
+    }
+  }
+}
