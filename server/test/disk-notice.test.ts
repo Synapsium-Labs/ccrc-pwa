@@ -8,7 +8,8 @@ import { mkdirSync } from 'node:fs';
 import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { diskNotice, type DiskVerdict } from '../src/disk.js';
+import { readDiskEpisode } from '../src/diskepisode.js';
+import { diskNotice, diskVerdict, type DiskVerdict } from '../src/disk.js';
 import { localIO, type FleetIO, type MeasuredDisk } from '../src/io.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { PushPayload } from '../src/push.js';
@@ -92,6 +93,26 @@ describe('diskNotice: what to say when the fleet level moves', () => {
     expect(`${n.title} ${n.body}`).not.toContain('/data/vol');
     expect(n.body).toMatch(/not mounted/);
   });
+
+  it('a missing expected mount is named by its position, and still named when a filesystem is critical too', () => {
+    const exp = [{ path: '/a', mounted: true }, { path: '/b', mounted: false }];
+    const only = diskNotice(verdict('ok', 40), { ...verdict('ok', 40), level: 'critical', mountsDown: ['/b'], expectedMounts: exp, filesystems: [] })!;
+    expect(only.body).toContain('#2');
+    const both = diskNotice(verdict('ok', 40), { ...verdict('critical', 93), mountsDown: ['/b'], expectedMounts: exp })!;
+    expect(both.body).toContain('#2');
+    expect(both.body).not.toMatch(/\/b/);
+  });
+
+  it('an episode opens at a rise to warn/critical only: ok and unmeasured verdicts carry none', () => {
+    const m = (f: number): DiskMeasured => ({ filesystems: [fsAt(f)], expectedMounts: [], missing: [] });
+    const ok = diskVerdict(null, m(40), 10);
+    expect(ok.episode).toBeUndefined();
+    const warn1 = diskVerdict(diskVerdict(ok, m(86), 20), m(86), 30);
+    expect(warn1.episode).toBe(30);
+    const miss = diskVerdict(ok, { filesystems: [fsAt(40)], expectedMounts: [{ path: '/m', mounted: false }], missing: [] }, 40);
+    expect(miss.level).toBe('unmeasured');
+    expect(miss.episode).toBeUndefined();
+  });
 });
 
 /** A watcher over a real coord store and notify log, whose fleet io answers from `answers` (the last repeats). */
@@ -165,5 +186,32 @@ describe('sweepDisk sends the notice through the funnel', () => {
     const again = await rig(home, [...hold(86)], () => clock);
     for (let i = 0; i < 2; i += 1) { clock += 60_000; await again.sweep(); }
     expect(again.push.notify.mock.calls.length).toBe(1);
+  });
+
+  const missingMount = (): MeasuredDisk => ({
+    ok: true, measured: { filesystems: [fsAt(40)], expectedMounts: [{ path: '/data/vol', mounted: false }], missing: [] } satisfies DiskMeasured,
+  });
+
+  it('a restart with a mount still missing re-sends nothing: the first pass after boot is unmeasured, the second critical', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const first = await rig(home, [missingMount()], () => clock);
+    for (let i = 0; i < 3; i += 1) { clock += 60_000; await first.sweep(); }
+    expect(first.push.notify.mock.calls.length).toBe(1);
+    clock += 6 * 3_600_000;
+    const again = await rig(home, [missingMount()], () => clock);
+    for (let i = 0; i < 3; i += 1) { clock += 60_000; await again.sweep(); }
+    expect(again.push.notify.mock.calls.length).toBe(0);
+  });
+
+  it('a restart inside the clear band does not erase the mark: the next standing pass after it is still the same episode', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const first = await rig(home, [...hold(40), ...hold(86)], () => clock);
+    for (let i = 0; i < 4; i += 1) { clock += 60_000; await first.sweep(); }
+    expect(first.push.notify.mock.calls.length).toBe(1);
+    const again = await rig(home, [reading(40)], () => clock);
+    await again.sweep();
+    expect(readDiskEpisode(path.join(home, '.ccrc'))).not.toBeNull();
   });
 });

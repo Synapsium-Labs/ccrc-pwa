@@ -24,8 +24,9 @@ export interface DiskVerdict {
   readonly expectedMounts: readonly DiskExpectedMount[];
   /** Expected mounts missing in this pass: one missing pass is a bad read, two in a row is critical. */
   readonly mountsDown: readonly string[];
-  /** The instant the standing `warn`/`critical` run began (D-6616): a rise from `ok` starts an episode, and it is carried
-   *  while the level stays off `ok`. Absent on a verdict built before the field existed. */
+  /** The instant the standing `warn`/`critical` run began (D-6616): a rise to `warn`/`critical` with no episode open
+   *  starts one, `unmeasured` carries an open one, and `ok` closes it. Absent while none is open, and on a verdict
+   *  built before the field existed. */
   readonly episode?: number;
 }
 
@@ -119,9 +120,10 @@ export function diskVerdict(prev: DiskVerdict | null, measured: DiskMeasured, no
   const unknown = unreadable.size > 0 || carried.length > 0 || drifted > 0 || mountsDown.length > 0 || measured.filesystems.length === 0;
   if (unknown && RANK[level] < RANK.unmeasured) level = 'unmeasured';
   if (confirmed) level = 'critical';
-  // An episode starts at a rise from anything but a standing `warn`/`critical`, and is carried while one stands.
+  // An episode starts at a rise to `warn`/`critical` with none open, is carried through `unmeasured`, and `ok` closes it.
   const standing = prev !== null && (prev.level === 'warn' || prev.level === 'critical');
-  const episode = standing ? (prev.episode ?? prev.at) : nowMs;
+  const open = prev === null ? undefined : (prev.episode ?? (standing ? prev.at : undefined));
+  const episode = level === 'ok' ? undefined : level === 'unmeasured' ? open : (open ?? nowMs);
   return { at: nowMs, level, filesystems, expectedMounts: measured.expectedMounts, mountsDown, episode };
 }
 
@@ -167,19 +169,22 @@ export function diskNotice(prev: DiskVerdict | null, next: DiskVerdict): DiskNot
   if ((next.level !== 'warn' && next.level !== 'critical') || RANK[next.level] <= heldRank) return null;
   const episode = next.episode ?? next.at;
   const worst = next.filesystems.filter((f) => f.level === next.level).sort((a, b) => usedPct(b) - usedPct(a))[0];
+  // A missing mount is named by its position in the expected list (1-based), never by its path.
+  const down = next.expectedMounts.flatMap((m, i) => (next.mountsDown.includes(m.path) ? [i + 1] : []));
+  const downText = down.length > 0 ? ` Work mount${down.length === 1 ? '' : 's'} ${down.map((i) => `#${i}`).join(', ')} not mounted.` : '';
   const limits = `Warns at ${DISK_WARN_PCT}%, critical at ${DISK_CRITICAL_PCT}%.`;
   if (worst === undefined) {
     // Critical with no full filesystem: an expected work mount is not mounted.
     return {
       mode: 'push', title: 'Fleet disk: a work volume is not mounted',
-      body: `${next.mountsDown.length} expected work mount${next.mountsDown.length === 1 ? ' is' : 's are'} not mounted. ${limits}`,
+      body: `${next.mountsDown.length} expected work mount${next.mountsDown.length === 1 ? ' is' : 's are'} not mounted (${down.map((i) => `#${i}`).join(', ')}). ${limits}`,
       dedupeKey: `disk:mount:${next.level}:${episode}`,
     };
   }
   const others = next.filesystems.filter((f) => f.level === next.level).length - 1;
   return {
     mode: 'push', title: `Fleet disk ${usedPct(worst)}% full · ${gib(worst.availBytes)} free`,
-    body: `Holds ${worst.roots.join(', ')}${others > 0 ? `, and ${others} more filesystem${others === 1 ? '' : 's'} at ${next.level}` : ''}. ${limits}`,
+    body: `Holds ${worst.roots.join(', ')}${others > 0 ? `, and ${others} more filesystem${others === 1 ? '' : 's'} at ${next.level}` : ''}.${downText} ${limits}`,
     dedupeKey: `disk:${worst.dev}:${next.level}:${episode}`,
   };
 }
