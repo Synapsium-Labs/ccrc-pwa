@@ -16231,7 +16231,7 @@ _ws_orphan_nested_ok() {   # tree -> 0 when the marker is live and EVERY nested 
     REAP_SENSITIVE=(); RECLAIM_SECRETS=(); _ws_nested_secrets "$c" "$rel"; (( ${#REAP_SENSITIVE[@]} == 0 )) || return 1   # a secret-shaped file is never carried, so the checkout stays
     if [[ "$cc" == "$mr" ]]; then
       kind=same
-      _ws_reclaim_gitdir_own "$c" "$mr" && git -C "$c" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 && ! _ws_nested_busy "$c" || return 1
+      _ws_reclaim_gitdir_own "$c" "$mr" && [[ ! -e "$_WS_GITDIR_DIR/locked" ]] && git -C "$c" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 && ! _ws_nested_busy "$c" || return 1
     else kind=foreign; _ws_nested_rescue_shape "$c" || return 1; fi
     b=$(_ws_nested_bind "$c" "$rel") || return 1
     nl+="$kind"$'\t'"$c"$'\n'; _WS_ORPHAN_NBIND+=("$b")
@@ -16242,8 +16242,8 @@ _ws_orphan_nested_ok() {   # tree -> 0 when the marker is live and EVERY nested 
 _ws_orphan_tail() {   # tree sp -> rungs 10 to 14, in order; 0 all pass, else _ws_orphan_refuse's word and rc 1
   local p="$1" sp="$2" now secs floor="$WS_ORPHAN_FLOOR_S"
   _ws_orphan_rung secrets "$p" || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; }
-  _ws_orphan_rung nested "$p"  || {   # DR-22: under the marker a rescuable nested checkout is a RESCUE arm (like rung 9), not a stop
-    if [[ "$_WS_ORPHAN_WORD" == nested-checkout ]] && _ws_orphan_nested_ok "$p"; then _WS_ORPHAN_R11=1; _WS_ORPHAN_R11WHY="$_WS_ORPHAN_WHY"
+  _ws_orphan_rung nested "$p"  || {   # DR-22 (contained: a foreign repo's fsmonitor and hooks never run in the audit): under the marker a rescuable nested checkout is a RESCUE arm (like rung 9), not a stop
+    if [[ "$_WS_ORPHAN_WORD" == nested-checkout ]] && _ws_reclaim_contained _ws_orphan_nested_ok "$p"; then _WS_ORPHAN_R11=1; _WS_ORPHAN_R11WHY="$_WS_ORPHAN_WHY"
     else _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; fi; }
   _ws_orphan_holders "$p" "$sp" || return 1   # rung 12: the holder probe, one definition the verb asks again nearest the act
   # rung 13: the newest ctime of every entry, the `.git` file included
