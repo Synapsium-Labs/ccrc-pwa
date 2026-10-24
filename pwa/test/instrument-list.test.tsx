@@ -29,6 +29,23 @@
 //                                                         the old loop, run on the same mutant, stayed green (20 passed)
 // The browser file's rows, a literal 32px floor outside (pointer: fine), the naive ⋯ inset and the lamp rule, are that
 // file's header's.
+//
+// W2 desk polish, Task T3f (D-6386): Done above Working in the status table and the phone tabs. MUTATION TABLE (plan Task
+// T3f Step 3; RUN, each mutant on a `git archive` copy of a234acfe2, these two suites alone, then restored):
+//   Working back above Done (STATUS_GROUPS' done and working orders swapped)
+//                                         "status mode shows Done above Working"
+//                                         (and the updated pins "status mode renders the groups in groupByStatus's order, the last four folded",
+//                                          "each group header names its status, and in project mode each row shows its word beside its lamp",
+//                                          "phone: the tabs select one group; All shows every group",
+//                                          "a group with no rows is absent at a desk and under All, present under its own phone tab")
+//   a folded group moved among the open ones (Idle at order 1.5)
+//                                         "status mode renders the groups in groupByStatus's order, the last four folded"
+//                                         (and "each group header names its status, and in project mode each row shows its word beside its lamp",
+//                                          "phone: the tabs select one group; All shows every group")
+//   PHONE_TABS alone reverted (STATUS_GROUPS left new)
+//                                         "the phone tabs read Needs you, Done, Working, All"
+//                                         (and "the toggle is a radiogroup with one checked; the phone tabs are a tablist with one selected")
+// The status-groups suite's rows for the first two are that file's header's.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
