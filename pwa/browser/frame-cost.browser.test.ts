@@ -3,9 +3,10 @@
 // fleet of 80 rows with about nine changing per frame is the load this file puts on it, and `frameCost`
 // (`browser/app.ts`) reads Chrome's `TaskDuration` over the 2 s after each frame (CDP `Performance.getMetrics`).
 //
-// - The gated case: in Refined and in Instrument at 1920, the median cost of 15 changing frames on `/` stays under
-//   `FRAME_CEILING_MS`. The fixture is READY before it is measured: the rows are drawn (not only received), the page has
-//   no sideways scroll and threw nothing.
+// - Two gated cases, each in Refined and in Instrument at 1920 on `/`: the median cost of 15 changing frames stays under
+//   `FRAME_CEILING_MS` (a ceiling only), and the median script time of 5 identical frames sent after them stays under
+//   `IDENTICAL_SCRIPT_RATIO` of the changing frames' median script time (what C6 changed). The fixture is READY before
+//   it is measured: the rows are drawn (not only received), the page has no sideways scroll and threw nothing.
 // - The measurement block runs only on demand (`CCRC_MEASURE=1`): 8 configurations (`/` and a long session, in both
 //   skins, at 1920 and 390), each 15 changing frames, one identical frame and one idle window, one console line each.
 //   When `CCRC_RENDERS` names a directory the same block also writes the viewport screenshots there (both pages, both
@@ -27,10 +28,23 @@ import {
   removeDist, serveDist, summarize, type AppFixture, type AppView, type DistServer, type OpenedApp,
 } from './app';
 
-/** PROVISIONAL, about twice the BEFORE median of Refined and Instrument at 1920 (C6 Step 0: 185 and 176 ms per frame,
- *  measured at a load average near 50, the gated case itself 229 for Refined); the parent rewrites this value and
- *  this comment from the AFTER measurement. */
-const FRAME_CEILING_MS = 400;
+/** A CEILING only: it catches a gross regression of a CHANGING frame on `/`, and it is not below the before-measurement.
+ *  C6 does not change what a changing frame costs there: the list's own rows re-render, and memoising the list is a
+ *  later task (C9), so no mutant row claims this value. Measured on this box under a load average of 15 to 28, not on
+ *  CI's runner, 80 rows, 15 changing frames 2 s apart (median TaskDuration per frame): before C6 (`pwa/src` at main)
+ *  Refined 101.3 ms and Instrument 93.9 ms at 1920; after C6 108.9 and 92.4. The ceiling is about twice the after
+ *  medians. What C6 does change, an identical frame, is gated below by `IDENTICAL_SCRIPT_RATIO`. */
+const FRAME_CEILING_MS = 220;
+
+/** The most an IDENTICAL frame's script time may be, as a share of the same page's changing-frame median script time.
+ *  A ratio, not a number of milliseconds: both figures come from one page in one run, so the gate does not depend on
+ *  the runner's speed. Measured on this box (load 12 to 28), after C6: 0.08 to 0.19 over three runs (Refined 2.2 / 17.0,
+ *  1.8 / 17.1 and 1.5 / 20.1 ms at 1920; Instrument 1.5 / 10.7, 1.8 / 9.5 and 1.4 / 9.0); before C6 (`pwa/src` at main):
+ *  0.49 to 0.94 over two runs (Refined 8.8 / 17.9 and 7.0 / 13.8; Instrument 10.0 / 10.6 and 8.9 / 12.7),
+ *  so a revert of C6's src reds the case. After C6 an identical frame makes the store keep the array it holds and set
+ *  nothing, so no subscriber renders; before it, every subscriber of `sessions` rendered again. */
+const IDENTICAL_SCRIPT_RATIO = 0.35;
+const IDENTICAL_FRAMES = 5;
 
 const ROWS = 80;
 const FRAMES = 15;
@@ -123,6 +137,31 @@ describe('frame cost (D-6438)', () => {
         await app.ctx.close();
       }
     }, 90_000);
+
+    // Its own page visit, not shared with the ceiling case: each case then reads on its own, and a failure of one does
+    // not hide the other. The changing frames come first, as in the ceiling case, so the identical ones follow a page
+    // that has just rendered a changed list.
+    it(`an identical fleet frame costs under a third of a changing frame's script (${skin}, 1920)`, async () => {
+      const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/');
+      try {
+        expect(app.errors).toEqual([]);
+        expect(await sideScroll(app.page)).toBeLessThanOrEqual(0);
+        const frames = changing();
+        const last = frames.at(-1)!;
+        const cost = await frameCost(app, '/ws/fleet', [...frames, ...Array.from({ length: IDENTICAL_FRAMES }, () => last)], GAP_MS);
+        expect(cost.frames).toHaveLength(FRAMES + IDENTICAL_FRAMES);
+        expect(app.errors).toEqual([]);
+        const changed = summarize(cost.frames.slice(0, FRAMES)).median.scriptMs;
+        const identical = summarize(cost.frames.slice(FRAMES)).median.scriptMs;
+        // Non-vacuous: a page whose changing frames cost no script has nothing to be a share of.
+        expect(changed, `median script per changing frame, ${skin}: ${changed.toFixed(1)} ms`).toBeGreaterThan(1);
+        const ratio = identical / changed;
+        expect(ratio, `median script per identical frame ${identical.toFixed(1)} ms / per changing frame ${changed.toFixed(1)} ms = ${ratio.toFixed(2)}, ${skin}`)
+          .toBeLessThan(IDENTICAL_SCRIPT_RATIO);
+      } finally {
+        await app.ctx.close();
+      }
+    }, 120_000);
   }
 });
 
