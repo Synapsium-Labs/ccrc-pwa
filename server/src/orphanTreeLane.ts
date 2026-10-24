@@ -5,7 +5,7 @@
 // the tree. The L3 executor (`coord/collectOrphanTree.ts`) asks ccd; the L4 driver (`orphanTreeSweep.ts`) holds the
 // memory and the timer; neither decides anything this file decides.
 import type { DiskOrphanTrees } from '../../shared/disk.js';
-import type { OrphanToken } from '../../shared/api.js';
+import { isRegistryId, type OrphanToken } from '../../shared/api.js';
 
 /** The census runs this often, and hourly while the fleet is in pressure mode. */
 export const ORPHAN_CENSUS_MS = 6 * 60 * 60 * 1000;
@@ -30,12 +30,13 @@ export const isAuditedClass = (c: OrphanClass): c is OrphanAuditedClass => (ORPH
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const HEX = /^(?:[0-9a-f]{2})+$/;
 const TOKEN = /^[0-9a-f]{64}$/;
-const INSIDE_ID = /^[A-Za-z0-9._-]{1,120}$/;
 
 // ── what ccd answers ─────────────────────────────────────────────────────────
 
 /** `inside` is the registry id of the workspace whose workdir CONTAINS the tree (DR-22, G4), else null. A ccd that does not
- *  print it reads as null: such a tree is never inside anything this lane knows. */
+ *  print it reads as null: such a tree is never inside anything this lane knows. A containing row whose workdir is the MAIN
+ *  checkout (`insideMain: true`) is no nesting at all: a main checkout has no reclaim or expiry exit, so its agent worktrees
+ *  are the lane's own population and read as `inside: null`. */
 export interface OrphanRow { readonly hex: string; readonly cls: OrphanClass; readonly inside: string | null }
 export type OrphanCensus =
   | { readonly kind: 'census'; readonly rows: readonly OrphanRow[]; readonly truncated: boolean }
@@ -52,8 +53,10 @@ export function parseOrphanCensus(stdout: string): OrphanCensus {
     if (!isObj(r) || typeof r['pathHex'] !== 'string' || !HEX.test(r['pathHex']) || typeof r['class'] !== 'string') return { kind: 'unreadable' };
     if (!(ORPHAN_CLASSES as readonly string[]).includes(r['class'])) return { kind: 'unreadable' };
     const ins = r['inside'];
-    if (ins !== undefined && ins !== null && (typeof ins !== 'string' || !INSIDE_ID.test(ins))) return { kind: 'unreadable' };
-    rows.push({ hex: r['pathHex'], cls: r['class'] as OrphanClass, inside: typeof ins === 'string' ? ins : null });
+    if (ins !== undefined && ins !== null && !isRegistryId(ins)) return { kind: 'unreadable' };
+    const main = r['insideMain'];
+    if (main !== undefined && typeof main !== 'boolean') return { kind: 'unreadable' };
+    rows.push({ hex: r['pathHex'], cls: r['class'] as OrphanClass, inside: typeof ins === 'string' && main !== true ? ins : null });
   }
   return { kind: 'census', rows, truncated: doc['truncated'] };
 }
