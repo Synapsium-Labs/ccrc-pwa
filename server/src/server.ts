@@ -101,7 +101,7 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
 import { noticeBanner, noticeSink, notifyPushOnly } from './notice.js';
@@ -2007,6 +2007,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // ends inside a run that could begin a secret is held back until the next chunk or 6 ms (`DrawerMask`, D-5995).
     const drawerMask = (deps.masker ?? SHAPE_ONLY_MASKER).drawer((text) => socket.send(text));
     const sub = p.onData((data) => drawerMask.push(data));
+    const exitSub = p.onExit?.(() => socket.close(PTY_EXIT_CLOSE, 'pty-exit'));   // a drawer never sits open on a dead pty (D-6368)
     socket.on('message', (raw) => {
       try {
         const m = JSON.parse(String(raw)) as { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
@@ -2021,6 +2022,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
     socket.on('close', () => {
       sub.dispose();
+      exitSub?.dispose();
       drawerMask.dispose();
       p.kill();
       // Restore the canonical size ccd spawned with — a phone-sized drawer must

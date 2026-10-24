@@ -9188,6 +9188,13 @@ export const PINNED_WINDOW_COLS = 220;
 export const PINNED_WINDOW_ROWS = 50;
 
 /**
+ * The close code the pty bridge (`/ws/pty/:id`) ends the drawer's socket with when its pty exits (D-6368): the pty's
+ * own exit, the agent link's synthesized exit on a drop, and a failed open alike. The drawer re-attaches once on it
+ * (`TerminalDrawer.tsx`); any other close keeps the connection-lost state and its Reconnect.
+ */
+export const PTY_EXIT_CLOSE = 4000;
+
+/**
  * The rows tmux takes from every attached client for its status line. A client
  * of R rows views a window of R − TMUX_STATUS_ROWS rows exactly (spec 2026-10-14
  * W8), so a drawer that attaches at PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS is the
