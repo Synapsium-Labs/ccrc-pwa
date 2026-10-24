@@ -11,6 +11,9 @@ export interface PtyLike {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(): void;
+  /** Optional: the drawer bridge closes its socket when the pty exits (D-6368). node-pty's `IPty.onExit` is an event
+   *  taking a listener, so it satisfies this as is; `RemotePty` implements it. A stub without it still bridges. */
+  onExit?(listener: () => void): { dispose(): void };
 }
 
 export type SpawnPty = (id: string, cols: number, rows: number) => PtyLike;

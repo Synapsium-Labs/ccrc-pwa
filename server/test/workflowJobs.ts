@@ -20,6 +20,11 @@
 //   - in EVERY job, a job's or a step's `with:` and `env:`, when present, is a
 //     mapping: a whole-value expression, a list or a scalar holds keys and
 //     values no check here can read (D-6728);
+//   - in EVERY job, `steps:`, when present, is a list, and each of its items
+//     is a mapping that carries `run:` or `uses:` and none of the step-group
+//     keys (STEP_GROUP_KEYS): a group's nested steps, and an item no check
+//     here reads as a step, would run code every check above passes over
+//     (review 886's F1; D-6737);
 //   - NO job reads a secret: none carries a `secrets:` key, and the whole
 //     parsed job, every key at every depth (container and services env, a
 //     step's if: and working-directory included), never names the `secrets`
@@ -205,7 +210,14 @@ const DOWNLOAD_PATH = '${{ runner.temp }}/release-in';
  *  LEADING run of `../`, so a zip entry `x/../../../<f>` lands outside the
  *  download path, beside the write token and OIDC; `@v7` bundles 0.3.4, which
  *  rewrites every `..` segment and so confines every entry under the path,
- *  where verify's exact file set refuses it. Spelled `@v<N>` exactly: a minor
+ *  where verify's exact file set refuses it. `@v8`, which both publish jobs
+ *  use (D-6739), bundles the same 0.3.4 and sanitiser; it adds a raw, non-zip
+ *  write of ONE file named by its basename into the path, which verify's
+ *  exact file set refuses as it refuses an extra zip entry, and it fails a
+ *  digest mismatch by default, against the digest the upload recorded, which
+ *  the build job controls: that proves the transfer, not the build, and the
+ *  build's digest a publish job trusts is the one verify checks. Spelled
+ *  `@v<N>` exactly: a minor
  *  pin or a SHA names code this floor has not read, and an older major reopens
  *  the hole. */
 const DOWNLOAD_MAJOR_FLOOR = 7;
@@ -296,6 +308,10 @@ const NO_ALLOWANCE: WriteAllowance = { uses: [], runs: [], needsIn: [], env: {},
 
 /** The two keys whose value every check reads as a mapping (D-6728). */
 const MAPPING_KEYS = ['with', 'env'] as const;
+/** The step keys that nest or schedule other steps, which this guard does not
+ *  read, so a step carrying one is refused rather than recursed into (review
+ *  886's F1). */
+const STEP_GROUP_KEYS = ['parallel', 'background', 'wait', 'wait-all', 'cancel'] as const;
 /** The job keys a build job may not carry (D-6727): `continue-on-error`
  *  passes a failed build, and a `strategy` runs it as several jobs. */
 const BUILD_JOB_FORBIDDEN_KEYS = ['continue-on-error', 'strategy'] as const;
@@ -363,6 +379,25 @@ export function boundaryFindings(
       for (const k of MAPPING_KEYS) {
         if (Object.hasOwn(s.raw, k) && !isMapping(s.raw[k])) out.push(`${J} step ${i + 1} carries ${k === 'env' ? 'an' : 'a'} ${k}: that is not a mapping: ${shown(s.raw[k])}`);
       }
+    });
+
+    // ── every step is read, in every job (review 886's F1; D-6737) ──
+    // readJob folds a `steps:` that is not a list to no steps, and readStep
+    // an item that is not a mapping to an empty step, so each is read here
+    // from the job as parsed.
+    const items = job.raw.steps;
+    if (Object.hasOwn(job.raw, 'steps') && !Array.isArray(items)) out.push(`${J} carries a steps: that is not a list: ${shown(items)}`);
+    job.steps.forEach((s, i) => {
+      const n = i + 1;
+      const item: unknown = (items as unknown[])[i];
+      if (!isMapping(item)) {
+        out.push(`${J} step ${n} is not a mapping: ${shown(item)}`);
+        return;
+      }
+      for (const k of STEP_GROUP_KEYS) {
+        if (Object.hasOwn(s.raw, k)) out.push(`${J} step ${n} carries the step-group key ${k}, which this guard does not read`);
+      }
+      if (s.run === null && s.uses === null) out.push(`${J} step ${n} carries neither run: nor uses:`);
     });
 
     // ── no job reads a secret (D-6663) ──

@@ -13,16 +13,23 @@ import { FleetScreen } from './FleetScreen';
 import { useFleetStore } from '../stores/fleet';
 
 /** The skin's frame holds part of the fleet's chrome at a desk, and the column leaves out what it holds; below 900 it
- *  keeps all of it (one instance of each at any width, as with the accounts strip). Two flags, because the two things
- *  are held by different parts (W2 desk polish T2e, D-6335; before it, one `barHoldsChrome` drove both):
+ *  keeps all of it (one instance of each at any width, as with the accounts strip). Three flags, because the three
+ *  things are held by different parts (W2 desk polish T2e, D-6335; before it, one `barHoldsChrome` drove both of the first
+ *  two; T2g, D-6715, adds the third):
  *  - `headChrome`: the head's wordmark and its Docs, Accounts, Settings, Inbox and Bell doors. Instrument's top bar
- *    holds the wordmark and its rail holds the doors, so its column draws none of them; the head keeps its count line and the
- *    pool-lag readout, which it draws outside that gate.
+ *    holds the wordmark and its rail holds the doors, so its column draws none of them. The pool-lag readout stays,
+ *    because it is drawn outside that gate.
+ *  - `headCount`: the head's count line. Instrument's status bar prints the fleet's count at every desk width, so its
+ *    column draws none; Refined's frame has no such bar, so its column keeps the line.
  *  - `banners`: the banner stack. Refined's frame places the stack under its bar; Instrument's `Banners` part is `null`,
  *    so its column is where the stack is drawn, and a flag tied to the head's would drop it there altogether.
  *  Each reads "the column draws it at a desk", and defaults to true. */
 export function FleetColumn(
-  { headChrome = true, banners = true }: { headChrome?: boolean; banners?: boolean } = {},
+  { headChrome = true, headCount = true, banners = true }: {
+    headChrome?: boolean;
+    headCount?: boolean;
+    banners?: boolean;
+  } = {},
 ): ReactNode {
   const { path } = useLocation();
   const at = matchRoute(path);
@@ -39,6 +46,7 @@ export function FleetColumn(
       showAccounts={!desktop}
       banners={banners || !desktop}
       headChrome={headChrome || !desktop}
+      headCount={headCount || !desktop}
       epoch={pools?.epoch}
       observedEpoch={pools?.observedEpoch}
     />

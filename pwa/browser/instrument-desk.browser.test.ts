@@ -1,15 +1,19 @@
-// Instrument's desk, measured in a real Chrome over the production build (W2 desk polish, Task T2e, D-6335). The jsdom
-// suites (test/instrument-shell.test.tsx, test/instrument-list.test.tsx) pin the rules that produce this geometry;
-// this file holds the geometry: no empty fourth column (the reading column is 860 at 1600 and the detail reaches the
-// viewport's edge), one head in the list column (the first row starts higher), and a status row of two lines and
-// about 40 px under a fine pointer (three lines, the name, `waiting · needs you` and the context, when a long name and
-// the state do not fit side by side, and under 61 px), which under a touch screen is the tap floor again.
+// Instrument's desk, measured in a real Chrome over the production build (W2 desk polish, Task T2e, D-6335; T2g, D-6715).
+// The jsdom suites (test/instrument-shell.test.tsx, test/instrument-list.test.tsx) pin the rules that produce this
+// geometry; this file holds the geometry: no empty fourth column (the reading column is 860 at 1600 and the detail
+// reaches the viewport's edge), no head in the list column (T2e removed its chrome and T2g its count line; this fixture
+// has no pool lag, so nothing else draws there and the first row starts higher), a status row of two lines and at most
+// 42 px under a fine pointer when its name and state fit (every row at most three lines and under 61 px: the name,
+// `waiting · needs you` and the context, when a long name and the state do not fit side by side), which under a touch
+// screen is the tap floor again, the status bar's count whole at 900 under both pointers, and the rail's unread pill on
+// its Inbox door's top-right corner.
 //
-// The fixture is 13 sessions of one project in every bucket (2 attention, 3 working, 3 done, 3 idle, 2 dead: eight open
-// rows by default), with realistic workspace names of 17 to 25 characters, like a fleet's slugs, because a row's height
-// is decided by the name beside the state word and a 4-character name hides every wrap. One row is a main checkout
-// (no workspace, so no context fact: a one-line row). Fine pointer is the default context; touch is `openApp`'s
-// `touch: true`.
+// The fixture is 14 sessions across two projects, in every bucket (3 attention, 3 working, 3 done, 3 idle, 2 dead: nine
+// open rows by default), with realistic workspace names of 17 to 25 characters, like a fleet's slugs, because a row's
+// height is decided by the name beside the state word and a 4-character name hides every wrap. Two rows are main
+// checkouts (no workspace, so no context fact): project-a's is a one-line row, and project-b's, which needs the
+// operator, drops its state under a long branch name and is two. Fine pointer is the default context; touch is
+// `openApp`'s `touch: true`.
 //
 // MUTATION TABLE (plan Task T2e Step 3 and fix round 1; RUN, this file alone, each mutant reverted):
 //   the fourth track unconditional ..................... "at 1600 the session's reading column is 860 …"
@@ -22,6 +26,19 @@
 //     minmax(0, 1fr) fit-content(60%)`, context `grid-column: 1 / -1`)  "at 1280 (the 340 column) … every row is at most three lines and under 61 px"
 //                                                         (`lines: expected 4 to be less than or equal to 3`), "…exactly three lines" (`expected 4 to be 3`)
 //   the dense body `flex-flow: row nowrap` ............. the same cases (`lines: expected 4 to be 3`, `name: expected false to be true`)
+// W2 desk polish, Task T2g (D-6715; plan Step 3, RUN, this file alone with -t "T2g", each mutant reverted):
+//   `ListColumn` without `headCount={false}` ........... "at 1280x800 the first row starts 27 px higher than after T2e, no less"
+//                                                         (`expected 223 to be less than or equal to 196`)
+//   `FleetHead`'s nothing-to-draw `return null` removed  the same case (`expected 212 to be less than or equal to 196`: the empty head
+//                                                         keeps its padding, and the column's gap beside it)
+//   `.ins-status-summary { max-width: 6ch }` ........... "at 900 the status bar's count is whole, with two open runs" (both pointers;
+//                                                         `expected 211 to be less than or equal to 40`)
+// T2e review R32, F7 (carried into T2g; RUN with -t "Inbox count", each mutant reverted):
+//   `.ins-rail-count` without `position: absolute` ..... "at 1280x800 the unread pill sits on the Inbox door's top-right corner, inside the door"
+//                                                         (`top inset 13.203125 vs --sp-1 4: expected 9.203125 to be less than or equal to 2`; both themes)
+//   `.ins-rail-count` without `right: var(--sp-1)` ..... the same case (`right inset 16.203125 vs --sp-1 4: expected 12.203125 to be less than or equal to 2`)
+// The plan's row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900 under both pointers, so
+// T2g added no `flex: none`.
 // The state's `flex: 0 0 auto` as `0 1 auto` + `min-width: 0` is NOT red here (a wrapped flex line is decided on max-content
 // sizes before any shrinking, so the layout is identical): test/instrument-list.test.tsx's rule pin catches it.
 // The plain move of the dense block's media prelude (without `(pointer: fine)`) is NOT red here: its floors are
@@ -69,7 +86,22 @@ const FIXTURE: AppFixture = {
   },
   fleetFrames: [{ type: 'fleet', sessions: SESSIONS }],
 };
+// The same fleet with two open runs (T2g, D-6715): the status bar's count then reads "… · 2 runs", its longest form.
+const RUNS = [1, 2].map((id) => ({
+  id, program: 'programme-a', programTitle: 'Programme A', wave: 1, waveOf: 2, project: 'project-a', homeProject: null,
+  state: 'working', closedAt: null,
+}));
+const WITH_RUNS: AppFixture = {
+  api: { ...FIXTURE.api, '/api/runs': RUNS },
+  fleetFrames: [{ type: 'fleet', sessions: SESSIONS }, { type: 'runs', runs: RUNS }],
+};
 const SESSION_ROUTE = '/s/project-a-desk-density-pass';
+// The same fleet with three unread mail records in the durable feed (`GET /api/feed`, which the store reads once on its
+// first connect; no ack is stored, so every record is past it): the rail's Inbox door then reads "Inbox, 3 unread".
+const MAIL = [1, 2, 3].map((seq) => ({
+  seq, at: 1_800_000_000_000 + seq, kind: 'mail', sessionId: 'project-a-desk-density-pass', title: 'unread', body: '', runId: null,
+}));
+const WITH_MAIL: AppFixture = { api: { ...FIXTURE.api, '/api/feed': { events: MAIL } }, fleetFrames: FIXTURE.fleetFrames };
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -88,8 +120,8 @@ afterAll(async () => {
   removeDist(dist);
 });
 
-async function open(theme: string, width: number, height: number, route: string, touch = false) {
-  const opened = await openApp(browser!, { skin: INSTRUMENT, theme, width, touch }, FIXTURE);
+async function open(theme: string, width: number, height: number, route: string, touch = false, fixture: AppFixture = FIXTURE) {
+  const opened = await openApp(browser!, { skin: INSTRUMENT, theme, width, touch }, fixture);
   await opened.page.setViewportSize({ width, height });
   await opened.page.goto(server!.origin + route);
   await opened.page.waitForSelector('.shell-nav .sess-line', { timeout: 20_000 });
@@ -146,9 +178,45 @@ describe('no empty fourth column', () => {
 const BEFORE = 352;
 /** What T2e removes from that offset on this fixture, written exactly as measured: 352 before, 223 after, a saving of
  *  129 px, not rounded down (AFTER_OFFSET and BUDGET below). It is the head's chrome (the wordmark and the doors row; the count line
- *  stays), the toggle (44 to 32) and the first group head (44 to 32). */
+ *  stays until T2g), the toggle (44 to 32) and the first group head (44 to 32). */
 const AFTER_OFFSET = 223;
 const BUDGET = BEFORE - AFTER_OFFSET;
+
+describe("the rail's Inbox count (T2e review R32, F7)", () => {
+  for (const theme of THEMES) {
+    it(`at 1280x800 the unread pill sits on the Inbox door's top-right corner, inside the door (${theme})`, async () => {
+      const { ctx, page } = await open(theme, 1280, 800, '/', false, WITH_MAIL);
+      try {
+        await page.waitForSelector('.ins-rail-count', { timeout: 20_000 });
+        const m = await page.evaluate(() => {
+          const door = document.querySelector('.ins-rail-item[aria-label="Inbox, 3 unread"]')!;
+          const pill = door.querySelector('.ins-rail-count')!;
+          // `--sp-1` as the page resolves it: the width of a probe that takes the token.
+          const probe = document.createElement('div');
+          probe.style.cssText = 'position:absolute;visibility:hidden;width:var(--sp-1)';
+          document.body.append(probe);
+          const sp1 = probe.getBoundingClientRect().width;
+          probe.remove();
+          const d = door.getBoundingClientRect();
+          const p = pill.getBoundingClientRect();
+          return {
+            sp1, pillText: pill.textContent,
+            inside: { left: p.left - d.left, top: p.top - d.top, right: d.right - p.right, bottom: d.bottom - p.bottom },
+          };
+        });
+        expect(m.pillText, 'the pill prints the count').toBe('3');
+        expect(m.sp1, '--sp-1 resolves to a length').toBeGreaterThan(0);
+        // Inside the door's box (a pixel of rounding).
+        for (const [edge, gap] of Object.entries(m.inside)) expect(gap, `the pill's ${edge} edge is inside the door`).toBeGreaterThanOrEqual(-1);
+        // On its top-right corner: the `--sp-1` inset from the right and the top edges, give or take the border and a pixel.
+        expect(Math.abs(m.inside.right - m.sp1), `right inset ${m.inside.right} vs --sp-1 ${m.sp1}`).toBeLessThanOrEqual(2);
+        expect(Math.abs(m.inside.top - m.sp1), `top inset ${m.inside.top} vs --sp-1 ${m.sp1}`).toBeLessThanOrEqual(2);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
 
 describe('one head in the list column', () => {
   for (const theme of THEMES) {
@@ -160,6 +228,50 @@ describe('one head in the list column', () => {
           return Math.round(document.querySelector('.shell-nav .sess-line')!.getBoundingClientRect().top - nav.top);
         });
         expect(offset).toBeLessThanOrEqual(BEFORE - BUDGET);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
+
+/** The first row's offset at 1280x800 on `/` after T2e (fd15dd7e0, Step 0 of T2g, both themes, a fine pointer), and what
+ *  T2g removes from it: the head (15 px, the count line gone and no lag in this fixture, so no head at all) and the `.fleet` column's
+ *  row gap beside it (12 px), written exactly as measured: 223 before, 27 saved. After the change the measured offset is
+ *  196 px, exactly the budget (1280x800, both themes). */
+const AFTER_T2E = 223;
+const SAVING = 27;
+
+describe('one count at the desk (T2g, D-6715)', () => {
+  for (const theme of THEMES) {
+    it(`at 1280x800 the first row starts ${SAVING} px higher than after T2e, no less (${theme})`, async () => {
+      const { ctx, page } = await open(theme, 1280, 800, '/');
+      try {
+        const offset = await page.evaluate(() => {
+          const nav = document.querySelector('.shell-nav')!.getBoundingClientRect();
+          return Math.round(document.querySelector('.shell-nav .sess-line')!.getBoundingClientRect().top - nav.top);
+        });
+        expect(offset).toBeLessThanOrEqual(AFTER_T2E - SAVING);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+
+  // Green at the base (Step 0 measured it whole there): a guard for the one count left, which must not be cut with an
+  // ellipsis now that the column's copy is gone.
+  for (const touch of [false, true]) {
+    it(`at 900 the status bar's count is whole, with two open runs (${touch ? 'touch' : 'fine pointer'})`, async () => {
+      const { ctx, page } = await open(PHOSPHOR, 900, 800, '/', touch, WITH_RUNS);
+      try {
+        await page.waitForFunction(() => (document.querySelector('.ins-status-summary')?.textContent ?? '').includes('run'),
+          undefined, { timeout: 20_000 });
+        const m = await page.evaluate(() => {
+          const el = document.querySelector<HTMLElement>('.ins-status-summary')!;
+          return { text: el.textContent ?? '', scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
+        });
+        expect(m.text).toContain('run');
+        expect(m.scrollWidth, m.text).toBeLessThanOrEqual(m.clientWidth);
       } finally {
         await ctx.close();
       }

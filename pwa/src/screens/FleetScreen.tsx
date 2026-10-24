@@ -43,6 +43,7 @@ export function FleetScreen({
   showAccounts = true,
   banners = true,
   headChrome = true,
+  headCount = true,
   epoch,
   observedEpoch,
 }: {
@@ -54,9 +55,12 @@ export function FleetScreen({
   showAccounts?: boolean; // false on desktop — the accounts strip is a top bar there
   /** False where the skin's frame places the banner stack under its bar (W2 Task S4b): one stack at any width. */
   banners?: boolean;
-  /** False where the skin's bar holds the head's wordmark and doors (Refined at a desk, W2 Task S4b); the readouts
-   *  stay. */
+  /** False where the skin's bar holds the head's wordmark and doors (Refined's `Sidebar` and Instrument's
+   *  `ListColumn` at a desk, W2 Task S4b, T2e); the readouts stay. */
   headChrome?: boolean;
+  /** False where the skin's status bar prints the fleet's count (Instrument's `ListColumn` at a desk, T2g, D-6715):
+   *  the head draws no count line. The pool lag stays. */
+  headCount?: boolean;
   /** The server's current account-pool epoch (`GET /api/pools/epoch`, Task
    *  7), off `useFleetStore`'s `pools.epoch` (`app.tsx`) — the same `pools`
    *  frame the fleet WS/REST wire carries (`server/src/pools.ts`'s
@@ -215,7 +219,7 @@ export function FleetScreen({
     <section id={FLEET_ID} aria-label="Fleet" className="fleet" data-conn={conn} tabIndex={-1}>
       {Head !== null ? <Head /> : (
         <FleetHead
-          countLine={sessions.length > 0 ? countLine : null}
+          countLine={headCount && sessions.length > 0 ? countLine : null}
           poolLag={poolLag}
           unreadMail={unreadMail}
           chrome={headChrome}

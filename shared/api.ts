@@ -1204,7 +1204,7 @@ export interface WsAudit {
    *  It used to imply a refusal (drift was one); it no longer does, so a
    *  `reapable` verdict can carry `false` here. */
   headMatchesRegistry: boolean;
-  reaping: string | null;
+  reaping: ReapCrumb | null;   // ccd's `.reaping` breadcrumb, parsed once at the wire (`optReapCrumb`, at the foot); null when none stands
   /* ── THE SESSION BEHIND THE WORKSPACE ──────────────────────────────────────
    * Computed by ccd BEFORE `_ws_reap_eval`'s early refusal, unlike everything
    * in the `null MEANS NOBODY LOOKED` block below — a `not-archived` verdict
@@ -3526,7 +3526,7 @@ export function reviveWsAudit(v: unknown, sentence: string): WsAudit {
     repo: reqStr(o, 'repo'),
     exists: reqBool(o, 'exists'),
     headMatchesRegistry: reqBool(o, 'headMatchesRegistry'),
-    reaping: optStr(o, 'reaping'),
+    reaping: optReapCrumb(o, 'reaping'),
     // optBool/optStr, NOT reqBool — DELIBERATE, and decided beside the writer.
     // An older ccd on the fleet host omits all three; reqBool would throw and
     // the whole sheet would render nothing, against a rolled-back ccd or a
@@ -9188,6 +9188,13 @@ export const PINNED_WINDOW_COLS = 220;
 export const PINNED_WINDOW_ROWS = 50;
 
 /**
+ * The close code the pty bridge (`/ws/pty/:id`) ends the drawer's socket with when its pty exits (D-6368): the pty's
+ * own exit, the agent link's synthesized exit on a drop, and a failed open alike. The drawer re-attaches once on it
+ * (`TerminalDrawer.tsx`); any other close keeps the connection-lost state and its Reconnect.
+ */
+export const PTY_EXIT_CLOSE = 4000;
+
+/**
  * The rows tmux takes from every attached client for its status line. A client
  * of R rows views a window of R − TMUX_STATUS_ROWS rows exactly (spec 2026-10-14
  * W8), so a drawer that attaches at PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS is the
@@ -10436,6 +10443,12 @@ declare const collectTokenBrand: unique symbol;
  *  - It is a `string` underneath, so it is assignable to one. It does not keep itself out of another builder's
  *    string parameter. */
 export type CollectToken = string & { readonly [collectTokenBrand]: true };
+
+declare const orphanTokenBrand: unique symbol;
+/** The consent `ws-orphan` spends (fleet disk retention spec 2026-10-23 §2.3, D-6630): the `token` or the `rescueToken` of a
+ *  `ws-audit --orphan-hex` answer, 64 lowercase hex characters. Phantom brand, like `CollectToken`; the lane's audit reader
+ *  is the one place that casts to it, and `CCD_ARGV.wsOrphan` takes nothing else. */
+export type OrphanToken = string & { readonly [orphanTokenBrand]: true };
 
 /** One arm of `ChildReclaimAttention` (spec §5.9, §5.10): an item of the temp-root collector's.
  *  - `sessionId` is the temp-root id on a per-id item. On a box-wide line it is a `COLLECT_BOX_LABELS` label, which no
@@ -12032,3 +12045,12 @@ export interface FleetHealth {
    */
   disk?: DiskHealth;
 }
+
+// ── THE REAPING BREADCRUMB (ARCH-25, #531) ── at the foot, like the lane block above, so no line cited above it
+// moves. The one runtime import here, and from an L0 sibling that itself imports nothing (`reapcrumb.test.ts`).
+import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';
+/** An absent, null or empty crumb is none; any other string goes through `parseReapCrumb`. */
+const optReapCrumb = (o: RawObj, k: string): ReapCrumb | null => {
+  const raw = optStr(o, k);
+  return raw === null || raw === '' ? null : parseReapCrumb(raw);
+};

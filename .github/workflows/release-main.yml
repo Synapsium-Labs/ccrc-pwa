@@ -70,8 +70,13 @@ jobs:
   # (dependency install scripts, the build, and the comparison that extracts
   # what they produced), so it holds contents: read and nothing else. It has
   # no write token and no id-token, so no code it runs can push, publish or
-  # sign. Its checkout sets persist-credentials: false, so no credential is
-  # left in the checkout's git config for that code to find. Nothing in this
+  # sign. Its checkout sets persist-credentials: false, so the checkout leaves
+  # no credential behind for that code to find (the job's own read token
+  # remains, as the next sentences say): at this checkout major the token is
+  # written to a file under the runner's temp directory for the checkout's own
+  # fetch, and the checkout removes that file in the step's own cleanup; a
+  # failed removal does not fail the step, the action only warns or says
+  # nothing, as at v4. Nothing in this
   # job writes to origin: prepare's `git ls-remote` is anonymous on this
   # public repository, and compare's token is this job's read token. The
   # script reads any non-zero exit of those calls as "origin does not hold
@@ -88,7 +93,7 @@ jobs:
       tag: ${{ steps.compare.outputs.tag }}
       digest: ${{ steps.record.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The next tag is derived from the highest existing one, the base is
           # the newest release tag this commit contains, and the builder names
@@ -101,7 +106,7 @@ jobs:
       # release decision is made on the built artifact, not on which paths
       # changed (D-6390, D-6401). Its npm cache is restored into this job only,
       # which holds no write token (D-6652).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: server/package.json
           cache: npm
@@ -135,15 +140,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash deploy/release-main.sh compare --out release-out
 
-      # The decision reaches the publish job only as this job's output, and the
-      # arm's append to the step output swallows a failure by design. A lost
-      # decision would leave the publish job's condition false and skip the
-      # release with a green run. Every exit-0 path of compare writes one of
-      # the two words, so anything else fails here, never skips (D-6393, D-6658).
-      - name: Fail when the release decision did not reach the job output
+      # The arm's append to the step output swallows a failure by design. This
+      # check reads compare's own step output, and every exit-0 path of compare
+      # writes one of the two words there, so a swallowed append fails the
+      # build job here rather than skipping the release (D-6393, D-6658). A
+      # value dropped later, at the job boundary (a mask on the job output), is
+      # past this check: the publish job's condition is then false and the
+      # release is skipped with a green run. That is an availability effect a
+      # hostile build already has, and it reaches no credential (D-6658, as
+      # narrowed by review 871's ruling 2).
+      - name: Fail when the release decision did not reach compare's step output
         if: steps.compare.outputs.release != 'true' && steps.compare.outputs.release != 'false'
         run: |
-          echo "release-main.yml: the release decision did not reach the job output; failing rather than skipping a release; re-run all jobs" >&2; exit 1
+          echo "release-main.yml: the release decision did not reach compare's step output; failing rather than skipping a release; re-run all jobs" >&2; exit 1
 
       # Fails early on a tarball not named after the derived tag, a SHA256SUMS
       # that is not its one line, or a build.json naming another tag or commit,
@@ -159,7 +168,7 @@ jobs:
       # The hand-over (D-6657): one artifact named for the tag, holding exactly
       # the tarball and its SHA256SUMS, kept seven days so a failed publish job
       # can be re-run alone. Stored as it is: the tarball is compressed already.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.compare.outputs.release == 'true'
         with:
           name: release-${{ steps.compare.outputs.tag }}
@@ -180,7 +189,9 @@ jobs:
   # keep and no secret in this repo. ci.yml's stance is that a writing job
   # asks in the diff — this is that ask. It installs nothing and has no
   # setup-node, so no npm cache is ever restored into it (D-6651). Its
-  # checkout keeps its credential: the publish arm pushes the tag with it.
+  # checkout keeps its credential: the publish arm pushes the tag with it. At
+  # this checkout major it lives in a file under the runner's temp directory
+  # that the checkout's git config includes, removed at the job's end.
   # It starts only on a release decision, so a skip mints no write token
   # (D-6658).
   publish:
@@ -194,7 +205,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # receive re-derives the tag from the highest existing one and the
           # newest release tag this commit contains, as prepare did: it needs
@@ -203,10 +214,17 @@ jobs:
 
       # Into the runner's temp directory, outside the checkout (D-6657). The
       # path alone keeps nothing off this job's scripts: what does is the
-      # extractor. This major's (unzip-stream 0.3.4) confines every zip entry
-      # under release-in, where @v4 to @v6 wrote an `x/../../..` entry outside
-      # it; and receive's verify refuses any entry but the two expected files (D-6726).
-      - uses: actions/download-artifact@v7
+      # extractor. This major keeps v7's (unzip-stream 0.3.4), which
+      # confines every zip entry under release-in, where @v4 to @v6 wrote an
+      # `x/../../..` entry outside it. An artifact that is not a zip is
+      # written raw, as one file into release-in, named by the basename of
+      # the blob's download filename, which whoever wrote the blob chooses,
+      # not by the artifact's name. Either way, receive's verify refuses
+      # anything but the two expected files (D-6726, D-6739). This major also
+      # fails a digest mismatch, but against the digest the upload recorded,
+      # which the build job controls: it proves the transfer, not the build.
+      # The build's digest this job trusts is the one verify checks.
+      - uses: actions/download-artifact@v8
         with:
           name: release-${{ needs.build.outputs.tag }}
           path: ${{ runner.temp }}/release-in
