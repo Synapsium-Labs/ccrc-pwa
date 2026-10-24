@@ -1901,6 +1901,7 @@ describe('the model files, and who reads each one', () => {
     expect(holders).toEqual([
       'ccd/ccd',                // ROUTE_CLASSES and _route_valid's degraded arm — routing spec §5.1
       'ccd/ccrc',               // MODELS_CLASSES — the usage-error gate
+      'ccd/session-hook.sh',    // the Fable arm's deny reason and prefilter name the classes in prose (D-6792) — no walk
       'deploy/models-op.mjs',   // CLASSES — the mutation walk
       'pwa/src/lib/models.ts',  // the picker's aliases — spec §1/§8/§13.4, deleted by Plan 3a
       'shared/modelenv.mjs',    // the env block's key order and the TSV's
