@@ -426,7 +426,7 @@ describe('the transcript stops repeating the ask the card already shows', () => 
 describe.each([
   [3, 'ask-unreadable'],
   [5, 'terminal-only'],
-] as const)('the terminal-door surface at the desk (fixture %i, %s)', (n) => {
+] as const)('the terminal-door surface at the desk (fixture %i, %s)', (n, _surface) => {
   /** `DialogSheet` alone over fixture `n`'s frames, with the terminal door stubbed. */
   function mountDoor() {
     const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
