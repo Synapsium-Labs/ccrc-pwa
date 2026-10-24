@@ -104,6 +104,7 @@ const SERVER_NEVER_SENDS: Readonly<Record<string, string>> = {
   menu: 'the interactive picker at a terminal',
   pick: 'the picker\'s alias, at a terminal',
   'path-users': 'the read-only probe entry for ccd-tmp-sweep and operators; the server does not send it yet',
+  'scratch-rescue': 'the temp sweep\'s box-local act (D-6632), never a server route',
   prefer: 'the operator sets a session\'s home account at a terminal',
   'swap-self': 'run from inside the session\'s own pane, never from outside it',
   supervise: 'the systemd unit\'s own entry point, never a remote verb',
