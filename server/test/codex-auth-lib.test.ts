@@ -2618,6 +2618,46 @@ describe.skipIf(!PY)('refresh_rejected: a refresh after the upstream refused a v
       expectStatusClean(dir, tokensOf(t));
     });
   });
+
+  it('a barred lane and a credential that cannot be refreshed answer at once, never waiting on a held lock', async () => {
+    const home = mkTmp('codex-auth-rejected-prelock-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir);
+    plantStatus(dir, { state: 'needs-signin', lastErrorCode: 'invalid_grant', lastRequestId: 'req-fixture-dead-2' });
+    const text = statusText(dir);
+    const absent = join(home, 'lane-b'); // no credential: held() below makes the directory and its lock file only
+    // Another thread holds both lanes' locks (its own opens of the lock files, so flock excludes them as another
+    // process would), with LOCK_WAIT_S lowered to 3 s: a call that waited on the lock would answer auth-lock-busy
+    // after it, where the pre-lock checks answer before it.
+    await withAuth({ token: [{ status: 200, body: issuedAnswer() }] }, async (srv) => {
+      const lines = await libLines(home, [
+        'mod.LOCK_WAIT_S = 3.0',
+        'taken, done = threading.Event(), threading.Event()',
+        'def holder():',
+        '    with mod.held(args[0]):',
+        '        with mod.held(args[1]):',
+        '            taken.set()',
+        '            done.wait(15)',
+        'th = threading.Thread(target=holder, daemon=True)',
+        'th.start()',
+        'taken.wait(5)',
+        'for d in args[:2]:',
+        '    t0 = time.monotonic()',
+        '    res = call(mod.refresh_rejected, d, args[2], lane="lane-a")',
+        '    out([reading(res), time.monotonic() - t0])',
+        'done.set()',
+        'th.join()',
+      ], { base: srv.base, args: [dir, absent, t.access], timeoutMs: 15_000 });
+      expect(lines.map((l) => l[0])).toEqual([
+        { error: 'needs-signin', class: 'NeedsSignin' },
+        { error: 'not-logged-in', class: 'NotSignedIn' },
+      ]);
+      for (const l of lines) expect(l[1], 'answered well inside LOCK_WAIT_S').toBeLessThan(1.5);
+      expect(srv.requests, 'no request').toHaveLength(0);
+      expect(statusText(dir), 'the needs-signin is left byte for byte').toBe(text);
+      expect(existsSync(credPath(absent))).toBe(false);
+    });
+  });
 });
 
 describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file (codex-bridge Stage 2, Task 6)', () => {
@@ -2637,7 +2677,8 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
       ...ST,
       'for s, c, r in [("limit-paused", "usage_limit_reached", "req-fixture-up-1"), ("ok", None, "req-fixture-up-2"),',
       '                (None, "rate_limit_exceeded", "req-fixture-up-3"), ("ineligible", "usage_not_included", "req-fixture-up-4"),',
-      '                ("limit-paused", "usage_limit_reached", "req-fixture-up-5"), (None, None, None), ("ok", None, None)]:',
+      '                ("limit-paused", "usage_limit_reached", "req-fixture-up-5"), (None, None, None), ("ok", None, None),',
+      '                (None, "rate_limit_exceeded", "req-fixture-up-9"), ("ok", None, "req-fixture-up-10")]:',
       '    out([s, mod.record_upstream(args[0], state=s, code=c, request_id=r), st(args[0])])',
     ];
     expect(await libLines(home, steps, { args: [dir] })).toEqual([
@@ -2648,6 +2689,9 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
       ['limit-paused', true, ['limit-paused', 'usage_limit_reached', 'req-fixture-up-5']],
       [null, true, ['limit-paused', null, null]],
       ['ok', true, ['ok', null, null]],
+      [null, true, ['ok', 'rate_limit_exceeded', 'req-fixture-up-9']],
+      // ok is written only over an upstream state: over ok it writes nothing, so the code standing there is kept.
+      ['ok', false, ['ok', 'rate_limit_exceeded', 'req-fixture-up-9']],
     ]);
     // A barring state is the refresher's: no upstream answer writes over it, not even its code or request id.
     const current = (await libLines(home, ['out(mod.config_hash())'], { args: [dir] }))[0] as unknown as string;
@@ -2717,6 +2761,7 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
       'out(mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id=None))',
     ], { args: [none] }))[0]).toBe(false);
     expect(existsSync(statusPath(none))).toBe(false);
+    expect(existsSync(none), 'no lock was taken and no directory made').toBe(false);
     expectStatusClean(dir, tokensOf(t));
     expectStatusClean(other, tokensOf(u));
   });
@@ -2740,14 +2785,25 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
       't0 = time.monotonic()',
       'res = mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id=None, wait_s=0.3)',
       'elapsed = time.monotonic() - t0',
+      // With no wait_s, the bound is RECORD_WAIT_S, read when called (the library's header rule).
+      'default = mod.RECORD_WAIT_S',
+      'mod.RECORD_WAIT_S = 0.3',
+      't1 = time.monotonic()',
+      'res2 = mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id=None)',
+      'elapsed2 = time.monotonic() - t1',
       'done.set()',
       'th.join()',
-      'out({"result": res, "elapsed": elapsed, "default": inspect.signature(mod.record_upstream).parameters["wait_s"].default})',
+      'out({"result": res, "elapsed": elapsed, "result2": res2, "elapsed2": elapsed2, "default": default,',
+      '     "signature": inspect.signature(mod.record_upstream).parameters["wait_s"].default})',
     ], { args: [dir] });
     expect(line.result).toBe(false);
     expect(line.elapsed, 'it waited its bound').toBeGreaterThanOrEqual(0.25);
     expect(line.elapsed, 'and no longer').toBeLessThan(1.5);
-    expect(line.default, 'the wait defaults to 2 s').toBe(2.0);
+    expect(line.result2).toBe(false);
+    expect(line.elapsed2, 'a changed RECORD_WAIT_S is the bound').toBeGreaterThanOrEqual(0.25);
+    expect(line.elapsed2, 'and no longer').toBeLessThan(1.5);
+    expect(line.default, 'the wait is 2 s by default').toBe(2.0);
+    expect(line.signature, 'no constant is bound early').toBeNull();
     expect(statusText(dir), 'nothing was written').toBe(text);
   });
 
@@ -2769,6 +2825,39 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
       [true, ['limit-paused', 'usage_limit_reached', 'req-fixture-up-8']],
     ]);
     expectStatusClean(dir, tokensOf(t));
+  });
+
+  it('a committed refresh keeps an upstream state, and the next ok clears it', async () => {
+    const home = mkTmp('codex-auth-upstream-refresh-');
+    const answer = issuedAnswer();
+    for (const upstream of ['limit-paused', 'ineligible']) {
+      const dir = join(home, `lane-${upstream}`);
+      const t = plantBackendCredential(dir);
+      plantStatus(dir, { state: upstream, lastErrorCode: 'usage_limit_reached', lastRequestId: 'req-fixture-up-11' });
+      // A token refresh says nothing about the account's quota or eligibility: the state the bridge recorded stays,
+      // and only the refresher's own fields change.
+      await withAuth({ token: [{ status: 200, body: answer, headers: { 'x-request-id': 'req-fixture-refresh-3' } }] },
+        async (srv) => {
+          const lines = await libLines(home, [
+            'out(reading(call(mod.ensure_fresh, args[0], within_s=7200, lane="lane-a")))',
+          ], { base: srv.base, args: [dir] });
+          expect(lines[0], upstream).toEqual({
+            credential: 'present', access: sha(answer.access_token as string), refresh: sha(answer.refresh_token as string),
+          });
+          expect(srv.requests, upstream).toHaveLength(1);
+        });
+      const st = statusOf(dir);
+      expect(st, upstream).toMatchObject({
+        state: upstream, lastErrorCode: null, lastRequestId: 'req-fixture-refresh-3', unsaved: false,
+      });
+      expect(typeof st.lastRefreshAt, upstream).toBe('number');
+      expect(statusIdentity(statusText(dir)), 'bound to the new file').toEqual(fileIdentity(dir));
+      expect((await libLines(home, [
+        'out(mod.record_upstream(args[0], state="ok", code=None, request_id="req-fixture-up-12"))',
+      ], { args: [dir] }))[0]).toBe(true);
+      expect(statusOf(dir), upstream).toMatchObject({ state: 'ok', lastErrorCode: null, lastRequestId: 'req-fixture-up-12' });
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    }
   });
 });
 
