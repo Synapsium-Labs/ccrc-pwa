@@ -16120,12 +16120,26 @@ _ws_orphan_stanzas() {   # main -> one line per worktree git lists: path<TAB>hea
   done < <(git -C "$1" worktree list --porcelain 2>/dev/null; echo)
 }
 
-_ws_orphan_class() {   # tree mainreal wsroot project -> echoes ccd-root | claude | superpowers | other (LOCATION only)
-  local t="$1" m="$2" w="$3" pj="$4" rel
+_ws_orphan_class() {   # tree mainreal wsroot project [checkouts] -> echoes ccd-root | claude | superpowers | other (LOCATION only)
+  #   `checkouts` (DR-22, G4): every checkout of the repository, one per line; a `.claude`/`.superpowers` directory of ANY of them counts
+  local t="$1" m="$2" w="$3" pj="$4" rel k x
   rel="${t#$w/$pj/}";            [[ "$t" == "$w/$pj/"* && -n "$rel" && "$rel" != */* ]] && { echo ccd-root; return 0; }
-  rel="${t#$m/.claude/worktrees/}";      [[ "$t" == "$m/.claude/worktrees/"* && -n "$rel" && "$rel" != */* ]] && { echo claude; return 0; }
-  rel="${t#$m/.superpowers/worktrees/}"; [[ "$t" == "$m/.superpowers/worktrees/"* && -n "$rel" && "$rel" != */* ]] && { echo superpowers; return 0; }
+  for k in claude superpowers; do
+    [[ "$t" == */."$k"/worktrees/* && "${t##*/."$k"/worktrees/}" != */* && -n "${t##*/."$k"/worktrees/}" ]] || continue
+    x="${t%/."$k"/worktrees/*}"
+    [[ "$x" == "$m" || $'\n'"${5-}"$'\n' == *$'\n'"$x"$'\n'* ]] && { echo "$k"; return 0; }
+  done
   echo other
+}
+_ws_orphan_inside() {   # tree -> the id of the registry row whose workdir CONTAINS the tree (the nearest), '' when none (DR-22, G4)
+  local f id wd q best='' bl=0
+  for f in "$REG"/*.workdir; do
+    [[ -f "$f" && ! -L "$f" && -r "$f" ]] || continue
+    id=$(basename "$f" .workdir); wd=$(<"$f"); [[ -n "$wd" ]] || continue
+    q="$wd"; [[ -d "$wd" ]] && _ws_dir_physical "$wd" && q="$_WS_PHYS"
+    if [[ "$1" == "$wd"/* || "$1" == "$q"/* ]] && (( ${#q} > bl )); then best="$id"; bl=${#q}; fi
+  done
+  printf '%s' "$best"
 }
 
 _ws_orphan_rung() {   # dirty|head|secrets|nested path -> 0 passes; 1 refuses (_WS_ORPHAN_WORD, _WS_ORPHAN_WHY); 2 unmeasured
@@ -16147,7 +16161,7 @@ _ws_orphan_rung() {   # dirty|head|secrets|nested path -> 0 passes; 1 refuses (_
       if ! n=$(_ws_nested_checkouts "$p"); then
         _WS_ORPHAN_WORD=unmeasured; _WS_ORPHAN_WHY="$p could not be scanned for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)}"; return 2
       fi
-      if [[ -n "$n" ]]; then _WS_ORPHAN_WORD=nested-checkout; _WS_ORPHAN_WHY="$p holds nested checkouts"; return 1; fi ;;
+      if [[ -n "$n" ]]; then _WS_ORPHAN_WORD=nested-checkout; _WS_ORPHAN_WHY="$p holds nested checkouts"; _WS_ORPHAN_NESTED="$n"; return 1; fi ;;
   esac
   return 0
 }
@@ -16204,10 +16218,33 @@ _ws_orphan_holders() {   # tree sp -> rung 12: 0 nobody holds it; 1 with _ws_orp
   return 0
 }
 
+_ws_orphan_nested_ok() {   # tree -> 0 when the marker is live and EVERY nested checkout can be pinned or rescued whole; sets
+  #   _WS_ORPHAN_NLIST (kind<TAB>path per line, kind same|foreign) and _WS_ORPHAN_NBIND (the token's nestedRescue= inputs); 1 keeps the tree
+  local pr mr c cc rel kind b nl=''
+  _WS_ORPHAN_NLIST=''; _WS_ORPHAN_NBIND=()
+  _ws_nested_rescue_live || return 1
+  pr=$(cd "$1" >/dev/null 2>&1 && pwd -P) && mr=$(_ws_common_dir "$1") || return 1
+  while IFS= read -r c; do
+    [[ -n "$c" ]] || continue
+    [[ "$c" == "$pr"/* && "${c##*/}" =~ ^[A-Za-z0-9._-]+$ ]] || return 1   # _ws_leaf_remove takes one id-shaped leaf name; any other keeps the tree
+    rel="${c#"$pr"/}"; cc=$(_ws_common_dir "$c") || return 1
+    REAP_SENSITIVE=(); RECLAIM_SECRETS=(); _ws_nested_secrets "$c" "$rel"; (( ${#REAP_SENSITIVE[@]} == 0 )) || return 1   # a secret-shaped file is never carried, so the checkout stays
+    if [[ "$cc" == "$mr" ]]; then
+      kind=same
+      _ws_reclaim_gitdir_own "$c" "$mr" && git -C "$c" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 && ! _ws_nested_busy "$c" || return 1
+    else kind=foreign; _ws_nested_rescue_shape "$c" || return 1; fi
+    b=$(_ws_nested_bind "$c" "$rel") || return 1
+    nl+="$kind"$'\t'"$c"$'\n'; _WS_ORPHAN_NBIND+=("$b")
+  done <<< "$_WS_ORPHAN_NESTED"
+  _WS_ORPHAN_NLIST="$nl"
+}
+
 _ws_orphan_tail() {   # tree sp -> rungs 10 to 14, in order; 0 all pass, else _ws_orphan_refuse's word and rc 1
   local p="$1" sp="$2" now secs floor="$WS_ORPHAN_FLOOR_S"
   _ws_orphan_rung secrets "$p" || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; }
-  _ws_orphan_rung nested "$p"  || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; }
+  _ws_orphan_rung nested "$p"  || {   # DR-22: under the marker a rescuable nested checkout is a RESCUE arm (like rung 9), not a stop
+    if [[ "$_WS_ORPHAN_WORD" == nested-checkout ]] && _ws_orphan_nested_ok "$p"; then _WS_ORPHAN_R11=1; _WS_ORPHAN_R11WHY="$_WS_ORPHAN_WHY"
+    else _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; fi; }
   _ws_orphan_holders "$p" "$sp" || return 1   # rung 12: the holder probe, one definition the verb asks again nearest the act
   # rung 13: the newest ctime of every entry, the `.git` file included
   if declare -F _disk_pressure >/dev/null 2>&1 && _disk_pressure "$sp"; then floor="$WS_ORPHAN_FLOOR_PRESSURE_S"; fi
@@ -16228,6 +16265,7 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
   _WS_ORPHAN_WORD=''; _WS_ORPHAN_WHY=''; _WS_ORPHAN_VERDICT=''; _WS_ORPHAN_TOKEN=''; _WS_ORPHAN_RESCUE=''
   _WS_ORPHAN_CLASS=''; _WS_ORPHAN_MAIN=''; _WS_ORPHAN_BRANCH=''; _WS_ORPHAN_HEAD=''
   _WS_ORPHAN_NEWEST=''; _WS_ORPHAN_ENTRIES=''; _WS_ORPHAN_FLOOR=''
+  _WS_ORPHAN_R11=0; _WS_ORPHAN_R11WHY=''; _WS_ORPHAN_NESTED=''; _WS_ORPHAN_NLIST=''; _WS_ORPHAN_NBIND=(); _WS_ORPHAN_INSIDE=''
   wsroot=$(cd "$WORKTREES_ROOT" >/dev/null 2>&1 && pwd -P) || wsroot="$WORKTREES_ROOT"
   # 1: a linked worktree of a main checkout under PROJECTS_ROOT, by identity (its stanza -ef the path)
   _ws_reclaim_plain_path "$p" && [[ -d "$p" && ! -L "$p" ]] \
@@ -16243,7 +16281,7 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
   [[ -n "$sp" ]] || { _ws_orphan_refuse not-a-worktree "no worktree list of a project names $p"; return 1; }
   slug=$(basename "$sp"); _WS_ORPHAN_TREE="$sp"
   # 2: scope
-  cls=$(_ws_orphan_class "$sp" "$_WS_ORPHAN_MAIN" "$wsroot" "$pj"); _WS_ORPHAN_CLASS="$cls"
+  cls=$(_ws_orphan_class "$sp" "$_WS_ORPHAN_MAIN" "$wsroot" "$pj" "$(_ws_orphan_stanzas "$_WS_ORPHAN_MAIN" | cut -f1)"); _WS_ORPHAN_CLASS="$cls"
   [[ "$cls" != other ]] || { _ws_orphan_refuse out-of-scope "$sp is neither under the ccd worktree root nor a claude or superpowers worktree"; return 1; }
   # 3: not the main checkout under any spelling
   if [[ "$smain" == 1 ]]; then _ws_orphan_refuse not-a-workspace "$sp is a main checkout"; return 1; fi
@@ -16254,6 +16292,7 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
   # 4: no registry row names it
   _ws_orphan_registered "$p" "$sp" "$cls" "$pj" "$slug"; rc=$?
   (( rc == 0 )) || { if (( rc == 1 )); then _ws_orphan_refuse registered "$_WS_ORPHAN_WHY"; else _ws_orphan_refuse unmeasured "$_WS_ORPHAN_WHY"; fi; return 1; }
+  _WS_ORPHAN_INSIDE=$(_ws_orphan_inside "$sp")   # a row whose workdir CONTAINS the tree passes rung 4 and is named (G4)
   # 5: not locked in git
   [[ "$sl" != 1 ]] || { _ws_orphan_refuse locked "$sp is locked in git"; return 1; }
   # 6: clean and readable
@@ -16282,6 +16321,8 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
     (( tail_rc == 0 )) || return 1
   elif (( tail_rc != 0 )); then
     return 1
+  elif (( _WS_ORPHAN_R11 )); then
+    _ws_orphan_refuse nested-checkout "$_WS_ORPHAN_R11WHY; only --rescue with a rescue token may take it"
   fi
   # the token: every input named, the tree's and its main checkout's and its admin directory's identities, the content digests
   _ws_path_ident "$sp" && tid="$_WS_IDENT" || { _ws_orphan_refuse unmeasured "${_WS_IDENT_WHY:-the identity of $sp was never read}"; return 1; }
@@ -16291,8 +16332,8 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
   local -a inp=("pathhex=$(printf '%s' "$p" | _ws_orphan_hex)" "tree=$tid" "main=$mid" "admin=$aid" "head=$_WS_ORPHAN_HEAD"
                 "branch=$_WS_ORPHAN_BRANCH" "status=$stat_sha" "ignored=$ign" "newestctimens=$_WS_ORPHAN_NEWEST"
                 "entries=$_WS_ORPHAN_ENTRIES" "floor=$_WS_ORPHAN_FLOOR")
-  if (( r9 )); then
-    _WS_ORPHAN_RESCUE=$(_ws_reclaim_fingerprint mode=orphan-rescue "${inp[@]}")
+  if (( r9 || _WS_ORPHAN_R11 )); then
+    _WS_ORPHAN_RESCUE=$(_ws_reclaim_fingerprint mode=orphan-rescue "${inp[@]}" ${_WS_ORPHAN_NBIND[@]+"${_WS_ORPHAN_NBIND[@]}"})
     return 1   # _ws_orphan_refuse above already named head-not-on-remote
   fi
   _WS_ORPHAN_TOKEN=$(_ws_reclaim_fingerprint mode=orphan "${inp[@]}"); _WS_ORPHAN_VERDICT=token
@@ -16301,35 +16342,37 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
 
 _ws_orphan_census() {   # ccd ws-audit --orphans -> ONE JSON document: every linked worktree by location class
   _json_str probe >/dev/null 2>&1 || die "python3 unavailable — cannot quote the census safely"
-  local wsroot m mr pj line sh sb sl spr smain cls slug rows=0 trunc=false first=1 t0=$SECONDS d age ph out='['
-  local -a seen
+  local wsroot m mr pj line sh sb sl spr smain cls slug rows=0 trunc=false first=1 t0=$SECONDS d age ph out='[' chk ins
+  local -a seen scan
   wsroot=$(cd "$WORKTREES_ROOT" >/dev/null 2>&1 && pwd -P) || wsroot="$WORKTREES_ROOT"
   for m in "$PROJECTS_ROOT"/*; do
     [[ -e "$m/.git" ]] || continue
     mr=$(cd "$m" >/dev/null 2>&1 && pwd -P) || continue
-    pj=$(basename "$m"); seen=()
+    pj=$(basename "$m"); seen=(); chk=$(_ws_orphan_stanzas "$m" | cut -f1)
     while IFS=$'\t' read -r line sh sb sl spr smain; do
       seen+=("$line")
       [[ "$smain" != 1 ]] || continue
-      cls=$(_ws_orphan_class "$line" "$mr" "$wsroot" "$pj"); slug=$(basename "$line")
+      cls=$(_ws_orphan_class "$line" "$mr" "$wsroot" "$pj" "$chk"); slug=$(basename "$line")
       [[ "$cls" == ccd-root && -f "$REG/$pj-$slug.uuid" ]] && continue   # a registered workspace is not an orphan
       if (( rows >= WS_ORPHAN_CENSUS_ROWS || SECONDS - t0 >= WS_ORPHAN_CENSUS_S )); then trunc=true; break 2; fi
       age=$(_ws_gc_age "$line"); [[ "$age" == - ]] && age=null
-      ph=$(printf '%s' "$line" | _ws_orphan_hex)
+      ph=$(printf '%s' "$line" | _ws_orphan_hex); ins=$(_ws_orphan_inside "$line")
       (( first )) || out+=','; first=0; rows=$(( rows + 1 ))
-      out+=$(printf '{"pathHex":"%s","class":"%s","project":%s,"main":%s,"branch":%s,"head":%s,"locked":%s,"prunable":%s,"ageDays":%s}' \
+      out+=$(printf '{"pathHex":"%s","class":"%s","project":%s,"main":%s,"branch":%s,"head":%s,"locked":%s,"prunable":%s,"ageDays":%s,"inside":%s}' \
         "$ph" "$cls" "$(_json_str "$pj")" "$(_json_str "$mr")" "$( [[ "$sb" == detached ]] && echo null || _json_str "$sb")" \
-        "$(_json_str "$sh")" "$( (( sl )) && echo true || echo false)" "$( (( spr )) && echo true || echo false)" "$age")
+        "$(_json_str "$sh")" "$( (( sl )) && echo true || echo false)" "$( (( spr )) && echo true || echo false)" "$age" "$( [[ -n "$ins" ]] && _json_str "$ins" || echo null)")
     done < <(_ws_orphan_stanzas "$m")
     # a directory under a scanned root that no list names is not a worktree, and is the operator's
-    for d in "$wsroot/$pj"/* "$mr/.claude/worktrees"/* "$mr/.superpowers/worktrees"/*; do
+    scan=("$wsroot/$pj"/*)
+    while IFS= read -r d; do [[ -n "$d" ]] && scan+=("$d/.claude/worktrees"/* "$d/.superpowers/worktrees"/*); done <<< "${chk:-$mr}"
+    for d in "${scan[@]}"; do
       [[ -d "$d" && ! -L "$d" ]] || continue
       line=0; for ph in ${seen[@]+"${seen[@]}"}; do [[ "$ph" == "$d" || "$ph" -ef "$d" ]] && { line=1; break; }; done
       (( ! line )) || continue
       [[ "$d" != "$wsroot/$pj/"* || ! -f "$REG/$pj-$(basename "$d").uuid" ]] || continue
       if (( rows >= WS_ORPHAN_CENSUS_ROWS || SECONDS - t0 >= WS_ORPHAN_CENSUS_S )); then trunc=true; break 2; fi
       (( first )) || out+=','; first=0; rows=$(( rows + 1 ))
-      out+=$(printf '{"pathHex":"%s","class":"not-a-worktree","project":%s,"main":%s,"branch":null,"head":"","locked":false,"prunable":false,"ageDays":null}' \
+      out+=$(printf '{"pathHex":"%s","class":"not-a-worktree","project":%s,"main":%s,"branch":null,"head":"","locked":false,"prunable":false,"ageDays":null,"inside":null}' \
         "$(printf '%s' "$d" | _ws_orphan_hex)" "$(_json_str "$pj")" "$(_json_str "$mr")")
     done
   done
@@ -16342,14 +16385,14 @@ _ws_orphan_audit() {   # ccd ws-audit --orphan-hex <hex> -> ONE JSON document; e
   _json_str probe >/dev/null 2>&1 || die "python3 unavailable — cannot quote the audit record safely"
   p=$(_ws_orphan_unhex "$hex") || die "bad path hex"
   _ws_orphan_ladder "$p" || rc=$?
-  printf '{"mode":"orphan","pathHex":%s,"class":%s,"main":%s,"branch":%s,"head":%s,"verdict":%s,"refusal":%s,"detail":%s,"token":%s,"rescueToken":%s,"newestCtimeNs":%s,"entries":%s,"floorS":%s}\n' \
+  printf '{"mode":"orphan","pathHex":%s,"class":%s,"main":%s,"branch":%s,"head":%s,"verdict":%s,"refusal":%s,"detail":%s,"token":%s,"rescueToken":%s,"newestCtimeNs":%s,"entries":%s,"floorS":%s,"inside":%s}\n' \
     "$(_json_str "$hex")" "$(_json_str "$_WS_ORPHAN_CLASS")" "$(_json_str "$_WS_ORPHAN_MAIN")" "$(_json_str "$_WS_ORPHAN_BRANCH")" \
     "$(_json_str "$_WS_ORPHAN_HEAD")" "$(_json_str "$_WS_ORPHAN_VERDICT")" \
     "$( [[ -n "$_WS_ORPHAN_WORD" ]] && _json_str "$_WS_ORPHAN_WORD" || echo null)" "$(_json_str "$_WS_ORPHAN_WHY")" \
     "$( [[ -n "$_WS_ORPHAN_TOKEN" ]] && _json_str "$_WS_ORPHAN_TOKEN" || echo null)" \
     "$( [[ -n "$_WS_ORPHAN_RESCUE" ]] && _json_str "$_WS_ORPHAN_RESCUE" || echo null)" \
     "$( [[ -n "$_WS_ORPHAN_NEWEST" ]] && _json_str "$_WS_ORPHAN_NEWEST" || echo null)" \
-    "${_WS_ORPHAN_ENTRIES:-null}" "${_WS_ORPHAN_FLOOR:-null}"
+    "${_WS_ORPHAN_ENTRIES:-null}" "${_WS_ORPHAN_FLOOR:-null}" "$( [[ -n "$_WS_ORPHAN_INSIDE" ]] && _json_str "$_WS_ORPHAN_INSIDE" || echo null)"
   if [[ "$_WS_ORPHAN_VERDICT" == unmeasured ]]; then
     echo "ccd: ws-audit --orphan-hex measured nothing: $_WS_ORPHAN_WHY — retry" >&2
     return 1
@@ -16377,7 +16420,7 @@ _ws_orphan_failed() {   # id tx word detail -> the post-start failure, journaled
 }
 
 _ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s16, p and the decision words are cmd_ws_orphan's)
-  local tok="$1" rescue="$2" want sp m cls br head tx n=0 err bres=left want_n sha
+  local tok="$1" rescue="$2" want sp m cls br head tx n=0 err bres=left want_n sha nk np
   _ws_orphan_ladder "$p" || :
   [[ "$_WS_ORPHAN_VERDICT" != unmeasured ]] || { _ws_orphan_failed "$id" "" probe-unmeasured "nothing was removed: $_WS_ORPHAN_WHY"; return 1; }
   want="$_WS_ORPHAN_TOKEN"
@@ -16386,7 +16429,7 @@ _ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s1
     elif [[ -n "$_WS_ORPHAN_TOKEN" ]]; then _ws_orphan_refused "$id" "" no-rescue-token "--rescue was given for a tree that needs no rescue; nothing was pinned or removed"; return 0
     fi
   elif [[ -n "$_WS_ORPHAN_RESCUE" ]]; then
-    _ws_orphan_refused "$id" "" head-not-on-remote "$_WS_ORPHAN_WHY; only --rescue with a rescue token may take it"; return 0
+    _ws_orphan_refused "$id" "" "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 0
   fi
   if [[ -z "$want" ]]; then
     case "$_WS_ORPHAN_WORD" in
@@ -16407,10 +16450,19 @@ _ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s1
     { [[ "$n" =~ ^[1-9][0-9]*$ && "$n" == "$want_n" ]] && git -C "$m" rev-parse --verify --quiet "refs/ccrc/attic/orphan/$s16/$head" >/dev/null 2>&1; } \
       || { _ws_orphan_failed "$id" "$tx" pin-failed "nothing was removed: HEAD of $p could not be pinned under refs/ccrc/attic/orphan/$s16/"; return 1; }
   fi
+  if (( rescue && _WS_ORPHAN_R11 )); then   # DR-22 (D-6634): each nested checkout is pinned or rescued whole, and re-proved, before anything goes
+    _ws_orphan_nested_pin "$m" "$p" "$s16" || { _ws_orphan_failed "$id" "$tx" pin-failed "nothing was removed: $RECLAIM_PIN_WHY"; return 1; }
+  fi
   _ws_orphan_gap pinned
   if ! _ws_orphan_holders "$p" "$sp"; then   # the holder, asked once more nearest the act
     if [[ "$_WS_ORPHAN_VERDICT" == unmeasured ]]; then _ws_orphan_failed "$id" "$tx" probe-unmeasured "nothing was removed: $_WS_ORPHAN_WHY"; return 1; fi
     _ws_orphan_refused "$id" "$tx" "$_WS_ORPHAN_WORD" "nothing was removed: $_WS_ORPHAN_WHY"; return 0
+  fi
+  if (( rescue && _WS_ORPHAN_R11 )); then   # the rescued directories go first, by the collector's own removal; then git's, never forced
+    while IFS=$'\t' read -r nk np; do
+      [[ -n "$np" ]] || continue
+      _ws_leaf_remove "${np%/*}" "${np##*/}" || { _ws_orphan_failed "$id" "$tx" nested-remove-failed "$np was not removed ($_WS_LEAF_WHY); the tree is left as it stands"; return 1; }
+    done < <(printf '%s' "$_WS_ORPHAN_NLIST" | LC_ALL=C sort -t $'\t' -k2,2 -r)
   fi
   err=$(git -C "$m" worktree remove -- "$p" 2>&1) && [[ ! -e "$p" ]] \
     || { _ws_orphan_failed "$id" "$tx" worktree-remove-failed "git did not remove $p, and it is left as it stands: ${err:-the directory still stands}"; return 1; }
@@ -16419,6 +16471,25 @@ _ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s1
   fi
   _lc_done destroy "$id" "$tx" verb ws-orphan meas.mode "$cls" meas.branch "$bres" meas.attic "$( ((rescue)) && echo "$n")" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   printf '{"removed":true,"pathHex":%s,"class":%s,"branch":%s,"pinned":%s}\n' "$(_json_str "$(printf '%s' "$p" | _ws_orphan_hex)")" "$(_json_str "$cls")" "$(_json_str "$bres")" "$n"
+}
+
+_ws_orphan_nested_pin() {   # main tree s16 -> 0 when each nested checkout is pinned (same repository) or rescued (foreign) under
+  #   refs/ccrc/attic/orphan/<s16>/nested/<pathhex>/ and every pin re-proved; 1 with RECLAIM_PIN_WHY. Run under `_ws_reclaim_contained`.
+  local m="$1" pr b kind c rel wip sha got
+  RECLAIM_PIN_WHY=''; RECLAIM_SECRETS=()
+  pr=$(cd "$2" >/dev/null 2>&1 && pwd -P) || { RECLAIM_PIN_WHY="could not resolve $2"; return 1; }
+  while IFS=$'\t' read -r kind c; do
+    [[ -n "$c" ]] || continue
+    rel="${c#"$pr"/}"; b="refs/ccrc/attic/orphan/$3/nested/$(_ws_hex "$rel")"
+    if [[ "$kind" == foreign ]]; then _ws_nested_rescue "$m" "$c" "$b" "orphan-$3" orphan "$rel/" || return 1; continue; fi
+    _ws_wip_commit "$c" "orphan-$3" orphan "$rel/" || { RECLAIM_PIN_WHY="$RECLAIM_WIP_WHY"; return 1; }
+    wip="$RECLAIM_WIP_SHA"
+    { git -C "$c" reflog show HEAD --format=%H 2>/dev/null | LC_ALL=C sort -u | sed "s#.*#& reflog/&#"; git -C "$c" rev-parse --verify --quiet "HEAD^{commit}" | sed 's/$/ head/'
+      [[ -z "$wip" ]] || echo "$wip wip"; } | while read -r sha got; do
+      [[ "$sha" =~ ^[0-9a-f]{40,64}$ ]] && git -C "$m" update-ref "$b/$got" "$sha" 2>/dev/null && [[ "$(git -C "$m" rev-parse --verify --quiet "$b/$got")" == "$sha" ]] || exit 1
+    done
+    [[ "${PIPESTATUS[1]}" == 0 && -n "$(git -C "$m" rev-parse --verify --quiet "$b/head")" ]] || { RECLAIM_PIN_WHY="the nested checkout at $c could not be pinned under $b/"; return 1; }
+  done <<< "$_WS_ORPHAN_NLIST"
 }
 
 cmd_ws_orphan() {   # ccd ws-orphan --expect <token> --tree-hex <hex> [--rescue] [--surface <word>] [--actor <text>] [--reason <text>]
