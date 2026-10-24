@@ -239,6 +239,26 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     expect(routeLines()[0]).toMatch(new RegExp(`route ${ID}: class fable -> opus \\[actor=operator-session\\]`));
   });
 
+  it('D-6791: an acknowledged /model fable is kept from a Claude Code session shell too (the keep is the operator\'s write, not the session\'s)', () => {
+    seed(); record({ class: 'opus' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'fable'), ack(t, MODEL_ACK('Fable 5'))]);
+    expect(h.sh(`_operator_choice_keep ${ID}; echo "rc=$?"`, { CCRC_TEST_CLAUDECODE: '1' })).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('fable');
+  });
+
+  it('D-6791: cmd_swap run from a session shell keeps the operator\'s /model fable, and the spawn it leads to composes --model fable (not the D-6793 Opus)', () => {
+    seed(); record({ class: 'opus' }); h.sh(`_reg_set ${ID} wrapper claude-d`); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'fable'), ack(t, MODEL_ACK('Fable 5'))]);
+    const d = h.sh('_cfg_dir claude').trim();
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ model: 'fable' }));
+    h.sh(`${SWAP} CCD_SWAP_AUTO=1 cmd_swap ${ID} claude`, { TMUX: '', CCRC_TEST_CLAUDECODE: '1' });
+    expect(h.reg(ID, 'class')).toBe('fable');
+    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in new-session) : > "$HOME/pane-up" ;; has-session) [[ -e "$HOME/pane-up" ]] ;; esac; };
+      rm -f "$HOME/pane-up"; _spawn_start ${ID} resume`, { CCRC_TEST_CLAUDECODE: '1' });
+    expect(h.calls().filter((c) => c.startsWith('tmux new-session')).join('\n')).toContain(' --model fable ');
+  });
+
   it('the picker takes no argument: its acknowledgement names the value, in either shape Claude Code writes it', () => {
     seed(); record({ class: 'fable' }); const t = now() - 600;
     writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK('Opus 5.5 (1M context)'))]);

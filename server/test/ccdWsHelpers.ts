@@ -379,9 +379,11 @@ export function stubContainedTool(
  *  CCRC_CODEX_AUTH_BASE when it names one, else CLOSED_AUTH_BASE. An environment VALUE, not a poison: only the
  *  auth library reads it, so it moves no other code path (the opt-in rule below is about poisons), and unset or
  *  EMPTY the library reads the live endpoint, so an empty caller value names none (`runAuthDriver`'s rule). */
-function containedAuthBase(env: NodeJS.ProcessEnv): { CCRC_CODEX_AUTH_BASE: string } {
+function containedAuthBase(env: NodeJS.ProcessEnv): { CCRC_CODEX_AUTH_BASE: string; CLAUDECODE: string } {
   const named = env['CCRC_CODEX_AUTH_BASE'];
-  return { CCRC_CODEX_AUTH_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE };
+  // D-6791: `ccd` refuses class=fable from a Claude Code session's shell (CLAUDECODE set), so a suite run from inside
+  // one must not inherit it: the harness answers empty unless the test names CCRC_TEST_CLAUDECODE.
+  return { CCRC_CODEX_AUTH_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE, CLAUDECODE: env['CCRC_TEST_CLAUDECODE'] ?? '' };
 }
 
 export function ghContainedEnv(
