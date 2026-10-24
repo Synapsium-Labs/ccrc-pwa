@@ -8,6 +8,7 @@
 // half-written or foreign file never looks like an empty, healthy fleet. A notice or a receipt names only what the
 // census states; it decides nothing about a deletion (the sweep's own rules and its marker do that).
 import type { DiskHolder } from '../../shared/disk.js';
+import { MAIL_BODY_MAX_BYTES } from '../../shared/api.js';
 
 /** The grace before a quarantined entry is deleted, and the span a receipt tells the session it has to move it back:
  *  24 hours, one hour under pressure (the sweep's own `GRACE`, restated only as the words a session reads). */
@@ -136,32 +137,64 @@ const stamp = (ms: number): string => new Date(ms).toISOString();
 
 export interface TmpSweepReceiptMail { readonly toId: string; readonly subject: string; readonly body: string }
 
-/**
- * One mail per session per pass, for the NON-SHADOW rows newer than `mailed` (the highest `seq` already handled).
- * `mailed` returns as the census's own `seq`, shadow passes included, so shadow rows are never read twice either. A
- * census whose `seq` fell below `mailed` (the file was recreated) is read from the start; the lane's subject check
- * keeps an identical mail from being queued twice. The body lists each entry, its size and its quarantine path, the
- * sentence "move it back before <time> to keep it", and the entries the budget kept, with why.
- */
-export function tmpSweepReceipts(census: TmpSweepCensus, mailed: number): { mails: TmpSweepReceiptMail[]; mailed: number } {
-  const from = mailed > census.seq ? 0 : mailed;
-  const bySession = new Map<string, TmpSweepMoved[]>();
-  for (const r of census.moved) {
-    if (r.shadow || r.seq <= from) continue;
-    const rows = bySession.get(r.id);
-    if (rows === undefined) bySession.set(r.id, [r]); else rows.push(r);
+const bytesOf = (s: string): number => Buffer.byteLength(s);
+
+/** `lines` while they fit in `limit` bytes (joined by newlines, `used` already spent), then ONE line saying how many
+ *  more there are and where the rest is. The overflow line itself is always inside the limit. */
+function fitLines(lines: readonly string[], limit: number, used: number): string[] {
+  const more = (k: number): string => `and ${k} more entries; the census ~/.ccrc/tmp-sweep.json lists them`;
+  const out: string[] = [];
+  let spent = used;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const rest = lines.length - i - 1;
+    // Keep room for the overflow line unless this is the last one and it fits outright.
+    const reserve = rest === 0 ? 0 : bytesOf(more(lines.length)) + 1;
+    if (spent + bytesOf(line) + 1 + reserve > limit) {
+      out.push(more(lines.length - i));
+      return out;
+    }
+    out.push(line);
+    spent += bytesOf(line) + 1;
   }
+  return out;
+}
+
+/**
+ * One mail per session per PASS (every row of one sweep pass carries the same `at`; journal-folded rows keep their
+ * pass's), for the NON-SHADOW rows of the census. The pass is in the subject, and the subject is the identity: a re-read
+ * or a cold start rebuilds exactly the subjects already sent (the lane's subject check then sends nothing), and a
+ * recreated census, whose `seq` restarts, cannot collide with an old pass. `_mailed` (the lane's high-water) is no
+ * longer a filter, since `seq` alone cannot tell a recreated census whose seq reaches the old one. Rows whose quarantine time has
+ * already passed are not mailed (the entry is gone; telling the session to move it back would be false). `mailed`
+ * returns as the census's own `seq`, shadow passes included. The body lists each entry, its size and its quarantine
+ * path, the sentence "move it back before <time> to keep it", and the entries the budget kept, with why, within
+ * MAIL_BODY_MAX_BYTES; what does not fit is one line pointing at the census.
+ */
+export function tmpSweepReceipts(census: TmpSweepCensus, _mailed: number): { mails: TmpSweepReceiptMail[]; mailed: number } {
   const grace = census.pressure ? TMP_QUARANTINE_GRACE_PRESSURE_MS : TMP_QUARANTINE_GRACE_MS;
+  const byPass = new Map<string, { id: string; at: number; rows: TmpSweepMoved[] }>();
+  for (const r of census.moved) {
+    if (r.shadow || r.at + grace <= census.at) continue;
+    const key = `${r.id}\u0000${r.at}`;
+    const g = byPass.get(key);
+    if (g === undefined) byPass.set(key, { id: r.id, at: r.at, rows: [r] }); else g.rows.push(r);
+  }
   const mails: TmpSweepReceiptMail[] = [];
-  for (const [id, rows] of bySession) {
+  for (const { id, at, rows } of byPass.values()) {
     const lo = Math.min(...rows.map((r) => r.seq));
     const hi = Math.max(...rows.map((r) => r.seq));
     const lines = rows.map((r) => `- ${r.kind === 'budget' ? '(budget) ' : ''}${r.name} (${gib(r.bytes)}) -> ${r.quarantine ?? 'no quarantine path'}; ` +
       `move it back before ${stamp(r.at + grace)} to keep it`);
     const kept = (census.sessions.find((s) => s.id === id)?.budget.kept ?? []).map((k) => `- kept ${k.name}: ${k.why}`);
-    const body = ['The tmp sweep moved these entries out of your scratch into quarantine:', ...lines,
-      ...(kept.length > 0 ? ['The size budget kept these:', ...kept] : [])].join('\n');
-    mails.push({ toId: id, subject: `tmp-sweep: moved ${rows.length} entries (seq ${lo}-${hi})`, body });
+    const head = 'The tmp sweep moved these entries out of your scratch into quarantine:';
+    const keptHead = 'The size budget kept these:';
+    // Entries get at most three quarters of the body; the kept list takes what is left.
+    const rowLines = fitLines(lines, Math.floor(MAIL_BODY_MAX_BYTES * 0.75), bytesOf(head) + 1);
+    const used = bytesOf(head) + 1 + rowLines.reduce((n, l) => n + bytesOf(l) + 1, 0);
+    const keptLines = kept.length > 0 ? fitLines(kept, MAIL_BODY_MAX_BYTES, used + bytesOf(keptHead) + 1) : [];
+    const body = [head, ...rowLines, ...(kept.length > 0 ? [keptHead, ...keptLines] : [])].join('\n');
+    mails.push({ toId: id, subject: `tmp-sweep: moved ${rows.length} entries (seq ${lo}-${hi}, pass ${at})`, body });
   }
   return { mails, mailed: census.seq };
 }
