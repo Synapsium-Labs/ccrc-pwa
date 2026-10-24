@@ -676,6 +676,33 @@ describe('NewSessionSheet — success opens the new session', () => {
     expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
   });
 
+  it('an unnamed create for an already-live project, answered after a dismissal and a reopening, toasts once and leaves the reopened sheet open', async () => {
+    // The already-live arm closes the sheet at once, so after the create it is the post-create generation check alone
+    // that keeps a dismissed sheet's answer from shutting the operator's reopened sheet (the parent's close).
+    let answer!: () => void;
+    vi.spyOn(api, 'createSession').mockImplementation(() => new Promise<void>((resolve) => { answer = resolve; }));
+    const { store, onClose, flush, close, reopen } = await mount();
+    showFrame(store, [NEW_ROW]); // alive BEFORE the create: this create would take the already-live arm
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
+    close();
+    reopen();
+    await flush();
+    await act(async () => { answer(); }); // the dismissed create answers successfully, into the reopened sheet
+    await flush();
+    expect(screen.getAllByText('Starting demo on team·max…')).toHaveLength(1); // said once, by the dismissed start
+    expect(onClose).not.toHaveBeenCalled(); // the parent's close would shut the operator's reopened sheet
+    expect(window.location.pathname).toBe('/');
+    // The reopened sheet is a fresh one at step 1, not closed and not left in the old create's starting state.
+    expect(screen.getByRole('button', { name: /team·max/ })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /^(Starting…|Still starting)/ })).toBeNull();
+    await pickDemo(flush);
+    expect(screen.getByRole('button', { name: /^Start demo/ })).toBeEnabled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('a named create answered after the sheet was dismissed says it started, with the server\'s title, and navigates nowhere', async () => {
     let answer!: (a: { named: true; id: string; slug: string; title: string }) => void;
     vi.spyOn(api, 'workspaceAdd').mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
