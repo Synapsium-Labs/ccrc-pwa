@@ -154,17 +154,25 @@ describe('coordinatorRole and COORDINATOR_WORD (D-6714)', () => {
 
     // SessionDetails.tsx imports the word and spells it nowhere: no JSX text and no string that is the whole word.
     const details = path.join(SRC, 'session', 'SessionDetails.tsx');
-    const importsWord = (file: string): boolean => parseTs(file).statements.some((st) => ts.isImportDeclaration(st)
-      && st.importClause?.namedBindings !== undefined && ts.isNamedImports(st.importClause.namedBindings)
-      && st.importClause.namedBindings.elements.some((e) => e.name.text === 'COORDINATOR_WORD'));
-    expect(importsWord(details), 'SessionDetails.tsx imports COORDINATOR_WORD').toBe(true);
+    // The module COORDINATOR_WORD is imported from, under its own name (an alias is refused), or null.
+    const importedFrom = (file: string, name: string): string | null => {
+      for (const st of parseTs(file).statements) {
+        if (!ts.isImportDeclaration(st) || st.importClause?.namedBindings === undefined) continue;
+        const b = st.importClause.namedBindings;
+        if (ts.isNamedImports(b) && b.elements.some((e) => (e.propertyName ?? e.name).text === name && e.name.text === name)) {
+          return (st.moduleSpecifier as ts.StringLiteral).text;
+        }
+      }
+      return null;
+    };
+    expect(importedFrom(details, 'COORDINATOR_WORD'), 'SessionDetails.tsx imports COORDINATOR_WORD from fleet/sessionFacts, its one owner').toBe('../fleet/sessionFacts');
     const spelled = nodes(details, (n) => isCoordinatorLiteral(n) || (ts.isJsxText(n) && n.text.trim() === 'coordinator'));
     expect(spelled.map((n) => n.getText()), 'SessionDetails.tsx spells the word').toEqual([]);
 
     // sessionEntries.ts (the palette's session builder) imports the word; its two wording arrows `groupWords` and
     // `labelWords` reference it and hold no string or template text that spells it; nothing else in the file does.
     const entries = path.join(SRC, 'command', 'sessionEntries.ts');
-    expect(importsWord(entries), 'sessionEntries.ts imports COORDINATOR_WORD').toBe(true);
+    expect(importedFrom(entries, 'COORDINATOR_WORD'), 'sessionEntries.ts imports COORDINATOR_WORD from fleet/sessionFacts, its one owner').toBe('../fleet/sessionFacts');
     type TextPart = ts.StringLiteral | ts.NoSubstitutionTemplateLiteral | ts.TemplateHead | ts.TemplateMiddle | ts.TemplateTail;
     const textPart = (n: ts.Node): n is TextPart => ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)
       || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n);
