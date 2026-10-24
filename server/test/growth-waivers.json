@@ -38,9 +38,9 @@
     },
     {
       "file": "ccd/ccd",
-      "maxDelta": 650,
+      "maxDelta": 588,
       "d": "D-6625",
-      "reason": "fleet disk retention DR-13: the loose arm of ws-collect (census, audit, verb, record family, pressure twin) as one new region of ccd/ccd; the verb shares the witnessed arm's helpers and cannot live in another file, because ccd is installed as one digest-checked body (measured +547 net code lines over DR-7, +644 against the merge-base while DR-7 is unmerged; the census now also lists the loose record family)",
+      "reason": "fleet disk retention DR-13: the loose arm of ws-collect (census, audit, verb, record family, pressure twin) as one new region of ccd/ccd; the verb shares the witnessed arm's helpers and cannot live in another file, because ccd is installed as one digest-checked body (measured +578 net code lines against the merge-base with main after DR-7 merged; the census also lists the loose record family)",
       "added": "2026-10-23"
     }
   ]
