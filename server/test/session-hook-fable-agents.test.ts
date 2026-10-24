@@ -86,7 +86,7 @@ describe('the Fable arm fails open (D-6792)', () => {
   it('a malformed payload that names fable prints nothing and exits 0', () => {
     expect(run('{"hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"model":"fable"')).toBe('');
   });
-  it('a non-string model is allowed', () => {
+  it('a non-string model is not denied by the Fable arm', () => {
     expect(fire('Agent', { prompt: 'p', model: { fable: 1 } })).not.toMatch(/Fable runs only/);
   });
   it('another tool naming fable is not this arm\'s business', () => {
