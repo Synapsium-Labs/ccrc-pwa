@@ -664,6 +664,30 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(card().contains(document.activeElement), 'the returned menu took focus from the body').toBe(false);
   });
 
+  it('a hooked ask\'s menu that vanishes for one poll and returns as the next question keeps the keys', async () => {
+    // Premises (R2): fixture 1's envelope up and engaged by a key, the answer in flight; focus falls to the body; a poll
+    // sees no menu (`dialog_cleared`, its own batch) and the next poll the next question. The hook's envelope never went, and
+    // for a hooked ask the hook is the lifecycle authority, so the pane's blink is not the ask's end.
+    media(true);
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(1);
+    const section = card();
+    const first = opt(section, /^Redis/);
+    act(() => first.focus());
+    key(first, '1');
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    act(() => store.getState().apply({ type: 'dialog_cleared' }));
+    await frame();
+    expect(store.getState().ask, 'premise: the envelope is still held').not.toBeNull();
+    act(() => store.getState().apply({ type: 'dialog', dialog: nextScreen() }));
+    await frame();
+    expect(card(), 'premise: the same card carries question 2').toBe(section);
+    expect(within(section).getByText(QUESTION_2), 'premise: question 2 is in the card').toBeInTheDocument();
+    expect(card().contains(document.activeElement), 'R2: focus is back inside the card after the transient clear').toBe(true);
+  });
+
   it('an aged ask\'s same screen sent again releases nothing: the next screen still takes the keys back', async () => {
     // Premises: engaged on fixture 2 by a key; the SAME dialog frame arrives again (a repeat, no clear); focus falls to the
     // body; the next aged question arrives. A repeated frame is no lifecycle event.
@@ -708,7 +732,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(card().contains(document.activeElement), 'the replacing menu took focus from the body').toBe(false);
   });
 
-  it('the store\'s askEpoch counts clears only: ask_cleared and dialog_cleared, never a frame that states something', () => {
+  it('the store\'s askEpoch counts the clears that end an ask: an ask_cleared of a held envelope, a dialog_cleared with none held', () => {
     const store = createSessionStore(ID, { makeSocket: fakeSocket });
     const epoch = (): number => store.getState().askEpoch;
     expect(epoch(), 'it starts at 0').toBe(0);
@@ -716,10 +740,15 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     store.getState().apply({ type: 'dialog', dialog: askFixture(2).dialog! });
     store.getState().apply({ type: 'rotated', uuid: 'u2' });
     expect(epoch(), 'ask, dialog and rotated frames leave it').toBe(0);
-    store.getState().apply({ type: 'ask_cleared' });
-    expect(epoch(), 'ask_cleared counts one').toBe(1);
     store.getState().apply({ type: 'dialog_cleared' });
-    expect(epoch(), 'dialog_cleared counts one').toBe(2);
+    expect(epoch(), 'dialog_cleared with an envelope held leaves it').toBe(0);
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(epoch(), 'ask_cleared of a held envelope counts one').toBe(1);
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(epoch(), 'ask_cleared with none held (a connection\'s first frame) leaves it').toBe(1);
+    store.getState().apply({ type: 'dialog', dialog: askFixture(2).dialog! });
+    store.getState().apply({ type: 'dialog_cleared' });
+    expect(epoch(), 'dialog_cleared with no envelope held counts one').toBe(2);
   });
 });
 
