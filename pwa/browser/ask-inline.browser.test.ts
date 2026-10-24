@@ -394,21 +394,40 @@ describe('Go to question reveals the focused option (R69 F3, D-6326)', () => {
   interface Geometry {
     inCard: boolean; focusIsFirst: boolean; vh: number; scrollTop: number; scrollHeight: number; clientHeight: number;
     scroller: [number, number]; option: [number, number];
+    /** The ring room `--sp-1` resolves to, in px, measured from a probe that uses the token (never hard-coded here). */
+    ring: number;
   }
+  /** What must not move across the click: the composer's box and every scroller but the card's own body. */
+  interface Stand { composer: { left: number; top: number; width: number }; page: number; chat: number; chatBody: number }
+  const STAND = (card: string): Stand => {
+    const chat = document.querySelector<HTMLElement>(card)!.closest<HTMLElement>('.chat')!;
+    const r = chat.querySelector<HTMLElement>('.composer')!.getBoundingClientRect();
+    return {
+      composer: { left: r.left, top: r.top, width: r.width },
+      page: (document.scrollingElement as HTMLElement).scrollTop,
+      chat: chat.scrollTop,
+      chatBody: chat.querySelector<HTMLElement>(':scope > .chat-body')!.scrollTop,
+    };
+  };
   const MEASURE = (card: string): Geometry => {
     const el = document.querySelector<HTMLElement>(card)!;
     const body = el.querySelector<HTMLElement>('.ask-inline-body')!;
     const a = document.activeElement as HTMLElement;
     const br = body.getBoundingClientRect();
     const ar = a.getBoundingClientRect();
+    const probe = document.createElement('div');
+    probe.style.marginBlockStart = 'var(--sp-1)';
+    el.appendChild(probe);
+    const ring = parseFloat(getComputedStyle(probe).marginTop);
+    probe.remove();
     return {
-      inCard: el.contains(a), focusIsFirst: a === el.querySelector<HTMLElement>('.opt[tabindex="0"]'), vh: window.innerHeight,
+      ring, inCard: el.contains(a), focusIsFirst: a === el.querySelector<HTMLElement>('.opt[tabindex="0"]'), vh: window.innerHeight,
       scrollTop: body.scrollTop, scrollHeight: body.scrollHeight, clientHeight: body.clientHeight,
       scroller: [Math.round(br.top), Math.round(br.bottom)], option: [Math.round(ar.top), Math.round(ar.bottom)],
     };
   };
   /** Open `frames` at `view` with the call in the transcript, park focus on the body, click Go to question, and measure. */
-  async function goTo(view: AppView, frames: object[]): Promise<{ g: Geometry; errors: string[] }> {
+  async function goTo(view: AppView, frames: object[]): Promise<{ g: Geometry; before: Stand; after: Stand; errors: string[] }> {
     const opened = await openApp(browser!, view, FIXTURE);
     try {
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
@@ -418,9 +437,10 @@ describe('Go to question reveals the focused option (R69 F3, D-6326)', () => {
       await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
       await opened.page.waitForTimeout(800);
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      const before = await opened.page.evaluate(STAND, CARD);
       await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).click();
       await opened.page.waitForTimeout(300);
-      return { g: await opened.page.evaluate(MEASURE, CARD), errors: opened.errors };
+      return { g: await opened.page.evaluate(MEASURE, CARD), before, after: await opened.page.evaluate(STAND, CARD), errors: opened.errors };
     } finally {
       await opened.ctx.close();
     }
@@ -429,11 +449,23 @@ describe('Go to question reveals the focused option (R69 F3, D-6326)', () => {
 
   for (const view of GOTO_VIEWS) {
     it(`${named(view)}: the focused first option lies inside the card's scroller and the window after Go to question`, async () => {
-      const { g, errors } = await goTo(view, FRAMES());
+      const { g, before, after, errors } = await goTo(view, FRAMES());
       expect(g.inCard && g.focusIsFirst, 'premise: focus is on the first option (the identity control)').toBe(true);
       expect(g.scrollHeight, 'premise: the forty-line question overflows the one scroller').toBeGreaterThan(g.clientHeight);
       expect(inside(g.option, g.scroller), `the option ${JSON.stringify(g.option)} lies inside the scroller ${JSON.stringify(g.scroller)} (scrollTop ${g.scrollTop})`).toBe(true);
       expect(inside(g.option, [0, g.vh]), `the option ${JSON.stringify(g.option)} lies inside the window (0-${g.vh})`).toBe(true);
+      // R69 N3 (characterization, green on arrival): nothing but the card's own body moved.
+      for (const k of ['left', 'top', 'width'] as const) {
+        expect(Math.abs(after.composer[k] - before.composer[k]), `the composer's ${k} moved ${before.composer[k]} -> ${after.composer[k]}`).toBeLessThanOrEqual(1);
+      }
+      expect(after.page, 'the page did not scroll across the click').toBe(before.page);
+      expect(after.chat, '.chat did not scroll across the click').toBe(before.chat);
+      expect(after.chatBody, '.chat-body did not scroll across the click').toBe(before.chatBody);
+      // R69 N2: the ring is drawn --sp-1 outside the option and the scroller clips it, so the revealed option stops that far
+      // short of the scroller's bottom (`scroll-margin-block` on `.ask-inline .opt`), not flush with it.
+      expect(g.ring, 'premise: the probe resolved --sp-1').toBeGreaterThan(0);
+      expect(g.option[1], `ring room: the option's bottom ${g.option[1]} is at least ${g.ring}px (--sp-1) above the scroller's bottom ${g.scroller[1]}`)
+        .toBeLessThanOrEqual(g.scroller[1] - g.ring + 1);
       expect(errors).toEqual([]);
     }, 90_000);
   }
