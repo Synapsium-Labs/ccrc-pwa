@@ -26,7 +26,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
   const feed: Array<{ title: string; body: string }> = [];
   let mono = 1_000_000;
   let truncated = false;
-  const ok = (stdout: string): CcdResult => ({ ok: true, stdout, stderr: '', killed: false, signal: null });
+  const ok = (stdout: string): CcdResult => ({ ran: true, ok: true, stdout, stderr: '', killed: false, signal: null });
   const deps: OrphanSweepDeps = {
     io: { readdirMeasured: async () => ({ ok: true, entries: [...markers] }) } as unknown as OrphanSweepDeps['io'],
     registryDir: '/reg',
