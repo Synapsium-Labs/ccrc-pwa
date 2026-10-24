@@ -267,6 +267,11 @@ const BUILD_TIMEOUT = '    timeout-minutes: 30\n';
 const afterBuildTimeout = (lines: string): string => plant(BUILD_TIMEOUT, `${BUILD_TIMEOUT}${lines}`);
 const RECEIVE_ENV = '        env:\n          CCRC_BUILD_TAG: ${{ needs.build.outputs.tag }}\n          CCRC_BUILD_DIGEST: ${{ needs.build.outputs.digest }}\n';
 const PUBLISH_STEP = '      - name: publish\n';
+const BUILD_PREPARE = '      - name: prepare\n';
+/** The build job's second step, `step`, before prepare. */
+const beforePrepare = (step: string): string => plant(BUILD_PREPARE, `${step}${BUILD_PREPARE}`);
+/** The publish job's `steps:` and everything after it, to the end of the base. */
+const PUBLISH_STEPS = BASE.slice(BASE.indexOf('      attestations: write\n    steps:\n'));
 
 const MARKER_RUNS = [
   'cd server && npm ci', 'npm install', 'npm run build', 'npx tsc', 'pnpm i', 'yarn',
@@ -363,6 +368,24 @@ const PLANTED: Array<[string, string, string]> = [
   // exact condition; no step of a release write job carries one today.
   ['the attest step runs always()', plant('        id: attest\n', '        id: attest\n        if: always()\n'), 'job publish holds a write permission and step 4 carries if: always(), which its allowance does not permit'],
   ['the publish step runs always()', plant(PUBLISH_STEP, `${PUBLISH_STEP}        if: always()\n`), 'job publish holds a write permission and step 5 carries if: always(), which its allowance does not permit'],
+  // Review 886's F1: every item of steps: is read. A step-group key nests or
+  // schedules steps no check reads, so it is refused in every job, beside a
+  // valid run: too; a step with neither run: nor uses:, an item that is not a
+  // mapping and a steps: that is not a list are refused as well (D-6737).
+  ['a parallel: group in the publish job holds a run its allowance does not name', beforeReceive('      - parallel:\n          - run: node x.mjs\n'), 'job publish step 3 carries the step-group key parallel, which this guard does not read'],
+  ['a parallel: group in the build job holds a checkout that keeps its credential', beforePrepare('      - parallel:\n          - uses: actions/checkout@v4\n            with:\n              fetch-depth: 0\n'), 'job build step 2 carries the step-group key parallel, which this guard does not read'],
+  ['a build step carries background:', beforePrepare('      - run: echo x\n        background: true\n'), 'job build step 2 carries the step-group key background, which this guard does not read'],
+  ['a build step carries wait:', beforePrepare('      - run: echo x\n        wait: [x]\n'), 'job build step 2 carries the step-group key wait, which this guard does not read'],
+  ['a build step carries wait-all:', beforePrepare('      - run: echo x\n        wait-all: true\n'), 'job build step 2 carries the step-group key wait-all, which this guard does not read'],
+  ['a build step carries cancel:', beforePrepare('      - run: echo x\n        cancel: x\n'), 'job build step 2 carries the step-group key cancel, which this guard does not read'],
+  ['a build step carries only a name:', beforePrepare('      - name: x\n'), 'job build step 2 carries neither run: nor uses:'],
+  ['a build step is a plain scalar', beforePrepare('      - just-a-string\n'), 'job build step 2 is not a mapping: just-a-string'],
+  ['the publish job steps: is a plain scalar', plant(PUBLISH_STEPS, '      attestations: write\n    steps: bash r publish\n'), 'job publish carries a steps: that is not a list: bash r publish'],
+  // Review 886's F2: D-6728's job-level arm, each shape a row of its own.
+  ['a build job env: is present with a null value', afterBuildTimeout('    env:\n'), 'job build carries a job-level env: that is not a mapping: null'],
+  ['a build job env: is a list', afterBuildTimeout('    env:\n      - A=x\n'), 'job build carries a job-level env: that is not a mapping: ["A=x"]'],
+  ['a build job env: is a plain scalar', afterBuildTimeout('    env: x\n'), 'job build carries a job-level env: that is not a mapping: x'],
+  ['a called-workflow job with: is a whole-value expression', `${BASE}  called:\n    permissions:\n      contents: read\n    uses: ./.github/workflows/ci.yml\n    with: \${{ fromJSON(vars.W) }}\n`, 'job called carries a job-level with: that is not a mapping: ${{ fromJSON(vars.W) }}'],
 ];
 
 describe('W26-G4: the guard sees each planted breach', () => {
