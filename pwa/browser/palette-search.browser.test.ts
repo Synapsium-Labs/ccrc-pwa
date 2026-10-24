@@ -146,8 +146,10 @@ describe("a close hands focus to the landmark on screen, never the body (T5a car
         await page.getByRole('combobox').waitFor({ timeout: 10_000 });
         await page.keyboard.press('Escape');
         await page.waitForFunction(() => document.querySelector('[role="combobox"]') === null, undefined, { timeout: 5_000 });
-        await page.waitForFunction(() => document.activeElement !== document.body, undefined, { timeout: 5_000 });
-        expect(await page.evaluate(() => document.activeElement?.id)).toBe('fleet');
+        await expect.poll(() => page.evaluate(() => {
+          const a = document.activeElement;
+          return a === null || a === document.body ? 'body' : (a.id || a.tagName);
+        }), { message: "focus lands on the fleet column's landmark (#fleet), never the body", timeout: 5_000 }).toBe('fleet');
       } finally {
         await ctx.close();
       }
