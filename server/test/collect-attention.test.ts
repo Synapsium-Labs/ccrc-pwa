@@ -195,7 +195,7 @@ describe('whose words a sentence quotes: ccd’s, or ccrc’s own (spec §5.10)'
 describe('box-wide lines: single items under fixed labels (spec §5.10)', () => {
   it('every label is spelled once, holds a slash, which no registry file name can carry, and is no session id', () => {
     const labels = Object.values(COLLECT_BOX_LABELS);
-    expect(Object.keys(COLLECT_BOX_LABELS).sort()).toEqual(['box-probe', 'flock', 'lock', 'no-document', 'no-run',
+    expect(Object.keys(COLLECT_BOX_LABELS).sort()).toEqual(['box-probe', 'flock', 'lock', 'loose-census', 'no-document', 'no-run',
       'refused-names', 'tmpquarantine', 'tmproots', 'unsettled', 'unvouched']);
     expect(new Set(labels).size).toBe(labels.length);
     for (const l of labels) {
@@ -215,6 +215,17 @@ describe('box-wide lines: single items under fixed labels (spec §5.10)', () => 
     expect(got[1]!.sentence.includes(NL)).toBe(false);
     expect(got[2]!.sentence.startsWith('3 names under')).toBe(true);
     expect(got[2]!.sentence, 'Task 3 counts more than dashes and length').toContain('is no quarantine record of one');
+  });
+
+  it('the loose census in doubt is ONE box line saying why; a measured census (null or absent) lists none (D-6627)', () => {
+    const doubt = 'the census of loose temp entries named 2000 entries, past the 1024 the lane takes, so none was considered';
+    const got = items({}, { looseDoubt: doubt }).box;
+    expect(got).toHaveLength(1);
+    expect(got[0]!.word).toBe('loose-census');
+    expect(got[0]!.sessionId).toBe(COLLECT_BOX_LABELS['loose-census']);
+    expect(got[0]!.sentence).toContain(doubt);
+    expect(items({}, { looseDoubt: null }).box).toEqual([]);
+    expect(items({}, {}).box).toEqual([]);
   });
 
   it('box-wide probes: ONE line naming each probe with ccd’s detail', () => {

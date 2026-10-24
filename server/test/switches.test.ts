@@ -18,7 +18,10 @@ import { IDLE_NUDGE_DISABLED_MARKER } from '../src/idlenudge.js';
 import { STOP_DONE_DISABLED_MARKER } from '../src/stopDone.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
 import { isMarkerState } from '../../shared/api.js';
-import { ASKS_DISABLED_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, SWITCHES, markerSwitchNames, readSwitches } from '../../shared/switches.js';
+import {
+  ASKS_DISABLED_MARKER, COLLECT_LOOSE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, SWITCHES,
+  markerSwitchNames, readSwitches,
+} from '../../shared/switches.js';
 
 /** Today's marker values, typed once here as the table the switchboard must equal. `asks-disabled` is `watch.ts`'s
  *  private constant on the base, so it has no export to read; the switchboard rows below hold it. */
@@ -61,7 +64,9 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
   it('every exported marker constant is a marker row, keyed by its own name', () => {
     const markers = markerRows.map(([k, r]) => { expect('marker' in r.storage && r.storage.marker, k).toBe(k); return k; });
     expect(ASKS_DISABLED_MARKER).toBe('asks-disabled');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live'].sort());
+    // D-6627: the collector's loose arm joins as a row of its own, with no writer (single-definition pins that).
+    expect(COLLECT_LOOSE_LIVE_MARKER).toBe('collect-loose-live');
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live'].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
   });
 
