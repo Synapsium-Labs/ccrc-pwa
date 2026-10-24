@@ -14971,6 +14971,15 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(knob(home, `CCD_OS=${os}; _ccrc_knob CCRC_BACKUP_KEEP 7; ${ECHO}`), 'a key the file only comments').toBe('rc 0 val 7 from default why \n');
     });
 
+    it.each(['linux', 'darwin'] as const)('W24-R15: on %s a CRLF comment naming CCRC_RELEASE_BASE_URL beside the odd line reads the default: a CR that ends its line is the line\'s end, never a second line (ruling 16, D-6604)', (os) => {
+      // A CR followed by nothing is CRLF's line end, so the comment names nothing (R13's CR has a line after it). Alone and in a copy of the example.
+      const CRLF = '# CCRC_RELEASE_BASE_URL=https://mirror.example/releases\r\n';
+      for (const [shape, text] of [['alone', Buffer.from(CRLF + ODD[os], 'utf8')], ['in a copy of the example', exampleWith(os, CRLF)]] as const) {
+        const home = boxWith('ccrc-fx-w24-r15-', text);
+        expect(knob(home, `CCD_OS=${os}; _ccrc_knob CCRC_RELEASE_BASE_URL 7; ${ECHO}`), shape).toBe('rc 0 val 7 from default why \n');
+      }
+    });
+
     // ── Task 3 (D-6591, D-6592, D-6593, D-6601, D-6602, D-6603): one deadline reading on both sides, the keep-set bounded by it,
     // and the gate window from ccrc.env. The watchdog's rows (W24-D4, W24-D5) sit beside its fixture, and the flip run of W24-K5
     // beside the rollback-by-flip fixture.
