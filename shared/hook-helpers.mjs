@@ -16,8 +16,9 @@
 // same `# ccrc:generated 1 sha256=…` stamp `shared/mark.mjs` writes for
 // `ccd/ccd`, over the region's own body, so the stamp tells a regenerated
 // region from a hand-edited one. Regenerate with
-//   node shared/hook-helpers.mjs --write ccd/session-hook.sh ccd/ccd
-// and verify with `--check` (same arguments). A pure byte copy, not a
+//   ccrc restamp ccd/session-hook.sh
+// (the one regeneration verb; it calls this module with the tree's own ccd).
+// The `--write` / `--check` CLI below is the engine's entry, used by tests. A pure byte copy, not a
 // `source`: a runtime-sourced sibling is refused by the architecture spec.
 //
 // Plain ESM with no npm imports, like `shared/mark.mjs`, so `deploy/` and the

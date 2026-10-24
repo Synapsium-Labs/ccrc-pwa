@@ -25889,6 +25889,32 @@ _uninst_purge() {
   fi
 }
 
+# ARCH-74 (#809): the hook's generated region is rewritten by shared/hook-helpers.mjs.
+# Prints regenerated | current | refused-missing | nothere (no region: not a hook).
+_restamp_hook_region() {
+  node --no-warnings --input-type=module -e '
+import { readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [, mod, hookPath, ccdPath] = process.argv.slice(1);
+const h = await import(pathToFileURL(mod).href);
+const hook = readFileSync(hookPath, "utf8");
+if (h.extractHookRegion(hook) === null) { console.log("nothere"); process.exit(0); }
+const ccd = readFileSync(ccdPath, "utf8");
+const v = h.checkHookRegion(hook, ccd);
+if (v === "current") { console.log("current"); process.exit(0); }
+writeFileSync(hookPath, h.applyHookRegion(hook, ccd));
+console.log("regenerated");
+' - "$1" "$2" "$3" 2>/dev/null
+}
+
+# After restamping ccd/ccd, say whether the sibling hook's region has gone stale.
+_restamp_hook_note() {
+  local hook="${1%/*}/session-hook.sh" hooks="$CCRC_HERE/../shared/hook-helpers.mjs" out
+  { [ "${1##*/}" = ccd ] && [ -f "$hook" ] && [ -f "$hooks" ]; } || return 0
+  out="$(node --no-warnings "$hooks" --check "$hook" "$1" 2>/dev/null)" && return 0
+  echo "restamp: $hook: ${out:-hook helpers unreadable}; run \`$PROG restamp $hook\` to regenerate"
+}
+
 # ── restamp — the regenerator for a `# ccrc:generated` stamp ───────────────
 # Landing-order spec 2026-09-23 §5.1. Worker clause 16 says a generated stamp
 # is never hand-resolved: on a conflict in the stamp line, take either side of
@@ -25924,7 +25950,7 @@ _uninst_purge() {
 cmd_restamp() {
   case "${1:-}" in -h|--help) echo "usage: $PROG restamp <file>"; return 0 ;; esac
   [ $# -eq 1 ] || { echo "usage: $PROG restamp <file>" >&2; exit 2; }
-  local f="$1" mark="$CCRC_HERE/../shared/mark.mjs" verdict dir real d
+  local f="$1" mark="$CCRC_HERE/../shared/mark.mjs" verdict dir real d hooks ccdsrc
   { [ -f "$f" ] && [ ! -L "$f" ]; } || _ccrc_die "restamp: $f is not a regular file"
   # CDPATH= : `cd` consults an exported CDPATH for a relative operand, so the
   # directory resolved here could be a decoy while the write lands on $f itself.
@@ -25937,6 +25963,17 @@ cmd_restamp() {
     esac
   done
   [ -f "$mark" ] || _ccrc_die "restamp: the marker module is missing ($mark)"
+  # A hook carrying the generated-helpers region (ARCH-74, #809) is regenerated
+  # from THIS tree's ccd by the module that wrote it; there is no second command.
+  hooks="$CCRC_HERE/../shared/hook-helpers.mjs"; ccdsrc="$CCRC_HERE/ccd"
+  if [ -f "$hooks" ] && [ -f "$ccdsrc" ]; then
+    verdict="$(_restamp_hook_region "$hooks" "$f" "$ccdsrc")" || _ccrc_die "restamp: $f could not be read or written; restore it from git (git checkout -- $f), re-apply your edit, restamp again"
+    case "$verdict" in
+      regenerated) echo "restamp: $f: hook helpers regenerated"; return 0 ;;
+      current)     echo "restamp: $f: hook helpers already current"; return 0 ;;
+      refused-*)   _ccrc_die "restamp: $f: hook helpers refused (${verdict#refused-})" ;;
+    esac
+  fi
   verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync } from "node:fs"; import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -25949,8 +25986,8 @@ await writeFile(filePath, markGenerated(text));
 console.log("restamped");
 ' "$mark" "$f" 2>/dev/null)" || _ccrc_die "restamp: $f could not be read or written; it may be partly written — restore it from git (git checkout -- $f), re-apply your edit, restamp again"
   case "$verdict" in
-    restamped)       echo "restamp: $f: restamped" ;;
-    ccrc-unmodified) echo "restamp: $f: already current" ;;
+    restamped)       echo "restamp: $f: restamped"; _restamp_hook_note "$real" ;;
+    ccrc-unmodified) echo "restamp: $f: already current"; _restamp_hook_note "$real" ;;
     foreign)         _ccrc_die "restamp: $f carries no ccrc:generated marker — restamp re-stamps a generated file, it never adopts one" ;;
     *)               _ccrc_die "restamp: $f: unexpected verdict '$verdict'" ;;
   esac
