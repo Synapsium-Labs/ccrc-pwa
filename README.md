@@ -5782,6 +5782,12 @@ and any doubt (the probe failing, a walk running out of time) keeps the entry.
 
 A taken entry is renamed into `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>`; a pass 24 hours later (1 hour
 under pressure) asks the holder probe again and deletes it, so the session has a working day to move it back.
+**Finished task output is capped, not moved.** A `tasks/*.output` regular file over 1 GiB, unheld, with no mtime or
+ctime in the last hour, is rewritten as its first 64 MiB, one marker line (`[ccd-tmp-sweep: <n> bytes cut at <ts>]`)
+and its last 64 MiB. The new file is written beside it and renamed over, so a failed write leaves the original
+byte-identical, and the holder probe is asked last, just before the rename. The census records it as a `moved` row
+of kind `output-capped` (counted `capped`, or `wouldCap` in shadow).
+
 **It ships in shadow:** without `~/.ccrc/tmp-sweep-live-arm` it records what it would take and touches
 nothing (no code in the tree creates that file; arming is the operator's). Pressure is the sweep's own
 measure of its filesystem (92% of bytes or inodes used, the same figure `shared/disk.ts` holds; `disk-twins.test.ts`
