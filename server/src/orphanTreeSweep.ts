@@ -14,7 +14,7 @@ import {
 } from './coord/collectOrphanTree.js';
 import {
   ORPHAN_AUDITS_PER_PASS, ORPHAN_AUDITS_PER_PASS_PRESSURE, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_QUEUE_KEY,
-  ORPHAN_RETRY_MS, isAuditedClass, orphanCensusDue, orphanGoesWithRow, orphanHeldBack, orphanInsideVerdict, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
+  ORPHAN_RETRY_MS, isAuditedClass, orphanPathOfHex, orphanCensusDue, orphanGoesWithRow, orphanHeldBack, orphanInsideVerdict, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
   orphanRemember, orphanRescueArmed, orphanTreesHealth,
   type OrphanFold, type OrphanMemory, type OrphanRow, type OrphanTreeMemory,
 } from './orphanTreeLane.js';
@@ -47,6 +47,7 @@ export class OrphanTreeSweep {
   private removed = 0;
   private measured = false;
   private reported = new Set<string>();
+  private rowUnreadableSaid = new Set<string>();
   private wsKinds = new Map<string, boolean | null>();
   private unreadableSaid = false;
 
@@ -136,6 +137,14 @@ export class OrphanTreeSweep {
       // Forget the reports of trees the whole census no longer lists.
       const listed = new Set(c.rows.map((r) => r.hex));
       this.reported = new Set([...this.reported].filter((h) => listed.has(h)));
+      this.rowUnreadableSaid = new Set([...this.rowUnreadableSaid].filter((h) => listed.has(h)));
+      // A containing row that cannot be read keeps its trees silently otherwise: one row per tree per episode.
+      for (const r of c.rows) {
+        if (r.inside === null || !isAuditedClass(r.cls) || this.isWs(r.inside) !== null) { this.rowUnreadableSaid.delete(r.hex); continue; }
+        if (this.rowUnreadableSaid.has(r.hex)) continue;
+        this.rowUnreadableSaid.add(r.hex);
+        d.record('orphan worktree left', `${orphanPathOfHex(r.hex)} (${r.cls}): a nested worktree was left: its containing row could not be read`);
+      }
       for (const r of c.rows) {
         if (!isAuditedClass(r.cls) || orphanInsideVerdict(r.inside, coords, this.isWs) !== 'goes-with-workspace' || this.reported.has(r.hex)) continue;
         this.reported.add(r.hex);

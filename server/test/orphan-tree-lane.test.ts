@@ -58,7 +58,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
     epochNow: () => 1,
     pressure: () => false,
     record: (title, body) => { feed.push({ title, body }); },
-    isWorkspace: async (id) => { const k = wsKinds.get(id) ?? true; if (k === 'throw') throw new Error('row unreadable'); return k; },
+    isWorkspace: async (id) => { const k = wsKinds.has(id) ? wsKinds.get(id)! : true; if (k === 'throw') throw new Error('row unreadable'); return k; },
     coordinators: () => { if (!coordsReadable) throw new Error('store unreadable'); return coordinators; },
   };
   const sweep = new OrphanTreeSweep(deps);
@@ -450,5 +450,25 @@ describe('DR-23: trees nested inside a workspace', () => {
     r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
     expect(r.acts()).toHaveLength(1);
     expect(r.acts()[0]!.slice(0, 6)).toEqual(['ws-orphan', '--expect', tok('b'), '--tree-hex', h, '--rescue']);
+  });
+});
+
+describe('an unreadable containing row is reported once per tree', () => {
+  it('says why the tree is kept, once across censuses, and again after the tree is gone and returns', async () => {
+    const r = rig();
+    r.wsKinds.set('demo-main', null);
+    const h = r.addInside('/p/.claude/worktrees/a', 'claude', clean('a'), 'demo-main');
+    await r.sweep.pass();
+    const said = (): string[] => r.feed.filter((f) => f.body.includes('its containing row could not be read')).map((f) => f.body);
+    expect(said()).toHaveLength(1);
+    expect(said()[0]).toContain('/p/.claude/worktrees/a');
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(said(), 'a repeat says nothing').toHaveLength(1);
+    expect(r.acts()).toEqual([]);
+    r.trees.delete(h);
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    r.addInside('/p/.claude/worktrees/a', 'claude', clean('a'), 'demo-main');
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(said()).toHaveLength(2);
   });
 });
