@@ -351,8 +351,9 @@ describe.skipIf(!PY)('the backend adapter: the endpoint and the transport (codex
     // With `Connection: close`, http.client hands the socket to the response and closes the connection object first,
     // so closing that object alone leaves the stream open. The driver reads one chunk, closes, then stays alive past
     // the stream's end, so only a close that drops the socket shows as `dropped` before the fake ends its answer.
-    // The fake ends about 0.7 s after the first chunk; the 3 s sleep leaves a wide margin before the driver's exit, or
-    // the helper's fake.close(), could mark `dropped` on its own and so hide a close that does nothing.
+    // The fake ends its answer about 0.8 s after the first chunk (eight chunks 100 ms apart, then the end); the 3 s
+    // sleep leaves a wide margin before the driver's exit, or the helper's fake.close(), could mark `dropped` on its
+    // own and so hide a close that does nothing.
     const chunks = Array.from({ length: 8 }, (_, i) =>
       `event: response.created\ndata: {"type":"response.created","response":{"id":"resp_fx${i}","output":[]}}\n\n`);
     const heads: Array<Record<string, string>> = [{ connection: 'close' }, {}];
