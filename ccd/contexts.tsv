@@ -99,6 +99,7 @@ _reg_generation_mint	C1
 _reg_generation_init	C1
 _reg_purge_unremoved	C1
 _reg_purge	C1
+_reg_retire	C1
 _substrate_mark	C1
 _substrate_clear	C1
 _ws_seed_home	C1
