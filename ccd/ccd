@@ -11611,13 +11611,6 @@ _pr_landing_rules() {   # project repo base [rest] -> the rules document, ONE JS
   _pr_landing_py cache-put "$cache" "$base" 4<<<"$r" 5<<<"$p"
 }
 
-_pr_landing_rules_cached() {   # project base -> 0 when a fresh cache file answers that base (no gh call needed)
-  local enc="_" cache
-  [[ "$2" =~ ^[A-Za-z0-9._/-]+$ && "$2" != -* ]] && enc="${2//\//%2F}"
-  cache="$REG/pr-landing/$1.rules.$enc.json"
-  [[ -n "$(_pr_landing_py cache-get "$cache" "$2" "$PR_LANDING_RULES_TTL" 2>/dev/null)" ]]
-}
-
 cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<pr>…]
   # Fixed arity, no getopt loop, no "$@" passthrough. One JSON line per named session, in order, always rc 0 once the
   # arguments are valid: a read that did not answer is `unmeasured`, never a missing line. A refusal here (rc 1, empty
@@ -11683,12 +11676,13 @@ cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<
   # REST reads go to at most ONE uncached base per call (worst path 6 + 4 + 4 s, inside the runner's bound); any
   # further uncached base answers rules-unread, so its sessions read unmeasured this pass and the next pass finds the
   # cache filled for the base read here.
-  local rules="" rb rest=1 doc1 hit
+  local rules="" rb rest=1 doc1 hit enc
   while IFS= read -r rb; do
     [[ -n "$rb" ]] || continue
     # a miss that is allowed to read spends the one REST budget (cache hits never do); decided BEFORE the read, since
     # the read itself fills the cache
-    hit=0; _pr_landing_rules_cached "$project" "$rb" && hit=1
+    enc="_"; [[ "$rb" =~ ^[A-Za-z0-9._/-]+$ && "$rb" != -* ]] && enc="${rb//\//%2F}"
+    hit=0; [[ -n "$(_pr_landing_py cache-get "$REG/pr-landing/$project.rules.$enc.json" "$rb" "$PR_LANDING_RULES_TTL" 2>/dev/null)" ]] && hit=1
     doc1=$(_pr_landing_rules "$project" "$repo" "$rb" "$rest")
     rules+="$doc1"$'\n'
     (( hit == 1 )) || rest=0
