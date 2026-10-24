@@ -378,3 +378,84 @@ export function draftPr(line: CcdPrLine, tasks: TaskItem[] | null): { title: str
   // and ccd refuses one for that reason.
   return { title, body: parts.join('\n\n') + '\n' };
 }
+
+// ── `ccd pr-landing` (PR landing in ccrc, stage 1) ───────────────────────────────────────────────────────────────
+
+/** One required context of a landing line. `checkId` is the check run's own per-attempt id and null for a commit
+ *  status (which carries no attempt id); `runId` is the workflow run's id. `state` is the context's conclusion (a
+ *  check run: empty while it has not completed) or state (a commit status), lowercased by the verdict, never here. */
+export interface PrLandingRequired {
+  name: string; appId: number | null; state: string; checkId: number | null; runId: number | null;
+}
+
+/** One session's line of `ccd pr-landing`, as the checks lane reads it. `unmeasured` carries the reasons ccd gave
+ *  (an alias GitHub answered with no object, a branch-drift refusal, a call that timed out) and this reader's own
+ *  `shape` for a document it could not follow. It is the type of `readPrLandingLine`'s answer, never `LandingLine`
+ *  (`coord/landing.ts` exports that one, the dequeue lane's). */
+export interface PrLandingLine {
+  id: string;
+  bound: boolean;
+  number: number | null;
+  /** GitHub's own state word (`OPEN`, `CLOSED`, `MERGED`), or null when the line is not bound. */
+  state: string | null;
+  isDraft: boolean;
+  base: string | null;
+  head: string | null;
+  required: PrLandingRequired[];
+  requiredCut: boolean;
+  rulesNamed: string[];
+  protectionNamed: string[];
+  /** Required names the rules pin to an App. Absent from an older line, which reads as none. */
+  pinnedNames: string[];
+  unmeasured: string[];
+}
+
+const isPlainObject = (x: unknown): x is Record<string, unknown> =>
+  typeof x === 'object' && x !== null && !Array.isArray(x);
+const positiveSafe = (x: unknown): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x > 0;
+
+/** The ONE reader of `pr-landing`'s JSON, one parsed line at a time. Null only for a value with no string `id`. A
+ *  field this build cannot follow adds the reason `shape` to `unmeasured`, so the line reads as unmeasured: nothing
+ *  is dropped, and nothing is guessed. */
+export function readPrLandingLine(x: unknown): PrLandingLine | null {
+  if (!isPlainObject(x) || typeof x['id'] !== 'string' || x['id'] === '') return null;
+  let shape = false;
+  const strings = (v: unknown): string[] => {
+    if (v === undefined) return [];
+    if (!Array.isArray(v) || !v.every((s) => typeof s === 'string')) { shape = true; return []; }
+    return v as string[];
+  };
+  const unmeasured = strings(x['unmeasured']);
+  const bound = x['bound'] === true;
+  const required: PrLandingRequired[] = [];
+  if (x['required'] !== undefined) {
+    if (!Array.isArray(x['required'])) shape = true;
+    else {
+      for (const r of x['required'] as unknown[]) {
+        if (!isPlainObject(r) || typeof r['name'] !== 'string' || typeof r['state'] !== 'string') { shape = true; continue; }
+        const checkId = r['checkId'];
+        const appId = r['appId'];
+        const runId = r['runId'];
+        if (checkId !== null && checkId !== undefined && !positiveSafe(checkId)) shape = true;
+        required.push({
+          name: r['name'], state: r['state'],
+          checkId: positiveSafe(checkId) ? checkId : null,
+          appId: positiveSafe(appId) ? appId : null,
+          runId: positiveSafe(runId) ? runId : null,
+        });
+      }
+    }
+  }
+  const optStr = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  const number = positiveSafe(x['number']) ? x['number'] : null;
+  if (bound && number === null) shape = true;
+  return {
+    id: x['id'], bound, number,
+    state: optStr(x['state']), isDraft: x['isDraft'] === true,
+    base: optStr(x['base']), head: optStr(x['head']),
+    required, requiredCut: x['requiredCut'] === true,
+    rulesNamed: strings(x['rulesNamed']), protectionNamed: strings(x['protectionNamed']),
+    pinnedNames: strings(x['pinnedNames']),
+    unmeasured: shape ? [...unmeasured, 'shape'] : unmeasured,
+  };
+}

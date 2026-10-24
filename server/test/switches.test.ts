@@ -61,7 +61,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
   it('every exported marker constant is a marker row, keyed by its own name', () => {
     const markers = markerRows.map(([k, r]) => { expect('marker' in r.storage && r.storage.marker, k).toBe(k); return k; });
     expect(ASKS_DISABLED_MARKER).toBe('asks-disabled');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled'].sort());
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live'].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
   });
 
