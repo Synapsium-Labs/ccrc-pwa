@@ -285,26 +285,31 @@ describe('the PR sweep: single flight that abandons a stuck run', () => {
     return { w, settle, sweep };
   }
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await new Promise((res) => setImmediate(res)); };
+  // A run that SHOULD start is waited for, not counted in ticks: a loaded CI shard can take more than twenty
+  // turns to reach the runner. A run that should NOT start keeps the fixed flush, which is all a negative can wait for.
+  const until = async (cond: () => boolean): Promise<void> => {
+    for (let i = 0; i < 5000 && !cond(); i++) await new Promise((res) => setImmediate(res));
+  };
 
   it('holds the lane shut one millisecond before the ceiling and reopens at it', async () => {
     const r = rigPr();
     at(NOW);
-    void r.sweep(); await flush();
+    void r.sweep(); await until(() => r.settle.length === 1);
     expect(r.settle).toHaveLength(1);
     at(NOW + STUCK - 1);
     void r.sweep(); await flush();
     expect(r.settle, 'a run younger than the ceiling was abandoned').toHaveLength(1);
     at(NOW + STUCK);
-    void r.sweep(); await flush();
+    void r.sweep(); await until(() => r.settle.length === 2);
     expect(r.settle, 'a stuck run was not abandoned at the ceiling').toHaveLength(2);
   });
 
   it('an abandoned run settling late does not clear the newer run, and the newer one still holds the lane', async () => {
     const r = rigPr();
     at(NOW);
-    void r.sweep(); await flush();
+    void r.sweep(); await until(() => r.settle.length === 1);
     at(NOW + STUCK);
-    void r.sweep(); await flush();
+    void r.sweep(); await until(() => r.settle.length === 2);
     expect(r.settle).toHaveLength(2);
     r.settle[0]!({ ran: true, code: 0, stdout: '', stderr: '' }); await flush();      // the abandoned run settles late
     at(NOW + STUCK + 150_000);                                             // past the cadence, short of the newer run's ceiling
