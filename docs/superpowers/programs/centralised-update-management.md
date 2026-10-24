@@ -5958,6 +5958,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
 - **2026-10-24 00:05 UTC — wave 26 landed, and its first release run measured.** The release build now runs with a read
   token only, and the job that tags, attests and publishes installs nothing and runs nothing of the build's. Every
   check of D-6659 that one run can show holds; the sixth needs the next merge whose build is unchanged.
+- **2026-10-24 00:25 UTC — monitoring: v0.0.599 released (wave 26), no anomalies; both boxes still on v0.0.589.**
+  `STATUS 2026-10-24T00:25:42Z fleet=v0.0.589 server=v0.0.589 health=v0.0.589 newest=v0.0.599 intent=*:dev/auto=off`
+  `backups=fleet:236M/server:7495M disk=fleet:109G/server:23G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
