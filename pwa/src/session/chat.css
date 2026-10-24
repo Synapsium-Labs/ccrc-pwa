@@ -1955,6 +1955,10 @@ button.metachip:active {
   display: flex;
   flex-direction: column;
   margin-block: var(--sp-2);
+  /* Inside the reading column, not on its edge: `.chat-item` and `.composer` pad their content by --sp-4 within the
+     column's box, so the card is that much narrower on each side and lines up with the transcript's cards and the
+     composer's field. Later than the column's shared rule above, so it wins. */
+  max-width: calc(min(var(--measure-chat), 100%) - 2 * var(--sp-4));
   padding: var(--pad-card);
   background: var(--bg-surface);
   border: 1px solid var(--edge-subtle);

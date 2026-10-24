@@ -11,6 +11,8 @@
 //   - "the transcript keeps at least a third of the pane": `.chat-body`'s height is at least a third of `.chat`'s (the
 //     rule is `.chat[data-ask-inline] > .chat-body { min-height: calc(100% / 3) }`; without it the forty-line card
 //     takes what it asks for and the transcript is squeezed);
+//   - "the card sits inside the reading column, its edges on the composer's field": the card is as wide as the
+//     composer's content box, as the transcript's cards are, not as its padded outer box;
 //   - "no page error": nothing uncaught was thrown.
 // One more view holds "no horizontal page scroll" at 1600 with Refined's inspector rail, where the pane is narrower
 // than the reading measure and the card yields to it.
@@ -112,6 +114,9 @@ interface Measure {
   chatHeight: number;
   transcriptHeight: number;
   pageSide: number;
+  /** The card's left and right edges, and the composer's content edges (its box less its padding). */
+  card: { left: number; right: number };
+  field: { left: number; right: number };
 }
 
 /** Open fixture 1 at `view`, let the card settle, and measure it as it stands. */
@@ -149,6 +154,13 @@ async function openAndMeasure(view: AppView): Promise<{ measured: Measure; error
         chatHeight: chat.getBoundingClientRect().height,
         transcriptHeight: chat.querySelector<HTMLElement>(':scope > .chat-body')!.getBoundingClientRect().height,
         pageSide: doc.scrollWidth - doc.clientWidth,
+        card: { left: el.getBoundingClientRect().left, right: el.getBoundingClientRect().right },
+        field: (() => {
+          const composer = chat.querySelector<HTMLElement>('.composer')!;
+          const r = composer.getBoundingClientRect();
+          const cs = getComputedStyle(composer);
+          return { left: r.left + parseFloat(cs.paddingLeft), right: r.right - parseFloat(cs.paddingRight) };
+        })(),
       };
     }, CARD);
     return { measured, errors: opened.errors };
@@ -185,6 +197,12 @@ describe('the inline ask holds one vertical scroller and leaves the transcript i
         const m = measured!;
         expect(m.transcriptHeight, `the transcript (${m.transcriptHeight}px) of a pane of ${m.chatHeight}px`)
           .toBeGreaterThanOrEqual(m.chatHeight / 3 - 1);
+      });
+
+      it('the card sits inside the reading column, its edges on the composer\'s field', () => {
+        const m = measured!;
+        expect(Math.abs(m.card.left - m.field.left), `card left ${m.card.left}, field left ${m.field.left}`).toBeLessThanOrEqual(1);
+        expect(Math.abs(m.card.right - m.field.right), `card right ${m.card.right}, field right ${m.field.right}`).toBeLessThanOrEqual(1);
       });
 
       it('no page error', () => {
