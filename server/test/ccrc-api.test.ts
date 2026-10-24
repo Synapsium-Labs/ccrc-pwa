@@ -443,8 +443,10 @@ describe('the body ends in exactly one newline, and the status line stays', () =
   it('still yields the code and a body jq reads from the merged output, as the approval hook parses it', async () => {
     reply = { code: 201, body: '{"id":7}' };
     const merged = await new Promise<string>((resolve) => {
-      const child = spawn('bash', ['-c', '"$0" runs list 2>&1', CCRC_API],
-        { env: ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true }) });
+      // The binary rides the environment, not argv: CodeQL reads every argv element of a `bash -c` as part of the
+      // command (js/shell-command-injection-from-environment), so the script text stays constant.
+      const child = spawn('bash', ['-c', '"$CCRC_API_UNDER_TEST" runs list 2>&1'],
+        { env: { ...ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true }), CCRC_API_UNDER_TEST: CCRC_API } });
       let out = '';
       child.stdout.on('data', (c) => { out += c; });
       child.stdin.end();
