@@ -73,7 +73,7 @@ import {
   type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
-import { refuseAdvance, refuseRoute, refuseRun } from '../refuse.js';
+import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../refuse.js';
 import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
@@ -2688,7 +2688,7 @@ export function registerCoordRoutes(
     config: { rateLimit: RUN_SPEND_RATE_LIMIT },
     // Auth first (onRequest), then the limiter (preHandler): a refused call spends no budget.
     errorHandler: (err, _req, reply) => {
-      if ((err as { statusCode?: number }).statusCode === 429) return reply.code(429).send({ ok: false, error: 'rate-limited' });
+      if ((err as { statusCode?: number }).statusCode === 429) return refuseRateLimited(reply);
       return reply.send(err);
     },
     onRequest: async (req, reply) => {
