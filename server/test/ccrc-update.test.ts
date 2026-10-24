@@ -15102,8 +15102,8 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       const undecided = update('ccrc-fx-w24-d3-undecided-', (h) => appendFileSync(envFile(h), 'CCRC_UPDATE_DEADLINE_MS=6e5\n'));
       expect(undecided.out).toContain(DL_WARN('update'));
       expect(undecided.until, 'the re-stamp less the margin: already past').toBe(undecided.saw.updatedAt - 235);
-      // The hard cap (D-6601, D-6603): a report started 3.5 deadlines back, re-stamped now. The re-stamp's term would be now + 665;
-      // the control plane's hard cap, less the 40 s its start can lead the report's, is earlier.
+      // The hard cap (D-6601, D-6744): a report started 3.5 deadlines back, re-stamped now. The re-stamp's term would be now + 665;
+      // the control plane's hard cap, less the 63 s its start can lead the report's (W24-K6 derives it), is earlier.
       const home = updBox('ccrc-fx-w24-d3-cap-');
       plantDir(home, '20250101-000000', 'tree+v1-full');
       const now = ago(0);
@@ -15111,7 +15111,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       const r = sourcedWith(home, `${FLOOR}; UPD_THIN_AT=${now}; UPD_REPORT_STARTED=${started}; _bak_gc update; echo "rc $?"`, withShim(home));
       expect(r.stdout, `stderr: ${r.stderr}`).toMatch(/^rc 0$/m);
       const args = readFileSync(join(home, 'thin-args'), 'utf8').split('\n');
-      expect(Number(args[args.indexOf('--until') + 1]), 'the hard cap\'s term').toBe(started + 4 * 900 - 40 - 235);
+      expect(Number(args[args.indexOf('--until') + 1]), 'the hard cap\'s term').toBe(started + 4 * 900 - 63 - 235);
     });
 
     it('W24-D6: _upd_deadline_ms max', () => {
