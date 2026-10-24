@@ -32,7 +32,7 @@ const { ack, FEED_ACK_KEY } = await import('../src/lib/seen');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
 const { api } = await import('../src/lib/api');
 const { DocsHead } = await import('../src/docs/DocsHead');
-const { ACCOUNTS_DOOR_LABEL } = await import('../src/fleet/CompactGauges');
+const { ACCOUNTS_DOOR_LABEL } = await import('../src/fleet/laneWords');
 
 /** A Docs visit whose actions are inert: the up door reads only the page. */
 const docsVisit = (): DocsVisit => ({

@@ -17,6 +17,7 @@ import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { commandDoor } from '../command/door';
 import { bindingPct } from './laneOrder';
+import { ACCOUNTS_DOOR_LABEL, compactDoorLabel, compactReading } from './laneWords';
 import { limitBand, Meter } from '@ccrc/ui';
 import './fleet.css';
 
@@ -28,37 +29,12 @@ export type CompactArrangement = 'bar' | 'grid' | 'led';
  *  lane. */
 export const COMPACT_FIT: Readonly<Record<CompactArrangement, number>> = { bar: 4, led: 6, grid: Number.POSITIVE_INFINITY };
 
-/** The reading beside a lane's meter, kept three ways like the full strip's `AccountMeterRow`: "reset" when the
- *  window that binds rolled over (the server zeroed it; the zero is inferred, not measured), "—" never measured, else
- *  the measured percentage. */
-export function compactReading(a: Pick<AccountUsage, 'five' | 'seven' | 'fiveRolledOver' | 'sevenRolledOver'>): string {
-  const pct = bindingPct(a);
-  if (pct === null) return '—';
-  const binding = [
-    { pct: a.five, rolled: a.fiveRolledOver === true },
-    { pct: a.seven, rolled: a.sevenRolledOver === true },
-  ].filter((w) => w.pct === pct);
-  return binding.every((w) => w.rolled) ? 'reset' : `${pct}%`;
-}
-
 /** Which gauges the one-line row does not show whole, from their boxes in order: every one below the first's line
  *  (it wrapped), and every one whose right edge passes the row's (it is cut; only the first can be, as it cannot wrap). */
 export function hiddenGauges(boxes: readonly { top: number; right: number }[], rowRight: number): boolean[] {
   if (boxes.length === 0) return [];
   const line = boxes[0]!.top;
   return boxes.map((b) => b.top > line + 1 || b.right > rowRight + 1);
-}
-
-/** The door's bare name, the full strip's too: what it is and where it goes. */
-export const ACCOUNTS_DOOR_LABEL = 'account usage — open accounts';
-
-/** The door's accessible name: what it is, the fullest lane's reading, and where it goes. */
-export function compactDoorLabel(lanes: readonly AccountUsage[], roster: readonly RosterWire[]): string {
-  let top: AccountUsage | null = null;
-  for (const a of lanes) if ((bindingPct(a) ?? -1) > (top === null ? -1 : bindingPct(top) ?? -1)) top = a;
-  return top === null
-    ? ACCOUNTS_DOOR_LABEL
-    : `account usage, highest ${accountLabel(roster, top.wrapper)} ${compactReading(top)} — open accounts`;
 }
 
 export function CompactGauges({ compact, lanes, roster, placeholder }: {

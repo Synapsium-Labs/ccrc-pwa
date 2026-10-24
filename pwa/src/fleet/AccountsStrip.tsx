@@ -25,7 +25,8 @@ import { accountColorVar, accountLabel, warnNonArrayRoster } from '../lib/accoun
 import { api } from '../lib/api';
 import { useNow } from '@ccrc/ui';
 import { commandDoor } from '../command/door';
-import { ACCOUNTS_DOOR_LABEL, CompactGauges, type CompactArrangement } from './CompactGauges';
+import { CompactGauges, type CompactArrangement } from './CompactGauges';
+import { ACCOUNTS_DOOR_LABEL } from './laneWords';
 import { AccountMeterRow } from './AccountMeterRow';
 import './fleet.css';
 

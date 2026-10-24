@@ -9,7 +9,7 @@ import type { AccountUsage, AuthStatus, FleetHealth, FleetSession, NodeWire, Run
 import { BANNER_ORDER, BannerStack, LOCAL_BANNERS, type BannerRank } from '../src/fleet/BannerStack';
 import { fleetSummary } from '../src/fleet/fleetSummary';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
-import { COMPACT_FIT, CompactGauges, compactDoorLabel, compactReading, hiddenGauges } from '../src/fleet/CompactGauges';
+import { COMPACT_FIT, CompactGauges, hiddenGauges } from '../src/fleet/CompactGauges';
 import { DOOR_EVENT } from '../src/command/door';
 import { FleetHostBanner, fleetHostBannerShows } from '../src/fleet/FleetHostBanner';
 import { HaltBanner, haltBannerShows } from '../src/fleet/HaltBanner';
@@ -281,18 +281,6 @@ describe('the compact gauges', () => {
     expect(await within(door).findByText('no accounts reporting')).toBeInTheDocument();
   });
 
-  it('the reading is kept three ways, like the full strip: reset when the binding window rolled over, — never measured', () => {
-    expect(compactReading(lane('x', 30, 80))).toBe('80%');
-    expect(compactReading(lane('x', null, null))).toBe('—');
-    // The 5h window rolled over (the server zeroed it) and nothing else was measured: the zero is inferred.
-    expect(compactReading(lane('x', 0, null, { fiveRolledOver: true }))).toBe('reset');
-    // The 5h window rolled over, but the 7d one binds and was measured.
-    expect(compactReading(lane('x', 0, 40, { fiveRolledOver: true }))).toBe('40%');
-    expect(compactReading(lane('x', 0, 0, { fiveRolledOver: true, sevenRolledOver: true }))).toBe('reset');
-    // A measured zero beside a rolled-over zero is still measured.
-    expect(compactReading(lane('x', 0, 0, { fiveRolledOver: true }))).toBe('0%');
-  });
-
   it('the fit is measured: a gauge below the first line wrapped out of the box and counts into +n', () => {
     const at = (...tops: number[]): { top: number; right: number }[] => tops.map((top) => ({ top, right: 100 }));
     expect(hiddenGauges([], 200)).toEqual([]);
@@ -328,10 +316,5 @@ describe('the compact gauges', () => {
     expect(gauges.map((g) => g.hasAttribute('data-clipped'))).toEqual([true, true, true, true]);
     expect(container.querySelector('.accounts-compact-more')).toHaveTextContent('+6');
     expect(container.querySelector('.accounts-compact')).toHaveAttribute('data-lanes-hidden');
-  });
-
-  it('the door\'s name carries the fullest lane\'s reading', () => {
-    expect(compactDoorLabel([], [])).toBe('account usage — open accounts');
-    expect(compactDoorLabel([lane('lane-a', 30, 80), lane('lane-b', 90, null)], [])).toBe('account usage, highest lane-b 90% — open accounts');
   });
 });
