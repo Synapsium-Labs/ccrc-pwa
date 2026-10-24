@@ -175,7 +175,7 @@ describe('stopDonePass (D-5370)', () => {
     expect(f.argv).toEqual([HIB(ID)]);
   });
 
-  it('a call that never ran is a failure, never a session-busy skip, even when the runner words spell one (D-TBD-ran-required)', async () => {
+  it('a call that never ran is a failure, never a session-busy skip, even when the runner words spell one (D-6840)', async () => {
     const f = fake([ID]);
     const words = 'ccd: session-busy: attached — 1 terminal(s) attached to the pane';
     const runCcd: StopDoneSweepDeps['runCcd'] = async (a) => {

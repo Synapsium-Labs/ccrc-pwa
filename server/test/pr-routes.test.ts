@@ -504,7 +504,7 @@ describe('audit and reap', () => {
     await a.close();
   });
 
-  it('a reap that never ran (a dropped link, with its words on stderr) is INDETERMINATE, never a refusal (D-TBD-ran-required)', async () => {
+  it('a reap that never ran (a dropped link, with its words on stderr) is INDETERMINATE, never a refusal (D-6840)', async () => {
     // The agent link failing forges `code: 1` and puts the error's words on stderr, so the empty-stderr rule above
     // never saw it: it read as `refused: 'error'`, a claim about the filesystem nobody could make.
     const run: Runner = async (_cmd, args) => (args[0] === 'list-panes'

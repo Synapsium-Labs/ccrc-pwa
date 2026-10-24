@@ -146,7 +146,7 @@ function clientTimeoutWord(): string {
 }
 
 describe('check 1: the transport catch, both halves unmeasured (row 46, R14)', () => {
-  // D-TBD-ran-required: the transport catch as the remote runner answers it, the not-ran arm (`remote/runner.ts`).
+  // D-6840: the transport catch as the remote runner answers it, the not-ran arm (`remote/runner.ts`).
   const transport = (detail: string, reason: 'transport' | 'spawn' | 'timeout' = 'transport'): CcdResult =>
     ({ ran: false, reason, detail, ok: false, stdout: '', stderr: detail, killed: U, signal: U });
 

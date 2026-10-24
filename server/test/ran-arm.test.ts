@@ -74,7 +74,7 @@ describe('the remote runner says ran:false, and why, where the command never ran
     expect(res).toMatchObject({ code: 1, stdout: '', stderr: 'forbidden', ran: false, reason: 'spawn', detail: 'forbidden' });
   });
 
-  it('a command that ran carries ran:true and no reason (D-TBD-ran-required)', async () => {
+  it('a command that ran carries ran:true and no reason (D-6840)', async () => {
     fixture = makeFixture();
     agent = await bootAgent(fixture);
     fleet = connectToAgent(agent.port);
@@ -84,7 +84,7 @@ describe('the remote runner says ran:false, and why, where the command never ran
     expect(res).not.toHaveProperty('reason');
   });
 
-  it('an agent whose exec never started (ccd absent on its box) answers ran:false, carried as spawn (D-TBD-ran-required)', async () => {
+  it('an agent whose exec never started (ccd absent on its box) answers ran:false, carried as spawn (D-6840)', async () => {
     fixture = makeFixture();
     agent = await bootAgent(fixture);
     fleet = connectToAgent(agent.port);

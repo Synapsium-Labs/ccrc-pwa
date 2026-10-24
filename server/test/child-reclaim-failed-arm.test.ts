@@ -195,7 +195,7 @@ const rig = async (script: (runId: number) => { audit: { ran: true, code: number
   const calls: string[] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args[0]);
-    // D-TBD-ran-required: `notRan` is the runner's own arm (a link that dropped), with the words it forged on stderr.
+    // D-6840: `notRan` is the runner's own arm (a link that dropped), with the words it forged on stderr.
     const arm = (a: { notRan?: boolean; stderr?: string }) => (a.notRan === true
       ? { ran: false as const, reason: 'transport' as const, detail: a.stderr ?? '' } : {});
     if (args[0] === 'ws-audit') return { ran: true as const, code: s.audit.code, stdout: s.audit.stdout, stderr: s.audit.stderr ?? '', ...arm(s.audit) };
@@ -249,7 +249,7 @@ describe('reclaimChild: the exit-1 audit arm', () => {
   });
 });
 
-describe('reclaimChild: a call that never ran is not a document, a die or a refusal (D-TBD-ran-required)', () => {
+describe('reclaimChild: a call that never ran is not a document, a die or a refusal (D-6840)', () => {
   it('an audit that never ran is unreadable (a failed, not-resumable attempt), even over a document that names a phase, and the verb is never called', async () => {
     // Read as an exit-1 document, this one is the audit's own `unmeasured` answer over a standing breadcrumb: resumable.
     const s = await rig((runId) => ({ audit: { ran: true as const, code: 1, stdout: auditDoc(runId, 'unmeasured', { resume: 'worktree' }), stderr: 'disconnected', notRan: true } }));

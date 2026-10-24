@@ -500,7 +500,7 @@ describe('hibernatePass: the live act', () => {
     expect(l.f.lines, 'and once more an hour later').toHaveLength(2);
   });
 
-  it('a call that never ran is a failure, never a session-busy skip, even when the runner words spell one (D-TBD-ran-required)', async () => {
+  it('a call that never ran is a failure, never a session-busy skip, even when the runner words spell one (D-6840)', async () => {
     const words = 'ccd: session-busy: attached — 1 terminal(s) attached to the pane';
     const l = live({ answer: () => ({ ran: false, reason: 'transport', detail: words, ok: false, stdout: '', stderr: words, killed: 'unmeasured', signal: 'unmeasured' }) });
     const out = await pass(l.f, mem(), [HIBERNATE_LIVE_MARKER]);

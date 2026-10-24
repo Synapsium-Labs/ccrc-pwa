@@ -305,7 +305,7 @@ describe("ccd's own refusals reach the operator as the same two 409s (D-5240)", 
     expect((await post(b.app, { wrapper: 'lane-b' })).statusCode).toBe(502);
   });
 
-  it('a swap that never ran is 502 with the runner\'s words, never a refusal, even when they spell one (D-TBD-ran-required)', async () => {
+  it('a swap that never ran is 502 with the runner\'s words, never a refusal, even when they spell one (D-6840)', async () => {
     const stderr = `ccd: session-busy: ${ID} is working — nothing was touched.\n`;
     const b = await box({ caps: ALL_CAPS, swap: { ran: true, code: 1, stderr, notRan: true } });
     liveStatus(b.home, 'idle');
