@@ -18,8 +18,9 @@ export const TMP_QUARANTINE_GRACE_PRESSURE_MS = 3_600_000;
 export const TMP_NOTICE_TOP = 5;
 /** How many sessions `disk.holders` names. */
 export const TMP_HOLDERS_MAX = 5;
-/** The census is bigger than the inventory's node files (a thousand `moved` rows), so its read has its own cap. */
-export const TMP_SWEEP_CENSUS_CAP_BYTES = 1024 * 1024;
+/** The census is bigger than the inventory's node files (a thousand `moved` rows, each with an absolute path), so its
+ *  read has its own cap, under the agent's own read limit. The writer also bounds each session's `kept` list. */
+export const TMP_SWEEP_CENSUS_CAP_BYTES = 8 * 1024 * 1024;
 
 export interface TmpSweepMoved {
   readonly seq: number;
@@ -39,6 +40,8 @@ export interface TmpSweepBudgetState {
   readonly enforceAt: number | null;
   readonly removedBytes: number;
   readonly kept: readonly { readonly name: string; readonly why: string }[];
+  /** How many more kept entries the writer left out of `kept` (it names the first fifty). Absent reads 0. */
+  readonly keptMore?: number;
 }
 
 export interface TmpSweepSession {
@@ -75,7 +78,8 @@ function parseMoved(v: unknown): TmpSweepMoved | null {
 
 function parseBudget(v: unknown): TmpSweepBudgetState | null {
   if (!isObj(v)) return null;
-  const { state, overSince, enforceAt, removedBytes, kept } = v;
+  const { state, overSince, enforceAt, removedBytes, kept, keptMore } = v;
+  if (keptMore !== undefined && !nat(keptMore)) return null;
   if (!str(state)) return null;
   if (overSince !== null && !nat(overSince)) return null;
   if (enforceAt !== null && !nat(enforceAt)) return null;
@@ -85,7 +89,7 @@ function parseBudget(v: unknown): TmpSweepBudgetState | null {
     if (!isObj(k) || !str(k['name']) || !str(k['why'])) return null;
     keptRows.push({ name: k['name'], why: k['why'] });
   }
-  return { state, overSince: overSince as number | null, enforceAt: enforceAt as number | null, removedBytes, kept: keptRows };
+  return { state, overSince: overSince as number | null, enforceAt: enforceAt as number | null, removedBytes, kept: keptRows, ...(typeof keptMore === 'number' && keptMore > 0 ? { keptMore } : {}) };
 }
 
 function parseSession(v: unknown): TmpSweepSession | null {
@@ -186,7 +190,9 @@ export function tmpSweepReceipts(census: TmpSweepCensus, _mailed: number): { mai
     const hi = Math.max(...rows.map((r) => r.seq));
     const lines = rows.map((r) => `- ${r.kind === 'budget' ? '(budget) ' : ''}${r.name} (${gib(r.bytes)}) -> ${r.quarantine ?? 'no quarantine path'}; ` +
       `move it back before ${stamp(r.at + grace)} to keep it`);
-    const kept = (census.sessions.find((s) => s.id === id)?.budget.kept ?? []).map((k) => `- kept ${k.name}: ${k.why}`);
+    const budget = census.sessions.find((s) => s.id === id)?.budget;
+    const kept = (budget?.kept ?? []).map((k) => `- kept ${k.name}: ${k.why}`);
+    if (budget?.keptMore) kept.push(`- and ${budget.keptMore} more kept entries; the census ~/.ccrc/tmp-sweep.json lists the first ${budget.kept.length}`);
     const head = 'The tmp sweep moved these entries out of your scratch into quarantine:';
     const keptHead = 'The size budget kept these:';
     // Entries get at most three quarters of the body; the kept list takes what is left.
@@ -212,7 +218,7 @@ export interface TmpSweepBudgetNotice {
 /**
  * One notice per over-budget episode, keyed on the session's `overSince`: `noticed` holds the keys already sent. The
  * notice deletes nothing, so it is sent whether the sweep's arm is shadow or live. It names the total, the largest
- * entries and the instant `enforceAt`; at critical pressure it says enforcement has already begun.
+ * entries and the instant `enforceAt`; when that instant has passed (critical pressure) it says enforcement has begun.
  */
 export function tmpSweepBudget(census: TmpSweepCensus, noticed: ReadonlySet<string>): TmpSweepBudgetNotice[] {
   const out: TmpSweepBudgetNotice[] = [];
@@ -224,10 +230,11 @@ export function tmpSweepBudget(census: TmpSweepCensus, noticed: ReadonlySet<stri
     const top = [...s.top].sort((a, b) => b.bytes - a.bytes || (a.name < b.name ? -1 : 1)).slice(0, TMP_NOTICE_TOP);
     const largest = top.length > 0 ? `Its largest entries: ${top.map((t) => `${t.name} (${gib(t.bytes)})`).join(', ')}. ` : '';
     const when = enforceAt === null ? 'the grace ends' : stamp(enforceAt);
-    const begun = census.pressure
+    // Pressure is decided per root by the sweep, so the words come from THIS row's own `enforceAt`, never the file's flag.
+    const begun = enforceAt !== null && enforceAt <= census.at
       ? 'The disk is at critical pressure, so enforcement has begun: no grace is left. '
       : `After ${when} the sweep removes `;
-    const rule = census.pressure
+    const rule = enforceAt !== null && enforceAt <= census.at
       ? 'The sweep removes entries untouched for 48 hours, oldest first, until the session is under 15 GiB. '
       : 'entries untouched for 48 hours, oldest first, until the session is under 15 GiB. ';
     const body = `Your scratch and task output hold ${gib(s.bytes)}, over the 20 GiB budget. ${largest}${begun}${rule}` +
