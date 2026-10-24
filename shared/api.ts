@@ -13,7 +13,6 @@ import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { WorkflowView } from './workflows.js';
-import type { DiskHealth } from './disk.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -3640,13 +3639,6 @@ export interface FleetHealth {
    * Read it through `readArchivedHeld` alone. No PWA surface renders it yet (the PWA epic's, under the UI rule).
    */
   archivedHeld?: ArchivedHeld;
-  /**
-   * The fleet's disk alarm (D-6615, `DiskHealth`): the level of the worst work filesystem, each filesystem's own level,
-   * the expected mounts and the pressure flag, held by the watcher's `sweepDisk` once a minute. Optional for the same
-   * absence-permits reason as the blocks above: absent until the first sweep. Read it through `readDiskHealth` alone;
-   * absent reads as UNKNOWN, never as a healthy disk.
-   */
-  disk?: DiskHealth;
 }
 
 /**
@@ -12026,3 +12018,17 @@ export const ACCOUNT_DENY_RULES: readonly string[] = [
   ...ACCOUNT_SECRET_PATHS.map((p) => `Read(${p})`),
   ...ACCOUNT_WRITE_DIRS.map((p) => `Edit(${p})`),
 ];
+
+/** `FleetHealth`'s disk block (D-6615), declared HERE at the foot as an interface merge, with its type import beside it,
+ *  so no line above moves and every line citation into this file (the README's, the specs', the compaction card's)
+ *  still holds. TypeScript merges it into `FleetHealth` above: it is one member of that interface. */
+import type { DiskHealth } from './disk.js';
+export interface FleetHealth {
+  /**
+   * The fleet's disk alarm (`DiskHealth`): the level of the worst work filesystem, each filesystem's own level,
+   * the expected mounts and the pressure flag, held by the watcher's `sweepDisk` once a minute. Optional for the same
+   * absence-permits reason as the blocks above: absent until the first sweep. Read it through `readDiskHealth` alone;
+   * absent reads as UNKNOWN, never as a healthy disk.
+   */
+  disk?: DiskHealth;
+}
