@@ -779,6 +779,11 @@ function stubDf(home: string, availKiB = 42_991_616): void {
   stub(home, 'df', [
     'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
     'if [ -f "$HOME/fixture-df-exit" ]; then read -r c < "$HOME/fixture-df-exit"; exit "$c"; fi',
+    'if [ "$1" = "-Pi" ] && [ -n "$2" ]; then',
+    '  echo "Filesystem      Inodes IUsed   IFree IUse% Mounted on"',
+    '  echo "/dev/fixture0  1000000 10000  990000    1% /"',
+    '  exit 0',
+    'fi',
     'if [ "$1" = "-Pk" ] && [ -n "$2" ]; then',
     '  avail=0',
     '  [ -f "$HOME/fixture-df-avail" ] && read -r avail < "$HOME/fixture-df-avail"',
@@ -790,6 +795,37 @@ function stubDf(home: string, availKiB = 42_991_616): void {
   ].join('\n'));
   writeFileSync(join(home, 'fixture-df-avail'), `${availKiB}\n`);
   rmSync(join(home, 'fixture-df-exit'), { force: true });
+}
+
+/** A `df` that answers per PATH, so a work root can sit on a second filesystem. One row per line of
+ *  `<home>/fixture-df-map`: `<path prefix>|<mount>|<size KiB>|<used KiB>|<avail KiB>|<inodes>|<iused>|<ifree>`; the
+ *  first row whose prefix is the asked path, or a parent of it, answers. A path no row matches exits 1 printing
+ *  nothing (a mount df cannot stat). A mount spelled `garbled` answers a line with no numbers. Shell builtins only. */
+interface DfRow { prefix: string; mount: string; sizeKiB: number; usedKiB: number; availKiB: number; inodes?: number; iused?: number }
+function stubDfMap(home: string, rows: DfRow[]): void {
+  stub(home, 'df', [
+    'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
+    'mode="$1"; path="$2"',
+    'while IFS="|" read -r pre mnt size used avail ino iu ifr; do',
+    '  hit=0',
+    '  case "$path" in "$pre"|"$pre"/*) hit=1 ;; esac',
+    '  [ "$pre" = "*" ] && hit=1',
+    '  if [ "$hit" = 1 ]; then',
+    '    if [ "$mnt" = garbled ]; then echo "Filesystem 1024-blocks Used Available Capacity Mounted on"; echo "dev - - - - /garbled"; exit 0; fi',
+    '    if [ "$mode" = "-Pk" ]; then',
+    '      echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
+    '      echo "/dev/fx $size $used $avail 1% $mnt"; exit 0',
+    '    fi',
+    '    echo "Filesystem Inodes IUsed IFree IUse% Mounted on"',
+    '    echo "/dev/fx $ino $iu $ifr 1% $mnt"; exit 0',
+    '  fi',
+    'done < "$HOME/fixture-df-map"',
+    'exit 1',
+  ].join('\n'));
+  writeFileSync(join(home, 'fixture-df-map'), rows.map((r) => {
+    const inodes = r.inodes ?? 1_000_000, iused = r.iused ?? 10_000;
+    return [r.prefix, r.mount, r.sizeKiB, r.usedKiB, r.availKiB, inodes, iused, inodes - iused].join('|');
+  }).join('\n') + '\n');
 }
 
 // ── stage 3b: the exposure quartet's fixtures ─────────────────────────────
@@ -5840,7 +5876,7 @@ describe('ccrc doctor: disk', () => {
     const i = lines.findIndex((l) => l.startsWith('FAIL disk: '));
     expect(i, lines.join('\n')).toBeGreaterThan(-1);
     expect(lines[i]).toContain('1024 MiB free');     // MiB, because "1 GiB" and "0 GiB" are the whole range below the floor
-    expect(lines[i + 1]).toMatch(/^ {2}remedy: free space on \$HOME's filesystem/);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: free space on \//);
     expect(runDoctor(home).code).toBe(1);
   });
 
@@ -5859,10 +5895,10 @@ describe('ccrc doctor: disk', () => {
   it('passes naming the room it measured', () => {
     const home = healthy('ccrc-doctor-disk-ok-');
     expect(lineFor(runDoctor(home).stdout, 'disk'))
-      .toMatch(/^PASS disk: 41 GiB free on \$HOME's filesystem$/);
+      .toMatch(/^PASS disk: 41 GiB free on \/ \(.*home.*\), /);
   });
 
-  it('asks df for KiB and about $HOME, and asks once', () => {
+  it('asks df for KiB and for inodes, about $HOME among the roots, and never with -h', () => {
     // `-P` because the default output wraps a long device name onto its own
     // line (and the parse takes the LAST line); `-k` because every threshold
     // here is in KiB. `df -h` would answer "41G" and the arithmetic below would
@@ -5870,7 +5906,9 @@ describe('ccrc doctor: disk', () => {
     const home = healthy('ccrc-doctor-disk-argv-');
     runDoctor(home);
     const calls = readFileSync(join(home, 'df-calls'), 'utf8').split('\n').filter(Boolean);
-    expect(calls).toEqual([`-Pk ${home}`]);
+    expect(calls).toContain(`-Pk ${home}`);
+    expect(calls).toContain(`-Pi ${home}`);
+    for (const c of calls) expect(c).toMatch(/^-P[ki] \//);
   });
 
   it('warns, rather than measuring nothing silently, when df is not installed', () => {
@@ -5900,6 +5938,159 @@ describe('ccrc doctor: disk', () => {
     expect(r.stdout).not.toMatch(/0 GiB|0 MiB/);
     expect(r.stderr).toBe('');
     expect(r.code).toBe(0);
+  });
+});
+
+// D-6618 (plan Task DR-6; spec §2.5.2): doctor measures EVERY work filesystem, one line each, not only $HOME's.
+describe('ccrc doctor: disk, every work filesystem', () => {
+  const GIB = 1024 * 1024;                          // in the KiB `df -Pk` reports
+  const diskLines = (out: string): string[] => out.split('\n').filter((l) => /^(PASS|WARN|FAIL) disk: /.test(l));
+  /** $HOME on the root filesystem, `projects` and `worktrees` on a second one. */
+  const twoFs = (home: string, work: Partial<DfRow>, root: Partial<DfRow> = {}): void => {
+    mkdirSync(join(home, 'projects'), { recursive: true });
+    mkdirSync(join(home, 'worktrees'), { recursive: true });
+    stubDfMap(home, [
+      { prefix: join(home, 'projects'), mount: '/mnt/work', sizeKiB: 100 * GIB, usedKiB: 50 * GIB, availKiB: 50 * GIB, ...work },
+      { prefix: join(home, 'worktrees'), mount: '/mnt/work', sizeKiB: 100 * GIB, usedKiB: 50 * GIB, availKiB: 50 * GIB, ...work },
+      { prefix: '*', mount: '/', sizeKiB: 100 * GIB, usedKiB: 10 * GIB, availKiB: 90 * GIB, ...root },
+    ]);
+  };
+
+  it('two roots on one filesystem print one line naming both', () => {
+    const home = healthy('ccrc-doctor-disk-one-line-');
+    twoFs(home, {});
+    const lines = diskLines(runDoctor(home).stdout);
+    const work = lines.filter((l) => l.includes('/mnt/work'));
+    expect(work, lines.join('\n')).toHaveLength(1);
+    expect(work[0]).toContain('projects');
+    expect(work[0]).toContain('worktrees');
+    expect(lines.filter((l) => l.includes(' on / '))).toHaveLength(1);
+  });
+
+  it('a work root on a second filesystem at 93% is FAIL even when $HOME is at 10%', () => {
+    const home = healthy('ccrc-doctor-disk-second-fs-');
+    twoFs(home, { usedKiB: 93 * GIB, availKiB: 7 * GIB });
+    const r = runDoctor(home);
+    const lines = diskLines(r.stdout);
+    expect(lines.find((l) => l.includes('/mnt/work')), lines.join('\n')).toMatch(/^FAIL disk: /);
+    expect(lines.find((l) => l.includes(' on / '))).toMatch(/^PASS disk: /);
+    expect(r.code).toBe(1);
+  });
+
+  it('92% of bytes is FAIL and 85% is WARN, at the edges', () => {
+    const at = (usedPct: number): string => {
+      const home = healthy('ccrc-doctor-disk-pct-');
+      twoFs(home, { sizeKiB: 1000 * GIB, usedKiB: usedPct * 10 * GIB, availKiB: (100 - usedPct) * 10 * GIB });
+      return diskLines(runDoctor(home).stdout).find((l) => l.includes('/mnt/work')) ?? '';
+    };
+    expect(at(91)).toMatch(/^WARN disk: /);
+    expect(at(92)).toMatch(/^FAIL disk: /);
+    expect(at(84)).toMatch(/^PASS disk: /);
+    expect(at(85)).toMatch(/^WARN disk: /);
+  });
+
+  it('inodes at 90% are WARN, and at 92% FAIL, while bytes are at 10%', () => {
+    const home = healthy('ccrc-doctor-disk-inodes-');
+    twoFs(home, { usedKiB: 10 * GIB, availKiB: 90 * GIB, inodes: 1_000_000, iused: 900_000 });
+    const line = diskLines(runDoctor(home).stdout).find((l) => l.includes('/mnt/work')) ?? '';
+    expect(line).toMatch(/^WARN disk: /);
+    expect(line).toContain('inodes');
+    const home2 = healthy('ccrc-doctor-disk-inodes-fail-');
+    twoFs(home2, { usedKiB: 10 * GIB, availKiB: 90 * GIB, inodes: 1_000_000, iused: 920_000 });
+    expect(diskLines(runDoctor(home2).stdout).find((l) => l.includes('/mnt/work'))).toMatch(/^FAIL disk: /);
+  });
+
+  it('under 2 GiB free on a second filesystem is FAIL and under 10 GiB is WARN, whatever the percent', () => {
+    const home = healthy('ccrc-doctor-disk-floor-');
+    twoFs(home, { sizeKiB: 100 * GIB, usedKiB: 10 * GIB, availKiB: 1 * GIB });
+    expect(diskLines(runDoctor(home).stdout).find((l) => l.includes('/mnt/work'))).toMatch(/^FAIL disk: .*1024 MiB free/);
+    const home2 = healthy('ccrc-doctor-disk-floor-warn-');
+    twoFs(home2, { sizeKiB: 100 * GIB, usedKiB: 10 * GIB, availKiB: 5 * GIB });
+    expect(diskLines(runDoctor(home2).stdout).find((l) => l.includes('/mnt/work'))).toMatch(/^WARN disk: .*5 GiB free/);
+  });
+
+  it('an unreadable df line is WARN, never PASS', () => {
+    const home = healthy('ccrc-doctor-disk-garbled-');
+    twoFs(home, { mount: 'garbled' });
+    const r = runDoctor(home);
+    const lines = diskLines(r.stdout);
+    const bad = lines.find((l) => l.includes('projects')) ?? '';
+    expect(bad, lines.join('\n')).toMatch(/^WARN disk: .*never measured/);
+    expect(r.stdout).not.toMatch(/^PASS disk: .*projects/m);
+    expect(r.code).toBe(0);
+  });
+
+  it('prints the measured percent past the FAIL line, never the threshold', () => {
+    const home = healthy('ccrc-doctor-disk-99pct-');
+    twoFs(home, { sizeKiB: 100 * GIB, usedKiB: 99 * GIB, availKiB: 1 * GIB, inodes: 1_000_000, iused: 980_000 });
+    const line = diskLines(runDoctor(home).stdout).find((l) => l.includes('/mnt/work')) ?? '';
+    expect(line).toMatch(/^FAIL disk: /);
+    expect(line).toContain('99% of bytes');
+    expect(line).toContain('98% of inodes');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a root under an unsearchable parent is WARN naming it, never an all-PASS', () => {
+    const home = healthy('ccrc-doctor-disk-unstatable-');
+    const locked = join(home, 'locked');
+    mkdirSync(join(locked, 'cfg'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), `CCRC_ACCOUNTS=(lane-a)\n_ccrc_cfg_dir() { echo "${locked}/cfg"; }\n`);
+    chmodSync(locked, 0o000);
+    try {
+      const r = runDoctor(home);
+      const lines = diskLines(r.stdout);
+      const warn = lines.find((l) => l.startsWith('WARN disk: ')) ?? '';
+      expect(warn, lines.join('\n')).toContain('config-dirs');
+      expect(warn).toContain(`${locked}/cfg`);
+      expect(warn).toContain('never measured');
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+
+  it('a config dir from the roster is measured with its own filesystem', () => {
+    const home = healthy('ccrc-doctor-disk-config-dir-');
+    mkdirSync(join(home, '.claude-a'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ACCOUNTS=(lane-a)\n_ccrc_cfg_dir() { echo "$HOME/.claude-a"; }\n');
+    stubDfMap(home, [
+      { prefix: join(home, '.claude-a'), mount: '/mnt/cfg', sizeKiB: 100 * GIB, usedKiB: 95 * GIB, availKiB: 5 * GIB },
+      { prefix: '*', mount: '/', sizeKiB: 100 * GIB, usedKiB: 10 * GIB, availKiB: 90 * GIB },
+    ]);
+    const line = diskLines(runDoctor(home).stdout).find((l) => l.includes('/mnt/cfg')) ?? '';
+    expect(line).toMatch(/^FAIL disk: /);
+    expect(line).toContain('config-dirs');
+  });
+
+  it.each([
+    ['fails to source', 'return 1\n'],
+    ['lacks _ccrc_cfg_dir', 'CCRC_ACCOUNTS=(lane-a)\n'],
+  ])('a roster projection that %s is a WARN naming config-dirs, never a silent PASS', (_n, body) => {
+    const home = healthy('ccrc-doctor-disk-config-broken-');
+    mkdirSync(join(home, '.claude-a'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), body);
+    stubDfMap(home, [
+      { prefix: join(home, '.claude-a'), mount: '/mnt/cfg', sizeKiB: 100 * GIB, usedKiB: 99 * GIB, availKiB: 1 * GIB },
+      { prefix: '*', mount: '/', sizeKiB: 100 * GIB, usedKiB: 10 * GIB, availKiB: 90 * GIB },
+    ]);
+    const lines = diskLines(runDoctor(home).stdout);
+    expect(lines.find((l) => l.includes('config-dirs')), lines.join('\n')).toMatch(/^WARN disk: .*roster projection unreadable/);
+  });
+});
+
+// D-6618 (plan Task DR-6) characterization: the three verdicts on $HOME's filesystem at their edges, green on the
+// check as it stood before it measured every work filesystem. They stay true after: the floors did not move.
+describe('ccrc doctor: disk, the $HOME verdicts at their edges', () => {
+  const GIB = 1024 * 1024;
+
+  it('exactly 2 GiB free is a WARN, not a FAIL', () => {
+    const home = healthy('ccrc-doctor-disk-edge2-');
+    stubDf(home, 2 * GIB);
+    expect(lineFor(runDoctor(home).stdout, 'disk')).toMatch(/^WARN disk: 2 GiB free/);
+  });
+
+  it('exactly 10 GiB free is a PASS', () => {
+    const home = healthy('ccrc-doctor-disk-edge10-');
+    stubDf(home, 10 * GIB);
+    expect(lineFor(runDoctor(home).stdout, 'disk')).toMatch(/^PASS disk: 10 GiB free/);
   });
 });
 

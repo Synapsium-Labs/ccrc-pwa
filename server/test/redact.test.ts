@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DOCS_REDACT_RULES, redactDocsText } from '../../shared/docs.js';
 import {
   APPROVAL_DIGEST_PREVIEW_CHARS, APPROVAL_INPUT_MAX_BYTES, REDACTED, capUtf8, redactCommand, redactedPreview, redactedStored,
 } from '../src/coord/redact.js';
@@ -59,4 +60,43 @@ describe('the length caps', () => {
     expect(capUtf8('aé', 2)).toBe('a');
     expect(capUtf8('😀😀', 5)).toBe('😀');
   });
+});
+
+// D-5867 (Task C1l, ARCH-66 (#801)), characterization: written green on the two old tables, before either moved into
+// `shared/redact.mjs`. The two callers' outputs are pinned byte for byte, so a rule moved into the wrong profile shows
+// as a changed row. The expected values of the first block come from the corpus rows, not from the function.
+describe('the caller-facing functions over the corpus (D-5867)', () => {
+  for (const [i, r] of CORPUS.entries()) {
+    it(`#${i}: redactedStored is the redacted row, uncapped`, () => { expect(redactedStored(r.input)).toBe(r.output); });
+    it(`#${i}: redactedPreview is the redacted row's first 160 characters`, () => {
+      expect(redactedPreview(r.input)).toBe([...r.output].slice(0, APPROVAL_DIGEST_PREVIEW_CHARS).join(''));
+    });
+  }
+});
+
+const PROFILES: {
+  docs: [why: string, input: string, output: string][];
+  cross: [input: string, egress: string, docs: string][];
+} = JSON.parse(readFileSync(path.join(here, 'fixtures/redact/profiles.json'), 'utf8'));
+
+describe('the docs redactor over its own corpus (D-5867)', () => {
+  it('has one row per DOCS_REDACT_RULES rule at least, and the rules are the four of docs W1', () => {
+    expect(DOCS_REDACT_RULES.length).toBe(4);
+    expect(PROFILES.docs.length).toBeGreaterThanOrEqual(DOCS_REDACT_RULES.length);
+  });
+  for (const [why, input, output] of PROFILES.docs) {
+    it(`${why}`, () => {
+      expect(redactDocsText(input)).toBe(output);
+      expect(redactDocsText(output)).toBe(output);
+    });
+  }
+});
+
+describe('a shape both profiles touch is redacted by each profile in its own way (D-5867)', () => {
+  for (const [input, egress, docs] of PROFILES.cross) {
+    it(JSON.stringify(input), () => {
+      expect(redactCommand(input)).toBe(egress);
+      expect(redactDocsText(input)).toBe(docs);
+    });
+  }
 });

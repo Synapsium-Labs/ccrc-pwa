@@ -44,7 +44,7 @@ describe('connectFleet — connection lifecycle', () => {
     // `rosterFp`/`build`, a real agent NEVER omits this field — the fixture
     // home has no `~/.cc-sessions/pool-epoch`, so `readObservedEpoch` answers
     // "never synced" (`null`), sent on the wire explicitly, not "no evidence".
-    // `agentOps: ['update', 'token-sync', 'account']`: the REAL agent advertises the ops it
+    // `agentOps: ['update', 'token-sync', 'account', 'disk']`: the REAL agent advertises the ops it
     // answers beyond the closed set (design 2026-09-20 §10, programme wave 5
     // Task 2; `token-sync` from box-token lifecycle wave 1, spec 4.4; `account`
     // from the accounts plan's A8, spec §13.2), read
@@ -54,7 +54,7 @@ describe('connectFleet — connection lifecycle', () => {
     await vi.waitFor(
       () => expect(fleet!.state).toEqual({
         connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null, observedEpoch: null,
-        agentOps: ['update', 'token-sync', 'account'],
+        agentOps: ['update', 'token-sync', 'account', 'disk'],
       }),
       { timeout: 3000 });
   });

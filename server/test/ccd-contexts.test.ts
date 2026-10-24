@@ -21,8 +21,8 @@ import {
   ccdHeredocBraces,
 } from './consolidationCensus.js';
 
-/** The cross-context reference count on the day this ratchet landed. May only go DOWN. */
-const BASELINE = 522;   // DR-26 (D-6638): the stale reclaim's one edge, the ladder's `_transcript_path` read; named in its PR
+/** The cross-context reference count on the day this ratchet landed. May only go DOWN, except a new destructive verb: ws-orphan (D-6629) adds the same eight lifecycle-journal calls into C1 that ws-collect makes. */
+const BASELINE = 530;   // DR-26 (D-6638): the stale reclaim's one edge, the ladder's `_transcript_path` read; named in its PR
 
 const nameOf = (text: string): string => /^([A-Za-z_][A-Za-z0-9_]*)\(/.exec(text)![1]!;
 

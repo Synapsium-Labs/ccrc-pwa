@@ -13,6 +13,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/server.ts': { reason: 'the HTTP host: builds the Fastify instance, registers its plugins and the routes it serves itself', since: '2026-10-20' },
   'server/src/pwaStatic.ts': { reason: "the PWA's static-file options, typed by @fastify/static's own option type", since: '2026-10-20' },
   'server/src/refuse.ts': { reason: 'the thin route refusal: sends the refusal word at its status on a reply', since: '2026-10-20' },
+  'server/src/archiveAct.ts': { reason: 'the archive door\'s acts: answers the plan\'s refusal and the stop and ws-archive outcomes on the route\'s reply', since: '2026-10-23' },
   'server/src/auth/gate.ts': { reason: "the gate: one onRequest hook in front of every route", since: '2026-10-20' },
   'server/src/auth/stepup.ts': { reason: "step-up auth: reads the request's cookie and answers on the reply", since: '2026-10-20' },
   'server/src/accounts/gate.ts': { reason: "the accounts routes' gate: reads the request's session and answers on the reply", since: '2026-10-20' },

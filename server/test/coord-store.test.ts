@@ -7,8 +7,9 @@
 // from the ledger + the registry + .prhistory after the database is LOST.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { parsedFile, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
          MAIL_RUN_CLOSED_ERROR, toRunSummary } from '../src/coord/store.js';
@@ -4249,10 +4250,14 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     // one spelling of it (PR #75 review round 1, MUT-3): the old scan matched
     // `UPDATE runs SET sessionId` only, and a restored write with the column
     // LAST in its SET list walked straight past it, measured green.
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const src = readFileSync(path.resolve(here, '../src/coord/store.ts'), 'utf8');
-    const writes = [...src.matchAll(/UPDATE runs SET([\s\S]*?)WHERE/gi)]
-      .filter((m) => /\bsessionId\b/i.test(m[1]!));
+    //
+    // ARCH-06 (#554): the census reads the store's SQL by symbol (`sqlStatementsInFile`), and each statement's home by
+    // the method whose span holds it, so a method that moves, or a statement that is re-indented, changes nothing here.
+    const STORE = 'server/src/coord/store.ts';
+    const sql = sqlStatementsInFile(STORE);
+    const homeOf = (name: string): { start: number; end: number } => symbolOf(STORE, `CoordStore.${name}`);
+    const within = (q: { start: number }, name: string): boolean => q.start >= homeOf(name).start && q.start < homeOf(name).end;
+    const writes = sql.filter((q) => q.verb === 'UPDATE' && q.table === 'runs' && /\bsessionId\b/i.test(q.set ?? ''));
     // child-reclamation wave 2: an UNBIND is not a re-bind. It binds no value
     // to the column, so it can hand a run to nobody and has no mail to move —
     // but it is still a writer, so it is named here rather than let through by
@@ -4266,32 +4271,59 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     // the SAME statement) is a re-binder and lands in `updates` below, not a
     // silent UNBIND.
     const UNBIND = /^\s*sessionId\s*=\s*NULL\b(?![\s\S]*\bsessionId\b)/i;
-    const unbinds = writes.filter((m) => UNBIND.test(m[1]!));
-    const updates = writes.filter((m) => !UNBIND.test(m[1]!));
+    const unbinds = writes.filter((q) => UNBIND.test(q.set!));
+    const updates = writes.filter((q) => !UNBIND.test(q.set!));
     expect(updates, 'runs.sessionId is written outside bindSession').toHaveLength(1);
     expect(unbinds, 'a second statement sets runs.sessionId to NULL').toHaveLength(1);
-    const clearAt = src.indexOf('  clearSession(runId: number, pr: number)');
-    expect(clearAt, 'clearSession is gone — the unbind has no home').toBeGreaterThan(-1);
-    expect(unbinds[0]!.index!).toBeGreaterThan(clearAt);
-    expect(unbinds[0]!.index!).toBeLessThan(src.indexOf('\n  }\n', clearAt));
+    expect(unbinds.every((q) => within(q, 'clearSession')), 'clearSession is gone — the unbind has no home').toBe(true);
     // The one that remains sits inside bindSession — the funnel, not a caller.
-    const bindAt = src.indexOf('  bindSession(runId: number, sessionId: string, bornAt?: number | null)');
-    const nextMethodAt = src.indexOf('\n  setSession(', bindAt);
-    expect(bindAt).toBeGreaterThan(-1);
-    expect(updates[0]!.index!).toBeGreaterThan(bindAt);
-    expect(updates[0]!.index!).toBeLessThan(nextMethodAt);
+    expect(within(updates[0]!, 'bindSession')).toBe(true);
     // The OTHER writer, named and argued rather than hidden (store-4):
     // `reconstruct`'s `INSERT INTO runs (…, sessionId, …)` makes a FRESH row
     // from the registry — there is no predecessor to inherit mail from, so it
     // is not a re-bind and the funnel has nothing to do for it. Exactly one
     // such INSERT, and it lives in `reconstruct`.
-    const inserts = [...src.matchAll(/INSERT INTO runs \(([^)]*)\)/g)]
-      .filter((m) => /\bsessionId\b/.test(m[1]!));
+    const inserts = sql.filter((q) => /\bsessionId\b/.test(/^\s*INSERT INTO runs \(([^)]*)\)/.exec(q.text)?.[1] ?? ''));
     expect(inserts, 'a second INSERT names runs.sessionId — argue it here or route it through bindSession').toHaveLength(1);
-    expect(inserts[0]!.index!).toBeGreaterThan(src.indexOf('  reconstruct(input: {'));
+    expect(within(inserts[0]!, 'reconstruct')).toBe(true);
     // Premise: the widened regex recognises what it forbids — it finds the
     // funnel's own statement.
-    expect(updates[0]![0]).toContain('sessionId');
+    expect(updates[0]!.text).toContain('sessionId');
+    // A `+` chain with a non-literal part splits into fragments, and the fragment that opens with `UPDATE runs SET`
+    // carries a `set` cut at the gap (PR #75 MUT-3's escape, through a conditional SET): any PARTIAL `UPDATE runs`
+    // whose whole chain mentions the column is a writer this census cannot place, so it is red.
+    expect(sql.filter((q) => q.verb === 'UPDATE' && q.table === 'runs' && q.partial && /\bsessionId\b/i.test(q.source)).map((q) => q.line),
+      'a conditional `UPDATE runs SET …` chain mentions runs.sessionId — route it through bindSession').toEqual([]);
+    // Superset tripwire (the pre-ARCH-06 raw-text census, kept for the spellings no string expression holds: a `.join`
+    // of pieces, a variable): every `UPDATE runs` in the store's raw text whose text up to the next WHERE names the
+    // column must sit inside bindSession (the funnel) or clearSession (the unbind).
+    const raw = parsedFile(STORE).text;
+    const stray = [...raw.matchAll(/UPDATE\s+runs\b/gi)].filter((m) => {
+      const from = m.index!;
+      const rest = raw.slice(from, from + 600);
+      const upTo = rest.search(/\bWHERE\b/i);
+      return /\bsessionId\b/i.test(upTo < 0 ? rest : rest.slice(0, upTo)) && !within({ start: from }, 'bindSession') && !within({ start: from }, 'clearSession');
+    });
+    expect(stray.map((m) => raw.slice(0, m.index).split('\n').length),
+      'an `UPDATE runs` outside bindSession/clearSession names runs.sessionId in the raw text (a .join or variable spelling)').toEqual([]);
+  });
+
+  it('CONTROL (fixture): a template-substituted SET that may name sessionId is partial', () => {
+    const dir = mkTmp('coord-store-census-');
+    const file = path.join(dir, 'store.ts');
+    writeFileSync(file, "class S { m(x: boolean) { return this.db.prepare(`UPDATE runs SET ${x ? 'sessionId = ?' : 'branch = ?'} WHERE id = ?`); } }\n");
+    const [q] = sqlStatementsInFile(file);
+    expect([q?.verb, q?.table, q?.partial, /\bsessionId\b/.test(q?.source ?? '')]).toEqual(['UPDATE', 'runs', true, true]);
+  });
+
+  it('CONTROL (fixture): a conditional-SET chain that names sessionId is partial and its source shows the column', () => {
+    const dir = mkTmp('coord-store-census-');
+    const file = path.join(dir, 'store.ts');
+    writeFileSync(file, "class S { m(x: boolean) { return this.db.prepare('UPDATE runs SET workspace = ?, ' + (x ? 'sessionId = ?' : 'branch = ?') + ' WHERE id = ?'); } }\n");
+    const [q] = sqlStatementsInFile(file);
+    expect([q?.verb, q?.table, q?.partial, q?.set, /\bsessionId\b/.test(q?.source ?? '')]).toEqual(['UPDATE', 'runs', true, ' workspace = ?, ', true]);
+    writeFileSync(file, "class S { m() { return this.db.prepare('UPDATE runs SET sessionId = ? ' + 'WHERE id = ?'); } }\n");
+    expect(sqlStatementsInFile(file).map((x) => x.partial)).toEqual([false]);   // a wholly literal chain is not partial
   });
 
   // Migration 16, child-reclamation spec §5.1, §5.3: the child's BIRTH is

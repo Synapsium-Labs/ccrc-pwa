@@ -19,6 +19,7 @@ import type { FleetWatcher } from '../src/watch.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import { DISPATCH_SPAWN_POLL_MS, DISPATCH_SPAWN_WAIT_MS } from '../src/coord/routes.js';
 import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { configDirFor } from '../src/config.js';
@@ -464,7 +465,7 @@ describe('dispatchRun alone never waits (D-5238)', () => {
         return { ok: true, stdout: argv[0] === 'ensure' ? `ensured ${ID}\n` : '', stderr: '', killed: false, signal: null };
       },
       configDir: (w: string) => configDirFor(base.cfg, w),
-      turnVerdict: async () => { asked++; return 'unmeasured'; },
+      turnVerdict: async () => { asked++; return 'unmeasured'; }, sendClear: clearSender(base),
     };
     const out = await dispatchRun(deps, opened.id, 'go', undefined);
     expect(out).toMatchObject({ ok: false, kind: 'worker-starting', poll: { uuid: UUID } });
@@ -486,7 +487,7 @@ describe('dispatchRun alone never waits (D-5238)', () => {
       runCcd: async (argv): Promise<CcdResult> =>
         ({ ok: true, stdout: argv[0] === 'ensure' ? `alive: ${ID}\n` : '', stderr: '', killed: false, signal: null }),
       configDir: (w: string) => configDirFor(base.cfg, w),
-      turnVerdict: async () => 'unmeasured',
+      turnVerdict: async () => 'unmeasured', sendClear: clearSender(base),
     };
     expect(await dispatchRun(deps, opened.id, 'go', undefined))
       .toEqual({ ok: false, kind: 'refused', code: 'status-unmeasurable' });
