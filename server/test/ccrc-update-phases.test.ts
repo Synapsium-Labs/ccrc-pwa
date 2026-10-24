@@ -1245,7 +1245,12 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expectNoHostileByte(home, r);
     expect(localUrls(home), 'only SHA256SUMS was fetched').toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
   });
-  for (const locale of ['C.UTF-8', 'C'] as const) {
+  /** The UTF-8 locale this host's bash really runs under: `C.UTF-8` on Linux runners, `en_US.UTF-8` on macOS. A locale
+   *  that is not installed falls back to C silently and would hollow the UTF-8 arm, so the effect is measured, and a
+   *  host with neither runs the arm under `C.UTF-8` and fails it rather than skipping (fix round 5's re-review, m2). */
+  const UTF8 = ['C.UTF-8', 'en_US.UTF-8'].find((loc) => spawnSync(BASH, ['-c', `x=$'\\xc3\\xa9'; printf '%s' "\${#x}"`],
+    { encoding: 'utf8', env: { LC_ALL: loc } }).stdout === '1') ?? 'C.UTF-8';
+  for (const locale of [UTF8, 'C']) {
     it(`a tarball name with one byte 0x9b (a C1 CSI), the caller's locale ${locale}: the update dies at the read and the byte reaches no way out (D-6751, R46)`, () => {
       const home = freshUpdateBox('ccrc-update-bound-name-c1-');
       plantOldBox(home, { version: 'v1.0.0' });
@@ -1282,7 +1287,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     const name = `ccrc-${'é'.repeat(94)}v.tar.gz`;
     expect([name.length, Buffer.byteLength(name)]).toEqual([107, 201]);
     sumsName(home, name);
-    const { r } = boundedRun(home, [], 'C.UTF-8');
+    const { r } = boundedRun(home, [], UTF8);
     expect(r.code, r.stderr).toBe(1);
     expect(nameDie(r), r.stderr).toEqual([`ccrc: SHA256SUMS's tarball name is 201 bytes or not printable ASCII, not a ccrc release's (starts: ccrc-${'?'.repeat(35)}) — refusing; nothing on this box was changed`]);
   });
@@ -1310,7 +1315,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(r.stderr.split('\n').filter((l) => l.startsWith(MALFORMED)), r.stderr).toHaveLength(1);
     expectNoHostileByte(home, r);
   }, 150_000);
-  for (const locale of ['C.UTF-8', 'C'] as const) {
+  for (const locale of [UTF8, 'C']) {
     it(`an unsigned release whose build.json version carries U+009B (a C1 CSI), the caller's locale ${locale}: the update dies, and the byte reaches no way out (D-6751, R46)`, () => {
       const { home, r } = unsignedVersion('ccrc-update-bound-version-c1-', 'v2.0.0\u009b2J', locale);
       if (locale === 'C') {
@@ -1336,7 +1341,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
   it('an unsigned release whose build.json version is 201 bytes in 101 characters, the caller\'s locale UTF-8: the bound counts bytes and dies (D-6751, R46)', () => {
     const version = `v${'é'.repeat(100)}`;
     expect([version.length, Buffer.byteLength(version)]).toEqual([101, 201]);
-    const { r } = unsignedVersion('ccrc-update-bound-version-mb-', version, 'C.UTF-8');
+    const { r } = unsignedVersion('ccrc-update-bound-version-mb-', version, UTF8);
     expect(versionDie(r), r.stderr).toEqual([`ccrc: build.json's version is 201 bytes or not printable ASCII, not a ccrc release's (starts: v${'?'.repeat(39)}) — refusing; nothing outside the staging dir was touched`]);
   }, 150_000);
 
