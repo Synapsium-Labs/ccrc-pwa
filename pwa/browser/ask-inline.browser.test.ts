@@ -306,3 +306,70 @@ describe('the inline ask\'s keys at the desk (R41 F4, D-6326)', () => {
     }
   }, 90_000);
 });
+
+// R64 F5: the transcript's live ask card offers "Go to question" at the desk. It raises the mounted inline card (the
+// existing raise path): the card scrolls into view and its first option takes focus. The transcript here holds the live
+// `AskUserQuestion` call, so its card is drawn beside the inline one.
+describe('Go to question at the desk (R64 F5, D-6326)', () => {
+  const view: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1280 };
+  const CALL = {
+    kind: 'tool_use', uuid: 'a2', ts: TS, toolId: 't1', name: 'AskUserQuestion',
+    input: JSON.stringify({ questions: [{ question: 'Which cache should the service use?', header: 'Cache', multiSelect: false,
+      options: [{ label: 'Redis' }, { label: 'In-process' }] }] }),
+  };
+  const WITH_CALL = (): object[] =>
+    FRAMES().map((f) => ((f as { type?: string }).type === 'backlog'
+      ? { ...BACKLOG, events: [...BACKLOG.events, CALL] }
+      : f));
+
+  it('clicking it with the card scrolled away brings the card into the viewport and focuses its first option', async () => {
+    const opened = await openApp(browser!, view, FIXTURE);
+    try {
+      await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        for (const frame of WITH_CALL()) ws.send(JSON.stringify(frame));
+      });
+      await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
+      await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
+      await opened.page.waitForTimeout(800);
+      const button = opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' });
+      expect(await button.count(), 'premise: the transcript card offers Go to question').toBe(1);
+      expect(await opened.page.locator('.tool-ask .ask-state', { hasText: 'waiting for you, below' }).count(), 'beside the word').toBe(1);
+
+      // Scroll the card away as far as this layout lets anything scroll, and measure where that leaves it.
+      const away = await opened.page.evaluate((card) => {
+        const el = document.querySelector<HTMLElement>(card)!;
+        const chat = el.closest<HTMLElement>('.chat')!;
+        const body = chat.querySelector<HTMLElement>(':scope > .chat-body')!;
+        for (const e of [document.scrollingElement as HTMLElement, document.body, chat, body]) e.scrollTop = e.scrollHeight;
+        el.querySelector<HTMLElement>('.ask-inline-body')!.scrollTop = 0;
+        (document.activeElement as HTMLElement | null)?.blur();
+        const r = el.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, vh: window.innerHeight, focusInCard: el.contains(document.activeElement) };
+      }, CARD);
+      console.log('GO-TO-QUESTION away', JSON.stringify(away));
+      expect(away.focusInCard, 'premise: focus is outside the card before the click').toBe(false);
+
+      await button.click();
+      await opened.page.waitForTimeout(300);
+      const after = await opened.page.evaluate((card) => {
+        const el = document.querySelector<HTMLElement>(card)!;
+        const r = el.getBoundingClientRect();
+        const first = el.querySelector<HTMLElement>('.opt[tabindex="0"]');
+        const fr = first?.getBoundingClientRect();
+        return {
+          top: r.top, bottom: r.bottom, vh: window.innerHeight,
+          focusIsFirst: first !== null && document.activeElement === first,
+          focused: document.activeElement?.getAttribute('class') ?? document.activeElement?.tagName ?? '',
+          first: fr === undefined ? null : { top: fr.top, bottom: fr.bottom },
+        };
+      }, CARD);
+      console.log('GO-TO-QUESTION after', JSON.stringify(after));
+      expect(after.top, 'the card starts inside the viewport').toBeGreaterThanOrEqual(0);
+      expect(after.bottom, 'and ends inside it').toBeLessThanOrEqual(after.vh + 1);
+      expect(after.focusIsFirst, `focus is on the first option (it is on ${after.focused})`).toBe(true);
+      expect(opened.errors).toEqual([]);
+    } finally {
+      await opened.ctx.close();
+    }
+  }, 90_000);
+});

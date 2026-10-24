@@ -555,6 +555,75 @@ describe('the transcript stops repeating the ask the card already shows', () => 
     expect(view.container.querySelector('.tool-ask .ask-state')?.textContent ?? '').toMatch(/waiting for you, below/i);
   });
 
+  // R64 F5: the desk's transcript card keeps "waiting for you, below" and offers "Go to question" beside it. It is the
+  // existing raise (`SessionScreen`'s `setRaise`, through `ChatList` and `ToolCard`, to `DialogSheet`'s `raise` and the
+  // inline card's effect), so the cases click the real button on the real screen.
+  describe('Go to question (R64 F5)', () => {
+    const goTo = (): HTMLButtonElement | null =>
+      [...document.querySelectorAll<HTMLButtonElement>('.tool-ask .ask-state button')].find((b) => b.textContent === 'Go to question') ?? null;
+
+    it('clicking Go to question on the transcript\'s live ask card scrolls the inline card into view and focuses its first option', async () => {
+      // Premises: the desk; the transcript holds the live ask call; fixture 1's envelope is up in the inline card; focus
+      // is in the composer, as a fine pointer leaves it.
+      media(true);
+      const scrolled: Element[] = [];
+      vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(function scrollIntoView(this: Element): void {
+        scrolled.push(this);
+      });
+      const { arrive } = mount({ events: [...EVENTS, ASK_CALL] });
+      await frame();
+      arrive(1);
+      const section = card();
+      act(() => composer().focus());
+      scrolled.length = 0;
+      const button = goTo();
+      expect(button, 'premise: the transcript card offers Go to question').not.toBeNull();
+      act(() => button!.focus());
+      fireEvent.click(button!);
+      expect(scrolled, 'the click scrolled the mounted card into view').toEqual([section]);
+      expect(document.activeElement, 'and focused its first option').toBe(opt(section, /^Redis/));
+      // The same button raises again after focus moved away: it is a nonce, not a one-shot.
+      act(() => composer().focus());
+      fireEvent.click(goTo()!);
+      expect(document.activeElement, 'a second click focuses it again').toBe(opt(section, /^Redis/));
+    });
+
+    it('with the button on screen the card still says waiting for you, below, and there is one question form and no dialog', async () => {
+      media(true);
+      const { arrive } = mount({ events: [...EVENTS, ASK_CALL] });
+      await frame();
+      arrive(1);
+      card();
+      const live = document.querySelector<HTMLElement>('.tool-ask .ask-state')!;
+      expect(live.textContent ?? '', 'the word is kept').toMatch(/waiting for you, below/i);
+      expect(goTo(), 'premise: the button is beside it').not.toBeNull();
+      fireEvent.click(goTo()!);
+      expect(cards(), 'one inline card').toHaveLength(1);
+      expect(dialogs(), 'no dialog').toHaveLength(0);
+      expect(overlays(), 'no scrim').toHaveLength(0);
+      expect(screen.getAllByRole('button', { name: /^Redis/ }), 'the options exist once, in the card').toHaveLength(1);
+      expect(within(live).queryByRole('button', { name: 'Answer' }), 'and the transcript offers no Answer').toBeNull();
+    });
+
+    it('on the review screen the transcript button still says Go to question, not the answer label', async () => {
+      media(true);
+      const { arrive } = mount({ events: [...EVENTS, ASK_CALL] });
+      await frame();
+      arrive(8);
+      card();
+      expect(goTo(), 'Go to question, whatever the sheet is waiting on').not.toBeNull();
+      expect(document.querySelector('.tool-ask .ask-state')!.textContent ?? '', 'the answer label is not the transcript\'s').not.toMatch(/Submit answers/);
+    });
+
+    it('below 900 the transcript card offers Answer and no Go to question', () => {
+      media(false);
+      const { arrive } = mount({ events: [...EVENTS, ASK_CALL] });
+      arrive(1);
+      expect(goTo(), 'no Go to question on a phone').toBeNull();
+      expect(document.querySelector('.tool-ask .ask-state button.ask-answer')?.textContent, 'Answer raises the sheet').toBe('Answer');
+    });
+  });
+
   it('Answer\'s raise scrolls the card into view and focuses its first option', () => {
     media(true);
     const scrolled: Element[] = [];
