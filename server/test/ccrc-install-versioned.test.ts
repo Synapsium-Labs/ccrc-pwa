@@ -18,7 +18,7 @@ describe('ccrc install: the order is stated in one place', () => {
     // `ccd` refuses to run AT ALL without `~/.ccrc/accounts.sh` — its own
     // `|| die`, on every invocation — so an install that put `ccd` on PATH
     // before the roster projection existed would leave a box whose every ccd
-    // command dies, for exactly as long as the gap. That is `deploy.sh:348-353`'s
+    // command dies, for exactly as long as the gap. That is `deploy.sh`'s
     // "THE ROSTER LANDS BEFORE ccd" rule, and it is the reason `cmd_install`
     // is a fixed sequence rather than a set of steps.
     const src = read(join(REPO, 'ccd', 'ccrc'));
