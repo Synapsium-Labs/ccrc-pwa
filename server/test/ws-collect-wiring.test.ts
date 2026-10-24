@@ -33,7 +33,7 @@ describe('the agent grant — ws-collect on its confirmation token, the audit on
     expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-audit')).toEqual([
       ['ws-audit', '--session'], ['ws-audit', '--orphans'], ['ws-audit', '--orphan-hex'],
     ]);
-    expect(EXEC_WHITELIST.ccd.some((p) => p[0] === 'ws-audit' && p.includes('--collect'))).toBe(false);
+    expect(EXEC_WHITELIST.ccd.some((p) => p[0] === 'ws-audit' && (p as readonly string[]).includes('--collect'))).toBe(false);
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsCollectAudit(ID)])).toBe(true);
   });
 });
