@@ -405,6 +405,71 @@ describe('the output contract', () => {
   });
 });
 
+describe('the body ends in exactly one newline, and the status line stays', () => {
+  it('prints a 2xx body with no trailing newline with exactly one', async () => {
+    reply = { code: 200, body: '{"ok":true}' };
+    expect((await run(['runs', 'list'])).stdout).toBe('{"ok":true}\n');
+  });
+
+  it('gives a body that already ends in a newline no second one', async () => {
+    reply = { code: 200, body: '{"ok":true}\n' };
+    expect((await run(['runs', 'list'])).stdout).toBe('{"ok":true}\n');
+  });
+
+  it('prints nothing on stdout for an empty body', async () => {
+    reply = { code: 200, body: '' };
+    expect((await run(['runs', 'list'])).stdout).toBe('');
+  });
+
+  it('parses stdout as JSON with no cleanup, for a 200 and for a 409', async () => {
+    reply = { code: 200, body: '{"ok":true}' };
+    expect(JSON.parse((await run(['runs', 'list'])).stdout)).toEqual({ ok: true });
+    reply = { code: 409, body: '{"ok":false,"refused":"x"}' };
+    const r = await run(['runs', 'open']);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ ok: false, refused: 'x' });
+  });
+
+  it('ends stderr with `http <code>`, with and without CCRC_API_STATUS=line', async () => {
+    for (const [code, body] of [[200, '{"ok":true}'], [409, '{"ok":false}']] as const) {
+      reply = { code, body };
+      for (const overrides of [{}, { CCRC_API_STATUS: 'line' }]) {
+        const r = await run(['runs', 'list'], undefined, overrides);
+        expect(r.stderr.trimEnd().split('\n').pop()).toBe(`http ${code}`);
+      }
+    }
+  });
+
+  it('still yields the code and a body jq reads from the merged output, as the approval hook parses it', async () => {
+    reply = { code: 201, body: '{"id":7}' };
+    const merged = await new Promise<string>((resolve) => {
+      // The binary rides the environment, not argv: CodeQL reads every argv element of a `bash -c` as part of the
+      // command (js/shell-command-injection-from-environment), so the script text stays constant.
+      const child = spawn('bash', ['-c', '"$CCRC_API_UNDER_TEST" runs list 2>&1'],
+        { env: { ...ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true }), CCRC_API_UNDER_TEST: CCRC_API } });
+      let out = '';
+      child.stdout.on('data', (c) => { out += c; });
+      child.stdin.end();
+      child.on('close', () => resolve(out));
+    });
+    const parsed = await sh('out=$(cat); code="${out##*http }"; body="${out%http *}"; printf "%s|" "$code"; jq -r .id <<<"$body"', merged.replace(/\n$/, ''));
+    expect(parsed.trim()).toBe('201|7');
+  });
+
+  it('leaves the transport failure as it was: exit 3 and the transport envelope', async () => {
+    await new Promise<void>((r) => { server.close(() => r()); });
+    const r = await run(['runs', 'list']);
+    expect(r.status).toBe(3);
+    expect(JSON.parse(r.stdout)).toMatchObject({ ok: false, error: 'transport' });
+  });
+
+  it('never prints the token on either stream, on a 200 with the line on', async () => {
+    reply = { code: 200, body: '{"ok":true}' };
+    const r = await run(['runs', 'list'], undefined, { CCRC_API_STATUS: 'line' });
+    expect(r.stdout + r.stderr).not.toContain(TOKEN);
+  });
+});
+
 describe('the token', () => {
   it('sends the value line, not the document around it', async () => {
     await run(['runs', 'list']);
