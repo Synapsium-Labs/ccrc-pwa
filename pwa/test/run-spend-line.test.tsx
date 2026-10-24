@@ -4,7 +4,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import type { RunSpend, RunSummary } from '../../shared/api';
+import { RUN_SPEND_UNMEASURED_REASONS, type RunSpend, type RunSummary } from '../../shared/api';
 import { runSpendLine, compactCount } from '../src/fleet/runSpendWords';
 import { RunRow } from '../src/screens/RunRow';
 
@@ -33,7 +33,7 @@ describe('runSpendLine', () => {
     expect(l.title).toContain('2026-10-24T12:00:00Z');
   });
   it('unmeasured says so, with the reason in words, and is never a zero', () => {
-    for (const reason of ['no-session', 'no-sweep', 'unreadable', 'malformed', 'not-swept'] as const) {
+    for (const reason of RUN_SPEND_UNMEASURED_REASONS) {
       const l = runSpendLine({ measured: false, reason })!;
       expect(l.measured).toBe(false);
       expect(l.short).toMatch(/^spend not measured/);

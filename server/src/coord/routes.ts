@@ -2681,8 +2681,8 @@ export function registerCoordRoutes(
       if (session.reason !== 'session') {
         const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id');
         if (token !== 'ok') {
-          return reply.code(401).send({
-            ok: false, error: 'unauthenticated', verdict: session.verdict,
+          return refuseRoute(reply, 'unauthenticated', {
+            verdict: session.verdict,
             detail: 'GET /api/runs/:id takes a session cookie OR the box token ' +
               `(${MAIL_TOKEN_HEADER}); the coordinator skill reads it cookieless from the fleet host`,
           });
@@ -2692,10 +2692,10 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     const { id: idParam } = req.params as { id: string };
     const id = parseCanonicalPositiveSafeInteger(idParam);
-    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    if (id === null) return refuseRoute(reply, 'bad-request');
     const read = deps.coord.run(id);
-    if (!read.ok) return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
-    if (read.run === null) return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    if (!read.ok) return refuseRoute(reply, 'run-unreadable', { detail: read.detail });
+    if (read.run === null) return refuseRoute(reply, 'unknown-run');
     const bound = boundSessionsOf(read.run.sessionId, deps.coord.runEvents(id));
     const spend = joinRunSpend(bound, bound.length === 0 ? { kind: 'absent' } : await readSessionSpendMeasured(deps.io, deps.cfg.registryDir));
     return { ok: true, run: toRunSummary(read.run), spend };

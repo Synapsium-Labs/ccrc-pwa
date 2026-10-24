@@ -6460,6 +6460,11 @@ export interface ChildReclaimStatus {
  * into `measured: true` with zero tokens.
  */
 export type RunSpendUnmeasuredReason = 'no-session' | 'no-sweep' | 'unreadable' | 'malformed' | 'not-swept';
+const RUN_SPEND_UNMEASURED_REASON_MAP: Record<RunSpendUnmeasuredReason, true> = {
+  'no-session': true, 'no-sweep': true, unreadable: true, malformed: true, 'not-swept': true,
+};
+export const RUN_SPEND_UNMEASURED_REASONS: readonly RunSpendUnmeasuredReason[] =
+  Object.keys(RUN_SPEND_UNMEASURED_REASON_MAP) as RunSpendUnmeasuredReason[];
 export interface RunSpendTokens { input: number; cacheWrite: number; cacheRead: number; output: number }
 export type RunSpend =
   | { measured: true; tokens: RunSpendTokens; proxyUsd: number; measuredAt: string }
