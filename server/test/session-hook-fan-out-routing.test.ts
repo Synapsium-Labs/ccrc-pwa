@@ -88,6 +88,56 @@ describe('a Workflow agent() call must name its model and effort (D-6798)', () =
   });
 });
 
+describe('a Workflow agent() call is read as code, not as text (D-6798)', () => {
+  it('options kept in a shared object are not seen, so the call is allowed', () => {
+    expect(fire('Workflow', { script: 'const W = { model: "sonnet", effort: "low" }; await agent("x", W)' })).toBeNull();
+    expect(fire('Workflow', { script: 'const W = { model: "sonnet", effort: "low" }; await pipeline(items, i => agent(i, W))' })).toBeNull();
+    expect(fire('Workflow', { script: 'await agent("x", { ...W, effort: "low" })' })).toBeNull();
+  });
+  it('the text agent( inside a string is not a call', () => {
+    expect(fire('Workflow', { script: "await agent(`call agent( later`, { model: 'opus', effort: 'high' })" })).toBeNull();
+    expect(fire('Workflow', { script: "const p = 'then agent(x) the rest'; return p" })).toBeNull();
+  });
+  it('the word model in the prompt is not a model option', () => {
+    expect(fire('Workflow', { script: "await agent('review the data model', { effort: 'low' })" })).not.toBeNull();
+    expect(fire('Workflow', { script: "await agent('review the model: effort: x', { model: 'opus' })" })).not.toBeNull();
+  });
+  it('a two-argument call with inline options needs both keys', () => {
+    expect(fire('Workflow', { script: "await agent('x', { model: 'opus', effort: 'high' })" })).toBeNull();
+    expect(fire('Workflow', { script: "await agent('x', { model, effort })" })).toBeNull();
+    expect(fire('Workflow', { script: "await agent('x', { model: 'opus' })" })).not.toBeNull();
+    expect(fire('Workflow', { script: "await agent('x')" })).not.toBeNull();
+  });
+  it('commas inside the prompt or a nested call do not end the first argument', () => {
+    expect(fire('Workflow', { script: "await agent(f(a, b) + 'x, y', { model: 'opus', effort: 'high' })" })).toBeNull();
+    expect(fire('Workflow', { script: "await agent(f(a, b) + 'x, y', { model: 'opus' })" })).not.toBeNull();
+  });
+});
+
+describe('a Workflow run by scriptPath is checked as its file (D-6798)', () => {
+  let dir: string;
+  beforeAll(() => { dir = mkTmp('ccrc-fanout-script-'); });
+  afterAll(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+  const file = (name: string, body: string): string => { const p = path.join(dir, name); fs.writeFileSync(p, body); return p; };
+  it('a file with a bare agent() is denied', () => {
+    expect(fire('Workflow', { scriptPath: file('bare.js', "await agent('x')") })).toMatch(/routing matrix/);
+  });
+  it('a fully routed file is allowed', () => {
+    expect(fire('Workflow', { scriptPath: file('ok.js', "await agent('x', { model: 'opus', effort: 'high' })") })).toBeNull();
+  });
+  it('a missing, unreadable, directory or oversize file fails open', () => {
+    expect(fire('Workflow', { scriptPath: path.join(dir, 'nope.js') })).toBeNull();
+    expect(fire('Workflow', { scriptPath: dir })).toBeNull();
+    expect(fire('Workflow', { scriptPath: file('big.js', `${' '.repeat(262145)}await agent('x')`) })).toBeNull();
+  });
+  it('an inline script wins over a scriptPath', () => {
+    expect(fire('Workflow', { script: 'return 1', scriptPath: file('bare2.js', "await agent('x')") })).toBeNull();
+  });
+  it('a saved workflow by name is not read (out of scope)', () => {
+    expect(fire('Workflow', { name: 'saved' })).toBeNull();
+  });
+});
+
 describe('the fan-out arm fails open (D-6798)', () => {
   it('a malformed Agent payload prints nothing and exits 0', () => {
     expect(run('{"hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"prompt":"p"')).toBe('');
