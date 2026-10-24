@@ -305,10 +305,10 @@ describe('the nine sweep lanes outside coordination (D-5862, PR 1b)', () => {
     ['lifecycle', 5_000], ['readiness', 600_000], ['ledgerReconcile', 900_000], ['ledgerFloor', 3_600_000],
   ];
 
-  it.each(NINE)('the %s row exists, on the wall clock as it is today, at %i ms', (name, cadenceMs) => {
+  it.each(NINE)('the %s row exists, on the monotonic clock (OA-C4), at %i ms', (name, cadenceMs) => {
     const r = laneRow(name);
     expect(r.cadenceMs).toBe(cadenceMs);
-    expect(r.clock).toBe('wall');
+    expect(r.clock).toBe('mono');
     expect(r.derivedFrom).toBeNull();
   });
 
@@ -364,11 +364,11 @@ describe('the nine sweep lanes outside coordination (D-5862, PR 1b)', () => {
 
 describe('the eight coordination lanes (D-5862, PR 2)', () => {
   const ROWS: Array<[string, string, string]> = [
-    ['claimRenew', 'wall', 'none'], ['claimLapse', 'wall', 'none'], ['stalls', 'wall', 'skip'], ['idleNudge', 'wall', 'skip'],
-    ['mail', 'wall', 'none'], ['asks', 'wall', 'none'], ['approvalPrune', 'wall', 'none'], ['digestBeat', 'wall', 'none'],
+    ['claimRenew', 'mono', 'none'], ['claimLapse', 'mono', 'none'], ['stalls', 'mono', 'skip'], ['idleNudge', 'mono', 'skip'],
+    ['mail', 'mono', 'none'], ['asks', 'mono', 'none'], ['approvalPrune', 'mono', 'none'], ['digestBeat', 'mono', 'none'],
   ];
 
-  it('each lane is a row on the clock it throttles on today, with the flight it has today', () => {
+  it('each lane is a row on the monotonic clock (OA-C4), with the flight it has today', () => {
     for (const [name, clock, flight] of ROWS) {
       expect(laneRow(name).clock, `${name}'s clock`).toBe(clock);
       expect(laneRow(name).flight, `${name}'s flight`).toBe(flight);
@@ -467,5 +467,33 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
     expect(runner.due('x'), 'the stamp was not the handed reading').toBe(false);
     t.mono = 5_140;
     expect(runner.due('x')).toBe(true);
+  });
+});
+
+describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 25 of 25 are monotonic', () => {
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(25);
+  });
+
+  it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
+    const { t, runner } = rig([row({ name: 'lane', cadenceMs: 100, clock: 'mono' })]);
+    expect(runner.due('lane'), 'a first run').toBe(true);
+    runner.stamp('lane');
+    t.wall -= 3_600_000; t.mono += 100;
+    expect(runner.due('lane'), 'a wall step back held a monotonic row').toBe(true);
+    runner.stamp('lane');
+    t.wall += 3_600_000;
+    expect(runner.due('lane'), 'a wall step forward ran a monotonic row early').toBe(false);
+  });
+
+  it('runSync on a monotonic row throttles on the monotonic reading', () => {
+    const { t, runner } = rig([row({ name: 'beat', cadenceMs: 100, clock: 'mono' })]);
+    const fn = vi.fn();
+    expect(runner.runSync('beat', fn)).toBe(true);
+    t.wall += 1_000_000;
+    expect(runner.runSync('beat', fn), 'the wall clock moved a monotonic row').toBe(false);
+    t.mono += 100;
+    expect(runner.runSync('beat', fn)).toBe(true);
   });
 });
