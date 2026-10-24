@@ -8,9 +8,21 @@ import path from 'node:path';
 import { LANE_SCHEDULE, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS } from '../src/laneSchedule.js';
+import { parsedFile } from './scan/symbols.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 const text = (rel: string): string => readFileSync(path.join(SRC, rel), 'utf8');
+/** A file's declarations and import edges, read through scan/parse.ts (ARCH-06: a pin keyed on a binding, not a line). */
+const parsed = (rel: string) => parsedFile(path.join(SRC, rel));
+/** The initialiser of `rel`'s one binding `name`, or null when the file declares none. */
+const initOf = (rel: string, name: string): string | null => {
+  const found = parsed(rel).bindings.filter((b) => b.name === name);
+  if (found.length > 1) throw new Error(`${rel} declares ${name} ${found.length} times`);
+  return found[0]?.init ?? null;
+};
+/** True when `rel` re-exports `name` from `specifier` (`export { name } from '…'`). */
+const reExports = (rel: string, name: string, specifier: string): boolean =>
+  parsed(rel).imports.some((e) => e.kind === 'export-from' && e.specifier === specifier && e.names.includes(name));
 
 /** The safety intervals that are NOT cadences (spec K11): a lane's cadence is never derived from one of these. */
 const SAFETY_CONSTANTS = [
@@ -57,15 +69,15 @@ describe('LANE_SCHEDULE — the table', () => {
   });
 
   it('a shared cadence has one home, here, and its old home re-exports it rather than declaring a second copy', () => {
-    const src = text('laneSchedule.ts');
-    expect(src).toMatch(/export const CATALOGUE_POLL_INTERVAL_MS = 30 \* 60_000;/);
-    expect(src).toMatch(/export const SERVER_CAPS_WRITE_MS = 60_000;/);
-    expect(src).toMatch(/cadenceMs: CATALOGUE_POLL_INTERVAL_MS\b/);
-    expect(src).toMatch(/cadenceMs: SERVER_CAPS_WRITE_MS\b/);
-    expect(text('update/catalogue.ts')).not.toMatch(/export const CATALOGUE_POLL_INTERVAL_MS\b/);
-    expect(text('update/catalogue.ts')).toMatch(/export \{ CATALOGUE_POLL_INTERVAL_MS \} from '..\/laneSchedule.js'/);
-    expect(text('update/serverCaps.ts')).not.toMatch(/export const SERVER_CAPS_WRITE_MS\b/);
-    expect(text('update/serverCaps.ts')).toMatch(/export \{ SERVER_CAPS_WRITE_MS \} from '..\/laneSchedule.js'/);
+    expect(initOf('laneSchedule.ts', 'CATALOGUE_POLL_INTERVAL_MS')).toBe('30 * 60_000');
+    expect(initOf('laneSchedule.ts', 'SERVER_CAPS_WRITE_MS')).toBe('60_000');
+    const table = initOf('laneSchedule.ts', 'LANE_SCHEDULE') ?? '';
+    expect(table).toMatch(/cadenceMs: CATALOGUE_POLL_INTERVAL_MS\b/);
+    expect(table).toMatch(/cadenceMs: SERVER_CAPS_WRITE_MS\b/);
+    expect(initOf('update/catalogue.ts', 'CATALOGUE_POLL_INTERVAL_MS'), 'catalogue.ts declares a second copy').toBeNull();
+    expect(reExports('update/catalogue.ts', 'CATALOGUE_POLL_INTERVAL_MS', '../laneSchedule.js')).toBe(true);
+    expect(initOf('update/serverCaps.ts', 'SERVER_CAPS_WRITE_MS'), 'serverCaps.ts declares a second copy').toBeNull();
+    expect(reExports('update/serverCaps.ts', 'SERVER_CAPS_WRITE_MS', '../laneSchedule.js')).toBe(true);
     expect(text('watch.ts'), 'the watcher holds a cadence of its own').not.toMatch(/\b(?:CAPS_REFRESH_MS|UPDATE_INVENTORY_MS|UPDATE_CATALOGUE_MS)\s*=/);
     expect(laneRow('catalogue').cadenceMs).toBe(CATALOGUE_POLL_INTERVAL_MS);
     expect(laneRow('serverCaps').cadenceMs).toBe(SERVER_CAPS_WRITE_MS);
@@ -75,8 +87,8 @@ describe('LANE_SCHEDULE — the table', () => {
     for (const r of LANE_SCHEDULE) {
       expect(SAFETY_CONSTANTS, `${r.name} takes its cadence from a safety interval`).not.toContain(r.derivedFrom?.name);
     }
-    const src = text('laneSchedule.ts');
-    for (const s of SAFETY_CONSTANTS) expect(src, `${s} is a row`).not.toMatch(new RegExp(`cadenceMs: ${s}\\b`));
+    const table = initOf('laneSchedule.ts', 'LANE_SCHEDULE') ?? '';
+    for (const s of SAFETY_CONSTANTS) expect(table, `${s} is a row`).not.toMatch(new RegExp(`cadenceMs: ${s}\\b`));
   });
 
   it('a staleAfterMs rides a skip row only, and the four beats of this PR are the rows named', () => {
