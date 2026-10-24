@@ -21,7 +21,7 @@ import { chmodSync, copyFileSync, mkdirSync, readFileSync, statSync, symlinkSync
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { markGenerated, verifyMarker } from '../../shared/mark.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -166,7 +166,7 @@ describe('ccrc restamp <file>', () => {
     const tree = (idMax?: number): string => {
       const t = mkTmp('ccrc-restamp-hook-');
       mkdirSync(join(t, 'ccd')); mkdirSync(join(t, 'shared'));
-      copyFileSync(join(ROOT, 'ccd', 'ccd'), join(t, 'ccd', 'ccd'));
+      copyFileSync(CCD, join(t, 'ccd', path.basename(CCD)));
       copyFileSync(join(ROOT, 'shared', 'mark.mjs'), join(t, 'shared', 'mark.mjs'));
       const mod = readFileSync(join(ROOT, 'shared', 'hook-helpers.mjs'), 'utf8');
       writeFileSync(join(t, 'shared', 'hook-helpers.mjs'),
@@ -209,6 +209,17 @@ describe('ccrc restamp <file>', () => {
       expect(r.code).toBe(1);
       expect(r.stderr).toContain('Nothing was written');
       expect(readFileSync(f, 'utf8')).toBe(shipped);
+    });
+
+    it('REFUSES, naming the damage and writing nothing, a hook whose region lost its END line', () => {
+      const f = join(tree(), 'ccd', 'session-hook.sh');
+      const damaged = shipped.replace(/^# ── END GENERATED HOOK HELPERS ──\n/m, '');
+      expect(damaged).not.toBe(shipped);
+      writeFileSync(f, damaged);
+      const r = run([f]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('hook helpers refused (missing)');
+      expect(readFileSync(f, 'utf8')).toBe(damaged);
     });
 
     it('REFUSES a hook with no region, untouched', () => {

@@ -96,13 +96,23 @@ function startedAsScript() {
 
 if (startedAsScript()) {
   const [mode, hookPath, ccdPath] = process.argv.slice(2);
-  if ((mode !== '--write' && mode !== '--check') || !hookPath || !ccdPath) {
-    process.stderr.write('usage: node shared/hook-helpers.mjs --write|--check <session-hook.sh> <ccd>\n');
+  if ((mode !== '--write' && mode !== '--check' && mode !== '--restamp') || !hookPath || !ccdPath) {
+    process.stderr.write('usage: node shared/hook-helpers.mjs --write|--check|--restamp <session-hook.sh> <ccd>\n');
     process.exit(2);
   }
   const hook = readFileSync(hookPath, 'utf8');
   const ccd = readFileSync(ccdPath, 'utf8');
-  if (mode === '--write') {
+  if (mode === '--restamp') {
+    // One line for `ccrc restamp`: nothere | refused-missing | current | regenerated.
+    let v = 'nothere';
+    if (extractHookRegion(hook) === null) v = hook.includes(HOOK_REGION_BEGIN.slice(0, 32)) ? 'refused-missing' : 'nothere';
+    else if (checkHookRegion(hook, ccd) === 'current') v = 'current';
+    else {
+      writeFileSync(hookPath, applyHookRegion(hook, ccd));
+      v = 'regenerated';
+    }
+    process.stdout.write(`${v}\n`);
+  } else if (mode === '--write') {
     writeFileSync(hookPath, applyHookRegion(hook, ccd));
     process.stdout.write('hook-helpers: regenerated\n');
   } else {
