@@ -1750,6 +1750,15 @@ export function sendPrompt(
   });
 }
 
+/**
+ * The `/clear` a dispatch types into a resumed worker (ARCH-22, #553): `coord/dispatch.ts` is L1 and holds this as its
+ * `sendClear` port instead of importing `sendPrompt`. A human's draft in the worker's box is stashed around the
+ * `/clear` and restored after it (D-5912), never a reason to skip the clear.
+ */
+export function clearSender(d: SendDeps): (sessionId: string) => Promise<SendResult> {
+  return (sessionId) => sendPrompt(d, sessionId, '/clear', { onDraft: 'stash' });
+}
+
 /** A box-horizontal rule row — the same convention `pane/dialog.ts`'s private
  *  `isRule` matches for AskUserQuestion separators (a run of `─`), reused
  *  here for the identical glyph Claude Code draws immediately below the

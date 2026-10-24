@@ -17,7 +17,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import type { NodeWire, UpdatesView } from '../../shared/api';
 import { ApiError, api } from '../src/lib/api';
-import { UPDATES_POLL_MS, asUpdatesView, nodeVersion, pendingTag, useUpdatesView } from '../src/fleet/useUpdatesView';
+import { UPDATES_POLL_MS, useUpdatesView } from '../src/fleet/useUpdatesView';
+import { asUpdatesView, nodeVersion, pendingTag } from '../src/fleet/updatesRead';
 
 const setVisibility = (v: DocumentVisibilityState): void => {
   Object.defineProperty(document, 'visibilityState', { value: v, configurable: true });

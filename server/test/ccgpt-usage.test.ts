@@ -1,14 +1,17 @@
 // server/test/ccgpt-usage.test.ts
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer, type IncomingMessage, type IncomingHttpHeaders, type ServerResponse, type Server } from 'node:http';
-import { writeFileSync, mkdirSync, chmodSync, readFileSync, existsSync, lstatSync } from 'node:fs';
+import { writeFileSync, mkdirSync, chmodSync, readFileSync, existsSync, lstatSync, copyFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { pythonOrSkip, runPy, runPyAsync, ccgptFile, PYSTUB_DIR } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
-import { authAsks, codexAuthDir, deviceFlowMarks, setAuthStubMode, writeAuthStub } from './codexLaneFixture.js';
+import { codexAuthDir } from './codexLaneFixture.js';
+import {
+  AUTH_LIB, CLOSED_AUTH_BASE, driverLines, fakeAuthServer, plantBackendCredential, runAuthDriver,
+} from './codexAuthFixture.js';
 
 // Probed once at module scope — same shape as ccgpt-harness.test.ts and
 // ccgpt-proxy.test.ts (task-10-rulings.md (commit af7cc0bc) §5): a missing interpreter must be
@@ -108,10 +111,13 @@ function mintId(): string {
  *  (lane.json had no writer until Plan 2b, task-10-brief.md (commit 4893935a);
  *  it has one now, `deploy/models-op.mjs`, and the task-6 case below reads
  *  what that writer produced instead of calling this helper). By default
- *  also plants a stub `auth.json` (empty object; its CONTENTS are never
- *  read by the publisher, only its existence — task-10-fix-rulings.md I-3)
- *  at that `authDir`, so every case is "logged in" unless it opts out via
- *  `{ loggedIn: false }` (the I-3 refusal case).
+ *  also plants a signed-in credential at that `authDir`:
+ *  `plantBackendCredential`'s synthetic backend credential, fresh, its account
+ *  id `acct-<id>` (codex-bridge Stage 1, Task 7: the publisher reads it through
+ *  the auth library now, so an empty object would read `absent`). Every case
+ *  is "logged in" unless it opts out via `{ loggedIn: false }` (the I-3
+ *  refusal case). Returns the lane.json authDir's planted credential (null
+ *  when none was planted), so a case can compare the bearer it sent.
  *
  *  Measured while writing the fix-round mutations: planting auth.json ONLY
  *  at the lane.json-declared authDir made mutation 4 (task-10 I-2 — re-deriving the
@@ -132,18 +138,47 @@ function mintId(): string {
  *  siblings), never a real OpenAI model name. */
 function plantLane(
   home: string, id: string, model = 'gpt-5.6-luna', opts: { loggedIn?: boolean } = {},
-): void {
+): ReturnType<typeof plantBackendCredential> | null {
   const { loggedIn = true } = opts;
   const dir = join(home, '.ccrc', 'codex', id);
   mkdirSync(dir, { recursive: true });
   const authDir = `.local/share/ccrc/codex/${id}`;
   writeFileSync(join(dir, 'lane.json'), JSON.stringify({ probeModel: model, authDir }));
-  if (loggedIn) {
-    for (const rel of [authDir, `.handoff/chatgpt-auth-${id}`]) {
-      const abs = join(home, rel);
-      mkdirSync(abs, { recursive: true });
-      writeFileSync(join(abs, 'auth.json'), '{}');
-    }
+  if (!loggedIn) return null;
+  const planted = plantBackendCredential(join(home, authDir), { accountId: `acct-${id}` });
+  plantBackendCredential(join(home, `.handoff/chatgpt-auth-${id}`), { accountId: `acct-${id}` });
+  return planted;
+}
+
+/** The lane's authDir, absolute, as `plantLane` lays it out. */
+const laneAuthDir = (home: string, id: string): string => join(home, codexAuthDir(id));
+
+/** The credential compared by lstat (size, mtime, inode), never read by a test. */
+function credentialStat(dir: string): { size: number; mtimeMs: number; ino: number } {
+  const st = lstatSync(join(dir, 'auth.json'));
+  return { size: st.size, mtimeMs: st.mtimeMs, ino: st.ino };
+}
+
+/** The tier's refresher meets a refusal (codex-bridge Stage 1, Task 7): the library's own `ensure_fresh`, run by the
+ *  driver against a fake token endpoint, writes the status file the publisher then reads (needs-signin for
+ *  invalid_grant, config-error for invalid_client). The credential it refreshes is re-planted expiring, unless `o`
+ *  plants it fresh and has the driver refresh it early (`withinS`). `o.consts` are set on the driver's copy of the
+ *  library only (its "NOTHING BINDS A CONSTANT EARLY" rule), so a status recorded under another `CLIENT_ID` carries
+ *  another `configHash` than the publisher's library computes. */
+async function recordRefusal(
+  home: string, dir: string, error: string, word: string,
+  o: { expiresIn?: number; withinS?: number; consts?: Record<string, unknown> } = {},
+): Promise<void> {
+  plantBackendCredential(dir, { expiresIn: o.expiresIn ?? 30 });
+  const srv = await fakeAuthServer({ token: [{ status: 400, body: { error } }] });
+  try {
+    const op = { op: 'ensure_fresh', lane: 'codex-a', ...(o.withinS === undefined ? {} : { withinS: o.withinS }) };
+    const r = await runAuthDriver(home, { authDir: dir, ops: [op], ...(o.consts ? { consts: o.consts } : {}) },
+      { CCRC_CODEX_AUTH_BASE: srv.base });
+    expect(driverLines(r.stdout)[0]?.['error'], r.stderr).toBe(word);
+    expect(srv.requests).toHaveLength(1);
+  } finally {
+    await srv.close();
   }
 }
 
@@ -184,9 +219,8 @@ function materialiseLane(home: string, id: string, mutations: string[][]): void 
       { cwd: home, env: { ...process.env, HOME: home }, encoding: 'utf8' });
     expect(m.status, `models-op ${verb}: ${m.stdout}${m.stderr}`).toBe(0);
   }
-  // Existence, never contents — the stub Authenticator reads nothing.
-  mkdirSync(join(home, authDir), { recursive: true });
-  writeFileSync(join(home, authDir, 'auth.json'), '{}');
+  // A signed-in credential, read through the auth library (codex-bridge Stage 1, Task 7).
+  plantBackendCredential(join(home, authDir), { accountId: `acct-${id}` });
 }
 
 /** The registry FILE's haiku class — the oracle a materialised lane.json's
@@ -265,22 +299,15 @@ function fullHeaders(status = 200): (req: IncomingMessage, res: ServerResponse) 
 // deadlock (D-3157) that rules `runPy` out for every case whose mock must
 // answer while the child runs.
 
-/** The stand-in Authenticator every publisher case imports (Plan 3a Task 1).
- *  `pystub`'s one-method class answers a token and nothing else, and it stays
- *  that minimal (`ccgpt-harness.test.ts` pins it). The publisher's unattended
- *  guard refuses a runtime whose Authenticator lacks the two device-flow names
- *  it overrides, so every case that reaches `get_access_token` imports this
- *  one instead. It is written once, in token mode, and never shared with a
- *  case that changes its mode. */
-const AUTH_STUB = ((): string => { const d = mkTmp('ccgpt-usage-authstub-'); writeAuthStub(d, d); return d; })();
-
 /** Composes the env a "happy path" or lane-scoped case passes to the
- *  publisher: the litellm stub on `PYTHONPATH`, the lane id, and the
- *  endpoint to poll. `extra` lets a caller add or override one key without
- *  hand-writing the other three. */
+ *  publisher: the lane id and the endpoint to poll. `extra` lets a caller add
+ *  or override one key without hand-writing the other two. No PYTHONPATH
+ *  (codex-bridge Stage 1, Task 7): the publisher imports nothing of LiteLLM
+ *  now, and loads the auth library from beside itself. It runs through
+ *  `containedSpawnOptions`, so its CCRC_CODEX_AUTH_BASE is CLOSED_AUTH_BASE
+ *  unless `extra` names a `fakeAuthServer`. */
 function publisherEnv(id: string, endpoint: string, extra: Record<string, string> = {}): Record<string, string> {
   return {
-    PYTHONPATH: AUTH_STUB,
     CCGPT_ACCOUNT_ID: id,
     CCGPT_USAGE_ENDPOINT: endpoint,
     ...extra,
@@ -497,6 +524,8 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
       expect(r.timedOut).toBe(false);
       expect(r.status).not.toBe(0);
+      // codex-bridge Stage 1, Task 7: the word and its remedy come first.
+      expect(r.stderr.startsWith(`ccgpt-usage: not-logged-in: run ccrc codex login ${id} — `), r.stderr).toBe(true);
       expect(r.stderr).toMatch(/is not logged in/);
       expect(r.stderr).toContain(id);
       // The message names the TOKEN DIRECTORY this run computed — proving
@@ -525,8 +554,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     const dir = join(home, '.ccrc', 'codex', id);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'lane.json'), JSON.stringify({ probeModel: 'gpt-5.6-luna', authDir: distinctiveAuthDir }));
-    mkdirSync(join(home, distinctiveAuthDir), { recursive: true });
-    writeFileSync(join(home, distinctiveAuthDir, 'auth.json'), '{}');
+    plantBackendCredential(join(home, distinctiveAuthDir));
     // Deliberately no $HOME/.handoff/chatgpt-auth-<id> at all.
     const { url, close } = await startEndpoint(fullHeaders());
     try {
@@ -700,9 +728,10 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     // task-10 C-2: captures the outgoing request and asserts the constant header
     // block (originator/user-agent/session_id) this repo's own
     // ccd/ccrc-models-probe documents as what the backend expects, plus
-    // Authorization — and asserts ChatGPT-Account-Id is deliberately ABSENT
-    // (see ccd/ccgpt-usage.py's own docstring for why it is dropped, not
-    // merely missing by omission). task-10-fix-rulings-3.md (commit 4893935a) item 3
+    // Authorization. (ChatGPT-Account-Id was asserted ABSENT here until
+    // codex-bridge Stage 1 Task 7, D-6373: the publisher now sends it from the
+    // auth library's reading, and its own case below pins that, so this case
+    // no longer names it.) task-10-fix-rulings-3.md (commit 4893935a) item 3
     // (re-review V-1): the three Codex-CLI header VALUES are asserted
     // exactly, not merely their presence — `ccd/ccrc-models-probe` ships
     // these as fixed literals the backend is documented to expect from "a
@@ -716,7 +745,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     const home1 = mkTmp('ccgpt-usage-request1-');
     const id1 = mintId();
     const model1 = 'gpt-5.6-terra';
-    plantLane(home1, id1, model1);
+    const planted1 = plantLane(home1, id1, model1);
     const ep1 = await startEndpoint(fullHeaders());
     try {
       const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home: home1, env: publisherEnv(id1, ep1.url) });
@@ -727,8 +756,9 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       expect(captured.headers['originator']).toBe('codex_cli_rs');
       expect(captured.headers['user-agent']).toBe('codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown');
       expect(captured.headers['session_id']).toBe('00000000-0000-0000-0000-000000000000');
-      expect(captured.headers['authorization']).toBe('Bearer test-token-not-a-secret'); // Plan 3a Task 1: publisherEnv imports the AUTH_STUB stand-in
-      expect(captured.headers['chatgpt-account-id']).toBeUndefined();
+      // The lane's own credential, read through the auth library (codex-bridge Stage 1, Task 7). A boolean: a
+      // failing `toBe` would print the synthetic token. ChatGPT-Account-Id is pinned by its own case below.
+      expect(captured.headers['authorization'] === `Bearer ${planted1!.access}`, 'the bearer is the credential\'s').toBe(true);
       expect((captured.body as { model?: unknown }).model).toBe(model1);
     } finally {
       await ep1.close();
@@ -1050,66 +1080,75 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     }
   });
 
-  // Plan 3a Task 1 (critic #2): the publisher is an unattended oneshot. Its
-  // Authenticator may refresh a token and must never start a device sign-in.
-  // In litellm 1.101.0 that sign-in WRITES device_code_requested_at into
-  // auth.json before it prints a code and polls for 15 minutes, and no
-  // deadline can undo the write. The stand-in's device path records a mark
-  // and makes that same write, so a guard that fails reds on the mark.
-  it('Plan 3a Task 1: a token the runtime can neither use nor refresh is login-required at once — no device flow, no auth.json write, nothing published', async () => {
-    const home = mkTmp('ccgpt-usage-device-');
+  // codex-bridge Stage 1, Task 7: the publisher only READS the lane's credential, through the auth library loaded
+  // from beside it. It never refreshes (in litellm mode only the lane's tier does) and never signs in; each reading
+  // it cannot use is one refusal line, remedy first, and nothing is published. Every case below that could reach a
+  // token endpoint runs against a `fakeAuthServer` and asserts it saw no request.
+  it('a dead credential: login-required at once, no token request, nothing published', async () => {
+    const home = mkTmp('ccgpt-usage-dead-');
     const id = mintId();
     plantLane(home, id);
-    const stub = join(home, 'auth-stub');
-    writeAuthStub(stub, stub);
-    setAuthStubMode(stub, 'device');
-    const auth = join(home, codexAuthDir(id), 'auth.json');
-    // auth.json is compared by lstat (size, mtime, inode), never read: no test
-    // opens an OAuth file. The stand-in's device step rewrites it, longer.
-    const authStat = (): { size: number; mtimeMs: number; ino: number } => {
-      const st = lstatSync(auth);
-      return { size: st.size, mtimeMs: st.mtimeMs, ino: st.ino };
-    };
-    const before = authStat();
+    // The marker an abandoned device sign-in leaves: backend family, no tokens. The library reads it `incomplete`.
+    const dir = laneAuthDir(home, id);
+    writeFileSync(join(dir, 'auth.json'), JSON.stringify({ device_code_requested_at: 1 }));
+    const before = credentialStat(dir);
+    const files = readdirSync(dir).sort();
+    const srv = await fakeAuthServer({});
     const { url, close, requests } = await startEndpoint(fullHeaders());
     try {
-      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url, { PYTHONPATH: stub }) });
-      expect(r.timedOut).toBe(false);
-      expect(r.status).not.toBe(0);
-      expect(r.stderr).toContain(`ccgpt-usage: login-required: run ccrc codex login ${id} —`);
-      expect(deviceFlowMarks(stub), 'the device flow started').toEqual([]);
-      expect(authStat(), 'auth.json was written').toEqual(before);
-      expect(r.stdout + r.stderr).not.toMatch(/Enter code/);
-      expect(existsSync(limitsPath(home, id))).toBe(false);
-      expect(requests.length).toBe(0);
-    } finally {
-      await close();
-    }
-  });
-
-  // Fix round 1: on a dead refresh token litellm LOGS its own warning, the
-  // token endpoint's answer in it, before the guard refuses. The publisher's
-  // refusal must still be the first thing on its stderr (the journal line an
-  // operator reads), and the endpoint's answer must never reach it. The
-  // stand-in's handler bound sys.stderr at import.
-  it('Plan 3a Task 1 fix round 1: a dead refresh token is login-required FIRST on stderr — litellm\'s warning and the token endpoint\'s answer never reach it', async () => {
-    const home = mkTmp('ccgpt-usage-refresh-');
-    const id = mintId();
-    plantLane(home, id);
-    const stub = join(home, 'auth-stub');
-    writeAuthStub(stub, stub);
-    setAuthStubMode(stub, 'refresh-fails');
-    const { url, close, requests } = await startEndpoint(fullHeaders());
-    try {
-      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url, { PYTHONPATH: stub }) });
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), {
+        home, env: publisherEnv(id, url, { CCRC_CODEX_AUTH_BASE: srv.base }),
+      });
       expect(r.timedOut).toBe(false);
       expect(r.status).not.toBe(0);
       expect(r.stderr.startsWith(`ccgpt-usage: login-required: run ccrc codex login ${id} — `), r.stderr).toBe(true);
-      expect(r.stderr).not.toContain('ChatGPT refresh token failed');
-      expect(r.stderr).not.toContain('stand-in-token-endpoint-body');
-      // The control: the stand-in did take its logging path.
-      expect(authAsks(stub)).toEqual(['get_access_token']);
-      expect(deviceFlowMarks(stub)).toEqual([]);
+      expect(srv.requests, 'a token request was made').toHaveLength(0);
+      expect(credentialStat(dir), 'auth.json was written').toEqual(before);
+      expect(readdirSync(dir).sort(), 'the reader wrote into the authDir').toEqual(files);
+      expect(existsSync(limitsPath(home, id))).toBe(false);
+      expect(requests.length).toBe(0);
+    } finally {
+      await close();
+      await srv.close();
+    }
+  });
+
+  it('a needs-signin the tier recorded for this credential is login-required FIRST on stderr, never token-expired; nothing published', async () => {
+    const home = mkTmp('ccgpt-usage-needs-signin-');
+    const id = mintId();
+    plantLane(home, id);
+    await recordRefusal(home, laneAuthDir(home, id), 'invalid_grant', 'needs-signin');
+    const srv = await fakeAuthServer({});
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), {
+        home, env: publisherEnv(id, url, { CCRC_CODEX_AUTH_BASE: srv.base }),
+      });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr.startsWith(`ccgpt-usage: login-required: run ccrc codex login ${id} — `), r.stderr).toBe(true);
+      expect(r.stderr).not.toContain('token-expired');
+      expect(srv.requests).toHaveLength(0);
+      expect(existsSync(limitsPath(home, id))).toBe(false);
+      expect(requests.length).toBe(0);
+    } finally {
+      await close();
+      await srv.close();
+    }
+  });
+
+  it('another family\'s file is credential-unusable, naming ccrc doctor; nothing published', async () => {
+    const home = mkTmp('ccgpt-usage-foreign-');
+    const id = mintId();
+    plantLane(home, id);
+    // The Codex CLI's own shape: a `tokens` object. The library reads it `foreign-family`.
+    writeFileSync(join(laneAuthDir(home, id), 'auth.json'), JSON.stringify({ tokens: {} }));
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr.startsWith('ccgpt-usage: credential-unusable: run ccrc doctor — '), r.stderr).toBe(true);
       expect(existsSync(limitsPath(home, id))).toBe(false);
       expect(requests.length).toBe(0);
     } finally {
@@ -1117,22 +1156,212 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     }
   });
 
-  it('Plan 3a Task 1: a runtime whose Authenticator lacks a device-flow name the guard overrides is refused runtime-api-moved, before any token is asked', async () => {
-    const home = mkTmp('ccgpt-usage-apimoved-');
+  it('a config-error the tier recorded is credential-unusable, naming ccrc update, then ccrc codex login; nothing published', async () => {
+    const home = mkTmp('ccgpt-usage-config-error-');
     const id = mintId();
     plantLane(home, id);
-    const stub = join(home, 'auth-stub');
-    writeAuthStub(stub, stub);
-    setAuthStubMode(stub, 'renamed');
+    await recordRefusal(home, laneAuthDir(home, id), 'invalid_client', 'config-error');
     const { url, close, requests } = await startEndpoint(fullHeaders());
     try {
-      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url, { PYTHONPATH: stub }) });
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
       expect(r.timedOut).toBe(false);
       expect(r.status).not.toBe(0);
-      expect(r.stderr).toMatch(/ccgpt-usage: runtime-api-moved: run ccrc update — this runtime's Authenticator has no _login_device_code/);
-      expect(deviceFlowMarks(stub)).toEqual([]);
+      expect(r.stderr.startsWith(`ccgpt-usage: credential-unusable: run ccrc update, then ccrc codex login ${id} — `),
+        r.stderr).toBe(true);
       expect(existsSync(limitsPath(home, id))).toBe(false);
       expect(requests.length).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  // The library's own `_bars` rule, which the publisher asks through `bars` (D-6692): a config-error measured under
+  // another OAuth configuration is stale (a `ccrc update` that fixed the client cures it), so it bars nothing.
+  it('a config-error recorded under another OAuth configuration bars nothing: the poll publishes', async () => {
+    const home = mkTmp('ccgpt-usage-config-error-stale-');
+    const id = mintId();
+    plantLane(home, id);
+    // A fresh credential, refreshed early by a library whose CLIENT_ID is another one.
+    await recordRefusal(home, laneAuthDir(home, id), 'invalid_client', 'config-error',
+      { expiresIn: 3600, withinS: 7200, consts: { CLIENT_ID: 'app_fixture_older_client' } });
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stderr).not.toContain('credential-unusable');
+      expect(requests.length).toBe(1);
+      expect(readRow(home, id)).toMatchObject({ five: 17, seven: 42 });
+    } finally {
+      await close();
+    }
+  });
+
+  // Review Focus 1: a torn or unparseable credential is never answered with a sign-in.
+  it('an unparseable credential is credential-unusable, naming ccrc doctor, never login-required; nothing published', async () => {
+    const home = mkTmp('ccgpt-usage-unreadable-');
+    const id = mintId();
+    plantLane(home, id);
+    const dir = laneAuthDir(home, id);
+    // Torn JSON: the library re-reads it, then reads it `unreadable`.
+    writeFileSync(join(dir, 'auth.json'), '{"access_token":', { mode: 0o600 });
+    const before = credentialStat(dir);
+    const files = readdirSync(dir).sort();
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr.startsWith('ccgpt-usage: credential-unusable: run ccrc doctor — '), r.stderr).toBe(true);
+      expect(r.stderr).not.toContain('login-required');
+      expect(credentialStat(dir), 'auth.json was written').toEqual(before);
+      expect(readdirSync(dir).sort(), 'the reader wrote into the authDir').toEqual(files);
+      expect(existsSync(limitsPath(home, id))).toBe(false);
+      expect(requests.length).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  // Review Focus 3: an idle lane whose access token expired. In litellm mode only the tier refreshes, on its next
+  // request; a reader that refreshed would spend the single-use refresh token outside the tier's lock.
+  it('an expired token is never refreshed by a reader: token-expired, no request, nothing published', async () => {
+    const home = mkTmp('ccgpt-usage-expired-');
+    const id = mintId();
+    plantLane(home, id);
+    const dir = laneAuthDir(home, id);
+    plantBackendCredential(dir, { accountId: `acct-${id}`, expiresIn: -600 });
+    const before = credentialStat(dir);
+    // A fake that WOULD answer a refresh, so a reader that asked would be seen asking, and would succeed.
+    const srv = await fakeAuthServer({ token: [{ status: 200, body: { access_token: 'x', id_token: 'y', refresh_token: 'z' } }] });
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), {
+        home, env: publisherEnv(id, url, { CCRC_CODEX_AUTH_BASE: srv.base }),
+      });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain('ccgpt-usage: token-expired: none needed — the lane\'s tier refreshes it on its next '
+        + 'request; if its refresh token is dead, that request records needs-signin');
+      expect(srv.requests.length, 'a token request was made').toBe(0);
+      expect(credentialStat(dir), 'the reader wrote the credential').toEqual(before);
+      expect(existsSync(limitsPath(home, id))).toBe(false);
+      expect(requests.length).toBe(0);
+    } finally {
+      await close();
+      await srv.close();
+    }
+  });
+
+  // D-6373: the account id the library reads (the file's, else the tokens' claim) rides as ChatGPT-Account-Id, and
+  // the identity block stays the Codex CLI's (`originator: ccrc` waits for the bridge).
+  it('sends ChatGPT-Account-Id, and originator stays codex_cli_rs', async () => {
+    const home = mkTmp('ccgpt-usage-account-id-');
+    const id = mintId();
+    plantLane(home, id);
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status, r.stderr).toBe(0);
+      expect(requests.length).toBe(1);
+      expect(requests[0].headers['chatgpt-account-id']).toBe(`acct-${id}`);
+      expect(requests[0].headers['originator']).toBe('codex_cli_rs');
+    } finally {
+      await close();
+    }
+  });
+
+  it('no library beside the publisher: auth-library-absent, naming ccrc update; nothing published', async () => {
+    const home = mkTmp('ccgpt-usage-nolib-');
+    const id = mintId();
+    plantLane(home, id);
+    // The publisher alone, as a box whose update placed it without the library would have it.
+    const bin = join(home, 'lone-bin');
+    mkdirSync(bin, { recursive: true });
+    copyFileSync(ccgptFile('ccgpt-usage.py'), join(bin, 'ccgpt-usage.py'));
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(join(bin, 'ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr.startsWith('ccgpt-usage: auth-library-absent: run ccrc update — '), r.stderr).toBe(true);
+      expect(existsSync(limitsPath(home, id))).toBe(false);
+      expect(requests.length).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  // A library beside the publisher that is there but cannot serve: one that raises on import, and one that defines
+  // `read` only. Each is the one refusal, FIRST on stderr, naming the exception's class and never its arguments
+  // (the library's load failure may carry text it was handed), and no traceback.
+  it('a library that does not import, or lacks a reader: auth-library-absent naming only the class; nothing published', async () => {
+    const shapes = {
+      'raises-on-import': { src: 'raise RuntimeError("arg-text-the-refusal-never-prints")\n', cls: 'RuntimeError' },
+      'read-only': {
+        src: 'class _R:\n    credential = "present"\n    detail = ""\n    access_token = "x"\n'
+          + '    account_id = None\n    expires_at = None\n\n\ndef read(auth_dir):\n    return _R()\n',
+        cls: 'AttributeError',
+      },
+    } as const;
+    for (const [shape, { src, cls }] of Object.entries(shapes)) {
+      const home = mkTmp(`ccgpt-usage-badlib-${shape}-`);
+      const id = mintId();
+      plantLane(home, id);
+      const bin = join(home, 'bad-lib-bin');
+      mkdirSync(bin, { recursive: true });
+      copyFileSync(ccgptFile('ccgpt-usage.py'), join(bin, 'ccgpt-usage.py'));
+      writeFileSync(join(bin, 'ccgpt-auth.py'), src);
+      const { url, close, requests } = await startEndpoint(fullHeaders());
+      try {
+        const r = await runPyAsync(join(bin, 'ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+        expect(r.timedOut, shape).toBe(false);
+        expect(r.status, shape).not.toBe(0);
+        expect(r.stderr.startsWith('ccgpt-usage: auth-library-absent: run ccrc update — '), `${shape}: ${r.stderr}`).toBe(true);
+        expect(r.stderr.includes(`(${cls})`), `${shape}: the class is named`).toBe(true);
+        expect(r.stderr.includes('arg-text-the-refusal-never-prints'), `${shape}: the exception's argument printed`).toBe(false);
+        expect(r.stderr.includes('Traceback'), `${shape}: a traceback`).toBe(false);
+        expect(existsSync(limitsPath(home, id)), shape).toBe(false);
+        expect(requests.length, shape).toBe(0);
+      } finally {
+        await close();
+      }
+    }
+  });
+
+  // The unit runs `<runtime python> -I ~/.local/bin/ccgpt-usage.py` (deploy/systemd/ccrc-codex-usage@.service): under
+  // `-I` neither the script's directory nor PYTHONPATH is on sys.path, so the library is loaded by its path, beside
+  // the publisher's own real path. `runPy`'s runs use no `-I`, so this case spawns the interpreter itself.
+  it('loads the library the way production does: a copy beside it, under -I, with no PYTHONPATH', async () => {
+    const home = mkTmp('ccgpt-usage-installed-');
+    const id = mintId();
+    plantLane(home, id);
+    const bin = join(home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    copyFileSync(ccgptFile('ccgpt-usage.py'), join(bin, 'ccgpt-usage.py'));
+    copyFileSync(AUTH_LIB, join(bin, 'ccgpt-auth.py'));
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
+        const child = spawn(PY!, ['-I', join(bin, 'ccgpt-usage.py')], {
+          cwd: home,
+          env: {
+            PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, CCGPT_ACCOUNT_ID: id, CCGPT_USAGE_ENDPOINT: url,
+            CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE,
+          },
+          stdio: ['ignore', 'ignore', 'pipe'],
+        });
+        let stderr = '';
+        const timer = setTimeout(() => child.kill('SIGKILL'), 15_000);
+        child.stderr!.on('data', (c: Buffer) => { stderr += c.toString(); });
+        child.once('error', (e) => { clearTimeout(timer); reject(e); });
+        child.once('close', (code) => { clearTimeout(timer); resolve({ code, stderr }); });
+      });
+      expect(r.code, r.stderr).toBe(0);
+      expect(requests.length).toBe(1);
+      expect(readRow(home, id)).toMatchObject({ five: 17, seven: 42 });
+      expect(existsSync(join(bin, '__pycache__')), 'loading the library wrote bytecode beside it').toBe(false);
     } finally {
       await close();
     }

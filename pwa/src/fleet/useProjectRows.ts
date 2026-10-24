@@ -24,6 +24,7 @@ import type {
 } from '../../../shared/api';
 import type { ModelClass } from '../../../shared/models';
 import { api, type WorkspaceAddAnswer } from '../lib/api';
+import { useWhenVisible } from '../lib/usePoll';
 import { placementOfRow, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
 
 /** The pools frame reduced to one comparable string. Key ORDER is not
@@ -214,15 +215,9 @@ export function useProjectRows(
     visibilityRequest.current = null;
     void refreshProjects();
   }, [pools, refreshProjects]);
-  useEffect(() => {
-    const onVisible = (): void => {
-      if (document.visibilityState === 'visible' && poolsFingerprintRef.current !== null) {
-        void refreshProjects(poolsFingerprintRef.current);
-      }
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [refreshProjects]);
+  useWhenVisible(() => {
+    if (poolsFingerprintRef.current !== null) void refreshProjects(poolsFingerprintRef.current);
+  });
 
   // Memoised on the rows it reads, so the remeasurement below can depend on it
   // honestly: a reader rebuilt every render would make that effect re-run on

@@ -49,7 +49,7 @@
    `className`, which is what tailwind-merge assumes, as long as no app sheet
    rule also claims that property. And the app can
    always scope over a primitive (`.block-screen .btn-primary`,
-   `.update-banner-actions .btn-ghost`, chat.css's retained `.opt-inert`),
+   `.btn-ghost.settings-move`, chat.css's retained `.opt-inert`),
    which several rules rely on. The consequence to know: a ui rule can NEVER
    win against an app rule. If the design system ever needs to override the
    app, that is not a specificity bug to fix — it is this ordering, and the

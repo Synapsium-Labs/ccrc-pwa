@@ -4,6 +4,7 @@
 // modules only; never from Instrument's directory (`skin-boundary.test.ts`, from S4a).
 import type { ReactNode } from 'react';
 import { REFINED } from '@ccrc/ui';
+import { UpdateIndicator } from '../../fleet/UpdateIndicator';
 import { FleetColumn } from '../../screens/FleetColumn';
 import { FleetBanners } from '../../screens/FleetScreen';
 import type { SkinSet } from '../types';
@@ -21,12 +22,25 @@ function Sidebar(): ReactNode {
   return <FleetColumn headChrome={false} banners={false} />;
 }
 
+/** The banners under the bar at a desk (D-6327, ruled departure `refined-desk-indicator-in-a-row-under-the-bar`): the
+ *  fleet's banner stack, then the quiet update line as one full-width row, in the same form as the phone row. The halt
+ *  and every alert keep their place above it. The frame mounts this part at a desk only, so there is one instance per
+ *  width with no media query here. */
+function RefinedBanners(): ReactNode {
+  return (
+    <>
+      <FleetBanners />
+      <UpdateIndicator form="row" />
+    </>
+  );
+}
+
 export const REFINED_SET: SkinSet = {
   id: REFINED,
   frameClass: 'ref-frame',
   // W2 Task S4b (D-5471): the app bar, the banners under it, and the sidebar.
   Bar: AppBar,
-  Banners: FleetBanners,
+  Banners: RefinedBanners,
   Rail: null,
   Nav: Sidebar,
   FleetList: null,

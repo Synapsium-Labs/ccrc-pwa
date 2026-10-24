@@ -7,6 +7,27 @@
       "d": "D-6180",
       "reason": "auto-swap reliability W1: a stand-down line for every held limit, a re-logged tick-undecidable after the compact-note floor, and lane= on every decision line, all log-only bash in ccd/ccd's swap arm (measured +87 net code lines against the merge-base)",
       "added": "2026-10-21"
+    },
+    {
+      "file": "ccd/ccrc",
+      "maxDelta": 128,
+      "d": "D-6693",
+      "reason": "codex bridge Stage 1 wave 2: ccd/ccrc's codex callers move onto the auth library (login signs in through it, start and status read its status, account removal takes its lock, the litellm tier's started record hashes it, and a failed runtime build leaves that tier running), measured +128 net code lines against the merge-base",
+      "added": "2026-10-23"
+    },
+    {
+      "file": "ccd/ccd",
+      "maxDelta": 70,
+      "d": "D-6619",
+      "reason": "fleet disk retention DR-7: the read-only path-users verb and its one-walk holder probe in ccd/ccd (measured +65 net code lines against the merge-base)",
+      "added": "2026-10-23"
+    },
+    {
+      "file": "ccd/ccd",
+      "maxDelta": 310,
+      "d": "D-6628",
+      "reason": "fleet disk retention DR-16: the read-only orphan census and the fourteen-rung ladder in ccd/ccd, whose shared rungs ws-gc --prune also calls (measured +237 net code lines against the DR-7 tip, +302 against the merge-base while DR-7 is unmerged)",
+      "added": "2026-10-23"
     }
   ]
 }

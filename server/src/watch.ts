@@ -181,6 +181,7 @@ import type { CoordRoutesHandle } from './coord/routes.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
+import { changeLatch, changeLatchMap } from './changeLatch.js';
 import { SERVER_CAPS_WRITE_MS, writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { runDispatch, type DispatchRunResult } from './update/converge.js';
@@ -1040,8 +1041,8 @@ export class FleetWatcher {
   private lastServerCapsAt = 0;
   private serverCapsRun: Promise<WriteServerCapsResult | null> | null = null;
   /** The last server-caps write failure's stable key (`unwritable:<errno>`), so an unwritable ~/.ccrc warns once
-   *  per change of reason, not once a minute (`lastProjectionWhy`'s idiom); null after a success. */
-  private lastServerCapsWhy: string | null = null;
+   *  per change of reason, not once a minute (`changeLatch`'s idiom); null after a success. */
+  private readonly serverCapsWhy = changeLatch<string | null>();
   /** C2 (final fix wave): the last inventory-sweep REJECTION message warned
    *  about, so a standing cause (a locked or corrupt coord.db held past one
    *  sweep) warns once, not every tick/ready — reset to null the moment a
@@ -1050,7 +1051,7 @@ export class FleetWatcher {
    *  itself should not reject any more except for a bug outside either
    *  connection's own try/catch (e.g. inside `resolveAndProject`'s own
    *  queueing, which `sweepThenProject` already handles separately). */
-  private lastInventoryRejectWarn: string | null = null;
+  private readonly inventoryRejectWarn = changeLatch<string>();
   /** C4 (final fix wave): set when a caller of `triggerInventory()` (the
    *  `ready` hook) JOINS a sweep already in flight rather than starting one.
    *  The joiner's own connection state may be exactly what changed since the
@@ -1066,12 +1067,12 @@ export class FleetWatcher {
    *  own gap). Warned once when a tuple first appears, silent while it
    *  repeats, and warned again if it clears and later recurs. */
   private lastInventoryIssues: ReadonlySet<string> = new Set();
-  /** Task 12: the last projection-warning KEY (`projectionWarn`'s `key`, never its `message`), so a box
+  /** Task 12: the latch on the projection-warning KEY (`projectionWarn`'s `key`, never its `message`), so a box
    *  whose ~/.ccrc cannot take the file warns once per change of reason, not once a minute. */
-  private lastProjectionWhy: string | null = null;
+  private readonly projectionWhy = changeLatch<string | null>();
   /** Plan W3 Task 3: the last reason a release-push decision failed, so a coord.db that cannot be read
-   *  warns once per change of reason on the inventory lane's minute beat (`lastProjectionWhy`'s idiom). */
-  private lastReleasePushFailure: string | null = null;
+   *  warns once per change of reason on the inventory lane's minute beat (`changeLatch`'s idiom). */
+  private readonly releasePushFailure = changeLatch<string>();
   /** Plan W3 Task 3 (D-3314): true once THIS process's sweep has actually REWRITTEN the rows the push decides
    *  on — never merely "a sweep finished" (W5 review 161, F-H: a sweep can finish with the server row
    *  unreachable, refused or errored, none of which rewrites it — `sweptEnoughToDecide` is the exact
@@ -1345,12 +1346,12 @@ export class FleetWatcher {
   /** The stale set last reported, as JSON — one warn per CHANGING set, the
    *  `lastDivergenceJson` idiom, so a standing stale number is not a log
    *  line every 15 minutes forever. */
-  private lastStaleReport: string | null = null;
+  private readonly staleReport = changeLatch<string>();
 
-  /** Per project, the last orphan set this sweep reported — `lastStaleReport`'s
+  /** Per project, the last orphan set this sweep reported — `staleReport`'s
    *  once-per-changing-set idiom, keyed because the reconcile sweep now walks
    *  every project the allocator has issued for rather than a subset of them. */
-  private readonly lastOrphanReport = new Map<string, string>();
+  private readonly orphanReport = changeLatchMap<string>();
   /** Built lazily (`mirrorFor` below) as soon as a coordination database
    *  exists — NOT only on the first sweep, since `lifecycleHealth()` must be
    *  able to ask it before any sweep has run. The mirror holds the cursor,
@@ -1715,10 +1716,9 @@ export class FleetWatcher {
     if (role !== 'server' && role !== 'both') return Promise.resolve(null);
     const run = writeServerCaps(ccrcDir, SERVER_CAPS, Math.floor(Date.now() / 1000)).then((r) => {
       const key = r.ok ? null : `${r.why}:${r.code ?? 'none'}`;
-      if (!r.ok && key !== this.lastServerCapsWhy) {
+      if (this.serverCapsWhy.changed(key) && !r.ok) {
         console.warn(`ccrc-server: could not write ~/.ccrc/server-caps (the fleet hook's gated arms stay off until it is written): ${r.detail}`);
       }
-      this.lastServerCapsWhy = key;
       return r;
     }).finally(() => { this.serverCapsRun = null; });
     this.serverCapsRun = run;
@@ -1774,11 +1774,10 @@ export class FleetWatcher {
     // condition from two different call sites (or two turns of one retry
     // loop) carry two different stacks, which would defeat the dedupe.
     const message = err instanceof Error ? err.message : String(err);
-    if (message !== this.lastInventoryRejectWarn) {
+    if (this.inventoryRejectWarn.changed(message)) {
       const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
       console.warn('ccrc-server: the inventory sweep rejected — a throw outside the per-row ' +
         `measurement+apply catch (C1) or the projection path (both are their own arms/warnings): ${detail}`);
-      this.lastInventoryRejectWarn = message;
     }
   }
 
@@ -1795,7 +1794,7 @@ export class FleetWatcher {
    *  recovery warns again. */
   private dispatchInventorySweep(): Promise<void> {
     return this.inventoryNow().then(
-      () => { this.lastInventoryRejectWarn = null; },
+      () => { this.inventoryRejectWarn.clear(); },
       (err: unknown) => { this.warnInventoryRejected(err); },
     );
   }
@@ -1989,10 +1988,9 @@ export class FleetWatcher {
       };
     }
     const key = warn?.key ?? null;
-    if (warn !== null && key !== this.lastProjectionWhy) {
+    if (this.projectionWhy.changed(key) && warn !== null) {
       console.warn(`ccrc-server: update: this server's own ~/.ccrc/update-intent was not written (${warn.message})`);
     }
-    this.lastProjectionWhy = key;
     // Plan W3 Task 3: the inventory run MEASURES what the nodes run, so it is where a release every node
     // already runs is marked instead of pushed (D-3294), where the first release after a
     // fresh install is decided at all (D-3300), and what opens the catalogue
@@ -2051,7 +2049,7 @@ export class FleetWatcher {
       const nodes = coord.nodes();
       n = releaseToNotify({ fleetIntent, releases: coord.releases(), nodes });
       if (n === null) {
-        this.lastReleasePushFailure = null;
+        this.releasePushFailure.clear();
         return { did: 'skipped', why: 'nothing-to-notify' };
       }
       marked = coord.markReleaseNotified(n.tag, now);
@@ -2068,11 +2066,10 @@ export class FleetWatcher {
       summary = summaryFromSides(sides);
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
-      if (detail !== this.lastReleasePushFailure) console.warn(`ccrc-server: update: the release push was not decided (${detail}) — nothing was marked or sent`);
-      this.lastReleasePushFailure = detail;
+      if (this.releasePushFailure.changed(detail)) console.warn(`ccrc-server: update: the release push was not decided (${detail}) — nothing was marked or sent`);
       return { did: 'failed', detail };
     }
-    this.lastReleasePushFailure = null;
+    this.releasePushFailure.clear();
     if (!marked.ok) return { did: 'refused', tag: n.tag, why: marked.why };
     if (!n.push) return { did: 'marked', tag: n.tag };
     const copy = releasePushCopy(n, summary);
@@ -7213,8 +7210,7 @@ export class FleetWatcher {
       // claim, and why batch scatter is not reported here.
       const orphans = unallocatedDefinitions(defs, store.ledgerIssued(project));
       const oJson = JSON.stringify([project, orphans.map((o) => o.n)]);
-      if (orphans.length > 0 && oJson !== this.lastOrphanReport.get(project)) {
-        this.lastOrphanReport.set(project, oJson);
+      if (orphans.length > 0 && this.orphanReport.changed(project, oJson)) {
         console.warn(
           `ccrc-server: ${orphans.length} deviation number(s) defined in ${project}'s plans were ` +
           'never allocated: ' + orphans.map((o) => `D-${o.n} (${o.files.join(', ')})`).join('; ') +
@@ -7223,8 +7219,7 @@ export class FleetWatcher {
     }
     const stale = store.staleAllocations(now - LEDGER_STALE_MS);
     const json = JSON.stringify(stale.map((s) => [s.project, s.n]));
-    if (stale.length > 0 && json !== this.lastStaleReport) {
-      this.lastStaleReport = json;
+    if (stale.length > 0 && this.staleReport.changed(json)) {
       console.warn(
         `ccrc-server: ${stale.length} allocated deviation number(s) never landed in a plan ` +
         'after 7 days: ' + stale.map((s) => `${s.project} D-${s.n}`).join(', ') +

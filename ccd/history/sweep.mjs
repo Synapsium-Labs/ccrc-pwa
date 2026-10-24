@@ -89,12 +89,14 @@ import {
 } from './derive.mjs';
 import { cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, withdrawCards } from './card.mjs';
 
-const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] --secrets <file...> -- <home...>';
+const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] [--unanswered <path>]... --secrets <file...> -- <home...>';
 
 /** The shim's argv, exactly: `[--op <verb> <op-args…>] [--roster-unreadable]
- *  --secrets <file…> -- <home…>` (§5.1 step 5). An op's arguments run up to the
- *  first `--roster-unreadable` or `--secrets`. Sources are normalized in stable first-seen order and
- *  refused before a pass opens the store unless the shared bounded source-list contract admits them. */
+ *  [--unanswered <path>]… --secrets <file…> -- <home…>` (§5.1 step 5). An op's arguments run up to the
+ *  first `--roster-unreadable`, `--unanswered` or `--secrets`. Each `--unanswered` path is a codex lane's authDir the
+ *  auth library could not name the secret files of (codex-bridge Stage 1, Task 10), returned as `unanswered`. Sources
+ *  and unanswered paths are each normalized in stable first-seen order and refused before a pass opens the store unless
+ *  the shared bounded source-list contract admits them. */
 export function parseSweepArgv(argv) {
   let i = 0;
   let op = null;
@@ -103,10 +105,17 @@ export function parseSweepArgv(argv) {
     op = argv[1] ?? '';
     if (!/^[a-z][a-z-]{0,31}$/.test(op)) return { error: 'bad-args' };
     i = 2;
-    while (i < argv.length && argv[i] !== '--roster-unreadable' && argv[i] !== '--secrets') opArgs.push(argv[i++]);
+    while (i < argv.length && argv[i] !== '--roster-unreadable' && argv[i] !== '--unanswered' && argv[i] !== '--secrets') {
+      opArgs.push(argv[i++]);
+    }
   }
   let rosterUnreadable = false;
   if (argv[i] === '--roster-unreadable') { rosterUnreadable = true; i += 1; }
+  const unanswered = [];
+  // A missing path pushes undefined and a flag pushes a relative word: the normalizer refuses both.
+  while (argv[i] === '--unanswered') { unanswered.push(argv[i + 1]); i += 2; }
+  const normalizedUnanswered = normalizeRedactSources(unanswered);
+  if (normalizedUnanswered === null) return { error: 'bad-args' };
   if (argv[i] !== '--secrets') return { error: 'bad-args' };
   i += 1;
   const secrets = [];
@@ -114,7 +123,7 @@ export function parseSweepArgv(argv) {
   if (argv[i] !== '--') return { error: 'bad-args' };
   const normalizedSecrets = normalizeRedactSources(secrets);
   if (normalizedSecrets === null) return { error: 'bad-args' };
-  return { op, opArgs, rosterUnreadable, secrets: normalizedSecrets, homes: argv.slice(i + 1) };
+  return { op, opArgs, rosterUnreadable, unanswered: normalizedUnanswered, secrets: normalizedSecrets, homes: argv.slice(i + 1) };
 }
 
 /** `fs.promises.statfs` raced against a deadline (§9.3; RR15;
@@ -3412,7 +3421,7 @@ export async function recoverPass(db, ctx, failedAtStart) {
     // phase's rebuild recreates nodes_fts only when the replay added a pair, so a pair from a secrets file needs this hook;
     // this pass runs no merge step, and the next ordinary tick merges. D-4609 (history-nodes-fts-merged-after-rewrite), H-158.
     registerNodesMerge(ictx, db);
-    const secrets = secretsStep(db, ictx, ctx.parsed.secrets);
+    const secrets = secretsStep(db, ictx, ctx.parsed.secrets, ctx.parsed.unanswered);
     ictx.pairIdx = secrets.pairIdx;
     ctx.belt = secrets.pairIdx.belt;   // §8.3 layer 4: recoveryStep hands it to its executors as run.ectx.belt (Task 29)
     ictx.fts = ftsPrepare(db, ictx.nowMs).tables;
@@ -3678,7 +3687,7 @@ export async function tick(db, ctx) {
   // step inside its own transaction, as the blob re-index does (D-4609 (history-nodes-fts-merged-after-rewrite)).
   registerNodesMerge(ictx, db);
   // §9.2 "Then the secrets": every pair committed and journaled before any drain or FTS insert.
-  const secrets = secretsStep(db, ictx, ctx.parsed.secrets);
+  const secrets = secretsStep(db, ictx, ctx.parsed.secrets, ctx.parsed.unanswered);
   ictx.pairIdx = secrets.pairIdx;
   // §9.1 the probe at every open, then §6.2: every pair whose re-index is still owed (a pair learned this tick, or
   // one a dead pass committed) re-indexes before any FTS insert, within the tick's re-index slice, in two steps
@@ -5631,7 +5640,9 @@ function expandSecretSource(home, src, unreadable) {
  *  - A listed path that is not a regular file, or is over SECRET_FILE_MAX, is listed unreadable and
  *    never opened (D-4300).
  *  - A value under SECRET_MIN_LEN is never kept.
- *  - The list never names an account's exec.authDir (gpt-lane spec §4.1). */
+ *  - The frozen list never names an account's exec.authDir: an authDir is per-row roster data. The roster half
+ *    brings each codex lane's credential and checkpoint, the auth library's `secret-files` answer, which the shim
+ *    passes in `--secrets` (codex-bridge Stage 1, Task 10). */
 export function loadSecrets(home, secretFiles) {
   const values = new Set();
   const pairs = new Map();
@@ -5698,11 +5709,15 @@ export function recordPairs(db, home, ids, pairs, nowMs) {
  *  task 23's phrase fast path reads against its durable mark (while a D-4344 generation is open, only
  *  `newValues`: review 344 F2), so a pair committed by a pass that died before its re-index is still
  *  searched at the next tick no generation is open, and re-derived by the generation whose target covers
- *  it. The caller drops the values when the tick ends. */
-export function secretsStep(db, ctx, secretFiles) {
+ *  it. The caller drops the values when the tick ends. `unanswered` is the shim's `--unanswered` paths: each codex
+ *  lane's authDir the auth library could not name the secret files of, listed unreadable beside the files that could
+ *  not be read, so redact_unreadable and the doctor's redact-source-unreadable WARN name it (codex-bridge Stage 1,
+ *  Task 10). */
+export function secretsStep(db, ctx, secretFiles, unanswered = []) {
   // §6.2 "The belt" (ruling R-rollback): record a due belt before this pass writes a witnessed value.
   withTx(db, 'NORMAL', () => { recordBeltDueIfWitnessMoved(db); });
   const loaded = loadSecrets(ctx.home, secretFiles);
+  for (const p of unanswered) loaded.unreadable.push(p);
   const fresh = new Set(recordPairs(db, ctx.home, ctx.ids, loaded.pairs, ctx.nowMs).map((p) => `${p.len}:${p.sha256}`));
   const newValues = loaded.values.filter((v) => secretPairs([v]).pairs.some((p) => fresh.has(`${p.len}:${p.sha256}`)));
   // §8.3 layer 4: the belt over every unit this tick loaded, held in memory only.
@@ -7630,7 +7645,7 @@ export function reparseApplyOp(db, ctx, args) {
   const plan = reparsePlan(db, args, ctx.out);
   if (plan.result !== undefined) return plan.result;
   const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids);
-  ictx.pairIdx = secretsStep(db, ictx, ctx.parsed.secrets).pairIdx;
+  ictx.pairIdx = secretsStep(db, ictx, ctx.parsed.secrets, ctx.parsed.unanswered).pairIdx;
   ictx.fts = ftsPrepare(db, ictx.nowMs).tables;
   registerNodesMerge(ictx, db);   // a leaf's nodes_fts delete registers the merge step, as the tick's does (D-4609)
   withTx(db, 'NORMAL', () => { recordBeltDueIfUncovered(db, ictx.pairIdx); });   // the op pass's belt rule (reparse)
@@ -8001,7 +8016,7 @@ export async function repairOp(db, ctx) {
     reportCounterResets(ctx, spoolCounterResets(db, ctx.home));   // blob_undecodable stays as it is: no rebuild read the blobs
     return { rc: EXIT.OK };
   }
-  ictx.pairIdx = secretsStep(db, ictx, ctx.parsed.secrets).pairIdx;
+  ictx.pairIdx = secretsStep(db, ictx, ctx.parsed.secrets, ctx.parsed.unanswered).pairIdx;
   ictx.fts = true;
   const open = openFtsRebuild(db);
   const baseline = open === null || open.state.phase === 'start' ? foreignKeyRows(db) : null;

@@ -2314,7 +2314,8 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // that pretended they were copies would be describing the tree wrongly.
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'mail-disabled'")).map(rel).sort();
     expect(holders).toEqual([
-      'server/src/coord/dispatch.ts',   // the refusal CODE
+      'server/src/coord/dispatch.ts',   // the refusal CODE (the outcome union's member)
+      'server/src/coord/dispatchDecide.ts', // the refusal CODE, decided (ARCH-22, #553)
       'server/src/coord/stall.ts',      // the hold named for the marker it honours
       'shared/api.ts',                  // the refusal-code vocabulary
       'shared/switches.ts',             // the marker literal (its one definition, D-5855)
@@ -4708,10 +4709,14 @@ describe('docs failure vocabulary, redactor and ccd wire types are declared once
     for (const name of FUNCTIONS) expect(holdersOf(FUNCTION_DEF(name)), name).toEqual(['shared/docs.ts']);
   });
 
-  it('spells the redactor patterns in one TS file: no second copy of a rule', () => {
-    // Fragments every copy of rules 2 and 3 must contain however it is escaped or quoted.
+  it('spells the redactor patterns in one file, shared/redact.mjs: no second copy of a rule', () => {
+    // Fragments every copy of rules 2 and 3 must contain however it is escaped or quoted. D-5867 (Task C1l; ARCH-66
+    // (#801)): the rows' one home moved from shared/docs.ts to shared/redact.mjs, which `ALL` (`.ts` and `.tsx`) does
+    // not walk, so it is read by path.
+    const home = readFileSync(path.join(ccrcRoot, 'shared', 'redact.mjs'), 'utf8');
     for (const fragment of ['(?:access_token|token)=', 'gh[opsu]_']) {
-      expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(fragment)).map(rel), fragment).toEqual(['shared/docs.ts']);
+      expect(home.includes(fragment), `${fragment} in shared/redact.mjs`).toBe(true);
+      expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(fragment)).map(rel), fragment).toEqual([]);
     }
   });
 
@@ -6599,7 +6604,7 @@ describe('the turn verdict\'s reads and rule each have one home (D-5238)', () =>
 
   it('dispatch.ts reads no live file of its own: it asks the turnVerdict port', () => {
     const dispatch = stallCode(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'));
-    expect(dispatch).toMatch(/deps\.turnVerdict\(/);
+    expect(dispatch).toMatch(/turnVerdict: deps\.turnVerdict\b/);
     expect(dispatch).not.toMatch(/readLiveStateMeasured|readLiveState\b|panePid\(/);
   });
 });
@@ -6631,6 +6636,18 @@ describe('the approval classifier, its class map and the redactor each have one 
 
   it('redactCommand is defined once, in coord/redact.ts', () => {
     expect(holders(/\bfunction redactCommand\b|\bconst redactCommand\s*=/)).toEqual(['server/src/coord/redact.ts']);
+  });
+
+  // D-5867 (Task C1l, ARCH-66 (#801)): the egress rule patterns' one home is `shared/redact.mjs`. `.mjs` is not in
+  // `ALL`, so the home is read by path; the TypeScript holders are `ALL`'s.
+  it('the egress rule patterns have one home, shared/redact.mjs: no TypeScript file spells one', () => {
+    const FRAGMENTS = [/hooks\\\.slack\\\.com/, /gh\[pousr\]_/, /\bSECRET_NAME_TEST\b/, /\(\?:Proxy-\)\?Authorization/];
+    const home = readFileSync(path.join(ccrcRoot, 'shared', 'redact.mjs'), 'utf8');
+    for (const f of FRAGMENTS) {
+      expect(f.test(home), `${f} in shared/redact.mjs`).toBe(true);
+      expect(holders(f), `${f} in a .ts file`).toEqual([]);
+    }
+    expect(FRAGMENTS[0]!.test('const SLACK = /(hooks\\.slack\\.com\\/)/;'), 'CONTROL: the pattern sees a spelling').toBe(true);
   });
 });
 
@@ -8239,6 +8256,43 @@ describe('one verb question (ARCH-71): ccdCan(state, row) (D-5866)', () => {
   });
 });
 
+// D-5861 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1g, Step 4;
+// ARCH-76 (#811); spec §5.1 rule 3). The change-latch ratchet, placed after the capability ratchet above and ahead of
+// the next appended block. "Warn once until it changes" is `changeLatch` (`server/src/changeLatch.ts`): no `last*` field
+// of `FleetWatcher` is compared with a key before a `console.warn` and assigned in the same method
+// (`consolidationCensus.ts`'s `changeLatchSites`, a parse.ts-based query). The count may only shrink, and it is 0.
+// `DelegationLane#lastMarkWarnHour` has the same shape and is another series' file, so it is reported
+// (`changeLatchReported`), never counted, until a later PR moves it. The census is loaded inside the rows, so this
+// block adds no import line.
+describe('one change latch (ARCH-76): changeLatch (D-5861)', () => {
+  it('no hand-rolled change latch remains', async () => {
+    const { changeLatchSites } = await import('./consolidationCensus.js');
+    expect(changeLatchSites().map((x) => `${x.file}:${x.line} ${x.text.trim()}`),
+      'use changeLatch() from server/src/changeLatch.ts instead of a last* field').toEqual([]);
+  });
+
+  it('CONTROL: the census sees a planted latch', async () => {
+    const { changeLatchSites } = await import('./consolidationCensus.js');
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tree = mk(path.join(tmpdir(), 'change-latch-ratchet-'));
+    try {
+      md(path.join(tree, 'server/src'), { recursive: true });
+      wf(path.join(tree, 'server/src/watch.ts'), [
+        'class FleetWatcher {',
+        '  f(key: string): void {',
+        '    if (key !== this.lastFooWhy) console.warn(key);',
+        '    this.lastFooWhy = key;',
+        '  }',
+        '}',
+      ].join('\n'));
+      expect(changeLatchSites(tree)).toHaveLength(1);
+    } finally {
+      rm(tree, { recursive: true, force: true });
+    }
+  });
+});
+
 // D-5841 (D3, #755; plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Durability). APPENDED. The
 // brief watch has ONE home: its two timers, its decider and the wave brief's subject are defined in
 // `server/src/coord/briefwatch.ts` alone, and the subject is spelled on no other source code line, so `dispatchRun`'s
@@ -8562,5 +8616,21 @@ describe('ccrc history: the headless marker and the arm words are defined once, 
     const named = HISTORY_MJS.flatMap((f) => stallCode(f).split('\n').filter((l) => NAMES_MARKER.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
     expect(named, 'CONTROL: historyPaths names it').toContain(`ccd/history/lib.mjs: ${PATHS_FIELD}`);
     expect(named.filter((x) => !allowed(x.slice(x.indexOf(': ') + 2)))).toEqual([]);
+  });
+});
+
+// D-5867 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1l, Step 4;
+// ARCH-66 (#801); spec §5.1 rule 3). The redactor ratchet, appended after the capability ratchet so no cited line above
+// it moves. The JS/TS modules that spell redaction rule patterns of their own (`consolidationCensus.ts`'s
+// `redactRuleTables`, `shared/redact.mjs` counted) were three: `coord/redact.ts`, `shared/docs.ts` and
+// `ccd/history/lib.mjs`. PR 1 moved the first two into `shared/redact.mjs`; PR 2 moves the third, and then the bound
+// is one. The set may only shrink. The census is loaded inside the row, so this block adds no import line.
+describe('one redaction rule table (ARCH-66): shared/redact.mjs (D-5867)', () => {
+  it('at most two modules spell redaction rule patterns, and no TypeScript module is one', async () => {
+    const { redactRuleTables } = await import('./consolidationCensus.js');
+    const tables = redactRuleTables();
+    expect(tables.length, `a new redaction rule table: ${tables.join(', ')}; add the rules to shared/redact.mjs`).toBeLessThanOrEqual(2);
+    expect(tables.filter((f) => /\.tsx?$/.test(f)), 'a TypeScript redaction table').toEqual([]);
+    expect(tables).toContain('shared/redact.mjs');
   });
 });

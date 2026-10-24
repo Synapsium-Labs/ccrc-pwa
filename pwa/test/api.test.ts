@@ -1400,7 +1400,7 @@ describe('the update plane client (W3 Task 5)', () => {
     const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((f) => /\.(tsx?|css)$/.test(f));
     // The walk reached the tree: a scan over zero files would pass vacuously.
     expect(files).toContain(path.join('lib', 'api.ts'));
-    expect(files).toContain(path.join('fleet', 'UpdateBanner.tsx'));
+    expect(files).toContain(path.join('fleet', 'UpdateIndicator.tsx'));
     expect(files).toContain(path.join('screens', 'settings', 'UpdatesSection.tsx'));
     const hits = files.filter((f) => {
       const text = readFileSync(path.join(root, f), 'utf8');

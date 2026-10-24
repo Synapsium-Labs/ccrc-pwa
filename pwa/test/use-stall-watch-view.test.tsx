@@ -17,8 +17,9 @@ import type { StallConfirmRequired, StallWatchEffective, StallWatchView, StallWr
 import { STALL_WATCH_REFUSALS } from '../../shared/stall-watch';
 import { ApiError, api, createApi } from '../src/lib/api';
 import {
-  STALL_WATCH_POLL_MS, asStallConfirm, asStallWatchView, stallWriteRefusal, useStallWatchView,
+  STALL_WATCH_POLL_MS, stallWriteRefusal, useStallWatchView,
 } from '../src/fleet/useStallWatchView';
+import { asStallConfirm, asStallWatchView } from '../src/fleet/stallWatchRead';
 
 const setVisibility = (v: DocumentVisibilityState): void => {
   Object.defineProperty(document, 'visibilityState', { value: v, configurable: true });

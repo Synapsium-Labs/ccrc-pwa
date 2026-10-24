@@ -68,7 +68,7 @@ separate authorisation, and only then is the other repository's copy deleted.
 4. **`configDirSuffix` stays authoritative.** The launcher stops deriving `~/.claude-<id>`; there is one
    mapping from account to config directory and `ccd` already reads it.
 5. **Adoption never touches the credential.** An existing lane is adopted BY PATH: ccrc records where the
-   OAuth directory is and never opens, moves, copies or re-authenticates it.
+   OAuth directory is and never opens, moves, copies or re-authenticates it. (amended: §24)
 6. **The dependency is declared and isolated, not pinned.** ccrc owns a runtime it builds and probes for
    the behaviour the lane needs, inside a supported range — the standing preference is tolerance, and the
    surface in question is upstream's experimental one, so a version string alone is not evidence.
@@ -147,7 +147,7 @@ Validation, in `parseExec`'s existing `RosterError(message, remedy)` idiom:
 - Each port is an integer in `1024…65535`. Non-integer, out-of-range and privileged values are each refused by name so the remedy can say which happened.
 - `proxyPort !== litellmPort` **within** a lane: the shim and LiteLLM need two.
 - **No port value appears twice across the whole roster**, in either field, on any lane. The whole-roster gate goes where the duplicate-`configDirSuffix` gate already lives (`shared/roster.ts:983-989`) and reads the same way: a named pair of accounts and which value they share.
-- `authDir` is validated exactly as `secretsFile` is (`shared/roster.ts:566-596`): non-empty, no leading `/`, no trailing `/`, no `..`, and the same safe charset. It names a **directory**; nothing in ccrc opens what is inside it. It is additionally refused **under `.ccrc/`**: `_uninst_purge` empties that tree except `memory`, and a credential ccrc never obtained must not be destroyable by ccrc's own uninstall — a refusal makes that structural rather than documented. A lane being adopted keeps the directory it already has; only a lane created from nothing defaults to the shape shown above.
+- `authDir` is validated exactly as `secretsFile` is (`shared/roster.ts:566-596`): non-empty, no leading `/`, no trailing `/`, no `..`, and the same safe charset. It names a **directory**; nothing in ccrc opens what is inside it. (amended: §24) It is additionally refused **under `.ccrc/`**: `_uninst_purge` empties that tree except `memory`, and a credential ccrc never obtained must not be destroyable by ccrc's own uninstall — a refusal makes that structural rather than documented. A lane being adopted keeps the directory it already has; only a lane created from nothing defaults to the shape shown above.
 - `EXEC_KEYS_CODEX` joins `EXEC_KEYS`. Because that map is `Readonly<Record<ExecSpec['kind'], ReadonlySet<string>>>` "so a fourth `ExecSpec` kind would be a compile error here before it was a silent fall-through" (`shared/roster.ts:424-431`), omission cannot be silent.
 - The union arm and `EXEC_KINDS` land **in the same commit**. `EXEC_KEYS[kind as ExecSpec['kind']]` yields
   `undefined` for a kind the union does not carry, and `warnUnknownKeys` then calls `.has()` on it — the server
@@ -476,7 +476,7 @@ Two things the rendered config must continue **not** to contain:
    not carry. (amended: §20.1, D-3706) (amended: §23.2)
 2. **Adoption is by path, never by copy.** An existing lane keeps its current directory: the operator writes
    the path it already has into `exec.authDir`. ccrc records it, passes it, checks that it exists, and never
-   opens it, moves it, copies it or re-authenticates it.
+   opens it, moves it, copies it or re-authenticates it. (amended: §24)
 3. **Login becomes a ccrc verb over ccrc's runtime — and one existing function's whole argument is
    retired.** `_auth_openai_login` today runs `$WRAPPER_DIR/<id> login` under a pty and argues in comment
    that no config dir is minted, no secrets file is written, the credential "lands wherever that launcher
@@ -485,7 +485,7 @@ Two things the rendered config must continue **not** to contain:
    a pty (the device flow needs one), it still asserts no credential *content*, and its
    `pane-unsupported-here` refusal stays — but for a `codex` lane it now invokes `ccrc codex login <id>`, which runs the **isolated
    runtime's** `Authenticator` with that lane's `authDir` exported, and it can say so. The route named here, `ccrc account
-   auth-start`, does not exist (measured), so the pane's existing door is routed instead (amended: §19.7, D-3489, D-3530).
+   auth-start`, does not exist (measured), so the pane's existing door is routed instead (amended: §19.7, D-3489, D-3530). (amended: §24)
 
 `_acct_credential`'s refusal currently gates on `external` **only**, so every other kind is rotatable by
 default — and the comment beside it records that this exact hole was once measured as a live token written
@@ -494,8 +494,8 @@ credential is an OAuth directory a browser flow owns, not a file ccrc writes. `_
 keep-the-launcher branch and its mirrored secrets branch both test the same `external` literal; both are
 decided explicitly for `codex` (the launcher IS removed, marker-verified; the OAuth directory is **kept**).
 
-Nothing in ccrc — doctor, installer, publisher, probe or test — ever reads the contents of an OAuth file. (amended: §21.7) (amended: §23.2)
-Existence and mode only.
+Nothing in ccrc — doctor, installer, publisher, probe or test — ever reads the contents of an OAuth file. (amended: §21.7) (amended: §23.2) (amended: §24)
+Existence and mode only. (amended: §24)
 
 ## 10. Usage publication
 
@@ -544,7 +544,7 @@ model policy.
 
 ## 11. Install, role, release, and the fallback deploy
 
-**Placement.** The four executables go through `_inst_bins`; the unit template pair through `_inst_units`
+**Placement.** The five executables go through `_inst_bins`; the unit template pair through `_inst_units` (amended: §24)
 and `_inst_enable`, once Plan 3 places the pair: until then nothing places it (D-3172) (amended: §20.4). `cmd_install`'s step list is pinned by an exact `toEqual` over the `_inst_*` lines in
 its body, so any new step is a deliberate, visible edit — and nothing is added after `_inst_installed`,
 and the verb still ends with `cmd_doctor` (§7.4).
@@ -590,7 +590,7 @@ because the file is sourced bare by tests.
 | a ccrc-owned executable missing or drifted from the shipped tree | FAIL |
 | the isolated runtime absent, out of range, or failing its behaviour probe (amended: §20.3, D-3711) | FAIL |
 | `lane.json` or the rendered LiteLLM config absent or stale against the catalogue (amended: §20.3, D-3712) | FAIL |
-| `exec.authDir` absent or unreadable (existence and mode only) | FAIL |
+| `exec.authDir` absent or unreadable (existence and mode only) (amended: §24) | FAIL |
 | ports invalid or colliding — belt and braces behind the roster refusal, for a hand-edited file | FAIL |
 | a listener on a lane's port that answers another lane's id, or no id | FAIL |
 | one tier active and the other not | FAIL |
@@ -617,7 +617,7 @@ the verdict that counts is doctor's **re-measurement**, never the fixer's word.
 
 ## 13. Uninstall
 
-Removed: the four executables (by the `_uninst_tree_bins` census, which gains its derived guard — §5.1), the
+Removed: the five executables (amended: §24) (by the `_uninst_tree_bins` census, which gains its derived guard — §5.1), the
 usage unit template pair and every enabled instance of it once Plan 3 places them (until then nothing placed the pair, D-3172, so there is nothing to remove) (amended: §20.4), marker-verified per-account launchers, the
 isolated runtime under `~/.ccrc/runtime/codex/`, and any transient tier still running that `_codex_tier_ours` proves this lane's, stopped by exact unit
 name or verified pid under the lane's lock; a foreign or unmeasurable tier is left running and named (amended: §19.8, D-3488, D-3490).
@@ -906,7 +906,7 @@ Both sit above the platform region's closing sentinel, byte-identical in `ccd/cc
 ### 19.7 Login (§9.3)
 
 - **The door.** `ccrc account auth-start` does not exist (measured). A codex lane therefore logs in through the pane's existing door: `ccd account-pane --method openai-login` → `_auth_openai_login` → `ccrc codex login <id>` (D-3489).
-- **What the login does.** `ccrc codex login` runs the isolated runtime's `Authenticator`, with the lane's `authDir` as `CHATGPT_TOKEN_DIR` and the cost map local. Then it asserts that `auth.json` exists. It checks only that the file exists, never what it holds.
+- **What the login does.** `ccrc codex login` runs the isolated runtime's `Authenticator`, with the lane's `authDir` as `CHATGPT_TOKEN_DIR` and the cost map local. Then it asserts that `auth.json` exists. It checks only that the file exists, never what it holds. (amended: §24)
 - **The pane's gate** reads the lane's wrapper as well as the roster (D-3530). A lane whose wrapper execs `ccrc-codex` never takes the external arm, whatever the roster answers. The roster read, `_auth_exec_kind`, answers exactly one word: `absent`, `dangling`, `undecidable`, `no-row`, `no-kind`, or `kind:<the roster's own exec.kind>` (the tag keeps a kind spelled like a state word from reading as that state). For a `ccrc-codex` wrapper these are refused by name:
   - a roster that is absent (`roster-absent`). The remedy puts a copy back and retries; otherwise it notes which accounts `accounts.sh` lists, runs `ccrc install` (which seeds a one-account default and drops every other account from `accounts.sh`), declares the lane, and runs `ccrc install` again;
   - a roster that is a symlink to nothing (`roster-dangling`). It names the link's target and says to restore the roster there, or re-point the link, and not to run `ccrc install` first, which replaces the link;
@@ -984,17 +984,17 @@ Plan 3a (`docs/superpowers/plans/2026-09-30-gpt-lane-ownership-3a-before-the-fli
 - **Refusals** on the codex path, one line each, with a remedy:
   - `no-token-dir`;
   - `runtime-absent` (run `ccrc install`);
-  - `not-logged-in` (run `ccrc codex login <id>`): the `authDir` holds no `auth.json`, tested for existence only, before any interpreter runs;
-  - `runtime-api-moved` (run `ccrc update`): the runtime's `Authenticator` lacks a name the unattended guard overrides;
+  - `not-logged-in` (run `ccrc codex login <id>`): the `authDir` holds no `auth.json`, tested for existence only, before any interpreter runs; (amended: §24)
+  - `runtime-api-moved` (run `ccrc update`): the runtime's `Authenticator` lacks a name the unattended guard overrides; (amended: §24)
   - `login-required` (run `ccrc codex login <id>`).
-  Nothing opens `auth.json` to decide.
+  Nothing opens `auth.json` to decide. (amended: §24)
 - **An external lane keeps today's probe path until its flip (D-3706).** For any row that is not codex-kind, the probe runs exactly as before this plan, through `_fetch_codex`: the token-directory default, the interpreter beside the `litellm` on PATH, and no `-I`. So the hourly refresh keeps probing, refreshing and rendering for an external lane that has a codex registry, and `_check_models` is unchanged. The device-flow guard below is the codex path's alone, because the external path is its own function with today's bytes (ruling Z2's one-program allowance is not taken). Plan 3b's flip moves a lane onto the codex path with no other act. (amended: §23.2)
 - **An external lane cannot gain a codex registry (D-3706).** A codex class registry is created only on an `exec.kind: "codex"` row. `ccrc models <id> init codex` on any other row, the `external` rows included, is refused `codex-registry-needs-codex-lane` by `deploy/models-op.mjs`' `init` op, the one creator of a registry, so every caller of the op is covered. It writes nothing and names the remedy: flip the lane to `codex` first (Plan 3b). A registry that already exists is untouched, and every other probe kind is created on any row as before. So on today's shape the default probes only the lane whose directory it is: a lane with no registry is never probed, and none can gain one before its flip. A lane that is flipped back keeps the registry it had as a codex lane, and Plan 3b's rollback says what becomes of it. (amended: §23.3, D-5308)
-- **No device flow outside `ccrc codex login`.** (amended: §21.8)
+- **No device flow outside `ccrc codex login`.** (amended: §21.8) (amended: §24)
   - On the probe's codex path and in `ccd/ccgpt-usage.py`, the `Authenticator`'s device-code path is replaced in-process by a `login-required` refusal, which fires before anything writes `auth.json`.
   - So a codex lane whose token cannot be refreshed answers within the probe's bound and never leaves a cooldown marker behind.
   - `ccrc-codex-usage@.service` carries `TimeoutStartSec=300` (D-3707).
-- **The account id (closes D-3161 for every codex lane).** The probe's codex path takes `ChatGPT-Account-Id` from `Authenticator().get_account_id()` and opens no `auth.json`. When `auth.json` carries no `account_id`, that call derives one from the token's claims and writes it back: a library write, the same class as its `expires_at` write. The external path's direct `auth.json` read stays, byte for byte, until the final plan deletes that path, so §9's closing sentence is true of every codex lane and not yet of the external path. (amended: §23.2)
+- **The account id (closes D-3161 for every codex lane).** The probe's codex path takes `ChatGPT-Account-Id` from `Authenticator().get_account_id()` and opens no `auth.json`. When `auth.json` carries no `account_id`, that call derives one from the token's claims and writes it back: a library write, the same class as its `expires_at` write. The external path's direct `auth.json` read stays, byte for byte, until the final plan deletes that path, so §9's closing sentence is true of every codex lane and not yet of the external path. (amended: §23.2) (amended: §24)
 
 ### 20.2 The external LiteLLM arm, until each lane's flip (§8, §19.6)
 
@@ -1091,8 +1091,8 @@ Plan 3a (`docs/superpowers/plans/2026-09-30-gpt-lane-ownership-3a-before-the-fli
 | Guard | Task | Held by (the case title, read from the suite at execution) |
 |---|---|---|
 | a codex lane's probe gets its own `authDir` and runtime, never another lane's | 1 | `ccrc-models.test.ts`: "two codex lanes: each probe is handed its own authDir and the resolved runtime — never the other lane's, an ambient one, or a secrets file's", and "_models_run_probe hands a codex row its own authDir, runtime and marker; every other row gets neither marker nor runtime, and today's CHATGPT_TOKEN_DIR" (amended: §23.5) |
-| no token-directory default on the codex path; its refusals | 1 | `models-probe.test.ts`: "handed no CHATGPT_TOKEN_DIR it refuses no-token-dir — there is no default directory — and no interpreter runs", "handed no interpreter it refuses runtime-absent, naming ccrc install — and never falls back to the python beside a litellm on PATH", "with no auth.json in the handed directory it refuses not-logged-in, naming ccrc codex login — existence only, before any interpreter runs", "a runtime whose Authenticator lacks a name the guard overrides is refused runtime-api-moved, before any token is asked", "a runtime whose Authenticator has no get_account_id is refused runtime-api-moved, before any token is asked", and "the codex-lane arm spells no default token directory and no PATH-derived interpreter" |
-| the device flow never writes `auth.json` (the probe's codex path and the publisher) | 1 | `models-probe.test.ts`: "a token the runtime can neither use nor refresh is login-required AT ONCE: the device flow never starts, and auth.json is never written", "another sign-in's cooldown is login-required too: the probe never waits on it", and "the unattended guard is ONE text, in the probe and in the usage publisher"; `ccgpt-usage.test.ts`: "Plan 3a Task 1: a token the runtime can neither use nor refresh is login-required at once — no device flow, no auth.json write, nothing published" |
+| no token-directory default on the codex path; its refusals | 1 | `models-probe.test.ts`: "handed no CHATGPT_TOKEN_DIR it refuses no-token-dir — there is no default directory — and no interpreter runs", "handed no interpreter it refuses runtime-absent, naming ccrc install — and never falls back to the python beside a litellm on PATH", "with no auth.json in the handed directory it refuses not-logged-in, naming ccrc codex login — existence only, before any interpreter runs", "a runtime whose Authenticator lacks a name the guard overrides is refused runtime-api-moved, before any token is asked", "a runtime whose Authenticator has no get_account_id is refused runtime-api-moved, before any token is asked", and "the codex-lane arm spells no default token directory and no PATH-derived interpreter" (amended: §24) |
+| the device flow never writes `auth.json` (the probe's codex path and the publisher) | 1 | `models-probe.test.ts`: "a token the runtime can neither use nor refresh is login-required AT ONCE: the device flow never starts, and auth.json is never written", "another sign-in's cooldown is login-required too: the probe never waits on it", and "the unattended guard is ONE text, in the probe and in the usage publisher"; `ccgpt-usage.test.ts`: "Plan 3a Task 1: a token the runtime can neither use nor refresh is login-required at once — no device flow, no auth.json write, nothing published" (amended: §24) |
 | an external lane keeps today's probe path and hourly refresh, and every doctor check keeps its class, `models` included | 1, 10 | `ccrc-models.test.ts`: "_models_run_probe hands a codex row its own authDir, runtime and marker; every other row gets neither marker nor runtime, and today's CHATGPT_TOKEN_DIR"; `models-probe.test.ts`: "without the codex-lane marker the arm is today's: the python beside the PATH litellm, run as `-`, on the directory it was handed; a handed CCRC_CODEX_PYTHON never runs", and "without the codex-lane marker and handed no directory, the arm still falls back to its own default, and nothing runs where that holds no auth.json"; `ccrc-install.test.ts`: "the base tree: …", "live shape: …" (amended: §23.5, D-5646) |
 | a codex registry is created on a codex-kind row only | 2, 10 | `models-op.test.ts`: "refuses to CREATE a codex registry on %s, a row that is not exec.kind codex, by name, and writes nothing (Z3)" (one case each for `ext-a`, `ext-b` and `gen-a`), "seeds today's codex registry, byte for byte, on a codex-kind lane", and "every other probe kind is still created on an external row (Z3 refuses codex alone)"; `ccrc-models.test.ts`: "refuses to CREATE a codex registry on an external lane, by name, and writes nothing (Z3)", and "an external lane whose codex registry predates this build keeps it: init answers created:false, byte for byte (Z3)"; `ccrc-install.test.ts`: "live shape: …" (amended: §23.5, D-5308, D-5646) |
 | the external arm keeps its bytes on a roster with no codex row, and refuses the stop it owes once one exists | 2, 10 | `ccrc-models.test.ts`, the describe "once a codex-kind lane exists, the bare stop is never run (Z4)": "on today's shape (no codex-kind row) the bare stop still runs, byte for byte (Z1)", "after a flip, a running proxy on a changed render is REFUSED restart-failed, naming why: nothing stopped, nothing written", "after two flips, the refusal names BOTH codex-kind lanes, in roster order, joined by ", "", "after a flip, with nothing running, the render lands exactly as before: the guard binds the stop alone", "after a flip, an unchanged render asks nothing, even with a proxy running", "a roster whose codex lanes cannot be told refuses the stop too: undecidable is never "no codex lane"", and "the hourly refresh carries the refusal as a FAILED row, exits 1, and still stops nothing"; `ccrc-install.test.ts`: "live shape: …", "ruling Z4: …" (its row of record is the mutation the plan calls M2b) (amended: §23.5, D-5646) |
@@ -1129,7 +1129,7 @@ Plan 3b (`docs/superpowers/plans/2026-10-05-gpt-lane-ownership-3b-the-cutover.md
 
 ### 21.3 Account removal waits for an in-flight usage refresh (§13, §20.4)
 
-- After it disables the timer, `_acct_remove_usage` waits for `ccrc-codex-usage@<id>.service` to read `inactive` or `failed` before the limits row, `~/.cc-limits/<id>.json`, is removed. A poll whose last run ended `failed` has ended, so it is done, never in flight. It never stops that service: a oneshot mid-refresh may be writing the lane's `auth.json` through the library (§21.7), and a stop could cut that write short.
+- After it disables the timer, `_acct_remove_usage` waits for `ccrc-codex-usage@<id>.service` to read `inactive` or `failed` before the limits row, `~/.cc-limits/<id>.json`, is removed. A poll whose last run ended `failed` has ended, so it is done, never in flight. It never stops that service: a oneshot mid-refresh may be writing the lane's `auth.json` through the library (§21.7), and a stop could cut that write short. (amended: §24)
 - The wait prints one waiting line and is bounded by `CCRC_ACCT_USAGE_WAIT_S`, in whole seconds, default 300, the unit's own `TimeoutStartSec` (D-3707).
 - When the bound expires, the removal refuses by name, `usage-refresh-in-flight`, with a sentence telling the operator to retry, before the roster drop and before any limits-row deletion. Every step before the wait is idempotent, so the retry is safe, and Plan 3b pins that. So §20.4's "the removal still completes" holds for a disable the manager refuses or answers while the link stays, and not for a refresh still running when the bound expires (D-4049, D-4050).
 - `ccrc account remove` runs this half after its liveness census and before the codex tier stop, the registry rehome, the home sweep and the roster drop, where Plan 3a ran it after the drop. A refusal after the drop could not be retried, because a second run refuses `unknown-id` for an id the roster no longer names (D-4050). The wait holds the placement lock the removal already holds, for at most the bound, and that lock blocks only the other `ccrc account` writing verbs: ccd's placements do not take it and go on (ccd's "A RE-READ, NOT A LOCK"), so a session can be placed on the lane during the wait. A removal that waited therefore takes its liveness census again before it stops a tier or moves anything, and refuses `registry-unreadable`, `live-unmeasured` or `live-sessions` as the first census does, each saying that the timer this run disabled is all it wrote (`live-sessions` through `refuse-live`'s `--stands`).
@@ -1158,16 +1158,16 @@ Plan 3b (`docs/superpowers/plans/2026-10-05-gpt-lane-ownership-3b-the-cutover.md
 
 ### 21.7 Who reads an OAuth file, per lane kind (§9)
 
-- **For every codex lane, §9's closing sentence is true of ccrc's own code.** Nothing ccrc ships, whether doctor, installer, publisher, probe or test, opens a real codex lane's `auth.json`; a test reads only the placeholder file its own fixture planted. It checks existence and mode only.
-- **The library does read and write it.** LiteLLM's `Authenticator`, inside ccrc's isolated runtime, reads the lane's `auth.json`, and writes it back when it refreshes the token: its `expires_at`, and an `account_id` it derives when the file has none (§20.1). It runs in the probe's codex path, the usage publisher, `ccrc codex login` and the lane's own LiteLLM tier, each against that lane's own `exec.authDir` and never another lane's.
+- **For every codex lane, §9's closing sentence is true of ccrc's own code.** Nothing ccrc ships, whether doctor, installer, publisher, probe or test, opens a real codex lane's `auth.json`; a test reads only the placeholder file its own fixture planted. It checks existence and mode only. (amended: §24)
+- **The library does read and write it.** LiteLLM's `Authenticator`, inside ccrc's isolated runtime, reads the lane's `auth.json`, and writes it back when it refreshes the token: its `expires_at`, and an `account_id` it derives when the file has none (§20.1). It runs in the probe's codex path, the usage publisher, `ccrc codex login` and the lane's own LiteLLM tier, each against that lane's own `exec.authDir` and never another lane's. (amended: §24)
 - **For an `external` lane, until its flip,** the probe's external fetch reads `auth.json` directly for `account_id`: the base's bytes, the breach D-3161 records. The other repository's own processes read and write that lane's file as they always have. Plan 4's ccrc PR deletes the external fetch (§20.9). (amended: §23.2)
-- That library write is why account removal waits for a running refresh and never stops one (§21.3).
+- That library write is why account removal waits for a running refresh and never stops one (§21.3). (amended: §24)
 
 ### 21.8 The device flow a lane's own LiteLLM tier can still start (§20.1)
 
 - §20.1's "No device flow outside `ccrc codex login`" holds for the two programs its sub-bullets name: the probe's codex path and the usage publisher replace the `Authenticator`'s device-code path in-process with a `login-required` refusal.
-- It does not hold for a codex lane's own LiteLLM tier. The tier runs the runtime's `Authenticator` inside its own process, which that guard does not reach, so a tier that needs a token while the lane's refresh token is dead can still begin a device flow.
-- Plan 3b contains it. At each lane's flip, before any session returns to the lane, one refresh, `ccrc models refresh <id>`, runs through the guarded codex path and proves the lane's token refreshes. A `login-required` answer there stops the window for `ccrc codex login <id>`, run with the operator present. Nothing in the tree changes for this.
+- It does not hold for a codex lane's own LiteLLM tier. The tier runs the runtime's `Authenticator` inside its own process, which that guard does not reach, so a tier that needs a token while the lane's refresh token is dead can still begin a device flow. (amended: §24)
+- Plan 3b contains it. At each lane's flip, before any session returns to the lane, one refresh, `ccrc models refresh <id>`, runs through the guarded codex path and proves the lane's token refreshes. A `login-required` answer there stops the window for `ccrc codex login <id>`, run with the operator present. Nothing in the tree changes for this. (amended: §24)
 
 ### 21.9 The lane's entry file, never the shared launcher (§15 step 3)
 
@@ -1247,7 +1247,7 @@ The lane fidelity fixes (`docs/superpowers/plans/2026-10-12-gpt-lane-fidelity-fi
 | `check` reads `mutated` for a generation that lost its patch | B | `ccgpt-runtime.test.ts`: "check reads mutated for a generation with %s, and a build rebuilds it", for the module deleted, edited, or carrying a NUL after the shipped bytes, the `.pth` edited or deleted, and a second site-packages. Measured red with the check removed from `check`, and with each of its parts removed; and "check reads mutated, quietly, for a generation whose patch module it cannot read", measured red with the read's error left unsilenced |
 | a failed write is the `patch` stage's own line | B | `ccgpt-runtime.test.ts`: "fails at %s (%o): deletes the new generation, keeps current", its `pyblocked` and `pthblocked` rows, measured red with the write's refusal removed |
 | doctor names the patch | B | `ccrc-doctor.test.ts`: "FAILs a runtime that `ccgpt-runtime check` answers %s, in its own sentence, with a rebuild remedy", its `probe-moved` and `mutated` rows, each measured red with its sentence or remedy reverted; and "FAILs a runtime whose installed ccrc LiteLLM patch was deleted after the build as mutated, though its stamp still matches", measured red with the check removed from `ccgpt-runtime` |
-| the probe's stream gates, against a real LiteLLM | B | `ccgpt-runtime.test.ts`, the opt-in layer (`CCRC_TEST_LITELLM_PY`), whose "no patch" case shadows any patch the borrowed interpreter already carries: "M6: a patch whose fallback fires even after the deltas streamed FAILS stream-deltas-not-duplicated", "M7: no patch at all FAILS stream-tool-args-kept — stock LiteLLM drops a no-delta stream's arguments", "M8: a patch that fills only the first of two parallel calls FAILS stream-tool-args-kept", "M9: a streamed call the router cannot serve FAILS translate-stream — the harness, not the behaviour". Each is red on LiteLLM 1.101.0 and 1.104.0 while the control passes. With the probe's stream gate disabled, the probe passes in M6, M7 and M8 and each of those cases goes red, measured |
+| the probe's stream gates, against a real LiteLLM | B | `ccgpt-runtime.test.ts`, the opt-in layer (`CCRC_TEST_LITELLM_PY`), whose "no patch" case shadows any patch the borrowed interpreter already carries: "M6: a patch whose fallback fires even after the deltas streamed FAILS stream-deltas-not-duplicated", "M7: no patch at all FAILS stream-tool-args-kept — stock LiteLLM drops a no-delta stream's arguments", "M8: a patch that fills only the first of two parallel calls FAILS stream-tool-args-kept", "M9: a streamed call the router cannot serve FAILS translate-stream — the harness, not the behaviour". Each is red on LiteLLM 1.101.0 and 1.104.0 while the control passes. With the probe's stream gate disabled, the probe passes in M6, M7 and M8 and each of those cases goes red, measured (amended: §24) |
 | the probe's stream fold itself | B | `ccgpt-runtime.test.ts`: "the probe's stream fold joins each block's deltas in start order, and a delta outside its block is the answer", measured red with the after-stop check removed |
 | the probe's system gate requires the shim's whole lead-lined string in `instructions` | B | `ccgpt-runtime.test.ts`: "M3: the gate fed the unrewritten body FAILS a system-door assertion", red at `top-system-in-instructions` on 1.104.0 and at `no-system-role` on 1.101.0. With the gate reduced to the top-level text alone, the probe passes on 1.104.0 and the case goes red, measured |
 
@@ -1284,7 +1284,7 @@ Plan 4 (`docs/superpowers/plans/2026-10-17-gpt-lane-ownership-4-retirement.md`) 
 - **The probe's external fetch is deleted.** `_fetch_codex` goes, with its token-directory default, its interpreter beside the `litellm` on PATH, and its direct read of `auth.json` for the account id. The lane-kind marker, `CCRC_PROBE_LANE_KIND`, which chose between the two fetches, goes too. `_fetch_codex_lane` is now the probe's one codex fetch, for every caller. Handed no directory, it refuses `no-token-dir`. Handed a directory but no interpreter, it refuses `runtime-absent`.
 - **A row that is not codex-kind gets no interpreter.** `_models_probe_codex_env` exports no marker. For such a row it still unsets the runtime interpreter, so a row whose secrets file sets `CHATGPT_TOKEN_DIR` refuses `runtime-absent` and reads nothing. §21.1's probe-input seam still refuses an absent roster `roster-absent`, and the probe does not run.
 - **A row that is not codex-kind and still holds a codex registry** fails its hourly refresh row. The probe refuses first (`no-token-dir`, or `runtime-absent`), and with a probe answer in hand the dispatcher refuses `not-codex-kind`. Either way the row is `ok: false`, nothing is rendered, stopped or written, and `ccrc models refresh --all` exits 1. On a roster where every codex registry belongs to a codex-kind row, the fleet box's shape since Plan 3b, the deletion changes nothing a lane does.
-- **D-3161 is closed everywhere.** No code ccrc ships opens a lane's `auth.json`. §9's "Nothing in ccrc — doctor, installer, publisher, probe or test — ever reads the contents of an OAuth file" now holds without condition for ccrc's own code, in §21.7's sense: a test reads only the placeholder its own fixture planted. The LiteLLM library's read and write of a lane's `auth.json`, inside ccrc's runtime, stand as §21.7 says.
+- **D-3161 is closed everywhere.** No code ccrc ships opens a lane's `auth.json`. §9's "Nothing in ccrc — doctor, installer, publisher, probe or test — ever reads the contents of an OAuth file" now holds without condition for ccrc's own code, in §21.7's sense: a test reads only the placeholder its own fixture planted. The LiteLLM library's read and write of a lane's `auth.json`, inside ccrc's runtime, stand as §21.7 says. (amended: §24)
 - **What stays on purpose.** The models suite still drops an inherited `CCGPT_CONFIG` and poisons `pgrep` and `ccgpt`, so a return of the arm is loud. §20.10's row "a models case reaches no real `pgrep` or `ccgpt`" stands.
 
 ### 23.3 Z3 stays (§20.1, §20.9)
@@ -1322,7 +1322,7 @@ Each §20.10 and §21.12 row whose case Plan 4 deleted, re-seated, moved or adde
 | Plan 4: ccrc never runs the other repository's launcher, and no code line spells the retired box-global config path or its override | C1 | `single-definition.test.ts`: "ccrc never runs the other repository's launcher (Plan 4)", measured red with a `ccgpt stop` code line added; and "no bash code line spells the retired box-global LiteLLM config path or its override (Plan 4)", re-seated from "the LiteLLM config path is spelled once, in one tool, through one helper", measured red with the old path line restored |
 | Plan 4: models-op's probe-kind guard (`not-a-codex-lane`) | C1 | `models-op.test.ts`: "refuses a lane whose probe is not codex: not-a-codex-lane, naming its probe (Plan 4)", moved from `ccrc-models.test.ts`'s "refuses a lane whose probe is not codex", which the dispatcher now answers first. Measured red with the op's codex-probe test dropped |
 | Plan 4: one codex fetch for every caller, and a probe handed no lane inputs refuses `no-token-dir` | C2 | `models-probe.test.ts`: "a codex probe handed no lane inputs refuses no-token-dir, and never reads the retired default directory (Plan 4)"; `ccrc-models.test.ts`: "a non-codex row with a codex registry fails the hourly refresh at the probe, and --all exits 1 (Plan 4)". Measured red with the two-arm dispatch put back over a stand-in external fetch that uses the default directory: 13 of 61 `models-probe.test.ts` cases, the named one among them, and 4 of `ccrc-models.test.ts`'s 9 Plan 4 cases |
-| Plan 4: no probe code opens an `auth.json` or carries the lane-kind marker (D-3161 closed) | C2 | `models-probe.test.ts`: "the probe's code reads no auth.json and has no token-directory default or lane-kind marker (Plan 4)". Measured red with an `auth.json` read added to the probe's Python, which also reds "sends ChatGPT-Account-Id from Authenticator().get_account_id(), and its own program never opens auth.json (D-3161 closed)", and with the marker's export put back |
+| Plan 4: no probe code opens an `auth.json` or carries the lane-kind marker (D-3161 closed) | C2 | `models-probe.test.ts`: "the probe's code reads no auth.json and has no token-directory default or lane-kind marker (Plan 4)". Measured red with an `auth.json` read added to the probe's Python, which also reds "sends ChatGPT-Account-Id from Authenticator().get_account_id(), and its own program never opens auth.json (D-3161 closed)", and with the marker's export put back (amended: §24) |
 | Plan 4: `_models_run_probe` scrubs an inherited `CHATGPT_TOKEN_DIR` on both of its branches | C2 | `ccrc-models.test.ts`: "an ambient CHATGPT_TOKEN_DIR pointing at a poisoned auth.json never reaches a non-codex row's codex fetch: the row refuses no-token-dir (Plan 4)" and "a non-codex row with a secrets file that sets only ANTHROPIC_AUTH_TOKEN still scrubs an ambient CHATGPT_TOKEN_DIR: it refuses no-token-dir (Plan 4)", each re-seated from its codex-lane title. Each measured red with its own branch's `unset` deleted |
 | Plan 4: the openrouter remedy names the verb that runs the probe (D-5310) | C4 | `models-op.test.ts`: "openrouter discovery add without --endpoints refuses, and the remedy names the verb that runs the probe (Plan 4)", re-pinned from "openrouter discovery add without --endpoints refuses". Red first: the old remedy named `ccrc-models-probe`, which nothing places on PATH |
 
@@ -1369,3 +1369,189 @@ Later:
 - **The refresh-path remedy for a row that is not codex-kind and holds a codex registry repeats the failing command.** The dispatcher's `not-codex-kind` sentence is the right one to name.
 - **The dispatcher's roster-invalid fallback** has no case. It is the path where the membership read fails between two reads of the roster. Its sentence names a line that path never prints. It fails closed.
 - **The other repository's LiteLLM virtual environments and old logs** stay on the fleet box, by rulings R4-1 and R4-2. Removing them needs an operator ruling.
+
+## 24. Amendments (codex-bridge Stage 1)
+
+Codex-bridge Stage 1 (`docs/superpowers/plans/2026-10-22-codex-bridge-stage-1-auth-library.md`, from
+`docs/superpowers/specs/2026-10-15-codex-bridge-design.md` §2.6) puts every program that touches a codex lane's
+ChatGPT credential on one standard-library Python module, `ccd/ccgpt-auth.py`. It changes the rule §9 closes with.
+Its first wave placed the library and changed nothing a lane runs; its second moved every caller onto it. The rules
+of §19 to §23 hold here: a sentence above that the tree now contradicts carries a same-line pointer,
+`(amended: §24)`, and the item below says what is true. **No line above this section moved:** every hunk above this
+heading is on its own line, a same-line pointer, and in §11 and §13 the executables' count, which says five. Each
+D-number is defined in that plan's Deviations found. *(Added 2026-10-23.)*
+
+### 24.1 Exactly one ccrc library reads and writes a codex lane's credential (§9, §21.7, §23.2)
+
+- **The rule.** §9's closing sentence, "Nothing in ccrc … ever reads the contents of an OAuth file", becomes:
+  exactly one ccrc library, `ccd/ccgpt-auth.py`, reads and writes a codex lane's credential; history's redaction
+  reads it as a secret source and never writes it (§24.5). §21.7's first two bullets and §23.2's "D-3161 is closed
+  everywhere" are read through it: no other ccrc code opens a lane's `auth.json`, and in a tier ccrc starts,
+  LiteLLM's own reads and writes of it go through the library or are disabled (§24.2).
+- **Placement.** The library is the fifth GPT-lane executable, `~/.local/bin/ccgpt-auth.py`, beside the shim. It is
+  placed by `_inst_bins` and by the fallback deploy, compared and restored by the doctor's `codex` check, and removed
+  by `_uninst_tree_bins` (D-6376). §5.1's heading and table and §5.3's "four common executables" count the four that
+  predate it. Python callers load it by its path. Bash callers run its command line, `python3 -IS
+  ~/.local/bin/ccgpt-auth.py` with `status`, `signin`, `paths` or `secret-files`. History's sweep asks the tree's
+  copy.
+- **The credential and its three side files.** `auth.json` in `exec.authDir` keeps LiteLLM's format while any
+  LiteLLM tier exists, and the library always writes all five of its keys: `access_token`, `refresh_token`,
+  `id_token`, `expires_at` and `account_id`. Beside it the library keeps three files of its own, each mode 0600:
+  - `auth.json.lock`, the `flock` every write takes (polled every 50 ms, for up to 60 s). A lock file, not the
+    credential, because a rename replaces the credential's inode.
+  - `auth.pending.json`, the checkpoint: the next credential, written and fsynced before the rename that commits it
+    (D-6374).
+  - `auth.status.json`, the non-secret status: its state, `expiresAt`, `lastRefreshAt`, `lastErrorCode`,
+    `lastRequestId` and the identity of the credential it was measured on. It never holds a token.
+
+  A write goes to a temporary file at 0600, is fsynced, renamed over the credential, and the directory is fsynced.
+  The library never writes over a file of another family, the Codex CLI's own `auth.json` among them, or over one
+  it cannot read.
+- **A dead credential is a state.** The token endpoint's `invalid_grant` (on a 400 or a 401), `invalid_refresh_token`,
+  `token_expired`, `refresh_token_expired`, `refresh_token_invalidated` and `refresh_token_reused` record
+  `needs-signin` in the status file. It is never retried and never answered with a sign-in inside a request.
+  `invalid_client` records `config-error` (D-6375, D-6382). A new sign-in clears either, because a status binds the
+  identity of the credential it was measured on.
+- **Who refreshes, per mode.** In `litellm` mode, the only mode Stage 1 runs, the lane's LiteLLM tier is the one
+  refresher, and it refreshes through the library's lock, re-read and atomic write (§24.2, D-6372). Every other
+  caller only reads, so an idle lane is refreshed only by its next request (D-6383). `direct` mode, where the
+  bridge refreshes, is the codex-bridge's Stage 2.
+
+| Caller | What it asks the library | What it writes |
+|---|---|---|
+| the lane's LiteLLM tier | `ensure_fresh`, through the patch (§24.2) | the credential and the status, under the lock |
+| `ccrc codex login <id>` | `signin`, the device-code sign-in | the credential and the status, under the lock |
+| the usage publisher and the model probe | `read` and the recorded status | nothing: an expired token is `token-expired` |
+| `ccrc codex start`, `ccrc codex status` and the doctor | `status`, computed when no current file exists (D-6377) | nothing |
+| account removal | `paths`, for the lock (§24.4) | the lock file, when it creates one |
+| history's sweep | `secret-files`: the credential and the checkpoint (§24.5) | nothing |
+
+- **What did not change.** `exec.authDir`'s validation, its refusal under `.ccrc/` and `_acct_credential`'s
+  `codex-lane` refusal stand. Account removal and `ccrc uninstall`, `--purge` included, keep the authDir and
+  everything in it. Adoption is still by path (§9 item 2): ccrc moves and copies nothing in an authDir.
+
+### 24.2 The tier's device flow ends (§9 item 3, §19.7, §20.1, §21.8)
+
+- **The patch's authenticator part.** ccrc's one patch to LiteLLM (§22.2, `_rt_patch_source` in `ccd/ccgpt-runtime`)
+  gains a second part. It is armed only when the tier's environment names the library: `_codex_start_tier` sets
+  `CCRC_CODEX_AUTH_LIB` and `CCRC_CODEX_LANE` on the litellm tier and never on the shim tier. Armed, it replaces five
+  names of LiteLLM's `Authenticator`:
+  - `get_access_token` asks the library's `tier_access_token`, which is `ensure_fresh`; an `AuthError` becomes a
+    401 `GetAccessTokenError` that names its word;
+  - `get_account_id` answers the library's reading;
+  - `_write_auth_file` writes nothing and warns once, never formatting its argument;
+  - `_login_device_code` and `_wait_for_access_token` raise a 401 naming `needs-signin` and
+    `ccrc codex login <lane>`.
+
+  A `CHATGPT_AUTH_FILE` other than the authDir's credential, or a relative token directory, is a 401
+  `config-error`, and nothing is read.
+- **It fails closed.** A library that cannot be loaded keeps the device flow and the write disabled, and makes every
+  token request a 401 `auth-library-absent` naming `ccrc update`: LiteLLM's own refresh never runs. A LiteLLM that
+  lacks one of the five names is left stock and said on stderr, and the runtime's behaviour probe, which now runs an
+  offline auth scenario over a stub library, FAILs `auth-patch-not-applied` or `auth-device-flow-alive`, so that
+  generation never becomes current.
+- **What restarts it.** The litellm tier's started record hashes the library's bytes with the runtime's stamp, so a
+  changed library makes that tier stale, and the next `ccrc install` or `ccrc update` restarts a running one through
+  `_inst_codex_tiers`. With no library placed, the litellm tier refuses to start, `auth-library-absent`; the shim tier
+  still starts.
+- **`ccrc codex login` is the library's sign-in.** It runs `signin` over the roster's authDir: the device-code
+  protocol LiteLLM's authenticator spoke, with no Codex runtime and none run. It refuses another family's file
+  before any request, and writes nothing before the token exchange answers, so an abandoned or killed sign-in leaves
+  the authDir as it was. Its exit status is the library's. §19.7's "runs the isolated runtime's `Authenticator`" and
+  "asserts that `auth.json` exists" no longer describe it.
+- **§21.8's gap is closed** for a tier this build starts: one whose refresh token is dead answers 401 `needs-signin`
+  at once and starts no device flow. The probe and the publisher no longer carry §20.1's in-process guard: they never
+  refresh, so they have no device path to guard. Each refuses `login-required` when the credential is incomplete or
+  its status reads `needs-signin`, `credential-unusable` for an unreadable or foreign file or a `config-error`, and
+  `auth-library-absent` when the library cannot be loaded; `runtime-api-moved` is retired with the guard. The probe
+  takes `ChatGPT-Account-Id` from the library's reading, so §20.1's write-back of a derived `account_id` is gone.
+- **What an older ccrc's tier still does.** A tier started by an older ccrc, including one still running before its
+  restart at a rollout, runs LiteLLM's own `Authenticator`: it refreshes without the lock, truncates the credential
+  in place, writes derived fields back and can begin a device flow inside a request. For that window the library's
+  read retries a torn file and answers `unreadable`, never `absent` or `needs-signin`, and writes nothing. A rollback
+  to an older ccrc brings that behaviour back for every lane. The credential keeps LiteLLM's format, so the older
+  code reads it as it is and ignores the side files, so an `auth.pending.json` left in an authDir should be promoted
+  before the rollback, by `ccrc codex login <id>`: it settles the checkpoint under the library's lock even when the
+  lane is already signed in. Only a request that refreshes promotes it too; a request whose credential is unexpired
+  returns before the lock and leaves it in place.
+
+### 24.3 The doctor reads the status and the mode (§12, §20.3, §20.5)
+
+- **The row.** §12's "`exec.authDir` absent or unreadable (existence and mode only)" now reads: the authDir by `[ ]`
+  tests, then the credential through the library's `status`, which never makes a network call and never writes.
+  Inside the existing `codex` check, each with its remedy, the doctor FAILs:
+  - a credential that is absent or incomplete, or whose status reads `needs-signin`: `ccrc codex login <id>`;
+  - an unreadable or foreign-family credential: move it aside, then `ccrc codex login <id>`;
+  - a `config-error`: `ccrc update`, then `ccrc codex login <id>`;
+  - a credential this user does not own, tested before the mode, so a file both foreign-owned and the wrong mode gets
+    the owner line alone;
+  - a mode that its owner cannot read, or that gives any group or other bit (`modeOk` false; 0600 is what the library
+    writes, and an owner-only 0400 or 0700 passes): `chmod 600` on the path the library's `paths` answers. It is then
+    the only credential line, because a 0000 file also reads `unreadable` and a chmod cures it;
+  - a library that is missing (`auth-library-absent`) or answers nothing readable (`auth-status-unreadable`):
+    `ccrc update`.
+
+  A present credential PASSes, `signed in`, whether or not its access token expired, because the tier refreshes it.
+- **No new WARN and no new check name.** A running soak gate allow-lists WARNs by name. The FAIL for a retired
+  refresher enabled again waits for Stage 2 to retire one (D-6380).
+- **`--fix`** places a drifted or missing library again from the shipped tree, like the other four, and then asks
+  `_inst_codex_tiers` to restart a stale tier, as it does for the shim and the runtime (§20.5). It still performs no
+  OAuth, reads no secret and writes nothing under an authDir.
+
+### 24.4 Account removal takes the library's lock (§13, §21.3)
+
+- **The hold.** `_acct_remove`'s codex arm takes `_codex_auth_hold` after the lane's lock, `_codex_lock`, and
+  releases it after `_codex_stop_lane`, so where the hold takes the lock, removal never stops a tier inside a
+  refresh's token round trip. The two
+  locks are legitimately different: the lane's lock serialises tier starts and stops for up to the readiness bound,
+  and the library's serialises credential writes for one refresh. Removal is the only stop that takes both (D-6384).
+- **Its refusals.** The lock's path and bound come from the library's `paths`. A holder past the bound refuses
+  `codex-reap-failed`, with nothing removed. So does a symlink or another non-regular file at the lock path, which is
+  never opened, and so do a `paths` answer it cannot read, a lock it cannot open, and a lock it created but cannot
+  set to 0600. A lane that never signed in has no authDir, holds nothing and gets none. A lock file the hold creates
+  is 0600 whatever the umask.
+- **Where it holds nothing.** Besides a lane with no authDir (above), which has no credential to write, in two arms
+  the hold answers 0 holding nothing and the stop goes ahead unserialised.
+  With no `flock` binary on the box, the hold takes nothing, as the lane's own lock does, while a running tier still
+  locks through the library's own Python `flock`. With no library or no `python3` on the removing shell's PATH
+  (`_codex_auth`'s rc 3), the arm is accepted, not proved safe (D-6683): a running tier keeps the
+  library it loaded at its start and runs it under the runtime's own interpreter. In either arm the tier can still
+  take the lock, and a stop inside its refresh can lose a refresh token the endpoint has already rotated, leaving the
+  lane to be signed in again.
+- **The wait for a poll stays, for one reason now** (D-6378). §21.3 says removal never stops the usage service
+  because a poll mid-refresh may be writing the credential. That reason is gone: the publisher only reads. The other
+  stands, so the wait does: a poll still running writes again the `~/.cc-limits` row the removal deletes.
+- **No revocation** at removal (D-6379): no revocation endpoint for this credential is measured. The authDir is kept,
+  as before.
+
+### 24.5 History redacts the credential (§21.7)
+
+- **What the sweep loads.** `accounts.sh` gains `_ccrc_auth_dir <id>`, always emitted (an empty `case` for a roster
+  with no codex row), naming each codex row's HOME-relative authDir. `ccd-history-sweep` asks the tree's library
+  `secret-files` for each one and loads the credential and the checkpoint as secret sources, so a token a session
+  printed is redacted from `~/.ccrc/history`. The status file is never loaded.
+- **When the library cannot answer** (no copy in the tree, no `python3`, a non-zero exit), the sweep's shim prints one
+  stderr line naming the lane and its authDir, and passes the authDir to the sweep as `--unanswered <path>`. The
+  sweep lists it as an unreadable redaction source, so `redact_unreadable` and the doctor's existing
+  `redact-source-unreadable` WARN name it, never nothing. An `accounts.sh` from before `_ccrc_auth_dir` names no
+  authDir.
+- The frozen secret-source list still names no authDir: an authDir is roster data, one per row.
+
+### 24.6 Who holds each mutation-table row Stage 1 changed (§18, §20.10, §22.3, §23.5)
+
+Each row whose subject Stage 1 changed, or whose case it re-seated, with the case that holds it now. A row Stage 1
+read and left as it was says so, with its unchanged holder. "Measured red" names the Stage 1 mutation that turned the
+holder red, as that task measured it.
+
+| Row | Task | Held by (the case title, read from the suite at execution), and how it was measured |
+|---|---|---|
+| §18: `authDir` path validation | 1, 10 | Unchanged: `roster.test.ts`'s "refuses %s" (an absent, non-string, empty, absolute, escaping, trailing-slash or shell-metacharacter authDir) and "refuses an authDir with %s". Two new readers of the value do not rely on it: `roster-generate.test.ts`'s "escapes an unvalidated authDir as inert literal text, prints an option-shaped one verbatim, and the payload never runs" (Task 10), and `codex-auth-lib.test.ts`'s "paths_for names the four files beside the credential, and refuses a relative authDir" (Task 1, D-6540) |
+| §18: `_acct_credential` refuses a codex lane | — | Unchanged: `ccrc-account.test.ts`'s "refuses a codex lane with an OAuth-specific identity before reading credentials". The refusal stands: the credential is the library's to write, and `ccrc codex login <id>` is how it is replaced |
+| §18: `_acct_remove` keeps the OAuth directory | 9 | `ccrc-account.test.ts`: "C1: reaps a codex lane's generated state and reports it, keeping its logs and its OAuth", unchanged, and the describe "ccrc account remove: a codex lane takes the auth library's lock (codex-bridge Stage 1, Task 9)": "removal takes the auth library's lock around the stop: a holder makes it wait, then proceed", "a lane never signed in (no authDir) holds nothing and is removed, creating no authDir and no lock", "a holder past the bound refuses codex-reap-failed, nothing removed", "a symlink at the auth lock path refuses codex-reap-failed, nothing removed, its target untouched" and "under a 0277 umask the hold leaves the lock file it created at 0600". Measured red with the hold not taken (3 failed), and with the hold's timeout answering 0, its non-regular refusal removed, its `chmod 600` removed or its absent-authDir arm removed (1 failed each) |
+| §18: `authDir` is refused under `.ccrc/` | — | Unchanged: `roster.test.ts`'s "refuses an authDir under ~/.ccrc (%s) — purge empties that tree" and its control "a directory merely NAMED like .ccrc is not refused". The library's three side files live in the authDir, so the refusal keeps them out of `--purge`'s reach too |
+| §20.10: no token-directory default on the codex path; its refusals | 7 | `models-probe.test.ts`: "with no credential in the handed directory it refuses not-logged-in, naming ccrc codex login: the library answers, no request is made and nothing is written", re-seated from "with no auth.json in the handed directory …"; "no CCRC_MODELS_AUTH_LIB: auth-library-absent, naming ccrc update, before any interpreter runs" and "a library that cannot be read, does not import, or lacks a reader: auth-library-absent, naming only the class" replace the two `runtime-api-moved` cases, retired with the guard they pinned. The row's other cases are unchanged. Measured red with the probe's library-path test deleted (1 failed) |
+| §20.10: the device flow never writes `auth.json` (the probe's codex path and the publisher) | 7 | Re-seated on the rule that replaces it, a reader that never refreshes and never signs in: `models-probe.test.ts`'s "a dead credential is login-required AT ONCE: no request is made, and the credential is never written", "a needs-signin the tier recorded for this credential is login-required, FIRST on stderr and never token-expired: no request, the credential unchanged", "an expired token is never refreshed by a reader: token-expired, no request, the catalogue kept" and "neither the probe nor the publisher imports LiteLLM's Authenticator"; `ccgpt-usage.test.ts`'s "a dead credential: login-required at once, no token request, nothing published" and "an expired token is never refreshed by a reader: token-expired, no request, nothing published". Measured red, in each reader's suite, with its `read` replaced by `ensure_fresh` (6 failed) and with a refresh on expiry only (1 failed) |
+| Stage 1: a tier ccrc starts refreshes through the library and starts no device flow (§24.2, closing §21.8's gap) | 6 | `ccgpt-runtime.test.ts`, the describe "the patch's authenticator part (codex-bridge Stage 1)", among them "with it: a dead token is a 401 GetAccessTokenError naming needs-signin, and no device flow starts", "with it: LiteLLM's write is disabled: the stand-in's write-backs leave the file unchanged" and "with it, and a library that fails to load: every token request is a 401 auth-library-absent, the stand-in's refresh is never called, the device flow is killed and the file is unchanged"; the describe "the probe's auth scenario (codex-bridge Stage 1)"; and `ccrc-codex.test.ts`'s "the litellm tier is started with CCRC_CODEX_AUTH_LIB and CCRC_CODEX_LANE" and "a library change makes the litellm tier stale". Measured red with the device-flow kill dropped (5 failed), with LiteLLM's write left stock (5 failed), with a fallback to LiteLLM's refresh when the library fails to load (1 failed), with the tier started without `CCRC_CODEX_AUTH_LIB` (2 failed) and with the started record hashing the stamp alone (3 failed) |
+| §22.3: the probe's stream gates, against a real LiteLLM | 6 | `ccgpt-runtime.test.ts`: "M7: a patch with no stream part FAILS stream-tool-args-kept — stock LiteLLM drops a no-delta stream's arguments", re-titled from "M7: no patch at all FAILS …": the patch has two parts now, and an empty patch would FAIL the auth scenario first, so the case switches off the stream part alone. M6, M8 and M9 are unchanged |
+| §23.5: Plan 4: no probe code opens an `auth.json` or carries the lane-kind marker (D-3161 closed) | 7 | `models-probe.test.ts`: "the probe's code reads no auth.json and has no token-directory default or lane-kind marker (Plan 4)", unchanged in title, whose count of the probe's code lines naming `auth.json` is now 0; and "sends ChatGPT-Account-Id from the library's reading, and only the library opens auth.json", re-seated from "sends ChatGPT-Account-Id from Authenticator().get_account_id(), and its own program never opens auth.json (D-3161 closed)": every recorded open of the credential is the library's, and there is at least one. Measured red with the probe opening the credential itself, through the path `paths_for` names (1 failed) |
+| §23.5: Plan 4: `_models_run_probe` scrubs an inherited `CHATGPT_TOKEN_DIR` on both of its branches | 7 | Unchanged, and green after Task 7: `ccrc-models.test.ts`'s two Plan 4 cases. `_models_probe_codex_env` now also hands a codex row the library's path, `CCRC_MODELS_AUTH_LIB`, and unsets it for every other row, and the scrub's comment says the codex arm reads through the library |

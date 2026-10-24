@@ -47,7 +47,8 @@ import {
   COLLECT_PAUSE_TEXT, COLLECT_REFUSAL_TEXT, COLLECT_SECTION_TEXT, collectConfirmLines, collectCountLine,
   collectNowLines, collectOffNote, collectOffersReconfirm, collectUnmeasurableLines,
 } from './collectLaneWords';
-import { asCollectLaneView, collectLanePostRefusal, type CollectLanePoll } from './useCollectLaneView';
+import { collectLanePostRefusal, type CollectLanePoll } from './useCollectLaneView';
+import { asCollectLaneView } from './collectLaneRead';
 import './fleet.css';
 
 // This file has no words of its own. Every line it renders, the legend, the radio labels, the read and write lines

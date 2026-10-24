@@ -8,6 +8,7 @@
 // the sentence. The class is what a sheet branches on (an account refusal returns the operator to the account
 // step); the sentence is what it shows.
 import { ApiError } from '../lib/apiError';
+import { isRecord } from '../lib/wire';
 import { accountLabel } from '../lib/accounts';
 import type { RosterWire } from '../../../shared/api';
 import { NAME_REFUSAL_TEXT, isNameRefusal, workspaceId, type NameRefusal } from '../../../shared/slug';
@@ -44,7 +45,6 @@ export type AddRefusal =
   /** An answer this build has no word for. The status is kept for the sentence. */
   | { kind: 'other'; status: number };
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export function classifyAddError(err: unknown): AddRefusal {
   if (!(err instanceof ApiError)) return { kind: 'unreached' };
