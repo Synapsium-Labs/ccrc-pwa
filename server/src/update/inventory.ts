@@ -76,7 +76,7 @@ const OS_LINE = /^os (linux|darwin)$/;
 export type NodeFileRead =
   | { ok: true; content: string }
   | { ok: false; reason: ReadFailure | 'too-large' };
-type MeasuredFileKey = Exclude<NodeFileKey, 'projection' | 'tokenGeneration'>;
+type MeasuredFileKey = Exclude<NodeFileKey, 'projection' | 'tokenGeneration' | 'tmpSweep'>;
 export type NodeFileReads = Record<MeasuredFileKey, NodeFileRead>;
 export interface NodeConnection { label: string; role: NodeRole; agentOps: readonly string[] | null }
 
@@ -89,7 +89,7 @@ export interface NodeConnection { label: string; role: NodeRole; agentOps: reado
  *  reads seven files. */
 const MEASURED_FILE_KEYS: readonly MeasuredFileKey[] =
   (Object.keys(NODE_FILES) as NodeFileKey[])
-    .filter((k): k is MeasuredFileKey => k !== 'projection' && k !== 'tokenGeneration');
+    .filter((k): k is MeasuredFileKey => k !== 'projection' && k !== 'tokenGeneration' && k !== 'tmpSweep');
 
 const ABSENT: NodeFileRead = { ok: false, reason: 'absent' };
 const UNREADABLE: NodeFileRead = { ok: false, reason: 'unreadable' };
@@ -110,7 +110,8 @@ const TOO_LARGE: NodeFileRead = { ok: false, reason: 'too-large' };
  * predates the ~/.ccrc read set and refuses every one of these paths anyway,
  * and a symlinked node file is exactly what §8 reads as `unreadable`.
  */
-export async function readNodeFile(io: FleetIO, filePath: string, deadline: PoolReadDeadline | null): Promise<NodeFileRead> {
+export async function readNodeFile(io: FleetIO, filePath: string, deadline: PoolReadDeadline | null,
+  capBytes: number = NODE_FILE_CAP_BYTES): Promise<NodeFileRead> {
   const within = <T>(op: Promise<T>): Promise<T | null> => (deadline === null ? op.catch(() => null) : deadline.race(op));
   const kind = await within(io.lstatMeasured(filePath));
   if (kind === null || deadline?.expired()) return UNREADABLE;
@@ -119,11 +120,11 @@ export async function readNodeFile(io: FleetIO, filePath: string, deadline: Pool
   const size = await within(io.statMeasured(filePath));
   if (size === null || deadline?.expired()) return UNREADABLE;
   if (!size.ok) return size.reason === 'absent' ? ABSENT : UNREADABLE;
-  if (size.size > NODE_FILE_CAP_BYTES) return TOO_LARGE;
+  if (size.size > capBytes) return TOO_LARGE;
   const read = await within(io.readFileMeasured(filePath, deadline?.budgetMs, deadline?.signal));
   if (read === null || deadline?.expired()) return UNREADABLE;
   if (!read.ok) return read.reason === 'absent' ? ABSENT : UNREADABLE;
-  if (Buffer.byteLength(read.content, 'utf8') > NODE_FILE_CAP_BYTES) return TOO_LARGE;
+  if (Buffer.byteLength(read.content, 'utf8') > capBytes) return TOO_LARGE;
   return { ok: true, content: read.content };
 }
 
