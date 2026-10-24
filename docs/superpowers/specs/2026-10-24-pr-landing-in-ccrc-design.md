@@ -1,6 +1,6 @@
 # PR landing in ccrc, stage 1: the checks mail and the coordinator's ended turn
 
-**Spec** · 2026-10-24 · Status: draft for review, rev 3 (re-scoped to stage 1 by the orchestrator's ruling). §10 holds the two stage-1 questions for the operator, and §11 keeps every later question with its recommendation · Owner: the ccrc coordinator · Deviation: D-6773 (issued by the ledger) · Plan: `docs/superpowers/plans/2026-10-24-pr-landing-in-ccrc.md`
+**Spec** · 2026-10-24 · Status: draft for review, rev 4 (re-scoped to stage 1 by the orchestrator's ruling). §10 holds the two stage-1 questions for the operator, and §11 keeps every later question with its recommendation · Owner: the ccrc coordinator · Deviation: D-6773 (issued by the ledger) · Plan: `docs/superpowers/plans/2026-10-24-pr-landing-in-ccrc.md`
 
 **Related:** `2026-09-23-landing-order-and-main-churn-design.md` (the parent: R5 "no unattended lander", §5.2's dequeue and merged notices, §5.7.1's reads, §5.7.3's state table and §5.7.8's checks word), `docs/superpowers/programs/landing-order.md` (the proof-run readings and wave 3f), `2026-09-29-worker-stall-watch-design.md` (observation rows, shadow rows, arming markers), `2026-10-19-ccrc-consolidation-wave-design.md` (K12 switches), open PR #1127 (landing-order wave 3e, the landing route in the skill).
 
@@ -10,14 +10,14 @@ Coordinators spend a quarter to nearly half of their own tokens waiting. The big
 
 Stage 1 makes the server say it, and nothing more:
 
-- **The checks mail.** For a run waiting at `merging`, the server reads the REQUIRED checks of the PR head the coordinator advanced at, not the whole rollup. When they go from pending to green or from pending to red, it mails the run's coordinator once: `checks:#<pr>:<episode>.<gen>:green@<head7>` or `…:red@<head7>`. An **episode** is one advance into `merging`, keyed on that transition's own `run_events` id, so a run that re-enters `merging` at the same head starts fresh. A **generation** is one settle inside an episode, so a rerun that goes red again is a new mail. Check names come from GitHub and anyone who can write a workflow controls them, so they are bounded, reduced to a fixed character set and fenced as untrusted data. Every edge is a durable row, deduped and latched the way `sweepLanding`'s notices are. It ships in shadow first: rows recorded, no mail.
+- **The checks mail.** For a run waiting at `merging`, the server reads the REQUIRED checks of the PR head the coordinator advanced at, not the whole rollup. When they go from pending to green or from pending to red, it mails the run's coordinator once: `checks:#<pr>:<episode>.<gen>:green@<head7>` or `…:red@<head7>`. A head that moved after the advance gets one `moved` mail instead, a PR that is no longer open and bound gets one `left`, and a live wait that never settles ends in one `stuck`, whatever has happened to the PR or the workspace. An **episode** is one advance into `merging`, keyed on that transition's own `run_events` id, so a run that re-enters `merging` at the same head starts fresh. A **generation** is one settle inside an episode, so a rerun that goes red again is a new mail. Check names come from GitHub and anyone who can write a workflow controls them, so they are bounded, reduced to a fixed character set and fenced as untrusted data. Every edge is a durable row, deduped and latched the way `sweepLanding`'s notices are. It ships in shadow first: rows recorded, no mail.
 - **The coordinator's ended turn.** When the advance to `merging` answers the capability token `checks-mail-v1`, the coordinator ends its turn. `checks:…:green` wakes it to run its own enqueue (`gh pr merge <pr> --match-head-commit <handoffCommit>`, today's spelling), and `checks:…:red` wakes it to start a fix round. `merged:` and `dequeued:` stay as they are. The foreground `--watch` wait is kept only as the fallback for an advance that does not carry the token.
 
 The server touches no merge queue and no branch. It reads, writes rows in its own database and sends mail. The enqueue stays the coordinator's act, exactly as parent ruling R5 has it. Everything that would make the server act on GitHub is in §11, for a separate spec and the operator's rulings.
 
 ## 1. The problem, measured
 
-Code citations are to `origin/main` `7a3104abd`. Line numbers are hints, written `≈:`, and each names its function. No server, ccd or `shared/` file changed between rev 2's base `30f9bdc9f` and `7a3104abd` (`git diff --stat` lists `pwa/` files only), so rev 2's anchors hold.
+Code citations are to `origin/main` `4910f4cff`. Line numbers are hints, written `≈:`, and each names its function. Between rev 3's base `7a3104abd` and `4910f4cff`, one change touched a file this spec cites: #1190 moved the advance route's ordered gates into `server/src/coord/advance.ts` (`advanceGate`) and its act into `advanceAct` (`routes.ts`), so §1.4's anchors are re-grounded. The other files it changed (`server/src/refuse.ts`, `shared/refusal.ts` and tests) are cited nowhere here. `ccd/ccd`, `watch.ts`, `store.ts`, `prstate.ts` and `shared/api.ts` did not change (`git diff --stat`).
 
 ### 1.1 What the fleet spends on waiting
 
@@ -49,12 +49,14 @@ Clause 7 of `SKILL.md` (≈:76) says "This session does not poll in a loop." The
 - **The rollup is the whole set.** `checksFor` (`server/src/prstate.ts` ≈:165-176) folds every entry of `statusCheckRollup`, required or not, into one word. ccd fetches it through `gh pr list --json number,statusCheckRollup` (`_gh_pr_checks`, `ccd/ccd` ≈:5638), which carries no `isRequired`. A non-required red reads `fail` (measured on #1068 with every required check green).
 - **The word is wrong for running checks.** gh writes a running check run with `conclusion: ""`, and `stateOf` keeps the empty string, so a running check reads `pass` (parent §5.7.8, measured on #1010). The fix is landing-order wave 3f. This spec's own verdict applies that rule to its own read and does not change `checksFor` (§3.3).
 - **`sweepLanding`** (`watch.ts` ≈:8616, every decision in `server/src/coord/landing.ts`) mails a run's coordinator `dequeued:#<pr>@<time>` and `merged:#<pr>` (`landingVerdict`, `landing.ts` ≈:123). It never enqueues, merges or re-runs (R5). Its in-memory latch, `landingNotified` (≈:976), is written only after a notice landed or a durable read proved an earlier process sent it, and it only spares later reads. What keeps a notice single across restarts is the durable read (`hasMailWithSubject`, `hasNotice`), because every rollout restarts the server (≈:964-975).
+- **`_pr_state_one` is a writer, not a binder.** `_pr_state_one` (`ccd/ccd` ≈:10828) hands the rows to `_pr_py state` (≈:5831), which takes `$REG/.prstate-<id>.lock` (≈:6242), appends to `<id>.prhistory` (≈:6302), and `put`s `prphase`, `prnumber` and `prcheckedat` under a compare-and-set on `prcheckedat` (≈:6253-6333). Its `$5` (when gh answered, in ms) is what ranks answers; without it `_pr_py` falls back to its own clock (≈:10829-10834), the ordering that let a stale answer overwrite a newer `prnumber`. The binding itself is `annotate` and `pick` over `bound()` (≈:5800-5829), and `_pr_py pick` (≈:6425) already runs them without persisting anything, for `ws-reap`.
 - **The binding is base-exact.** ccd's `bound()` (`ccd/ccd` ≈:5806-5811) and the server's `boundRow` (`prstate.ts` ≈:147) bind a PR to a workspace only when `isCrossRepository` is false, `headRefName` is the registry branch, the PR is `ours`, and `baseRefName` equals the registry base. A PR stacked on another branch is never bound.
 - **The observation writer refuses `merging`, and refuses a repeated detail.** `insertStallObservation` (`server/src/coord/store.ts` ≈:2648) refuses any run whose state is in `INACTIVE_RUN_STATES_SQL` (≈:1114), and `IDLE_RUN_STATES` includes `merging` (`shared/api.ts` ≈:4912). It answers `duplicate` for any `(runId, detail)` already in `run_events` (≈:2657-2660), which is the stall lane's restart-proof dedupe.
 
 ### 1.4 What an advance to `merging` records today
 
-- **`POST /api/runs/:id/advance`** (`server/src/coord/routes.ts` ≈:1792-1907) re-measures the fingerprint on a move to `merging` (`verifyDone`, ≈:1871-1888, which checks `handoffCommit === branchTip` and the PR's phase), then calls `coord.advance(id, to, 'coordinator')` (≈:1893) with no `detail`, and answers `{ok, run}` (≈:1906). The head it verified is dropped.
+- **`POST /api/runs/:id/advance`** (`server/src/coord/routes.ts` ≈:1826-1845) runs `advanceGate` (`server/src/coord/advance.ts`, #1190) inside `coordMutex`, then `advanceAct` (`routes.ts` ≈:1766-1793). On a move to `merging`, `advanceAct` re-measures the fingerprint (`verifyDone`, ≈:1771-1782, which checks `handoffCommit === branchTip` and the PR's phase), then calls `coord.advance(id, to, 'coordinator')` (≈:1784) with no `detail`, and answers `{ok, run}` (≈:1792). The head it verified is dropped.
+- **The only edge into `merging` is from `awaiting-review`.** `RUN_TRANSITIONS` (`shared/api.ts` ≈:4870-4879) has `'awaiting-review': ['merging', 'working', 'closing', 'failed']` and `merging: ['closing', 'working', 'failed']`, and `advanceGate`'s `edge` gate refuses any other edge as `bad-transition` (409). So `merging → merging` and `working → merging` cannot be made. A run leaves `merging` and comes back only as `merging → working → awaiting-review → merging`, re-measured by `verifyDone` at both forward advances. Review runs never reach `merging` (`REVIEW_RUN_TRANSITIONS` ≈:4968).
 - **`advanceInner`** (`store.ts` ≈:2559-2577) already takes a `detail` and writes it into the transition row (≈:2575).
 - **`run_events.id`** is `INTEGER PRIMARY KEY AUTOINCREMENT` (`server/src/coord/schema.ts` ≈:99-107). SQLite never reuses an AUTOINCREMENT id, so the id of a transition row names that one transition for good.
 - **A transition row and an observation row differ in shape.** A transition writes `fromState ≠ toState`. `recordRunEvent` and the observation writer write `fromState = toState` = the run's current state (`store.ts` ≈:2580-2601, ≈:2661-2664).
@@ -70,7 +72,7 @@ From the landing-order ledger (`docs/superpowers/programs/landing-order.md` ≈:
 2. The "required checks finished" fact has one producer, the server, and one consumer, the run's coordinator.
 3. The landing decision and the enqueue stay the coordinator's, at a head it verified. The server changes nothing on GitHub.
 4. Every string GitHub supplies reaches a model only bounded, reduced and fenced.
-5. A coordinator that ended its turn on the token always hears something: a green, a red, or a bounded `stuck` (§3.6).
+5. A coordinator that ended its turn on the token always hears something: a green, a red, a `moved`, a `left` or a bounded `stuck` (§3.2, §3.6), whatever happens to its PR or its workspace after the advance.
 
 **Non-goals.**
 - Any server act on the merge queue, a PR, a branch or a workflow run: no enqueue, no read-back, no merge proof, no re-queue, no rerun (§11).
@@ -83,17 +85,29 @@ From the landing-order ledger (`docs/superpowers/programs/landing-order.md` ≈:
 
 ### 3.1 The episode
 
-An **episode** is one advance into `merging` that the server measured. The advance to `merging` (§4) writes its transition row with the detail `merging-at:<head>:<mode>`. `<head>` is the 40-hex head `verifyDone` verified (`claim.handoffCommit`, equal to the measured `branchTip`). `<mode>` is `live`, `shadow` or `off` (§3.7). The episode's id `e` is that transition row's `run_events.id`.
+An **episode** is one advance into `merging` that the server measured. The advance to `merging` (§4) writes its transition row with the detail `merging-at:<head>:<pr>:<mode>`. `<head>` is the 40-hex head `verifyDone` verified (`claim.handoffCommit`, equal to the measured `branchTip`). `<pr>` is the PR number `verifyDone` measured, or `none`, which only an `off` episode may carry. `<mode>` is `live`, `shadow` or `off` (§3.7). The episode's id `e` is that transition row's `run_events.id`. Every subject of the episode names `<pr>` and `<head>` from this row, so a mail can be addressed even when the PR no longer binds.
 
-- The run's **current episode** is its newest transition row with `toState = 'merging'` and `fromState <> 'merging'`, when that row carries a `merging-at:` detail. Observation rows written while the run waits have `fromState = toState`, so they are never mistaken for a transition.
-- **A re-entry is a new episode.** `merging → working → merging` at the same head writes a new transition row, so `e` is new. Generation 0 opens again, the stuck clock restarts, and no row of the old episode is read. This replaces rev 2's (run, head) key, which let a re-entry at the same head inherit the old episode's settled edges and its stuck clock.
+- The run's **current episode** is its newest transition row with `toState = 'merging'` and `fromState <> 'merging'` (today always `fromState = 'awaiting-review'`, §1.4), when that row carries a `merging-at:` detail. Observation rows written while the run waits have `fromState = toState`, so they are never mistaken for a transition.
+- **A re-entry is a new episode.** `merging → working → awaiting-review → merging` at the same head (the only way back, §1.4) writes a new transition row into `merging`, so `e` is new. Generation 0 opens again, the stuck clock restarts, and no row of the old episode is read. This replaces rev 2's (run, head) key, which let a re-entry at the same head inherit the old episode's settled edges and its stuck clock.
 - **Why a transition-row detail and not a column.** The head and the mode are facts of the transition, written once by the one writer that makes the transition. They need no migration, no second writer and no clear on `merging → working`, because the next episode is a new row. One writer and one reader live in `shared/landing.ts` (`mergingAtDetail`, `readMergingAtDetail`), and the reader answers null for anything it does not know.
 
-### 3.2 Who is told
+### 3.2 Who is told, and what is read
 
-The population is open runs at `merging` whose current episode has mode `live` or `shadow`, whose `sessionId` names a registry workspace with a bound PR (`ours`, base-exact), and whose bound PR is open. The recipient is the run's coordinator, through `resolveCoordinator(runId)`, sent from the `operator` role like the landing lane's notices. Any other PR is not read. A hand merge, a closed run, a stacked PR (§6), a run whose advance answered `off` and a PR with no run are never mailed about.
+Two sets, because a wait that cannot be read still needs its bound.
 
-When the bound PR's head differs from the episode's head (someone pushed after the advance, or the advanced tip was never pushed), the lane mails `checks:#<pr>:<e>.0:moved@<head7>` once per episode, naming the new head in the body. It stops reading that episode. The coordinator sends the run back to `working` or advances again at the new head, which is a new episode.
+- **The owed set** is every open run at `merging` whose current episode has mode `live` or `shadow`, whatever has happened to its PR or its workspace since the advance. Every member's wait ends in one mail (live) or one row (shadow): an edge, `moved`, `left` or `stuck`. The stuck bound (§3.5) is folded for every member on every pass, read or not, and is never gated on the PR being bound, open or read.
+- **The read set** is the members of the owed set whose `sessionId` is still a registry workspace of the run's project. `pr-landing` is asked about these and only these, and binds each one's PR itself (§3.3). A member whose workspace left the registry is not read; its bound still runs, and its `stuck` carries the cause `unmeasured`.
+
+One pure decider, `landingLineAct` (L1, `coord/landing.ts`), turns an episode and its line into one act, in this order:
+
+1. **`unmeasured`**: the read, or the binding (§3.3), did not answer. No edge; the bound runs.
+2. **The edge** (§3.5): the line is bound to the episode's `<pr>`, `OPEN`, not a draft, and its head is the episode's head.
+3. **`moved`**: bound to the episode's `<pr>`, `OPEN` and not a draft, at another head (a late worker push, or an advanced tip that was never pushed). `checks:#<pr>:<e>.0:moved@<head7>` once per episode, naming the new head in the body.
+4. **`left`**: anything else, which is the PR closed, turned into a draft, merged, or no longer bound to the episode's `<pr>` (retargeted to another base, which the base-exact binding drops, or replaced by another PR). `checks:#<pr>:<e>.0:left@<head7>` once per episode, with the measured phase (`closed`, `draft`, `unbound`) in the body. A merged PR writes the `left` row with phase `merged` and sends no mail: `sweepLanding`'s `merged:` is that wake and stays its one writer.
+
+`moved` and `left` end the episode for the lane: no later read, edge or `stuck`. The coordinator has been woken, and the skill's act for each takes the run off this episode (§5).
+
+The recipient is the run's coordinator, through `resolveCoordinator(runId)`, sent from the `operator` role like the landing lane's notices. A PR with no run, a closed run, a stacked PR (§6) and a run whose advance answered `off` are never read or mailed about.
 
 ### 3.3 The read: `ccd pr-landing`
 
@@ -101,11 +115,11 @@ A new read-only verb answers for the population of one project in one call:
 
     ccd pr-landing --project <project> --sessions <id>[,<id>…]
 
-For each session it names, it binds the PR exactly as `pr-state` does and prints one JSON line. Per call, in this order:
+For each session it names, it binds the PR with `pr-state`'s own binding code, persisting nothing (below), and prints one JSON line. Per call, in this order:
 
 | # | Call | ccd timeout | When |
 |---|---|---|---|
-| 1 | `gh pr list` rows, the input `_pr_state_one` binds from | `PR_GH_TIMEOUT` = 8 s (existing) | every call |
+| 1 | `gh pr list` rows (`_gh_pr_list`), the input the binding reads | `PR_GH_TIMEOUT` = 8 s (existing) | every call |
 | 2 | one GraphQL query, one aliased `pullRequest(number: N)` per bound PR | `PR_LANDING_GQL_TIMEOUT` = 6 s | every call |
 | 3 | `repos/{o}/{r}/rules/branches/<base>` | `PR_LANDING_REST_TIMEOUT` = 4 s | cache miss |
 | 4 | `repos/{o}/{r}/branches/<base>` (the public branch view) | `PR_LANDING_REST_TIMEOUT` = 4 s | cache miss |
@@ -114,11 +128,12 @@ The worst case is 8 + 6 + 4 + 4 = 22 s. The runner budget `CCD_VERB_TIMEOUT_MS['
 
 - **The GraphQL read.** The numbers are integers ccd read from its own binding, checked against `^[1-9][0-9]{0,8}$` and passed as `-F` integer variables, never interpolated text. The document is a `query`, a constant in ccd, with no `mutation`. For each PR it reads `state`, `isDraft`, `baseRefName`, `headRefOid` and the head commit's `statusCheckRollup.contexts`. For each context it reads `__typename`, `name`/`context`, `status`, `conclusion`/`state`, the check run's App id, `isRequired(pullRequestNumber: N)`, **`checkId`** (the check run's own `databaseId`, new for every attempt, `--failed` reruns included, or a commit status's `createdAt`) and **`runId`** (the workflow run's `databaseId`, the same across attempts, an integer the red mail's rerun spelling names).
 - **The base's required set by name**, reads 3 and 4 (parent §5.7.1 reads 2 and 3b), with plain read access, cached for 600 s in `$REG/pr-landing/<project>.rules.json`, a dotless registry subdirectory (the pools rule in CLAUDE.md). An unreadable cache is a miss, never a hit.
-- **Read-only, measured.** Every gh call is a read: `pr list`, `api graphql` with a `query` document, and two `api` GETs. The verb composes no `pr merge`, no `-X`/`--method` other than GET, no `mutation`, and no `git` write. A fixture census pins that (plan PL-1).
+- **Binding without persisting.** `_pr_state_one` is a registry writer (§1.3), so `pr-landing` never calls it: doing so would make it a second writer of every bound session's `prphase`, `prnumber` and `prcheckedat`, racing `pr-state`'s compare-and-set. It binds instead through a new `_pr_py` mode, `bind`, which reuses `annotate` and `pick` (and so `bound()`), writes nothing, and prints only the chosen row's `number`, `headRefOid`, `baseRefName`, `state` and `isDraft`, or nothing when no row binds. The shell-side facts the binding reads (the registry branch and base, `baseShort`, the branch tip) and `_pr_state_one`'s refusals that come before any persist (no branch, an unreadable tip, the branch-drift rung, ≈:10860-10872 and ≈:10951-10988) move out of `_pr_state_one` into one helper, `_pr_bind_facts`, which both call. A refusal answers `{id, unmeasured: [<reason>]}`, which the lane reads as `unmeasured`, never as `left`. So the two verbs cannot disagree on which PR a session owns, and only `pr-state` writes the registry's PR fields.
+- **Read-only, measured.** Every gh call is a read: `pr list`, `api graphql` with a `query` document, and two `api` GETs. The verb composes no `pr merge`, no `-X`/`--method` other than GET, no `mutation`, and no `git` write. No `$REG` file outside its own cache directory `$REG/pr-landing/` is created, changed or appended: no `.prstate-<id>.lock`, no `.prhistory`, no registry field. Fixture censuses pin both (plan PL-1).
 
 `isRequired` sees only checks that have reported. The rules read is what makes a required check that has not reported visible, the case parent §5.7.3 calls **not reported**: "an empty list means nothing has reported, never a pass".
 
-**Why a new verb and not a fourth call in `pr-state`** (the "legitimately different" record CLAUDE.md asks for): `isRequired` takes the PR number as an argument, so it cannot ride the project-wide window `_gh_pr_checks` reads. `pr-state --project` already spends 17 of its 25 s budget (`ccd/ccd` ≈:5436-5470 and ≈:40239, pinned by `pr-timeout-budget.test.ts`). And this read is needed only for the handful of runs at `merging`. The binding is shared, not copied: both verbs bind through `_pr_state_one`.
+**Why a new verb and not a fourth call in `pr-state`** (the "legitimately different" record CLAUDE.md asks for): `isRequired` takes the PR number as an argument, so it cannot ride the project-wide window `_gh_pr_checks` reads. `pr-state --project` already spends 17 of its 25 s budget (`ccd/ccd` ≈:5436-5470 and ≈:40239, pinned by `pr-timeout-budget.test.ts`). And this read is needed only for the handful of runs at `merging`. The binding is shared, not copied: both verbs bind through `_pr_bind_facts` and `_pr_py`'s `pick`, and only `pr-state` persists.
 
 GitHub-sourced text is handled as `_pr_queue_py` handles it: documents travel on stdin and numbered file descriptors, never in an argv or a shell word. ccd bounds each name to 120 bytes and each list to 32 entries, and says when it cut.
 
@@ -151,8 +166,8 @@ Every fact the edge needs lives in `run_events` rows, because every rollout rest
   2. its fingerprint differs from its edge row's (a rerun that started and finished between two reads);
   3. it reads the other settled word (red to green, or green to red, with no running read between).
   In cases 2 and 3 the reading is already settled, so the same pass writes `<gen+1>:open` and `<gen+1>:<word>@<fp>` and mails the new edge.
-- **`<gen>:stuck`** is written and mailed once per generation when the generation is still unsettled `LANDING_CHECKS_STUCK_MS` (45 min: the CI job bound is 30 min) after its own `open` row's `at`, or at once on `unverifiable`, which waiting will not change (§3.6).
-- **`moved`** is written once per episode (§3.2), with no generation.
+- **`<gen>:stuck`** is written and mailed once per generation when the generation is still unsettled `LANDING_CHECKS_STUCK_MS` (45 min: the CI job bound is 30 min) after its own `open` row's `at`, or at once on `unverifiable`, which waiting will not change (§3.6). It is folded for every member of the owed set (§3.2), whether or not the episode was read on that pass, because the clock is a row. An episode the lane never read has no `open` row; its generation 0 then opens on the first pass that sees it in the owed set, with `at` copied from the transition row as always.
+- **`moved`** (`landing:checks:<e>:moved`) and **`left`** (`landing:checks:<e>:left`) are written once per episode (§3.2), with no generation in the row and `0` in the subject. Either one ends the episode for the lane.
 
 **Cadence.** One `pr-landing` call per project per pass: every 30 s while any of the project's episodes is unsettled **or its last edge is red** (a coordinator's rerun follows a red), and every 120 s once every episode's last edge is green or stuck. The fingerprint rule is what makes the mail correct; the 30 s cadence after red only makes it quicker.
 
@@ -172,12 +187,13 @@ A run that left `merging`, or re-entered it as a new episode, between the lane's
 
 ### 3.6 The mail
 
-Subject `checks:#<pr>:<e>.<gen>:<word>@<head7>`, `<word>` one of `green`, `red`, `stuck`, `moved`; kind `status`; from `operator`; to the coordinator; carrying the `runId`. The episode and generation are in the subject, because a second red of the same head, or a red after a re-entry, is a new fact. The body is built in one place, `renderChecksBrief` in `coord/landing.ts`:
+Subject `checks:#<pr>:<e>.<gen>:<word>@<head7>`, `<word>` one of `green`, `red`, `stuck`, `moved`, `left`, with `<pr>` and `<head7>` always the episode's own (§3.1); kind `status`; from `operator`; to the coordinator; carrying the `runId`. The episode and generation are in the subject, because a second red of the same head, or a red after a re-entry, is a new fact. The body is built in one place, `renderChecksBrief` in `coord/landing.ts`:
 
 - The facts the server owns: PR number, workspace id, the episode's head, the word, the episode and generation.
 - On `red`: the failing required names, after `landingCheckName` (below), inside `untrustedBlock` (`server/src/coord/untrusted.ts` ≈:48) with a preface that names GitHub as the source. That renderer is the one the ask and approval mails use, so the fence cannot be closed from inside. `untrusted.ts` imports nothing, so `landing.ts` may take it as a value import.
 - The next act, as the skill spells it: on `green`, the coordinator's own enqueue; on `red`, a fix round to the owning worker on `merging → working`, or, for a red that is not the PR's own, one `gh run rerun <runId> --failed`, where `<runId>` is an integer the server read and validated. The server names the act. It never performs it.
-- On `stuck`, its cause, one closed word: `timeout` (still pending or not reported after 45 minutes), `unmeasured` (every read failed, or the ccd no longer answers `pr-landing-v1`), `unverifiable`, or `disabled` (§3.8).
+- On `stuck`, its cause, one closed word: `timeout` (still pending or not reported after 45 minutes), `unmeasured` (every read failed, the ccd no longer answers `pr-landing-v1`, or the workspace left the registry), `unverifiable`, or `disabled` (§3.8).
+- On `moved`, the measured head (40 hex, validated). On `left`, the measured phase, one closed word: `closed`, `draft` or `unbound`.
 
 **`landingCheckName`** (L1, pure) reduces a GitHub-supplied name before it enters any mail:
 - NFKC-normalise it.
@@ -210,10 +226,10 @@ It is a capability token: the skill reads it, and nothing else, to decide whethe
 
 ## 4. The advance records the episode
 
-`POST /api/runs/:id/advance` changes on a move to `merging` only, inside its existing `coordMutex` hold, after `verifyDone` answers ok:
+`POST /api/runs/:id/advance` changes on a move to `merging` only, in `advanceAct` (`routes.ts` ≈:1766-1793), which runs inside the route's `coordMutex` hold, after `verifyDone` answers ok. `advanceGate` and its order are unchanged:
 
 1. Compute the mode (§3.7) from the switches, `ccdCan('prLanding')` and `verdict.measured`, through `checksModeAt` (L1, `coord/landing.ts`).
-2. Call `coord.advance(id, 'merging', 'coordinator', mergingAtDetail(claim.handoffCommit, mode))`. `advanceInner` already writes `detail` into the transition row (≈:2575), so the transition and the episode are one row in one transaction. `causedBy` stays `coordinator`.
+2. Call `coord.advance(id, 'merging', 'coordinator', mergingAtDetail(claim.handoffCommit, verdict.measured.prNumber ?? 'none', mode))`. `advanceInner` already writes `detail` into the transition row (≈:2575), so the transition and the episode are one row in one transaction. `causedBy` stays `coordinator`.
 3. Answer `{ok, run}` as today, plus `checksMail: CHECKS_MAIL_TOKEN` when the mode is `live`.
 
 Every other target keeps its exact behaviour, and every refusal path is unchanged: a refused `verifyDone` writes no transition and so no episode. `handoffCommit` keeps its one writer, the close.
@@ -226,7 +242,8 @@ Every other target keeps its exact behaviour, and every refusal path is unchange
   - `checks:#<pr>:<e>.<gen>:green@<head7>`: run `gh pr checks <pr> --required` once, with no `--watch`. On exit 0, enqueue exactly as today (`gh pr merge <pr> --match-head-commit <handoffCommit>`, no `--squash`, never `--admin`), read the entry back with today's GraphQL query, disarm what only armed, and end the turn. On exit 8 (a rerun started after the mail), end the turn: the next generation's mail wakes it.
   - `checks:…:red@<head7>`: start a fix round to the owning worker on `merging → working`, as today's `1` branch does, or, for a red that is not the PR's own, one `gh run rerun <run id> --failed`, and end the turn: the next generation's mail wakes it.
   - `checks:…:stuck@<head7>`: read the cause, then act once. For `timeout` or `unverifiable`, read `gh pr checks <pr> --required` and decide: a rerun, a fix round, or ask the operator. For `unmeasured` or `disabled`, the checks mail is no longer reading this PR, so go back to today's foreground wait for this episode.
-  - `checks:…:moved@<head7>`: the PR's head is not the head you advanced at. Send the run back to `working`, or re-measure and advance again at the new head (a new episode).
+  - `checks:…:moved@<head7>`: the PR's head is not the head you advanced at. Send the run back to `working`; then, when the head is the one to land, re-advance through `awaiting-review` to `merging` at the new head (a new episode). There is no `merging → merging` advance: the server refuses it as `bad-transition` (§1.4).
+  - `checks:…:left@<head7>`: the PR is no longer open and bound (the body names `closed`, `draft` or `unbound`), and the checks mail has stopped reading this episode. Read the PR, then either go back to today's foreground wait for it, or send the run back to `working`.
   - `merged:#<pr>` and `dequeued:#<pr>@<time>` stay exactly as today.
 - **Without the token** (an older server, shadow, `off`), today's text stands word for word, the foreground `gh pr checks <pr> --required --watch` included.
 - A coordinator whose own workspace carries a programme-wave hold or the child marker is still refused its enqueue by the session hook. On `checks:…:green` it asks the operator to enqueue from their own shell, as today's paragraph says (≈:832-838).
@@ -238,7 +255,8 @@ Every other target keeps its exact behaviour, and every refusal path is unchange
 A PR stacked on another (its base is the parent's branch, not the default branch) is never bound, because the binding is base-exact and a workspace's registry base is the default branch at its creation (§1.3). So:
 - an advance to `merging` that claims it as the run's PR is refused by `verifyDone` (`pr-regressed`: claimed `open`, measured `none`);
 - an advance that claims no PR answers no token, because its mode is `off` (§3.7), and the coordinator keeps today's wait;
-- the lane never reads or mails about it.
+- the lane never reads or mails about it;
+- a PR retargeted onto another branch after a `live` advance stops binding, so the lane mails `left` with phase `unbound` once (§3.2).
 
 The plan pins this with census cases. Detection, a `restack:` mail and any server-side restack are in §11.
 
@@ -247,11 +265,12 @@ The plan pins this with census cases. Detection, a `restack:` mail and any serve
 The CLAUDE.md SAFETY rules are unchanged.
 
 - **No GitHub write, no branch touched.** The lane composes one ccd verb, `pr-landing`, which is read-only by construction and by census (§3.3). The server runs no `gh` (`EXEC_COMMANDS` stays `['tmux','ccd']`, `agent/src/whitelist.ts` ≈:220; `gh` stays in `FORBIDDEN_COMMANDS`, ≈:232). No merge queue entry, auto-merge request, branch, ref, workflow run or PR is created, changed or removed by anything this spec adds. The enqueue and the rerun stay the coordinator's, under today's hook.
-- **Only runs the server owns.** The lane reads an open run at `merging` in a measured episode, its `sessionId` a registry workspace, its PR bound (`ours`, base-exact) and open, its head equal to the episode's. A PR with no run, a closed run, a stacked PR and an `off` episode are never read.
+- **Only runs the server owns.** The lane reads an open run at `merging` in a measured `live` or `shadow` episode whose `sessionId` is a registry workspace, and acts on a line only through `landingLineAct` (§3.2). A PR with no run, a closed run, a stacked PR and an `off` episode are never read.
+- **No registry write.** `pr-landing` writes no registry field and no `.prstate` lock or `.prhistory` (§3.3); `pr-state` stays their one writer.
 - **Untrusted text.** Check names are attacker-controllable (fork PRs, any workflow author). They are never an argv, a shell word, a subject, a file name or a GraphQL document. They are bounded in ccd, reduced by `landingCheckName`, and fenced by `untrustedBlock`. Integers (PR number, run id, check id) and shas are validated by regex before they are spelled anywhere.
-- **Fail toward silence, then a bound.** `unmeasured`, a cache miss and an unknown shape mail nothing at once. Each unsettled generation of a live episode ends in one `stuck` mail, so a coordinator that ended its turn is never left waiting with nothing to wake it.
+- **Fail toward silence, then a bound.** `unmeasured`, a cache miss and an unknown shape mail nothing at once. Each unsettled generation of a live episode ends in one `stuck` mail, whether or not its PR still binds or its workspace is still registered, and a PR that closes, turns draft or stops binding ends the episode in one `left`. So a coordinator that ended its turn is never left waiting with nothing to wake it.
 - **Arming.** The lane ships in shadow. `landing-checks-live` and `landing-disabled` have no writer in the tree. `mail-disabled` holds every mail.
-- **No herd.** One `pr-landing` call per project per pass, only for projects with a run in the population.
+- **No herd.** One `pr-landing` call per project per pass, only for projects with a member in the read set (§3.2).
 - **Fixture HOMEs only** in every test (`makeCcdHarness`). gh is faked through `ghContainedEnv()` and a fixture `gh` on PATH. No task creates a marker on a live box.
 
 ## 8. Ownership and the consolidation rule
@@ -261,7 +280,8 @@ The CLAUDE.md SAFETY rules are unchanged.
 | A PR's CI rollup word for the PWA | `checksFor`, whole set | unchanged |
 | The required checks of a landing PR's head | the coordinator's `gh pr checks --required` | `ccd pr-landing` → `requiredChecksVerdict` (one reader, `coord/landing.ts`) |
 | "Required checks finished" | **nobody says it** | the checks lane, durable rows through `queueLandingNotice` |
-| The head verified at `merging`, and the episode's mode | re-measured, then dropped | the transition row's `merging-at:<head>:<mode>`, one writer (the advance), one reader (`readMergingAtDetail`) |
+| The head and PR verified at `merging`, and the episode's mode | re-measured, then dropped | the transition row's `merging-at:<head>:<pr>:<mode>`, one writer (the advance), one reader (`readMergingAtDetail`) |
+| Which PR a workspace owns | `_pr_state_one` (binds and persists) | `_pr_bind_facts` and `_pr_py`'s `pick`, shared by `pr-state` and `pr-landing`; persisted by `pr-state` only |
 | The queue entry, the read-back, the merge proof | the coordinator | unchanged (the coordinator) |
 | Observation rows | `insertStallObservation`, stall lane only | one writer with a closed two-member state predicate, two lanes |
 
@@ -331,3 +351,8 @@ Rev 2 designed the following on top of the checks mail. The orchestrator's rulin
 - **The fallback wait.** The skill reads one capability token, `checksMail: 'checks-mail-v1'`, on the advance answer; without it, today's foreground `--watch` text stands (§3.7, §5).
 - **`stuck` and `moved` stay.** The ruling keeps the pending-to-green and pending-to-red edges. A coordinator that ended its turn also needs a bound for a check that never settles and a word for a head that moved, or it can wait forever, so both are kept as `checks:` words (§3.2, §3.5, §3.6).
 - **Wave 3f stays with its programme.** Rev 2's PL-1 changed `checksFor`; stage 1's verdict applies the running-check rule to its own read and leaves `checksFor` alone (§1.3, §3.4).
+
+**rev 4 (2026-10-24).** Re-grounded on `origin/main` `4910f4cff` (#1190 moved the advance route's gates to `coord/advance.ts`). A review found three issues in rev 3. Acted on:
+- **`_pr_state_one` persists.** It hands its rows to `_pr_py state`, which locks, appends `.prhistory` and writes `prphase`/`prnumber`/`prcheckedat` under a compare-and-set, so rev 3's "read-only" verb would have been a second writer of every bound session's PR fields, without the answered-at stamp that ranks answers. `pr-landing` now binds through a new non-persisting `_pr_py bind` mode and a shared `_pr_bind_facts`, and a census pins that it writes no `$REG` file outside its cache (§1.3, §3.3, §7).
+- **The re-entry path.** `RUN_TRANSITIONS` has no `working → merging` or `merging → merging` edge. Re-entry is written `merging → working → awaiting-review → merging` everywhere, and the skill's `moved` act sends the run back to `working` and re-advances through `awaiting-review` (§1.4, §3.1, §5).
+- **A wait whose PR or workspace drops out.** Rev 3's population required a bound open PR, so a live episode whose PR was closed, made a draft or retargeted, or whose workspace left the registry, heard nothing. The population is split: the owed set (every open live or shadow episode at `merging`) gets the bound; the read set (registry workspaces) gets edges, `moved` and a new closed word, `left` (§2 goal 5, §3.2, §3.5, §3.6, §7).
