@@ -279,4 +279,19 @@ describe('a fleet frame reaches only what reads a changed row (C6, D-6438)', () 
     expect(chrome.actions.open).toBe(true);
     expect(chrome.actions.session).toBe(newest);
   });
+
+  it('openActions opens a row that arrived after the doors were taken', () => {
+    const { d, seen } = mountFlows();
+    // The doors of the FIRST render, taken while the store held three rows. ws-d is in none of the lists they could have
+    // closed over: `useActionsSheet` swaps in the newest row after `openFor`, so a door that froze the list at render
+    // would open nothing, or the wrong row, for it.
+    const stale = seen.doors[0]!;
+    expect(d.store.getState().sessions.some((s) => s.id === 'ws-d')).toBe(false);
+    d.sendRows([wsA(), wsB(), wsC(), row({ id: 'ws-d', project: 'project-a', workspace: null, name: 'late row' })]);
+    expect(d.store.getState().sessions.find((s) => s.id === 'ws-d')?.name).toBe('late row');
+    act(() => { stale.openActions('ws-d'); });
+    const chrome = seen.chrome[seen.chrome.length - 1]!;
+    expect(chrome.actions.open).toBe(true);
+    expect(chrome.actions.session?.name).toBe('late row');
+  });
 });
