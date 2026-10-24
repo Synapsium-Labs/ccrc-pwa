@@ -8303,6 +8303,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/coord/delegation-policy.ts': 6,
       'server/src/coord/digest.ts': 2,
       'server/src/coord/dispatch.ts': 5,
+      'server/src/coord/dispatchDecide.ts': 3,
       'server/src/coord/drift.ts': 1,
       'server/src/coord/envelope.ts': 3,
       'server/src/coord/heldFor.ts': 2,
