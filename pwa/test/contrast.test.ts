@@ -936,6 +936,23 @@ describe('token pairs the gate must keep measuring', () => {
     expect(r).toBeGreaterThanOrEqual(3);
   });
 
+  // THE EMPTY METER STAYS VISIBLE (T2c, D-6329). `Meter`'s track carries a 1px
+  // inset ring in --ink-tertiary, because no edge token reaches 1.5:1 on a
+  // card (the fill-on-track pairs say nothing about a 0% bar). A non-text
+  // mark, so 3:1, on the desk card's ground (--bg-raised) and the phone
+  // card's (--bg-surface). Distinct from the 4.5 `ink-tertiary / raised`
+  // text pairs, which `measured` would otherwise find first.
+  it.each([
+    'DARK  meter track outline / raised',
+    'LIGHT meter track outline / raised',
+    'DARK  meter track outline / surface',
+    'LIGHT meter track outline / surface',
+  ])('measures %s at the 3:1 UI threshold', (label) => {
+    const { ratio: r, min } = measured(label);
+    expect(min).toBe(3);
+    expect(r).toBeGreaterThanOrEqual(3);
+  });
+
   // Build 2, attention UX: the two-glyph rule's new `done` and `cleanup`
   // buckets (StatusDot's ✓ and ♻). Both dots are non-text graphical objects
   // on the same two grounds every other status dot is measured on — a
