@@ -20,6 +20,7 @@ import {
   type ChildReclaimLeafKeptAttention, type ChildReclaimLeafKeptMany, type LeafKeptWord, type LifecycleMeas,
   type LifecycleOutcome, type MirroredLifecycleEvent, type RunState,
 } from '../../shared/api.js';
+import { CCD_LOCK_UNOPENABLE } from '../../shared/ccd-refusal.js';
 
 /** How long a presence defer may continue before the reclaim proceeds past it
  *  (spec §5.7, "Presence, and its bound"). Unbounded would be worse than
@@ -1183,7 +1184,7 @@ const FAILED: LifecycleOutcome = 'failed';
  *  journaled once the session id is valid. The usage, bad-session-id and python3 dies are never
  *  journaled, so they are never here. */
 export const CHILD_RECLAIM_PRE_LOCK_TOKEN = {
-  flock: 'flock-unavailable', lock: 'lock-unopenable', token: 'token-malformed', runId: 'run-id-malformed',
+  flock: 'flock-unavailable', lock: CCD_LOCK_UNOPENABLE, token: 'token-malformed', runId: 'run-id-malformed',
 } as const satisfies Readonly<Record<'flock' | 'lock' | 'token' | 'runId', LcRefusalToken>>;
 export type ChildReclaimPreLockToken = (typeof CHILD_RECLAIM_PRE_LOCK_TOKEN)[keyof typeof CHILD_RECLAIM_PRE_LOCK_TOKEN];
 const CHILD_RECLAIM_PRE_LOCK_TOKENS: readonly string[] = Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN);

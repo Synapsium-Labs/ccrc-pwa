@@ -28,6 +28,9 @@ export interface AskKeysOptions {
   readonly onAnswer: (index: number) => void;
   readonly onToggle?: (index: number) => void;
   readonly onTab?: (to: 'prev' | 'next') => void;
+  /** The free-text row's digit was pressed (D-6325, R5): the sheet chooses `Other`, which opens the field. The row (or the
+   *  field, once open) is focused first; the sheet puts the cursor in the field when it opens. */
+  readonly onWords?: () => void;
 }
 
 export interface AskKeys {
@@ -77,11 +80,13 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
 
   // A new screen (or the sheet opening) puts focus on its highlighted row, under a fine pointer or once the keyboard
   // has been used in the sheet. About a frame on (`FOCUS_DELAY_MS`), so the rows the screen renders are mounted.
+  // `preventScroll` (D-6325, as `Sheet`'s own open-time focus does, D-5610): the sheet has one scroller, and a long
+  // question above the options is not to be scrolled away on open. An arrow key's `focusRow` keeps the normal scroll.
   useEffect(() => {
     if (!open || screen === null || hl === null) return undefined;
     if (!finePointer() && !engaged.current) return undefined;
     const key = hl;
-    const t = setTimeout(() => els.current.get(key)?.focus(), FOCUS_DELAY_MS);
+    const t = setTimeout(() => els.current.get(key)?.focus({ preventScroll: true }), FOCUS_DELAY_MS);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, screenId, screen === null]);
@@ -94,8 +99,10 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
       const target = e.target instanceof Element ? e.target : null;
       const onPage = target === null || target === document.body || target === document.documentElement;
       if (!onPage && (dialog === null || !dialog.contains(target))) return;
+      // `words` is the `Other` row while the field is closed and the field once it is open (D-6325, R5): only the field is
+      // text, so only the field keeps the keys a caret and a digit need.
       const wordsEl = els.current.get('words');
-      const inWords = target !== null && wordsEl !== undefined && target === wordsEl;
+      const inWords = target !== null && wordsEl !== undefined && target === wordsEl && typingInto(wordsEl);
       if (!inWords && target !== null && typingInto(target)) return;
       // Where the highlight is, as the keyboard sees it: the focused row, else nothing focused in the sheet yet.
       let focused: string | null = null;
@@ -114,7 +121,10 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
       if (action.type === 'answer') o.onAnswer(action.index);
       else if (action.type === 'toggle') o.onToggle?.(action.index);
       else if (action.type === 'tab') o.onTab?.(action.to);
-      else if (action.type === 'words') focusRow('words');
+      else if (action.type === 'words') {
+        focusRow('words');
+        o.onWords?.();
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);

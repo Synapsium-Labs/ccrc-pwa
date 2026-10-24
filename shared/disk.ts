@@ -159,6 +159,50 @@ function readFilesystem(v: unknown): DiskFilesystemLevel | null {
   };
 }
 
+function readMeasuredFilesystem(v: unknown): DiskFilesystem | null {
+  if (!isObj(v)) return null;
+  const dev = str(v['dev']);
+  const mount = str(v['mount']);
+  const fsType = str(v['fsType']);
+  const sizeBytes = num(v['sizeBytes']);
+  const availBytes = num(v['availBytes']);
+  const freeBytes = num(v['freeBytes']);
+  const files = num(v['files']);
+  const filesFree = num(v['filesFree']);
+  const roots = v['roots'];
+  if (dev === null || mount === null || fsType === null) return null;
+  if (sizeBytes === null || availBytes === null || freeBytes === null || files === null || filesFree === null) return null;
+  if (!Array.isArray(roots) || !roots.every((r) => typeof r === 'string')) return null;
+  if (typeof v['readOnly'] !== 'boolean') return null;
+  return { dev, mount, fsType, roots: roots as string[], sizeBytes, availBytes, freeBytes, files, filesFree, readOnly: v['readOnly'] };
+}
+
+/** THE ONE READER of the agent's `disk` reply (a wire boundary: validated, never trusted): the measurement, or `null`
+ *  when ANY element is malformed. A half-formed reply is unknown, never a measurement the decider could fold to `ok`. */
+export function readDiskMeasured(x: unknown): DiskMeasured | null {
+  if (!isObj(x)) return null;
+  const { filesystems: fsRaw, expectedMounts: emRaw, missing: missRaw } = x;
+  if (!Array.isArray(fsRaw) || !Array.isArray(emRaw) || !Array.isArray(missRaw)) return null;
+  const filesystems: DiskFilesystem[] = [];
+  for (const f of fsRaw) {
+    const r = readMeasuredFilesystem(f);
+    if (r === null) return null;
+    filesystems.push(r);
+  }
+  const expectedMounts: DiskExpectedMount[] = [];
+  for (const m of emRaw) {
+    if (!isObj(m) || typeof m['path'] !== 'string' || typeof m['mounted'] !== 'boolean') return null;
+    expectedMounts.push({ path: m['path'], mounted: m['mounted'] });
+  }
+  const missing: DiskMissingRoot[] = [];
+  for (const m of missRaw) {
+    if (!isObj(m) || typeof m['label'] !== 'string' || typeof m['why'] !== 'string') return null;
+    if (!(DISK_MISSING_WHYS as string[]).includes(m['why'])) return null;
+    missing.push({ label: m['label'], why: m['why'] as DiskMissingWhy });
+  }
+  return { filesystems, expectedMounts, missing };
+}
+
 /** THE ONE READER of `FleetHealth.disk`: the block, or `null`. Absent (an older server, or no pass yet) and malformed
  *  alike read as `null`, and `null` is UNKNOWN, never "the disk is fine". `holders` is optional inside the block (an
  *  older server omits it) and reads as none. */

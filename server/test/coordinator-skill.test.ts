@@ -94,7 +94,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The seventeen clauses, verbatim. Kept as a literal array rather than a regex per
+// The eighteen clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -130,10 +130,12 @@ const CONTRACT = [
   // Delegation broker wave 3, Task 15 (spec 2026-10-04 §5.1, §13). Written with no apostrophe at all, so neither the straight nor
   // the curly spelling can drift. It names the CLIENT verb, not the route; it is an identity declaration, never a restriction.
   'Before delegating, declare coordinator intent for this session with `ccrc-api coordinators intent set --session <id>`; clear that declaration when the coordinator role ends. This is an identity declaration, not a restriction on ordinary Agent or Workflow use.',
+  // Fleet disk retention, DR-25 (spec 2026-10-23 §2.7.2, §10). ASCII only, no apostrophe, no quote.
+  'A workflow script, a worker brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree.',
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all seventeen clauses verbatim', () => {
+  it('carries all eighteen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -155,7 +157,7 @@ describe('the coordinator skill: its contract', () => {
   // "pinned verbatim" exists to prevent. `worker-skill.test.ts` already
   // carries this guard; this ports it, with two adaptations the worker's
   // version does not need. First, the coordinator states its count in prose as
-  // "These seventeen sentences" (SKILL.md:67), not "clauses"/"lines" as the
+  // "These eighteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
   // worker skill says, so the in-file harvest is widened to accept all three.
   // Second, README.md's own mention line-wraps the count word onto the line
   // after "clauses" (measured — CLAUDE.md's does not), so the cross-file
@@ -190,7 +192,7 @@ describe('the coordinator skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it once in its own words ("These seventeen sentences").
+    // SKILL.md states it once in its own words ("These eighteen sentences").
     // HARVESTED, never matched literally, so a revert to "ten" fails with the
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
@@ -451,11 +453,23 @@ describe('the coordinator skill: its contract', () => {
 // Delegation broker wave 3, Task 15 (spec 2026-10-04 §5.1, §13): clause 17, the coordinator's explicit intent declaration. The clause
 // is pinned VERBATIM with the others above; these rows hold what the verbatim pin cannot: that it is an IDENTITY declaration and not a
 // restriction, that the client verb it names exists, and that the skill still names none of the later waves' lease or cleanup verbs.
-describe('the coordinator skill: clause 17, coordinator intent', () => {
-  const CLAUSE_17 = CONTRACT[CONTRACT.length - 1]!;
+// DR-25 (D-6637): clause 18, where scratch and long output go. Pinned verbatim above; these rows hold the halves by name.
+describe('the coordinator skill: clause 18, temp and long output', () => {
+  it('keeps scratch out of a work tree and sends long output to a file or tail (D-6637)', () => {
+    const line = skill.split('\n').find((l) => l.startsWith('18. '));
+    expect(line, 'SKILL.md has no clause 18').toBeTruthy();
+    expect(line).toContain('never sets `TMPDIR` to a path inside a work tree');
+    expect(line).toContain('never writes scratch inside one');
+    expect(line).toContain('`CCRC_SESSION_TMPDIR`');
+    expect(line).toContain('Long command output goes to a file there, or through `tail`');
+  });
+});
 
-  it('is the seventeenth and last clause, and SKILL.md numbers it so', () => {
-    expect(CONTRACT).toHaveLength(17);
+describe('the coordinator skill: clause 17, coordinator intent', () => {
+  const CLAUSE_17 = CONTRACT[16]!;
+
+  it('is the seventeenth clause, and SKILL.md numbers it so', () => {
+    expect(CONTRACT).toHaveLength(18);
     expect(CLAUSE_17.startsWith('Before delegating, declare coordinator intent for this session with ')).toBe(true);
     expect(skill).toContain(`\n17. ${CLAUSE_17}\n`);
   });

@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
+<<<<<<< ours
 # ccrc:generated 1 sha256=5daf6b254c2355aabcbea8c087ff51f3ca8128a77b56544380860542afebe047
+=======
+# ccrc:generated 1 sha256=871f89a1f40da0163d4e2f3d83d11196989e0fa40204d440abce75a2619e4311
+>>>>>>> theirs
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5107,6 +5111,18 @@ _lc_refuse() {   # act id token detail [k v]... — EMITS, THEN DIES. Never retu
   # own docstring is the precedent for why the spelling matters, not a
   # specific ccd line.
   local a="${1-}" i="${2-}" tok="${3-}" msg="${4-}"; shift 4 2>/dev/null || :
+  #
+  # THE MACHINE LINE (`refusal-v1`, #560). Before the die, ONE anchored line on
+  # stderr gives the server the word it would otherwise rebuild from the
+  # English: act, a space, the word, nothing else on the line. It cannot be the
+  # last line (the die follows) and bash's own diagnostics may precede it, so a
+  # reader looks for it anywhere. `shared/ccd-refusal.ts` is the reader and the
+  # word list. The head is spelled with a hyphen, never `refus` plus `ed`, and
+  # the word rides a `%s`, so none of the four scanned shapes appears here.
+  # The line goes to the caller's stderr FIRST (`>&2`), and only then is the
+  # builtin's own stderr silenced, so a closed stderr cannot make the refusal
+  # die differently from the way it always did.
+  printf 'ccd-refusal: %s %s\n' "$a" "$tok" >&2 2>/dev/null || :
   _lc_emit "$a" refused "$i" "" refusal "$tok" detail "$msg" "$@"
   die "$msg"
 }
@@ -8891,6 +8907,7 @@ EOF
   # it lands in the project or slug slot and is refused there; trailing, it would be dropped unread and the workspace
   # created on the least-loaded lane with exit 0 — so the caps gate is the control and the leading position the defence.
   echo ws-title-v1; echo ws-wrapper-v1; echo ws-title   # the verb itself (S9), which the server offers Rename on; it rides here, not in the list above
+  echo refusal-v1   # #560: `_lc_refuse` prints `ccd-refusal: <act> <word>` on stderr before its die; the server reads it first and keeps its prose matchers as the fallback
   echo swap-busy-v1; echo hibernate  # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word; `hibernate` (D-5242) is a verb, sent only behind `verbSupported`
 }
 

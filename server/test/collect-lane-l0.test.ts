@@ -63,6 +63,7 @@ const IMPORTS = [
   "import type { WorkflowView } from './workflows.js';",
   "import type { NodeRole } from './node-role.js';",
   "import type { AccountStateAnswer, LaneState } from './accounts.js';",
+  "import type { DiskHealth } from './disk.js';",
 ];
 
 describe("the collector switch's L0 vocabulary (path-identity spec §5.7)", () => {

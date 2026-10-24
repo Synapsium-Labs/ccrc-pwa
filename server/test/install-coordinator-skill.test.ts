@@ -48,7 +48,7 @@ describe('install-coordinator-skill', () => {
     const clause = 'Before delegating, declare coordinator intent for this session with `ccrc-api coordinators intent set --session <id>`;';
     run();
     for (const d of HOMES) expect(fs.readFileSync(skill(d, 'SKILL.md'), 'utf8')).toContain(`\n17. ${clause}`);
-    const older = fs.readFileSync(skill('.claude', 'SKILL.md'), 'utf8').replace(/\n17\. [^\n]*/, '').replace('These seventeen', 'These sixteen');
+    const older = fs.readFileSync(skill('.claude', 'SKILL.md'), 'utf8').replace(/\n1[78]\. [^\n]*/g, '').replace('These eighteen', 'These sixteen');
     expect(older).not.toContain('coordinators intent');
     fs.writeFileSync(skill('.claude', 'SKILL.md'), older);
     run();

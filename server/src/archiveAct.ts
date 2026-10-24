@@ -13,6 +13,7 @@ import type { CcdResult } from './lifecycle.js';
 import type { ArchiveDecision, ArchiveFlags, TurnVerdict } from './coord/archiveDoor.js';
 import { archiveOutcome, refusedAtStop } from './coord/archiveDoor.js';
 import { refuseRoute } from './refuse.js';
+import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 
 /** What the route reads and runs on the act's behalf. The turn is re-read at the act, fail-closed. */
 export interface ArchiveActPorts {
@@ -60,7 +61,7 @@ export async function actArchive(
       return sendRefused(reply, refused.body as RefusedBody);
     }
     const res = await ports.runCcd(ports.stopArgv());
-    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr, ...endedSpread });
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr), ...endedSpread });
     stopped = true;
   }
   if (archiveArgv === null || !plan.wsArchive) return { ok: true, archived: true, stopped, ended: plan.ended };
@@ -76,7 +77,7 @@ export async function actArchive(
   if (archived.ok && !stopped && /^already archived /m.test(archived.stdout)
       && (await ports.paneLive()) && (await ports.turnVerdict()) === 'idle') {
     const res = await ports.runCcd(ports.stopArgv());
-    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr, ...endedSpread });
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr), ...endedSpread });
     stopped = true;
   }
   const out = archiveOutcome(stopped, plan.ended, archived);

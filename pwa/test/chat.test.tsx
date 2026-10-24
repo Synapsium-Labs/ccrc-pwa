@@ -639,6 +639,7 @@ describe('SessionScreen', () => {
     stubPointer(true);
     const store = makeStore();
     seed(store, {
+      askFrameSeen: true,
       dialog: {
         id: 'd1',
         title: 'Which migration strategy?',
