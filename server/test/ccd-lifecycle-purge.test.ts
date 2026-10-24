@@ -888,13 +888,13 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
         // shape that collapsed a pre-emit lock refusal and a post-emit removal
         // failure into one message, so the pin is now its ABSENCE plus the
         // capture that replaced it.
-        expect(fn, `${verb} reads the purge's status`).toMatch(/_reg_purge "\$id" \|\| _\w+_prc=\$\?/);
+        expect(fn, `${verb} reads the purge's status`).toMatch(/_reg_retire "\$id" \S+/);
         expect(fn, `${verb} must not collapse the three conditions back to a boolean`)
           .not.toMatch(/if ! _reg_purge/);
         expect(fn, `${verb} reports it as a FAILURE, not a decline`).toContain(`_lc_fail ${act}`);
         expect(fn).toContain('purge-refused');
         expect(fn, 'and the post-emit condition has its own token').toContain('purge-incomplete');
-        expect(fn, 'which is branched on by VALUE').toMatch(/\(\( _\w+_prc == 3 \)\); then/);
+        expect(fn, 'which is branched on by VALUE').toMatch(/\(\( REG_RETIRE_RC == 3 \)\); then/);
         expect(fn, 'and names what still stands').toContain('still stand');
         expect(fn, 'a refusal is never reported as success').toMatch(/return 1/);
       } finally { release(); }
@@ -2425,24 +2425,22 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     // `expectSurvivingState` is the behaviour half of the same pin — this one
     // is a scan, and a scan alone is what left the arguments free.
     const CALLERS = [
-      ['_rm_why', 'ws-rm', '"$id"'],
-      ['_rt_why', 'ws-reap', '"$id"'],
-      ['_pr_why', "'ws-gc --prune'", '"$project-$slug"'],
-      ['_fg_why', 'forget', '"$id"'],
+      ['ws-rm', 'ws-rm', '"$id"'],
+      ['ws-reap', 'ws-reap', '"$id"'],
+      ['ws-gc', "'ws-gc --prune'", '"$project-$slug"'],
+      ['forget', 'forget', '"$id"'],
     ] as const;
+    // ARCH-46: the call is `_reg_retire <id> <verb>`, which renders the remedy
+    // through the shared helper itself, so the scan pins the call's arguments
+    // and the helper's own body pins the renderer.
+    const retireAt = (idExpr: string, verb: string): number => src.indexOf(`_reg_retire ${idExpr} ${verb}`);
     for (const [v, verb, idExpr] of CALLERS) {
-      const at = src.indexOf(`local ${v};`);
-      expect(at, `${v} is one of the four durable purge callers`).toBeGreaterThan(-1);
-      const line = src.slice(at, src.indexOf('\n', at));
-      expect(line, `${v} renders its remedy through the shared helper, not its own case`)
-        .toContain('_compact_lock_why_remedy');
-      expect(line, `${v} passes its OWN verb, which selects the surviving-state and re-run clauses`)
-        .toContain(verb);
-      expect(line, `${v} passes the row id in this caller's own spelling`)
-        .toContain(idExpr);
-      expect(line, `${v}'s two arguments, in the order the helper reads them`)
-        .toContain(`_compact_lock_why_remedy ${idExpr} ${verb})`);
+      expect(retireAt(idExpr, verb), `${v} retires its row through _reg_retire with its OWN id and verb`)
+        .toBeGreaterThan(-1);
     }
+    const helperAt = src.indexOf('_reg_retire() {');
+    expect(src.slice(helperAt, src.indexOf('\n}\n', helperAt)), 'the helper renders the shared remedy from its two arguments')
+      .toContain('_compact_lock_why_remedy "$1" "$2"');
 
     // AND NO CALLER RESTATES THE CENSUS (r7 R6-M1). All four paragraphs said
     // "THREE set COMPACT_LOCK_WHY" and called the untokened residue a set of
@@ -2450,9 +2448,9 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     // those words had already made both false — four sites, and an `exec
     // {fd}<>` permission state the acquire calls a DURABLE member of that
     // residue. The number now lives in one place and each caller points at it.
-    for (const [v] of CALLERS) {
-      const at = src.indexOf(`local ${v};`);
-      const para = prose(src.slice(src.lastIndexOf('elif ((', at), at));
+    for (const [v, verb, idExpr] of CALLERS) {
+      const at = retireAt(idExpr, verb);
+      const para = prose(src.slice(at, src.indexOf('REG_RETIRE_WHY', at)));
       expect(para, `${v}'s paragraph points at the single-source census instead of restating it`)
         .toContain('that census lives in ONE place, the header comment on _compact_lock_acquire');
       expect(para, `${v} no longer spells how many sites set the token`)
