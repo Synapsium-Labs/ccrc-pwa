@@ -560,8 +560,9 @@ leave a wave undispatchable pending a ruling below.
     wave 5's chip act on them differently, so one word would be an overloaded null.
   - Wave 3 is unchanged; it holds, which is the safe side.
   - **Amended by the stale arm (D-6639).** "The sweep as planned skips held children" is no longer all of it: a held
-    child idle for seven days is taken by the stale arm (R34's amendment). It is still never taken while a person's
-    hold is fresh, and never a child that has coordinated (R37, R40).
+    child idle for seven days is taken by the stale arm (R34's amendment). Writing or renewing a hold is activity: the
+    idle clock restarts at the hold file's write time, so a child just held is never taken until seven days after the
+    hold, and a hold whose write time cannot be read keeps its child. Never a child that has coordinated (R37, R40).
 - **R33 — a child's birth is the FIRST dispatch stamp** (wave 3's wave-done, open item 2, 2026-09-25).
   `markDispatchStarted` rewrites `dispatchStartedAt` on every attempt. A workspace minted by one attempt and adopted
   by a later one therefore gets a late birth. PRs opened in between would then read `inherited`, and a bind could

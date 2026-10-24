@@ -26,6 +26,9 @@ import type { CoordStore } from './store.js';
 import { queueSystemMail } from './rundefsTx.js';
 import type { ChildReclaimDeps, ChildReclaimRequest } from './childReclaim.js';
 
+/** A digest stand-in for the first, hold-free look at a held child (never sent anywhere). */
+const PENDING_DIGEST = 'pending';
+
 /** The title of the shadow row: what the arm would have done. */
 export const CHILD_STALE_WOULD_TITLE = 'child would be reclaimed (stale)';
 /** The title of the row that stands in for the coordinator's mail when there is nobody to send it to. */
@@ -49,19 +52,29 @@ export function childStaleHoldDigest(bytes: string | null): string | null {
 /** The server's idle evidence for one marked child (spec §2.7.3, the server half), or `'unmeasured'`. The status
  *  clock is the registry row's own stamps in milliseconds: the last process end and the last hibernation. ccd measures
  *  the live half (transcript, pane) on the box, and refuses `not-idle` on it. */
-export function childStaleIdleOf(coord: Pick<CoordStore, 'childStaleActivity'>, r: SessionRecord, runId: number): ChildStaleIdleRead {
+export function childStaleIdleOf(
+  coord: Pick<CoordStore, 'childStaleActivity'>, r: SessionRecord, runId: number, holdAt: number | null = null,
+): ChildStaleIdleRead {
   const a = coord.childStaleActivity(r.id, runId);
   if (!a.ok) return 'unmeasured';
   const status = [r.lastEnd?.at ?? null, r.hibernatedAt].filter((x): x is number => x !== null);
-  return { runAt: a.runAt, mailAt: a.mailAt, statusAt: status.length === 0 ? null : Math.max(...status) };
+  return { runAt: a.runAt, mailAt: a.mailAt, statusAt: status.length === 0 ? null : Math.max(...status), holdAt };
+}
+
+/** The hold file's write time in epoch ms, or `null` when it cannot be told (the stat failed, or answered a non-finite
+ *  time): a hold whose age is unknown keeps its child. */
+export async function readStaleHoldAt(io: Pick<FleetIO, 'statMeasured'>, registryDir: string, id: string): Promise<number | null> {
+  const r = await io.statMeasured(path.join(registryDir, `${id}.hold`));
+  return r.ok && Number.isFinite(r.mtimeMs) ? r.mtimeMs : null;
 }
 
 /** What the lane hands `judge` for one marked child. */
 export interface ChildStaleJudgement {
   readonly coord: Pick<CoordStore, 'childStaleActivity' | 'recordFeedEvent'>;
   readonly record: SessionRecord;
-  /** The hold file's raw bytes (`readStaleHoldBytes`), `null` when not read or not known. */
-  readonly holdBytes: string | null;
+  /** Reads the hold file's raw bytes and write time, called only once the word is `held`, the box proves the flag and
+   *  the server's own idle evidence has passed the ceiling (a remote fleet pays one round trip per held child, not per pass). */
+  readonly readHold: () => Promise<{ readonly bytes: string | null; readonly atMs: number | null }>;
   readonly input: ChildReclaimSweepInput;
   readonly verdict: ChildReclaimSweepVerdict;
   /** The registry listing this pass took, which the arm's switch is read from. */
@@ -78,17 +91,23 @@ export class ChildStaleArm {
 
   /** The ask for this child this pass, or `null`: not stale, the box cannot take the flag, the arm is shadowed (the
    *  row is written once), or a terminal child was asked within the last seven days. */
-  judge(j: ChildStaleJudgement): (ChildStaleAsk & { readonly runId: number }) | null {
+  async judge(j: ChildStaleJudgement): Promise<(ChildStaleAsk & { readonly runId: number }) | null> {
     const id = j.record.id;
     const word = childReclaimStaleWordOf(j.verdict);
     if (word === null) { this.forget(id); return null; }
     // A box that does not prove the flag is not sent it, and is not told "would" either: it could not.
     if (!capSupported(j.fleetState, RECLAIM_STALE_CAP)) return null;
-    const i: ChildReclaimSweepInput = {
-      ...j.input,
-      idle: j.input.child.kind === 'child' ? childStaleIdleOf(j.coord, j.record, j.input.child.runId) : 'unmeasured',
-      holdDigest: childStaleHoldDigest(j.holdBytes),
-    };
+    const runId = j.input.child.kind === 'child' ? j.input.child.runId : null;
+    const idleWith = (holdAt: number | null): ChildStaleIdleRead => runId === null ? 'unmeasured' : childStaleIdleOf(j.coord, j.record, runId, holdAt);
+    let i: ChildReclaimSweepInput = { ...j.input, idle: idleWith(null), holdDigest: null };
+    if (word === 'held') {
+      // First on the server's own evidence, with a stand-in digest: no hold is read for a child that is not past the ceiling.
+      if (!childReclaimStaleVerdict({ ...i, holdDigest: PENDING_DIGEST }, j.verdict).stale) { this.forget(id); return null; }
+      const hold = await j.readHold();
+      // A hold whose bytes or write time cannot be told keeps the child; writing or renewing a hold is activity.
+      if (hold.bytes === null || hold.atMs === null) return null;
+      i = { ...i, idle: idleWith(hold.atMs), holdDigest: childStaleHoldDigest(hold.bytes) };
+    }
     const v = childReclaimStaleVerdict(i, j.verdict);
     if (!v.stale) { this.forget(id); return null; }
     if (readSwitches(j.names)[CHILD_STALE_RECLAIM_LIVE_MARKER] !== 'set') {
