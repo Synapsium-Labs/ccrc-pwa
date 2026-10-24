@@ -11589,10 +11589,12 @@ elif mode == 'final':
 PY
 }
 
-_pr_landing_rules() {   # project repo base -> the rules document, ONE JSON line, always
+_pr_landing_rules() {   # project repo base [rest] -> the rules document, ONE JSON line, always
   # Cache hit: no gh call. Miss: the rules read (`rules/branches/<base>`) and the public branch view
   # (`branches/<base>`), each under its own timeout, both plain GETs. A read failure is a miss and is never cached.
-  local project="$1" repo="$2" base="$3" cache got r="" p="" enc="_"
+  # A fourth argument of `0` forbids the REST reads: a miss then answers rules-unread (nothing cached), so the caller
+  # can keep one call's worst path at 6 + 4 + 4 s whatever number of bases are bound.
+  local project="$1" repo="$2" base="$3" rest="${4:-1}" cache got r="" p="" enc="_"
   # One cache file per project and base (the base's slashes encoded, so the name stays one path component); a base
   # outside the allowed spelling makes no REST call, writes nothing, and shares the `_` name only as a miss.
   [[ "$base" =~ ^[A-Za-z0-9._/-]+$ && "$base" != -* ]] && enc="${base//\//%2F}"
@@ -11600,13 +11602,20 @@ _pr_landing_rules() {   # project repo base -> the rules document, ONE JSON line
   if got=$(_pr_landing_py cache-get "$cache" "$base" "$PR_LANDING_RULES_TTL" 2>/dev/null) && [[ -n "$got" ]]; then
     printf '%s\n' "$got"; return 0
   fi
-  if [[ "$base" =~ ^[A-Za-z0-9._/-]+$ && "$base" != -* ]]; then
+  if [[ "$rest" == 1 && "$base" =~ ^[A-Za-z0-9._/-]+$ && "$base" != -* ]]; then
     r=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/rules/branches/$enc" 2>/dev/null) || r=""
     p=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/branches/$enc" 2>/dev/null) || p=""
     r=$(_pr_landing_py names-rules 4<<<"$r" 2>/dev/null) || r=""
     p=$(_pr_landing_py names-protection 4<<<"$p" 2>/dev/null) || p=""
   fi
   _pr_landing_py cache-put "$cache" "$base" 4<<<"$r" 5<<<"$p"
+}
+
+_pr_landing_rules_cached() {   # project base -> 0 when a fresh cache file answers that base (no gh call needed)
+  local enc="_" cache
+  [[ "$2" =~ ^[A-Za-z0-9._/-]+$ && "$2" != -* ]] && enc="${2//\//%2F}"
+  cache="$REG/pr-landing/$1.rules.$enc.json"
+  [[ -n "$(_pr_landing_py cache-get "$cache" "$2" "$PR_LANDING_RULES_TTL" 2>/dev/null)" ]]
 }
 
 cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<pr>…]
@@ -11671,9 +11680,18 @@ cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<
 
   # THE RULES, only when someone bound (a GraphQL failure or an all-unbound call makes no REST call).
   # once per DISTINCT base among the bound sessions (stacked work binds to other bases), one document per line.
-  local rules="" rb
+  # REST reads go to at most ONE uncached base per call (worst path 6 + 4 + 4 s, inside the runner's bound); any
+  # further uncached base answers rules-unread, so its sessions read unmeasured this pass and the next pass finds the
+  # cache filled for the base read here.
+  local rules="" rb rest=1 doc1 hit
   while IFS= read -r rb; do
-    [[ -z "$rb" ]] || rules+="$(_pr_landing_rules "$project" "$repo" "$rb")"$'\n'
+    [[ -n "$rb" ]] || continue
+    # a miss that is allowed to read spends the one REST budget (cache hits never do); decided BEFORE the read, since
+    # the read itself fills the cache
+    hit=0; _pr_landing_rules_cached "$project" "$rb" && hit=1
+    doc1=$(_pr_landing_rules "$project" "$repo" "$rb" "$rest")
+    rules+="$doc1"$'\n'
+    (( hit == 1 )) || rest=0
   done <<< "$bases"
   _pr_landing_py final "$k" 4<<<"$answer" 5<<<"$facts" 6<<<"$rules"
 }

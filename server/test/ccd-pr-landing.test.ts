@@ -456,7 +456,7 @@ describe('the rules cache', () => {
     expect(fs.existsSync(cachePath())).toBe(false);
   });
 
-  it('the rules are read once per distinct base, each cached in its own file', () => {
+  it('REST reads go to at most one uncached base per call; the next pass fills the other', () => {
     const t0 = workspace('demo', 'quiet-basin');
     const t1 = second('demo', 'tall-fern');
     h.git(path.join(h.home, 'projects', 'demo'), 'branch', 'release', 'HEAD');
@@ -465,13 +465,17 @@ describe('the rules cache', () => {
     put('rules-main.json', [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'lint' }] } }]);
     put('rules-release.json', [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'e2e' }] } }]);
     put('branch.json', { protected: false });
-    const lines = landing('demo', 'demo-quiet-basin:41,demo-tall-fern:42').lines;
-    expect(restCalls().map((c) => c[1]).sort()).toEqual([
-      'repos/o/r/branches/main', 'repos/o/r/branches/release', 'repos/o/r/rules/branches/main', 'repos/o/r/rules/branches/release']);
-    expect(lines.map((l) => l.rulesNamed)).toEqual([['lint'], ['e2e']]);
-    expect(lines.map((l) => l.unmeasured)).toEqual([[], []]);
+    const first = landing('demo', 'demo-quiet-basin:41,demo-tall-fern:42').lines;
+    expect(restCalls().map((c) => c[1]).sort()).toEqual(['repos/o/r/branches/main', 'repos/o/r/rules/branches/main']);
+    expect(first.map((l) => l.rulesNamed)).toEqual([['lint'], []]);
+    expect(first.map((l) => l.unmeasured)).toEqual([[], ['rules', 'protection']]);
     expect(fs.existsSync(cachePath())).toBe(true);
-    expect(fs.existsSync(cachePath().replace('main', 'release'))).toBe(true);
+    expect(fs.existsSync(cachePath().replace('main', 'release'))).toBe(false);
+    fs.rmSync(path.join(h.home, 'gh-landing.log'));
+    const second2 = landing('demo', 'demo-quiet-basin:41,demo-tall-fern:42').lines;
+    expect(restCalls().map((c) => c[1]).sort()).toEqual(['repos/o/r/branches/release', 'repos/o/r/rules/branches/release']);
+    expect(second2.map((l) => l.rulesNamed)).toEqual([['lint'], ['e2e']]);
+    expect(second2.map((l) => l.unmeasured)).toEqual([[], []]);
     fs.rmSync(path.join(h.home, 'gh-landing.log'));
     expect(landing('demo', 'demo-quiet-basin:41,demo-tall-fern:42').lines.map((l) => l.rulesNamed)).toEqual([['lint'], ['e2e']]);
     expect(restCalls()).toEqual([]);
