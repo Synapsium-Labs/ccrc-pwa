@@ -293,6 +293,7 @@ describe('the refusal vocabulary', () => {
       facts(ask, { reg: { effort: ok('ultracode') } }),
       facts(worker({ by: 'demote', field: 'effort' }), { reg: { effort: ok('low') } }),
       facts(worker({ by: 'kind', kind: 'ceiling' }), { reg: { class: ok('opus'), degraded: ok('sonnet') } }),
+      facts(worker({ by: 'manual', field: 'class', value: 'fable' })),
     ];
     for (const c of cases) { const d = await decideRoute(c.facts); if (!d.ok) asked.add(d.refused); }
     const extra = new Set(['run-unreadable', 'unknown-run', 'unsupported']);
