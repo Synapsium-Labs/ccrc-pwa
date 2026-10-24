@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6df9835f581c0ca39a2db06c8c0593d4d8df25304e53bf5b22c4472ed3d4e0e1
+# ccrc:generated 1 sha256=cb0078d7290588c3a8e62a662cca77140d181a3f1fe5e14359426c154ed00aac
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -9,7 +9,7 @@
 set -uo pipefail
 
 # ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
-# A direct `ws-reclaim`, `ws-expire` or `ws-collect`, or a direct `ws-audit --session <id>
+# A direct `ws-reclaim`, `ws-expire`, `ws-collect` or `ws-orphan`, or a direct `ws-audit --session <id>
 # --reclaim [--defer-expired]`, `… --expire` or `… --collect`, runs under Bash >= 4.4 PRIVILEGED with
 # no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
 # rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
@@ -24,7 +24,7 @@ set -uo pipefail
 # inherited `nocasematch` folds here starts PROTECTED, `-p` drops that option, and
 # this guard and the dispatcher compare exactly again. SOURCE MODE never runs this;
 # the launcher classifies a superset of these shapes; the dispatcher owns every tail.
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect ]] \
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan ]] \
      || { [[ $# -eq 4 || $# -eq 5 ]] && [[ "${1-}" == ws-audit && "${2-}" == --session && ( "${4-}" == --reclaim || ( $# -eq 4 && ( "${4-}" == --expire || "${4-}" == --collect ) ) ) ]] \
           && [[ $# -eq 4 || "${5-}" == --defer-expired ]]; }; }; then
   if ! (( BASH_VERSINFO[0] > 4 || ( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4 ) )) || [[ $- != *p* ]]; then
@@ -6473,14 +6473,16 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # lowers contention and is never a gate, so two retries holding two inodes is
 # two retries running at once, each with every refusal intact.
 #
-# NOT reachable this way, and this set IS the boundary — THIRTEEN dot-prefixed
-# artifacts live under `$REG`; the six above are reachable, these seven are
+# NOT reachable this way, and this set IS the boundary — FOURTEEN dot-prefixed
+# artifacts live under `$REG`; the six above are reachable, these eight are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The seven: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The eight: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# `$REG/.orphan-<sha16>.lock` (DR-17, D-6629: `ccd ws-orphan`'s per-tree lock; its suffix is the sha16 of a PATH, not
+# a `<project>-<slug>` id, so no `_reg_purge` glob can match it);
 # `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
 # exactly this reason; see the LC-BEGIN block, and note that its generations,
 # `errors` and `.rotate.lock` are counted WITH it, as `.reaped/`'s tombstones
@@ -8865,7 +8867,7 @@ EOF
   echo child-argv-v1
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
-  echo reclaim-pause-v1; echo expire-v1; echo ws-expire; echo collect-v1; echo ws-collect   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
+  echo reclaim-pause-v1; echo expire-v1; echo ws-expire; echo collect-v1; echo ws-collect; echo orphan-v1; echo ws-orphan   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
   echo docs-tree
   echo docs-show
   echo docs-fetch
@@ -13530,7 +13532,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   fi
 }
 
-_ws_attic_pin() {   # main id workdir tip -> echoes how many refs were created
+_ws_attic_pin() {   # main id workdir tip [reflog-scope, default --all] -> echoes how many refs were created
   # Every distinct sha in the worktree's HEAD reflog, deduped and capped, plus
   # the tip. ~50 bytes each, no new objects, and the commits become REFERENCED
   # rather than dangling — so gc.pruneExpire can never reach them.
@@ -13575,12 +13577,17 @@ _ws_attic_pin() {   # main id workdir tip -> echoes how many refs were created
   # exist. The cap's own MAGNITUDE — 200 rather than 20 — remains unpinned:
   # bounding it costs a fixture with 200 resolvable commits in it, and the
   # fixture above pins where the cap is applied without paying for how big it is.
-  local main="$1" id="$2" workdir="$3" tip="$4" sha n=0
+  # The fifth argument is the reflog scope: `--all` (reclaim, unchanged) or `HEAD`
+  # (the orphan rescue, which must pin the tree's OWN history, not every reflog
+  # of the shared repository that a 200-cap would then fill with foreign shas).
+  # The sixth argument is the cap (default 200; 0 = uncapped, which the orphan rescue
+  # uses so a long reflog is pinned whole and the caller can demand n == its own count).
+  local main="$1" id="$2" workdir="$3" tip="$4" scope="${5:---all}" cap="${6:-200}" sha n=0
   while read -r sha; do
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
     git -C "$main" cat-file -e "${sha}^{commit}" 2>/dev/null || continue
     git -C "$main" update-ref "refs/ccrc/attic/$id/$sha" "$sha" 2>/dev/null && n=$(( n + 1 ))
-  done < <( { [[ -d "$workdir" ]] && git -C "$workdir" reflog show --all --format=%H 2>/dev/null | sort -u | head -200; \
+  done < <( { [[ -d "$workdir" ]] && git -C "$workdir" reflog show "$scope" --format=%H 2>/dev/null | sort -u | awk -v c="$cap" 'c == 0 || NR <= c'; \
               printf '%s\n' "$tip"; } | sort -u )
   echo "$n"
 }
@@ -16084,7 +16091,7 @@ WS_ORPHAN_FLOOR_PRESSURE_S=259200   # 3 days under `_disk_pressure` (spec §2.5.
 WS_ORPHAN_CENSUS_ROWS=4096; WS_ORPHAN_CENSUS_S=60
 _WS_ORPHAN_WORD=''; _WS_ORPHAN_WHY=''; _WS_ORPHAN_BRANCH=''; _WS_ORPHAN_HEAD=''; _WS_ORPHAN_VERDICT=''
 _WS_ORPHAN_CLASS=''; _WS_ORPHAN_MAIN=''; _WS_ORPHAN_TOKEN=''; _WS_ORPHAN_RESCUE=''
-_WS_ORPHAN_NEWEST=''; _WS_ORPHAN_ENTRIES=''; _WS_ORPHAN_FLOOR=''
+_WS_ORPHAN_NEWEST=''; _WS_ORPHAN_ENTRIES=''; _WS_ORPHAN_FLOOR=''; _WS_ORPHAN_TREE=''
 
 _ws_orphan_hex() { LC_ALL=C od -An -v -tx1 | tr -d ' \n'; }   # stdin -> lowercase hex
 _ws_orphan_unhex() {   # hex -> the path on stdout; rc 1 when it is not an even run of hex, or holds a NUL or a newline
@@ -16174,12 +16181,9 @@ _ws_orphan_registered() {   # tree sp class project slug -> 0 no registry row na
   return 0
 }
 
-_ws_orphan_tail() {   # tree sp -> rungs 10 to 14, in order; 0 all pass, else _ws_orphan_refuse's word and rc 1
-  local p="$1" sp="$2" rc=0 i now secs floor="$WS_ORPHAN_FLOOR_S"
+_ws_orphan_holders() {   # tree sp -> rung 12: 0 nobody holds it; 1 with _ws_orphan_refuse's in-use or unmeasured word
+  local p="$1" sp="$2" rc=0 i
   local -a say=("$p")
-  _ws_orphan_rung secrets "$p" || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; }
-  _ws_orphan_rung nested "$p"  || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; }
-  # rung 12: the holder probe, both spellings; and #1132's working-directory question, which this probe does not repeat
   [[ "$sp" == "$p" ]] || say+=("$sp")
   _ws_path_users_many "${say[@]}"
   for i in "${!say[@]}"; do
@@ -16195,6 +16199,14 @@ _ws_orphan_tail() {   # tree sp -> rungs 10 to 14, in order; 0 all pass, else _w
     1) _ws_orphan_refuse in-use "$_WS_CWD_USERS_WHY"; return 1 ;;
     *) _ws_orphan_refuse unmeasured "$_WS_CWD_USERS_WHY"; return 1 ;;
   esac
+  return 0
+}
+
+_ws_orphan_tail() {   # tree sp -> rungs 10 to 14, in order; 0 all pass, else _ws_orphan_refuse's word and rc 1
+  local p="$1" sp="$2" now secs floor="$WS_ORPHAN_FLOOR_S"
+  _ws_orphan_rung secrets "$p" || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; }
+  _ws_orphan_rung nested "$p"  || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; }
+  _ws_orphan_holders "$p" "$sp" || return 1   # rung 12: the holder probe, one definition the verb asks again nearest the act
   # rung 13: the newest ctime of every entry, the `.git` file included
   if declare -F _disk_pressure >/dev/null 2>&1 && _disk_pressure "$sp"; then floor="$WS_ORPHAN_FLOOR_PRESSURE_S"; fi
   _ws_collect_idle "$sp" || { _ws_orphan_refuse unmeasured "$_WS_IDLE_DETAIL"; return 1; }
@@ -16227,7 +16239,7 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
     done < <(_ws_orphan_stanzas "$m")
   done
   [[ -n "$sp" ]] || { _ws_orphan_refuse not-a-worktree "no worktree list of a project names $p"; return 1; }
-  slug=$(basename "$sp")
+  slug=$(basename "$sp"); _WS_ORPHAN_TREE="$sp"
   # 2: scope
   cls=$(_ws_orphan_class "$sp" "$_WS_ORPHAN_MAIN" "$wsroot" "$pj"); _WS_ORPHAN_CLASS="$cls"
   [[ "$cls" != other ]] || { _ws_orphan_refuse out-of-scope "$sp is neither under the ccd worktree root nor a claude or superpowers worktree"; return 1; }
@@ -16341,6 +16353,103 @@ _ws_orphan_audit() {   # ccd ws-audit --orphan-hex <hex> -> ONE JSON document; e
     return 1
   fi
   return 0
+}
+
+# ── ws-orphan: the destructive verb (DR-17, D-6629, spec §2.3, §2.6.2) ──────────────────────────────────────────
+# THE SERVER'S ACT, composed by the server and by nothing else (CLAUDE.md SAFETY). The token `ws-audit --orphan-hex`
+# minted must equal the one the SAME ladder recomputes here, inside `$REG/.orphan-<sha16>.lock`. stdout is ONE JSON
+# line: `{"removed":true,…}`, a refusal at exit 0, or `{"failed":…}` at exit 1. `git worktree remove` is never given
+# `--force` and the branch only ever `-d`: git's own refusals are the last rung.
+_ws_orphan_gap() { :; }   # a test seam between the steps, as `_ws_collect_gap` is the collector's
+_ws_orphan_refused() {   # id tx word detail -> journaled (closing the intent when tx is set) and printed; rc 0
+  local d; d=$(_ws_leaf_why_line "$4")
+  _lc_emit destroy refused "$1" "$2" verb ws-orphan refusal "$3" detail "$d" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  printf '{"refused":%s,"detail":%s,"paths":[]}\n' "$(_json_str "$3")" "$(_json_str "$d")"
+  return 0
+}
+_ws_orphan_failed() {   # id tx word detail -> the post-start failure, journaled and printed from one detail; rc 1
+  local d; d=$(_ws_leaf_why_line "$4")
+  _lc_fail destroy "$1" "$2" "$3" "$d" verb ws-orphan dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  printf '{"failed":%s,"detail":%s}\n' "$(_json_str "$3")" "$(_json_str "$d")"
+  return 1
+}
+
+_ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s16, p and the decision words are cmd_ws_orphan's)
+  local tok="$1" rescue="$2" want sp m cls br head tx n=0 err bres=left want_n sha
+  _ws_orphan_ladder "$p" || :
+  [[ "$_WS_ORPHAN_VERDICT" != unmeasured ]] || { _ws_orphan_failed "$id" "" probe-unmeasured "nothing was removed: $_WS_ORPHAN_WHY"; return 1; }
+  want="$_WS_ORPHAN_TOKEN"
+  if (( rescue )); then
+    if [[ -n "$_WS_ORPHAN_RESCUE" ]]; then want="$_WS_ORPHAN_RESCUE"
+    elif [[ -n "$_WS_ORPHAN_TOKEN" ]]; then _ws_orphan_refused "$id" "" no-rescue-token "--rescue was given for a tree that needs no rescue; nothing was pinned or removed"; return 0
+    fi
+  elif [[ -n "$_WS_ORPHAN_RESCUE" ]]; then
+    _ws_orphan_refused "$id" "" head-not-on-remote "$_WS_ORPHAN_WHY; only --rescue with a rescue token may take it"; return 0
+  fi
+  if [[ -z "$want" ]]; then
+    case "$_WS_ORPHAN_WORD" in
+      paused|in-use) _ws_orphan_refused "$id" "" "$_WS_ORPHAN_WORD" "nothing was removed: $_WS_ORPHAN_WHY" ;;
+      *) _ws_orphan_refused "$id" "" state-changed "nothing was removed: the tree no longer passes the audit that minted the token ($_WS_ORPHAN_WORD: $_WS_ORPHAN_WHY)" ;;
+    esac
+    return 0
+  fi
+  [[ "$tok" == "$want" ]] || { _ws_orphan_refused "$id" "" state-changed "nothing was removed: the tree changed since the audit that minted the token"; return 0; }
+  sp="$_WS_ORPHAN_TREE"; m="$_WS_ORPHAN_MAIN"; cls="$_WS_ORPHAN_CLASS"; br="$_WS_ORPHAN_BRANCH"; head="$_WS_ORPHAN_HEAD"
+  _ws_orphan_gap recomputed
+  tx=$(_lc_tx)
+  _lc_intent destroy "$id" "$tx" verb ws-orphan meas.mode "$cls" meas.state "$( ((rescue)) && echo rescue || echo plain)" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  if (( rescue )); then   # the pin first: a failed pin stops the act with the tree whole
+    want_n=$({ git -C "$p" reflog show HEAD --format=%H 2>/dev/null; printf '%s\n' "$head"; } | sort -u \
+      | while read -r sha; do [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && git -C "$m" cat-file -e "${sha}^{commit}" 2>/dev/null && echo x; done | wc -l | tr -d ' ')
+    n=$(_ws_attic_pin "$m" "orphan/$s16" "$p" "$head" HEAD 0)
+    { [[ "$n" =~ ^[1-9][0-9]*$ && "$n" == "$want_n" ]] && git -C "$m" rev-parse --verify --quiet "refs/ccrc/attic/orphan/$s16/$head" >/dev/null 2>&1; } \
+      || { _ws_orphan_failed "$id" "$tx" pin-failed "nothing was removed: HEAD of $p could not be pinned under refs/ccrc/attic/orphan/$s16/"; return 1; }
+  fi
+  _ws_orphan_gap pinned
+  if ! _ws_orphan_holders "$p" "$sp"; then   # the holder, asked once more nearest the act
+    if [[ "$_WS_ORPHAN_VERDICT" == unmeasured ]]; then _ws_orphan_failed "$id" "$tx" probe-unmeasured "nothing was removed: $_WS_ORPHAN_WHY"; return 1; fi
+    _ws_orphan_refused "$id" "$tx" "$_WS_ORPHAN_WORD" "nothing was removed: $_WS_ORPHAN_WHY"; return 0
+  fi
+  err=$(git -C "$m" worktree remove -- "$p" 2>&1) && [[ ! -e "$p" ]] \
+    || { _ws_orphan_failed "$id" "$tx" worktree-remove-failed "git did not remove $p, and it is left as it stands: ${err:-the directory still stands}"; return 1; }
+  if [[ "$cls" == ccd-root && "$br" != detached && -n "$br" ]]; then   # a ccd-root tree's branch is ours; -d only, never -D
+    if git -C "$m" branch -d -- "$br" >/dev/null 2>&1; then bres=deleted; else bres=branch-kept; fi
+  fi
+  _lc_done destroy "$id" "$tx" verb ws-orphan meas.mode "$cls" meas.branch "$bres" meas.attic "$( ((rescue)) && echo "$n")" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  printf '{"removed":true,"pathHex":%s,"class":%s,"branch":%s,"pinned":%s}\n' "$(_json_str "$(printf '%s' "$p" | _ws_orphan_hex)")" "$(_json_str "$cls")" "$(_json_str "$bres")" "$n"
+}
+
+cmd_ws_orphan() {   # ccd ws-orphan --expect <token> --tree-hex <hex> [--rescue] [--surface <word>] [--actor <text>] [--reason <text>]
+  local U='usage: ccd ws-orphan --expect <token> --tree-hex <hex> [--rescue] [--surface <word>] [--actor <text>] [--reason <text>]'
+  local lc_surface=none lc_actor='' lc_reason='' gs=0 ga=0 gr=0 token='' hex='' rescue=0 w
+  while (( $# )); do
+    case "$1" in
+      --expect)   [[ $# -ge 2 && -z "$token" ]] || die "$U"; token="$2"; shift 2 ;;
+      --tree-hex) [[ $# -ge 2 && -z "$hex" ]] || die "$U"; hex="$2"; shift 2 ;;
+      --rescue)   (( ! rescue )) || die "$U"; rescue=1; shift ;;
+      --surface)  [[ $# -ge 2 ]] || die "$U"; gs=1; lc_surface="$2"; shift 2 ;;
+      --actor)    [[ $# -ge 2 ]] || die "$U"; ga=1; lc_actor="$2"; shift 2 ;;
+      --reason)   [[ $# -ge 2 ]] || die "$U"; gr=1; lc_reason="$2"; shift 2 ;;
+      *)          die "$U" ;;
+    esac
+  done
+  if (( gs )); then w=$(_lc_surface_norm "$lc_surface"); lc_surface=${w:-unknown}; fi
+  if (( ga )); then [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"; _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"; fi
+  if (( gr )); then [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"; _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"; fi
+  [[ -n "$token" && -n "$hex" ]] || die "$U"
+  [[ $token =~ ^[0-9a-f]{64}$ ]] || die "bad token"
+  _json_str probe >/dev/null 2>&1 || die "python3 unavailable — cannot quote the record safely"
+  local p; p=$(_ws_orphan_unhex "$hex") && [[ "$p" == /?* ]] || die "bad tree hex"
+  local s16 id; s16=$(printf '%s' "$p" | _plat_sha256 | cut -d' ' -f1 | cut -c1-16); id="orphan-$s16"
+  # no lock is opened for a path that is not one plain directory: the lock files are never removed
+  [[ -d "$p" && ! -L "$p" ]] || { _ws_orphan_refused "$id" "" not-a-worktree "$p is not one plain real directory; no lock was taken"; return 0; }
+  command -v flock >/dev/null 2>&1 || _lc_refuse destroy "$id" flock-unavailable "flock (util-linux) is unavailable — refusing to run the destructive verb unserialised"
+  local lfd rc=0
+  exec {lfd}>>"$REG/.orphan-$s16.lock" || _lc_refuse destroy "$id" lock-unopenable "cannot open the orphan lock at $REG/.orphan-$s16.lock"
+  flock -n "$lfd" || { exec {lfd}>&-; _ws_orphan_refused "$id" "" locked-elsewhere "another ccd process holds the orphan lock for $p"; return 0; }
+  _ws_reclaim_contained _ws_orphan_locked "$token" "$rescue"; rc=$?
+  exec {lfd}>&-
+  return "$rc"
 }
 
 cmd_ws_gc() {   # [--prune | --fast]
@@ -43925,6 +44034,7 @@ case "${1:-}" in
   ws-reclaim) shift; cmd_ws_reclaim "$@" ;;
   ws-expire) shift; cmd_ws_expire "$@" ;;
   ws-collect) shift; cmd_ws_collect "$@" ;;
+  ws-orphan)  shift; cmd_ws_orphan "$@" ;;
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   ws-title)   shift; cmd_ws_title "$@" ;;
@@ -43941,6 +44051,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi
