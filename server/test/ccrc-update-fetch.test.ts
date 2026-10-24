@@ -1262,6 +1262,8 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     ['clear screen, cursor home, a title set and an OSC 52 write', `${CLEAR}${HOME_CURSOR}${TITLE}${OSC52}`, '?[2J?[H?]0'],
     ['a title set alone', TITLE, '?]0;title?'],
     ['an OSC 52 clipboard write alone', OSC52, '?]52;c;aGVsbG8=?'],
+    // Not only C0: DEL, a C1 CSI (two UTF-8 bytes) and a multibyte letter are each outside printable ASCII too.
+    ['a DEL, a C1 CSI and a multibyte letter', '\x7f\u009béx', '"?????x"'],
   ])('a hostile bundle (%s) is refused by the real verifier, and its refusal line carries no raw escape byte (D-6842)', (_what, line, shown) => {
     const home = freshUpdateBox('ccrc-update-prov-escape-');
     plantOldBox(home, { version: 'v1.0.0' });

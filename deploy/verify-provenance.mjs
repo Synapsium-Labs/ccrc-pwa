@@ -69,7 +69,7 @@ function usage(code) {
 // quotes the bad bundle line), so every byte of its UTF-8 outside printable
 // ASCII, newlines included, is written as `?`: one line, no escape sequence.
 // The verifier's own sentences are spelled in ASCII, so the rule costs them
-// nothing.
+// nothing (D-6843).
 function refuse(why) {
   why = Buffer.from(String(why), 'utf8').toString('latin1').replace(/[^\x20-\x7e]/g, '?');
   process.stderr.write(`verify-provenance: ${why}\n`);
