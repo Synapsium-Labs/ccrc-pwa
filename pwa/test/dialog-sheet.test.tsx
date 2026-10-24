@@ -2934,7 +2934,7 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
   });
 
   it('Deny, the quiet way out, looks disabled while it is (the reconnect gap disables it)', () => {
-    // D-6325 (review 844 M1): every control the gap disables wears a disabled look; `.dlg-later` had none, so a disabled Deny
+    // D-6325 (fix round 2's own review, M1): every control the gap disables wears a disabled look; `.dlg-later` had none, so a disabled Deny
     // looked live. Tertiary ink and the default cursor, as `.dlg-reply-send:disabled` and `.ask-tab:disabled` have.
     expect(rule('.dlg-later:disabled')).toMatch(/color:\s*var\(--ink-tertiary\)/);
     expect(rule('.dlg-later:disabled')).toMatch(/cursor:\s*default/);

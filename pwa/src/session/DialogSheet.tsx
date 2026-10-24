@@ -216,7 +216,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   const useStore = store ?? getSessionStore(id);
   const storeDialog = useStore((s) => s.dialog);
   /** Decision `ask-answer-returns-next-screen`: an answer route's `next`, into the store (`applyAnswered`). */
-  // D-6325 (review 844 I1): not while the connection has not spoken. The store's `dialog` is null in the gap, which
+  // D-6325 (fix round 2's own review, I1): not while the connection has not spoken. The store's `dialog` is null in the gap, which
   // `applyAnswered` reads as "nothing newer is held" and would write the reply's `next` into it: the old connection's
   // evidence, which a new stream that frames no menu would then be decided from. The new stream frames the current menu itself.
   const applyAnswered = (answeredId: string, next: Dialog | null): void => {
