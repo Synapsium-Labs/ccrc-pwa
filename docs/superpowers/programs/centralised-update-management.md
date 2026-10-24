@@ -6024,6 +6024,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
 - **2026-10-24 14:25 UTC — monitoring: v0.0.623 released; boxes stay on v0.0.619, no anomalies.** No file of the delegation
   lane changes in it. `STATUS 2026-10-24T14:25:41Z fleet=v0.0.619 server=v0.0.619 health=v0.0.619 newest=v0.0.623`
   `intent=*:dev/auto=off backups=fleet:221M/server:8170M disk=fleet:93G/server:22G`
+- **2026-10-24 16:25 UTC — monitoring: both boxes moved to v0.0.624 by the operator's console tap; settled, no anomalies.**
+  The fleet half ran 14:58:34 to `done` at 14:59:46, the server half from 15:00:03 to `done` at 15:07:46, with the service
+  restarted at 15:03:08. The keep of five held: three backups with data and two thinned. v0.0.624 changes `watch.ts` (#1200,
+  the lane runner for the caps, catalogue, inventory and server-caps beats; no delegation hunk). It was released at 14:43
+  and tapped within the hour, so the broker's soak heard of it after the tap, and of v0.0.625's orphan-tree lane before
+  any. Its coordinator ruled that neither restarts the clock. v0.0.625 to v0.0.627 were released meanwhile.
+  `STATUS 2026-10-24T16:25:39Z fleet=v0.0.624 server=v0.0.624 health=v0.0.624 newest=v0.0.627 intent=*:dev/auto=off`
+  `backups=fleet:222M/server:8318M disk=fleet:93G/server:22G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
