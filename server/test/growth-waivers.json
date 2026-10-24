@@ -45,9 +45,9 @@
     },
     {
       "file": "ccd/ccd",
-      "maxDelta": 310,
+      "maxDelta": 325,
       "d": "D-6773",
-      "reason": "PR-landing stage 1 PL-1: the read-only pr-landing verb (the per-alias GraphQL builder, the python reader with its rules cache per base, and the _pr_bind_facts extraction) in ccd/ccd (measured +306 net code lines against the merge-base)",
+      "reason": "PR-landing stage 1 PL-1: the read-only pr-landing verb (the per-alias GraphQL builder, the python reader with its rules cache per base, and the _pr_bind_facts extraction) in ccd/ccd (measured +323 net code lines against the merge-base)",
       "added": "2026-10-24"
     }
   ]
