@@ -19,7 +19,8 @@
 //     `openApp` takes `touch`.
 //
 // The card check below is refined-bar.browser.test.ts's, rewritten and not imported: that file is a test file (its
-// `beforeAll` builds the app), and it keeps the check inline.
+// `beforeAll` builds the app), and it keeps the check inline. The lanes row's own layout, and the update row under it
+// at length, are lanes-row.browser.test.ts's.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/update-indicator.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -167,14 +168,21 @@ async function lineFaults(page: Page, holderSel: string, barSel: string | null, 
       const fresh = bar.querySelector<HTMLElement>('.ref-bar-new');
       if (fresh === null) out.push('no New session');
       else inside('New session', fresh.getBoundingClientRect(), bb, 'the bar');
-      // The lanes row under the line (T2c, D-6329): every card whole inside the row, its readings whole.
+      // The lanes row (T2c, D-6329) is in the header under the bar's line and above the update row, every one of the
+      // seventeen cards whole inside it with its readings whole; the update row is under the header, never over it.
       const row = bar.querySelector<HTMLElement>('.accounts-strip');
-      if (row !== null) {
+      const line = bar.querySelector<HTMLElement>('.ref-bar');
+      if (row === null || line === null) out.push('no lanes row or bar line in the header');
+      else {
         const r = row.getBoundingClientRect();
-        for (const g of row.querySelectorAll<HTMLElement>('.account-gauge')) {
+        if (r.top < line.getBoundingClientRect().bottom - 0.5) out.push("the lanes row is not under the bar's line");
+        if (r.bottom > hb.top + 0.5) out.push(`the lanes row (bottom ${r.bottom}) runs over the update row (top ${hb.top})`);
+        const cards = row.querySelectorAll<HTMLElement>('.account-gauge');
+        if (cards.length !== 17) out.push(`${cards.length} cards, not 17`);
+        for (const g of cards) {
           const gr = g.getBoundingClientRect();
           const name = g.querySelector<HTMLElement>('.account-gauge-label')!.textContent;
-          if (gr.right > r.right + 0.5) out.push(`${name} sticks out of the row (${gr.right} > ${r.right})`);
+          if (gr.left < r.left - 0.5 || gr.right > r.right + 0.5) out.push(`${name} sticks out of the row (${gr.left}..${gr.right} in ${r.left}..${r.right})`);
           for (const pct of g.querySelectorAll<HTMLElement>('.acct-pct')) {
             if (pct.getBoundingClientRect().right > gr.right + 0.5 || pct.scrollWidth > pct.clientWidth + 0.5) out.push(`${name}'s ${pct.textContent} is cut`);
           }
@@ -207,7 +215,7 @@ describe("at the desk the bar's first line is unchanged and the update line is o
         const holder = refined ? ROW : STATUS_BAR;
         const bar = refined ? BAR : null;
         await page.waitForSelector(`${holder} .update-indicator-dismiss`, { timeout: 20_000 });
-        if (refined) await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length > 0, undefined, { timeout: 20_000 });
+        if (refined) await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 17, undefined, { timeout: 20_000 });
         await page.waitForTimeout(300); // layout settles
         const fresh = await lineFaults(page, holder, bar, false);
         expect(fresh.faults, 'a fresh view').toEqual([]);
