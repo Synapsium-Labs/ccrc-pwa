@@ -2254,6 +2254,11 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
 }
+/* A lane arrived at from a card (`/accounts?lane=<id>`): the screen scrolls it into view and focuses it by script, so
+   the row is a focus target with no ring of its own (tabindex -1, never a tab stop), and the one quiet edge says which
+   row the card meant. An inset shadow on the row's own ground, not a border: it moves no layout and adds no ink. */
+.accounts-row[tabindex="-1"]:focus { outline: none; }
+.accounts-row[data-arrived] { box-shadow: inset 2px 0 0 var(--accent); }
 .accounts-row-head { display: flex; align-items: center; gap: var(--sp-2); }
 /* A sentence ("disabled on the fleet host"), so the UI face — see
    `.accounts-projection`. */

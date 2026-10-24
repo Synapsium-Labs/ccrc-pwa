@@ -11,7 +11,7 @@
 // theirs: useProjectedHome.ts:9-12 makes the same call for ProjectCard and
 // defends the duplication — one more GET against two small local JSON files
 // beats coupling component trees that must not depend on each other mounting.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountUsage, ProjectedHome, RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
@@ -22,7 +22,8 @@ import { formatAge } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, warnNonArrayRoster } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
-import { navigate } from '../lib/router';
+import { navigate, useLocation } from '../lib/router';
+import { laneParam } from '../lib/routes';
 import { backToFleet } from '../command/door';
 import { useFleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -198,6 +199,30 @@ export function AccountsScreen(): ReactNode {
 
   const order = rowOrder(roster, accounts ?? []);
 
+  // The arrival at a lane (T2c, D-6329, Q14): a lane card opens `/accounts?lane=<id>`, and the screen scrolls that
+  // lane's row into view, focuses it and marks it with one accent edge. A PASSIVE effect, never a layout one: the
+  // shell's pane reset to the top (app.tsx) is a layout effect that runs on every path or search change, and layout
+  // effects run child before parent, so an arrival made in a layout effect would be undone by it. It is keyed on the
+  // lane AND on whether the lane's row exists, because the rows are drawn only once the poll lands (`order` is empty
+  // until then): an arrival at mount finds no row, and the same effect finishes the job when the poll brings it.
+  // `arrivedAt` holds the last lane arrived at, so each value scrolls once and a re-render never moves focus again;
+  // a second `?lane=` on the same mount is a new value and arrives once. An unknown lane arrives nowhere.
+  const lane = laneParam(useLocation().search);
+  const laneRowExists = lane !== null && accounts != null && order.includes(lane);
+  const rowRefs = useRef(new Map<string, HTMLElement>());
+  const arrivedAt = useRef<string | null>(null);
+  const [arrived, setArrived] = useState<string | null>(null);
+  useEffect(() => {
+    if (lane === null) { arrivedAt.current = null; setArrived(null); return; }
+    if (!laneRowExists || arrivedAt.current === lane) return;
+    const row = rowRefs.current.get(lane);
+    if (row === undefined) return;
+    arrivedAt.current = lane;
+    row.scrollIntoView({ block: 'start' });
+    row.focus({ preventScroll: true });
+    setArrived(lane);
+  }, [lane, laneRowExists]);
+
   // The account-pool editor — one sheet, retargeted per tap, on the exact
   // terms `PoolSheet`/`FleetScreen`'s own pool sheet already use: the route-
   // owned subject lives here, not inside the sheet.
@@ -350,7 +375,15 @@ export function AccountsScreen(): ReactNode {
           // on a guess.
           const acctPoolDim = accountPools === 'unavailable';
           return (
-            <section key={wrapper} className="accounts-row" data-disabled={off ? 'true' : 'false'}>
+            <section
+              key={wrapper}
+              className="accounts-row"
+              data-disabled={off ? 'true' : 'false'}
+              data-lane={wrapper}
+              data-arrived={arrived === wrapper ? 'true' : undefined}
+              tabIndex={-1}
+              ref={(el) => { if (el === null) rowRefs.current.delete(wrapper); else rowRefs.current.set(wrapper, el); }}
+            >
               <div className="accounts-row-head">
                 <span
                   className="account-gauge-label"

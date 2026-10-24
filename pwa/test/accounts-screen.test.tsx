@@ -469,3 +469,102 @@ describe('AccountsScreen on the page scaffold (D-5102)', () => {
     expect(screen.getByRole('button', { name: 'Back to fleet' })).toBeInTheDocument();
   });
 });
+
+// T2c (D-6329, Q14): a lane card opens the screen at its lane, `/accounts?lane=<id>`. The arrival is a PASSIVE effect
+// keyed on the lane param and on whether that lane's row exists: the rows render only once the poll lands, and the
+// shell's layout-effect pane reset (app.tsx) must run before the scroll, not after it.
+describe('AccountsScreen — opens at a lane (?lane=<id>)', () => {
+  const rowOf = (id: string): HTMLElement => {
+    const el = document.querySelector<HTMLElement>(`.accounts-row[data-lane="${id}"]`);
+    expect(el, `the row of lane ${id}`).not.toBeNull();
+    return el!;
+  };
+  /** The elements `scrollIntoView` was called on, in order, with the options it got. */
+  const spyScroll = (): { readonly calls: HTMLElement[]; readonly spy: ReturnType<typeof vi.spyOn> } => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    return { spy, get calls() { return spy.mock.contexts as HTMLElement[]; } };
+  };
+  const twoLanes = [acct({ wrapper: 'claude', five: 10, seven: 5 }), acct({ wrapper: 'claude9', five: 20, seven: 6 })];
+
+  it("/accounts?lane=<id> scrolls that lane's row into view and focuses it, once", async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts?lane=claude9');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    await act(async () => {});     // the arrival's own state write (the accent edge) lands after the poll's render
+    const row = rowOf('claude9');
+    expect(scroll.calls).toEqual([row]);
+    expect(scroll.spy).toHaveBeenCalledWith({ block: 'start' });
+    expect(row).toHaveAttribute('tabindex', '-1');
+    expect(document.activeElement).toBe(row);
+    expect(row).toHaveAttribute('data-arrived', 'true');
+    expect(rowOf('claude')).not.toHaveAttribute('data-arrived');
+    // ONCE: the focus moves on arrival, not on every render. Move it away and re-render the screen (a fleet store
+    // change re-renders it); neither the scroll nor the focus comes back.
+    (document.activeElement as HTMLElement).blur();
+    act(() => useFleetStore.setState({ sessions: [sess()] }));
+    expect(scroll.calls).toHaveLength(1);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('focuses without scrolling the page a second time (preventScroll)', async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts?lane=claude9');
+    spyScroll();
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it('the lane arrives after the poll lands', async () => {
+    let land!: (r: Awaited<ReturnType<typeof api.accounts>>) => void;
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise((res) => { land = res; }));
+    navigate('/accounts?lane=claude9');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await act(async () => { await Promise.resolve(); });
+    expect(scroll.calls, 'no row yet, so nothing to scroll to').toHaveLength(0);
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => { land({ accounts: twoLanes, projected: null, roster: TEST_ROSTER }); });
+    expect(scroll.calls).toEqual([rowOf('claude9')]);
+    expect(document.activeElement).toBe(rowOf('claude9'));
+  });
+
+  it('a second ?lane= on the same mount scrolls to the new lane, once', async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts?lane=claude');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    expect(scroll.calls).toEqual([rowOf('claude')]);
+    act(() => { navigate('/accounts?lane=claude9'); });
+    expect(scroll.calls).toEqual([rowOf('claude'), rowOf('claude9')]);
+    expect(document.activeElement).toBe(rowOf('claude9'));
+    expect(rowOf('claude9')).toHaveAttribute('data-arrived', 'true');
+    expect(rowOf('claude')).not.toHaveAttribute('data-arrived');
+  });
+
+  it('an unknown lane opens the screen at its top and moves no focus', async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts?lane=no-such-lane');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    expect(scroll.calls).toHaveLength(0);
+    expect(document.activeElement).toBe(document.body);
+    expect(document.querySelector('[data-arrived]')).toBeNull();
+  });
+
+  it('with no ?lane= nothing scrolls or takes focus, and each row is still a programmatic focus target only', async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    expect(scroll.calls).toHaveLength(0);
+    expect(document.activeElement).toBe(document.body);
+    expect(rowOf('claude')).toHaveAttribute('tabindex', '-1');
+  });
+});
