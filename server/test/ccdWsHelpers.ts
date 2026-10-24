@@ -384,6 +384,15 @@ function containedAuthBase(env: NodeJS.ProcessEnv): { CCRC_CODEX_AUTH_BASE: stri
   return { CCRC_CODEX_AUTH_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE };
 }
 
+/** The codex bridge's upstream for every contained env (codex-bridge Stage 2, Task 7): the caller's own
+ *  CCGPT_BRIDGE_UPSTREAM_BASE when it names one, else CLOSED_AUTH_BASE, by `containedAuthBase`'s rule. Only the
+ *  bridge's backend adapter reads it, and unset or EMPTY it names the live endpoint, so an empty caller value names
+ *  none. */
+function containedBridgeBase(env: NodeJS.ProcessEnv): { CCGPT_BRIDGE_UPSTREAM_BASE: string } {
+  const named = env['CCGPT_BRIDGE_UPSTREAM_BASE'];
+  return { CCGPT_BRIDGE_UPSTREAM_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE };
+}
+
 export function ghContainedEnv(
   home: string, env: NodeJS.ProcessEnv = {}, opts: ContainOpts = {},
 ): NodeJS.ProcessEnv {
@@ -396,7 +405,7 @@ export function ghContainedEnv(
   // consumer it hurts, because the damage shows up as a wrong ANSWER in a file
   // that never mentioned systemd (see the header). Opt-in makes the widening
   // land at the call site, where the reviewer of that call site can see it.
-  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...containedAuthBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
+  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...containedAuthBase(env), ...containedBridgeBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
   // THE SECOND STRUCTURAL BOUNDARY for the ccd runners, and the reason it is a
   // poison rather than an absence: `_have_systemctl` is `command -v systemctl`,
   // so REMOVING systemctl would send every ccd test down `_supervised_start`'s
@@ -465,7 +474,7 @@ export function ghContainedEnv(
   // Prepended to whatever the caller passed, never the other way round: a
   // snippet that supplies its own PATH must not be able to displace the poison,
   // which is the difference between structural and advisory.
-  return { ...env, ...bus, ...containedAuthBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
+  return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
 }
 
 /** The one reader every append-only call log in this file goes through: absent

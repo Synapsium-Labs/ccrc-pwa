@@ -1390,7 +1390,7 @@ export function healthy(prefix: string): string {
     docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY)), { mode: 0o755 });
   // …and its PWA bundle carries the service worker every browser installs (spec 2026-10-01 §7.2): `docs-sw` is a
   // check, and healthy()'s contract is that every check PASSES. `swJs()` is the default-denylist worker in the
-  // one-line shape a build emits, the same text `TREE_STUBS` and `ccrc-update.test.ts`'s tree plant.
+  // one-line shape a build emits, the same text `TREE_STUBS` and `ccrc-updateFixture.ts`'s tree plant.
   mkdirSync(join(home, 'ccrc', 'server', 'dist-pwa'), { recursive: true });
   writeFileSync(join(home, 'ccrc', 'server', 'dist-pwa', 'sw.js'), swJs());
   return home;

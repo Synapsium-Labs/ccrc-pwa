@@ -6122,6 +6122,9 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * `reviews`, or a send-back while one is open (design 2026-09-14 §5.1, §9
  * invariant 3).
  *
+ * `cap-review-rounds` (D-6795) — the work run already has `REVIEW_ROUND_CAP` review runs, and the operator has
+ * not lifted the cap for it; the open is refused, an ask is raised once, and `by` carries the round count.
+ *
  * `workspace-spent` and `spent-unmeasured` are rule 3 of the child-reclamation
  * programme (spec 2026-09-22 §5.3-§5.4): a CHILD — a workspace the server
  * minted for a run and marked `$REG/<id>.child` at creation — carries at most
@@ -6154,7 +6157,8 @@ export type RunRefuseCode =
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
   | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight'
   | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
-  | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child';   // the last two: D-5298
+  | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child'   // the last two: D-5298
+  | 'cap-review-rounds';   // D-6795: a fourth review run for one work run
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6165,6 +6169,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'review-in-flight': true, 'claimant-is-a-worker': true,
   'workspace-spent': true, 'spent-unmeasured': true,
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
+  'cap-review-rounds': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -6933,9 +6938,9 @@ export function armEventDetail(fields: RouteFields): string {
  *                             union in this file) — distinct from `no-session`
  *                             (nothing there at all): a value here would
  *                             silently fail to round-trip through
- *                             `routeEventDetail`/`parseRouteEventDetail`'s
- *                             `:`-delimited grammar (fix round 1, finding #2),
+ *                             `routeEventDetail`/`parseRouteEventDetail`'s `:`-delimited grammar (fix round 1, finding #2),
  *                             so this door refuses it before ever writing one
+ *   409 fable-operator-only — the write names class `fable` (manual or ladder): the operator's to select
  *   501 unsupported         — the fleet does not report `route-v1`
  *   409 no-record           — the target session's registry has no `.class`
  *                             file at all (S5-R18: an absent `.effort`
@@ -6986,7 +6991,7 @@ export function armEventDetail(fields: RouteFields): string {
  */
 export const RUN_ROUTE_REFUSE_CODES = [
   'no-session', 'bad-session', 'no-record', 'unrouteable-record', 'registry-unreadable', 'run-closed',
-  'ceiling', 'floor', 'no-effort-rungs',
+  'ceiling', 'floor', 'no-effort-rungs', 'fable-operator-only',
 ] as const;
 export type RunRouteRefuseCode = (typeof RUN_ROUTE_REFUSE_CODES)[number];
 export function isRunRouteRefuseCode(v: unknown): v is RunRouteRefuseCode {
@@ -12054,3 +12059,14 @@ const optReapCrumb = (o: RawObj, k: string): ReapCrumb | null => {
   const raw = optStr(o, k);
   return raw === null || raw === '' ? null : parseReapCrumb(raw);
 };
+
+/**
+ * D-6790: the ONE predicate every box-token route write asks before it names a class (operator ruling 2026-10-24: Fable
+ * runs only when the operator selects it). `true` when the fields set `class` to `fable`, spelled as ccd's vocabulary
+ * spells it or with the case and padding ccd would have to fold. `POST /api/runs/:id/route` (the manual write and a
+ * ladder result) and a dispatch's route (`coord/dispatchDecide.ts`) refuse on it with `409 fable-operator-only`. The
+ * cookie-session routes the operator's PWA uses never ask it: a human's explicit choice of Fable stays open there.
+ */
+export function routeNamesFable(r: Readonly<Partial<Record<string, string>>>): boolean {
+  return r.class?.trim().toLowerCase() === 'fable';
+}

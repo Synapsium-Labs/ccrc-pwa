@@ -1059,11 +1059,91 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
         .toMatch(new RegExp(`^ {6}- uses: \\./\\.github/actions/server-deps\\n {8}with:\\n {10}platform: ${platform}$`, 'm'));
     }
     const a = read(DEPS);
-    expect(a).toMatch(/^ {4}- name: Install system dependencies \(linux\)\n {6}if: inputs\.platform == 'linux'\n {6}shell: bash\n {6}run: sudo apt-get update && sudo apt-get install -y tmux jq strace python3$/m);
+    // The miss arm of the apt install (D-6770): the hit arm dpkg-installs the cached packages first.
+    expect(a).toMatch(/^ {4}- name: Install system dependencies \(linux\)\n(?: {6}.*\n)*? {8}sudo apt-get update && sudo apt-get install -y tmux jq strace python3$/m);
     expect(a).toMatch(/^ {4}- name: Install system dependencies \(macos\)\n {6}if: inputs\.platform == 'macos'\n {6}shell: bash\n {6}run: brew install bash tmux flock jq coreutils$/m);
     for (const pkg of ['server', 'agent', 'pwa']) {
       expect(a, `server-deps no longer installs ${pkg}/`).toMatch(new RegExp(`^ {6}working-directory: ${pkg}\\n {6}run: npm ci$`, 'm'));
     }
+    // ui too: pwa reads it as source (the census above), and the cache entry holds all four trees.
+    expect(a).toMatch(/^ {6}working-directory: ui\n {6}run: npm ci$/m);
+  });
+});
+
+// ── D-6770: dependencies are installed once per run ─────────────────────────
+describe('ci.yml: dependencies are installed once per run, and handed to the jobs (D-6770)', () => {
+  const NPM_CI_STEPS = ['Install server', 'Install agent dependencies', 'Install pwa dependencies', 'Install ui dependencies'];
+
+  it('the npm ci steps of server-deps run only on a cache miss, and macOS (no restore step) still installs', () => {
+    const a = read(DEPS);
+    const all = a.split(/^(?= {4}- )/m).filter((p) => /^ {4}- /.test(p));
+    for (const name of NPM_CI_STEPS) {
+      const st = all.find((p) => p.startsWith(`    - name: ${name}`));
+      expect(st, `no step "${name}"`).toBeDefined();
+      expect(st, `${name} runs on a hit`).toMatch(/^ {6}if: steps\.trees\.outputs\.cache-hit != 'true'$/m);
+    }
+    // The restore is Linux-only; on macOS the output is empty, so `!= 'true'` holds and the install runs.
+    expect(a).toMatch(/^ {4}- name: Restore the installed trees \(linux\)\n {6}id: trees\n {6}if: inputs\.platform == 'linux'\n {6}uses: actions\/cache\/restore@v4$/m);
+  });
+
+  it('the cache key is the lockfile hashes, the runner image (OS name for the trees, exact version for the packages) and the node version — no branch, ref, run or actor', () => {
+    const a = read(DEPS);
+    const keyStep = /- name: Name the cache entries \(linux\)\n(?: {6}.*\n| *\n)*/.exec(a)?.[0] ?? '';
+    expect(keyStep, 'the key step is gone').not.toBe('');
+    for (const lock of ['server', 'agent', 'pwa', 'ui']) expect(keyStep).toContain(`${lock}/package-lock.json`);
+    expect(keyStep).toContain('ImageOS');
+    expect(keyStep, 'the packages are keyed on the exact image').toContain('ImageVersion');
+    expect(keyStep).toContain('node --version');
+    expect(keyStep, 'a key that varies with the branch defeats the once-per-run install')
+      .not.toMatch(/GITHUB_(?:REF|HEAD_REF|BASE_REF|RUN_ID|RUN_NUMBER|RUN_ATTEMPT|SHA|ACTOR)|github\./);
+    for (const entry of ['trees', 'apt']) expect(keyStep).toMatch(new RegExp(`echo "${entry}=`));
+  });
+
+  it('only the deps job saves the cache; every other caller restores it read-only', () => {
+    const a = read(DEPS);
+    expect(a).toMatch(/^ {2}save:\n(?: {4}.*\n)*? {4}default: 'false'$/m);
+    const saves = a.split(/^(?= {4}- )/m).filter((p) => /uses: actions\/cache\/save@/.test(p));
+    expect(saves, 'one save per cache entry: the trees and the packages').toHaveLength(2);
+    for (const st of saves) expect(st, 'a save that runs without save: true').toMatch(/if: .*inputs\.save == 'true'/);
+    expect(a, 'actions/cache itself would save on every caller').not.toMatch(/uses: actions\/cache@/);
+    const callers = [...jobs(read(CI))].filter(([, b]) => /^ {6}- uses: \.\/\.github\/actions\/server-deps$/m.test(b));
+    expect(callers.map(([id]) => id).sort()).toEqual(['deps', 'node-floor', 'server-shard', 'test-macos', 'trace-shard']);
+    for (const [id, b] of callers) {
+      const saves = /save: 'true'/.test(b);
+      expect(saves, `${id}: only deps may save`).toBe(id === 'deps');
+    }
+  });
+
+  it('the deps job installs both node versions the consumers run, and the floor one is engines.node', () => {
+    const b = job('deps');
+    expect(jobKey(b, 'timeout-minutes')).toBe('30');
+    const m = /^ {8}node: \[([^\]]+)\]$/m.exec(b);
+    expect(m, 'the node axis').not.toBeNull();
+    const versions = m![1].split(',').map((v) => v.trim().replace(/['"]/g, ''));
+    const range = (JSON.parse(read('server/package.json')) as { engines: { node: string } }).engines.node;
+    expect(versions).toEqual(['22', range.replace(/^>=/, '')]);
+    expect(b).toMatch(/^ {10}node-version: \$\{\{ matrix\.node \}\}$/m);
+  });
+
+  it('server shards, trace shards and the Node floor need deps but still run when it fails (a fallback install)', () => {
+    for (const id of ['server-shard', 'trace-shard']) {
+      expect(needs(job(id)), id).toEqual(['deps', 'select']);
+      expect(jobKey(job(id), 'if'), id).toMatch(/^\$\{\{ !cancelled\(\) && /);
+    }
+    expect(needs(job('node-floor'))).toEqual(['deps']);
+    expect(jobKey(job('node-floor'), 'if')).toBe('${{ !cancelled() }}');
+    // The required legs stay needs-free (pinned above): they install themselves.
+    for (const id of ['test', 'build-pwa', 'browser-pwa']) expect(needs(job(id)), id).toEqual([]);
+  });
+
+  it('pwa is typechecked once per run: test (pwa) runs tsc, build-pwa runs vite build alone', () => {
+    const build = job('build-pwa').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(build, 'build-pwa runs tsc a second time through `npm run build`').not.toMatch(/npm run build/);
+    expect(build).toMatch(/^ {8}run: npm ci && \.\/node_modules\/\.bin\/vite build$/m);
+    expect(build).not.toMatch(/\btsc\b[^\n]*--noEmit/);
+    expect(step(job('test'), 'Typecheck')).toMatch(/^ {8}run: \.\/node_modules\/\.bin\/tsc --noEmit$/m);
+    // package.json's build is still `tsc && vite build` for a developer's `npm run build`; the CI step is its second half.
+    expect(JSON.parse(read('pwa/package.json')).scripts.build).toBe('tsc --noEmit && vite build');
   });
 });
 
@@ -1098,13 +1178,16 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
     expect(b).not.toMatch(/node-version-file/);
   });
 
-  it('is named for the version it runs, needs nothing, and carries no job-level if:', () => {
+  it('is named for the version it runs, needs only the dependency install, and never skips itself', () => {
     const b = job('node-floor');
     expect(jobKey(b, 'name'), 'the check name must not claim a version the leg does not run').toBe(`node floor (${floor()})`);
     // A job-level `if:` that skips it reads as red in full-suite and as nothing
-    // on a pull request; a failed `needs:` skips it the same way.
-    expect(jobKey(b, 'if')).toBeNull();
-    expect(needs(b)).toEqual([]);
+    // on a pull request; a failed `needs:` skips it the same way. So its one
+    // need, `deps` (D-6770: the installed trees), is an optimisation it
+    // survives losing: `!cancelled()` runs it after a failed or skipped
+    // `deps`, and server-deps then installs for itself.
+    expect(jobKey(b, 'if')).toBe('${{ !cancelled() }}');
+    expect(needs(b)).toEqual(['deps']);
   });
 
   it('skips by STEP, only on a refresh or a rebuild, like the required legs', () => {

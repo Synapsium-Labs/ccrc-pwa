@@ -1,0 +1,3 @@
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_fx1","object":"response","status":"completed","output":[{"type":"message","id":"msg_fx0","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}},"sequence_number":0}
+

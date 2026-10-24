@@ -267,13 +267,53 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  # THE ONE INSTALL OF THE RUN (D-6770). Every server shard, trace shard and
+  # the Node-floor leg needs the same four installed trees (server, agent, pwa,
+  # ui) and the same apt packages, and each used to run its own `apt-get` and
+  # four `npm ci`. This job installs them once per lockfile set and writes
+  # them to the Actions cache; the jobs below `need` it and RESTORE the entry
+  # read-only (./.github/actions/server-deps, whose header has the key). The
+  # key is the lockfile hashes, the runner image and the node version, never a
+  # branch, so a restored tree is what `npm ci` gives for that lockfile; a
+  # miss installs the old way. One entry per node version: '22' for the
+  # shards, the floor's own for `node-floor`. Not a required check, and the
+  # jobs that need it run even when it fails (`!cancelled()`), falling back
+  # to their own install, so it can only save time.
+  deps:
+    name: install dependencies (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    # A cold install of the four packages measured about three minutes
+    # (server-deps' old note on node-floor); 30 is a deadline, not an estimate.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The server shards' '22' and node-floor's exact floor; the latter is
+        # pinned equal to `engines.node` by ci-pipeline.test.ts.
+        node: ['22', '22.16.0']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            agent/package-lock.json
+            pwa/package-lock.json
+            ui/package-lock.json
+      - uses: ./.github/actions/server-deps
+        with:
+          platform: linux
+          save: 'true'
+
   # The selected server tests, split across runners (design 2026-09-23 §7).
   # Skipped when nothing is selected — `test (server)` checks that the skip
   # was for that reason and no other.
   server-shard:
     name: server ${{ matrix.shard }}/${{ matrix.total }}
-    needs: select
-    if: needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
+    needs: [select, deps]
+    if: ${{ !cancelled() && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}
     runs-on: ubuntu-latest
     # A deadline, not the default. Without this key a wedged job runs for
     # GitHub's 360 minutes before anyone learns it wedged. Each shard is
@@ -813,15 +853,19 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: pwa/package-lock.json
-      # `npm run build` is `tsc --noEmit && vite build`, and both halves read
-      # ui SOURCE through `exports['.']`. Same resolution rule as the test
-      # leg: ui's own node_modules or nothing resolves.
+      # The build reads ui SOURCE through `exports['.']`. Same resolution rule
+      # as the test leg: ui's own node_modules or nothing resolves.
+      #
+      # `vite build` alone, not `npm run build` (`tsc --noEmit && vite build`):
+      # `test (pwa)`'s Typecheck step already runs that same `tsc --noEmit` on
+      # every run, so the second copy here bought nothing but a duplicate
+      # (D-6770). Exactly one pwa typecheck runs per CI run, in that leg.
       - if: env.CCRC_LEG == 'run'
         working-directory: ui
         run: npm ci
       - if: env.CCRC_LEG == 'run'
         working-directory: pwa
-        run: npm ci && npm run build
+        run: npm ci && ./node_modules/.bin/vite build
       # The build is only proven by its output existing. A green build step with
       # no artifact is the failure this repo has already shipped once.
       - if: env.CCRC_LEG == 'run'
@@ -892,9 +936,12 @@ jobs:
   # list reads the commit range.
   node-floor:
     name: node floor (22.16.0)
+    needs: deps
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # server-deps installs three packages from a cold cache in about three
-    # minutes; the list runs in seconds. 30 is a deadline, not an estimate.
+    # server-deps installs four packages from a cold cache in about three
+    # minutes (it restores them from the `deps` job's entry otherwise); the
+    # list runs in seconds. 30 is a deadline, not an estimate.
     timeout-minutes: 30
     env:
       CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
@@ -956,8 +1003,8 @@ jobs:
   # Trace step itself fails.
   trace-shard:
     name: trace ${{ matrix.shard }}/${{ matrix.total }}
-    needs: select
-    if: needs.select.outputs.trace != 'none' && needs.select.outputs.trace_count != '0'
+    needs: [select, deps]
+    if: ${{ !cancelled() && needs.select.outputs.trace != 'none' && needs.select.outputs.trace_count != '0' }}
     runs-on: ubuntu-latest
     # Tracing costs 1.7-4.3x wall-clock (measured on the fleet box), and the
     # shard planner packs trace shards to about 15 minutes at that cost; 60 is

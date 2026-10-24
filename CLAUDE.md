@@ -470,12 +470,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   with its own argument — are the census, not this bullet. What does need saying here are the
   coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4),
   `POST /api/coord/caps` (wave 6), `POST /api/coord/reclaim-pause` (child-reclamation wave 4),
-  `POST /api/coord/stall-watch` (stall-watch settings wave 1) and `POST /api/coord/collect-lane`
-  (child-reclamation wave 10, which also refuses `live` while sign-in is dark) are
+  `POST /api/coord/stall-watch` (stall-watch settings wave 1), `POST /api/coord/collect-lane`
+  (child-reclamation wave 10, which also refuses `live` while sign-in is dark) and `POST /api/coord/review-cap`
+  (D-6795, the operator's lift of the review-round cap for one work run) are
   session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other four are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other five are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST

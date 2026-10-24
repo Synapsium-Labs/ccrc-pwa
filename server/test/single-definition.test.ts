@@ -1901,6 +1901,7 @@ describe('the model files, and who reads each one', () => {
     expect(holders).toEqual([
       'ccd/ccd',                // ROUTE_CLASSES and _route_valid's degraded arm — routing spec §5.1
       'ccd/ccrc',               // MODELS_CLASSES — the usage-error gate
+      'ccd/session-hook.sh',    // the Fable arm's deny reason and prefilter name the classes in prose (D-6792) — no walk
       'deploy/models-op.mjs',   // CLASSES — the mutation walk
       'pwa/src/lib/models.ts',  // the picker's aliases — spec §1/§8/§13.4, deleted by Plan 3a
       'shared/modelenv.mjs',    // the env block's key order and the TSV's
@@ -3040,7 +3041,7 @@ describe('the release owner literal — two named assignments, and no third spel
   // deliberate:
   //   - license.test.ts pins the VALUE — both lanes name the ruled owner, and
   //     the previous org survives nowhere in shipping code;
-  //   - ccrc-update.test.ts pins the AGREEMENT — install.sh's owner/repo pair
+  //   - ccrc-update-kept.test.ts pins the AGREEMENT — install.sh's owner/repo pair
   //     and ccd/ccrc's are equal, so the two lanes download the same release;
   //   - THIS pins the COUNT — those two assignments are the only spellings of
   //     the org anywhere in shipped code, so a third copy (a hardcoded release
@@ -7213,6 +7214,40 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
   });
 });
 
+// D-6631 (fleet disk retention DR-19; spec 2026-10-23 sections 2.3 and 4). The orphan-worktree lane ships SHADOW behind two
+// markers, `orphan-tree-live` and `orphan-tree-rescue-live`, set BY HAND in `$REG`. Nothing in the tree writes either:
+// the one file that spells each on a code line is the switchboard (L0, no `node:` import), and every file that names its
+// constant reaches no write. The verb's argv has one composing site, and `--force` has none.
+describe('D-6631: the orphan lane\'s markers have no writer, and its verb one composer', () => {
+  const DEFINER = 'shared/switches.ts';
+  const MARKERS = [['orphan-tree-live', 'ORPHAN_TREE_LIVE_MARKER'], ['orphan-tree-rescue-live', 'ORPHAN_TREE_RESCUE_LIVE_MARKER']] as const;
+  const SHELL_WRITE = /(?:>>?|\btouch\b|\btee\b|\b_reg_set\b|\bprintf\b[^|]*>|\bcp\b|\bmv\b|\bln\b|\binstall\b)/;
+  const TS_WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+  it.each(MARKERS)('%s: no line of shell writes it', (name) => {
+    expect(SHELL_WRITE.test(`touch "$REG/${name}"`), 'CONTROL: the pattern sees a write').toBe(true);
+    const writers = BASH.flatMap((f) => codeLines(f).filter((l) => l.includes(name) && SHELL_WRITE.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(writers, `${name}: a line of shell writes it`).toEqual([]);
+  });
+  it.each(MARKERS)('%s: its one TS holder is the switchboard, which reaches no node: module', (name) => {
+    expect(ALL.filter((f) => stallCode(f).includes(`'${name}'`) || stallCode(f).includes(`"${name}"`)
+      || stallCode(f).includes(`\`${name}`) || stallCode(f).includes(`/${name}`)).map(rel).sort(),
+    `${name} spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it.each(MARKERS)('%s: the files that name its constant reach no write', (_name, constant) => {
+    const holders = ALL.filter((f) => stallCode(f).includes(constant)).map(rel).sort();
+    expect(holders, `${constant}: nobody names it`).toContain(DEFINER);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(TS_WRITE);
+  });
+  it('CCD_ARGV.wsOrphan is composed by the executor alone, and nothing composes --force beside it', () => {
+    const composers = ALL.filter((f) => stallCode(f).includes('CCD_ARGV.wsOrphan(')).map(rel).sort();
+    expect(composers).toEqual(['server/src/coord/collectOrphanTree.ts']);
+    for (const f of ['server/src/orphanTreeLane.ts', 'server/src/coord/collectOrphanTree.ts', 'server/src/orphanTreeSweep.ts']) {
+      expect(stallCode(path.join(ccrcRoot, f)), `${f} spells --force`).not.toContain('--force');
+    }
+  });
+});
+
 // D-5242 (plan Task 17b). APPENDED, for the reason the stall-watch blocks above state. The wake budget has one home
 // (`coord/wakeBudget.ts`, its rule and its two figures) and ONE list it is applied to (`FleetWatcher.admitWake`, the only
 // caller of `wakeAdmit`); the live act's constants are hibernation's definer's, and each lane's declared actor is
@@ -7880,6 +7915,15 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(writersOf('mail-disabled')).toEqual([]);
   });
 
+  // D-6785 (PR landing in ccrc, stage 1): the checks lane's two markers are rows of the switchboard with writer
+  // `hand-only`. Nothing in the tree writes `landing-disabled` or `landing-checks-live` (the operator arms the lane
+  // by hand, after a week of agreeing shadow rows).
+  it.each(['landing-disabled', 'landing-checks-live'])('%s: hand-only, no writer in the tree', (name) => {
+    expect(SWITCHES[name as 'landing-disabled' | 'landing-checks-live'].writer).toBe('hand-only');
+    expect(constsOf(name), 'CONTROL: the switchboard defines it').toHaveLength(1);
+    expect(writersOf(name)).toEqual([]);
+  });
+
   // D-5855 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1a; ARCH-70 (#805)).
   // The switchboard's exit: `mail-disabled` is defined once (2 -> 1 on C1a's tip; the count may only shrink), and so
   // is every other marker row; and every marker literal a `const *_MARKER` defines under `server/src` or `shared/` is
@@ -8297,7 +8341,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/collectLane.ts': 7,
       'server/src/config.ts': 3,
       'server/src/coord/caps.ts': 6,
-      'server/src/coord/close.ts': 8,
+      'server/src/coord/close.ts': 2,
       'server/src/coord/collectLaneJournal.ts': 5,
       'server/src/coord/db.ts': 4,
       'server/src/coord/delegation-checkpoint.ts': 33,
@@ -8784,5 +8828,57 @@ describe('one redaction rule table (ARCH-66): shared/redact.mjs (D-5867)', () =>
     expect(tables.length, `a new redaction rule table: ${tables.join(', ')}; add the rules to shared/redact.mjs`).toBeLessThanOrEqual(2);
     expect(tables.filter((f) => /\.tsx?$/.test(f)), 'a TypeScript redaction table').toEqual([]);
     expect(tables).toContain('shared/redact.mjs');
+  });
+});
+
+describe('the tmp sweep\'s live-arm marker has no writer in the tree (fleet disk retention DR-8, D-6620)', () => {
+  // `~/.ccrc/tmp-sweep-live-arm` arms the live arm's moves and its budget removals; without it the arm only records
+  // what it would take. Like the stall watch's markers it is touched by hand and removed by hand, so nothing in the
+  // tree may create it. Three halves: exactly one shell file names it on a code line (the sweep, which READS it);
+  // in that file the name is assigned once and the variable is only ever tested with `-e`; and in TypeScript exactly
+  // one file names it, shared/lifecycle.ts, which says so in a row's text and imports no node: module, so it cannot
+  // write the marker.
+  const NAME = 'tmp-sweep-live-arm';
+  const SWEEP = path.join(ccrcRoot, 'ccd', 'ccd-tmp-sweep');
+
+  it('CONTROL: the shell corpus was walked and the sweep is in it', () => {
+    expect(BASH.map(rel)).toContain('ccd/ccd-tmp-sweep');
+  });
+  it('the sweep is the one shell file that names it', () => {
+    expect(holdersOf(NAME)).toEqual(['ccd/ccd-tmp-sweep']);
+  });
+  it('in the sweep it is assigned once and only ever tested with -e', () => {
+    const lines = codeLines(SWEEP);
+    expect(lines.filter((l) => l.includes(NAME)).map((l) => l.trim())).toEqual(['LIVE_ARM="$HOME/.ccrc/tmp-sweep-live-arm"']);
+    const uses = lines.filter((l) => /\bLIVE_ARM\b/.test(l) && !l.includes(NAME)).map((l) => l.trim());
+    expect(uses.length, 'CONTROL: the sweep reads it').toBeGreaterThan(0);
+    for (const u of uses) expect(u, 'a use of LIVE_ARM that is not a -e test could write it').toMatch(/\[ -e "\$LIVE_ARM" \]/);
+  });
+  it('in TypeScript only the lifecycle manifest names it, and that file reaches no node: module', () => {
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel)).toEqual(['shared/lifecycle.ts']);
+    expect(stallCode(path.join(ccrcRoot, 'shared/lifecycle.ts'))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+});
+
+// CODEX BRIDGE STAGE 2, TASK 1: the upstream error codes (the seven sets) are module constants in
+// ccd/codexbridge/errors.py, and every other reader imports errors.ALL_CODES rather than spell one. APPENDED, for the
+// reason the blocks above state: session-hook.test.ts's citation audit cites this file by line. The codes are read from
+// the module itself, so this row holds no second copy of them. ccd/ccgpt-usage.py and ccd/ccgpt-auth.py are left out:
+// they classify other endpoints.
+describe('codex bridge Stage 2 Task 1: the bridge owns the upstream error codes', () => {
+  it('the upstream error codes are spelled once, in codexbridge/errors.py', () => {
+    const py = spawnSync('python3', ['-I', '-c', [
+      'import sys', 'sys.dont_write_bytecode = True', 'sys.path.insert(0, sys.argv[1])',
+      'from codexbridge import errors', 'print("\\n".join(sorted(errors.ALL_CODES)))',
+    ].join('\n'), path.join(ccrcRoot, 'ccd')], { encoding: 'utf8' });
+    expect(py.status, py.stderr).toBe(0);
+    const codes = py.stdout.split('\n').filter(Boolean);
+    expect(codes.length).toBeGreaterThanOrEqual(16);
+    const r = spawnSync('git', ['-C', ccrcRoot, 'grep', '-l', '-w', ...codes.flatMap((c) => ['-e', c]), '--',
+      'ccd', 'shared', 'deploy', 'server/src', ':!ccd/ccgpt-usage.py', ':!ccd/ccgpt-auth.py'], { encoding: 'utf8' });
+    // git grep answers 1 for "no match" and above 1 for a failure: neither is the answer this row expects, and a
+    // failure must never read as an empty list.
+    if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/codexbridge/errors.py']);
   });
 });

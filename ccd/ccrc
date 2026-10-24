@@ -2044,7 +2044,7 @@ BOX_MIGRATION_FILE="$HOME/.ccrc/migrating-to"
 # DELIBERATE cross-file second spelling of D-92's class: `install.sh
 # --release` runs before any ccrc exists on the box, so it cannot read this
 # pair, and this file runs on boxes install.sh has long left. The two are
-# held equal by `server/test/ccrc-update.test.ts` (the pin IS the mechanism;
+# held equal by `server/test/ccrc-update-kept.test.ts` (the pin IS the mechanism;
 # a comment would be the promise). `CCRC_RELEASE_BASE_URL` overrides the
 # derived `…/releases` prefix — the same test seam and mirror escape hatch
 # install.sh documents. Stage 5 de-brands the pair in both files at once.
@@ -2740,7 +2740,7 @@ _upd_redact() {
 # own refusal sentences, which deliberately name absolute paths
 # (`ccrc-expose.test.ts`'s "shadow refusal" cases), must print byte-for-byte
 # what they always did. ONE LINE ON PURPOSE —
-# `ccrc-install.test.ts` and `ccrc-update.test.ts` extract this definition
+# `ccrc-install.test.ts` and the `ccrc-update-*.test.ts` files extract this definition
 # by `^_ccrc_die\(\) \{.*\}$` and run it alone under `set -u` (hence
 # `${UPD_FAIL_PREFIX:-}` and `${UPD_REDACT_ACTIVE:-0}` both defaulting) —
 # each harness that actually triggers a die also picks `_upd_redact`'s
@@ -21859,7 +21859,7 @@ _upd_backup_set() {
   # (launchd has none — `ccd` mints a plist per session) and the names are
   # labels, so the loop below would have copied nothing and the backup would
   # have been silently short of the very files a rollback needs. Measured by
-  # `ccrc-update.test.ts`'s "the backup is COMPLETE before the install step
+  # `ccrc-update-fetch.test.ts`'s "the backup is COMPLETE before the install step
   # runs".
   #
   # The per-SESSION plists are deliberately not swept: an update does not
@@ -23037,7 +23037,7 @@ _upd_sweep() {
     fi
   done
   # fix round 1 item 7 (review 196 F8): the argv-order pin is
-  # `ccrc-update.test.ts`'s "with KillMode=process resolving per unit, the
+  # `ccrc-update-fetch.test.ts`'s "with KillMode=process resolving per unit, the
   # sweep runs: preflight, try-restart, the failed warn query, the active
   # verify query — in that argv order" case — cited by title, since its line
   # range moves.

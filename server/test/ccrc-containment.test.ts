@@ -420,11 +420,13 @@ describe('keepDigest\'s env (wave 9 R9-F8, 3b)', () => {
 // Two shapes only (fix round 1, F5): a raw `ccd/ccrc` spawn with no `env`, with `env: process.env`, or with
 // `{ ...process.env, HOME: dir }` is invisible to both scans below; `raw-spawn-census.test.ts` is that scan (wave 18).
 describe('the census — two shapes of a bare parent env: a `ghContainedEnv({ ...process.env` builder, and the `...process.env, HOME: home` literal (wave 9 R10d, 3c)', () => {
-  const FILES = ['ccrc-update.test.ts', 'ccrc-install.test.ts', 'ccrc-cli.test.ts', 'ccrc-install-graphify.test.ts',
+  // The `ccrc update` suite is a family of files (D-6767): the shared fixture and the four parts.
+  const FILES = ['ccrc-updateFixture.ts', 'ccrc-update-fetch.test.ts', 'ccrc-update-phases.test.ts', 'ccrc-update-kept.test.ts',
+    'ccrc-update-flip-backups.test.ts', 'ccrc-install.test.ts', 'ccrc-cli.test.ts', 'ccrc-install-graphify.test.ts',
     'installTreeFixture.ts'] as const;
   const lineOf = (src: string, at: number): number => src.slice(0, at).split('\n').length;
 
-  it('no `ghContainedEnv(` call in the five files is handed `{ ...process.env` — every builder starts from ccrcContainedEnv', () => {
+  it('no `ghContainedEnv(` call in these files is handed `{ ...process.env` — every builder starts from ccrcContainedEnv', () => {
     const offenders: string[] = [];
     for (const f of FILES) {
       const src = read(f);
@@ -469,7 +471,7 @@ describe('the census — two shapes of a bare parent env: a `ghContainedEnv({ ..
   });
 
   it('runInstall and runUpdate each call assertNoRealTool(env, home) AFTER assertSpineFrontContained(env, home', () => {
-    for (const [f, fn] of [['ccrc-install.test.ts', 'runInstall'], ['ccrc-update.test.ts', 'runUpdate']] as const) {
+    for (const [f, fn] of [['ccrc-install.test.ts', 'runInstall'], ['ccrc-updateFixture.ts', 'runUpdate']] as const) {
       const src = read(f);
       const start = src.indexOf(`function ${fn}(`);
       expect(start, `${f}: ${fn} not found`).toBeGreaterThan(-1);

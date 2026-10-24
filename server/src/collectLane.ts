@@ -555,6 +555,9 @@ export const COLLECT_VERDICT_TABLE = {
   registered: { pace: 'defer', listedAfterMs: CHILD_RECLAIM_DEFER_CEILING_MS },
   'in-use': { pace: 'defer', listedAfterMs: 0 },
   paused: { pace: 'defer', listedAfterMs: null },
+  // `not-loose` (D-6625): only ws-collect's loose arm says it, of an entry that is not that arm's (another class, not a
+  // regular file or directory, or another uid's). Nothing was touched, and its own continuity never lists the id.
+  'not-loose': { pace: 'defer', listedAfterMs: null },
   'in-progress': { pace: 'defer', listedAfterMs: CHILD_RECLAIM_DEFER_CEILING_MS },
   'witness-mismatch': { pace: 'terminal' },
   'quarantine-kept': { pace: 'terminal' },

@@ -544,7 +544,7 @@ describe('README: where the project tag lives (spec §4, §5.4.1)', () => {
 
 describe('README: what a retag does, and when (spec §5.5.4, §5.8, §5.7, §5.11, §15)', () => {
   /** Both gate figures, read off ccd rather than remembered — the bash-floor
-   *  idiom in `ccrc-update.test.ts`: a bumped constant must move the prose. */
+   *  idiom in `ccrc-update-phases.test.ts`: a bumped constant must move the prose. */
   const cooldowns = (): { swap: string; block: string } => {
     const s = /^SWAP_COOLDOWN=(\d+)/m.exec(ccd());
     const b = /^SWAPBLOCK_COOLDOWN=(\d+)/m.exec(ccd());

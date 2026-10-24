@@ -105,7 +105,7 @@ function plantBox(home: string): void {
   //                      did not come back on the new build).
   // W4 (Task 12) — five more, each a per-host file plantHost removes when
   // not asked for. The stub computes `--check` ITSELF, never through the
-  // real cmd_update (that is ccrc-update.test.ts's subject), so these are
+  // real cmd_update (that is ccrc-update-*.test.ts's subject), so these are
   // rollout's PARSER's inputs:
   //   caps            -> the caps= words (default W1's three: no update-json,
   //                      so no --from rollout — every earlier case's argv)

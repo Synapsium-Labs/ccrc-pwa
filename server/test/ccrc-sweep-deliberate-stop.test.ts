@@ -22,7 +22,7 @@
 // pins the seven tree helpers the frozen function calls (a helper the tree changes is frozen into the fixture
 // first), and X0b pins that the next move still resolves the script at call time.
 //
-// THE TECHNIQUE is `ccrc-update.test.ts`'s `sourcedCcrc`: a shell that SOURCES `ccd/ccrc` — its dispatch is
+// THE TECHNIQUE is `ccrc-updateFixture.ts`'s `sourcedCcrc`: a shell that SOURCES `ccd/ccrc` — its dispatch is
 // guarded by `BASH_SOURCE[0] == $0`, so sourcing defines functions and runs no verb — then sources the frozen
 // file, which redefines `_upd_sweep`, and calls it, on a fixture HOME whose `systemctl` is a stub. The builders
 // live in `sweepFixture.ts` (wave 11's window file uses them too).

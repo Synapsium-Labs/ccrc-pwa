@@ -701,9 +701,13 @@ ready = os.path.join(unit, "supervisor-ready")
 # unit directory, or the whole fixture HOME, deleted under a live unit must
 # never stop the supervisor signalling or reaping its one child.
 def write(path, text):
+    # Whole-file replace: a reader polling \`state\` must never see a file that
+    # \`open(path, "w")\` has truncated and not yet filled (D-6788).
     try:
-        with open(path, "w") as stream:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as stream:
             stream.write(text)
+        os.replace(tmp, path)
     except OSError:
         pass
 
@@ -715,8 +719,10 @@ def record(event):
         pass
 
 def complete_inactive():
-    write(state_path, "inactive\\n")
+    # pid first: \`state\` going inactive is what a test polls, and the pid it
+    # then reads must already be final.
     write(pid_path, "0\\n")
+    write(state_path, "inactive\\n")
     try:
         with open(events, "a") as stream:
             stream.flush()
@@ -1258,7 +1264,7 @@ export async function killLaneProcesses(home: string): Promise<void> {
 // WHY A JOIN AND NOT `plantSystemd` ITSELF. `plantSystemd` above plants
 // `systemctl` and `systemd-run` into `<home>/.local/bin` for the codex suites.
 // The three spine harnesses — `ccrcEnv` (ccrc-install.test.ts), `updateEnv`
-// (ccrc-update.test.ts), `verbEnv` (ccrc-uninstall.test.ts) — write their
+// (ccrc-updateFixture.ts), `verbEnv` (ccrc-uninstall.test.ts) — write their
 // OWN `systemctl` over that path on EVERY run, because theirs answer the
 // spine's verbs and plantSystemd's answers the codex tiers'. And none of them
 // planted any `systemd-run`, so on a Linux box the name resolved to the REAL

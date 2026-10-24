@@ -1,6 +1,6 @@
 // `_ver_verdicts`' rc 1 reaches its callers' WARN arms (centralised update management, wave 16, R8g). `_ver_verdicts`
 // answers 1 only when a numeric test of <keep> ERRORS, a belt over `_keep_ok`, which every caller asks first; so no
-// input from outside reaches those arms, and `ccrc-update.test.ts` pins only the belt itself. Here the belt is
+// input from outside reaches those arms, and `ccrc-update-*.test.ts` pins only the belt itself. Here the belt is
 // stubbed to answer 1, and each of the three arms that read it is run and its line pinned: `_ver_gc`'s auto arm (the
 // install's and the update's prune), its prune arm (`ccrc versions --prune`), and `cmd_versions`' listing. The six
 // shadowed readers are the price of reaching arms no input can reach: a change to what one of them sets reds this file
