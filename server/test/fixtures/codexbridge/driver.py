@@ -124,6 +124,19 @@ THE BACKEND ADAPTER (Task 7). A request is built from an Anthropic body through 
                    HTTPConnection and socket.create_connection each replaced by a recorder that raises before any I/O
                    (restored after), so nothing reaches the network; `verifyMode` is the context's ssl.VerifyMode name
                    (None with no context), and `postRaised` the class post raised
+THE DIRECT-MODE SERVER (Task 8).
+  serve            {fault?} -> no line: the LAST op of its action. It loads `<pkg>/ccgpt-proxy.py` by path, unchanged
+                   (`spec_from_file_location` under a module name other than `__main__`, so its `__main__` block does
+                   not run; the environment carries the three variables its top level reads), takes its five hooks,
+                   copying none: `Hooks(m._read_request_body, m._content_encoding, m._decode_body, <apply_effort>,
+                   m._Server)`, where <apply_effort> is this op's two-line wrapper (the one stated copy; Task 9's
+                   lives in `_run_direct`), which reads `output_config` before `_apply_effort` pops it. Only when
+                   `consts` carries `ccgpt_auth.<NAME>` keys, it calls `server.load_auth_lib(CCRC_CODEX_AUTH_LIB)`
+                   and sets each on the module that call returned (otherwise the bridge loads the library at its
+                   first request, so an absent library is the bridge's own 401). Then
+                   `server.serve(server.config_from_env(os.environ), hooks)`, and the driver exits with its return.
+                   `fault: "post-raises"` replaces backend.post with one that raises an exception whose text holds
+                   the request body and the headers (the bearer token among them), for the log case.
 A BridgeError prints as {"error": {status, etype, message, headers, state, code, requestId, kind}, "answer":
 {"status", "headers", "body": parsed JSON}, "event": errors.event(e) as text}. An op that raised prints
 {"raised": <class name>}. Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the package failed to import.
@@ -764,6 +777,35 @@ def _backend_tls(op, backend):
     return {"constructed": constructed, "postRaised": raised}
 
 
+def _serve(op, pkg, cb, auth_consts):
+    """The serve op (the docstring above). Never returns to the op loop: its answer is the process's exit code."""
+    server = cb.server
+    spec = importlib.util.spec_from_file_location("ccgpt_proxy_for_bridge", os.path.join(pkg, "ccgpt-proxy.py"))
+    shim = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shim)
+
+    def apply_effort(data):
+        oc = data.get("output_config")
+        return shim._apply_effort(data), oc
+
+    hooks = server.Hooks(shim._read_request_body, shim._content_encoding, shim._decode_body, apply_effort,
+                         shim._Server)
+    if auth_consts:
+        lib = server.load_auth_lib(os.environ["CCRC_CODEX_AUTH_LIB"])
+        for name, value in auth_consts.items():
+            if not hasattr(lib, name):
+                _usage("no constant " + json.dumps("ccgpt_auth." + name))
+            setattr(lib, name, value)
+    if op.get("fault") == "post-raises":
+        def post(base, body, headers, **kwargs):
+            raise RuntimeError("upstream refused " + body.decode("utf-8", "replace") + " " + repr(headers))
+
+        cb.backend.post = post
+    elif op.get("fault") is not None:
+        _usage("unknown fault " + json.dumps(op.get("fault")))
+    return server.serve(server.config_from_env(os.environ), hooks)
+
+
 def main():
     if len(sys.argv) != 2:
         _usage("one argument: the action as JSON")
@@ -779,14 +821,23 @@ def main():
     except Exception as e:  # the red phase: no package yet
         _emit({"op": "load", "raised": type(e).__name__, "message": str(e)})
         return 3
+    auth_consts = {}
     for key, value in (action.get("consts") or {}).items():
         mod_name, _, const = key.partition(".")
+        if mod_name == "ccgpt_auth" and const:  # the library's, set by the serve op (above)
+            auth_consts[const] = value
+            continue
         mod = sys.modules.get("codexbridge." + mod_name)
         if mod is None or not const or not hasattr(mod, const):
             _usage("no constant " + json.dumps(key))
         setattr(mod, const, value)
+    ops = action.get("ops", [])
+    if auth_consts and not any(op.get("op") == "serve" for op in ops):
+        _usage("a ccgpt_auth.<NAME> const needs a serve op")
     rc = 0
-    for op in action.get("ops", []):
+    for op in ops:
+        if op.get("op") == "serve":
+            return _serve(op, pkg, cb, auth_consts)
         try:
             line = _run(op, pkg, cb)
         except Exception as e:  # report and continue

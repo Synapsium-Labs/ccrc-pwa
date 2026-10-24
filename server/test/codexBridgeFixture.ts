@@ -8,16 +8,16 @@
 //
 // `runBridgeDriver` runs `server/test/fixtures/codexbridge/driver.py`, which loads the package from this tree's
 // `ccd/` directory (first on `sys.path`, as the shim's direct entry does) and runs a list of ops in ONE process.
-import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { realpathSync, writeFileSync } from 'node:fs';
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { createServer, get as httpGet, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer as createNetServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pythonOrSkip } from './ccgptHarness.js';
-import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
+import { CLOSED_AUTH_BASE, plantBackendCredential } from './codexAuthFixture.js';
 
 export { driverLines } from './codexAuthFixture.js';
 
@@ -102,7 +102,8 @@ export function runBridgeDriver(
 
 /** One scripted answer of `fakeResponses`, taken in order by each `POST /responses`.
  *  - `status`, `headers`: the response head (`content-type` defaults to `text/event-stream` for an `sse` answer and to
- *    `application/json` otherwise).
+ *    `application/json` otherwise; a header given as `null` is not sent at all, so `{'content-type': null}` is an
+ *    answer with no media type).
  *  - `sse`: the stream. A string is written at once and the response ended; `{chunks, delayMs, holdOpenMs}` writes
  *    each chunk `delayMs` apart (default 0), then holds the connection open, writing nothing, for `holdOpenMs`
  *    (default 0) before it ends it: a silent upstream.
@@ -111,7 +112,7 @@ export function runBridgeDriver(
  *    accepted the connection and never answers. The answer then follows as scripted. */
 export type ResponsesAnswer = {
   status: number;
-  headers?: Record<string, string>;
+  headers?: Record<string, string | null>;
   sse?: string | { chunks: string[]; delayMs?: number; holdOpenMs?: number };
   body?: unknown;
   holdHeadMs?: number;
@@ -160,9 +161,17 @@ export async function fakeResponses(
     const t = setTimeout(() => { timers.delete(t); fn(); }, ms);
     timers.add(t);
   };
+  const head = (defaults: Record<string, string>, given: Record<string, string | null> | undefined): Record<string, string> => {
+    const out: Record<string, string> = { ...defaults };
+    for (const [k, v] of Object.entries(given ?? {})) {
+      if (v === null) delete out[k];
+      else out[k] = v;
+    }
+    return out;
+  };
   const answer = (res: ServerResponse, a: ResponsesAnswer): void => {
     if (a.sse !== undefined) {
-      res.writeHead(a.status, { 'content-type': 'text/event-stream', ...(a.headers ?? {}) });
+      res.writeHead(a.status, head({ 'content-type': 'text/event-stream' }, a.headers));
       if (typeof a.sse === 'string') {
         res.end(a.sse);
         return;
@@ -181,7 +190,7 @@ export async function fakeResponses(
       return;
     }
     const text = typeof a.body === 'string' ? a.body : a.body === undefined ? '' : JSON.stringify(a.body);
-    res.writeHead(a.status, { 'content-type': 'application/json', ...(a.headers ?? {}) });
+    res.writeHead(a.status, head({ 'content-type': 'application/json' }, a.headers));
     res.end(text);
   };
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -234,4 +243,191 @@ export async function fakeResponses(
       server.close(() => resolve());
     }),
   };
+}
+
+// ── the direct-mode bridge (Task 8) ──────────────────────────────────────────────────────────────────────────────
+
+/** The shim, whose five request hooks the driver's `serve` op takes, unchanged (plan Task 8). */
+export const SHIM_FILE = path.join(CCD_DIR, 'ccgpt-proxy.py');
+/** Stage 1's library, which the bridge loads by path (CCRC_CODEX_AUTH_LIB). */
+export const BRIDGE_AUTH_LIB = path.join(CCD_DIR, 'ccgpt-auth.py');
+/** The models a planted lane's catalogue lists, neutral ids (the plan's Global Constraints). */
+export const BRIDGE_MODELS = ['model-6.1-alpha', 'model-6-beta'] as const;
+/** The bridge's file names a planted `lane.json` carries in `bridgeFiles` (Task 10 spells them in `laneManifest`;
+ *  the fixture plants what that manifest will hold). */
+export const BRIDGE_FILES = { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' } as const;
+
+/** One planted lane: every path absolute; `key` the lane's gateway key; `cred` the planted credential's tokens (null
+ *  when none was planted). */
+export type BridgeLane = {
+  lane: string; laneDir: string; authDir: string; configDir: string; catalogue: string; settings: string;
+  stats: string; store: string; status: string; key: string; cred: { access: string; refresh: string; id: string } | null;
+};
+
+/** Plant a direct lane's files under the fixture `home`: `~/.ccrc/codex/<lane>/lane.json` (0700 directory) with
+ *  `id`, `configDir`, `authDir` (both HOME-relative, as `laneManifest` writes them) and `bridgeFiles`;
+ *  `runtime.env` (0600) with one `LITELLM_MASTER_KEY=sk-<48 hex>` line; the catalogue `~/.ccrc/models/<lane>.json`
+ *  listing `models` (default BRIDGE_MODELS); `<configDir>/settings.json` whose env carries
+ *  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` = `window` (default 400000; `null` writes no settings file); and, unless
+ *  `credential` is false, a backend credential in `authDir` through Stage 1's `plantBackendCredential` with those
+ *  options. */
+export function plantBridgeLane(
+  home: string,
+  lane: string,
+  o: { models?: readonly string[]; window?: number | null; credential?: Parameters<typeof plantBackendCredential>[1] | false } = {},
+): BridgeLane {
+  const laneDir = path.join(home, '.ccrc', 'codex', lane);
+  mkdirSync(laneDir, { recursive: true });
+  chmodSync(laneDir, 0o700);
+  const configRel = `.claude-${lane}`;
+  const authRel = `.local/share/ccrc/codex/${lane}`;
+  writeFileSync(path.join(laneDir, 'lane.json'), JSON.stringify({
+    id: lane, configDir: configRel, authDir: authRel, proxyPort: 1, litellmPort: 1,
+    units: { litellm: `ccgpt-${lane}-litellm.service`, shim: `ccgpt-${lane}-shim.service` },
+    bridgeFiles: BRIDGE_FILES,
+  }));
+  const key = `sk-${randomBytes(24).toString('hex')}`;
+  const envFile = path.join(laneDir, 'runtime.env');
+  writeFileSync(envFile, `LITELLM_MASTER_KEY=${key}\n`, { mode: 0o600 });
+  chmodSync(envFile, 0o600);
+  const modelsDir = path.join(home, '.ccrc', 'models');
+  mkdirSync(modelsDir, { recursive: true });
+  const catalogue = path.join(modelsDir, `${lane}.json`);
+  writeBridgeCatalogue(catalogue, o.models ?? BRIDGE_MODELS);
+  const configDir = path.join(home, configRel);
+  mkdirSync(configDir, { recursive: true });
+  const settings = path.join(configDir, 'settings.json');
+  const window = o.window === undefined ? 400000 : o.window;
+  if (window !== null) writeFileSync(settings, JSON.stringify({ env: { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(window) } }));
+  const authDir = path.join(home, authRel);
+  const cred = o.credential === false ? null : plantBackendCredential(authDir, o.credential ?? {});
+  return {
+    lane, laneDir, authDir, configDir, catalogue, settings, key, cred,
+    stats: path.join(laneDir, BRIDGE_FILES.stats), store: path.join(laneDir, BRIDGE_FILES.store),
+    status: path.join(authDir, 'auth.status.json'),
+  };
+}
+
+/** (Re)write a lane catalogue listing `models`, in the shape `deploy/models-op.mjs`'s `readCatalogue` reads. */
+export function writeBridgeCatalogue(file: string, models: readonly string[]): void {
+  writeFileSync(file, JSON.stringify({
+    fetchedAt: new Date().toISOString(), stale: false,
+    models: models.map((id) => ({ id, hidden: false, efforts: [] })),
+  }));
+}
+
+async function freeLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = createNetServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address() as AddressInfo;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+function laneAnswers(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = httpGet({ host: '127.0.0.1', port, path: '/ccgpt/lane', timeout: 500 }, (res) => {
+      res.resume();
+      res.once('end', () => resolve(res.statusCode === 200));
+    });
+    req.once('timeout', () => { req.destroy(); resolve(false); });
+    req.once('error', () => resolve(false));
+  });
+}
+
+/** A running bridge. `stop` sends `signal` (default SIGTERM) unless the process has already exited, and resolves
+ *  with the exit; `wait` resolves with the exit and sends nothing (a case that signalled the process itself waits
+ *  with it, since a second SIGTERM that lands while the interpreter is finalising meets the default action). */
+export type SpawnedBridge = {
+  port: number; key: string; proc: ChildProcess; stderr(): string; stdout(): string;
+  exited(): { code: number | null; signal: string | null } | null;
+  wait(): Promise<{ code: number | null; signal: string | null }>;
+  stop(signal?: NodeJS.Signals): Promise<{ code: number | null; signal: string | null }>;
+};
+
+const liveBridges = new Set<SpawnedBridge>();
+
+/** SIGKILL every bridge a case left running (an afterEach net under each case's own stop). */
+export async function killBridges(): Promise<void> {
+  await Promise.all([...liveBridges].map((b) => b.stop('SIGKILL')));
+}
+
+/** Run the bridge through the driver's `serve` op (`{"op": "serve", ...o.serve}`), on a free loopback port, with the
+ *  contract's environment for the lane `plantBridgeLane` planted under `home`. The env is built from scratch, as
+ *  `runBridgeDriver` builds it: PATH and TMPDIR, `o.env`, the contract's variables, then the two endpoint variables
+ *  (each CLOSED_AUTH_BASE unless `o.env` names a non-empty one), then HOME. Resolves once `GET /ccgpt/lane` answers
+ *  200; rejects with the bridge's stderr when it exits first or `timeoutMs` (default 10000) passes. `key` is read
+ *  from the lane's `runtime.env`. */
+export async function spawnBridge(
+  home: string,
+  lane: string,
+  o: { env?: Record<string, string>; consts?: Record<string, unknown>; timeoutMs?: number; serve?: Record<string, unknown> } = {},
+): Promise<SpawnedBridge> {
+  const resolved = path.resolve(home);
+  if (!resolved.startsWith(TMP_ROOT + path.sep)) throw new Error(`spawnBridge: home must be a fixture directory — got ${JSON.stringify(home)}`);
+  const py = pythonOrSkip();
+  if (!py) throw new Error('spawnBridge called with no python3 — guard with pythonOrSkip() first');
+  const env = o.env ?? {};
+  if ('HOME' in env) throw new Error('spawnBridge: env must not set HOME (the fixture owns it)');
+  const laneDir = path.join(resolved, '.ccrc', 'codex', lane);
+  const keyLine = readFileSync(path.join(laneDir, 'runtime.env'), 'utf8');
+  const key = /^LITELLM_MASTER_KEY=(sk-[0-9a-f]{48})\n?$/.exec(keyLine)?.[1];
+  if (!key) throw new Error('spawnBridge: the lane has no runtime.env key; plant it with plantBridgeLane');
+  const named = (k: string): string => {
+    const v = env[k];
+    return typeof v === 'string' && v !== '' ? v : CLOSED_AUTH_BASE;
+  };
+  const deadline = Date.now() + (o.timeoutMs ?? 10_000);
+  let lastErr = '';
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const port = await freeLoopbackPort();
+    const childEnv: Record<string, string> = {
+      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      TMPDIR: tmpdir(),
+      CCGPT_BRIDGE: 'direct',
+      CCGPT_ACCOUNT_ID: lane,
+      CCGPT_PROXY_PORT: String(port),
+      CCGPT_LITELLM_PORT: '1',
+      CCGPT_BRIDGE_DIR: BRIDGE_DIR,
+      CCGPT_LANE_DIR: laneDir,
+      CCRC_CODEX_AUTH_LIB: BRIDGE_AUTH_LIB,
+      CCGPT_CCRC_VERSION: 'dev',
+      CCGPT_CATALOGUE: path.join(resolved, '.ccrc', 'models', `${lane}.json`),
+      ...env,
+      CCGPT_BRIDGE_UPSTREAM_BASE: named('CCGPT_BRIDGE_UPSTREAM_BASE'),
+      CCRC_CODEX_AUTH_BASE: named('CCRC_CODEX_AUTH_BASE'),
+      HOME: resolved,
+    };
+    const action = JSON.stringify({ pkg: CCD_DIR, ops: [{ op: 'serve', ...(o.serve ?? {}) }], consts: o.consts ?? {} });
+    const proc = spawn(py, ['-I', BRIDGE_DRIVER, action], { cwd: resolved, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    let stdout = '';
+    let exit: { code: number | null; signal: string | null } | null = null;
+    const closed = new Promise<{ code: number | null; signal: string | null }>((res) => {
+      proc.once('close', (code, signal) => { exit = { code, signal }; res(exit); });
+    });
+    proc.stdout!.on('data', (c: Buffer) => { stdout += c.toString(); });
+    proc.stderr!.on('data', (c: Buffer) => { stderr += c.toString(); });
+    const bridge: SpawnedBridge = {
+      port, key, proc, stderr: () => stderr, stdout: () => stdout, exited: () => exit,
+      wait: async () => { const e = await closed; liveBridges.delete(bridge); return e; },
+      stop: async (signal: NodeJS.Signals = 'SIGTERM') => {
+        liveBridges.delete(bridge);
+        if (exit === null) proc.kill(signal);
+        return closed;
+      },
+    };
+    liveBridges.add(bridge);
+    while (exit === null && Date.now() < deadline) {
+      if (await laneAnswers(port)) return bridge;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    lastErr = stderr;
+    await bridge.stop('SIGKILL');
+    if (!/failed to bind|Address already in use/.test(stderr) || Date.now() >= deadline) break;
+  }
+  throw new Error(`spawnBridge: the bridge did not answer GET /ccgpt/lane: ${lastErr}`);
 }
