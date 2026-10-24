@@ -17,8 +17,8 @@
 // `SERVER_SETTINGS` (the keys ccrc reads where the server reads them, from the
 // server's own files), `VAR_KEY_BODIES` (the functions that may hand those
 // readers a key in a variable) and `SOURCING_BODIES` (the one function that
-// may source the box env file, for the server, and how often). A new name
-// reds a row until it is classed.
+// may source the box env file, for the server, how often, and only inside the
+// launchd command string it emits). A new name reds a row until it is classed.
 //
 // WHAT IT GUARDS: THE SPELLINGS IT NAMES (D-6746). It is not a proof that
 // no other reader exists. It sees a `${NAME…}` or `$NAME` expansion of a
@@ -26,14 +26,16 @@
 // bounded readers' literal arguments (C5), the box-env readers' keys and the
 // reader's own indirection and awk program elsewhere (C8), a nameref to a
 // setting (C9), a `-v` test of a CCRC_ name (C10), and `.` or `source` of the
-// box env file in any body SOURCING_BODIES does not list (C11): in command
-// position (after `if`, `elif`, `while`, `until`, `!`, `builtin` or `command`
-// too), of `$BOX_ENV_FILE`, a `ccrc.env` path (a quote inside it included), a
-// name bound to either, `<(…)` naming one, or `/dev/stdin <` one. A name bound
-// in a body that declares it `local` is followed in that body alone; any other
-// binding, and BOX_ENV_FILE, everywhere. `set -u` (C7) makes a bare `$NAME` of
-// an unset name abort, so an unguarded read must spell a default C5 sees; a
-// `-v` test is one guard that needs none, which is why C10 is a row of its own.
+// box env file in any body SOURCING_BODIES does not list, or outside the
+// launchd command string of the one it lists (C11): in command position (after
+// `if`, `elif`, `while`, `until`, `!`, `builtin`, `command` or a backtick too,
+// a `--` before the operand skipped), of `$BOX_ENV_FILE`, a `ccrc.env` path (a
+// quote inside it included), a name bound to either, `<(…)` naming one, or
+// `/dev/stdin <` one. A name bound in a body that declares it `local` is
+// followed in that body alone; any other binding, and BOX_ENV_FILE,
+// everywhere. `set -u` (C7) makes a bare `$NAME` of an unset name abort, so an
+// unguarded read must spell a default C5 sees; a `-v` test is one guard that
+// needs none, which is why C10 is a row of its own.
 //
 // WHAT IT DOES NOT CATCH, measured by review 891's mutants and named so no
 // reader takes this file for more: `${#NAME}`; an expansion split by a
@@ -173,9 +175,11 @@ const VAR_KEY_BODIES: Record<string, string> = {
   _ccrc_knob: 'the one reader of a setting',
 };
 
-/** The bodies that may source the box env file, each with how many times and why. Counted per body, so a second sourcing reds. */
-const SOURCING_BODIES: Record<string, { count: number; reason: string }> = {
-  _inst_plist_server: { count: 1, reason: 'the macOS server job\'s launch line: the launchd job\'s parse of ccrc.env becomes the server\'s environment, and so reaches a ccrc the server spawns as its environment, as on Linux through ccrc.service\'s EnvironmentFile; it is the server\'s reading, the same one EnvironmentFile gives on Linux' },
+/** The bodies that may source the box env file, each with how many times, where and why. Counted per body, so a second sourcing
+ *  reds; and each sourcing must sit inside the string `cmd` names (one `local cmd="…"` line), which the body expands once, as the
+ *  launchd job's `-c` argument, so a sourcing moved out of that string onto a line the body executes reds too. */
+const SOURCING_BODIES: Record<string, { count: number; cmd: string; reason: string }> = {
+  _inst_plist_server: { count: 1, cmd: 'cmd', reason: 'the macOS server job\'s launch line: the launchd job\'s parse of ccrc.env becomes the server\'s environment, and so reaches a ccrc the server spawns as its environment, as on Linux through ccrc.service\'s EnvironmentFile; it is the server\'s reading, the same one EnvironmentFile gives on Linux' },
 };
 
 /** Every name read from the environment outside the reader: `${NAME…}` with a
@@ -368,7 +372,7 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
     expect(CODE['ccd/ccrc'].split('\n').some((l) => /^set -[a-z]*u[a-z]*o pipefail$/.test(l))).toBe(true);
   });
 
-  it('C8: there is no second reader of a setting', () => {
+  it('C8: the box-env readers take the server\'s keys by name and a key in a variable only in VAR_KEY_BODIES; the reader\'s indirection, its awk program and a setting beside a file read stay in _ccrc_knob', () => {
     // Each part adds to one list, so a second reader that breaks two parts is named by both.
     const faults: string[] = [];
     // (a) the box-env readers take the server's keys by name, and a key in a variable only inside the bodies listed.
@@ -430,11 +434,12 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
     })).toEqual([]);
   });
 
-  it('C11: nothing sources the box env file (`.` or `source` of BOX_ENV_FILE, of a ccrc.env path, or of a name bound to either) but SOURCING_BODIES, by count', () => {
+  it('C11: nothing sources the box env file (`.` or `source` of BOX_ENV_FILE, of a ccrc.env path, or of a name bound to either) but SOURCING_BODIES, by count, inside its launchd command string', () => {
     // Sourcing it is a whole second reader: bash's parse of every line, every setting set at once, no refusal of a line systemd
     // reads otherwise. The doctor and the model read the file as text (awk, grep, `_box_env_value`), which is not sourcing.
-    // `.` counts only in command position: first on a line, or after `;`, `&`, `|`, `(`, `{` or `!`, and after any run of
-    // `if`, `elif`, `while`, `until`, `then`, `do`, `else`, `!`, `builtin` or `command` — never jq's `.` filter (`jq -S . "$f"`).
+    // `.` counts only in command position: first on a line, or after `;`, `&`, `|`, `(`, `{`, `!` or a backtick, and after any run of
+    // `if`, `elif`, `while`, `until`, `then`, `do`, `else`, `!`, `builtin` or `command` — never jq's `.` filter (`jq -S . "$f"`);
+    // a `--` before the operand is skipped (`. -- "$BOX_ENV_FILE"`).
     // A bound name is any assignment whose value, less a trailing `;`, `&&`, `||` or `)` (as defaultsOf drops them), is a ccrc.env
     // path or BOX_ENV_FILE itself. It is followed only inside the body that makes it when that body declares it `local` (not -g), so a
     // generic local (`f`, `src`) never reds an unrelated body; any other binding (a global such as BUE_SRC) is followed everywhere.
@@ -456,7 +461,7 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
     expect([...global], 'the file\'s own binding, and the global one today\'s code makes').toEqual(expect.arrayContaining(['BOX_ENV_FILE', 'BUE_SRC']));
     const sourced = (names: Iterable<string>): RegExp => {
       const operand = '["\']?(?:\\$\\{?(?:' + [...names].map(escapeRe).join('|') + ')\\b|[^\\s;&|)]*ccrc\\.env\\b)';
-      return new RegExp('(?:^|[;&|({!])\\s*(?:(?:if|elif|while|until|then|do|else|builtin|command|!)\\s+)*(?:\\.|source)\\s+'
+      return new RegExp('(?:^|[;&|({!`])\\s*(?:(?:if|elif|while|until|then|do|else|builtin|command|!)\\s+)*(?:\\.|source)\\s+(?:--\\s+)?'
         + '(?:' + operand + '|<\\([^)]*?' + operand + '|/dev/stdin\\s*<\\s*' + operand + ')', 'gm');
     };
     const counts = new Map<string, number>();
@@ -471,8 +476,18 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
           const o = span === null ? '(top level)' : span.owner;
           counts.set(o, (counts.get(o) ?? 0) + 1);
           if (!(o in SOURCING_BODIES)) faults.push(`${f}: ${o} sources the box env file: ${m[0].trim()}`);
+          else if (!new RegExp('^\\s*local ' + SOURCING_BODIES[o].cmd + '="[^"]*"$').test(l))
+            faults.push(`${f}: ${o} sources the box env file outside its launchd command string: ${l.trim()}`);
         }
       }
+    }
+    // The command string is the launchd job's: expanded once in the body, as the `-c` argument of the plist's ProgramArguments.
+    for (const [o, e] of Object.entries(SOURCING_BODIES)) {
+      const span = bodySpan(CODE['ccd/ccrc'], o);
+      const body = span === null ? '' : CODE['ccd/ccrc'].slice(span.start, span.end);
+      const uses = body.match(new RegExp('\\$\\{?' + e.cmd + '\\b', 'g')) ?? [];
+      if (uses.length !== 1 || !new RegExp('<string>-c</string>\\s*<string>\\$' + e.cmd + '</string>').test(body))
+        faults.push(`ccd/ccrc: ${o}'s $${e.cmd} is not expanded once, as the launchd job's -c argument (${uses.length} expansions)`);
     }
     const miscounted = Object.entries(SOURCING_BODIES).filter(([o, e]) => (counts.get(o) ?? 0) !== e.count)
       .map(([o, e]) => `${o}: ${counts.get(o) ?? 0} sourcings, listed as ${e.count}`);
