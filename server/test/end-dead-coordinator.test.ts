@@ -26,6 +26,7 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
 import { codeOnly } from './sourceScan.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 const CRASHED = 'demo-coord-crashed';
 const HEIR = 'demo-coord-heir';
@@ -389,22 +390,17 @@ describe('the journal’s trust is READ AGAIN after the claimant’s measure (wa
     const after = body.slice(measure + 'await measureClaimant('.length);
     expect(after, 'no await after the measure: the revive window stays its round trip').not.toMatch(/\bawait\b/);
     expect(after.indexOf('deps.journalReread(journal.trust)'), 'the re-read, after the measure').toBeGreaterThan(-1);
-    const close = src('close.ts');
-    const last = close.indexOf('const stop = await sweep.stillCrashed();');
+    // ARCH-35: the abandon arm is `abandonRun`, and its commit is `commitAbandon`; both are read by symbol.
+    const arm = sourceOfSymbol('server/src/coord/close.ts', 'abandonRun');
+    const mark = 'stop: await sweep.stillCrashed(), release:';
+    const last = arm.indexOf(mark);
     expect(last, 'close’s re-measure after the fleet act').toBeGreaterThan(-1);
-    const commit = close.indexOf('const closed = coord.closeRun({', last);
+    const commit = arm.indexOf('commitAbandon(deps, id, plan, causedBy, sweep, true)', last);
     expect(commit, 'then the commit').toBeGreaterThan(last);
-    // Between them sits only the arm with NO fleet act (`} else if (sweep !== undefined) { … }`), which a run whose fleet act
-    // ran never enters: nothing awaits on the path from the re-measure to the commit.
-    const between = close.slice(last + 'const stop = await sweep.stillCrashed();'.length, commit);
-    const noFleetAct = between.indexOf('    } else if (sweep !== undefined) {\n');
-    expect(noFleetAct, 'the arm with no fleet act').toBeGreaterThan(-1);
-    expect(between.slice(0, noFleetAct), 'nothing awaits after the re-measure').not.toMatch(/\bawait\b/);
-    // Whole-branch review, item 2: an absent closing line would make `indexOf` -1 and the slice the last character, so the
-    // assertion below would pass over nothing. The closing line must be found AFTER the arm's opening.
-    const armEnd = between.indexOf('\n    }\n', noFleetAct);
-    expect(armEnd, 'the closing line of the arm with no fleet act, after its opening').toBeGreaterThan(noFleetAct);
-    expect(between.slice(armEnd), 'nor after that arm, up to the commit').not.toMatch(/\bawait\b/);
+    // Between them sits only the decider's `recheck` verdict, which is synchronous: nothing awaits on the path from the
+    // re-measure to the commit, and the commit itself (`commitAbandon`, the store's synchronous close) awaits nothing.
+    expect(arm.slice(last + mark.length, commit), 'nothing awaits after the re-measure').not.toMatch(/\bawait\b/);
+    expect(sourceOfSymbol('server/src/coord/close.ts', 'commitAbandon'), 'the commit awaits nothing').not.toMatch(/\bawait\b/);
   });
 });
 
