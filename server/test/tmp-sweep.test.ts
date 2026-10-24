@@ -17,6 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { fakeDf } from './tmpSweepHelpers.js';
 
 beforeEach((ctx) => { if (process.platform !== 'linux') ctx.skip(); });
 
@@ -113,7 +114,9 @@ function fixture(): Fixture {
   const env: NodeJS.ProcessEnv = {
     ...process.env, HOME: home, CCD_TMP_SWEEP_ROOT: root,
     CCD_TMP_SWEEP_CLAUDE_RE: `/${TAG}$`, TMPDIR: fs.realpathSync(os.tmpdir()),
+    CCD_TMP_SWEEP_DF: fakeDf(base),
   };
+  delete env['FAKE_DF_PCT'];
   delete env['CCD_TMP_SWEEP_MAX_AGE_DAYS'];
 
   // Age everything, THEN write the two recent things, so the recent session's

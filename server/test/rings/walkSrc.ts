@@ -39,6 +39,10 @@ export function walkSrc({ roots, min, flat = false, match, extensions = SOURCE_R
   const out: string[] = [];
   const visit = (dir: string, depth: number): void => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
+      // `__`-prefixed entries are TRANSIENT mutants a parallel suite writes (`boot.test.ts` writes
+      // `server/src/__boot_control_mutant__.ts` for ~15s and removes it): never a source, and a rule that read one
+      // would go red on whichever shard ran beside it. Same guard as `single-definition.test.ts`'s `sources`.
+      if (e.name.startsWith('__')) continue;
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
         if (!flat && e.name !== 'node_modules') visit(abs, depth + 1);

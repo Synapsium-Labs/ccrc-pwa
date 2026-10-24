@@ -4363,6 +4363,27 @@ such a snapshot, make sure the legacy file is gone. A restore that rolls both fi
 whole file system, is outside this proof: after one, raise the cleanup pause and make a fresh confirmed change in
 Settings before allowing Live.
 
+**Orphan worktrees (fleet disk retention, D-6631).** A linked worktree that no registry row names, and that no collector
+owns, is the orphan-tree lane's: the registry orphans under the worktree root, and the `.claude/worktrees/*` and
+`.superpowers/worktrees/*` checkouts of any project. `ccd ws-audit --orphans` lists them by location class (a path
+outside those places is reported and never audited), `ws-audit --orphan-hex <hex>` answers the first refusal of a
+fourteen-rung ladder or mints a token, and `ccd ws-orphan --expect <token> --tree-hex <hex>` removes the tree with
+`git worktree remove`, never `--force`. A tree is removed only when it is clean, its HEAD is on a remote, no registry row
+names it or a path inside it, nothing holds it, and nothing in it has changed for 7 days. The server is the only
+composer of `ws-orphan`, and a child's deny list names the verb.
+The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the beat in
+`watch.ts`'s `sweepOrphanTrees`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
+pass (4 under pressure) and acts at most once per pass fleet-wide, only on two audits of one unchanged token at least an
+hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`.
+
+It ships in **shadow**: it records `orphan worktree would be removed` in the feed and runs no verb until the operator
+touches `$REG/orphan-tree-live` by hand. A tree whose HEAD is on no remote is `orphan worktree left` until
+`$REG/orphan-tree-rescue-live` also stands (set it only after the lane has run live for a week); the rescue pins HEAD and
+the tree's own reflog under `refs/ccrc/attic/orphan/` first, and a failed pin stops the act. Neither file has a writer
+in the tree. A `ccd-root` tree's branch is deleted with `branch -d`; the branches of the other two classes are left. The
+feed has one row per change of a tree's outcome and none per repeat, and `FleetHealth.disk.orphanTrees` carries counts by
+class and outcome.
+
 **Reclaim's tail, corrected in wave 7 (it is shared with `ws-expire`).** `containment-refuted` is the failed word the
 tail prints when it proves that what it would remove is not only the child's own (another session's row or tree at,
 inside or through it, a workdir that is the main checkout, a link or non-directory at the workdir); the session was
@@ -5741,6 +5762,31 @@ resolve inside `/tmp` or `$TMPDIR` or that another uid owns, and prints one summ
 the journal (`journalctl --user -u ccd-tmp-sweep.service`). `ccd-tmp-sweep --dry-run` prints what a
 pass would remove and removes nothing; `touch ~/.ccrc/tmp-sweep-paused` short-circuits every pass
 until removed. `ccrc doctor`'s `services` check warns when the timer is installed and stopped.
+
+**The live arm and the size budget** (fleet disk retention, D-6620). The rules above spare every unit a
+running or hibernated session owns, however old its contents. After the dead pass, under the same lock and
+pause file, the live arm reaches into those units' `scratchpad/` and `tasks/` (never the two directories, never
+the unit) and takes a top-level entry in two cases. **Age:** every entry under it has an mtime and ctime older
+than 14 days (3 under pressure) and every regular file an atime older too, unless its mount is `noatime`
+(then atime is not read, and the census says so; a directory's own atime never is). **Budget:** a session's
+scratch, summed over every root and unit of its uuid, is over `CCD_TMP_BUDGET_GB` (20); the first pass that
+sees it records `overSince` and gives 24 hours of grace (none under pressure), and after that the sweep takes
+entries oldest first until the total is under `CCD_TMP_BUDGET_TARGET_GB` (15), skipping any entry touched in
+the last 48 hours (a floor pressure never lowers), any entry a process holds, and any entry holding a
+repository with work on no remote (`git-work-unrescued`). Both knobs can only be raised. The roots walked are
+today's, `/tmp/claude-<uid>` when it differs, and each witnessed child leaf's `claude-<uid>`. "Held" is the one
+holder probe, `ccd path-users --json`: a cwd, an open fd, a file mapping or a `TMPDIR` at or under the entry,
+and any doubt (the probe failing, a walk running out of time) keeps the entry.
+
+A taken entry is renamed into `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>`; a pass 24 hours later (1 hour
+under pressure) asks the holder probe again and deletes it, so the session has a working day to move it back.
+**It ships in shadow:** without `~/.ccrc/tmp-sweep-live-arm` it records what it would take and touches
+nothing (no code in the tree creates that file; arming is the operator's). Pressure is the sweep's own
+measure of its filesystem (92% of bytes or inodes used, the same figure `shared/disk.ts` holds; `disk-twins.test.ts`
+pins them equal) and also shortens the dead arm to 2 days. The live arm scans at most every 6 hours, or every
+pass under pressure. Its census, `~/.ccrc/tmp-sweep.json` (`v`, `at`, `liveAt`, `pressure`, `arm`, `seq`,
+`roots`, `sessions` with each one's `budget`, `moved` rows kept 7 days or 1,000, `counts`), is replaced whole
+by a rename at the end of every pass, shadow or live. The sweep is its only writer.
 
 ### Pane-scope sweep (ccd-scope-sweep)
 

@@ -101,15 +101,10 @@ export const UNAUTHENTICATED_HOURLY_REQUEST_BUDGET = 60;
 /** A GitHub listing that has not answered in 10 s is not going to; the lane
  *  is void-dispatched, so this bounds a request, not the tick. */
 export const CATALOGUE_TIMEOUT_MS = 10_000;
-/** Fix round 2 (C3, ruling): the SCHEDULED poll's own cadence (`watch.ts`'s
- *  `tick()`, gated above the registry's fail-shut return, D-3198) — moved
- *  here, catalogue.ts owning it, so `routes.ts`'s refresh-door interval can
- *  derive `SCHEDULED_POLLS_PER_HOUR` from the SAME constant `watch.ts`
- *  polls on, rather than a second copy. GitHub's unauthenticated listing
- *  budget is 60 requests an hour per IP and a 304 still spends one, so every
- *  30 minutes is 2 scheduled polls an hour, leaving the rest of the budget
- *  to `POST /api/updates/refresh`. */
-export const CATALOGUE_POLL_INTERVAL_MS = 30 * 60_000;   // D-3404: declared here, not in watch.ts (which imports it)
+/** The SCHEDULED poll's own cadence: declared in `laneSchedule.ts` with the watcher's other cadences (D-5862), re-exported
+ *  here so `routes.ts`'s refresh-door interval derives `SCHEDULED_POLLS_PER_HOUR` from the SAME constant the watcher polls on
+ *  (fix round 2, C3; D-3218), never a second copy. */
+export { CATALOGUE_POLL_INTERVAL_MS } from '../laneSchedule.js';   // D-3404, D-5862
 export const NOTES_CAP_BYTES = 4096;
 export const NOTES_MARKER = '…';
 /** D-3209: a hostile or oversized listing must never reach `JSON.parse` or
