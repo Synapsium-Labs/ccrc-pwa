@@ -1,4 +1,4 @@
-// D-TBD-ran-required (ARCH-10, #543, step 2): `ran` is required on both results (`ran: true` on the ran arm, `ran: false` on the not-ran arm), and the sites that read the runner's
+// D-6840 (ARCH-10, #543, step 2): `ran` is required on both results (`ran: true` on the ran arm, `ran: false` on the not-ran arm), and the sites that read the runner's
 // words read it first. Proven here, beside `ran-arm.test.ts` (the runners and the two lanes of step 1):
 //   - the archive door's outcome never reads a refusal word off a call that never ran;
 //   - the docs adapter reads the link's faces off the arm, and a spawn arm whose halves were measured (a local ccd that

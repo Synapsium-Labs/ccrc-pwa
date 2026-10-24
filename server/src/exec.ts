@@ -25,7 +25,7 @@ interface ExecAnswer {
   signal?: string | null;
 }
 
-/** D-6034, D-TBD-ran-required: the `ran` discriminant; it is required on both arms, `ran: true` on the ran arm and `ran: false` on the not-ran arm.
+/** D-6034, D-6840: the `ran` discriminant; it is required on both arms, `ran: true` on the ran arm and `ran: false` on the not-ran arm.
  *  `ran: true` is a command that ran and exited; `ran: false` is a runner's own answer that it never ran (or may not have); `code: 1` and `stderr`
  *  stay forged on that arm exactly as before, so a reader of `code` alone is unchanged. A reader that classifies a
  *  refusal must narrow on `ran === false` FIRST: no refusal, die or composition error is ever read off a forged code.

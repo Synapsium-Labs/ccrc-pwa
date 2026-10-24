@@ -128,7 +128,7 @@ describe('ccrc-agent exec whitelist', () => {
     }
   });
 
-  it('says ran:false, additively, when the exec never started (a spawn error), and nothing else about ran otherwise (D-TBD-ran-required)', async () => {
+  it('says ran:false, additively, when the exec never started (a spawn error), and nothing else about ran otherwise (D-6840)', async () => {
     fixture = makeFixture();
     agent = await boot(fixture);
     client = new TestClient(agent.port);

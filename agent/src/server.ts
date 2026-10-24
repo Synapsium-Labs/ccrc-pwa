@@ -358,7 +358,7 @@ function runExec(
       const code = error
         ? (((error as NodeJS.ErrnoException & { code?: number }).code as number | undefined) ?? 1)
         : 0;
-      // D-TBD-ran-required (ARCH-10, #543): a SPAWN error (node names the syscall `spawn <cmd>`: ENOENT, EACCES) means
+      // D-6840 (ARCH-10, #543): a SPAWN error (node names the syscall `spawn <cmd>`: ENOENT, EACCES) means
       // no child ever existed, so the forged 1 is said to be one: `ran: false`, additive (an older server ignores the key
       // and reads the exit 1 it always read). Any other string code (a maxBuffer overflow) had a child and stays as it was.
       const spawnErr = error as (NodeJS.ErrnoException & { syscall?: string }) | null;

@@ -241,7 +241,7 @@ async function actOn(
         deps.log(`ccrc-server: hibernated ${id} idle=${hours(v.idleMs)}h (D-5242)`);
         return { kind: 'hibernated' };
       }
-      // D-TBD-ran-required: a call that never ran has no `session-busy` to read off the runner's forged stderr.
+      // D-6840: a call that never ran has no `session-busy` to read off the runner's forged stderr.
       const busy = res.ran === false ? null : SESSION_BUSY.exec(res.stderr);
       if (busy !== null) {
         note(`ccrc-server: hibernate-skip ${id}: ccd re-measured it as ${busy[1] || 'busy'} — asked again next sweep`);

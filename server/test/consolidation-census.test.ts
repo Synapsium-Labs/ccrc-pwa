@@ -209,7 +209,7 @@ describe('runCcdOldFoldSites: runCcd( call sites under server/src not yet narrow
     } finally { rmSync(t2, { recursive: true, force: true }); }
   });
 
-  it('REAL: every runCcd( site answers the not-ran arm, and the count stays at 0 (D-TBD-ran-required; ARCH-10, #543)', () => {
+  it('REAL: every runCcd( site answers the not-ran arm, and the count stays at 0 (D-6840; ARCH-10, #543)', () => {
     const sites = runCcdSiteArms();
     show('runCcdSiteArms', sites);
     // A query that silently matched nothing would read as "every site is accounted": the swap route is a known site.

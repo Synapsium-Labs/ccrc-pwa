@@ -167,7 +167,7 @@ async function fetchDocs(deps: CcdDocsDeps, project: string, branch: string | nu
 function classify<T extends { ok: true }>(verb: DocsVerb, res: CcdResult, job: DocsJob, accept: DocsAccept<T>):
   T | DocsFailureBody {
   const ending = ccdEnding(res);
-  // D-TBD-ran-required: the runner says a call never ran (or may not have), typed, so the link's three faces are read
+  // D-6840: the runner says a call never ran (or may not have), typed, so the link's three faces are read
   // off its `ran` arm and not inferred from a matching stderr string. Only the arm whose kill halves are unmeasured is
   // the link: a local spawn error (ccd absent) measured both halves, and stays the `ccd-fault` it always was.
   if (res.ran === false && ending.kind === 'unmeasured') {

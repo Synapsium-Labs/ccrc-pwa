@@ -23,7 +23,7 @@ interface CcdAnswer {
   signal: string | null | Unmeasured;
 }
 
-/** D-6034, D-TBD-ran-required (ARCH-10, #543): the runner's `ran` discriminant, CARRIED by `ccd()` (`lifecycle.ts`) and
+/** D-6034, D-6840 (ARCH-10, #543): the runner's `ran` discriminant, CARRIED by `ccd()` (`lifecycle.ts`) and
  *  required on both arms (an agent older than the key is read as `ran: true` by `asExecResult`): `ran: true` is a ccd that ran and exited (`ok` is its exit code 0); `ran: false` is the not-ran arm, whose
  *  every other field is what it was before the arm existed (`ok: false`, the runner's `stderr`, and `killed`/`signal`
  *  from the same hop), so a reader of `ok` alone narrows to the ran arm by `ok` itself. A reader that classifies a

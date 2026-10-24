@@ -238,7 +238,7 @@ export function filesNaming(needles: readonly string[], root: string = REPO): st
 /** How many code lines after a `runCcd(` call `runCcdOldFoldSites` reads for the call's `ran` narrowing. */
 export const RAN_NARROW_WINDOW = 12;
 
-/** The readers a `runCcd(` result may be handed to whole, each of which reads `ran` FIRST (D-6034, D-TBD-ran-required). */
+/** The readers a `runCcd(` result may be handed to whole, each of which reads `ran` FIRST (D-6034, D-6840). */
 export const RAN_CARRY_READERS: readonly string[] = [
   'cutShort', 'sweepFailureReason', 'failureDetail', 'classifyAddFailure', 'classifyTitleFailure', 'archiveOutcome',
 ];
@@ -306,7 +306,7 @@ export const RAN_TABLE: readonly RanTableRow[] = [
 /** One `runCcd(` site and how it answers the not-ran arm; `null` when nothing accounts for it. */
 export interface RanSite extends CensusSite { readonly arm: RanArm | null }
 
-/** D-6034, D-TBD-ran-required (ARCH-10, #543): every `runCcd(` call expression under `server/src`, with how it answers
+/** D-6034, D-6840 (ARCH-10, #543): every `runCcd(` call expression under `server/src`, with how it answers
  *  the not-ran arm. A site is `explicit` when the variable it assigns (`res = await deps.runCcd(...)`, with or without
  *  `const`/`let`) is read as `<name>.ran === false` within the next `RAN_NARROW_WINDOW` code lines, and before a line
  *  that opens with `}` at column 0 (the end of the declaration the call sits in); `carried` when that name is an
