@@ -722,12 +722,16 @@ describe('/api/fleet/health: the archived-held block (D-5943)', () => {
 // D-6615 (fleet disk retention spec §2.5): the optional `disk` block. Absent before the first sweep, never `null`; a
 // present block round-trips through its single reader; nothing else on the route moves.
 describe('/api/fleet/health: the disk block (D-6615)', () => {
-  async function lane(env: Record<string, string> = {}) {
+  async function lane(env: Record<string, string> = {}, census: string | null = null) {
     const home = mkTmp('ccrc-fh-dk-');
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home, ...env });
     const io = {
       ...localIO,
+      // The tmp sweep census (D-6624) is read through the same io: absent unless a test hands one in.
+      lstatMeasured: async () => (census === null ? { ok: false as const, reason: 'absent' as const } : { ok: true as const, kind: 'regular' as const }),
+      statMeasured: async () => (census === null ? { ok: false as const, reason: 'absent' as const } : { ok: true as const, size: census.length }),
+      readFileMeasured: async () => (census === null ? { ok: false as const, reason: 'absent' as const } : { ok: true as const, content: census }),
       statfsMeasured: async () => ({
         ok: true as const,
         measured: {
@@ -766,6 +770,38 @@ describe('/api/fleet/health: the disk block (D-6615)', () => {
       } finally { await app.close(); }
     });
   }
+
+  // D-6624 (plan Task DR-12): `holders` is the census's five largest sessions; a census that cannot be read names none.
+  const GIB = 1024 ** 3;
+  const row = (id: string, g: number): Record<string, unknown> => ({
+    id, uuid: id.padEnd(36, 'x'), bytes: g * GIB,
+    budget: { state: 'ok', overSince: null, enforceAt: null, removedBytes: 0, kept: [] },
+  });
+  const censusText = (g: number[]): string => JSON.stringify({
+    v: 1, at: 1, pressure: false, arm: 'shadow', seq: 0, moved: [], sessions: g.map((x, i) => row(`project-a-s${i}`, x)),
+  });
+
+  it('holders carry the tmp sweep census\'s five largest sessions, largest first', async () => {
+    const { app, watcher, health } = await lane({}, censusText([1, 9, 4, 7, 2, 8, 3]));
+    try {
+      await watcher.sweepDisk();
+      await watcher.sweepTmpSweepCensus();
+      expect(readDiskHealth(await health())?.holders).toEqual([
+        { label: 'project-a-s1', bytes: 9 * GIB }, { label: 'project-a-s5', bytes: 8 * GIB }, { label: 'project-a-s3', bytes: 7 * GIB },
+        { label: 'project-a-s2', bytes: 4 * GIB }, { label: 'project-a-s6', bytes: 3 * GIB },
+      ]);
+    } finally { await app.close(); }
+  });
+
+  it('a malformed census is unmeasured and the holders are empty', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { app, watcher, health } = await lane({}, '{"v":1,"sessions":[');
+    try {
+      await watcher.sweepDisk();
+      await watcher.sweepTmpSweepCensus();
+      expect(readDiskHealth(await health())?.holders).toEqual([]);
+    } finally { await app.close(); warn.mockRestore(); }
+  });
 });
 
 // D-6631 (fleet disk retention DR-19): the orphan-worktree lane's counts, which the `disk` block carries as `orphanTrees`

@@ -3987,7 +3987,7 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
     // Anti-vacuity (F16, m2): the derived list really does carry all nine —
     // a NODE_FILES shrink or a broken import would otherwise let this
     // describe run over an empty or partial set and pass for the wrong reason.
-    expect(NINE_BASENAMES, 'NODE_FILE_BASENAMES did not import, or the vocabulary shrank').toHaveLength(9);
+    expect(NINE_BASENAMES, 'NODE_FILE_BASENAMES did not import, or the vocabulary shrank').toHaveLength(10);
     const files = ALL.filter((f) => rel(f).startsWith('agent/src/'))
       .map((f) => ({ path: rel(f), src: readFileSync(f, 'utf8') }));
     expect(files.length, 'the agent/src scan is over nothing').toBeGreaterThan(3);
@@ -3996,7 +3996,7 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
 
   it('CONTROL: a planted re-list of all nine basenames beside the import reds the check above (F16)', () => {
     const real = readFileSync(path.join(ccrcRoot, 'agent', 'src', 'whitelist.ts'), 'utf8');
-    const planted = `${real}\nconst ALSO = ["build.json", 'installed', \`ccrc-caps\`, 'floor', "previous", 'node-id', \`update.json\`, "update-intent", 'box-token-generation'];\n`;
+    const planted = `${real}\nconst ALSO = ["build.json", 'installed', \`ccrc-caps\`, 'floor', "previous", 'node-id', \`update.json\`, "update-intent", 'box-token-generation', 'tmp-sweep.json'];\n`;
     expect(agentBasenameHolders([{ path: 'agent/src/whitelist.ts', src: planted }]),
       'a planted re-list of all nine went unseen').toEqual(['agent/src/whitelist.ts']);
     expect(agentBasenameHolders([{ path: 'agent/src/whitelist.ts', src: real }]),

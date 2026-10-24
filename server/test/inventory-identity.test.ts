@@ -27,7 +27,7 @@ const U1 = '0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0';
 const U2 = '11111111-2222-4333-8444-555555555555';
 const NOW = 1_758_500_120_000;
 
-type Measured = Exclude<NodeFileKey, 'projection' | 'tokenGeneration'>;
+type Measured = Exclude<NodeFileKey, 'projection' | 'tokenGeneration' | 'tmpSweep'>;
 const stampJson = (): string =>
   `${JSON.stringify({ sha: SHA, ref: 'main', builtAt: '2026-09-22T10:00:00Z', dirty: false, version: 'v0.0.12' })}\n`;
 /** Every node file but `node-id` (`update-inventory.test.ts`'s NO_ID). */
