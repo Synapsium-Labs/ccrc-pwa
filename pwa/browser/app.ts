@@ -9,8 +9,10 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { Browser, BrowserContext, Page } from 'playwright-core';
+import type { Browser, BrowserContext, Page, WebSocketRoute } from 'playwright-core';
 import { SKIN_STORAGE_KEY, THEME_STORAGE_KEY } from '@ccrc/ui';
+import type { FleetSession } from '../../shared/api';
+import { fleetSession } from '../test/fleetFixture';
 
 const PWA = path.join(import.meta.dirname, '..');
 
@@ -74,10 +76,12 @@ export async function serveDist(dist: string): Promise<DistServer> {
 
 /** What the app's `/api` and `/ws` answer. `api` is keyed by pathname; any other `/api` path answers `{}`, which every
  *  poller the shell mounts reads as "nothing to say". `/ws/fleet` sends each of `fleetFrames` once it opens; every
- *  other socket opens and stays silent. */
+ *  other socket opens and stays silent, unless `socketFrames` names its pathname: each frame listed there is sent once the
+ *  socket opens (a session's backlog, for `/ws/session/<id>`). */
 export interface AppFixture {
   readonly api: Readonly<Record<string, unknown>>;
   readonly fleetFrames: readonly unknown[];
+  readonly socketFrames?: Readonly<Record<string, readonly unknown[]>>;
 }
 
 export interface AppView {
@@ -93,6 +97,9 @@ export interface OpenedApp {
   readonly page: Page;
   /** Every uncaught page error, in order. */
   readonly errors: string[];
+  /** Send `frame` (as JSON) to the NEWEST socket opened on `path` (a pathname such as `/ws/fleet`) and throw when none
+   *  is open. Test code only: a frame-cost measure drives the app's own socket exactly as the server would. */
+  send(path: string, frame: unknown): void;
 }
 
 /** A context at `view.width` (844 tall below 900, as a phone; 900 above), with a touch screen below 900 or when
@@ -115,11 +122,184 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
     const body = Object.hasOwn(fixture.api, pathname) ? fixture.api[pathname] : {};
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   });
+  // Every routed socket, per pathname, in the order it opened: `send` talks to the newest one, and a socket that closed
+  // (a reconnect replaced it) leaves the list.
+  const sockets = new Map<string, WebSocketRoute[]>();
   await ctx.routeWebSocket(/\/ws\//, (ws) => {
-    if (new URL(ws.url()).pathname === '/ws/fleet') for (const frame of fixture.fleetFrames) ws.send(JSON.stringify(frame));
+    const pathname = new URL(ws.url()).pathname;
+    sockets.set(pathname, [...(sockets.get(pathname) ?? []), ws]);
+    ws.onClose(() => { sockets.set(pathname, (sockets.get(pathname) ?? []).filter((x) => x !== ws)); });
+    const frames = pathname === '/ws/fleet' ? fixture.fleetFrames : (fixture.socketFrames?.[pathname] ?? []);
+    for (const frame of frames) ws.send(JSON.stringify(frame));
   });
   const page = await ctx.newPage();
   const errors: string[] = [];
   page.on('pageerror', (e) => { errors.push(e.message); });
-  return { ctx, page, errors };
+  const send = (path: string, frame: unknown): void => {
+    const open = sockets.get(path) ?? [];
+    const newest = open.at(-1);
+    if (newest === undefined) throw new Error(`no socket is open on ${path} (open: ${[...sockets.keys()].join(', ') || 'none'})`);
+    newest.send(JSON.stringify(frame));
+  };
+  return { ctx, page, errors, send };
+}
+
+// ---- frame cost: the fleet fixture and the meter (D-6438, C6; C7 and C9 reuse them) --------------------------------
+// Test code only. A fleet frame is the whole session list on every change, so what a frame COSTS is the main thread's
+// time between the socket delivering it and the page being idle again. `fleetFixture` builds a deterministic fleet of
+// C0's shape (15 projects, 17 lanes, neutral names), `fleetFrameAt` returns the frame after `k` steps of about nine
+// rows changing each, and `frameCost` sends frames to the app's own socket and reads Chrome's TaskDuration and
+// ScriptDuration around each one.
+
+/** The page clock the cost and render cases fix, and the base of every time field in the fixture (epoch ms). */
+export const FIXTURE_NOW_MS = 1_792_362_479_000;
+export const FIXTURE_PROJECTS = 15;
+export const FIXTURE_LANES = 17;
+/** How many rows one step of `fleetFrameAt` changes. */
+export const ROWS_PER_STEP = 9;
+
+const letter = (i: number): string => String.fromCharCode(97 + i);
+const HUE_CYCLE = ['cyan', 'violet', 'blue', 'magenta', 'amber', 'green'] as const;
+
+export interface FleetFixtureData {
+  readonly sessions: readonly FleetSession[];
+  /** `/api/accounts`'s `roster`: 17 entries, `lane-a` ... `lane-q`. */
+  readonly roster: readonly object[];
+  /** `/api/accounts`'s `accounts`: one usage reading per lane. */
+  readonly usage: readonly object[];
+  /** `/api/projects`'s rows: `project-a` ... `project-o`. */
+  readonly projects: readonly { readonly name: string; readonly workdir: string }[];
+}
+
+/** `n` workspace rows spread over 15 projects and 17 lanes, in a mix of buckets (working, idle, a few asking). Ids are
+ *  `ws-<i>`; the same `n` always gives the same rows. */
+export function fleetFixture(n: number): FleetFixtureData {
+  const projects = Array.from({ length: FIXTURE_PROJECTS }, (_, i) => ({ name: `project-${letter(i)}`, workdir: `/w/project-${letter(i)}` }));
+  const lanes = Array.from({ length: FIXTURE_LANES }, (_, i) => `lane-${letter(i)}`);
+  const roster = lanes.map((id, i) => ({ id, label: id, hue: HUE_CYCLE[i % HUE_CYCLE.length]!, pool: null, homeAble: true, hidden: false }));
+  const usage = lanes.map((wrapper, i) => ({
+    wrapper, five: 10 + ((i * 7) % 80), seven: 20 + ((i * 11) % 70), ts: FIXTURE_NOW_MS / 1000,
+    fiveResetAt: FIXTURE_NOW_MS / 1000 + 7_800, sevenResetAt: FIXTURE_NOW_MS / 1000 + 259_800,
+    fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
+  }));
+  const sessions = Array.from({ length: n }, (_, i): FleetSession => {
+    const project = projects[i % FIXTURE_PROJECTS]!.name;
+    const lane = lanes[i % FIXTURE_LANES]!;
+    const kind = i % 6; // 0,3 working; 1,2,4 idle; 5 asking
+    const working = kind === 0 || kind === 3;
+    return fleetSession({
+      id: `ws-${i}`, wrapper: lane, home: lane, project, workdir: `/w/${project}/ws-${i}`, workspace: `ws-${i}`,
+      name: `task ${i}`, branch: `ws/task-${i}`, status: working ? 'busy' : 'idle', bucket: kind === 5 ? 'attention' : working ? 'working' : 'idle',
+      statusUpdatedAt: FIXTURE_NOW_MS - (60 + i * 37) * 1000, ctxPct: (i * 13) % 90, model: 'Model A (1M context)', effort: 'high',
+    });
+  });
+  return { sessions, roster, usage, projects };
+}
+
+/** The `AppFixture.api` entries a fleet of `data` needs, over any extra the case adds. */
+export function fleetApi(data: FleetFixtureData, extra: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    '/api/accounts': { accounts: data.usage, projected: null, roster: data.roster },
+    '/api/projects': { roots: ['/w'], projects: data.projects },
+    '/api/runs': [], '/api/claims': [],
+    ...extra,
+  };
+}
+
+/** The `/ws/fleet` frame that carries `sessions`. */
+export const fleetFrame = (sessions: readonly FleetSession[]): { type: 'fleet'; sessions: readonly FleetSession[] } => ({ type: 'fleet', sessions });
+
+/** The fleet after `k` steps (k = 0 is `base`). Step j changes rows `(j-1)*9 ... (j-1)*9+8` (mod n): a working row goes
+ *  idle and an idle one works, an asking one stays asking, and every touched row moves its `statusUpdatedAt` and its
+ *  `ctxPct`. Cumulative, so each frame differs from the one before it in exactly those nine rows. */
+export function fleetFrameAt(base: readonly FleetSession[], k: number): FleetSession[] {
+  const rows = base.map((s) => ({ ...s }));
+  const n = rows.length;
+  for (let j = 1; j <= k; j += 1) {
+    for (let r = 0; r < ROWS_PER_STEP; r += 1) {
+      const row = rows[((j - 1) * ROWS_PER_STEP + r) % n]!;
+      if (row.bucket === 'working') { row.bucket = 'idle'; row.status = 'idle'; }
+      else if (row.bucket === 'idle') { row.bucket = 'working'; row.status = 'busy'; }
+      row.statusUpdatedAt = FIXTURE_NOW_MS - 30_000 + j * 1000;
+      row.ctxPct = ((row.ctxPct ?? 0) + 7 + j) % 100;
+    }
+  }
+  return rows;
+}
+
+/** About `count` neutral transcript events for a session's backlog: user text, assistant text with a code block, and
+ *  tool calls with their results, in a fixed rotation. */
+export function longTranscript(count: number): object[] {
+  const ts = new Date(FIXTURE_NOW_MS - 3_600_000).toISOString();
+  const events: object[] = [];
+  let t = 0;
+  while (events.length < count) {
+    t += 1;
+    events.push({ kind: 'user', uuid: `q${t}`, ts, text: `Step ${t}: please check the module and report what you find.` });
+    events.push({ kind: 'assistant', uuid: `a${t}`, ts, text:
+      `Looking at step ${t}. The helper returns early when the list is empty:\n\n\`\`\`ts\nexport function pick(items: string[]): string | null {\n  return items.length === 0 ? null : items[0] ?? null;\n}\n\`\`\`\n\nI will read the file, then run the checks.` });
+    events.push({ kind: 'tool_use', uuid: `u${t}`, ts, toolId: `t${t}`, name: t % 2 === 0 ? 'Read' : 'Bash',
+      input: JSON.stringify(t % 2 === 0 ? { file_path: `/w/project-a/src/module-${t}.ts` } : { command: `npm run check -- --filter module-${t}` }) });
+    events.push({ kind: 'tool_result', ts, toolId: `t${t}`, text: `checked module-${t}: 12 passed`, isError: false });
+    events.push({ kind: 'assistant', uuid: `b${t}`, ts, text: `Step ${t} is clean: nothing to change.` });
+  }
+  return events.slice(0, count);
+}
+
+/** The frame a session socket sends on open. */
+export const backlogFrame = (events: readonly object[]): object => ({
+  type: 'backlog', uuid: 'u-1', events, offset: 1, file: '/w/t.jsonl', missing: false, searchComplete: true, fileMeasured: true,
+});
+
+export interface Cost { readonly taskMs: number; readonly scriptMs: number }
+export interface FrameCost {
+  /** One window of `gapMs` with no frame sent: what the page costs doing nothing. */
+  readonly idle: Cost;
+  /** One entry per frame: the main thread's TaskDuration and ScriptDuration over the `gapMs` after it was sent. */
+  readonly frames: readonly Cost[];
+  readonly median: Cost;
+  readonly mean: Cost;
+}
+
+const medianOf = (xs: readonly number[]): number => {
+  const v = [...xs].sort((a, b) => a - b);
+  if (v.length === 0) return 0;
+  return v.length % 2 === 1 ? v[(v.length - 1) / 2]! : (v[v.length / 2 - 1]! + v[v.length / 2]!) / 2;
+};
+const meanOf = (xs: readonly number[]): number => (xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length);
+
+/** The median and the mean of `costs`, each of the two figures on its own. */
+export function summarize(costs: readonly Cost[]): { readonly median: Cost; readonly mean: Cost } {
+  return {
+    median: { taskMs: medianOf(costs.map((c) => c.taskMs)), scriptMs: medianOf(costs.map((c) => c.scriptMs)) },
+    mean: { taskMs: meanOf(costs.map((c) => c.taskMs)), scriptMs: meanOf(costs.map((c) => c.scriptMs)) },
+  };
+}
+
+/** Send each of `frames` to the newest socket on `path`, `gapMs` apart, and read Chrome's `TaskDuration` and
+ *  `ScriptDuration` (`Performance.getMetrics`, seconds) before and after each window. One idle window of `gapMs` with
+ *  no frame is measured first. Nothing runs in the page: the meter is a CDP session on the test side. */
+export async function frameCost(app: OpenedApp, path: string, frames: readonly unknown[], gapMs: number): Promise<FrameCost> {
+  const cdp = await app.ctx.newCDPSession(app.page);
+  try {
+    await cdp.send('Performance.enable');
+    const read = async (): Promise<Cost> => {
+      const { metrics } = await cdp.send('Performance.getMetrics');
+      const get = (name: string): number => metrics.find((m) => m.name === name)?.value ?? Number.NaN;
+      return { taskMs: get('TaskDuration') * 1000, scriptMs: get('ScriptDuration') * 1000 };
+    };
+    const window = async (frame: { readonly frame: unknown } | null): Promise<Cost> => {
+      const a = await read();
+      if (frame !== null) app.send(path, frame.frame);
+      await app.page.waitForTimeout(gapMs);
+      const b = await read();
+      return { taskMs: b.taskMs - a.taskMs, scriptMs: b.scriptMs - a.scriptMs };
+    };
+    const idle = await window(null);
+    const costs: Cost[] = [];
+    for (const frame of frames) costs.push(await window({ frame }));
+    return { idle, frames: costs, ...summarize(costs) };
+  } finally {
+    await cdp.detach().catch(() => { /* the context closing first is fine */ });
+  }
 }
