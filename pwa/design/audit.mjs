@@ -897,7 +897,7 @@ export const INHERITED_GROUNDS = {
   },
   '.dlg-later:disabled': {
     under: ['var(--bg-sheet)', 'var(--bg-surface)'],
-    why: "D-6325 (the-ask-holds-through-a-reconnect): Deny's disabled look while the reconnect gap holds the ask, tertiary ink as the own-words Send and the tab chips take. It sits in .dlg-actions inside the ask sheet's <Sheet>, whose panel paints background: var(--bg-sheet) (its bg-sheet utility, ui/src/primitives/sheet.tsx:275); the rule paints no ground and its selector names no painted ancestor. Registered rather than grandfathered: the ground is recoverable by reading the component. D-6326: at the desk the same row sits in the inline ask card, `.ask-inline` (chat.css), which paints background: var(--bg-surface), so both grounds are measured.",
+    why: "D-6325 (the-ask-holds-through-a-reconnect): Deny's disabled look while the reconnect gap holds the ask, tertiary ink as the own-words Send and the tab chips take. It sits in .dlg-actions inside the ask sheet's <Sheet>, whose panel paints background: var(--bg-sheet) (its bg-sheet utility, ui/src/primitives/sheet.tsx#Sheet); the rule paints no ground and its selector names no painted ancestor. Registered rather than grandfathered: the ground is recoverable by reading the component. D-6326: at the desk the same row sits in the inline ask card, `.ask-inline` (chat.css), which paints background: var(--bg-surface), so both grounds are measured.",
   },
   '.opt-inert': {
     under: ['var(--bg-sheet)'],
