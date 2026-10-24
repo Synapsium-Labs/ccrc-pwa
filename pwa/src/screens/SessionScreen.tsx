@@ -3,7 +3,8 @@
 // banners for every degraded state (offline, dead/read-only, missing
 // transcript), the chat list, and the optimistic composer. The fleet store
 // (connected app-wide in app.tsx) supplies the header's live identity.
-// DialogSheet and the TerminalDrawer mount at the bottom.
+// DialogSheet mounts between the transcript and the strips (its card is inline at the desk), the TerminalDrawer at the
+// bottom.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { backgroundOnlyRefusal, repoLabel, sessionWithCoordinator, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
@@ -210,6 +211,10 @@ export function SessionScreen({
   // `DialogSheet` to clear a dismissal the reader had made. It carries no
   // answer and cannot send — raising the sheet is the entire contract.
   const [raise, setRaise] = useState(0);
+  // D-6326: is the INLINE ask card mounted (the desk)? Told by `DialogSheet` through `AskSurface`, so one fact answers
+  // for the transcript (its live ask card points at the card), the Escape interrupt (it stands down) and the composer
+  // (Send holds). A phone's sheet never reports, so none of the three changes there.
+  const [askInline, setAskInline] = useState(false);
   // Lifecycle surfaces behind the header's overflow menu.
   const [swapOpen, setSwapOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -495,6 +500,7 @@ export function SessionScreen({
   useEscapeInterrupt({
     busy: effectiveStatus === 'busy',
     onInterrupt: () => void interrupt('escape-key'),
+    askInline,
   });
 
   // The chrome is the skin's (W2 Task S7c, D-5471): Refined's short header, or the shared header where a skin places
@@ -524,6 +530,7 @@ export function SessionScreen({
     <div
       className="chat"
       data-acct={acct}
+      data-ask-inline={askInline ? 'true' : undefined}
       data-kb={kbInset > 0 ? 'true' : undefined}
       style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}
     >
@@ -636,11 +643,25 @@ export function SessionScreen({
             onRetry={(key) => useStore.getState().retry(key)}
             onDiscard={(key) => useStore.getState().discard(key)}
             askPending={askPending}
+            askBelow={askInline}
             answerLabel={answerLabel}
             onAnswer={() => setRaise((n) => n + 1)}
           />
         )}
       </div>
+
+      {/* D-6326: the ask, answered where it is asked. At the desk the controller draws an inline card here, between the
+          transcript and the strips, in a keyed slot of its own (never keyed by the skin, so a switch keeps the card
+          and the composer's text); on a phone it draws the Sheet, which portals, and this slot holds nothing. */}
+      <DialogSheet
+        key="ask"
+        id={id}
+        store={useStore}
+        onOpenTerminal={openTerminal}
+        raise={raise}
+        asker={asker}
+        onInline={setAskInline}
+      />
 
       {/* The strips in ONE container under the transcript, in both skins (W2 Task S7c), until S8 and S12 place them
           by width. */}
@@ -673,10 +694,10 @@ export function SessionScreen({
           // Stop in the send slot (W2 Task S7b, D-5471): the same LIVE `busy` the Escape interrupt reads.
           busy={effectiveStatus === 'busy'}
           onInterrupt={(source) => void interrupt(source)}
+          askUp={askInline}
         />
       </div>
 
-      <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} raise={raise} asker={asker} />
       <PickSheet
         open={picker === 'model'}
         onClose={() => setPicker(null)}

@@ -299,11 +299,14 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     // just above.
     case 'mail':
       return { ...s, mail: msg.mail };
-    // The hook-sourced envelope (Task 8, PR C). It resets the exact same way
-    // `dialog` does above: only its own `_cleared` message (and the store's
-    // initial state) null it out — `rotated` below touches events/uuid/offset
-    // only, because a transcript switch does not itself mean a live menu (or
-    // the hook's envelope for one) went away.
+    // The hook-sourced envelope (Task 8, PR C). Its own `_cleared` message
+    // (and the store's initial state) null it out, as `dialog_cleared` does
+    // `dialog` above — `rotated` below touches events/uuid/offset only,
+    // because a transcript switch does not itself mean a live menu (or the
+    // hook's envelope for one) went away. One difference since D-6325: the
+    // socket leaving `open` also lowers `dialog` (`onState`), and never `ask`,
+    // which stays for the held surface while `askFrameSeen` says this
+    // connection has not spoken about it.
     // Either frame is this connection's statement about the envelope, so either sets `askFrameSeen` (D-6325).
     case 'ask':
       return { ...s, ask: msg.ask, askFrameSeen: true };

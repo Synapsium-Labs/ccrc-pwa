@@ -6,6 +6,11 @@
 //
 // The `esc` keycap exists because phone keyboards have no Escape key. Where one exists ((pointer: fine)) the key is
 // the better control and the cap is hidden, so the binding lives wherever the cap is hidden: here, for every skin.
+//
+// D-6326: while an INLINE ask card is mounted (the desk, `AskSurface.tsx`) the hook stands down altogether. The card is no
+// dialog, so the open-dialog guard below never sees it; and an Escape from the page body or a transcript row on a busy
+// session, with a question up, would stop the turn the question belongs to and decline it by accident. The card's own
+// Escape is prevented (`escapeStaysInCard`), which the `defaultPrevented` guard already skips; this is the rest of the page.
 import { useEffect } from 'react';
 import { useMediaQuery } from '../lib/useMediaQuery';
 
@@ -13,13 +18,15 @@ export interface EscapeInterrupt {
   /** The LIVE status is `busy`: stopping a turn is a fact about the process now, not about how the fleet filed it. */
   busy: boolean;
   onInterrupt: () => void;
+  /** An inline ask surface is mounted: an Escape is never an interrupt while a question is up on the page. */
+  askInline?: boolean;
 }
 
-export function useEscapeInterrupt({ busy, onInterrupt }: EscapeInterrupt): void {
+export function useEscapeInterrupt({ busy, onInterrupt, askInline = false }: EscapeInterrupt): void {
   const finePointer = useMediaQuery('(pointer: fine)');
 
   useEffect(() => {
-    if (!finePointer || !busy) return;
+    if (!finePointer || !busy || askInline) return;
     const onKey = (e: globalThis.KeyboardEvent): void => {
       if (e.key !== 'Escape') return;
       // D-5235: AN ESCAPE THAT CLOSES A SHEET IS NOT AN INTERRUPT. Radix's
@@ -40,5 +47,5 @@ export function useEscapeInterrupt({ busy, onInterrupt }: EscapeInterrupt): void
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [finePointer, busy, onInterrupt]);
+  }, [finePointer, busy, askInline, onInterrupt]);
 }

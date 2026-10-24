@@ -139,8 +139,10 @@
 // D-6325 (plan docs/superpowers/plans/2026-10-22-desktop-polish.md, Task T1b): every surface below is chosen by ONE pure
 // function, `askSource` (`askLive.ts`), and renders its answer; no string the pane painted reaches an
 // AskUserQuestion. This file stays the one controller and the one sender (answers, Deny, own words, picks, tab moves),
-// and it renders ONE container (`AskSheet`, `AskParts.tsx`) for every kind of surface, so moving between them never
-// remounts the drawer and T1c swaps the container at this one site. What goes inside it is now: nothing (no container);
+// and it renders ONE container (`AskSurface`, `AskSurface.tsx`) for every kind of surface, so moving between them never
+// remounts it. D-6326 (T1c): the container is chosen by width inside `AskSurface` (the Sheet below 900, an inline card
+// in the session pane at the desk), and the answer requests are unchanged, byte-identical to T1b's: this file is still
+// the one sender, and a card instead of a drawer changes where the rows are drawn and nothing about what a tap sends. What goes inside it is now: nothing (no container);
 // the approval and the structured question (`EnvelopeSheet`'s content, the hook's envelope or the transcript's copy of
 // the question); the review (one render here for every source of copy); a question this screen cannot read (it says so
 // and offers the terminal); a menu that is no ask (its parsed rows, `Claude needs a choice`); and an unparsed pane (the
@@ -153,10 +155,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, DialogTabTarget, HookAsk } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
-import { OptionRow, toast } from '@ccrc/ui';
+import { OptionRow, toast, useDesk } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
+import { AskSurface } from './AskSurface';
 import {
-  AskHeader, AskReview, AskSheet, AskTabs, KICKER_CHOICE, KICKER_WAITING, REVIEW_TITLE, keyed, lit, picksBusy,
+  AskHeader, AskReview, AskTabs, KICKER_CHOICE, KICKER_WAITING, REVIEW_TITLE, keyed, lit, picksBusy,
   wordsBusy, type Asker, type PickCall, type Picks, type Words, type WordsCall,
 } from './AskParts';
 import {
@@ -164,7 +167,7 @@ import {
 } from './askLive';
 import { keyTabs, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
-import { useAskKeys } from './useAskKeys';
+import { useAskEngagement, useAskKeys } from './useAskKeys';
 import { api, ApiError, failedTo } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
@@ -209,14 +212,17 @@ export interface DialogSheetProps {
   /** D-6325, R4: who asks (the session, its project, and the held line while a coordinator holds the question), for the
    *  header every surface draws. Null or absent: no who line. */
   asker?: Asker | null;
+  /** D-6326: told whether the inline ask card is mounted (the desk), so the session screen can point the transcript at it,
+   *  stand its Escape interrupt down and hold the composer's Send. A phone's sheet never reports. */
+  onInline?: (mounted: boolean) => void;
 }
 
 
-export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: DialogSheetProps): ReactNode {
+export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, onInline }: DialogSheetProps): ReactNode {
   const useStore = store ?? getSessionStore(id);
   const storeDialog = useStore((s) => s.dialog);
   /** Decision `ask-answer-returns-next-screen`: an answer route's `next`, into the store (`applyAnswered`). */
-  // D-6325 (review 844 I1): not while the connection has not spoken. The store's `dialog` is null in the gap, which
+  // D-6325 (fix round 2's own review, I1): not while the connection has not spoken. The store's `dialog` is null in the gap, which
   // `applyAnswered` reads as "nothing newer is held" and would write the reply's `next` into it: the old connection's
   // evidence, which a new stream that frames no menu would then be decided from. The new stream frames the current menu itself.
   const applyAnswered = (answeredId: string, next: Dialog | null): void => {
@@ -360,11 +366,23 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   const hooked = envelope !== null
     && (source.kind === 'approval' || (source.kind === 'structured' && source.from === 'hook') || source.kind === 'review');
   const askKey = hooked ? JSON.stringify(envelope) : null;
+  // D-6326, R64: the ask's IDENTITY for the keyboard's engagement (`useAskEngagement`) is exactly the dismissal's: the
+  // hooked envelope (the same for every question and the review of it, so the keys stay engaged question → review,
+  // review ← question and question → question), else the pane dialog's id (a menu, the transcript's copy, an unreadable
+  // ask, the terminal), else null. Two known gaps: the pane dialog's id changes per screen (`sha1(options + title)`), so a
+  // transcript-copy question → its review crosses identities and the engagement does not continue there; and a clear
+  // followed by a byte-identical envelope in one batch keeps one identity. A CLOSED hold (the ask ended, the held surface
+  // exiting) is no ask: its identity is null, so the engagement ends there and a later ask with equal content starts clean.
+  const askIdentity = closed ? null : (askKey ?? dialog?.id ?? null);
   // An approval is one screen; a question ask is one per question plus its review (`askScreen`).
   const screenNow = !hooked ? null : 'approval' in envelope ? (dialog === null ? null : 'approval') : askScreen(envelope, dialog);
-  const open = !closed && (hooked
+  // D-6326: INLINE there is no dismissal (the card covers nothing, and has no ✕, scrim or "Not now"), so at the desk a hide
+  // never makes it vanish: `leave()` opening the terminal leaves the question where it is. The slots stay, so a crossing
+  // below 900 reads what was waved away, and `raise` still clears them.
+  const desk = useDesk();
+  const open = !closed && (desk || (hooked
     ? !(askKey === dismissedKey && (screenNow === null || screenNow === dismissedScreen))
-    : dialog !== null && dialog.id !== dismissedKey && dialog.id !== dismissedDialogId);
+    : dialog !== null && dialog.id !== dismissedKey && dialog.id !== dismissedDialogId));
 
   const hide = (): void => {
     if (hooked) {
@@ -532,6 +550,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   const keyScreen: KeyScreen | null = source.kind === 'review'
     ? reviewKeys(source.rows.submit, source.rows.cancel, keyTabs(tabCount, null, true, picksHeld))
     : source.kind === 'menu' ? questionKeys(source.options.map((o) => o.index), null, null, null) : null;
+  // ONE engagement for the ask, handed to this hook and, below, to the structured sheet's: not a fact per hook instance.
+  const engagement = useAskEngagement(askIdentity);
   const keys = useAskKeys({
     screenId: dialog?.id ?? null,
     screen: keyScreen,
@@ -540,6 +560,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
     onAnswer: (k) => void answer(k),
     onToggle: toggle,
     onTab: (to) => void moveTab(to),
+    engagement,
   });
 
   if (source.kind === 'none') return null;
@@ -578,6 +599,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
         tabbing={tabbing}
         picksHeld={picksHeld}
         onTab={(to, from) => void moveTab(to, from)}
+        engagement={engagement}
       />
     );
   } else if (source.kind === 'review') {
@@ -660,7 +682,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   }
 
   return (
-    <AskSheet open={open} onClose={close} eyebrow={frame.eyebrow} title={frame.title}>
+    <AskSurface open={open} onClose={close} eyebrow={frame.eyebrow} title={frame.title} raise={raise} onInline={onInline}>
       {/* The gap's one status line, at the container level so every kind of surface gets it (the approval, a question,
           the review, a menu, the terminal door), in the plain words of `RECONNECTING`. A closed surface is on its way
           out and says nothing. */}
@@ -670,7 +692,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
       <div className="contents" inert={closed}>
         {surface}
       </div>
-    </AskSheet>
+    </AskSurface>
   );
 }
 
