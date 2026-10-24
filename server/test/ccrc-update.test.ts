@@ -4529,6 +4529,8 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     // D-6748: a base with no scheme loses its userinfo at a token's start, with or without a ':' in it; prose's `user@host`,
     // an email, a query's email and a scoped package name stay byte for byte.
     expect(call('fetching user:s3cretTOKEN@127.0.0.1:1/rel/x and "tok@h/r"')).toBe('fetching 127.0.0.1:1/rel/x and "h/r"');
+    // Fix round 3: a '<' or '"' past the run's first character is the password's; one that starts a token still ends prose.
+    expect(call('see <u:p<w@h/r> and u:p"w@h/r')).toBe('see <h/r> and h/r');
     for (const kept of ['curl: (6) user@host', 'mail a@example.com today', 'https://h/r?email=a@example.com/y', '@scope/pkg']) {
       expect(call(kept), kept).toBe(kept);
     }
@@ -4675,15 +4677,17 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
   // D-6748 (fix round 1, F7): a base in ccrc.env with NO scheme (`user:pass@host/r`, which curl takes as http) is masked by
   // `_upd_redact` as the scheme form is, on each of the three ways it would leave the box: the fetching line, the die line and
   // update.json's detail. The poisoned curl (exit 99) fails the first fetch, so `_upd_resolve`'s URL-bearing die fires.
-  const schemeless = (prefix: string): { r: Result; secret: string; home: string } => {
+  const schemeless = (prefix: string, base?: { url: string; from: 'file' | 'env' }): { r: Result; secret: string; home: string } => {
     const secret = 's3cretTOKEN';
     const home = mkTmp(prefix);
     mkdirSync(join(home, '.local', 'bin'), { recursive: true });
     writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
     mkdirSync(join(home, '.ccrc'), { recursive: true });
-    writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=user:${secret}@127.0.0.1:1/rel\n`);
+    const url = base?.url ?? `user:${secret}@127.0.0.1:1/rel`;
+    if (base?.from !== 'env') writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=${url}\n`);
     const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     delete env['CCRC_RELEASE_BASE_URL'];
+    if (base?.from === 'env') env['CCRC_RELEASE_BASE_URL'] = url;
     assertNoRealTool(env, home);
     const p = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--to', 'v0.0.1'], { env, encoding: 'utf8' });
     const r = { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
@@ -4717,6 +4721,26 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(raw).not.toContain(secret);
     expect(raw).not.toContain('user:');
   });
+
+  // D-6748 (fix round 3, item 1): a password may hold a raw '<' or '"' (curl sends both in a scheme-less userinfo), so the mask
+  // runs through them past the run's first character. Each row reads all three ways out: the fetching line, the one die line
+  // and update.json's detail; no fragment of the userinfo may appear in any of them.
+  for (const [label, from, pass] of [['<', 'file', 'S3cr<etTOKEN'], ['"', 'env', 'S3cr"etTOKEN']] as const) {
+    it(`a scheme-less base whose password holds ${label} (${from === 'file' ? 'ccrc.env' : 'the environment'}): the fetching line, the die line and update.json's detail carry no part of the userinfo (D-6748, fix round 3)`, () => {
+      const { r, home } = schemeless(`ccrc-redact-schemeless-${from}-`, { url: `fleetuser:${pass}@mirror.example/rel`, from });
+      const url = 'mirror.example/rel/download/v0.0.1/SHA256SUMS';
+      expect(r.stdout.split('\n'), r.stdout).toContain(`update: fetching ${url} …`);
+      const die = r.stderr.split('\n').filter((l) => l.includes('download failed:'));
+      expect(die, r.stderr).toHaveLength(1);
+      expect(die[0]).toContain(url);
+      const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+      const detail = String(JSON.parse(raw).detail ?? '');
+      expect(detail, raw).toContain(`download failed: ${url}`);
+      for (const [where, text] of [['stdout', r.stdout], ['stderr', r.stderr], ['update.json', raw]]) {
+        for (const part of ['fleetuser', 'S3cr', 'etTOKEN']) expect(text, `${where} carries ${part}`).not.toContain(part);
+      }
+    });
+  }
 
   // Fix round 1 item 11 / review 155 C17: the floor death's update.json
   // DETAIL keeps its VERDICT (D-3249) even with a HOME long enough that the
