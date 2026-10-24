@@ -998,21 +998,41 @@ describe('the rulings: one frame never blocks the event loop past 25 ms (D-5995)
   // pins the ORDER of the cost (a quadratic or per-string regression is seconds), the PR body gives the measured ms.
   const BOUND = 250;
   it('4 MB of undelimited drawer output in 4 KB chunks: no push blocks, and nothing is held past the bound', () => {
-    const { m } = maskerOver(() => TOKEN_1, [CMP]);
-    const d = m.drawer(() => {});
+    // What the test proves: masking 4 MB never holds the event loop for one long stretch. Each push is one
+    // synchronous slice, timed on the monotonic clock (`performance.now`). The input is deterministic, so a stall in
+    // the CODE comes back at the same push index every run, while a loaded runner pre-empts the process (a GC pause,
+    // a lost timeslice) at arbitrary pushes. The two CI failures that motivated this were single slices of 513 and
+    // 442 ms. So: (1) the 95th-percentile slice stays under 25 ms, which catches a uniform per-push cost (a rescan of
+    // everything held, a quadratic join); (2) every push that crosses BOUND (250 ms, below both CI stalls) is
+    // replayed on a fresh drawer, and the test fails only if the SAME index crosses BOUND in both runs. That catches a
+    // sparse or periodic stall in the code, which a bound on the percentile alone would miss, and tolerates one
+    // pre-emption in either run.
     const chunk = 'A'.repeat(4096);
-    let worst = 0;
-    d.push('key sk-');
-    for (let i = 0; i < 1024; i++) {
-      const t0 = performance.now();
-      d.push(chunk);
-      worst = Math.max(worst, performance.now() - t0);
-      expect((d as unknown as { held: string }).held.length + ((d as unknown as { pending: string | null }).pending?.length ?? 0))
-        .toBeLessThanOrEqual(8192 + 1024 + 4096);
+    const run = (): number[] => {
+      const { m } = maskerOver(() => TOKEN_1, [CMP]);
+      const d = m.drawer(() => {});
+      const slices: number[] = [];
+      d.push('key sk-');
+      for (let i = 0; i < 1024; i++) {
+        const t0 = performance.now();
+        d.push(chunk);
+        slices.push(performance.now() - t0);
+        expect((d as unknown as { held: string }).held.length + ((d as unknown as { pending: string | null }).pending?.length ?? 0))
+          .toBeLessThanOrEqual(8192 + 1024 + 4096);
+      }
+      d.dispose();
+      m.close();
+      return slices;
+    };
+    const first = run();
+    const sorted = [...first].sort((a, b) => a - b);
+    expect(sorted[Math.floor(sorted.length * 0.95)]!, 'the 95th-percentile push slice (ms)').toBeLessThan(25);
+    const slow = first.flatMap((ms, i) => (ms > BOUND ? [i] : []));
+    if (slow.length > 0) {
+      const again = run();
+      const repeated = slow.filter((i) => again[i]! > BOUND);
+      expect(repeated, `push indices over ${BOUND} ms in both runs: a stall in the code, not a pre-emption`).toEqual([]);
     }
-    d.dispose();
-    expect(worst).toBeLessThan(BOUND);
-    m.close();
   });
 
   it('20,000 shape matches, and a frame of 50 strings each at the run ceiling, mask within the bound', () => {
