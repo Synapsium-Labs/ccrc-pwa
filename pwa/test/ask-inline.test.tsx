@@ -26,7 +26,7 @@ import { DialogSheet } from '../src/session/DialogSheet';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
-import { askFixture } from './askFixtures';
+import { askFixture, HOOK_QUESTIONS } from './askFixtures';
 import { fleetSession } from './fleetFixture';
 
 // The transcript's rows, all of them in order: virtuoso measures nothing in jsdom and would render none.
@@ -509,6 +509,168 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     await frame();
     expect(cards(), 'premise: the card is back').toHaveLength(1);
     expect(card().contains(document.activeElement), 'the later ask took no focus').toBe(false);
+  });
+});
+
+// R69 F1, F4: the engagement's identity carries ONE client-side lifecycle generation (the store's `askEpoch`, bumped by
+// every `ask_cleared` and `dialog_cleared` frame, so a clear is seen even inside one batch). A hooked ask is its envelope
+// plus the generation; an ask-backed surface with no envelope (the transcript's copy, its review, an unreadable ask) is
+// ONE ask per generation, because its pane dialog id changes per screen; a plain menu is its own ask per screen.
+describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
+  const reviewDialog = (): Dialog => askFixture(8).dialog!;
+  /** Aged question 2 of fixture 1: the envelope gone, the pane's other rows, the transcript's copy of the question. */
+  const agedQuestion2 = (): Dialog => {
+    const q2 = HOOK_QUESTIONS[1]!;
+    return {
+      ...askFixture(2).dialog!, id: 'dlg-a2-q2', selectedIndex: 1,
+      options: [...q2.options.map((o, i) => ({ index: i + 1, label: o.label, description: o.description })),
+        { index: q2.options.length + 1, label: 'Type something.' }, { index: q2.options.length + 2, label: 'Chat about this' }],
+      ask: { question: q2.question, header: q2.header, multiSelect: false, options: q2.options.map((o) => ({ ...o })) },
+    };
+  };
+
+  it('an aged question\'s digit whose answer brings the review leaves focus on the review\'s highlighted row, and a key acts', async () => {
+    // Premises: the desk; fixture 2 (no envelope, the transcript's copy) up; the answer's `next` is the review (P1).
+    media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: reviewDialog() });
+    const { arrive, store } = mount();
+    await frame();
+    arrive(2);
+    expect(store.getState().ask, 'premise: no envelope').toBeNull();
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    await act(async () => { key(first, '1'); });
+    await frame();
+    const submit = opt(card(), /^Submit answers/);
+    expect(submit, 'premise: the review is mounted').toBeInTheDocument();
+    expect(card().contains(document.activeElement), 'focus is inside the card on the aged review').toBe(true);
+    expect(document.activeElement, 'on the review\'s highlighted row').toBe(submit);
+    answer.mockReturnValue(new Promise(() => {}));
+    key(document.activeElement!, '1');
+    expect(answer, 'a key on the aged review acts').toHaveBeenCalledTimes(2);
+  });
+
+  it('← from an aged review back to its question leaves focus on the question\'s row, and a key acts', async () => {
+    // Premises: the review is up, then the envelope clears (the aged copy of the same ask); ← inside the card moves the
+    // pane's tab and `next` is the question with its transcript copy.
+    media(true);
+    const tab = vi.spyOn(api, 'answerDialogTab').mockResolvedValueOnce({ ok: true, next: askFixture(2).dialog! });
+    const { arrive, store } = mount();
+    await frame();
+    arrive(8);
+    act(() => store.getState().apply({ type: 'ask_cleared' }));
+    expect(store.getState().ask, 'premise: no envelope').toBeNull();
+    const submit = opt(card(), /^Submit answers/);
+    act(() => submit.focus());
+    await act(async () => { key(submit, 'ArrowLeft'); });
+    await frame();
+    expect(tab).toHaveBeenCalledTimes(1);
+    expect(within(card()).getByText(QUESTION), 'premise: the question is back').toBeInTheDocument();
+    expect(card().contains(document.activeElement), 'focus is inside the card on the aged question').toBe(true);
+    expect(document.activeElement, 'on the question\'s highlighted row').toBe(opt(card(), /^Redis/));
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    key(document.activeElement!, '2');
+    expect(answer, 'a key on the aged question acts').toHaveBeenCalledTimes(1);
+  });
+
+  it('an aged question\'s digit whose answer brings another question, with the focused row gone, keeps focus in the card', async () => {
+    // Premises: fixture 2 up; the operator focuses its THIRD row and answers it; question 2 has two options, so that row's
+    // node does not exist on the next screen (review 932's P2 passed only because the first row's node was reused).
+    media(true);
+    vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: agedQuestion2() });
+    const { arrive } = mount();
+    await frame();
+    arrive(2);
+    const third = opt(card(), /^None/);
+    act(() => third.focus());
+    await act(async () => { key(third, '3'); });
+    await frame();
+    expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
+    expect(third.isConnected, 'premise: the focused row\'s node left the DOM').toBe(false);
+    expect(card().contains(document.activeElement), 'focus is inside the card on question 2').toBe(true);
+    expect(document.activeElement, 'on question 2\'s highlighted row').toBe(opt(card(), /^Yes/));
+  });
+
+  it('a clear and a byte-identical envelope in ONE batch, with a screen change, take no focus from the page body', async () => {
+    // Premises: the review is engaged by an arrow and focus falls to the body (P4); ONE batch clears the ask, sends the
+    // SAME review frames again and moves the pane to question 1. A content hash would call that one ask.
+    media(true);
+    const { arrive, store } = mount();
+    await frame();
+    arrive(8);
+    const section = card();
+    const submit = opt(section, /^Submit answers/);
+    act(() => submit.focus());
+    key(submit, 'ArrowDown');
+    expect(section.contains(document.activeElement), 'premise: the arrow engaged the keyboard inside the card').toBe(true);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    act(() => {
+      store.getState().apply({ type: 'ask_cleared' });
+      for (const f of askFixture(8).frames) store.getState().apply(f);
+      store.getState().apply({ type: 'dialog', dialog: askFixture(1).dialog! });
+    });
+    await frame();
+    expect(card(), 'premise: the same card node carries the new ask').toBe(section);
+    expect(within(section).getByText(QUESTION), 'premise: question 1 is up').toBeInTheDocument();
+    expect(card().contains(document.activeElement), 'the new ask took focus from the body').toBe(false);
+  });
+
+  it('an aged ask\'s same screen sent again releases nothing: the next screen still takes the keys back', async () => {
+    // Premises: engaged on fixture 2 by a key; the SAME dialog frame arrives again (a repeat, no clear); focus falls to the
+    // body; the next aged question arrives. A repeated frame is no lifecycle event.
+    media(true);
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(2);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, '1');
+    act(() => store.getState().apply({ type: 'dialog', dialog: askFixture(2).dialog! }));
+    await frame();
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    act(() => store.getState().apply({ type: 'dialog', dialog: agedQuestion2() }));
+    await frame();
+    expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
+    expect(card().contains(document.activeElement), 'the repeat released the engagement: focus stayed on the body').toBe(true);
+  });
+
+  it('a plain menu replaced by another plain menu takes no focus from the page body: each menu is its own ask', async () => {
+    // Premises: fixture 4's menu up and engaged by an arrow; focus falls to the body; ANOTHER plain menu (no ask evidence)
+    // replaces it with no clear. The per-screen pane id is that kind of surface's identity, as it always was.
+    media(true);
+    const { arrive, store } = mount();
+    await frame();
+    arrive(4);
+    const section = card();
+    const yes = opt(section, /^Yes, and auto-accept edits/);
+    act(() => yes.focus());
+    key(yes, 'ArrowDown');
+    expect(section.contains(document.activeElement), 'premise: the arrow engaged the keyboard inside the card').toBe(true);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    const other: Dialog = {
+      ...askFixture(4).dialog!, id: 'dlg-a4-other', title: 'Run the migration?',
+      options: [{ index: 1, label: 'Run it now' }, { index: 2, label: 'Not yet' }],
+      raw: ['╭ pane chrome ╮', 'Run the migration?', '  1. Run it now', '  2. Not yet'].join('\n'),
+    };
+    act(() => store.getState().apply({ type: 'dialog', dialog: other }));
+    await frame();
+    expect(within(card()).getByText('Run it now'), 'premise: the second menu is up').toBeInTheDocument();
+    expect(card().contains(document.activeElement), 'the replacing menu took focus from the body').toBe(false);
+  });
+
+  it('the store\'s askEpoch counts clears only: ask_cleared and dialog_cleared, never a frame that states something', () => {
+    const store = createSessionStore(ID, { makeSocket: fakeSocket });
+    const epoch = (): number => store.getState().askEpoch;
+    expect(epoch(), 'it starts at 0').toBe(0);
+    for (const f of askFixture(1).frames) store.getState().apply(f);
+    store.getState().apply({ type: 'dialog', dialog: askFixture(2).dialog! });
+    store.getState().apply({ type: 'rotated', uuid: 'u2' });
+    expect(epoch(), 'ask, dialog and rotated frames leave it').toBe(0);
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(epoch(), 'ask_cleared counts one').toBe(1);
+    store.getState().apply({ type: 'dialog_cleared' });
+    expect(epoch(), 'dialog_cleared counts one').toBe(2);
   });
 });
 
