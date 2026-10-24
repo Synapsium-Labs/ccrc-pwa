@@ -34,7 +34,7 @@ const stubAccounts = (accounts: AccountUsage[]): void => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); navigate('/'); });
 
 describe('AccountsStrip', () => {
-  it('shows an inferred zero as "reset" and a measured zero as 0%', async () => {
+  it('a rolled-over window reads 0% with its countdown', async () => {
     // Both fixtures are states the server can actually emit: readLimits sets
     // fiveRolledOver only when fiveResetAt is non-null and has passed (and then
     // forces five to 0), so an inferred zero always comes with a past reset
@@ -50,11 +50,33 @@ describe('AccountsStrip', () => {
       roster: TEST_ROSTER,
     });
     render(<AccountsStrip />);
-    // claude's 5h rolled over; claude9's 5h was really measured at zero.
-    expect(await screen.findByText('reset')).toBeTruthy();
-    expect(screen.getByText('0%')).toBeTruthy();
+    // claude's 5h rolled over (R48: it reads 0%, its sr-only words say it reset and the 0% is inferred);
+    // claude9's 5h was really measured at zero, which speaks no "inferred".
+    const inferred = await screen.findByText(/inferred/);
+    expect(inferred).toHaveTextContent('0%, inferred: the window reset');
+    const rolledRow = inferred.closest('.acct-row') as HTMLElement;
+    expect(rolledRow.querySelector('.acct-pct [aria-hidden="true"]')).toHaveTextContent('0%');
+    // …beside its countdown (the stamp has passed, so the window reads as resetting now).
+    expect(rolledRow.querySelector('.acct-reset')).toHaveTextContent(/↻/);
+    // Two 0% nodes show: the rolled-over one and the measured one.
+    expect(screen.getAllByText('0%')).toHaveLength(2);
     expect(screen.getByText('57%')).toBeTruthy();
     expect(screen.getByText('93%')).toBeTruthy();
+  });
+
+  it('a measured window prints its percentage once: no sr-only span and nothing aria-hidden beside it', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue({
+      accounts: [acct({ wrapper: 'claude', five: 40, fiveResetAt: nowSec + 9000, fiveRolledOver: false, seven: 57, sevenRolledOver: false })],
+      projected: { wrapper: 'claude', score: 57 },
+      roster: TEST_ROSTER,
+    });
+    render(<AccountsStrip />);
+    const pct = (await screen.findByText('57%')).closest('.acct-pct') as HTMLElement;
+    expect(pct.querySelector('.sr-only')).toBeNull();
+    expect(pct.querySelector('[aria-hidden]')).toBeNull();
+    expect(pct.textContent).toBe('57%');
+    // One element holds the text: the query above would have thrown on two.
+    expect(screen.getAllByText('40%')).toHaveLength(1);
   });
 
   it('hides an account whose lane is switched off', async () => {
