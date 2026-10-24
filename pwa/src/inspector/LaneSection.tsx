@@ -5,22 +5,12 @@
 // opens no poll of its own.
 import type { ReactNode } from 'react';
 import { useNow } from '@ccrc/ui';
-import type { AccountUsage } from '../../../shared/api';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
+import { bindingWindow } from '../fleet/laneOrder';
 import { accountLabel } from '../lib/accounts';
 import { useFleetStore } from '../stores/fleet';
 import { InspectorSection } from './InspectorSection';
 import { useInspectorSession } from './useInspectorSession';
-
-/** The window that binds: the fuller of the two, the 7d one on a tie (it resets later). `null` when neither is read. */
-export function bindingWindow(a: AccountUsage): { label: '5h' | '7d'; pct: number | null; resetAt: number | null; rolledOver: boolean } | null {
-  const five = { label: '5h' as const, pct: a.five, resetAt: a.fiveResetAt, rolledOver: a.fiveRolledOver };
-  const seven = { label: '7d' as const, pct: a.seven, resetAt: a.sevenResetAt, rolledOver: a.sevenRolledOver };
-  if (a.five === null && a.seven === null) return null;
-  if (a.five === null) return seven;
-  if (a.seven === null) return five;
-  return a.five > a.seven ? five : seven;
-}
 
 function LaneBody({ wrapper }: { wrapper: string }): ReactNode {
   const roster = useFleetStore((s) => s.roster);

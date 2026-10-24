@@ -16,6 +16,7 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { commandDoor } from '../command/door';
+import { bindingPct } from './laneOrder';
 import { limitBand, Meter } from '@ccrc/ui';
 import './fleet.css';
 
@@ -26,13 +27,6 @@ export type CompactArrangement = 'bar' | 'grid' | 'led';
 /** The most lanes an arrangement places; the box's width may place fewer (above). `grid` wraps, so it places every
  *  lane. */
 export const COMPACT_FIT: Readonly<Record<CompactArrangement, number>> = { bar: 4, led: 6, grid: Number.POSITIVE_INFINITY };
-
-/** A lane's binding percentage: the fuller of its windows, the one that stops work first. Null when neither window
- *  was ever measured (a lane may report only the weekly one). */
-export function bindingPct(a: Pick<AccountUsage, 'five' | 'seven'>): number | null {
-  const known = [a.five, a.seven].filter((p): p is number => p !== null);
-  return known.length === 0 ? null : Math.max(...known);
-}
 
 /** The reading beside a lane's meter, kept three ways like the full strip's `AccountMeterRow`: "reset" when the
  *  window that binds rolled over (the server zeroed it; the zero is inferred, not measured), "—" never measured, else

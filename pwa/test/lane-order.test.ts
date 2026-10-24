@@ -2,7 +2,7 @@
 // and (once it lands) `lanesByFree` orders lanes by it, most free first.
 import { describe, expect, it } from 'vitest';
 import type { AccountUsage } from '../../shared/api';
-import { bindingWindow } from '../src/inspector/LaneSection';
+import { bindingWindow } from '../src/fleet/laneOrder';
 
 const lane = (wrapper: string, five: number | null, seven: number | null, over: Partial<AccountUsage> = {}): AccountUsage => ({
   wrapper, five, seven, ts: 1, fiveResetAt: 1000, sevenResetAt: 2000, fiveRolledOver: false, sevenRolledOver: false,
