@@ -12,7 +12,7 @@ On 2026-10-22 the operator gave a directive, relayed verbatim in mail 8002: "I d
 | A half-exception | 1 | `CCRC_UPDATE_DEADLINE_MS`: the environment if canonical, else `ccrc.env` through two-argument `_box_env_value` (:3161), which reads in the caller's locale (`_upd_deadline_ms`, :19288) |
 | Names read from `ccrc.env` or the exposure file only, never the environment | — | the server's own settings (`CCRC_ROLE`, `CCRC_HOST`, `CCRC_PORT`, `CCRC_AUTH`, …), read where the server reads them |
 
-`set -uo pipefail` is ccd/ccrc:68. Under `-u` a bare `$CCRC_X` of an unset name aborts the run, so every optional environment read in this file must use a default form. That is why a text census of those forms catches an unguarded read (Task 5's C7 pins the premise). It is not a proof that no other reader exists: fix round 1 retired the word "complete", and the census names what it does not catch (D-6746).
+`set -uo pipefail` is ccd/ccrc:68. Under `-u` a bare `$CCRC_X` of an unset name aborts the run, so an optional environment read spells a default form, or a guard that needs none (a `-v` test, `declare -p`). A text census sees the forms it names, the default forms among them (Task 5's C7 pins `set -u`). It is not a proof that no other reader exists: fix round 1 retired the word "complete", fix round 3 the premise that every read spells a default, and the census names what it does not catch (D-6746).
 
 **What already holds.**
 - The tree has a byte-wise model of how systemd reads an `EnvironmentFile=`: `_box_unit_env` (ccd/ccrc:3376), which reads `_box_env_value`'s `unit` mode on Linux and `_box_unit_env_shell` (:3437) on macOS. A shape it cannot decide answers rc 3, and an unreadable second file rc 2.
@@ -215,7 +215,7 @@ One PR, from this workspace's own branch.
 - **A rollback on a box with an invalid `CCRC_BACKUP_DATA_KEEP`.** A rollback never thins, so it must still prune by count and never name the data knob (Task 2's B3).
 - **The process shapes that carry no setting** (a detached run, a timer, an ssh rollout). Under `env -i` with only HOME and PATH, each act reads `ccrc.env` (Task 2's P1 to P3, Task 3's D1 and H1, Task 4's U1 and M1). The units' own lines carry no `CCRC_` setting (Task 2's P5).
 - **A second reader.** C8 (Task 5) reds on a non-array `${!name}` indirection or the whole-token awk program outside `_ccrc_knob`, on a variable key passed to `_box_env_value`/`_box_unit_env`/`_box_unit_env_shell` outside an enumerated set of bodies, on a literal key passed to them outside the server's settings, and on a code line that names a setting beside `BOX_ENV_FILE` or an awk, sed, grep or cut command. `eval` stays a residual: outside `_upd_validate_timeout` and `_acct_deadline` (which C5 reads by name) the base has none, and a reviewer should grep `eval` in the diff.
-- **Time.** A rollback by flip, the watchdog's included, is now bounded like an update (D-6601), and the bound also stays inside the control plane's hard cap (D-6601). The keep-set's gate counts only verifications of a data set (D-6592), so a fleet box whose backups hold none is never stopped by it.
+- **Time.** A rollback by flip, the watchdog's included, is now bounded like an update (D-6601), and the bound also stays inside the control plane's hard cap for every verification it gates (D-6601). The first full verification is never gated, so when the re-stamp is already late it can run past the bound, and past the hard cap, by one classifier call (D-6745). The keep-set's gate counts only verifications of a data set (D-6592), so a fleet box whose backups hold none is never stopped by it.
 
 ## Risk notes
 
@@ -437,7 +437,7 @@ These twenty numbers, starting at D-6587, were issued to run 855. This revision 
   - **The term.** 63 = `(UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS) / 1000` (22) + the asset probe's ceiling twice (2 × 18; the last argument of `_upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME`: the parent's probe and the detached child's repeat) + `_box_health`'s default curl limit (5). `_bak_gc`'s `until` line carries the sum as one literal: `hc=$(( 4 * dl / 1000 - 63 - margin ))`. W24-K6 reads the two TypeScript constants, parses the probe ceiling out of `_upd_asset_listed` and the health default out of ccd/ccrc, pins that `_upd_fleet_warn` calls `_box_health` and that its curl carries `--max-time "$CCRC_HEALTH_TIMEOUT"`, and asserts the literal equals the sum, so a change to any one source reds it. W24-D3's arithmetic follows.
   - **Re-measured** (fixture only, no row): the same chain, parent 18.016 s plus child 23.029 s = 41.045 s, below 63 by 21.955 s.
   - **Ruling R30: 63 is kept although it over-counts.** The parent's probe runs inside the spawn's 20 s bound (its ceiling is 18 so that it fits), so counting it a second time, as the ruling says, over-counts the chain by up to 18 s. A larger term only stops the thinning earlier, the safe direction. Cost: thinning stops up to 18 s earlier than it need. The `_bak_gc` header says so.
-  - **Residuals no literal bounds:** the transient unit's start under the service manager, and a lease stamped before its dispatch.
+  - **Residuals no literal bounds:** the transient unit's start under the service manager, and a lease stamped before its dispatch. And a third (fix round 3, the coordinator's item 4): the `CCRC_HEALTH_TIMEOUT` override. It is unvalidated, and W24-K6 pins only its default of 5. With 30 in the user manager's environment the review measured the chain at 66.0 s, past 63. Not bounded in this wave.
   - **Mutants** (scratch clone, restored by cmp): probe ceiling 18 → 17, health default 5 → 6, spawn timeout 20 000 → 21 000, drain 2 000 → 1 000 each red W24-K6; the literal 63 → 40 reds W24-K6 and W24-D3.
 - **D-6745.** **Ruling 4 stands, and the hard-cap guarantee narrows: the bound holds for every gated verification, not for the first** (review 891 F3; the coordinator's ruling 3).
   - `_bak_keepset` never gates its first full verification (ruling 4, D-6592), even when `until` is already past. When the re-stamp is already late, that one verification can run past `until`, and past the control plane's hard cap, by one classifier call (W24-K1 measures one); it can spend the roughly 150 s the margin reserved once the available reserve is gone. No full-size hard-cap expiry was run.
@@ -445,19 +445,25 @@ These twenty numbers, starting at D-6587, were issued to run 855. This revision 
 - **D-6746.** **The census guards the spellings it names, and is not a proof that no other reader exists** (review 891 F4; the coordinator's ruling 4). It replaces the "complete" premise of this plan's first text and amends D-6598.
   - **Rows added.** C9 (a nameref to a setting: a `local`, `declare` or `typeset` whose option cluster holds `n`, with a setting after it). C10 (a `-v` test of a CCRC_ name, in `[[ ]]`, `[ ]` or `test`, is an environment read, so the name must be a reasoned `ENV_ONLY` exception, never a setting: `[[ -v CCRC_NEW ]] && x="$CCRC_NEW"`). C11, which matters most because sourcing is a whole second reader: `.` or `source`, in command position (first on a line, after `;`, `&`, `|`, `(`, `{` or `!`, or after any run of `if`, `elif`, `while`, `until`, `then`, `do`, `else`, `!`, `builtin`, `command`), of `$BOX_ENV_FILE`, a path ending `ccrc.env` (a quote inside it included), a name bound to either, `<(…)` naming one, or `/dev/stdin <` one. A name bound in a body that declares it `local` is followed in that body alone; any other binding, and `BOX_ENV_FILE`, everywhere. C7's title is now `ccd/ccrc keeps set -u, so a bare read of an unset name aborts and an unguarded read must spell the default C5 sees`.
   - **The one allowed sourcing site: `_inst_plist_server`.** Its launchd job command string, `set -a; [ -f '$env1' ] && . '$env1'; …`, is the macOS counterpart of `EnvironmentFile=`: the server's reading of ccrc.env, not ccrc's read of a setting. `SOURCING_BODIES` lists it with its reason and a pinned count of 1, both ways: a second sourcing in it, an unlisted body, or a listed body that no longer sources reds C11.
+  - **Pinned to the launchd command line (fix round 3, the coordinator's item 2).** A count alone did not say where the sourcing sits: the review moved it out of the `cmd=` string onto a line the body executes, a real second reader, and C11 stayed green. Each `SOURCING_BODIES` entry now names its command variable (`cmd`). A sourcing in a listed body must sit on the one `local cmd="…"` line, inside its quotes, and the body must expand `$cmd` exactly once, as the `-c` argument of the plist's `ProgramArguments`. A sourcing moved onto an executed line, or the string also run in the body, reds C11.
+  - **Two more spellings, caught (fix round 3, item 3).** `. -- "$BOX_ENV_FILE"` (a `--` before the operand is skipped) and a sourcing right after a backtick (a backtick is a command position). Both were cheap, one optional token and one class character. Measured sound: the census stays 11 of 11 at the tip with no new hit. Each was green on the census before this round, and is red now.
   - **Named residuals** (the census header and here, in place of "complete"). The coordinator's list: `${#NAME}`; an expansion split by a backslash-newline; indirect calls through the timeout helper; environment reads from node or jq; a two-line file loop; C6's spacing and export variants. What the census reviews measured: `eval "$(cat …)"`; `declare -p NAME`; a nameref whose target is held in a variable (`local -n r="$k"`) or assigned after its declaration; a `-v` test of a name held in a variable; a name bound through a second variable; a helper that sources a positional parameter handed the file; `printenv`. And, from the re-review (ruling R29), four sourcing shapes that survive C11: a `case` arm (`x) . "$BOX_ENV_FILE" ;;`), `time . …`, a sourcing in a callee that reads a name its caller declared `local` (dynamic scope), and a sourcing split over lines.
   - **Ruling R29:** those four are named, not caught. D-6746 rules the census guards the spellings it names, no code uses these forms, and each further catch adds pattern risk. Cost: a future sourcing in one of those forms passes the census silently.
-  - **Measured.** Each row red on its mutant, restored by cmp: ten mutants for C9 to C11 at first (M1 to M9 and M3b), then 22 after the census review (command positions, scoped bindings, quote, process-substitution and stdin forms, the count pin), with three controls that stay green (`. "$f"` in a body that does not bind it, an unrelated local, jq's `.` filter) and three named residuals measured surviving. The census passes 11 of 11 at the round's tip.
+  - **Measured.** Each row red on its mutant, restored by cmp: ten mutants for C9 to C11 at first (M1 to M9 and M3b), then 22 after the census review (command positions, scoped bindings, quote, process-substitution and stdin forms, the count pin), with three controls that stay green (`. "$f"` in a body that does not bind it, an unrelated local, jq's `.` filter) and three named residuals measured surviving. The census passes 11 of 11 at the round's tip. Fix round 3 adds four mutants, each red on C11 alone: the sourcing moved onto an executed line, the string also run in the body (`bash -c "$cmd"`), `. -- "$BOX_ENV_FILE"`, and a backtick sourcing. The first, third and fourth were measured green on the census before the round.
 - **D-6747.** **A digits-only health window the shell cannot compare is an unusable value: it waits 90 and says so** (review 891 F6; the coordinator's ruling 6).
   - Ruling 6 stands for every value the shell can compare, zero included: `CCRC_UPDATE_HEALTH_S=0` still fails after one probe, and no range is added. But a digits-only value of more than 18 characters (zero-padded included), or one the integer test refuses (`9223372036854775808`, `99999999999999999999`), made the comparison print `integer expression expected` and end the gate after its first failed probe (`gate FAILED after 0s`), after which the update restores. `_upd_gate`'s `case` gains a third alternative (`''|*[!0-9]*|???????????????????*)`, nineteen `?`), so such a value takes the documented path for an unusable value: the WARN, 90, never an early failure. A zero-padded value longer than 18 characters is comparable, but waits 90 too, by the length rule.
   - **WARN wording, changed for every unusable value** (the old non-digit case included). Old: `update: WARN: CCRC_UPDATE_HEALTH_S='<v>' is not a number of seconds — using 90`. New: `update: WARN: CCRC_UPDATE_HEALTH_S='<v>' is not a number of seconds (digits only, at most 18) — using 90`. No README, example or plan text quoted the old sentence; the existing row was re-pinned.
   - **Rows.** W24-H2 × 4 (`9223372036854775808` and `99999999999999999999`, each from ccrc.env and from the environment: the WARN, `gate FAILED after 90s`, rc 1, never `integer expression expected`). W24-H3 × 4, added after the review of the fix (`120` and `000000000000000120`, each from both sources: no WARN and `gate FAILED after 120s`, so an ordinary window is used as written). Mutants (restored, cmp clean): the guard removed reds all four H2 rows; the guard widened to `??*` reds all four H3 rows; the guard slipped to eighteen `?` reds the two 18-character H3 rows.
 - **D-6748.** **`_upd_redact` masks a mirror base's userinfo with or without a scheme, so neither form leaves a credential in update's lines or `update.json`** (review 891 F7; the coordinator's ruling 7).
   - A scheme-less base (`user:pass@host/path`, which curl takes as http) was masked by doctor's `box-settings` but not by `_upd_redact`, so the fetching line, the error lines and the report's detail (which the inventory relays off the box) carried it. `_upd_redact` is the owner of redaction and now masks both forms: every `@`-ended run from a token's start (the text's start, or after whitespace, `"` or `<`), whose host ends at `/`, `?` or `#`, with or without a `:` in the userinfo, repeated `@` segments included. Doctor's mask is unchanged and is no longer the only one.
+  - **Corrected by fix round 3** (the coordinator's item 1). Fix round 1's class stopped each run at `<` and `"` as well as the token start did (`[^/@?#[:space:]"<]+@`), so a password holding either printed its head: `fleetuser:S3cr<etTOKEN@mirror.example/r` gave `fleetuser:S3cr<mirror.example/r` on the fetching line, the die and the report's detail. curl 8.5.0 sends both raw in a scheme-less userinfo (measured: `u:p<w` and `u:p"w` reach the server as the Basic credential). Now only a segment's first character excludes them: `([^/@?#[:space:]"<][^/@?#[:space:]]*@)+`. Dropping `"<` from the class altogether would let a match that starts at a space swallow an opening quote (`and "tok@h/r"` gives `and h/r"`; measured, the unit row reds), since the leftmost match wins. This is the text above as written (a run from a token's start), which the first class fell short of, so no number is spent for it.
+    - A userinfo that begins with `<` or `"` (curl takes `<u:pw@host` as user `<u`, measured) prints that one leading character and masks the rest. It is a user name's first character, never a password's. A repeated `@` segment that begins with `<` or `"` does not join the run, and curl refuses every repeated `@` (exit 3, measured, with and without a scheme).
+  - **Compared with doctor's mask** (`_check_box-settings`). Doctor is handed the value alone, so it needs no token start. It takes an optional scheme off, then strips from the value's start every `@`-ended run of characters other than `/`, `@` and whitespace (`([^/@[:space:]]*@)+`). Doctor's runs may hold `<`, `"`, `?` and `#`, may be empty, and need no host end. `_upd_redact` reads free text, so it starts a run only at a token's start and never on a `<` or `"`, stops at `?` and `#` too, needs at least one character, and needs the host to end at `/`, `?` or `#`. The two give the same answer for a scheme-less base whose userinfo holds no `?`, `#` or leading `<`/`"` and whose host is followed by a path. On a scheme form, `_upd_redact`'s strip takes one run up to the first `@`. So D-6748's "as doctor's box-settings masks one" holds for every base curl authenticates with but those three shapes (the leading character above, R32's characters, and a host with no path, which no URL built on a base has).
+  - **Rows added by fix round 3.** Two end-to-end rows, each reading the fetching line, the one `download failed:` die line and `update.json`'s detail: a `<` password from ccrc.env and a `"` password from the environment (`fleetuser:S3cr<etTOKEN@mirror.example/rel`, synthetic). Neither output holds `fleetuser`, `S3cr` or `etTOKEN`. The `_upd_redact` unit row gains `see <u:p<w@h/r> and u:p"w@h/r` → `see <h/r> and h/r`. Mutants (scratch clone, restored by cmp): the fix round 1 class reds both new rows and the unit row; `"<` dropped from the class altogether reds the unit row on its quoted-prose line.
   - Kept as they are (pinned): `curl: (6) user@host`, prose `a@example.com`, `@scope/pkg`, a query's `?email=a@example.com/y`, and the existing `https://h?a@b` controls.
   - **Rows.** Three end-to-end rows with a synthetic credential (the fetching line; the one `download failed:` die line; `update.json`'s detail and file), and unit controls on the `_upd_redact` row. Mutants: the loop replaced by `:` reds the unit row and the three rows; the host-end class dropped and the boundary `(^|.)` each red the unit row.
-  - **Ruling R31:** it over-masks text glued before a credentialed URL. A `'`, `(` or `=` directly before the userinfo goes with it (`k=u:p@h/r` prints `h/r`; an unbalanced `(` likewise). These are RFC 3986 sub-delims a userinfo may hold raw, so excluding them would leak part of such a password. Display only, never a leak. Cost: a slightly mangled error line.
-  - **Ruling R32:** a raw `?`, `#`, `/` or space inside a password still prints, since it ends the pattern's authority; curl refuses such shapes as a host. Recorded here only, with no code comment (`_upd_redact` sits above the citation-debt line). Cost: a malformed credential could print.
+  - **Ruling R31:** it over-masks text glued before a credentialed URL. A `'`, `(` or `=` directly before the userinfo goes with it (`k=u:p@h/r` prints `h/r`; an unbalanced `(` likewise). These are RFC 3986 sub-delims a userinfo may hold raw, so excluding them would leak part of such a password. Display only, never a leak. Cost: a slightly mangled error line. After fix round 3 a `"` or `<` glued after other text goes too (`k="u:p<w@h/r"` prints `h/r"`), for the same reason.
+  - **Ruling R32, corrected by fix round 3:** a raw `?`, `#`, `/` or space inside a password still prints, since it ends the pattern's authority; curl refuses such shapes as a host. A raw `<` or `"` no longer prints (above). Recorded here only, with no code comment (`_upd_redact` sits above the citation-debt line). Cost: a malformed credential could print.
 - **D-6749.** **The comment-only header changes are accepted** (review 891 F21; the coordinator's ruling 13).
   - The plan's exact edit list permitted one in-place line in `_models_advance_budget_secs`; its three-line header changed too, and so did the headers of `_upd_release_base`, `_upd_gate`, `_upd_asset_listed` and `_ver_gc`. The source owner's external condition held: the platform block is untouched and the citation census is kept (the lines above base line 11635 net to zero in aggregate, and `session-hook`'s citation-debt row passes).
   - The as-built records each one, and corrects its one-line description of the hunk before line 11635 (its "Fix round 1" subsection).
@@ -850,11 +856,11 @@ Tasks 1 to 4 are claim group A, Task 5 group B, Task 6 group C. A bash row sourc
     - `it('C5: every name read from the environment outside the reader is a reasoned exception, and every exception is still read')`. `envReads` of both files equals `Object.keys(ENV_ONLY)` exactly, in both directions, and the failure message prints both differences.
     - `it('C6: no exception is documented as a ccrc.env line')`. No `ENV_ONLY` or `HELPER_ENV_ONLY` name has a `^(# )?NAME=` line in the example.
     - `it('C7: ccd/ccrc keeps set -u, so a bare read of an unset name aborts and an unguarded read must spell the default C5 sees')`. A code line of `ccd/ccrc` matches `/^set -[a-z]*u[a-z]*o pipefail$/`. **Retitled by fix round 1 (F4, D-6746):** the plan's first title, `the census is complete only under set -u, which ccd/ccrc keeps`, claimed completeness the census does not have; the assertion is unchanged.
-    - `it('C8: there is no second reader of a setting')`, over the code lines of both files, function bodies sliced as the W23 rows slice them (`^name\(\) \{[\s\S]*?\n\}$`):
+    - `it('C8: there is no second reader of a setting')` (**retitled by fix round 3**, the assertion unchanged: `C8: the box-env readers take the server's keys by name and a key in a variable only in VAR_KEY_BODIES; the reader's indirection, its awk program and a setting beside a file read stay in _ccrc_knob`, since the census guards the spellings it names, D-6746), over the code lines of both files, function bodies sliced as the W23 rows slice them (`^name\(\) \{[\s\S]*?\n\}$`):
       - (a) the literal keys passed to `_box_env_value`, `_box_unit_env`, `_box_unit_env_shell` and `_box_path_for` equal `SERVER_SETTINGS` as a set, in both directions, and none is in `SETTINGS`; a call whose key is a variable (`"$key"`, `"$k"`, `"$1"`) appears only inside a `VAR_KEY_BODIES` body;
       - (b) a non-array, non-prefix indirection (`/\$\{!(?![A-Za-z_][A-Za-z0-9_]*(?:\[@\]|@)\})/`: neither `${!arr[@]}` nor `${!PREFIX_@}`) and the whole-token awk program's fragment `index(t, k "=") != 1` appear only inside `_ccrc_knob`;
       - (c) no code line outside `_ccrc_knob` names a setting together with `BOX_ENV_FILE` or an `awk`, `sed`, `grep` or `cut` command word, except where the setting is the literal first argument of a `_ccrc_knob`/`_keep_knob` call on that line (`_upd_deadline_ms`'s `BOX_ENV_FILE="$CCRC_EXPOSURE_FILE" _ccrc_knob …` prefix form).
-    - Added by fix round 1 (F4, D-6746): `it('C9: no nameref points at a setting')` (a `local`, `declare` or `typeset` whose option cluster holds `n`, with a setting after it); `it('C10: a -v test of a CCRC_ name reads the environment, so the name is a reasoned exception')` (never a setting, never unclassified); `it('C11: nothing sources the box env file but SOURCING_BODIES, by count')` (`.` or `source`, in command position, of `$BOX_ENV_FILE`, a `ccrc.env` path, a name bound to either, `<(…)` naming one, or `/dev/stdin <` one; the one allowed site is `_inst_plist_server`, count 1, both ways). The header's "what it does not catch" paragraph names the residuals (D-6746).
+    - Added by fix round 1 (F4, D-6746): `it('C9: no nameref points at a setting')` (a `local`, `declare` or `typeset` whose option cluster holds `n`, with a setting after it); `it('C10: a -v test of a CCRC_ name reads the environment, so the name is a reasoned exception')` (never a setting, never unclassified); `it('C11: nothing sources the box env file but SOURCING_BODIES, by count')` (`.` or `source`, in command position, of `$BOX_ENV_FILE`, a `ccrc.env` path, a name bound to either, `<(…)` naming one, or `/dev/stdin <` one; the one allowed site is `_inst_plist_server`, count 1, both ways). The header's "what it does not catch" paragraph names the residuals (D-6746). Fix round 3 (D-6746): the allowed sourcing must sit inside the one `local cmd="…"` line, and `$cmd` must be expanded once in the body, as the launchd job's `-c` argument; `. --` and a sourcing after a backtick are caught.
 - [ ] **Step 2: Run it red.** `./node_modules/.bin/vitest run test/ccrc-settings-census.test.ts`. Expected:
   - C2 red for six settings (only the deadline has a line), and for the README paragraph (not yet written);
   - C3 red on the two `\$CCRC_BACKUP…` usage lines;
@@ -1194,6 +1200,36 @@ Claims 2359 and 2363 lapse at about 04:31 and 05:49 UTC. Re-take one before it l
 
 Landing order: #1245 (wave 32, the fix for the trickle row's CI race) lands first, and #1237 absorbs it then.
 
+## Coordinator rulings on the review of rounds 1 and 2 (2026-10-24)
+
+The coordinator's mail 9052 rules on the held-out review of fix rounds 1 and 2 at `7446f7281`, and asked that its body be recorded here verbatim.
+
+Run 855, wave 24: fix round 3, ruled on the review of rounds 1 and 2 at 7446f7281. Record this verbatim in the plan as "Coordinator rulings on the review of rounds 1 and 2 (2026-10-24)".
+
+How the review ran: the daily cap held review run 902, so the operator directed that it run in my workspace. The held-out panel ran there as a workflow: three Opus lenses plus an Opus attacker lens, three Sonnet refuters per finding, and a run of every named suite. I read only its findings. Eleven findings survived, all 3-0, and five were refuted. Every suite is green on its tests. The one exit 1 is ccrc-uninstall's leaked fixture python supervisor, which main shares. Every claim of rounds 1 and 2 reproduces, and so do review 891's F2 chain (41.05 s) and each of K6's, C9 to C11's, R15's, H2/H3's, U5/U6's and X0c's mutants. Run 855 stays at awaiting-review. A send-back is blocked while review run 902 stays open, and it has not been dispatched, so it cannot be closed. The review of this round reads the new tip.
+
+1. Important (three lenses found it). `_upd_redact`'s scheme-less mask still leaks when a password holds a raw `<` or `"`. curl 8.5.0 accepts both in a scheme-less userinfo, and the attacker measured it authenticating with `u:p<w`. The token-start class `(^|[[:space:]"<])` and the run class `[^/@?#[:space:]"<]+@` stop at those characters. So `fleetuser:S3cr<etTOKEN@mirror.example/r` in ccrc.env prints `fleetuser:S3cr<mirror.example/r/...` on the fetching line, the `download failed:` die and update.json's detail, which the inventory relays off the box. The `"` form reaches from the environment.
+   The fix: the run class must not stop at `<` or `"` inside the userinfo. The token-start class still masks quoted prose (the unit row at about :4530, `and "tok@h/r"` to `"h/r"`, stays green). R32's curl-refused characters stay as they are.
+   - Add rows with a `<` password (from ccrc.env) and a `"` password (from the environment). Each row checks the fetching line, the die line and the detail. Measure each red without the fix, on a scratch copy restored by cmp.
+   - Correct the comment at about ccd/ccrc:2677-2678, R32 and D-6748. D-6748's "as doctor's box-settings masks one" must then be true.
+   - Spend D-6750 if the class change departs from D-6748's text.
+   X0c is unaffected: the fixture holds v0.0.84's own copy.
+2. The `_inst_plist_server` allowance in the census (SOURCING_BODIES, about :177) pins a count of 1 per body, not where the sourcing sits. The review moved the sourcing out of the launchd `cmd=` string into an executed body line, a real second reader, and the census stayed 11 of 11 green. Pin the allowance to the emitted launchd command line. That mutant must then red.
+3. Name two more sourcing spellings as residuals in the census header and D-6746, unless catching them is cheap: `. -- "$BOX_ENV_FILE"`, and a sourcing inside backticks. Each was measured green.
+4. D-6744: name the `CCRC_HEALTH_TIMEOUT` override as a third residual. It is unvalidated, and K6 pins only its default. With 30 in the user manager's environment the chain measured 66.0 s, past 63. Do not bound it in this wave.
+5. Text:
+   - the plan's Review Focus (about :218) still states the unnarrowed hard-cap bound, so narrow it as D-6745 does;
+   - the plan's :15 drops its completeness premise;
+   - census C8's title stops saying "there is no second reader" and matches the header;
+   - the README audit's row 1299 is 1300 at the tip.
+Questions: (a) none of R35's three is fixed before landing. The 200-character cap is applied after redaction, and the duplicate stderr line and F11's edges are wording; record them as accepted. (b) Wording only, accepted. (c) Yes.
+
+Gates, one file at a time, in the foreground:
+- ccrc-update `-t` for the D-6748 and redact unit rows and the W24 describe;
+- ccrc-settings-census, ccrc-sweep-deliberate-stop, and ccrc-doctor's box-settings describe;
+- growth (GROWTH_CHECK=1, the stop line stays 39), citations, docs-parity, topology-clean, private-names, dtbd, and deviation-refs after `git fetch origin main`.
+Run mutations on a scratch copy restored by cmp. Scan the prose for private names. Measure merge-tree against main and #1259's head; absorb main only on a conflict. Push once, with the wave-done in the same turn. Keep claims 2382 and 2383. Re-take 2377 and 2378 before about 12:50 UTC if the land runs past it.
+
 ## As built (run 855, 2026-10-23)
 
 What shipped on the branch, how it departs from the text above, and what is still open. Written from the worker's
@@ -1427,7 +1463,7 @@ Base `0754e84e2`.
   "counted twice" and the safe direction say; the comment accounts for all 23 added seconds. Cost: thinning stops up to 18 s early.
 - **R31** (`_upd_redact` over-masks text glued before a credentialed URL): accepted, display only. Cost: a mangled error line.
 - **R32** (a raw `?`, `#`, `/` or space inside a password still prints): recorded in D-6748 only. Cost: a malformed
-  credential could print; curl refuses such hosts.
+  credential could print; curl refuses such hosts. Corrected by fix round 3: a raw `<` or `"` no longer prints (D-6748).
 - **R33** (F12 would red two rows in `ccrc-uninstall.test.ts`): it goes ahead, since that file is under this run's claim 2367
   (the brief was narrow, not the claim); the two rows were updated, old → new, in D-6605. Cost: none.
 - **R34** (W24-U6 carries a minimal copy of the rollout suite's ssh and curl stubs, since `ccrc-rollout.test.ts` is not this
@@ -1501,7 +1537,7 @@ gives 25 lines. Each was read in this round; "unchanged" means it still reads tr
 | 1227 | unchanged | the newest `CCRC_BACKUP_DATA_KEEP` keep the data set: true. |
 | 1234, 1235 | unchanged | the data knob's line grammar, the reader's own: still true. |
 | 1285, 1286, 1287 | changed | the new `**ccrc's own settings.**` paragraph: the seven names (grant 8545). |
-| 1299, 1302 | changed | the same paragraph: the deadline's smallest and largest readings, the doctor check; the F14 sentence on the model-wide causes follows the whole-file sentence. |
+| 1300, 1302 | changed | the same paragraph: the deadline's smallest and largest readings, the doctor check; the F14 sentence on the model-wide causes follows the whole-file sentence. |
 | 1991 | unchanged | the models budget's default 250 seconds in "When the step runs": true. |
 | 2001 | unchanged | `=0` turns the step off, and so does a value that is not a whole number: true. |
 | 2005, 2007 | changed | "Turning the step off": the budget is read from the environment, else ccrc.env, a drop-in still overrides one unit, an unreadable line turns the step off (grant 8545). |
@@ -1564,3 +1600,56 @@ against `49e7f187a`, all netting to zero lines: the `update` usage paragraph (fo
   agent label), and install describe 35's teardown leak (main shares it): both named by the coordinator as ledger items.
 - The sibling scripts' operator settings (unchanged from the follow-ups above).
 - The F12 row was first committed as a second W24-R10 (beside Ledger R8's KEEP_FROM row); renamed W24-R16 before the push.
+
+### Fix round 3 (2026-10-24, mail 9052)
+
+The held-out review of fix rounds 1 and 2 read the branch at `7446f7281`. The coordinator ruled in mail 9052, recorded
+verbatim above: one important finding and four minor ones. Base `7446f7281`.
+
+#### Commits, in order
+
+1. `477d02c45` fix(ccrc): the scheme-less mask runs through a password's < and ", so neither leaks (item 1, D-6748). The
+   class change and `_upd_redact`'s D-6748 comment, six lines for six (above base line 11635, so line for line). Two
+   end-to-end rows and one unit expectation.
+2. `a0a449436` test(census): the one allowed sourcing is pinned to the launchd command line (items 2 and 3, D-6746). The
+   commit's subject says the two spellings are "named". They are named in the census header, as caught, not as residuals.
+   C8's title now matches the header (item 5).
+3. `docs(plan): the review of rounds 1 and 2 recorded, D-6744/6746/6748 corrected, round 3 as built (fix round 3)`: this text.
+
+#### What the round decided
+
+- **Item 1.** Only the first character of a userinfo segment excludes `<` and `"`, so a password's `<` or `"` is masked with
+  the rest, and the opening quote of quoted prose stays (D-6748 says how, and how it compares with doctor's mask). A userinfo
+  that begins with `<` or `"` prints that one character: it is a user name's first, never a password's, and curl accepts it
+  (measured). R32's `?`, `#`, `/` and space are unchanged.
+- **D-6750 stays unspent.** The new class does what D-6748's text already said, every `@`-ended run from a token's start. The
+  fix round 1 class fell short of it, so nothing departs from the text and no number is spent. D-6748 is corrected in place,
+  and its "as doctor's box-settings masks one" is now stated exactly.
+- **Item 2.** The allowance is pinned to the launchd command line. A sourcing in `_inst_plist_server` must sit inside its one
+  `local cmd="…"` line, and `$cmd` must be expanded once, as the plist's `-c` argument.
+- **Item 3: caught, not named as residuals.** `. -- "$BOX_ENV_FILE"` and a sourcing after a backtick are each one token or one
+  class character in C11's pattern. The census stays 11 of 11 with no new hit.
+- **Item 4.** D-6744 names the `CCRC_HEALTH_TIMEOUT` override as its third residual. Not bounded in this wave.
+- **Item 5.** The Review Focus's time bullet is narrowed as D-6745 says. This plan's opening premise no longer says every read
+  spells a default. C8's title stops saying "there is no second reader", and the README audit's row 1299 reads 1300. Every
+  other audit row was re-checked against README at this tip: the grep still gives 25 lines, and no other line number drifted.
+- **Questions, as ruled.** (a) None of R35's three is fixed before landing. They are accepted as they stand: the 200-character
+  cap applies after redaction, and the duplicate stderr line and F11's edges are wording. (b) Wording only, accepted. (c) Yes.
+
+#### Measured
+
+- **Mutants**, each on a scratch clone, one at a time, restored by cmp (clean after each):
+  - the fix round 1 class (`[^/@?#[:space:]"<]+@`) restored: both new rows red, and the `_upd_redact` unit row red;
+  - `"<` dropped from the class altogether: the unit row red, on its `and "tok@h/r"` line (`and h/r"` received);
+  - the sourcing moved out of `cmd=` onto an executed line of `_inst_plist_server`: C11 red (green on the census before the
+    round, measured);
+  - `$cmd` also run in the body (`bash -c "$cmd"`): C11 red, two expansions;
+  - `. -- "$BOX_ENV_FILE"` in `_bak_data_keep`: C11 red (green before the round, measured);
+  - a backtick sourcing in `_bak_data_keep`: C11 red (green before the round, measured).
+- **Growth.** `ccd/ccrc` is +26 net code lines, of the stop line 39, unchanged by this round. The `_upd_redact` hunk is line for
+  line, and session-hook's citation-debt row passes.
+- **Suites and guards** at this commit: the gate list in `fr3-report.md` (one file at a time, in the foreground).
+
+#### Claims
+
+2382 and 2383 (re-taken at 08:47Z from 2366 and 2367, same paths), and 2377 and 2378 (the frozen sweep fixture and its test).
