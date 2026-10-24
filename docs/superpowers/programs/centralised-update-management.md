@@ -6018,6 +6018,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   v0.0.620 and v0.0.621 were released meanwhile.
   `STATUS 2026-10-24T12:29:57Z fleet=v0.0.619 server=v0.0.619 health=v0.0.619 newest=v0.0.621 intent=*:dev/auto=off`
   `backups=fleet:221M/server:8170M disk=fleet:95G/server:22G`
+- **2026-10-24 13:25 UTC — monitoring: v0.0.622 released; boxes stay on v0.0.619, no anomalies.** No file of the delegation
+  lane changes in it. `STATUS 2026-10-24T13:25:40Z fleet=v0.0.619 server=v0.0.619 health=v0.0.619 newest=v0.0.622`
+  `intent=*:dev/auto=off backups=fleet:221M/server:8170M disk=fleet:93G/server:22G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
