@@ -13,6 +13,7 @@ import { clearAuthLost, raiseAuthLost, useAuthLost } from '../src/lib/auth';
 import { useLocation } from '../src/lib/router';
 import { setSkin } from '../src/lib/skin';
 import { Composer } from '../src/session/Composer';
+import { CONTENT_ID, FLEET_ID } from '../src/skins/frame';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { useFleetStore } from '../src/stores/fleet';
 import { PALETTE_MOTION_VARS, VAUL_MOTION } from '../../ui/src/lib/motion';
@@ -614,6 +615,19 @@ describe('the palette hands focus back where it came from (D-5679)', () => {
     fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
     await wait(30);
     expect(document.activeElement).toBe(document.getElementById('content'));
+  });
+
+  it("to the fleet column's landmark when the main one cannot take focus: a phone's fleet view (390), never the body", async () => {
+    // At 390 on the fleet view the phone swap hides <main> (display: none), so focus() on it does nothing (measured in
+    // Chrome in T2a's review). jsdom renders nothing, so main's focus is stubbed to refuse, as Chrome's does there.
+    render(<><main id={CONTENT_ID} tabIndex={-1} /><section id={FLEET_ID} aria-label="Fleet" tabIndex={-1} /><CommandLayer openNewSession={vi.fn()} /></>);
+    const main = document.getElementById(CONTENT_ID)!;
+    const refused = vi.spyOn(main, 'focus').mockImplementation(() => {});
+    fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
+    await wait(30);
+    expect(refused, 'main was asked first').toHaveBeenCalled();
+    expect(document.activeElement, 'not the body').toBe(screen.getByRole('region', { name: 'Fleet' }));
   });
 
   it('to the main landmark when the element that opened it is gone', async () => {
