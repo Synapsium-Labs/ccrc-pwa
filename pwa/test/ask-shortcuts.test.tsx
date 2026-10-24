@@ -107,11 +107,19 @@ describe('focus inside the inline ask card holds the page keys', () => {
     expect(ran, 'premise: the chord is half on the page, half in the card; the card holds the second key').toEqual([]);
   });
 
-  it('a held-back key inside the card does not arm a chord for a later key on the page', () => {
+  it('a "g" held back inside the card is not a chord\'s first key for a later "r" on the page', () => {
     const { ran, at } = mountPage();
     press(at('card-option'), 'g');
     press(document.body, 'r');
     expect(ran, 'premise: the "g" was the card\'s, so the page "r" is a lone key').toEqual([]);
+  });
+
+  it('a "g" on the page, then any key inside the card, disarms the chord: a later "r" on the page is a lone key', () => {
+    const { ran, at } = mountPage();
+    press(document.body, 'g');
+    press(at('card-option'), '[');
+    press(document.body, 'r');
+    expect(ran, 'premise: the held-back "[" ended the chord the page "g" armed').toEqual([]);
   });
 
   it('⌘K inside the card still opens the palette', () => {
