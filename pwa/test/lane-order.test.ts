@@ -1,8 +1,12 @@
 // The lanes' one order and one binding-window decider (T2c, D-6329): `bindingWindow` names the window that binds a lane,
 // and (once it lands) `lanesByFree` orders lanes by it, most free first.
 import { describe, expect, it } from 'vitest';
+import { readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
 import type { AccountUsage } from '../../shared/api';
 import { bindingWindow, lanesByFree } from '../src/fleet/laneOrder';
+import { parseTs } from './literalWalker';
 
 const lane = (wrapper: string, five: number | null, seven: number | null, over: Partial<AccountUsage> = {}): AccountUsage => ({
   wrapper, five, seven, ts: 1, fiveResetAt: 1000, sevenResetAt: 2000, fiveRolledOver: false, sevenRolledOver: false,
@@ -49,5 +53,40 @@ describe('lanesByFree', () => {
     ];
     // Read and signed in by use, then the never-read and the expired ones in their own relative order.
     expect(names(lanes)).toEqual(['lane-f', 'lane-d', 'lane-b', 'lane-a', 'lane-c', 'lane-e']);
+  });
+});
+
+describe('one bindingWindow', () => {
+  const SRC = path.join(import.meta.dirname, '..', 'src');
+  const files = (dir: string): string[] => readdirSync(dir).sort().flatMap((e) => {
+    const p = path.join(dir, e);
+    return statSync(p).isDirectory() ? files(p) : /\.tsx?$/.test(p) && !p.endsWith('.d.ts') ? [p] : [];
+  });
+  const rel = (f: string): string => path.relative(SRC, f).split(path.sep).join('/');
+
+  /** Every declaration of the name: a function, a variable, a class, or a parameter-free binding of it. */
+  function declarations(file: string): number {
+    let n = 0;
+    const visit = (node: ts.Node): void => {
+      if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name?.text === 'bindingWindow') n += 1;
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'bindingWindow') n += 1;
+      ts.forEachChild(node, visit);
+    };
+    visit(parseTs(file));
+    return n;
+  }
+
+  it('bindingWindow is defined once, in fleet/laneOrder.ts, and LaneSection imports it', () => {
+    const all = files(SRC);
+    expect(all.length).toBeGreaterThan(100); // the walk is not vacuously empty
+    const declared = all.filter((f) => declarations(f) > 0).map((f) => `${rel(f)} x${declarations(f)}`);
+    expect(declared).toEqual(['fleet/laneOrder.ts x1']);
+
+    const lane = parseTs(path.join(SRC, 'inspector', 'LaneSection.tsx'));
+    const imported = lane.statements.some((st) => ts.isImportDeclaration(st)
+      && ts.isStringLiteral(st.moduleSpecifier) && st.moduleSpecifier.text === '../fleet/laneOrder'
+      && st.importClause?.namedBindings !== undefined && ts.isNamedImports(st.importClause.namedBindings)
+      && st.importClause.namedBindings.elements.some((el) => el.name.text === 'bindingWindow' && el.propertyName === undefined));
+    expect(imported).toBe(true);
   });
 });
