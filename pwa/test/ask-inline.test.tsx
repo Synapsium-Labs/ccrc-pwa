@@ -1026,6 +1026,45 @@ describe('the composer while a question is up', () => {
     expect(screen.queryByText(sendErrorText('dialog-open')), 'a new ask shows no stale refusal').toBeNull();
   });
 
+  it('fixture 7 (an approval, no pane menu) at the desk: Send is held locally, the draft is kept, no request is made and the dialog-open sentence shows', async () => {
+    // Premises (R69 F2): the hook's permission envelope and `dialog: null` (the server's `hasMenu` is false for it, so the
+    // server would NOT refuse this send), the inline card mounted at the desk. Send holds because the card is up, which is
+    // the client's own deferral, not the server's predicate: a gate on the pane menu (`dialog !== null`) lets this send through.
+    media(true);
+    const { arrive, prompt, store } = mount();
+    arrive(7);
+    expect(store.getState().dialog, 'premise: the pane has no menu').toBeNull();
+    expect(store.getState().ask, 'premise: the hook\'s approval envelope is held').not.toBeNull();
+    card();
+    const box = composer();
+    fireEvent.change(box, { target: { value: 'half a thought' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await act(async () => { await Promise.resolve(); });
+    expect(prompt, 'no request was made').not.toHaveBeenCalled();
+    expect(composer(), 'the draft is kept').toHaveValue('half a thought');
+    expect(screen.getByText(sendErrorText('dialog-open')).closest('[role="status"]'), 'the sentence shows, in a status line')
+      .not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await act(async () => { await Promise.resolve(); });
+    expect(prompt, 'the Send button is the same door').not.toHaveBeenCalled();
+    expect(composer()).toHaveValue('half a thought');
+  });
+
+  it('Stop still interrupts a busy turn while fixture 7 (no pane menu) is up at the desk', async () => {
+    media(true);
+    const interrupt = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
+    const { arrive, store } = mount({ status: 'busy' });
+    arrive(7);
+    expect(store.getState().dialog, 'premise: the pane has no menu').toBeNull();
+    card();
+    const stop = document.querySelector<HTMLElement>('.composer .stop-slot')!;
+    expect(stop, 'Stop is in the send slot').not.toBeNull();
+    fireEvent.click(stop);
+    await act(async () => { await Promise.resolve(); });
+    expect(interrupt).toHaveBeenCalledTimes(1);
+    expect(interrupt).toHaveBeenCalledWith(ID, 'keycap');
+  });
+
   it('Stop still interrupts a busy turn while an inline ask is up', async () => {
     media(true);
     const interrupt = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
@@ -1039,5 +1078,114 @@ describe('the composer while a question is up', () => {
     await act(async () => { await Promise.resolve(); });
     expect(interrupt).toHaveBeenCalledTimes(1);
     expect(interrupt).toHaveBeenCalledWith(ID, 'keycap');
+  });
+});
+
+// R69 F6, a CHARACTERIZATION (green on the base, not a guard that was red): the card and the composer are not remounted by
+// anything the ask goes through. The geometry (the composer moves 0 px) does not prove that, so these compare the nodes.
+// Arrival (above) and the skin switch (`skin-switch.test.tsx`) pin theirs; these pin the reconnect and the leave.
+class ScriptedSocket {
+  onopen: ((ev: Event) => void) | null = null;
+  onclose: ((ev: CloseEvent) => void) | null = null;
+  onerror: ((ev: Event) => void) | null = null;
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+  readyState = 0;
+  constructor(readonly url: string, sockets: ScriptedSocket[]) { sockets.push(this); }
+  close(): void {}
+  send(): void {}
+  open(): void { this.readyState = 1; this.onopen?.(new Event('open')); }
+  drop(): void { this.readyState = 3; this.onclose?.(new Event('close') as CloseEvent); }
+}
+
+/** The real `SessionScreen` over a store that `connect()`s through scripted sockets, so a drop and a reconnect are the
+ *  store's own `onState` and `onOpen`. `speak(n)` is the connection delivering fixture `n`'s frames after its open. */
+function mountLive() {
+  const sockets: ScriptedSocket[] = [];
+  const prompt = vi.fn().mockResolvedValue(undefined);
+  const store: SessionStore = createSessionStore(ID, {
+    makeSocket: (url) => new ScriptedSocket(url, sockets) as unknown as WebSocket,
+    api: { prompt },
+  });
+  const row: FleetSession = fleetSession({ id: ID, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', status: 'idle' });
+  const fleet = createFleetStore({ makeSocket: fakeSocket });
+  act(() => fleet.setState({ sessions: [row], conn: 'open' }));
+  act(() => store.setState({ uuid: 'u1', status: 'idle', events: EVENTS }));
+  render(<SessionScreen id={ID} store={store} fleet={fleet} />);
+  const last = (): ScriptedSocket => sockets[sockets.length - 1]!;
+  act(() => last().open());
+  const speak = (n: number): void => {
+    act(() => { for (const f of askFixture(n).frames) store.getState().apply(f); });
+  };
+  const drop = (): void => { act(() => last().drop()); };
+  const reconnect = (): void => {
+    act(() => { window.dispatchEvent(new Event('online')); });
+    act(() => last().open());
+  };
+  return { store, prompt, speak, drop, reconnect, sockets };
+}
+
+describe('the card and the composer are not remounted by the ask\'s own life (R69 F6)', () => {
+  it('the SAME card node and the SAME composer node, with its typed text, across a drop, the gap and the resume', async () => {
+    media(true);
+    const { store, speak, drop, reconnect, sockets } = mountLive();
+    speak(1);
+    const section = card();
+    const box = composer();
+    fireEvent.change(box, { target: { value: 'half a thought' } });
+    const option = opt(section, /^Redis/);
+    expect(box, 'premise: the draft is typed').toHaveValue('half a thought');
+
+    drop();
+    expect(sockets.length, 'premise: the first socket carried the ask').toBe(1);
+    expect(store.getState().conn, 'premise: the store left open').not.toBe('open');
+    expect(document.body.textContent, 'premise: the gap says so').toMatch(/Reconnecting/);
+    expect(card(), 'in the gap: the same card node').toBe(section);
+    expect(composer(), 'in the gap: the same composer node').toBe(box);
+    expect(composer(), 'in the gap: its text').toHaveValue('half a thought');
+
+    reconnect();
+    expect(sockets.length, 'premise: a second socket was made').toBe(2);
+    speak(1);
+    expect(store.getState().conn, 'premise: the store is open again').toBe('open');
+    await frame();
+    expect(card(), 'after the resume: the same card node').toBe(section);
+    expect(opt(card(), /^Redis/), 'after the resume: the same option node').toBe(option);
+    expect(composer(), 'after the resume: the same composer node').toBe(box);
+    expect(composer(), 'after the resume: its text').toHaveValue('half a thought');
+  });
+
+  it('the composer keeps its node and its text when Open terminal is pressed on a terminal-door surface at the desk (fixtures 3 and 5)', () => {
+    for (const n of [3, 5]) {
+      media(true);
+      const { arrive } = mount();
+      arrive(n);
+      const section = card();
+      const box = composer();
+      fireEvent.change(box, { target: { value: `draft ${n}` } });
+      fireEvent.click(within(section).getByRole('button', { name: 'Open terminal to answer' }));
+      expect(card(), `fixture ${n}: the card is the same node`).toBe(section);
+      // The drawer is modal, so the page behind it leaves the accessibility tree: the composer is read with `hidden`.
+      const behind = screen.getByRole('textbox', { name: 'Message', hidden: true }) as HTMLTextAreaElement;
+      expect(behind, `fixture ${n}: the same composer node after Open terminal`).toBe(box);
+      expect(behind.isConnected, `fixture ${n}: still in the document`).toBe(true);
+      expect(behind, `fixture ${n}: its text`).toHaveValue(`draft ${n}`);
+      cleanup();
+    }
+  });
+
+  it('the composer keeps its node and its text when the ask ends and the card leaves', () => {
+    media(true);
+    const { arrive, store } = mount();
+    arrive(1);
+    card();
+    const box = composer();
+    fireEvent.change(box, { target: { value: 'half a thought' } });
+    act(() => {
+      store.getState().apply({ type: 'dialog_cleared' });
+      store.getState().apply({ type: 'ask_cleared' });
+    });
+    expect(cards(), 'premise: the card is gone').toHaveLength(0);
+    expect(composer(), 'the same composer node after the card left').toBe(box);
+    expect(composer(), 'its text').toHaveValue('half a thought');
   });
 });
