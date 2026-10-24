@@ -429,7 +429,7 @@ These twenty numbers, starting at D-6587, were issued to run 855. This revision 
   - **The plan's mandated sentence is amended** (D-6589, and the Task 1 and Task 2 rows that quote it). Old: `CCRC_BACKUP_KEEP='x' is not a whole number from 0 to 9999`, then each caller's tail. New: `CCRC_BACKUP_KEEP='x' is not a whole number from 0 to 9999, as set in the box's ccrc.env` (a file value), or `…, as set in the environment` (an environment value), then the tail (` — nothing pruned`, ` — nothing was thinned`, ` — listing only; …`). An unmeasured refusal (`<KEY> cannot be measured: …`) is unchanged: it already names the file.
   - **Why.** With the environment `CCRC_BACKUP_KEEP=' '` and a file value of 5, the refusal named the invalid value without saying it came from the environment, while doctor's file-only line passed with 5. Accepted prune lines already named their source; invalid-value refusals did not (review 891 F12). Diagnostic clarity, not a precedence defect.
   - **`deploy/deploy.sh` keeps its own copy of the sentence** (D-5142), without the clause: its value always comes from its own environment.
-  - **Rows.** W24-R10 (new): the environment `' '` with file 5 names the environment; file `x` names ccrc.env; neither output holds `CCRC_ROLE`. The suites that quoted the old sentence were re-pinned, old → new, with the clause added before the dash (the versions rows, P11, W23-B3 and B12, and W24-B1, B2, B4, B5, B8 and R9 in ccrc-update.test.ts, and the two bounded-number rows in ccrc-uninstall.test.ts, a file this run's claim covers; ruling R33). Mutant: dropping `, as set in $KEEP_FROM` reds W24-R9, W24-R10 and both uninstall rows.
+  - **Rows.** W24-R16 (new): the environment `' '` with file 5 names the environment; file `x` names ccrc.env; neither output holds `CCRC_ROLE`. The suites that quoted the old sentence were re-pinned, old → new, with the clause added before the dash (the versions rows, P11, W23-B3 and B12, and W24-B1, B2, B4, B5, B8 and R9 in ccrc-update.test.ts, and the two bounded-number rows in ccrc-uninstall.test.ts, a file this run's claim covers; ruling R33). Mutant: dropping `, as set in $KEEP_FROM` reds W24-R9, W24-R16 and both uninstall rows.
 - **D-6606.** **Unspent: issued to run 855 as the worker's reserve, not needed by this wave.**
   - No code, test or document cites it. It is defined only so the issued block is accounted for.
 - **D-6744.** **The hard-cap term is 63 s, the sum of the start chain's own ceilings, and W24-K6 derives it from the four sources** (review 891 F2; the coordinator's ruling 2). It amends D-6601's `− 40` to `− 63`. D-6603 stays as the history it is, with one bullet saying this supersedes its term.
@@ -540,7 +540,7 @@ Tasks 1 to 4 are claim group A, Task 5 group B, Task 6 group C. A bash row sourc
     - file `x` → rc 1, `CCRC_BACKUP_KEEP='x' is not a whole number from 0 to 9999`;
     - `_keep_knob CCRC_BACKUP_DATA_KEEP 3 2` with file `1` → rc 1, `CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999`;
     - environment `CCRC_BACKUP_KEEP=٣` → rc 1, the `_keep_why` sentence with the value sanitised.
-  - Added by fix round 1 (F12, D-6605): `it('W24-R10: a keep refused for its value names where the value came from (D-6605)')`. ccrc.env `CCRC_ROLE=both` and `CCRC_BACKUP_KEEP=5` with the environment `CCRC_BACKUP_KEEP=' '` → exactly `rc 1 keep  why CCRC_BACKUP_KEEP=' ' is not a whole number from 0 to 9999, as set in the environment`; file value `x` → `… 'x' … 9999, as set in the box's ccrc.env`; neither output holds `CCRC_ROLE`, so no other byte of the file prints. The mutant that drops `, as set in $KEEP_FROM` reds this row, W24-R9 and the uninstall suite's two bounded-number rows. (The file now holds two rows named W24-R10: this one and Ledger R8's `a refused keep clears KEEP_FROM too`.)
+  - Added by fix round 1 (F12, D-6605): `it('W24-R16: a keep refused for its value names where the value came from (D-6605)')`. ccrc.env `CCRC_ROLE=both` and `CCRC_BACKUP_KEEP=5` with the environment `CCRC_BACKUP_KEEP=' '` → exactly `rc 1 keep  why CCRC_BACKUP_KEEP=' ' is not a whole number from 0 to 9999, as set in the environment`; file value `x` → `… 'x' … 9999, as set in the box's ccrc.env`; neither output holds `CCRC_ROLE`, so no other byte of the file prints. The mutant that drops `, as set in $KEEP_FROM` reds this row, W24-R9 and the uninstall suite's two bounded-number rows.
   - Added by fix round 1 (F5): `it.each(['linux','darwin'])('W24-R15: a CRLF comment naming CCRC_RELEASE_BASE_URL beside the odd line reads the default')`: `# CCRC_RELEASE_BASE_URL=https://mirror.example/releases` with a CRLF ending, beside the platform's odd line (the UTF-8 `CCRC_VAPID_SUBJECT=mailto:josé@…` line on Linux), alone and inside a copy of the example → `rc 0 val … from default`. The mutant that turns the count clause `|| /\r./` into `|| /\r/` (a CR that ends the line counted as a second line) reds it; W24-R9 to R14 and W23-B17 did not.
 - [ ] **Step 2: Run them red.** `./node_modules/.bin/vitest run test/ccrc-update.test.ts -t 'W24-R' --pool=forks --maxWorkers=1`. Expected: every row red, because `_ccrc_knob` and `_keep_knob` do not exist (`command not found` in stderr, the echo's values empty).
 - [ ] **Step 3: Implement.**
@@ -1132,9 +1132,9 @@ the worker updates every place the plan states it, in the first task that touche
 
 ## Coordinator rulings on review 891 (2026-10-24)
 
-The coordinator's mail 8892 rules on review 891 (run 891's review of run 855 at `0754e84e2`), and asked that its body be recorded here verbatim. One substitution only: the review report's path under a session's clips directory, which names a session, is replaced by "the review's report" (this repository is public).
+The coordinator's mail 8892 rules on review 891 (run 891's review of run 855 at `0754e84e2`), and asked that its body be recorded here verbatim. One substitution only: the review report's path under a session's clips directory, which names a session, is shortened to its file name (this repository is public).
 
-Run 855, wave 24: fix round 1, ruled on review 891 (the review's report: the review's report, at 0754e84e). Record this verbatim in the plan as "Coordinator rulings on review 891 (2026-10-24)". Eight numbers are issued to this round, D-6744 to D-6751. The rulings below define D-6744 to D-6749. D-6750 and D-6751 are your reserve, and D-6605 and D-6606 are still unspent.
+Run 855, wave 24: fix round 1, ruled on review 891 (the review's report: review-891-0754e84e.md, at 0754e84e). Record this verbatim in the plan as "Coordinator rulings on review 891 (2026-10-24)". Eight numbers are issued to this round, D-6744 to D-6751. The rulings below define D-6744 to D-6749. D-6750 and D-6751 are your reserve, and D-6605 and D-6606 are still unspent.
 
 The review found the wave as planned: the brief's 14 files, one settings reader, growth +23 of 39, every suite green but a teardown leak main shares. One finding is important: CI is red.
 
@@ -1376,7 +1376,7 @@ the setting's source was replaced by the one this plan's brief gave.
 ### Fix round 1 (2026-10-24, mail 8892, review 891)
 
 Review 891 read the wave at `0754e84e2` and found 21 findings (one important). The coordinator ruled in mail 8892 (recorded
-verbatim above, one path replaced by "the review's report"). The round's code is `ccd/ccrc`, the doctor check and tests; this
+verbatim above, one path shortened to its file name). The round's code is `ccd/ccrc`, the doctor check and tests; this
 dispatch wrote its text.
 
 #### Commits, in order
@@ -1453,7 +1453,7 @@ Base `0754e84e2`.
   F4 (C9 to C11) 10 at first and 22 after the census review, with three controls that stay green and three named residuals
   surviving; F5 1 (red: the two W24-R15 rows); F2 5 (W24-K6, and W24-D3 for the literal); F7 3; F6 1 for W24-H2 and 2 for W24-H3;
   F8/F9 5 (W24-U5, U2, U3); F10 2 (the arm deleted, the old sentence restored); F11 5 (`|| :`, the old question, and the
-  `255)`, `0)` and `127)` arms; W24-U6); F12 1 (W24-R9, W24-R10, both uninstall rows); F15 3 by the implementer and six by the
+  `255)`, `0)` and `127)` arms; W24-U6); F12 1 (W24-R9, W24-R16, both uninstall rows); F15 3 by the implementer and six by the
   review (S8 to S12).
 - **Suites, as each dispatch last measured them** (one file at a time, foreground; `ccrc-update` by describe: W23 99, W24 65
   before W24-H3's four rows and `W24-H` 9 of 9 after them, the automatic restore 25, restore arm 1 12, update.json at every phase
@@ -1551,4 +1551,4 @@ against `49e7f187a`, all netting to zero lines: the `update` usage paragraph (fo
 - `_inst_plist_server`'s fleet-role entry point (an older defect: the base and the tip generate the server entry beside a fleet
   agent label), and install describe 35's teardown leak (main shares it): both named by the coordinator as ledger items.
 - The sibling scripts' operator settings (unchanged from the follow-ups above).
-- One wart for the next touch: `ccrc-update.test.ts` holds two rows named W24-R10 (the F12 row and Ledger R8's KEEP_FROM row).
+- The F12 row was first committed as a second W24-R10 (beside Ledger R8's KEEP_FROM row); renamed W24-R16 before the push.

@@ -14990,7 +14990,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     // D-6605 (fix round 1, F12): a keep refused for its value names the source that won, and prints no byte of the file but
     // that value: an environment value of spaces wins over the file's 5 and is refused as the environment's; a file's `x` as
     // ccrc.env's. The file's other line (and its 5) never reach the sentence.
-    it('W24-R10: a keep refused for its value names where the value came from (D-6605)', () => {
+    it('W24-R16: a keep refused for its value names where the value came from (D-6605)', () => {
       const home = boxWith('ccrc-fx-w24-r10-', 'CCRC_ROLE=both\nCCRC_BACKUP_KEEP=5\n');
       const env = knob(home, `export CCRC_BACKUP_KEEP=' '; _keep_knob CCRC_BACKUP_KEEP 10; ${KEEP_ECHO}`);
       expect(env).toBe('rc 1 keep  why CCRC_BACKUP_KEEP=\' \' is not a whole number from 0 to 9999, as set in the environment\n');
