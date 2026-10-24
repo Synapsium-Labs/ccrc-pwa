@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ts from 'typescript';
 import type { AccountUsage } from '../../shared/api';
@@ -10,7 +10,7 @@ import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { declValue, ruleIn } from './cssRule';
-import { parseTs } from './literalWalker';
+import { isSpecifier, parseTs } from './literalWalker';
 import { TEST_ROSTER } from './rosterFixture';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -142,7 +142,8 @@ describe('AccountsStrip', () => {
     const literals: string[] = [];
     let importsBuilder = false;
     const visit = (n: ts.Node): void => {
-      if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isJsxText(n)) literals.push(n.text);
+      // A module specifier names a module, not a path the strip builds.
+      if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isJsxText(n)) && !isSpecifier(n)) literals.push(n.text);
       if (ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) literals.push(n.text);
       if (ts.isImportDeclaration(n)) {
         const b = n.importClause?.namedBindings;
@@ -219,28 +220,32 @@ describe('AccountsStrip', () => {
   });
 
   it('the stop follows its lane through a re-sort, and falls to the first card when that lane leaves', async () => {
-    const first = [acct({ wrapper: 'lane-a', five: 10 }), acct({ wrapper: 'lane-b', five: 20 }), acct({ wrapper: 'lane-c', five: 30 })];
-    const spy = vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: first, projected: { wrapper: 'lane-a', score: 0 }, roster: TEST_ROSTER });
-    const { container } = render(<AccountsStrip />);
-    await screen.findByText('lane-a');
-    const user = userEvent.setup();
-    await user.tab();
-    await user.keyboard('{ArrowRight}');           // lane-b holds the stop
-    const stops = (): string[] => cardsOf(container).filter((c) => c.tabIndex === 0).map(nameOf);
-    expect(stops()).toEqual(['lane-b']);
-    // lane-b becomes the fullest on the next poll: it moves to the end, and the stop stays on it.
-    spy.mockResolvedValue({ accounts: [first[0]!, acct({ wrapper: 'lane-b', five: 90 }), first[2]!], projected: { wrapper: 'lane-a', score: 0 }, roster: TEST_ROSTER });
+    // Fake timers from before the mount, so the strip's 20 s poll interval is the fake one.
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    try { await vi.advanceTimersByTimeAsync(20_100); } finally { vi.useRealTimers(); }
-    await within(container).findByText('90%');
-    expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c', 'lane-b']);
-    expect(stops()).toEqual(['lane-b']);
-    // lane-b leaves: the stop falls to the first card.
-    spy.mockResolvedValue({ accounts: [first[0]!, first[2]!], projected: { wrapper: 'lane-a', score: 0 }, roster: TEST_ROSTER });
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try { await vi.advanceTimersByTimeAsync(20_100); } finally { vi.useRealTimers(); }
-    await vi.waitFor(() => expect(cardsOf(container)).toHaveLength(2));
-    expect(stops()).toEqual(['lane-a']);
+    try {
+      const first = [acct({ wrapper: 'lane-a', five: 10 }), acct({ wrapper: 'lane-b', five: 20 }), acct({ wrapper: 'lane-c', five: 30 })];
+      const reply = (accounts: AccountUsage[]) => ({ accounts, projected: { wrapper: 'lane-a', score: 0 }, roster: TEST_ROSTER });
+      const spy = vi.spyOn(api, 'accounts').mockResolvedValue(reply(first));
+      const { container } = render(<AccountsStrip />);
+      await screen.findByText('lane-a');
+      const stops = (): string[] => cardsOf(container).filter((c) => c.tabIndex === 0).map(nameOf);
+      const byName = (n: string): HTMLElement => cardsOf(container).find((c) => nameOf(c) === n)!;
+      act(() => { byName('lane-a').focus(); });
+      fireEvent.keyDown(byName('lane-a'), { key: 'ArrowRight' });   // lane-b holds the stop
+      expect(stops()).toEqual(['lane-b']);
+      // lane-b becomes the fullest on the next poll: it moves to the end, and the stop stays on it.
+      spy.mockResolvedValue(reply([first[0]!, acct({ wrapper: 'lane-b', five: 90 }), first[2]!]));
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_100); });
+      expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c', 'lane-b']);
+      expect(stops()).toEqual(['lane-b']);
+      // lane-b leaves: the stop falls to the first card.
+      spy.mockResolvedValue(reply([first[0]!, first[2]!]));
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_100); });
+      expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c']);
+      expect(stops()).toEqual(['lane-a']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('every card shows each window it has, with its meter, percentage and countdown', async () => {
@@ -403,12 +408,16 @@ describe('AccountsStrip', () => {
     ]);
     const { container } = render(<AccountsStrip />);
     await screen.findAllByText('91%');
-    const gauges = container.querySelectorAll('.account-gauge');
+    // The expired lane sorts last (neither has a use that says it is free), so find each card by its lane.
+    const gauges = [...container.querySelectorAll<HTMLElement>('.account-gauge')];
     expect(gauges).toHaveLength(2);
+    const expired = gauges.find((g) => g.querySelector('.account-gauge-label')?.textContent === 'team·max')!;
+    const live = gauges.find((g) => g.querySelector('.account-gauge-label')?.textContent === 'team·alt')!;
+    expect(gauges[1]).toBe(expired);
     const fills = (g: Element) => [...g.querySelectorAll('.acct-fill')];
-    expect(fills(gauges[0]!).map((f) => f.classList.contains('limit-fill--off'))).toEqual([true, true]);
-    expect(gauges[0]!.querySelector('.acct-meter')).toHaveAttribute('data-band', 'crit');
-    expect(fills(gauges[1]!).map((f) => f.classList.contains('limit-fill--off'))).toEqual([false, false]);
-    expect(fills(gauges[1]!)[0]).toHaveClass('limit-fill--crit');
+    expect(fills(expired).map((f) => f.classList.contains('limit-fill--off'))).toEqual([true, true]);
+    expect(expired.querySelector('.acct-meter')).toHaveAttribute('data-band', 'crit');
+    expect(fills(live).map((f) => f.classList.contains('limit-fill--off'))).toEqual([false, false]);
+    expect(fills(live)[0]).toHaveClass('limit-fill--crit');
   });
 });
