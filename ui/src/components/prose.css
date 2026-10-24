@@ -243,17 +243,29 @@
   .msg-assist .kbd-plus { font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono); color: var(--ink-tertiary); }
 
   /* CODE BLOCKS — wells, dark in both themes, scrolling inside the glass.
-     Kept on --lh-mono; excluded from the reading measure. */
+     Line height is --lh-mono rounded down to a whole pixel; excluded from
+     the reading measure. */
   .msg-assist pre {
     background: var(--bg-well);
     color: var(--ink-on-well);
     border-radius: var(--r-md);
     padding: 10px var(--sp-3);
     font: var(--weight-regular) var(--fs-sm) / var(--lh-mono) var(--family-mono);
+    /* A WHOLE-PIXEL line (13px x 1.55 = 20.15px): a fractional line box
+       makes the block's scroll range fractional (60 lines = 1228.44px, max
+       scrollTop 988), and at some page offsets Chrome latches the first
+       wheel at the block's end to the block, which cannot move, so the wheel
+       never reaches the transcript (D-6437). Declared after the shorthand,
+       which resets line-height. Tracks --fs-sm and --lh-mono (each defined
+       once, in tokens.css, for every skin and width). */
+    line-height: round(down, calc(var(--fs-sm) * var(--lh-mono)), 1px);
     overflow-x: auto;
     max-height: var(--well-max);
     overflow-y: auto;
-    overscroll-behavior: contain;
+    /* x only: a block scrolls sideways (white-space: pre), but a y-axis
+       containment would stop a wheel it has nothing left to scroll from
+       reaching the transcript (D-6437). */
+    overscroll-behavior-x: contain;
   }
   .msg-assist pre code { background: none; border-radius: 0; padding: 0; color: inherit; font: inherit; }
 

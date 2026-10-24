@@ -58,8 +58,10 @@ body {
   line-height: var(--lh-normal);
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
-  /* Native feel: the shell never rubber-bands; scroll containers own their
-     overscroll (each sets `overscroll-behavior: contain`). */
+  /* Native feel: the shell never rubber-bands; the shell's own scroll containers
+     own their overscroll (each sets `overscroll-behavior: contain`), while a box
+     inside the transcript keeps no y-axis containment, so a wheel it cannot use
+     reaches `.chat-scroller` (D-6437). */
   overscroll-behavior: none;
 }
 
