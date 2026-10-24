@@ -17,8 +17,8 @@
 // `SERVER_SETTINGS` (the keys ccrc reads where the server reads them, from the
 // server's own files), `VAR_KEY_BODIES` (the functions that may hand those
 // readers a key in a variable) and `SOURCING_BODIES` (the one function that
-// may source the box env file, for the server). A new name reds a row until
-// it is classed.
+// may source the box env file, for the server, and how often). A new name
+// reds a row until it is classed.
 //
 // WHAT IT GUARDS: THE SPELLINGS IT NAMES (D-6746). It is not a proof that
 // no other reader exists. It sees a `${NAME…}` or `$NAME` expansion of a
@@ -26,21 +26,27 @@
 // bounded readers' literal arguments (C5), the box-env readers' keys and the
 // reader's own indirection and awk program elsewhere (C8), a nameref to a
 // setting (C9), a `-v` test of a CCRC_ name (C10), and `.` or `source` of the
-// box env file in any body SOURCING_BODIES does not list (C11), whether by
-// `$BOX_ENV_FILE`, a `ccrc.env` path or a name bound to either; a name bound
-// through a second variable is not followed. `set -u` (C7) makes a bare
-// `$NAME` of an unset name abort, so an unguarded read must spell a default C5
-// sees; a `-v` test is the guard that needs none, which is why C10 is a row of
-// its own.
+// box env file in any body SOURCING_BODIES does not list (C11): in command
+// position (after `if`, `elif`, `while`, `until`, `!`, `builtin` or `command`
+// too), of `$BOX_ENV_FILE`, a `ccrc.env` path (a quote inside it included), a
+// name bound to either, `<(…)` naming one, or `/dev/stdin <` one. A name bound
+// in a body that declares it `local` is followed in that body alone; any other
+// binding, and BOX_ENV_FILE, everywhere. `set -u` (C7) makes a bare `$NAME` of
+// an unset name abort, so an unguarded read must spell a default C5 sees; a
+// `-v` test is one guard that needs none, which is why C10 is a row of its own.
 //
 // WHAT IT DOES NOT CATCH, measured by review 891's mutants and named so no
 // reader takes this file for more: `${#NAME}`; an expansion split by a
 // backslash-newline; an indirect call through the timeout helper (a key in a
 // variable, `_upd_validate_timeout "$k"`, or the helper renamed); a nameref
-// whose target is assigned after its declaration, or a `-v` test of a name
-// held in a variable; an environment read from node (`process.env.`), jq
-// (`$ENV.`) or printenv; a two-line loop that reads the box env file
-// (`while IFS== read`); and C6's spacing and export variants of an
+// whose target is assigned after its declaration or held in a variable
+// (`local -n r="$k"`); a `-v` test of a name held in a variable, and the other
+// guard that needs no default, `declare -p NAME`; an environment read from
+// node (`process.env.`), jq (`$ENV.`) or printenv; a two-line loop that reads
+// the box env file (`while IFS== read`); the box env file sourced by another
+// route: `eval "$(cat …)"`, a name bound through a second variable, or a
+// helper that sources a positional parameter (`_svc_run_supervised`'s
+// `. "$1"`) handed the file; and C6's spacing and export variants of an
 // environment-only example line (`#CCRC_X=`, `#  CCRC_X=`, leading spaces,
 // `export CCRC_X=`, `# export CCRC_X=`).
 import { describe, it, expect } from 'vitest';
@@ -163,9 +169,9 @@ const VAR_KEY_BODIES: Record<string, string> = {
   _ccrc_knob: 'the one reader of a setting',
 };
 
-/** The bodies that may source the box env file, each with its reason: never ccrc reading a setting. */
-const SOURCING_BODIES: Record<string, string> = {
-  _inst_plist_server: 'the macOS server job\'s own launch line, the launchd counterpart of ccrc.service\'s EnvironmentFile: the server\'s reading, in the job\'s shell, never ccrc\'s',
+/** The bodies that may source the box env file, each with how many times and why. Counted per body, so a second sourcing reds. */
+const SOURCING_BODIES: Record<string, { count: number; reason: string }> = {
+  _inst_plist_server: { count: 1, reason: 'the macOS server job\'s launch line: the launchd job\'s parse of ccrc.env becomes the server\'s environment, and so reaches a ccrc the server spawns as its environment, as on Linux through ccrc.service\'s EnvironmentFile; it is the server\'s reading, the same one EnvironmentFile gives on Linux' },
 };
 
 /** Every name read from the environment outside the reader: `${NAME…}` with a
@@ -208,6 +214,27 @@ function ownerOf(code: string, index: number): string {
   if (!last) return '(top level)';
   const span = bodySpan(code, last[1], last.index!);
   return span && span.start === last.index && index < span.end ? last[1] : '(top level)';
+}
+
+/** Every function definition's sliced body, in order: `spanAt` over it answers what `ownerOf` answers, in one pass. */
+function spansOf(code: string): { owner: string; start: number; end: number }[] {
+  const out: { owner: string; start: number; end: number }[] = [];
+  for (const m of code.matchAll(/^([A-Za-z_][A-Za-z0-9_-]*)\(\) \{/gm)) {
+    const span = bodySpan(code, m[1], m.index!);
+    out.push({ owner: m[1], start: m.index!, end: span && span.start === m.index ? span.end : m.index! });
+  }
+  return out;
+}
+/** The body holding `index` as `ownerOf` decides it (the nearest definition above it), or null at the top level. */
+function spanAt(spans: { owner: string; start: number; end: number }[], index: number): { owner: string; start: number; end: number } | null {
+  let lo = 0;
+  let hi = spans.length - 1;
+  let last = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans[mid].start <= index) { last = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return last >= 0 && index < spans[last].end ? spans[last] : null;
 }
 
 /** Every call of a box-env reader with the key it passes: a literal CCRC_ name, or a variable. */
@@ -399,28 +426,52 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
     })).toEqual([]);
   });
 
-  it('C11: nothing sources the box env file (`.` or `source` of BOX_ENV_FILE, of a ccrc.env path, or of a name bound to either) but the bodies SOURCING_BODIES lists', () => {
+  it('C11: nothing sources the box env file (`.` or `source` of BOX_ENV_FILE, of a ccrc.env path, or of a name bound to either) but SOURCING_BODIES, by count', () => {
     // Sourcing it is a whole second reader: bash's parse of every line, every setting set at once, no refusal of a line systemd
     // reads otherwise. The doctor and the model read the file as text (awk, grep, `_box_env_value`), which is not sourcing.
-    // The names bound to the file are derived: any assignment whose value is a ccrc.env path or BOX_ENV_FILE itself. `.` counts
-    // only as a command (first on a line, after `;`, `&`, `|`, `(`, `{`, `!`, `then`, `do` or `else`), never jq's `.` filter.
-    const FILE_VALUE = /^["']?(?:\$\{?BOX_ENV_FILE\}?|[^\s;&|"']*\/ccrc\.env)["']?$/;
-    const bound = new Set<string>(['BOX_ENV_FILE']);
+    // `.` counts only in command position: first on a line, or after `;`, `&`, `|`, `(`, `{` or `!`, and after any run of
+    // `if`, `elif`, `while`, `until`, `then`, `do`, `else`, `!`, `builtin` or `command` — never jq's `.` filter (`jq -S . "$f"`).
+    // A bound name is any assignment whose value, less a trailing `;`, `&&`, `||` or `)` (as defaultsOf drops them), is a ccrc.env
+    // path or BOX_ENV_FILE itself. It is followed only inside the body that makes it when that body declares it `local` (not -g), so a
+    // generic local (`f`, `src`) never reds an unrelated body; any other binding (a global such as BUE_SRC) is followed everywhere.
+    const FILE_VALUE = /^["']?(?:\$\{?BOX_ENV_FILE\}?|[^\s;&|]*\/ccrc\.env)["']?$/;
+    const global = new Set<string>(['BOX_ENV_FILE']);
+    const scoped = new Map<string, Set<string>>(); // `<file> <start>` of a body -> its local names bound to the file
+    const SPANS = { 'ccd/ccrc': spansOf(CODE['ccd/ccrc']), 'ccd/ccrc-doctor-checks': spansOf(CODE['ccd/ccrc-doctor-checks']) };
     for (const f of FILES)
-      for (const m of CODE[f].matchAll(/(?:^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=(\S+)/gm))
-        if (FILE_VALUE.test(m[2])) bound.add(m[1]);
-    const names = [...bound].map(escapeRe).join('|');
-    const SOURCED = new RegExp('(?:^\\s*|[;&|({!]\\s*|\\b(?:then|do|else)\\s+)(?:\\.|source)\\s+["\']?'
-      + '(?:\\$\\{?(?:' + names + ')\\b|[^\\s;&|"\')]*ccrc\\.env\\b)', 'gm');
-    expect([...bound], 'the file\'s own binding is found').toContain('BOX_ENV_FILE');
-    const owners = new Set<string>();
-    const faults: string[] = [];
-    for (const f of FILES)
-      for (const m of CODE[f].matchAll(SOURCED)) {
-        const o = ownerOf(CODE[f], m.index!);
-        owners.add(o);
-        if (!(o in SOURCING_BODIES)) faults.push(`${f}: ${o} sources the box env file: ${m[0].trim()}`);
+      for (const m of CODE[f].matchAll(/(?:^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=(\S+)/gm)) {
+        if (!FILE_VALUE.test(m[2].replace(/(?:;|&&|\|\||\))+$/, ''))) continue;
+        const span = spanAt(SPANS[f], m.index!);
+        const body = span === null ? '' : CODE[f].slice(span.start, span.end);
+        const local = new RegExp('(?:^|[\\s;&|(])(?:local|declare|typeset)(?![^;\\n]*\\s-[A-Za-z]*g)\\s[^;\\n]*?\\b' + m[1] + '\\b(?!\\()', 'm');
+        if (span === null || !local.test(body)) { global.add(m[1]); continue; }
+        const key = `${f} ${span.start}`;
+        if (!scoped.has(key)) scoped.set(key, new Set());
+        scoped.get(key)!.add(m[1]);
       }
-    expect({ faults, noLongerSourcing: diff(Object.keys(SOURCING_BODIES), owners) }).toEqual({ faults: [], noLongerSourcing: [] });
+    expect([...global], 'the file\'s own binding, and the global one today\'s code makes').toEqual(expect.arrayContaining(['BOX_ENV_FILE', 'BUE_SRC']));
+    const sourced = (names: Iterable<string>): RegExp => {
+      const operand = '["\']?(?:\\$\\{?(?:' + [...names].map(escapeRe).join('|') + ')\\b|[^\\s;&|)]*ccrc\\.env\\b)';
+      return new RegExp('(?:^|[;&|({!])\\s*(?:(?:if|elif|while|until|then|do|else|builtin|command|!)\\s+)*(?:\\.|source)\\s+'
+        + '(?:' + operand + '|<\\([^)]*?' + operand + '|/dev/stdin\\s*<\\s*' + operand + ')', 'gm');
+    };
+    const counts = new Map<string, number>();
+    const faults: string[] = [];
+    for (const f of FILES) {
+      let at = 0;
+      for (const l of CODE[f].split('\n')) {
+        const span = spanAt(SPANS[f], at);
+        at += l.length + 1;
+        const names = new Set([...global, ...(span === null ? [] : scoped.get(`${f} ${span.start}`) ?? [])]);
+        for (const m of l.matchAll(sourced(names))) {
+          const o = span === null ? '(top level)' : span.owner;
+          counts.set(o, (counts.get(o) ?? 0) + 1);
+          if (!(o in SOURCING_BODIES)) faults.push(`${f}: ${o} sources the box env file: ${m[0].trim()}`);
+        }
+      }
+    }
+    const miscounted = Object.entries(SOURCING_BODIES).filter(([o, e]) => (counts.get(o) ?? 0) !== e.count)
+      .map(([o, e]) => `${o}: ${counts.get(o) ?? 0} sourcings, listed as ${e.count}`);
+    expect({ faults, miscounted }).toEqual({ faults: [], miscounted: [] });
   });
 });
