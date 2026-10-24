@@ -9867,6 +9867,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // it that no longer carries its row's token, so it fails again. Measured data, not a prose citation: it is
         // spelled in two parts so the citations ratchet, which polices added prose, does not count a census row.
         'ccd/ccd' + ':13573-13575',
+        'ccd/ccd:11665-11670',
+        // ENTERS at pr-landing PL-1 (S6-R11), spelled in two parts for the citations ratchet.
+        'ccd/ccd' + ':13601-13666',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         // LEFT here at model-class auto-advance W2 (S6-R11): `:2874` x2 (the note above this assertion).
