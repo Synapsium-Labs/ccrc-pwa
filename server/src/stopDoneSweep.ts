@@ -274,7 +274,8 @@ export async function stopDonePass(
         const res = await deps.runCcd(CCD_ARGV.hibernate(row.id, sweepDec(deps.fleetState, STOP_DONE_ACTOR), v.holdOk ?? null));
         if (!res.ok) {
           mem.retryAt.set(row.id, deps.now() + STOP_DONE_RETRY_MS);
-          const busy = /ccd: session-busy: ?(\S*)/.exec(res.stderr);
+          // D-TBD-ran-required: a call that never ran has no `session-busy` to read off the runner's forged stderr.
+          const busy = res.ran === false ? null : /ccd: session-busy: ?(\S*)/.exec(res.stderr);
           return busy !== null
             ? { id: row.id, kind: 'skipped', detail: busy[1] || 'busy' }
             : { id: row.id, kind: 'failed', detail: res.stderr };

@@ -36,3 +36,9 @@ export type NotRanReason = 'transport' | 'spawn' | 'timeout';
 
 /** The arm `ExecResult` (`exec.ts`) and `CcdResult` (`coord/ports.ts`) both carry when the command never ran. */
 export interface NotRan { ran: false; reason: NotRanReason; detail: string }
+
+/** D-TBD-ran-required: the sentence a lane writes for a call that never ran, or may not have: the verb, the runner's
+ *  reason and its own words. One spelling for every lane that answers it as unmeasured and retried later. */
+export function notRanSentence(verb: string, r: NotRan): string {
+  return `${verb} was not answered (${r.reason}: ${r.detail}) — unmeasured, asked again on a later pass`;
+}

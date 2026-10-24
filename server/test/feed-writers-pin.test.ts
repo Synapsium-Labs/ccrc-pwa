@@ -91,10 +91,10 @@ const pushRig = async (o: { coord?: false; notifyLog?: false } = {}) => {
     if (args[0] === 'list-panes') {
       const id = /^=cc-(.*):$/.exec(args[2] ?? '')?.[1] ?? '';
       const pid = pids.get(id);
-      return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
+      return { ran: true, code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
     }
-    if (args[0] === 'capture-pane') return { code: 0, stdout: 'ready\n❯ \n', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: 'ready\n❯ \n', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const deps = { ...testDeps(home, run), push: rec.push, presence: rec.presence,
     ...(o.notifyLog === false ? {} : { notifyLog: rec.notifyLog }), ...(o.coord === false ? {} : { coord: rec.coord }) };
@@ -253,15 +253,15 @@ const nudgeRig = async (o: { notifyLog?: boolean } = {}) => {
   const sends: string[][] = [];
   let box = '';
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${NUDGE_PID}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: `❯ ${box}\n`, stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${NUDGE_PID}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: `❯ ${box}\n`, stderr: '' };
     if (args[0] === 'send-keys') {
       sends.push([...args]);
       box = args[3] === '-l' ? box + args[5]! : '';
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: '' };
   };
   const base = testDeps(home, run);
   const deps = { ...base, coord: rec.coord, presence: rec.presence, ...(o.notifyLog === false ? {} : { notifyLog: rec.notifyLog }) };
@@ -463,7 +463,7 @@ describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorde
       updatedAt: now, ask: { questions: [QUESTION] }, subagents: [],
     }));
     const run: Runner = async (_cmd, args) => (args[0] === 'capture-pane'
-      ? { code: 0, stdout: ASK_PANE, stderr: '' } : { code: 0, stdout: '', stderr: '' });
+      ? { ran: true, code: 0, stdout: ASK_PANE, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' });
     const rec = await feedRecorder(home);
     rec.setVisible(visible ? [B] : []);                      // the record gate does not read presence
     const app = await buildServer({ ...testDeps(home, run), coord: rec.coord, notifyLog: rec.notifyLog,
@@ -726,7 +726,7 @@ describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recor
       updatedAt: now, ask: { questions: [QUESTION] }, subagents: [],
     }));
     const run: Runner = async (_cmd, args) => (args[0] === 'capture-pane'
-      ? { code: 0, stdout: ASK_PANE, stderr: '' } : { code: 0, stdout: '', stderr: '' });
+      ? { ran: true, code: 0, stdout: ASK_PANE, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' });
     const rec = await feedRecorder(home);
     rec.setVisible([B]);                                     // the record gate does not read presence
     const app = await buildServer({ ...testDeps(home, run), mailToken: TOKEN, coord: rec.coord, notifyLog: rec.notifyLog,
@@ -856,7 +856,7 @@ const CLAIM_RUN = 7;
 const reclaimRig = async (visible: boolean) => {
   const home = mkTmp('ccrc-feed-pin-reclaim-');
   const argv: string[][] = [];
-  const base = testDeps(home, async (_cmd, args) => { argv.push(args); return { code: 1, stdout: '', stderr: '' }; });
+  const base = testDeps(home, async (_cmd, args) => { argv.push(args); return { ran: true, code: 1, stdout: '', stderr: '' }; });
   const reg = base.cfg.registryDir;
   mkdirSync(reg, { recursive: true });
   const rec = await feedRecorder(home);
@@ -983,7 +983,7 @@ describe("coord/expireArchived.ts's row (recordExpireFeed): recorded always, nev
   const expired = async (fail: boolean) => {
     const home = mkTmp('ccrc-feed-pin-expire-');
     const argv: string[][] = [];
-    const base = testDeps(home, async (_cmd, args) => { argv.push(args); return { code: 1, stdout: '', stderr: '' }; });
+    const base = testDeps(home, async (_cmd, args) => { argv.push(args); return { ran: true, code: 1, stdout: '', stderr: '' }; });
     mkdirSync(base.cfg.registryDir, { recursive: true });
     const rec = await feedRecorder(home);
     rec.setVisible([ID]);                                    // the record gate does not read presence
@@ -1086,7 +1086,7 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
         recordFeedEvent: (epoch, ev) => rec.coord.recordFeedEvent(epoch, ev),
         run: () => ({ ok: true as const, run: { state: 'working', reviews: null } }) as never,
       },
-      runCcd: async (a) => { argv.push([...a]); return { ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
+      runCcd: async (a) => { argv.push([...a]); return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
       fleetState: { ccdVerbs: ['hibernate', ACTOR_FLAGS_CAP] } as unknown as FleetState,
       presence: { isOpen: () => false },
       notifyLog: rec.notifyLog,
@@ -1148,7 +1148,7 @@ describe('the executors\' writers, handed a push sink: recorded whatever the pre
   };
   /** The expiry writer's input, from the executor itself (no expire capability: `deferred` before any argv). */
   const expiryOutcome = async (home: string, rec: FeedRecorder) => {
-    const base = testDeps(home, async () => ({ code: 1, stdout: '', stderr: '' }));
+    const base = testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' }));
     mkdirSync(base.cfg.registryDir, { recursive: true });
     const deps: ExpireArchivedDeps = { coord: rec.coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
       fleetState: { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [] },

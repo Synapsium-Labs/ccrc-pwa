@@ -341,10 +341,11 @@ export function ccdArchiveRefusal(stderr: string): ArchiveRefusal | null {
  * `ended` rides every answer once a programme was ended, so the operator is never told only half of what happened.
  */
 export function archiveOutcome(
-  stopped: boolean, ended: readonly OpenSibling[], res: { ok: boolean; stderr: string },
+  stopped: boolean, ended: readonly OpenSibling[], res: { ok: boolean; stderr: string; ran?: boolean },
 ): ArchiveReply {
   if (res.ok) return { status: 200, body: { ok: true, archived: true, stopped, ended } };
-  const refusal = ccdArchiveRefusal(res.stderr);
+  // D-TBD-ran-required: a call that never ran has no refusal word to read, only the runner's own words.
+  const refusal = res.ran === false ? null : ccdArchiveRefusal(res.stderr);
   const detail = res.stderr.trim();
   if (stopped) return { status: 200, body: { ok: true, archived: false, stopped: true, ended, refusal, detail } };
   const endedSpread = ended.length > 0 ? { ended } : {};

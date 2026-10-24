@@ -76,7 +76,7 @@ describe('learnCollect asks the temp-root id predicate before any argv (collecto
 
   it('an ordinary id on a box that advertises the capability is answered: exactly one argv, the audit’s', async () => {
     const r = rig();
-    r.answerAudit(() => ({ code: 0, stdout: auditDoc({ id: REEF, witness: r.witness }), stderr: '' }));
+    r.answerAudit(() => ({ ran: true, code: 0, stdout: auditDoc({ id: REEF, witness: r.witness }), stderr: '' }));
     expect(await learnCollect(r.deps, REEF)).toMatchObject({ kind: 'answered', audit: { value: { kind: 'collectable' } } });
     expect(r.attempts).toEqual([['ws-audit', '--session', REEF, '--collect']]);
   });

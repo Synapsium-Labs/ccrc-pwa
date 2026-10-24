@@ -62,7 +62,7 @@ const paneRunner = (pane: string): { run: Runner; calls: string[][] } => {
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
-    return args[0] === 'capture-pane' ? { code: 0, stdout: pane, stderr: '' } : { code: 0, stdout: '', stderr: '' };
+    return args[0] === 'capture-pane' ? { ran: true, code: 0, stdout: pane, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 };
@@ -138,12 +138,12 @@ describe('every absence-acting caller holds on bad-id (spec §2.3)', () => {
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => {
       if (path.basename(cmd) === 'tmux') {
-        if (args[0] !== 'has-session') return { code: 1, stdout: '', stderr: '' };
+        if (args[0] !== 'has-session') return { ran: true, code: 1, stdout: '', stderr: '' };
         const id = (args[2] ?? '').replace(/^=cc-/, '').replace(/:$/, '');
-        return { code: 1, stdout: '', stderr: `can't find session: cc-${id}` };
+        return { ran: true, code: 1, stdout: '', stderr: `can't find session: cc-${id}` };
       }
       calls.push(args);
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const coord = store(home);
     const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));

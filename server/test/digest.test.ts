@@ -302,7 +302,7 @@ describe('the digest beat (FleetWatcher.sweepDigest)', () => {
     const log = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
     await log.load();
     const sent: PushPayload[] = [];
-    const runner: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const runner: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps = { ...testDeps(home, runner), coord, notifyLog: log,
       push: { notify: async (p: PushPayload) => { sent.push(p); } } as never };
     return { coord, home, sent, log, watcher: () => new FleetWatcher(deps, new Bus(), 10_000) };

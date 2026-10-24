@@ -90,8 +90,8 @@ const rig = async (over: RigOpts = {}) => {
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const a = over.script !== undefined ? over.script(args, runId) : model(args);
-    return a === undefined ? { code: 1, stdout: '', stderr: `unscripted ${args[0]}` }
-      : { code: a.code, stdout: a.stdout, stderr: a.stderr ?? '' };
+    return a === undefined ? { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0]}` }
+      : { ran: true, code: a.code, stdout: a.stdout, stderr: a.stderr ?? '' };
   };
   const base = testDeps(home, run);
   let generationReads = 0;
@@ -228,7 +228,7 @@ describe('step 5a — the audit’s generation, against the licence', () => {
 
   it('a licence judged under no generation never spends a token minted over one', async () => {
     const s = await rig({ generation: null, script: (args, runId) => (args[0] === 'ws-audit'
-      ? { code: 0, stdout: JSON.stringify({ id: ID, mode: 'reclaim', childOf: runId, generation: G1,
+      ? { ran: true, code: 0, stdout: JSON.stringify({ id: ID, mode: 'reclaim', childOf: runId, generation: G1,
           verdict: 'reclaimable', detail: '', token: TOK }) }
       : undefined) });
     expect(await reclaimChild(s.deps, s.req(ABSENT))).toMatchObject({ kind: 'deferred', why: 'generation-changed' });

@@ -37,7 +37,7 @@ interface BoxCfg {
   /** Called with every call's argv before it is answered — a turn that starts while the route waits. */
   onCall?: (args: string[]) => void;
   /** `ccd swap`'s answer; every other call exits 0. */
-  swap?: { code: number; stderr: string };
+  swap?: { ran: true, code: number; stderr: string; notRan?: boolean };
   queue?: KeyedQueue;
   /** The row's `.uuid` is listed but its read fails: the identity is unmeasured (D-5380). */
   uuidUnreadable?: boolean;
@@ -56,9 +56,12 @@ const box = async (cfg: BoxCfg = {}) => {
     calls.push(args);
     cfg.onCall?.(args);
     const verb = args[0] ?? '';
-    if (verb === 'list-panes') return { code: 0, stdout: `${PANE}\n`, stderr: '' };
-    if (verb === 'swap' && cfg.swap) return { code: cfg.swap.code, stdout: '', stderr: cfg.swap.stderr };
-    return { code: 0, stdout: '', stderr: '' };
+    if (verb === 'list-panes') return { ran: true, code: 0, stdout: `${PANE}\n`, stderr: '' };
+    if (verb === 'swap' && cfg.swap?.notRan === true) {
+      return { code: cfg.swap.code, stdout: '', stderr: cfg.swap.stderr, ran: false, reason: 'transport', detail: cfg.swap.stderr };
+    }
+    if (verb === 'swap' && cfg.swap) return { ran: true, code: cfg.swap.code, stdout: '', stderr: cfg.swap.stderr };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   seedRoster(home, ROSTER);
   const config = loadConfig({ CCRC_HOME: home });
@@ -270,7 +273,7 @@ describe('the turn gate refuses BEFORE the queue (D-5240)', () => {
 describe("ccd's own refusals reach the operator as the same two 409s (D-5240)", () => {
   it('`ccd: status-unknown:` is 409 status-unknown', async () => {
     const b = await box({ caps: ALL_CAPS,
-      swap: { code: 1, stderr: `ccd: status-unknown: the status of ${ID} could not be read, so a swap could lose a turn nobody measured; nothing was touched.\n` } });
+      swap: { ran: true, code: 1, stderr: `ccd: status-unknown: the status of ${ID} could not be read, so a swap could lose a turn nobody measured; nothing was touched.\n` } });
     liveStatus(b.home, 'idle');
     const res = await post(b.app, { wrapper: 'lane-b' });
     expect(res.statusCode).toBe(409);
@@ -279,7 +282,7 @@ describe("ccd's own refusals reach the operator as the same two 409s (D-5240)", 
 
   it('`ccd: session-busy:` (both server reads said idle) is 409 session-busy', async () => {
     const b = await box({ caps: ALL_CAPS,
-      swap: { code: 1, stderr: `ccd: session-busy: ${ID} is working — a swap restarts it and loses the turn in progress and its background tasks; nothing was touched.\n` } });
+      swap: { ran: true, code: 1, stderr: `ccd: session-busy: ${ID} is working — a swap restarts it and loses the turn in progress and its background tasks; nothing was touched.\n` } });
     liveStatus(b.home, 'idle');
     const res = await post(b.app, { wrapper: 'lane-b' });
     expect(res.statusCode).toBe(409);
@@ -288,7 +291,7 @@ describe("ccd's own refusals reach the operator as the same two 409s (D-5240)", 
 
   it('the phrase anywhere but at the head of the first line is an ordinary failure: 502', async () => {
     const stderr = 'ccd: cannot carry the transcript (an earlier run said ccd: session-busy: once)\n';
-    const b = await box({ caps: ALL_CAPS, swap: { code: 1, stderr } });
+    const b = await box({ caps: ALL_CAPS, swap: { ran: true, code: 1, stderr } });
     liveStatus(b.home, 'idle');
     const res = await post(b.app, { wrapper: 'lane-b' });
     expect(res.statusCode).toBe(502);
@@ -297,13 +300,22 @@ describe("ccd's own refusals reach the operator as the same two 409s (D-5240)", 
 
   it('a second-line refusal is not the first line: 502', async () => {
     const stderr = 'ccd: warning: something\nccd: session-busy: x\n';
-    const b = await box({ caps: ALL_CAPS, swap: { code: 1, stderr } });
+    const b = await box({ caps: ALL_CAPS, swap: { ran: true, code: 1, stderr } });
     liveStatus(b.home, 'idle');
     expect((await post(b.app, { wrapper: 'lane-b' })).statusCode).toBe(502);
   });
 
+  it('a swap that never ran is 502 with the runner\'s words, never a refusal, even when they spell one (D-TBD-ran-required)', async () => {
+    const stderr = `ccd: session-busy: ${ID} is working — nothing was touched.\n`;
+    const b = await box({ caps: ALL_CAPS, swap: { ran: true, code: 1, stderr, notRan: true } });
+    liveStatus(b.home, 'idle');
+    const res = await post(b.app, { wrapper: 'lane-b' });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ ok: false, stderr });
+  });
+
   it('any other ccd failure is 502 with its stderr, as before', async () => {
-    const b = await box({ caps: ALL_CAPS, swap: { code: 1, stderr: 'boom' } });
+    const b = await box({ caps: ALL_CAPS, swap: { ran: true, code: 1, stderr: 'boom' } });
     liveStatus(b.home, 'idle');
     const res = await post(b.app, { wrapper: 'lane-b' });
     expect(res.statusCode).toBe(502);
@@ -334,7 +346,7 @@ describe('a hibernated row is 409 hibernated (D-5242)', () => {
 
   it('`ccd: hibernated:` (the row fell asleep after the route read it) is 409 hibernated, never 502', async () => {
     const b = await box({ caps: ALL_CAPS,
-      swap: { code: 1, stderr: `ccd: hibernated: ${ID} is asleep — wake it first (ccd ensure); nothing was touched\n` } });
+      swap: { ran: true, code: 1, stderr: `ccd: hibernated: ${ID} is asleep — wake it first (ccd ensure); nothing was touched\n` } });
     liveStatus(b.home, 'idle');
     const res = await post(b.app, { wrapper: 'lane-b' });
     expect(res.statusCode).toBe(409);

@@ -91,7 +91,7 @@ const rig = async (): Promise<Rig> => {
     lstatMeasured: async (p) => { touched.push(p); return localIO.lstatMeasured(p); },
   };
   const calls: string[][] = [];
-  const run: Runner = async (_cmd, args) => { calls.push([...args]); return { code: 1, stdout: '', stderr: '' }; };
+  const run: Runner = async (_cmd, args) => { calls.push([...args]); return { ran: true, code: 1, stdout: '', stderr: '' }; };
   const sent: PushPayload[] = [];
   const deps: Deps = {
     ...testDeps(home, run), io, coord, stateCachePath: path.join(home, 'state-cache.json'),

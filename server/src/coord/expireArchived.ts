@@ -16,6 +16,7 @@ import {
 } from '../archivedExpiry.js';
 import { isRegistryId } from '../../../shared/api.js';
 import { notify } from '../notice.js';
+import { notRanSentence } from '../unmeasured.js';
 
 /**
  * THE EXPIRY LANE'S ONE EXECUTOR (workspace lifecycle spec 2026-09-24 §5.3, wave 3b): `ws-audit --expire`, then
@@ -215,7 +216,7 @@ async function expireAudit(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState
   const res = await deps.runCcd(argv);
   // D-6034: a call that never ran (or may not have) is read FIRST, before a byte of a document: unreadable, so the
   // executor answers `audit-failed` (retried on the failure backoff), never a refusal.
-  if (res.ran === false) return { kind: 'unreadable', detail: notRanDetail(argv, res) };
+  if (res.ran === false) return { kind: 'unreadable', detail: notRanSentence(argv[0] ?? 'ccd', res) };
   return parseExpireAudit(sessionId, res.ok, res.stdout);
 }
 
@@ -228,13 +229,9 @@ async function expireAct(deps: ExpireArchivedDeps, sessionId: string, token: str
   // D-6034: read FIRST, before the box words and the composition dies are read off the runner's stderr. The verb may
   // have started (a link that dropped after the send, a wait that expired), so this is the reader's own "may have been
   // cut short" answer: `failed`, resumable — retried, and never a refusal, a box word or a composition error.
-  if (res.ran === false) return { kind: 'failed' as const, resumable: true, detail: notRanDetail(argv, res) };
+  if (res.ran === false) return { kind: 'failed' as const, resumable: true, detail: notRanSentence(argv[0] ?? 'ccd', res) };
   return parseExpireResult(sessionId, res.stdout, res.stderr);
 }
-
-/** D-6034: the sentence for a call that never ran, or may not have: the verb, the runner's reason and its own words. */
-const notRanDetail = (argv: CcdArgv, res: Extract<CcdResult, { ran: false }>): string =>
-  `${argv[0] ?? 'ccd'} was not answered (${res.reason}: ${res.detail}) — unmeasured, asked again on a later pass`;
 
 // ── the feed row ─────────────────────────────────────────────────────────────
 

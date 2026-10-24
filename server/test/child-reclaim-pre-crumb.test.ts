@@ -65,7 +65,7 @@ describe('parseChildReclaimResult: a failed word printed before the breadcrumb i
 
 /** A closed minting run and a registry row, a scripted ccd, and the feed —
  *  the part of `child-reclaim.test.ts`'s rig this file needs. */
-const rig = async (verb: { code: number; stdout: string }) => {
+const rig = async (verb: { ran: true, code: number; stdout: string }) => {
   const home = mkTmp('ccrc-child-reclaim-precrumb-');
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
@@ -81,9 +81,9 @@ const rig = async (verb: { code: number; stdout: string }) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
   const audit = JSON.stringify({ id: ID, mode: 'reclaim', childOf: runId, verdict: 'reclaimable', detail: '', token: TOK });
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'ws-audit') return { code: 0, stdout: audit, stderr: '' };
-    if (args[0] === 'ws-reclaim') return { code: verb.code, stdout: verb.stdout, stderr: '' };
-    return { code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
+    if (args[0] === 'ws-audit') return { ran: true, code: 0, stdout: audit, stderr: '' };
+    if (args[0] === 'ws-reclaim') return { ran: true, code: verb.code, stdout: verb.stdout, stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
   };
   const base = testDeps(home, run);
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
@@ -98,7 +98,7 @@ const rig = async (verb: { code: number; stdout: string }) => {
 
 describe('reclaimChild: the feed sentence follows the resume reading', () => {
   it('a state-changed FAILURE says it is retried from the start, not that the box resumes where it stopped', async () => {
-    const s = await rig({ code: 1, stdout: '{"failed":"state-changed","detail":"d"}' });
+    const s = await rig({ ran: true, code: 1, stdout: '{"failed":"state-changed","detail":"d"}' });
     expect(await reclaimChild(s.deps, s.req)).toMatchObject({ kind: 'failed', resume: 'not-resumable', token: 'state-changed' });
     expect(s.bodies()).toHaveLength(1);
     expect(s.bodies()[0]).toContain('It is retried from the start.');
@@ -106,14 +106,14 @@ describe('reclaimChild: the feed sentence follows the resume reading', () => {
   });
 
   it('a probe-unmeasured failure says the same (control)', async () => {
-    const s = await rig({ code: 1, stdout: '{"failed":"probe-unmeasured","detail":"d"}' });
+    const s = await rig({ ran: true, code: 1, stdout: '{"failed":"probe-unmeasured","detail":"d"}' });
     expect(await reclaimChild(s.deps, s.req)).toMatchObject({ kind: 'failed', resume: 'not-resumable' });
     expect(s.bodies()[0]).toContain('It is retried from the start.');
     expect(s.bodies()[0]).not.toContain('resumes where it stopped');
   });
 
   it('a pin-failed failure still says the box resumes where it stopped (control)', async () => {
-    const s = await rig({ code: 1, stdout: '{"failed":"pin-failed","detail":"d"}' });
+    const s = await rig({ ran: true, code: 1, stdout: '{"failed":"pin-failed","detail":"d"}' });
     expect(await reclaimChild(s.deps, s.req)).toMatchObject({ kind: 'failed', resume: 'resumable' });
     expect(s.bodies()[0]).toContain('the box resumes where it stopped');
     expect(s.bodies()[0]).not.toContain('It is retried from the start.');

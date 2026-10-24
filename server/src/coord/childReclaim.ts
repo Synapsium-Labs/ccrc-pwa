@@ -29,6 +29,7 @@ import {
   isChildReclaimKeptWord,
 } from '../../../shared/api.js';
 import { notify } from '../notice.js';
+import { notRanSentence } from '../unmeasured.js';
 
 /**
  * CHILD-WORKSPACE RECLAMATION, the server half (spec 2026-09-22 §5.5–§5.7).
@@ -1328,6 +1329,8 @@ async function childReclaimAudit(
   const argv = CCD_ARGV.wsReclaimAudit(req.sessionId, req.deferExpired);
   if (!ccdCan(deps.fleetState, 'wsReclaimAudit')) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
   const res = await deps.runCcd(argv);
+  // D-TBD-ran-required: a call that never ran has no document to read; the runner's forged exit 1 is not an audit's.
+  if (res.ran === false) return { kind: 'unreadable', detail: notRanSentence(argv[0] ?? 'ws-audit', res) };
   if (!res.ok) return parseChildReclaimAuditFailed(req.sessionId, res.stdout, res.stderr);
   return parseChildReclaimAudit(req.sessionId, res.stdout);
 }
@@ -1342,6 +1345,10 @@ async function childReclaimAct(
   const argv = CCD_ARGV.wsReclaim(token, req.runId, req.sessionId, req.deferExpired,
     sweepDec(deps.fleetState, `run:${req.runId} reclaim ${req.trigger}`));
   const res = await deps.runCcd(argv);
+  // D-TBD-ran-required: read FIRST, before a pre-lock die is matched off the runner's stderr. The verb may have started
+  // (a link that dropped after the send, a wait that expired), so this is the reader's own "may have been cut short"
+  // answer: resumable, no ccd word, never a refusal or a pre-lock die ("acted nothing").
+  if (res.ran === false) return { kind: 'failed', resume: 'resumable', token: null, detail: notRanSentence(argv[0] ?? 'ws-reclaim', res) };
   return parseChildReclaimResult(req.sessionId, res.stdout, res.stderr);
 }
 

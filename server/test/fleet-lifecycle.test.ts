@@ -33,8 +33,8 @@ const fixture = (fields: Record<string, string>, alive: boolean) => {
     writeFileSync(path.join(reg, `${ID}.${k}`), v);
   }
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: alive ? 0 : 1, stdout: '', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: alive ? 0 : 1, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { cfg: loadConfig({ CCRC_HOME: home }), tmux: new Tmux(run) };
 };

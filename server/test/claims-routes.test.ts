@@ -31,11 +31,11 @@ const seed = (home: string, id: string, uuid: string, over: Record<string, strin
  *  the 409 arm reads it through assembleFleet. */
 const tmuxRunner = (dead: readonly string[] = []): Runner => async (_cmd, args) => {
   if (args[0] === 'has-session') {
-    return { code: dead.some((d) => args.join(' ').includes(d)) ? 1 : 0, stdout: '', stderr: '' };
+    return { ran: true, code: dead.some((d) => args.join(' ').includes(d)) ? 1 : 0, stdout: '', stderr: '' };
   }
-  if (args[0] === 'list-panes') return { code: 0, stdout: '4061\n', stderr: '' };
-  if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
-  return { code: 1, stdout: '', stderr: '' };
+  if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4061\n', stderr: '' };
+  if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
+  return { ran: true, code: 1, stdout: '', stderr: '' };
 };
 
 const openApp = async (home: string, run: Runner = tmuxRunner(), over: Partial<Deps> = {}) => {

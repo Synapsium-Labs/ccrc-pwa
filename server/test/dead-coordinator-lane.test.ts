@@ -72,17 +72,17 @@ const fixture = async (opts: {
   const calls: string[][] = [];
   const run: Runner = async (cmd, args) => {
     if (path.basename(cmd) === 'tmux') {
-      if (args[0] !== 'has-session') return { code: 1, stdout: '', stderr: '' };
+      if (args[0] !== 'has-session') return { ran: true, code: 1, stdout: '', stderr: '' };
       const id = (args[2] ?? '').replace(/^=cc-/, '').replace(/:$/, '');
       tmuxAsked.push(id);
       opts.onHasSession?.(id);
       if (gate !== null) await gate;
-      if (tmuxDown) return { code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default' };
-      return live.has(id) ? { code: 0, stdout: '', stderr: '' } : { code: 1, stdout: '', stderr: `can't find session: cc-${id}` };
+      if (tmuxDown) return { ran: true, code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default' };
+      return live.has(id) ? { ran: true, code: 0, stdout: '', stderr: '' } : { ran: true, code: 1, stdout: '', stderr: `can't find session: cc-${id}` };
     }
     calls.push(args);
     opts.onCcd?.(args);
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const dbPath = path.join(home, '.ccrc', 'coord.db');
   const coord = new CoordStore(openCoordDb(dbPath));

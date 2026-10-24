@@ -126,15 +126,15 @@ function fixture(opts: {
     const target = args[2] ?? '';
     const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';   // the exact target `=cc-<id>:` (D-3525)
     if (args[0] === 'has-session') {
-      if (unmeasured.has(id)) return { code: 1, stdout: '', stderr: 'server exited unexpectedly' };
-      return gone.has(id) ? { code: 1, stdout: '', stderr: `can't find session: cc-${id}` } : { code: 0, stdout: '', stderr: '' };
+      if (unmeasured.has(id)) return { ran: true, code: 1, stdout: '', stderr: 'server exited unexpectedly' };
+      return gone.has(id) ? { ran: true, code: 1, stdout: '', stderr: `can't find session: cc-${id}` } : { ran: true, code: 0, stdout: '', stderr: '' };
     }
     if (args[0] === 'list-panes') {
       const pid = info.get(id)?.pid;
-      return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
+      return { ran: true, code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
     }
-    if (args[0] === 'capture-pane') return { code: 0, stdout: panes.get(id) ?? BARE_PROMPT, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: panes.get(id) ?? BARE_PROMPT, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const deps = {

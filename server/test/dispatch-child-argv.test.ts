@@ -42,13 +42,13 @@ function makeRunner(home: string, creates: string): { run: Runner; calls: string
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (verb === 'ws-add') { seed(home, creates); return { code: 0, stdout: '', stderr: '' }; }
+    if (verb === 'ws-add') { seed(home, creates); return { ran: true, code: 0, stdout: '', stderr: '' }; }
     if (verb === 'capture-pane') {
       const p = CLEAR_PANES[Math.min(capIdx, CLEAR_PANES.length - 1)]!;
       capIdx++;
-      return { code: 0, stdout: p, stderr: '' };
+      return { ran: true, code: 0, stdout: p, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 }

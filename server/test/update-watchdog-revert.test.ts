@@ -298,7 +298,7 @@ function watchdogBox(prefix: string, o: { gateFails?: true } = {}): WatchdogBox 
 /** The real verb, from the CHECKOUT's own `ccd/ccrc`, against the fixture. `update.json` is emptied first: the box is
  *  in the state the watchdog finds it in, its last report a stale `installing` of the failed update, so every write the
  *  revert makes is recorded from the first. */
-function runWatchdogRollback(box: WatchdogBox): { code: number; stdout: string; stderr: string; writes: Array<Record<string, unknown>> } {
+function runWatchdogRollback(box: WatchdogBox): { ran: true, code: number; stdout: string; stderr: string; writes: Array<Record<string, unknown>> } {
   writeFileSync(join(box.home, '.ccrc', 'update.json'),
     `{"target":"${X}","phase":"installing","startedAt":1,"updatedAt":1,"detail":null,"from":"pwa","pid":999999}\n`);
   const r = spawnSync(BASH, [CCRC_SRC, 'rollback', '--from', 'watchdog'], { env: box.env, encoding: 'utf8' });
@@ -306,7 +306,7 @@ function runWatchdogRollback(box: WatchdogBox): { code: number; stdout: string; 
   const writes = existsSync(wf)
     ? readFileSync(wf, 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Record<string, unknown>)
     : [];
-  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', writes };
+  return { ran: true, code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', writes };
 }
 
 /** Everything the fixture must NOT have reached: no transient unit, no unmodelled systemctl or curl shape. */
@@ -357,7 +357,7 @@ function server(home: string, o: { fleet?: boolean } = {}): Server {
   const spawnedArgvs: string[][] = [];
   const deps: ConvergeDeps = {
     store, role: 'server', ccrcDir: join(home, '.ccrc'), localIo: io, deadlineMs: DEADLINE, fleet: null,
-    runLocal: spawnFromRunner(async (_cmd, args) => { spawnedArgvs.push(args); return { code: 0, stdout: '', stderr: '' }; }, home),
+    runLocal: spawnFromRunner(async (_cmd, args) => { spawnedArgvs.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; }, home),
     onAccepted: () => undefined,
     recordMove: null,
   };

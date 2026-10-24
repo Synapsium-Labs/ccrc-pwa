@@ -65,10 +65,10 @@ const WF_ROW = '  ◯ allprobe  ▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱
 describe('ctx pressure survives only the tick that measured it (D-2012)', () => {
   let paneOut = FULL_PANE(82);
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'capture-pane') return { code: 0, stdout: paneOut, stderr: '' };
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: '4061\n', stderr: '' };
-    return { code: 1, stdout: '', stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: paneOut, stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4061\n', stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: '' };
   };
 
   beforeEach(() => { paneOut = FULL_PANE(82); });
@@ -221,9 +221,9 @@ describe('ctx pressure survives only the tick that measured it (D-2012)', () => 
     const home = mkTmp('ccrc-ctx-');
     seed(home);
     const deadRun: Runner = async (_cmd, args) => {
-      if (args[0] === 'capture-pane') return { code: 1, stdout: '', stderr: '' }; // Tmux.capture -> null
-      if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: '' };
-      return { code: 1, stdout: '', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 1, stdout: '', stderr: '' }; // Tmux.capture -> null
+      if (args[0] === 'has-session') return { ran: true, code: 1, stdout: '', stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     };
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 2000);
     await w.tick();
@@ -265,10 +265,10 @@ describe('an overlay over a running Workflow neither drops a fallback card to id
       }
       let pane = '';
       const run: Runner = async (_cmd, args) => {
-        if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
-        if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-        if (args[0] === 'list-panes') return { code: 0, stdout: '4061\n', stderr: '' };
-        return { code: 1, stdout: '', stderr: '' };
+        if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: pane, stderr: '' };
+        if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+        if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4061\n', stderr: '' };
+        return { ran: true, code: 1, stdout: '', stderr: '' };
       };
       const sent: PushPayload[] = [];
       const push = { notify: async (p: PushPayload) => { sent.push(p); } };

@@ -114,18 +114,18 @@ const box = async (cfg: BoxCfg = {}) => {
     const verb = args[0] ?? '';
     n[verb] = (n[verb] ?? 0) + 1;
     cfg.onCall?.(args, n);
-    if (verb === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (verb === 'list-panes') return { code: 0, stdout: `${PANE}\n`, stderr: '' };
+    if (verb === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (verb === 'list-panes') return { ran: true, code: 0, stdout: `${PANE}\n`, stderr: '' };
     if (verb === 'ensure') {
       const said = cfg.ensure?.[n[verb]! - 1];
-      return { code: 0, stdout: said ?? `alive: ${args[1] ?? ''}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: said ?? `alive: ${args[1] ?? ''}\n`, stderr: '' };
     }
     if (verb === 'capture-pane') {
       const p = CLEAR_PANES[Math.min(capIdx, CLEAR_PANES.length - 1)]!;
       capIdx++;
-      return { code: 0, stdout: p, stderr: '' };
+      return { ran: true, code: 0, stdout: p, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base0 = testDeps(home, run);
@@ -455,14 +455,14 @@ describe('dispatchRun alone never waits (D-5238)', () => {
     const opened = coord.openRun({ program: 'p', title: 't', project: PROJECT, wave: 2, waveOf: 3, claimedBy: 'c' });
     if (!('id' in opened)) throw new Error('fixture openRun refused');
     coord.setSession(opened.id, ID);
-    const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const base = testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
     const ccd: string[][] = [];
     let asked = 0;
     const deps: DispatchRunDeps = {
       ...base, coord,
       runCcd: async (argv): Promise<CcdResult> => {
         ccd.push([...argv]);
-        return { ok: true, stdout: argv[0] === 'ensure' ? `ensured ${ID}\n` : '', stderr: '', killed: false, signal: null };
+        return { ran: true, ok: true, stdout: argv[0] === 'ensure' ? `ensured ${ID}\n` : '', stderr: '', killed: false, signal: null };
       },
       configDir: (w: string) => configDirFor(base.cfg, w),
       turnVerdict: async () => { asked++; return 'unmeasured'; }, sendClear: clearSender(base),
@@ -481,11 +481,11 @@ describe('dispatchRun alone never waits (D-5238)', () => {
     const opened = coord.openRun({ program: 'p', title: 't', project: PROJECT, wave: 2, waveOf: 3, claimedBy: 'c' });
     if (!('id' in opened)) throw new Error('fixture openRun refused');
     coord.setSession(opened.id, ID);
-    const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const base = testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
     const deps: DispatchRunDeps = {
       ...base, coord,
       runCcd: async (argv): Promise<CcdResult> =>
-        ({ ok: true, stdout: argv[0] === 'ensure' ? `alive: ${ID}\n` : '', stderr: '', killed: false, signal: null }),
+        ({ ran: true, ok: true, stdout: argv[0] === 'ensure' ? `alive: ${ID}\n` : '', stderr: '', killed: false, signal: null }),
       configDir: (w: string) => configDirFor(base.cfg, w),
       turnVerdict: async () => 'unmeasured', sendClear: clearSender(base),
     };

@@ -47,9 +47,9 @@ function fakeTmux(panes: (string | null)[]) {
     if (args[0] === 'capture-pane') {
       const pane = panes[Math.min(capIdx, panes.length - 1)] ?? null;
       capIdx++;
-      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { tmux: new Tmux(run), calls };
 }
@@ -201,13 +201,13 @@ const SPAWN_MS = 8;   // measured order of magnitude for a `tmux` subprocess
  *    read as flags (`unknown flag -x`, `invalid flag -`): exit 1, nothing typed;
  *  - anything else is typed verbatim: exit 0.
  */
-function tmuxLiteral(args: readonly string[]): { code: number; typed: string | null; stderr: string } {
+function tmuxLiteral(args: readonly string[]): { ran: true, code: number; typed: string | null; stderr: string } {
   const rest = args.slice(4);
-  if (rest[0] === '--') return { code: 0, typed: rest[1] ?? null, stderr: '' };
+  if (rest[0] === '--') return { ran: true, code: 0, typed: rest[1] ?? null, stderr: '' };
   const tok = rest[0] ?? '';
-  if (tok === '--') return { code: 0, typed: null, stderr: '' };
-  if (tok.startsWith('-') && tok !== '-') return { code: 1, typed: null, stderr: `command send-keys: unknown flag ${tok.slice(0, 2)}\n` };
-  return { code: 0, typed: tok, stderr: '' };
+  if (tok === '--') return { ran: true, code: 0, typed: null, stderr: '' };
+  if (tok.startsWith('-') && tok !== '-') return { ran: true, code: 1, typed: null, stderr: `command send-keys: unknown flag ${tok.slice(0, 2)}\n` };
+  return { ran: true, code: 0, typed: tok, stderr: '' };
 }
 
 function boxTmux(opts: {
@@ -236,26 +236,26 @@ function boxTmux(opts: {
     ms += SPAWN_MS;
     if (args[0] === 'capture-pane') {
       captures++;
-      if (opts.dieFrom !== undefined && captures >= opts.dieFrom) return { code: 1, stdout: '', stderr: '' };
+      if (opts.dieFrom !== undefined && captures >= opts.dieFrom) return { ran: true, code: 1, stdout: '', stderr: '' };
       if (opts.overlayFrom !== undefined && captures >= opts.overlayFrom) {
-        return { code: 0, stdout: opts.overlay ?? '', stderr: '' };
+        return { ran: true, code: 0, stdout: opts.overlay ?? '', stderr: '' };
       }
-      return { code: 0, stdout: captures <= stale ? frozen : box.render(), stderr: '' };
+      return { ran: true, code: 0, stdout: captures <= stale ? frozen : box.render(), stderr: '' };
     }
     if (args[0] === 'send-keys') {
       const key = args[args.length - 1]!;
       if (args[3] === '-l') {
         literals++;
-        if (literals === opts.failLiteralAt) return { code: 1, stdout: '', stderr: "can't find session: cc-x\n" };
+        if (literals === opts.failLiteralAt) return { ran: true, code: 1, stdout: '', stderr: "can't find session: cc-x\n" };
         const t = tmuxLiteral(args);
         if (t.typed !== null) box.type(t.typed);
-        return { code: t.code, stdout: '', stderr: t.stderr };
+        return { ran: true, code: t.code, stdout: '', stderr: t.stderr };
       }
       if (key === 'M-Enter') box.newline();
       else if (key === 'C-u') box.pressCu();
       else if (key === 'Enter') box.submit();
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { tmux: new Tmux(run), calls, box, clock };
 }
@@ -2316,15 +2316,15 @@ describe('a lost reply after Enter does not end the proof (D-6366)', () => {
       calls.push([cmd, ...args]);
       if (args[0] === 'send-keys') {
         if (args.includes('-l')) typed = true;
-        if (args.at(-1) === 'Enter') { entered = true; return { code: o.enterCode, stdout: '', stderr: '' }; }
-        return { code: 0, stdout: '', stderr: '' };
+        if (args.at(-1) === 'Enter') { entered = true; return { ran: true, code: o.enterCode, stdout: '', stderr: '' }; }
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       }
       if (args[0] === 'capture-pane') {
-        if (!entered) return { code: 0, stdout: typed ? OURS : (o.before ?? EMPTY), stderr: '' };
+        if (!entered) return { ran: true, code: 0, stdout: typed ? OURS : (o.before ?? EMPTY), stderr: '' };
         const pane = afterEnter[Math.min(post++, afterEnter.length - 1)] ?? null;
-        return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+        return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     return { tmux: new Tmux(run), calls };
   }
@@ -2414,9 +2414,9 @@ describe("answerDialogText's echo wait (D-6366)", () => {
       if (args[0] === 'send-keys' && args.includes('-l')) literal = true;
       if (args[0] === 'capture-pane') {
         if (literal) capturesAfterLiteral++;
-        return { code: 0, stdout: script[Math.min(idx++, script.length - 1)]!, stderr: '' };
+        return { ran: true, code: 0, stdout: script[Math.min(idx++, script.length - 1)]!, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const res = await answerDialogText(
       { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: noSleep }, 'lane-a:project-a', parseDialog(open)!.id, 3, 'only in staging',

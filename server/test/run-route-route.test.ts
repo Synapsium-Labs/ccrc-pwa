@@ -57,15 +57,15 @@ function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls:
     calls.push(args);
     const verb = args[0] ?? '';
     if (verb === 'route' && cfg.fail?.has('route')) {
-      return { code: 1, stdout: '', stderr: cfg.routeStderr ?? 'route failed' };
+      return { ran: true, code: 1, stdout: '', stderr: cfg.routeStderr ?? 'route failed' };
     }
-    if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `${verb} failed` };
+    if (cfg.fail?.has(verb)) return { ran: true, code: 1, stdout: '', stderr: `${verb} failed` };
     if (verb === 'ws-add') {
       const ids = cfg.wsAddCreates ?? [`${PROJECT}-fresh`];
       for (const id of ids) seed(home, id);
-      return { code: 0, stdout: 'workspace demo-decoy on claude — /w/x (branch ws/decoy)', stderr: '' };
+      return { ran: true, code: 0, stdout: 'workspace demo-decoy on claude — /w/x (branch ws/decoy)', stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 }

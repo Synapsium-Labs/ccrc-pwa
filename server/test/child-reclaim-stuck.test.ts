@@ -367,9 +367,9 @@ const rig = async (verbStdout: string) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
   const audit = JSON.stringify({ id: ID, mode: 'reclaim', childOf: runId, verdict: 'reclaimable', detail: '', token: TOK });
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'ws-audit') return { code: 0, stdout: audit, stderr: '' };
-    if (args[0] === 'ws-reclaim') return { code: 1, stdout: verbStdout, stderr: '' };
-    return { code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
+    if (args[0] === 'ws-audit') return { ran: true, code: 0, stdout: audit, stderr: '' };
+    if (args[0] === 'ws-reclaim') return { ran: true, code: 1, stdout: verbStdout, stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
   };
   const base = testDeps(home, run);
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));

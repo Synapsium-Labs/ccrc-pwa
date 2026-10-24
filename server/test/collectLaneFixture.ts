@@ -159,15 +159,15 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   const onCall: ((c: CollectCall) => void)[] = [];
   const calls: CollectCall[] = [];
   const run: Runner = async (cmd, args) => {
-    if (path.basename(cmd) === 'tmux') return { code: 1, stdout: '', stderr: '' };   // the tick's pane reads, not ccd
+    if (path.basename(cmd) === 'tmux') return { ran: true, code: 1, stdout: '', stderr: '' };   // the tick's pane reads, not ccd
     if (args[0] === 'ws-audit' && args[1] === '--collect-census') {
       censusCalls += 1;
       const c = censusDoc();
-      return { code: c.code, stdout: c.stdout, stderr: c.stderr ?? '' };
+      return { ran: true, code: c.code, stdout: c.stdout, stderr: c.stderr ?? '' };
     }
     const verb: CollectVerb | null = args[0] === 'ws-audit' && args.includes('--collect') ? 'audit'
       : args[0] === 'ws-collect' ? 'collect' : null;
-    if (verb === null) return { code: 1, stdout: '', stderr: `unscripted ${args[0] ?? ''}` };
+    if (verb === null) return { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0] ?? ''}` };
     const hexAt = args.indexOf('--loose-hex');
     const id = hexAt >= 0 ? collectLooseId(args[hexAt + 1] ?? '') : (args[args.indexOf('--session') + 1] ?? '');
     const call: CollectCall = { verb, id, token: verb === 'collect' ? (args[args.indexOf('--expect') + 1] ?? null) : null, mono };
@@ -180,7 +180,7 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
       try { await h.promise; } finally { park(id, -1); }
     }
     const a = scripts.get(id)?.(verb, args) ?? model(verb, id, args);
-    return { code: a.code, stdout: a.stdout, stderr: a.stderr ?? '' };
+    return { ran: true, code: a.code, stdout: a.stdout, stderr: a.stderr ?? '' };
   };
 
   // ── the io: the real one, with three switches a case throws ──
