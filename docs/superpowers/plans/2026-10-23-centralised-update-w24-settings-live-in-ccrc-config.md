@@ -1405,6 +1405,8 @@ Base `0754e84e2`.
 20. `cd50ab271` test(ccrc-update): the F12 row is W24-R16, so no two rows share a name; the recorded rulings name the review's report by file (the controller's; it also edited this section's text).
 21. `docs(plan,readme): the round's last stale sentences made true (fix round 1, docs review)`: the review of dispatch D's ten minors, below.
 22. `docs(readme,doctor): the settings paragraph and the box-settings header re-wrapped to their width (fix round 1)`: the two lines the docs review fix left long, re-wrapped in place; no word changed.
+23. `65ed340e4` test(sweep): v0.0.84's `_upd_redact` is frozen beside the pre-wave-11 sweep (the coordinator's mail 8937, after CI at `e246b8938` went red on `ccrc-sweep-deliberate-stop` X0c). The guard's own rule — a tree helper the frozen sweep calls is frozen into its fixture before the tree changes it — made this the ordinary step for D-6748's change, so no reserve number is spent. The copy's bytes are read from the v0.0.84 tag and hash to X0c's pin; X0c now reads `_upd_redact` from the fixture, as it reads `_upd_phase`. Removing the copy or altering one byte reds X0c (scratch copy, restored by cmp). Claims 2377 (the fixture) and 2378 (the test file).
+24. `docs(plan): the frozen _upd_redact recorded (wave 24)`: this note.
 
 #### Claims and consents
 
