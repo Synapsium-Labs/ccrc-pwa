@@ -359,7 +359,7 @@ describe('a keyboard engagement ends with its ask (D-6326)', () => {
 describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
   const reviewDialog = (): Dialog => askFixture(8).dialog!;
 
-  it('a digit that answers the last question leaves focus on the review\'s highlighted row, and a next key acts', async () => {
+  it('a digit whose answer brings the review leaves focus on the review\'s highlighted row, and a next key acts', async () => {
     // Premises: the desk; fixture 1's envelope up; the answer's `next` is the review (review 917 F1's shape).
     media(true);
     const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: reviewDialog() });
@@ -444,6 +444,48 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     await frame();
     expect(within(card()).getByText(QUESTION_2), 'premise: question 2 is in the card').toBeInTheDocument();
     expect(card().contains(document.activeElement), 'the click\'s release held: the screen took no focus back').toBe(false);
+  });
+
+  it('an engaged ask replaced by another with NO clear, and then returning byte-identical, takes no focus from the page body', async () => {
+    // Premises: engaged on fixture 1's envelope; the hook sends envelopes on a change of JSON only, so fixture 7's approval
+    // replaces it with no `ask_cleared` between (the identity never goes null); focus is on the body; fixture 1 returns.
+    media(true);
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, '1');
+    arrive(7);
+    await frame();
+    expect(cards(), 'premise: the approval is up in the card').toHaveLength(1);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    arrive(1);
+    await frame();
+    expect(within(card()).getByText(QUESTION), 'premise: fixture 1 is back').toBeInTheDocument();
+    expect(store.getState().ask, 'premise: no clear came between').not.toBeNull();
+    expect(card().contains(document.activeElement), 'returning A took focus from the body').toBe(false);
+  });
+
+  it('leaving the card by focus alone (the composer focused, then blurred; no pointerdown) ends the engagement', async () => {
+    // Premises: a key engaged the card; focus then moved to the composer and fell to the body with no pointer press, so
+    // only the `focusin` outside the card can say the operator left; the next question arrives.
+    media(true);
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, '1');
+    act(() => composer().focus());
+    act(() => composer().blur());
+    expect(document.activeElement, 'premise: focus fell to the body').toBe(document.body);
+    act(() => store.getState().apply({ type: 'dialog', dialog: nextScreen() }));
+    await frame();
+    expect(within(card()).getByText(QUESTION_2), 'premise: question 2 is in the card').toBeInTheDocument();
+    expect(card().contains(document.activeElement), 'the focusin release held: the screen took no focus back').toBe(false);
   });
 
   it('a clear then a later ask with the same content in another batch takes no focus from the page body', async () => {
