@@ -9817,6 +9817,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // branch's `cmd_ws_gc` lines above this anchor slide a different `ccd/ccd` line under it,
         // one that happens to carry a token of its row: a coincidental pass, not a repair. Neither
         // corpus document changed, so nothing was re-pointed. S6-R11 covers it, so no D-number.
+        // RE-MEASURED for `ws-archive --if-no-pane` (D-6642) after its rebase onto `ws-orphan` (D-6629), 57 -> 57:
+        // nothing enters or leaves. S6-R11 covers it, so no D-number.
+        // RE-MEASURED for `ws-archive --if-no-pane` (D-6642) after its rebase onto the collector's loose arm (D-6625),
+        // 57 -> 58, dumped from the rebased tree: ONE ENTERS (the range that left above, spelled in two parts below) and
+        // none leaves; the branch's `cmd_ws_archive` lines slide a line under it that no longer carries its row's token.
+        // The site-level set below has no mirror for it. Neither corpus document changed. S6-R11, no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9866,6 +9872,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // spelled in two parts so the citations ratchet, which polices added prose, does not count a census row.
         'ccd/ccd' + ':13573-13575',
         'ccd/ccd:11665-11670',
+        'ccd/ccd' + ':13601-13666',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         // LEFT here at model-class auto-advance W2 (S6-R11): `:2874` x2 (the note above this assertion).
@@ -10074,6 +10081,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // those sites. S6-R11, no D-number.
       // RE-MEASURED on the merge of `origin/main` at `77c11245` into docs W1, 35 -> 35, FROM THE SAME RUN as
       // the row-pass set above: stated 35, base 35, tree 35, nothing entered or left. S6-R11, no D-number.
+      // RE-MEASURED for `ws-archive --if-no-pane` (D-6642) after its rebase onto `ws-orphan` (D-6629), 38 -> 38,
+      // FROM THE SAME RUN as the row-pass set above: nothing entered or left. S6-R11, no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
