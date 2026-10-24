@@ -5,13 +5,14 @@
 // CCRC_CODEX_AUTH_BASE pointed at a loopback URL, so no case can reach a live endpoint. Tokens are built at runtime by
 // `syntheticJwt`; no token-shaped literal is written here.
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { spawn, spawnSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -2440,5 +2441,563 @@ describe.skipIf(!PY)('the fixtures (codex-bridge Stage 1, Task 1)', () => {
     } finally {
       await srv.close();
     }
+  });
+});
+
+// ── codex-bridge Stage 2, Task 6: the library's three additions for a direct lane ──────────────────────────────────
+
+/** sha256 hex of a token: what the Task 6 scripts print in place of one, so a case compares tokens exactly without
+ *  any token crossing a process's stdout. */
+const sha = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
+
+/** The preamble every Task 6 script starts with: the library loaded by path as `mod` (bytecode off), `args` (argv
+ *  after the library's path), `out(obj)` printing one JSON line, `sha(s)`, `reading(r)` (a Reading as its word and the
+ *  sha256 of each token, or an op's error line as is) and `call(fn, ...)` (fn's answer, or `{"error": <word or class>,
+ *  "class": ...}` when it raised: never `str(e)`, so no sentence is printed). */
+const LIB_PRELUDE = [
+  'import hashlib, importlib.util, inspect, json, os, sys, threading, time',
+  'sys.dont_write_bytecode = True',
+  'spec = importlib.util.spec_from_file_location("ccgpt_auth", sys.argv[1])',
+  'mod = importlib.util.module_from_spec(spec)',
+  'spec.loader.exec_module(mod)',
+  'args = sys.argv[2:]',
+  'def out(obj):',
+  '    sys.stdout.write(json.dumps(obj, sort_keys=True) + "\\n")',
+  '    sys.stdout.flush()',
+  'def sha(s):',
+  '    return None if s is None else hashlib.sha256(s.encode("utf-8")).hexdigest()',
+  'def reading(r):',
+  '    if isinstance(r, dict):',
+  '        return r',
+  '    return {"credential": r.credential, "access": sha(r.access_token), "refresh": sha(r.refresh_token)}',
+  'def call(fn, *a, **k):',
+  '    try:',
+  '        return fn(*a, **k)',
+  '    except Exception as e:',
+  '        return {"error": getattr(e, "word", type(e).__name__), "class": type(e).__name__}',
+];
+
+/** Run `body` after LIB_PRELUDE in `python3 -I -c` of its own, ASYNCHRONOUSLY (a synchronous child deadlocks against a
+ *  fakeAuthServer on this event loop), in the fixture `home`, which is its cwd and its HOME. The env is built from
+ *  scratch as `runAuthDriver` builds it: PATH, TMPDIR, HOME, and CCRC_CODEX_AUTH_BASE, which is `base` or
+ *  CLOSED_AUTH_BASE, never empty, so no script can reach a live endpoint. `onLine` sees each JSON line as it is
+ *  printed. Past `timeoutMs` (default 10000) the child is SIGKILLed and `timedOut` is true. */
+function runLib(
+  home: string,
+  body: string[],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  o: { base?: string; args?: string[]; timeoutMs?: number; onLine?: (line: Record<string, any>) => void } = {},
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean; lines: Array<Record<string, any>> }> {
+  const base = o.base !== undefined && o.base !== '' ? o.base : CLOSED_AUTH_BASE;
+  expect(base, 'a Task 6 script talks to a loopback base only').toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+  const code = [...LIB_PRELUDE, ...body].join('\n');
+  return new Promise((resolve, reject) => {
+    const child = spawn(PY as string, ['-I', '-c', code, AUTH_LIB, ...(o.args ?? [])], {
+      cwd: home, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmpdir(), HOME: home, CCRC_CODEX_AUTH_BASE: base },
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let seen = 0;
+    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, o.timeoutMs ?? 10_000);
+    child.stdout.on('data', (c: Buffer) => {
+      stdout += c.toString();
+      if (!o.onLine) return;
+      for (let nl = stdout.indexOf('\n', seen); nl !== -1; nl = stdout.indexOf('\n', seen)) {
+        const text = stdout.slice(seen, nl);
+        seen = nl + 1;
+        if (text.trim() !== '') o.onLine(JSON.parse(text) as Record<string, unknown>);
+      }
+    });
+    child.stderr.on('data', (c: Buffer) => { stderr += c.toString(); });
+    child.once('error', (err) => { clearTimeout(timer); reject(err); });
+    child.once('close', (status) => {
+      clearTimeout(timer);
+      resolve({ status, stdout, stderr, timedOut, lines: driverLines(stdout) });
+    });
+  });
+}
+
+/** One run of a Task 6 script that must finish in time and exit 0; its lines. */
+async function libLines(home: string, body: string[], o: Parameters<typeof runLib>[2] = {}): Promise<Array<Record<string, any>>> {
+  const r = await runLib(home, body, o);
+  expect(r.timedOut, r.stderr).toBe(false);
+  expect(r.status, r.stdout + r.stderr).toBe(0);
+  return r.lines;
+}
+
+describe.skipIf(!PY)('refresh_rejected: a refresh after the upstream refused a valid token (codex-bridge Stage 2, Task 6)', () => {
+  it('a 401 on a valid token refreshes once, and two callers rejected on the same token make one request', async () => {
+    const home = mkTmp('codex-auth-rejected-race-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir); // an hour left: ensure_fresh would never refresh it
+    const answer = issuedAnswer();
+    const barrier = join(home, 'go');
+    // Both scripts print `ready` once loaded, then wait on one barrier file the case writes when it has seen both, so
+    // their calls start within a poll of each other, well inside the server's 300 ms delay.
+    await withAuth({ token: [{ status: 200, body: answer, delayMs: 300 }] }, async (srv) => {
+      let ready = 0;
+      const one = (): ReturnType<typeof runLib> => runLib(home, [
+        'out({"ready": True})',
+        'deadline = time.monotonic() + 5',
+        'while not os.path.exists(args[1]) and time.monotonic() < deadline:',
+        '    time.sleep(0.01)',
+        'out(reading(call(mod.refresh_rejected, args[0], args[2], lane="lane-a")))',
+      ], {
+        base: srv.base, args: [dir, barrier, t.access],
+        onLine: (l) => { if (l.ready === true && ++ready === 2) writeFileSync(barrier, ''); },
+      });
+      const runs = await Promise.all([one(), one()]);
+      for (const r of runs) {
+        expect(r.timedOut, r.stderr).toBe(false);
+        expect(r.status, r.stdout + r.stderr).toBe(0);
+        expect(r.lines[1], 'both callers answer the new token').toEqual({
+          credential: 'present', access: sha(answer.access_token as string), refresh: sha(answer.refresh_token as string),
+        });
+      }
+      expect(srv.requests, 'one token request in total').toHaveLength(1);
+      expect(srv.requests[0].form).toMatchObject({ grant_type: 'refresh_token', refresh_token: t.refresh });
+      expect(fileRecord(dir).access_token).toBe(answer.access_token);
+      expect(statusOf(dir)).toMatchObject({ state: 'ok', lastErrorCode: null, unsaved: false });
+      expect(statusIdentity(statusText(dir)), 'the status binds the new file').toEqual(fileIdentity(dir));
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
+  it('a token already replaced is not refreshed again', async () => {
+    const home = mkTmp('codex-auth-rejected-replaced-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir);
+    const before = readFileSync(credPath(dir), 'utf8');
+    const replaced = syntheticJwt({ exp: Math.floor(Date.now() / 1000) + 3600, sub: 'replaced' });
+    await withAuth({ token: [{ status: 200, body: issuedAnswer() }] }, async (srv) => {
+      const lines = await libLines(home, [
+        'out(reading(call(mod.refresh_rejected, args[0], args[1])))',
+      ], { base: srv.base, args: [dir, replaced] });
+      expect(lines[0], 'the file\'s own token, as it stands').toEqual({
+        credential: 'present', access: sha(t.access), refresh: sha(t.refresh),
+      });
+      expect(srv.requests, 'no request').toHaveLength(0);
+      expect(readFileSync(credPath(dir), 'utf8')).toBe(before);
+      expect(existsSync(statusPath(dir)), 'no status was written').toBe(false);
+    });
+  });
+
+  it('refresh_rejected lands a dead refresh token in needs-signin like ensure_fresh', async () => {
+    const home = mkTmp('codex-auth-rejected-dead-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir);
+    const before = readFileSync(credPath(dir), 'utf8');
+    const stored = (JSON.parse(before) as Record<string, unknown>).expires_at;
+    await withAuth({
+      token: [
+        { status: 400, body: { error: 'invalid_grant' }, headers: { 'x-request-id': 'req-fixture-dead-1' } },
+        { status: 200, body: issuedAnswer() },
+      ],
+    }, async (srv) => {
+      const r = await runLib(home, [
+        'out(reading(call(mod.refresh_rejected, args[0], args[1], lane="lane-a")))',
+        'out(reading(call(mod.refresh_rejected, args[0], args[1], lane="lane-a")))',
+        'out(reading(call(mod.ensure_fresh, args[0], within_s=7200, lane="lane-a")))',
+      ], { base: srv.base, args: [dir, t.access] });
+      expect(r.timedOut, r.stderr).toBe(false);
+      expect(r.lines, r.stderr).toEqual([
+        { error: 'needs-signin', class: 'NeedsSignin' },
+        { error: 'needs-signin', class: 'NeedsSignin' },
+        { error: 'needs-signin', class: 'NeedsSignin' },
+      ]);
+      expect(srv.requests, 'the first call alone asked; the bar answers the rest').toHaveLength(1);
+      expect(statusOf(dir)).toMatchObject({
+        state: 'needs-signin', lastErrorCode: 'invalid_grant', lastRequestId: 'req-fixture-dead-1', expiresAt: stored,
+        unsaved: false,
+      });
+      expect(statusIdentity(statusText(dir)), 'the status binds the file kept').toEqual(fileIdentity(dir));
+      expect(readFileSync(credPath(dir), 'utf8'), 'the dead credential is kept as it is').toBe(before);
+      expectStatusClean(dir, tokensOf(t));
+    });
+  });
+
+  it('a barred lane and a credential that cannot be refreshed answer at once, never waiting on a held lock', async () => {
+    const home = mkTmp('codex-auth-rejected-prelock-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir);
+    plantStatus(dir, { state: 'needs-signin', lastErrorCode: 'invalid_grant', lastRequestId: 'req-fixture-dead-2' });
+    const text = statusText(dir);
+    const absent = join(home, 'lane-b'); // no credential: held() below makes the directory and its lock file only
+    // Another thread holds both lanes' locks (its own opens of the lock files, so flock excludes them as another
+    // process would), with LOCK_WAIT_S lowered to 3 s: a call that waited on the lock would answer auth-lock-busy
+    // after it, where the pre-lock checks answer before it.
+    await withAuth({ token: [{ status: 200, body: issuedAnswer() }] }, async (srv) => {
+      const lines = await libLines(home, [
+        'mod.LOCK_WAIT_S = 3.0',
+        'taken, done = threading.Event(), threading.Event()',
+        'def holder():',
+        '    with mod.held(args[0]):',
+        '        with mod.held(args[1]):',
+        '            taken.set()',
+        '            done.wait(15)',
+        'th = threading.Thread(target=holder, daemon=True)',
+        'th.start()',
+        'if not taken.wait(5):',
+        '    sys.exit("the holder never took the locks")',
+        'for d in args[:2]:',
+        '    t0 = time.monotonic()',
+        '    res = call(mod.refresh_rejected, d, args[2], lane="lane-a")',
+        '    out([reading(res), time.monotonic() - t0])',
+        'done.set()',
+        'th.join()',
+      ], { base: srv.base, args: [dir, absent, t.access], timeoutMs: 15_000 });
+      expect(lines.map((l) => l[0])).toEqual([
+        { error: 'needs-signin', class: 'NeedsSignin' },
+        { error: 'not-logged-in', class: 'NotSignedIn' },
+      ]);
+      for (const l of lines) expect(l[1], 'answered well inside LOCK_WAIT_S').toBeLessThan(1.5);
+      expect(srv.requests, 'no request').toHaveLength(0);
+      expect(statusText(dir), 'the needs-signin is left byte for byte').toBe(text);
+      expect(existsSync(credPath(absent))).toBe(false);
+    });
+  });
+});
+
+describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file (codex-bridge Stage 2, Task 6)', () => {
+  /** The status as [state, lastErrorCode, lastRequestId], or null when none is current. */
+  const ST = [
+    'def st(d):',
+    '    s = mod.read_status(d)',
+    '    return None if s is None else [s["state"], s["lastErrorCode"], s["lastRequestId"]]',
+  ];
+
+  it('record_upstream writes limit-paused, then ok clears it, and never clears needs-signin', async () => {
+    const home = mkTmp('codex-auth-upstream-states-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir);
+    plantStatus(dir, { state: 'ok' });
+    const steps = [
+      ...ST,
+      'for s, c, r in [("limit-paused", "usage_limit_reached", "req-fixture-up-1"), ("ok", None, "req-fixture-up-2"),',
+      '                (None, "rate_limit_exceeded", "req-fixture-up-3"), ("ineligible", "usage_not_included", "req-fixture-up-4"),',
+      '                ("limit-paused", "usage_limit_reached", "req-fixture-up-5"), (None, None, None), ("ok", None, None),',
+      '                (None, "rate_limit_exceeded", "req-fixture-up-9"), ("ok", None, "req-fixture-up-10")]:',
+      '    out([s, mod.record_upstream(args[0], state=s, code=c, request_id=r), st(args[0])])',
+    ];
+    // The answer is the bounded request id, written or not (the whole-wave fix round, WS-2): the bridge's stats file
+    // is given that and nothing else.
+    expect(await libLines(home, steps, { args: [dir] })).toEqual([
+      ['limit-paused', 'req-fixture-up-1', ['limit-paused', 'usage_limit_reached', 'req-fixture-up-1']],
+      ['ok', 'req-fixture-up-2', ['ok', null, 'req-fixture-up-2']],
+      [null, 'req-fixture-up-3', ['ok', 'rate_limit_exceeded', 'req-fixture-up-3']],
+      ['ineligible', 'req-fixture-up-4', ['ineligible', 'usage_not_included', 'req-fixture-up-4']],
+      ['limit-paused', 'req-fixture-up-5', ['limit-paused', 'usage_limit_reached', 'req-fixture-up-5']],
+      [null, null, ['limit-paused', null, null]],
+      ['ok', null, ['ok', null, null]],
+      [null, 'req-fixture-up-9', ['ok', 'rate_limit_exceeded', 'req-fixture-up-9']],
+      // ok is written only over an upstream state: over ok it writes nothing, so the code standing there is kept.
+      ['ok', 'req-fixture-up-10', ['ok', 'rate_limit_exceeded', 'req-fixture-up-9']],
+    ]);
+    // A barring state is the refresher's: no upstream answer writes over it, not even its code or request id.
+    const current = (await libLines(home, ['out(mod.config_hash())'], { args: [dir] }))[0] as unknown as string;
+    for (const barring of [
+      { state: 'needs-signin', lastErrorCode: 'invalid_grant', lastRequestId: 'req-fixture-refresh-1' },
+      { state: 'config-error', lastErrorCode: 'invalid_client', lastRequestId: 'req-fixture-refresh-2', configHash: current },
+    ]) {
+      plantStatus(dir, barring);
+      const text = statusText(dir);
+      const lines = await libLines(home, [
+        ...ST,
+        'for s in ("ok", "limit-paused", "ineligible", None):',
+        '    out([s, mod.record_upstream(args[0], state=s, code="usage_limit_reached", request_id="req-fixture-up-6"), st(args[0])])',
+      ], { args: [dir] });
+      expect(lines, barring.state).toEqual(['ok', 'limit-paused', 'ineligible', null].map((s) => [
+        s, 'req-fixture-up-6', [barring.state, barring.lastErrorCode, barring.lastRequestId],
+      ]));
+      expect(statusText(dir), `${barring.state} is left byte for byte`).toBe(text);
+    }
+    // A state outside the four is a programming error, raised before anything is read or written.
+    plantStatus(dir, { state: 'ok' });
+    const text = statusText(dir);
+    expect(await libLines(home, [
+      'for s in ("needs-signin", "config-error", "plan-disabled", "bogus"):',
+      '    out([s, call(mod.record_upstream, args[0], state=s, code=None, request_id=None)])',
+    ], { args: [dir] })).toEqual(['needs-signin', 'config-error', 'plan-disabled', 'bogus'].map((s) => [
+      s, { error: 'ValueError', class: 'ValueError' },
+    ]));
+    expect(statusText(dir)).toBe(text);
+    expectStatusClean(dir, tokensOf(t));
+  });
+
+  it('record_upstream keeps lastRefreshAt and expiresAt', async () => {
+    const home = mkTmp('codex-auth-upstream-merge-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir);
+    plantStatus(dir, { state: 'ok', lastRefreshAt: 1700000000, expiresAt: 1800000000, unsaved: true });
+    const [line] = await libLines(home, [
+      'out(mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id="req-fixture-up-7"))',
+    ], { args: [dir] });
+    expect(line).toBe('req-fixture-up-7');
+    const st = statusOf(dir);
+    expect(st).toMatchObject({
+      version: 1, family: 'chatgpt-backend', state: 'limit-paused', lastErrorCode: 'usage_limit_reached',
+      lastRequestId: 'req-fixture-up-7', lastRefreshAt: 1700000000, expiresAt: 1800000000, unsaved: true, consent: null,
+    });
+    expect(Object.keys(st).sort()).toEqual([
+      'configHash', 'consent', 'expiresAt', 'family', 'identity', 'lastErrorCode', 'lastRefreshAt', 'lastRequestId',
+      'state', 'unsaved', 'updatedAt', 'version',
+    ]);
+    expect(statusIdentity(statusText(dir)), 'still bound to the same file').toEqual(fileIdentity(dir));
+    // With no current status, the base is what a reading of the credential computes: its expiry, no refresh yet.
+    const other = join(home, 'lane-b');
+    const u = plantBackendCredential(other);
+    const stored = fileRecord(other).expires_at;
+    expect((await libLines(home, [
+      'out(mod.record_upstream(args[0], state="ineligible", code="usage_not_included", request_id=None))',
+    ], { args: [other] }))[0]).toBeNull();
+    expect(statusOf(other)).toMatchObject({
+      state: 'ineligible', lastErrorCode: 'usage_not_included', lastRequestId: null, lastRefreshAt: null,
+      expiresAt: stored, unsaved: false,
+    });
+    expect(statusIdentity(statusText(other))).toEqual(fileIdentity(other));
+    // And with no credential at all there is nothing to bind a status to.
+    const none = join(home, 'lane-c');
+    expect((await libLines(home, [
+      'out(mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id="req-fixture-up-16"))',
+    ], { args: [none] }))[0]).toBeNull();
+    expect(existsSync(statusPath(none))).toBe(false);
+    expect(existsSync(none), 'no lock was taken and no directory made').toBe(false);
+    expectStatusClean(dir, tokensOf(t));
+    expectStatusClean(other, tokensOf(u));
+  });
+
+  it('a held lock makes record_upstream answer None within its wait', async () => {
+    const home = mkTmp('codex-auth-upstream-busy-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    plantStatus(dir, { state: 'ok' });
+    const text = statusText(dir);
+    // Another thread holds the lock (its own open of the lock file, so flock excludes it as another process would).
+    const [line] = await libLines(home, [
+      'taken, done = threading.Event(), threading.Event()',
+      'def holder():',
+      '    with mod.held(args[0]):',
+      '        taken.set()',
+      '        done.wait(10)',
+      'th = threading.Thread(target=holder, daemon=True)',
+      'th.start()',
+      'if not taken.wait(5):',
+      '    sys.exit("the holder never took the lock")',
+      't0 = time.monotonic()',
+      'res = mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id="req-fixture-up-17", wait_s=0.3)',
+      'elapsed = time.monotonic() - t0',
+      // With no wait_s, the bound is RECORD_WAIT_S, read when called (the library's header rule).
+      'default = mod.RECORD_WAIT_S',
+      'mod.RECORD_WAIT_S = 0.3',
+      't1 = time.monotonic()',
+      'res2 = mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id="req-fixture-up-17")',
+      'elapsed2 = time.monotonic() - t1',
+      'done.set()',
+      'th.join()',
+      'out({"result": res, "elapsed": elapsed, "result2": res2, "elapsed2": elapsed2, "default": default,',
+      '     "signature": inspect.signature(mod.record_upstream).parameters["wait_s"].default})',
+    ], { args: [dir] });
+    expect(line.result).toBeNull();
+    expect(line.elapsed, 'it waited its bound').toBeGreaterThanOrEqual(0.25);
+    expect(line.elapsed, 'and no longer').toBeLessThan(1.5);
+    expect(line.result2).toBeNull();
+    expect(line.elapsed2, 'a changed RECORD_WAIT_S is the bound').toBeGreaterThanOrEqual(0.25);
+    expect(line.elapsed2, 'and no longer').toBeLessThan(1.5);
+    expect(line.default, 'the wait is 2 s by default').toBe(2.0);
+    expect(line.signature, 'no constant is bound early').toBeNull();
+    expect(statusText(dir), 'nothing was written').toBe(text);
+  });
+
+  it('record_upstream never holds a token or the account id', async () => {
+    const home = mkTmp('codex-auth-upstream-clean-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir);
+    plantStatus(dir, { state: 'ok' });
+    // Each shape fits CODE_RE once lower-cased, or REQUEST_ID_RE, so only the echo check keeps it out.
+    const echoes = [t.refresh, FIXTURE_ACCOUNT_ID, t.access.split('.')[2], t.id.split('.')[2]];
+    const lines = await libLines(home, [
+      ...ST,
+      'for v in args[1:]:',
+      '    out([mod.record_upstream(args[0], state="limit-paused", code=v, request_id=v), st(args[0])])',
+      'out([mod.record_upstream(args[0], state="limit-paused", code="Usage_Limit_Reached", request_id="req-fixture-up-8"), st(args[0])])',
+    ], { args: [dir, ...echoes] });
+    expect(lines).toEqual([
+      ...echoes.map(() => [null, ['limit-paused', 'unrecognised', null]]),
+      ['req-fixture-up-8', ['limit-paused', 'usage_limit_reached', 'req-fixture-up-8']],
+    ]);
+    expectStatusClean(dir, tokensOf(t));
+  });
+
+  it('a committed refresh keeps an upstream state, and the next ok clears it', async () => {
+    const home = mkTmp('codex-auth-upstream-refresh-');
+    const answer = issuedAnswer();
+    const codes: Record<string, string> = { 'limit-paused': 'usage_limit_reached', ineligible: 'usage_not_included' };
+    for (const upstream of ['limit-paused', 'ineligible']) {
+      const dir = join(home, `lane-${upstream}`);
+      const t = plantBackendCredential(dir);
+      plantStatus(dir, { state: upstream, lastErrorCode: codes[upstream], lastRequestId: 'req-fixture-up-11' });
+      // A token refresh says nothing about the account's quota or eligibility: the state the bridge recorded stays,
+      // with the upstream answer's code and request id (spec §2.4), and only the refresher's own fields change.
+      await withAuth({ token: [{ status: 200, body: answer, headers: { 'x-request-id': 'req-fixture-refresh-3' } }] },
+        async (srv) => {
+          const lines = await libLines(home, [
+            'out(reading(call(mod.ensure_fresh, args[0], within_s=7200, lane="lane-a")))',
+          ], { base: srv.base, args: [dir] });
+          expect(lines[0], upstream).toEqual({
+            credential: 'present', access: sha(answer.access_token as string), refresh: sha(answer.refresh_token as string),
+          });
+          expect(srv.requests, upstream).toHaveLength(1);
+        });
+      const st = statusOf(dir);
+      expect(st, upstream).toMatchObject({
+        state: upstream, lastErrorCode: codes[upstream], lastRequestId: 'req-fixture-up-11', unsaved: false,
+      });
+      expect(typeof st.lastRefreshAt, upstream).toBe('number');
+      expect(statusIdentity(statusText(dir)), 'bound to the new file').toEqual(fileIdentity(dir));
+      expect((await libLines(home, [
+        'out(mod.record_upstream(args[0], state="ok", code=None, request_id="req-fixture-up-12"))',
+      ], { args: [dir] }))[0]).toBe('req-fixture-up-12');
+      expect(statusOf(dir), upstream).toMatchObject({ state: 'ok', lastErrorCode: null, lastRequestId: 'req-fixture-up-12' });
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    }
+  });
+
+  it('a refresh whose commit lands later keeps an upstream state too', async () => {
+    const home = mkTmp('codex-auth-upstream-unsaved-');
+    const codes: Record<string, string> = { 'limit-paused': 'usage_limit_reached', ineligible: 'usage_not_included' };
+    for (const upstream of ['limit-paused', 'ineligible']) {
+      const dir = join(home, `lane-${upstream}`);
+      const t = plantBackendCredential(dir);
+      const old = readFileSync(credPath(dir), 'utf8');
+      plantStatus(dir, { state: upstream, lastErrorCode: codes[upstream], lastRequestId: 'req-fixture-up-13' });
+      const answer = issuedAnswer();
+      const barrier = join(home, `checked-${upstream}`);
+      // The first checkpoint write meets a full disk, so the refresh is held unsaved, bound to the old file; the
+      // driver then waits while the case reads the status, and a held retry (`retry_unsaved`) lands the record.
+      let mid: Record<string, any> = {};
+      let fileMid = '';
+      await withAuth({ token: [{ status: 200, body: answer, headers: { 'x-request-id': 'req-fixture-refresh-4' } }] },
+        async (srv) => {
+          const r = await runFresh(home, dir, srv.base, [
+            { op: 'ensure_fresh', withinS: 7200 }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'held-retry' },
+          ], { faults: ['enospc-writes:1'] }, {
+            onLine: (l) => {
+              if (l.op !== 'ensure_fresh' || existsSync(barrier)) return;
+              mid = statusOf(dir);
+              fileMid = readFileSync(credPath(dir), 'utf8');
+              writeFileSync(barrier, '');
+            },
+          });
+          expect(r.status, r.stderr).toBe(0);
+          expect(r.lines[0], upstream).toMatchObject({ credential: 'present', access_token: (answer.access_token as string).length });
+          expect(r.lines[2], upstream).toMatchObject({ result: 'written' });
+          expect(srv.requests, upstream).toHaveLength(1);
+        });
+      expect(fileMid, 'the commit could not write: the old file stood').toBe(old);
+      expect(mid, upstream).toMatchObject({
+        state: upstream, lastErrorCode: codes[upstream], lastRequestId: 'req-fixture-up-13', unsaved: true,
+      });
+      expect(fileRecord(dir), 'the record landed').toMatchObject({ access_token: answer.access_token });
+      expect(statusOf(dir), upstream).toMatchObject({
+        state: upstream, lastErrorCode: codes[upstream], lastRequestId: 'req-fixture-up-13', unsaved: false,
+      });
+      expect(typeof statusOf(dir).lastRefreshAt, upstream).toBe('number');
+      expect(statusIdentity(statusText(dir)), 'bound to the landed file').toEqual(fileIdentity(dir));
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    }
+  });
+
+  it('a transient failure keeps an upstream state with the upstream answer\'s code and request id, and plan-disabled until a commit', async () => {
+    const home = mkTmp('codex-auth-upstream-transient-');
+    const codes: Record<string, string> = {
+      'limit-paused': 'usage_limit_reached', ineligible: 'usage_not_included', 'plan-disabled': 'plan_disabled',
+    };
+    for (const planted of ['limit-paused', 'ineligible', 'plan-disabled']) {
+      const dir = join(home, `lane-${planted}`);
+      const t = plantBackendCredential(dir);
+      plantStatus(dir, { state: planted, lastErrorCode: codes[planted], lastRequestId: 'req-fixture-up-14' });
+      const answer = issuedAnswer();
+      // A coded 500 with a request id, then a dropped connection (no code, no request id), then a 200.
+      await withAuth({
+        token: [
+          { status: 500, body: { error: 'server_error' }, headers: { 'x-request-id': 'req-fixture-refresh-5' } },
+          { status: 500, drop: true },
+          { status: 200, body: answer, headers: { 'x-request-id': 'req-fixture-refresh-6' } },
+        ],
+      }, async (srv) => {
+        const lines = await libLines(home, [
+          ...ST,
+          'for _ in range(3):',
+          '    r = reading(call(mod.ensure_fresh, args[0], within_s=7200, lane="lane-a"))',
+          '    out([r.get("error", r.get("credential")), st(args[0])])',
+        ], { base: srv.base, args: [dir] });
+        expect(srv.requests, planted).toHaveLength(3);
+        if (planted === 'plan-disabled') {
+          // Stage 1's rule, now stated: carried over a transient failure with the failure's fields, ok after a commit.
+          expect(lines, planted).toEqual([
+            ['refresh-failed', ['plan-disabled', 'server_error', 'req-fixture-refresh-5']],
+            ['refresh-failed', ['plan-disabled', null, null]],
+            ['present', ['ok', null, 'req-fixture-refresh-6']],
+          ]);
+        } else {
+          // A token refresh, failed or committed, says nothing about the account: the upstream answer's fields stay.
+          const kept = [planted, codes[planted], 'req-fixture-up-14'];
+          expect(lines, planted).toEqual([['refresh-failed', kept], ['refresh-failed', kept], ['present', kept]]);
+        }
+      });
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    }
+  });
+});
+
+describe.skipIf(!PY)('half_life_s: when the designated refresher refreshes (codex-bridge Stage 2, Task 6)', () => {
+  it('half_life_s is half the token lifetime, and the skew without claims', () => {
+    const home = mkTmp('codex-auth-half-life-');
+    const now = Math.floor(Date.now() / 1000);
+    const cases: Array<[string, string | null]> = [
+      ['an hour', syntheticJwt({ exp: now + 3600, iat: now })],
+      ['ten days', syntheticJwt({ exp: now + 864000, iat: now })],
+      ['no iat', syntheticJwt({ exp: now + 3600 })],
+      ['no exp', syntheticJwt({ iat: now })],
+      ['exp before iat', syntheticJwt({ exp: now, iat: now + 10 })],
+      ['exp equal to iat', syntheticJwt({ exp: now, iat: now })],
+      ['a float exp', syntheticJwt({ exp: now + 3600.5, iat: now })],
+      ['a boolean iat', syntheticJwt({ exp: now + 3600, iat: true })],
+      ['a string exp', syntheticJwt({ exp: String(now + 3600), iat: now })],
+      ['not a JWT', 'opaque-fixture-token'],
+      ['no access token', null],
+    ];
+    const r = pyWithLib(home, [
+      'def rd(tok):',
+      '    return mod.Reading("present", tok, None, None, mod._exp_of(tok), "chatgpt-backend", None, "")',
+      'cases = json.loads(sys.argv[2])',
+      'res = [[name, mod.half_life_s(rd(tok))] for name, tok in cases]',
+      'hour = rd(cases[0][1])',
+      'iat = mod.claims_of(cases[0][1])["iat"]',
+      'res.append(["refreshes at half", [mod.expired(hour, mod.half_life_s(hour), now=iat + 1799),',
+      '                                   mod.expired(hour, mod.half_life_s(hour), now=iat + 1800)]])',
+      'mod.EXPIRY_SKEW_S = 90',
+      'res.append(["the skew, read when called", mod.half_life_s(rd(None))])',
+      'print(json.dumps(res))',
+    ], [JSON.stringify(cases)]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual([
+      ['an hour', 1800],
+      ['ten days', 432000],
+      ['no iat', 60],
+      ['no exp', 60],
+      ['exp before iat', 60],
+      ['exp equal to iat', 60],
+      ['a float exp', 60],
+      ['a boolean iat', 60],
+      ['a string exp', 60],
+      ['not a JWT', 60],
+      ['no access token', 60],
+      ['refreshes at half', [false, true]],
+      ['the skew, read when called', 90],
+    ]);
   });
 });

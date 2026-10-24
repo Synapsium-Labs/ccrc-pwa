@@ -28,6 +28,7 @@ import contextlib
 import errno
 import fcntl
 import hashlib
+import hmac
 import http.client
 import json
 import math
@@ -57,8 +58,19 @@ FAMILY_UNKNOWN = "unknown"
 BACKEND_KEYS = ("access_token", "refresh_token", "id_token", "device_code_requested_at")
 
 # ── states (the status file's `state`) ───────────────────────────────────────────────────────────────────────────
-# Stage 1 produces ok, needs-signin and config-error; the other three are the bridge's and are only accepted.
-STATES = ("ok", "needs-signin", "limit-paused", "ineligible", "plan-disabled", "config-error")
+# Who SETS each state, and who only CARRIES one forward. The refresher (`_refresh_locked`, reached from `ensure_fresh`
+# and `refresh_rejected`) sets ok, needs-signin and config-error; over a committed refresh, or one whose commit cannot
+# write, it carries a current upstream state with its code and request id (`_refreshed_fields`), and over a transient
+# failure any current state but needs-signin and config-error (`_unchanged_state`), an upstream state again with its
+# own code and request id, any other with the failure's. `retry_unsaved` sets ok, or carries a current upstream state
+# as the refresh it lands would have (`_refreshed_fields`), or keeps a config-error that bars under this config.
+# `sign_in_device` sets ok over any state. A refusal (needs-signin, config-error) replaces any state, unless an unsaved
+# record stands against a needs-signin (then it writes nothing). `record_upstream`, a direct lane's door in this library
+# (codex-bridge Stage 2), sets the two states an upstream answer sets, _UPSTREAM_STATES, and clears them to ok.
+# Nothing in this library sets plan-disabled: it is accepted, carried over a transient failure, and written over with
+# ok by a committed refresh, as in Stage 1.
+_UPSTREAM_STATES = ("limit-paused", "ineligible")
+STATES = ("ok", "needs-signin") + _UPSTREAM_STATES + ("plan-disabled", "config-error")
 
 # ── the readings ─────────────────────────────────────────────────────────────────────────────────────────────────
 CREDENTIAL_WORDS = ("present", "absent", "unreadable", "foreign-family", "incomplete")
@@ -69,6 +81,9 @@ READ_RETRY_S = 0.05  # ... this far apart, then answers unreadable
 # ── the lock and the commit ──────────────────────────────────────────────────────────────────────────────────────
 LOCK_POLL_S = 0.05  # held() polls a non-blocking flock this often ...
 LOCK_WAIT_S = 60.0  # ... until this bound, then raises LockTimeout
+# record_upstream's bound on the same lock, best effort. The bridge records an upstream failure BEFORE it answers
+# it (D-6836), so this wait also bounds how long that answer is delayed while another holder has the lock.
+RECORD_WAIT_S = 2.0
 FILE_MODE = 0o600  # every file the library makes, set by fchmod after creation (umask-proof)
 DIR_MODE = 0o700  # every authDir level held() makes, set by chmod after mkdir
 
@@ -330,9 +345,10 @@ class Reading(NamedTuple):
 # The unsaved records: authDir -> (record, identity of the file the record was to replace, measured under the lock,
 # the ok-status fields of the refresh that produced it or None). `read` answers from one while the file's identity
 # still equals its identity, and otherwise ignores it, leaving the map unchanged and printing nothing. Four writers
-# change the map, each under the lock: `commit_record` and `retry_unsaved`; `ensure_fresh`, which drops a record
-# whose own refresh token the endpoint refused as needs-signin (one stderr line, no token), and keeps a refreshed
-# record whose commit refused the file after the token endpoint answered (D-6560); and `sign_in_device`,
+# change the map, each under the lock: `commit_record` and `retry_unsaved`; `_refresh_locked` (the refresh that
+# `ensure_fresh` and `refresh_rejected` run under the lock), which drops a record whose own refresh token the endpoint
+# refused as needs-signin (one stderr line, no token), and keeps a refreshed record whose commit refused the file
+# after the token endpoint answered (D-6560); and `sign_in_device`,
 # which puts back what the map held before its commits when none of them landed, and drops the record of one whose
 # rename landed (the file then holds it). The status fields
 # (`lastRefreshAt`, `lastRequestId`) are kept with the record, not read back from the status file, because that file
@@ -756,15 +772,18 @@ def retry_unsaved(auth_dir: str) -> str:
     `"none"`: no record. `"dropped"`: the credential file is no longer the one the record was to replace (a sign-in
     or a restore wrote it since), so the record is removed and the file kept, with one stderr line naming the authDir
     and no token; this is the only place a mismatched record is dropped. `"written"`: the commit succeeded and the
-    record is cleared; the status file is rewritten as the refresh that produced the record would have written it:
-    state `ok`, `lastErrorCode` null, `expiresAt` the record's, `lastRefreshAt` and `lastRequestId` the ones kept with
-    the record, `unsaved: false` and the new file's identity. Nothing else is carried from the status on disk: it was
-    measured on the file the record replaces (another process's needs-signin there is about that file's token, not
-    this record's), and it may be older than this refresh when the status write failed with the commit. A
-    needs-signin met on the record's own token never reaches here: `ensure_fresh` drops the record. The one thing
-    carried is a config-error that bars under this config: it is about ccrc's OAuth client, not a file's token, so
-    its `state`, `lastErrorCode` and `lastRequestId` stay, bound to the new file, and no request follows until the
-    config changes. `"still-unsaved"`: the commit failed again and the record stays. A raise: while that file,
+    record is cleared; the status file is rewritten as the refresh that produced the record would have written it
+    (`_refreshed_fields`): state `ok`, `lastErrorCode` null, `expiresAt` the record's, `lastRefreshAt` and
+    `lastRequestId` the ones kept with the record, `unsaved: false` and the new file's identity. Nothing else is
+    carried from the status on disk but the two things below: it was measured on the file the record replaces
+    (another process's needs-signin there is about that file's token, not this record's), and it may be older than
+    this refresh when the status write failed with the commit. A needs-signin met on the record's own token never
+    reaches here: `_refresh_locked` drops the record. Carried, each with its `state`, `lastErrorCode` and
+    `lastRequestId`, bound to the new file: a config-error that bars under this config (it is about ccrc's OAuth
+    client, not a file's token, so no request follows until the config changes), and a current upstream state,
+    limit-paused or ineligible (it is about the account, not a file's token, whether it stood at the refresh or was
+    recorded since; D-6829). `"still-unsaved"`: the commit failed again and the record
+    stays. A raise: while that file,
     still in place, reads `unreadable`, the commit's refusal (Unreadable) propagates and the record stays (D-6560)."""
     p = paths_for(auth_dir)
     key = _key(auth_dir)
@@ -786,7 +805,7 @@ def retry_unsaved(auth_dir: str) -> str:
     if _bars(prev) and prev is not None and prev.get("state") == KIND_CONFIG_ERROR:
         state, code, rid = KIND_CONFIG_ERROR, prev.get("lastErrorCode"), prev.get("lastRequestId")
     else:
-        state, code, rid = "ok", None, kept.get("lastRequestId")
+        state, code, rid = _refreshed_fields(prev, kept.get("lastRequestId"))
     write_status(auth_dir, state=state, expiresAt=record.get("expires_at"), lastRefreshAt=kept.get("lastRefreshAt"),
                  lastErrorCode=code, lastRequestId=rid, identity=_current_identity(p.credential), unsaved=False)
     return "written"
@@ -1284,8 +1303,9 @@ def _raise_if_barred(auth_dir: str, lane: Optional[str], unsaved: bool = False) 
     """Raise the state a current status bars with. `unsaved`: the reading was served from this process's unsaved
     record, which a needs-signin never bars: that status was measured on the file the record replaces, so it is about
     that file's refresh token, not the record's (a refusal of the record's own token drops the record instead, in
-    `ensure_fresh`). A config-error bars it as it bars any reading: it is about ccrc's OAuth client, not one token.
-    `ensure_fresh` calls this for an unsaved reading under the lock only, after `retry_unsaved` has had its chance."""
+    `_refresh_locked`). A config-error bars it as it bars any reading: it is about ccrc's OAuth client, not one token.
+    `_refresh_locked` (reached from `ensure_fresh` and `refresh_rejected`) calls this for an unsaved reading under the
+    lock only, after `retry_unsaved` has had its chance."""
     status = read_status(auth_dir)
     if _bars(status):
         assert status is not None
@@ -1300,12 +1320,31 @@ def _raise_if_barred(auth_dir: str, lane: Optional[str], unsaved: bool = False) 
 def _unchanged_state(prev: Optional[dict]) -> str:
     """The state a transient failure leaves: the current status's, unless that is one the failure contradicts, else
     ok. A config-error reaches here only when it is stale (measured under another config). A current needs-signin
-    never does: the bar raises it for a reading from the file, and for the unsaved record's reading `ensure_fresh`
+    never does: the bar raises it for a reading from the file, and for the unsaved record's reading `_refresh_locked`
     leaves it standing and writes no status (it is about the file's token, which this request did not send)."""
     state = prev.get("state") if prev is not None else None
     if state in STATES and state not in (KIND_NEEDS_SIGNIN, KIND_CONFIG_ERROR):
         return state  # type: ignore[return-value]
     return "ok"
+
+
+def _refreshed_fields(prev: Optional[dict], request_id: Optional[str]) -> Tuple[str, Optional[str], Optional[str]]:
+    """The `(state, lastErrorCode, lastRequestId)` a committed refresh writes, `request_id` being the refresh's own:
+    `("ok", None, request_id)`, unless the current status `prev` holds a state an upstream answer set
+    (`record_upstream`, _UPSTREAM_STATES). That state is kept with its code and its request id, the upstream answer's
+    (spec §2.4 keeps the upstream request id in the status), because a token refresh says nothing about the account's
+    quota or eligibility (D-6829). The refresh that commits, or whose commit cannot write
+    (`_refresh_locked`), the one whose commit lands later (`retry_unsaved`), and a transient failure over an upstream
+    state (`_refresh_locked`'s RefreshFailed arm) write this. What replaces a kept upstream state:
+    `record_upstream(state="ok")` after the bridge's next 2xx, a refusal (needs-signin, config-error), and a sign-in
+    (`sign_in_device`, a new file, so no status is current). plan-disabled is not kept: a committed refresh writes ok
+    over it, as in Stage 1 (`_unchanged_state` carries it over a transient failure, as in Stage 1 too)."""
+    state = prev.get("state") if prev is not None else None
+    if state in _UPSTREAM_STATES:
+        assert prev is not None
+        code, rid = prev.get("lastErrorCode"), prev.get("lastRequestId")
+        return state, code if isinstance(code, str) else None, rid if isinstance(rid, str) else None  # type: ignore
+    return "ok", None, request_id
 
 
 def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optional[str] = None) -> Reading:
@@ -1337,69 +1376,86 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
         return r
     if not _from_unsaved(auth_dir, old):
         _raise_if_barred(auth_dir, lane)
-    with held(auth_dir) as p:
+    with held(auth_dir):
         recover_pending(auth_dir)
         retry_unsaved(auth_dir)
         r, old = _read_raw(auth_dir)
         _raise_for(r)
         if not expired(r, within_s):
             return r  # the unsaved record too: a disk that stays full never asks again
-        from_unsaved = _from_unsaved(auth_dir, old)
-        _raise_if_barred(auth_dir, lane, unsaved=from_unsaved)
-        prev = read_status(auth_dir)
-        # A needs-signin another process measured on the file the unsaved record replaces: it stays (that file's
-        # refresh token is dead), so no failure arm below writes a status about that file; only a committed refresh
-        # replaces it.
-        standing = from_unsaved and _bars(prev)
-        # The unsaved record's own lastRefreshAt, never the status on disk's, which may predate the record's refresh
-        # when that refresh's status write failed with its commit.
-        kept = _UNSAVED[key][2] if from_unsaved else None
-        failed = dict(expiresAt=r.expires_at, identity=r.identity, unsaved=key in _UNSAVED,
-                      lastRefreshAt=(kept.get("lastRefreshAt") if kept is not None
-                                     else prev.get("lastRefreshAt") if prev is not None else None))
-        try:
-            answer, rid = token_request(r.refresh_token or "")
-            rec = _merge(r, old, answer, rid)
-        except (NeedsSignin, ConfigError) as e:
-            if e.word == KIND_NEEDS_SIGNIN and from_unsaved:
-                # The record's own refresh token is dead: drop the record (nothing in it can be refreshed again), so
-                # the needs-signin bound to the file on disk bars every later call.
-                del _UNSAVED[key]
-                failed["unsaved"] = False
-                sys.stderr.write("ccgpt-auth: dropped an unsaved credential for " + key + ": the token endpoint "
-                                 "refused its refresh token; the file on disk is kept\n")
-                sys.stderr.flush()
-            if not standing:
-                write_status(auth_dir, state=e.word, lastErrorCode=e.code, lastRequestId=e.request_id, **failed)
-            raise _state_error(e.word, e.code, e.request_id, lane) from None
-        except RefreshFailed as e:
-            if not standing:
-                write_status(auth_dir, state=_unchanged_state(prev), lastErrorCode=e.code,
-                             lastRequestId=e.request_id, **failed)
-            raise
-        refreshed = dict(lastRefreshAt=time.time(), lastRequestId=rid)
-        try:
-            saved = commit_record(auth_dir, rec, refreshed)
-        except (Unreadable, ForeignFamily):
-            # D-6560: the token endpoint has answered, so the refresh token `r` carried is already spent, and the
-            # commit's re-read refused the file (a lock-ignoring writer tore it or swapped another family's file in
-            # during the round trip, or the read failed). The record is kept unsaved, as the OSError arm keeps one,
-            # bound to the identity read under the lock, `r`'s: the file it was to replace. `retry_unsaved` lands
-            # it once that file, still in place, reads again, drops it once another stands there; `read` never serves
-            # it over a file swapped in, whatever that file holds.
-            _UNSAVED[key] = (dict(rec), r.identity, dict(refreshed))
-            raise
-        # The file still on disk when the commit could not write: the identity the unsaved record is bound to.
-        bound = _current_identity(p.credential) if saved else _UNSAVED.get(key, (rec, r.identity, None))[1]
-        if saved or not standing:
-            write_status(auth_dir, state="ok", expiresAt=rec["expires_at"], lastErrorCode=None, identity=bound,
-                         unsaved=not saved, **refreshed)
-        identity = bound if isinstance(bound, tuple) else None  # type: Optional[Identity]
-        out = _reading_of(rec, identity, p.credential)
-        if not saved:
-            out = out._replace(detail="an unsaved credential for " + p.credential + " is held in memory; the next "
-                               "refresh writes it")
-        return out
+        return _refresh_locked(auth_dir, r, old, lane)
+
+
+def _refresh_locked(auth_dir: str, r: Reading, old: object, lane: Optional[str]) -> Reading:
+    """The refresh `ensure_fresh` runs under the lock, once it has settled a checkpoint and an unsaved record and
+    re-read the credential: `r` and `old` are that re-read (`_read_raw`'s pair), `r` present. Checks the bar, makes the
+    one token request, writes the status and commits, as `ensure_fresh`'s docstring describes. The caller holds
+    `held(auth_dir)`. Extracted from `ensure_fresh` as a move, so that `refresh_rejected` runs the same body
+    (codex-bridge Stage 2, Task 6), and since changed in one place: a committed refresh, and one whose commit cannot
+    write, write `_refreshed_fields`, which keeps a current upstream state with its code and request id
+    (D-6829)."""
+    key = _key(auth_dir)
+    p = paths_for(auth_dir)
+    from_unsaved = _from_unsaved(auth_dir, old)
+    _raise_if_barred(auth_dir, lane, unsaved=from_unsaved)
+    prev = read_status(auth_dir)
+    # A needs-signin another process measured on the file the unsaved record replaces: it stays (that file's
+    # refresh token is dead), so no failure arm below writes a status about that file; only a committed refresh
+    # replaces it.
+    standing = from_unsaved and _bars(prev)
+    # The unsaved record's own lastRefreshAt, never the status on disk's, which may predate the record's refresh
+    # when that refresh's status write failed with its commit.
+    kept = _UNSAVED[key][2] if from_unsaved else None
+    failed = dict(expiresAt=r.expires_at, identity=r.identity, unsaved=key in _UNSAVED,
+                  lastRefreshAt=(kept.get("lastRefreshAt") if kept is not None
+                                 else prev.get("lastRefreshAt") if prev is not None else None))
+    try:
+        answer, rid = token_request(r.refresh_token or "")
+        rec = _merge(r, old, answer, rid)
+    except (NeedsSignin, ConfigError) as e:
+        if e.word == KIND_NEEDS_SIGNIN and from_unsaved:
+            # The record's own refresh token is dead: drop the record (nothing in it can be refreshed again), so
+            # the needs-signin bound to the file on disk bars every later call.
+            del _UNSAVED[key]
+            failed["unsaved"] = False
+            sys.stderr.write("ccgpt-auth: dropped an unsaved credential for " + key + ": the token endpoint "
+                             "refused its refresh token; the file on disk is kept\n")
+            sys.stderr.flush()
+        if not standing:
+            write_status(auth_dir, state=e.word, lastErrorCode=e.code, lastRequestId=e.request_id, **failed)
+        raise _state_error(e.word, e.code, e.request_id, lane) from None
+    except RefreshFailed as e:
+        if not standing:
+            state, code, req = _unchanged_state(prev), e.code, e.request_id
+            if state in _UPSTREAM_STATES:
+                # A kept upstream state keeps the upstream answer's code and request id, as a commit does.
+                state, code, req = _refreshed_fields(prev, e.request_id)
+            write_status(auth_dir, state=state, lastErrorCode=code, lastRequestId=req, **failed)
+        raise
+    refreshed = dict(lastRefreshAt=time.time(), lastRequestId=rid)
+    try:
+        saved = commit_record(auth_dir, rec, refreshed)
+    except (Unreadable, ForeignFamily):
+        # D-6560: the token endpoint has answered, so the refresh token `r` carried is already spent, and the
+        # commit's re-read refused the file (a lock-ignoring writer tore it or swapped another family's file in
+        # during the round trip, or the read failed). The record is kept unsaved, as the OSError arm keeps one,
+        # bound to the identity read under the lock, `r`'s: the file it was to replace. `retry_unsaved` lands
+        # it once that file, still in place, reads again, drops it once another stands there; `read` never serves
+        # it over a file swapped in, whatever that file holds.
+        _UNSAVED[key] = (dict(rec), r.identity, dict(refreshed))
+        raise
+    # The file still on disk when the commit could not write: the identity the unsaved record is bound to.
+    bound = _current_identity(p.credential) if saved else _UNSAVED.get(key, (rec, r.identity, None))[1]
+    if saved or not standing:
+        state, code, req = _refreshed_fields(prev, rid)
+        write_status(auth_dir, state=state, expiresAt=rec["expires_at"], lastErrorCode=code, lastRequestId=req,
+                     lastRefreshAt=refreshed["lastRefreshAt"], identity=bound, unsaved=not saved)
+    identity = bound if isinstance(bound, tuple) else None  # type: Optional[Identity]
+    out = _reading_of(rec, identity, p.credential)
+    if not saved:
+        out = out._replace(detail="an unsaved credential for " + p.credential + " is held in memory; the next "
+                           "refresh writes it")
+    return out
 
 
 def tier_access_token(auth_dir: str, lane: Optional[str] = None) -> Tuple[str, Optional[str]]:
@@ -1411,6 +1467,143 @@ def tier_access_token(auth_dir: str, lane: Optional[str] = None) -> Tuple[str, O
     if not r.access_token:
         raise Unreadable(r.detail)  # unreachable for a present reading (D-6541); never an empty bearer token
     return (r.access_token, r.account_id)
+
+
+# ── a direct lane: the bridge's three doors (codex-bridge Stage 2, Task 6) ───────────────────────────────────────────
+# What `record_upstream` records: the two states an upstream answer sets (spec §2.4's error table, _UPSTREAM_STATES),
+# written over `ok` and over each other, and `ok`, written only over them. A state the refresher writes (needs-signin,
+# config-error) is never written over by an upstream answer, and neither is plan-disabled: no upstream answer in the
+# error table sets or clears it.
+_RECORDABLE = frozenset(("ok",) + _UPSTREAM_STATES)
+
+
+def _same_token(held_token: Optional[str], rejected: object) -> bool:
+    """True when the reading's access token is the one the upstream rejected, compared in memory by
+    `hmac.compare_digest` over the UTF-8 bytes; the rejected token is never stored or logged."""
+    if not isinstance(held_token, str) or not isinstance(rejected, str):
+        return False
+    return hmac.compare_digest(held_token.encode("utf-8"), rejected.encode("utf-8"))
+
+
+def refresh_rejected(auth_dir: str, rejected_access_token: str, *, lane: Optional[str] = None) -> Reading:
+    """The bridge's door after the upstream answered 401 to a token `ensure_fresh` called valid: refresh it once, even
+    though it is not expiring, unless another call already has.
+
+    As `ensure_fresh` does before its lock: a reading the refresher cannot use raises (`_raise_for`), and a status that
+    bars the credential is raised at once, never waiting on the lock (a reading served from the unsaved record is
+    barred only under the lock). Then, under `held`: settle a checkpoint (`recover_pending`), write an unsaved record
+    (`retry_unsaved`) and re-read; when the credential's access token is no longer `rejected_access_token`, another
+    call refreshed it since, and that reading is answered with no request; otherwise the same refresh `ensure_fresh`
+    runs (`_refresh_locked`): the bar, the one token request, the status, the commit. So two callers rejected on one
+    token make one request, and a dead refresh token lands in needs-signin exactly as `ensure_fresh` lands it."""
+    r, old = _read_raw(auth_dir)
+    _raise_for(r)
+    if not _from_unsaved(auth_dir, old):
+        _raise_if_barred(auth_dir, lane)
+    with held(auth_dir):
+        recover_pending(auth_dir)
+        retry_unsaved(auth_dir)
+        r, old = _read_raw(auth_dir)
+        _raise_for(r)
+        if not _same_token(r.access_token, rejected_access_token):
+            return r
+        return _refresh_locked(auth_dir, r, old, lane)
+
+
+def _secrets_of(auth_dir: str) -> List[str]:
+    """Every token and the account id the lane's credential holds, in the unsaved record and in the file alike: what a
+    code or a request id recorded from an upstream answer must not echo."""
+    found = []  # type: List[str]
+    for r, obj in (_read_raw(auth_dir), _read_file_raw(auth_dir)):
+        found.extend(v for v in (r.access_token, r.refresh_token, r.account_id) if isinstance(v, str) and v)
+        if isinstance(obj, dict):
+            id_token = _nonempty_str(obj.get("id_token"))
+            if id_token is not None:
+                found.append(id_token)
+    return found
+
+
+def _bounded_upstream(code: Optional[str], request_id: Optional[str],
+                      secrets: List[str]) -> Tuple[Optional[str], Optional[str]]:
+    """A code and a request id bounded as Stage 1 bounds the refresher's: the code lower-cased and kept when it matches
+    CODE_RE, else UNRECOGNISED_CODE (None for none, or an empty one); the request id kept when it matches
+    REQUEST_ID_RE, else None. Either one that echoes a token or the account id (`_echoes`, case-folded) is replaced
+    the same way, so neither field can carry a secret even when it fits its pattern."""
+    bounded_code = None  # type: Optional[str]
+    if isinstance(code, str) and code:
+        lowered = code.lower()
+        bounded_code = lowered if CODE_RE.fullmatch(lowered) else UNRECOGNISED_CODE
+        if any(_echoes(bounded_code, s) for s in secrets):
+            bounded_code = UNRECOGNISED_CODE
+    rid = request_id if isinstance(request_id, str) and REQUEST_ID_RE.fullmatch(request_id) else None
+    if rid is not None and any(_echoes(rid.lower(), s) for s in secrets):
+        rid = None
+    return bounded_code, rid
+
+
+def record_upstream(auth_dir: str, *, state: Optional[str], code: Optional[str], request_id: Optional[str],
+                    wait_s: Optional[float] = None) -> Optional[str]:
+    """Record what an upstream answer says about the lane in its status file. Best effort; never touches the network.
+
+    `state` is `ok`, `limit-paused`, `ineligible` or None (any other value is a ValueError, raised before anything is
+    read: a programming error). Under `held(auth_dir, wait_s)` (RECORD_WAIT_S, read when called, by default), the
+    current status (`read_status`), or, with none
+    current, the one a reading of the credential computes (state `ok`, its expiry, no refresh yet), is merged with:
+    `state` (None keeps the current one), `lastErrorCode` and `lastRequestId`, each bounded by `_bounded_upstream`.
+    Every refresher field (`expiresAt`, `lastRefreshAt`, `identity`, `unsaved`) is kept as it stands. The state moves
+    only among `ok`, `limit-paused` and `ineligible`: an upstream state is written over `ok` or the other upstream
+    state, and `ok` clears either and is written over nothing else (over `ok` it writes nothing, so the codes standing
+    there are kept); a current state the refresher writes (needs-signin, config-error), and plan-disabled, which no
+    upstream answer sets or clears, are left as they are, code and request id included (the answer is still the bounded
+    request id, below).
+
+    Nothing is written when: the lock is still held after `wait_s` (LockTimeout) or cannot be taken (any other
+    AuthError); the credential is not present (nothing to bind a status to; then no lock is taken and no directory
+    made); the current state is not one an upstream answer moves; `state` is `ok` and the current state is `ok` too;
+    or the write failed.
+
+    The answer is the request id as `_bounded_upstream` bounds it against the lane's tokens and account id, once the
+    lock is taken over a present credential, whether the status was written or not; None when that bound keeps none,
+    and when the credential is not present or the lock is not taken. The bridge writes this answer, and nothing else,
+    as its stats file's request id, so that file's id is bounded as the status file's is (plan Global Constraints)."""
+    if state is not None and state not in _RECORDABLE:
+        raise ValueError("ccgpt-auth: record_upstream records ok, limit-paused, ineligible or None")
+    if read(auth_dir).credential != "present":
+        return None
+    wait = RECORD_WAIT_S if wait_s is None else wait_s
+    try:
+        with held(auth_dir, wait):
+            r, old = _read_raw(auth_dir)
+            if r.credential != "present":
+                return None
+            bounded_code, rid = _bounded_upstream(code, request_id, _secrets_of(auth_dir))
+            prev = read_status(auth_dir)
+            if prev is None:
+                current = "ok"  # type: object
+                kept = dict(expiresAt=r.expires_at, lastRefreshAt=None, identity=r.identity,
+                            unsaved=_from_unsaved(auth_dir, old))  # type: Dict[str, object]
+            else:
+                current = prev.get("state")
+                kept = dict(expiresAt=prev.get("expiresAt"), lastRefreshAt=prev.get("lastRefreshAt"),
+                            identity=_identity_from_json(prev.get("identity")), unsaved=prev.get("unsaved") is True)
+            if current not in _RECORDABLE or (state == "ok" and current == "ok"):
+                return rid
+            write_status(auth_dir, state=current if state is None else state, lastErrorCode=bounded_code,
+                         lastRequestId=rid, **kept)
+            return rid
+    except AuthError:
+        return None
+
+
+def half_life_s(r: Reading) -> float:
+    """Half the access token's lifetime, `(exp - iat) / 2` from its claims when both are integers (never a bool) and
+    `exp > iat`; else EXPIRY_SKEW_S, read when called. The designated refresher, a direct lane's bridge, passes it to
+    `ensure_fresh` as `within_s`, so it refreshes at about half the token lifetime (spec §2.6)."""
+    claims = claims_of(r.access_token) if isinstance(r.access_token, str) else {}
+    exp, iat = claims.get("exp"), claims.get("iat")
+    if type(exp) is int and type(iat) is int and exp > iat:
+        return (exp - iat) / 2.0
+    return float(EXPIRY_SKEW_S)
 
 
 # ── the device-code sign-in ──────────────────────────────────────────────────────────────────────────────────────

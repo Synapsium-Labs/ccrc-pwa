@@ -1,0 +1,2281 @@
+{
+ "order": [
+  "probe-with-deltas",
+  "probe-no-deltas",
+  "probe-args-in-added",
+  "probe-completed-only",
+  "hook-custom-tool-call-no-delta",
+  "hook-message-text-refusal-text",
+  "hook-three-calls-in-order",
+  "hook-three-calls-added-first",
+  "synth-reasoning-text-call-cache",
+  "synth-encrypted-only-big-parallel",
+  "synth-incomplete-max_output_tokens",
+  "synth-incomplete-interrupted",
+  "synth-incomplete-content-filter",
+  "synth-incomplete-unknown-reason",
+  "synth-failed-cyber-policy",
+  "synth-failed-context-length-exceeded",
+  "synth-failed-rate-limit-exceeded",
+  "synth-failed-server-is-overloaded",
+  "synth-failed-usage-not-included",
+  "synth-failed-something-new",
+  "synth-error-event-top-level",
+  "synth-failed-after-a-call",
+  "synth-truncated-no-terminal",
+  "synth-empty-stream",
+  "synth-no-created-first",
+  "synth-dones-out-of-order",
+  "synth-call-only-in-completed-output",
+  "synth-duplicate-done",
+  "synth-empty-and-bad-arguments",
+  "synth-unhandled-items-and-noise",
+  "synth-crlf-and-malformed-line",
+  "synth-reasoning-without-encrypted",
+  "synth2-dedupe-two-calls",
+  "synth2-order-three-calls",
+  "synth2-cache-write-nonzero",
+  "synth2-crlf-reasoning",
+  "synth2-refusal-only-message",
+  "synth2-failed-first-event",
+  "synth2-drop-inside-live-text",
+  "synth2-live-text-prefix-then-suffix",
+  "synth2-live-text-mismatch",
+  "synth2-phase-commentary-then-final",
+  "synth2-end-turn-false-no-call",
+  "synth2-end-turn-false-with-call",
+  "synth2-long-tool-name",
+  "synth2-completed-empty-output-after-dones",
+  "synth2-cache-write-only",
+  "synth2-reasoning-message-reasoning-call",
+  "synth3-text-ahead-of-cursor",
+  "synth3-two-text-parts-merge",
+  "synth3-incomplete-message-not-live",
+  "synth3-final-output-unfinished-items",
+  "synth3-gap-released-at-terminal",
+  "synth3-gap-with-live-block",
+  "synth3-refusal-first-then-text",
+  "synth3-live-index-finishes-as-a-call",
+  "synth3-live-index-finishes-as-reasoning",
+  "synth3-live-text-without-content-index",
+  "synth3-final-output-unfinished-call-at-live-index",
+  "synth3-final-output-in-progress-message-at-live-index",
+  "synth3-final-output-incomplete-call-at-live-index"
+ ],
+ "streams": {
+  "hook-custom-tool-call-no-delta": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "input": "RAW INPUT"
+     },
+     "json": "{\"input\":\"RAW INPUT\"}",
+     "name": "probe_custom",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 4,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "hook-message-text-refusal-text": {
+   "blocks": [
+    {
+     "text": "o",
+     "type": "text"
+    },
+    {
+     "text": "no",
+     "type": "text"
+    },
+    {
+     "text": "k",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "refusal",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 4,
+    "output_tokens": 3
+   },
+   "warnings": []
+  },
+  "hook-three-calls-added-first": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx2",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 5,
+    "output_tokens": 6
+   },
+   "warnings": []
+  },
+  "hook-three-calls-in-order": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx2",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 5,
+    "output_tokens": 6
+   },
+   "warnings": []
+  },
+  "probe-args-in-added": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "two"
+     },
+     "json": "{\"q\": \"two\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "text": "ok",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 1,
+    "output_tokens": 1
+   },
+   "warnings": []
+  },
+  "probe-completed-only": {
+   "blocks": [
+    {
+     "text": "ok",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 1,
+    "output_tokens": 1
+   },
+   "warnings": [
+    "an item was filled from the final output"
+   ]
+  },
+  "probe-no-deltas": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "two"
+     },
+     "json": "{\"q\": \"two\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "text": "ok",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 1,
+    "output_tokens": 1
+   },
+   "warnings": []
+  },
+  "probe-with-deltas": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "two"
+     },
+     "json": "{\"q\": \"two\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "text": "ok",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 1,
+    "output_tokens": 1
+   },
+   "warnings": []
+  },
+  "synth-call-only-in-completed-output": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "two"
+     },
+     "json": "{\"q\": \"two\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": [
+    "an item was filled from the final output"
+   ]
+  },
+  "synth-crlf-and-malformed-line": {
+   "blocks": [
+    {
+     "text": "Fine.",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 2,
+    "output_tokens": 1
+   },
+   "warnings": []
+  },
+  "synth-dones-out-of-order": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "two"
+     },
+     "json": "{\"q\": \"two\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth-duplicate-done": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 1
+   },
+   "warnings": [
+    "a repeated output_index was dropped"
+   ]
+  },
+  "synth-empty-and-bad-arguments": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {},
+     "json": "{}",
+     "name": "needs_args",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx1",
+     "input": {},
+     "json": "{}",
+     "name": "needs_args",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {
+     "emptyArguments": 2,
+     "invalidArguments": 2
+    },
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": [
+     "needs_args"
+    ]
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth-empty-stream": {
+   "blocks": [],
+   "committable": false,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "upstream unavailable (the stream closed before a terminal event)",
+    "status": 503,
+    "type": "api_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth-encrypted-only-big-parallel": {
+   "blocks": [
+    {
+     "id": "call_fx1",
+     "input": {
+      "content": "line 0: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 1: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 2: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 3: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 4: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 5: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 6: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 7: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 8: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 9: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 10: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 11: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 12: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 13: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 14: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 15: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 16: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 17: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 18: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 19: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 20: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 21: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 22: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 23: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 24: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 25: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 26: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 27: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 28: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 29: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 30: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 31: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 32: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 33: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 34: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 35: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 36: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 37: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 38: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 39: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 40: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 41: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 42: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 43: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 44: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 45: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 46: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 47: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 48: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 49: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 50: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 51: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 52: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 53: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 54: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 55: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 56: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 57: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 58: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 59: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 60: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 61: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 62: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 63: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 64: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 65: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 66: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 67: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 68: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 69: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 70: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 71: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 72: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 73: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 74: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 75: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 76: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 77: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 78: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 79: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 80: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 81: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 82: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 83: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 84: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 85: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 86: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 87: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 88: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 89: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 90: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 91: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 92: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 93: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 94: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 95: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 96: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 97: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 98: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 99: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 100: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 101: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 102: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 103: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 104: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 105: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 106: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 107: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 108: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 109: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 110: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 111: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 112: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 113: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 114: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 115: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 116: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 117: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 118: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 119: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 120: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 121: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 122: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 123: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 124: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 125: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 126: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 127: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 128: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 129: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 130: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 131: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 132: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 133: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 134: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 135: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 136: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 137: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 138: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 139: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 140: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 141: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 142: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 143: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 144: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 145: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 146: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 147: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 148: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 149: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 150: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 151: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 152: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 153: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 154: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 155: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 156: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 157: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 158: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 159: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 160: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 161: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 162: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 163: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 164: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 165: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 166: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 167: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 168: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 169: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 170: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 171: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 172: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 173: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 174: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 175: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 176: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 177: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 178: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 179: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 180: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 181: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 182: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 183: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 184: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 185: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 186: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 187: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 188: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 189: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 190: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 191: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 192: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 193: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 194: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 195: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 196: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 197: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 198: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 199: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 200: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 201: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 202: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 203: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 204: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 205: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 206: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 207: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 208: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 209: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 210: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 211: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 212: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 213: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 214: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 215: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 216: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 217: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 218: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 219: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 220: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 221: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 222: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 223: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 224: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 225: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 226: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 227: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 228: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 229: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 230: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 231: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 232: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 233: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 234: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 235: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 236: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 237: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 238: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 239: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 240: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 241: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 242: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 243: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 244: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 245: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 246: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 247: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 248: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 249: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 250: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 251: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 252: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 253: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 254: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 255: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 256: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 257: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 258: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 259: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 260: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 261: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 262: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 263: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 264: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 265: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 266: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 267: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 268: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 269: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 270: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 271: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 272: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 273: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 274: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 275: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 276: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 277: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 278: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 279: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 280: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 281: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 282: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 283: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 284: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 285: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 286: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 287: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 288: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 289: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 290: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 291: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 292: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 293: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 294: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 295: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 296: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 297: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 298: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 299: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 300: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 301: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 302: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 303: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 304: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 305: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 306: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 307: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 308: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 309: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 310: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 311: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 312: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 313: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 314: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 315: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 316: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 317: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 318: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 319: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 320: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 321: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 322: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 323: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 324: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 325: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 326: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 327: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 328: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 329: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 330: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 331: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 332: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 333: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 334: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 335: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 336: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 337: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 338: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 339: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 340: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 341: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 342: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 343: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 344: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 345: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 346: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 347: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 348: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 349: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 350: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 351: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 352: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 353: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 354: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 355: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 356: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 357: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 358: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 359: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 360: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 361: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 362: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 363: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 364: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 365: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 366: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 367: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 368: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 369: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 370: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 371: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 372: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 373: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 374: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 375: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 376: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 377: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 378: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 379: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 380: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 381: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 382: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 383: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 384: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 385: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 386: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 387: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 388: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 389: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 390: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 391: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 392: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 393: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 394: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 395: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 396: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 397: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 398: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 399: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 400: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 401: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 402: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 403: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 404: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 405: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 406: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 407: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 408: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 409: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 410: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 411: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 412: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 413: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 414: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 415: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 416: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 417: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 418: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 419: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 420: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 421: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 422: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 423: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 424: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 425: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 426: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 427: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 428: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 429: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 430: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 431: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 432: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 433: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 434: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 435: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 436: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 437: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 438: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 439: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 440: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 441: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 442: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 443: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 444: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 445: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 446: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 447: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 448: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 449: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 450: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 451: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 452: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 453: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 454: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 455: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 456: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 457: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 458: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\nline 459: a \"quote\", a \\ backslash,\ta tab, é ü 字 😀   end\n",
+      "path": "big.txt"
+     },
+     "json": "{\"path\": \"big.txt\", \"content\": \"line 0: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 1: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 2: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 3: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 4: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 5: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 6: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 7: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 8: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 9: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 10: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 11: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 12: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 13: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 14: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 15: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 16: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 17: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 18: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 19: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 20: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 21: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 22: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 23: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 24: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 25: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 26: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 27: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 28: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 29: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 30: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 31: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 32: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 33: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 34: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 35: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 36: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 37: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 38: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 39: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 40: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 41: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 42: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 43: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 44: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 45: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 46: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 47: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 48: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 49: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 50: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 51: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 52: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 53: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 54: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 55: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 56: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 57: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 58: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 59: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 60: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 61: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 62: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 63: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 64: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 65: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 66: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 67: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 68: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 69: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 70: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 71: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 72: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 73: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 74: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 75: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 76: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 77: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 78: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 79: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 80: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 81: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 82: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 83: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 84: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 85: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 86: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 87: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 88: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 89: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 90: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 91: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 92: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 93: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 94: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 95: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 96: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 97: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 98: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 99: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 100: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 101: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 102: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 103: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 104: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 105: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 106: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 107: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 108: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 109: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 110: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 111: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 112: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 113: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 114: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 115: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 116: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 117: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 118: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 119: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 120: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 121: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 122: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 123: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 124: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 125: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 126: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 127: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 128: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 129: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 130: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 131: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 132: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 133: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 134: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 135: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 136: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 137: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 138: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 139: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 140: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 141: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 142: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 143: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 144: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 145: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 146: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 147: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 148: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 149: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 150: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 151: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 152: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 153: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 154: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 155: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 156: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 157: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 158: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 159: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 160: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 161: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 162: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 163: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 164: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 165: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 166: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 167: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 168: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 169: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 170: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 171: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 172: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 173: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 174: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 175: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 176: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 177: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 178: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 179: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 180: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 181: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 182: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 183: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 184: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 185: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 186: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 187: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 188: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 189: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 190: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 191: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 192: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 193: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 194: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 195: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 196: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 197: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 198: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 199: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 200: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 201: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 202: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 203: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 204: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 205: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 206: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 207: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 208: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 209: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 210: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 211: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 212: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 213: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 214: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 215: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 216: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 217: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 218: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 219: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 220: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 221: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 222: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 223: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 224: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 225: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 226: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 227: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 228: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 229: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 230: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 231: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 232: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 233: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 234: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 235: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 236: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 237: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 238: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 239: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 240: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 241: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 242: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 243: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 244: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 245: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 246: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 247: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 248: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 249: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 250: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 251: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 252: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 253: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 254: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 255: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 256: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 257: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 258: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 259: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 260: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 261: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 262: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 263: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 264: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 265: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 266: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 267: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 268: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 269: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 270: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 271: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 272: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 273: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 274: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 275: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 276: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 277: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 278: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 279: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 280: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 281: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 282: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 283: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 284: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 285: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 286: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 287: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 288: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 289: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 290: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 291: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 292: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 293: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 294: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 295: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 296: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 297: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 298: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 299: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 300: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 301: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 302: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 303: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 304: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 305: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 306: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 307: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 308: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 309: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 310: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 311: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 312: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 313: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 314: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 315: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 316: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 317: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 318: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 319: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 320: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 321: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 322: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 323: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 324: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 325: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 326: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 327: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 328: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 329: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 330: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 331: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 332: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 333: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 334: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 335: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 336: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 337: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 338: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 339: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 340: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 341: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 342: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 343: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 344: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 345: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 346: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 347: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 348: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 349: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 350: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 351: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 352: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 353: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 354: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 355: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 356: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 357: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 358: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 359: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 360: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 361: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 362: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 363: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 364: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 365: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 366: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 367: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 368: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 369: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 370: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 371: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 372: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 373: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 374: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 375: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 376: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 377: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 378: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 379: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 380: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 381: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 382: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 383: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 384: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 385: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 386: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 387: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 388: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 389: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 390: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 391: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 392: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 393: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 394: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 395: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 396: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 397: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 398: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 399: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 400: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 401: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 402: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 403: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 404: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 405: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 406: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 407: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 408: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 409: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 410: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 411: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 412: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 413: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 414: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 415: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 416: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 417: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 418: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 419: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 420: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 421: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 422: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 423: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 424: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 425: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 426: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 427: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 428: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 429: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 430: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 431: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 432: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 433: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 434: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 435: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 436: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 437: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 438: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 439: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 440: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 441: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 442: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 443: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 444: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 445: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 446: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 447: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 448: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 449: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 450: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 451: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 452: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 453: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 454: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 455: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 456: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 457: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 458: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\nline 459: a \\\"quote\\\", a \\\\ backslash,\\ta tab, é ü 字 😀   end\\n\"}",
+     "name": "write_file",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx2",
+     "input": {
+      "q": "two"
+     },
+     "json": "{\"q\": \"two\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [
+    [
+     "call",
+     "call_fx1"
+    ]
+   ],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 50,
+    "output_tokens": 3000
+   },
+   "warnings": []
+  },
+  "synth-error-event-top-level": {
+   "blocks": [],
+   "committable": false,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "usage limit reached (insufficient_quota): the lane's plan limit is spent until it resets",
+    "status": 429,
+    "type": "billing_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth-failed-after-a-call": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "upstream overloaded (server_is_overloaded)",
+    "status": 529,
+    "type": "overloaded_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth-failed-context-length-exceeded": {
+   "blocks": [],
+   "committable": false,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "prompt is too long",
+    "status": 400,
+    "type": "invalid_request_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth-failed-cyber-policy": {
+   "blocks": [],
+   "committable": false,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "policy_blocked: the upstream refused the request (cyber_policy)",
+    "status": 400,
+    "type": "policy_blocked"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth-failed-rate-limit-exceeded": {
+   "blocks": [],
+   "committable": false,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "rate limited upstream (rate_limit_exceeded)",
+    "status": 429,
+    "type": "rate_limit_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth-failed-server-is-overloaded": {
+   "blocks": [],
+   "committable": false,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "upstream overloaded (server_is_overloaded)",
+    "status": 529,
+    "type": "overloaded_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth-failed-something-new": {
+   "blocks": [],
+   "committable": false,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "upstream unavailable (the response failed: something_new)",
+    "status": 503,
+    "type": "api_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth-failed-usage-not-included": {
+   "blocks": [],
+   "committable": false,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "usage_not_included: this account's plan does not include Codex usage",
+    "status": 403,
+    "type": "permission_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth-incomplete-content-filter": {
+   "blocks": [
+    {
+     "text": "Some text",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": [
+     [
+      "incompleteReason",
+      "content_filter"
+     ]
+    ]
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "refusal",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 20,
+    "output_tokens": 5
+   },
+   "warnings": [
+    "an unfinished item was skipped"
+   ]
+  },
+  "synth-incomplete-interrupted": {
+   "blocks": [
+    {
+     "text": "Working on it",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": true,
+   "counted": {
+    "counts": {},
+    "names": [
+     [
+      "incompleteReason",
+      "interrupted"
+     ]
+    ]
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 20,
+    "output_tokens": 4
+   },
+   "warnings": [
+    "an item was filled from the final output"
+   ]
+  },
+  "synth-incomplete-max_output_tokens": {
+   "blocks": [
+    {
+     "text": "Partial answer",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": [
+     [
+      "incompleteReason",
+      "max_output_tokens"
+     ]
+    ]
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [
+    [
+     "text",
+     "Partial answer"
+    ]
+   ],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "max_tokens",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 30,
+    "output_tokens": 16
+   },
+   "warnings": []
+  },
+  "synth-incomplete-unknown-reason": {
+   "blocks": [
+    {
+     "text": "Text",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": [
+     [
+      "incompleteReason",
+      "something_else"
+     ]
+    ]
+   },
+   "error": {
+    "message": "upstream unavailable (an incomplete response: something_else)",
+    "status": 503,
+    "type": "api_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 10,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth-no-created-first": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 1
+   },
+   "warnings": []
+  },
+  "synth-reasoning-text-call-cache": {
+   "blocks": [
+    {
+     "text": "Looking now.",
+     "type": "text"
+    },
+    {
+     "id": "call_fx2",
+     "input": {
+      "path": "a.txt"
+     },
+     "json": "{\"path\": \"a.txt\"}",
+     "name": "read_file",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [
+    [
+     "text",
+     "Looking now."
+    ]
+   ],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 60,
+    "input_tokens": 40,
+    "output_tokens": 20
+   },
+   "warnings": []
+  },
+  "synth-reasoning-without-encrypted": {
+   "blocks": [
+    {
+     "text": "Answer.",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": [
+     [
+      "itemType",
+      "reasoning-without-encrypted-content"
+     ]
+    ]
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 4,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth-truncated-no-terminal": {
+   "blocks": [],
+   "committable": false,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "upstream unavailable (the stream closed before a terminal event)",
+    "status": 503,
+    "type": "api_error"
+   },
+   "phases": {},
+   "reasoning": [
+    null
+   ],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth-unhandled-items-and-noise": {
+   "blocks": [
+    {
+     "text": "Done.",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": true,
+   "counted": {
+    "counts": {},
+    "names": [
+     [
+      "eventType",
+      "response.mystery.event"
+     ],
+     [
+      "itemType",
+      "web_search_call"
+     ],
+     [
+      "itemType",
+      "compaction"
+     ],
+     [
+      "itemType",
+      "mystery_item"
+     ],
+     [
+      "eventType",
+      "response.another_unknown"
+     ]
+    ]
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 9,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth2-cache-write-nonzero": {
+   "blocks": [
+    {
+     "text": "ok",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 100,
+    "cache_read_input_tokens": 400,
+    "input_tokens": 500,
+    "output_tokens": 5
+   },
+   "warnings": []
+  },
+  "synth2-cache-write-only": {
+   "blocks": [
+    {
+     "text": "ok",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 300,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 500,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth2-completed-empty-output-after-dones": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "text": "After.",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth2-crlf-reasoning": {
+   "blocks": [
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [
+    [
+     "call",
+     "call_fx1"
+    ]
+   ],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 1
+   },
+   "warnings": []
+  },
+  "synth2-dedupe-two-calls": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "two"
+     },
+     "json": "{\"q\": \"two\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": [
+    "a repeated output_index was dropped",
+    "a repeated output_index was dropped"
+   ]
+  },
+  "synth2-drop-inside-live-text": {
+   "blocks": [
+    {
+     "text": "Hello wor",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "upstream unavailable (the stream closed before a terminal event)",
+    "status": 503,
+    "type": "api_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth2-end-turn-false-no-call": {
+   "blocks": [
+    {
+     "text": "Part one.",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": true,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 3
+   },
+   "warnings": []
+  },
+  "synth2-end-turn-false-with-call": {
+   "blocks": [
+    {
+     "text": "Calling.",
+     "type": "text"
+    },
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 3
+   },
+   "warnings": []
+  },
+  "synth2-failed-first-event": {
+   "blocks": [],
+   "committable": false,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "prompt is too long",
+    "status": 400,
+    "type": "invalid_request_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth2-live-text-mismatch": {
+   "blocks": [
+    {
+     "text": "Hello there",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {
+     "liveTextMismatch": 1
+    },
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [
+    [
+     "text",
+     "Hello there"
+    ]
+   ],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 3
+   },
+   "warnings": []
+  },
+  "synth2-live-text-prefix-then-suffix": {
+   "blocks": [
+    {
+     "text": "The answer is 42.",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 5
+   },
+   "warnings": []
+  },
+  "synth2-long-tool-name": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "mcp__a_long_server_name__a_very_long_tool_name_that_runs_past_the_limi",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {
+     "mcp__a_long_server_name__a_very_long_tool_name_that_run_c205ff5e": "mcp__a_long_server_name__a_very_long_tool_name_that_runs_past_the_limi"
+    },
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 1
+   },
+   "warnings": []
+  },
+  "synth2-order-three-calls": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "n": 0
+     },
+     "json": "{\"n\": 0}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx1",
+     "input": {
+      "n": 1
+     },
+     "json": "{\"n\": 1}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "id": "call_fx2",
+     "input": {
+      "n": 2
+     },
+     "json": "{\"n\": 2}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 3
+   },
+   "warnings": []
+  },
+  "synth2-phase-commentary-then-final": {
+   "blocks": [
+    {
+     "text": "Checking.",
+     "type": "text"
+    },
+    {
+     "text": "All good.",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {
+    "All good.": "final",
+    "Checking.": "commentary"
+   },
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 4
+   },
+   "warnings": []
+  },
+  "synth2-reasoning-message-reasoning-call": {
+   "blocks": [
+    {
+     "text": "First I look.",
+     "type": "text"
+    },
+    {
+     "id": "call_fx3",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [
+    [
+     "text",
+     "First I look."
+    ],
+    [
+     "call",
+     "call_fx3"
+    ]
+   ],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 4
+   },
+   "warnings": []
+  },
+  "synth2-refusal-only-message": {
+   "blocks": [
+    {
+     "text": "I can't help with that.",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "refusal",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 6
+   },
+   "warnings": []
+  },
+  "synth3-final-output-in-progress-message-at-live-index": {
+   "blocks": [
+    {
+     "text": "Hi",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": [
+    "an unfinished item was skipped"
+   ]
+  },
+  "synth3-final-output-incomplete-call-at-live-index": {
+   "blocks": [
+    {
+     "text": "Hi",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": [
+    "an unfinished item was skipped"
+   ]
+  },
+  "synth3-final-output-unfinished-call-at-live-index": {
+   "blocks": [
+    {
+     "text": "Hi",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": [
+    "an unfinished item was skipped"
+   ]
+  },
+  "synth3-final-output-unfinished-items": {
+   "blocks": [
+    {
+     "text": "ok",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": [
+    "an unfinished item was skipped",
+    "an unfinished item was skipped"
+   ]
+  },
+  "synth3-gap-released-at-terminal": {
+   "blocks": [
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "two"
+     },
+     "json": "{\"q\": \"two\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 1
+   },
+   "warnings": []
+  },
+  "synth3-gap-with-live-block": {
+   "blocks": [
+    {
+     "text": "Hi",
+     "type": "text"
+    },
+    {
+     "id": "call_fx1",
+     "input": {
+      "q": "two"
+     },
+     "json": "{\"q\": \"two\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth3-incomplete-message-not-live": {
+   "blocks": [],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": [
+     [
+      "incompleteReason",
+      "max_output_tokens"
+     ]
+    ]
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "max_tokens",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 1
+   },
+   "warnings": [
+    "an unfinished item was skipped"
+   ]
+  },
+  "synth3-live-index-finishes-as-a-call": {
+   "blocks": [
+    {
+     "text": "Hi",
+     "type": "text"
+    },
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "text": "x",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {
+     "liveTextMismatch": 1
+    },
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth3-live-index-finishes-as-reasoning": {
+   "blocks": [
+    {
+     "text": "Hi",
+     "type": "text"
+    },
+    {
+     "text": "After",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {
+     "liveTextMismatch": 1
+    },
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [
+    [
+     "text",
+     "After"
+    ]
+   ],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth3-live-text-without-content-index": {
+   "blocks": [
+    {
+     "text": "Hello wor",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": {
+    "message": "upstream unavailable (the stream closed before a terminal event)",
+    "status": 503,
+    "type": "api_error"
+   },
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   },
+   "warnings": []
+  },
+  "synth3-refusal-first-then-text": {
+   "blocks": [
+    {
+     "text": "no",
+     "type": "text"
+    },
+    {
+     "text": "Hello",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "refusal",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth3-text-ahead-of-cursor": {
+   "blocks": [
+    {
+     "id": "call_fx0",
+     "input": {
+      "q": "one"
+     },
+     "json": "{\"q\": \"one\"}",
+     "name": "probe_tool",
+     "type": "tool_use"
+    },
+    {
+     "text": "Text",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "tool_use",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 2
+   },
+   "warnings": []
+  },
+  "synth3-two-text-parts-merge": {
+   "blocks": [
+    {
+     "text": "Hello",
+     "type": "text"
+    }
+   ],
+   "committable": true,
+   "continue": false,
+   "counted": {
+    "counts": {},
+    "names": []
+   },
+   "error": null,
+   "phases": {},
+   "reasoning": [],
+   "setup": {
+    "name_map": {},
+    "tools_required": []
+   },
+   "stop": "end_turn",
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 1
+   },
+   "warnings": []
+  }
+ }
+}

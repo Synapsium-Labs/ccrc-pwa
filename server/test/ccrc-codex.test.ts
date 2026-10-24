@@ -78,8 +78,12 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   // CCRC_CODEX_AUTH_BASE is the one CCRC_CODEX_ name kept: `ghContainedEnv`
   // sets it to a loopback endpoint (codex-bridge Stage 1, Task 6), so no auth
   // library this suite reaches can ask a live one.
+  // CCGPT_BRIDGE_UPSTREAM_BASE is the one CCGPT_ name kept, for the same
+  // reason: `ghContainedEnv` sets it to a loopback endpoint (codex-bridge
+  // Stage 2, Task 7, D-6838), so no bridge this suite starts can reach the
+  // live backend.
   for (const k of Object.keys(e)) {
-    if ((/^(CCRC_CODEX_|CCGPT_)/.test(k) && k !== 'CCRC_CODEX_AUTH_BASE')
+    if ((/^(CCRC_CODEX_|CCGPT_)/.test(k) && k !== 'CCRC_CODEX_AUTH_BASE' && k !== 'CCGPT_BRIDGE_UPSTREAM_BASE')
       || ['CHATGPT_TOKEN_DIR', 'LITELLM_MASTER_KEY', 'COLUMNS'].includes(k)) {
       delete e[k];
     }
@@ -3552,6 +3556,12 @@ describe.skipIf(!pythonOrSkip())('ccrc codex login — the auth library signs th
       c.once('close', (code) => { clearTimeout(timer); resolve({ code: code ?? -1, stdout: out, stderr: err }); });
     });
   };
+
+  it('env() keeps the loopback CCGPT_BRIDGE_UPSTREAM_BASE ghContainedEnv sets (D-6838)', () => {
+    const e = env(mkTmp('ccrc-codex-env-'));
+    expect(e['CCRC_CODEX_AUTH_BASE'], 'no auth library reaches a live endpoint').toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(e['CCGPT_BRIDGE_UPSTREAM_BASE'], 'no bridge reaches the live backend').toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+  });
 
   it("A1: signs in through the library over the roster's authDir, against the fake endpoint, with no runtime", async () => {
     const home = await loginBox();

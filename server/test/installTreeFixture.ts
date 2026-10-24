@@ -69,6 +69,13 @@ export const TREE_FILES = [
   'ccd/ccgpt-usage.py',
   'ccd/ccgpt-runtime',
   'ccd/ccrc-codex',
+  // The codex bridge's package (codex bridge Stage 2, Task 9), which the shim's
+  // direct entry imports from the installed TREE (CCGPT_BRIDGE_DIR, the tree's
+  // `ccd/codexbridge`), never from `~/.local/bin`: no installer places it, so
+  // it rides the tree and nothing else. A DIRECTORY entry, copied whole, so
+  // every `ccd/codexbridge/*.py` is in the fixture tree, a module added later
+  // included.
+  'ccd/codexbridge',
   // The generators, reached as `$CCRC_HERE/../deploy/<name>.mjs` — the same
   // "one directory up from this script" resolution `cmd_wrappers` uses, true
   // in a checkout and at `~/ccrc/deploy` on a deployed box.
