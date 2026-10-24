@@ -420,6 +420,44 @@ describe('the transcript stops repeating the ask the card already shows', () => 
   });
 });
 
+// The two surfaces that only point at the terminal (fixture 3, unreadable rows with no copy of the question; fixture 5, an
+// unparsed pane): the sheet offers "Open terminal to answer" and "Not now"; the inline card covers nothing, so it offers
+// the first alone, and opening the terminal leaves it where it is (`open` is `desk ||` first, D-6326).
+describe.each([
+  [3, 'ask-unreadable'],
+  [5, 'terminal-only'],
+] as const)('the terminal-door surface at the desk (fixture %i, %s)', (n) => {
+  /** `DialogSheet` alone over fixture `n`'s frames, with the terminal door stubbed. */
+  function mountDoor() {
+    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    act(() => { for (const f of askFixture(n).frames) store.getState().apply(f); });
+    const onOpenTerminal = vi.fn();
+    render(<DialogSheet id={ID} store={store} onOpenTerminal={onOpenTerminal} />);
+    return { onOpenTerminal };
+  }
+
+  it('shows "Open terminal to answer" and no "Not now"', () => {
+    media(true);
+    mountDoor();
+    const section = card();
+    expect(within(section).getByRole('button', { name: 'Open terminal to answer' }), 'premise: the terminal door is in the card')
+      .toBeInTheDocument();
+    expect(within(section).queryByRole('button', { name: 'Not now' }), 'no "Not now" in the inline card').toBeNull();
+    expect(screen.queryByText('Not now'), 'no "Not now" anywhere on the page').toBeNull();
+  });
+
+  it('opening the terminal leaves the inline card mounted', () => {
+    media(true);
+    const { onOpenTerminal } = mountDoor();
+    const section = card();
+    fireEvent.click(within(section).getByRole('button', { name: 'Open terminal to answer' }));
+    expect(onOpenTerminal, 'premise: the click reached the terminal door').toHaveBeenCalledOnce();
+    expect(cards(), 'the card is still mounted after the click').toHaveLength(1);
+    expect(cards()[0], 'and it is the same node, not a remount').toBe(section);
+    expect(section.isConnected, 'still in the document').toBe(true);
+  });
+});
+
 describe('the composer while a question is up', () => {
   it('Send while an inline ask is up keeps the text, shows the dialog-open sentence and makes no request', async () => {
     media(true);
