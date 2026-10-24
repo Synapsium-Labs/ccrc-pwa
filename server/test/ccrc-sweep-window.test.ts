@@ -1515,7 +1515,7 @@ describe('_upd_sweep, Linux arm: the sweep records what it did in update.json (w
   }, 60_000);
 
   // R10k (D-5315): a sweep that ran unverified says so in the report; exit code, stdout and stderr are as
-  // `ccrc-update.test.ts` pins them (review 196 item 1), so only the record is read here. Its refusals are that file's.
+  // `ccrc-update-*.test.ts` pins them (review 196 item 1), so only the record is read here. Its refusals are that file's.
   itLinux('S6 something restarted and the post-restart listing failing records unverified: relist', () => {
     const box = withReport({ units: [stable(A, 0)], activeListingRc: 94 });
     const { r, j } = swept(box);

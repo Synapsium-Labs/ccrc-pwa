@@ -3,7 +3,7 @@
 // restored database that disagrees with it stops the lane instead of re-arming it. These cases pin what the operator is
 // TOLD: both `CoordDbUnmigratable` restore sentences, `ccrc`'s update and backup usage, the one cross-side name, and the
 // whole-state boundary no check can see. What the tools DO is pinned against the real `ccrc` in fixture HOMEs
-// (`ccrc-update.test.ts`, `ccrc-uninstall.test.ts`), and the shell holders in `single-definition.test.ts`.
+// (`ccrc-update-*.test.ts`, `ccrc-uninstall.test.ts`), and the shell holders in `single-definition.test.ts`.
 import { describe, it, expect } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
