@@ -12007,11 +12007,6 @@ _codex_stop_order() {   # <id>
   printf 'bridge shim litellm\n'
 }
 
-# The last answer `_codex_tier_ours` gave for each `<id>/<tier>` in this shell,
-# its rc: what `_codex_tier_is_other_mode` reads for the lane's own mode tier,
-# which every walk measures first. A command substitution keeps its own copy.
-declare -gA CX_TIER_SEEN=()
-
 # Every codex-lane refusal in this file, from the library, the lifecycle
 # verbs, the spine and account removal alike, prints through this one
 # function, and none of them spells the shape again.
@@ -12758,6 +12753,8 @@ _codex_tier_ours() {   # <id> <tier>   |   --bounded-read <seconds> <id> <tier>
   # Every ordinary answer is also recorded in CX_TIER_SEEN, for
   # `_codex_tier_is_other_mode` (codex-bridge Stage 2, Task 11): the question
   # itself is `_codex_tier_measure`, below, and its rc is passed on as it came.
+  # CX_TIER_SEEN["<id>/<tier>"] is the last rc this shell got for that tier,
+  # declared here on first use (a command substitution keeps its own copy).
   local cx_rc=0
   _codex_tier_measure "${1:-}" "${2:-}" || cx_rc=$?
   declare -p CX_TIER_SEEN >/dev/null 2>&1 || declare -gA CX_TIER_SEEN=()
@@ -13004,9 +13001,10 @@ _codex_tier_stale() {   # <id> <tier>
 # The FILE half of `_acct_remove`'s codex arms (Task 8; spec §9's reap, Plan 2b-1 carry-forward
 # 8): removes EXACTLY the lane's generated state under `~/.ccrc/codex/<id>/`:
 # lane.json, runtime.env, litellm.yaml and the `.prev` the litellm op keeps
-# beside it, every tier's `.started`/`.pid` (litellm.started, shim.started,
-# litellm.pid, shim.pid), `.lock`, the file `_codex_lock` takes its per-lane
-# `flock` on, and any `runtime.env.tmp.*` leftover an interrupted
+# beside it, every tier's `.started`/`.pid` (litellm, shim and bridge, each
+# `<tier>.started` and `<tier>.pid`, through `$CODEX_TIERS`), the bridge's
+# markers, stats file, store and recordings directory (below), `.lock`, the
+# file `_codex_lock` takes its per-lane `flock` on, and any `runtime.env.tmp.*` leftover an interrupted
 # `_codex_runtime_env_ensure` mint left behind (its `mktemp` name is random,
 # so this is a GLOB, not a fixed name — a key-bearing tmp file left by a
 # killed mint must not survive account removal, and its presence must not
@@ -13079,7 +13077,7 @@ _codex_reap_files() {   # <id>
   return "$rc"
 }
 
-# ── `ccrc codex` — a Codex lane's two tiers, RUN (Plan 2b-2 Task 5) ────────
+# ── `ccrc codex` — a Codex lane's tiers, RUN (Plan 2b-2 Task 5) ────────────
 # The lane library above this block ANSWERS questions (Task 4). What follows
 # ACTS on them, and redefines none of them (ruling R5):
 #   - `_codex_ready_secs`: the one parse of CCRC_CODEX_READY_S (ruling R27);
@@ -13107,7 +13105,7 @@ _codex_reap_files() {   # <id>
 # Refusals print through `_codex_say`. The code `usage` exits 2 (this file's
 # EXIT CODES table; ruling R3); every other code exits 1.
 
-# The readiness bound `start` waits for both tiers inside, in whole seconds:
+# The readiness bound `start` waits for the lane's mode tiers inside, in whole seconds:
 # `CCRC_CODEX_READY_S`, default 90. It falls back to 90, exactly as
 # `_codex_probe_secs` falls back for its own bound (ruling PF-19), on a value
 # that is empty, not all digits, five characters or longer (which `$(( ))`
@@ -13448,7 +13446,8 @@ _codex_shim_absent() {   # <id> [<tail>]
 #   else's. On the unit arm nothing else would remove the file, and on either
 #   arm a failed spawn would otherwise leave it behind.
 _codex_start_tier() {   # <id> <tier> -> rc 0 + "systemd <unit>" | "nohup <pid>" on stdout; rc 1 + one refusal line; rc 2 usage
-  local id="${1:-}" tier="${2:-}" d unit rec gen py log ans rc p
+  local id="${1:-}" tier="${2:-}" d unit rec gen py log ans rc p envf
+  local -a pairs=() argv=()
   _codex_row "$id" || return $?
   if ! _codex_tier_ok "$tier"; then
     _codex_say usage "a tier is one of: $CODEX_TIERS (got '$tier')."
@@ -13459,45 +13458,60 @@ _codex_start_tier() {   # <id> <tier> -> rc 0 + "systemd <unit>" | "nohup <pid>"
     _codex_say lane-unwritable "$d/lane.json names no usable $tier unit, so there is no name to run $id's $tier tier under. 'ccrc codex start $id' re-renders it; if it still names none, run 'ccrc models $id init codex'."
     return 1
   fi
-  # THE BRIDGE ARM (codex-bridge Stage 2, Task 11), decided BEFORE the LiteLLM
-  # runtime is read: a direct lane runs the shim file in `direct` mode under the
-  # system python3, on the shim's port and unit, with no runtime, no
-  # litellm.yaml and no env file — the bridge reads the key from runtime.env
-  # itself (`codexbridge/server.py`'s config_from_env), so it never enters a
-  # unit's environment. Its argv is `<python3> -I <shim file>
-  # --ccrc-bridge=direct --ccrc-lane=<id>`, what `_codex_pid_is_tier` proves.
-  # CCGPT_BRIDGE_UPSTREAM_BASE and CCRC_CODEX_AUTH_BASE are forwarded as pairs
-  # each ONLY when the caller has it set (a tier's environment is never the
-  # caller's): tests set both to loopback, a live box sets neither.
+  _codex_bus_defaults
+  # ONE SPAWN, THREE TIERS (codex-bridge Stage 2, Task 11, fix round 1): what
+  # is tier-specific is decided first, as four values — the record (`rec`),
+  # the env file (`envf`, `-` for none), the environment pairs (`pairs`) and
+  # the argv (`argv`) — and the one tail below spawns and records every tier.
+  # THE BRIDGE ARM, decided BEFORE the LiteLLM runtime is read: a direct lane
+  # runs the shim file in `direct` mode under the system python3, on the shim's
+  # port and unit, with no runtime, no litellm.yaml and no env file — the
+  # bridge reads the key from runtime.env itself (`codexbridge/server.py`'s
+  # config_from_env), so it never enters a unit's environment. Its argv is
+  # `<python3> -I <shim file> --ccrc-bridge=direct --ccrc-lane=<id>`, what
+  # `_codex_pid_is_tier` proves. CCGPT_BRIDGE_UPSTREAM_BASE and
+  # CCRC_CODEX_AUTH_BASE are forwarded as pairs each ONLY when the caller has
+  # it set (a tier's environment is never the caller's): tests set both to
+  # loopback, a live box sets neither.
   if [ "$tier" = bridge ]; then
-    _codex_start_bridge "$id" "$unit" "$d"
-    return $?
-  fi
-  if ! "$(_codex_runtime_cli)" python >/dev/null 2>&1; then
-    _codex_say runtime-absent "no LiteLLM runtime is current on this box, so $id's $tier tier has no interpreter to start from. Build one with 'ccgpt-runtime build' (or 'ccrc update', which builds it), then re-run."
-    return 1
-  fi
-  # The litellm tier reads and refreshes its credential through the auth
-  # library, which `_codex_started_json` also hashes into its record, so a
-  # missing one is named here, before that call, and never read as a runtime
-  # with no readable stamp. The shim tier does not load it.
-  if [ "$tier" = litellm ] && ! { [ -f "$(_codex_auth_lib)" ] && [ -r "$(_codex_auth_lib)" ]; }; then
-    _codex_say auth-library-absent "$(_codex_auth_lib) is not a readable file, so $id's litellm tier would have no auth library to read and refresh its credential through, and would answer every request 401. Run 'ccrc update', which places it, then re-run. Nothing was started."
-    return 1
-  fi
-  if ! rec="$(_codex_started_json "$tier")"; then
-    if [ "$tier" = shim ]; then
-      _codex_shim_absent "$id"
-    else
-      _codex_say runtime-absent "the current runtime generation carries no readable stamp (.ccrc-runtime.json), so what $id's litellm tier would run cannot be recorded. Rebuild it with 'ccgpt-runtime build --force', then re-run."
+    _codex_bridge_spawn "$id" "$d" || return 1
+  else
+    if ! "$(_codex_runtime_cli)" python >/dev/null 2>&1; then
+      _codex_say runtime-absent "no LiteLLM runtime is current on this box, so $id's $tier tier has no interpreter to start from. Build one with 'ccgpt-runtime build' (or 'ccrc update', which builds it), then re-run."
+      return 1
     fi
-    return 1
-  fi
-  gen="$(printf '%s' "$rec" | jq -r '.generation // empty' 2>/dev/null)" || gen=''
-  py="$gen/bin/python"
-  if [ -z "$gen" ] || [ ! -x "$py" ]; then
-    _codex_say runtime-absent "the current runtime's interpreter ${gen:+$py }is not executable, so $id's $tier tier cannot start. Rebuild it with 'ccgpt-runtime build --force', then re-run."
-    return 1
+    # The litellm tier reads and refreshes its credential through the auth
+    # library, which `_codex_started_json` also hashes into its record, so a
+    # missing one is named here, before that call, and never read as a runtime
+    # with no readable stamp. The shim tier does not load it.
+    if [ "$tier" = litellm ] && ! { [ -f "$(_codex_auth_lib)" ] && [ -r "$(_codex_auth_lib)" ]; }; then
+      _codex_say auth-library-absent "$(_codex_auth_lib) is not a readable file, so $id's litellm tier would have no auth library to read and refresh its credential through, and would answer every request 401. Run 'ccrc update', which places it, then re-run. Nothing was started."
+      return 1
+    fi
+    if ! rec="$(_codex_started_json "$tier")"; then
+      if [ "$tier" = shim ]; then
+        _codex_shim_absent "$id"
+      else
+        _codex_say runtime-absent "the current runtime generation carries no readable stamp (.ccrc-runtime.json), so what $id's litellm tier would run cannot be recorded. Rebuild it with 'ccgpt-runtime build --force', then re-run."
+      fi
+      return 1
+    fi
+    gen="$(printf '%s' "$rec" | jq -r '.generation // empty' 2>/dev/null)" || gen=''
+    py="$gen/bin/python"
+    if [ -z "$gen" ] || [ ! -x "$py" ]; then
+      _codex_say runtime-absent "the current runtime's interpreter ${gen:+$py }is not executable, so $id's $tier tier cannot start. Rebuild it with 'ccgpt-runtime build --force', then re-run."
+      return 1
+    fi
+    if [ "$tier" = litellm ]; then
+      envf="$d/runtime.env"
+      pairs=("CHATGPT_TOKEN_DIR=$HOME/$CX_AUTH" LITELLM_LOCAL_MODEL_COST_MAP=True "HOME=$HOME"
+        "CCRC_CODEX_AUTH_LIB=$(_codex_auth_lib)" "CCRC_CODEX_LANE=$id")
+      argv=("$py" -I -m litellm.proxy.proxy_cli --config "$(_codex_litellm_yaml "$id")" --host 127.0.0.1 --port "$CX_LITELLM")
+    else
+      envf=-
+      pairs=("CCGPT_ACCOUNT_ID=$id" "CCGPT_PROXY_PORT=$CX_PROXY" "CCGPT_LITELLM_PORT=$CX_LITELLM" "HOME=$HOME")
+      argv=("$py" -I "$(_codex_shim_file)" "--ccrc-lane=$id")
+    fi
   fi
   log="$HOME/.ccrc/logs/codex/$id/$tier.log"
   # 0700: a tier's log can carry request fragments on an error path.
@@ -13509,19 +13523,8 @@ _codex_start_tier() {   # <id> <tier> -> rc 0 + "systemd <unit>" | "nohup <pid>"
     _codex_say lane-unwritable "$d/$tier.pid is a stale pidfile (it names no running tier of $id's) and could not be removed. Fix $d, then re-run. Nothing was started."
     return 1
   fi
-  _codex_bus_defaults
-  if [ "$tier" = litellm ]; then
-    ans="$( [ -z "${CX_LOCK_FD:-}" ] || exec {CX_LOCK_FD}>&-
-      _svc_run_supervised "$unit" "$log" "$d/runtime.env" \
-        "CHATGPT_TOKEN_DIR=$HOME/$CX_AUTH" LITELLM_LOCAL_MODEL_COST_MAP=True "HOME=$HOME" \
-        "CCRC_CODEX_AUTH_LIB=$(_codex_auth_lib)" "CCRC_CODEX_LANE=$id" \
-        -- "$py" -I -m litellm.proxy.proxy_cli --config "$(_codex_litellm_yaml "$id")" --host 127.0.0.1 --port "$CX_LITELLM" )"; rc=$?
-  else
-    ans="$( [ -z "${CX_LOCK_FD:-}" ] || exec {CX_LOCK_FD}>&-
-      _svc_run_supervised "$unit" "$log" - \
-        "CCGPT_ACCOUNT_ID=$id" "CCGPT_PROXY_PORT=$CX_PROXY" "CCGPT_LITELLM_PORT=$CX_LITELLM" "HOME=$HOME" \
-        -- "$py" -I "$(_codex_shim_file)" "--ccrc-lane=$id" )"; rc=$?
-  fi
+  ans="$( [ -z "${CX_LOCK_FD:-}" ] || exec {CX_LOCK_FD}>&-
+    _svc_run_supervised "$unit" "$log" "$envf" "${pairs[@]}" -- "${argv[@]}" )"; rc=$?
   ans="${ans##*$'\n'}"
   if [ "$rc" -ne 0 ]; then
     _codex_say tier-not-ready "$id's $tier tier could not be started: the platform helper answered rc $rc (its reason is the line above). Read $log; 'ccrc codex status $id' shows what is running."
@@ -13551,12 +13554,13 @@ _codex_start_tier() {   # <id> <tier> -> rc 0 + "systemd <unit>" | "nohup <pid>"
   printf '%s\n' "$ans"
 }
 
-# `_codex_start_tier`'s bridge arm (above): <id> <unit> <lane dir>. Same
-# contract, same answer, same records: the pidfile on the nohup arm, then
-# `bridge.started`, `_codex_started_json bridge`'s output and nothing else.
-_codex_start_bridge() {   # <id> <unit> <lane dir>
-  local id="$1" unit="$2" d="$3" py rec lib bdir log ver ans rc p
-  local -a extra=()
+# `_codex_start_tier`'s bridge arm (above): <id> <lane dir>. It refuses, with
+# one line and rc 1, what the bridge cannot run without, and otherwise sets
+# the CALLER's `rec` (`_codex_started_json bridge`'s output and nothing
+# else), `envf`, `pairs` and `argv` (bash's dynamic scope), rc 0. It spawns
+# and records nothing: that is `_codex_start_tier`'s one tail.
+_codex_bridge_spawn() {   # <id> <lane dir>
+  local id="$1" d="$2" py lib bdir ver
   py="$(_codex_python)" || return 1
   if ! { [ -f "$(_codex_shim_file)" ] && [ -r "$(_codex_shim_file)" ]; }; then
     _codex_shim_absent "$id"
@@ -13576,52 +13580,16 @@ _codex_start_bridge() {   # <id> <unit> <lane dir>
     _codex_say bridge-absent "what $id's bridge tier would run cannot be recorded: the placed shim or the bridge package $bdir cannot be hashed. 'ccrc update' places both; re-run after. Nothing was started."
     return 1
   fi
-  log="$HOME/.ccrc/logs/codex/$id/bridge.log"
-  if ! ( umask 077; mkdir -p -- "${log%/*}" ) 2>/dev/null; then
-    _codex_say lane-unwritable "${log%/*} could not be created, so $id's bridge tier would have nowhere to log. Fix that directory, then re-run."
-    return 1
-  fi
-  if ! rm -f -- "$d/bridge.pid" 2>/dev/null; then
-    _codex_say lane-unwritable "$d/bridge.pid is a stale pidfile (it names no running tier of $id's) and could not be removed. Fix $d, then re-run. Nothing was started."
-    return 1
-  fi
   # The box's stamp names the version, else `dev` (the contract's default).
   ver="$( _box_build_fields >/dev/null 2>&1 && printf '%s' "${BOX_BUILD[4]:-}" )" || ver=''
   [ -n "$ver" ] || ver=dev
-  [ -z "${CCGPT_BRIDGE_UPSTREAM_BASE:-}" ] || extra+=("CCGPT_BRIDGE_UPSTREAM_BASE=$CCGPT_BRIDGE_UPSTREAM_BASE")
-  [ -z "${CCRC_CODEX_AUTH_BASE:-}" ] || extra+=("CCRC_CODEX_AUTH_BASE=$CCRC_CODEX_AUTH_BASE")
-  _codex_bus_defaults
-  ans="$( [ -z "${CX_LOCK_FD:-}" ] || exec {CX_LOCK_FD}>&-
-    _svc_run_supervised "$unit" "$log" - \
-      CCGPT_BRIDGE=direct "CCGPT_ACCOUNT_ID=$id" "CCGPT_PROXY_PORT=$CX_PROXY" "CCGPT_LITELLM_PORT=$CX_LITELLM" \
-      "CCGPT_BRIDGE_DIR=$bdir" "CCGPT_LANE_DIR=$d" "CCRC_CODEX_AUTH_LIB=$lib" "CCGPT_CCRC_VERSION=$ver" \
-      "CCGPT_CATALOGUE=$HOME/.ccrc/models/$id.json" "HOME=$HOME" ${extra[@]+"${extra[@]}"} \
-      -- "$py" -I "$(_codex_shim_file)" --ccrc-bridge=direct "--ccrc-lane=$id" )"; rc=$?
-  ans="${ans##*$'\n'}"
-  if [ "$rc" -ne 0 ]; then
-    _codex_say tier-not-ready "$id's bridge tier could not be started: the platform helper answered rc $rc (its reason is the line above). Read $log; 'ccrc codex status $id' shows what is running."
-    return 1
-  fi
-  case "$ans" in
-    "systemd $unit") : ;;
-    "nohup "*)
-      p="${ans#nohup }"
-      case "$p" in ''|*[!0-9]*) p='' ;; esac
-      if [ -z "$p" ] || ! { printf '%s\n' "$p" > "$d/bridge.pid.$$" && mv -f -- "$d/bridge.pid.$$" "$d/bridge.pid"; }; then
-        rm -f -- "$d/bridge.pid.$$"
-        _codex_say lane-unwritable "$id's bridge tier was started under nohup (\"$ans\"), but its pid could not be recorded in $d/bridge.pid, and without it nothing can stop it by verified identity. Stop it by hand, fix $d, then re-run."
-        return 1
-      fi ;;
-    *)
-      _codex_say tier-not-ready "the platform helper answered \"$ans\" for $id's bridge tier, which names neither its unit nor a pid. Read $log."
-      return 1 ;;
-  esac
-  if ! { printf '%s\n' "$rec" > "$d/bridge.started.$$" && mv -f -- "$d/bridge.started.$$" "$d/bridge.started"; }; then
-    rm -f -- "$d/bridge.started.$$"
-    _codex_say lane-unwritable "$id's bridge tier IS running, but $d/bridge.started could not be written, so the next update will read that tier as stale and restart it. Fix $d."
-    return 1
-  fi
-  printf '%s\n' "$ans"
+  envf=-
+  pairs=(CCGPT_BRIDGE=direct "CCGPT_ACCOUNT_ID=$id" "CCGPT_PROXY_PORT=$CX_PROXY" "CCGPT_LITELLM_PORT=$CX_LITELLM"
+    "CCGPT_BRIDGE_DIR=$bdir" "CCGPT_LANE_DIR=$d" "CCRC_CODEX_AUTH_LIB=$lib" "CCGPT_CCRC_VERSION=$ver"
+    "CCGPT_CATALOGUE=$HOME/.ccrc/models/$id.json" "HOME=$HOME")
+  [ -z "${CCGPT_BRIDGE_UPSTREAM_BASE:-}" ] || pairs+=("CCGPT_BRIDGE_UPSTREAM_BASE=$CCGPT_BRIDGE_UPSTREAM_BASE")
+  [ -z "${CCRC_CODEX_AUTH_BASE:-}" ] || pairs+=("CCRC_CODEX_AUTH_BASE=$CCRC_CODEX_AUTH_BASE")
+  argv=("$py" -I "$(_codex_shim_file)" --ccrc-bridge=direct "--ccrc-lane=$id")
 }
 
 # The nohup arm's TERM-to-KILL wait for <tier>, in whole seconds: 10 for every
@@ -13729,10 +13697,10 @@ _codex_stop_tier() {   # <id> <tier> -> rc 0 + "stopped" | "not running" | "fore
   printf '%s\n' "$did"
 }
 
-# `_codex_stop_lane <id>` — both tiers, the FRONT one first: the shim closes
-# before the gateway behind it (the live launcher's own order, m-tiers §3).
-# Both are always attempted, so one tier that will not stop never leaves the
-# other running. It takes no lock: its callers hold `_codex_lock`. It RETURNS,
+# `_codex_stop_lane <id>` — all three tiers, the FRONT one first: the shim
+# closes before the gateway behind it (the live launcher's own order, m-tiers
+# §3). Every tier is always attempted, so one tier that will not stop never
+# leaves another running. It takes no lock: its callers hold `_codex_lock`. It RETURNS,
 # never exits, because account removal's codex arm (Task 8, ruling R16) calls
 # it between `_codex_lock` and `_codex_unlock`, BEFORE the roster drop (the
 # stop reads the row's ports and lane.json's unit names), and must still print
@@ -13759,9 +13727,10 @@ _codex_stop_lane() {   # <id> -> rc 0 + "litellm <word>, shim <word>, bridge <wo
 
 # `ccrc codex start <id>` — the idempotent ensure the launcher runs on every
 # session start.
-# - EVERY REFUSAL LANDS BEFORE ANYTHING IS SPAWNED: login, runtime, config,
-#   BOTH tiers' unit names, start records and the placed shim file (ruling
-#   PF-15), and BOTH tiers' identity are all decided first. A refusal here
+# - EVERY REFUSAL LANDS BEFORE ANYTHING IS SPAWNED: login, runtime (or, on a
+#   direct lane, the system python3), config, the mode tiers' unit names, start
+#   records and the placed shim file (ruling PF-15), and every tier's identity,
+#   the other mode's included, are all decided first. A refusal here
 #   is a session that dies at once, and ccd parks one that dies five times
 #   in 120 s as FAILED (m-ccd-launcher §3); a half-started lane would be a
 #   second problem on top.
@@ -13770,13 +13739,14 @@ _codex_stop_lane() {   # <id> -> rc 0 + "litellm <word>, shim <word>, bridge <wo
 #   start waits and then adopts, and a stop waits for this start to finish.
 # - 0 (ours, running) and 4 (ours, starting: ruling R7) are adopted, never
 #   started over; 1 is started; 2 is refused by name; 3 has already said why.
-#   Then it waits, bounded, until both tiers answer as this lane (0).
+#   Then it waits, bounded, until every tier of the lane's mode answers as
+#   this lane (0).
 # - A KEY MINTED OR REPLACED UNDER THIS LANE'S LITELLM (ruling R21) restarts
 #   that tier: stopped, identity-gated, after every refusal has been decided,
 #   then started from the new runtime.env, under this start's lock, before the
 #   readiness wait.
 _codex_cmd_start() {   # <id>
-  local id d py tier q via pid out h limit t0 rekey=0 w mode up kt mine others waitfor
+  local id d py tier q via pid out h limit t0 rekey=0 w mode up kt mine others waitfor mate mq retired='' rpid=''
   local -A tq=() tv=() tp=() th=()
   _codex_row "${1:-}" || exit $?
   id="$CX_ID"
@@ -13883,11 +13853,24 @@ _codex_cmd_start() {   # <id>
   # that is this lane's (0 or 4), is a RETIRED TIER RUNNING: two refreshers on
   # one credential (Review Focus 5). It is refused by name, never adopted and
   # never stopped here: stopping it is the stop's (mode-blind) and the switch's.
+  # A STARTING OTHER-MODE FRONT TIER (fix round 1): the shared unit is live,
+  # its MainPID proves the OTHER mode's front tier, and the port is still
+  # silent, so the own front tier reads `unit-unproven`, which by itself would
+  # be `unit-foreign`. Its mate (shim for the bridge, bridge for the shim) is
+  # then measured on the spot, in a subshell, as `_codex_tier_is_other_mode`'s
+  # mode-blind arm does, and a 0 or 4 there is that retired tier, by name.
   for tier in $mine; do
     _codex_tier_ours "$id" "$tier"; q=$?
     case "$q" in
       0|1|4) ;;
       2)
+        if [ "${CX_TIER_WHY:-}" = unit-unproven ]; then
+          case "$tier" in shim) mate=bridge ;; bridge) mate=shim ;; *) mate='' ;; esac
+          if [ -n "$mate" ]; then
+            mq="$( _codex_tier_ours "$id" "$mate" >/dev/null 2>&1; printf '%s %s' "$?" "${CX_TIER_PID:-}" )"
+            case "${mq%% *}" in 0|4) retired="$mate"; rpid="${mq#* }"; break ;; esac
+          fi
+        fi
         _codex_foreign_what "$id" "$tier"
         if [ "${CX_TIER_WHY:-}" = listener-other-mode ]; then
           _codex_say retired-tier-running "$id runs in $mode mode, and $CX_FOREIGN_WHAT: the other mode's tier is running, and two refreshers on one credential is what ccrc never starts. ccrc neither adopts nor stops it here. $CX_FOREIGN_FIX Nothing was started."
@@ -13899,16 +13882,20 @@ _codex_cmd_start() {   # <id>
     esac
     tq[$tier]="$q"; tv[$tier]="$CX_TIER_VIA"; tp[$tier]="$CX_TIER_PID"
   done
-  for tier in $others; do
-    _codex_tier_ours "$id" "$tier"; q=$?
-    case "$q" in
-      0|4)
-        _codex_say retired-tier-running "$id runs in $mode mode, and its $tier tier (the other mode's) is running${CX_TIER_PID:+ (pid $CX_TIER_PID)}: two refreshers on one credential is what ccrc never starts. ccrc neither adopts nor stops it here. 'ccrc codex stop $id' stops every tier of the lane, in either mode; then re-run. Nothing was started."
-        exit 1 ;;
-      3) exit 1 ;;   # `_codex_tier_ours` has printed why: never "not running" unmeasured
-      *) ;;          # 1, or a 2 that is not this lane's: not this mode's business
-    esac
-  done
+  if [ -z "$retired" ]; then
+    for tier in $others; do
+      _codex_tier_ours "$id" "$tier"; q=$?
+      case "$q" in
+        0|4) retired="$tier"; rpid="$CX_TIER_PID"; break ;;
+        3) exit 1 ;;   # `_codex_tier_ours` has printed why: never "not running" unmeasured
+        *) ;;          # 1, or a 2 that is not this lane's: not this mode's business
+      esac
+    done
+  fi
+  if [ -n "$retired" ]; then
+    _codex_say retired-tier-running "$id runs in $mode mode, and its $retired tier (the other mode's) is running${rpid:+ (pid $rpid)}: two refreshers on one credential is what ccrc never starts. ccrc neither adopts nor stops it here. 'ccrc codex stop $id' stops every tier of the lane, in either mode; then re-run. Nothing was started."
+    exit 1
+  fi
   # A KEY THAT CHANGED UNDER A RUNNING LITELLM (ruling R21; Task 4's hazard
   # 4) — OR, on a direct lane, under a running BRIDGE, which reads the key
   # from runtime.env once, at start, as LiteLLM does (codex-bridge Stage 2,
@@ -13994,7 +13981,7 @@ _codex_cmd_start() {   # <id>
   printf '%s\n' "$PROG codex: $id: $out"
 }
 
-# `ccrc codex stop <id>` — both tiers, identity-gated (ruling R8), under the
+# `ccrc codex stop <id>` — all three tiers, identity-gated (ruling R8), under the
 # lane lock (ruling R11). Exit 0 whenever no tier of this lane still runs,
 # including when a foreign one was left running and named.
 _codex_cmd_stop() {   # <id>

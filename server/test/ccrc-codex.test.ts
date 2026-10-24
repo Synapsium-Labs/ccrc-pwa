@@ -4320,6 +4320,61 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     fs.rmSync(join(laneDir(home, 'codex-a'), 'bridge.pid'), { force: true });
   }, 60_000);
 
+  // Fix round 1 (review I2): each refusal the bridge arm makes before it spawns, asked of `_codex_start_tier` alone,
+  // with its platform helper a recorder, so a deleted guard spawns (records) and the case goes red.
+  const SVC_BRIDGE = '_svc_run_supervised() { printf \'%s\\n\' "$@" > "$HOME/svc-bridge"; echo "nohup 999999"; }';
+  const startBridgeAlone = (home: string): Result => lib(home, `${SVC_BRIDGE}\n_codex_start_tier codex-a bridge`);
+
+  it('the bridge arm refuses auth-library-absent with no auth library, and spawns nothing', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    fs.rmSync(authLib(home));
+    const r = startBridgeAlone(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc codex: auth-library-absent: .*codex-a's bridge would have no auth library.*Nothing was started\.$/m);
+    expect(fs.existsSync(join(home, 'svc-bridge')), 'a bridge was spawned').toBe(false);
+    expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'bridge.started'))).toBe(false);
+  }, 60_000);
+
+  it('the bridge arm refuses bridge-absent with no bridge package, and spawns nothing', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    fs.rmSync(join(home, 'ccrc', 'ccd', 'codexbridge', '__init__.py'));
+    const r = startBridgeAlone(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc codex: bridge-absent: the bridge package .*codexbridge is missing or unreadable.*Nothing was started\.$/m);
+    expect(fs.existsSync(join(home, 'svc-bridge')), 'a bridge was spawned').toBe(false);
+    expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'bridge.started'))).toBe(false);
+  }, 60_000);
+
+  it('the bridge arm refuses python-absent for a python3 that does not say its version, and spawns nothing', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    // Silent when asked its version, and the real one for everything else.
+    fs.writeFileSync(join(home, '.local', 'bin', 'python3'),
+      `#!/bin/bash\ncase "$*" in *version_info*) exit 0 ;; esac\nexec "${PY_ABS}" "$@"\n`, { mode: 0o755 });
+    const r = startBridgeAlone(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc codex: python-absent: .*python3 did not say its version.*Nothing was started\.$/m);
+    expect(fs.existsSync(join(home, 'svc-bridge')), 'a bridge was spawned').toBe(false);
+  }, 60_000);
+
+  // Fix round 1 (review F5): the shared unit is live and its MainPID proves this lane's SHIM, whose port is still
+  // silent (a litellm-mode front tier starting), so the direct lane's own bridge reads `unit-unproven`. The start
+  // names the retired tier, never the generic unit-foreign sentence.
+  itLinux('start on a direct lane names a starting shim under the shared unit retired-tier-running', async () => {
+    const { home, shimFile } = await bridgeBox({ userManager: true });
+    const units = laneJson(home, 'codex-a')['units'] as { litellm: string; shim: string };
+    const c = spawn(PY_ABS, ['-B', '-c', 'import time; time.sleep(60)', shimFile, '--ccrc-lane=codex-a'], { stdio: 'ignore' });
+    trackChild(home, c);
+    await eventually(() => psArgs(c.pid!).includes(`${shimFile} --ccrc-lane=codex-a`), 'the stand-in shim to exec');
+    fakeUnit(home, units.shim, { state: 'active', pid: c.pid! });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toMatch(new RegExp(`^ccrc codex: retired-tier-running: codex-a runs in direct mode, and its shim tier \\(the other mode's\\) is running \\(pid ${c.pid}\\): .*Nothing was started\\.$`, 'm'));
+    expect(r.stderr).not.toMatch(/unit-foreign/);
+    expect(systemdRunArgv(home), 'a bridge was started beside it').toEqual([]);
+    expect(alive(c.pid!), 'start stopped the retired tier').toBe(true);
+  }, 120_000);
+
   it('siwc is refused upstream-unsupported', async () => {
     const { home } = await bridgeBox({ userManager: false, upstream: 'siwc' });
     const r = cx(home, ['start', 'codex-a']);
