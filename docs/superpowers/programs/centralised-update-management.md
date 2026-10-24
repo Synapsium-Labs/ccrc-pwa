@@ -6036,6 +6036,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   changes `ccd/session-hook.sh` (#1323, a deny arm for a Fable model, after the spool block), so the broker's soak was told
   before any tap. `STATUS 2026-10-24T17:25:42Z fleet=v0.0.624 server=v0.0.624 health=v0.0.624 newest=v0.0.630`
   `intent=*:dev/auto=off backups=fleet:222M/server:8318M disk=fleet:93G/server:22G`
+- **2026-10-24 18:30 UTC — monitoring: both boxes moved to v0.0.636 by the operator's console tap; settled, no anomalies.**
+  The fleet half ran 18:15:27 to `done` at 18:18:52, the server half from 18:19:16 to `done` at 18:27:14, with the service
+  restarted at 18:22:04. The 18:25 probe caught the server half pruning and thinning, with four backups still holding data
+  and 19G free; the watchdog read it as in progress at each tick and left it alone. It settled with three data backups kept
+  (11151M to 8426M) and 22G free, and the inventory's pending request cleared within two minutes of `done`. The move carries
+  the two delegation-lane changes the broker's soak was told of beforehand (the orphan-tree lane, in shadow, and the hook's
+  deny arm); its coordinator ruled that neither restarts the clock. The orphan-tree lane's hand-only live markers are absent,
+  and the hourly probe now reports either one.
+  `STATUS 2026-10-24T18:29:39Z fleet=v0.0.636 server=v0.0.636 health=v0.0.636 newest=v0.0.638 intent=*:dev/auto=off`
+  `backups=fleet:204M/server:8426M disk=fleet:93G/server:22G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
