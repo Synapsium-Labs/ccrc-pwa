@@ -23552,8 +23552,9 @@ cmd_rollout() {
 # The prune keeps what `_bak_gc` keeps (wave 9 R10g, D-3825), through the one helper `_bak_keepset`: this run's own
 # dir by exact path, every dir named at or after the second this verb began, and the newest earlier tree backup and
 # coord.db snapshot — so at CCRC_BACKUP_KEEP=0 the backup just taken survives, and more than KEEP dirs can. It takes
-# ~/.ccrc/update.lock for the PRUNE only (D-3826) and skips, exit 0, while another holder has it, when flock is absent
-# or when the lock cannot be measured: the backup itself was taken. The COPY is not locked, by ruling (an update's
+# ~/.ccrc/update.lock for the PRUNE only (D-3826) and skips while another holder has it, when flock is absent or when the
+# lock cannot be measured: the backup itself was taken, so the skip exits 0 when the settings read, and 1 after a setting
+# refusal (D-6590). The COPY is not locked, by ruling (an update's
 # `_bak_gc` can still prune a dir of this verb's that is still being copied, if that dir was named before the update
 # took its lock — wave 8's Risk (a), unchanged): holding the lock across a coord.db VACUUM would make a console move
 # answer busy for its whole length.
@@ -23745,8 +23746,9 @@ _bak_prune() {
 # allows on an update and a rollback by flip, `_bak_prune` (`ccrc backup`, which holds no lease) none. Before a classifier call, once an
 # earlier call in this walk was heavy (`BAK_SNAP_HEAVY`) and the clock is at or past <until>, it clears its three out-params and
 # answers rc 3, a time stop, never rc 2: so its first full verification is never stopped, the one both the count prune and `thin`
-# (as `--verified`) use and whose cost the 235 s margin already holds, and a walk of cheap calls (manifest-only and code-only dirs,
-# which never set BAK_KEEP_DATA) is never stopped at all, so such a box always ends with its count prune.
+# (as `--verified`) use and whose cost the 235 s margin already holds unless the re-stamp came late (then that one call may run past
+# <until> and the hard cap, D-6745), and a walk of cheap calls (manifest-only and code-only dirs, which never set BAK_KEEP_DATA) is
+# never stopped at all, so such a box always ends with its count prune.
 _bak_keepset() {
   local n i d src until="${1:-}" heavy=0
   [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
@@ -23958,7 +23960,9 @@ _bak_gc() {   # <lead word: update|rollback>
   # rollback, twice (the parent's `_upd_asset_listed` before it detaches, and the detached child's repeat), each at the
   # CCRC_RELEASE_PROBE_MAX_TIME ceiling `_upd_asset_listed` validates; and `_upd_fleet_warn`'s `_box_health` call before the first
   # `_upd_phase`, at CCRC_HEALTH_TIMEOUT's default. W24-K6 derives the literal from those four and pins it. No literal bounds D-6744's
-  # residuals: the transient unit's start under the service manager, and a lease stamped before its dispatch.
+  # residuals: the transient unit's start under the service manager, and a lease stamped before its dispatch. The bound holds for
+  # every GATED verification (D-6745): when the re-stamp is already late, the keep-set's first full verification, which
+  # `_bak_keepset` never gates (ruling 4), can run past `until`, and past the hard cap, by one classifier call (W24-K1 measures one).
   # An undecided reading (`_upd_deadline_ms min` rc 1) leaves no deadline to cap: the bound is the re-stamp less the margin.
   if [[ "${UPD_THIN_AT:-}" =~ ^[1-9][0-9]{0,10}$ ]]; then
     dl="$(_upd_deadline_ms min)" || { rc=1; echo "$lead: backups: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the server may take it from (the environment, the box's ccrc.env, the exposure file), so no verification starts this run past the keep-set's first full one — the next update continues"; }
