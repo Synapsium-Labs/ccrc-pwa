@@ -14,6 +14,7 @@ import {
   type LandingAsk, type LandingFacts, type LandingLine, type LandingStep,
 } from '../src/coord/landing.js';
 import { dequeuedSubject, mergedSubject } from '../src/coord/rundefs.js';
+import { parseFile } from './scan/parse.js';
 
 const ID = 'demo-quiet-basin';
 const T1 = '2026-09-23T11:30:00Z';
@@ -231,13 +232,18 @@ describe('landing.ts is the pure L1 module its docstring says it is', () => {
     expect(code(), 'landing.ts answers HTTP').not.toMatch(/\breply\s*\.|\bFastify|\bapp\s*\./);
     expect(code(), 'landing.ts reaches the store').not.toMatch(/CoordStore|\bcoord\s*\.|\bstore\s*\.|\bdb\s*\.|\.prepare\s*\(/);
   });
-  it('imports values only from shared/api.ts (L0); anything else is a type import', () => {
+  it('imports values only from shared/api.ts, shared/landing.ts (L0) and ./untrusted.ts; anything else is a type import', () => {
     const c = code();
     expect(c, 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
     expect(c, 'a dynamic import').not.toMatch(/\bimport\s*\(/);
     expect(c, 'a re-export').not.toMatch(RE_EXPORT);
+    // PR landing stage 1 (D-6785): exactly three files may be value imports, and nothing else.
+    const ALLOWED = ['../../../shared/api.js', '../../../shared/landing.js', './untrusted.js'];
     for (const spec of valueImportSpecifiers(c)) {
-      expect(spec, `landing.ts takes a value import from ${spec}`).toBe('../../../shared/api.js');
+      expect(ALLOWED, `landing.ts takes a value import from ${spec}`).toContain(spec);
     }
+  });
+  it('untrusted.ts imports nothing', () => {
+    expect(parseFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'untrusted.ts')).imports).toEqual([]);
   });
 });
