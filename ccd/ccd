@@ -4143,6 +4143,16 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   _compact_lock_release "$_pg_fd"
   return "$_pg_urc"
 }
+# ARCH-46: the registry-retire sequence every durable caller spelled by hand. Runs `_reg_purge` and
+# keeps its VALUE in REG_RETIRE_RC (0 purged, 2 lock mechanism absent, 3 purged with residue, else 1),
+# and for the one status that carries a remedy renders `_compact_lock_why_remedy` at once, before
+# anything can clobber COMPACT_LOCK_WHY, into REG_RETIRE_WHY. It decides nothing: each caller words
+# its own failure. Always returns 0 (ccd has no `set -e`), so a caller reads the globals.
+_reg_retire() {   # id verb
+  REG_RETIRE_RC=0; REG_RETIRE_WHY=""
+  _reg_purge "$1" || REG_RETIRE_RC=$?
+  case "$REG_RETIRE_RC" in 0|2|3) ;; *) REG_RETIRE_WHY=$(_compact_lock_why_remedy "$1" "$2") ;; esac
+}
 _substrate_mark() {   # id — record "this supervisor could not reach tmux" ($REG/<id>.substrate)
   # ONE writer per file: this row's supervisor — and the FIRST WRITE WINS. The epoch is
   # the fault's ONSET ("could not reach tmux SINCE <epoch>", spec §2) and the skew
@@ -8188,15 +8198,14 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # `rm -f` would not take is still on disk — a message telling that operator
   # to wait for a compaction to settle prescribes a wait for a compaction that
   # is not running and promises state that no longer exists.
-  local _rm_prc=0
-  _reg_purge "$id" || _rm_prc=$?                                           # finding F3
-  if (( _rm_prc == 3 )); then
+  _reg_retire "$id" ws-rm                                                  # finding F3
+  if (( REG_RETIRE_RC == 3 )); then
     _lc_fail destroy "$id" "$lctx" purge-incomplete \
       "the workspace was torn down and the registry row WAS purged — this journal's own purge fact is the record of it — but $REG_PURGE_UNREMOVED could not be removed and still stands; re-running \`ccd ws-rm $id\` will not take it, remove it by hand" \
       verb ws-rm dec.reason "$reason" meas.unremoved "$REG_PURGE_UNREMOVED"
     echo "ccd: $id: torn down and purged, but $REG_PURGE_UNREMOVED could not be removed — see the lifecycle journal" >&2
     return 1
-  elif (( _rm_prc == 2 )); then
+  elif (( REG_RETIRE_RC == 2 )); then
     # STATUS 2 IS NOT STATUS 1 (r3 A-I3). `_reg_purge` has answered the two
     # apart since D-2782 and every caller collapsed them, so a flock-less box
     # was told its lock "was unavailable" and to "re-run once the compaction
@@ -8211,7 +8220,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
       verb ws-rm dec.reason "$reason"
     echo "ccd: $id: torn down, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
     return 1
-  elif (( _rm_prc != 0 )); then
+  elif (( REG_RETIRE_RC != 0 )); then
     # STATUS 1 FOLDS SEVERAL CONDITIONS, AND COMPACT_LOCK_WHY NAMES ONLY THE
     # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
     # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
@@ -8235,9 +8244,8 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # acquire sites, one level up; this is it one level down, where the
     # record is DURABLE — and it is the ONE renderer all five durable callers
     # consult, so this caller's text cannot drift from theirs.
-    local _rm_why; _rm_why=$(_compact_lock_why_remedy "$id" ws-rm)
     _lc_fail destroy "$id" "$lctx" purge-refused \
-      "the workspace was torn down, but the registry row could not be purged: $_rm_why" \
+      "the workspace was torn down, but the registry row could not be purged: $REG_RETIRE_WHY" \
       verb ws-rm dec.reason "$reason"
     echo "ccd: $id: torn down, registry NOT purged — see the lifecycle journal" >&2
     return 1
@@ -15291,15 +15299,14 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # THE VALUE, not the boolean (D-2605): 3 is a purge that RAN and left
   # residue, and it is the opposite of the 1 this branch used to assume. See
   # `cmd_ws_rm`'s note for the argument; the disposition is the same here.
-  local _rt_prc=0
-  _reg_purge "$id" || _rt_prc=$?                                           # (i) LAST, finding F3
-  if (( _rt_prc == 3 )); then
+  _reg_retire "$id" ws-reap                                                # (i) LAST, finding F3
+  if (( REG_RETIRE_RC == 3 )); then
     _lc_fail reap "$id" "$lctx" purge-incomplete \
       "the reap completed — worktree, branch and clips are gone — and the registry row WAS purged, this journal's own purge fact being the record of it, but $REG_PURGE_UNREMOVED could not be removed and still stands; re-running will not take it, remove it by hand" \
       verb ws-reap meas.branch "$branch" meas.unremoved "$REG_PURGE_UNREMOVED"
     echo "ccd: $id: reaped and purged, but $REG_PURGE_UNREMOVED could not be removed — see the lifecycle journal" >&2
     return 1
-  elif (( _rt_prc == 2 )); then
+  elif (( REG_RETIRE_RC == 2 )); then
     # STATUS 2 IS NOT STATUS 1 — see `cmd_ws_rm`'s note (r3 A-I3), and the
     # header above for why this arm is reachable here at all.
     _lc_fail reap "$id" "$lctx" purge-mechanism-absent \
@@ -15307,7 +15314,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
       verb ws-reap meas.branch "$branch"
     echo "ccd: $id: reaped, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
     return 1
-  elif (( _rt_prc != 0 )); then
+  elif (( REG_RETIRE_RC != 0 )); then
     # STATUS 1 FOLDS SEVERAL CONDITIONS, AND COMPACT_LOCK_WHY NAMES ONLY THE
     # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
     # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
@@ -15331,9 +15338,8 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     # acquire sites, one level up; this is it one level down, where the
     # record is DURABLE — and it is the ONE renderer all five durable callers
     # consult, so this caller's text cannot drift from theirs.
-    local _rt_why; _rt_why=$(_compact_lock_why_remedy "$id" ws-reap)
     _lc_fail reap "$id" "$lctx" purge-refused \
-      "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: $_rt_why" \
+      "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: $REG_RETIRE_WHY" \
       verb ws-reap meas.branch "$branch"
     echo "ccd: $id: reaped, registry NOT purged — see the lifecycle journal" >&2
     return 1
@@ -15900,15 +15906,14 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       # tree: one un-removable field under a HELD lock produced exactly that
       # record. A status-3 row therefore gets `_lc_fail destroy`, the word for
       # an act that started and broke.
-      local _pr_prc=0
-      _reg_purge "$project-$slug" || _pr_prc=$?                            # finding F3
-      if (( _pr_prc == 3 )); then
+      _reg_retire "$project-$slug" 'ws-gc --prune'                         # finding F3
+      if (( REG_RETIRE_RC == 3 )); then
         _lc_fail destroy "$project-$slug" "$lctx" purge-incomplete \
           "the registry row WAS purged — this journal's own purge fact is the record of it — but $REG_PURGE_UNREMOVED could not be removed and still stands" \
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg \
           meas.unremoved "$REG_PURGE_UNREMOVED"
         _gc_incomplete "dead registry entry $project-$slug — the row is gone, but $REG_PURGE_UNREMOVED could not be removed and needs a hand"
-      elif (( _pr_prc == 2 )); then
+      elif (( REG_RETIRE_RC == 2 )); then
         # STATUS 2 IS NOT STATUS 1 — see `cmd_ws_rm`'s note (r3 A-I3). The
         # DISPOSITION is unchanged and deliberately so: this caller reaches
         # `_reg_purge` before anything irreversible, so it still DECLINES with
@@ -15918,7 +15923,7 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
           "the compaction lock's MECHANISM is absent on this box — flock, mktemp or link could not be resolved on the PATH ccd ran with, so $REG/.$project-$slug.compactions.lock was never consulted and may not exist — while $REG/$project-$slug.generation is present; the registry row is untouched, and waiting changes nothing" \
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
         _gc_declined "dead registry entry $project-$slug — this box cannot take the compaction lock at all (flock, mktemp or link is off the PATH); nothing was removed"
-      elif (( _pr_prc != 0 )); then
+      elif (( REG_RETIRE_RC != 0 )); then
         # STATUS 1 FOLDS SEVERAL CONDITIONS, AND COMPACT_LOCK_WHY NAMES ONLY THE
         # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
         # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
@@ -15948,9 +15953,8 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # surviving-state clause: this arm DECLINES before anything
         # irreversible, so "the registry row is untouched" is the true
         # residue, not "$REG/$id.* … still stand".
-        local _pr_why; _pr_why=$(_compact_lock_why_remedy "$project-$slug" 'ws-gc --prune')
         _lc_refuse_return destroy "$project-$slug" "$lctx" purge-refused \
-          "$_pr_why" \
+          "$REG_RETIRE_WHY" \
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
         # AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME THING THE JOURNAL DOES
         # (r8 R8-M3). This line said "the compaction lock was unavailable"
@@ -29612,15 +29616,14 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
   # would say nothing was touched, which is false. The message names WHAT
   # COMPLETED and that the registry row and its generation still stand.
   # THE VALUE, not the boolean (D-2605) — see `cmd_ws_rm`'s note.
-  local _fg_prc=0
-  _reg_purge "$id" || _fg_prc=$?
-  if (( _fg_prc == 3 )); then
+  _reg_retire "$id" forget
+  if (( REG_RETIRE_RC == 3 )); then
     _lc_fail forget "$id" "$lctx" purge-incomplete \
       "the session was unsupervised, its pane killed and the registry row purged — this journal's own purge fact is the record of it — but $REG_PURGE_UNREMOVED could not be removed and still stands; re-running \`ccd forget $id\` will not take it, remove it by hand" \
       verb forget dec.reason "$reason" meas.unremoved "$REG_PURGE_UNREMOVED"
     echo "ccd: $id: unsupervised, killed and purged, but $REG_PURGE_UNREMOVED could not be removed — see the lifecycle journal" >&2
     return 1
-  elif (( _fg_prc == 2 )); then
+  elif (( REG_RETIRE_RC == 2 )); then
     # STATUS 2 IS NOT STATUS 1 — see `cmd_ws_rm`'s note (r3 A-I3). The REMEDY
     # differs from ws-rm's, which is why it is written out rather than shared:
     # `forget`'s own liveness precondition is `_session_verdict`, whose
@@ -29631,7 +29634,7 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
       verb forget dec.reason "$reason"
     echo "ccd: $id: unsupervised and killed, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
     return 1
-  elif (( _fg_prc != 0 )); then
+  elif (( REG_RETIRE_RC != 0 )); then
     # STATUS 1 FOLDS SEVERAL CONDITIONS, AND COMPACT_LOCK_WHY NAMES ONLY THE
     # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
     # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
@@ -29655,9 +29658,8 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
     # acquire sites, one level up; this is it one level down, where the
     # record is DURABLE — and it is the ONE renderer all five durable callers
     # consult, so this caller's text cannot drift from theirs.
-    local _fg_why; _fg_why=$(_compact_lock_why_remedy "$id" forget)
     _lc_fail forget "$id" "$lctx" purge-refused \
-      "the session was unsupervised and its pane killed, but the registry row could not be purged: $_fg_why" \
+      "the session was unsupervised and its pane killed, but the registry row could not be purged: $REG_RETIRE_WHY" \
       verb forget dec.reason "$reason"
     echo "ccd: $id: unsupervised and killed, registry NOT purged — see the lifecycle journal" >&2
     return 1
@@ -36697,22 +36699,20 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   attic=$(git -C "$main" for-each-ref --format='%(refname)' "refs/ccrc/attic/$id/" 2>/dev/null | grep -c . || true)
   # (8) The registry row LAST — the same three failure arms `_ws_reap_tail` (i)
   # carries, because they are `_reg_purge`'s answers, not reap's.
-  local _rcl_prc=0
-  _reg_purge "$id" || _rcl_prc=$?
-  if (( _rcl_prc == 3 )); then
+  _reg_retire "$id" "ws-$_WS_RCL_ACT"
+  if (( REG_RETIRE_RC == 3 )); then
     _ws_reclaim_fail "$id" "$lctx" purge-incomplete \
       "the $noun completed — $gone — and the registry row WAS purged, but $REG_PURGE_UNREMOVED could not be removed and still stands" \
       meas.branch "$branch" meas.unremoved "$REG_PURGE_UNREMOVED" meas.clipsKept "$clipskept" meas.tmpRootKept "$tmpkept"
     return 1
-  elif (( _rcl_prc == 2 )); then
+  elif (( REG_RETIRE_RC == 2 )); then
     _ws_reclaim_fail "$id" "$lctx" purge-mechanism-absent \
       "the $noun completed — $gone — but the registry row could not be purged: the compaction lock's mechanism is absent on this box while $REG/$id.generation is present" \
       meas.branch "$branch" meas.clipsKept "$clipskept" meas.tmpRootKept "$tmpkept"
     return 1
-  elif (( _rcl_prc != 0 )); then
-    local _rcl_why; _rcl_why=$(_compact_lock_why_remedy "$id" "ws-$_WS_RCL_ACT")
+  elif (( REG_RETIRE_RC != 0 )); then
     _ws_reclaim_fail "$id" "$lctx" purge-refused \
-      "the $noun completed — $gone — but the registry row could not be purged: $_rcl_why" \
+      "the $noun completed — $gone — but the registry row could not be purged: $REG_RETIRE_WHY" \
       meas.branch "$branch" meas.clipsKept "$clipskept" meas.tmpRootKept "$tmpkept"
     return 1
   fi
