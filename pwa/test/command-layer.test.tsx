@@ -652,7 +652,8 @@ describe('the palette hands focus back where it came from (D-5679)', () => {
 });
 
 // THE TOP SEARCH (D-6714, plan 2026-10-22-desktop-polish Task T5a): the palette's first level finds sessions by their
-// name, workspace, branch, project and, for a coordinator, its programme, after every matching command, coordinators
+// shown title and underlying name (R64), workspace, branch, project and, for a coordinator, its programme, after every
+// matching command, coordinators
 // first on an equal match. A worker and a coordinator in project-a with no run linking them, so `fleetOrder` lists the
 // worker (attention) first; a third session on branch runs-fold.
 describe('the top search finds sessions (D-6714)', () => {
@@ -794,17 +795,20 @@ describe('the top search finds sessions (D-6714)', () => {
     // The shown title first: the control, which a dropped name term leaves green.
     type('Alpha task');
     expect(screen.queryByRole('option', { name: SHOWN }), 'found by the shown title').not.toBeNull();
-    type('zeta-name');
-    expect(screen.queryByRole('option', { name: SHOWN }), 'found by the hidden name').not.toBeNull();
     const input = type('zeta-name');
+    expect(screen.queryByRole('option', { name: SHOWN }), 'found by the hidden name').not.toBeNull();
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(window.location.pathname).toBe(`/s/${encodeURIComponent(TITLED.id)}`);
     expect(palette()).toBeNull();
+    window.history.replaceState(null, '', '/');
     openPalette();
     openSessionPage();
     type('Alpha task');
     expect(optionNames(), 'the page, by the shown title').toEqual([SHOWN]);
-    type('zeta-name');
+    const pageInput = type('zeta-name');
     expect(optionNames(), 'the page, by the hidden name').toEqual([SHOWN]);
+    fireEvent.keyDown(pageInput, { key: 'Enter' });
+    expect(window.location.pathname, 'the page opens it too').toBe(`/s/${encodeURIComponent(TITLED.id)}`);
+    expect(palette()).toBeNull();
   });
 });

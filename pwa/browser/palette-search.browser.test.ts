@@ -2,7 +2,8 @@
 // build: in Refined and Instrument at 390, 1280 and 1920, Ctrl+K opens the palette, a project name lists that project's
 // sessions after the commands with the coordinator first, each option named exactly, Enter opens the session, and
 // nothing scrolls sideways. And the palette's focus restore (T5a carries R41): at 390 on the fleet view the phone swap
-// hides <main>, so a close hands focus to the fleet column's landmark, never the body.
+// hides <main>, so a close hands focus to the fleet column's landmark, never the body. And R64: at 390 and 1280 a session
+// whose custom title hides its name is found by either, shown by its title, and Enter on the hidden name opens it.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/palette-search.browser.test.ts )`.
 //
@@ -113,6 +114,9 @@ describe('a custom title hides the name: the top search finds the session by eit
         await input.fill('Release notes');
         await expect.poll(sessionNames, { message: 'the shown title finds the session', timeout: 5_000 })
           .toEqual(['Release notes, project-b']);
+        // Cleared, so the next poll cannot read the title's list.
+        await input.fill('');
+        await expect.poll(sessionNames, { message: 'an empty query lists no session', timeout: 5_000 }).toEqual([]);
         // By the hidden name: the same one session, still shown by its title.
         await input.fill('other-name');
         await expect.poll(sessionNames, { message: 'the hidden name finds the same session, shown by its title', timeout: 5_000 })

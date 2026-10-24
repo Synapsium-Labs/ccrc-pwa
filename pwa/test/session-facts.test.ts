@@ -154,7 +154,7 @@ describe('coordinatorRole and COORDINATOR_WORD (D-6714)', () => {
 
     // SessionDetails.tsx imports the word and spells it nowhere: no JSX text and no string that is the whole word.
     const details = path.join(SRC, 'session', 'SessionDetails.tsx');
-    // The module COORDINATOR_WORD is imported from, under its own name (an alias is refused), or null.
+    // The module `name` is imported from, under its own name (an alias either way is refused), or null.
     const importedFrom = (file: string, name: string): string | null => {
       for (const st of parseTs(file).statements) {
         if (!ts.isImportDeclaration(st) || st.importClause?.namedBindings === undefined) continue;
