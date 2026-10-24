@@ -293,9 +293,9 @@ describe('sessionBucket', () => {
       name: 'project-f-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
 
@@ -328,10 +328,10 @@ describe('sessionBucket', () => {
     writeFileSync(path.join(reg2, 'claude-demo.uuid'), '1'.repeat(36));
     writeFileSync(path.join(reg2, 'claude-demo.started'), '1');
     const idleRun: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
       // A real pane pid with no live file behind it (`no-state`, idle): since D-5234 a NULL pid is unmeasured `busy`.
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleetNoHookFile = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home2 }), new Tmux(idleRun), 1784600000,
@@ -370,9 +370,9 @@ describe('sessionBucket', () => {
       name: 'calm-mesa', status: 'busy', statusUpdatedAt: 1786973261696, version: '2.1.233',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-demo-calm-mesa:') ? 0 : 1, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '9001\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: args.includes('=cc-demo-calm-mesa:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '9001\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1786973300,
@@ -410,9 +410,9 @@ describe('sessionBucket', () => {
       statusUpdatedAt: 1786973261696, version: '2.1.233',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-demo-blocked:') ? 0 : 1, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '7007\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: args.includes('=cc-demo-blocked:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '7007\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1786973300,
@@ -445,9 +445,9 @@ describe('sessionBucket', () => {
       status: 'waiting', statusUpdatedAt: 1786973261696, version: '2.1.233',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-demo-mute:') ? 0 : 1, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '7008\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: args.includes('=cc-demo-mute:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '7008\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1786973300,
@@ -488,9 +488,9 @@ describe('sessionBucket', () => {
       name: 'project-f-a1', status: 'idle', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const sessionStartDone = new Map<string, HookState>([
@@ -662,9 +662,9 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
         status: 'busy', statusUpdatedAt: raw.state.updatedAt - 60_000, version: '2.1.296',
       }));
       const run: Runner = async (_cmd, args) => {
-        if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
-        if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-        return { code: 0, stdout: '', stderr: '' };
+        if (args[0] === 'has-session') return { ran: true, code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+        if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       };
       const cfg = loadConfig({ CCRC_HOME: home });
       const fleet = await assembleFleet(localIO, cfg, new Tmux(run), Math.floor(Date.now() / 1000),
@@ -757,9 +757,9 @@ describe('a carried done stands through delegated work, and the rung holds it wo
       status: 'busy', statusUpdatedAt: stopAt - 60_000, version: '2.1.296',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const agentPost = {

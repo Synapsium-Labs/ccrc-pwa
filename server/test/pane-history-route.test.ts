@@ -25,7 +25,7 @@ const ID = 'claude-a-project-f';
 
 async function makeApp(
   capture: ExecResult,
-  listPanes: ExecResult = { code: 0, stdout: '1 1953 2000 220 50 0\n', stderr: '' },
+  listPanes: ExecResult = { ran: true, code: 0, stdout: '1 1953 2000 220 50 0\n', stderr: '' },
 ): Promise<{ app: FastifyInstance; calls: string[][] }> {
   const home = mkTmp('ccrc-pane-history-');
   seedRoster(home);
@@ -34,7 +34,7 @@ async function makeApp(
     calls.push([cmd, ...args]);
     if (args[0] === 'capture-pane') return capture;
     if (args[0] === 'list-panes') return listPanes;
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const cfg = loadConfig({ CCRC_HOME: home });
   const app = await buildServer(
@@ -48,7 +48,7 @@ const HISTORY = 'older output\nolder still\n';
 
 describe('GET /api/sessions/:id/pane/history', () => {
   it('reads the pane history with capture-pane and answers it verbatim', async () => {
-    const { app, calls } = await makeApp({ code: 0, stdout: HISTORY, stderr: '' });
+    const { app, calls } = await makeApp({ ran: true, code: 0, stdout: HISTORY, stderr: '' });
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
     expect(res.statusCode).toBe(200);
@@ -85,7 +85,7 @@ describe('GET /api/sessions/:id/pane/history', () => {
     // are reads, and the day a mutating one is added to this route — copy-mode,
     // send-keys, resize-window — this line is what refuses it. Growing the list
     // is a deliberate act with this comment in front of it.
-    const { app, calls } = await makeApp({ code: 0, stdout: HISTORY, stderr: '' });
+    const { app, calls } = await makeApp({ ran: true, code: 0, stdout: HISTORY, stderr: '' });
     await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
     expect(calls.map((c) => c[1])).toEqual(['list-panes', 'capture-pane']);
@@ -94,7 +94,7 @@ describe('GET /api/sessions/:id/pane/history', () => {
 
   it('tells a dead pane (404) apart from a tmux that could not answer (502)', async () => {
     // tmux 3.4's own message for a session that is not there, measured.
-    const gone = await makeApp({ code: 1, stdout: '', stderr: "can't find pane: cc-nope\n" });
+    const gone = await makeApp({ ran: true, code: 1, stdout: '', stderr: "can't find pane: cc-nope\n" });
     const goneRes = await gone.app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
     expect(goneRes.statusCode).toBe(404);
     expect(goneRes.json()).toEqual({ ok: false, error: 'gone' });
@@ -103,7 +103,7 @@ describe('GET /api/sessions/:id/pane/history', () => {
     // Anything else is UNKNOWN, never death: an unrecognised future tmux error
     // must read as "we could not look", with the reason carried out to the
     // reader rather than collapsed into the same 404.
-    const down = await makeApp({ code: 1, stdout: '', stderr: 'error connecting to /tmp/tmux-1000/default (No such file or directory)\n' });
+    const down = await makeApp({ ran: true, code: 1, stdout: '', stderr: 'error connecting to /tmp/tmux-1000/default (No such file or directory)\n' });
     const downRes = await down.app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
     expect(downRes.statusCode).toBe(502);
     expect(downRes.json()).toEqual({
@@ -122,8 +122,8 @@ describe('GET /api/sessions/:id/pane/history', () => {
     // that is gone, instead of its loss overlay. The probe answers the same
     // message, so both reads say gone together.
     const gone = await makeApp(
-      { code: 1, stdout: '', stderr: "can't find session: cc-nope\n" },
-      { code: 1, stdout: '', stderr: "can't find session: cc-nope\n" },
+      { ran: true, code: 1, stdout: '', stderr: "can't find session: cc-nope\n" },
+      { ran: true, code: 1, stdout: '', stderr: "can't find session: cc-nope\n" },
     );
     const res = await gone.app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
     expect(res.statusCode).toBe(404);
@@ -132,7 +132,7 @@ describe('GET /api/sessions/:id/pane/history', () => {
   });
 
   it('a failure with nothing to say still says something', async () => {
-    const { app } = await makeApp({ code: 3, stdout: '', stderr: '' });
+    const { app } = await makeApp({ ran: true, code: 3, stdout: '', stderr: '' });
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ ok: false, error: 'unmeasured', detail: 'tmux exited 3 with no message' });
@@ -140,7 +140,7 @@ describe('GET /api/sessions/:id/pane/history', () => {
   });
 
   it('refuses a session id that is not one, before tmux is reached at all', async () => {
-    const { app, calls } = await makeApp({ code: 0, stdout: HISTORY, stderr: '' });
+    const { app, calls } = await makeApp({ ran: true, code: 0, stdout: HISTORY, stderr: '' });
     const res = await app.inject({ method: 'GET', url: '/api/sessions/..%2Fetc/pane/history' });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ ok: false, error: 'bad-session-id' });
@@ -157,8 +157,8 @@ describe('GET /api/sessions/:id/pane/history', () => {
   // and this route is where the difference is measured.
   it('carries the scrollback measurement beside the text, off the verb that was already allowed', async () => {
     const { app, calls } = await makeApp(
-      { code: 0, stdout: HISTORY, stderr: '' },
-      { code: 0, stdout: '1 1979 2000 220 50 0\n', stderr: '' },
+      { ran: true, code: 0, stdout: HISTORY, stderr: '' },
+      { ran: true, code: 0, stdout: '1 1979 2000 220 50 0\n', stderr: '' },
     );
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
@@ -179,8 +179,8 @@ describe('GET /api/sessions/:id/pane/history', () => {
     // route carries both facts and lets the reader's own words be chosen from
     // the pair.
     const { app } = await makeApp(
-      { code: 0, stdout: 'a full screen\n', stderr: '' },
-      { code: 0, stdout: '1 0 2000 220 50 1\n', stderr: '' },
+      { ran: true, code: 0, stdout: 'a full screen\n', stderr: '' },
+      { ran: true, code: 0, stdout: '1 0 2000 220 50 1\n', stderr: '' },
     );
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
@@ -192,8 +192,8 @@ describe('GET /api/sessions/:id/pane/history', () => {
     // reader with the behaviour the drawer shipped with; reporting zero here
     // would make every unreachable pane claim it has no history.
     const { app } = await makeApp(
-      { code: 0, stdout: HISTORY, stderr: '' },
-      { code: 1, stderr: "can't find pane: cc-nope", stdout: '' },
+      { ran: true, code: 0, stdout: HISTORY, stderr: '' },
+      { ran: true, code: 1, stderr: "can't find pane: cc-nope", stdout: '' },
     );
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
@@ -440,8 +440,8 @@ describe('the probe is taken FIRST and sizes the capture (§5.2)', () => {
     // sized by a guess that happened to be right. The order flips so the read
     // is sized by the measurement.
     const { app, calls } = await makeApp(
-      { code: 0, stdout: HISTORY, stderr: '' },
-      { code: 0, stdout: '1 47 2000 220 50 0\n', stderr: '' },
+      { ran: true, code: 0, stdout: HISTORY, stderr: '' },
+      { ran: true, code: 0, stdout: '1 47 2000 220 50 0\n', stderr: '' },
     );
     await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
@@ -455,8 +455,8 @@ describe('the probe is taken FIRST and sizes the capture (§5.2)', () => {
 
   it('falls back to PANE_HISTORY_LINES when the pane could not be measured', async () => {
     const { app, calls } = await makeApp(
-      { code: 0, stdout: HISTORY, stderr: '' },
-      { code: 1, stdout: '', stderr: 'no server running\n' },
+      { ran: true, code: 0, stdout: HISTORY, stderr: '' },
+      { ran: true, code: 1, stdout: '', stderr: 'no server running\n' },
     );
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
@@ -473,8 +473,8 @@ describe('the probe is taken FIRST and sizes the capture (§5.2)', () => {
 
   it('carries scrollback, alternate AND width when the probe was ok', async () => {
     const { app } = await makeApp(
-      { code: 0, stdout: HISTORY, stderr: '' },
-      { code: 0, stdout: '1 1953 2000 220 50 1\n', stderr: '' },
+      { ran: true, code: 0, stdout: HISTORY, stderr: '' },
+      { ran: true, code: 0, stdout: '1 1953 2000 220 50 1\n', stderr: '' },
     );
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
@@ -489,8 +489,8 @@ describe('the probe is taken FIRST and sizes the capture (§5.2)', () => {
 
   it('echoes the SIZE IT ASKED FOR as `lines`, so the two sides cannot disagree', async () => {
     const { app } = await makeApp(
-      { code: 0, stdout: HISTORY, stderr: '' },
-      { code: 0, stdout: '1 47 2000 220 50 0\n', stderr: '' },
+      { ran: true, code: 0, stdout: HISTORY, stderr: '' },
+      { ran: true, code: 0, stdout: '1 47 2000 220 50 0\n', stderr: '' },
     );
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
     expect(res.json()).toMatchObject({ lines: 47, scrollback: 47 });
@@ -503,8 +503,8 @@ describe('the probe is taken FIRST and sizes the capture (§5.2)', () => {
     // measured zero travels as `scrollback: 0` instead, which is exactly the
     // fact the drawer refuses to open a layer on.
     const { app, calls } = await makeApp(
-      { code: 0, stdout: HISTORY, stderr: '' },
-      { code: 0, stdout: '1 0 2000 220 50 1\n', stderr: '' },
+      { ran: true, code: 0, stdout: HISTORY, stderr: '' },
+      { ran: true, code: 0, stdout: '1 0 2000 220 50 1\n', stderr: '' },
     );
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
     expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
@@ -515,7 +515,7 @@ describe('the probe is taken FIRST and sizes the capture (§5.2)', () => {
   });
 
   it('still refuses an unsafe id before either verb runs', async () => {
-    const { app, calls } = await makeApp({ code: 0, stdout: HISTORY, stderr: '' });
+    const { app, calls } = await makeApp({ ran: true, code: 0, stdout: HISTORY, stderr: '' });
     const res = await app.inject({ method: 'GET', url: '/api/sessions/..%2Fetc/pane/history' });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ ok: false, error: 'bad-session-id' });
@@ -524,13 +524,13 @@ describe('the probe is taken FIRST and sizes the capture (§5.2)', () => {
   });
 
   it('the capture still decides the status: gone -> 404, anything else -> 502 with its detail', async () => {
-    const gone = await makeApp({ code: 1, stdout: '', stderr: "can't find pane: cc-nope\n" });
+    const gone = await makeApp({ ran: true, code: 1, stdout: '', stderr: "can't find pane: cc-nope\n" });
     const g = await gone.app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
     expect(g.statusCode).toBe(404);
     expect(g.json()).toEqual({ ok: false, error: 'gone' });
     await gone.app.close();
 
-    const bad = await makeApp({ code: 1, stdout: '', stderr: 'server exited unexpectedly\n' });
+    const bad = await makeApp({ ran: true, code: 1, stdout: '', stderr: 'server exited unexpectedly\n' });
     const b = await bad.app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
     expect(b.statusCode).toBe(502);
     expect(b.json()).toEqual({ ok: false, error: 'unmeasured', detail: 'server exited unexpectedly' });

@@ -41,16 +41,16 @@ function paneGraph(start: string, screens: Record<string, string>, moves: Record
     if (args[0] === 'capture-pane') {
       if (fails > 0) {
         fails--;
-        return { code: 1, stdout: '', stderr: '' };
+        return { ran: true, code: 1, stdout: '', stderr: '' };
       }
-      return { code: 0, stdout: screens[at]!, stderr: '' };
+      return { ran: true, code: 0, stdout: screens[at]!, stderr: '' };
     }
     if (args[0] === 'send-keys') {
       const key = args.at(-1)!;
       keys.push(key);
       at = moves[at]?.[key] ?? at;
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { tmux: new Tmux(run), keys, at: () => at };
 }

@@ -64,11 +64,11 @@ const mergedLine = (id: string, number = 42): string => JSON.stringify({
 function runnerFor(prOut: string | (() => string), calls: string[][], pid = '4242'): Runner {
   return async (_cmd, args) => {
     calls.push(args);
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${pid}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'pr-state') return { code: 0, stdout: typeof prOut === 'function' ? prOut() : prOut, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${pid}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'pr-state') return { ran: true, code: 0, stdout: typeof prOut === 'function' ? prOut() : prOut, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
 }
 

@@ -66,26 +66,26 @@ export function modelCcd(o: { readonly reg: string; readonly id: string; readonl
     if (args[0] === 'ws-audit') {
       o.hooks.beforeAudit?.();
       if (!listed()) {
-        return { code: 0, stdout: JSON.stringify({ id: o.id, mode: 'reclaim', childOf: null, verdict: 'no-such-session', detail: '' }) };
+        return { ran: true, code: 0, stdout: JSON.stringify({ id: o.id, mode: 'reclaim', childOf: null, verdict: 'no-such-session', detail: '' }) };
       }
       const head = { id: o.id, mode: 'reclaim', childOf: Number(readFileSync(file('child'), 'utf8')) };
-      if (!o.wave7) return { code: 0, stdout: JSON.stringify({ ...head, verdict: 'reclaimable', detail: '', token: tokenOf(null) }) };
+      if (!o.wave7) return { ran: true, code: 0, stdout: JSON.stringify({ ...head, verdict: 'reclaimable', detail: '', token: tokenOf(null) }) };
       const g = current();
       if (g === null || !REG_GENERATION_SHAPE.test(g)) {
-        return { code: 1, stdout: JSON.stringify({ ...head, generation: null, verdict: 'unmeasured',
+        return { ran: true, code: 1, stdout: JSON.stringify({ ...head, generation: null, verdict: 'unmeasured',
           detail: `${o.id}.generation could not be read as this row's generation` }) };
       }
-      return { code: 0, stdout: JSON.stringify({ ...head, generation: g, verdict: 'reclaimable', detail: '', token: tokenOf(g) }) };
+      return { ran: true, code: 0, stdout: JSON.stringify({ ...head, generation: g, verdict: 'reclaimable', detail: '', token: tokenOf(g) }) };
     }
     if (args[0] === 'ws-reclaim') {
       o.hooks.beforeAct?.();
       const spent = args[args.indexOf('--expect') + 1];
       if (!listed() || spent !== tokenOf(o.wave7 ? current() : null)) {
-        return { code: 0, stdout: JSON.stringify({ refused: 'state-changed', detail: 'the token no longer binds this row' }) };
+        return { ran: true, code: 0, stdout: JSON.stringify({ refused: 'state-changed', detail: 'the token no longer binds this row' }) };
       }
       for (const n of readdirSync(o.reg)) if (n.startsWith(`${o.id}.`)) rmSync(path.join(o.reg, n), { recursive: true, force: true });
       o.hooks.afterReclaim?.();
-      return { code: 0, stdout: JSON.stringify({ reclaimed: o.id, childOf: Number(args[args.indexOf('--child-of') + 1]),
+      return { ran: true, code: 0, stdout: JSON.stringify({ reclaimed: o.id, childOf: Number(args[args.indexOf('--child-of') + 1]),
         wip: null, attic: 2, residueBytes: null, secretsDropped: 0 }) };
     }
     return undefined;
@@ -130,12 +130,12 @@ export const laneFixture = (opts: LaneOpts = {}) => {
     calls.push(args);
     if (args[0] === 'ws-release') {
       const id = args[args.indexOf('--session') + 1] ?? '';
-      try { rmSync(path.join(reg, `${id}.hold`)); return { code: 0, stdout: `released ${id}\n`, stderr: '' }; }
-      catch { return { code: 0, stdout: `not held ${id}\n`, stderr: '' }; }
+      try { rmSync(path.join(reg, `${id}.hold`)); return { ran: true, code: 0, stdout: `released ${id}\n`, stderr: '' }; }
+      catch { return { ran: true, code: 0, stdout: `not held ${id}\n`, stderr: '' }; }
     }
     const a = ccd?.(args);
-    return a === undefined ? { code: 1, stdout: '', stderr: `unscripted ${args[0]}` }
-      : { code: a.code, stdout: a.stdout, stderr: a.stderr ?? '' };
+    return a === undefined ? { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0]}` }
+      : { ran: true, code: a.code, stdout: a.stdout, stderr: a.stderr ?? '' };
   };
   const base = testDeps(home, run);
   const io: FleetIO = {

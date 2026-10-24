@@ -37,8 +37,8 @@ describe('D-6790: POST /api/runs/:id/route over a ladder result naming fable', (
     const calls: string[][] = [];
     const run: Runner = async (_c, args) => {
       calls.push(args);
-      if (args[0] === 'ws-add') { seed('demo-fresh'); return { code: 0, stdout: 'workspace demo-decoy on claude — /w/x (branch ws/decoy)', stderr: '' }; }
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'ws-add') { seed('demo-fresh'); return { ran: true, code: 0, stdout: 'workspace demo-decoy on claude — /w/x (branch ws/decoy)', stderr: '' }; }
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const fleetState = { connected: true, downSince: null, rosterFp: null, build: null,

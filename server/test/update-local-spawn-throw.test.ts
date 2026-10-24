@@ -38,7 +38,7 @@ describe('item 9: a SYNCHRONOUS throw from the local spawn halts; a rejected pro
     ran(await runDispatch(h.deps, T0 + 1000));
     expect(h.store.ackNode(SERVER_ID).ok).toBe(true);   // ack clears the halt AND the request
     expect(h.store.requestNode(SERVER_ID, TAG, 'update', T0 + 2000).ok).toBe(true);
-    h.deps.runLocal = spawnFromRunner(async () => ({ code: 0, stdout: '', stderr: '' }), h.home);
+    h.deps.runLocal = spawnFromRunner(async () => ({ ran: true, code: 0, stdout: '', stderr: '' }), h.home);
     const r = ran(await runDispatch(h.deps, T0 + 61_000));
     expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
   });
@@ -74,7 +74,7 @@ describe('item 9: a SYNCHRONOUS throw from the local spawn halts; a rejected pro
 
   // PLATFORM-ONLY: stating only what was measured (fix round 1, review 178 F2 — the plan's own Task 4 Step 2
   // contingency). Measured `test-macos 1/2`, run 36552172708: on macOS the promise RESOLVES instead of
-  // rejecting, `{ code: 1, stderr: 'could not start the launcher (ENOENT)' }`. The cause was not measured
+  // rejecting, `{ ran: true, code: 1, stderr: 'could not start the launcher (ENOENT)' }`. The cause was not measured
   // there (wave 9, R7b: the earlier guess about `/usr/bin/true` is dropped, it was never measured), so the case
   // stays Linux-only.
   itLinux('premise (b): only the synchronous arm rejects — a 3 MiB single argument throws E2BIG before anything execs', async () => {

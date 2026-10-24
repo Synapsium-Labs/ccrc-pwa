@@ -58,13 +58,13 @@ const render = (p: Pane): string => [
 ].join('\n') + '\n';
 
 /** A Runner for the tmux verbs over `p`; `inertStash` models a rebound `C-s`. Other verbs answer `other`. */
-const paneRunner = (p: Pane, o: { inertStash?: boolean; other?: (args: string[]) => { code: number; stdout: string; stderr: string } } = {}): Runner =>
+const paneRunner = (p: Pane, o: { inertStash?: boolean; other?: (args: string[]) => { ran: true, code: number; stdout: string; stderr: string } } = {}): Runner =>
   async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: render(p), stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: render(p), stderr: '' };
     if (args[0] === 'send-keys') {
-      if (args[3] === '-l') { p.keys.push(`lit:${args.at(-1)}`); p.box += args.at(-1)!; return { code: 0, stdout: '', stderr: '' }; }
+      if (args[3] === '-l') { p.keys.push(`lit:${args.at(-1)}`); p.box += args.at(-1)!; return { ran: true, code: 0, stdout: '', stderr: '' }; }
       const key = args.at(-1)!;
       p.keys.push(key);
       if (key === 'C-u') p.box = '';
@@ -75,9 +75,9 @@ const paneRunner = (p: Pane, o: { inertStash?: boolean; other?: (args: string[])
         p.box = '';
         if (p.stash !== null) { p.box = p.stash; p.stash = null; }
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
-    return o.other?.(args) ?? { code: 0, stdout: '', stderr: '' };
+    return o.other?.(args) ?? { ran: true, code: 0, stdout: '', stderr: '' };
   };
 
 // ── the mail lane ───────────────────────────────────────────────────────────────────────────────────────────────────

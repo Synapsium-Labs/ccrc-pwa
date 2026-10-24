@@ -78,7 +78,7 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
 
   const calls: string[][] = [];
   const run = async (_cmd: string, args: string[]) => {
-    calls.push(args); return { code: 0, stdout: '', stderr: '' };
+    calls.push(args); return { ran: true as const, code: 0, stdout: '', stderr: '' };
   };
 
   /** Every `readdir` this sweep takes, in order — the evidence for the ordering

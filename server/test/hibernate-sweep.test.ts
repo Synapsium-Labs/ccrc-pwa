@@ -296,9 +296,9 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     const calls: { cmd: string; args: string[] }[] = [];
     const run: Runner = async (cmd, args) => {
       calls.push({ cmd, args: [...args] });
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PANE}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     // `runCcd` UNGUARDED (not `testDeps`'s whitelist-guarded one): a guarded runner throws on an argv outside the
     // agent's whitelist before it is recorded, and the sweep's catch would swallow that — so any ccd call at all,
@@ -422,7 +422,7 @@ describe('hibernatePass: no presence port at all', () => {
 // sweep; ccd's `session-busy` refusal is a quiet skip.
 describe('hibernatePass: the live act', () => {
   const CAPS = { ccdVerbs: ['hibernate', 'ensure', ACTOR_FLAGS_CAP] };
-  const ok: CcdResult = { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+  const ok: CcdResult = { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
   interface Live { f: Fake; argvs: string[][]; order: string[]; port: HibernateActPort }
   const live = (o: { answer?: (argv: readonly string[]) => CcdResult; serial?: HibernateActPort['serial'] | 'none';
     fleetState?: { ccdVerbs: string[] | null }; rowAtAct?: HibernateActPort['rowAtAct']; ageMs?: number;
@@ -488,7 +488,7 @@ describe('hibernatePass: the live act', () => {
   });
 
   it('ccd refusing session-busy (exit 3) is a quiet skip: one line per id per hour, never a warning per sweep', async () => {
-    const l = live({ answer: () => ({ ok: false, stdout: '', stderr: 'ccd: session-busy: attached — 1 terminal(s) attached to the pane\n', killed: false, signal: null }) });
+    const l = live({ answer: () => ({ ran: true, ok: false, stdout: '', stderr: 'ccd: session-busy: attached — 1 terminal(s) attached to the pane\n', killed: false, signal: null }) });
     const m = mem();
     const first = await pass(l.f, m, [HIBERNATE_LIVE_MARKER]);
     expect(first[0]!.act).toEqual({ kind: 'skipped', detail: 'attached' });
@@ -500,8 +500,15 @@ describe('hibernatePass: the live act', () => {
     expect(l.f.lines, 'and once more an hour later').toHaveLength(2);
   });
 
+  it('a call that never ran is a failure, never a session-busy skip, even when the runner words spell one (D-6840)', async () => {
+    const words = 'ccd: session-busy: attached — 1 terminal(s) attached to the pane';
+    const l = live({ answer: () => ({ ran: false, reason: 'transport', detail: words, ok: false, stdout: '', stderr: words, killed: 'unmeasured', signal: 'unmeasured' }) });
+    const out = await pass(l.f, mem(), [HIBERNATE_LIVE_MARKER]);
+    expect(out[0]!.act).toEqual({ kind: 'failed', detail: words });
+  });
+
   it('any other failure is logged once per id per hour too, and the pass goes on', async () => {
-    const l = live({ answer: () => ({ ok: false, stdout: '', stderr: 'boom', killed: false, signal: null }) });
+    const l = live({ answer: () => ({ ran: true, ok: false, stdout: '', stderr: 'boom', killed: false, signal: null }) });
     const m = mem();
     const out = await pass(l.f, m, [HIBERNATE_LIVE_MARKER]);
     expect(out[0]!.act).toEqual({ kind: 'failed', detail: 'boom' });

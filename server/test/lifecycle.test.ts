@@ -42,7 +42,7 @@ const seedDefault = (home: string) =>
 const swappable = (home: string): void => {
   writeFileSync(path.join(home, '.cc-sessions', `${ID}.wrapper`), 'claude');
 };
-const PANE_GONE = (args: string[]) => ({ code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` });
+const PANE_GONE = (args: string[]) => ({ ran: true as const, code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` });
 
 /** Server over a seeded one-session registry; every exec succeeds (or fails with stderr 'boom').
  *  `ccdVerbs`, when given, seeds a real `fleetState` (mirroring
@@ -75,11 +75,11 @@ async function makeApp(
   const run: Runner = async (cmd, args) => {
     if (opts.swapIdle && args[0] === 'has-session') return PANE_GONE(args);
     calls.push([cmd, ...args]);
-    if (opts.fail) return { code: 1, stdout: '', stderr: 'boom' };
+    if (opts.fail) return { ran: true as const, code: 1, stdout: '', stderr: 'boom' };
     // A real pane pid, as routes.test.ts's makeApp gives: since D-5234 a null pid on an alive pane is an unmeasured
     // row, which the archive door refuses `status-unknown` (D-5274).
-    if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true as const, code: 0, stdout: '4242\n', stderr: '' };
+    return { ran: true as const, code: 0, stdout: '', stderr: '' };
   };
   const env: NodeJS.ProcessEnv = { CCRC_HOME: home };
   if (opts.projectsRoot) env.CCRC_PROJECTS_ROOT = opts.projectsRoot;
@@ -238,7 +238,7 @@ describe('lifecycle routes', () => {
       lastswap: '1784650000',
     });
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     // ccdVerbs explicit (fix round 3): this test is about wrapper-prefix
     // resolution, not the capability gate.
@@ -271,7 +271,7 @@ describe('lifecycle routes', () => {
       started: '1',
     });
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     // ccdVerbs explicit (fix round 3): this test is about workspace-id
     // handling, not the capability gate.
@@ -345,7 +345,7 @@ describe('lifecycle routes', () => {
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return PANE_GONE(args);
       order.push(args.join(' '));
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true as const, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     // Recording, so the enqueue itself is observable — see the wait below.
@@ -445,7 +445,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     expect(ccdVerbs).toEqual(['start', 'enable', 'ensure', 'stop', 'swap']);
 
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home }); // CCRC_FLEET genuinely unset
     expect(cfg.fleetMode).toBe('local');
     // The rest of this composition mirrors index.ts's local branch: real
@@ -476,7 +476,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     expect(ccdVerbs).toContain('stop-surface');
 
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     expect(cfg.fleetMode).toBe('local');
     const app = await buildServer({
@@ -498,7 +498,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     expect(ccdVerbs).toBeNull();
 
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer({
       cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
@@ -529,7 +529,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
       'sleep 0.15\necho start\necho stop\necho stop-surface\nexit 0',
     );
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
 
     // index.ts's exact shape: seed null, fire-and-forget the read, mutate
@@ -684,7 +684,7 @@ describe('listProjects', () => {
 // its three decisions apart — which binary it names, how it maps an exit code,
 // and whether a failure still carries the output the 502 body quotes.
 describe('ccdRunner — the one ccd capability Deps carries', () => {
-  const spy = (result: { code: number; stdout: string; stderr: string }) => {
+  const spy = (result: { ran: true, code: number; stdout: string; stderr: string }) => {
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return result; };
     return { run, calls };
@@ -694,34 +694,34 @@ describe('ccdRunner — the one ccd capability Deps carries', () => {
   const cfg = loadConfig({ CCRC_HOME: ccdRunnerHome });
 
   it('names cfg.ccdBin and passes the argv tokens through verbatim', async () => {
-    const { run, calls } = spy({ code: 0, stdout: '', stderr: '' });
+    const { run, calls } = spy({ ran: true as const, code: 0, stdout: '', stderr: '' });
     await ccdRunner(run, cfg)(CCD_ARGV.wsReap('a'.repeat(64), ID));
     expect(calls).toEqual([[cfg.ccdBin, 'ws-reap', '--expect', 'a'.repeat(64), '--session', ID]]);
   });
 
   it('ok is exit code 0 and nothing else', async () => {
-    const zero = spy({ code: 0, stdout: '', stderr: '' });
-    const one = spy({ code: 1, stdout: '', stderr: '' });
-    const other = spy({ code: 127, stdout: '', stderr: '' });
+    const zero = spy({ ran: true as const, code: 0, stdout: '', stderr: '' });
+    const one = spy({ ran: true as const, code: 1, stdout: '', stderr: '' });
+    const other = spy({ ran: true as const, code: 127, stdout: '', stderr: '' });
     expect((await ccdRunner(zero.run, cfg)(CCD_ARGV.ensure(ID))).ok).toBe(true);
     expect((await ccdRunner(one.run, cfg)(CCD_ARGV.ensure(ID))).ok).toBe(false);
     expect((await ccdRunner(other.run, cfg)(CCD_ARGV.ensure(ID))).ok).toBe(false);
   });
 
   it('passes stdout and stderr through untouched on success', async () => {
-    const { run } = spy({ code: 0, stdout: 'out\n', stderr: 'warn\n' });
+    const { run } = spy({ ran: true as const, code: 0, stdout: 'out\n', stderr: 'warn\n' });
     expect(await ccdRunner(run, cfg)(CCD_ARGV.wsAudit(ID)))
       // The kill fields are not decoration: both are REQUIRED on `CcdResult`
       // (§1.4/§1.7), and this runner reported NEITHER — so both read as the
       // token, never as `false`/`null`, which would claim a measurement.
-      .toEqual({ ok: true, stdout: 'out\n', stderr: 'warn\n',
+      .toEqual({ ran: true, ok: true, stdout: 'out\n', stderr: 'warn\n',
                  killed: UNMEASURED, signal: UNMEASURED });
   });
 
   it('a FAILURE still carries stdout and stderr — the 502 body quotes stderr', async () => {
-    const { run } = spy({ code: 1, stdout: 'partial\n', stderr: 'boom\n' });
+    const { run } = spy({ ran: true as const, code: 1, stdout: 'partial\n', stderr: 'boom\n' });
     expect(await ccdRunner(run, cfg)(CCD_ARGV.wsArchive(ID, null)))
-      .toEqual({ ok: false, stdout: 'partial\n', stderr: 'boom\n',
+      .toEqual({ ran: true, ok: false, stdout: 'partial\n', stderr: 'boom\n',
                  killed: UNMEASURED, signal: UNMEASURED });
   });
 });
@@ -730,9 +730,9 @@ describe('§1.4/§1.7 — CcdResult stops dropping the kill one hop later', () =
   const cfg = { ccdBin: '/home/u/.local/bin/ccd' } as unknown as CcrcConfig;
 
   it('threads `killed` off the runner', async () => {
-    const killedRun: Runner = async () => ({ code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' });
+    const killedRun: Runner = async () => ({ ran: true as const, code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' });
     expect(await ccd(killedRun, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ok: false, stdout: '', stderr: '', killed: true, signal: 'SIGTERM',
+      ran: true as const, ok: false, stdout: '', stderr: '', killed: true, signal: 'SIGTERM',
     });
   });
 
@@ -741,23 +741,23 @@ describe('§1.4/§1.7 — CcdResult stops dropping the kill one hop later', () =
     // absent optional to `false`, telling every downstream caller "this child was
     // not killed" when the truth was "nobody measured whether it was". The
     // adoption gate treats those two differently on purpose.
-    const plainRun: Runner = async () => ({ code: 1, stdout: '', stderr: 'refused' });
+    const plainRun: Runner = async () => ({ ran: true as const, code: 1, stdout: '', stderr: 'refused' });
     expect(await ccd(plainRun, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ok: false, stdout: '', stderr: 'refused', killed: UNMEASURED, signal: UNMEASURED,
+      ran: true as const, ok: false, stdout: '', stderr: 'refused', killed: UNMEASURED, signal: UNMEASURED,
     });
   });
 
   it('keeps a MEASURED false and a MEASURED null — only absence becomes the token', async () => {
-    const measured: Runner = async () => ({ code: 1, stdout: '', stderr: 'die', killed: false, signal: null });
+    const measured: Runner = async () => ({ ran: true as const, code: 1, stdout: '', stderr: 'die', killed: false, signal: null });
     expect(await ccd(measured, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ok: false, stdout: '', stderr: 'die', killed: false, signal: null,
+      ran: true as const, ok: false, stdout: '', stderr: 'die', killed: false, signal: null,
     });
   });
 });
 
 describe('§1.7 — cutShort: one reader for both halves, three answers, one adopts', () => {
   const r = (killed: CcdResult['killed'], signal: CcdResult['signal']): CcdResult =>
-    ({ ok: false, stdout: '', stderr: '', killed, signal });
+    ({ ran: true as const, ok: false, stdout: '', stderr: '', killed, signal });
 
   it('true when the runner killed the child at its own deadline', () => {
     expect(cutShort(r(true, 'SIGTERM'))).toBe(true);
@@ -1433,7 +1433,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
 
 describe('docs W2 — ccdEnding: the single reader of killed and signal, and cutShort read through it', () => {
   const r = (killed: CcdResult['killed'], signal: CcdResult['signal']): CcdResult =>
-    ({ ok: false, stdout: '', stderr: '', killed, signal });
+    ({ ran: true as const, ok: false, stdout: '', stderr: '', killed, signal });
   const U = UNMEASURED;
   // Every (killed, signal) cell, killed in {true, false, UNMEASURED} by signal in {null, SIGKILL, SIGTERM, UNMEASURED}.
   // The UNMEASURED signal column is the token trap: `UNMEASURED` is a string, so a reader that tests the signal by

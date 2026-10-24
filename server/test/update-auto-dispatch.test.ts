@@ -102,7 +102,7 @@ function box(): Box {
  *  `spawnFromRunner` hands it and exits 0, as a `--detach` parent does. */
 const recorder = (spawned: { cmd: string; args: string[] }[]): Runner => async (cmd, args) => {
   spawned.push({ cmd, args: [...args] });
-  return { code: 0, stdout: '', stderr: '' };
+  return { ran: true, code: 0, stdout: '', stderr: '' };
 };
 
 /** A two-box fleet's server: the link records every op it is asked to send and

@@ -5,8 +5,8 @@
 //   - `notRan(reason)`: the command never ran, or may not have, in the shape the runners produce it: the forged
 //     `code: 1`, an empty stdout, the runner's words on stderr and as `detail`, and neither kill half (the transport
 //     catch arm sends neither, `remote/runner.ts`).
-// `ranOk` and `ranExit` carry `ran: true`, which step 2 makes required; today `ccd()` adds no key for it, so a result
-// built from either reaches every reader exactly as the bare literal did.
+// `ranOk` and `ranExit` carry `ran: true`, which is required on both results (ARCH-10 step 2); the bare `{ code, stdout, stderr }`
+// literals in the older suites now carry it inline.
 import type { ExecResult, NotRanReason } from '../../src/exec.js';
 
 /** The command ran and exited 0. */

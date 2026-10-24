@@ -122,15 +122,15 @@ const harness = async (cfg: HarnessCfg) => {
         seedRow(home, r.id, { held: r.held ?? null, spawnRc: r.spawnRc ?? null });
       }
       return {
-        ok: cfg.ccd.ok, stdout: '', stderr: cfg.ccd.stderr,
+        ran: true, ok: cfg.ccd.ok, stdout: '', stderr: cfg.ccd.stderr,
         killed: cfg.ccd.killed ?? UNMEASURED,
         signal: cfg.ccd.signal === undefined ? UNMEASURED : cfg.ccd.signal,
       };
     }
-    return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+    return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
   };
 
-  const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
+  const base = testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
   // `listed: false` on the AFTER read only — BEFORE must succeed, or the test
   // proves nothing about the asymmetry. `sawWsAdd` flips when the double runs.
   let sawWsAdd = false;

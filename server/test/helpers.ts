@@ -52,7 +52,7 @@ export const guardRunner = (inner: Runner): Runner => async (cmd, args) => {
  *  pin each use site independently. */
 export function testDeps(
   home: string = mkTmp('ccrc-'),
-  run: Runner = async () => ({ code: 1, stdout: '', stderr: '' }),
+  run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' }),
 ): Deps {
   const guarded = guardRunner(run);
   seedRoster(home);

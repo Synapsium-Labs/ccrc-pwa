@@ -168,20 +168,20 @@ const countingIO = (sink: string[]): FleetIO => ({
 });
 
 /** `panes` is the scripted `list-panes` answer, mutable so a case can take the pane pid away and give it back. */
-interface Harness { home: string; calls: string[][]; run: Runner; panes: { code: number; stdout: string } }
+interface Harness { home: string; calls: string[][]; run: Runner; panes: { ran: true, code: number; stdout: string } }
 
 const harness = (): Harness => {
   const home = mkTmp('ccrc-stall-sweep-');
   // Empty but LISTABLE before priming, or `tick()` fails shut and never sets `primed` (mail-sweep.test.ts).
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const calls: string[][] = [];
-  const panes = { code: 0, stdout: `${PID}\n` };
+  const panes = { ran: true as const, code: 0, stdout: `${PID}\n` };
   const run: Runner = async (_cmd, args) => {
     calls.push([...args]);
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: panes.code, stdout: panes.stdout, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: '❯ \n', stderr: '' };
-    return { code: 1, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true as const, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true as const, code: panes.code, stdout: panes.stdout, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true as const, code: 0, stdout: '❯ \n', stderr: '' };
+    return { ran: true as const, code: 1, stdout: '', stderr: '' };
   };
   return { home, calls, run, panes };
 };

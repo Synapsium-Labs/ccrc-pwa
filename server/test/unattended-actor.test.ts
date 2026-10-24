@@ -319,7 +319,7 @@ describe('an interpolated label carries the RUN ID ACTUALLY IN SCOPE, not merely
         };
         for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${SESSION}.${k}`), v);
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const base = testDeps(home, run);
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));

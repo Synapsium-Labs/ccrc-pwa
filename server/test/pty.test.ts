@@ -53,7 +53,7 @@ describe('pty drawer bridge', () => {
     const calls: string[][] = [];
     const run = async (cmd: string, args: string[]) => {
       calls.push([cmd, ...args]);
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true as const, code: 0, stdout: '', stderr: '' };
     };
     const stub = new StubPty();
     let spawned: { id: string; cols: number; rows: number } | undefined;
@@ -156,7 +156,7 @@ describe('pty drawer bridge', () => {
     const log: string[] = [];
     const run = async (cmd: string, args: string[]) => {
       log.push([cmd, ...args].join(' '));
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true as const, code: 0, stdout: '', stderr: '' };
     };
     const stub = new StubPty();
     const deps = {
@@ -257,7 +257,7 @@ describe('pty drawer bridge records a lone Escape or Ctrl-C (D-5237)', () => {
     await notifyLog.load();
     const notify = vi.fn(async () => {});
     app = await buildServer({
-      ...testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' })),
+      ...testDeps(undefined, async () => ({ ran: true as const, code: 0, stdout: '', stderr: '' })),
       spawnPty: () => stub, notifyLog, push: { notify } as unknown as PushService,
     });
     await app.listen({ host: '127.0.0.1', port: 0 });

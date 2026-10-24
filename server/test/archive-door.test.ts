@@ -33,7 +33,7 @@ interface BoxCfg {
   /** The watcher's newest pane dialogs (`currentPending`): sessions with a dialog waiting on the operator. */
   pending?: string[];
   /** A ccd verb's answer, by verb; every other verb exits 0. */
-  ccd?: Record<string, { code: number; stderr: string; stdout?: string }>;
+  ccd?: Record<string, { ran: true, code: number; stderr: string; stdout?: string }>;
   /** Remote mode's view of a worktree: the fleet agent's read roots (`checkPath`) exclude `~/worktrees`, so every
    *  stat under one answers `unreadable` (`remote/io.ts`), never `absent`. */
   worktreeUnreadable?: boolean;
@@ -52,16 +52,16 @@ const box = async (cfg: BoxCfg = {}, over: Partial<Deps> = {}) => {
     const verb = args[0] ?? '';
     if (verb === 'has-session') {
       if (cfg.tmuxUnknown === true) {
-        return { code: 1, stdout: '', stderr: 'error connecting to /tmp/tmux-1000/default (Resource temporarily unavailable)' };
+        return { ran: true, code: 1, stdout: '', stderr: 'error connecting to /tmp/tmux-1000/default (Resource temporarily unavailable)' };
       }
-      return cfg.alive === false ? { code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` }
-        : { code: 0, stdout: '', stderr: '' };
+      return cfg.alive === false ? { ran: true, code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` }
+        : { ran: true, code: 0, stdout: '', stderr: '' };
     }
     if (verb === 'list-panes') {
-      return cfg.noPanePid === true ? { code: 1, stdout: '', stderr: 'lost server' } : { code: 0, stdout: `${PANE}\n`, stderr: '' };
+      return cfg.noPanePid === true ? { ran: true, code: 1, stdout: '', stderr: 'lost server' } : { ran: true, code: 0, stdout: `${PANE}\n`, stderr: '' };
     }
     const scripted = cfg.ccd?.[verb];
-    return scripted ? { code: scripted.code, stdout: scripted.stdout ?? '', stderr: scripted.stderr } : { code: 0, stdout: '', stderr: '' };
+    return scripted ? { ran: true, code: scripted.code, stdout: scripted.stdout ?? '', stderr: scripted.stderr } : { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base = testDeps(home, run);
@@ -219,7 +219,7 @@ describe('the one Archive — a workspace', () => {
   });
 
   it('maps ccd\'s own session-busy — the race after the live read — to 409 session-busy', async () => {
-    const b = await box({ ccd: { 'ws-archive': { code: 1, stderr: 'ccd: session-busy\n' } } });
+    const b = await box({ ccd: { 'ws-archive': { ran: true, code: 1, stderr: 'ccd: session-busy\n' } } });
     seed(b.home, 'demo-amber');
     const res = await post(b.app, 'demo-amber');
     expect(res.statusCode).toBe(409);
@@ -227,7 +227,7 @@ describe('the one Archive — a workspace', () => {
   });
 
   it('a manifest ccd cannot build, with nothing stopped, is 409 manifest-unbuildable — a "Stop only" refusal', async () => {
-    const b = await box({ ccd: { 'ws-archive': { code: 1,
+    const b = await box({ ccd: { 'ws-archive': { ran: true, code: 1,
       stderr: 'ccd: cannot describe demo-amber truthfully — nothing was touched\n' } } });
     seed(b.home, 'demo-amber');
     expect((await post(b.app, 'demo-amber')).json())
@@ -236,7 +236,7 @@ describe('the one Archive — a workspace', () => {
   });
 
   it('stopped, then refused: 200 {archived:false, stopped:true, refusal} — the row stays visible, stopped', async () => {
-    const b = await box({ ccd: { 'ws-archive': { code: 1, stderr: 'ccd: status-unknown\n' } } });
+    const b = await box({ ccd: { 'ws-archive': { ran: true, code: 1, stderr: 'ccd: status-unknown\n' } } });
     seed(b.home, 'demo-amber');
     liveStatus(b.home, 'busy');
     const res = await post(b.app, 'demo-amber', { interrupt: true });
@@ -274,7 +274,7 @@ describe('the one Archive — a main checkout', () => {
   });
 
   it('answers a failed stop as /stop does — 502 with ccd\'s stderr', async () => {
-    const b = await box({ ccd: { stop: { code: 1, stderr: 'ccd: no tmux server\n' } } });
+    const b = await box({ ccd: { stop: { ran: true, code: 1, stderr: 'ccd: no tmux server\n' } } });
     seed(b.home, 'claude-a-demo', { workspace: null });
     liveStatus(b.home, 'idle');
     const res = await post(b.app, 'claude-a-demo');
@@ -283,7 +283,7 @@ describe('the one Archive — a main checkout', () => {
   });
 
   it('a stop that fails AFTER the programme was ended says both: ccd\'s stderr and the runs it ended', async () => {
-    const b = await box({ ccd: { stop: { code: 1, stderr: 'ccd: no tmux server\n' } } });
+    const b = await box({ ccd: { stop: { ran: true, code: 1, stderr: 'ccd: no tmux server\n' } } });
     seed(b.home, 'claude-a-demo', { workspace: null });
     liveStatus(b.home, 'idle');
     const r = b.coord.openRun({ program: 'lifecycle', title: 'T', project: 'demo', wave: 1, waveOf: 3,
@@ -540,7 +540,7 @@ describe('the one Archive — a coordinator (L5)', () => {
     });
 
   it('an abandon refused AT the act stops the door there: programme-partly-ended names what it closed, nothing is stopped or archived', async () => {
-    const b = await box({ ccd: { 'ws-release': { code: 1, stderr: 'ccd: lock busy\n' } } });
+    const b = await box({ ccd: { 'ws-release': { ran: true, code: 1, stderr: 'ccd: lock busy\n' } } });
     seed(b.home, COORDINATOR);
     seed(b.home, 'demo-w');
     liveStatus(b.home, 'busy');
@@ -630,7 +630,7 @@ describe('the one Archive — remote mode, where this box cannot read a worktree
   });
 
   it('a gone worktree only ccd can see: the programme was ended first, and the 409 names the runs it ended', async () => {
-    const b = await box({ worktreeUnreadable: true, ccd: { 'ws-archive': { code: 1,
+    const b = await box({ worktreeUnreadable: true, ccd: { 'ws-archive': { ran: true, code: 1,
       stderr: `ccd: worktree is gone: /w — cannot describe it for the archive record; see: ccd ws-attic --session ${COORDINATOR}\n` } } });
     seed(b.home, COORDINATOR, { worktree: false });
     liveStatus(b.home, 'idle');
@@ -687,7 +687,7 @@ describe('the archive door, wave 3b', () => {
   });
 
   it('`already archived` with a pane tmux proves UP: the door stops it, as the archive would have, and says so', async () => {
-    const b = await box({ ccd: { 'ws-archive': { code: 0, stderr: '', stdout: 'already archived demo-amber\n' } } });
+    const b = await box({ ccd: { 'ws-archive': { ran: true, code: 0, stderr: '', stdout: 'already archived demo-amber\n' } } });
     seed(b.home, 'demo-amber');
     liveStatus(b.home, 'idle');
     const res = await post(b.app, 'demo-amber');
@@ -698,7 +698,7 @@ describe('the archive door, wave 3b', () => {
   });
 
   it('`already archived` with the pane GONE: archived, nothing stopped — as before', async () => {
-    const b = await box({ alive: false, ccd: { 'ws-archive': { code: 0, stderr: '', stdout: 'already archived demo-amber\n' } } });
+    const b = await box({ alive: false, ccd: { 'ws-archive': { ran: true, code: 0, stderr: '', stdout: 'already archived demo-amber\n' } } });
     seed(b.home, 'demo-amber');
     const res = await post(b.app, 'demo-amber');
     expect(res.json()).toEqual({ ok: true, archived: true, stopped: false, ended: [] });
@@ -708,7 +708,7 @@ describe('the archive door, wave 3b', () => {
   it('`already archived` with the pane UP but the turn BUSY at the act: not stopped — the re-read is the stop\'s guard (review, Task 9)', async () => {
     let home = '';
     const b = await box({
-      ccd: { 'ws-archive': { code: 0, stderr: '', stdout: 'already archived demo-amber\n' } },
+      ccd: { 'ws-archive': { ran: true, code: 0, stderr: '', stdout: 'already archived demo-amber\n' } },
       // A turn that starts after the door measured idle, while `ws-archive` ran.
       onCall: (args) => { if (args[0] === 'ws-archive') liveStatus(home, 'busy'); },
     });
@@ -722,7 +722,7 @@ describe('the archive door, wave 3b', () => {
   });
 
   it('`already archived` with a pane tmux CANNOT be asked about (`unknown`): archived, nothing stopped — as before', async () => {
-    const b = await box({ tmuxUnknown: true, ccd: { 'ws-archive': { code: 0, stderr: '', stdout: 'already archived demo-amber\n' } } });
+    const b = await box({ tmuxUnknown: true, ccd: { 'ws-archive': { ran: true, code: 0, stderr: '', stdout: 'already archived demo-amber\n' } } });
     seed(b.home, 'demo-amber');
     liveStatus(b.home, 'idle');
     const res = await post(b.app, 'demo-amber');

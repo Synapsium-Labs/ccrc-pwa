@@ -134,15 +134,15 @@ function fixture(opts: {
   const info = seedSessions(home, opts.sessions);
   const panes = new Map<string, string>(opts.sessions.map((spec) => [spec.split('/')[1]!, BARE_PROMPT]));
   const runner: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
     const target = args[2] ?? '';
     const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';   // the exact target `=cc-<id>:` (D-3525)
     if (args[0] === 'list-panes') {
       const pid = info.get(id)?.pid;
-      return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
+      return { ran: true, code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
     }
-    if (args[0] === 'capture-pane') return { code: 0, stdout: panes.get(id) ?? BARE_PROMPT, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: panes.get(id) ?? BARE_PROMPT, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const io: FleetIO = opts.overIo ? opts.overIo(localIO) : localIO;

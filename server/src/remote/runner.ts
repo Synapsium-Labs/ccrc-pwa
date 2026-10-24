@@ -178,8 +178,14 @@ function timeoutMsFor(cmd: string, args: string[]): number {
  *  ("measured: no signal") is a different fact from the key being missing ("an
  *  older agent, which measured nothing"), and only the spread keeps them apart. */
 function asExecResult(res: unknown): ExecResult {
-  const r = res as { code?: unknown; stdout?: unknown; stderr?: unknown; signal?: unknown };
+  const r = res as { code?: unknown; stdout?: unknown; stderr?: unknown; signal?: unknown; ran?: unknown; detail?: unknown };
+  // D-6840: an agent that says the exec never started (`ran: false`, a spawn error) is carried as the
+  // `spawn` arm; an agent that says nothing (older than the arm) ran it, as it always answered.
+  const base = r.ran === false
+    ? { ran: false as const, reason: 'spawn' as const, detail: typeof r.detail === 'string' ? r.detail : 'the exec never started' }
+    : { ran: true as const };
   return {
+    ...base,
     code: typeof r.code === 'number' ? r.code : 1,
     stdout: typeof r.stdout === 'string' ? r.stdout : '',
     stderr: typeof r.stderr === 'string' ? r.stderr : '',

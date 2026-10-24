@@ -46,8 +46,8 @@ const makeRunner = (cfg: RunnerCfg = {}): { run: Runner; calls: string[][] } => 
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `${verb} failed on the box` };
-    return { code: 0, stdout: '', stderr: '' };
+    if (cfg.fail?.has(verb)) return { ran: true, code: 1, stdout: '', stderr: `${verb} failed on the box` };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 };
