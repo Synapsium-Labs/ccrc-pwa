@@ -273,6 +273,14 @@ describe('decideRoute: the ladder, S5-R17 and the ceiling', () => {
     const higher = await moveOf(facts(kind('ceiling'), { reg: { class: ok('fable'), effort: ok('high'), degraded: ok('sonnet') } }));
     expect(higher).toMatchObject({ field: 'class', to: 'opus' });
   });
+  it('D-6790: a stale fable->opus class demotion (session moved to sonnet out of band) runs the plain ladder', async () => {
+    const m = await moveOf(facts(kind(), { reg: { class: ok('sonnet'), effort: ok('high') }, trail: [demoteEv('class', 'fable', 'opus')] }));
+    expect(m).toMatchObject({ mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh' });
+  });
+  it('D-6790: a live fable->opus demotion is not restored and does not freeze the effort ladder', async () => {
+    const m = await moveOf(facts(kind(), { reg: { class: ok('opus'), effort: ok('high') }, trail: [demoteEv('class', 'fable', 'opus')] }));
+    expect(m).toMatchObject({ mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh' });
+  });
   it('a degraded lane is laddered from the served class, not the intended one', async () => {
     const m = await moveOf(facts(kind('ceiling'), { reg: { class: ok('fable'), degraded: ok('haiku'), effort: ok('auto') } }));
     expect(m).toMatchObject({ from: 'haiku', to: 'sonnet' });
@@ -293,6 +301,7 @@ describe('the refusal vocabulary', () => {
       facts(ask, { reg: { effort: ok('ultracode') } }),
       facts(worker({ by: 'demote', field: 'effort' }), { reg: { effort: ok('low') } }),
       facts(worker({ by: 'kind', kind: 'ceiling' }), { reg: { class: ok('opus'), degraded: ok('sonnet') } }),
+      facts(worker({ by: 'manual', field: 'class', value: 'fable' })),
     ];
     for (const c of cases) { const d = await decideRoute(c.facts); if (!d.ok) asked.add(d.refused); }
     const extra = new Set(['run-unreadable', 'unknown-run', 'unsupported']);

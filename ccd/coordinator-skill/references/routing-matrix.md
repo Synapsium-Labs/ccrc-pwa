@@ -50,9 +50,9 @@ Fable is never a fan-out worker and never inherits into workflow agents; every w
 names its class and effort explicitly. **Fable is selected only by an explicit human choice and
 is never an automatic destination** (operator instruction 2026-09-22): no default seeds it, no
 row of this table routes to it, and no escalation climbs to it. The choices that do reach it are
-all a person saying so — the session screen's model picker, `ccd route --set class=fable`,
-`--route class=fable` on a verb that mints a session, and the coordinator door's explicit route
-call — and a session a human has put there keeps every way back down, so the choice is not a
+all the operator saying so — the session screen's model picker, the new-session sheet, a new
+workspace's route, and a typed `/model fable`. A coordinator's route call and the coordinator
+door refuse Fable (409 fable-operator-only) — and a session a human has put there keeps every way back down, so the choice is not a
 trap. The class ladder ends at Opus for a main loop exactly as it does for a subagent (Haiku →
 Sonnet → Opus); a capability ceiling above Opus inside a subagent escalates the main loop, never
 the fan-out, and a capability ceiling on an Opus main loop is reported as a ceiling for a human

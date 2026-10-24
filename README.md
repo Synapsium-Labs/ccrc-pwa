@@ -2975,10 +2975,12 @@ fleet `ccd` that does not advertise `route-apply-v1`); the chip wears `queued` u
 back (on a session whose row carries no routing record yet, a toast says so after 60 s without a read-back). The
 new-session sheet seeds `class`, `effort` and `workflow` at creation. An operator spawn with nothing chosen gets
 the coordinator row, `class=opus effort=ultracode subagent=sonnet workflow=on`; a dispatched worker gets a record
-only when its run names one. **Fable is never reached by a default or an escalation** — both automatic ladders
-(`shared/routing-ladder.ts`) stop at `opus` — only by an explicit class choice: the picker's Fable row,
-`ccd route --set class=fable`, `--route class=fable` at creation, a coordinator's manual `field`/`value` write
-through `POST /api/runs/:id/route`, or the operator's own `/model fable` typed in the session, which the next
+only when its run names one. **Fable runs only when the operator selects it** (D-6790, ruling 2026-10-24). Neither automatic ladder
+(`shared/routing-ladder.ts`) reaches it — both stop at `opus`, and a reversal of a demotion off `fable` answers `ceiling`
+rather than restoring it — and every box-token route write refuses it with `409 fable-operator-only`: a coordinator's
+manual `field`/`value` write or ladder result through `POST /api/runs/:id/route`, and the `route` a dispatch sends. Only
+the operator's own paths remain: the picker's Fable row, the new-session sheet's class and a new workspace's route (all
+behind the cookie session), or the operator's own `/model fable` typed in the session, which the next
 stop or spawn keeps in the record (`[actor=operator-session]`, stage 7 above).
 
 **Placement and swaps route by class.** A lane serves `fable` only on an Anthropic backend whose **Fable share** —
