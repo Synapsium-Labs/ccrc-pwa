@@ -4867,7 +4867,7 @@ take either side of that one line, resolve every other hunk as the source it is,
 `~/.local/bin/ccrc restamp <file>`. `ccrc restamp` re-stamps a stamped file and refuses, file
 untouched, one with no marker, a symlink, or a generator's own output (see Contributing). Coordinator
 clause 15 is the other half: the coordinator never calls `update-branch` by any route, never writes a
-repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`, sends a
+repository's rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch`, sends a
 rebase-check only on a conflict it has measured, and commits programme-ledger documents on its own
 ledger PR, never inside a feature PR. The session hook carries the rule to every session, and is the
 only place a session that loads no ccrc skill sees it: a `Bash` call that merges, pulls or rebases

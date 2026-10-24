@@ -753,10 +753,10 @@ whole time, which is the only prevention this ordering rule buys.
    terminal state, never merge. Here, with no cross-project `producerSha` to
    read, the exact SHA is the producer run's own verified `handoffCommit`:
    prove the merge with `gh pr view <pr> --json state,headRefOid`, answering
-   MERGED with `headRefOid` equal to it — the coordinator merges with
-   `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` (plus
-   `--admin` where the repository's ruleset requires it) for exactly this
-   reason — and on a native-queue project it lands with the same binding, as
+   MERGED with `headRefOid` equal to it — the coordinator lands every PR with
+   `--match-head-commit <handoffCommit>`, by the route §5b reads from the
+   repository's own rules, for exactly this reason — and on a native-queue
+   project it lands with the same binding, as
    "Landing on a native-queue project" below says. An UNMARKED producer —
    every workspace minted without a marker: by a box whose ccd did not yet
    mark children, or by a dispatch that journaled `child-omitted` (§2) — is
@@ -774,23 +774,38 @@ whole time, which is the only prevention this ordering rule buys.
    if wave N+1 depends on that code, wait for the same merge proof before
    redispatching.
 
-   **Landing on a native-queue project** (one whose `main` requires GitHub's
-   merge queue — measure it before each landing, never from memory: from a
-   checkout of its repository,
-   `gh api 'repos/{owner}/{repo}/rules/branches/main' --jq 'any(.[]; .type == "merge_queue")'`
-   answers `true`): the producer LANDS BEFORE IT CLOSES. Once its review is
+   **Landing on a native-queue project** (one whose base branch requires
+   GitHub's merge queue — measure it before each landing, never from memory:
+   the landing verdict (§5b) answers `ROUTE Q`, reading the PR's own base,
+   never the literal `main`): the producer LANDS BEFORE IT CLOSES. Once its review is
    clean and wave N+1 is open — or, on the programme's LAST wave, which has
    no wave N+1, once its review is clean (its close is SKILL.md step 7's and
    §6's) — advance the producer's run to `merging` (§4 — from
    `awaiting-review`, re-measured). Enqueue only a PR whose required checks
-   have all passed — `gh pr checks <pr> --required` exits 0 (8 is pending, 1
-   is failed): for any other PR gh arms auto-merge instead of queueing it,
+   have all passed — every required name the verdict discovered passes on the
+   head, and `gh pr checks <pr> --required` exits 0: for any other
+   PR gh arms auto-merge instead of queueing it,
    and prints the same "will be added to the merge queue … when ready" line
-   either way. On `8`, wait for them in the foreground —
+   either way. The `--required` exit decides, and a `ROUTE Q` answer does not waive it.
+   On `0`, go on under this gate and the read-back below. On `8` (pending), if
+   this landing attempt's bounded wait is already spent (§5b, **After a bounded
+   wait**), do not start the wait: report the exit to the operator and leave the
+   landing stopped; otherwise wait for them in the foreground —
    `gh pr checks <pr> --required --watch`, again if the call times out —
-   never by ending your turn: no mail comes when checks finish. On `1`,
-   send the owning worker a fix round (below), or, for a red that is not
-   this PR's own, one `gh run rerun <run id> --failed` and the same wait.
+   never by ending your turn: no mail comes when checks finish; then run the
+   verdict again. Whichever arm led back to the verdict, a `ROUTE Q` answer
+   does not skip this gate: never enqueue on a verdict without an exit `0` read
+   after it. On `1`, run the verdict again: a `RED` goes to the `RED`
+   rule of §5b, which limits a rerun to the kind it names and never reruns
+   unconditionally; a `ROUTE Q` answer is the stop `checks-gate-unread`; any
+   other line goes by its bullet in §5b. On any other exit the stop is
+   `checks-gate-unread` too. Stop `checks-gate-unread` means: report the exit
+   and the whole output, and never enqueue, arm, retry or choose another route
+   by hand. gh's "no required checks reported" and "no checks reported" are an
+   exit `1`: with a `ROUTE Q` answer they are this stop, which is deliberately
+   conservative on a queue repository, not support promised by an empty
+   required set, and it does not touch a repository whose required checks gh
+   reports.
    Then, from your own session, enqueue its PR with
    `gh pr merge <pr> --match-head-commit <handoffCommit>`: no `--squash`,
    because the queue's merge method applies, and never `--admin`. Prove it
@@ -824,7 +839,8 @@ whole time, which is the only prevention this ordering rule buys.
    finds it by its `headBranch` (`gh-readonly-queue/<base>/pr-<pr>-…`) and
    `gh run view <id> --log-failed` says why, while
    `gh pr view <pr> --json mergeStateStatus` answers a conflict. Then either
-   enqueue it again exactly as above — checks first, then the read-back — or
+   enqueue it again exactly as above — the landing verdict (§5b) again first,
+   then the checks, then the read-back — or
    send the owning worker a fix round on the `merging → working` edge
    (SKILL.md step 6's send-back; its fresh wave-done gets a fresh review run,
    and a fresh `merging`). Closing before the landing would hand a PR still
@@ -868,6 +884,482 @@ whole time, which is the only prevention this ordering rule buys.
    (400). Both leave the run open; report rather than retrying unchanged.
 5. Dispatch wave N+1 (§2, step 2) only after the applicable close, closed-row
    proof, release proof, and exact-SHA merge proof above succeed.
+
+### 5b — The landing route, from the repository's own rules
+
+Before every landing, on every project, this session reads the PR's repository
+and lands only by the route its rules give (spec 2026-09-23 §5.7). The reads
+run fresh each time, never from memory, because the operator can change any of
+them between two PRs. They are the block below, the **landing verdict**: run it
+from your own session, in a checkout of the PR's repository, with `<pr>` and
+`<handoffCommit>` filled in. It makes GETs only, prints exactly one line, and
+never merges, enqueues or writes a setting.
+
+```bash
+( # The landing verdict (spec 2026-09-23 §5.7). GETs only: it never merges, enqueues or writes a setting.
+PR=<pr> HC=<handoffCommit>
+BOUND_S=${BOUND_S:-0} POLL_S=${POLL_S:-30} route=
+set -o pipefail
+say() { printf '%s\n' "$1"; exit 0; }
+stop() { say "STOP $1"; }
+
+# Read 1: the base, the head, the state and the review decision, from the PR itself.
+r1=$(gh pr view "$PR" --json baseRefName,headRefOid,state,reviewDecision) || stop "unreadable: read 1"
+base=$(jq -r .baseRefName <<<"$r1") && head=$(jq -r .headRefOid <<<"$r1") && state=$(jq -r .state <<<"$r1") \
+  || stop "unreadable: read 1"
+[[ $base =~ ^[A-Za-z0-9._/-]+$ ]] || stop "unreadable: read 1 gave no usable base"
+case "$state" in OPEN|CLOSED|MERGED) ;; *) stop "unreadable: read 1" ;; esac
+[ "$state" = MERGED ] && say "MERGED head=$head"
+[ "$state" = CLOSED ] && stop "not-at-head: the PR is CLOSED"
+[ "$head" = "$HC" ] || stop "not-at-head: the PR head is $head"
+
+# Read 1's reviews, in API order (oldest first), every page. A malformed page, an empty answer or a failed call is a
+# stop, never "no requests". Every entry is validated whole, then only its id, state and user id are kept, so no
+# login or free text reaches an argument. An entry with no user is a deleted account: its identity is its own review id.
+rv=$(gh api --paginate "repos/{owner}/{repo}/pulls/$PR/reviews" | jq -sc '
+  def sint: type == "number" and . == floor and . > 0 and . <= 9007199254740991;
+  if length > 0 and all(.[]; type == "array")
+     and all(.[][]; type == "object" and (.id | sint) and (.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED",
+       "COMMENTED", "PENDING")) and (.user == null or (.user.id | sint)))
+  then [.[][] | {id, state, user: (if .user == null then null else {id: .user.id} end)}]
+  else error("malformed") end') || stop "unreadable: read 1's reviews"
+# Per identity, the latest opinionated review (COMMENTED and PENDING neither clear nor replace one); the requests that
+# stand are the review ids of the identities whose kept review requests changes. Only numbers reach the key.
+sel=$(jq -nc --argjson rv "$rv" --argjson pr "$r1" '
+  {summary: ($pr.reviewDecision == "CHANGES_REQUESTED"),
+   reviews: ([reduce $rv[] as $e ({}; if $e.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
+       then .[if $e.user == null then "r:\($e.id)" else "u:\($e.user.id)" end] = $e else . end)
+     | .[] | select(.state == "CHANGES_REQUESTED") | .id] | unique)}') || stop "unreadable: read 1's reviews"
+key=$(jq -c --arg pr "$PR" --arg head "$HC" '{pr: $pr, head: $head, summary, reviews}' <<<"$sel") \
+  || stop "unreadable: read 1's reviews"
+standing=$(jq -r '.summary or (.reviews | length > 0)' <<<"$sel") || stop "unreadable: read 1's reviews"
+# A requested change stops every route. Only the operator's answer to that stop, ignore, skips it: CR_IGNORE holds
+# the exact key printed here, set for this one invocation (a convention check, not authentication). It skips nothing
+# else, and a summary-only request with no review id to name is never skipped.
+if [ "$standing" = true ]; then
+  [ -n "$CR_IGNORE" ] && [ "$CR_IGNORE" = "$key" ] && jq -e '.reviews | length > 0' <<<"$sel" >/dev/null \
+    || stop "changes-requested: operator decision required; key=$key"
+fi
+
+# Read 2: every rule of every active ruleset on that base. A type this block does not know is a stop. The fields the
+# approval licence weighs are typed here, where they are read (a present count is a non-negative safe integer, a present
+# thread resolution a boolean; a missing one keeps its default), and every required-check entry must be a named object.
+rules=$(gh api --paginate "repos/{owner}/{repo}/rules/branches/$base" | jq -sc '
+  def cnt: type == "number" and . == floor and . >= 0 and . <= 9007199254740991;
+  def typed($k; f): (has($k) | not) or (.[$k] | f);
+  if length > 0 and all(.[]; type == "array")
+     and all(.[][]; type == "object" and (.type | type) == "string"
+       and (if .type | IN("pull_request", "merge_queue", "required_status_checks") then (.parameters | type) == "object" else true end)
+       and (if .type == "pull_request" then (.parameters | typed("required_approving_review_count"; cnt)
+         and typed("required_review_thread_resolution"; type == "boolean")) else true end)
+       and (if .type == "required_status_checks" then (.parameters.required_status_checks | type) == "array"
+         and all(.parameters.required_status_checks[]; type == "object" and (.context | type) == "string" and (.context | length) > 0)
+         else true end))
+  then flatten(1) else error("malformed") end') || stop "unreadable: read 2"
+# The stop lines print a list of values joined by commas, an empty string as "" and any other value as it is. That text
+# only shows what was found: whether a queue rule or an unknown type exists, and how many methods there are, is decided
+# on the arrays, so a value that prints as nothing is still a value.
+shown='map(if . == "" then "\"\"" else . end) | join(",")'
+unk=$(jq -c '[.[].type] - ["pull_request", "merge_queue", "required_status_checks", "required_linear_history",
+  "workflows", "code_scanning", "required_deployments", "required_signatures", "non_fast_forward", "deletion",
+  "creation"] | unique' <<<"$rules") || stop "unreadable: read 2"
+[ "$unk" = "[]" ] || stop "unknown-rule-type: $(jq -r "$shown" <<<"$unk")"
+
+# Read 3: classic protection. A 404 is "not protected" only with exactly that message; a 401 or 403 goes to read 3b.
+# A 200 body is typed where the licence and the required set read it (the review count, the conversation switch's
+# `enabled`, the names of the required checks): a missing field keeps its default, a wrong type is a stop, and the body is
+# exactly one value (`-s` slurps the answer: an empty body, or two or more values, is a stop here). The names
+# are one predicate, `classic_names`, which read 3b's projection of the same checks uses too: a missing or null
+# container or list is no entries, a present one is an object or an array, and every entry has a non-empty string name.
+names='def named: type == "string" and length > 0;
+  def typed($k; f): (has($k) | not) or (.[$k] | f);
+  def classic_names: . == null or (type == "object"
+    and typed("checks"; . == null or (type == "array" and all(.[]; type == "object" and (.context | named))))
+    and typed("contexts"; . == null or (type == "array" and all(.[]; named))));'
+r3=$(gh api -i "repos/{owner}/{repo}/branches/$base/protection" 2>/dev/null)
+c3=$(head -n1 <<<"$r3" | cut -d' ' -f2) b3=$(tr -d '\r' <<<"$r3" | sed '1,/^$/d') via=3
+case "$c3" in
+  200) prot=$(jq -sce "$names"'
+         def cnt: type == "number" and . == floor and . >= 0 and . <= 9007199254740991;
+         if length == 1 then .[0] else error("not exactly one value") end
+         | if type == "object"
+            and (.required_pull_request_reviews | . == null or (type == "object" and typed("required_approving_review_count"; cnt)))
+            and (.required_conversation_resolution | . == null or (type == "object" and typed("enabled"; type == "boolean")))
+            and (.required_status_checks | classic_names)
+         then . else error("not a usable object") end' <<<"$b3") || stop "unreadable: read 3" ;;
+  404) [ "$(jq -r .message <<<"$b3")" = "Branch not protected" ] || stop "unreadable: read 3 answered 404"
+       prot='{}' ;;
+  401|403) via=3b
+       prot=$(gh api "repos/{owner}/{repo}/branches/$base" | jq -sc "$names"'
+         if length == 1 then .[0] else error("not exactly one value") end
+         | .protection | if .enabled == true
+         then (if .required_status_checks | classic_names then {required_status_checks} else error("unnamed") end)
+         elif .enabled == false then {} else error("no enabled") end') \
+         || stop "unreadable: read 3b, after read 3 answered $c3" ;;
+  *) stop "unreadable: read 3 answered ${c3:-nothing}" ;;
+esac
+
+# Read 4: the merge settings. A missing field is unreadable, never false.
+r4=$(gh api "repos/{owner}/{repo}" | jq -ce '{allow_squash_merge, allow_merge_commit, allow_rebase_merge,
+  allow_auto_merge} as $s | if all($s[]; type == "boolean") then $s else error("missing") end') \
+  || stop "unreadable: read 4"
+
+# The method set (§5.7.2): the settings, intersected with EVERY pull_request rule, minus merge under linear history.
+methods=$(jq -nc --argjson s "$r4" --argjson r "$rules" --argjson p "$prot" '
+  [if $s.allow_squash_merge then "squash" else empty end, if $s.allow_merge_commit then "merge" else empty end,
+   if $s.allow_rebase_merge then "rebase" else empty end]
+  | reduce ($r[] | select(.type == "pull_request")
+      | .parameters.allowed_merge_methods // ["merge", "squash", "rebase"] | map(ascii_downcase)) as $a
+      (.; map(select(IN($a[]))))
+  | if any($r[]; .type == "required_linear_history") or $p.required_linear_history.enabled == true
+    then map(select(. != "merge")) else . end') || stop "unreadable: the method set"
+qs=$(jq -c '[.[] | select(.type == "merge_queue") | (.parameters.merge_method // "unknown") | ascii_downcase] | unique' \
+  <<<"$rules") || stop "unreadable: read 2"
+if [ "$qs" != "[]" ]; then
+  route=Q qshow=$(jq -r "$shown" <<<"$qs") || stop "unreadable: read 2"
+  jq -e 'length == 1' <<<"$qs" >/dev/null || stop "two-queue-methods: $qshow"
+  method=$(jq -r '.[0]' <<<"$qs") || stop "unreadable: read 2"
+  jq -e --argjson q "$qs" 'any(.[]; . == $q[0])' <<<"$methods" >/dev/null \
+    || stop "queue-method-not-allowed: the queue merges by $qshow and the method set is $methods"
+  [ "$(jq -r .allow_auto_merge <<<"$r4")" = true ] || stop "auto-merge-off: a merge_queue rule applies"
+else
+  method=$(jq -r 'if any(.[]; . == "squash") then "squash" elif any(.[]; . == "merge") then "merge"
+    elif length > 0 then "rebase" else "" end' <<<"$methods") || stop "unreadable: the method set"
+  [ -n "$method" ] || stop "method-set-empty: the settings, the pull_request rules and linear history leave none"
+  [ "$method" = rebase ] && stop "rebase-only: rebase is the only method left"
+fi
+
+# Read 3b knows no linear history and no strictness: the merge method is a stop, and on a direct route so is a head
+# behind the base. Route Q needs no strictness (the queue tests the merged group itself), so it reads no compare.
+if [ "$via" = 3b ]; then
+  [ "$method" = merge ] && stop "read-3b-unknowable: read 3 answered $c3 and the method is merge"
+  if [ "$route" != Q ]; then
+    behind=$(gh api "repos/{owner}/{repo}/compare/$base...$HC" | jq -e .behind_by) \
+      || stop "unreadable: the compare read under read 3b"
+    [ "$behind" = 0 ] || stop "read-3b-unknowable: read 3 answered $c3 and the head is $behind behind the base"
+  fi
+fi
+
+# The required set (§5.7.3): every ruleset's required checks, plus classic checks and legacy contexts. A name an App
+# is pinned for keeps its App; the same name unpinned is the same requirement. Then strictness and the other gates.
+req=$(jq -nc --argjson r "$rules" --argjson p "$prot" '
+  [($r[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]?
+     | {context, app: .integration_id}),
+   ($p.required_status_checks.checks[]? | {context, app: (if .app_id == -1 then null else .app_id end)}),
+   ($p.required_status_checks.contexts[]? | {context: ., app: null})]
+  | unique | . as $all
+  | map(select(.app != null or (.context as $c | all($all[]; .context != $c or .app == null))))') \
+  || stop "unreadable: the required set"
+strict=$(jq -nr --argjson r "$rules" --argjson p "$prot" --arg via "$via" '
+  if any($r[]; .type == "required_status_checks" and .parameters.strict_required_status_checks_policy == true)
+     or $p.required_status_checks.strict == true then "yes" elif $via == "3b" then "unknown" else "no" end') \
+  || stop "unreadable: strictness"
+gates=$(jq -nr --argjson r "$rules" --argjson p "$prot" '
+  [($r[] | select(.type | IN("workflows", "code_scanning", "required_deployments", "required_signatures")) | .type),
+   (if $p.required_signatures.enabled == true then "classic required_signatures" else empty end)]
+  | unique | join(",")') || stop "unreadable: the other gates"
+
+# Read 5, judged name by name: the head's check runs and its statuses ARRAY, never the combined state.
+checks() {
+  local cr st
+  cr=$(gh api --paginate "repos/{owner}/{repo}/commits/$HC/check-runs" \
+    | jq -sc 'if length > 0 and all(.[]; type == "object" and (.check_runs | type) == "array") and all(.[].check_runs[]; type == "object")
+      then [.[].check_runs[] | {name, status, conclusion, app: (.app | {id, slug})}] else error("malformed") end') \
+    || { echo unreadable; return; }
+  st=$(gh api --paginate "repos/{owner}/{repo}/commits/$HC/status" \
+    | jq -sc 'if length > 0 and all(.[]; type == "object" and (.statuses | type) == "array") and all(.[].statuses[]; type == "object")
+      then [.[].statuses[] | {context, state}] else error("malformed") end') \
+    || { echo unreadable; return; }
+  jq -nr --argjson q "$req" --argjson cr "$cr" --argjson st "$st" '
+    def runs($x): [$cr[] | select(.name == $x.context and ($x.app == null or .app.id == $x.app))];
+    def sts($x): if $x.app == null then [$st[] | select(.context == $x.context)] else [] end;
+    def judge($x): runs($x) as $r | sts($x) as $s
+      | if $x.app != null and ($r | length) == 0 and any($st[]; .context == $x.context) then "unverifiable"
+        elif any($r[]; .status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))
+          or any($s[]; .state | IN("failure", "error")) then "red"
+        elif any($r[]; .status != "completed") or any($s[]; .state == "pending") then "pending"
+        elif ($r | length) > 0 or any($s[]; .state == "success") then "passing"
+        else "not-reported" end;
+    def kind($x): if any(runs($x)[]; .app.slug == "github-actions") then "github-actions"
+      elif (runs($x) | length) > 0 then "app \(runs($x)[0].app.id)" else "status" end;
+    [$q[] | {x: ., s: judge(.)}] as $j
+    | first(("unverifiable", "red", "pending", "not-reported") as $w | select(any($j[]; .s == $w))
+        | "\($w) " + ([$j[] | select(.s == $w) | .x.context + (if $w == "red" then " [\(kind(.x))]" else "" end)]
+        | join(", "))) // "passing"' || echo unreadable
+}
+v=$(checks) w=${v%% *}
+# A bounded wait re-reads read 5 only: the reviews, the rules and the head stay this run's snapshot (section 5b).
+# Each sleep is cut to the time left of BOUND_S seconds and none starts once it is spent; the read after the last sleep decides.
+if [ "$w" = not-reported ] && [ "$BOUND_S" -gt 0 ]; then
+  end=$((SECONDS + BOUND_S))
+  while [ "$w" = not-reported ]; do
+    left=$((end - SECONDS))
+    [ "$left" -gt 0 ] || break
+    [ "$left" -lt "$POLL_S" ] || left=$POLL_S
+    sleep "$left"; v=$(checks) w=${v%% *}
+  done
+fi
+case "$w" in
+  passing) ;;
+  unverifiable) stop "unverifiable: ${v#* } shows only as a commit status" ;;
+  red) say "RED ${v#* }" ;;
+  pending) say "WAIT pending: ${v#* }" ;;
+  not-reported) [ "$BOUND_S" -gt 0 ] && stop "not-reported: ${v#* } within ${BOUND_S}s"
+                say "WAIT not-reported: ${v#* }" ;;
+  *) stop "unreadable: read 5" ;;
+esac
+
+# The route (§5.7.4), and the approval licence on a direct route only. A request that stands (and was ignored)
+# licenses nothing: while one stands the licence is never weighed, so admin stays never.
+if [ "$route" != Q ]; then
+  if [ "$req" != "[]" ] || [ -n "$gates" ]; then route=G; else route=U; fi
+fi
+admin=never
+need=$(jq -nr --argjson r "$rules" --argjson p "$prot" --argjson pr "$r1" --arg standing "$standing" '
+  if $standing == "true" then "no"
+  elif (any($r[]; .type == "pull_request" and (.parameters.required_approving_review_count // 0) > 0)
+      or ($p.required_pull_request_reviews.required_approving_review_count // 0) > 0) | not then "no"
+  elif $pr.reviewDecision == "REVIEW_REQUIRED" then "yes"
+  else "no" end') || stop "unreadable: the approval"
+if [ "$route" != Q ] && [ "$need" = yes ]; then
+  [ "$via" = 3b ] && stop "read-3b-unknowable: an approval is missing and read 3 answered $c3"
+  [ -z "$gates" ] || stop "licence-fails: an approval is missing and --admin could skip $gates"
+  jq -ne --argjson r "$rules" --argjson p "$prot" 'any($r[]; .type == "pull_request"
+      and .parameters.required_review_thread_resolution == true)
+    or ($p.required_conversation_resolution.enabled == true and $p.enforce_admins.enabled != true) | not' >/dev/null \
+    || stop "licence-fails: an approval is missing and --admin could skip conversation resolution"
+  jq -e '((.required_status_checks.checks // []) + (.required_status_checks.contexts // []) | length) == 0
+    or .enforce_admins.enabled == true' <<<"$prot" >/dev/null \
+    || stop "licence-fails: an approval is missing and enforce_admins is off over the classic checks"
+  # Read 6 for every ruleset carrying required checks. A rule naming no ruleset cannot be asked: able to bypass.
+  ids=$(jq -r '[.[] | select(.type == "required_status_checks") | .ruleset_id]
+    | if all(.[]; type == "number") then unique | .[] else error("no ruleset id") end' <<<"$rules") \
+    || stop "licence-fails: an approval is missing and a required_status_checks rule names no ruleset"
+  for id in $ids; do
+    by=$(gh api "repos/{owner}/{repo}/rulesets/$id" | jq -r .current_user_can_bypass) || by=unreadable
+    [ "$by" = never ] || stop "licence-fails: an approval is missing and ruleset $id answers $by"
+  done
+  admin=licensed
+fi
+say "ROUTE $route method=$method admin=$admin strict=$strict"
+)
+```
+
+Run it once the review is clean and the run is at `merging` (§4), in the
+order step 3 gives for route Q, and again after every wait. Its first word
+decides what this session does, and nothing else does:
+
+- `ROUTE Q method=<m> admin=never` — the native queue, merging by `<m>`: land
+  as "Landing on a native-queue project" (step 3) says, with no method flag
+  and never `--admin`, the read-back and the disarm rule included, and the
+  checks gate with its four exits, which a `ROUTE Q` answer does not waive.
+- `ROUTE G method=<m> admin=<a>` — a gated direct merge: every required check
+  has passed on the head. Merge from your own session with exactly
+  `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>`, `<method>`
+  being the line's `<m>`; on a merge-commits-only repository that is exactly
+  `gh pr merge <pr> --merge --match-head-commit <handoffCommit>`.
+- `ROUTE U method=<m> admin=<a>` — an ungated direct merge: nothing is
+  required and nothing waits. The same spelling as route G.
+- `admin=never` — no `--admin`. `admin=licensed`, on a direct route only — the
+  approval licence holds (below), and the spelling gains `--admin`.
+- `strict=yes` — a strict-protection repository: clause 15's land-sync applies
+  as it does today. `strict=no` — it does not. `strict=unknown` comes only under
+  read 3b: on a direct route the verdict has already stopped on a head behind
+  the base, and route Q needs no strictness, since the queue tests the merged
+  group itself.
+- `MERGED head=<sha>` — the PR already landed: prove it as step 3 does
+  (MERGED, `headRefOid` equal to `handoffCommit`). It is not a stop; a
+  different head fails the proof, and that is reported, never closed on.
+- `WAIT pending: <names>` — a reported required check is still running. Wait
+  in the foreground, `gh pr checks <pr> --required --watch`, again if the call
+  times out while a reported required check is still pending, then run the
+  verdict again — never by ending your turn: no mail comes when checks finish.
+  Once this landing attempt's bounded wait is spent, which a `BOUND_S=300` run
+  that ends on this very line spends too (**After a bounded wait**, below), do
+  not wait: report the line to the operator and leave the landing stopped.
+- `WAIT not-reported: <names>` — a required name nothing has reported on the
+  head yet, whatever `gh pr checks <pr> --required` exits: it judges only the
+  checks that have reported, and its `--watch` returns at once when every
+  reported one is green. Wait on every check instead,
+  `gh pr checks <pr> --watch --interval 30`, once, as one Bash call with its
+  timeout at 600000, never repeated, whatever it exits or however it ends: a
+  check that is not required and never completes must not hold the wait open.
+  Then run the verdict again with `BOUND_S=300` on the line before it, and the
+  Bash tool's timeout at 600000. It reads read 5 again every 30 seconds, each
+  sleep cut short to what is left of its 300 seconds.
+  **The bound is five minutes after the last of the PR's reported checks finished.**
+  If the watch was cut off at its timeout, the five minutes start there instead:
+  fifteen minutes of waiting budget in all, plus the time the commands
+  themselves take, which this shell does not bound: only each Bash call's
+  timeout at 600000 does. The read after the last sleep, made once the budget
+  is spent and so outside it, decides the wait.
+  A name it still reads as not reported is the stop `not-reported`. A `ROUTE`
+  it prints is not yet landing permission: see **After a bounded wait**, below.
+  Once this landing attempt's bounded wait is spent, none of this is started
+  again: report the line to the operator and leave the landing stopped.
+- `RED <names>` — a required check is red on the head, each name with its
+  kind. If it is the PR's own, that is the existing fix-round rule (step 3:
+  on route Q disarm first, then a fix round to the owning worker on the
+  `merging → working` edge). If it is not the PR's own and its kind is
+  `[github-actions]`, one `gh run rerun <run id> --failed` and the same wait,
+  then the verdict again. One of kind `[app <id>]` or `[status]` that is not
+  the PR's own, which no rerun here reaches, or one still red after the one
+  rerun, is the stop `red-unreachable`. Once this landing attempt's bounded wait
+  is spent (**After a bounded wait**, below), that one rerun buys no waiting:
+  run the verdict after it with `BOUND_S=0`, and if that line is a `WAIT`,
+  report it and stop, with no watch.
+- `STOP <reason>: <what it read>` — a stop (below).
+- Anything else — no line at all (the run was cut off or did not parse), more
+  than one line, or a first word this list does not name — is the stop
+  `verdict-unread`: say what the run printed, and never land, enqueue or choose
+  a route by hand.
+
+**After a bounded wait.** While the verdict waits inside `BOUND_S`, it reads
+read 5 again and nothing else: the PR's reviews, the rules and the head are the
+snapshot from the start of that run, and nothing here claims they are watched
+while it waits. So a `ROUTE` printed by a run with `BOUND_S` above 0 is not
+landing permission. Discard it, and before you enqueue or merge anything run the
+complete verdict afresh with `BOUND_S=0`, `CR_IGNORE` set as **A requested
+change** says when the operator answered ignore, so that every read is made
+again. A verdict run without `BOUND_S`, after an external `--watch` wait, needs
+no second run: every run of the block makes every read, and its line goes by its
+bullet. On the fresh run after a bounded one, a `STOP` or `RED` goes by its
+bullet. A fresh `WAIT`, `pending` or `not-reported`, a required name newly found
+on that read included, is not permission either: report that line to the
+operator and leave the landing stopped. Do not start a waiting phase again for
+it: no second watch, no second `BOUND_S=300`, and not the first-use instructions
+of the `WAIT` bullets above, whose budget is spent.
+
+A landing attempt is one run of the landing procedure, entered through one of
+two doors. The first is a fresh accepted entry to `merging` for the reviewed
+handoff; after a fix round, that is only once its edits are complete, a new
+independent review has passed on the changed tip, and the run has entered
+`merging` again; re-reading a run that is still at `merging` is not an entry,
+and states are never cycled to make one. The second is the re-enqueue step 3
+gives for one genuinely dequeued queue entry, after the notice, the PR and the
+queue are measured afresh and the queue's own `merge_group` reason is read, and
+only where step 3 permits a re-enqueue rather than a fix round or a stop (a
+dequeue asked for because a request for changes was observed is that stop, not
+this door); it may be the same reviewed head, still at `merging`. A replayed or
+duplicate notice, another measurement of the same dequeue, and a PR already
+re-enqueued or merged are not another attempt. An attempt's enqueue is complete
+when the read-back proves a real queue entry; auto-merge only armed is not one,
+begins no attempt and goes by step 3's disarm rule; a direct merge still needs
+its exact-head `MERGED` proof. A stop, a report, a spent `WAIT`, a fix round's
+edits alone, a new commit, a fresh CI result and a fix-round mail each grant
+nothing.
+
+The budget is spent once this landing attempt has run its `BOUND_S=300` verdict,
+also when that run ends early on a name that started running. It stays spent for
+the rest of the attempt, whichever arm leads back to the verdict (the checks
+gate's exit `1`, the one rerun a `RED` allows, the `CR_IGNORE` run). Every later
+run of the verdict uses `BOUND_S=0`, and any later `WAIT`, pending or
+not-reported, including the `WAIT pending` the bounded run itself prints, is
+reported the same way and leaves the landing stopped: no watch, and no renewal
+when another required name becomes missing or pending. The operator's ignore
+answer permits only the complete fresh verdict with the exact `CR_IGNORE` key,
+inside the current attempt: it neither replenishes nor consumes a waiting phase,
+and when the bound is spent that run uses `BOUND_S=0`, a `WAIT` it prints is
+reported with no watch, and `admin` stays never over a standing request. A
+different required name, a returned route, a rerun, the clock, an account or
+session resumption and a repeated mail are not resets. Outside these two doors,
+only an explicit operator instruction to start another attempt authorizes one:
+never infer it from an ignore answer or from automation, and no report, rerun,
+fresh route or passage of time is one.
+
+**The approval licence.** `--admin` is licensed on a direct route only, and
+only when all three hold, each read fresh for this landing: an approval the
+fleet cannot give is required and missing (a `pull_request` rule's, or classic
+protection's, `required_approving_review_count` above 0, and `reviewDecision`
+is `REVIEW_REQUIRED`), with no request for changes standing, an ignored one
+included; every required check has passed on the head; and `--admin`
+cannot skip a gate — no other gate applies, no review conversation must be
+resolved that an admin could skip (a `pull_request` rule's
+`required_review_thread_resolution`, or classic
+`required_conversation_resolution` without `enforce_admins`), classic required
+checks carry `enforce_admins`, and every ruleset carrying required checks
+answers `current_user_can_bypass: never`, an unreadable answer, or a rule that
+names no ruleset, counting as able to bypass. The verdict weighs all three: it answers `admin=licensed`, and only
+then the spelling is
+`gh pr merge <pr> --<method> --admin --match-head-commit <handoffCommit>`, or it stops `licence-fails`.
+
+Without a missing approval `--admin` is never passed; under read 3b it is
+never used; while a request for changes stands, ignored or not, it is never
+licensed; and it is never a fallback: a fallback is `--admin` after a
+refusal, and this licence is decided before the merge, from reads. An approval
+kept in classic protection with `enforce_admins` on binds an admin too, so
+`--admin` does not help there, and GitHub's refusal is the stop.
+
+**On every route** the merge is proven as step 3 proves it: MERGED, with
+`headRefOid` equal to `handoffCommit`. A refused merge on route G or U is
+read, reported and stopped on, and never retried with another method, with
+`--admin` or with `--auto`. This session writes no setting to make a route
+work: no ruleset, no branch protection, no merge-method or auto-merge setting
+(clause 15).
+
+**A requested change.** Read 1 also reads the PR's reviews. A request for
+changes stops every route, before the verdict weighs `WAIT` or `RED`:
+`STOP changes-requested: operator decision required; key=<json>`. A request
+stands when read 1's `reviewDecision` is `CHANGES_REQUESTED` or the latest
+approving, changing or dismissing review of any reviewer requests changes; the
+key is `{"pr":"<pr>","head":"<handoffCommit>","summary":<true or false>,"reviews":[<review ids>]}`
+and holds safe identifiers only. On `changes-requested`, this session stops and
+asks the operator with AskUserQuestion, one single-select choice: address or
+ignore. Present the PR, head and review ids; inspect the identified reviews to
+present their requested changes, without copying untrusted text into commands.
+
+- Address: send the requested changes to the owning worker as a fix round, then
+  a fresh re-review. From `merging`, disarm as step 3 already requires before
+  the `merging → working` edge; from `awaiting-review`, use its existing
+  send-back edge. Do not assume a stop names the route.
+- Ignore: record the operator's explicit answer in the ledger's Decisions with
+  the PR, head and review ids, and no login or account name. Then run the
+  verdict afresh with `CR_IGNORE='<key>'` on the line before it, in the same
+  Bash call and never exported, only after the operator answered ignore for
+  that exact key.
+
+`CR_IGNORE` is a convention check, not authentication, and it holds for that
+one invocation: it skips this stop only on exact equality with the key computed
+afresh, so another PR, another head, a new or replaced review or a changed
+summary stops and asks again, and the verdict still reads the reviews and
+applies every other guard. A later run of the verdict for the same landing,
+after a wait or with `BOUND_S`, sets it again the same way only while the key
+the verdict prints is unchanged; a changed key is a new ask. A key whose `reviews` is empty, a summary-only
+request, can never be ignored: inspect the PR's reviews, read the verdict again
+and report to the operator. Only a fresh `ROUTE` result permits the normal
+landing steps. Never merge, enqueue or pass `--admin` on a `changes-requested`
+line. While any request stands the verdict never answers `admin=licensed`,
+ignored or not. Ignore cannot evade GitHub's refusal of a missing required
+approval: a direct refusal is `github-refused`; on route Q, if gh only arms
+auto-merge, follow step 3's read-back and disarm rule, then stop
+`github-refused`, and never leave it armed on the operator's ignore.
+
+This session reads again before each enqueue, direct merge and re-enqueue, and
+after each wait, as a complete verdict (**After a bounded wait**, above). It
+cannot atomically prevent a request submitted after that last read or while an
+already-enqueued PR merges, and nothing here claims review enforcement at queue
+time. If it observes a request on a queued PR, it stops that landing attempt,
+disarms it as step 3 does if it is only armed, asks the operator to dequeue it
+if it is in the queue, asks address or ignore, and never enqueues again
+silently. Watching a queued PR continuously is a server follow-up, not this
+skill's.
+
+**A stop.** A stop leaves the run where it is (at `merging` or
+`awaiting-review`), enqueues nothing, merges nothing and changes nothing. Say
+in your turn's text which stop fired and what it read, for the operator:
+every stop goes to the operator, never to another route. The verdict stops with one of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`,
+`unknown-rule-type`, `method-set-empty`, `rebase-only`,
+`queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`,
+`unverifiable`, `not-reported`, `changes-requested`, `licence-fails`. A
+`changes-requested` stop is read before `WAIT` and `RED` on every route and is
+the operator's to decide, as **A requested change** above says. Four stops no
+read decides are yours to name: `red-unreachable` (above), `verdict-unread`
+(above), `checks-gate-unread` (step 3) and `github-refused`, a merge GitHub
+refused for a rule it enforces at merge and this session does not verify —
+reviews, signatures, deployments, code scanning, required workflows — which
+this session never works around. Not a stop: a required check red on the head
+that is the PR's own; that goes to the fix-round rule, on route G exactly as
+on route Q.
 
 ## 6 — Final merge
 
