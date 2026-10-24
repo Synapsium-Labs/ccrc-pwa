@@ -170,6 +170,7 @@ _ws_archive_manifest	C4
 cmd_ws_restore	C4
 _attic_project	C4
 cmd_ws_attic	C4
+_pr_bind_facts	C4
 _pr_state_one	C4
 cmd_pr_state	C4
 cmd_pr_open	C4

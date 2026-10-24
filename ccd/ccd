@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=60242abc3ec5e8f469348dd8db684afd68d94db7b218183267f8c46b65c075b8
+# ccrc:generated 1 sha256=e6a0a43c1b906e402b41a8496d884ee6adcb63b1aa7a0a16f06cdd5ee6940219
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -10829,35 +10829,17 @@ cmd_ws_attic() {   # ccd ws-attic --session <id>   |   ccd ws-attic --drop <id>
   esac
 }
 
-_pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> one JSON line
-  # `$5` is WHEN gh ANSWERED `$4`, in milliseconds, and it belongs to the answer
-  # rather than to this session: `cmd_pr_state` takes it once, at the read, and
-  # hands the same value to every session of a `--project` sweep. That is what
-  # makes `_pr_py`'s compare-and-set rank ANSWERS. It is optional and `""` is the
-  # honest default for a caller that has none — `_pr_py` then falls back to its
-  # own clock, which is the pre-fix behaviour and not a refusal.
+_pr_bind_facts() {   # id main [rows-head-branch] -> 0, the binding's shell-side facts set in the CALLER's locals; 1 with BIND_REFUSAL set
+  # THE ONE PLACE A SESSION'S BINDING FACTS ARE READ, extracted from `_pr_state_one` so that `pr-state` and `pr-landing`
+  # cannot disagree on whether a workspace owns a PR. It PERSISTS NOTHING and prints nothing but the drift rung's stderr
+  # line; each caller turns a refusal into its own answer shape (`pr-state`: `{id, phase: "unknown", reason}`;
+  # `pr-landing`: `{id, unmeasured: [reason]}`).
   #
-  # `$6` is WHICH BRANCH gh was asked about for `$4`, and it is here for the
-  # same reason `$5` is: it is a property of the ANSWER, not of this session, so
-  # it travels with the rows rather than being re-derived beside them. Since the
-  # `--session` path started sending `--head`, the branch is read once — to
-  # build the question — and the binding below must use THAT string and not a
-  # second read of the field, because the two reads are now separated by a
-  # network call `PR_GH_TIMEOUT` bounds at twelve seconds. A `ws-rename` or a
-  # hand-edited registry landing in that window would otherwise have this
-  # function bind branch B's rows against branch C: `bound()` cannot match, the
-  # phase collapses to `none`, and `none` is the answer that CLEARS the
-  # persisted `prnumber` and appends the outgoing PR to the append-only
-  # `.prhistory` — a local fact erasing GitHub's answer about a PR, which is
-  # exactly what the drift rung below refuses to do. Answering about the branch
-  # gh was asked about is coherent and at most one sweep stale; the next sweep
-  # asks about the new name.
-  #
-  # `""` — every `--project` caller, and the four-argument calls the pr-state
-  # tests make — means "these rows are the whole repository's, not one
-  # branch's", and the registry is then the only source there is.
-  local id="$1" main="$2" repo="$3" rows="$4" answeredAt="${5:-}" rowsHead="${6:-}"
-  local project branch base baseShort tip ahead workdir dirty tmpl
+  # DYNAMIC SCOPE, on purpose: bash has no out-parameters worth the name, so the CALLER declares `project branch base
+  # baseShort tip ahead workdir wthead registered BIND_REFUSAL` as locals and this function assigns them. `main` is the
+  # caller's checkout, passed in because `pr-state`'s tests hand `_pr_state_one` a main of their own choosing.
+  local id="$1" main="$2" rowsHead="${3:-}"
+  BIND_REFUSAL=""
   project=$(_reg_get "$id" project)
   branch="$rowsHead"; [[ -n "$branch" ]] || branch=$(_reg_get "$id" branch)
   base=$(_reg_get "$id" base);       workdir=$(_reg_get "$id" workdir)
@@ -10870,7 +10852,7 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
   # registry-incomplete workspace mark its seven siblings `unknown` and
   # silence the whole project's lane. §6's "Partial sweep" row promises
   # per-session honesty; this is where that is kept.
-  [[ -n "$branch" ]] || { printf '{"id":%s,"phase":"unknown","reason":"error"}\n' "$(_json_str "$id")"; return 0; }
+  [[ -n "$branch" ]] || { BIND_REFUSAL=error; return 1; }
   [[ -n "$base" ]] || base="origin/HEAD"
   baseShort="${base#origin/}"
   # `--quiet` turns git's own two answers into two exit codes, and the same
@@ -10892,7 +10874,7 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
   case "$rc" in
     0) : ;;
     1) tip="" ;;
-    *) printf '{"id":%s,"phase":"unknown","reason":"error"}\n' "$(_json_str "$id")"; return 0 ;;
+    *) BIND_REFUSAL=error; return 1 ;;
   esac
   # "" is UNMEASURED, not zero. `ahead=0` is the claim "this branch is level with
   # base", which is what `no-commits` is built from, and a ref that does not
@@ -10914,44 +10896,6 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
     # rest of this function now says, and `0` would say "level with base".
     [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=""
   fi
-  # THE ONE READ IN THIS VERB THAT IS ABOUT A DIRECTORY. ccrc asks $main;
-  # $workdir is otherwise only ever a path git is asked ABOUT — but "what is
-  # uncommitted here" is a question about that directory's contents, so it is
-  # `-C "$workdir"` and therefore has to be ENTITLED first: git's own record AND
-  # the directory itself must both say $main, the pair `cmd_ws_rm` requires
-  # before it touches anything and `_ws_archive_manifest` walks for the identical
-  # read. Neither rung alone is enough — the record outlives the directory, so a
-  # hand-deletion plus a stray `git init` still answers $branch while its tree
-  # belongs to a stranger. Measured: without the common-dir rung the squatter's
-  # two untracked files were counted and reported as this workspace's.
-  #
-  # UNENTITLED OR UNREADABLE IS `null`, NOT A REFUSAL AND NEVER 0. `dirty` is an
-  # advisory — the PR state is entirely knowable when gh answered and the
-  # worktree did not — and this verb answers for every workspace of a project
-  # from one gh call, so refusing here would cost the siblings their state too.
-  # `ws-archive` refuses on these same facts because it writes a record that
-  # authorises deletions; this one only reports. What is NOT allowed is `0`: the
-  # shipped one-liner piped into `grep -c` and threw git's status away, so a
-  # deleted worktree answered `"dirty": 0` — an affirmative "nothing is
-  # uncommitted here" about a directory that is not there. That is deviation 6's
-  # silent-empty-stream defect, one task later in the same file. `registered` and
-  # the status are read from `$?` on their own lines: `local x=$(cmd)` returns
-  # local's status, not the command's.
-  #
-  # Two of the three rungs survive mutation and are kept rather than pinned,
-  # because each is redundant only GIVEN the others and the rule names all three:
-  #   - `registered != 0` — a path whose common dir equals `$main`'s is inside
-  #     `$main`'s repository, and `git status` from anywhere in a worktree
-  #     reports that worktree, so the count is the same with or without this
-  #     rung today. It is the rung the plan's rule names FIRST, and it is the one
-  #     that stops answering if `_ws_common_dir` is ever loosened.
-  #   - `-z "$main_common"` — an unreadable `$main` makes both sides empty and
-  #     therefore equal, which is the fail-OPEN this guard exists to stop; it is
-  #     unreachable only because the tip read above already returned on rc 128.
-  # The `wd_common != main_common` rung is the one that catches the squatter, and
-  # it is pinned.
-  local wthead registered wd_common main_common porcelain prc
-  dirty=""
   wthead=$(_ws_wt_branch "$main" "$workdir"); registered=$?
   # ── DRIFT IS NOT A PHASE, AND THIS VERB MAY NOT INVENT ONE ────────
   # The defect: `swift-delta`'s `.prphase` read `no-commits` while its worktree
@@ -10992,9 +10936,83 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
   # the four pinned cases of that shape keep their behaviour untouched.
   if (( registered == 0 )) && [[ -n "$wthead" && -n "$tip" && "$wthead" != "$branch" ]]; then
     echo "pr-state: the registry says $branch, git's worktree record for $workdir says $wthead — PR state not measured for $id (reconcile with: ccd ws-rename --session $id --branch $wthead)" >&2
-    printf '{"id":%s,"phase":"unknown","reason":"branch-drift"}\n' "$(_json_str "$id")"
-    return 0
+    BIND_REFUSAL=branch-drift
+    return 1
   fi
+  return 0
+}
+
+_pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> one JSON line
+  # `$5` is WHEN gh ANSWERED `$4`, in milliseconds, and it belongs to the answer
+  # rather than to this session: `cmd_pr_state` takes it once, at the read, and
+  # hands the same value to every session of a `--project` sweep. That is what
+  # makes `_pr_py`'s compare-and-set rank ANSWERS. It is optional and `""` is the
+  # honest default for a caller that has none — `_pr_py` then falls back to its
+  # own clock, which is the pre-fix behaviour and not a refusal.
+  #
+  # `$6` is WHICH BRANCH gh was asked about for `$4`, and it is here for the
+  # same reason `$5` is: it is a property of the ANSWER, not of this session, so
+  # it travels with the rows rather than being re-derived beside them. Since the
+  # `--session` path started sending `--head`, the branch is read once — to
+  # build the question — and the binding below must use THAT string and not a
+  # second read of the field, because the two reads are now separated by a
+  # network call `PR_GH_TIMEOUT` bounds at twelve seconds. A `ws-rename` or a
+  # hand-edited registry landing in that window would otherwise have this
+  # function bind branch B's rows against branch C: `bound()` cannot match, the
+  # phase collapses to `none`, and `none` is the answer that CLEARS the
+  # persisted `prnumber` and appends the outgoing PR to the append-only
+  # `.prhistory` — a local fact erasing GitHub's answer about a PR, which is
+  # exactly what the drift rung below refuses to do. Answering about the branch
+  # gh was asked about is coherent and at most one sweep stale; the next sweep
+  # asks about the new name.
+  #
+  # `""` — every `--project` caller, and the four-argument calls the pr-state
+  # tests make — means "these rows are the whole repository's, not one
+  # branch's", and the registry is then the only source there is.
+  local id="$1" main="$2" repo="$3" rows="$4" answeredAt="${5:-}" rowsHead="${6:-}"
+  local project branch base baseShort tip ahead workdir dirty tmpl wthead registered BIND_REFUSAL
+  # The binding facts and the refusals that come before any persist live in `_pr_bind_facts`, shared with `pr-landing`.
+  # A refusal CARRIES THE ID (a per-session failure is not a whole-repo failure; see there).
+  _pr_bind_facts "$id" "$main" "$rowsHead" || {
+    printf '{"id":%s,"phase":"unknown","reason":"%s"}\n' "$(_json_str "$id")" "$BIND_REFUSAL"; return 0; }
+  # THE ONE READ IN THIS VERB THAT IS ABOUT A DIRECTORY. ccrc asks $main;
+  # $workdir is otherwise only ever a path git is asked ABOUT — but "what is
+  # uncommitted here" is a question about that directory's contents, so it is
+  # `-C "$workdir"` and therefore has to be ENTITLED first: git's own record AND
+  # the directory itself must both say $main, the pair `cmd_ws_rm` requires
+  # before it touches anything and `_ws_archive_manifest` walks for the identical
+  # read. Neither rung alone is enough — the record outlives the directory, so a
+  # hand-deletion plus a stray `git init` still answers $branch while its tree
+  # belongs to a stranger. Measured: without the common-dir rung the squatter's
+  # two untracked files were counted and reported as this workspace's.
+  #
+  # UNENTITLED OR UNREADABLE IS `null`, NOT A REFUSAL AND NEVER 0. `dirty` is an
+  # advisory — the PR state is entirely knowable when gh answered and the
+  # worktree did not — and this verb answers for every workspace of a project
+  # from one gh call, so refusing here would cost the siblings their state too.
+  # `ws-archive` refuses on these same facts because it writes a record that
+  # authorises deletions; this one only reports. What is NOT allowed is `0`: the
+  # shipped one-liner piped into `grep -c` and threw git's status away, so a
+  # deleted worktree answered `"dirty": 0` — an affirmative "nothing is
+  # uncommitted here" about a directory that is not there. That is deviation 6's
+  # silent-empty-stream defect, one task later in the same file. `registered` and
+  # the status are read from `$?` on their own lines: `local x=$(cmd)` returns
+  # local's status, not the command's.
+  #
+  # Two of the three rungs survive mutation and are kept rather than pinned,
+  # because each is redundant only GIVEN the others and the rule names all three:
+  #   - `registered != 0` — a path whose common dir equals `$main`'s is inside
+  #     `$main`'s repository, and `git status` from anywhere in a worktree
+  #     reports that worktree, so the count is the same with or without this
+  #     rung today. It is the rung the plan's rule names FIRST, and it is the one
+  #     that stops answering if `_ws_common_dir` is ever loosened.
+  #   - `-z "$main_common"` — an unreadable `$main` makes both sides empty and
+  #     therefore equal, which is the fail-OPEN this guard exists to stop; it is
+  #     unreachable only because the tip read above already returned on rc 128.
+  # The `wd_common != main_common` rung is the one that catches the squatter, and
+  # it is pinned.
+  local wd_common main_common porcelain prc
+  dirty=""
   wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
   if (( registered != 0 )) || [[ -z "$main_common" || "$wd_common" != "$main_common" ]]; then
     echo "pr-state: $workdir is not a corroborated worktree of $main — dirty unknown for $id" >&2
