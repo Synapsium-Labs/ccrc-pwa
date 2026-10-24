@@ -21,10 +21,17 @@
 //   | the empty-version arm deleted                | a null version is unmeasured…               |
 //   | `-0` not normalised                          | a measured zero is $0.00                    |
 //   | the `<$0.01` arm deleted                     | cost reads as US dollars…                   |
+import { readdirSync } from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import type { FleetSession, SessionUsage } from '../../shared/api';
+import {
+  COORDINATOR_WORD, coordinatorRole, headerFacts, sessionFacts as fleetFacts,
+} from '../src/fleet/sessionFacts';
 import { sessionFacts } from '../src/session/sessionFacts';
 import { fleetSession } from './fleetFixture';
+import { parseTs } from './literalWalker';
 
 const usage = (over: Partial<SessionUsage> = {}): SessionUsage => ({
   ts: 1_700_000_000, model: null, class: null, effort: null, ctxPct: null,
@@ -87,5 +94,75 @@ describe('sessionFacts (D-5104, F6): version and cost as words, never a fabricat
     expect(sessionFacts(withCost(2, false)).cost).toEqual({ word: '$2.00', measured: true, stale: false });
     // A stale reading that carries no cost is still a stale reading.
     expect(sessionFacts(withCost(null, true)).cost).toEqual({ word: '—', measured: false, stale: true });
+  });
+});
+
+// THE COORDINATOR'S ONE READER AND ONE WORD (D-6714, plan 2026-10-22-desktop-polish Task T5a): the palette's session
+// entries ask `coordinatorRole` as the row's facts do, and say `COORDINATOR_WORD` as the header and the details do.
+describe('coordinatorRole and COORDINATOR_WORD (D-6714)', () => {
+  const SRC = path.join(import.meta.dirname, '..', 'src');
+  const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
+    d.isDirectory() ? files(path.join(dir, d.name)) : /\.tsx?$/.test(d.name) ? [path.join(dir, d.name)] : []);
+  const nodes = (file: string, pick: (n: ts.Node) => boolean): ts.Node[] => {
+    const out: ts.Node[] = [];
+    const walk = (n: ts.Node): void => { if (pick(n)) out.push(n); ts.forEachChild(n, walk); };
+    walk(parseTs(file));
+    return out;
+  };
+  const isCoordinatorLiteral = (n: ts.Node): boolean => ts.isStringLiteral(n) && n.text === 'coordinator';
+  /** `x === 'coordinator'` (or `==`, `!==`, `!=`) where `x` is `role` or a `.role` read. */
+  const roleComparison = (n: ts.Node): boolean => {
+    if (!ts.isBinaryExpression(n)) return false;
+    const op = n.operatorToken.kind;
+    if (![ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken,
+      ts.SyntaxKind.ExclamationEqualsToken].includes(op)) return false;
+    const isRole = (e: ts.Expression): boolean => (ts.isIdentifier(e) && e.text === 'role')
+      || (ts.isPropertyAccessExpression(e) && e.name.text === 'role');
+    return (isRole(n.left) && isCoordinatorLiteral(n.right)) || (isRole(n.right) && isCoordinatorLiteral(n.left));
+  };
+  const enclosingFunction = (n: ts.Node): string | null => {
+    for (let p: ts.Node | undefined = n.parent; p !== undefined; p = p.parent) {
+      if (ts.isFunctionDeclaration(p)) return p.name?.text ?? null;
+    }
+    return null;
+  };
+
+  it("coordinatorRole: only 'coordinator' is a coordinator; null, absent and any other value are not", () => {
+    expect(coordinatorRole(fleetSession({ role: 'coordinator' }))).toBe(true);
+    expect(coordinatorRole(fleetSession({ role: null }))).toBe(false);
+    const { role: _role, ...absent } = fleetSession();
+    expect(coordinatorRole(absent as unknown as FleetSession)).toBe(false);
+    for (const other of ['worker', 'Coordinator', 'coordinator ', '', 1, true]) {
+      expect(coordinatorRole(fleetSession({ role: other as unknown as FleetSession['role'] })), String(other)).toBe(false);
+    }
+  });
+
+  it('the coordinator word has one home', () => {
+    expect(COORDINATOR_WORD).toBe('coordinator');
+    const lead = fleetSession({ id: 'lead', role: 'coordinator' });
+    const role = headerFacts(fleetFacts({ session: lead, now: 0 })).find((f) => f.key === 'role');
+    expect(role?.text, "headerFacts' role fact").toBe(COORDINATOR_WORD);
+
+    // sessionFacts.ts: headerFacts' role fact takes COORDINATOR_WORD as its text, never a literal.
+    const facts = path.join(SRC, 'fleet', 'sessionFacts.ts');
+    const roleFacts = nodes(facts, (n) => ts.isObjectLiteralExpression(n) && n.properties.some((p) =>
+      ts.isPropertyAssignment(p) && p.name.getText() === 'key' && ts.isStringLiteral(p.initializer) && p.initializer.text === 'role'));
+    expect(roleFacts, "headerFacts' one role fact").toHaveLength(1);
+    const text = (roleFacts[0] as ts.ObjectLiteralExpression).properties.find((p) => p.name?.getText() === 'text');
+    expect(text !== undefined && ts.isPropertyAssignment(text) ? text.initializer.getText() : null).toBe('COORDINATOR_WORD');
+
+    // SessionDetails.tsx imports the word and spells it nowhere: no JSX text and no string that is the whole word.
+    const details = path.join(SRC, 'session', 'SessionDetails.tsx');
+    const imported = parseTs(details).statements.some((st) => ts.isImportDeclaration(st)
+      && st.importClause?.namedBindings !== undefined && ts.isNamedImports(st.importClause.namedBindings)
+      && st.importClause.namedBindings.elements.some((e) => e.name.text === 'COORDINATOR_WORD'));
+    expect(imported, 'SessionDetails.tsx imports COORDINATOR_WORD').toBe(true);
+    const spelled = nodes(details, (n) => isCoordinatorLiteral(n) || (ts.isJsxText(n) && n.text.trim() === 'coordinator'));
+    expect(spelled.map((n) => n.getText()), 'SessionDetails.tsx spells the word').toEqual([]);
+
+    // coordinatorRole is the only `role === 'coordinator'` comparison in pwa/src.
+    const comparisons = files(SRC).flatMap((f) => nodes(f, roleComparison)
+      .map((n) => `${path.relative(SRC, f)}:${enclosingFunction(n) ?? '<top>'}`));
+    expect(comparisons).toEqual(['fleet/sessionFacts.ts:coordinatorRole']);
   });
 });

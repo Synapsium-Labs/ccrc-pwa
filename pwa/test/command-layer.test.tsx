@@ -4,9 +4,10 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { INSTRUMENT, SKINS, Sheet } from '@ccrc/ui';
-import { AUTH_VERDICTS } from '../../shared/api';
+import { AUTH_VERDICTS, type RunSummary } from '../../shared/api';
 import { CommandLayer } from '../src/command/CommandLayer';
-import { SEARCH_EMPTY } from '../src/command/registry';
+import { fleetOrder } from '../src/command/commands';
+import { COMMAND_FIELD_WORDS, SEARCH_EMPTY } from '../src/command/registry';
 import { actionDoor, commandDoor, doorMark } from '../src/command/door';
 import { CHORD_MS } from '../src/command/useShortcuts';
 import { clearAuthLost, raiseAuthLost, useAuthLost } from '../src/lib/auth';
@@ -647,5 +648,139 @@ describe('the palette hands focus back where it came from (D-5679)', () => {
     fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
     await wait(30);
     expect(document.activeElement).toBe(document.getElementById('content'));
+  });
+});
+
+// THE TOP SEARCH (D-6714, plan 2026-10-22-desktop-polish Task T5a): the palette's first level finds sessions by their
+// name, workspace, branch, project and, for a coordinator, its programme, after every matching command, coordinators
+// first on an equal match. A worker and a coordinator in project-a with no run linking them, so `fleetOrder` lists the
+// worker (attention) first; a third session on branch runs-fold.
+describe('the top search finds sessions (D-6714)', () => {
+  const FIRST = fleetSession({ id: 'project-a-one', project: 'project-a', name: 'first', workspace: 'ws-a', bucket: 'attention', statusUpdatedAt: 3 });
+  const LEAD = fleetSession({ id: 'project-a-lead', project: 'project-a', name: 'lead', role: 'coordinator', bucket: 'idle', statusUpdatedAt: 2 });
+  const THIRD = fleetSession({ id: 'project-b-three', project: 'project-b', name: 'third', branch: 'runs-fold', bucket: 'idle', statusUpdatedAt: 1 });
+  const NAMES: Readonly<Record<string, string>> = {
+    [FIRST.id]: 'first, project-a', [LEAD.id]: 'lead, coordinator, project-a', [THIRD.id]: 'third, project-b',
+  };
+  const SESSION_NAMES = new Set(Object.values(NAMES));
+  const PROGRAMME = { id: 7, program: 'prog-a', programTitle: 'Programme A', wave: 1, waveOf: 2, project: 'project-a',
+    homeProject: null, state: 'working', closedAt: null, claimedBy: LEAD.id, sessionId: FIRST.id, kind: 'work' } as unknown as RunSummary;
+
+  beforeEach(() => {
+    useFleetStore.setState({ sessions: [FIRST, LEAD, THIRD], runs: [], blocked: false });
+  });
+
+  /** Every option's accessible name, in order (an option names itself by `aria-label` when it has one). */
+  const optionNames = (): string[] => screen.queryAllByRole('option').map((o) => o.getAttribute('aria-label') ?? o.textContent ?? '');
+  const sessionOptions = (): string[] => optionNames().filter((n) => SESSION_NAMES.has(n));
+  const type = (q: string): HTMLElement => {
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: q } });
+    return input;
+  };
+  const openSessionPage = (): void => {
+    const input = type('open session');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByRole('combobox', { name: 'Open session' })).toBeTruthy();
+  };
+
+  it('typing a workspace slug lists that session at the first level, and Enter opens it and closes the palette', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    const input = type('ws-a');
+    expect(optionNames()).toEqual([NAMES[FIRST.id]]);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(window.location.pathname).toBe(`/s/${encodeURIComponent(FIRST.id)}`);
+    expect(palette()).toBeNull();
+  });
+
+  it('typing a project name lists its sessions after the commands, the coordinator before the worker', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    type('project-a');
+    expect(sessionOptions()).toEqual([NAMES[LEAD.id], NAMES[FIRST.id]]);
+    const names = optionNames();
+    const firstSession = names.findIndex((n) => SESSION_NAMES.has(n));
+    expect(names.slice(firstSession).every((n) => SESSION_NAMES.has(n)), 'no command after a session').toBe(true);
+  });
+
+  it("a command still comes first: 'runs' puts Go to Runs first, and Enter goes to /runs", () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    const input = type('runs');
+    const names = optionNames();
+    expect(names[0]).toMatch(/^Go to Runs/);
+    expect(names, 'the runs-fold branch is found, after the command').toContain(NAMES[THIRD.id]);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(window.location.pathname).toBe('/runs');
+  });
+
+  it("a coordinator is found by its programme's title; its worker is not", () => {
+    useFleetStore.setState({ runs: [PROGRAMME] });
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    type('Programme A');
+    expect(sessionOptions()).toEqual([NAMES[LEAD.id]]);
+  });
+
+  it('an empty query lists the commands and no session', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    expect(optionNames().length).toBeGreaterThan(5);
+    expect(sessionOptions()).toEqual([]);
+    expect(screen.queryAllByRole('option').some((o) => o.hasAttribute('aria-label'))).toBe(false);
+  });
+
+  it('a one-letter query lists no session', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    type('p');
+    expect(sessionOptions()).toEqual([]);
+  });
+
+  it("each session option's accessible name is exact", () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    type('project-a');
+    const worker = screen.getByRole('option', { name: 'first, project-a' });
+    expect(screen.getByRole('option', { name: 'lead, coordinator, project-a' })).toBeTruthy();
+    expect(worker.getAttribute('aria-label') ?? '').not.toContain('coordinator');
+  });
+
+  it("the first level's placeholder is COMMAND_FIELD_WORDS and its empty text SEARCH_EMPTY; a page keeps its own placeholder", () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    expect(screen.getByRole('combobox').getAttribute('placeholder')).toBe(COMMAND_FIELD_WORDS);
+    type('zzzzqq');
+    expect(screen.getByText(SEARCH_EMPTY)).toBeTruthy();
+    type('');
+    openSessionPage();
+    expect(screen.getByRole('combobox').getAttribute('placeholder')).toBe('Open session…');
+    type('zzzzqq');
+    expect(screen.queryByText(SEARCH_EMPTY), "a page says the palette's own empty text").toBeNull();
+  });
+
+  it('Open session… lists the same entries', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    const order = fleetOrder([FIRST, LEAD, THIRD], []).map((s) => NAMES[s.id]);
+    expect(order[0], 'the fixture: fleetOrder lists the worker first').toBe(NAMES[FIRST.id]);
+    const top: Record<string, string[]> = {};
+    for (const q of ['ws-a', 'project-a', 'runs-fold']) {
+      openPalette();
+      type(q);
+      top[q] = sessionOptions();
+      fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
+    }
+    openPalette();
+    openSessionPage();
+    expect(optionNames(), 'empty, the fleet in its order').toEqual(order);
+    type('ws-a');
+    expect(optionNames()).toEqual([NAMES[FIRST.id]]);
+    type('project-a');
+    expect(optionNames()).toEqual([NAMES[LEAD.id], NAMES[FIRST.id]]);
+    for (const q of Object.keys(top)) {
+      type(q);
+      expect(optionNames(), q).toEqual(top[q]);
+    }
   });
 });
