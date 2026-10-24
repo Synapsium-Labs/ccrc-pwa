@@ -169,7 +169,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     //
     // DERIVED FROM THE BIN DIRECTORY, so the next executable added is caught
     // by the same mechanism rather than by someone remembering this line —
-    // `macos-platform.test.ts:184-189`'s rule under D-1250. `graphify` is
+    // `macos-platform.test.ts#shebangged`'s rule under D-1250. `graphify` is
     // excluded because `_inst_graphify_engine`'s symlink into the pinned venv
     // is not one of `_inst_bins`' copies.
     //

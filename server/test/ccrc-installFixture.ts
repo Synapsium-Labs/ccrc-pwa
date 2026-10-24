@@ -126,7 +126,7 @@ export function realPath(name: string): string {
 }
 
 /** bash's absolute path, resolved ONCE, for the same reason
- *  `ccrc-doctorFixture.ts's `BASH`` resolves it: libuv looks the executable up in the
+ *  `ccrc-doctorFixture.ts#BASH` resolves it: libuv looks the executable up in the
  *  CHILD's environment, and one runner below hands the child a PATH with no
  *  system directory on it at all — spawning bare `bash` there is ENOENT, which
  *  surfaces as a spawn failure (`status === null`) rather than as anything the
@@ -361,7 +361,7 @@ export function freshBoxNoUpstream(prefix: string): string {
 
 export interface Result { code: number; stdout: string; stderr: string }
 
-/** `ccrc-cli.test.ts:73-95`'s runner environment, and its reasoning applies
+/** `ccrc-cli.test.ts#ccrcEnv`'s runner environment, and its reasoning applies
  *  here unchanged. The one addition a future task must remember: any new
  *  `CCRC_*` variable this verb learns to read goes in the delete list below,
  *  or a maintainer with it exported in their shell gets a different install
@@ -594,7 +594,7 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     '    rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$3"',
     '    exit 0 ;;',
     // `restart` is the line `_inst_enable` gained in fix round 1 — deploy's
-    // own (deploy.sh:808-810), and the one that makes a re-run replace the
+    // own (deploy.sh's `systemctl --user restart`), and the one that makes a re-run replace the
     // RUNNING server rather than only the files it runs from. Contained the
     // same way as `enable`: recorded, answered, never a real systemctl.
     '  restart)',
@@ -1098,7 +1098,7 @@ export const unitDir = (home: string, ...rel: string[]): string =>
 
 /** systemd's escape of the `-` in the unit name `app-claude-session.slice`.
  *  The REPOSITORY directory is plainly named; the DESTINATION must be this or
- *  systemd never reads the drop-in (deploy.sh:404-407). In TypeScript the
+ *  systemd never reads the drop-in (deploy.sh's `\x2d` escape note above `AGENT_BUILD_CMD`). In TypeScript the
  *  backslash is doubled; on disk the name carries the four literal characters
  *  `\x2d`, which is what the assertions below are about. */
 export const SLICE_DIR = 'app-claude\\x2dsession.slice.d';

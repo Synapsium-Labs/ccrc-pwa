@@ -477,7 +477,7 @@ describe('ccrc install: the build stamp', () => {
 
   it('skips — and says what that costs — when the tree is not a git checkout', () => {
     // The ordinary state of a DEPLOYED box: `~/ccrc` is an rsync of a tree,
-    // never a repository (`deploy.sh:75-81` says so), so a re-install there has
+    // never a repository (`deploy.sh#stamp_build` says so), so a re-install there has
     // nothing to measure. Skipping is the honest answer; inventing a sha, or
     // carrying the previous one forward, is the forgery. The line names the
     // consequence so an operator who later reads "unstamped" knows why.
@@ -638,7 +638,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
   const dropIns = UNIT_FILES.filter(([dest]) => dest.endsWith('.conf'));
   const unitFiles = UNIT_FILES.filter(([dest]) => !dest.endsWith('.conf'));
   it(`installs ${unitFiles.length} unit files and ${dropIns.length} drop-ins, byte for byte, at 644`, () => {
-    // `deploy.sh:402-417`'s copy set, plus graphify Task 10's role-gated
+    // `deploy.sh#AGENT_BUILD_CMD`'s copy set, plus graphify Task 10's role-gated
     // sweep pair (the default install here is role `both`, so both land).
     // Byte equality rather than existence,
     // because the failure this catches is not an absent file: it is a unit
@@ -915,7 +915,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // role enables it — degrading rather than dying like every timer in
       // this list, and taking no restart (a oneshot holds no code).
       '--user enable --now ccrc-update-watchdog.timer',
-      // THE RESTART, in deploy's own position (deploy.sh:803-805): after both
+      // THE RESTART, in deploy's own position (deploy.sh's `systemctl --user restart` after the enables): after both
       // enables, before the verify. `enable --now` on an already-active unit is
       // a no-op, and `ccrc.service` runs `node ~/ccrc/server/dist/…` — a process
       // pinned to the dist it started with. Without this line the SECOND

@@ -607,7 +607,7 @@ describe('ccrc install: a fresh box', () => {
 });
 
 describe('ccrc install: the files the operator owns', () => {
-  // The rule `deploy/deploy.sh:196-206` states and this verb inherits:
+  // The rule `deploy/deploy.sh#ship_roster` and `#ship_env` state and this verb inherits:
   // `accounts.json` and `ccrc.env` are created once and never overwritten.
   // Everything in this describe is one half of that.
   it('keeps a roster the box already had, and generates accounts.sh FROM IT', () => {
@@ -650,7 +650,7 @@ describe('ccrc install: the files the operator owns', () => {
       'CCRC_HOST=127.0.0.1',
       'CCRC_PORT=9999',
       // Both agent keys, because `CCRC_FLEET=remote` with either one missing is
-      // a config the server REFUSES TO BOOT on (server/src/index.ts:75-79), and
+      // a config the server REFUSES TO BOOT on (server/src/index.ts, its `CCRC_FLEET=remote requires` refusal), and
       // doctor's `config` check reproduces that refusal at the end of this same
       // run. A half-configured remote box is a real state and it has its own
       // test in the `ccrc-doctor-*` test files; this test is about a file being kept, and
@@ -674,7 +674,7 @@ describe('ccrc install: the files the operator owns', () => {
   });
 
   it('keeps a remote-control flag the box already had, byte for byte, on every re-run', () => {
-    // The THIRD file on the user-owned side of `deploy.sh:196-206`'s rule, and
+    // The THIRD file on the user-owned side of `deploy.sh#ship_roster`'s rule, and
     // the one whose overwrite is loudest: this flag decides what every session
     // on the box is SPAWNED AS, so a step that rewrote it would change the
     // shape of ~11 live panes at their next respawn — the exact outage D-99
@@ -1002,7 +1002,7 @@ describe('ccrc install: the env file is named once in the whole CLI', () => {
 
 describe('ccrc install: the executables and files it installs', () => {
   // Every one of these is an artifact the fleet host RUNS and that no
-  // installer placed before stage 1 (`deploy.sh:381-387`'s own note). They
+  // installer placed before stage 1 (`deploy.sh`'s own "Stage 1:" note). They
   // divide into two kinds and the division is what `_inst_atomic` is for:
   //   - COPIES of a file in the tree (`ccd`, the cap-scopes enforcer, the two
   //     session hooks, notify, tmux.conf, the statusline), and
@@ -1255,7 +1255,7 @@ describe('ccrc install: the executables and files it installs', () => {
     // box installing itself — and two generators of one artifact is a drift
     // waiting to happen: a box whose launcher came from the older of them
     // fails in a way neither generator's own tests can see. Extract deploy's
-    // heredoc (the mechanics `agent/test/deploy-verify.test.ts:1750-1776`
+    // heredoc (the mechanics `agent/test/deploy-verify.test.ts#shimBody`
     // uses) and compare it to the bytes THIS verb actually installed.
     //
     // It also means the behaviour tests deploy-verify already runs against
