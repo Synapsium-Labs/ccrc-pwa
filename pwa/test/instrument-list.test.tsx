@@ -50,7 +50,7 @@ const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '');
 const CSS = strip(readFileSync(path.join(SKIN_DIR, 'instrument.css'), 'utf8'));
 const TABLE_SRC = readFileSync(path.join(SKIN_DIR, 'FleetTable.tsx'), 'utf8');
 
-const LABELS = ['Needs you', 'Working', 'Done', 'Idle', 'Cleanup', 'Archived', 'Dead'];
+const LABELS = ['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Dead'];
 
 const COORD = 'project-a-coord';
 const CHILD = 'project-a-worker';
@@ -155,7 +155,7 @@ describe('status mode', () => {
   it('status mode renders the groups in groupByStatus\'s order, the last four folded', () => {
     mount();
     expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(
-      ['attention', 'working', 'done', 'idle', 'cleanup', 'archived', 'dead']);
+      ['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
     expect(groups().map((g) => head(g).getAttribute('aria-expanded'))).toEqual(
       ['true', 'true', 'true', 'false', 'false', 'false', 'false']);
     // A folded group draws no rows; an open one draws its own.
@@ -164,6 +164,19 @@ describe('status mode', () => {
     expect(rowIds(groupOf('attention'))).toEqual(['project-a-asks']);
     // The folds are the model's, never a second list.
     expect(Object.entries(STATUS_GROUPS).filter(([, g]) => g.folds).map(([b]) => b)).toEqual(['idle', 'cleanup', 'archived', 'dead']);
+  });
+
+  it('status mode shows Done above Working', () => {
+    mount();
+    const order = groups().map((g) => g.getAttribute('data-status-group'));
+    expect(order.indexOf('done')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('done')).toBeLessThan(order.indexOf('working'));
+    // In the document itself, not only in the list: the Done section precedes the Working one.
+    expect(groupOf('done').compareDocumentPosition(groupOf('working')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // And so do their rows, in the table's own row order.
+    const rows = [...table().querySelectorAll<HTMLElement>('[data-row]')].map((r) => r.getAttribute('data-row'));
+    expect(rows.indexOf(CHILD)).toBeGreaterThanOrEqual(0);
+    expect(rows.indexOf(CHILD)).toBeLessThan(rows.indexOf(COORD));
   });
 
   it('each group header names its status, and in project mode each row shows its word beside its lamp', () => {
@@ -239,7 +252,7 @@ describe('project mode and the doors', () => {
     pick('Status');
     const tabs = within(screen.getByRole('tablist', { name: 'Sessions by status' })).getAllByRole('tab');
     expect(tabs.map((t) => t.textContent)).toEqual([
-      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Working/), expect.stringMatching(/^Done/), expect.stringMatching(/^All/)]);
+      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Done/), expect.stringMatching(/^Working/), expect.stringMatching(/^All/)]);
     expect(tabs.filter((t) => t.getAttribute('aria-selected') === 'true')).toHaveLength(1);
   });
 
@@ -332,11 +345,20 @@ describe('phone', () => {
     expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(['attention']);
     fireEvent.click(tab(/^All/));
     expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(
-      ['attention', 'working', 'done', 'idle', 'cleanup', 'archived', 'dead']);
+      ['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
     expect(groups().map((g) => head(g).getAttribute('aria-expanded'))).toEqual(
       ['true', 'true', 'true', 'false', 'false', 'false', 'false']);
     // A tab's name carries its group's count.
     expect(tab(/^Needs you/)).toHaveAccessibleName(/1/);
+  });
+
+  it('the phone tabs read Needs you, Done, Working, All', () => {
+    stubWidth(false, false);
+    mount();
+    pick('Status');
+    const tabs = within(screen.getByRole('tablist', { name: 'Sessions by status' })).getAllByRole('tab');
+    expect(tabs.map((t) => t.textContent)).toEqual([
+      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Done/), expect.stringMatching(/^Working/), expect.stringMatching(/^All/)]);
   });
 });
 
@@ -397,7 +419,7 @@ describe('review fixes', () => {
   it('a group with no rows is absent at a desk and under All, present under its own phone tab', () => {
     const sparse = FLEET.filter((s) => s.bucket !== 'attention' && s.bucket !== 'idle');
     mount(sparse);
-    expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(['working', 'done', 'cleanup', 'archived', 'dead']);
+    expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(['done', 'working', 'cleanup', 'archived', 'dead']);
     cleanup();
     stubWidth(false, false);
     mount(sparse);
