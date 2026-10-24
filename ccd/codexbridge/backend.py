@@ -217,6 +217,7 @@ def post(base: str, body: bytes, headers: List[Tuple[str, str]], *, idle_s: Opti
     phase = "connect"
     try:
         conn.connect()
+        sock = conn.sock  # kept: for a `will_close` answer getresponse hands it to the response and clears conn.sock
         phase = "head"
         conn.sock.settimeout(idle)
         conn.putrequest("POST", prefix + RESPONSES_PATH, skip_accept_encoding=True)
@@ -237,6 +238,12 @@ def post(base: str, body: bytes, headers: List[Tuple[str, str]], *, idle_s: Opti
         received[key] = received[key] + ", " + value if key in received else value
 
     def close() -> None:
+        # The socket is shut down first, so a read in flight on another thread returns at once rather than holding the
+        # response file's lock until the upstream's next bytes; a socket already closed refuses it, which is the same.
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         # The response first: for a `will_close` answer (`Connection: close`, or no length and not chunked)
         # getresponse has already closed `conn` and handed the socket to the response, whose file still holds it, so
         # conn.close() alone would leave the socket open (CPython http/client.py, HTTPConnection.getresponse).

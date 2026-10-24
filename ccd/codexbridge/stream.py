@@ -31,9 +31,9 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import errors, sse
+from . import errors, reducer, sse
 
-ZERO_USAGE = {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0}
+ZERO_USAGE = reducer.anthropic_usage(reducer.ZERO_USAGE)  # the four keys spelled once, by the reducer
 WRITE_LOCK_S = 1.0  # the drain's wait for a write in flight before it gives the stream up
 
 

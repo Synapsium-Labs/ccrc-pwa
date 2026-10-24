@@ -247,8 +247,6 @@ export async function fakeResponses(
 
 // ── the direct-mode bridge (Task 8) ──────────────────────────────────────────────────────────────────────────────
 
-/** The shim, whose five request hooks the driver's `serve` op takes, unchanged (plan Task 8). */
-export const SHIM_FILE = path.join(CCD_DIR, 'ccgpt-proxy.py');
 /** Stage 1's library, which the bridge loads by path (CCRC_CODEX_AUTH_LIB). */
 export const BRIDGE_AUTH_LIB = path.join(CCD_DIR, 'ccgpt-auth.py');
 /** The models a planted lane's catalogue lists, neutral ids (the plan's Global Constraints). */

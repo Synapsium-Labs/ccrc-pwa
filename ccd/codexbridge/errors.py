@@ -87,6 +87,7 @@ POLICY_BLOCKED = "policy_blocked"
 OVERLOADED = "overloaded_error"
 API_ERROR = "api_error"
 AUTHENTICATION = "authentication_error"
+NOT_FOUND = "not_found_error"
 
 NO_RETRY = {"x-should-retry": "false"}
 
@@ -159,7 +160,8 @@ def _header(headers: object, name: str) -> Optional[str]:
     return value if isinstance(value, str) else None
 
 
-def _request_id(headers: object) -> Optional[str]:
+def request_id_of(headers: object) -> Optional[str]:
+    """The upstream request id (`x-request-id`, else `request-id`), kept only under REQUEST_ID_RE; else None."""
     for name in ("x-request-id", "request-id"):
         value = _header(headers, name)
         if value is not None:
@@ -265,7 +267,7 @@ def classify_http(status: int, body: bytes, headers: Mapping[str, str], *, now: 
         obj = None
     err = _error_object(obj)
     code, etype = _names(err)
-    rid = _request_id(headers)
+    rid = request_id_of(headers)
     raw_retry = _header(headers, "retry-after")
     retry_after = raw_retry.strip() if raw_retry is not None and RETRY_AFTER_RE.fullmatch(raw_retry.strip()) else None
     shown = code if code is not None else etype

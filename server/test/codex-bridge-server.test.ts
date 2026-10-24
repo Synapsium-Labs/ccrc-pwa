@@ -9,15 +9,16 @@
 // CCRC_CODEX_AUTH_BASE; a case that needs neither leaves both at CLOSED_AUTH_BASE. Every timer a case exercises is
 // lowered through the driver's `consts`, never waited out. Tokens are synthetic JWTs built at runtime.
 import { afterEach, describe, it, expect } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
 import path, { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  ACCOUNT_CLAIM, FIXTURE_ACCOUNT_ID, fakeAuthServer, runAuthDriver, syntheticJwt, type AuthScript,
+  ACCOUNT_CLAIM, CLOSED_AUTH_BASE, FIXTURE_ACCOUNT_ID, fakeAuthServer, runAuthDriver, syntheticJwt, type AuthScript,
 } from './codexAuthFixture.js';
 import {
   BRIDGE_MODELS, fakeResponses, killBridges, plantBridgeLane, spawnBridge, writeBridgeCatalogue,
@@ -85,10 +86,11 @@ function parseFrames(text: string, at: number[]): Frame[] {
 }
 
 /** One request to the bridge; resolves when the bridge closes the answer. `key: null` sends none; `bearer` sends it
- *  as `Authorization: Bearer`. Each SSE frame carries the time (ms from the request) its bytes arrived. */
+ *  as `Authorization: Bearer`; `raw` is sent as the body, byte for byte, in place of `body`'s JSON. Each SSE frame
+ *  carries the time (ms from the request) its bytes arrived. */
 function call(
   b: SpawnedBridge, route: string,
-  o: { method?: string; body?: Json; key?: string | null; bearer?: boolean; headers?: Record<string, string>; onHead?: () => void } = {},
+  o: { method?: string; body?: Json; raw?: Buffer; key?: string | null; bearer?: boolean; headers?: Record<string, string>; onHead?: () => void } = {},
 ): Promise<Answer> {
   const t0 = Date.now();
   const headers: Record<string, string> = { 'content-type': 'application/json', ...(o.headers ?? {}) };
@@ -97,7 +99,7 @@ function call(
     if (o.bearer) headers.authorization = `Bearer ${key}`;
     else headers['x-api-key'] = key;
   }
-  const payload = o.body === undefined ? undefined : Buffer.from(JSON.stringify(o.body));
+  const payload = o.raw ?? (o.body === undefined ? undefined : Buffer.from(JSON.stringify(o.body)));
   if (payload) headers['content-length'] = String(payload.length);
   return new Promise((resolve, reject) => {
     const req = httpRequest({ host: '127.0.0.1', port: b.port, path: route, method: o.method ?? 'POST', headers, agent: false }, (res) => {
@@ -124,6 +126,26 @@ function call(
     req.once('error', reject);
     if (payload) req.write(payload);
     req.end();
+  });
+}
+
+/** A request written to the bridge's socket as it is (`head`, CRLF line ends added, then `body`), for framing that
+ *  node's client will not send; resolves with the status and the JSON body once the bridge closes the connection. */
+function rawCall(b: SpawnedBridge, head: string[], body: string): Promise<{ status: number; json: Json | null }> {
+  return new Promise((resolve, reject) => {
+    const s = connect(b.port, '127.0.0.1');
+    let text = '';
+    s.setEncoding('utf8');
+    s.on('data', (c: string) => { text += c; });
+    s.once('error', reject);
+    s.once('close', () => {
+      const status = Number(/^HTTP\/1\.1 (\d{3}) /.exec(text)?.[1] ?? 0);
+      const at = text.indexOf('\r\n\r\n');
+      let json: Json | null = null;
+      try { json = JSON.parse(text.slice(at + 4)) as Json; } catch { json = null; }
+      resolve({ status, json });
+    });
+    s.once('connect', () => { s.write(head.join('\r\n') + '\r\n\r\n' + body); });
   });
 }
 
@@ -331,10 +353,14 @@ describe.skipIf(!PY)('the overflow and the usage that compaction reads (D-6415, 
 
   it('response.failed then a held-open connection is answered at once', async () => {
     const answer: ResponsesAnswer = { status: 200, sse: { chunks: [created() + failed('context_length_exceeded')], holdOpenMs: 2000 } };
-    await withBridge([answer], async ({ bridge, lane }) => {
+    await withBridge([answer], async ({ bridge, lane, up }) => {
+      const t0 = Date.now();
       const a = await call(bridge, '/v1/messages', { body: messages({ text: big }) });
       await checkOverflow(a, lane);
       expect(a.endAt).toBeLessThan(1200);
+      // the bridge drops the held connection itself, long before the upstream's 2 s hold ends: no reader is left on it
+      while (!up.requests[0].dropped && Date.now() - t0 < 1500) await new Promise((r) => setTimeout(r, 25));
+      expect(up.requests[0].dropped).toBe(true);
     });
   });
 
@@ -382,7 +408,7 @@ describe.skipIf(!PY)('the timers: ping, the commit point and the idle bound (Rev
 
   it('the upstream idle bound ends the stream with api_error', async () => {
     const answer: ResponsesAnswer = { status: 200, sse: { chunks: [created() + added(0, 'msg_fx1') + delta(0, 'msg_fx1', 'x')], holdOpenMs: 3000 } };
-    await withBridge([answer], async ({ bridge }) => {
+    await withBridge([answer], async ({ bridge, lane }) => {
       const a = await call(bridge, '/v1/messages', { body: messages() });
       expect(a.status).toBe(200);
       const ev = events(a);
@@ -390,7 +416,18 @@ describe.skipIf(!PY)('the timers: ping, the commit point and the idle bound (Rev
       expect(a.frames.at(-1)!.data.error.type).toBe('api_error');
       expect(ev).not.toContain('message_stop');
       expect(a.endAt).toBeLessThan(2000);
+      // the contract: every error keeps its code in the status file, the bridge's own idle bound included
+      expect((JSON.parse(readFileSync(lane.status, 'utf8')) as Json).lastErrorCode).toBe('idle-timeout');
     }, { consts: { 'backend.IDLE_TIMEOUT_S': 0.5 } });
+  });
+
+  it('an upstream that cannot be reached is 503 api_error, its code in the status file', async () => {
+    await withBridge([], async ({ bridge, lane }) => {
+      const a = await call(bridge, '/v1/messages', { body: messages() });
+      expect(a.status).toBe(503);
+      expect(a.json?.error.type).toBe('api_error');
+      expect((JSON.parse(readFileSync(lane.status, 'utf8')) as Json).lastErrorCode).toBe('transport');
+    }, { env: { CCGPT_BRIDGE_UPSTREAM_BASE: CLOSED_AUTH_BASE } });
   });
 
   it('keepalive comments do not reset the idle bound', async () => {
@@ -447,12 +484,33 @@ describe.skipIf(!PY)('the drain (Review Focus 3, D-6429)', () => {
       expect(readStats(lane).outcomes['drain-cut']).toBe(1);
     }, { consts: { 'server.DRAIN_S': 0.5 } });
   });
+
+  it('SIGTERM during a refresh waits for it: the rotated credential is on disk at exit 0', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const issued = issuedAnswer();
+    await withBridge([], async ({ bridge, auth, lane }) => {
+      const t0 = Date.now();
+      while (auth!.requests.length === 0 && Date.now() - t0 < 4000) await new Promise((r) => setTimeout(r, 25));
+      expect(auth!.requests).toHaveLength(1);
+      const t1 = Date.now();
+      bridge.proc.kill('SIGTERM');
+      const exit = await bridge.wait();
+      expect(exit).toEqual({ code: 0, signal: null });
+      expect(Date.now() - t1).toBeLessThan(4000);
+      expect(readFileSync(join(lane.authDir, 'auth.json'), 'utf8')).toContain(issued.refresh_token as string);
+    }, {
+      // the token endpoint holds its answer 1.5 s, past the drain's DRAIN_S, inside its credential wait
+      auth: { token: [{ status: 200, body: issued, delayMs: 1500 }] },
+      consts: { 'server.REFRESH_TICK_S': 0.2, 'server.DRAIN_S': 0.2 },
+      plant: { credential: { expiresIn: 1000, accessClaims: { iat: now - 3000 } } },
+    });
+  });
 });
 
 describe.skipIf(!PY)('the continuation and the fold (D-6410, D-6431, Review Focus 4)', () => {
   it('end_turn false with no call is continued upstream, at most CONTINUE_MAX times', async () => {
     const part = (n: number): ResponsesAnswer => ({
-      status: 200, sse: created(n) + done(0, msgItem(`msg_fx${n}`, `part ${n}`)) + completed({ input: 100 + n, output: 2 }, { end_turn: false }),
+      status: 200, sse: created(n) + done(0, msgItem(`msg_fx${n}`, `part ${n}`)) + completed({ input: 1000 + n, output: 2 }, { end_turn: false }),
     });
     await withBridge([part(1), part(2), part(3), part(4)], async ({ bridge, up, lane }) => {
       const a = await call(bridge, '/v1/messages', { body: messages() });
@@ -466,10 +524,41 @@ describe.skipIf(!PY)('the continuation and the fold (D-6410, D-6431, Review Focu
       const md = a.frames.find((f) => f.event === 'message_delta')!.data;
       expect(md.delta.stop_reason).toBe('end_turn');
       expect(md.usage.output_tokens).toBe(8);
-      expect(md.usage.input_tokens).toBe(104);
+      expect(md.usage.input_tokens).toBe(1004);
       const stats = await statsWhen(lane, (d) => d.outcomes['2xx'] === 1);
       expect(stats.outcomes['continuation-cap']).toBe(1);
       expect(stats.outcomes.continuations).toBe(3);
+      // a continued message never trains the ratio (D24, D-6427): its last input (1004) is past CALIBRATE_MIN_TOKENS,
+      // so only `continued` keeps the route at its seed
+      expect(stats.routes[`backend/${MODEL}`].bytesPerToken).toBe(3.5);
+    });
+  });
+
+  it('a continued message pings while it waits for the next head', async () => {
+    const first: ResponsesAnswer = { status: 200, sse: created(1) + done(0, msgItem('msg_fx1', 'part 1')) + completed({}, { end_turn: false }) };
+    const second: ResponsesAnswer = { status: 200, sse: textReply('part 2'), holdHeadMs: 1000 };
+    await withBridge([first, second], async ({ bridge, up }) => {
+      const a = await call(bridge, '/v1/messages', { body: messages() });
+      expect(a.status, a.text).toBe(200);
+      expect(up.requests).toHaveLength(2);
+      const ev = events(a);
+      const starts = ev.map((e, i) => [e, i] as const).filter(([e]) => e === 'content_block_start').map(([, i]) => i);
+      expect(starts).toHaveLength(2);
+      expect(ev.slice(starts[0], starts[1]).filter((e) => e === 'ping').length).toBeGreaterThanOrEqual(3);
+      expect(textOf(a)).toBe('part 1part 2');
+      expect(ev.at(-1)).toBe('message_stop');
+    }, { consts: { 'server.PING_S': 0.2 } });
+  });
+
+  it('a compaction request is counted only when it succeeds', async () => {
+    const compact = 'CRITICAL: Respond with TEXT ONLY. Summarise the conversation.';
+    await withBridge([{ status: 200, sse: created() + failed('server_is_overloaded') }, { status: 200, sse: textReply('summary') }], async ({ bridge, lane }) => {
+      const a = await call(bridge, '/v1/messages', { body: messages({ text: compact }) });
+      expect(a.status).toBe(529);
+      expect((await statsWhen(lane, (d) => d.outcomes['5xx'] === 1)).outcomes.compactionRequests).toBeUndefined();
+      const b = await call(bridge, '/v1/messages', { body: messages({ text: compact }) });
+      expect(b.status, b.text).toBe(200);
+      expect((await statsWhen(lane, (d) => d.outcomes['2xx'] === 1)).outcomes.compactionRequests).toBe(1);
     });
   });
 
@@ -479,6 +568,7 @@ describe.skipIf(!PY)('the continuation and the fold (D-6410, D-6431, Review Focu
       const a = await call(bridge, '/v1/messages', { body: messages() });
       expect(a.status).toBe(200);
       expect(events(a).slice(-2)).toEqual(['content_block_stop', 'error']);
+      expect(a.frames.at(-1)!.data.error.type).toBe('api_error');
       expect(events(a)).not.toContain('message_stop');
       const b = await call(bridge, '/v1/messages', { body: messages({ stream: false }) });
       expect(b.status, b.text).toBe(200);
@@ -570,6 +660,78 @@ describe.skipIf(!PY)('the local routes', () => {
       const b = await call(bridge, '/v1/messages', { body: messages() });
       expect(textOf(b)).toBe('typed');
       expect((await statsWhen(lane, (d) => d.outcomes['2xx'] === 2)).names.responseHeader).toHaveProperty(['content-type:text/event-stream']);
+    });
+  });
+});
+
+describe.skipIf(!PY)('an undecidable catalogue is the bridge\'s fault, not the client\'s model', () => {
+  for (const [what, spoil] of [
+    ['absent', (file: string) => rmSync(file)],
+    ['not in its shape', (file: string) => writeFileSync(file, JSON.stringify({ models: 5 }))],
+  ] as const) {
+    it(`a catalogue that is ${what} is 503 api_error, retryable, and never a substitution`, async () => {
+      await withBridge([], async ({ bridge, up, lane }) => {
+        spoil(lane.catalogue);
+        const a = await call(bridge, '/v1/messages', { body: messages() });
+        expect(a.status).toBe(503);
+        expect(a.json?.error.type).toBe('api_error');
+        expect(a.headers['x-should-retry']).toBeUndefined();
+        const stats = await statsWhen(lane, (d) => d.outcomes['catalogue-unreadable'] === 1);
+        expect(stats.outcomes['catalogue-unreadable']).toBe(1);
+        expect(stats.names.modelSubstitution).toBeUndefined();
+        const m = await call(bridge, '/v1/models', { method: 'GET' });
+        expect(m.status).toBe(503);
+        expect(m.json?.error.type).toBe('api_error');
+        expect(up.requests).toHaveLength(0);
+      });
+    });
+  }
+});
+
+describe.skipIf(!PY)('the request body, through the shim\'s hooks', () => {
+  const json = (): Buffer => Buffer.from(JSON.stringify(messages()));
+
+  it('an encoding the shim does not implement is 415 and reaches nothing', async () => {
+    await withBridge([{ status: 200, sse: textReply('no') }], async ({ bridge, up }) => {
+      const a = await call(bridge, '/v1/messages', { raw: json(), headers: { 'content-encoding': 'br' } });
+      expect(a.status, a.text).toBe(415);
+      expect(a.json?.error.type).toBe('invalid_request_error');
+      expect(up.requests).toHaveLength(0);
+    });
+  });
+
+  it('a gzip body is decoded and served; one that does not decode is 400', async () => {
+    await withBridge([{ status: 200, sse: textReply('unzipped') }], async ({ bridge, up }) => {
+      const ok = await call(bridge, '/v1/messages', { raw: gzipSync(json()), headers: { 'content-encoding': 'gzip' } });
+      expect(ok.status, ok.text).toBe(200);
+      expect(textOf(ok)).toBe('unzipped');
+      const bad = await call(bridge, '/v1/messages', { raw: Buffer.from('not gzip at all'), headers: { 'content-encoding': 'gzip' } });
+      expect(bad.status, bad.text).toBe(400);
+      expect(bad.json?.error.type).toBe('invalid_request_error');
+      expect(up.requests).toHaveLength(1);
+    });
+  });
+
+  it('a body that is not JSON, or not a JSON object, is 400 and reaches nothing', async () => {
+    await withBridge([], async ({ bridge, up }) => {
+      for (const raw of ['not json', '[1, 2]']) {
+        const a = await call(bridge, '/v1/messages', { raw: Buffer.from(raw) });
+        expect(a.status, raw).toBe(400);
+        expect(a.json?.error.type).toBe('invalid_request_error');
+      }
+      expect(up.requests).toHaveLength(0);
+    });
+  });
+
+  it('malformed body framing is 400 and reaches nothing', async () => {
+    await withBridge([], async ({ bridge, up }) => {
+      const a = await rawCall(bridge, [
+        'POST /v1/messages HTTP/1.1', `Host: 127.0.0.1:${bridge.port}`, `x-api-key: ${bridge.key}`,
+        'Content-Type: application/json', 'Transfer-Encoding: chunked',
+      ], 'zz\r\n{}\r\n0\r\n\r\n');
+      expect(a.status).toBe(400);
+      expect(a.json?.error.type).toBe('invalid_request_error');
+      expect(up.requests).toHaveLength(0);
     });
   });
 });
