@@ -140,6 +140,12 @@ THE DIRECT-MODE SERVER (Task 8).
                    `fault: "eof-is-timeout"` wraps backend.post so the upstream body's end raises
                    backend.UpstreamTimeout("read") in place of ending: the socket's own idle bound, firing before the
                    parsed-event bound whatever the scheduling, for the idle case.
+  refresher        {authDir, lib, lane, close?, waitS} -> {"returned", "count", "alive"}: `server._refresher` on a
+                   thread of its own, over a BridgeConfig carrying only `lane`, `authDir` and `lib` (the fields the
+                   refresher reads) and a fresh `server._Flight`, closed first when `close` is true; its stop event is
+                   set only after `waitS`. "returned": whether the thread had ended before the stop was set; "count":
+                   the flight's count once the thread is joined (at most 5 s after the stop); "alive": still running
+                   then. REFRESH_TICK_S comes from `consts`.
 A BridgeError prints as {"error": {status, etype, message, headers, state, code, requestId, kind}, "answer":
 {"status", "headers", "body": parsed JSON}, "event": errors.event(e) as text}. An op that raised prints
 {"raised": <class name>}. Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the package failed to import.
@@ -658,6 +664,8 @@ def _run(op, pkg, cb):
         return {}
     if name.startswith("backend-"):
         return _backend_op(name, op, cb)
+    if name == "refresher":
+        return _refresher_op(op, cb)
     _usage("unknown op " + json.dumps(name))
     return None
 
@@ -778,6 +786,25 @@ def _backend_tls(op, backend):
     finally:
         http.client.HTTPSConnection, http.client.HTTPConnection, socket.create_connection = saved
     return {"constructed": constructed, "postRaised": raised}
+
+
+def _refresher_op(op, cb):
+    """The refresher op (the docstring above)."""
+    server = cb.server
+    cfg = server.BridgeConfig(lane=op["lane"], port=0, lane_dir="", auth_dir=op["authDir"], config_dir="", key="",
+                              catalogue="", auth_lib=op["lib"], ccrc_version="dev", upstream_base="", stats_path="",
+                              store_path="")
+    auth = server._Flight()
+    if op.get("close"):
+        auth.close()
+    stop = threading.Event()
+    t = threading.Thread(target=server._refresher, args=(cfg, stop, auth), name="driver-refresher", daemon=True)
+    t.start()
+    t.join(float(op["waitS"]))
+    returned = not t.is_alive()
+    stop.set()
+    t.join(5)
+    return {"returned": returned, "count": auth.count, "alive": t.is_alive()}
 
 
 def _serve(op, pkg, cb, auth_consts):

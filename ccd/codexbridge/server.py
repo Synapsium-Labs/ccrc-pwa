@@ -21,13 +21,14 @@ indexes running on; while a continued message waits for its next upstream head (
 thread still pings (`_waiting`), and it stops waiting once the stream is closed (the client went away, or the drain
 cut it): the helper's answer, when it comes, is dropped and its connection closed. A stream that is closed is never
 posted upstream again (`_one_response` checks before each post, the one after a refresh included). Then the reasoning
-store, the stats file and, when the status file read an upstream state, `ok`. An upstream failure the bridge meets itself (the idle bound, a timeout or transport failure of the post)
-is recorded in the status file with a bounded code too, like every classified one.
+store, the stats file and, when the status file read an upstream state, `ok`. An upstream failure the bridge meets
+itself (the idle bound, a timeout or transport failure of the post) is recorded in the status file with a bounded code
+too, like every classified one.
 
 THE CATALOGUE. A model outside it is the client's: 404 `not_found_error`, counted `modelSubstitution:<model>`. A
-catalogue that is absent, unreadable or not in its shape (a row that is not an object with a string `id` among them)
-is the bridge's: 503 `api_error` (retryable) on `/v1/messages` and on `/v1/models` alike, counted
-`catalogue-unreadable`, never a substitution.
+catalogue that is absent, unreadable, nested too deep to decode or not in its shape (a row that is not an object with
+a non-empty string `id` among them) is the bridge's: 503 `api_error` (retryable) on `/v1/messages` and on `/v1/models`
+alike, counted `catalogue-unreadable`, never a substitution.
 
 THE OVERFLOW. Task 1's table answers the overflow row with the bare `prompt is too long` (the backend's message holds
 no counts); here, where the D24 estimate and the lane's window are known, it becomes `overflow(N, M)` with
@@ -234,12 +235,13 @@ def load_auth_lib(path: str) -> object:
 # ── small readers ────────────────────────────────────────────────────────────────────────────────────────────────
 def catalogue_ids(path: str) -> Optional[List[str]]:
     """The lane catalogue's model ids (`{"models": [{"id": ...}, ...]}`), read at each call. None when the file is
-    absent or unreadable, is not JSON, has no `models` list, or has a row that is not an object with a non-empty
-    string `id`: an undecidable catalogue, never an empty one. [] only for a literal empty list."""
+    absent or unreadable, is not JSON (nesting past the decoder's recursion limit among it: RecursionError), has no
+    `models` list, or has a row that is not an object with a non-empty string `id`: an undecidable catalogue, never an
+    empty one. [] only for a literal empty list."""
     try:
         with open(path, "rb") as f:
             doc = json.loads(f.read().decode("utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     rows = doc.get("models") if isinstance(doc, dict) else None
     if not isinstance(rows, list):
@@ -507,12 +509,15 @@ class _Request:
                 raise errors.from_auth(errors.AUTH_LIBRARY_ABSENT, AUTH_LIBRARY_REMEDY)
         return self.lib
 
-    def _auth_call(self, fn: Callable, *args: object, **kwargs: object) -> object:
+    def _auth_call(self, fn: Callable, *args: object, outcome: Optional[str] = None, **kwargs: object) -> object:
         """`fn`, a library call that may refresh, counted in the credential flight; once the drain has closed it, the
-        bridge stopped and the library is not called."""
+        bridge stopped and the library is not called. `outcome`, when given, is counted only once the call has entered
+        the flight, so a refresh the drain refused is never counted as one."""
         lib = self.library()
         if not self.state.auth.enter():
             raise errors.unavailable("the bridge stopped")
+        if outcome is not None:
+            self.state.stats.outcome(outcome)
         try:
             return fn(*args, **kwargs)
         except lib.AuthError as e:
@@ -649,7 +654,9 @@ class _Request:
         responses is not silence. Its exception is raised here; the wait ends when `fn` returns, which its own
         bounds limit (CONNECT_TIMEOUT_S, IDLE_TIMEOUT_S, the library's), or when the stream is closed (the client went
         away, or the drain cut it): then `the bridge stopped` is raised at once, and the helper drops its answer when
-        it comes, closing an upstream connection."""
+        it comes. An upstream connection it gets is closed there explicitly; under CPython the reference count would
+        close it too once the helper returns, so the close is stated rather than guarded (no case can tell the two
+        apart)."""
         if not out.committed or out.buffered:
             return fn(*args, **kwargs)
         box = {}  # type: Dict[str, object]
@@ -714,10 +721,9 @@ class _Request:
                     st.stats.outcome("refresh-skipped-fresh-token")
                     self.record(e, rid)
                     return e
-                st.stats.outcome("refresh-after-401")
                 cfg = st.cfg
                 reading = self._waiting(out, self._auth_call, lib.refresh_rejected, cfg.auth_dir, reading.access_token,
-                                        lane=cfg.lane)
+                                        outcome="refresh-after-401", lane=cfg.lane)
                 continue
             self.record(e, rid)
             return e

@@ -19,11 +19,12 @@ import { gzipSync } from 'node:zlib';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  ACCOUNT_CLAIM, CLOSED_AUTH_BASE, FIXTURE_ACCOUNT_ID, fakeAuthServer, runAuthDriver, syntheticJwt, type AuthScript,
+  ACCOUNT_CLAIM, CLOSED_AUTH_BASE, FIXTURE_ACCOUNT_ID, fakeAuthServer, plantBackendCredential, runAuthDriver, syntheticJwt,
+  type AuthScript,
 } from './codexAuthFixture.js';
 import {
-  BRIDGE_MODELS, fakeResponses, killBridges, plantBridgeLane, spawnBridge, writeBridgeCatalogue,
-  type BridgeLane, type ResponsesAnswer, type SpawnedBridge,
+  BRIDGE_AUTH_LIB, BRIDGE_MODELS, driverLines, fakeResponses, killBridges, plantBridgeLane, runBridgeDriver, spawnBridge,
+  writeBridgeCatalogue, type BridgeLane, type ResponsesAnswer, type SpawnedBridge,
 } from './codexBridgeFixture.js';
 
 const PY = pythonOrSkip();
@@ -533,6 +534,34 @@ describe.skipIf(!PY)('the drain (Review Focus 3, D-6429)', () => {
     });
   });
 
+  it('the refresher starts no tick once the credential flight is closed, and counts none', async () => {
+    // `_refresher` driven directly (the driver's refresher op): a closed flight's tick can only be reached through the
+    // window between a tick's wait and its enter(), which no case through the process can force
+    const home = mkTmp('cb-refresher-');
+    const authDir = join(home, 'auth');
+    plantBackendCredential(authDir, { expiresIn: -120 });
+    const auth = await fakeAuthServer({ token: [{ status: 200, body: issuedAnswer() }] });
+    try {
+      const run = async (close: boolean): Promise<Json> => {
+        const r = await runBridgeDriver(home, {
+          ops: [{ op: 'refresher', authDir, lib: BRIDGE_AUTH_LIB, lane: LANE, close, waitS: 1 }],
+          consts: { 'server.REFRESH_TICK_S': 0.01 },
+        }, { CCRC_CODEX_AUTH_BASE: auth.base });
+        expect(r.status, r.stderr).toBe(0);
+        return driverLines(r.stdout)[0];
+      };
+      const closed = await run(true);
+      expect(closed).toMatchObject({ returned: true, count: 0, alive: false });
+      expect(auth.requests).toHaveLength(0);
+      // the same op over an open flight does tick: the expired credential is refreshed, and the count is back at 0
+      const open = await run(false);
+      expect(open).toMatchObject({ returned: false, count: 0, alive: false });
+      expect(auth.requests).toHaveLength(1);
+    } finally {
+      await auth.close();
+    }
+  });
+
   it('SIGTERM during a request\'s refresh waits for it, and the cut request is never posted', async () => {
     const issued = issuedAnswer();
     await withBridge([{ status: 200, sse: textReply('too late') }], async ({ bridge, auth, up, lane }) => {
@@ -557,10 +586,33 @@ describe.skipIf(!PY)('the drain (Review Focus 3, D-6429)', () => {
     });
   });
 
+  it('a request cut during its refresh never posts once the refresh returns, while the drain still waits for it', async () => {
+    const issued = issuedAnswer();
+    await withBridge([{ status: 200, sse: textReply('too late') }], async ({ bridge, auth, up }) => {
+      const aP = call(bridge, '/v1/messages', { body: messages() });
+      const t0 = Date.now();
+      while (auth!.requests.length === 0 && Date.now() - t0 < 4000) await sleep(25);
+      expect(auth!.requests).toHaveLength(1);
+      bridge.proc.kill('SIGTERM');
+      const a = await aP;
+      const exit = await bridge.wait();
+      expect(a.status).toBe(503);
+      expect(exit).toEqual({ code: 0, signal: null });
+      expect(up.requests).toHaveLength(0);
+    }, {
+      // the same refresh, held 1.5 s, but DRAIN_WRITE_S (3 s) outlasts it: the drain waits for the cut request's thread
+      // to leave the flight, which it does only after any post it makes has reached the upstream, so a post is seen
+      // here whatever the scheduling
+      auth: { token: [{ status: 200, body: issued, delayMs: 1500 }] },
+      consts: { 'server.DRAIN_S': 0.2, 'server.DRAIN_WRITE_S': 3 },
+      plant: { credential: { expiresIn: -120 } },
+    });
+  });
+
   it('a request cut by the drain whose upstream then answers 401 starts no refresh', async () => {
     const now = Math.floor(Date.now() / 1000);
     const no: ResponsesAnswer = { status: 401, body: { error: { code: 'token_expired', message: 'expired' } }, holdHeadMs: 1500 };
-    await withBridge([no], async ({ bridge, auth, up }) => {
+    await withBridge([no], async ({ bridge, auth, up, lane }) => {
       const aP = call(bridge, '/v1/messages', { body: messages() });
       const t0 = Date.now();
       while (up.requests.length === 0 && Date.now() - t0 < 4000) await sleep(25);
@@ -573,6 +625,8 @@ describe.skipIf(!PY)('the drain (Review Focus 3, D-6429)', () => {
       expect(exit).toEqual({ code: 0, signal: null });
       expect(up.requests).toHaveLength(1);
       expect(auth!.requests).toHaveLength(0);
+      // the refresh never started, so the flushed stats file counts none
+      expect(readStats(lane).outcomes['refresh-after-401'] ?? 0).toBe(0);
     }, {
       // the 401 lands about 1.5 s after the signal: after the cut (at most 0.5 + 0.2 s), inside the cut stream's
       // DRAIN_WRITE_S (2.5 s), so the credential flight is already closed when the request would refresh
@@ -628,8 +682,9 @@ describe.skipIf(!PY)('the continuation and the fold (D-6410, D-6431, Review Focu
 
   it.skipIf(!HAS_PROC)('a continued message whose client goes away stops waiting, and spins no CPU on the held head', async () => {
     const first: ResponsesAnswer = { status: 200, sse: created(1) + done(0, msgItem('msg_fx1', 'part 1')) + completed({}, { end_turn: false }) };
-    const second: ResponsesAnswer = { status: 200, sse: textReply('part 2'), holdHeadMs: 2000 };
-    await withBridge([first, second], async ({ bridge, up }) => {
+    // the second head is held 2000 ms, then its body stays open 3000 ms more: only a close by the bridge drops it
+    const second: ResponsesAnswer = { status: 200, sse: { chunks: [created(2)], holdOpenMs: 3000 }, holdHeadMs: 2000 };
+    await withBridge([first, second], async ({ bridge, up, lane }) => {
       const pid = bridge.proc.pid!;
       const body = Buffer.from(JSON.stringify(messages()));
       // the client reads the first response's block, then goes away while the second head is held
@@ -649,13 +704,24 @@ describe.skipIf(!PY)('the continuation and the fold (D-6410, D-6431, Review Focu
         req.write(body);
         req.end();
       });
+      const left = Date.now();
       const cpu0 = cpuSeconds(pid);
+      // the request ends (its handler counts the 5xx and flushes) once a ping finds the client gone, long before the
+      // held head: a wait that kept waiting for the helper, spinning or not, ends only after it, about 2000 ms on
+      const ended = statsWhen(lane, (d) => d.outcomes['5xx'] === 1).then((d) => ({ d, at: Date.now() - left }));
       await sleep(1800);
       const spent = cpuSeconds(pid) - cpu0;
       expect(up.requests).toHaveLength(2);
       // a ping finds the client gone within a few PING_S; a loop that kept joining the helper with no ping due would
       // spin a whole core until the held head (about 1.5 s of this window)
       expect(spent).toBeLessThan(0.4);
+      const end = await ended;
+      expect(end.d.outcomes['5xx']).toBe(1);
+      expect(end.at).toBeLessThan(1500);
+      // the abandoned helper's Upstream is closed once the head comes (by its explicit close, and under CPython by the
+      // reference count as well), so the held body is dropped then, not ended by the fake 3000 ms later
+      while (!up.requests[1].dropped && Date.now() - left < 3500) await sleep(25);
+      expect(up.requests[1].dropped).toBe(true);
     }, { consts: { 'server.PING_S': 0.2 } });
   });
 
@@ -795,6 +861,8 @@ describe.skipIf(!PY)('an undecidable catalogue is the bridge\'s fault, not the c
     ['a list of rows that are not objects', (file: string) => writeFileSync(file, JSON.stringify({ models: [5] }))],
     ['a list of rows with no id', (file: string) => writeFileSync(file, JSON.stringify({ models: [{ name: 'x' }] }))],
     ['a list with one row out of shape', (file: string) => writeFileSync(file, JSON.stringify({ models: [{ id: BRIDGE_MODELS[0] }, { id: '' }] }))],
+    // JSON that nests past the decoder's recursion limit: json.loads raises RecursionError, not a ValueError
+    ['nested too deep to decode', (file: string) => writeFileSync(file, `{"models": ${'['.repeat(100000)}${']'.repeat(100000)}}`)],
   ] as const) {
     it(`a catalogue that is ${what} is 503 api_error, retryable, and never a substitution`, async () => {
       await withBridge([], async ({ bridge, up, lane }) => {
