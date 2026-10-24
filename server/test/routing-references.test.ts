@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLASSES } from '../../shared/models.mjs';
+import { ROUTE_DEFAULT_BY_KIND, routeDefaultFor } from '../../shared/route-defaults.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -96,6 +97,26 @@ describe('routing-matrix.md — spec §3, pinned to the vocabularies the mechani
     expect(worker).toContain('Sonnet · high per-task reviewer');
     expect(worker).not.toContain('Opus · high per-task reviewer');
     expect(matrix).toContain('Opus · high review lenses');
+  });
+
+  it('the table the server fills an unrouted dispatch from IS the matrix\'s two rows (D-6794)', () => {
+    // One table, two homes: `shared/route-defaults.ts` is what the server writes, the matrix is what the
+    // coordinator reads. Each row is parsed back into the route words and compared whole, so a one-sided edit
+    // (a class, an effort, the subagent class, the workflow mode or the compaction threshold) reds here.
+    const rowFields = (start: string): Record<string, string> => {
+      const row = rows.find((r) => r.startsWith(start));
+      expect(row, `the matrix lost its row: ${start}`).toBeDefined();
+      const cells = row!.split('|').slice(1, -1).map((c) => c.trim());
+      const main = /^([A-Z][a-z]+) · (\w+)/.exec(cells[1]!)!;
+      const sub = /^([A-Z][a-z]+) · /.exec(cells[2]!)!;
+      return {
+        class: main[1]!.toLowerCase(), effort: main[2]!, subagent: sub[1]!.toLowerCase(),
+        workflow: /^On\b/.test(cells[3]!) ? 'on' : 'off', compact: /`compact (\d+)`/.exec(cells[4]!)![1]!,
+      };
+    };
+    expect(ROUTE_DEFAULT_BY_KIND.work).toEqual(rowFields("| Worker executing a spec'd plan"));
+    expect(ROUTE_DEFAULT_BY_KIND.review).toEqual(rowFields('| Review session main loop'));
+    expect(routeDefaultFor('unknown')).toBeNull();
   });
 
   it('states the floors the mechanism relies on, in the spec\'s words', () => {

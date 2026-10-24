@@ -2,6 +2,7 @@ import { isRegistryId, routeNamesFable, spawnVerdict, transitionsFor, parseRoute
   MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, WORKSPACE_SLUG_RE,
   type CoordCaps, type CoordCapsUsage, type RouteFields, type SpawnVerdict,
 } from '../../../shared/api.js';
+import { routeDefaultFor } from '../../../shared/route-defaults.js';
 import { measuredIdentity, type RegistryRead, type SessionRecord } from '../registry.js';
 import type { MeasuredRead } from '../io.js';
 import type { HookStateRead } from '../hookstate.js';
@@ -85,6 +86,8 @@ export interface RequestPlan {
   body: string;
   itemTitles: readonly string[];
   routeFields: RouteFields | null;
+  /** D-6794: the fields came from the run kind's default row, because the caller passed no route. */
+  routeDefaulted: boolean;
   childSlug: string | null;
   hold: Extract<HoldReasonVerdict, { ok: true }>;
 }
@@ -127,13 +130,19 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
   // Routing spec 2026-09-14 §5.3: `undefined` is "the caller never asked", and stays `null` through every branch,
   // so the argv a run sends is byte-for-byte what it was before routing existed. No branch on `run.kind`: a review
   // run's SESSION is routed like any other (only the held-out panel it names is exempt).
+  // D-6794: a dispatch that passes NO route (`undefined`) gets its run kind's row from the shared table; a route the
+  // coordinator did pass, even an empty one, is never overridden.
   let routeFields: RouteFields | null = null;
+  let routeDefaulted = false;
   if (route !== undefined) {
     const parsed = parseRouteFields(route);
     if (!parsed.ok) return refused({ ok: false, kind: 'bad-request', detail: routeParseDetail(parsed) });
     // D-6790: Fable runs only when the operator selects it; a dispatch is a coordinator's act, never the operator's.
     if (routeNamesFable(parsed.route)) return refused({ ok: false, kind: 'fable-operator-only' });
     routeFields = routeFieldsOrNull(parsed.route);
+  } else {
+    routeFields = routeDefaultFor(run.kind);
+    routeDefaulted = routeFields !== null;
   }
   // The coordinator may NAME the child a fresh spawn mints; a slug on a run that resumes its bound session names
   // nothing, so it is refused rather than silently dropped.
@@ -156,7 +165,7 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
   // The stored SESSION ID, re-checked for the hold's reason (spec §2.3): every id-taking call after this takes this
   // column. It runs after the body checks and before the pause listing, so a refused id costs no read.
   if (run.sessionId !== null && !isRegistryId(run.sessionId)) return refused({ ok: false, kind: 'bad-session' });
-  return go({ run, body, itemTitles, routeFields, childSlug, hold });
+  return go({ run, body, itemTitles, routeFields, routeDefaulted, childSlug, hold });
 }
 
 // -- step: admit -------------------------------------------------------------------------------------------------
