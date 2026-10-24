@@ -1987,7 +1987,8 @@ button.metachip:active {
   overscroll-behavior: contain;
 }
 /* A focused option revealed with `scrollIntoView({ block: 'nearest' })` stops flush with the scroller's edge, which clips
-   the bottom of its focus ring (drawn --sp-1 outside it); this margin is the room `nearest` leaves it. */
+   the bottom of its focus ring (base.css's `:focus-visible` outline and offset, drawn outside the option); this margin
+   leaves room for that ring, which is the one the browser test measures from the focused option itself. */
 .ask-inline .opt {
   scroll-margin-block: var(--sp-1);
 }

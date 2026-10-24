@@ -394,8 +394,10 @@ describe('Go to question reveals the focused option (R69 F3, D-6326)', () => {
   interface Geometry {
     inCard: boolean; focusIsFirst: boolean; vh: number; scrollTop: number; scrollHeight: number; clientHeight: number;
     scroller: [number, number]; option: [number, number];
-    /** The ring room `--sp-1` resolves to, in px, measured from a probe that uses the token (never hard-coded here). */
+    /** The focused option's own focus ring, in px: its computed `outlineWidth + outlineOffset` (base.css's `:focus-visible`),
+     *  read after the click and never hard-coded here; `ringStyle` is its computed `outlineStyle`. */
     ring: number;
+    ringStyle: string;
   }
   /** What must not move across the click: the composer's box and every scroller but the card's own body. */
   interface Stand { composer: { left: number; top: number; width: number }; page: number; chat: number; chatBody: number }
@@ -415,13 +417,10 @@ describe('Go to question reveals the focused option (R69 F3, D-6326)', () => {
     const a = document.activeElement as HTMLElement;
     const br = body.getBoundingClientRect();
     const ar = a.getBoundingClientRect();
-    const probe = document.createElement('div');
-    probe.style.marginBlockStart = 'var(--sp-1)';
-    el.appendChild(probe);
-    const ring = parseFloat(getComputedStyle(probe).marginTop);
-    probe.remove();
+    const cs = getComputedStyle(a);
+    const ring = parseFloat(cs.outlineWidth) + parseFloat(cs.outlineOffset);
     return {
-      ring, inCard: el.contains(a), focusIsFirst: a === el.querySelector<HTMLElement>('.opt[tabindex="0"]'), vh: window.innerHeight,
+      ring, ringStyle: cs.outlineStyle, inCard: el.contains(a), focusIsFirst: a === el.querySelector<HTMLElement>('.opt[tabindex="0"]'), vh: window.innerHeight,
       scrollTop: body.scrollTop, scrollHeight: body.scrollHeight, clientHeight: body.clientHeight,
       scroller: [Math.round(br.top), Math.round(br.bottom)], option: [Math.round(ar.top), Math.round(ar.bottom)],
     };
@@ -440,6 +439,11 @@ describe('Go to question reveals the focused option (R69 F3, D-6326)', () => {
       const before = await opened.page.evaluate(STAND, CARD);
       await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).click();
       await opened.page.waitForTimeout(300);
+      // A script focus that follows a mouse click is not `:focus-visible`, so no ring is drawn yet. A modifier alone does
+      // nothing to the card (no digit, arrow or Escape), and makes Chrome match `:focus-visible` on the focused option, so
+      // the ring is the one a keyboard user sees, and its width and offset are real computed values to measure.
+      await opened.page.keyboard.press('Shift');
+      await opened.page.waitForTimeout(100);
       return { g: await opened.page.evaluate(MEASURE, CARD), before, after: await opened.page.evaluate(STAND, CARD), errors: opened.errors };
     } finally {
       await opened.ctx.close();
@@ -461,10 +465,12 @@ describe('Go to question reveals the focused option (R69 F3, D-6326)', () => {
       expect(after.page, 'the page did not scroll across the click').toBe(before.page);
       expect(after.chat, '.chat did not scroll across the click').toBe(before.chat);
       expect(after.chatBody, '.chat-body did not scroll across the click').toBe(before.chatBody);
-      // R69 N2: the ring is drawn --sp-1 outside the option and the scroller clips it, so the revealed option stops that far
-      // short of the scroller's bottom (`scroll-margin-block` on `.ask-inline .opt`), not flush with it.
-      expect(g.ring, 'premise: the probe resolved --sp-1').toBeGreaterThan(0);
-      expect(g.option[1], `ring room: the option's bottom ${g.option[1]} is at least ${g.ring}px (--sp-1) above the scroller's bottom ${g.scroller[1]}`)
+      // R69 N2: the focus ring is drawn outside the option (outline width plus offset) and the scroller clips it, so the
+      // revealed option stops at least that far short of the scroller's bottom (`scroll-margin-block` on
+      // `.ask-inline .opt`), not flush with it. The bound is the focused option's own computed ring, not the margin's token.
+      expect(g.ringStyle, 'premise: the focused option draws a focus ring (an outline, so its width and offset are real)').not.toBe('none');
+      expect(g.ring, 'premise: the focused option\'s outline width plus offset is read').toBeGreaterThan(0);
+      expect(g.option[1], `ring room: the option's bottom ${g.option[1]} is at least ${g.ring}px (its outline width + offset) above the scroller's bottom ${g.scroller[1]}`)
         .toBeLessThanOrEqual(g.scroller[1] - g.ring + 1);
       expect(errors).toEqual([]);
     }, 90_000);
