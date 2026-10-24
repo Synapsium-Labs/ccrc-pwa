@@ -12,6 +12,7 @@ import { configDirFor, loadConfig } from '../src/config.js';
 import { closeRun, type CloseRunDeps } from '../src/coord/close.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import { verifyDone, type DoneClaim } from '../src/coord/fingerprint.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
@@ -151,7 +152,8 @@ describe('dispatch refuses what subtraction cannot see (spec §2.3)', () => {
         return localIO.readdir(p, timeoutMs, signal);
       },
     };
-    const deps = { ...base, io, coord, runCcd, configDir: (w: string) => configDirFor(base.cfg, w) } as DispatchRunDeps;
+    const deps = { ...base, io, coord, runCcd, configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
+      sendClear: clearSender(base) } as DispatchRunDeps;
     return {
       coord, runId: opened.id, calls,
       listings: (): number => listings,
@@ -332,7 +334,7 @@ describe('one refused row wedges nothing fleet-wide (Review Focus 3)', () => {
       return { code: 0, stdout: '', stderr: '' };
     };
     const base = testDeps(home, run);
-    const deps = { ...base, coord, configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const } as DispatchRunDeps;
+    const deps = { ...base, coord, configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, sendClear: clearSender(base) } as DispatchRunDeps;
 
     expect(await dispatchRun(deps, opened.id, 'go', undefined))
       .toMatchObject({ ok: true, resumed: true, sessionId: GOOD });

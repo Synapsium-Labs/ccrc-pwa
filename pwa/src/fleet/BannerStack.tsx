@@ -7,7 +7,7 @@
 // folded announces as before; a folded one is out of the accessibility tree and announces once expanded.
 //
 // WHAT IT KEEPS. Every banner stays mounted, applicable or not, folded or not, exactly as each was before the
-// stack: a banner carries state (the fleet host's Reboot confirm, the halt's Ack, the update's sheets, the passkey
+// stack: a banner carries state (the fleet host's Reboot confirm, the halt's Ack, the passkey
 // line's posture read), so folding it must never unmount it. A folded slot is `hidden`, which takes it out of the
 // page and out of the accessibility tree; a slot draws no box of its own (`.banner-slot`, fleet.css), so a sticky
 // banner stays sticky against the fleet column.
@@ -35,14 +35,13 @@ export interface BannerRank {
 }
 
 /** Every global banner: one per fleet, above the list. */
-export type BannerId = 'fleet-host' | 'halt' | 'update' | 'substrate' | 'offline' | 'connecting' | 'notice' | 'passkey';
+export type BannerId = 'fleet-host' | 'halt' | 'substrate' | 'offline' | 'connecting' | 'notice' | 'passkey';
 
 /** A `Record` over the id union, so a new banner id without a rank is a compile error. The ranks are the order
  *  the fleet rendered its banners in before the stack, so a fleet with two or fewer looks as it did. */
 export const BANNER_ORDER: Readonly<Record<BannerId, BannerRank>> = {
   'fleet-host': { rank: 1, role: 'status', module: 'FleetHostBanner' },
   halt: { rank: 2, role: 'status', module: 'HaltBanner' },
-  update: { rank: 3, role: 'status', module: 'UpdateBanner' },
   substrate: { rank: 4, role: 'status', module: 'SubstrateBanner' },
   // The connection lines say every other line on the screen is stale, so they are pinned: whatever else applies,
   // "Reconnecting…" and "Last known state" stay in sight (and announced). Their rank keeps the order main drew.

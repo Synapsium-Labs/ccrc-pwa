@@ -32,6 +32,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import { configDirFor } from '../src/config.js';
 import { closeRun, type CloseRunDeps } from '../src/coord/close.js';
 import { HOLD_REASON_MAX_CHARS, holdReason } from '../src/coord/rundefs.js';
@@ -86,7 +87,7 @@ describe('dispatchRun, called directly with no CoordMutex in the loop (D-46, at 
     if (!('id' in opened)) throw new Error('openRun refused');
 
     const deps: DispatchRunDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
-      fleetState: undefined, tmux: base.tmux, queue: base.queue,
+      fleetState: undefined, sendClear: clearSender(base),
       // The one join `configDirFor` owns, supplied through dispatch's
       // consumer-declared port (wave 2, F2 — the skill preflight reads under it).
       configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, };
@@ -161,7 +162,7 @@ describe('dispatchRun hold preflight', () => {
     coord.db.prepare("UPDATE runs SET state = 'planned' WHERE id = ?").run(reconstructed.id);
     const deps: DispatchRunDeps = {
       coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
-      fleetState: undefined, tmux: base.tmux, queue: base.queue,
+      fleetState: undefined, sendClear: clearSender(base),
       configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
     };
 
@@ -189,7 +190,7 @@ describe('dispatchRun hold preflight', () => {
     coord.db.prepare("UPDATE runs SET state = 'planned' WHERE id = ?").run(reconstructed.id);
     const deps: DispatchRunDeps = {
       coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
-      fleetState: undefined, tmux: base.tmux, queue: base.queue,
+      fleetState: undefined, sendClear: clearSender(base),
       configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
     };
 
@@ -212,7 +213,7 @@ describe('dispatchRun, called CONCURRENTLY with no CoordMutex in the loop (fix r
     if (!('id' in opened)) throw new Error('openRun refused');
 
     const deps: DispatchRunDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
-      fleetState: undefined, tmux: base.tmux, queue: base.queue,
+      fleetState: undefined, sendClear: clearSender(base),
       // The one join `configDirFor` owns, supplied through dispatch's
       // consumer-declared port (wave 2, F2 — the skill preflight reads under it).
       configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, };
@@ -285,7 +286,7 @@ describe('closeRun, called directly — a failing ws-release leaves the run retr
     if (!('id' in opened)) throw new Error('openRun refused');
 
     const dispatchDeps: DispatchRunDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
-      fleetState: undefined, tmux: base.tmux, queue: base.queue,
+      fleetState: undefined, sendClear: clearSender(base),
       // The one join `configDirFor` owns, supplied through dispatch's
       // consumer-declared port (wave 2, F2 — the skill preflight reads under it).
       configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, };

@@ -731,3 +731,49 @@ describe('the archive door, wave 3b', () => {
     expect(b.ccd()).toEqual([['ws-archive', '--session', 'demo-amber']]);
   });
 });
+
+// ARCH-36 (#559) characterization, green on the inline handler before the guard chain moved to L1: the order of the
+// gates in front of the first measurement, as the route answers it. `archive-admission.test.ts` holds the decider's
+// own table; these are the same rows through `buildServer`.
+describe('the archive door — the gates before any measurement, in order (ARCH-36)', () => {
+  it('an id that is not a safe session id is 400 bad-session-id, before the registry is listed', async () => {
+    const b = await box();
+    rmSync(path.join(b.home, '.cc-sessions'), { recursive: true, force: true });
+    const res = await post(b.app, 'a%5Cb');
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session-id' });
+  });
+
+  it('an unlistable registry is 502 before an unknown id is 404, and before a bad body is 400', async () => {
+    const b = await box();
+    rmSync(path.join(b.home, '.cc-sessions'), { recursive: true, force: true });
+    const res = await b.app.inject({ method: 'POST', url: '/api/sessions/demo-nobody/archive', payload: [] });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ ok: false, error: 'registry-unmeasurable' });
+  });
+
+  it('an unknown id is 404 before a bad body is 400', async () => {
+    const b = await box();
+    const res = await b.app.inject({ method: 'POST', url: '/api/sessions/demo-nobody/archive', payload: [] });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ ok: false, error: 'unknown-session' });
+  });
+
+  it('a known id with a body that is not an object is 400 bad-request, reading nothing', async () => {
+    const b = await box();
+    seed(b.home, 'demo-amber');
+    const res = await b.app.inject({ method: 'POST', url: '/api/sessions/demo-amber/archive', payload: [] });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    expect(b.calls).toEqual([]);
+  });
+
+  it('a legacy row whose id is not its pair is 502 registry-unmeasurable, with nothing read or run', async () => {
+    const b = await box();
+    seed(b.home, 'claude-a-other', { workspace: null });
+    const res = await post(b.app, 'claude-a-other');
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ ok: false, error: 'registry-unmeasurable' });
+    expect(b.calls).toEqual([]);
+  });
+});

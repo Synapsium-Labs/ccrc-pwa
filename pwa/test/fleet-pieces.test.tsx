@@ -13,7 +13,6 @@ import { COMPACT_FIT, CompactGauges, compactDoorLabel, compactReading, hiddenGau
 import { DOOR_EVENT } from '../src/command/door';
 import { FleetHostBanner, fleetHostBannerShows } from '../src/fleet/FleetHostBanner';
 import { HaltBanner, haltBannerShows } from '../src/fleet/HaltBanner';
-import { UpdateBanner, updateBannerShows } from '../src/fleet/UpdateBanner';
 import { SubstrateBanner, substrateBannerShows } from '../src/fleet/SubstrateBanner';
 import { PasskeyNotice, passkeyNoticeShows } from '../src/fleet/PasskeyNotice';
 import { createFleetStore } from '../src/stores/fleet';
@@ -83,14 +82,14 @@ describe('BannerStack', () => {
   });
 
   it('the connection lines are pinned: with three banners above them, Reconnecting… still shows', () => {
-    // The fleet's own order. Fleet host, halt and update take the two and fold one; the offline line ranks below
+    // The fleet's own order. Fleet host, halt and substrate take the two and fold one; the offline line ranks below
     // them all and says every one of them is stale, so it is never the one folded.
     const line = (id: string, text: string) => ({ id, shows: true, node: <div role="status">{text}</div> }) as const;
     render(<BannerStack items={[
-      line('fleet-host', 'host'), line('halt', 'halt'), line('update', 'update'), line('offline', 'Reconnecting…'),
+      line('fleet-host', 'host'), line('halt', 'halt'), line('substrate', 'substrate'), line('offline', 'Reconnecting…'),
     ] as never} />);
     expect(screen.getByText('Reconnecting…')).toBeVisible();
-    expect(screen.getByText('update')).not.toBeVisible();
+    expect(screen.getByText('substrate')).not.toBeVisible();
     expect(screen.getByRole('button', { name: '1 more banner' })).toBeInTheDocument();
   });
 
@@ -154,16 +153,6 @@ describe('each banner draws exactly when its check says it shows', () => {
     }
     expect(views.map(haltBannerShows)).toContain(true);
     expect(views.map(haltBannerShows)).toContain(false);
-  });
-
-  it('UpdateBanner (its sheets stay mounted, so the banner line is what is drawn)', () => {
-    for (const v of views) {
-      render(<UpdateBanner updates={v} />);
-      expect(document.querySelector('.update-banner') !== null, JSON.stringify(v?.nodes.map((n) => n.desiredTag))).toBe(updateBannerShows(v));
-      cleanup();
-    }
-    expect(views.map(updateBannerShows)).toContain(true);
-    expect(views.map(updateBannerShows)).toContain(false);
   });
 
   it('FleetHostBanner', () => {

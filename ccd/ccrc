@@ -423,7 +423,7 @@ _plat_epoch_ms() {   # -> epoch milliseconds, 13 digits
   local t; t=$(date +%s%3N 2>/dev/null)
   if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
-
+_plat_workdirid_pane() { case "${1-}${2-}${3-}" in *[[:cntrl:]]*|*\'*) return 0 ;; esac; case "${2-}" in */*) return 0 ;; esac; [ -n "${1-}" ] && [ -n "${2-}" ] && [ -n "${3-}" ] || return 0; local s m x='\' a1 a2 a3; a1=${1//"$x"/"$x"0134} a2=${2//"$x"/"$x"0134} a3=${3//"$x"/"$x"0134}; if [ "$CCD_OS" = darwin ]; then s='stat -f %d:%i:%B .'; m='if [ -d "$f" ] && [ ! -L "$f" ]; then rm -f "$t"; exit 0; fi; [ -L "$f" ] && rm -f "$f"; mv -f "$t" "$f" 2>/dev/null || rm -f "$t"'; else s='stat -c %d:%i:%W .'; m='mv -fT "$t" "$f" 2>/dev/null || rm -f "$t"'; fi; printf "/bin/sh -c '%s' ccd-workdirid '%s' '%s' '%s' 2>/dev/null && " 'REG=$(printf %b "$1") id=$(printf %b "$2") l=$(printf %b "$3"); p=$(pwd -P && echo .) || exit 0; p=${p%?.}; case $p in /*) ;; *) exit 0;; esac; case $p$l in *[[:cntrl:]]*) exit 0;; esac; s=$('"$s"' 2>/dev/null) || exit 0; d=${s%%:*} r=${s#*:}; n=${r%%:*} b=${r#*:}; case $d in ""|*[!0-9]*) exit 0;; esac; case $n in ""|*[!0-9]*) exit 0;; esac; case $b in 0|-1|-) b=-;; [1-9]*) case $b in *[!0-9]*) exit 0;; esac;; *) exit 0;; esac; a=$(date +%s%3N 2>/dev/null); case $a in ""|*[!0-9]*) a=$(date +%s 2>/dev/null)000;; esac; case $a in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;; *) exit 0;; esac; t=$REG/.$id.workdirid.$$.tmp f=$REG/$id.workdirid; printf "v1\t%s:%s:%s\t%s\t%s\t%s" "$d" "$n" "$b" "$a" "$p" "$l" >"$t" || { rm -f "$t"; exit 0; }; '"$m"'; exit 0' "$a1" "$a2" "$a3"; return 0; }   # reg id logical -> the pane's brace-free entry-identity writer, or nothing (path-identity spec §4.3)
 # `cp --remove-destination` IS GNU. BSD's cp rejects the flag outright, and
 # the difference it names is not cosmetic: without it `cp` OPENS an existing
 # destination and writes through it, so a destination that is a HARDLINK to
@@ -9150,7 +9150,15 @@ _acct_remove() {
     done
     _codex_lock "$id" >&2 \
       || _acct_refuse 1 codex-reap-failed "codex lane $id's lock could not be taken, so its tiers cannot be stopped without racing a start - the lane library's reason is on stderr. The roster, projection, launcher, registry rows and every account artifact still stand.$usage_note Retry the removal once 'ccrc codex status $id' shows no start in progress."
+    # THE AUTH LIBRARY'S LOCK, after the lane lock and around the stop only
+    # (codex-bridge Stage 1, Task 9; D-6378, D-6384): a refresh in flight
+    # finishes its write before the tier that runs it is stopped, and no
+    # refresh starts until the stop is done. A timeout refuses with nothing
+    # removed; the exit releases both locks.
+    _codex_auth_hold "$id" >&2 \
+      || _acct_refuse 1 codex-reap-failed "codex lane $id's credential lock (the auth library's) could not be taken, so its tiers cannot be stopped without cutting a token refresh short - the reason is on stderr. The roster, projection, launcher, registry rows and every account artifact still stand.$usage_note Retry the removal once the lane's refresh or sign-in has ended."
     _codex_stop_lane "$id" >&2 || :
+    _codex_auth_release
     for tier in $CODEX_TIERS; do
       q=0; _codex_tier_ours "$id" "$tier" >&2 || q=$?
       # This lane's own tier, still there after the stop — the one 2 that
@@ -10402,11 +10410,11 @@ _models_class_ok() {   # <class>
 # `[ -r "$HOME/${secrets}" ] && . "$HOME/${secrets}"`. BOTH branches unset the
 # credential names `ccrc-models-probe` actually reads: ANTHROPIC_AUTH_TOKEN
 # (the two arms that send it — openrouter --endpoints and compatible; the
-# codex arm sends its own bearer header too, but via `_fetch_codex_lane`'s
-# litellm `Authenticator`, driven by CHATGPT_TOKEN_DIR, never this
+# codex arm sends its own bearer header too, but from the auth library's
+# `read` of the handed CHATGPT_TOKEN_DIR, never this
 # variable) and, on the codex arm only,
-# CHATGPT_TOKEN_DIR (it names the directory the codex arm's `Authenticator` reads `auth.json`
-# from) — measured fix, C3 of the final wave: without this, a lane with no
+# CHATGPT_TOKEN_DIR (it names the directory whose credential the auth library
+# reads) — measured fix, C3 of the final wave: without this, a lane with no
 # secrets file ran the probe against whatever this shell already had,
 # which on this fleet is ordinarily the CALLING lane's own key (every
 # wrapper-started session sources it before exec'ing `claude`), so `ccrc
@@ -10447,9 +10455,16 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
 #     under $HOME, as CHATGPT_TOKEN_DIR, and the interpreter `ccgpt-runtime
 #     python` resolves as CCRC_CODEX_PYTHON, EMPTY when none resolves, so the
 #     probe refuses `runtime-absent` rather than inheriting a caller's value.
+#     It also exports the placed auth library, `_codex_auth_lib`'s one
+#     spelling, as CCRC_MODELS_AUTH_LIB (codex-bridge Stage 1, Task 7): the
+#     probe reads the lane's credential through it and refuses
+#     `auth-library-absent` without it. The name is the probe's own, never
+#     CCRC_CODEX_AUTH_LIB, so the runtime interpreter's LiteLLM patch is never
+#     armed by it.
 #     The probe has one codex fetch for every caller (Plan 4), and it has no
 #     default directory.
-#   - Every other row: it UNSETS CCRC_CODEX_PYTHON and touches nothing else.
+#   - Every other row: it UNSETS CCRC_CODEX_PYTHON and CCRC_MODELS_AUTH_LIB
+#     and touches nothing else.
 #     That row's CHATGPT_TOKEN_DIR is whatever the scrub above and its secrets
 #     file leave. None, and the probe refuses `no-token-dir`; or a secrets
 #     file's, and it refuses `runtime-absent`, because the interpreter is
@@ -10477,18 +10492,20 @@ _models_probe_codex_env() {   # <accountId> -> 0; _codex_row's rc for a codex ro
   _models_litellm_codex "$1" || kind=$?
   case "$kind" in
     0) ;;
-    1) unset CCRC_CODEX_PYTHON
+    1) unset CCRC_CODEX_PYTHON CCRC_MODELS_AUTH_LIB
        return 0 ;;
-    3) unset CCRC_CODEX_PYTHON
+    3) unset CCRC_CODEX_PYTHON CCRC_MODELS_AUTH_LIB
        _codex_say roster-absent "\$HOME/.ccrc/accounts.json does not exist, so whether lane $1 is exec.kind \"codex\" cannot be told, and its probe does not run: a lane nobody read is never probed. Run 'ccrc install' — it seeds one and never overwrites an existing one."
        return "$MODELS_CODEX_UNTOLD_RC" ;;
-    *) unset CCRC_CODEX_PYTHON
+    *) unset CCRC_CODEX_PYTHON CCRC_MODELS_AUTH_LIB
        return "$MODELS_CODEX_UNTOLD_RC" ;;
   esac
   _codex_row "$1" || return $?
   export CHATGPT_TOKEN_DIR="$HOME/$CX_AUTH"
   CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
   export CCRC_CODEX_PYTHON
+  CCRC_MODELS_AUTH_LIB="$(_codex_auth_lib)"
+  export CCRC_MODELS_AUTH_LIB
   return 0
 }
 
@@ -11951,8 +11968,61 @@ _codex_say() {   # <code> <sentence> — the one refusal shape, `ccrc codex: <co
 
 _codex_lane_dir()    { printf '%s' "$HOME/.ccrc/codex/$1"; }
 _codex_shim_file()   { printf '%s' "$HOME/.local/bin/ccgpt-proxy.py"; }
+_codex_auth_lib()    { printf '%s' "$HOME/.local/bin/ccgpt-auth.py"; }
 _codex_runtime_cli() { printf '%s' "$HOME/.local/bin/ccgpt-runtime"; }
 _codex_litellm_yaml() { printf '%s' "$(_codex_lane_dir "$1")/litellm.yaml"; }
+
+# THE AUTH LIBRARY'S COMMAND LINE (codex-bridge Stage 1, Task 8): the one way
+# this file reads or signs in a lane's credential. `ccd/ccgpt-auth.py` is the
+# only ccrc code that opens one, so `start`, `status` and `login` ask it, and
+# none of them spells the credential's side files, its families or its states'
+# meaning again: they read its words. `-IS`: isolated, no site, so nothing on
+# PYTHONPATH or in a user site can stand in for the stdlib it imports.
+_codex_auth() {   # <verb> <args…> -> the library's own output and rc; rc 3 + one auth-library-absent line when the file or python3 is missing
+  local lib
+  lib="$(_codex_auth_lib)"
+  if ! { [ -f "$lib" ] && [ -r "$lib" ]; }; then
+    _codex_say auth-library-absent "$lib is not a readable file, so ccrc cannot read or sign in a Codex lane's credential. Run 'ccrc update', which places it, then re-run."
+    return 3
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    _codex_say auth-library-absent "python3 is not on PATH, so the auth library $lib cannot run. Install python3 (3.9 or later) or put it on PATH, then re-run."
+    return 3
+  fi
+  python3 -IS "$lib" "$@"
+}
+
+# `_codex_auth_status <id>` — the library's `status` for the lane `_codex_row`
+# just read (its CX_AUTH, under $HOME), never a network call and never a
+# write. Sets CX_AUTH_JSON (the report, one line), CX_AUTH_CRED (its
+# `credential` word) and CX_AUTH_STATE (its `state`, empty for null). An
+# answer that is empty, not one JSON object, or carries no credential word is
+# its own refusal, `auth-status-unreadable`, never folded into a state: a
+# library that cannot say is not a lane that is signed out.
+_codex_auth_status() {   # <id> -> rc 0 (CX_AUTH_* set); rc 3 auth-library-absent; rc 1 auth-status-unreadable; each refusal one line on stderr
+  local id="$1" out rc=0 vals
+  CX_AUTH_JSON=''; CX_AUTH_CRED=''; CX_AUTH_STATE=''
+  out="$(_codex_auth status --auth-dir "$HOME/$CX_AUTH" --lane "$id")" || rc=$?
+  [ "$rc" -eq 3 ] && return 3
+  vals=''
+  if [ "$rc" -eq 0 ] && [ -n "$out" ]; then
+    vals="$(printf '%s\n' "$out" | jq -er 'select(type == "object" and (.credential | type) == "string"
+        and ((.state | type) == "string" or .state == null))
+      | "\(.credential) \(.state // "-")"' 2>/dev/null)" || vals=''
+  fi
+  case "$vals" in
+    *$'\n'*|*' '*' '*|'') vals='' ;;
+  esac
+  if [ -z "$vals" ]; then
+    _codex_say auth-status-unreadable "the auth library answered no status ccrc can read for $id (it exited $rc), so whether $id is signed in cannot be told. Run 'ccrc update', which places the library again, then re-run."
+    return 1
+  fi
+  CX_AUTH_JSON="$out"
+  CX_AUTH_CRED="${vals%% *}"
+  CX_AUTH_STATE="${vals#* }"
+  [ "$CX_AUTH_STATE" = - ] && CX_AUTH_STATE=''
+  return 0
+}
 
 # `$WRAPPER_ID_RE` and `$WRAPPER_SUFFIX_SAFE_RE`, from the one contract that
 # spells them — `_acct_shape`'s idiom. Loaded HERE rather than trusted to the
@@ -12606,24 +12676,32 @@ _codex_tier_is_our_handle() {   # <rc of the _codex_tier_ours call just made>
 }
 
 # The record `_codex_start_tier` writes to `<tier>.started`, computed NOW:
-# `{"generation":"<resolved gen dir>","code":"<sha256 of the tier's code file>"}`
-# — the litellm tier's code is the generation's `.ccrc-runtime.json`, the shim's
-# is the placed `ccgpt-proxy.py`. ONE DEFINITION: the start half writes exactly
+# `{"generation":"<resolved gen dir>","code":"<sha256 of the tier's code files>"}`
+# — the litellm tier's code is the generation's `.ccrc-runtime.json` followed by
+# the placed auth library, `ccgpt-auth.py` (`_codex_auth_lib`), which the tier
+# loads through ccrc's LiteLLM patch (codex-bridge Stage 1, Task 6): the sha256
+# of the stamp's bytes and then the library's, so a library change reads as
+# stale and `_inst_codex_tiers` restarts the tier onto it. The shim's code is
+# the placed `ccgpt-proxy.py`. ONE DEFINITION: the start half writes exactly
 # this output and `_codex_tier_stale` compares against exactly this output, so
 # "stale" cannot mean two things. rc 1 when it cannot be computed: no runtime
 # (`ccgpt-runtime python` says `absent`) or an unreadable code file.
 _codex_started_json() {   # <tier>
-  local py gen code sum
+  local py gen sum f
+  local -a files=()
   py="$("$(_codex_runtime_cli)" python 2>/dev/null)" || return 1
   gen="${py%/bin/python}"
   { [ "$gen" != "$py" ] && [ -d "$gen" ]; } || return 1
   case "${1:-}" in
-    litellm) code="$gen/.ccrc-runtime.json" ;;
-    shim)    code="$(_codex_shim_file)" ;;
+    litellm) files=("$gen/.ccrc-runtime.json" "$(_codex_auth_lib)") ;;
+    shim)    files=("$(_codex_shim_file)") ;;
     *) return 1 ;;
   esac
-  { [ -f "$code" ] && [ -r "$code" ]; } || return 1
-  sum="$(_plat_sha256 < "$code" 2>/dev/null)" || return 1
+  for f in "${files[@]}"; do
+    { [ -f "$f" ] && [ -r "$f" ]; } || return 1
+  done
+  # The file's `set -o pipefail` makes a `cat` that fails part-way fail this too.
+  sum="$(cat -- "${files[@]}" 2>/dev/null | _plat_sha256 2>/dev/null)" || return 1
   sum="${sum%% *}"
   [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || return 1
   jq -cn --arg g "$gen" --arg c "$sum" '{generation: $g, code: $c}'
@@ -12845,6 +12923,96 @@ _codex_unlock() {   # always rc 0
   return 0
 }
 
+# `_codex_auth_hold <id>` — THE AUTH LIBRARY'S LOCK, from bash (codex-bridge
+# Stage 1, Task 9). The library (`ccd/ccgpt-auth.py`, `held`) serialises every
+# write of a lane's credential on an exclusive `flock` of a lock file beside
+# it; account removal takes the same lock around its tier stop, so a stop
+# never lands inside a refresh's token round trip (D-6378, D-6384). The lock
+# file's path and its bound come from the library's own `paths` answer
+# (`lock`, `lockWaitS`): this file spells neither.
+# - A DIFFERENT LOCK FROM `_codex_lock`, legitimately (the plan's two-locks
+#   rule): that one serialises tier starts and stops for up to the readiness
+#   bound; this one is taken inside a request by a long-lived tier and must
+#   never wait out a start. Where both are taken, `_codex_lock` comes first.
+# - THE CONTRACT, `_codex_lock`'s shape. rc 0 with the lock HELD and
+#   CX_AUTH_LOCK_FD set; rc 0 with CX_AUTH_LOCK_FD EMPTY when there is
+#   nothing to hold: an authDir that does not exist (no credential to write),
+#   no `flock` on this box (as `_codex_lock`), or no library or no python3
+#   on this shell's PATH (`_codex_auth`'s rc 3, D-6683).
+#   That last arm is ACCEPTED UNSERIALISED, not proved safe. What holds: a
+#   tier started with no library file loads none and fails closed, and the
+#   sign-in and every reader reach the credential only through the library.
+#   What does not: a running tier keeps the library it loaded at its start
+#   (`_load_auth_library`, ccd/ccgpt-runtime, once per process) and runs it
+#   under the runtime's own interpreter, not this PATH's python3, so a library
+#   file gone since that start, or a removing shell with no python3 on PATH,
+#   leaves that tier able to take the lock while this answers 0 having held
+#   nothing. rc 1, with one refusal line and CX_AUTH_LOCK_FD
+#   empty, on a timeout, on a `paths` answer it cannot read, on a lock path
+#   that cannot be opened, and on a symlink or any other non-regular file at
+#   the lock path, which is refused WITHOUT being opened (`held`'s
+#   `O_NOFOLLOW` rule; `exec {fd}>>` would follow it). A lock file this hold
+#   creates gets `chmod 600` right after the open, so a umask that removes
+#   owner bits (0277) leaves no 0400 lock the library's own open would refuse.
+#   `_codex_auth_release` is the ONLY release.
+# - ONE LEVEL, as `_codex_lock`: a second call for the lane this shell holds
+#   is a no-op; a call for another lane releases the first.
+# - THE FD MUST NOT OUTLIVE THE HOLD in a child: `_codex_lock`'s rule carries
+#   over, so any spawn made while it is held closes CX_AUTH_LOCK_FD in its own
+#   substitution. Between hold and release removal runs only
+#   `_codex_stop_lane`, whose spawns are short-lived stop commands.
+_codex_auth_hold() {   # <id> -> rc 0 held (CX_AUTH_LOCK_FD set) or nothing to hold (empty); rc 1 + one refusal line
+  local id="${1:-}" dir out rc=0 lock wait fd created=0
+  if [ -n "${CX_AUTH_LOCK_FD:-}" ]; then
+    [ "${CX_AUTH_LOCK_ID:-}" = "$id" ] && return 0
+    _codex_auth_release
+  fi
+  _codex_row "$id" || return 1
+  dir="$HOME/$CX_AUTH"
+  { [ -e "$dir" ] || [ -L "$dir" ]; } || return 0
+  command -v flock >/dev/null 2>&1 || return 0
+  out="$(_codex_auth paths --auth-dir "$dir" 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 3 ] && return 0
+  lock=''; wait=''
+  if [ "$rc" -eq 0 ]; then
+    lock="$(printf '%s\n' "$out" | jq -er '.lock | select(type == "string" and startswith("/"))' 2>/dev/null)" || lock=''
+    wait="$(printf '%s\n' "$out" | jq -er '.lockWaitS | select(type == "number" and . > 0)' 2>/dev/null)" || wait=''
+  fi
+  if [ -z "$lock" ] || [ -z "$wait" ]; then
+    _codex_say auth-status-unreadable "the auth library answered no lock path and bound ccrc can read for $id (it exited $rc), so $id's credential writes cannot be held off. Run 'ccrc update', which places the library again, then re-run."
+    return 1
+  fi
+  if [ -L "$lock" ] || { [ -e "$lock" ] && [ ! -f "$lock" ]; }; then
+    _codex_say auth-lock-unusable "$lock is a symlink or not a regular file, so ccrc will not open it as $id's credential lock. Remove it, then re-run."
+    return 1
+  fi
+  [ -e "$lock" ] || created=1
+  if ! { exec {fd}>>"$lock"; } 2>/dev/null; then
+    _codex_say auth-lock-unusable "$lock could not be opened, so $id's credential writes cannot be held off. Fix its mode with chmod 600 $lock, or the permissions of $dir, then re-run."
+    return 1
+  fi
+  if [ "$created" -eq 1 ] && ! chmod 600 "$lock" 2>/dev/null; then
+    exec {fd}>&-
+    _codex_say auth-lock-unusable "$lock could not be set to mode 600, so the auth library could not open it again. Fix its mode with chmod 600 $lock, then re-run."
+    return 1
+  fi
+  if ! flock -w "$wait" "$fd"; then
+    exec {fd}>&-   # never held and never published, so this is no release
+    _codex_say auth-lock-busy "another ccrc process has held $id's credential lock ($lock) for ${wait}s: it is refreshing or signing in this lane. Re-run once that has ended."
+    return 1
+  fi
+  CX_AUTH_LOCK_FD="$fd"; CX_AUTH_LOCK_ID="$id"
+  return 0
+}
+
+# THE ONLY RELEASE of `_codex_auth_hold`: closes CX_AUTH_LOCK_FD when set and
+# clears it and CX_AUTH_LOCK_ID. A no-op when nothing is held.
+_codex_auth_release() {   # always rc 0
+  if [ -n "${CX_AUTH_LOCK_FD:-}" ]; then exec {CX_AUTH_LOCK_FD}>&-; fi
+  CX_AUTH_LOCK_FD=''; CX_AUTH_LOCK_ID=''
+  return 0
+}
+
 # Names what a 2 from `_codex_tier_ours` found, for start's refusal and
 # stop's notice alike, so the two say the same thing about one fact. Call it
 # DIRECTLY, right after that 2: it reads CX_TIER_WHY and `_codex_row`'s CX_*,
@@ -12947,6 +13115,12 @@ _codex_shim_absent() {   # <id> [<tail>]
 #   Both arms start a tier in $HOME, and `-m` without `-I` puts the working
 #   directory first on sys.path, so a `~/litellm/` would load instead of the
 #   generation's litellm, the one `ccgpt-runtime`'s own `-I` probe proved.
+# - THE LITELLM TIER REFRESHES THROUGH THE AUTH LIBRARY (codex-bridge Stage 1,
+#   Task 6, D-6372): its spawn carries `CCRC_CODEX_AUTH_LIB` (`_codex_auth_lib`)
+#   and `CCRC_CODEX_LANE`, which arm the authenticator part of ccrc's LiteLLM
+#   patch (`ccgpt-runtime`). With no readable library it is refused
+#   `auth-library-absent` before anything is computed or started; the shim
+#   tier neither gets the two variables nor needs the file.
 # - The gateway key reaches LiteLLM ONLY as `runtime.env`, an EnvironmentFile
 #   (spec §5.4). The shim gets no env file, because it is value-blind
 #   (m-tiers §5).
@@ -12975,6 +13149,14 @@ _codex_start_tier() {   # <id> <tier> -> rc 0 + "systemd <unit>" | "nohup <pid>"
   fi
   if ! "$(_codex_runtime_cli)" python >/dev/null 2>&1; then
     _codex_say runtime-absent "no LiteLLM runtime is current on this box, so $id's $tier tier has no interpreter to start from. Build one with 'ccgpt-runtime build' (or 'ccrc update', which builds it), then re-run."
+    return 1
+  fi
+  # The litellm tier reads and refreshes its credential through the auth
+  # library, which `_codex_started_json` also hashes into its record, so a
+  # missing one is named here, before that call, and never read as a runtime
+  # with no readable stamp. The shim tier does not load it.
+  if [ "$tier" = litellm ] && ! { [ -f "$(_codex_auth_lib)" ] && [ -r "$(_codex_auth_lib)" ]; }; then
+    _codex_say auth-library-absent "$(_codex_auth_lib) is not a readable file, so $id's litellm tier would have no auth library to read and refresh its credential through, and would answer every request 401. Run 'ccrc update', which places it, then re-run. Nothing was started."
     return 1
   fi
   if ! rec="$(_codex_started_json "$tier")"; then
@@ -13006,6 +13188,7 @@ _codex_start_tier() {   # <id> <tier> -> rc 0 + "systemd <unit>" | "nohup <pid>"
     ans="$( [ -z "${CX_LOCK_FD:-}" ] || exec {CX_LOCK_FD}>&-
       _svc_run_supervised "$unit" "$log" "$d/runtime.env" \
         "CHATGPT_TOKEN_DIR=$HOME/$CX_AUTH" LITELLM_LOCAL_MODEL_COST_MAP=True "HOME=$HOME" \
+        "CCRC_CODEX_AUTH_LIB=$(_codex_auth_lib)" "CCRC_CODEX_LANE=$id" \
         -- "$py" -I -m litellm.proxy.proxy_cli --config "$(_codex_litellm_yaml "$id")" --host 127.0.0.1 --port "$CX_LITELLM" )"; rc=$?
   else
     ans="$( [ -z "${CX_LOCK_FD:-}" ] || exec {CX_LOCK_FD}>&-
@@ -13176,10 +13359,39 @@ _codex_cmd_start() {   # <id>
   id="$CX_ID"
   _codex_lane_json_ensure "$id" || exit 1
   d="$(_codex_lane_dir "$id")"
-  if [ ! -f "$HOME/$CX_AUTH/auth.json" ]; then
-    _codex_say not-logged-in "$id has no OAuth login: ~/$CX_AUTH holds no auth.json (existence is all ccrc checks; it never reads one). Log the lane in with 'ccrc codex login $id', then re-run. Nothing was started."
-    exit 1
-  fi
+  # THE CREDENTIAL, READ THROUGH THE AUTH LIBRARY (codex-bridge Stage 1,
+  # Task 8), before the runtime and before the lane lock: a lane that cannot
+  # serve is refused with nothing locked, minted or started. The library's
+  # `status` only reads, so start never refreshes: an expired `present` token
+  # starts, and the tier refreshes it on its next request (in litellm mode the
+  # tier is the only refresher). Each word is the library's:
+  #   absent, incomplete (a sign-in never finished) -> not-logged-in;
+  #   unreadable, foreign-family (another program's file, never written over)
+  #     -> credential-unusable, which the doctor names;
+  #   needs-signin (the endpoint refused the refresh token) -> needs-signin;
+  #   config-error (it refused this build's client) -> credential-unusable,
+  #     whose remedy is the build first, then a sign-in.
+  _codex_auth_status "$id" || exit 1
+  case "$CX_AUTH_CRED" in
+    absent|incomplete)
+      _codex_say not-logged-in "$id is not signed in: the auth library reads its credential in ~/$CX_AUTH as $CX_AUTH_CRED. Sign the lane in with 'ccrc codex login $id', then re-run. Nothing was started."
+      exit 1 ;;
+    unreadable|foreign-family)
+      _codex_say credential-unusable "the auth library reads $id's credential in ~/$CX_AUTH as $CX_AUTH_CRED, and ccrc never starts a lane on, or writes over, a credential it cannot use. Run 'ccrc doctor', which names the file and what to do with it, then re-run. Nothing was started."
+      exit 1 ;;
+    present) ;;
+    *)
+      _codex_say auth-status-unreadable "the auth library reads $id's credential as \"$CX_AUTH_CRED\", a word this ccrc does not know. Run 'ccrc update', which places a library and a ccrc that agree, then re-run. Nothing was started."
+      exit 1 ;;
+  esac
+  case "$CX_AUTH_STATE" in
+    needs-signin)
+      _codex_say needs-signin "the token endpoint refused $id's refresh token (the auth library's status reads needs-signin), so its tier could serve no request. Sign the lane in again with 'ccrc codex login $id', then re-run. Nothing was started."
+      exit 1 ;;
+    config-error)
+      _codex_say credential-unusable "the token endpoint refused the client this ccrc signs $id in with (the auth library's status reads config-error). Run 'ccrc update' first, then 'ccrc codex login $id' if the lane is still refused, then re-run. Nothing was started."
+      exit 1 ;;
+  esac
   py="$("$(_codex_runtime_cli)" python 2>/dev/null)" || py=''
   if [ -z "$py" ] || [ ! -x "$py" ]; then
     _codex_say runtime-absent "no LiteLLM runtime is current on this box ('ccgpt-runtime python' answered none). Build one with 'ccgpt-runtime build' (or 'ccrc update', which builds it), then re-run. Nothing was started."
@@ -13333,7 +13545,8 @@ _codex_cmd_stop() {   # <id>
 # `UNPROVEN` on the terminal, with that helper's retry, never `FOREIGN`; its
 # JSON state stays `foreign`, the contract's word for "not adopted".
 _codex_cmd_status() {   # <id> <1 = --json>
-  local id json="$2" d py gen='' lane tier q state via pid sg port why said
+  local id json="$2" d py gen='' lane tier q state via pid sg port why said auth
+  local CX_AUTH_JSON CX_AUTH_CRED CX_AUTH_STATE
   local ls='' lv='' lp='' lw='' lf='' ss='' sv='' sp='' sw='' sf=''
   # Read by `_codex_tier_ours` through bash's dynamic scope: its rc-3
   # sentence then omits its "'ccrc codex status <id>' reports the lane"
@@ -13369,15 +13582,27 @@ _codex_cmd_status() {   # <id> <1 = --json>
     else ss="$state"; sv="$via"; sp="$pid"; sw="$why"; sf="$said"; fi
   done
   if [ "$json" -eq 1 ]; then
+    # `auth` (codex-bridge Stage 1, Task 8): the auth library's status report
+    # for the lane, minus its raw `mode` and `ownerOk`, which are the doctor's
+    # to judge (`modeOk`, the library's own verdict on the mode, stays, as the
+    # report carries it); null when the library cannot answer (absent, or an
+    # answer `_codex_auth_status` refuses), because this verb exits 0 whatever
+    # it finds and names no refusal of its own.
+    auth=null
+    if _codex_auth_status "$id" 2>/dev/null; then
+      auth="$(printf '%s\n' "$CX_AUTH_JSON" | jq -c 'del(.mode, .ownerOk)' 2>/dev/null)" || auth=null
+      [ -n "$auth" ] || auth=null
+    fi
     jq -cn --arg id "$id" --arg ls "$ls" --arg lv "$lv" --arg lp "$lp" \
-      --arg ss "$ss" --arg sv "$sv" --arg sp "$sp" --arg gen "$gen" --arg lane "$lane" '
+      --arg ss "$ss" --arg sv "$sv" --arg sp "$sp" --arg gen "$gen" --arg lane "$lane" --argjson auth "$auth" '
       def s: if . == "" then null else . end;
       def n: if . == "" then null else tonumber end;
       {id: $id,
        tiers: {litellm: {state: $ls, via: ($lv | s), pid: ($lp | n)},
                shim:    {state: $ss, via: ($sv | s), pid: ($sp | n)}},
        runtime: {generation: ($gen | s)},
-       lane: {json: ($lane | s)}}'
+       lane: {json: ($lane | s)},
+       auth: $auth}'
     return 0
   fi
   for tier in $CODEX_TIERS; do
@@ -13413,42 +13638,44 @@ _codex_cmd_status() {   # <id> <1 = --json>
 }
 
 # ── ccrc codex login <id> ─────────────────────────────────────────────────
-# THE LANE'S OWN RUNTIME SIGNS IT IN, OVER ITS OWN authDir (spec §9.3,
-# D-3479). The ISOLATED runtime's Authenticator runs with this
-# lane's `exec.authDir` as its token directory. It is never a `litellm` found
-# on PATH, and never the user-site fork D-3164 measured.
-# `get_access_token()` does one of three things:
-#   * returns a still-valid token without a network call;
-#   * refreshes an expired one;
-#   * or runs the device flow, which prints a URL and a code on stdout.
-# Those printed lines are the whole transcript an operator needs, in a terminal
-# or in `ccd-account-auth`'s pane. The function's return value IS the access
-# token, so it is discarded and never printed.
+# THE AUTH LIBRARY SIGNS THE LANE IN, OVER ITS OWN authDir (spec §9.3,
+# D-3479; codex-bridge Stage 1, Task 8). `_codex_auth signin --auth-dir
+# <authDir> --lane <id>` runs `ccd/ccgpt-auth.py`'s device-code sign-in, the
+# protocol LiteLLM's authenticator spoke, against the endpoint the library
+# names (a loopback CCRC_CODEX_AUTH_BASE in tests, never a live one there).
+# No Codex runtime is needed, and none is run: LiteLLM's own sign-in, which
+# this verb used to run, wrote a marker into auth.json before it polled, and
+# its in-request copy is the device flow the tier's patch now refuses.
 #
-# FOUR THINGS ARE DONE TO THE CHILD'S ENVIRONMENT, each read from the runtime's
-# own authenticator source:
-#   * every CHATGPT_*, LITELLM_* and OPENAI_* variable is UNSET, the same three
-#     prefixes the behaviour probe scrubs. The authenticator reads
-#     CHATGPT_AUTH_FILE and os.path.join()s it onto the token dir, so an ambient
-#     absolute value would put this lane's credential outside its authDir;
-#   * CHATGPT_TOKEN_DIR is set to the roster's authDir, under $HOME;
-#   * LITELLM_LOCAL_MODEL_COST_MAP=True (D-3484). Importing the
-#     authenticator imports litellm, which would otherwise fetch a remote file
-#     three times before the device flow could print;
-#   * umask 077. The authenticator mkdirs a missing token dir and writes
-#     auth.json with Python's default modes. A dir that already exists (an
-#     adopted one, spec §9.2) keeps whatever mode it has.
+# WHAT THE LIBRARY DOES, so this function does not do it again:
+#   * it refuses, before any request, a credential it reads `unreadable` or
+#     another family's (`foreign-family`), and never writes over either;
+#   * it answers `already-signed-in`, with no request, for a `present`
+#     credential no current status bars, with the sentence that says how a
+#     dead refresh token is learnt of (the lane's next request);
+#   * it WRITES NOTHING before the token exchange answers: an abandoned or
+#     killed sign-in (the pane's own bound is shorter than the device code's
+#     15 minutes) leaves the authDir exactly as it was;
+#   * it commits the credential through its lock, at 0600, into an authDir it
+#     creates at 0700, and an adopted authDir (spec §9.2) keeps its mode; this
+#     function's `umask 077` only covers anything else the child makes;
+#   * its environment is its own: it reads no CHATGPT_*, LITELLM_* or OPENAI_*
+#     variable, so an ambient one cannot move the credential.
 #
-# EXIT STATUS FIRST, THEN EXISTENCE, AND NEVER CONTENTS. The authenticator
-# writes `device_code_requested_at` INTO auth.json before it polls. So an
-# abandoned or refused device flow leaves an auth.json that holds no token, and
-# only the exit status can tell that apart from a login. ccrc never opens the
-# file (spec §9).
+# THE EXIT STATUS IS THE ANSWER. The library's rc 0 is `signed-in` or
+# `already-signed-in` (its own line, on stdout, says which); anything else is
+# `login-failed`, naming the library's refusal word, read from its own
+# `ccgpt-auth: <word>: <sentence>` line. The device lines pass through on
+# stdout as the library prints them, and its stderr is relayed line by line as
+# it arrives, so a line it prints before its first request (the
+# CCRC_CODEX_AUTH_BASE notice) reaches the pane before that request. The relay
+# keeps the word of the library's last `ccgpt-auth: <word>: ` line. This function's
+# own login-failed line is printed only after the library has exited, so it comes
+# LAST: that is the line `ccd-account-auth`'s pane names as the reason.
 #
-# NOTHING IS PRINTED BEFORE THE RUNTIME'S OWN LINES. `ccd-account-auth`
-# publishes the FIRST `XXXX-XXXX`-shaped run it sees as the device code. A
-# generation name (`gen-<UTC>-<pid>`) carries one (`…000Z-4242`), so a progress
-# line naming the interpreter would put a wrong code on the operator's phone.
+# NOTHING IS PRINTED BEFORE THE LIBRARY'S OWN LINES. `ccd-account-auth`
+# publishes the FIRST `XXXX-XXXX`-shaped run it sees as the device code, so a
+# progress line carrying one would put a wrong code on the operator's phone.
 #
 # ONE ID, ALREADY PARSED (ruling R18). `cmd_codex` refuses a missing id, a
 # flag-shaped one and any extra argument before its role gate and dependency
@@ -13460,24 +13687,29 @@ _codex_cmd_status() {   # <id> <1 = --json>
 # already keeps a malformed id (2) apart from a bad answer (1), and folding the
 # two here would narrow a distinction this function was handed. It takes no
 # lane lock: it starts and stops no tier (ruling R11's list is the paths that
-# do).
-_codex_login() {   # <id> (one, parsed by cmd_codex) — rc 0 iff the runtime exited 0 AND auth.json exists in the lane's authDir
-  local id="$1" py dir rc=0 v
+# do); the credential's own lock is the library's.
+_codex_login() {   # <id> (one, parsed by cmd_codex) — rc 0 iff the auth library's sign-in exited 0
+  local id="$1" dir res rc word re='^ccgpt-auth: ([a-z][a-z-]*): '
   _codex_row "$id" || return $?
-  py="$("$(_codex_runtime_cli)" python 2>/dev/null)" && [ -x "$py" ] \
-    || { _codex_say runtime-absent "this box has no built Codex runtime, so $id cannot be signed in. Build it with: ccgpt-runtime build (ccrc install runs the same build), then retry ccrc codex login $id"; return 1; }
   dir="$HOME/$CX_AUTH"
-  (
-    umask 077
-    for v in ${!CHATGPT_@} ${!LITELLM_@} ${!OPENAI_@}; do unset "$v"; done
-    export CHATGPT_TOKEN_DIR="$dir" LITELLM_LOCAL_MODEL_COST_MAP=True
-    exec "$py" -I -c 'from litellm.llms.chatgpt.authenticator import Authenticator; Authenticator().get_access_token()'
-  ) || rc=$?
-  [ "$rc" -eq 0 ] \
-    || { _codex_say login-failed "the Codex runtime's sign-in for $id exited $rc (its own message is above), so $id is not logged in. Retry with: ccrc codex login $id"; return 1; }
-  [ -e "$dir/auth.json" ] \
-    || { _codex_say login-failed "the Codex runtime's sign-in for $id exited 0 but left no auth.json in its authDir, so $id is not logged in. Retry with: ccrc codex login $id"; return 1; }
-  printf '%s codex: %s: logged in (auth.json is present in its authDir)\n' "$PROG" "$id"
+  # stdout straight through (fd 3, this function's stdout). stderr goes down
+  # the pipe to the relay, which prints each line to stderr as it arrives and,
+  # once the library has closed it, the last refusal word to the capture; the
+  # library's own rc follows, from PIPESTATUS, so nothing has to wait for a
+  # process substitution.
+  { res="$( { (umask 077; _codex_auth signin --auth-dir "$dir" --lane "$id") 2>&1 1>&3 3>&- \
+      | { w=''; while IFS= read -r l || [ -n "$l" ]; do
+            printf '%s\n' "$l" >&2
+            if [[ $l =~ $re ]]; then w="${BASH_REMATCH[1]}"; fi
+          done; printf '%s' "$w"; }
+      printf ' %s' "${PIPESTATUS[0]}"; })"; } 3>&1
+  rc="${res##* }"; word="${res% *}"
+  case "$rc" in
+    0) printf '%s codex: %s: logged in\n' "$PROG" "$id"; return 0 ;;
+    3) return 1 ;;   # `_codex_auth` has said auth-library-absent
+  esac
+  _codex_say login-failed "the auth library's sign-in for $id failed${word:+ ($word)} and exited $rc (its own line is above), so $id is not logged in. Retry with: ccrc codex login $id"
+  return 1
 }
 
 # `ccrc codex {start|stop|status|login} <id>` — the lane's lifecycle verb (D-3479).
@@ -16388,8 +16620,10 @@ _codex_usage_flat_foreign() {
 #     `_inst_enable_timer`, whose refusal is a counted degraded step;
 #   - a codex lane for which ANOTHER repository's `ccgpt-usage@<id>.timer` is
 #     enabled gets no ccrc instance, and one ccrc had enabled is withdrawn: two
-#     publishers would race one `~/.cc-limits/<id>.json`, and two Authenticator
-#     refreshes one rotating refresh token (D-3719).
+#     publishers would race one `~/.cc-limits/<id>.json` (D-3719). ccrc's
+#     own poll adds no credential race, because it only reads through the
+#     auth library and never refreshes; the other tool's timer refreshes
+#     outside the library's lock, so it can still race the tier's refresh.
 #     ccrc NEVER disables the foreign timer; the line names the operator's own
 #     command. The flat `ccgpt-usage.timer` names no lane, so it is reported as
 #     unattributable and blocks nothing.
@@ -16735,6 +16969,22 @@ _inst_enable() {
 # `codex-tiers` in INST_DEGRADED — a per-lane capability degrades; it is not
 # the guardrail `_inst_enable` is. An unreadable roster (`_codex_lanes` rc 1)
 # is a failure too, never "no codex lane".
+#
+# A FAILED RUNTIME BUILD NEVER RESTARTS A LITELLM TIER ALREADY ON THE CURRENT
+# GENERATION (D-6691). That tier's record hashes the generation's stamp AND
+# the placed auth library (`_codex_started_json`), so a new library reads as
+# stale even when this run's build failed and the previous generation stays
+# current. A restart then brings the tier back on that same generation, whose
+# patch may carry no authenticator, and cuts its in-flight requests for
+# nothing. So when this run's INST_DEGRADED holds `codex-runtime` AND the
+# tier's `<tier>.started` record names the generation that resolves now (its
+# `generation`, read with `jq -r .generation`, equals `${py%/bin/python}`), a
+# stale litellm tier is left running and said so in one line: it keeps its
+# running code until a build passes. It counts as left as it was, never as a
+# failure: the runtime step has already degraded this run. A tier whose record
+# names an older generation (or none) is not on the one that resolves now, so
+# a restart does move it there, and it is restarted as before. The shim tier
+# does not run on the generation, and is restarted as before.
 _inst_codex_tiers() {
   [ "$INST_ROLE" = server ] && return 0
   local lanes id tier ours stale py ready deadline back stopword rc lrc=0
@@ -16811,6 +17061,13 @@ _inst_codex_tiers() {
           echo "install: codex tiers: $id $tier: left alone — whether it runs code this install replaced could not be measured (no runtime resolves, or its code file cannot be read), and a tier nobody can prove stale is never restarted"
           kept=$((kept + 1)); continue ;;
       esac
+      # D-6691: a failed build this run leaves the litellm tier on its code,
+      # but only while its record names the generation that resolves now.
+      if [ "$tier" = litellm ] && [[ " ${INST_DEGRADED[*]-} " == *" codex-runtime "* ]] \
+        && [ "$(jq -r .generation "$(_codex_lane_dir "$id")/$tier.started" 2>/dev/null)" = "${py%/bin/python}" ]; then
+        echo "install: codex tiers: $id litellm: left alone — it runs code this install replaced, but this run's codex runtime build did not pass (the codex runtime: NOT BUILT line above), so it keeps its running code until a build passes; then re-run: ccrc install"
+        kept=$((kept + 1)); continue
+      fi
       # The runtime this step measured at its start (`py`, above, read ONCE
       # before the lane loop); belt-and-braces against a stale answer.
       # `_codex_tier_stale` already answers 2 when no runtime resolves, so
@@ -24728,14 +24985,16 @@ _uninst_codex_usage() {
 # when it did not). Every byte the manager says goes to stderr: `_acct_remove`'s
 # stdout is one JSON object.
 #
-# THEN IT WAITS, AND IT NEVER STOPS (D-4049).
+# THEN IT WAITS, AND IT NEVER STOPS (D-4049; D-6378).
 # Disabling the timer does not end the `ccrc-codex-usage@<id>.service` it had
-# already fired: a oneshot runs to the end of its poll, and that poll may be
-# part-way through the Authenticator's write of the lane's `auth.json`. A stop
-# could cut that write short, in the authDir removal deliberately keeps, so
-# nothing here asks for one. A limits row removed under a running poll is
-# written again by it. So the service is read through `_svc_is_active` once a
-# second, for at most `_acct_usage_wait_secs`, with one waiting line on stderr:
+# already fired: a oneshot runs to the end of its poll. The wait had two
+# reasons, and one is gone: since codex-bridge Stage 1 the poll only READS the
+# lane's credential, through the auth library, and never writes it (the tier
+# is the one refresher, and removal takes the library's lock around the tier
+# stop, `_codex_auth_hold`). The other stands, and the wait stays for it: a
+# limits row removed under a running poll is written again by it. Nothing
+# here asks for a stop. So the service is read through `_svc_is_active` once
+# a second, for at most `_acct_usage_wait_secs`, with one waiting line on stderr:
 #   * `inactive`, `failed`: done;
 #   * `active`, `activating` (a oneshot reads it for its WHOLE run — never
 #     `active`), `deactivating`, `reloading`, `refreshing`: in flight;
@@ -24764,8 +25023,9 @@ _uninst_codex_usage() {
 # verbs: ccd's placements do NOT wait on it (ccd/ccd's "A RE-READ, NOT A LOCK"),
 # so a session can be placed on the lane while this waits. So a run that waited
 # sets ACCT_USAGE_WAITED, and the caller takes its liveness census again before
-# it stops a tier or moves anything. One poll is a token refresh plus one
-# request the publisher bounds at 30 s (the unit's own comment).
+# it stops a tier or moves anything. One poll is one request the publisher
+# bounds at 30 s (the unit's own comment); since codex-bridge Stage 1 it makes
+# no token refresh.
 #
 # ASKED ONLY WHERE A POLL CAN RUN: on Linux, with ccrc's template
 # `ccrc-codex-usage@.service` placed in the unit directory, whether or not the
@@ -24811,7 +25071,7 @@ _acct_remove_usage() {   # <id> <what-still-stands>
         return 0 ;;
     esac
     if [ "$said" -eq 0 ]; then
-      printf '%s\n' "$PROG account remove: ccrc's usage poll $s is running ($state); waiting up to ${limit}s for it to finish before \$HOME/.cc-limits/$1.json is removed. ccrc never stops it: it may be writing the lane's OAuth token file." >&2
+      printf '%s\n' "$PROG account remove: ccrc's usage poll $s is running ($state); waiting up to ${limit}s for it to finish before \$HOME/.cc-limits/$1.json is removed. ccrc never stops it, and a row removed under a running poll is written again." >&2
       said=1; ACCT_USAGE_WAITED=1
     fi
     if [ $(( SECONDS - t0 )) -ge "$limit" ]; then
@@ -24825,7 +25085,7 @@ _acct_remove_usage() {   # <id> <what-still-stands>
           still="$still Except ccrc's usage timer $u: it is not enabled, and this run did not disable it, so it does not stand; 'ccrc install' enables it again for a lane that is still codex."
         fi
       fi
-      _acct_refuse 1 usage-refresh-in-flight "ccrc's usage poll $s for $1 still reads $state after ${limit}s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before \$HOME/.cc-limits/$1.json: ccrc never stops a poll, because it may be writing the lane's OAuth token file, and a row removed under a running poll is written again. $timer $still Retry 'ccrc account remove --id $1' once 'systemctl --user is-active $s' reads inactive: every step this run took is safe to repeat."
+      _acct_refuse 1 usage-refresh-in-flight "ccrc's usage poll $s for $1 still reads $state after ${limit}s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before \$HOME/.cc-limits/$1.json: ccrc never stops a poll, and a row removed under a running poll is written again. $timer $still Retry 'ccrc account remove --id $1' once 'systemctl --user is-active $s' reads inactive: every step this run took is safe to repeat."
     fi
     sleep 1
   done

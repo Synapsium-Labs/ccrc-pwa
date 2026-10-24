@@ -215,7 +215,7 @@ describe('the app bar (W2 Task S4b)', () => {
       const readouts = document.querySelectorAll('.accounts-strip, .accounts-compact');
       expect(readouts).toHaveLength(1);
       // Every banner keeps a slot while it is mounted, shown or not, so one slot per id is one stack.
-      for (const id of ['fleet-host', 'halt', 'update', 'substrate', 'offline', 'connecting', 'passkey']) {
+      for (const id of ['fleet-host', 'halt', 'substrate', 'offline', 'connecting', 'passkey']) {
         expect(document.querySelectorAll(`.banner-slot[data-banner="${id}"]`), id).toHaveLength(1);
       }
       const slot = document.querySelector('.banner-slot[data-banner="fleet-host"]')!;

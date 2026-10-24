@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
 import { FLEET_PROTO, SECRET_MASK } from '../../shared/api';
-import { ApiError } from '../src/lib/api';
+import { ApiError, sendErrorText } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, getSessionStore, type SessionSnapshot } from '../src/stores/session';
 import { createFleetStore } from '../src/stores/fleet';
 import { setUpdater } from '../src/lib/swupdate';
@@ -319,6 +319,22 @@ describe('session store optimistic send', () => {
     expect(store.getState().ask).toBeNull();
   });
 
+  it('disconnect() resets askFrameSeen with the ask it clears', () => {
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() } });
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().askFrameSeen).toBe(true);
+    store.getState().disconnect();
+    expect(store.getState().askFrameSeen).toBe(false);
+  });
+
+  it('the reducer sets askFrameSeen on an ask or ask_cleared frame and leaves it alone otherwise', () => {
+    const base = { ...emptySnap(), askFrameSeen: false };
+    expect(applySessionMsg(base, { type: 'ask', ask: askFixture, key: 'k1' }).askFrameSeen).toBe(true);
+    expect(applySessionMsg(base, { type: 'ask_cleared' }).askFrameSeen).toBe(true);
+    expect(applySessionMsg(base, { type: 'dialog', dialog: dialogFixture }).askFrameSeen).toBe(false);
+    expect(applySessionMsg({ ...base, askFrameSeen: true }, { type: 'dialog_cleared' }).askFrameSeen).toBe(true);
+  });
+
   // Fix round 1, finding 3's named residual: `sessionws.ts`'s own
   // per-connection sentinel now states the mail truth explicitly on every
   // fresh connect (including an empty one), which is the primary fix — this
@@ -507,6 +523,67 @@ describe('session store optimistic send', () => {
     const store = createSessionStore('s1', { api: { prompt } });
     await store.getState().send('x');
     expect(store.getState().pending[0]!.submittable).toBeUndefined();
+  });
+
+  // D-6367: Retry says the text is ours only when the refusal left OUR text in the box.
+  it('Retry after verify-failed with text left sends resume: true; Retry after other refusals does not', async () => {
+    const refusal = (code: string, draft?: string) =>
+      new ApiError(409, { ok: false, error: code, ...(draft === undefined ? {} : { draft }) });
+    vi.useFakeTimers(); // restored by the file's afterEach
+    const cases: Array<[string, unknown, boolean]> = [
+      ['verify-failed + draft', refusal('verify-failed', 'my message'), true],
+      ['enter-ignored + draft', refusal('enter-ignored', 'my message'), true],
+      ['verify-failed, no draft', refusal('verify-failed'), false],
+      ['type-failed', refusal('type-failed'), false],
+      ['draft-present', refusal('draft-present', 'someone else'), false],
+      ['not-alive', refusal('not-alive'), false],
+      ['box-unreadable', refusal('box-unreadable'), false],
+      ['dialog-open', refusal('dialog-open'), false],
+      ['a non-ApiError failure', new Error('network down'), false],
+    ];
+    for (const [name, failure, resumes] of cases) {
+      const prompt = vi.fn().mockRejectedValueOnce(failure);
+      prompt.mockResolvedValue(undefined);
+      const store = createSessionStore('s1', { api: { prompt } });
+      await store.getState().send('my message');
+      store.getState().retry(store.getState().pending[0]!.key);
+      expect(prompt, name).toHaveBeenCalledTimes(2);
+      const retried = prompt.mock.calls[1]![2] as { resume?: boolean };
+      if (resumes) expect(retried.resume, name).toBe(true);
+      else expect(retried, name).not.toHaveProperty('resume');
+    }
+  });
+
+  // D-6367, R38: a landed send can still be answered enter-ignored with a blind final read (no draft), and Retry
+  // must never type a second copy; the server's whole-box resume types nothing over an empty box.
+  it('Retry after enter-ignored with no draft sends resume: true', async () => {
+    vi.useFakeTimers(); // restored by the file's afterEach
+    const cases: Array<[string, ApiError]> = [
+      ['enter-ignored, no draft field', new ApiError(409, { ok: false, error: 'enter-ignored' })],
+      ["enter-ignored, draft ''", new ApiError(409, { ok: false, error: 'enter-ignored', draft: '' })],
+    ];
+    for (const [name, failure] of cases) {
+      const prompt = vi.fn().mockRejectedValueOnce(failure);
+      prompt.mockResolvedValue(undefined);
+      const store = createSessionStore('s1', { api: { prompt } });
+      await store.getState().send('my message');
+      store.getState().retry(store.getState().pending[0]!.key);
+      expect(prompt, name).toHaveBeenCalledTimes(2);
+      expect(prompt.mock.calls[1]![2], name).toMatchObject({ resume: true });
+    }
+  });
+
+  it('a resumed Retry answered nothing-to-submit shows the check-the-transcript sentence', async () => {
+    const prompt = vi.fn()
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'enter-ignored', draft: 'my message' }))
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'nothing-to-submit' }));
+    const store = createSessionStore('s1', { api: { prompt } });
+    await store.getState().send('my message');
+    store.getState().retry(store.getState().pending[0]!.key);
+    await vi.waitFor(() => expect(store.getState().pending[0]?.code).toBe('nothing-to-submit'));
+    expect(prompt.mock.calls[1]![2]).toMatchObject({ resume: true });
+    expect(store.getState().pending[0]!.error).toBe(sendErrorText('nothing-to-submit'));
+    expect(store.getState().pending[0]!.error).toMatch(/Check the transcript/);
   });
 
   it('retry() re-sends a failed pending; discard() drops it', async () => {
@@ -1190,6 +1267,106 @@ describe('session store connect()', () => {
 
     lastSocket().message(JSON.stringify({ type: 'status', status: 'busy', statusUpdatedAt: 123 }));
     expect(store.getState().status).toBe('busy');
+    store.getState().disconnect();
+  });
+
+  // D-6325: `askFrameSeen` is per CONNECTION, not per tab. The surface treats a scraped dialog as `none` until THIS
+  // connection's first `ask` or `ask_cleared` frame, because an `ask` the store holds from before a drop is exactly
+  // what a reconnect must not present as current. `ReconnectingSocket`'s automatic reconnects never call
+  // `disconnect()`, so the reset lives in the socket's state (`onState`: down, connecting; every open follows one of
+  // them): a drop and a backoff reconnect, driven here through the socket's own close event and its timer.
+  it('an automatic reconnect resets askFrameSeen until that connection\'s first ask or ask_cleared frame', () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
+    expect(store.getState().askFrameSeen).toBe(false);
+
+    store.getState().connect();
+    lastSocket().open();
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+    expect(store.getState().askFrameSeen).toBe(false);   // a dialog frame says nothing about the envelope
+    store.getState().apply({ type: 'ask', ask: askFixture, key: 'k1' });
+    expect(store.getState().askFrameSeen).toBe(true);
+
+    // The network drops; the socket schedules its own reconnect (no disconnect(), no new store).
+    const first = lastSocket();
+    first.onclose?.(new Event('close') as CloseEvent);
+    vi.advanceTimersByTime(60_000);
+    expect(lastSocket()).not.toBe(first);
+    expect(store.getState().askFrameSeen).toBe(false);   // the drop itself took it down (the-ask-holds-through-a-reconnect)
+    lastSocket().open();
+    expect(store.getState().askFrameSeen).toBe(false);
+    expect(store.getState().ask).toEqual(askFixture);    // the held envelope is untouched; only the flag says it is old
+
+    // A frame that is not an ask or an ask_cleared does not set it; an ask_cleared does.
+    store.getState().apply({ type: 'dialog_cleared' });
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().askFrameSeen).toBe(true);
+    expect(store.getState().ask).toBeNull();
+
+    // A second reconnect resets it again.
+    const second = lastSocket();
+    second.onclose?.(new Event('close') as CloseEvent);
+    vi.advanceTimersByTime(60_000);
+    lastSocket().open();
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().disconnect();
+  });
+
+  // D-6325, `the-ask-holds-through-a-reconnect`: the flag is also what says a surface is LIVE (the sheet holds what it
+  // showed, read-only, while it is false). It therefore falls the moment the socket drops, not only when the next
+  // connection opens: from the drop until that connection's first ask or ask_cleared frame, no answer may go on the old
+  // connection's evidence.
+  it('the socket dropping resets askFrameSeen at once, before the next connection opens', () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
+    store.getState().connect();
+    lastSocket().open();
+    store.getState().apply({ type: 'ask', ask: askFixture, key: 'k1' });
+    expect(store.getState().askFrameSeen).toBe(true);
+
+    lastSocket().onclose?.(new Event('close') as CloseEvent);
+    expect(store.getState().conn).toBe('down');
+    expect(store.getState().askFrameSeen, 'down: nothing is live').toBe(false);
+    expect(store.getState().ask, 'the held envelope itself is untouched').toEqual(askFixture);
+
+    // And through the reconnect's own states: the flag stays down until a frame of the new connection sets it.
+    vi.advanceTimersByTime(60_000);
+    expect(store.getState().conn).toBe('connecting');
+    expect(store.getState().askFrameSeen).toBe(false);
+    lastSocket().open();
+    expect(store.getState().conn).toBe('open');
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().askFrameSeen).toBe(true);
+    store.getState().disconnect();
+  });
+
+  // D-6325 (review 843's F1): a new stream frames the menu it sees, but never the ABSENCE of one (`nextDialogFrame` sends
+  // nothing for a stream that has seen no menu), so a `dialog` kept from before the drop would be read as current once the
+  // new connection's `ask_cleared` arrives. The drop lowers `dialog` with `askFrameSeen`; the sheet's hold keeps what it
+  // showed in its own ref, and the new connection's `dialog` frame, sent before its `ask` frame, brings the menu back.
+  it('the socket dropping lowers dialog with askFrameSeen, and the new connection\'s dialog frame brings it back', () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
+    store.getState().connect();
+    lastSocket().open();
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().dialog).toEqual(dialogFixture);
+
+    lastSocket().onclose?.(new Event('close') as CloseEvent);
+    expect(store.getState().dialog, 'down: the pre-drop menu is not current').toBeNull();
+    expect(store.getState().askFrameSeen).toBe(false);
+
+    vi.advanceTimersByTime(60_000);
+    lastSocket().open();
+    expect(store.getState().dialog).toBeNull();
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().dialog).toEqual(dialogFixture);
+    expect(store.getState().askFrameSeen).toBe(true);
     store.getState().disconnect();
   });
 });

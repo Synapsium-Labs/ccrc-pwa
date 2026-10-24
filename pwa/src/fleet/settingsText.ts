@@ -62,7 +62,7 @@ export const UPDATES_TEXT = {
   checkNowNote: 'Asks GitHub for new releases now, instead of waiting for the next check.',
   checkNowWhen: 'You know a release just shipped.',
   nodesLead: "Each machine ccrc runs on. A node's Update and Roll back move that node only.",
-  channelPurpose: "Sets which release the fleet treats as newest. That drives the update banner, each node's → arrow, "
+  channelPurpose: "Sets which release the fleet treats as newest. That drives the update line, each node's → arrow, "
     + 'the release window and, with auto-install on, what installs.',
   channelWhen: 'Once, at set-up. Choose Dev only if you want fixes as they merge and accept less tested builds.',
   autoPurpose: 'When on, the server installs a new release as soon as the release check sees it. It moves each node in '

@@ -13,7 +13,7 @@ import type { BoxTokenView, RotateAnswer } from '../../shared/box-token';
 import { BOX_TOKEN_PHASES, TOKEN_HOLDS } from '../../shared/box-token';
 import { boxTokenHoldText, boxTokenStateText, boxTokenTransportText } from '../src/screens/settings/SecuritySection';
 import { renderSettings } from './settingsHost';
-import { asUpdatesView } from '../src/fleet/useUpdatesView';
+import { asUpdatesView } from '../src/fleet/updatesRead';
 import { ApiError, api, apiErrorText, createApi, readBoxTokenView } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
@@ -104,6 +104,9 @@ describe('readBoxTokenView — the ONE reader of UpdatesView.boxToken', () => {
     ['a fleet word this build does not know', { ...BT(), fleetConfirmed: 'maybe' }],
     ['a count that is not a non-negative integer', { ...BT(), retiredPresented: -1 }],
     ['failures as a string', { ...BT(), failures: '3' }],
+    // ARCH-30 (#544): one count rule for every reader (lib/wire): 2^53 + 1 is not a count.
+    ['a count past the safe integers', { ...BT(), retiredPresented: 2 ** 53 + 1 }],
+    ['a sequence past the safe integers', { ...BT(), currentSeq: 2 ** 53 + 1 }],
     ['banner missing', (() => { const { banner: _b, ...rest } = BT(); return rest; })()],
     ['a lastSync with no word', { ...BT(), lastSync: { at: 5 } }],
     ['a boot recovery from a third source', { ...BT(), lastBootRecovery: { at: 5, source: 'current' } }],

@@ -753,7 +753,7 @@ describe('both spellings of mail-disabled agree: rundefs.ts\'s export and watch.
     const ccd: string[][] = [];
     const deps = { coord: f.coord, io: { readdir: async () => [MAIL_DISABLED_MARKER] },
       cfg: { registryDir: f.reg }, runCcd: async (a: string[]) => { ccd.push(a); return { ok: false }; },
-      tmux: {}, queue: {} } as unknown as DispatchRunDeps;
+      sendClear: async () => ({ ok: true as const }) } as unknown as DispatchRunDeps;
     expect(await dispatchRun(deps, opened.id, 'do the thing', undefined)).toEqual({ ok: false, kind: 'refused', code: 'mail-disabled' });
     expect(ccd).toEqual([]);
   });
@@ -778,7 +778,7 @@ describe('both spellings of mail-disabled agree: rundefs.ts\'s export and watch.
     const ccd: string[][] = [];
     const deps = { coord: f.coord, io: { readdir: async () => null },
       cfg: { registryDir: f.reg }, runCcd: async (a: string[]) => { ccd.push(a); return { ok: false }; },
-      tmux: {}, queue: {} } as unknown as DispatchRunDeps;
+      sendClear: async () => ({ ok: true as const }) } as unknown as DispatchRunDeps;
     expect(await dispatchRun(deps, opened.id, 'do the thing', undefined)).toEqual({ ok: false, kind: 'refused', code: 'paused' });
     expect(ccd).toEqual([]);
   });

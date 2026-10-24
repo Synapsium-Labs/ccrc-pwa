@@ -7,7 +7,7 @@
 // the design system cannot import the app's polling hook to find out whether a
 // node is behind, and these two functions never needed it: they are pure reads
 // of a `NodeWire`. `useUpdatesView.ts` re-exports both, so every existing
-// reader (SettingsScreen, UpdateBanner, movePlan and their tests) keeps its
+// reader (SettingsScreen, releaseWaiting.ts, movePlan and their tests) keeps its
 // import and there is still exactly one definition.
 import { isReleaseTag, isUpdateChannel, type NodeWire } from './api.js';
 import { isNewerTag } from './semver.js';
@@ -22,7 +22,7 @@ export function nodeVersion(n: NodeWire): string | null {
 
 /**
  * THE ONE ARROW PREDICATE — the tag a node should move UP to, or null. Read by
- * the node inventory (Task 9), the fleet banner (Task 11) and BuildLine's affix
+ * the node inventory (Task 9), the fleet's update line (Task 11, then a banner) and BuildLine's affix
  * (Task 12); none of them compares tags itself.
  *
  * No arrow while the node is UNMEASURED or has NO RESOLVED CHANNEL (spec §18
@@ -38,14 +38,14 @@ export function nodeVersion(n: NodeWire): string | null {
  * arrow (spec §13 Pins; §18 "`stampRead` keeps EACCES from unversioned";
  * D-3307). No arrow for a macOS node either: this
  * programme does not manage one (decision 17), and its row says so in place of
- * a desired — the rule is here, not in that row, so the banner and BuildLine
+ * a desired — the rule is here, not in that row, so the update line and BuildLine
  * say the same (`os: 'unknown'` is not Darwin; D-3309).
  *
  * Fix round 2 (review of d5aefc4a, item 4): no arrow either while the node is
  * UNREACHABLE (`reachable !== true`) — D-3316's own text, ruled to widen from
  * "no side states a version" to the arrow too: an unreachable node is treated
  * exactly like one whose stamp did not read (D-3307, the clause right above),
- * so BuildLine's affix, the settings inventory's `→ vX` and the banner's own
+ * so BuildLine's affix, the settings inventory's `→ vX` and the update line's own
  * "is this node behind" question all agree — an unreachable node offers
  * nothing to move up to, on any of the three surfaces this one predicate
  * feeds. The settings row still says "unreachable since …" (`reachabilityLine`,

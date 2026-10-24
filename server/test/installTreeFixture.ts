@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 // (wave 9 R9-F8). It may never import `ccrcContainment.ts`, which reaches vitest through `ccdWsHelpers.ts`.
 import { CONTAINED_TOOLS, plantPoison } from './containedTools.js';
 // The second, and it imports nothing at all (Docs W4): the PWA bundle's one fixture worker, so the closing doctor's
-// `docs-sw` check reads the same text `ccrc-doctor.test.ts`'s `healthy()` plants.
+// `docs-sw` check reads the same text `ccrc-doctorFixture.ts`'s `healthy()` plants.
 import { swJs } from './swFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));

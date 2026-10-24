@@ -68,7 +68,10 @@ import {
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 // The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
 import { randomUUID } from 'node:crypto';
-import type { MeasuredDirectoryRead } from './io.js';
+import type { MeasuredDirectoryRead, MeasuredDisk } from './io.js';
+import { diskMarkFate, diskNotice, diskVerdict, type DiskVerdict } from './disk.js';
+import { clearDiskEpisode, readDiskEpisode, writeDiskEpisode } from './diskepisode.js';
+import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
 import {
   DelegationIngestError, delegationBucketDurabilityOf, delegationBucketUtcHour, ingestAndApplyDelegationBucket, readDelegationBucket,
@@ -181,6 +184,7 @@ import type { CoordRoutesHandle } from './coord/routes.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
+import { changeLatch, changeLatchMap } from './changeLatch.js';
 import { SERVER_CAPS_WRITE_MS, writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { runDispatch, type DispatchRunResult } from './update/converge.js';
@@ -247,6 +251,8 @@ const NAME_SWEEP_MS = 10_000;
  *  the name sweep, deliberately: this one touches the filesystem per PROJECT,
  *  not per pane. */
 const DIVERGENCE_SWEEP_MS = 60_000;
+/** The disk alarm's clock (D-6615, spec §2.5): one `statfs` pass a minute. */
+const DISK_SWEEP_MS = 60_000;
 
 /** The child-reclaim lane (child-reclamation wave 4, spec §5.7). The
  *  census's cadence, for the census's reason — a child's eligibility moves on
@@ -1040,8 +1046,8 @@ export class FleetWatcher {
   private lastServerCapsAt = 0;
   private serverCapsRun: Promise<WriteServerCapsResult | null> | null = null;
   /** The last server-caps write failure's stable key (`unwritable:<errno>`), so an unwritable ~/.ccrc warns once
-   *  per change of reason, not once a minute (`lastProjectionWhy`'s idiom); null after a success. */
-  private lastServerCapsWhy: string | null = null;
+   *  per change of reason, not once a minute (`changeLatch`'s idiom); null after a success. */
+  private readonly serverCapsWhy = changeLatch<string | null>();
   /** C2 (final fix wave): the last inventory-sweep REJECTION message warned
    *  about, so a standing cause (a locked or corrupt coord.db held past one
    *  sweep) warns once, not every tick/ready — reset to null the moment a
@@ -1050,7 +1056,7 @@ export class FleetWatcher {
    *  itself should not reject any more except for a bug outside either
    *  connection's own try/catch (e.g. inside `resolveAndProject`'s own
    *  queueing, which `sweepThenProject` already handles separately). */
-  private lastInventoryRejectWarn: string | null = null;
+  private readonly inventoryRejectWarn = changeLatch<string>();
   /** C4 (final fix wave): set when a caller of `triggerInventory()` (the
    *  `ready` hook) JOINS a sweep already in flight rather than starting one.
    *  The joiner's own connection state may be exactly what changed since the
@@ -1066,12 +1072,12 @@ export class FleetWatcher {
    *  own gap). Warned once when a tuple first appears, silent while it
    *  repeats, and warned again if it clears and later recurs. */
   private lastInventoryIssues: ReadonlySet<string> = new Set();
-  /** Task 12: the last projection-warning KEY (`projectionWarn`'s `key`, never its `message`), so a box
+  /** Task 12: the latch on the projection-warning KEY (`projectionWarn`'s `key`, never its `message`), so a box
    *  whose ~/.ccrc cannot take the file warns once per change of reason, not once a minute. */
-  private lastProjectionWhy: string | null = null;
+  private readonly projectionWhy = changeLatch<string | null>();
   /** Plan W3 Task 3: the last reason a release-push decision failed, so a coord.db that cannot be read
-   *  warns once per change of reason on the inventory lane's minute beat (`lastProjectionWhy`'s idiom). */
-  private lastReleasePushFailure: string | null = null;
+   *  warns once per change of reason on the inventory lane's minute beat (`changeLatch`'s idiom). */
+  private readonly releasePushFailure = changeLatch<string>();
   /** Plan W3 Task 3 (D-3314): true once THIS process's sweep has actually REWRITTEN the rows the push decides
    *  on — never merely "a sweep finished" (W5 review 161, F-H: a sweep can finish with the server row
    *  unreachable, refused or errored, none of which rewrites it — `sweptEnoughToDecide` is the exact
@@ -1341,16 +1347,21 @@ export class FleetWatcher {
    *  `currentX()` on this class already has, and the route turns it into a
    *  `readiness: null` on the wire rather than omitting the key. */
   private lastReadinessSweep = 0;
+  /** The disk alarm's clock, the decider's memory and the block the route serves (D-6615). `diskBlock` is `null` until
+   *  the first sweep lands: absence on the wire reads as UNKNOWN. */
+  private lastDiskSweep = 0;
+  private diskState: DiskVerdict | null = null;
+  private diskBlock: DiskHealth | null = null;
   private readiness: FleetReadiness | undefined;
   /** The stale set last reported, as JSON — one warn per CHANGING set, the
    *  `lastDivergenceJson` idiom, so a standing stale number is not a log
    *  line every 15 minutes forever. */
-  private lastStaleReport: string | null = null;
+  private readonly staleReport = changeLatch<string>();
 
-  /** Per project, the last orphan set this sweep reported — `lastStaleReport`'s
+  /** Per project, the last orphan set this sweep reported — `staleReport`'s
    *  once-per-changing-set idiom, keyed because the reconcile sweep now walks
    *  every project the allocator has issued for rather than a subset of them. */
-  private readonly lastOrphanReport = new Map<string, string>();
+  private readonly orphanReport = changeLatchMap<string>();
   /** Built lazily (`mirrorFor` below) as soon as a coordination database
    *  exists — NOT only on the first sweep, since `lifecycleHealth()` must be
    *  able to ask it before any sweep has run. The mirror holds the cursor,
@@ -1715,10 +1726,9 @@ export class FleetWatcher {
     if (role !== 'server' && role !== 'both') return Promise.resolve(null);
     const run = writeServerCaps(ccrcDir, SERVER_CAPS, Math.floor(Date.now() / 1000)).then((r) => {
       const key = r.ok ? null : `${r.why}:${r.code ?? 'none'}`;
-      if (!r.ok && key !== this.lastServerCapsWhy) {
+      if (this.serverCapsWhy.changed(key) && !r.ok) {
         console.warn(`ccrc-server: could not write ~/.ccrc/server-caps (the fleet hook's gated arms stay off until it is written): ${r.detail}`);
       }
-      this.lastServerCapsWhy = key;
       return r;
     }).finally(() => { this.serverCapsRun = null; });
     this.serverCapsRun = run;
@@ -1774,11 +1784,10 @@ export class FleetWatcher {
     // condition from two different call sites (or two turns of one retry
     // loop) carry two different stacks, which would defeat the dedupe.
     const message = err instanceof Error ? err.message : String(err);
-    if (message !== this.lastInventoryRejectWarn) {
+    if (this.inventoryRejectWarn.changed(message)) {
       const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
       console.warn('ccrc-server: the inventory sweep rejected — a throw outside the per-row ' +
         `measurement+apply catch (C1) or the projection path (both are their own arms/warnings): ${detail}`);
-      this.lastInventoryRejectWarn = message;
     }
   }
 
@@ -1795,7 +1804,7 @@ export class FleetWatcher {
    *  recovery warns again. */
   private dispatchInventorySweep(): Promise<void> {
     return this.inventoryNow().then(
-      () => { this.lastInventoryRejectWarn = null; },
+      () => { this.inventoryRejectWarn.clear(); },
       (err: unknown) => { this.warnInventoryRejected(err); },
     );
   }
@@ -1989,10 +1998,9 @@ export class FleetWatcher {
       };
     }
     const key = warn?.key ?? null;
-    if (warn !== null && key !== this.lastProjectionWhy) {
+    if (this.projectionWhy.changed(key) && warn !== null) {
       console.warn(`ccrc-server: update: this server's own ~/.ccrc/update-intent was not written (${warn.message})`);
     }
-    this.lastProjectionWhy = key;
     // Plan W3 Task 3: the inventory run MEASURES what the nodes run, so it is where a release every node
     // already runs is marked instead of pushed (D-3294), where the first release after a
     // fresh install is decided at all (D-3300), and what opens the catalogue
@@ -2051,7 +2059,7 @@ export class FleetWatcher {
       const nodes = coord.nodes();
       n = releaseToNotify({ fleetIntent, releases: coord.releases(), nodes });
       if (n === null) {
-        this.lastReleasePushFailure = null;
+        this.releasePushFailure.clear();
         return { did: 'skipped', why: 'nothing-to-notify' };
       }
       marked = coord.markReleaseNotified(n.tag, now);
@@ -2068,11 +2076,10 @@ export class FleetWatcher {
       summary = summaryFromSides(sides);
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
-      if (detail !== this.lastReleasePushFailure) console.warn(`ccrc-server: update: the release push was not decided (${detail}) — nothing was marked or sent`);
-      this.lastReleasePushFailure = detail;
+      if (this.releasePushFailure.changed(detail)) console.warn(`ccrc-server: update: the release push was not decided (${detail}) — nothing was marked or sent`);
       return { did: 'failed', detail };
     }
-    this.lastReleasePushFailure = null;
+    this.releasePushFailure.clear();
     if (!marked.ok) return { did: 'refused', tag: n.tag, why: marked.why };
     if (!n.push) return { did: 'marked', tag: n.tag };
     const copy = releasePushCopy(n, summary);
@@ -2168,6 +2175,12 @@ export class FleetWatcher {
    *  lane's last pass composed it, stopped or not (D-6027). `null` before that pass: absence on the wire reads as UNKNOWN. */
   archivedHeld(): ArchivedHeld | null {
     return this.archivedHeldBlock;
+  }
+
+  /** The disk alarm's block as the last sweep held it (D-6615), or `null` before the first sweep: absence on the wire
+   *  reads as UNKNOWN, never as a healthy disk. */
+  disk(): DiskHealth | null {
+    return this.diskBlock;
   }
 
   /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
@@ -2466,6 +2479,12 @@ export class FleetWatcher {
       if (this.deps.coord && Date.now() - this.lastInventoryAt >= UPDATE_INVENTORY_MS) {
         void this.dispatchInventorySweep();
       }
+
+      // The disk alarm (D-6615) is gated HERE too, above the registry read's fail-shut return, because it reads no
+      // registry: a full disk is exactly when the registry read fails, and the one alarm must still sound. NEVER
+      // awaited: a `statfs` of a stalled volume is what hangs (the agent bounds each root, the link bounds the request),
+      // and the dialog detector must not wait behind it. Own clock (`DISK_SWEEP_MS`).
+      void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
 
       // The server-caps beat (D-5232's mechanism, Task 9b) sits BESIDE the inventory lane, never inside it: that lane
       // is `coord`-gated, and a coord-less server must still keep its fleet's file current. Above the registry's
@@ -7080,6 +7099,78 @@ export class FleetWatcher {
   }
 
   /**
+   * The disk alarm (D-6615, spec §2.5): ask the fleet io what the work filesystems read, fold it through the pure
+   * decider (`diskVerdict`: the larger of bytes and inodes, hysteresis, a two-measurement debounce) and hold the block
+   * `GET /api/fleet/health` serves. A read that could not be taken (an older agent, a fault on the link) leaves the
+   * decider's memory alone and marks the block `unmeasured`, never `ok`: it keeps a known `warn` or `critical`, so the
+   * one alarm does not go dark exactly when a full box stalls. `holders` stays empty until the holder census fills it.
+   *
+   * PUBLIC for the reason `sweepReadiness` is: `tick()` dispatches it with `void`, so a test that awaits `tick()` has
+   * not awaited this.
+   */
+  async sweepDisk(): Promise<void> {
+    const now = Date.now();
+    if (this.lastDiskSweep !== 0 && now - this.lastDiskSweep < DISK_SWEEP_MS) return;
+    this.lastDiskSweep = now;
+    let read: MeasuredDisk;
+    try { read = await this.deps.io.statfsMeasured(); } catch { read = { ok: false, reason: 'unreadable' }; }
+    const held = this.diskBlock;
+    if (!read.ok) {
+      const standing = held !== null && (held.level === 'warn' || held.level === 'critical');
+      this.diskBlock = {
+        at: held?.at ?? now,
+        level: standing ? held.level : 'unmeasured',
+        filesystems: held?.filesystems ?? [],
+        expectedMounts: held?.expectedMounts ?? [],
+        pressure: held?.pressure ?? false,
+        holders: [],
+      };
+      return;
+    }
+    const before = this.diskState;
+    let verdict = diskVerdict(before, read.measured, now);
+    // The open episode is durable (the `pushRelease` rule: a latch that forgets on restart repeats the push). A process
+    // that saw its own held episode close forgets the mark. One with no episode of its own judges the mark by the
+    // filesystem(s) that pushed it: standing now, it resumes that episode (its key is already archived); every one clear
+    // or gone, it forgets (a later rise is new); otherwise it keeps. A mark with no filesystem is stale.
+    const dir = this.deps.cfg.ccrcDir;
+    if (before?.episode !== undefined) {
+      if (verdict.level === 'ok') clearDiskEpisode(dir);
+    } else {
+      const mark = readDiskEpisode(dir);
+      const fate = mark === null ? 'keep' : diskMarkFate(mark.devs, verdict, read.measured);
+      if (mark !== null && fate === 'resume') verdict = { ...verdict, episode: mark.episode };
+      else if (fate === 'forget') clearDiskEpisode(dir);
+    }
+    this.diskState = verdict;
+    this.raiseDiskNotice(before, verdict);
+    this.diskBlock = {
+      at: verdict.at,
+      level: verdict.level,
+      filesystems: verdict.filesystems.map(({ pending: _pending, ...fs }) => fs),
+      expectedMounts: verdict.expectedMounts,
+      pressure: verdict.level === 'critical',
+      holders: [],
+    };
+  }
+
+  /**
+   * The disk notice (D-6616, spec §2.5): `diskNotice` decides, this sends it through the notice funnel as a sessionless
+   * `coord` notice. The once-only key is READ before the write (`hasNotice`), so a watcher restarted inside the same
+   * episode raises nothing twice; the archive row `notify` writes carries the key for the next read. A store that
+   * cannot answer costs the dedupe only, never the notice.
+   */
+  private raiseDiskNotice(before: DiskVerdict | null, after: DiskVerdict): void {
+    const n = diskNotice(before, after);
+    if (n === null) return;
+    // Mark the episode BEFORE the push, so a restart between the two finds it.
+    if (n.mode === 'push' && after.episode !== undefined) writeDiskEpisode(this.deps.cfg.ccrcDir, after.episode, n.dev);
+    try { if (this.deps.coord?.hasNotice('coord', '', n.dedupeKey) === true) return; } catch { /* send it: a repeat beats silence */ }
+    notify(this.deps, { kind: 'coord', sessionId: '', runId: null, title: n.title, body: n.body }, n.mode,
+      { tag: 'disk', dedupeKey: n.dedupeKey, degraded: 'feed archive degraded, ring/push unaffected' });
+  }
+
+  /**
    * F3: the program-ready preconditions, measured once per lane tick and
    * cached for `GET /api/projects`.
    *
@@ -7213,8 +7304,7 @@ export class FleetWatcher {
       // claim, and why batch scatter is not reported here.
       const orphans = unallocatedDefinitions(defs, store.ledgerIssued(project));
       const oJson = JSON.stringify([project, orphans.map((o) => o.n)]);
-      if (orphans.length > 0 && oJson !== this.lastOrphanReport.get(project)) {
-        this.lastOrphanReport.set(project, oJson);
+      if (orphans.length > 0 && this.orphanReport.changed(project, oJson)) {
         console.warn(
           `ccrc-server: ${orphans.length} deviation number(s) defined in ${project}'s plans were ` +
           'never allocated: ' + orphans.map((o) => `D-${o.n} (${o.files.join(', ')})`).join('; ') +
@@ -7223,8 +7313,7 @@ export class FleetWatcher {
     }
     const stale = store.staleAllocations(now - LEDGER_STALE_MS);
     const json = JSON.stringify(stale.map((s) => [s.project, s.n]));
-    if (stale.length > 0 && json !== this.lastStaleReport) {
-      this.lastStaleReport = json;
+    if (stale.length > 0 && this.staleReport.changed(json)) {
       console.warn(
         `ccrc-server: ${stale.length} allocated deviation number(s) never landed in a plan ` +
         'after 7 days: ' + stale.map((s) => `${s.project} D-${s.n}`).join(', ') +
@@ -9863,7 +9952,8 @@ function renderAskBrief(
 //   THE INTERVALS. Each observed (session, incarnation, UTC hour) has one checkpoint-owned `measured` or `unmeasured` row; unmeasured
 //   is sticky. A session whose spool directory does not exist (a pane older than the spool code, D-4651), a capability the fleet does
 //   not offer, an unreadable directory or range, malformed evidence and a parent whose incarnation is unmeasured are each an
-//   UNMEASURED hour, never a measured-empty one. Only a listing that SUCCEEDED and does not name the bucket is an empty hour. Between
+//   UNMEASURED hour, never a measured-empty one (one exception, D-6471: an `unreadable` incarnation DEFERS its hour, below). Only a
+//   listing that SUCCEEDED and does not name the bucket is an empty hour. Between
 //   two unmeasured words in one hour a LOSS word displaces a CARVE-OUT word (`directory-absent`, `capability-absent`), and a carve-out
 //   word never displaces a loss word (R90): the checkpoint's merge holds that, and the no-op skip re-stages a loss over a carve-out.
 //
@@ -9893,10 +9983,27 @@ function renderAskBrief(
 //       this one does not is pending again (R102), so its last lines are read once more after it ends. A pass forgets nothing of an owner a
 //       NEWER pass has listed or re-pended (R107, the `listedBy` stamp): a cut pass's late flush can land after it. Until it is read its listed hours,
 //       and its measured hours not yet closed (R106), are lost windows. An hour that leaves the read horizon before the owner is read is
-//       STAGED as a gap with a LOSS word (`hour-never-closed`, never a carve-out word) for the pass's flush, and leaves the memory as it is staged;
-//       the owner is forgotten once it has no listed hour left: so the memory is bounded by the read horizon (and `lastListed` by the live
-//       sessions). A failed flush is covered by the next recovery's not-ready window; an R82 pre-write refusal of that gap's own bucket
-//       would drop it unrecorded, and nothing known produces one.
+//       STAGED as a gap with a LOSS word (`hour-never-closed`, never a carve-out word) for the pass's flush, and leaves the memory as it is staged,
+//       except an hour D-6471 deferred (below), which leaves only once its gap is durable (a later pass finds the row); the owner is
+//       forgotten once it has no listed hour left: so the memory is bounded by the read horizon (and `lastListed` by the live sessions),
+//       with one edge, D-6471's (review 838 F4): under a STANDING R82 pre-write refusal of a deferred hour's gap bucket the row never lands,
+//       so the hour stays in memory past the horizon and its lost window keeps holding overlapping candidates. Only an R82 refusal reaches
+//       it, nothing known produces one, and the hold is the safe direction (no candidate leases over an unwritten loss); bounding it is
+//       wave 4's. A failed flush is covered by the next recovery's not-ready window; an R82 pre-write refusal of a non-deferred hour's gap
+//       bucket would drop it unrecorded, and nothing known produces one.
+//     - THE HOURS AN `unreadable` INCARNATION DEFERS (D-6471, the operator's "Fix first, then soak"; `owed` on the `(id, null)` owner).
+//       A census pass that reads a session's registry generation `unreadable` (an agent reconnecting reads every live one so) stages no
+//       stand-in gap for the hour when the lane holds the session's prior incarnation P (the last listing, a pending owner, else the
+//       latest interval row inside the horizon) AND the checkpoint held (session, P, hour) at the pass's start; otherwise the gap is
+//       immediate, as are `absent`, `changing` and an hour already listed for a gap. The hour stays OWED (a lost window, never forgotten
+//       by R101) until a later pass's LIVE census read of P covers it durably (R101's gate and R107; a no-op skip counts, a carve-out or
+//       a non-live read does not): discharged, with no row; or a census measures J != P, or a re-listing finds no P or another: the gap
+//       in that pass; or it leaves the read horizon: the gap at expiry. Its gap leaves the memory only once durable. Restart-safe because
+//       the deferral is never what keeps the hour honest: the (session, P, hour) row is, through the checkpoint arm's close read (a
+//       respawn's line in the shared bucket is refused there and makes it unmeasured) and upkeep's `hour-never-closed`. Residue: after a
+//       restart with no listing back in the hour, the hour rests on its P row alone; an outage spanning its close (the arm closes the
+//       row before any live read of P) fails closed, as a loss at expiry. A verdict over a window is final once its last hour has left
+//       the read horizon.
 //
 //   REPORT-ONLY EFFECTS. Attempts are made durable through one checkpoint-only change BEFORE any lease is journaled (so the next pass
 //   sees them), then each lease request goes through `createLease` (which deduplicates on the identity key, so a request re-emitted
@@ -10176,14 +10283,19 @@ interface LaneEvidenceIndex {
   launches: Map<string, { event: DelegationEventEnvelopeV1; journalId: string; dir: string }>;
 }
 /** One owner to observe in a pass. `incarnation: null` is a parent whose incarnation could not be measured (`reason` says why).
- *  `listedHours` are the hours (ms) a pass listed it in and no completed observation has covered yet, inside the read horizon (R89). */
-interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean; listedHours: readonly number[] }
+ *  `listedHours` are the hours (ms) a pass listed it in and no completed observation has covered yet, inside the read horizon (R89).
+ *  `read` (D-6471, lane memory): the hours whose bucket result this observation applied or skipped as unchanged, never refused by name
+ *  and never a carve-out: what may discharge an hour owed under this incarnation. */
+interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean; listedHours: readonly number[]; read?: number[] }
 /** R89: an owner a pass LISTED from the census, and the hours (ms) it was listed in, until one observation of it completes. */
 interface LanePendingOwner {
   id: string; incarnation: string | null; reason: string; hours: Set<number>;
   /** R107 (re-review N1): the sequence of the last pass that LISTED it alive or re-pended it (R102). A pass forgets only an owner no
    *  newer pass has listed: a cut pass's late flush must not erase a later pass's listing of the same hour (the hours are one set). */
   listedBy: number;
+  /** D-6471: the hours of an `(id, null)` owner DEFERRED by an `unreadable` listing, each with the prior incarnation P it waits for. Lane
+   *  memory only, never durable: what keeps the hour honest across a restart is the (id, P, hour) row the deferral required. */
+  owed?: Map<number, string>;
 }
 /** An owner's identity in a pass and in the pending memory: (id, incarnation or null). */
 const laneOwnerKey = (id: string, incarnation: string | null): string => JSON.stringify([id, incarnation]);
@@ -11270,6 +11382,18 @@ class DelegationLane {
       const k = laneOwnerKey(s.id, incarnation);
       // R89: LISTED, so it stays an owner, live or not, until one observation of it completes (the loop in `run` forgets it then).
       const pending = this.pendingOwners.get(k) ?? { id: s.id, incarnation, reason, hours: new Set<number>(), listedBy: pass.seq };
+      // D-6471: an `unreadable` listing DEFERS its hour while the lane holds the prior incarnation P and the checkpoint held (id, P, hour)
+      // at this pass's start; it never defers an hour already listed for a gap, and a re-listing keeps a deferral only under the same P.
+      // Any other listing of a deferred hour ends it (the gap is staged in this pass), and so does a census measuring J != P.
+      if (incarnation === null) {
+        const held = pending.owed?.get(nowHour);
+        const p = reason === 'unreadable' && (held !== undefined || !pending.hours.has(nowHour)) ? this.priorOf(s.id, pass.now, state) : null;
+        if (p !== null && (held !== undefined ? p === held : state.checkpoint.observationIntervals.some((r) => r.sessionId === s.id && r.parentIncarnation === p && r.utcHour === formatDelegationInstant(nowHour)))) (pending.owed ??= new Map()).set(nowHour, p);
+        else pending.owed?.delete(nowHour);
+      } else {
+        const unmeasured = this.pendingOwners.get(laneOwnerKey(s.id, null));
+        for (const [h, p] of unmeasured?.owed ?? []) if (p !== incarnation) { unmeasured!.owed!.delete(h); unmeasured!.listedBy = pass.seq; }
+      }
       pending.reason = reason;
       pending.hours.add(nowHour);
       pending.listedBy = pass.seq;                                       // R107
@@ -11307,13 +11431,30 @@ class DelegationLane {
     }).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   }
 
+  /** D-6471 (§3.1 a): the prior incarnation the lane holds for `id`: the last pass's listing, else a pending owner's, else the incarnation of
+   *  the latest interval row inside the read horizon (the source after a restart). Two candidates in the deciding source hold none. */
+  private priorOf(id: string, nowMs: number, state: DeepReadonly<DelegationRecoveryState>): string | null {
+    for (const l of this.lastListed.values()) if (l.id === id && l.incarnation !== null) return l.incarnation;
+    let found = new Set([...this.pendingOwners.values()].flatMap((p) => (p.id === id && p.incarnation !== null ? [p.incarnation] : [])));
+    let latest = -1;
+    for (const r of found.size > 0 ? [] : state.checkpoint.observationIntervals) {
+      const at = r.sessionId === id && r.parentIncarnation !== DELEGATION_UNMEASURED_INCARNATION ? laneInstantMs(r.utcHour) : null;
+      if (at === null || at < latest || !this.readable(at, nowMs)) continue;
+      if (at > latest) { latest = at; found = new Set(); }
+      found.add(r.parentIncarnation);
+    }
+    return found.size === 1 ? [...found][0]! : null;
+  }
+
   /**
    * R89: a listed hour of a pending owner that has LEFT THE READ HORIZON before any observation of it completed can never be read: it is
    * STAGED as a gap with a LOSS word for the pass's flush, never `directory-absent` or `capability-absent` (nothing measured either),
-   * under the owner's incarnation (the stand-in for an unmeasured one, whose own word it keeps), and leaves the memory as it is staged; an owner
-   * with no listed hour left is forgotten. So the memory is bounded by the read horizon. The two edges: a flush that fails is covered by
-   * the next recovery's not-ready window, and an R82 pre-write refusal of that gap's own bucket would drop it unrecorded (nothing known
-   * produces one).
+   * under the owner's incarnation (the stand-in for an unmeasured one, whose own word it keeps: an hour D-6471 deferred says `unreadable`,
+   * the reason it was deferred under), and leaves the memory as it is staged; an owner with no listed hour left is forgotten. So the memory
+   * is bounded by the read horizon. D-6471: a DEFERRED hour leaves (`hours` and `owed`) only once its gap is durable (a later pass's noteGap
+   * finds the row), so a failed or refused flush stages it again; under a standing R82 refusal of its bucket it never leaves (review 838
+   * F4: the safe direction, bounded in wave 4). The two edges of a non-deferred hour: a flush that fails is covered by the next recovery's
+   * not-ready window, and an R82 pre-write refusal of that gap's own bucket would drop it unrecorded (nothing known produces one).
    */
   private async expirePendingOwners(pass: LanePass, durable: DelegationDurability): Promise<void> {
     for (const [k, p] of [...this.pendingOwners]) {
@@ -11321,10 +11462,10 @@ class DelegationLane {
         if (this.readable(hourMs, pass.now)) continue;
         if (pass.signal.aborted) return;
         const detail = p.incarnation === null
-          ? laneIncarnationGap(p.reason)
+          ? laneIncarnationGap(p.owed?.has(hourMs) === true ? 'unreadable' : p.reason)      // D-6471 (review 838 F3): an owed hour was deferred under `unreadable`
           : `${DELEGATION_HOUR_NEVER_CLOSED}: listed in this hour, and never read before the hour left the read horizon`;
-        await this.noteGap(pass, durable, p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs, detail);
-        p.hours.delete(hourMs);
+        // D-6471: a deferred hour stays (owed) until its loss gap is durable: a later pass finds the row and lets it go
+        if (await this.noteGap(pass, durable, p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs, detail) || !p.owed?.has(hourMs)) { p.hours.delete(hourMs); p.owed?.delete(hourMs); }
       }
       if (p.hours.size === 0) this.pendingOwners.delete(k);
     }
@@ -11358,6 +11499,7 @@ class DelegationLane {
       // and the hour is a gap under a stand-in incarnation so that it counts. R89: every hour a pass LISTED it in and no completed
       // observation covered, live or not (a live owner's open hour is one: it was listed in this pass).
       for (const hourMs of owner.listedHours) {
+        if (this.pendingOwners.get(laneOwnerKey(owner.id, null))?.owed?.has(hourMs) === true) continue;   // D-6471: deferred, no gap
         await this.noteGap(pass, durable, owner.id, DELEGATION_UNMEASURED_INCARNATION, hourMs, laneIncarnationGap(owner.reason));
       }
       return;
@@ -11372,7 +11514,7 @@ class DelegationLane {
     }
     for (const hourMs of this.hoursOf(pass, durable.state(), owner, inc, listing)) {
       if (pass.signal.aborted) return;
-      await this.observeHour(pass, durable, owner.id, inc, hourMs, listing, capabilityPresent);
+      if (await this.observeHour(pass, durable, owner.id, inc, hourMs, listing, capabilityPresent)) (owner.read ??= []).push(hourMs);
     }
   }
 
@@ -11498,11 +11640,15 @@ class DelegationLane {
     const refusedOwners = new Set([...flushed.refused].map((k) => { const [id, inc] = JSON.parse(k) as [string, string, number]; return JSON.stringify([id, inc]); }));
     for (const owner of done) {
       if (refusedOwners.has(JSON.stringify([owner.id, owner.incarnation ?? DELEGATION_UNMEASURED_INCARNATION]))) continue;
+      // D-6471: a LIVE read of P, durable, discharges the hours deferred for P that it read (R107: unless a newer pass listed them)
+      const deferred = owner.live ? this.pendingOwners.get(laneOwnerKey(owner.id, null)) : undefined;
+      for (const h of deferred !== undefined && deferred.listedBy <= pass.seq ? owner.read ?? [] : []) if (deferred!.owed?.get(h) === owner.incarnation) { deferred!.owed.delete(h); deferred!.hours.delete(h); }
+      if (deferred?.hours.size === 0) this.pendingOwners.delete(laneOwnerKey(owner.id, null));
       const k = laneOwnerKey(owner.id, owner.incarnation);
       const pending = this.pendingOwners.get(k);
       if (pending === undefined) continue;
       if (pending.listedBy > pass.seq) continue;                         // R107: a newer pass listed it; that pass decides
-      for (const hourMs of owner.listedHours) pending.hours.delete(hourMs);
+      for (const hourMs of owner.listedHours) if (pending.owed?.has(hourMs) !== true) pending.hours.delete(hourMs);   // D-6471: owed stays
       if (pending.hours.size === 0) this.pendingOwners.delete(k);
     }
   }
@@ -11535,22 +11681,24 @@ class DelegationLane {
     for (const e of entries) this.refusedBuckets.delete(e.key);
   }
 
-  /** An hour recorded as a gap without a bucket to read: written once. */
-  private async noteGap(pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, detail: string): Promise<void> {
+  /** An hour recorded as a gap without a bucket to read: written once. True when the row is already on file (nothing staged). */
+  private async noteGap(pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, detail: string): Promise<boolean> {
     const hour = formatDelegationInstant(hourMs);
     const prior = durable.state().checkpoint.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === hour);
     // R90: an unmeasured hour is written once, unless this is a loss word over a carve-out word
-    if (prior !== undefined && prior.state === 'unmeasured' && !laneLossOverCarveOut(prior.detail, detail)) { this.skipped += 1; return; }
-    if (pass.signal.aborted) return;
+    if (prior !== undefined && prior.state === 'unmeasured' && !laneLossOverCarveOut(prior.detail, detail)) { this.skipped += 1; return true; }
+    if (pass.signal.aborted) return false;
     await this.stage(pass, durable, {
       accepted: [], cursor: null,
       interval: { sessionId: id, parentIncarnation: inc, utcHour: hour, state: 'unmeasured', detail, recordedAt: formatDelegationInstant(Date.now()) },
     }, this.settledKey(id, inc, hourMs), `${id}/${laneBucketOf(hourMs)}`);
+    return false;
   }
 
+  /** True when a bucket result for the hour was applied or skipped as unchanged, not refused by name and not a carve-out (D-6471). */
   private async observeHour(
     pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, listing: MeasuredDirectoryRead, capabilityPresent: boolean | null,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const bucket = laneBucketOf(hourMs);
     const closing = pass.now >= laneCloseAt(hourMs);
     const row = durable.state().checkpoint.bucketCursors.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.bucket === bucket);
@@ -11558,25 +11706,26 @@ class DelegationLane {
       ownerDir: this.ownerDir(id), sessionId: id, parentIncarnation: inc, bucket, cursor: row?.cursor ?? 0, lastSize: row?.lastSize ?? 0,
       anchorStart: row?.anchor?.start ?? null, capabilityPresent, listing, timeoutMs: DELEGATION_READ_TIMEOUT_MS, signal: pass.signal,
     });
-    if (pass.signal.aborted) return;                                     // a late answer of a cut pass applies nothing
+    if (pass.signal.aborted) return false;                               // a late answer of a cut pass applies nothing
     const state = durable.state();                                       // AT THIS MOMENT, never a copy taken before the read (M5/M6)
-    const seen = { accepted: 0 };
+    const seen = { accepted: 0, read: false };
     const gate = this.gateOf(pass, durable, state, id, inc, hourMs, bucket, seen);
     try {
       if (read.ok) await ingestAndApplyDelegationBucket(read.input, state, gate);
       else await gate.applyBucketResult(unreadableDelegationBucketResult({ sessionId: id, parentIncarnation: inc, bucket }, state, { reason: read.reason, detail: read.detail }));
     } catch (err) {
-      if (err instanceof DelegationIngestError) { console.warn(`ccrc-server: delegation bucket ${id}/${bucket} was refused: ${err.message}`); return; }
+      if (err instanceof DelegationIngestError) { console.warn(`ccrc-server: delegation bucket ${id}/${bucket} was refused: ${err.message}`); return false; }
       throw err;
     }
     // An hour read AFTER it closed, with nothing new in it, is not read again by this process (once the pass's application is durable).
     if (closing && read.ok && seen.accepted === 0) pass.settle.push(this.settledKey(id, inc, hourMs));
+    return seen.read;
   }
 
   /** The durable door for one bucket result: the no-op skip, then Task 8's own adapter (taking note of what it journaled). */
   private gateOf(
     pass: LanePass, durable: DelegationDurability, state: DeepReadonly<DelegationRecoveryState>, id: string, inc: string, hourMs: number, bucket: string,
-    seen: { accepted: number },
+    seen: { accepted: number; read: boolean },
   ): DelegationBucketDurability {
     const hour = formatDelegationInstant(hourMs);
     // Task 8's own adapter maps the result to its batch (and refuses an inapplicable one); the batch is STAGED for the pass (D-4658).
@@ -11587,6 +11736,7 @@ class DelegationLane {
       applyBucketResult: async (result: DelegationBucketResult) => {
         if (!result.applicable) return adapter.applyBucketResult(result);   // refused by name: a result that is not for a bucket applies nothing
         seen.accepted = result.accepted.length;
+        seen.read = !isDelegationHourCarveOut(result.detail);            // D-6471: an applicable result, staged or skipped, may discharge
         const cp = state.checkpoint;
         const row = cp.bucketCursors.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.bucket === bucket);
         const prior = cp.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === hour);

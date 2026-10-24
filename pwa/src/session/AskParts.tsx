@@ -1,28 +1,38 @@
-// The parts of an AskUserQuestion sheet that BOTH sheets render (D-5089, plan
-// docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 2): the envelope's (`EnvelopeSheet.tsx`, while the hook's
-// envelope is fresh) and the scraped one (`DialogSheet.tsx`, which takes over when the envelope ages out and
-// `ask_cleared` arrives, 30 minutes into an unanswered ask). Written once here so the hand-off cannot change what the
-// operator sees mid-ask: the same eyebrow, the same review screen, the same sentence for a question the sheet cannot
-// answer yet.
+// The parts of an AskUserQuestion surface (D-5089, plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 2),
+// written once and shared by the structured content (`EnvelopeSheet.tsx`) and the controller's own surfaces
+// (`DialogSheet.tsx`: the review, the menu, the terminal door): the same container, the same eyebrow, the same review
+// screen, the same sentence for a question the sheet cannot answer yet. `DialogSheet` is the one controller and the one
+// sender: it decides which surface shows through `askSource`, and on an AskUserQuestion it shows no pane text.
+//
+// The hook's envelope ages out and `ask_cleared` arrives 30 minutes into an unanswered ask only when the server no
+// longer keeps it (D-6324, Task T1a; the rule is `server/src/askkey.ts`'s, not restated here). When it does arrive, the
+// source moves to the transcript's copy of the question (`askSource`), and these parts draw it unchanged.
 //
 // What is on the pane is read by `askLive.ts`; this file only renders it. Every row is `@ccrc/ui`'s `OptionRow`, and
 // every class here is one chat.css already grounds (`.dlg-*`, `.opts`, `.ask-envelope-more*`).
 //
-// D-5090 (Task 3) adds the own-words region (`OwnWords`) and the `Chat about this` row (`ChatRow`), which both sheets
-// render under the live question's options. The own-words STATE is not here: it lives in `DialogSheet`, keyed to the
-// call, so a hand-off mid-call (`ask_cleared`) carries the same text and the same call to the scraped sheet.
+// D-5090 (Task 3) adds the own-words region (`OwnWords`) and the `Chat about this` row (`ChatRow`), which the structured
+// content renders under the live question's options. The own-words STATE is not here: it lives in `DialogSheet`, keyed to
+// the call, so a hand-off mid-call (`ask_cleared`) carries the same text and the same call to the surface that follows.
 //
-// D-5091 (Task 4) adds a multiSelect question's boxes (`MultiPick`), which both sheets render in place of the option
-// rows when the pane carries `Dialog.multi`. Their state, the operator's set and the commit's call, lives in
+// D-5091 (Task 4) adds a multiSelect question's boxes (`MultiPick`), which the structured content renders in place of the
+// option rows when the pane carries `Dialog.multi`. Their state, the operator's set and the commit's call, lives in
 // `DialogSheet` for the same reason.
-import { useEffect, useId, useRef, type ReactNode } from 'react';
-import type { Dialog, DialogMulti, HookAskQuestion } from '../../../shared/api';
-import { Button, EYEBROW, FOCUS_RING, OptionRow } from '@ccrc/ui';
-import { reviewRows, type AskTab } from '../../../shared/ask-menu';
+//
+// D-6325: every surface here renders from `askSource`, so no part draws a string the pane painted. One container
+// (`AskSheet`) holds every kind of surface, so moving between kinds never remounts the drawer, and it is the one site T1c
+// swaps. The header names who asks (`AskHeader`, one for every kind of surface), the review is one render for every
+// source of copy (`AskReview`, fixed words over the structured headers), the tab strip's chips carry the structured
+// headers (`AskTabs`), and the option preview (`OptionPreview`) lives here beside the rows it opens under.
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import type { Dialog, DialogMulti } from '../../../shared/api';
+import { Button, Chip, EYEBROW, FOCUS_RING, OptionRow, RESET_LIST, Sheet, Well } from '@ccrc/ui';
+import type { ReviewRows } from '../../../shared/ask-menu';
 import { rowKey } from './askKeys';
 import type { AskKeys } from './useAskKeys';
 import {
-  commitsToReview, paneTicks, reviewSummary, slotHolds, slotHoldsPart, wantedTicks, type FreeTextSlot,
+  SUBMIT_ANSWERS, commitWord, optionCopy, paneTicks, slotHolds, slotHoldsPart, wantedTicks, type AskSource,
+  type FreeTextSlot, type StructuredQuestion,
 } from './askLive';
 import {
   MULTI_FREE_TEXT_TICKED, cursorOffOptions, cursorPlace, multiHeld, ownWordsCount, ownWordsHeld,
@@ -37,31 +47,72 @@ export const REVIEW_TITLE = 'Review your answers';
  *  not (the 2.1.222 shape, no commit row on screen, whose keys were never measured). Every multiSelect question is
  *  followed by another question or by the review (measured), and both come back here. */
 export const SEVERAL_ANSWERS =
-  'This one takes several answers, so pick them on the terminal pane. The next question, or the review, comes back here.';
+  'This one takes several answers, so pick them in the terminal. The next question, or the review, comes back here.';
+
+/** The row Claude Code's free-text option becomes (D-6325, R5): `Other`, saying what it does. Its digit is the pane's. */
+const OTHER_LABEL = 'Other';
+const OTHER_SUBLABEL = 'Type your own answer';
+
+/** The Chat row's label (D-6325, R5): always these words, never the pane's own spelling of the row. */
+const CHAT_LABEL = 'Talk it over in the chat instead';
+
+/** The foot line of a live question: it names Other only where the row is offered. */
+export const FOOT_WITH_OTHER = 'Choose an option, or Other to type your own';
+export const FOOT_PLAIN = 'Choose an option';
+
+/** The kicker of an ask surface's header (D-6325): the words before the question's chip. Named top-level constants, so
+ *  `plain-words.test.ts` reads them as the sentence constants they are, and the sentence-case spelling lives in one place. */
+export const KICKER_ASKING = 'Claude is asking';
+export const KICKER_WAITING = 'Claude is waiting';
+export const KICKER_CHOICE = 'Claude needs a choice';
+
+/** The `Recommended` tag after an option's label (D-6325): `@ccrc/ui`'s `Chip`, in the header chip's paint (an accent
+ *  tint, which the contrast gate already grounds). `undefined` (no tag) for a label that is not marked. */
+export function recommendedTag(recommended: boolean): ReactNode {
+  return recommended ? <Chip className="dlg-header-chip">Recommended</Chip> : undefined;
+}
 
 /** What Cancel on the review does, said before the tap: it rejects the whole tool call and every answer with it
  *  (measured, `cc300-ask-review-cancelled`: "User declined to answer questions"). */
 const CANCEL_DECLINES_ALL = 'Declines every question in this ask — nothing you answered is sent.';
 
+/** The review's Cancel row, whatever the pane calls it (D-6325). */
+const CANCEL_ANSWERS = 'Cancel';
+
+/** Who is asking (D-6325, R4): the session as `sessionLabel` names it, its project, and, while a coordinator holds the
+ *  question, the sentence that says so (`heldAskLine`) — null otherwise. Built by `SessionScreen` from the fleet row. */
+export interface Asker {
+  readonly session: string;
+  readonly project: string;
+  readonly held: string | null;
+}
+
 /**
- * The sheet's kicker: `claude is asking`, the question's header chip when it has one, and `n of N` when the sheet
- * knows which of several questions it is showing. Only the envelope sheet knows that: the pane marks its active tab
- * by colour alone, which a plain capture cannot see, so the scraped sheet passes no `progress`.
+ * The header of every ask surface, inside the sheet's eyebrow slot (D-6325, R4): the kicker (`Claude is asking`, in
+ * sentence case), the question's header chip when it has one, and `n of N` when the sheet knows which of several
+ * questions it is showing. Only the structured sheet knows that: the pane marks its active tab by colour alone, which a
+ * plain capture cannot see. Then, each on a line of its own and in normal case, who asks (`ws-a · project-a`) and, while
+ * a coordinator holds the question, the held line. One header for approval, review, structured, unreadable, menu and
+ * terminal-only alike, so a surface never forgets to say which session wants an answer.
  */
-export function AskEyebrow({
+export function AskHeader({
+  kicker = KICKER_ASKING,
   header,
   progress,
+  asker,
 }: {
+  kicker?: string;
   header?: string;
   progress?: { n: number; of: number };
+  asker?: Asker | null;
 }): ReactNode {
   return (
     <>
-      claude is asking
+      {kicker}
       {header && (
         <>
           {' '}
-          <span className="dlg-header-chip">{header}</span>
+          <Chip className="dlg-header-chip">{header}</Chip>
         </>
       )}
       {progress && (
@@ -70,6 +121,8 @@ export function AskEyebrow({
           <span>{`${progress.n} of ${progress.of}`}</span>
         </>
       )}
+      {asker && <span className="ask-who">{`${asker.session} · ${asker.project}`}</span>}
+      {asker?.held && <span className="ask-held">{asker.held}</span>}
     </>
   );
 }
@@ -81,6 +134,35 @@ export function AskEyebrow({
  * of the same rule is its own guard (D-5235), which ignores an Escape a sheet handled; either half alone holds it.
  */
 export const escapeHidesOnly = (e: KeyboardEvent): void => e.stopPropagation();
+
+/**
+ * THE ONE CONTAINER of every ask surface (D-6325): the single `Sheet` the approval, a question, the review, an unreadable
+ * ask, a menu and the terminal-only surface all draw inside, with the header in its `eyebrow`, the title, and the
+ * surface as `children`. `DialogSheet` renders it ONCE, at one place in its tree, for every kind but `none`, so moving
+ * between kinds (the last question to the review, a question to an approval) changes what is inside the drawer and never
+ * the drawer: no remount, so no fresh entrance, no scroll reset and no focus taken again. It is also the single site
+ * where T1c swaps the drawer for an inline panel at the desk. Dismissal gating stays with the caller (`onClose`), and
+ * Escape only hides (`escapeHidesOnly`).
+ */
+export function AskSheet({
+  open,
+  onClose,
+  eyebrow,
+  title,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  eyebrow: ReactNode;
+  title: string;
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <Sheet open={open} onClose={onClose} onEscapeKeyDown={escapeHidesOnly} eyebrow={eyebrow} title={title} titleScroll={false}>
+      {children}
+    </Sheet>
+  );
+}
 
 /** A row's keyboard wiring (decision `ask-sheet-keyboard-model`): its element and roving tab stop when the sheet's keys
  *  are on, and the digit that answers it. */
@@ -96,55 +178,73 @@ export const lit = (keys: AskKeys | undefined, k: number, selectedIndex?: number
   keys !== undefined ? keys.hl === rowKey(k) : selectedIndex === k;
 
 /**
- * The review screen an ask ends on: the pane's summary, then the pane's own two rows. `Submit answers` is `answer(1)`
- * and sends every answer; `Cancel` is `answer(2)` and says first that it declines them all.
- *
- * The summary is `reviewSummary`'s, read from `dialog.raw` (never `body`, which a tall review loses its top answers
- * from), in `.dlg-body`: pre-wrap, breaks anywhere, and scrolls at 38vh, so a 1000-character answer wraps and the two
- * rows stay reachable under it at every width.
+ * The review screen an ask ends on (D-6325): fixed words, whatever the source of copy. Under `Review your answers` it
+ * lists each question by its header, with the pane's mark of whether it is answered when that is known (`summary`,
+ * built by `askSource` from the structured copy; never a line the pane painted), then two rows: `Submit answers`
+ * answers the pane's submit row, and `Cancel` its cancel row and says first that it declines them all. The rows are the
+ * pane's by POSITION (`rows`, from `reviewRows`): the digit printed there is the one answered.
  */
 export function AskReview({
-  dialog,
+  dialogId,
+  selectedIndex,
+  rows,
+  summary,
   answering,
   locked,
+  gap,
   onAnswer,
   keys,
 }: {
-  dialog: Dialog;
+  /** The pane screen's id, which keys the rows so a new screen starts them afresh. */
+  dialogId: string;
+  /** The pane's cursor row: the highlight when the sheet's keys are off. */
+  selectedIndex: number;
+  rows: ReviewRows;
+  summary: Extract<AskSource, { kind: 'review' }>['summary'];
   /** The option index whose answer is in flight, as the sheet's own rows read it. */
   answering: number | null;
   /** Another send is in flight (an own-words call, D-5090), so no row may start one. */
   locked: boolean;
+  /** The connection is not live (`DialogSheet`'s gap): nothing can be sent, so no row is offered as a tap. */
+  gap: boolean;
   onAnswer: (optionIndex: number) => void;
   /** The sheet's keyboard (`useAskKeys`), whose digits include this screen's `1` and `2`. */
   keys?: AskKeys;
 }): ReactNode {
-  const summary = reviewSummary(dialog);
-  // Submit and Cancel by LABEL (`reviewRows`, decision `ask-review-lenient-arm`), and only those two: a review with
-  // anything numbered painted after its rows still offers exactly the pane's own two, each under its printed digit.
-  const rows = reviewRows(dialog);
-  const shown = rows === null ? [] : dialog.options.filter((o) => o.index === rows.submit || o.index === rows.cancel);
-  const disabled = locked || answering !== null;
+  const disabled = locked || gap || answering !== null;
   // Claude Code's own keys on this screen (decision `ask-review-digit-keys`, the operator's ruling "Match Claude Code"):
   // `1` submits every answer and `2` cancels AT ONCE, which declines the whole ask, exactly as in the terminal. The
   // Cancel row keeps saying so (`CANCEL_DECLINES_ALL`). They are the sheet's keyboard now (`useAskKeys`, decision
   // `ask-sheet-keyboard-model`), with ↑/↓ wrapping between the two rows and ← back to the last question.
+  const shown = [
+    { index: rows.submit, label: SUBMIT_ANSWERS, sublabel: undefined },
+    { index: rows.cancel, label: CANCEL_ANSWERS, sublabel: CANCEL_DECLINES_ALL },
+  ];
   return (
     <>
-      {summary.length > 0 && <p className="dlg-body">{summary.join('\n')}</p>}
+      {summary.length > 0 && (
+        <ul className={`dlg-copy ${RESET_LIST} gap-1`} aria-label="Your questions">
+          {summary.map((q, i) => (
+            <li key={i}>
+              {q.header}
+              {q.answered !== null && <span>{q.answered ? ' · Answered' : ' · Not answered yet'}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="opts">
         {shown.map((o) => {
-          const selected = lit(keys, o.index, dialog.selectedIndex);
+          const selected = lit(keys, o.index, selectedIndex);
           const waiting = answering === o.index;
           return (
             <OptionRow
-              key={`${dialog.id}:${o.index}`}
+              key={`${dialogId}:${o.index}`}
               {...keyed(keys, o.index)}
               selected={selected}
               glyph={selected ? '❯' : ''}
               index={o.index}
               label={o.label}
-              sublabel={o.index === rows?.cancel ? CANCEL_DECLINES_ALL : undefined}
+              sublabel={o.sublabel}
               disabled={disabled}
               busy={waiting}
               onClick={() => onAnswer(o.index)}
@@ -168,7 +268,7 @@ export function OtherQuestions({
   questions,
   shown,
 }: {
-  questions: readonly HookAskQuestion[];
+  questions: readonly StructuredQuestion[];
   /** The question the sheet is showing, as an index into `questions`; every other one is listed. */
   shown: number;
 }): ReactNode {
@@ -183,7 +283,7 @@ export function OtherQuestions({
               key={i}
               index={i + 1}
               label={q.question}
-              marker={q.header ? <span className="dlg-header-chip">{q.header}</span> : undefined}
+              marker={q.header ? <Chip className="dlg-header-chip">{q.header}</Chip> : undefined}
               disabled
             />
           ),
@@ -205,8 +305,8 @@ export interface WordsCall {
   /** The free-text row the call typed into (its printed index). */
   readonly row: number;
   /** The question the call was made for (`questionKey` of the pane it was sent against): the call speaks for that
-   *  question only. The scraped sheet reads its free-text row from the call only while the pane shows it, so a
-   *  refused call that outlives its question never hides another question's option. */
+   *  question only. The sheet reads its free-text row from the call only while the pane shows it, so a refused call
+   *  that outlives its question never hides another question's option. */
   readonly question: string;
   readonly state: 'flight' | 'landed' | 'refused';
 }
@@ -216,6 +316,12 @@ export interface Words {
   /** The field's text, kept until a call answers ok. */
   readonly text: string;
   readonly call: WordsCall | null;
+  /** The question whose `Other` row the operator chose (its text, `StructuredQuestion.question`), or null: the field is
+   *  open under that question's row (D-6325, R5). Held here with the text so a change of source keeps it open;
+   *  it is also open whenever text is kept, a call is under way, or the pane's row is held (`OwnWords`). */
+  readonly otherFor: string | null;
+  /** Choose the `Other` row of the question whose text is given: opens the field, sends nothing. */
+  readonly onOpen: (question: string) => void;
   readonly onText: (text: string) => void;
   /** Send the text into the free-text row printed `row`. */
   readonly onSend: (row: number) => void;
@@ -228,7 +334,7 @@ export const wordsBusy = (call: WordsCall | null): boolean => call !== null && c
 /** The free-text row the own-words FIELD types into, or null where the region offers no field (a line at most). A
  *  send under way keeps its own row; otherwise the pane's free-text row must be there, and either empty, or holding
  *  text with the operator's own text to keep in view (the stranded retry, part of it, or other text beside it).
- *  `OwnWords` renders by this, and the scraped sheet's foot line names own words only where it is not null. */
+ *  `OwnWords` renders by this, and the structured content's foot line names `Other` only where it is not null. */
 export function ownWordsRow(slot: FreeTextSlot, text: string, call: WordsCall | null): number | null {
   if (call !== null && wordsBusy(call)) return call.row;
   if (slot.kind === 'none') return null;
@@ -236,18 +342,17 @@ export function ownWordsRow(slot: FreeTextSlot, text: string, call: WordsCall | 
 }
 
 /** The pane paints no free-text row under this question: the two-column preview layout. Its Chat row is the way to
- *  talk it over, then the composer. The row is named by the label the pane paints (`chat`), never spelled here: the
- *  rule that finds it has one home (`shared/ask-menu.ts`, `single-definition.test.ts`). */
-const noWordsRow = (chat: string): string =>
-  `This question has no own-words row on the terminal. Tap ${chat} to talk it over, then reply in the composer — or answer in the terminal.`;
+ *  talk it over, then the composer. The row that finds it has one home (`shared/ask-menu.ts`,
+ *  `single-definition.test.ts`); its label is not spelled here, the sentence names the chat. */
+const NO_OTHER = 'This question has no Other option. Talk it over in the chat, or answer in the terminal.';
 
 /** The free-text row already holds text the operator did not send from here: typing would append to it. */
-const ROW_HOLDS_OTHER = "The terminal's own-words row already holds other text — finish or clear it there.";
+const ROW_HOLDS_OTHER = 'The answer box in the terminal already holds other text — finish or clear it there.';
 
 /** The free-text row holds the start of the kept text: an attempt typed part of it (or the capture caught tmux part
  *  way). The route will not type after it, so the row is the terminal's to clear; then Send types the whole text. */
 const WORDS_PART =
-  "The terminal's own-words row holds only part of your answer — clear it there, and Send types the whole of it.";
+  'The answer box in the terminal holds only part of your answer — clear it there, and Send types the whole of it.';
 
 /** The free-text row holds exactly the kept text: a refused attempt typed it and never pressed Enter. */
 const WORDS_STRANDED = 'Your answer is typed in the terminal but not sent yet — Send submits it.';
@@ -258,44 +363,59 @@ const TRAILING_SEMICOLON = "A trailing ; doesn't survive the trip to the termina
 /** Why Send is held back for a control character (`ownWordsHeld`), which the field draws as a gap or not at all, so
  *  the operator may not see what is wrong: said the way the count says a text is over the limit. */
 const CONTROL_CHARACTER =
-  "A tab or another control character can't be typed into the terminal's own-words row — Send waits until it's gone. Or answer in the terminal.";
+  "A tab or another control character can't be typed into the terminal's answer box — Send waits until it's gone. Or answer in the terminal.";
 
-/** What `Chat about this` does, said on the row before the tap (measured: a rejection of the whole tool call). */
+/** What the Chat row does, said on the row before the tap (measured: a rejection of the whole tool call). */
 const CHAT_DECLINES = 'Declines this ask so you can talk it over in the chat.';
 
 /**
- * Answer in your own words (D-5090), under the live question's options, where the pane paints its free-text row:
- *  - `empty`: the field and Send, which types the text into that row (`api.answerDialogText`, through `onSend`);
+ * Answer in your own words (D-5090), as the question's last option, `Other` (D-6325, R5): an `OptionRow` labelled `Other`,
+ * saying `Type your own answer`, at the free-text row's printed index, where the pane paints that row. Choosing it (a tap,
+ * Enter, or its digit) opens the field and Send in place under the row, with no request, and puts the cursor in the field.
+ *  - `empty`: the row, and once chosen the field and Send, which type the text into that row (`api.answerDialogText`,
+ *    through `onSend`);
  *  - `held` with exactly the kept text: the stranded-text retry. The field keeps the text, read-only (the row holds
  *    that text and no other would be accepted), and Send submits what the terminal holds without typing it again;
  *  - `held` with other text: one line saying why Send waits, and the field with the operator's own text whenever
  *    there is any, never hidden behind the line: the start of it (an echo that failed part way) is the terminal's to
  *    clear, anything else to finish or clear there; once the row is empty again Send types the text;
- *  - `held` with other text and nothing typed here: the line alone;
- *  - `none`: one line pointing to `Chat about this`, when the pane has that row; nothing when it does not (a menu
- *    that is not an AskUserQuestion, whose own text rows are the next effort).
- * While a send is under way none of that is read: the field shows the text, disabled, and Send is busy, whatever the
- * pane paints meanwhile (the typed row under a new id is this send, not other text).
+ *  - `held` with other text and nothing typed here: the line alone, no row (there is nothing to type into);
+ *  - `none`: one line pointing to the chat, when the pane has that row; nothing when it does not (a menu that is not an
+ *    AskUserQuestion, whose own text rows are the next effort).
+ * The field is open already whenever the operator's text is kept, a send is under way, or the pane's row is held, so a
+ * tap on the row never has to be repeated to see what is there. While a send is under way none of that is read: the
+ * field shows the text, disabled, and Send is busy, whatever the pane paints meanwhile (the typed row under a new id is
+ * this send, not other text).
  *
  * The field paints `--fs-input` (16px), so focusing it never zooms iOS Safari, and it shares one row with Send at
- * every width (`.dlg-reply`: the field flexes, Send keeps its 44px and one width, busy or not). Everything here sits
- * in one `.dlg-words` block, spaced the same above and below, so the field's focus ring clears the rows on both
- * sides.
+ * every width (`.dlg-reply`: the field flexes, Send keeps its 44px and one width, busy or not). It draws no ruled box
+ * of its own between the rows. Everything here sits in one `.dlg-words` block, spaced the same above and below, so the
+ * field's focus ring clears the rows on both sides.
+ *
+ * Keyboard (`askKeys.ts`): the row is the `words` key while the field is closed (arrows reach it, its digit opens the
+ * field), and the field is the `words` key once it is open.
  */
 export function OwnWords({
   slot,
   chat,
   words,
+  question,
   locked,
+  gap,
   keys,
 }: {
   slot: FreeTextSlot;
-  /** The label of the pane's Chat row (`chatRow`), which the `none` line points to; null when the pane paints none. */
-  chat: string | null;
+  /** The pane has a Chat row (`chatRow`): the line for a question with no free-text row points to the chat. */
+  chat: boolean;
   words: Words;
+  /** The question shown (its text): `words.otherFor` names the one whose row was chosen. */
+  question: string;
   /** An option's answer is in flight. */
   locked: boolean;
-  /** The sheet's keyboard: the field is its `words` row (↑/↓ leave it; ←/→ stay its caret's). */
+  /** The connection is not live: Send waits. The row and the field do not (they are the operator's own text, its focus
+   *  and a phone keyboard, and typing sends nothing), so this reaches neither. */
+  gap: boolean;
+  /** The sheet's keyboard: the row, then the field, is its `words` row (↑/↓ leave it; ←/→ stay its caret's). */
   keys?: AskKeys;
 }): ReactNode {
   const { text, call, onText, onSend } = words;
@@ -303,9 +423,20 @@ export function OwnWords({
   const controlId = useId();
   const busy = wordsBusy(call);
   const row = ownWordsRow(slot, text, call);
+  const chosen = words.otherFor === question;
+  // Chosen on this question, or text kept, or a send under way, or the pane's row held: the field is open.
+  const open = row !== null && (chosen || busy || text !== '' || slot.kind === 'held');
+  // The cursor goes into the field when the operator chooses the row (a transition of `chosen`), and only then: a field
+  // that opens because the terminal's row filled up must not take the focus from wherever it is.
+  const field = useRef<HTMLInputElement | null>(null);
+  const wasChosen = useRef(chosen);
+  useEffect(() => {
+    if (chosen && !wasChosen.current) field.current?.focus();
+    wasChosen.current = chosen;
+  }, [chosen]);
   if (row === null) {
     if (slot.kind === 'held') return <OwnWordsLine>{ROW_HOLDS_OTHER}</OwnWordsLine>;
-    return chat !== null ? <OwnWordsLine>{noWordsRow(chat)}</OwnWordsLine> : null;
+    return chat ? <OwnWordsLine>{NO_OTHER}</OwnWordsLine> : null;
   }
   // The row holds text the route would not type after: part of the operator's own, or someone else's.
   const taken = busy || slot.kind !== 'held' || slotHolds(slot, text)
@@ -318,59 +449,83 @@ export function OwnWords({
   // The lines that say why Send waits for what is in the field describe the field, so a screen reader hears them there.
   const describedBy = [count !== null ? countId : null, held === 'control' ? controlId : null]
     .filter((d) => d !== null).join(' ');
+  const selected = keys !== undefined ? keys.hl === 'words' : open;
+  const wordsKey = keys?.bind('words');
+  const rowBind = keys === undefined ? {} : open ? { tabIndex: -1 } : keys.bind('words');
   return (
-    <div className="dlg-words">
-      <form
-        className="dlg-reply"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!busy && !locked && held === null && taken === null) onSend(row);
-        }}
-      >
-        <input
-          ref={keys?.bind('words').ref}
-          className="dlg-reply-input"
-          type="text"
-          value={text}
-          onChange={(e) => onText(e.target.value)}
-          placeholder="…or answer in your own words"
-          readOnly={stranded}
-          disabled={busy || locked}
-          aria-label="Answer in your own words"
-          aria-describedby={describedBy || undefined}
-        />
-        <button
-          type="submit"
-          className="dlg-reply-send"
-          disabled={busy || locked || held !== null || taken !== null}
-          aria-busy={busy || undefined}
-        >
-          {/* Both faces share the button's one grid cell, so it is as wide as the wider face whichever shows, and
-              Send never changes width while busy (`Send answering…` once grew it by 79px and squeezed the field mid
-              word). The face not showing is aria-hidden, which chat.css also hides from sight. Busy is the chat's
-              three working dots, narrower than the word Send, so Send is only as wide as its idle word: a busy face
-              drawn as `Sending…` made Send 96px and clipped the field's placeholder at 360 and 375. A screen reader
-              hears `Sending…`. */}
-          <span aria-hidden={busy || undefined}>Send</span>
-          <span className="dlg-reply-wait" aria-hidden={!busy || undefined}>
-            {busy && (
-              <>
-                <i />
-                <i />
-                <i />
-              </>
-            )}
-            <span className="sr-only">Sending…</span>
-          </span>
-        </button>
-      </form>
-      {count !== null && <p className="dlg-copy" id={countId}>{count}</p>}
-      {held === 'control' && <p className="dlg-copy" id={controlId}>{CONTROL_CHARACTER}</p>}
-      {stranded && <p className="dlg-copy">{WORDS_STRANDED}</p>}
-      {taken === 'part' && <p className="dlg-copy">{WORDS_PART}</p>}
-      {taken === 'other' && <p className="dlg-copy">{ROW_HOLDS_OTHER}</p>}
-      {held === 'semicolon' && <p className="dlg-copy">{TRAILING_SEMICOLON}</p>}
-    </div>
+    <>
+      <OptionRow
+        // Closed, the row IS the `words` key (its element and roving tab stop). Open, the field is, and the row leaves the
+        // tab order, a tap on it taking the cursor back to the field.
+        {...rowBind}
+        keyShortcut={keys !== undefined && row <= 9 ? String(row) : undefined}
+        selected={selected}
+        glyph={keys === undefined ? undefined : selected ? '❯' : ''}
+        index={row}
+        label={OTHER_LABEL}
+        sublabel={OTHER_SUBLABEL}
+        disabled={locked || busy}
+        onClick={() => (open ? field.current?.focus() : words.onOpen(question))}
+        enter={!open && selected ? '↵' : undefined}
+      />
+      {open && (
+        <div className="dlg-words">
+          <form
+            className="dlg-reply"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!busy && !locked && held === null && taken === null) onSend(row);
+            }}
+          >
+            <input
+              ref={(el) => {
+                field.current = el;
+                wordsKey?.ref(el);
+              }}
+              className="dlg-reply-input"
+              type="text"
+              value={text}
+              onChange={(e) => onText(e.target.value)}
+              placeholder="Type your answer"
+              readOnly={stranded}
+              disabled={busy || locked}
+              aria-label="Your own answer"
+              aria-describedby={describedBy || undefined}
+            />
+            <button
+              type="submit"
+              className="dlg-reply-send"
+              disabled={busy || locked || gap || held !== null || taken !== null}
+              aria-busy={busy || undefined}
+            >
+              {/* Both faces share the button's one grid cell, so it is as wide as the wider face whichever shows, and
+                  Send never changes width while busy (`Send answering…` once grew it by 79px and squeezed the field mid
+                  word). The face not showing is aria-hidden, which chat.css also hides from sight. Busy is the chat's
+                  three working dots, narrower than the word Send, so Send is only as wide as its idle word: a busy face
+                  drawn as `Sending…` made Send 96px and clipped the field's placeholder at 360 and 375. A screen reader
+                  hears `Sending…`. */}
+              <span aria-hidden={busy || undefined}>Send</span>
+              <span className="dlg-reply-wait" aria-hidden={!busy || undefined}>
+                {busy && (
+                  <>
+                    <i />
+                    <i />
+                    <i />
+                  </>
+                )}
+                <span className="sr-only">Sending…</span>
+              </span>
+            </button>
+          </form>
+          {count !== null && <p className="dlg-copy" id={countId}>{count}</p>}
+          {held === 'control' && <p className="dlg-copy" id={controlId}>{CONTROL_CHARACTER}</p>}
+          {stranded && <p className="dlg-copy">{WORDS_STRANDED}</p>}
+          {taken === 'part' && <p className="dlg-copy">{WORDS_PART}</p>}
+          {taken === 'other' && <p className="dlg-copy">{ROW_HOLDS_OTHER}</p>}
+          {held === 'semicolon' && <p className="dlg-copy">{TRAILING_SEMICOLON}</p>}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -385,21 +540,19 @@ function OwnWordsLine({ children }: { children: ReactNode }): ReactNode {
 }
 
 /**
- * The pane's own `Chat about this` row, after the own-words region, saying what a tap does: it declines the whole ask
- * so the operator can talk it over in the chat (the composer). A row of its own (`.opts` draws the rule the pane draws
- * above it), answered like any other row, by its printed index. Nothing presses it on the operator's behalf.
+ * The pane's own `Chat about this` row, after the `Other` region, saying what a tap does: it declines the whole ask
+ * so the operator can talk it over in the chat (the composer). Its words are ours, `Talk it over in the chat instead`
+ * (D-6325, R5), never the pane's label; the row is the pane's by POSITION and is answered like any other row, by its
+ * printed index. Nothing presses it on the operator's behalf.
  */
 export function ChatRow({
   row,
-  selectedIndex,
   answering,
   disabled,
   onAnswer,
   keys,
 }: {
   row: Dialog['options'][number];
-  /** The pane's cursor row, when the sheet shows the cursor (the scraped sheet does, the envelope's does not). */
-  selectedIndex?: number;
   answering: number | null;
   disabled: boolean;
   onAnswer: (optionIndex: number) => void;
@@ -407,15 +560,15 @@ export function ChatRow({
   keys?: AskKeys;
 }): ReactNode {
   const waiting = answering === row.index;
-  const selected = lit(keys, row.index, selectedIndex);
+  const selected = lit(keys, row.index);
   return (
     <div className="opts">
       <OptionRow
         {...keyed(keys, row.index)}
         selected={selected}
-        glyph={selectedIndex === undefined && keys === undefined ? undefined : selected ? '❯' : ''}
+        glyph={keys === undefined ? undefined : selected ? '❯' : ''}
         index={row.index}
-        label={row.label}
+        label={CHAT_LABEL}
         sublabel={CHAT_DECLINES}
         disabled={disabled}
         busy={waiting}
@@ -459,7 +612,7 @@ export interface Picks {
 export const picksBusy = (call: PickCall | null): boolean => call !== null;
 
 /** Free text inside a multiSelect question is not answered from the sheet in v1 (D-5048 refuses it). */
-const MULTI_OWN_WORDS = 'Own words on a pick-several question go in the terminal.';
+const MULTI_OWN_WORDS = 'To add your own answer, use the terminal';
 
 /**
  * A multiSelect question's boxes (D-5091), where the pane carries `Dialog.multi`: one checkbox row per box, then the
@@ -468,7 +621,7 @@ const MULTI_OWN_WORDS = 'Own words on a pick-several question go in the terminal
  *  - The boxes follow the pane's ticks until the operator touches one here (`Picks.picked`); from then the sheet's set
  *    stands until the question changes. While a commit is under way they show the set it sent.
  *  - The commit reads `Next`, or `Review answers` on the last question, where Tab lands on the review screen
- *    (`commitsToReview`). It is held back where the route would refuse (`multiHeld`): no box ticked, the free-text box
+ *    (`commitWord`). It is held back where the route would refuse (`multiHeld`): no box ticked, the free-text box
  *    ticked, or the cursor off the boxes; each of the last two says so in one line.
  *  - Free text inside such a question is the terminal's, said in one line where the pane paints the row.
  *
@@ -481,17 +634,22 @@ export function MultiPick({
   copy,
   picks,
   locked,
+  gap,
   keys,
 }: {
   multi: DialogMulti;
   /** The live dialog's id: a call committed to another question shows nothing of its set here. */
   dialogId: string;
-  /** The envelope's copy for the boxes, by position (`questionCorresponds` matched them one for one); the pane's own
-   *  labels and descriptions otherwise. */
-  copy?: HookAskQuestion['options'];
+  /** Claude's own copy for the boxes, by position (`questionCorresponds` matched them one for one, so the counts are
+   *  equal). Required (D-6325): the label and description shown are this copy's, and a box with no description shows
+   *  none, never the pane's sub-text under it. */
+  copy: StructuredQuestion['options'];
   picks: Picks;
   /** Another send is in flight (an option's answer, or own words). */
   locked: boolean;
+  /** The connection is not live: the commit waits. A box does not: ticking is local state, not a send, so the operator's
+   *  set is kept and the commit is there when the connection speaks. */
+  gap: boolean;
   /** The sheet's keyboard: a digit toggles its box, ↑/↓ run the boxes then the commit. */
   keys?: AskKeys;
 }): ReactNode {
@@ -504,15 +662,17 @@ export function MultiPick({
     <>
       <div className="opts">
         {multi.options.map((o, k) => {
-          const c = copy?.[k];
+          const c = copy[k]!; // `questionCorresponds`: one copy per box
+          const { label, recommended } = optionCopy(c.label);
           return (
             <OptionRow
               key={`${dialogId}:${o.index}`}
               {...keyed(keys, o.index)}
               checked={ticked.includes(o.index)}
               index={o.index}
-              label={c?.label ?? o.label}
-              sublabel={c?.description || o.description}
+              label={label}
+              tag={recommendedTag(recommended)}
+              sublabel={c.description}
               disabled={busy || locked}
               onClick={() => onToggle(o.index)}
             />
@@ -528,11 +688,11 @@ export function MultiPick({
           variant="primary"
           // A flex box drops the marker's leading space (`Nextanswering…`); the gap keeps the two apart.
           className="gap-2"
-          disabled={busy || locked || held !== null}
+          disabled={busy || locked || gap || held !== null}
           aria-busy={busy || undefined}
           onClick={() => onCommit(wanted)}
         >
-          {commitsToReview(multi) ? 'Review answers' : 'Next'}
+          {commitWord(multi)}
           {busy && <span className="opt-wait"> answering…</span>}
         </Button>
       </div>
@@ -546,13 +706,15 @@ export const TABS_HELD = 'Commit your picks with Next first, or untick them, to 
 
 /**
  * The ask's tab strip (decision `ask-tab-strip`): one chip per question, its header and whether the pane marks it
- * answered (`☒`) or not yet (`☐`), then `✔ Submit`, read off the pane's own tab row (`parseAskTabs`). The chip of the
+ * answered (`☒`) or not yet (`☐`), then `✔ Submit`. D-6325: the header is Claude's own (`Question <n>` when a question
+ * has none); the pane's tab row (`parseAskTabs`) supplies only the count and the marks, and no strip is drawn unless the
+ * two counts agree (`tabChips`). The chip of the
  * screen showing is marked current. A chip MOVES THE PANE there (`POST /dialog/tab`), the same move the arrow keys make,
  * and the sheet follows the screen the pane lands on: a sheet-local view of another question could not answer it, since
  * answers are positional on the live menu. Each chip is named `Go to …` for a screen reader: `✔ Submit` reaches the
  * review, where `Submit answers` submits, and must not be heard as a submit itself.
  *  - A question chip needs to know which tab is up (`active`), since only colour marks it on the pane; where the sheet
- *    cannot tell (the scraped sheet on an unnamed question), the question chips wait and `✔ Submit` still works.
+ *    cannot tell (a transcript copy whose header no tab carries), the question chips wait and `✔ Submit` still works.
  *  - Every chip waits while a send or a move is under way, and while picks are uncommitted (`TABS_HELD`).
  *  - It replaces nothing: the `n of N` kicker and the other-questions list stay.
  * At every width it is one row; a phone scrolls the chips sideways inside the strip, never the page, and each chip is
@@ -566,7 +728,8 @@ export function AskTabs({
   busy,
   onGo,
 }: {
-  tabs: readonly AskTab[];
+  /** One chip per question: Claude's own header for it, and the pane's mark of whether it is answered (`tabChips`). */
+  tabs: readonly { header: string; answered: boolean }[];
   /** The question showing (0-based), or null when the sheet cannot tell or the review is showing. */
   active: number | null;
   onReview: boolean;
@@ -574,13 +737,20 @@ export function AskTabs({
   busy: boolean;
   onGo: (to: number | 'submit') => void;
 }): ReactNode {
-  // A phone scrolls the chips sideways; the chip of the screen showing is scrolled into the strip's view whenever it
-  // changes, so question 4 of 4 is never the one chip out of sight. `nearest` on both axes: the strip only.
+  // A phone scrolls the chips sideways; the chip of the screen showing is brought into the strip's view whenever it
+  // changes, so question 4 of 4 is never the one chip out of sight. SIDEWAYS ONLY, by the strip's own `scrollLeft`
+  // (D-6325): `scrollIntoView`'s `block: 'nearest'` also scrolls the vertical ancestor, the sheet's one scroller, and
+  // with a long question above the strip it opened the sheet scrolled down to the chip.
   const strip = useRef<HTMLDivElement | null>(null);
   const at = onReview ? 'submit' : active;
   useEffect(() => {
-    const chip = strip.current?.querySelector<HTMLElement>('[aria-current="step"]');
-    chip?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    const row = strip.current;
+    const chip = row?.querySelector<HTMLElement>('[aria-current="step"]');
+    if (!row || !chip) return;
+    const r = row.getBoundingClientRect();
+    const c = chip.getBoundingClientRect();
+    if (c.left < r.left) row.scrollLeft += c.left - r.left;
+    else if (c.right > r.right) row.scrollLeft += c.right - r.right;
   }, [at]);
   // One chip per question, then Submit, drawn by ONE block: the two kinds differ only in what they say and where they go.
   const chips = [
@@ -619,5 +789,45 @@ export function AskTabs({
       </div>
       {held && <p className="dlg-copy">{TABS_HELD}</p>}
     </>
+  );
+}
+
+/** An option's worked example, folded away under its row and opened for the
+ *  preselected one. Fixed-width ASCII: it scrolls, it never wraps — the same
+ *  rule code blocks follow. Capped at --well-max with internal scroll.
+ *  The structured rows draw it, from the question's own example (`preview`); a pane's text is never shown. */
+export function OptionPreview({
+  text,
+  defaultOpen,
+}: {
+  text: string;
+  defaultOpen: boolean;
+}): ReactNode {
+  const [open, setOpen] = useState(defaultOpen);
+  // Names the region this toggle owns, so aria-expanded is about something a
+  // screen reader can then be taken to.
+  const previewId = useId();
+  return (
+    <div className="opt-preview-wrap">
+      <button
+        type="button"
+        className="opt-preview-toggle"
+        aria-expanded={open}
+        aria-controls={previewId}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {/* The caret is decoration, like .opt-glyph and .opt-enter: inside the
+            name it reads out as "black down-pointing small triangle preview",
+            and the announced NAME would change on every toggle on top of the
+            state change the toggle already announces. */}
+        <span aria-hidden="true">{open ? '▾' : '▸'} </span>
+        preview
+      </button>
+      {open && (
+        <Well id={previewId} className="opt-preview">
+          {text}
+        </Well>
+      )}
+    </div>
   );
 }

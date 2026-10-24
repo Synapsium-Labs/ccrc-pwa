@@ -310,3 +310,10 @@ describe('the session fields an older ccd does not send', () => {
     expect(() => reviveWsAudit(doc({ unit: 'masked' }), 's')).toThrow();
   });
 });
+
+describe('parseReap strips the refusal-v1 machine line (#560)', () => {
+  it('keeps the operator-facing sentence free of it', () => {
+    const r = parseReap('', 1, 'ccd-refusal: ws-reap held\nccd: held: x\n');
+    expect(r).toMatchObject({ refused: 'error', detail: 'ccd: held: x', sentence: 'ccd: held: x' });
+  });
+});

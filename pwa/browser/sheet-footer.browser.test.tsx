@@ -3,7 +3,7 @@
 // A sheet's answers were the last child of its scrolling body, so a tall body scrolled them away: What's new with
 // several releases put Update all below a phone's fold. `Sheet`'s `footer` is a row of the panel after the body, and
 // the body shrinks and scrolls instead. jsdom lays nothing out, so `test/sheet-footer.test.tsx` holds the classes and
-// this file holds the rects Chrome computes: What's new with eight releases of notes, opened from the update banner,
+// this file holds the rects Chrome computes: What's new with eight releases of notes, opened from Settings › Updates,
 // at 360, 390, 1280 and 1920 in both skins and both palettes — the body overflows and scrolls, the footer is inside
 // the panel and below the body, and Update all and Close are whole inside the viewport, so nothing is clipped at the
 // bottom on a desktop either.
@@ -97,9 +97,10 @@ describe("What's new with several releases: the footer stays in the panel and in
       const { ctx, page } = await openApp(browser!, view, FIXTURE);
       try {
         await page.emulateMedia({ reducedMotion: 'reduce' });
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/settings/updates');
         const opener = page.getByRole('button', { name: "See what's new" });
         await opener.waitFor({ timeout: 20_000 });
+        await opener.scrollIntoViewIfNeeded();
         await opener.click();
         await page.locator('.sheet-panel[data-state="open"] .sheet-footer').waitFor({ timeout: 10_000 });
         await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'), undefined, { timeout: 5_000 });
@@ -152,9 +153,10 @@ describe("What's new while a node halts the fleet: the reason is in view, above 
       const { ctx, page } = await openApp(browser!, view, HALTED);
       try {
         await page.emulateMedia({ reducedMotion: 'reduce' });
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/settings/updates');
         const opener = page.getByRole('button', { name: "See what's new" });
         await opener.waitFor({ timeout: 20_000 });
+        await opener.scrollIntoViewIfNeeded();
         await opener.click();
         await page.locator('.sheet-panel[data-state="open"] .sheet-footer').waitFor({ timeout: 10_000 });
         await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'), undefined, { timeout: 5_000 });

@@ -1,10 +1,10 @@
 // The native Docs reader's L0 vocabulary: the `shared/docs.ts` row of section 1 of the design,
 // `docs/superpowers/specs/2026-10-01-native-docs-reader-design.md`.
 //
-// L0, and it imports NOTHING, not even a type: the PWA bundles this file and the server and the agent compile it,
-// so it may name no host global either (the PWA's types carry none). Byte lengths are therefore computed from code
-// points by hand. The file is pure ASCII: a non-ASCII code point in a grammar is written only as a `\u` escape, so
-// the parity scan reads each grammar line byte for byte.
+// L0, and it imports only `shared/redact.mjs` (D-5867), which imports nothing and names no host global: the PWA
+// bundles this file and the server and the agent compile it, so it may name no host global either (the PWA's types
+// carry none). Byte lengths are therefore computed from code points by hand. The file is pure ASCII: a non-ASCII
+// code point in a grammar is written only as a `\u` escape, so the parity scan reads each grammar line byte for byte.
 //
 // Everything here is declared once and derived everywhere else. ccd's embedded helper (`_docs_py`, `ccd/ccd`)
 // holds ONE single-line parity copy of each grammar body, of the two path lists and of every cap ccd enforces, and
@@ -12,6 +12,8 @@
 //
 // The blocks are lettered and appended in order: (A) sections, (B) caps, (C) value grammars, then the failure
 // vocabulary, the wire types, the content class, the overlay, the GitHub link and the page grammar.
+
+import { docsRuleRows, redact } from './redact.mjs';
 
 // ---- (A) Sections ----------------------------------------------------------------------------------------------
 
@@ -459,7 +461,8 @@ export interface DocsFailureContext {
 export type DocsFailureBody = { ok: false; failure: DocsFailure; detail?: string; retryAfterMs?: number } & DocsFailureContext;
 
 /**
- * The redactor, declared once (section 2 (b) "One redactor"). `_docs_py` runs it over every string derived from
+ * The redactor, declared once (section 2 (b) "One redactor"), as the `docs` profile of `shared/redact.mjs` (D-5867;
+ * this constant is that profile's rows). `_docs_py` runs it over every string derived from
  * stderr or a traceback; the L3 adapter runs `redactDocsText` again over every such string field of a failure
  * body. `_docs_py` holds ONE parity-checked literal copy of these rules as `REDACT_RULES`.
  *
@@ -471,28 +474,12 @@ export type DocsFailureBody = { ok: false; failure: DocsFailure; detail?: string
  * U+001C..U+001F and JS's matches U+FEFF, so one `\s` literal would redact differently on the two sides.
  * Refines the spec table's `\s` (recorded in the plan's spec refinements).
  */
-export const DOCS_REDACT_RULES: readonly (readonly [pattern: string, suffix: string])[] = [
-  [String.raw`(://)[^/@\t\n\v\f\r ]+@`, '***@'],
-  [String.raw`([?&](?:access_token|token)=)[^&\t\n\v\f\r ]+`, '***'],
-  [String.raw`(gh[opsu]_)[A-Za-z0-9]{20,}`, '***'],
-  [String.raw`(?<![^\n])[^\n]*Authorization:[^\n]*`, 'Authorization: ***'],
-];
+export const DOCS_REDACT_RULES: readonly (readonly [pattern: string, suffix: string])[] = docsRuleRows();
 
-const DOCS_REDACTORS: readonly (readonly [RegExp, string])[] =
-  DOCS_REDACT_RULES.map(([pattern, suffix]) => [new RegExp(pattern, 'gu'), suffix] as const);
-
-/** `s` with every `DOCS_REDACT_RULES` match replaced. Idempotent: redacting a redacted string changes nothing. */
+/** `s` with every `DOCS_REDACT_RULES` match replaced. Idempotent: redacting a redacted string changes nothing. The
+ *  rules, their order and this replacement are the `docs` profile of `shared/redact.mjs` (D-5867). */
 export function redactDocsText(s: string): string {
-  let out = s;
-  for (const [re, suffix] of DOCS_REDACTORS) {
-    // With a capture group, the callback's second argument is group 1; without one, it is the match offset (a
-    // number), so only a string is kept.
-    out = out.replace(re, (_match: string, ...rest: unknown[]) => {
-      const group1 = rest[0];
-      return (typeof group1 === 'string' ? group1 : '') + suffix;
-    });
-  }
-  return out;
+  return redact('docs', s);
 }
 
 // ===== (E) ccd wire types =====

@@ -511,9 +511,8 @@ describe('UpdateMoveSheet — a refusal is said in the sheet, which stays open',
 describe('one sheet for every move (D-3389)', () => {
   const src = (...p: string[]): string => readFileSync(path.join(import.meta.dirname, '..', 'src', ...p), 'utf8');
 
-  it('UpdateBanner and SettingsScreen import no QuickConfirm — both open UpdateMoveSheet', () => {
+  it('SettingsScreen imports no QuickConfirm — it opens UpdateMoveSheet', () => {
     for (const [file, text] of [
-      ['UpdateBanner.tsx', src('fleet', 'UpdateBanner.tsx')],
       ['UpdatesSection.tsx', src('screens', 'settings', 'UpdatesSection.tsx')],
     ] as const) {
       expect(text, file).not.toMatch(/components\/QuickConfirm/);

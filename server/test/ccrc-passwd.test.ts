@@ -1,6 +1,6 @@
 // `ccrc passwd` and the hasher it shells to (`deploy/gen-auth-hash.mjs`) —
 // Task 9 of the stage-3a auth plan. `ccrc-cli.test.ts` owns the verb's
-// DISCOVERABILITY (the usage line), `ccrc-doctor.test.ts` owns the `auth`
+// DISCOVERABILITY (the usage line), the `ccrc-doctor-*` test files owns the `auth`
 // check that reports what this writes; this file owns what it DOES.
 //
 // ── THE ONE THING THIS SUITE IS REALLY ABOUT ──────────────────────────────

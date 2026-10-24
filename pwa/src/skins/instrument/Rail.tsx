@@ -7,11 +7,17 @@
 // (instrument.css), so a keyboard reader sees what a pointer reader sees. The item the page is on or under carries
 // `aria-current="page"` and the accent rail (`topRouteOf`, the breadcrumb's reader too).
 //
+// THE INBOX DOOR CARRIES THE UNREAD COUNT (T2e fix round 1, D-6335): the list column draws no mail door at a desk, so
+// this door is the desk's only unread readout. The count is `useNavBadges().unreadMail`, the reader Refined's tab and
+// the fleet head read (never a second count), and the door says it the way Refined's badged tab does: its accessible
+// name and its tooltip read `Inbox, 3 unread`, and a `CountBadge` prints the number while it is above zero.
+//
 // RESERVED, NOT RENDERED: Activity is F4's (W4). Its entry is here so the activity log adds one flag, and no control
 // that does nothing ships.
 import type { ReactNode } from 'react';
-import { Door, Icon, type IconName } from '@ccrc/ui';
+import { CountBadge, Door, Icon, type IconName } from '@ccrc/ui';
 import { commandDoor } from '../../command/door';
+import { useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
 import { useLocation } from '../../lib/router';
 import { ROUTES, topRouteOf } from '../../lib/routes';
@@ -43,19 +49,27 @@ function titleOf(id: string): string {
   return route.title;
 }
 
-function RailEntry({ item, current }: { item: RailItem; current: string | null }): ReactNode {
+/** A badge's printed cap; the accessible name carries the real number. The same constant AppBar, PhoneHeader and
+ *  MailBadge each carry (a skin may not import from another skin's directory): consolidating the four is T2d's. */
+const PRINT_CAP = 99;
+
+function RailEntry({ item, current, unread }: { item: RailItem; current: string | null; unread: number }): ReactNode {
   if ('reserved' in item) return null;
   if ('bell' in item) return <NotificationBell />;
   const word = titleOf(item.id);
+  // Only the Inbox door is badged: the fleet head's chrome carried a mail count and no runs count.
+  const count = item.id === 'inbox' ? unread : 0;
+  const name = count > 0 ? `${word}, ${count} unread` : word;
   return (
     <Door
       className="ins-rail-item"
       glyph={<Icon name={item.icon} />}
-      aria-label={word}
+      aria-label={name}
       aria-current={current === item.id ? 'page' : undefined}
       {...commandDoor(`go-${item.id}`)}
     >
-      <span className="ins-rail-tip" aria-hidden="true">{word}</span>
+      <span className="ins-rail-tip" aria-hidden="true">{name}</span>
+      {count > 0 && <CountBadge className="ins-rail-count" aria-hidden="true">{count > PRINT_CAP ? `${PRINT_CAP}+` : count}</CountBadge>}
     </Door>
   );
 }
@@ -63,13 +77,14 @@ function RailEntry({ item, current }: { item: RailItem; current: string | null }
 export function Rail(): ReactNode {
   const { path } = useLocation();
   const current = topRouteOf(path)?.id ?? null;
+  const { unreadMail } = useNavBadges();
   const head = RAIL_ITEMS.filter((i) => !('foot' in i));
   const foot = RAIL_ITEMS.filter((i) => 'foot' in i);
   return (
     <div className="ins-rail">
-      {head.map((item) => <RailEntry key={item.id} item={item} current={current} />)}
+      {head.map((item) => <RailEntry key={item.id} item={item} current={current} unread={unreadMail} />)}
       <div className="ins-rail-foot">
-        {foot.map((item) => <RailEntry key={item.id} item={item} current={current} />)}
+        {foot.map((item) => <RailEntry key={item.id} item={item} current={current} unread={unreadMail} />)}
       </div>
     </div>
   );

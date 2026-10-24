@@ -10,6 +10,7 @@ import {
 } from '../registry.js';
 import { fleetCarriesRunsAttribution } from '../fleetstate.js';
 import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
+import { clearSender } from '../inject/send.js';
 import { assembleFleet } from '../fleet.js';
 import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
@@ -17,14 +18,13 @@ import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
 import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
-import { escalate, demote, classRungEffortReset, EFFORT_LADDER, type Demotion, type RungCurrent, type RungTarget } from '../../../shared/routing-ladder.js';
-import { CLASSES, type ModelClass } from '../../../shared/models.js';
+import { decideRoute, parseRouteRequest } from './route.js';
 import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
-import { toRunSummary, type ClaimEndResult, type CoordStore, type StallSettingsWrite } from './store.js';
+import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
 import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
@@ -33,6 +33,7 @@ import { COORDINATOR_INTENT_ACTIONS, COORDINATOR_INTENT_REFUSALS, declareCoordin
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
+import { advanceGate, advanceRequest, type AdvanceBody } from './advance.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
@@ -64,14 +65,13 @@ import {
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
-  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isRegistryId, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
+  isRegistryId, isSessionIdShape, routeEventDetail,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
-  type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
   type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
-import { refuseRoute, refuseRun } from '../refuse.js';
+import { refuseAdvance, refuseRoute, refuseRun } from '../refuse.js';
 import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
@@ -98,23 +98,6 @@ import {
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const NONCE_HEX = /^[0-9a-f]{32}$/;
-
-/**
- * `POST /api/runs/:id/route`'s routable run states (review finding #6,
- * controller ruling S5-R4): every `RunState` NOT in `TERMINAL_RUN_STATES`
- * (`shared/api.ts`) — DERIVED, not a hand-typed three-state list, so
- * `run-closed` means "terminal" and nothing else. This makes `unknown` (an
- * ACTIVE state that holds a dispatch slot — `shared/api.ts`'s
- * `ACTIVE_RUN_STATES`) routable: a row in `unknown` proceeds past this gate
- * and refuses later on its true reason (typically `no-session`, since a
- * newer-build row this build cannot name is unlikely to carry a session id
- * this build understands either). Module level, not re-allocated per
- * request, and visible to `run-states.test.ts`'s partition census the way an
- * inline `const` inside the handler never was.
- */
-const ROUTABLE_RUN_STATES: readonly RunState[] = RUN_STATES.filter(
-  (s) => !(TERMINAL_RUN_STATES as readonly string[]).includes(s),
-);
 
 /**
  * One coordinator-wide async mutex, serialising the WRITE routes' bodies
@@ -1561,7 +1544,7 @@ export function registerCoordRoutes(
 
     const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue,
+      fleetState: deps.fleetState, sendClear: clearSender({ tmux: deps.tmux, queue: deps.queue }),
       // The one place a wrapper becomes a directory, called from L4 where the
       // config already lives. `dispatch.ts` declares the port instead of
       // importing `configDirFor` itself, because `config.ts` imports
@@ -1758,6 +1741,39 @@ export function registerCoordRoutes(
   });
 
   /**
+   * `POST /api/runs/:id/advance`'s ACT, after `advanceGate` admitted the run (ARCH-33): the forward edges re-measure
+   * the claim, then the advance and the read-back. It decides no gate.
+   */
+  const advanceAct = async (
+    coord: CoordStore, reply: FastifyReply, run: RunRow & { sessionId: string }, id: number, to: RunState, claim: DoneClaim,
+  ): Promise<FastifyReply> => {
+    // Forward motion toward a review claim re-measures; retreating to `working` does not — see the route's docstring.
+    if (to === 'awaiting-review' || to === 'merging') {
+      const verdict = await verifyDone(
+        { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
+        { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
+        claim,
+      );
+      if (!verdict.ok) {
+        coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
+        queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
+          kind: 'status', subject: 'wave-advance-rejected', body: `${verdict.code}: ${verdict.detail}` });
+        return reply.code(409).send({ ok: false, reject: { code: verdict.code, detail: verdict.detail } });
+      }
+    }
+
+    const adv = coord.advance(id, to, 'coordinator');
+    if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
+    // Re-read after the advance for the fresh row. `!` is gone with the type (D-2545): an advance that succeeded and
+    // then read back absent or unreadable is a real condition, and answering it honestly is cheaper than a
+    // non-null assertion that would throw a bare 500 here.
+    const after = coord.run(id);
+    if (!after.ok) return refuseRoute(reply, 'run-unreadable', { detail: after.detail });
+    if (after.run === null) return refuseAdvance(reply, { reject: { code: 'unknown-run' } });
+    return reply.code(200).send({ ok: true, run: toRunSummary(after.run) });
+  };
+
+  /**
    * `POST /api/runs/:id/advance` (fix, review findings 1/15: neither Build 7
    * plan actually authored this route — PR I's own D-9 said "PR J's
    * `POST /api/runs/:id/advance` is what reaches [awaiting-review/merging];
@@ -1793,116 +1809,19 @@ export function registerCoordRoutes(
     if (!requireMailToken(req, reply, 'POST /api/runs/:id/advance')) return;
     const coord = deps.coord;
 
-    const { id: idParam } = req.params as { id: string };
-    const id = parseCanonicalPositiveSafeInteger(idParam);
-    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-
-    const body = (req.body ?? {}) as
-      { to?: unknown;
-        fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown } };
-    const fp = body.fingerprint;
-    if (!isRunState(body.to) ||
-        typeof fp !== 'object' || fp === null ||
-        typeof fp.branchTip !== 'string' || typeof fp.handoffCommit !== 'string' ||
-        typeof fp.prPhase !== 'string' || !(fp.prNumber === null || typeof fp.prNumber === 'number')) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    const to = body.to;
-    const ADVANCE_TARGETS: readonly RunState[] = ['working', 'awaiting-review', 'merging'];
-    if (!ADVANCE_TARGETS.includes(to)) {
-      return reply.code(409).send({ ok: false,
-        reject: { code: 'bad-transition', detail: `POST /api/runs/:id/advance only reaches ${ADVANCE_TARGETS.join('/')} — ` +
-          "'planned'/'dispatched' are POST .../dispatch's job and 'closing'/'done'/'failed' are POST .../close's" } });
-    }
-    const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber as number | null,
+    // The body shape and the target scope are `advanceRequest`'s, the run-dependent gates `advanceGate`'s (ARCH-33,
+    // D-6733); this handler gathers their facts and acts.
+    const parsed = advanceRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), (req.body ?? {}) as AdvanceBody);
+    if (!parsed.ok) return refuseAdvance(reply, parsed.refusal);
+    const { id, to, fingerprint: fp } = parsed.req;
+    const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber,
       prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
 
     return coordMutex.run(async () => {
-    const read = coord.run(id);
-    // D-2545, and the `unknown-run` line below is why it matters: 404 tells
-    // the coordinator this run does not exist, which is a lie about a row
-    // sitting in the table with an integer this process cannot represent.
-    // 503, in the `not-configured` family — a fact about this box, not about
-    // the request. Before any `verifyDone` re-measurement or any advance.
-    if (!read.ok) {
-      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
-    }
-    const run = read.run;
-    if (!run) return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
-    if (!(transitionsFor(run.kind)[run.state] as readonly RunState[]).includes(to)) {
-      return reply.code(409).send({ ok: false, reject: { code: 'bad-transition', from: run.state, to } });
-    }
-    if (run.sessionId === null) {
-      return reply.code(409).send({ ok: false, reject: { code: 'not-dispatched' } });
-    }
-
-    // Design 2026-09-14 §9 invariant 3 — the pair never disagrees. A work run
-    // under review cannot be moved back to `working` until its review run is
-    // terminal: the coordinator closes R (done, or failed if it died) BEFORE
-    // sending W back, so a report and the tip it describes stay one pair.
-    // Checked ahead of the cap: a definite refusal before a contingent one.
-    if (to === 'working' && run.kind === 'work') {
-      const inflight = coord.reviewInFlightFor(id);
-      if (inflight !== null) {
-        return reply.code(409).send({ ok: false, reject: { code: 'review-in-flight', reviewRunId: inflight } });
-      }
-    }
-
-    // Spec 2026-09-14 §7.2 pin 2. Task 1 took the idle states out of
-    // `capsUsage().running`, so the one legal edge back INTO an active state
-    // — `awaiting-review`/`merging` -> `working`, a review sending work back
-    // or a lost merge race — must take the cap check dispatch takes, or the
-    // exclusion is a bypass. `dispatched -> working` is not checked: that run
-    // is already counted. The numbers come from `capsMeasured` (D-2805), the
-    // one reader both routes share; this file's own `.capsUsage(` stays the
-    // caps view's alone, as `coord-caps-route.test.ts` pins.
-    if (to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(run.state)) {
-      const { overConcurrency } = capsMeasured(coord);
-      if (overConcurrency !== null) {
-        // Fields spelled, not spread, to match dispatch.ts's frame; capsMeasured owns the arithmetic.
-        return reply.code(409).send({ ok: false, reject: { code: 'cap-concurrency',
-          limit: overConcurrency.limit, running: overConcurrency.running } });
-      }
-    }
-
-    // Forward motion toward a review claim re-measures; retreating to
-    // `working` does not — see this route's own docstring.
-    if (to === 'awaiting-review' || to === 'merging') {
-      // Spec §2.3: a STORED sessionId is re-checked where the row enters an
-      // id-taking flow. `verifyDone` composes `pr-state --session <id>`, and a
-      // refusal from it records a rejection and queues mail to that id, so
-      // this check stands before it and outside it. A row written before
-      // POST /api/runs checked its ids can hold an id ccd would read as a
-      // flag. Retreating to `working` composes no argv, so such a row can
-      // still be sent back: the check guards this block alone.
-      if (!isRegistryId(run.sessionId)) return reply.code(409).send({ ok: false, reject: { code: 'bad-session' } });
-      const verdict = await verifyDone(
-        { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-        { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
-        claim,
-      );
-      if (!verdict.ok) {
-        coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
-        queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
-          kind: 'status', subject: 'wave-advance-rejected', body: `${verdict.code}: ${verdict.detail}` });
-        return reply.code(409).send({ ok: false, reject: { code: verdict.code, detail: verdict.detail } });
-      }
-    }
-
-    const adv = coord.advance(id, to, 'coordinator');
-    if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
-    // Re-read after the advance for the fresh row. `!` is gone with the type
-    // (D-2545): an advance that succeeded and then read back absent or
-    // unreadable is a real condition, and answering it honestly is cheaper
-    // than a non-null assertion that would throw a bare 500 here.
-    const after = coord.run(id);
-    if (!after.ok) {
-      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: after.detail });
-    }
-    if (after.run === null) {
-      return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
-    }
-    return reply.code(200).send({ ok: true, run: toRunSummary(after.run) });
+      const gate = advanceGate({ to, read: () => coord.run(id), reviewInFlight: () => coord.reviewInFlightFor(id),
+        overConcurrency: () => capsMeasured(coord).overConcurrency });
+      if (!gate.ok) return refuseAdvance(reply, gate.refusal);
+      return advanceAct(coord, reply, gate.run, id, to, claim);
     });
   });
 
@@ -1948,341 +1867,40 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/runs/:id/route')) return;
     const coord = deps.coord;
-
-    const { id: idParam } = req.params as { id: string };
-    const id = parseCanonicalPositiveSafeInteger(idParam);
-    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'id must be a positive safe integer' });
-
-    const badRequest = (detail: string) => reply.code(400).send({ ok: false, error: 'bad-request', detail });
-
-    const body = (req.body ?? {}) as Partial<RunRouteBody>;
-    if (body.target !== 'worker' && body.target !== 'coordinator') {
-      return badRequest('target must be "worker" or "coordinator"');
-    }
-    if (typeof body.why !== 'string') return badRequest('why must be a string');
-    const whyBytes = new TextEncoder().encode(body.why).length;
-    if (whyBytes < 1 || whyBytes > 400 || ROUTE_CONTROL_CHAR_RE.test(body.why)) {
-      return badRequest('why must be 1..400 bytes with no control characters');
-    }
-    const why = body.why;
-
-    const hasKind = body.kind !== undefined;
-    const hasDemote = body.demote !== undefined;
-    const hasManual = body.field !== undefined || body.value !== undefined;
-    if ([hasKind, hasDemote, hasManual].filter(Boolean).length !== 1) {
-      return badRequest('exactly one of kind, demote, or field+value is required');
-    }
-
-    let kind: FailureKind | undefined;
-    let demoteField: 'class' | 'effort' | undefined;
-    let manualField: RouteField | undefined;
-    let manualValue: string | undefined;
-    if (hasKind) {
-      if (typeof body.kind !== 'string' || !(FAILURE_KINDS as readonly string[]).includes(body.kind)) {
-        return badRequest(`kind must be one of ${FAILURE_KINDS.join('/')}`);
-      }
-      kind = body.kind;
-    } else if (hasDemote) {
-      if (body.demote !== 'class' && body.demote !== 'effort') {
-        return badRequest('demote must be "class" or "effort"');
-      }
-      demoteField = body.demote;
-    } else {
-      // The same `{field, value}` SHAPE guard the sibling `POST
-      // /api/sessions/:id/route` (server.ts:1722) already reuses `parseRouteFields`
-      // for — known field, non-empty, no control characters, <= 32 bytes
-      // (`ROUTE_VALUE_MAX_BYTES`). ccd's own `_route_valid` carries no
-      // control-character or length arm at all (`ROUTE_CONTROL_CHAR_RE`'s own
-      // docstring), so this door is the only barrier on shape; a manual
-      // `value` that skipped it would reach `CCD_ARGV.route` unbounded and
-      // could poison the `route:<mode>:<field>:<from>-><to>:<kind>[:<session>]`
-      // event string this door later parses back off its own history.
-      const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
-      if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
-        return badRequest(!parsed.ok ? `field/value invalid: ${parsed.why}` : 'field and value are required');
-      }
-      const [field, value] = Object.entries(parsed.route)[0] as [RouteField, string];
-      manualField = field;
-      manualValue = value;
-    }
+    const request = parseRouteRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), req.body);
+    if (!request.ok) return refuseRoute(reply, 'bad-request', { detail: request.detail });
+    const { id, ask } = request;
 
     return coordMutex.run(async () => {
-      const read = coord.run(id);
-      if (!read.ok) return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
-      const run = read.run;
-      if (!run) return reply.code(404).send({ ok: false, error: 'unknown-run' });
-
-      if (!ROUTABLE_RUN_STATES.includes(run.state)) {
-        return reply.code(409).send({ ok: false, error: 'run-closed', detail: `run is ${run.state}` });
-      }
-
-      const sid = body.target === 'worker' ? run.sessionId : run.claimedBy;
-      if (sid === null || sid === '') {
-        return reply.code(409).send({ ok: false, error: 'no-session' });
-      }
-      // The stored id is re-checked HERE, before any field read, argv or
-      // event (spec §2.3). `sid` comes off `run.sessionId`/`run.claimedBy`,
-      // a STORED row: `POST /api/runs` now refuses a `claimedBy` or
-      // `sessionId` that is not a registry id, but a row written before that
-      // check can still hold one, so this door asks again rather than
-      // trusting the open. The rule is THE registry-id predicate,
-      // `isRegistryId` (`shared/api.ts`): the session-id shape, no leading
-      // `-` or `.`, and at most 255 characters. Fix round 1, finding #2
-      // checked the SHAPE alone, because `routeEventDetail` below embeds
-      // `sid` unescaped as the sixth segment of a `:`-delimited grammar whose
-      // `ROUTE_EVENT_DETAIL_RE` group accepts only `[A-Za-z0-9._-]+`. The
-      // predicate keeps that guarantee and closes what the shape let through:
-      // a stored `--actor` would reach `CCD_ARGV.route`/`routeSet` as
-      // `route --session --actor`, an id the one predicate refuses (spec §2.3).
-      // A manual-field write reads no registry field, so nothing but this
-      // check stands between a bad stored id and that argv. `no-session`
-      // (nothing to route to) and `bad-session` (something to route to, but
-      // not a name this door can safely write or compose) are two different
-      // conditions and must not collapse to one refusal.
-      if (!isRegistryId(sid)) {
-        return reply.code(409).send({ ok: false, error: 'bad-session' });
-      }
-
-      // D-5866: the `route` row; `routeSet`, the class rung's pair below, is answered by the same `ROUTE_CAP`.
-      if (!ccdCan(deps.fleetState, 'route')) {
-        return reply.code(501).send({ ok: false, error: 'unsupported' });
-      }
-
-      let field: RouteField;
-      let from: string;
-      let to: string;
-      let mode: RouteMode;
-      // THE COMPANION EFFORT A CLASS RUNG RESETS, or `null` when this call
-      // writes one field (final review, finding #1). Spec §3: "A class rung
-      // resets effort to the new class's matrix row, never carries the old
-      // level across" — so a ladder move on `class` is TWO pairs, and
-      // `classRungEffortReset` is the one place that says which value.
-      // `null` on an effort rung (nothing to reset) and on a MANUAL write,
-      // which this door forwards exactly as the coordinator typed it — the
-      // coordinator's own judgement is not a rung, and a manual
-      // `class=haiku` that ccd refuses is ccd's answer to give, not this
-      // door's to silently amend.
-      let effortReset: string | null = null;
-
-      if (manualField !== undefined) {
-        field = manualField;
-        from = '?';
-        to = manualValue!;
-        mode = 'manual';
-      } else {
-        const classRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sid, 'class');
-        if (!classRead.ok) {
-          return classRead.reason === 'absent'
-            ? reply.code(409).send({ ok: false, error: 'no-record', field: 'class' })
-            : reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'class' });
-        }
-        // S5-R18: `.class` present with `.effort` ABSENT is `effort: 'auto'`
-        // — the record's own vocabulary for "no override, the model's
-        // default" (ccd composes no `--effort` for it) — never `no-record`;
-        // that refusal is reserved for an absent `.class` (checked above).
-        // `.effort` present-but-UNREADABLE is still transient, not absence.
-        const effortRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sid, 'effort');
-        if (!effortRead.ok && effortRead.reason === 'unreadable') {
-          return reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'effort' });
-        }
-        const effortContent = effortRead.ok ? effortRead.content : 'auto';
-        const degradedRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sid, 'degraded');
-        if (!degradedRead.ok && degradedRead.reason === 'unreadable') {
-          return reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'degraded' });
-        }
-
-        // Fix round 1, finding #1: a PRESENT, READABLE registry field is not
-        // automatically a LEGAL rung. `classIndex`/`effortIndex`
-        // (`shared/routing-ladder.ts`) resolve rungs by `indexOf`, so an
-        // out-of-vocabulary value yields -1 and `CLASSES[-1+1]`/
-        // `EFFORT_LADDER[-1+1]` silently reads the FLOOR rather than
-        // refusing — reachable with a LEGAL ccd value, not just corruption:
-        // `ccd/ccd`'s `ROUTE_CLASSES` includes `default` ("no override"),
-        // which passes `_route_valid` and is stored verbatim, and a torn or
-        // never-written field trims to `''` (`fieldMeasured`'s own
-        // whitespace-collapse). Both are refused here as `unrouteable-record`
-        // — a condition distinct from `no-record` (the record EXISTS, it is
-        // only unroutable) — before either value is cast into the ladder's
-        // domain types. Ruling S5-R19: this is a DIFFERENT question than the
-        // doctor's live-session census asks ("has a record" — a `.class`
-        // field, `default` included) — this door asks "is on a rung of the
-        // ladder", so the detail below says the value is a record, not a
-        // rung, rather than repeating the census's own words.
-        if (!(CLASSES as readonly string[]).includes(classRead.content)) {
-          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'class', detail: `${JSON.stringify(classRead.content)} is not a rung of the ladder (a record, not a rung)` });
-        }
-        const EFFORT_VALUES: readonly string[] = [...EFFORT_LADDER, 'auto', 'ultracode'];
-        if (!EFFORT_VALUES.includes(effortContent)) {
-          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'effort', detail: `${JSON.stringify(effortContent)} is not a rung of the ladder (a record, not a rung)` });
-        }
-        // An ABSENT `.degraded` means no degrade (brief's own contract,
-        // handled above by `!degradedRead.ok`). A PRESENT but blank one — the
-        // same torn/never-written shape as `class`/`effort` above — is
-        // treated the same way, not as a garbage class: empty content is the
-        // established "cleared" reading `fieldMeasured`'s own docstring gives
-        // `.branch`/`.hold`/`.substrate`, so it degrades to "no override"
-        // rather than to the empty string the unvalidated cast used to leave
-        // it as. Anything else present must be a real class or the record is
-        // unrouteable.
-        if (degradedRead.ok && degradedRead.content !== '' && !(CLASSES as readonly string[]).includes(degradedRead.content)) {
-          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'degraded', detail: `${JSON.stringify(degradedRead.content)} is not a rung of the ladder (a record, not a rung)` });
-        }
-        const rawClass = classRead.content as ModelClass;
-        const degraded = degradedRead.ok && degradedRead.content !== '' ? (degradedRead.content as ModelClass) : null;
-        const servedClass = degraded ?? rawClass;
-        const current: RungCurrent = {
-          class: servedClass,
-          effort: effortContent as RungCurrent['effort'],
-        };
-
-        // S5-R2: `lastDemotion` is bookkeeping this door owns (not the
-        // ladder's), derived from the SESSION's event trail — the last
-        // `route:demote:` detail not yet followed by a
-        // `route:reverse-demotion:` detail. Walked in order, so a later
-        // reverse-demotion or a later demote always wins over an earlier
-        // one. (Routing slice 6, Task 1, D-2957 closed: the walk is the
-        // session's, across every run it touches — see below.)
-        //
-        // Fix round 2, finding #8, ruling S5-R5: a manual write on the
-        // DEMOTED field also clears `lastDemotion` — the coordinator's own
-        // judgement superseded the demotion, so the next escalation must not
-        // "reverse" a rung the record no longer carries. A manual write on
-        // some OTHER field leaves a standing demotion alone (it never
-        // touched that field). Without this, `demote effort high->medium`
-        // then `manual field:effort value:max` then a failure would answer
-        // `reverse-demotion medium->high` and walk the session DOWN from
-        // `max` using a `from` that was never current.
-        // S5-R6: the parse itself is `parseRouteEventDetail` (`shared/api.ts`)
-        // now, not an inline regex — this door and `CoordStore.runSignals`
-        // read the SAME vocabulary (`ROUTE_MODES`/`FAILURE_KINDS`), so a mode
-        // or kind added to one can never silently go unrecognised by the
-        // other.
-        //
-        // THE SCOPE IS THE SESSION, ACROSS EVERY RUN IT TOUCHES (routing
-        // slice 6, Task 1 — D-2957, the run-scoped rule final review left
-        // here, is CLOSED by this walk). The rung the ladder's history is
-        // about belongs to the SESSION, not to one run row, so this reads
-        // the union of `runEvents(r.id)` over `coord.runsTouching(sid)` —
-        // every run where `sid` is the worker OR the coordinator, any
-        // state — ordered by `at` then run id so two events landed in the
-        // same millisecond still replay in the order their rows were
-        // written.
-        //
-        // A SIX-SEGMENT event (`routeEventDetail` writes one on every call
-        // from here on) names its own session, so it counts iff
-        // `evSession === sid` — the one comparison that lets a run route
-        // both its worker and its coordinator without attributing one's
-        // history to the other. A FIVE-SEGMENT event (every one this door
-        // wrote before slice 6) names none, so it is attributed to the
-        // run's own `sessionId` — the worker — because that is the only
-        // role a pre-slice-6 write could ever have targeted; a
-        // coordinator-targeted five-segment event sitting on that same run
-        // is indistinguishable from a worker-targeted one and is IGNORED
-        // here rather than guessed at.
-        const touching = coord.runsTouching(sid);
-        const trail = touching
-          .flatMap((r) => coord.runEvents(r.id).map((e) => ({ ...e, runId: r.id, runSessionId: r.sessionId })))
-          .sort((a, b) => (a.at - b.at) || (a.runId - b.runId));
-        let lastDemotion: Demotion | null = null;
-        let priorSameKind = 0;
-        for (const e of trail) {
-          if (e.detail === null) continue;
-          const parsed = parseRouteEventDetail(e.detail);
-          if (parsed === null) continue;
-          const { mode: evMode, field: evField, from: evFrom, to: evTo, kind: evKind, session: evSession } = parsed;
-          const belongsToSid = evSession !== null ? evSession === sid : e.runSessionId === sid;
-          if (!belongsToSid) continue;
-          if (evMode === 'demote') {
-            lastDemotion = { field: evField as 'class' | 'effort', from: evFrom, to: evTo };
-          } else if (evMode === 'reverse-demotion') {
-            lastDemotion = null;
-          } else if (evMode === 'manual' && lastDemotion !== null && evField === lastDemotion.field) {
-            lastDemotion = null;
-          }
-          if (hasKind && evMode === 'escalate' && evKind === kind) {
-            priorSameKind++;
-          }
-        }
-
-        let target: RungTarget | { kind: 'floor'; why: string } = hasKind
-          ? escalate(kind!, current, 'main', priorSameKind, lastDemotion)
-          : demote(current, demoteField!);
-
-        // Ruling S5-R17 (final review, finding #3): `lastDemotion.to` is
-        // BOOKKEEPING — the rung the door last recorded the session landing
-        // on — while `current` above is what was just MEASURED off the live
-        // registry. A reversal's own `from` is `lastDemotion.to` (the
-        // ladder's own doc comment), so if the two disagree, something wrote
-        // the field out of band since (the PWA picker's `POST
-        // /api/sessions/:id/route`, or ccd itself — neither writes a run
-        // event this door's trail could see) and the demotion this reversal
-        // would walk back is no longer the session's actual history: treat
-        // `lastDemotion` as cleared and let the plain ladder apply to what is
-        // really on the record. The reversal's `from` is therefore always
-        // the measured value, never the stale bookkeeping.
-        if (hasKind && target.kind === 'move' && target.mode === 'reverse-demotion') {
-          const liveValue = target.field === 'class' ? current.class : current.effort;
-          if (target.from !== liveValue) {
-            target = escalate(kind!, current, 'main', priorSameKind, null);
-          }
-        }
-
-        if (target.kind !== 'move') {
-          return reply.code(409).send({ ok: false, error: target.kind, detail: target.why });
-        }
-
-        // A degraded session's own record may already intend the class the
-        // ladder just computed (the served class, not the intended one, is
-        // what escalated) — re-writing it is not a move, it is re-intending
-        // what the record already says. Only class escalations can collide
-        // this way: a demotion always lands BELOW the served class, and the
-        // served class is never above the raw one.
-        if (degraded !== null && target.field === 'class' && target.to === rawClass) {
-          return reply.code(409).send({
-            ok: false, error: 'ceiling',
-            detail: `the record already intends ${rawClass}; the lane serves ${servedClass} (degraded)`,
-          });
-        }
-
-        field = target.field;
-        from = target.from;
-        to = target.to;
-        mode = target.mode;
-        effortReset = target.field === 'class' ? classRungEffortReset(target.to) : null;
-      }
+      const decision = await decideRoute({
+        ask,
+        run: coord.run(id),
+        // D-5866: the `route` row; `routeSet`, the class rung's pair below, is answered by the same `ROUTE_CAP`.
+        ccdCanRoute: ccdCan(deps.fleetState, 'route'),
+        trail: (sid) => coord.runsTouching(sid).flatMap((r) =>
+          coord.runEvents(r.id).map((e) => ({ at: e.at, runId: r.id, runSessionId: r.sessionId, detail: e.detail }))),
+        measure: (sid, field) => fieldMeasured(deps.io, deps.cfg.registryDir, sid, field),
+      });
+      if (!decision.ok) return refuseRoute(reply, decision.refused, decision.extra);
+      const { sid, mode, field, from, to, kind, effortReset } = decision.move;
 
       const dec = sweepDec(deps.fleetState, `run:${id} coordinator`);
-      const reason = `${mode}${kind ? ' ' + kind : ''}: ${why}`;
-      const flags = dec === null ? null : { ...dec, reason };
+      const flags = dec === null ? null : { ...dec, reason: `${mode}${kind ? ' ' + kind : ''}: ${ask.why}` };
       // ONE ARGV FOR THE PAIR, NEVER TWO CALLS (`CCD_ARGV.routeSet`'s own
-      // docstring / ruling S4-R5). `cmd_route` validates every `--set` pair
-      // and then the class/effort PAIR — "refused whether it arrives in one
-      // call or across two" — before its write loop touches the registry, so
-      // one argv is all-or-nothing while two calls would commit
-      // `class=haiku` and then die on the pair check. That pair is not
-      // hypothetical here: `demote: class` off sonnet lands on haiku, whose
-      // reset is `auto` precisely because ccd refuses haiku beside a level.
-      // A single-field `route` argv for a class rung would therefore write
-      // the wrong effort silently on every other class rung and refuse
-      // outright on that one.
+      // docstring / ruling S4-R5): `cmd_route` validates every `--set` pair and
+      // then the class/effort PAIR before its write loop touches the registry,
+      // so one argv is all-or-nothing while two calls would commit `class=haiku`
+      // and then die on the pair check.
       const argv = effortReset === null
         ? CCD_ARGV.route(sid, field, to, flags)
         : CCD_ARGV.routeSet(sid, { class: to, effort: effortReset }, flags);
       const res = await deps.runCcd(argv);
-      if (!res.ok) {
-        return reply.code(502).send({ ok: false, error: 'fleetFailed', stderr: res.stderr });
-      }
+      if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
 
-      // ONE run event, naming the RUNG — the companion effort reset is part
-      // of that one class rung, not a second decision, and the `route:` event
-      // grammar (`routeEventDetail`, `shared/api.ts`) carries one field by
-      // construction. The reset is visible in the journal (ccd writes one
-      // `route` row per `--set` pair), in the `--reason` text the ladder
-      // composed ("… effort reset to <value>"), and on the response below.
+      // ONE run event, naming the RUNG; the companion effort reset is part of
+      // that one class rung, not a second decision.
       coord.recordRunEvent(id, 'coordinator', routeEventDetail({ mode, field, from, to, kind: kind ?? 'manual', session: sid }));
-      return reply.code(200).send({
-        ok: true, applied: { session: sid, mode, field, from, to, kind: kind ?? null, effortReset },
-      });
+      return reply.code(200).send({ ok: true, applied: { session: sid, mode, field, from, to, kind, effortReset } });
     });
   });
 

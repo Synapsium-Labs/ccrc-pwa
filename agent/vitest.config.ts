@@ -16,7 +16,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
-    setupFiles: ['test/contain-path.setup.ts'],
-    globalSetup: ['test/contain-path.globalsetup.ts'],
+    // The server package's scrub of git's repository-redirecting variables, shared rather than copied: no agent test
+    // spawns git today, so this keeps a future one from writing into the runner's checkout.
+    setupFiles: ['../server/test/git-env.setup.mjs', 'test/contain-path.setup.ts'],
+    globalSetup: ['../server/test/git-env.setup.mjs', 'test/contain-path.globalsetup.ts'],
   },
 });

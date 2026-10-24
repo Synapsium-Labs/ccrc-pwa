@@ -353,6 +353,9 @@ describe('ccd/ccd', () => {
     // `_ws_collect_audit_contained` joined them with `ws-audit --collect`, for the same reason: it `die`s on an
     // id or a python3 it cannot use, before any read, reached through `cmd_ws_audit`'s hand-off and never
     // inside `$( )`.
+    // `_ws_orphan_census` and `_ws_orphan_audit` joined them with `ws-audit --orphans` and `--orphan-hex`, for the
+    // same reason: each `die`s on its arguments or a python3 it cannot use, before any read, reached through
+    // `cmd_ws_audit`'s hand-off and never inside `$( )`.
     // `_ws_title` and `_ws_title_check` joined them with the named-workspace title: `_ws_title_check` IS a
     // refusal (a title that breaks a text rule `die`s naming the rule, before any write), and `_ws_title` is
     // the one door to it (its `check` op). Both are called plainly, by `cmd_ws_add` and `cmd_ws_title`,
@@ -375,7 +378,7 @@ describe('ccd/ccd', () => {
       .toEqual(['_account_still_rostered', '_lc_refuse', '_operator_choice_keep', '_operator_choice_promote',
         '_route_argv_check', '_route_argv_write', '_route_seed_default', '_spawn', '_spawn_start',
         '_supervised_start', '_swap_refuse', '_sync_uuid', '_ws_collect_audit_contained', '_ws_expire_audit_contained',
-        '_ws_expire_refuse_return', '_ws_title', '_ws_title_check']);
+        '_ws_expire_refuse_return', '_ws_orphan_audit', '_ws_orphan_census', '_ws_title', '_ws_title_check']);
     expect(fatal.has('_place_for_class'),
       'placement started dying instead of answering on stdout — both its call sites are `$( )`').toBe(false);
     expect(fatal.has('_wrapper_rostered_now'),

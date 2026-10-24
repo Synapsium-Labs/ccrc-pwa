@@ -4,7 +4,7 @@
 // task did not implement — dispatching to one of them was its own, deliberately
 // distinct, refusal (exit 1, "not implemented yet") from an unrecognised verb
 // (exit 2, a USAGE error). All three have since graduated: `doctor` in Task 4
-// and `status` in Task 7 (both pinned by server/test/ccrc-doctor.test.ts), and
+// and `status` in Task 7 (both pinned by the `ccrc-doctor-*` test files), and
 // `adopt` in Task 8, pinned by the `ccrc: adopt` block below. The
 // "not implemented yet" register has no caller left and is gone from `ccrc`
 // with the last verb that used it — a refusal nothing can reach is a comment.

@@ -11,6 +11,7 @@
 // THE PWA DOES NOT KNOW WHAT `ccd caps` LISTS, so it cannot hide Rename on a box whose ccd predates the verb. The
 // server's `501 unsupported` (`needs: 'ws-title'`) is read here and said plainly instead.
 import { ApiError } from '../lib/apiError';
+import { isRecord } from '../lib/wire';
 import { BAD_TITLE_REASONS, type BadTitleReason } from '../../../shared/refusal';
 import { NAME_REFUSAL_TEXT, isNameRefusal, type NameRefusal } from '../../../shared/slug';
 import { BAD_REQUEST_TEXT } from './workspaceAddWords';
@@ -58,7 +59,6 @@ export type RenameRefusal =
   /** An answer this build has no word for. The status is kept for the sentence. */
   | { kind: 'other'; status: number };
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 const badTitleReason = (v: unknown): BadTitleReason | null =>
   BAD_TITLE_REASONS.find((r) => r === v) ?? null;

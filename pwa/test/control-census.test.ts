@@ -268,9 +268,8 @@ const CONTROLS: Record<string, string> = {
   'session/Composer.tsx <button> slash-item': 'TOKEN. A slash-command row — one of the six floors this wave converted from a literal.',
   'session/AskParts.tsx <button> ask-tab': 'TOKEN. A tab-strip chip (AskTabs, decision ask-tab-strip), one per question and Submit, which both ask sheets render.',
   'session/AskParts.tsx <button> dlg-reply-send': 'TOKEN. Send, beside the own-words field (OwnWords, D-5090), which both ask sheets render.',
-  'session/DialogSheet.tsx <button> dlg-details-toggle': 'TOKEN. The details disclosure.',
-  'session/EnvelopeSheet.tsx <button> dlg-later': 'TOKEN. Both "Not now" rows, rendered by TerminalCta — which lives beside the envelope sheet and is imported back by the controller.',
-  'session/DialogSheet.tsx <button> opt-preview-toggle': 'TOKEN. The option preview disclosure.',
+  'session/EnvelopeSheet.tsx <button> dlg-later': 'TOKEN. Every "Not now" row, rendered by TerminalCta — which lives beside the envelope sheet and is imported back by the controller.',
+  'session/AskParts.tsx <button> opt-preview-toggle': 'TOKEN. The option preview disclosure (OptionPreview, moved here from DialogSheet by D-6325).',
   'session/TerminalDrawer.tsx <button> term-view':
     'TOKEN, and OVERLAY below. The terminal drawer\'s header chips — the view\'s '
     + 'flip and the offer of the grid (D-5005) — one class, two buttons. The pill '

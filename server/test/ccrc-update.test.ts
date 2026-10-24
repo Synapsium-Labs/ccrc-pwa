@@ -35,6 +35,7 @@
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { killGroup } from './spawnGroup.js';
+import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { createHash } from 'node:crypto';
 import { createServer as createNetServer, type AddressInfo } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
@@ -119,7 +120,7 @@ const FLOCK = realPath('flock');
 
 interface Result { code: number; stdout: string; stderr: string }
 
-/** GNU `timeout -k`, probed the same way `ccrc-doctor.test.ts`'s own
+/** GNU `timeout -k`, probed the same way `ccrc-doctorFixture.ts`'s own
  *  `DOCTOR_DEADLINE_BIN` is (fix round 1 items 9 and 23-C21): a FIFO block
  *  happens inside a GRANDCHILD (`jq`'s or `flock`'s own open), which a bare
  *  `spawnSync` `timeout` option cannot reach — only `timeout -k`, which puts
@@ -300,6 +301,7 @@ function healthyBox(home: string): void {
 
   stub('df', [
     'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
+    ...FIXTURE_DF_INODES_LINES,
     '[ "$1" = "-Pk" ] && [ -n "$2" ] || { echo "fixture df: unexpected argv: $*" >&2; exit 90; }',
     'echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
     'echo "/dev/fixture0    104857600  20971520 42991616      21% /"',
@@ -1496,6 +1498,9 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     const child = spawn(process.execPath, ['-e', HOST_JS, String(bytes), String(everyMs)], { stdio: ['ignore', 'pipe', 'ignore'] });
     let out = '';
     child.stdout!.on('data', (d: Buffer) => { out += d.toString(); });
+    // `close`, not `exit`: the host prints its count as it exits, and `exit` can fire before that last chunk is
+    // read, which reads as "sent 0".
+    const closed = new Promise<void>((resolve) => { child.once('close', () => resolve()); });
     const port = await new Promise<number>((resolve, reject) => {
       const t0 = Date.now();
       const iv = setInterval(() => {
@@ -1505,9 +1510,8 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       }, 20);
     });
     const stop = async (): Promise<number> => {
-      if (child.exitCode === null && child.signalCode === null) {
-        await new Promise<void>((resolve) => { child.once('exit', () => resolve()); child.kill('SIGTERM'); });
-      }
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      await closed;
       const m = /sent (\d+)/.exec(out);
       return m ? Number(m[1]) : 0;
     };
@@ -1548,7 +1552,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       expect(elapsedMs, `took ${elapsedMs}ms; stderr: ${r.stderr}`).toBeGreaterThanOrEqual(1800);
       expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(10_000);
       // The host really was above the floor the whole time.
-      expect(sent / (elapsedMs / 1000), `sent ${sent} bytes in ${elapsedMs}ms`).toBeGreaterThan(1500);
+      expect(sent / (elapsedMs / 1000), `sent ${sent} bytes in ${elapsedMs}ms; stderr: ${r.stderr}`).toBeGreaterThan(1500);
       expect(r.stderr).toMatch(/curl: \(28\) Operation timed out after 2\d{3} milliseconds/);
       expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS \(is there a release, or did the connection stall.*or did it time out after 2s \/ exceed 1048576 bytes\)/);
     } finally {
@@ -5733,7 +5737,7 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
   // THE ARMS, SOURCED. `ccrc` recomputes CCD_OS from $OSTYPE at source time
   // (ccd/ccrc:109-114), so the Darwin arms of a whole `ccrc update` run only
   // on the macOS leg — which is non-required and measured unable to finish.
-  // Sourced (the `_check_routing` idiom in ccrc-doctor.test.ts), CCD_OS is
+  // Sourced (the `_check_routing` idiom in ccrc-doctorFixture.ts), CCD_OS is
   // set AFTER the file computed it, and `_ccrc_job_stayed_up` is shadowed to
   // record its argument, so every leg measures which arm ran: the arm's
   // CHOICE is the subject here, the two-sample check is the itDarwin case's.

@@ -22,8 +22,9 @@ import { CODEX, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
 import { randomBytes } from 'node:crypto';
 import {
   assertManagerStandIns, authDirOf, codexAuthDir, freePort, freePorts, MANAGER_STANDIN_MARK, plantCodexBins,
-  plantFakeRuntime, plantLaneAuth, probeArgv0, probeRuntime, probeRuntimeCalls, authAsks, setAuthStubMode,
+  plantFakeRuntime, plantLaneAuth, probeArgv0, probeRuntime, probeRuntimeCalls,
 } from './codexLaneFixture.js';
+import { driverLines, fakeAuthServer, plantBackendCredential, runAuthDriver } from './codexAuthFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1705,17 +1706,23 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
     expect(poisonRan(), 'an inherited interpreter ran').toBe(false);
   });
 
-  it('a codex lane whose authDir holds no auth.json is not-logged-in, naming ccrc codex login, and no interpreter runs', async () => {
+  // codex-bridge Stage 1, Task 7: the probe no longer tests the file's existence itself; the auth library, loaded by
+  // the runtime interpreter from the CCRC_MODELS_AUTH_LIB `_models_probe_codex_env` exports, reads the lane `absent`.
+  // So the interpreter does run now, and what binds is that nothing was asked and nothing was written.
+  it('a codex lane whose authDir holds no credential is not-logged-in, naming ccrc codex login: no request is made and nothing under the authDir is written', async () => {
     home = await codexBox(['codex-a']);
     poisonPathLitellm();
     plantCodexBins(home);
     const pr = probeRuntime(home, CODEX_RAW);
-    plantFakeRuntime(home, { python: pr.python });
+    const rt = plantFakeRuntime(home, { python: pr.python });
     expect(run(['models', 'codex-a', 'init', 'codex']).code).toBe(0);
+    fs.mkdirSync(authDirOf(home, 'codex-a'), { recursive: true });
     const r = run(['models', 'refresh', 'codex-a']);
     expect(r.code).toBe(1);
     expect(/not-logged-in: run ccrc codex login codex-a/.test(String(rowsOf(r)[0]!['reason'])), 'the not-logged-in refusal').toBe(true);
-    expect(probeArgv0(pr.rec)).toEqual([]);
+    expect(probeArgv0(pr.rec), 'the library answers inside the runtime interpreter').toEqual([rt.python]);
+    expect(probeRuntimeCalls(pr.rec).flatMap((c) => c.requests), 'a request was made').toEqual([]);
+    expect(fs.readdirSync(authDirOf(home, 'codex-a')), 'the reader wrote into the authDir').toEqual([]);
     expect(poisonRan()).toBe(false);
   });
 
@@ -1823,20 +1830,28 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
     expect(r.stdout, 'the probe ran').toBe('');
   });
 
-  // Fix round 1: on a dead refresh token, litellm LOGS its own warning (the
-  // token endpoint's answer in it) before the guard refuses. The refresh row's
-  // reason and the stale catalogue's lastError both keep the remedy, and carry
-  // none of that text.
-  it('a dead refresh token reaches the refresh row and the stale catalogue as login-required, remedy intact, with none of litellm\'s own log text', async () => {
+  // Fix round 1, carried into codex-bridge Stage 1 Task 7: a dead credential reaches the refresh row's reason and the
+  // stale catalogue's lastError with its remedy first. The dead credential is now a state the tier's refresher
+  // recorded (the library's own `ensure_fresh`, driven against a fake token endpoint that refuses invalid_grant), and
+  // the probe only reads it: no request, and none of the token endpoint's answer in either text.
+  it('a needs-signin the tier recorded reaches the refresh row and the stale catalogue as login-required, remedy intact, and no request is made', async () => {
     home = await codexBox(['codex-a']);
     poisonPathLitellm();
     plantCodexBins(home);
     const pr = probeRuntime(home, CODEX_RAW);
     plantFakeRuntime(home, { python: pr.python });
-    plantLaneAuth(home, 'codex-a');
     expect(run(['models', 'codex-a', 'init', 'codex']).code).toBe(0);
     writeCatalogue('codex-a');                 // a previous catalogue, so the stale path records lastError
-    setAuthStubMode(pr.rec, 'refresh-fails');
+    const dir = authDirOf(home, 'codex-a');
+    plantBackendCredential(dir, { accountId: 'acct-codex-a', expiresIn: 30 });
+    const srv = await fakeAuthServer({ token: [{ status: 400, body: { error: 'invalid_grant', error_description: 'fixture-token-endpoint-body' } }] });
+    try {
+      const d = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'ensure_fresh', lane: 'codex-a' }] },
+        { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(driverLines(d.stdout)[0]?.['error'], d.stderr).toBe('needs-signin');
+    } finally {
+      await srv.close();
+    }
     const r = run(['models', 'refresh', 'codex-a']);
     expect(r.code).toBe(1);
     const reason = String(rowsOf(r)[0]!['reason']);
@@ -1846,13 +1861,12 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
     const lastError = String(cat.lastError);
     expect(reason).toContain('login-required: run ccrc codex login codex-a');
     expect(lastError).toContain('login-required: run ccrc codex login codex-a');
-    for (const text of ['ChatGPT refresh token failed', 'stand-in-token-endpoint-body']) {
+    for (const text of ['fixture-token-endpoint-body', 'token-expired']) {
       expect(reason.includes(text), `the refresh row carries "${text}"`).toBe(false);
       expect(lastError.includes(text), `the stale catalogue carries "${text}"`).toBe(false);
       expect((r.stdout + r.stderr).includes(text), `the verb's output carries "${text}"`).toBe(false);
     }
-    // The control: the stand-in did take its logging path.
-    expect(authAsks(pr.rec)).toEqual(['get_access_token']);
+    expect(probeRuntimeCalls(pr.rec).flatMap((c) => c.requests), 'a request was made').toEqual([]);
   });
 });
 

@@ -26,6 +26,7 @@ import {
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
@@ -101,6 +102,7 @@ function healthyDoctorBox(home: string): void {
 
   stub('df', [
     'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
+    ...FIXTURE_DF_INODES_LINES,
     '[ "$1" = "-Pk" ] && [ -n "$2" ] || { echo "fixture df: unexpected argv: $*" >&2; exit 90; }',
     'echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
     'echo "/dev/fixture0    104857600  20971520 42991616      21% /"',
@@ -200,7 +202,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // The containment is unchanged and is the point: neither stub ever execs the
   // real binary, so this box's systemd and logind are as unreachable as they
   // were behind the refusal. What changed is that they now ANSWER the shapes
-  // ccrc asks — and, per `ccrc-doctor.test.ts`'s stub discipline, exit 90 on
+  // ccrc asks — and, per `ccrc-doctorFixture.ts`'s stub discipline, exit 90 on
   // any argv they do not recognise, so a step that started mutating a unit
   // nobody authorised is a loud failure rather than a silent success.
   //

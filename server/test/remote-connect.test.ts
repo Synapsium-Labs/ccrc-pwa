@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import v8 from 'node:v8';
 import vm from 'node:vm';
@@ -43,7 +44,7 @@ describe('connectFleet — connection lifecycle', () => {
     // `rosterFp`/`build`, a real agent NEVER omits this field — the fixture
     // home has no `~/.cc-sessions/pool-epoch`, so `readObservedEpoch` answers
     // "never synced" (`null`), sent on the wire explicitly, not "no evidence".
-    // `agentOps: ['update', 'token-sync', 'account']`: the REAL agent advertises the ops it
+    // `agentOps: ['update', 'token-sync', 'account', 'disk']`: the REAL agent advertises the ops it
     // answers beyond the closed set (design 2026-09-20 §10, programme wave 5
     // Task 2; `token-sync` from box-token lifecycle wave 1, spec 4.4; `account`
     // from the accounts plan's A8, spec §13.2), read
@@ -53,7 +54,7 @@ describe('connectFleet — connection lifecycle', () => {
     await vi.waitFor(
       () => expect(fleet!.state).toEqual({
         connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null, observedEpoch: null,
-        agentOps: ['update', 'token-sync', 'account'],
+        agentOps: ['update', 'token-sync', 'account', 'disk'],
       }),
       { timeout: 3000 });
   });
@@ -1021,4 +1022,80 @@ describe('FleetClient.request — what never reached the link is a LinkNotSentEr
       await expect(request).rejects.not.toBeInstanceOf(LinkNotSentError);
     },
   );
+});
+
+describe('FleetClient — the connect deadline bounds socket creation → ready', () => {
+  let fleet: ConnectedFleet | undefined;
+  let closeServer: (() => Promise<void>) | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    await closeServer?.();
+    closeServer = undefined;
+  });
+
+  /** Accepts TCP and swallows every byte: the kernel's listen backlog behind an agent that is mid-shutdown or
+   *  mid-reboot. The upgrade request goes out and no reply or RST ever comes. */
+  async function silentTcp(): Promise<{ port: number; accepted: () => number }> {
+    const sockets: net.Socket[] = [];
+    const server = net.createServer((s) => { sockets.push(s); s.on('data', () => {}); s.on('error', () => {}); });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    closeServer = () => new Promise<void>((resolve) => {
+      for (const s of sockets) s.destroy();
+      server.close(() => resolve());
+    });
+    return { port: (server.address() as net.AddressInfo).port, accepted: () => sockets.length };
+  }
+
+  /** Completes the upgrade, reads `hello`, and answers `ready` only when `answer` is set. */
+  async function wsAgent(answer: boolean): Promise<{ port: number; accepted: () => number }> {
+    let accepted = 0;
+    const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((resolve) => wss.on('listening', () => resolve()));
+    wss.on('connection', (ws) => {
+      accepted++;
+      ws.on('message', () => { if (answer) ws.send(JSON.stringify({ t: 'ready', v: 1 })); });
+    });
+    closeServer = () => new Promise<void>((resolve) => {
+      for (const c of wss.clients) c.terminate();
+      wss.close(() => resolve());
+    });
+    return { port: (wss.address() as net.AddressInfo).port, accepted: () => accepted };
+  }
+
+  const fast = { heartbeatMs: 60_000, reconnectMinMs: 20, reconnectMaxMs: 40, connectTimeoutMs: 150 };
+
+  it('abandons an upgrade the peer never answers and dials again', async () => {
+    const peer = await silentTcp();
+    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    await vi.waitFor(() => expect(peer.accepted()).toBeGreaterThanOrEqual(2), { timeout: 3000 });
+    expect(fleet.state.connected).toBe(false);
+    expect(fleet.state.downSince).not.toBeNull();
+  });
+
+  it('abandons an open socket whose hello never gets a ready and dials again', async () => {
+    const peer = await wsAgent(false);
+    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    await vi.waitFor(() => expect(peer.accepted()).toBeGreaterThanOrEqual(2), { timeout: 3000 });
+    expect(fleet.state.connected).toBe(false);
+  });
+
+  it('never fires once ready arrived in time: no terminate, no second connection', async () => {
+    const peer = await wsAgent(true);
+    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    await new Promise((r) => setTimeout(r, fast.connectTimeoutMs * 3));
+    expect(fleet.state.connected).toBe(true);
+    expect(peer.accepted()).toBe(1);
+  });
+
+  it('close() during a pending connect leaves no timer to dial again', async () => {
+    const peer = await silentTcp();
+    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    await vi.waitFor(() => expect(peer.accepted()).toBe(1), { timeout: 3000 });
+    await fleet.close();
+    await new Promise((r) => setTimeout(r, fast.connectTimeoutMs * 3));
+    expect(peer.accepted()).toBe(1);
+  });
 });

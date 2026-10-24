@@ -53,6 +53,18 @@ describe('api client', () => {
     expect(JSON.parse(init.body as string)).toEqual({ text: 'hello' });
   });
 
+  it('prompt sends resume: true when asked, and omits it otherwise', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.prompt('x', 'hello', { resume: true });
+    await api.prompt('x', 'hello', { resume: false });
+    await api.prompt('x', 'hello', {});
+
+    const bodies = fetchImpl.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string));
+    expect(bodies).toEqual([{ text: 'hello', resume: true }, { text: 'hello' }, { text: 'hello' }]);
+  });
+
   it('prompt throws ApiError with the parsed body on 409', async () => {
     const draftBody = { ok: false, error: 'draft-present', draft: 'half-typed thought' };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(409, draftBody));
@@ -1400,7 +1412,7 @@ describe('the update plane client (W3 Task 5)', () => {
     const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((f) => /\.(tsx?|css)$/.test(f));
     // The walk reached the tree: a scan over zero files would pass vacuously.
     expect(files).toContain(path.join('lib', 'api.ts'));
-    expect(files).toContain(path.join('fleet', 'UpdateBanner.tsx'));
+    expect(files).toContain(path.join('fleet', 'UpdateIndicator.tsx'));
     expect(files).toContain(path.join('screens', 'settings', 'UpdatesSection.tsx'));
     const hits = files.filter((f) => {
       const text = readFileSync(path.join(root, f), 'utf8');

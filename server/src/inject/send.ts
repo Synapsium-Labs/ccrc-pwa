@@ -72,7 +72,10 @@ export type SendResult =
         // in the stash behind the empty box, with a warn line, and the next send's submit is then gated on the
         // indicator (D-6011). Not `enter-ignored`: that word says our text is still in the box, which the mail lane's
         // park hold and dispatch's stranded-`/clear` proof both read. Nothing of ours is left, so a retry types afresh.
-        | 'enter-ignored-restored';
+        | 'enter-ignored-restored'
+        // D-6367, `resumeIfOwn: 'whole'` only. The box is empty, so there is nothing to resume and nothing was typed
+        // (the earlier send may have landed). `submitEnter`'s word for the same fact.
+        | 'nothing-to-submit';
       draft?: string;
       pane?: string;
       /**
@@ -128,6 +131,17 @@ export type SendResult =
        */
       submittable?: boolean };
 
+/**
+ * D-6366: the box's shape behind a refused send, for the `/prompt` route's log line. Read from the result alone: the
+ * rows of the box reading it carries and whether the first is a paste chip, or `no-box-reading` when the refusal
+ * carries none. Never any of the text, the draft or the pane.
+ */
+export function refusalShape(res: Extract<SendResult, { ok: false }>): string {
+  // `rows=` is the whole box only for `draft-present`; every other outcome carries the one marker row (so `rows=1`).
+  if (res.draft === undefined) return 'no-box-reading';
+  return `rows=${res.draft.split('\n').length} ${PASTE_CHIP.test(res.draft) ? 'chip' : 'no-chip'}`;
+}
+
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const PANE_TAIL = 2000;
@@ -137,12 +151,44 @@ const PANE_TAIL = 2000;
  *  queues the message — so this is bounded by render time, not by Claude. */
 const SUBMIT_POLL_MS = 120;
 export const SUBMIT_TRIES = 8;
+/** D-6366: a blind run (consecutive failed post-Enter captures) also ends the watch when it has lasted this long, in wall
+ *  time from the ask of its first failed capture; a capture that returns, with a box or without, ends the run (tmux
+ *  answered, so it is not hung). The run as a whole (its failed captures and the sleeps between them) must stay under
+ *  this, so a blip keeps the watch's remaining polls for about 3 consecutive failures at 200 ms per capture, or 2 at
+ *  400 ms, and a single failed capture of this long or more ends it. The first capture's own time counts, which is the
+ *  price of keeping a hung tmux (each capture failing after its own timeout) at one failed capture per watch. On a frozen
+ *  clock the poll count (`SUBMIT_TRIES`) is the only bound. */
+export const SUBMIT_BLIND_MS = SUBMIT_TRIES * SUBMIT_POLL_MS;
 
-/** How long to wait for the input box to echo the typed text (~2.4 s total).
- *  A busy pane re-renders lazily; the old single 200 ms check called that a
- *  failed send. */
-const ECHO_POLL_MS = 200;
+/** How long to wait for the input box to echo the typed text (~2.4 s of sleeping
+ *  at least; `ECHO_BUDGET_MS` below stretches that on a slow box). A busy pane
+ *  re-renders lazily; the old single 200 ms check called that a failed send. */
+export const ECHO_POLL_MS = 200;
 export const ECHO_TRIES = 12;
+/** D-6366: `sendPrompt`'s two echo loops (not the ask's answer routes) also wait until this much time is spent,
+ *  so a loaded box whose captures are slow gets the same wait in time that a quiet one gets in polls. 8 s: 12
+ *  polls cost 3.0 / 4.8 / 6.0 / 9.6 s at captures of 50 / 200 / 300 / 600 ms; this is 32 / 20 / 16 / 12 polls. */
+export const ECHO_BUDGET_MS = 8000;
+/**
+ * D-6366: the next echo poll of one `sendPrompt` loop. Each call answers whether another poll may be taken and, if so,
+ * sleeps `ECHO_POLL_MS` first. A poll is allowed while fewer than `ECHO_TRIES` were taken OR less than
+ * `ECHO_BUDGET_MS` is spent, where spent is the larger of the wall time since the first call (`d.now`) and the sleeps
+ * asked for, so a test's free sleep ends after `ECHO_BUDGET_MS / ECHO_POLL_MS` polls instead of spinning.
+ */
+function echoPoller(d: SendDeps, sleep: (ms: number) => Promise<void>): () => Promise<boolean> {
+  const now = d.now ?? Date.now;
+  let start = 0;
+  let polls = 0;
+  let slept = 0;
+  return async () => {
+    if (polls === 0) start = now();
+    if (polls >= ECHO_TRIES && Math.max(now() - start, slept) >= ECHO_BUDGET_MS) return false;
+    polls++;
+    slept += ECHO_POLL_MS;
+    await sleep(ECHO_POLL_MS);
+    return true;
+  };
+}
 /** Prefix matched against the pane. Short enough to sit on the box's first
  *  visual line, so a wrapped message can't split it across a line break. */
 const ECHO_NEEDLE = 24;
@@ -278,20 +324,41 @@ type SubmitSeen = 'ours' | 'gone' | 'maybe-restored';
 /**
  * `submitted`'s poll, with the reading made a parameter so the stash path shares it. Answers `gone` on the first
  * capture that reads gone; otherwise `maybe-restored` if any capture read that, else `ours`. `pane` is the last
- * capture that held a box, `null` if none did.
+ * capture that held a box, `null` if none did. D-6366: `unseenAfterRead` is true when any capture after the last box
+ * read (or any capture at all, when none read one) either FAILED or returned with NO box: the Enter may have landed
+ * unseen. The two stay distinct facts inside (`failedSinceRead`, `absentSinceRead`); the deadline below counts only
+ * the first.
  */
 async function watchSubmit(
   d: SendDeps,
   id: string,
   sleep: (ms: number) => Promise<void>,
   classify: (pane: string, draft: string) => SubmitSeen,
-): Promise<{ seen: SubmitSeen; pane: string | null }> {
+): Promise<{ seen: SubmitSeen; pane: string | null; unseenAfterRead: boolean }> {
   let maybe = false;
   let last: string | null = null;
+  let failedSinceRead = false;
+  let absentSinceRead = false;
+  const now = d.now ?? Date.now;
+  // D-6366: the current blind run; `runStart` is null outside one.
+  let runStart: number | null = null;
   for (let i = 0; i < SUBMIT_TRIES; i++) {
     await sleep(SUBMIT_POLL_MS);
+    const askedAt = now();
     const pane = await d.tmux.captureAnsi(id);
-    if (pane === null) break;
+    // D-6366: a failed capture is a blind poll, as an absent box is (neither reads the box); unlike an absent box, it
+    // counts against the blind deadline. One dropped read (a link drop) used to end the whole watch with the box
+    // unread; the poll count (`SUBMIT_TRIES`) bounds it, and `SUBMIT_BLIND_MS` the time of one blind run: the run's
+    // failed captures and the sleeps between them, from the ask of its first failed capture (that capture's own time
+    // included, so a hung tmux ends at its first). A run of 3 failures at 200 ms per capture, or 2 at 400 ms, keeps the
+    // watch's polls.
+    if (pane === null) {
+      failedSinceRead = true;
+      if (runStart === null) runStart = askedAt;
+      if (now() - runStart >= SUBMIT_BLIND_MS) break;
+      continue;
+    }
+    runStart = null; // any capture that returns ends the blind run, an absent box too: tmux answered, so it is not hung
     const read = draftOfMeasured(pane);
     // ABSENCE IS NOT PROOF OF DEPARTURE, and this is the one place where the
     // collapse read as the OPPOSITE of the truth: with no box in the capture
@@ -300,13 +367,15 @@ async function watchSubmit(
     // unsubmitted. Reachable exactly when our own typing grows the box past the
     // window between the echo poll and this one. Skip the poll instead; if every
     // poll is blind the loop falls out below and the caller refuses.
-    if (read.box === 'absent') continue;
+    if (read.box === 'absent') { absentSinceRead = true; continue; }
     last = pane;
+    failedSinceRead = false;
+    absentSinceRead = false;
     const seen = classify(pane, read.draft);
-    if (seen === 'gone') return { seen, pane };
+    if (seen === 'gone') return { seen, pane, unseenAfterRead: false };
     if (seen === 'maybe-restored') maybe = true;
   }
-  return { seen: maybe ? 'maybe-restored' : 'ours', pane: last };
+  return { seen: maybe ? 'maybe-restored' : 'ours', pane: last, unseenAfterRead: failedSinceRead || absentSinceRead };
 }
 
 /**
@@ -347,15 +416,19 @@ async function submitOverHeldStash(
     !still(pane, draft) ? 'gone' : stashHeld(pane) ? 'ours' : 'maybe-restored';
   for (let press = 0; press < 2; press++) {
     await d.tmux.sendKey(id, 'Enter');
-    const { seen, pane } = await watchSubmit(d, id, sleep, classify);
+    const { seen, pane, unseenAfterRead } = await watchSubmit(d, id, sleep, classify);
     if (seen === 'gone') return { ok: true };
     if (seen === 'maybe-restored') {
       const window = (pane ?? '').replace(SGR, '').replace(/\n$/, '').split('\n').slice(-8).join('\n');
       if (!turnWasRunning && turnRunning(window)) return { ok: true };
       return { ok: false, error: 'enter-ignored', pane: (pane ?? '').replace(SGR, '').slice(-PANE_TAIL) };
     }
+    // D-6366: a watch with a failed or box-less capture after its last box read buys no retry Enter: the first may have
+    // landed, and Claude Code gives the human's stashed draft back at submit, so a second would submit it. The final
+    // read decides.
+    if (unseenAfterRead) break;
   }
-  return enterIgnored(d, id);
+  return enterIgnored(d, id, { classify, onGone: async () => ({ ok: true }) });
 }
 
 /**
@@ -373,17 +446,34 @@ async function pressEnterAndConfirm(
   sleep: (ms: number) => Promise<void>,
   still: StillInBox,
 ): Promise<SendResult> {
+  // D-6366: `sendKey`'s boolean stays out of the decision: in remote mode a `false` can follow a press that landed
+  // (`remote/runner.ts`), so the box reads below are the only proof either way.
   await d.tmux.sendKey(id, 'Enter');
   if (await submitted(d, id, sleep, still)) return { ok: true };
   await d.tmux.sendKey(id, 'Enter');
   if (await submitted(d, id, sleep, still)) return { ok: true };
-  return enterIgnored(d, id);
+  return enterIgnored(d, id, { classify: (pane, draft) => (still(pane, draft) ? 'ours' : 'gone'), onGone: async () => ({ ok: true }) });
 }
 
-/** Two Enters pressed and our own text never left: `pressEnterAndConfirm`'s refusal, shared by the stash path. */
-async function enterIgnored(d: SendDeps, id: string): Promise<SendResult> {
+/**
+ * Two Enters pressed and our own text never left: `pressEnterAndConfirm`'s refusal, shared by the stash path.
+ *
+ * D-6366: this final read is the last chance to learn the text left, and the caller judges it with the classifier its
+ * own watch uses. `gone` (the Enter landed after all; a reply lost, every poll blind) returns the caller's success,
+ * as a `gone` poll gives it. `maybe-restored` (the box may be the human's restored draft) refuses `enter-ignored` with
+ * no `draft` and no `submittable`, so "Send it" can never press Enter on it. `ours` and an absent box refuse as before.
+ */
+async function enterIgnored(
+  d: SendDeps,
+  id: string,
+  judge?: { classify: (pane: string, draft: string) => SubmitSeen; onGone: () => Promise<SendResult> },
+): Promise<SendResult> {
   const stuck = await d.tmux.capture(id);
-  const last = draftOfMeasured(await d.tmux.captureAnsi(id) ?? '');
+  const lastPane = await d.tmux.captureAnsi(id);
+  const last = draftOfMeasured(lastPane ?? '');
+  const seen = judge !== undefined && lastPane !== null && last.box === 'present' ? judge.classify(lastPane, last.draft) : 'ours';
+  if (seen === 'gone') return judge!.onGone();
+  if (seen === 'maybe-restored') return { ok: false, error: 'enter-ignored', pane: (stuck ?? '').slice(-PANE_TAIL) };
   // THE NAME STAYS `enter-ignored` — we pressed twice and the text never left,
   // which is what that token reports and is true whatever the last capture
   // shows. What CANNOT survive an absent box is the CLAIM beside it:
@@ -821,6 +911,27 @@ function boxRows(ansiPane: string): string[] | null {
  */
 export function ownRenderedBox(ansiPane: string, parts: readonly string[], provenance: TypeProvenance): string | null {
   if (provenance === 'unproven') return null;
+  return renderedAsTyped(ansiPane, parts, 'tail');
+}
+
+/**
+ * D-6367. The ONE definition of "the box renders what `parts` typed", read whole: guards 2 to 6 of `ownRenderedBox`
+ * (the provenance guard, 1, stays with its caller) and the tail it answers (or `null`). `head` is guard 4's and 5's
+ * only difference: `'tail'` (`ownRenderedBox`) lets the first run be a suffix of ours, which a box at the row cap
+ * shows when its head scrolled out; `'whole'` (`sendPrompt`'s `resumeIfOwn: 'whole'`) needs the first run to EQUAL
+ * ours, so nothing of ours is hidden above the window and no row is added. `'whole'` also refuses a box AT the row
+ * cap (R43 F1): such a box keeps its last rows in view, so rows above the window cannot be seen, and a claim equal to
+ * the visible rows would press Enter over lines never claimed. The cost, a message that renders at exactly the cap
+ * cannot be resumed and answers `draft-present`, is the safe direction (the one the hidden-head case takes). A resume
+ * cannot have this call's provenance (an earlier call typed the text): the ownership claim is the client's `resume`
+ * plus this correspondence.
+ *
+ * WHAT IT PROVES, no more: the box equals our text UP TO WHITESPACE (`squash` erases every space, newline and blank
+ * row, which wrapping moves), so no non-space character is added or removed. That is enough for a resume: one Enter
+ * sends exactly our non-space characters, and no second copy of them exists. It does NOT prove a bare chip row's
+ * content in `'whole'` mode (no provenance: a human would have to paste over 800 characters at exactly that position).
+ */
+function renderedAsTyped(ansiPane: string, parts: readonly string[], head: 'tail' | 'whole'): string | null {
   const rows = boxRows(ansiPane);
   if (rows === null) return null;
   const seen: string[] = [''];
@@ -836,8 +947,11 @@ export function ownRenderedBox(ansiPane: string, parts: readonly string[], prove
   }
   if (seen.length !== typed.length) return null;
   for (let i = 1; i < seen.length; i++) if (seen[i] !== typed[i]) return null;
-  if (!typed[0]!.endsWith(seen[0]!)) return null;
+  if (head === 'whole' ? seen[0] !== typed[0] : !typed[0]!.endsWith(seen[0]!)) return null;
   const paneRows = ansiPane.replace(/\n$/, '').split('\n').length;
+  // R43 F1: a box at the row cap keeps its LAST rows in view, so rows above the window are invisible; `'whole'` refuses
+  // it (nothing of ours may be hidden), whatever the first run says.
+  if (head === 'whole' && rows.length === boxRowCap(paneRows)) return null;
   if (seen[0] !== typed[0] && rows.length !== boxRowCap(paneRows)) return null;
   const inView = squash(rows.join(''));
   if (inView === '') return null;
@@ -995,7 +1109,7 @@ async function submitAroundStash(
   };
   for (let press = 0; press < 2; press++) {
     await d.tmux.sendKey(id, 'Enter');
-    const { seen, pane } = await watchSubmit(d, id, sleep, stashAwareStill);
+    const { seen, pane, unseenAfterRead } = await watchSubmit(d, id, sleep, stashAwareStill);
     if (seen === 'gone') return verifyRestore(d, id, sleep, stash);
     if (seen === 'maybe-restored') {
       const window = (pane ?? '').replace(SGR, '').replace(/\n$/, '').split('\n').slice(-8).join('\n');
@@ -1004,8 +1118,9 @@ async function submitAroundStash(
       if (!stash.turnWasRunning && turnRunning(window)) return verifyRestore(d, id, sleep, stash);
       return { ok: false, error: 'enter-ignored', pane: (pane ?? '').replace(SGR, '').slice(-PANE_TAIL) };
     }
+    if (unseenAfterRead) break; // D-6366: no retry Enter after a watch with a failed or box-less capture after its last box read (see `submitOverHeldStash`)
   }
-  return enterIgnored(d, id);
+  return enterIgnored(d, id, { classify: stashAwareStill, onGone: () => verifyRestore(d, id, sleep, stash) });
 }
 
 function unverifiedRestore(id: string, why: string): SendResult {
@@ -1149,7 +1264,18 @@ export type OnDraft = 'refuse' | 'replace' | 'stash';
  * what I am about to send, left there by MY OWN prior attempt whose Enter
  * did not land — if so, finish submitting it rather than refusing it as a
  * foreign draft." See the `draft` branch below for the discrimination this
- * buys, and its own limit.
+ * buys, and its own limit. `true` is that PREFIX mode.
+ *
+ * `resumeIfOwn: 'whole'` (D-6367): Retry's resume of text a refused send left in
+ * the box (`verify-failed`, `enter-ignored`). A mode of the same option, with the
+ * caller's claim "that text is mine": the box is read WHOLE and Enter is pressed
+ * only when it renders the composed text up to whitespace, wrapped lines and blank
+ * rows read as the rows they are (`renderedAsTyped`, the correspondence
+ * `ownRenderedBox` proves: no non-space character added or removed). Any
+ * other box is `draft-present`, a box at the row cap included (rows above the window cannot be seen, R43 F1; a message
+ * that renders at exactly the cap cannot be resumed, the safe direction); an EMPTY box is `nothing-to-submit`,
+ * because the earlier send may have landed and nothing is ever retyped. It types, clears and
+ * stashes nothing (`onDraft` is not consulted).
  *
  * `clearMailResidue` (robust-mail-delivery spec §2.2): a caller that sets
  * this is stating "if the box holds MACHINE residue this system's own old
@@ -1202,7 +1328,7 @@ export function sendPrompt(
   d: SendDeps,
   id: string,
   text: string,
-  opts: { onDraft?: OnDraft; attachments?: readonly string[]; resumeIfOwn?: boolean;
+  opts: { onDraft?: OnDraft; attachments?: readonly string[]; resumeIfOwn?: boolean | 'whole';
           clearMailResidue?: boolean; ownStrandedClear?: boolean; holdIfAutoContinueArmed?: boolean;
           refuseIfTurnRunning?: boolean } = {},
 ): Promise<SendResult> {
@@ -1296,6 +1422,16 @@ export function sendPrompt(
           ? submitOverHeldStash(d, id, sleep, still, turnBefore)
           : pressEnterAndConfirm(d, id, sleep, still);
     if (draft || hasContentBelowMarker(pane)) {
+      // D-6367, `resumeIfOwn: 'whole'`: Retry's resume of text a refused send left in the box. A MODE of the resume
+      // above, not a third path to Enter: it compares the box READ WHOLE (every visual row, `renderedAsTyped`, the
+      // first run equal to ours) and goes through the same `submit`, so a stash held when the call began still gets
+      // `submitOverHeldStash`'s gate. Anything else in the box is the ordinary refusal, shape and all. It never
+      // types, clears or stashes (`onDraft` is not consulted): the text is already there.
+      if (opts.resumeIfOwn === 'whole') {
+        const tail = renderedAsTyped(pane, parts, 'whole');
+        if (tail !== null) return submit(stillContains(tail));
+        return { ok: false, error: 'draft-present', draft: boxText(pane) };
+      }
       // `resumeIfOwn`'s discrimination: `needle` is derived from THIS call's
       // OWN `text`, and `submitEnter`'s own correspondence gate already
       // established the doctrine this reuses — "the box's MARKER ROW... is
@@ -1328,7 +1464,7 @@ export function sendPrompt(
       // straight through to the ordinary `draft-present` refusal below,
       // untouched: F2 (never type over a human mid-sentence) is unaffected,
       // because this branch only ever PRESSES ENTER, never clears or types.
-      if (opts.resumeIfOwn && needle !== '' && draft.startsWith(needle) && matchesOwnDraft(pane, parts)) {
+      if (opts.resumeIfOwn === true && needle !== '' && draft.startsWith(needle) && matchesOwnDraft(pane, parts)) {
         // D-6011: the resume goes through the same `submit`, so a held stash gates its retry Enter too.
         return submit(stillStartsWith(needle));
       }
@@ -1393,6 +1529,9 @@ export function sendPrompt(
         provenance = 'cleared-by-us';
       }
     } else {
+      // D-6367: an empty box under a whole-box resume is a send that may have LANDED (its final read was blind), so
+      // nothing is typed: `submitEnter`'s word for the same fact, whose sentence tells the operator to check.
+      if (opts.resumeIfOwn === 'whole') return { ok: false, error: 'nothing-to-submit' };
       provenance = 'proven-empty';
     }
     // D-5046: every line's send is CHECKED, and the first refusal stops the
@@ -1449,8 +1588,8 @@ export function sendPrompt(
       // fires the blind floor below into a box nothing can read: the operator's
       // own hundreds of rows, shredded by a clear that cannot see them.
       let lastBox: BoxRead | null = null;
-      for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
-        await sleep(ECHO_POLL_MS);
+      const nextPoll = echoPoller(d, sleep);
+      while (!echoed && await nextPoll()) {
         const ansi = await d.tmux.captureAnsi(id);
         if (ansi === null) continue;
         lastBox = draftOfMeasured(ansi);
@@ -1539,14 +1678,19 @@ export function sendPrompt(
       // null exactly when `lastBox` is: the paste-chip arm below reads the
       // whole box from it, not just the marker row `lastBox` carries.
       let lastPane: string | null = null;
-      for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
-        await sleep(ECHO_POLL_MS);
+      const nextPoll = echoPoller(d, sleep);
+      let polls = 0;
+      while (!echoed && await nextPoll()) {
+        polls++;
         const ansi = await d.tmux.captureAnsi(id);
         if (ansi === null) continue;
         lastBox = draftOfMeasured(ansi);
         lastPane = ansi;
         if (lastBox.box === 'absent') continue;
-        if (lastBox.draft.startsWith(needle)) echoed = true;
+        if (lastBox.draft.startsWith(needle)) { echoed = true; continue; }
+        // D-6366: a box proven to be our own chip or rendering that has not echoed the needle ends its wait at the
+        // floor. After the echo check, so a late echo keeps the echo proof.
+        if (polls >= ECHO_TRIES && (ownPasteChip(ansi, parts, provenance) !== null || ownRenderedBox(ansi, parts, provenance) !== null)) break;
       }
       if (!echoed) {
         // EVERY capture failed: the session is gone, and none of what the arm
@@ -1656,6 +1800,15 @@ export function sendPrompt(
     const res = await attempt(carry);
     return res.ok || carry.held === null ? res : giveBackStash(d, id, sleep, carry, res);
   });
+}
+
+/**
+ * The `/clear` a dispatch types into a resumed worker (ARCH-22, #553): `coord/dispatch.ts` is L1 and holds this as its
+ * `sendClear` port instead of importing `sendPrompt`. A human's draft in the worker's box is stashed around the
+ * `/clear` and restored after it (D-5912), never a reason to skip the clear.
+ */
+export function clearSender(d: SendDeps): (sessionId: string) => Promise<SendResult> {
+  return (sessionId) => sendPrompt(d, sessionId, '/clear', { onDraft: 'stash' });
 }
 
 /** A box-horizontal rule row — the same convention `pane/dialog.ts`'s private

@@ -14,7 +14,11 @@
 // page load, at `initSkin()`, and never subscribed to or re-read on any event,
 // so a skin never flips under the person using it; the snippet carries the
 // same rule behind a literal that mirrors Instrument's preview flag, bound
-// here to `skins.ts`.
+// here to `skins.ts`. Instrument stopped being a preview in S18 (D-5096,
+// D-6389), so the shipped catalogue and the snippet as committed are the world
+// in which a desk boots into Instrument; the PREVIEW world, which a future skin
+// may need again, is pinned by injection (`asPreview`, `snippetAsPreview`), so
+// the `!instrument.preview` half of `resolveSkin` stays guarded.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -82,23 +86,24 @@ const bare = (code: string): string => code.replace(/\/\*[\s\S]*?\*\//g, '').rep
 /** The snippet's preview literal: `AUTO_DESK = <true|false>`, exactly once. */
 const AUTO_DESK = /\bAUTO_DESK\s*=\s*(true|false)\b/g;
 
-/** The snippet as the W2 commit must leave it: the literal flipped to `true`,
- *  the flag's other half. Reds if the literal is not there to flip. */
-function snippetAsW2Ships(): string {
+/** The snippet in the PREVIEW world: the literal set to `false`, the flag's
+ *  other half, as it stood before S18 and as it would stand again for a skin
+ *  whose shell has not landed. Reds if the literal is not there to set. */
+function snippetAsPreview(): string {
   const code = bare(skinSnippet());
   expect([...code.matchAll(AUTO_DESK)], 'the snippet carries no AUTO_DESK literal').toHaveLength(1);
-  return code.replace(AUTO_DESK, 'AUTO_DESK = true');
+  return code.replace(AUTO_DESK, 'AUTO_DESK = false');
 }
 
-/** Run `fn` with the catalogue as W2 ships it — Instrument no longer a
- *  preview — and restore the flag after. The flag is flipped on the
- *  catalogue's own entry, so every reader sees it, `resolveSkin`'s default
- *  catalogue included, exactly as W2's one-line commit will make it. */
-function asW2Ships<T>(fn: () => T): T {
+/** Run `fn` with Instrument a preview again — the world before S18 — and
+ *  restore the flag after. The flag is set on the catalogue's own entry, so
+ *  every reader sees it, `resolveSkin`'s default catalogue included. The
+ *  shipped catalogue is the other world and needs no injection. */
+function asPreview<T>(fn: () => T): T {
   const entry = SKINS.find((s) => s.id === INSTRUMENT) as { preview: boolean } | undefined;
   expect(entry, 'the catalogue has no Instrument entry to flip').toBeDefined();
   const was = entry!.preview;
-  entry!.preview = false;
+  entry!.preview = true;
   try {
     return fn();
   } finally {
@@ -138,7 +143,10 @@ describe('the skin at boot', () => {
     expect(stamped()).toBe(REFINED);
   });
 
-  it('with nothing stored, refined is stamped — never left absent', () => {
+  it('with nothing stored, a skin is stamped — never left absent (refined where the device is not a desk)', () => {
+    // No `matchMedia` stub here: `test/setup.ts` shims one that matches
+    // nothing, so the device is not a desk and the stamp is Refined and, above
+    // all, PRESENT.
     localStorage.removeItem(SKIN_STORAGE_KEY);
     document.documentElement.removeAttribute('data-skin');
     initSkin();
@@ -288,9 +296,9 @@ describe('the per-device default (D-5096)', () => {
     // O2: a skin never flips under the person using it. Under W2's
     // `SKIN_SETS[useSkin()].Shell` a live re-resolve would remount the shell
     // mid-task — which is why this departs from `initTheme`, which does follow
-    // the colour scheme live. Run in the catalogue W2 ships, the one in which
-    // the device decides anything; as committed, AUTO is Refined everywhere and
-    // a flip would be invisible.
+    // the colour scheme live. Run against the shipped catalogue, in which the
+    // device decides anything (while Instrument was a preview, AUTO was Refined
+    // everywhere and a flip would have been invisible).
     //
     // ONCE is pinned two ways. The device is READ once — `matchMedia` is asked
     // DEVICE_QUERY at boot and never again until a reload, whatever fires — so
@@ -301,60 +309,71 @@ describe('the per-device default (D-5096)', () => {
     // installed before the boot, so a poll the boot starts is under them.
     // Each nudge is followed by an awaited zero-time advance, which drains the
     // microtask queue too, so a re-stamp the handler defers (an `await`, a
-    // `queueMicrotask`) is seen as well; that is why the case is async and
-    // flips `preview` inline rather than through the synchronous `asW2Ships`.
+    // `queueMicrotask`) is seen as well; that is why the case is async.
     const device = liveDevice(true);
     vi.stubGlobal('matchMedia', device.matchMedia);
     vi.useFakeTimers();
     try {
-      const entry = SKINS.find((x) => x.id === INSTRUMENT) as { preview: boolean };
-      const was = entry.preview;
-      entry.preview = false;
-      try {
-        localStorage.removeItem(SKIN_STORAGE_KEY);
-        initSkin();
-        expect(stamped(), 'a desk with nothing stored boots into Instrument').toBe(INSTRUMENT);
-        expect(device.reads(), 'the boot did not read the device exactly once').toEqual([DEVICE_QUERY]);
+      localStorage.removeItem(SKIN_STORAGE_KEY);
+      initSkin();
+      expect(stamped(), 'a desk with nothing stored boots into Instrument').toBe(INSTRUMENT);
+      expect(device.reads(), 'the boot did not read the device exactly once').toEqual([DEVICE_QUERY]);
 
-        device.change(false);
-        expect(stamped(), 'the skin flipped under the person using it').toBe(INSTRUMENT);
-        for (const [name, fire] of NUDGES) {
-          fire();
-          await vi.advanceTimersByTimeAsync(0);
-          expect(stamped(), `the skin flipped under the person using it on ${name}`).toBe(INSTRUMENT);
-          expect(device.reads(), `the device was read again on ${name}`).toEqual([DEVICE_QUERY]);
-        }
-
-        // "Match this device", chosen now, resolves against the BOOT reading,
-        // and is remembered as the choice itself rather than as its answer.
-        setSkin(AUTO);
-        expect(stamped(), 'Match this device re-read the device mid-session').toBe(INSTRUMENT);
-        expect(localStorage.getItem(SKIN_STORAGE_KEY)).toBe(AUTO);
-        expect(device.reads(), 'Match this device read the device again').toEqual([DEVICE_QUERY]);
-
-        // A reload is a new reading — the one other read there is.
-        initSkin();
-        expect(stamped(), 'a reload re-resolves').toBe(REFINED);
-        expect(device.reads(), 'a reload reads the device once more').toEqual([DEVICE_QUERY, DEVICE_QUERY]);
-      } finally {
-        entry.preview = was;
+      device.change(false);
+      expect(stamped(), 'the skin flipped under the person using it').toBe(INSTRUMENT);
+      for (const [name, fire] of NUDGES) {
+        fire();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stamped(), `the skin flipped under the person using it on ${name}`).toBe(INSTRUMENT);
+        expect(device.reads(), `the device was read again on ${name}`).toEqual([DEVICE_QUERY]);
       }
+
+      // "Match this device", chosen now, resolves against the BOOT reading,
+      // and is remembered as the choice itself rather than as its answer.
+      setSkin(AUTO);
+      expect(stamped(), 'Match this device re-read the device mid-session').toBe(INSTRUMENT);
+      expect(localStorage.getItem(SKIN_STORAGE_KEY)).toBe(AUTO);
+      expect(device.reads(), 'Match this device read the device again').toEqual([DEVICE_QUERY]);
+
+      // A reload is a new reading — the one other read there is.
+      initSkin();
+      expect(stamped(), 'a reload re-resolves').toBe(REFINED);
+      expect(device.reads(), 'a reload reads the device once more').toEqual([DEVICE_QUERY, DEVICE_QUERY]);
     } finally {
       vi.useRealTimers();
     }
     expect(device.subscribers(), 'something subscribed to the device query').toBe(0);
   });
 
-  it('a desk boots into Refined as committed: AUTO waits for Instrument to stop being a preview', () => {
-    // Nothing changes for anyone in this task (§7): the default exists in code
-    // and selects nobody until W2 flips the flag.
-    vi.stubGlobal('matchMedia', liveDevice(true).matchMedia);
+  it('a desk boots into Instrument with nothing stored, and a touch device into Refined', () => {
+    // S18 (D-5096, D-6389): the shipped catalogue has no preview, so the
+    // per-device default selects people. Every spelling of "no choice" — nothing
+    // stored, empty, `auto`, a skin from a newer build — answers by the device.
     for (const v of [null, '', AUTO, 'skin-from-a-newer-build']) {
       localStorage.clear();
       if (v !== null) localStorage.setItem(SKIN_STORAGE_KEY, v);
+      vi.stubGlobal('matchMedia', liveDevice(true).matchMedia);
       initSkin();
-      expect(stamped(), String(v)).toBe(REFINED);
+      expect(stamped(), `${String(v)} on a desk`).toBe(INSTRUMENT);
+      vi.stubGlobal('matchMedia', liveDevice(false).matchMedia);
+      initSkin();
+      expect(stamped(), `${String(v)} on a touch device`).toBe(REFINED);
     }
+  });
+
+  it('a desk boots into Refined while Instrument is a preview: AUTO waits for the flag', () => {
+    // The preview world, by injection: a skin whose shell has not landed is
+    // selectable but never the default, so `resolveSkin`'s `!preview` half
+    // stays pinned now that the shipped catalogue no longer exercises it.
+    vi.stubGlobal('matchMedia', liveDevice(true).matchMedia);
+    asPreview(() => {
+      for (const v of [null, '', AUTO, 'skin-from-a-newer-build']) {
+        localStorage.clear();
+        if (v !== null) localStorage.setItem(SKIN_STORAGE_KEY, v);
+        initSkin();
+        expect(stamped(), String(v)).toBe(REFINED);
+      }
+    });
   });
 });
 
@@ -392,26 +411,26 @@ describe("index.html's pre-paint stamp", () => {
 
   /** The skin each cell must boot into, said once, here, so the two halves
    *  cannot agree on a wrong answer. */
-  function expected(s: Stored, device: Device, w2: boolean): string {
+  function expected(s: Stored, device: Device, preview: boolean): string {
     if (s.value === REFINED || s.value === INSTRUMENT) return s.value;
-    return w2 && device === 'desk' ? INSTRUMENT : REFINED;
+    return !preview && device === 'desk' ? INSTRUMENT : REFINED;
   }
 
   it('the pre-paint snippet renders what initSkin renders across stored ∈ {missing, empty, auto, refined, instrument, garbage, throwing} × device ∈ {desk, touch, unreadable}', () => {
-    // Twice. As committed, where Instrument is a preview and AUTO is Refined
-    // on every device; and as the W2 commit must leave both halves — the flag
-    // flipped in skins.ts, the literal flipped in the snippet — where a desk
-    // boots into Instrument. The second world is never committed: it proves
-    // the snippet's RULE is the one initSkin runs, not merely its literal.
-    for (const w2 of [false, true]) {
-      const code = w2 ? snippetAsW2Ships() : skinSnippet();
+    // Twice. As shipped, where Instrument is no longer a preview and a desk
+    // boots into Instrument; and in the preview world, both halves set back —
+    // the flag in skins.ts, the literal in the snippet — where AUTO is Refined
+    // on every device. The second world is never committed: it proves the
+    // snippet's RULE is the one initSkin runs, not merely its literal.
+    for (const preview of [false, true]) {
+      const code = preview ? snippetAsPreview() : skinSnippet();
       for (const s of STORED) {
         for (const d of DEVICES) {
-          const cell = `${w2 ? 'as W2 ships' : 'as committed'}: ${s.name} on ${d}`;
+          const cell = `${preview ? 'as a preview' : 'as shipped'}: ${s.name} on ${d}`;
           let fromSnippet: string | null = null;
           expect(() => { fromSnippet = runSnippet(getItemOf(s), d, code); }, cell).not.toThrow();
-          const fromBoot = w2 ? asW2Ships(() => bootStamp(s, d)) : bootStamp(s, d);
-          expect(fromBoot, cell).toBe(expected(s, d, w2));
+          const fromBoot = preview ? asPreview(() => bootStamp(s, d)) : bootStamp(s, d);
+          expect(fromBoot, cell).toBe(expected(s, d, preview));
           if (s.name === 'garbage') {
             // VERBATIM: the snippet never re-lists the catalogue. No block in
             // skins.css answers the value, so the first frame is `:root` —
@@ -427,25 +446,29 @@ describe("index.html's pre-paint stamp", () => {
   });
 
   it("the snippet's query is DEVICE_QUERY and its AUTO_DESK is !preview", () => {
-    // The literal MIRRORS the flag, so the W2 commit that sets Instrument's
-    // `preview` false reds here until it flips this literal too: the one
-    // commit turns the desktop default on in both halves at once, and the
-    // first frame never disagrees with the boot.
+    // The literal MIRRORS the flag, so a commit that changes Instrument's
+    // `preview` reds here until it changes this literal too: the one commit
+    // moves the desktop default in both halves at once, and the first frame
+    // never disagrees with the boot (S18 set both, D-5096).
     const literal = [...bare(skinSnippet()).matchAll(AUTO_DESK)];
     expect(literal, 'AUTO_DESK is not one literal').toHaveLength(1);
     const preview = SKINS.find((s) => s.id === INSTRUMENT)?.preview;
     expect(preview).toBeTypeOf('boolean');
     expect(literal[0]?.[1], 'AUTO_DESK is not !preview').toBe(String(!preview));
 
-    // The query, read at RUN time, where it matters: with the literal flipped,
-    // the snippet asks matchMedia exactly DEVICE_QUERY, once, and only a desk
-    // that answers it gets Instrument.
+    // The query, read at RUN time, where it matters: the snippet as committed
+    // asks matchMedia exactly DEVICE_QUERY, once, and only a desk that answers
+    // it gets Instrument. In the preview world it asks nothing at all, and a
+    // desk gets Refined.
     const asked: string[] = [];
-    expect(runSnippet(() => null, 'desk', snippetAsW2Ships(), asked)).toBe(INSTRUMENT);
+    expect(runSnippet(() => null, 'desk', skinSnippet(), asked)).toBe(INSTRUMENT);
     expect(asked, 'the snippet asks a query other than DEVICE_QUERY').toEqual([DEVICE_QUERY]);
     asked.length = 0;
-    expect(runSnippet(() => null, 'touch', snippetAsW2Ships(), asked)).toBe(REFINED);
+    expect(runSnippet(() => null, 'touch', skinSnippet(), asked)).toBe(REFINED);
     expect(asked).toEqual([DEVICE_QUERY]);
+    asked.length = 0;
+    expect(runSnippet(() => null, 'desk', snippetAsPreview(), asked), 'a preview is never the default').toBe(REFINED);
+    expect(asked, 'the preview world still asks the device').toEqual([]);
   });
 
   it("the snippet names SKIN_STORAGE_KEY, AUTO and DEVICE_QUERY, and REFINED and INSTRUMENT once each as the device rule's results — no other skin id", () => {

@@ -13,6 +13,7 @@ import { generateAccountsSh } from '../../shared/generate.mjs';
 import { asManagerCalls } from './platformFixtures.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { CONTAINED_TOOLS, busUnder, plantPoison } from './containedTools.js';
+import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
 
 /** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
  *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
@@ -289,7 +290,7 @@ export const WS_ADD_REAL_SPAWN = `
  *
  *  It is NOT "the one stub directory in the suite", and reading it that way is
  *  what broke five `ccrc status` tests: a consumer that never runs ccd
- *  (`ccrc-doctor.test.ts`) keeps its own `<home>/stub-bin`, and only the
+ *  (`ccrc-doctorFixture.ts`) keeps its own `<home>/stub-bin`, and only the
  *  poisons this file actually plants can shadow what is in it. That set is `gh`
  *  for every caller, plus systemd, tmux and the net tools (ssh, scp, curl) for a
  *  caller that ASKS — see `ghContainedEnv`. Since wave 18 a functional stub of a
@@ -325,7 +326,7 @@ export function harnessBin(home: string): string {
  * at all, and anything planted here lands in a directory it PREPENDS — so an
  * unconditional systemd poison displaces the `systemctl` such a file planted on
  * its own PATH, in a directory the create-if-absent guard below can never see.
- * Measured: planting it unconditionally took `ccrc-doctor.test.ts` from 170/170
+ * Measured: planting it unconditionally took `ccrc-doctorFixture.ts` from 170/170
  * to 165/170, and every failure named `ccrc status`, three files from the edit.
  */
 export interface ContainOpts {
@@ -374,6 +375,15 @@ export function stubContainedTool(
   return p;
 }
 
+/** The codex auth library's endpoint for every contained env (codex-bridge Stage 1, Task 6): the caller's own
+ *  CCRC_CODEX_AUTH_BASE when it names one, else CLOSED_AUTH_BASE. An environment VALUE, not a poison: only the
+ *  auth library reads it, so it moves no other code path (the opt-in rule below is about poisons), and unset or
+ *  EMPTY the library reads the live endpoint, so an empty caller value names none (`runAuthDriver`'s rule). */
+function containedAuthBase(env: NodeJS.ProcessEnv): { CCRC_CODEX_AUTH_BASE: string } {
+  const named = env['CCRC_CODEX_AUTH_BASE'];
+  return { CCRC_CODEX_AUTH_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE };
+}
+
 export function ghContainedEnv(
   home: string, env: NodeJS.ProcessEnv = {}, opts: ContainOpts = {},
 ): NodeJS.ProcessEnv {
@@ -386,7 +396,7 @@ export function ghContainedEnv(
   // consumer it hurts, because the damage shows up as a wrong ANSWER in a file
   // that never mentioned systemd (see the header). Opt-in makes the widening
   // land at the call site, where the reviewer of that call site can see it.
-  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
+  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...containedAuthBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
   // THE SECOND STRUCTURAL BOUNDARY for the ccd runners, and the reason it is a
   // poison rather than an absence: `_have_systemctl` is `command -v systemctl`,
   // so REMOVING systemctl would send every ccd test down `_supervised_start`'s
@@ -404,7 +414,7 @@ export function ghContainedEnv(
   // literal. Re-planting would break both suites and read as a mystery.
   //
   // That guard only answers WITHIN this directory, which is why it did not
-  // save `ccrc-doctor.test.ts`: its `systemctl` lives in `<home>/stub-bin`, so
+  // save `ccrc-doctorFixture.ts`: its `systemctl` lives in `<home>/stub-bin`, so
   // there was nothing here to be absent, and the poison won on ordering alone.
   // Displaceability inside `harnessBin` and remit outside it are two different
   // questions, and only the second one has an answer that helps a stranger.
@@ -455,7 +465,7 @@ export function ghContainedEnv(
   // Prepended to whatever the caller passed, never the other way round: a
   // snippet that supplies its own PATH must not be able to displace the poison,
   // which is the difference between structural and advisory.
-  return { ...env, ...bus, PATH: `${bin}:${env['PATH'] ?? ''}` };
+  return { ...env, ...bus, ...containedAuthBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
 }
 
 /** The one reader every append-only call log in this file goes through: absent
@@ -580,6 +590,12 @@ export const toolAdjToken = (h: Pick<CcdHarness, 'sh'>): string => {
   const v = h.sh('_tool_adj_env');
   return v ? ` ${v}` : '';
 };
+
+/** D-6636: the session's own temp root, as `_spawn_start` splices it after the TMPDIR token — the child's leaf
+ *  when one is given, else the box's `TMPDIR` as the harness's ccd sees it (`/tmp` when unset) — with its leading
+ *  space. Read the box's value through the same shell, so a harness whose TMPDIR differs still pins byte-exact. */
+export const sessionTmpToken = (h: Pick<CcdHarness, 'sh'>, childLeaf?: string): string =>
+  ` CCRC_SESSION_TMPDIR='${childLeaf ?? h.sh('printf %s "${TMPDIR:-/tmp}"')}'`;
 
 export function makeCcdHarness(prefix: string): CcdHarness {
   const home = mkTmp(prefix);

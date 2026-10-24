@@ -28,6 +28,7 @@ import {
   tmuxSessions, wideDigitLocale, type Child,
 } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
+import { DARWIN_IDENT_SHIMS } from './worktreeIdentityFixture.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-verb-'); });
@@ -553,7 +554,7 @@ describe('on Darwin, a `.svcfailed` stamp reads as stopped only when launchd say
   // `_svc_launchctl`, ccd's one door to launchctl, records and answers.
   const LABEL = `gui/${process.getuid?.() ?? 0}/app.ccrc.session.${CHILD_ID}`;
   const darwin = (print: { out: string; rc: number }): string =>
-    `CCD_OS=darwin; eval "$(source '${CCD}' >/dev/null 2>&1; declare -f _svc_is_active)";`
+    `CCD_OS=darwin; ${DARWIN_IDENT_SHIMS} eval "$(source '${CCD}' >/dev/null 2>&1; declare -f _svc_is_active)";`
     + ` _svc_launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; [[ "$1" == print ]] || return 0;`
     + ` printf '%s\\n' '${print.out}'; return ${print.rc}; };`;
   const stamp = (): void => { fs.writeFileSync(reg('svcfailed'), '1700000000\n'); };

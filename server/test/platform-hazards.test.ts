@@ -297,12 +297,12 @@ describe('the deadline shim, asked directly (D-2661)', () => {
 // `_box_unit_env_shell`) because under a UTF-8 locale bash 5.x (1) misses a NUL that follows a lead byte in an
 // unpinned `read -d ''`, and (2) merges a line ending in a lead byte with the next one in an unpinned `read -r`
 // loop. Both are measured on Linux; neither was ever measured on macOS, and the macOS tests that rely on them
-// (U4n, U4u in `ccrc-doctor.test.ts`) could be hollow there if the runner's bash did not misread. So this asks,
+// (U4n, U4u in the `ccrc-doctor-*` test files) could be hollow there if the runner's bash did not misread. So this asks,
 // and RECORDS: a Darwin case here asserts only that the probes ran, because a red would be a `full-suite` red,
 // which blocks `stable`. The coordinator reads the answer from the PR's `probe-macos` and `test-macos` logs.
 describe('R14(i): the UTF-8 locale bash takes here, and whether D-3833/D-3979\'s locale pins are load-bearing on this platform', () => {
   /** The first UTF-8 locale under which bash counts the two-byte `é` as ONE character. A copy of
-   *  `ccrc-doctor.test.ts`'s `utf8Locale()` candidate list and one-character test: a test file cannot be imported
+   *  `ccrc-doctorFixture.ts`'s `utf8Locale()` candidate list and one-character test: a test file cannot be imported
    *  from another. It yields `'none'` rather than throwing, so collection never fails here (H1 does). */
   const LOC = ((): string => {
     try {

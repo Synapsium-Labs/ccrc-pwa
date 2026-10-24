@@ -2,16 +2,23 @@
 # release it contains, becomes a PRERELEASE carrying a provenance bundle (designs 2026-09-18 §3 and
 # 2026-09-20 §4). Thin by design, like release.yml: deploy/release-main.sh owns
 # the derivation, the local tag, the build, the comparison, the push and the
-# publish — in THREE ARMS, so the attest ACTION can run between the comparison
-# and the publish — and all three are tested locally
-# (server/test/release-main.test.ts). The expression this file decides, the
-# attest step's `if:`, and the step order and token placement are pinned in
-# server/test/build-release.test.ts.
+# publish, in FOUR ARMS across TWO JOBS (D-6647, D-6648):
+#   build   — prepare and compare. It runs the install and the builder, so its
+#             token can only read, its checkout keeps no credential, and it
+#             cannot mint the OIDC token that is the signing identity.
+#   publish — receive, the attest ACTION, then publish. It installs nothing
+#             and never opens the tarball: receive re-derives the tag and
+#             re-proves the build's artifact against the digest the build job
+#             recorded before anything is tagged, attested or written.
+# All four arms are tested locally (server/test/release-main.test.ts). The
+# expressions this file decides, the step order, the hand-over and the token
+# placement are pinned in server/test/build-release.test.ts, and the boundary
+# between the two jobs in server/test/release-job-boundary.test.ts.
 #
 # Deliberately NOT gated on ci.yml: the PR's required checks are the gate,
 # before the merge (spec §2, decision 4). There is no post-merge test run to
-# wait for: a push to main runs ci.yml's `refresh` mode, which re-traces the
-# tests the merge affected to keep the dependency map current and gates
+# wait for: an hourly run of ci.yml's `refresh` mode (D-6769) re-traces the
+# tests every merge since the last refresh affected, to keep the dependency map current and gates
 # nothing (design 2026-09-23 §3, §5.4). The full suite runs daily on main and
 # before any promotion to `stable` — release-stable.yml's gate — so what is
 # cut here is a `dev` prerelease, and `stable` is where the full suite is
@@ -59,36 +66,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  # THE BUILD JOB runs every line of code the install and the builder bring
+  # (dependency install scripts, the build, and the comparison that extracts
+  # what they produced), so it holds contents: read and nothing else. It has
+  # no write token and no id-token, so no code it runs can push, publish or
+  # sign. Its checkout sets persist-credentials: false, so the checkout leaves
+  # no credential behind for that code to find (the job's own read token
+  # remains, as the next sentences say): at this checkout major the token is
+  # written to a file under the runner's temp directory for the checkout's own
+  # fetch, and the checkout removes that file in the step's own cleanup; a
+  # failed removal does not fail the step, the action only warns or says
+  # nothing, as at v4. Nothing in this
+  # job writes to origin: prepare's `git ls-remote` is anonymous on this
+  # public repository, and compare's token is this job's read token. The
+  # script reads any non-zero exit of those calls as "origin does not hold
+  # it", so on a private fork the anonymous calls would fail and be misread;
+  # this repository is public by ruling.
+  build:
     runs-on: ubuntu-latest
-    # The job holds an open contents:write token while it runs. 30, like
-    # release.yml — the one measured run took 41 s.
+    # 30, like release.yml — the one measured single-job run took 41 s.
     timeout-minutes: 30
-    # contents: write — the tag push and the release. id-token: write and
-    # attestations: write — the permission set `actions/attest`'s README
-    # documents for this exact no-registry-push usage; `attest-build-
-    # provenance@v4` itself is a thin wrapper whose own README documents no
-    # permissions or inputs, only a redirect to `actions/attest` (D-3126).
-    # The OIDC token IS the signing identity, so there is no key to keep and
-    # no secret in this repo. Everything else stays read-only; ci.yml's
-    # stance is that a writing job asks in the diff — this is that ask.
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
+    outputs:
+      release: ${{ steps.compare.outputs.release }}
+      tag: ${{ steps.compare.outputs.tag }}
+      digest: ${{ steps.record.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The next tag is derived from the highest existing one, the base is
-          # the newest release tag this commit contains, and the release script
-          # names the artifact by `git tag --points-at HEAD`: all three need the
+          # the newest release tag this commit contains, and the builder names
+          # the artifact by `git tag --points-at HEAD`: all three need the
           # tags and the history present, not a shallow single-commit fetch.
           fetch-depth: 0
+          persist-credentials: false
 
       # Every merge builds, so the toolchain is set up unconditionally: the
       # release decision is made on the built artifact, not on which paths
-      # changed (D-6390, D-6401).
-      - uses: actions/setup-node@v4
+      # changed (D-6390, D-6401). Its npm cache is restored into this job only,
+      # which holds no write token (D-6652).
+      - uses: actions/setup-node@v7
         with:
           node-version-file: server/package.json
           cache: npm
@@ -99,43 +117,146 @@ jobs:
             ui/package-lock.json
 
       # Arm 1: refuses dirty/tagged, derives, tags LOCALLY, builds the candidate
-      # into release-out/candidate, outside the attest glob below. Nothing
-      # reaches origin here. The step has no env: it installs the dependencies,
-      # and it takes no token and runs no gh (D-6401).
+      # into release-out/candidate. Nothing reaches origin here. The step has no
+      # env: it installs the dependencies, and it takes no token and runs no gh
+      # (D-6401).
       - name: Derive the next tag and build the candidate
         run: bash deploy/release-main.sh prepare --out release-out
 
       # Arm 2: sets the candidate against the newest release this commit
       # contains, by a fingerprint of the two extracted tarballs (D-6390), and
-      # records `release=true` or `release=false`. Only a positive, exact,
-      # non-empty match skips; anything else releases (D-6393), as does a change
-      # to this workflow or to the script (D-6409). It holds the token for the
-      # published-base check and the download. It runs after the install in the
-      # same job, so it is not a boundary against a hostile dependency: two
-      # credentials already reach every step (D-6405). A crash here fails the
-      # job before the attest step, with nothing pushed (D-6499).
+      # records `release=true` with the tag, or `release=false`. Only a
+      # positive, exact, non-empty match skips; anything else releases
+      # (D-6393), as does a change to this workflow or to the script (D-6409).
+      # It holds this job's read token for the published-base check and the
+      # download. It runs beside the install, so its verdict is untrusted: a
+      # hostile dependency could forge it. The job boundary keeps that from
+      # mattering: a forged verdict reaches no credential, and the publish job
+      # re-proves the tag and the artifact before it writes anything (D-6648).
+      # A crash here fails the job with nothing pushed (D-6499).
       - name: Compare the build with the newest release it contains
         id: compare
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash deploy/release-main.sh compare --out release-out
 
+      # The arm's append to the step output swallows a failure by design. This
+      # check reads compare's own step output, and every exit-0 path of compare
+      # writes one of the two words there, so a swallowed append fails the
+      # build job here rather than skipping the release (D-6393, D-6658). A
+      # value dropped later, at the job boundary (a mask on the job output), is
+      # past this check: the publish job's condition is then false and the
+      # release is skipped with a green run. That is an availability effect a
+      # hostile build already has, and it reaches no credential (D-6658, as
+      # narrowed by review 871's ruling 2).
+      - name: Fail when the release decision did not reach compare's step output
+        if: steps.compare.outputs.release != 'true' && steps.compare.outputs.release != 'false'
+        run: |
+          echo "release-main.yml: the release decision did not reach compare's step output; failing rather than skipping a release; re-run all jobs" >&2; exit 1
+
+      # Fails early on a tarball not named after the derived tag, a SHA256SUMS
+      # that is not its one line, or a build.json naming another tag or commit,
+      # and hands the tarball's digest to the publish job as a job output
+      # (D-6650). It and the upload run only on a release decision.
+      - name: Record the release files' digest
+        id: record
+        if: steps.compare.outputs.release == 'true'
+        env:
+          CCRC_TAG: ${{ steps.compare.outputs.tag }}
+        run: bash deploy/release-artifact.sh record --tag "$CCRC_TAG" --dir release-out
+
+      # The hand-over (D-6657): one artifact named for the tag, holding exactly
+      # the tarball and its SHA256SUMS, kept seven days so a failed publish job
+      # can be re-run alone. Stored as it is: the tarball is compressed already.
+      - uses: actions/upload-artifact@v7
+        if: steps.compare.outputs.release == 'true'
+        with:
+          name: release-${{ steps.compare.outputs.tag }}
+          path: |
+            release-out/ccrc-${{ steps.compare.outputs.tag }}.tar.gz
+            release-out/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  # THE PUBLISH JOB holds the write token and the OIDC permission, and runs none
+  # of the build's code. contents: write — the tag push and the release.
+  # id-token: write and attestations: write — the permission set
+  # `actions/attest`'s README documents for this exact no-registry-push usage;
+  # `attest-build-provenance@v4` itself is a thin wrapper whose own README
+  # documents no permissions or inputs, only a redirect to `actions/attest`
+  # (D-3126). The OIDC token IS the signing identity, so there is no key to
+  # keep and no secret in this repo. ci.yml's stance is that a writing job
+  # asks in the diff — this is that ask. It installs nothing and has no
+  # setup-node, so no npm cache is ever restored into it (D-6651). Its
+  # checkout keeps its credential: the publish arm pushes the tag with it. At
+  # this checkout major it lives in a file under the runner's temp directory
+  # that the checkout's git config includes, removed at the job's end.
+  # It starts only on a release decision, so a skip mints no write token
+  # (D-6658).
+  publish:
+    needs: build
+    if: needs.build.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    # 10: it downloads, checks, attests and publishes; it builds nothing.
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # receive re-derives the tag from the highest existing one and the
+          # newest release tag this commit contains, as prepare did: it needs
+          # the tags and the history present.
+          fetch-depth: 0
+
+      # Into the runner's temp directory, outside the checkout (D-6657). The
+      # path alone keeps nothing off this job's scripts: what does is the
+      # extractor. This major keeps v7's (unzip-stream 0.3.4), which
+      # confines every zip entry under release-in, where @v4 to @v6 wrote an
+      # `x/../../..` entry outside it. An artifact that is not a zip is
+      # written raw, as one file into release-in, named by the basename of
+      # the blob's download filename, which whoever wrote the blob chooses,
+      # not by the artifact's name. Either way, receive's verify refuses
+      # anything but the two expected files (D-6726, D-6739). This major also
+      # fails a digest mismatch, but against the digest the upload recorded,
+      # which the build job controls: it proves the transfer, not the build.
+      # The build's digest this job trusts is the one verify checks.
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-${{ needs.build.outputs.tag }}
+          path: ${{ runner.temp }}/release-in
+
+      # Arm 3: refuses a dirty tree, a pre-filled out directory, a HEAD that is
+      # tagged or that a release tag contains, and a re-derived tag that is not
+      # the build's; then the artifact must be exactly the two regular files,
+      # hash to the recorded digest and carry exactly that SHA256SUMS line.
+      # Only then does it copy the tarball into release-out/, tag LOCALLY and
+      # leave the state the publish arm reads. Nothing in this job decompresses
+      # or parses the tarball (D-6648, D-6649, D-6656).
+      - name: Check the build's artifact and tag it for this commit
+        env:
+          CCRC_BUILD_TAG: ${{ needs.build.outputs.tag }}
+          CCRC_BUILD_DIGEST: ${{ needs.build.outputs.digest }}
+        run: bash deploy/release-main.sh receive --in "$RUNNER_TEMP/release-in" --tag "$CCRC_BUILD_TAG" --digest "$CCRC_BUILD_DIGEST" --out release-out
+
       # Keyless provenance (design 2026-09-20 §4, §5): THIS workflow's OIDC
       # identity at refs/heads/main signs the tarball's digest; the bundle
       # is published beside the tarball and every `ccrc update` verifies it
       # against exactly this identity (…/release-main.yml@refs/heads/main).
-      # Runs only on an explicit release decision (D-6499): a skipped build is
-      # never attested, an already-tagged HEAD is release.yml's, and the action
-      # refuses an empty subject glob.
+      # Runs only on an explicit release decision, through the job's own `if:`
+      # (D-6499, D-6658): a skipped build is never attested, an already-tagged
+      # HEAD is release.yml's, and the action refuses an empty subject glob.
+      # The only tarball in release-out/ is the one receive verified.
       - uses: actions/attest-build-provenance@v4
         id: attest
-        if: steps.compare.outputs.release == 'true'
         with:
           subject-path: release-out/ccrc-*.tar.gz
 
-      # Arm 3: copies the bundle to its release name, pushes the tag, publishes
-      # all three artifacts as a prerelease, deletes the tag on failure. On a
-      # skip it does nothing and the job ends green.
+      # Arm 4: copies the bundle to its release name, pushes the tag, publishes
+      # all three artifacts as a prerelease, deletes the tag on failure.
       - name: Push the tag and publish the prerelease
         env:
           GH_TOKEN: ${{ github.token }}

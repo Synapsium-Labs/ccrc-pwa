@@ -6,7 +6,7 @@
 // tree rather than a pair of files.
 //
 // ── WHY THE FIXTURE IS A COPIED TREE, NOT SYMLINKS ────────────────────────
-// `ccrc-doctor.test.ts` installs `ccrc` into its fixture as SYMLINKS at
+// `ccrc-doctorFixture.ts` installs `ccrc` into its fixture as SYMLINKS at
 // `<home>/ccrc/ccd/` — the shape of a deployed box — and that is right for
 // doctor, which only ever READS the tree it is run from. Install is the other
 // half: it reads the tree AND writes the box, and Task 7 makes it COPY that
@@ -78,6 +78,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { renderCcdEntry } from './ccdWsHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
@@ -133,7 +134,7 @@ function realPath(name: string): string {
 }
 
 /** bash's absolute path, resolved ONCE, for the same reason
- *  `ccrc-doctor.test.ts:66` resolves it: libuv looks the executable up in the
+ *  `ccrc-doctorFixture.ts's `BASH`` resolves it: libuv looks the executable up in the
  *  CHILD's environment, and one runner below hands the child a PATH with no
  *  system directory on it at all — spawning bare `bash` there is ENOENT, which
  *  surfaces as a spawn failure (`status === null`) rather than as anything the
@@ -194,7 +195,7 @@ const versionDir = (home: string, ...rel: string[]): string =>
  *  `FAIL git_email` (a throwaway HOME has no ~/.gitconfig), `FAIL linger` and
  *  `FAIL wrappers` (the roster's upstream account has no binary).
  *
- *  This is `ccrc-doctor.test.ts`'s `healthy()`, adapted: the same stub shapes,
+ *  This is `ccrc-doctorFixture.ts`'s `healthy()`, adapted: the same stub shapes,
  *  minus everything the INSTALL itself now provides. It plants no roster (the
  *  verb seeds one), no `ccrc.env` (the verb writes one), no unit files (the
  *  verb installs them) and no `systemctl`/`loginctl` (the runner's recorders
@@ -223,7 +224,7 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
     writeFileSync(join(d, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 
   // `gh auth status --hostname github.com`, answered with the shape a box
-  // authenticated for the 'repo' scope really prints (ccrc-doctor.test.ts's
+  // authenticated for the 'repo' scope really prints (ccrc-doctorFixture.ts's
   // GH_OK). It REPLACES `ghContainedEnv`'s poison, and the containment is not
   // weakened by that: this stub never execs the real gh either, and unlike the
   // poison it exits 90 — loudly — on any argv but the one ccrc asks.
@@ -288,6 +289,7 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
   // disk is that afternoon. Same table shape as the doctor suite's.
   stub('df', [
     'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
+    ...FIXTURE_DF_INODES_LINES,
     '[ "$1" = "-Pk" ] && [ -n "$2" ] || { echo "fixture df: unexpected argv: $*" >&2; exit 90; }',
     'echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
     'echo "/dev/fixture0    104857600  20971520 42991616      21% /"',
@@ -303,7 +305,7 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
 
   // The upstream account's binary, which the roster this verb seeds declares
   // and `_check_wrappers` looks for. A few bytes of ELF prove "not a script"
-  // without the real ~300 MB (ccrc-doctor.test.ts's `writeBinary`).
+  // without the real ~300 MB (ccrc-doctorFixture.ts's `writeBinary`).
   //
   // `mkdir` runs UNCONDITIONALLY (A2-NEW): `~/.local/bin` itself is not what
   // `opts.upstream = false` is testing the absence of — it is the shipped
@@ -448,7 +450,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // The containment is unchanged and is the point: neither stub ever execs the
   // real binary, so this box's systemd and logind are as unreachable as they
   // were behind the refusal. What changed is that they now ANSWER the shapes
-  // ccrc asks — and, per `ccrc-doctor.test.ts`'s stub discipline, exit 90 on
+  // ccrc asks — and, per `ccrc-doctorFixture.ts`'s stub discipline, exit 90 on
   // any argv they do not recognise, so a step that started mutating a unit
   // nobody authorised is a loud failure rather than a silent success.
   //
@@ -760,13 +762,19 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // python3, so the install stays hermetic and reads no projects root.
     `[ "$1" = -c ] && [ "$2" = '${DOCS_PROBE}' ] && exit 0`,
     `[ "$1" = /dev/fd/3 ] && [ "$2" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
+    // codex-bridge Stage 1, Task 8: `ccrc codex start` reads the lane's status
+    // through the auth library (`_codex_auth`, `python3 -IS <lib> status …`).
+    // That library, and ONLY at its installed path, goes to the REAL
+    // interpreter; it is offline here because ghContainedEnv names
+    // CLOSED_AUTH_BASE.
+    `[ "$1" = -IS ] && [ "$2" = "$HOME/.local/bin/ccgpt-auth.py" ] && exec '${PYTHON3}' "$@"`,
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_UPDATE_HEALTH_S', 'CCRC_UPDATE_DEADLINE_MS', 'CCRC_RELEASE_BASE_URL', 'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
   // makes one call per install. Zeroed here rather than per test, for the
-  // reason `ccrc-doctor.test.ts` zeroes `CCRC_DOCTOR_GH_TIMEOUT` in its own
+  // reason `ccrc-doctorFixture.ts` zeroes `CCRC_DOCTOR_GH_TIMEOUT` in its own
   // runner — a knob whose only reason to exist is that a test must not wait out
   // a production timeout, and one call site is where it cannot be forgotten.
   env['CCRC_VERIFY_SETTLE'] = '0';
@@ -1717,7 +1725,7 @@ describe('ccrc install: the files the operator owns', () => {
       // a config the server REFUSES TO BOOT on (server/src/index.ts:75-79), and
       // doctor's `config` check reproduces that refusal at the end of this same
       // run. A half-configured remote box is a real state and it has its own
-      // test in ccrc-doctor.test.ts; this test is about a file being kept, and
+      // test in the `ccrc-doctor-*` test files; this test is about a file being kept, and
       // a fixture that was also secretly a broken-config fixture would fail for
       // the wrong reason.
       'CCRC_AGENT_URL=ws://198.51.100.7:7789',
@@ -5027,7 +5035,7 @@ describe('ccrc install: the unit directory is spelled the same in both files', (
     // THE DELIBERATE SECOND SPELLING, held by a mechanism instead of a promise
     // (D-92, and `_check_path`'s own note about `WRAPPER_BIN_DIR` for the same
     // trade). `ccrc-doctor-checks` cannot read `ccrc`'s variable: it is sourced
-    // under `set -u` by things that are not `ccrc` — ccrc-doctor.test.ts's
+    // under `set -u` by things that are not `ccrc` — ccrc-doctorFixture.ts's
     // `tableNames()` does exactly that — so a top-level
     // `CCRC_UNIT_DIR="$BOX_UNIT_DIR"` would make sourcing it fail outright, and
     // a `:-` fallback IS the second spelling with a branch in front. So: two
@@ -5840,7 +5848,7 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
   // A readable env file names the flag in a shape the reader cannot decide (on macOS: either file is not plain
   // assignments). The line says so from `_box_unit_env`'s own `BUE_WHY`, in both arms; it never borrows the rc-2
   // sentence ("is there and cannot be read"), which is about an exposure file the reader cannot open.
-  /** The platform's own clause of a not-measured verdict about `file` (ccrc-doctor.test.ts's `expectUndecided`). */
+  /** The platform's own clause of a not-measured verdict about `file` (ccrc-doctorFixture.ts's `expectUndecided`). */
   const expectUndecided = (detail: string, file: string): void => {
     expect(detail).toContain(file);
     expect(detail).toContain('was not measured');
@@ -7300,6 +7308,7 @@ const LOCK_AFTER_OUT = 'printf \'%s\\n\' "${CX_LOCK_FD:-}" "${CX_LOCK_ID:-}" > "
 /** Task 4's one-line definitions, read out of ccd/ccrc rather than re-typed. */
 const RUNTIME_CLI_DEF = (): string => ccrcLine(/^_codex_runtime_cli\(\) \{.*\}$/m, '_codex_runtime_cli');
 const CODEX_TIERS_DEF = (): string => ccrcLine(/^CODEX_TIERS=.*$/m, 'CODEX_TIERS=');
+const LANE_DIR_DEF = (): string => ccrcLine(/^_codex_lane_dir\(\) +\{.*\}$/m, '_codex_lane_dir');
 
 /** The requirement the stub builder DECLARES, in the placed builder's own
  *  assignment shape. A fixture value, never the real one: the real-spine case
@@ -7377,11 +7386,27 @@ function runTiersStep(c: {
   // function, unstubbed) resolves a real message from it, the same way the
   // shipped library would.
   oursWhy?: Readonly<Record<string, string>>;
+  // Whole-wave fix round, D-6691: run the REAL `_inst_codex_runtime` first, in
+  // the same shell, against a builder whose `build` fails while the previous
+  // generation stays current — the spine's own order, so the tiers step reads
+  // the `codex-runtime` that run put in INST_DEGRADED.
+  runtimeBuildFails?: boolean;
+  // Closing fix round, D-6691: `"<id> <tier>"` -> the generation directory's
+  // name that the planted `<tier>.started` record names; the skip reads it.
+  startedGen?: Readonly<Record<string, string>>;
 }): StepRun {
   const home = mkTmp('ccrc-codex-tiers-step-');
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  for (const [key, gen] of Object.entries(c.startedGen ?? {})) {
+    const [id, tier] = key.split(' ');
+    mkdirSync(join(home, '.ccrc', 'codex', id), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'codex', id, `${tier}.started`),
+      JSON.stringify({ generation: join(home, '.ccrc', 'runtime', 'codex', gen), code: 'f'.repeat(64) }) + '\n');
+  }
   writeFileSync(join(home, '.local', 'bin', 'ccgpt-runtime'), [
     '#!/bin/sh',
+    ...(c.runtimeBuildFails === true
+      ? ['[ "$1" = build ] && { echo "ccgpt-runtime: build failed at probe: fixture refusal" >&2; exit 1; }'] : []),
     '[ "$1" = python ] || { echo "stub ccgpt-runtime: unexpected argv: $*" >&2; exit 90; }',
     c.runtime === false
       ? 'echo "ccgpt-runtime: absent" >&2; exit 1'
@@ -7406,6 +7431,7 @@ function runTiersStep(c: {
     lanesFn(c.lanes ?? ['codex-a'], c.lanesRc ?? 0),
     CODEX_TIERS_DEF(),
     RUNTIME_CLI_DEF(),
+    LANE_DIR_DEF(),
     ccrcFunction('_codex_ready_secs'),
     // Real, unstubbed (review round 2, N2/N3): `_inst_codex_tiers` now calls
     // this on a 2, the same helper the identity gate above it already used.
@@ -7425,6 +7451,7 @@ function runTiersStep(c: {
     recordingStub('_codex_tier_stale', c.stale, 1),
     recordingStub('_codex_stop_tier', c.stopRc, 0, stopWords),
     recordingStub('_codex_start_tier', c.startRc, 0),
+    ...(c.runtimeBuildFails === true ? [ccrcFunction('_inst_codex_runtime'), '_inst_codex_runtime'] : []),
     ccrcFunction('_inst_codex_tiers'),
     '_inst_codex_tiers; rc=$?',
     DEGRADED_OUT,
@@ -7803,6 +7830,46 @@ describe('ccrc install: the codex tier restart step, measured in isolation (_ins
     expect(r.calls).toEqual([LOCK_A, A_L, A_S, '_codex_tier_stale codex-a shim', UNLOCK_A]);
     expect(r.stderr).toMatch(/^install: codex tiers: codex-a shim: NOT restarted — it runs code this install replaced, but no codex runtime resolves/m);
     expect(r.degraded).toEqual(['codex-tiers']);
+  });
+
+  it('a failed runtime build this run never restarts a stale litellm tier: one line, left as it was; the shim is restarted (D-6691)', () => {
+    // `stale: 0` on litellm stands for its record's library hash having moved
+    // (`_codex_started_json` hashes the stamp and the placed auth library):
+    // stale, while the build that would have given it new code did not pass.
+    // The shim is the control: the same run restarts it, so the skip is the
+    // litellm tier's alone. The litellm record names the generation that
+    // resolves now, the one shape the skip covers.
+    const r = runTiersStep({
+      runtimeBuildFails: true, startedGen: { 'codex-a litellm': 'gen-20260101T000000Z-1' },
+      ours: { 'codex-a litellm': 0, 'codex-a shim': [0, 1, 0] },
+      stale: { 'codex-a litellm': 0, 'codex-a shim': 0 }, readyS: '5',
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: codex runtime: NOT BUILT — ccgpt-runtime build exited 1 /m);
+    expect(r.calls).toEqual([LOCK_A, A_L, '_codex_tier_stale codex-a litellm', A_S, '_codex_tier_stale codex-a shim',
+      '_codex_stop_tier codex-a shim', A_S, '_codex_start_tier codex-a shim', A_S, UNLOCK_A]);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a litellm: left alone — it runs code this install replaced, but this run's codex runtime build did not pass \(the codex runtime: NOT BUILT line above\), so it keeps its running code until a build passes; then re-run: ccrc install$/m);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a shim: restarted — /m);
+    expect(r.stdout).toMatch(/— 1 restarted, 1 left as they were, 0 not restarted$/m);
+    expect(r.degraded).toEqual(['codex-runtime']);
+  });
+
+  it('a failed runtime build still restarts a litellm tier whose record names an older generation onto the current one (D-6691)', () => {
+    // The previous build's generation is current, and this tier's record
+    // names an older one: a restart moves it onto the current generation, so
+    // the skip does not cover it.
+    const r = runTiersStep({
+      runtimeBuildFails: true, startedGen: { 'codex-a litellm': 'gen-20251201T000000Z-1' },
+      ours: { 'codex-a litellm': [0, 1, 0] }, stale: { 'codex-a litellm': 0 }, readyS: '5',
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: codex runtime: NOT BUILT — ccgpt-runtime build exited 1 /m);
+    expect(r.calls).toEqual([LOCK_A, A_L, '_codex_tier_stale codex-a litellm', '_codex_stop_tier codex-a litellm', A_L,
+      '_codex_start_tier codex-a litellm', A_L, A_S, UNLOCK_A]);
+    expect(r.stdout).not.toMatch(/codex-a litellm: left alone/);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a litellm: restarted — /m);
+    expect(r.stdout).toMatch(/— 1 restarted, 0 left as they were, 0 not restarted$/m);
+    expect(r.degraded).toEqual(['codex-runtime']);
   });
 
   it('two failed restarts degrade the step once, and the summary counts both', () => {

@@ -1,6 +1,8 @@
 // server/test/ccgpt-harness.test.ts
 import { describe, it, expect } from 'vitest';
 import { pythonOrSkip, runPy, runPyAsync, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness.js';
+import { ghContainedEnv } from './ccdWsHelpers.js';
+import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
 import { mkTmp } from './tmpHelpers.js';
 import { writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,6 +24,26 @@ it('this box has a usable python3', () => {
 // `skipIf` prints as a countable "↓ skipped" locally instead of a checkmark
 // that looks identical to a real pass — the absence is visible, not silent.
 describe.skipIf(!PY)('the ccgpt python harness', () => {
+  // codex-bridge Stage 1, Task 6: only the auth library reads CCRC_CODEX_AUTH_BASE,
+  // and unset (or empty) it names the LIVE endpoint, so every contained env names a
+  // loopback one unless the caller's own env names one.
+  it('every contained env names a loopback CCRC_CODEX_AUTH_BASE', async () => {
+    const home = mkTmp('ccgpt-harness-authbase-');
+    const mine = 'http://127.0.0.1:4242';
+    const base = (e: NodeJS.ProcessEnv): string | undefined => e['CCRC_CODEX_AUTH_BASE'];
+    for (const opts of [{}, { systemd: true }, { tmux: true, net: true }]) {
+      expect(base(ghContainedEnv(home, {}, opts)), JSON.stringify(opts)).toBe(CLOSED_AUTH_BASE);
+      expect(base(ghContainedEnv(home, { CCRC_CODEX_AUTH_BASE: '' }, opts)), JSON.stringify(opts)).toBe(CLOSED_AUTH_BASE);
+      expect(base(ghContainedEnv(home, { CCRC_CODEX_AUTH_BASE: mine }, opts)), JSON.stringify(opts)).toBe(mine);
+    }
+    const f = join(home, 'base.py');
+    writeFileSync(f, 'import os\nprint(os.environ.get("CCRC_CODEX_AUTH_BASE"))\n');
+    expect(runPy(f, { home }).stdout.trim()).toBe(CLOSED_AUTH_BASE);
+    expect(runPy(f, { home, env: { CCRC_CODEX_AUTH_BASE: '' } }).stdout.trim()).toBe(CLOSED_AUTH_BASE);
+    expect(runPy(f, { home, env: { CCRC_CODEX_AUTH_BASE: mine } }).stdout.trim()).toBe(mine);
+    expect((await runPyAsync(f, { home })).stdout.trim()).toBe(CLOSED_AUTH_BASE);
+  });
+
   it('runs a python file in a fixture HOME and reports its exit status', () => {
     const home = mkTmp('ccgpt-harness-');
     const f = join(home, 'probe.py');

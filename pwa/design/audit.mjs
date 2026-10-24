@@ -622,6 +622,21 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)', 'var(--accent-tint)'],
     why: 'the theme row\'s label: unselected it inherits the settings page, selected its row paints --accent-tint',
   },
+  // ── the fleet's update line (UpdateIndicator.tsx, D-6327) ───────────────
+  // The quiet "↑ vX available" door and its stale words set an ink on no ground of their own, and every place the line
+  // sits is the page (`--bg-page`), measured: Refined's row under the bar is in `.shell-banners`, which paints nothing
+  // (refined.css), inside `.ref-frame`, which paints nothing (shell.css), so it shows `body`; Instrument's status bar
+  // paints `--bg-page` (instrument.css `.ins-status`); both skins' phone rows (`.ref-phone-head`, and Instrument's
+  // `.fleet` column) paint nothing and show `body` too. The line no longer sits on a bar that paints `--bg-surface`,
+  // so that ground is not registered. `--accent` and `--ink-tertiary` on `--bg-page` are token pairs the gate holds.
+  '.update-indicator-door': {
+    under: ['var(--bg-page)'],
+    why: "the fleet's update line: Refined's row under the bar, Instrument's status bar and the phone rows all sit on the page (--bg-page). Its selector names no painted ancestor",
+  },
+  '.update-indicator-stale': {
+    under: ['var(--bg-page)'],
+    why: "the stale words beside the update line's version, on the same ground as .update-indicator-door: the page (--bg-page). Its selector names no painted ancestor",
+  },
   // ── the task card and the compaction card (PR #89) ──────────────────────
   // Seven rules that set a colour and paint no ground. Their hosts DO paint
   // one — `.task-card` and `.compaction` both set `background: var(--bg-surface)`
@@ -879,6 +894,10 @@ export const INHERITED_GROUNDS = {
   '.pool-epoch-lag': {
     under: ['var(--bg-page)'],
     why: "the account-pool epoch/observed staleness indicator (Task 9, account-pool-membership wave 1) sits in .fleet-head-right on the fleet screen's header. .fleet, .fleet-head and .fleet-head-right all paint no background of their own, so the real ground is body's --bg-page (styles/base.css:111) — same reasoning and same ground as .mail-chip/.mail-group-head above, which sit on the sibling .mail-screen's unpainted body. Its selector names no ancestor, so no route could ground it. Review round 1, C2: this was first added to GRANDFATHERED_UNCOVERED on the mistaken claim that nothing at this header level paints a background — INHERITED_GROUNDS already grounds three OTHER rules in this exact file against --bg-page for exactly this reason, and --ink-tertiary over --bg-page measures 6.23 dark / 5.25 light, clearing the 4.5 floor in both themes.",
+  },
+  '.dlg-later:disabled': {
+    under: ['var(--bg-sheet)'],
+    why: "D-6325 (the-ask-holds-through-a-reconnect): Deny's disabled look while the reconnect gap holds the ask, tertiary ink as the own-words Send and the tab chips take. It sits in .dlg-actions inside the ask sheet's <Sheet>, whose .sheet-panel paints background: var(--bg-sheet) (primitives.css:141); the rule paints no ground and its selector names no painted ancestor. Registered rather than grandfathered: the ground is recoverable by reading the component.",
   },
   '.opt-inert': {
     under: ['var(--bg-sheet)'],

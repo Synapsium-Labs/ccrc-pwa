@@ -1087,19 +1087,20 @@ _auth_openai_login() {   # `<launcher> login` — somebody else's program, under
   # actually works.
   _auth_state done
 }
-_auth_openai_login_codex() {   # `ccrc codex login <id>` — ccrc's own verb over the lane's own runtime, under a pty
+_auth_openai_login_codex() {   # `ccrc codex login <id>` — ccrc's own verb over the lane's auth library, under a pty
   # CCRC IS THIS LANE'S LAUNCHER, so the external arm's argument is inverted
   # here, sentence by sentence:
-  #   * the program is ccrc's. `ccrc codex login <id>` runs the ISOLATED
-  #     runtime's Authenticator with this lane's `exec.authDir` as its token
-  #     directory;
+  #   * the program is ccrc's. `ccrc codex login <id>` runs ccrc's auth
+  #     library's device-code sign-in (`ccd/ccgpt-auth.py`, codex-bridge
+  #     Stage 1) over this lane's `exec.authDir`;
   #   * the credential lands where ccrc NAMES it will, `auth.json` under
-  #     `exec.authDir`, although ccrc still never opens it;
-  #   * so there IS a credential assertion (existence only), and it belongs to
-  #     the verb. `ccrc codex login` exits 0 only when the runtime exited 0 AND
-  #     `auth.json` exists. The check is made once, in the file that reads the
-  #     roster row. Asserting it again here would make this helper a second
-  #     reader of `exec.authDir`.
+  #     `exec.authDir`, and that library is the one ccrc program that reads and
+  #     writes it; this helper never opens it;
+  #   * so there IS a credential assertion, and it belongs to the verb.
+  #     `ccrc codex login` exits 0 only when the library's sign-in did (signed
+  #     in, or already signed in). The check is made once, in the file that
+  #     reads the roster row. Asserting it again here would make this helper a
+  #     second reader of `exec.authDir`.
   # What does not change: the pty (the device flow prints to a terminal, and
   # the pane is one), the pump that publishes the URL and the device code, and
   # `pane-unsupported-here`.
@@ -1120,7 +1121,7 @@ _auth_openai_login_codex() {   # `ccrc codex login <id>` — ccrc's own verb ove
   #   * `rc` still decides `expired` (124, or the pump's backstop), because an
   #     expiry is the vehicle's fact, not the verb's.
   # `setup-token` answers the same blind spot with a printed-token guard. This
-  # verb prints no line that its runtime could not print too, so its own
+  # verb prints no line that its auth library could not print too, so its own
   # status is the fact to key on.
   #
   # `$HOME/.local/bin/ccrc` is ABSOLUTE, like `ccd account-pane`'s own exec of

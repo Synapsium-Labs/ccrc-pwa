@@ -2719,8 +2719,12 @@ composes when a gate forbids it, and 9 more items (three silent-wedge paths amon
        goes on to step 2. This mirrors ccd's `verb-population-refuses-linked-tmproots`.
     2. `readdir`. A null listing is resolved with `statMeasured`: `absent` is empty, and every other answer is
        unmeasured. A FIFO, socket or device is `other` at step 1 and unmeasured here. The two are never folded.
-    3. Names that are not strings, and dot-leading names, are dropped (the witness writer's `.<id>.<pid>.<rand>.tmp`,
-       and review 369 C5's `.<id>.drop.<pid>`).
+    3. Names that are not strings, and dot-leading names, are dropped uncounted (the witness writer's
+       `.<id>.<pid>.<rand>.tmp` among them), save ONE shape, in `tmproots` alone: review 369 C5's compare-and-drop
+       aside, `.<id>.drop.<pid>` (path-identity spec §3.6), whose id joins the population when the id predicate below
+       holds for it. An aside whose id the predicate refuses is dropped uncounted with the rest, and so is every
+       dot-leading name in `tmpquarantine`. (Amended at path-identity's close, as W2's `aside-joins-the-population`
+       asked.)
     4. A listing of more than `COLLECT_POPULATION_MAX` = 1024 names is unmeasured: one box-wide line giving the count
        only. A session that writes 100k names cannot bloat the agent frame or the server's memory.
   - **Stated residual.** A swap of a directory for a link between the lstat and the readdir is not closed by the server,
@@ -4225,3 +4229,172 @@ entry defines them.
   because the line above ends its statement. The keyword stays at the end of the line above.
 - Task 15: `learn-gate-refusal-leaves-no-trace`. `learnCollect`'s id gate answers `id-refused`, and the watcher returns
   on it with no observation and no warning. A refused id is asked again each pass, which costs no argv.
+
+### §17 as built (path-identity W3, run 722)
+
+Where W3's code and its plan's text narrowed, corrected or spelled out the spec's working rulings for worktree path
+identity (PI1 to PI10, spec §4.1 to §4.11), they now read as follows. This note amends; it edits no earlier text. It
+names each departure by slug and carries no deviation number. This wave's numbers were issued before its plan was
+committed, and the W3 plan's `## Deviations found` defines them. The spec records the same wave in its §4.12. Where
+the two differ, the spec governs, as this section's opening says. This wave's committed comments and test titles cite
+the spec, never this contract.
+
+**R93 (the programme's shape).**
+- W3 was dispatched after W2 merged and W2's run closed. It ships as one pull request from a fresh child, and it is the
+  programme's last scheduled wave. Its `ccd/ccd` edits went in series, one task at a time, and each was restamped with
+  the repository's own tool. `main` moved during the wave, and it was merged in once, with `git merge`, right before
+  the pull request. Its one conflict was `ccd/ccd`'s stamp line, which took one side and was restamped the same way.
+- Workspace lifecycle's coordinator consented to the edits that ws-expire reaches through shared code:
+  - the rows rung, with its walk, its field reader and its identity helpers;
+  - the mount table, in its new role as the rung's second reader;
+  - the moved-check, the record reader and owned;
+  - the ladder's main-checkout compare;
+  - the post-kill wait, the step-3 and step-4 asks, and the re-ask;
+  - the shared cwd probe, onto which `_ws_expire_cwd_users` moved.
+
+  `cmd_ws_expire`, `_ws_expire_locked`, `_ws_expire_resume_eval`, `_ws_expire_refuse_return`, the EXPIRE-V1 note and
+  the vocabulary were not edited. Its consent also covered one in-place edit of `_ws_expire_audit_contained`'s printf, so the expiry audit document
+  carries the two count keys too.
+- Run 308's coordinator and the delegation broker's coordinator consented to `_spawn_start`'s two launch statements:
+  one pending write inserted above each `_tmux_new_session` call, and the pane's fragment in each command string.
+  Nothing else in `_spawn_start` changed. `_reg_purge` and `_child_tmpdir` were not edited, and nor was
+  `session-hook.test.ts`, which ccrc history holds.
+- The census boundary:
+  - four in-place, line-neutral edits stand at or before line 19162, the corpus's highest `ccd/ccd` anchor: the stamp,
+    the platform composer's line, ws-add's `.workdir` line and the reclaim document's printf;
+  - `ccd/ccrc` has one, in its platform layer;
+  - the five citation passes stayed green at the number they read on `main`, with no number edited.
+- The wave added two keys to the reclaim audit document: `legacyRows`, the other rows whose field is in a `legacy-*`
+  state, and `pendingRows`, those whose field reads `pending` (a field that reads `unmeasured` is in neither, and it
+  holds the child). It changed one server sentence: `worktree-remove-failed`'s now ends "or a process still works inside it". It added no route, table,
+  migration, capability word, ccd verb, refusal token, journal act, probe word, sanctioned `die` line, agent grant or
+  exec-whitelist entry.
+- In remote mode the reclaim, expiry and collect verbs run only on the fleet box. So the mount table's device match was
+  measured there before the first edit, and a CONTROL case of `ccd-reclaim-idwalk.test.ts` re-measures it on the real
+  table of every Linux run of that file, CI's included.
+
+**R94 as built (process state may only refuse).**
+- R94 amended R31's bullet that begins "Process state never grants deletion consent. A pane's cwd". That bullet reads
+  "Process state never grants deletion consent; it may only refuse". W3 builds that amendment and amends nothing
+  further. R94 calls it R31's last bullet. It is the second-to-last, so this note names it by its words.
+- The one refusal-only probe is `_ws_cwd_users`. A process is in use when its cwd's string meets the tree's physical
+  spelling, OR its cwd's device and inode ancestry meets the tree. It skips a process only on ENOENT or ESRCH of that
+  process's own cwd link or stat file, or on the ruled EACCES exception. An ENOENT on opening the link after a
+  successful read is confirmed through the stat file, or by a second readlink that answers ENOENT (a release is then
+  asked through its threads). Any other failure answers unmeasured. Darwin keeps ws-expire's lsof arm. Its bound is
+  `WS_CWD_USERS_SCAN_S` (10 s).
+- `cwd-probe-adopts-the-path-users-walk`: the probe also adopts `_ws_path_users`' fixed point, its leader-thread walk
+  and its own-chain exclusion, and it owns the physical resolve of its argument. ws-expire's probe moved onto it.
+- `cwd-probe-confirms-a-vanished-link-by-a-second-read`: a process whose own link vanished at its first read, or was
+  let go of since (the second readlink answers ENOENT), is not skipped for that alone. It is asked again through its threads, in passes, with its own link read again after every pass, and the
+  walk accepts a vanished, reaped or outside answer only on a pass whose `task/` listing named no tid not asked before.
+  `cwd-probe-read-once-more-answers-eacces-for-a-reaped-pid`: at that per-pass read only, EACCES followed by a stat file
+  that is gone counts as the pid's release. `cwd-probe-holds-a-double-slash-physical-root`: a `//`-leading physical root
+  still holds ws-expire's own probe, through its adapter's gate, unmeasured, and a tree with a `//`-leading parent
+  holds through the probe itself, on Darwin too. `cwd-probe-collapses-a-double-slash-parent`: the shared probe
+  collapses a `//`-leading parent before its string compare, so the tail's asks compare the spelling `/proc` and lsof
+  print. Spec §4.12 says each in full.
+- `cwd-wait-only-waits`: inside the post-kill wait the probe only waits. It refuses at step 3 and step 4, before each
+  `keep_of` and each standing forced removal.
+- `cwd-refusal-reuses-worktree-remove-failed`: an in-use or unmeasured answer there fails as `worktree-remove-failed`,
+  keeping the tree, the branch and the breadcrumb.
+- R31's "left to a follow-up programme" is built as R94 says. The entry field, `$REG/<id>.workdirid`
+  (`workdirid-pending-form`, `workdirid-unreadable-holds`), may hold a row and never releases one.
+
+**R54 as W3 leaves it (the identity moved-check).**
+- R54's two arms stand. The identity moved-check is added beside them: a nested checkout whose identity is a gone row's
+  recorded entry holds the child, and it never releases. A gone row is never asked the mismatch rule.
+
+**R97's reach, unchanged (PI9 K1).**
+- A blank admin entry still holds every child at rung 9 while a gone row of that repository exists. A gone row's valid
+  field never releases it, so W3 did not shrink that reach.
+
+**R95's asks, now a backstop (`w2-mount-asks-shadowed-by-the-reask`).**
+- The rows rung's mount hold (`rows-walk-second-mountinfo-reader`) is asked by the in-lock recompute, by owned at the
+  tail's start and by the re-ask. So a mount under the child is caught before W2's step-3 and step-4 asks. Those asks
+  stand, as a backstop for a mount that appears in the instant after the re-ask. W2's behavioural cases moved their
+  plants, and their assertions are unchanged.
+- `collect-reprove-table-moves-to-the-gap`: the collector's row rule now reads the table before the move, so one
+  reprove case installs its unreadable table at the `moved` gap. Its assertions are unchanged.
+
+**The collect audit's budget.**
+- The rows rung's walk is bounded by `WS_RECLAIM_WALK_S` (5 s), which joins the collect audit's sum: about 78 s, or
+  83 s at the widest grace, against ws-audit's 90 s runner row. The child-reclamation spec's as-built figures are
+  wave 9's record, and were not edited.
+- The rung's git reads of a gone row's repository stay unbounded. A runner kill there fails closed.
+
+**Departures**, by slug; spec §4.12 says each in full.
+- The field: `workdirid-pending-form` and `workdirid-unreadable-holds`.
+- The rung: `rows-walk-second-mountinfo-reader`, `unproc-also-by-walked-position`, `w2-mount-asks-shadowed-by-the-reask`,
+  `collect-reprove-table-moves-to-the-gap`, `double-slash-rows-placed-by-identity-pins-move`,
+  `rows-rung-pass-b-holds-an-unlisted-answer` (an answer word the rung does not list for a row, a target or the table
+  holds the child unmeasured, never no hold), `rows-rung-holds-mask-later-terminal-words` (the rung runs before the
+  ladder's later terminal words, so a child that would have met one answers the retryable word; a refusal either way),
+  `pending-hold-remedy-stops-then-starts` (the pending hold's remedy says to stop and start that session, as
+  `ccd start` changes nothing for a session that is running) and `unfield-remedy-restarts-without-a-stop` (the
+  unreadable-field hold's remedy says to remove what stands at the field, then stop and start that session; the
+  wording alone).
+- The main checkout: `ladder-main-checkout-ef`, `record-main-hit-keeps-the-terminal-refusal`,
+  `record-by-another-spelling-reads-unmeasured`, `record-two-spellings-reads-unmeasured` and
+  `moved-check-identity-failure-preempted-a-proof`.
+- The probe: `cwd-probe-adopts-the-path-users-walk`, `cwd-wait-only-waits`,
+  `cwd-refusal-reuses-worktree-remove-failed`, `cwd-probe-holds-a-double-slash-physical-root`,
+  `cwd-probe-collapses-a-double-slash-parent`, `cwd-probe-confirms-a-vanished-link-by-a-second-read` and
+  `cwd-probe-read-once-more-answers-eacces-for-a-reaped-pid`.
+- The tail window: `reask-words-follow-the-owned-call`, `reappeared-tree-refuses` and
+  `reask-re-proves-the-nested-checkouts-path` (a nested checkout's path is proven a second time in the re-ask, so a
+  checkout moved out with a link left in its parent path is refused; the race is narrowed, not closed; `ws-expire`
+  shares the check, and a refusal there is the resumable `worktree-remove-failed`).
+- The suites: `darwin-prefixes-take-the-identity-shims`, `audit-document-key-pins-outside-the-boundary` and
+  `r77-cases-time-their-race-through-a-python3-shim`.
+- Decided by what was built: none.
+
+**Stated residuals**, named with no number; spec §4.12 says each one in full.
+- The field: `reg-purge-inventory-omits-workdirid`, `legacy-row-count-has-no-doctor-line`,
+  `workdirid-temp-leaks-on-sigkill`, `workdirid-pending-unwritable-keeps-the-old-field`,
+  `failed-pending-write-reads-legacy`, `workdirid-fifo-swap-after-type-check`,
+  `fish-spawn-cd-reads-backslash-escapes` (on Linux the launch command's earlier tool-child assignment, `${…-}`, is
+  not fish syntax, so a fish pane there parses nothing and every row stays `pending`; the backslash case is the Darwin
+  arm's alone), `workdirid-physical-control-byte-stays-pending`, `relative-workdir-second-cd-does-not-enter` and
+  `entry-field-identity-does-not-survive-a-device-renumbering`.
+- The rung: `rows-rung-git-reads-unbounded`, `repointed-alias-for-legacy-rows-until-respawn`,
+  `other-mount-namespaces-fuse-views-and-overlay`, `ancestry-stands-alone-on-darwin`,
+  `moved-check-misses-a-subdirectory-of-a-moved-tree`, `record-ef-has-no-deadline`,
+  `record-ef-unstattable-stanza-reads-as-another-tree`,
+  `record-main-by-another-spelling-reads-no-worktree-record`,
+  `gone-row-with-pending-field-holds-despite-its-release-arms` and `pending-row-holds-every-child-box-wide`.
+- The probe: `human-gated-removals-ask-no-cwd` (forwarded to workspace lifecycle), `cwd-probe-sees-no-open-fds`,
+  `cwd-probe-sees-a-session-only-while-it-runs`, `surviving-background-job-holds-the-reclaim`,
+  `cwd-probe-can-wait-on-a-hung-network-cwd`, `darwin-cwd-parse-unbounded-as-today`,
+  `cwd-probe-pure-bash-watcher-sleep-reads-as-a-user`, `cwd-probe-per-thread-cwd-unasked`,
+  `cwd-probe-pid-handoff-between-reads`, `cwd-probe-task-listing-can-skip-a-tid` and `cwd-probe-asks-no-process-root`.
+  The probe also states pid and tid reuse as a limit, with no slug.
+- The tail window: `reask-identity-is-per-attempt`, `reask-to-opendir-window`, `cwd-ask-to-opendir-window`,
+  `tail-reasks-can-outrun-the-act-row`, `identity-found-after-the-kill-repeats` and `worktree-ask-to-force-window`,
+  narrowed, and `vanished-checkout-arms-ask-no-cwd`. `reask-to-opendir-window` is also narrowed for a nested
+  checkout by `reask-re-proves-the-nested-checkouts-path`, and stands.
+- Unmeasured: `git-mount-crossing-unmeasured` and `exdev-class-moot-under-pi5-a`. The operator may measure either on a
+  throwaway box of their own choosing.
+- W2's, standing: `human-gated-removals-ask-no-mounts` and `vanished-checkout-arms-ask-no-mounts`.
+
+**Closed and narrowed carries**, each by slug.
+- Closed: `no-whole-child-mount-ask-before-step-3`, and §7 items 1 to 3 and 5 to 8:
+  `r31-repointed-alias-resolves-complete`, `r31-bind-mount-spelling-resolves-complete`,
+  `r54-recorded-basis-dev-ino-ancestry`, `proc-symlink-row-places-at-ccds-cwd`,
+  `unres-false-detail-for-row-that-is-the-child`, `double-slash-remedy-wordings` and
+  `owned-main-checkout-ambient-realpath`.
+- Narrowed, not closed: `owned-to-worktree-remove-window` (§7 item 4: the identity compares and the fresh re-asks),
+  `audit-normalise-has-no-mount-ask` (its worktree half), `registry-row-pass-carries-no-bound`
+  (the walk is bounded, the git reads are not), `in-use-probe-misses-another-mount` (its worktree half) and
+  `worktree-ask-to-force-window`.
+
+**Found while building, per task.** Task 13's slugs concern this record itself, and only the plan's Task 13 deviation
+entry defines them.
+- Task 0: `growth-check-armed-reds-w3s-ccd-growth`.
+- Task 5: `fixture-volume-at-the-ws-add-disk-floor` and `gate-chunk-8-outruns-the-foreground-bound`.
+
+Main's growth check, which reds a pull request that grows `ccd/ccd` by more than its net-line limit, reds this wave's
+`ccd/ccd` row until the operator's exemption lands; this wave edits neither the check nor its data. The volume the
+fixtures sit on holds less free space than ws-add's 10 GB floor, so every gate ran with `CCD_DISK_FLOOR_GB=1`, ccd's
+own refuse-only override, and nothing was edited for it. One chunk of the gate list, which holds the doctor suite,
+runs past the 600 s a foreground call allows, so it ran once, alone, in the background.
