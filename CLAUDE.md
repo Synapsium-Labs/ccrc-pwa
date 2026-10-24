@@ -103,6 +103,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
   **`ws-orphan` is forbidden to every session too** (D-6629): it is the SERVER's act on an ORPHANED worktree only (a linked
   worktree no registry row names, under the ccd worktree root or a `.claude`/`.superpowers` worktrees directory), behind a
   token re-proved on the box, never `--force` — never a session's verb, and never run against the live host from a shell or a test.
+  **`scratch-rescue` is forbidden to every session too** (D-6632): the temp sweep's act, which only adds attic refs for a session's scratch repository (`ccd scratch-rescue --session <id> <path>`), behind the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
   or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and

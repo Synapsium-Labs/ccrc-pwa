@@ -9838,6 +9838,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
         'ccd/ccd:13567',
+        // RE-MEASURED on the merge of disk retention DR-20 (D-6632) with main, 57 -> 55: TWO LEAVE
+        // (`:13673` and `:13560-13562`) and none enter. ONE cause: DR-20's two lines above them (its
+        // `nested-rescue-v1` caps row and its `_ws_rescue_doc` call in `cmd_ws_audit`) slide every `ccd/ccd` line below down 2, and
+        // both anchors now hold text carrying a token of their row (`:13673` a comment reading "destroyed").
+        // A coincidental pass, not a repair. Measured by running this test with `origin/main`'s `ccd/ccd`
+        // and with the merged one, everything else the same tree. Neither corpus document changed, so
+        // nothing was re-pointed. S6-R11 covers it.
+        // RE-MEASURED AGAIN on the merge with main's refusal-v1 (#560), 55 -> 57: the same TWO RE-ENTER
+        // (`:13673`, `:13560-13562`) because main's insertions above them shift the anchors again off text
+        // carrying a row token. Dumped from the merged tree, never retyped. S6-R11 covers it.
         'ccd/ccd:13673',
         'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
@@ -10093,6 +10103,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
         'spec:2125 ccd/ccd:13567',
+        // RE-MEASURED on the DR-20 merge (D-6632), 38 -> 36, from the same run as the `|`-row set above:
+        // the same two sites leave for the same 2-line shift. S6-R11 covers it.
+        // RE-MEASURED AGAIN on the refusal-v1 (#560) merge, 36 -> 38: the same two sites re-enter. S6-R11.
         'spec:2125 ccd/ccd:13673',
         'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
