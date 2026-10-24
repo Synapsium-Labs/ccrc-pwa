@@ -8332,7 +8332,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/collectLane.ts': 7,
       'server/src/config.ts': 3,
       'server/src/coord/caps.ts': 6,
-      'server/src/coord/close.ts': 8,
+      'server/src/coord/close.ts': 2,
       'server/src/coord/collectLaneJournal.ts': 5,
       'server/src/coord/db.ts': 4,
       'server/src/coord/delegation-checkpoint.ts': 33,
