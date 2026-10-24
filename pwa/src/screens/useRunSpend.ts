@@ -11,7 +11,9 @@ export function useRunSpend(run: Pick<RunSummary, 'id'>, load: (id: number) => P
     let live = true;
     load(run.id).then(
       (s) => { if (live) setSpend(s); },
-      () => { if (live) setSpend({ measured: false, reason: 'unreadable' }); },
+      // A failed load (signed out, rate-limited, unknown run, network) says nothing about the sweep file,
+      // so it shows NO line rather than 'the usage sweep could not be read'.
+      () => { if (live) setSpend(undefined); },
     );
     return () => { live = false; };
     // `load` is the screen's stable default: re-asking on its identity would re-read on every render.

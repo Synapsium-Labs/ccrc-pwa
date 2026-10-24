@@ -64,11 +64,25 @@ describe('GET /api/runs/:id', () => {
     expect((await get(app, 999999)).statusCode).toBe(404);
     expect((await get(app, 'x')).statusCode).toBe(400);
   });
-  it('is rate-limited per client, and a neighbouring route is not affected', async () => {
+  it('is rate-limited globally, and a neighbouring route is not affected', async () => {
     const { app, id } = await setup({ sweep: {} });
     for (let i = 0; i < RUN_SPEND_RATE_LIMIT.max; i += 1) expect((await get(app, id)).statusCode).toBe(200);
-    expect((await get(app, id)).statusCode).toBe(429);
+    const over = await get(app, id);
+    expect(over.statusCode).toBe(429);
+    expect(over.json()).toEqual({ ok: false, error: 'rate-limited' });
     expect((await app.inject({ method: 'GET', url: '/api/runs', headers: H })).statusCode).toBe(200);
+  });
+  it('unauthenticated calls never spend the budget: 601 refusals leave an authenticated call at 200', async () => {
+    const home = mkTmp('ccrc-run-spend-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const opened = coord.openRun({ program: 'demo', title: 'demo', project: 'demo', wave: 1, waveOf: null, claimedBy: 'coord-a' });
+    if (!('id' in opened)) throw new Error('openRun refused');
+    writeSweep(home, {});
+    const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const app = await buildServer({ ...base, cfg: { ...base.cfg, authEnabled: true }, mailToken: TOKEN, coord });
+    for (let i = 0; i < RUN_SPEND_RATE_LIMIT.max + 1; i += 1) expect((await get(app, opened.id, {})).statusCode).toBe(401);
+    expect((await get(app, opened.id)).statusCode).toBe(200);
   });
   it('a session id named like an Object.prototype member reads as not swept, never a 500', async () => {
     const home = mkTmp('ccrc-run-spend-');

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FleetIO } from './io.js';
 import type { ShareReading } from '../../shared/serviceability.js';
+import type { RunSpendTokens } from '../../shared/api.js';
 
 /** `~/.cc-sessions/usage/sweep/latest.json` — what `ccd/ccd-usage-sweep`
  *  writes (`OUT_DIR="$REG/usage/sweep"`), under the agent's `.cc-sessions/`
@@ -64,7 +65,7 @@ export function shareFor(read: SharesRead, account: string): ShareReading | null
  *  summed, message ids already deduplicated. `proxyUsd` is the PRICED-only dollar
  *  proxy (`apiUsd`). */
 export interface SessionSpend {
-  tokens: { input: number; cacheWrite: number; cacheRead: number; output: number };
+  tokens: RunSpendTokens;
   proxyUsd: number;
 }
 

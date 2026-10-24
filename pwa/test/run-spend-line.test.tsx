@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { RUN_SPEND_UNMEASURED_REASONS, type RunSpend, type RunSummary } from '../../shared/api';
-import { runSpendLine, compactCount } from '../src/fleet/runSpendWords';
+import { runSpendLine } from '../src/fleet/runSpendWords';
 import { RunRow } from '../src/screens/RunRow';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -13,19 +13,12 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const MEASURED: RunSpend = { measured: true, measuredAt: '2026-10-24T12:00:00Z', proxyUsd: 1.5234,
   tokens: { input: 1_200, cacheWrite: 300_000, cacheRead: 4_500_000, output: 17_400 } };
 
-describe('compactCount', () => {
-  it('is exact below a thousand and one decimal of k / M above', () => {
-    expect([0, 999, 1000, 1234, 17_400, 999_999, 1_000_000, 4_500_000].map(compactCount))
-      .toEqual(['0', '999', '1k', '1.2k', '17.4k', '1M', '1M', '4.5M']);
-  });
-});
-
 describe('runSpendLine', () => {
   it('measured: a short half (dollars, output) and a long half (input, cache), the whole in the title', () => {
     const l = runSpendLine(MEASURED)!;
     expect(l.measured).toBe(true);
     expect(l.short).toBe('≈ $1.52 · out 17.4k');
-    expect(l.long).toBe('in 1.2k · cache r 4.5M w 300k');
+    expect(l.long).toBe('in 1.2k · cache r 4.5m w 300k');
     expect(l.title).toContain('proxy');
     expect(l.title).toContain('not an invoice');
     expect(l.title).toContain('7-day window');
@@ -64,7 +57,7 @@ describe('the run row\'s spend line', () => {
     expect(load).toHaveBeenCalledTimes(1);
     expect(load).toHaveBeenCalledWith(3);
     expect(el.querySelector('.run-spend-short')!.textContent).toBe('≈ $1.52 · out 17.4k');
-    expect(el.querySelector('.run-spend-long')!.textContent).toBe('in 1.2k · cache r 4.5M w 300k');
+    expect(el.querySelector('.run-spend-long')!.textContent).toBe('in 1.2k · cache r 4.5m w 300k');
     expect(el.getAttribute('data-measured')).toBe('true');
     expect(screen.getAllByTestId('run-spend')).toHaveLength(1);
   });
@@ -77,9 +70,12 @@ describe('the run row\'s spend line', () => {
     mount(run({ sessionId: null }), vi.fn().mockResolvedValue({ measured: false, reason: 'no-session' }));
     await waitFor(() => expect(screen.getByTestId('run-spend').getAttribute('data-measured')).toBe('false'));
   });
-  it('a failed read says unreadable, not nothing', async () => {
-    mount(run(), vi.fn().mockRejectedValue(new Error('boom')));
-    await waitFor(() => expect(screen.getByTestId('run-spend').textContent).toContain('not measured'));
+  it('a failed read (rate-limited, signed out, network) shows no line, never "sweep unreadable"', async () => {
+    const load = vi.fn().mockRejectedValue(new Error('boom'));
+    mount(run(), load);
+    await waitFor(() => expect(load).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(screen.queryByTestId('run-spend')).toBeNull();
   });
 });
 

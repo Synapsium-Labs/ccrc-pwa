@@ -1,15 +1,8 @@
 // L1 words (D-6799): how the run board says what a run's sessions have spent.
 // Pure: the row mounts what this returns and decides nothing. A MEASUREMENT -
 // no word here is a budget, a cap or a warning.
+import { formatTokens } from '@ccrc/ui';
 import type { RunSpend, RunSpendUnmeasuredReason } from '../../../shared/api';
-
-/** 999 -> '999', 1234 -> '1.2k', 4_500_000 -> '4.5M'. One decimal, trailing '.0' dropped. */
-export function compactCount(n: number): string {
-  const trim = (x: number): string => x.toFixed(1).replace(/\.0$/, '');
-  if (n >= 999_950) return `${trim(n / 1e6)}M`;
-  if (n >= 1000) return `${trim(n / 1e3)}k`;
-  return String(Math.round(n));
-}
 
 const WHY: Record<RunSpendUnmeasuredReason, string> = {
   'no-session': 'no session is bound to this run yet',
@@ -37,8 +30,8 @@ export function runSpendLine(spend: RunSpend | undefined): RunSpendWords | null 
   const t = spend.tokens;
   return {
     measured: true,
-    short: `≈ $${spend.proxyUsd.toFixed(2)} · out ${compactCount(t.output)}`,
-    long: `in ${compactCount(t.input)} · cache r ${compactCount(t.cacheRead)} w ${compactCount(t.cacheWrite)}`,
+    short: `≈ $${spend.proxyUsd.toFixed(2)} · out ${formatTokens(t.output)}`,
+    long: `in ${formatTokens(t.input)} · cache r ${formatTokens(t.cacheRead)} w ${formatTokens(t.cacheWrite)}`,
     title: `what this run's sessions have spent in the usage sweep's 7-day window, from the pass finished ${spend.measuredAt}. ` +
       'Partial: a session\'s earlier transcripts count only if the sweep saw their uuid while its row named it, ' +
       'and a worker reused across runs is counted in each. ' +

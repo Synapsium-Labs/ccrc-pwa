@@ -482,8 +482,10 @@ export interface CoordRoutesHandle {
  * (architecture doc increment 4); this file keeps the token gate, the
  * `CoordMutex` and the union->status maps.
  */
-/** Per-client budget for `GET /api/runs/:id`: far above a board open (every open run plus a
- *  fold of finished ones), far below a loop. */
+/** Global budget for `GET /api/runs/:id`: far above a board open (every open run plus a
+ *  fold of finished ones), far below a loop. ONE constant-keyed bucket for every caller (the
+ *  limiter reads no `req.ip`, like `auth/ratelimit.ts`); it runs on `preHandler`, after the
+ *  route's own auth `onRequest` hook, so an unauthenticated call never spends it. */
 export const RUN_SPEND_RATE_LIMIT = { max: 600, timeWindow: '1 minute' } as const;
 
 export function registerCoordRoutes(
@@ -2682,20 +2684,29 @@ export function registerCoordRoutes(
    *  its siblings (a session cookie OR the box token). */
   // Rate-limited (CodeQL js/missing-rate-limiting): the one run route that fans out to the agent
   // link per call carries its own budget. `global: false` keeps the limiter off every other route.
-  app.get('/api/runs/:id', { config: { rateLimit: RUN_SPEND_RATE_LIMIT } }, async (req, reply) => {
-    if (deps.cfg.authEnabled) {
-      const session = sessionAuth(req);
-      if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id');
-        if (token !== 'ok') {
-          return refuseRoute(reply, 'unauthenticated', {
-            verdict: session.verdict,
-            detail: 'GET /api/runs/:id takes a session cookie OR the box token ' +
-              `(${MAIL_TOKEN_HEADER}); the coordinator skill reads it cookieless from the fleet host`,
-          });
+  app.get('/api/runs/:id', {
+    config: { rateLimit: RUN_SPEND_RATE_LIMIT },
+    // Auth first (onRequest), then the limiter (preHandler): a refused call spends no budget.
+    errorHandler: (err, _req, reply) => {
+      if ((err as { statusCode?: number }).statusCode === 429) return reply.code(429).send({ ok: false, error: 'rate-limited' });
+      return reply.send(err);
+    },
+    onRequest: async (req, reply) => {
+      if (deps.cfg.authEnabled) {
+        const session = sessionAuth(req);
+        if (session.reason !== 'session') {
+          const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id');
+          if (token !== 'ok') {
+            return refuseRoute(reply, 'unauthenticated', {
+              verdict: session.verdict,
+              detail: 'GET /api/runs/:id takes a session cookie OR the box token ' +
+                `(${MAIL_TOKEN_HEADER}); the coordinator skill reads it cookieless from the fleet host`,
+            });
+          }
         }
       }
-    }
+    },
+  }, async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     const { id: idParam } = req.params as { id: string };
     const id = parseCanonicalPositiveSafeInteger(idParam);
