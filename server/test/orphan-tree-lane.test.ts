@@ -346,6 +346,35 @@ describe('DR-23: trees nested inside a workspace', () => {
     expect(r.acts()).toEqual([]);
   });
 
+  it('a claim read that fails between the audits holds the act and the second audit; once readable the act proceeds', async () => {
+    const r = rig(); armed(r); r.coordinators.add('lane-a');
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'lane-a');
+    await r.sweep.pass();
+    expect(audits(r)).toHaveLength(1);
+    r.unreadable(true); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toEqual([]);
+    expect(audits(r), 'no new audit while the coordinator list is unreadable').toHaveLength(1);
+    r.unreadable(false); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toHaveLength(1);
+  });
+
+  it('a census whose claim read fails says so once per episode', async () => {
+    const r = rig(); armed(r); r.unreadable(true);
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'lane-a');
+    await r.sweep.pass(); r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass(); r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(r.feed.filter((f) => f.body.includes('coordinator list could not be read'))).toHaveLength(1);
+  });
+
+  it('a worker tree that leaves the census is forgotten, so it is reported again if it returns', async () => {
+    const r = rig(); armed(r);
+    const h = r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'worker-a');
+    await r.sweep.pass();
+    r.trees.delete(h); r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'worker-a');
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(r.feed.filter((f) => f.body.includes('goes with its workspace'))).toHaveLength(2);
+  });
+
   it('a coordinator whose runs are all terminal is still a candidate, and the act goes ahead', async () => {
     const claims = new Map<string, unknown>([['lane-a', 7]]);
     const set = orphanCoordinatorSet({ childReclaimCoordinatorClaims: () => claims, openCoordinatorIds: () => [] });

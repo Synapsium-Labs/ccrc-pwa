@@ -800,4 +800,29 @@ describe('the orphan lane\'s counts in the watcher', () => {
       });
     } finally { /* nothing was built that needs closing */ }
   });
+
+  it('wires the coordinator set from every claim, so a nested tree of a terminal-run claimant is audited', async () => {
+    const home = mkTmp('ccrc-fh-orphan-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    mkdirSync(cfg.registryDir, { recursive: true });
+    const real = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const coord = Object.assign(Object.create(real), {
+      childReclaimCoordinatorClaims: () => new Map([['lane-a', 'closed']]), openCoordinatorIds: () => [],
+    }) as CoordStore;
+    const calls: string[][] = [];
+    const runCcd = async (argv: readonly string[]) => {
+      calls.push([...argv]);
+      if (argv[1] === '--orphans') return ok(JSON.stringify({ mode: 'orphans', truncated: false, rows: [{ pathHex: HEX, class: 'claude', inside: 'lane-a' }] }));
+      return ok(JSON.stringify({ mode: 'orphan', pathHex: HEX, verdict: 'refused', refusal: 'dirty', detail: '1 file' }));
+    };
+    const full = {
+      cfg, runCcd, tmux: new Tmux(deadRunner), io: localIO, queue: new KeyedQueue(), coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['orphan-v1'], rosterFp: null, build: null },
+    } as never as Deps;
+    const watcher = new FleetWatcher(full, new Bus());
+    await watcher.sweepOrphanTrees();
+    expect(calls.some((c) => c[1] === '--orphan-hex')).toBe(true);
+    expect(watcher.orphanTreesHealth()?.byOutcome.left).toBe(1);
+  });
 });
