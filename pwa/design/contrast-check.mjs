@@ -280,10 +280,12 @@ const pairs = (T, name) => [
   // fill-on-track pair here, and `pwa/test/limit-off-band.test.ts` pins the
   // numbers in both directions.
   // THE EMPTY METER'S OUTLINE (T2c, D-6329). `Meter`'s track carries a 1px
-  // inset ring in --ink-tertiary: the track itself is --limit-track, which
-  // sits at 1.07-1.16 on a card, and no edge token reaches 1.5, so a 0% meter
-  // would be a blank. The ring is a non-text mark (3:1) on the desk card's
-  // ground (--bg-raised) and the phone card's (--bg-surface).
+  // inset ring in --ink-tertiary: over the twelve palettes and both card
+  // grounds the track itself (--limit-track) measures 1.07-1.56, --edge-subtle
+  // 1.12-1.71 and --edge-strong 1.43-2.15, so no edge token clears 3:1
+  // everywhere and a 0% meter could be a blank. The ring is a non-text mark
+  // (3:1) on the desk card's ground (--bg-raised) and the phone card's
+  // (--bg-surface).
   [`${name} meter track outline / raised (UI 3:1)`, T.inkT, T.raised, 3],
   [`${name} meter track outline / surface (UI 3:1)`, T.inkT, T.surface, 3],
   // The ask sheet's two accent-on-quiet-ground texts. Both are 11px
