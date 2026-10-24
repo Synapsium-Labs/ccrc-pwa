@@ -109,19 +109,16 @@ describe('a custom title hides the name: the top search finds the session by eit
         const shown = page.getByRole('option', { name: 'Release notes, project-b', exact: true });
         const sessionNames = (): Promise<string[]> => page.getByRole('option').evaluateAll(
           (els) => els.map((e) => e.getAttribute('aria-label')).filter((n): n is string => n !== null));
-        // By the hidden name.
-        await input.fill('other-name');
-        await shown.waitFor({ timeout: 5_000 });
-        expect(await shown.count()).toBe(1);
-        expect(await sessionNames(), 'the hidden name finds the one session, shown by its title').toEqual(['Release notes, project-b']);
-        // By the shown title.
+        // By the shown title first: the control, which a dropped name term leaves green.
         await input.fill('Release notes');
-        await shown.waitFor({ timeout: 5_000 });
-        expect(await shown.count()).toBe(1);
-        expect(await sessionNames(), 'the shown title finds the same session').toEqual(['Release notes, project-b']);
-        // Enter on the hidden name opens it.
+        await expect.poll(sessionNames, { message: 'the shown title finds the session', timeout: 5_000 })
+          .toEqual(['Release notes, project-b']);
+        // By the hidden name: the same one session, still shown by its title.
         await input.fill('other-name');
-        await shown.waitFor({ timeout: 5_000 });
+        await expect.poll(sessionNames, { message: 'the hidden name finds the same session, shown by its title', timeout: 5_000 })
+          .toEqual(['Release notes, project-b']);
+        expect(await shown.count()).toBe(1);
+        // Enter on the hidden name opens it.
         await page.keyboard.press('Enter');
         await page.waitForURL(/\/s\/project-b-one$/, { timeout: 10_000 });
         await input.waitFor({ state: 'detached', timeout: 5_000 });

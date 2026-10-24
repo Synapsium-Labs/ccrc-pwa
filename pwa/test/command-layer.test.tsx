@@ -791,19 +791,20 @@ describe('the top search finds sessions (D-6714)', () => {
     useFleetStore.setState({ sessions: [FIRST, LEAD, THIRD, TITLED], runs: [], blocked: false });
     render(<CommandLayer openNewSession={vi.fn()} />);
     openPalette();
-    type('zeta-name');
-    expect(screen.getByRole('option', { name: SHOWN }), 'found by the hidden name').toBeTruthy();
+    // The shown title first: the control, which a dropped name term leaves green.
     type('Alpha task');
-    expect(screen.getByRole('option', { name: SHOWN }), 'found by the shown title').toBeTruthy();
+    expect(screen.queryByRole('option', { name: SHOWN }), 'found by the shown title').not.toBeNull();
+    type('zeta-name');
+    expect(screen.queryByRole('option', { name: SHOWN }), 'found by the hidden name').not.toBeNull();
     const input = type('zeta-name');
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(window.location.pathname).toBe(`/s/${encodeURIComponent(TITLED.id)}`);
     expect(palette()).toBeNull();
     openPalette();
     openSessionPage();
-    type('zeta-name');
-    expect(optionNames(), 'the page, by the hidden name').toEqual([SHOWN]);
     type('Alpha task');
     expect(optionNames(), 'the page, by the shown title').toEqual([SHOWN]);
+    type('zeta-name');
+    expect(optionNames(), 'the page, by the hidden name').toEqual([SHOWN]);
   });
 });
