@@ -10,6 +10,7 @@ import type {
   AgentReady,
   AgentReq,
   CapsReq,
+  DiskReq,
   ExecReq,
   PtyData,
   PtyExit,
@@ -34,13 +35,14 @@ import type {
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
 import {
-  ACCOUNT_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP,
+  ACCOUNT_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP,
   TOKEN_SYNC_SPAWN_TIMEOUT_MS, UPDATE_OP, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine,
   inFlightBusyDetail, isClaimCode, isReadFromRange, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
   updateSpawnArgv, updateWriterMayLive,
   type KillProbeOutcome, type UpdateReportRead, type UpdateSpawnResult,
 } from '../../shared/agent-protocol.js';
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
+import { measureDisk, type DiskSeams } from './disk.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import {
@@ -85,6 +87,7 @@ export interface AgentOpts {
   spawnUpdate?: UpdateSpawn; // default realUpdateSpawn (a process-group spawn) — tests inject a recorder; the `update` op's ONLY spawn
   spawnTokenSync?: TokenSyncSpawn; // default makeTokenSyncSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `token-sync` op's ONLY spawn
   spawnAccount?: AccountOpSpawn; // default makeAccountOpSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `account` op's ONLY spawn
+  diskSeams?: Partial<DiskSeams>; // default realDiskSeams() — tests inject the statfs/stat/mountinfo reads; the `disk` op's ONLY disk reads
 }
 
 export interface RunningAgent {
@@ -523,6 +526,7 @@ interface ConnCtx {
   spawnTokenSync: TokenSyncSpawn;
   tokenSyncGate: TokenSyncGate;
   spawnAccount: AccountOpSpawn;
+  diskSeams: Partial<DiskSeams>;
 }
 
 async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: VerbCache): Promise<void> {
@@ -751,6 +755,13 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, { accepted: true }));
       return;
     }
+    case 'disk': {
+      // Fleet disk retention spec §2.5 (D-6614). The op takes NO argument (`validateReq` refuses a frame that carries
+      // one), so there is no path to contain: `measureDisk` resolves the work roots itself, against the configured home.
+      // Every disk fault is a `missing` row in the answer, never a throw and never a zero.
+      send(ws, ok(req.id, { ...await measureDisk(ctx.cfg.home, ctx.diskSeams) }));
+      return;
+    }
     case 'token-sync': {
       // Box-token lifecycle spec 4.4. The second wire-triggered spawn outside the exec whitelist (agent/CLAUDE.md).
       // `validateReq` has already refused a code that fails `isClaimCode`; it is checked AGAIN here, and a caller bug
@@ -938,6 +949,12 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
       const kind = msg.kind === undefined ? 'update' : msg.kind;
       if (!isRequestKind(kind)) return { refuse: 'bad-kind', id };
       return { t: 'req', id, op: 'update', tag: msg.tag, kind } satisfies UpdateReq;
+    }
+    case 'disk': {
+      // The op has no argument. A frame that carries any field beyond the envelope's own is malformed (`null` is
+      // `bad-request`, the word an agent that predates the op also answers), and nothing is measured.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
+      return { t: 'req', id, op: 'disk' } satisfies DiskReq;
     }
     case 'token-sync': {
       // The ONE code guard (`isClaimCode`, never a regex here). A missing, non-string or malformed code is a
@@ -1264,6 +1281,7 @@ function handleConnection(
     spawnTokenSync: opts.spawnTokenSync,
     tokenSyncGate,
     spawnAccount: opts.spawnAccount,
+    diskSeams: opts.diskSeams,
   };
 
   const helloTimer = setTimeout(() => {
@@ -1306,11 +1324,12 @@ function handleConnection(
       // something to write.
       // `ops` (design 2026-09-20 §10): the request ops this agent answers beyond
       // the closed set every agent has always had: `update`, `token-sync`
-      // (box-token lifecycle spec 4.4) and `account` (accounts spec §13.2, whose
-      // remote arm sends a secret only to an agent that names it here). It is
+      // (box-token lifecycle spec 4.4), `account` (accounts spec §13.2, whose
+      // remote arm sends a secret only to an agent that names it here) and `disk`
+      // (fleet disk retention spec §2.5, D-6614: it takes no field). It is
       // required in `ReadyFrame`, so it cannot be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP],
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP],
       };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
@@ -1406,6 +1425,7 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     spawnTokenSync: rawOpts.spawnTokenSync ?? makeTokenSyncSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
     // The `account` op's port gets the same explicit environment, from the same configured home (spec §13.2).
     spawnAccount: rawOpts.spawnAccount ?? makeAccountOpSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
+    diskSeams: rawOpts.diskSeams ?? {},
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {
