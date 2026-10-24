@@ -202,10 +202,9 @@ describe('closing the server (landing-order wave 3c)', () => {
     let release!: () => void;
     const held = new Promise<void>((r) => { release = r; });
     const spy = vi.spyOn(FleetWatcher.prototype, 'serverCapsNow').mockImplementation(function (this: FleetWatcher) {
-      const run = held.then(() => null);
-      (this as unknown as { serverCapsRun: Promise<unknown> | null }).serverCapsRun = run;
-      void run.finally(() => { (this as unknown as { serverCapsRun: Promise<unknown> | null }).serverCapsRun = null; });
-      return run;
+      // The write in flight is the lane runner's (D-5862): this stands a held write in the same flight slot.
+      const lanes = (this as unknown as { lanes: { runNow(n: string, fn: () => Promise<null>): Promise<null> } }).lanes;
+      return lanes.runNow('serverCaps', () => held.then(() => null));
     });
     try {
       const deps = testDeps(home);
