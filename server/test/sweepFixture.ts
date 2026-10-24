@@ -32,7 +32,7 @@ function realPath(name: string): string {
   if (p === '') throw new Error(`this box has no ${name} — the fixture needs it`);
   return p;
 }
-/** bash, resolved ONCE from the parent's PATH (`ccrc-update.test.ts`'s idiom): never a bare `'bash'` under a narrowed PATH. */
+/** bash, resolved ONCE from the parent's PATH (`ccrc-updateFixture.ts`'s idiom): never a bare `'bash'` under a narrowed PATH. */
 export const BASH = realPath('bash');
 
 /** The one name for the sourced `ccd/ccrc`: a case reads it and the spawn passes it as `$1`. */
@@ -111,7 +111,7 @@ export interface BoxOpts {
 
 export interface Box { home: string; env: NodeJS.ProcessEnv }
 
-/** The stub `systemctl`, after `ccrc-update.test.ts`'s: it records `$*` before any shift, requires `--user`, shifts
+/** The stub `systemctl`, after `ccrc-updateFixture.ts`'s: it records `$*` before any shift, requires `--user`, shifts
  *  it off, and answers each verb the sweep and the script make from files the plant wrote under `$HOME/fx`. */
 const SYSTEMCTL_STUB = [
   '#!/bin/sh',
