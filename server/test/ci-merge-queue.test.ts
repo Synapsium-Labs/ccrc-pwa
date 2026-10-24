@@ -89,7 +89,10 @@ function topLevel(expr: string, op: ' && ' | ' || '): string[] {
 }
 
 const SKIP = "github.event_name != 'merge_group'";
-const ALLOW_LIST = /^github\.event_name == '[a-z_]+'(?: \|\| github\.event_name == '[a-z_]+')*$/;
+// An allowed event may carry one schedule exclusion, `(github.event_name == 'schedule' && github.event.schedule != '<cron>')`
+// (D-6769: probe-macos runs on the daily schedule and not on the hourly refresh); it still names no merge_group.
+const ALLOWED = String.raw`(?:github\.event_name == '[a-z_]+'|\(github\.event_name == 'schedule' && github\.event\.schedule != '[^']+'\))`;
+const ALLOW_LIST = new RegExp(`^${ALLOWED}(?: \\|\\| ${ALLOWED})*$`);
 
 /** Whether a job-level `if:` keeps a `merge_group` run out: either the skip is
  *  one of its TOP-LEVEL conjuncts and it has no top-level `||` (a disjunct

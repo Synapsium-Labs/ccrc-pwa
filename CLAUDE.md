@@ -274,7 +274,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   map, runs the full suite instead. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
   `shadow`, the selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) runs what a pull request runs, its pipeline check included, in a
   concurrency group of its own, and never the macOS legs or `full-suite` (operator ruling 2026-09-28). **A merge
-  to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
+  to `main`** starts no CI run: an **hourly** `refresh` run (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
+  group so runs coalesce) re-traces the tests every merge since the last refresh affected and updates the map, running
+  no test legs and reporting newly failing or timed-out tests as a warning and a job summary, never a red job (D-6769).
   **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
   head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
   gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:

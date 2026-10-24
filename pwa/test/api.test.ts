@@ -53,6 +53,18 @@ describe('api client', () => {
     expect(JSON.parse(init.body as string)).toEqual({ text: 'hello' });
   });
 
+  it('prompt sends resume: true when asked, and omits it otherwise', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.prompt('x', 'hello', { resume: true });
+    await api.prompt('x', 'hello', { resume: false });
+    await api.prompt('x', 'hello', {});
+
+    const bodies = fetchImpl.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string));
+    expect(bodies).toEqual([{ text: 'hello', resume: true }, { text: 'hello' }, { text: 'hello' }]);
+  });
+
   it('prompt throws ApiError with the parsed body on 409', async () => {
     const draftBody = { ok: false, error: 'draft-present', draft: 'half-typed thought' };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(409, draftBody));

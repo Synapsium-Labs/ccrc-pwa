@@ -337,6 +337,65 @@ describe('write routes', () => {
     await app.close();
   });
 
+  // D-6367: Retry's whole-box resume rides the body's one optional `resume` field (`=== true`, one reader).
+  const RULE = '─'.repeat(60);
+  const boxPane = (text: string): string => `earlier turn\n${RULE}\n❯ ${text}\n${RULE}\n  👤 team·max\n`;
+
+  it('a /prompt body with resume: true resumes the box whole: one Enter, nothing typed', async () => {
+    const { app, calls } = await makeApp([boxPane('hello'), boxPane('')]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
+    await app.close();
+  });
+
+  it('a /prompt body with resume: true over an empty box is 409 nothing-to-submit, nothing typed', async () => {
+    const { app, calls } = await makeApp([boxPane('')]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // R38: Retry now resumes after every enter-ignored, drafted or not; the server never sees the draft, so this pins its half.
+  it('a Retry after an enter-ignored with no draft: resume over an empty box is nothing-to-submit and over our own text one Enter', async () => {
+    const empty = await makeApp([boxPane('')]);
+    const emptyRes = await empty.app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(emptyRes.statusCode).toBe(409);
+    expect(emptyRes.json()).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(sendKeysCalls(empty.calls)).toEqual([]);
+    await empty.app.close();
+
+    const own = await makeApp([boxPane('hello'), boxPane('')]);
+    const ownRes = await own.app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(ownRes.statusCode).toBe(200);
+    expect(ownRes.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(own.calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
+    await own.app.close();
+  });
+
+  it("a /prompt body with resume: 'yes' (not true) behaves as today", async () => {
+    const { app, calls } = await makeApp([boxPane('hello')]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: 'yes' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'draft-present', draft: 'hello' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('a /prompt body with resume: true and replaceDraft: true over a foreign box is draft-present and clears nothing', async () => {
+    const { app, calls } = await makeApp([boxPane('somebody else was typing')]);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true, replaceDraft: true },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'draft-present', draft: 'somebody else was typing' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
   // D-6366: a refused send leaves one countable line, naming the outcome and the box's shape and never the text.
   it('a refused send writes one warn line naming its outcome, without the text', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

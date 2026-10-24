@@ -53,7 +53,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { CCD_ARGV, type ActorFlags } from '../src/ccdargv.js';
-import { ACCOUNT_DENY_RULES, type CollectToken } from '../../shared/api.js';
+import { ACCOUNT_DENY_RULES, type CollectToken, type OrphanToken } from '../../shared/api.js';
 import { decOf, eventsOf, measOf } from './lifecycleHelpers.js';
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
@@ -127,6 +127,8 @@ interface Probe {
 
 const ABSENT = '__no-such-session__';
 const PROJECT = 'demo';
+/** `/__no-such-tree__`, as the orphan census prints a path: lowercase hex of its bytes. */
+const ABSENT_TREE_HEX = Buffer.from('/__no-such-tree__').toString('hex');
 
 /** The five session verbs' witness, said once: the refusal names the session
  *  the fixture deliberately does not have. That is also what proves the flags
@@ -163,6 +165,13 @@ const PROBES: Record<string, Probe> = {
   'ws-collect': {
     argv: (d) => CCD_ARGV.wsCollect('a'.repeat(64) as CollectToken, ABSENT, d),
     reached: (c) => { refusedForTheAbsentSession(c); expect(c.out).toContain('"refused":"not-witnessed"'); },
+  },
+  // Fleet disk retention DR-18 (D-6630): the orphan verb. A tree path that is not one plain real directory is refused as
+  // JSON BEFORE any lock is taken (`not-a-worktree`), the dec stripped before the verb's required-flag check, so the
+  // refusal is byte-identical with and without it and names the path the fixture deliberately does not have.
+  'ws-orphan': {
+    argv: (d) => CCD_ARGV.wsOrphan('a'.repeat(64) as OrphanToken, ABSENT_TREE_HEX, false, d),
+    reached: (c) => { expect(c.out).toContain('"refused":"not-a-worktree"'); },
   },
   'ws-add': {
     argv: (d) => CCD_ARGV.wsAddWorker(PROJECT, d),
@@ -241,7 +250,7 @@ const runCcd = (args: readonly string[]): { code: number; out: string } => {
 };
 
 describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a dec on', () => {
-  it('derives the dec-appending verbs from the table, and finds ten — the five workspace verbs, ws-add, ws-reclaim, ws-expire, ws-collect and hibernate', () => {
+  it('derives the dec-appending verbs from the table, and finds eleven — the five workspace verbs, ws-add, ws-reclaim, ws-expire, ws-collect, ws-orphan and hibernate', () => {
     // BOTH DIRECTIONS, and the second one is the one this suite was written
     // for. A verb ADDED here without a ccd that parses it is caught by the
     // execution test below; a verb SILENTLY added is caught right here, because
@@ -257,7 +266,7 @@ describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a de
     // `hibernate` (D-5242) is the tenth: a new verb whose capability word IS its name (`verbSupported`), so no box
     // receives the flags before it parses them.
     expect(decAppendingVerbs())
-      .toEqual(['hibernate', 'ws-add', 'ws-archive', 'ws-collect', 'ws-expire', 'ws-hold', 'ws-reclaim', 'ws-release', 'ws-rename', 'ws-restore']);
+      .toEqual(['hibernate', 'ws-add', 'ws-archive', 'ws-collect', 'ws-expire', 'ws-hold', 'ws-orphan', 'ws-reclaim', 'ws-release', 'ws-rename', 'ws-restore']);
   });
 
   it('has a probe for every derived verb — a new one cannot join unmeasured', () => {

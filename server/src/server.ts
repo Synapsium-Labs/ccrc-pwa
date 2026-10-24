@@ -101,7 +101,7 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
 import { noticeBanner, noticeSink, notifyPushOnly } from './notice.js';
@@ -2007,6 +2007,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // ends inside a run that could begin a secret is held back until the next chunk or 6 ms (`DrawerMask`, D-5995).
     const drawerMask = (deps.masker ?? SHAPE_ONLY_MASKER).drawer((text) => socket.send(text));
     const sub = p.onData((data) => drawerMask.push(data));
+    const exitSub = p.onExit?.(() => socket.close(PTY_EXIT_CLOSE, 'pty-exit'));   // a drawer never sits open on a dead pty (D-6368)
     socket.on('message', (raw) => {
       try {
         const m = JSON.parse(String(raw)) as { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
@@ -2021,6 +2022,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
     socket.on('close', () => {
       sub.dispose();
+      exitSub?.dispose();
       drawerMask.dispose();
       p.kill();
       // Restore the canonical size ccd spawned with — a phone-sized drawer must
@@ -2154,7 +2156,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/prompt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown };
+    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown; resume?: unknown };
     const raw = Array.isArray(body.attachments) ? body.attachments : [];
     if (raw.length > MAX_ATTACHMENTS) {
       return reply.code(400).send({ ok: false, error: 'bad-attachment' });
@@ -2179,7 +2181,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.text !== 'string' || (body.text.length === 0 && attachments.length === 0)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const res = await sendPrompt(sendDeps, id, body.text, { onDraft: body.replaceDraft === true ? 'replace' : 'refuse', attachments });
+    // D-6367: Retry over our own left text. `resume === true` is this field's one reader; anything else is today's call.
+    const res = await sendPrompt(sendDeps, id, body.text, {
+      onDraft: body.replaceDraft === true ? 'replace' : 'refuse', attachments,
+      ...(body.resume === true ? { resumeIfOwn: 'whole' as const } : {}),
+    });
     if (!res.ok) console.warn(`ccrc-server: prompt ${id}: ${res.error} ${refusalShape(res)}`); // D-6366: countable, no text
     return res.ok ? res : reply.code(409).send(res);
   });

@@ -1,5 +1,5 @@
 import type { FleetState } from './fleetstate.js';
-import { ROUTE_WRITABLE_FIELDS, type CollectToken, type RouteFields, type StopSurface } from '../../shared/api.js';
+import { ROUTE_WRITABLE_FIELDS, type CollectToken, type OrphanToken, type RouteFields, type StopSurface } from '../../shared/api.js';
 import type { DocSectionSlug } from '../../shared/docs.js';
 
 declare const CcdArgvBrand: unique symbol;
@@ -55,6 +55,17 @@ export type CcdArgv = readonly string[] & { readonly [CcdArgvBrand]: true };
  * inherent to TypeScript, not bugs in this function.
  */
 const argv = (parts: readonly string[]): CcdArgv => Object.freeze(parts) as CcdArgv;
+
+/** An orphaned tree's path as the census prints it: even-length lowercase hex, never empty. Anything else is a programming
+ *  error (the census is the only source), and fails toward not sending. */
+const treeHex = (hex: string): string => {
+  if (!/^(?:[0-9a-f]{2})+$/.test(hex)) throw new Error('an orphaned tree travels as even-length lowercase hex');
+  return hex;
+};
+
+/** `ccd ws-orphan --rescue`: the flag rides only when the caller spends the audit's rescue token (a tree whose head is on no
+ *  remote), and never otherwise. */
+const rescueFlag = (rescue: boolean): string[] => (rescue ? ['--rescue'] : []);
 
 /** `ccd hibernate --hold-ok <text>` (D-6091): the programme hold the run-done policy passes, verbatim, or nothing. Sent
  *  only behind `HIBERNATE_HOLD_OK_CAP`; ccd refuses a dash-leading value, and a programme hold never begins with one. */
@@ -560,6 +571,20 @@ export const CCD_ARGV = {
    *  `ws-collect-wiring.test.ts` pins that no other server source composes it. */
   wsCollect: (token: CollectToken, id: string, dec: ActorFlags | null) =>
     argv(['ws-collect', '--expect', token, '--session', id, ...decFlags(dec)]),
+  /** `ws-audit --orphans` (fleet disk retention spec 2026-10-23 section 2.3, D-6628/D-6630): the read-only census of the
+   *  linked worktrees no registry row names, paths as hex. Behind `ORPHAN_CAP`. Granted by `['ws-audit','--orphans']`. */
+  wsOrphanCensus: () => argv(['ws-audit', '--orphans']),
+  /** `ws-audit --orphan-hex <hex>`: one orphaned tree's ladder answer, which mints the token (and the rescue token) that
+   *  `wsOrphan` spends. The path travels as hex and nowhere else, so a path with a space or a leading dash never reaches
+   *  argv raw; a value that is not even-length lowercase hex is refused here, before any argv exists. Granted by
+   *  `['ws-audit','--orphan-hex']`. */
+  wsOrphanAudit: (hex: string) => argv(['ws-audit', '--orphan-hex', treeHex(hex)]),
+  /** `ws-orphan --expect <token> --tree-hex <hex> [--rescue]`: the orphan lane's act, on its own granted prefix
+   *  (`['ws-orphan','--expect']`, enrolled in the agent's `REQUIRED_VERB_FLAG`). The token LEADS and binds the tree's
+   *  identity; `--rescue` rides only with the audit's rescue token; the dec trails and ccd strips it before it binds a
+   *  positional. Behind `ORPHAN_CAP`. Never `--force`. `CCD_ARGV` is the one place this argv is composed. */
+  wsOrphan: (token: OrphanToken, hex: string, rescue: boolean, dec: ActorFlags | null) =>
+    argv(['ws-orphan', '--expect', token, '--tree-hex', treeHex(hex), ...rescueFlag(rescue), ...decFlags(dec)]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
   /** The dec flags ride AFTER `--reason`, and `--reason` is NOT one of them: on
    *  `ws-hold` the hold reason IS the declared reason (ccd's `cmd_ws_hold` says
@@ -1024,6 +1049,12 @@ export const DOCS_CAP = 'docs-v1';
  *  asks it before every audit and again in the act's own scope (`verb-gate.test.ts`, `collect-temp-root.test.ts`). */
 export const COLLECT_CAP = 'collect-v1';
 
+/** The `ccd caps` token that says this box's ccd has the orphan lane (fleet disk retention spec 2026-10-23 section 2.3,
+ *  D-6629): `ws-audit --orphans`, `ws-audit --orphan-hex <hex>` and `ws-orphan --expect <token> --tree-hex <hex>`, one ccd
+ *  inode. Spelled ONCE in `server/src`; ccd's `echo orphan-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which
+ *  refuse on no evidence: the verb it gates deletes. */
+export const ORPHAN_CAP = 'orphan-v1';
+
 /** The `ccd caps` token that says this box's `cmd_swap` re-measures the turn at the act and takes `--interrupt`
  *  (D-5240, Task 11). It gates ONE decision: whether the swap route may send `CCD_ARGV.swapInterrupt` or
  *  `swapCrossInterrupt`. Without it the route sends the old argv, which an old ccd parses and which refuses nothing —
@@ -1174,6 +1205,8 @@ export const CCD_CAN = {
   wsReclaimAudit: verbRow('ws-audit'), wsReclaim: capRow(RECLAIM_CAP),
   wsExpireAudit: verbRow('ws-audit'), wsExpire: capRow(EXPIRE_CAP),
   wsCollectAudit: verbRow('ws-audit'), wsCollect: capRow(COLLECT_CAP),
+  // The orphan lane's three rows all refuse on no evidence: the census and the audit are new flags an older ccd rejects.
+  wsOrphanCensus: capRow(ORPHAN_CAP), wsOrphanAudit: capRow(ORPHAN_CAP), wsOrphan: capRow(ORPHAN_CAP),
   wsAttic: verbRow('ws-attic'),
   wsHold: verbRow('ws-hold'), wsRelease: verbRow('ws-release'), wsRename: verbRow('ws-rename'),
   coordPause: verbRow('coord-pause'), reclaimPause: capRow(RECLAIM_PAUSE_CAP),

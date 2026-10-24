@@ -648,6 +648,51 @@ describe("onDraft: 'stash' (D-5911)", () => {
       expect(res).toEqual({ ok: true });
     });
 
+    it("D-6367: `resumeIfOwn: 'whole'` over a held stash goes through the held-stash submit: a swallowed Enter gets the retry, the stash stays unsent", async () => {
+      const ours = 'please review the latest diff of the module';
+      const f = fakeCc({ box: [ours], stash: ['an earlier human note'], swallowEnters: 1 });
+      const res = await send(f, ours, { resumeIfOwn: 'whole' });
+      expect(f.keys).toEqual(['Enter', 'Enter']);
+      expect(f.state.history).toEqual([ours]);
+      expect(f.state.box).toEqual(['an earlier human note']);
+      expect(res).toEqual({ ok: true });
+    });
+
+    // The whole-mode twins of the prefix mode's gates: the resume's `submit` is `submitOverHeldStash`, so the
+    // indicator gate and the blind-watch rule bind it too. A bypass to `pressEnterAndConfirm` keeps the retry Enter.
+    it("D-6367: `resumeIfOwn: 'whole'` over a held stash: a capture missing the indicator after a swallowed Enter is not a delivery", async () => {
+      const ours = 'please review the latest diff of the module';
+      const f = fakeCc({ box: [ours], stash: ['an earlier human note'], swallowEnters: 1, hideAfterSwallow: 1 });
+      const res = await send(f, ours, { resumeIfOwn: 'whole' });
+      expect(f.state.history).toEqual([]);
+      expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+      expect(res).not.toHaveProperty('submittable');
+      expect(f.keys).toEqual(['Enter']);
+    });
+
+    it("D-6367: `resumeIfOwn: 'whole'` over a held stash: a watch that went blind after reading our box buys no retry Enter", async () => {
+      const ours = 'please review the latest diff of the module';
+      const human = 'an earlier human note';
+      // One good read of our text, the Enter landing at capture 2, every capture after it failing to the end of the watch.
+      const f = fakeCc({ box: [ours], stash: [human], landAtCapture: 2, failCapture: (k) => k >= 2 && k <= SUBMIT_TRIES });
+      const res = await send(f, ours, { resumeIfOwn: 'whole' });
+      expect(f.keys).toEqual(['Enter']);
+      expect(f.state.history).toEqual([ours]);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true });
+    });
+
+    it("D-6367: `resumeIfOwn: 'whole'` never stashes (onDraft is not consulted) and its Enter's restore is not mistaken for our text", async () => {
+      const ours = 'please review the latest diff of the module';
+      const human = `${ours.slice(0, 30)} and then the human kept typing`;
+      const f = fakeCc({ box: [ours], stash: [human] });
+      const res = await send(f, ours, { ...STASH, resumeIfOwn: 'whole' });
+      expect(f.keys).toEqual(['Enter']);
+      expect(f.state.history).toEqual([ours]);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true });
+    });
+
     it('post-merge review: a capture missing the indicator after a swallowed Enter is not a delivery', async () => {
       const nudge = 'you have mail waiting for you, fetch it';
       const f = fakeCc({ box: [nudge], stash: ['an earlier human note'], swallowEnters: 1, hideAfterSwallow: 1 });
@@ -924,6 +969,23 @@ describe("onDraft: 'stash' (D-5911)", () => {
       expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(2);
       expect(f.state.history).toEqual(['hello from the lane']);
       expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+    });
+
+    // D-6367, R29 F2: the absent-box twins of the case above, one per stash path; a box-less capture resets it too.
+    it('a watch that read our box on every poll after its box-less capture keeps the retry Enter (around our own stash)', async () => {
+      const f = fakeCc({ box: [human], swallowEnters: 1, absentCapture: (k) => k === 2 });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(2);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+    });
+
+    it('a watch that read our box on every poll after its box-less capture keeps the retry Enter (over a stash already held)', async () => {
+      const f = fakeCc({ box: [], stash: [human], swallowEnters: 1, absentCapture: (k) => k === 2 });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(2);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(res).toEqual({ ok: true });
     });
   });
 

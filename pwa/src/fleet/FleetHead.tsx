@@ -21,16 +21,20 @@ import '../fleet/fleet.css';
 
 export function FleetHead(
   { countLine, poolLag, unreadMail, chrome = true }: {
-    /** The "N sessions" readout, or `null` on an empty fleet. */
+    /** The "N sessions" readout, or `null` when the fleet is empty or the column's status bar prints the count (T2g).
+     *  Both draw the same: nothing. */
     countLine: string | null;
     /** The account-pool projection's lag, when there is one to show. */
     poolLag: string | null;
     unreadMail: number;
-    /** The wordmark and the doors. False where the skin's bar holds them (Refined at a desk, W2 Task S4b): the
-     *  readouts stay here, and the identity mark is drawn once. */
+    /** The wordmark and the doors. False where the skin's bar holds them (Refined's `Sidebar` and Instrument's
+     *  `ListColumn` at a desk, W2 Task S4b, T2e): the readouts stay here, and the identity mark is drawn once. With no
+     *  chrome, no count line and no lag the head draws nothing (T2g, D-6715). */
     chrome?: boolean;
   },
 ): ReactNode {
+  // Nothing to draw: no header, so no empty box keeping its padding and the column's gap (both skins, T2g, D-6715).
+  if (!chrome && countLine === null && poolLag === null) return null;
   return (
     <header className="fleet-head">
         {chrome && <span className="wordmark">ccrc</span>}

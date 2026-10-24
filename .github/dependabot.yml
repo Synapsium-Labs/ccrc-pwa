@@ -81,8 +81,10 @@ updates:
 
   # ── the actions the workflows pin ─────────────────────────────────────────
   #
-  # ci.yml and release.yml pin actions/checkout@v4 and actions/setup-node@v4 by
-  # major tag, which floats within v4 but never crosses to v5 — so without this
+  # The workflows pin each action by major tag (now actions/checkout@v7,
+  # actions/setup-node@v7, actions/upload-artifact@v7 and
+  # actions/download-artifact@v8), which floats within that major but never
+  # crosses to the next — so without this
   # entry the pins age silently until a deprecation notice turns a green leg
   # red. `/` is correct here regardless of the package layout: this ecosystem
   # reads .github/workflows, not a manifest.

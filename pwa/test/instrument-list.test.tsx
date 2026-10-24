@@ -22,6 +22,11 @@
 //   the state's flex `0 0 auto` as `0 1 auto` + `min-width: 0` ... "under a fine pointer at a desk a status row is two lines on --row-h …"
 //                                                                 (`expected '\n flex: 0 1 auto;\n min-width:…' to match /flex:\s*0 0 auto/`; the browser file's
 //                                                                 layout does not change under it, a wrapped flex line deciding on max-content sizes)
+// T2e review R32, F6 (carried into T2g, D-6715; RUN, this suite alone, then reverted): the token guard reads every rule of the block.
+//   `padding-top: 3px` added to the dense block's `.ins-row .sess-actions` rule, a rule the old four-selector loop did not name
+//                                                         "under a fine pointer at a desk a status row is two lines on --row-h …"
+//                                                         (`.ins-row .sess-actions: expected '\n padding-top: 3px;\n align-se…' not to match /\d+px|#[0-9a-f]{3,8}\b|rgb|hsl/i`);
+//                                                         the old loop, run on the same mutant, stayed green (20 passed)
 // The browser file's rows, a literal 32px floor outside (pointer: fine), the naive ⋯ inset and the lamp rule, are that
 // file's header's.
 import { readFileSync } from 'node:fs';
@@ -102,6 +107,14 @@ const pick = (mode: 'Status' | 'Project'): void => { fireEvent.click(within(togg
 /** The declarations of every rule whose selector list includes `selector`: outside any at-rule, or, with `media`, inside
  *  the `@media` blocks whose prelude is exactly that (the sheet nests no at-rule in another). */
 function declsOf(selector: string, media: string | null = null): string {
+  const out: string[] = [];
+  for (const r of rulesIn(media)) if (r.selectors.includes(selector)) out.push(r.decls);
+  return out.join(';');
+}
+
+/** Every rule of the sheet outside any at-rule, or, with `media`, of the `@media` blocks whose prelude is exactly
+ *  that: its selector list and its declarations (the sheet nests no at-rule in another). `declsOf` reads it by selector. */
+function rulesIn(media: string | null): { selectors: string[]; decls: string }[] {
   let scope = CSS.replace(/@media[^{]+\{(?:[^{}]*\{[^}]*\})*\s*\}/g, '');
   if (media !== null) {
     const bodies: string[] = [];
@@ -116,11 +129,7 @@ function declsOf(selector: string, media: string | null = null): string {
     }
     scope = bodies.join('\n');
   }
-  const out: string[] = [];
-  for (const r of scope.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
-    if (r[1]!.split(',').map((s) => s.trim()).includes(selector)) out.push(r[2]!);
-  }
-  return out.join(';');
+  return [...scope.matchAll(/([^{}]+)\{([^}]*)\}/g)].map((r) => ({ selectors: r[1]!.split(',').map((x) => x.trim()), decls: r[2]! }));
 }
 
 beforeEach(() => {
@@ -459,7 +468,7 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     // The lamp is reached as the row's first cell (skin-boundary (b): a skin's sheet never names the lamp's class).
     expect(declsOf('.ins-row .sess-line > :first-child', DENSE)).toMatch(/margin-top:\s*0/);
     // A row with no context fact makes its name's line the floor high and puts the lamp at that line's middle, so the
-    // lamp is on the name's first line in a one-line row and in a two-line one (T2e fix rounds 1 and 2, F5).
+    // lamp is on the name's first line in a one-line row and in a two-line one (T2e fix round 1, F5).
     expect(declsOf('.ins-row .sess-line:not(:has(.sess-meta--context)) .sess-body > .sess-open', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
     expect(declsOf('.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child', DENSE))
       .toMatch(/margin-top:\s*calc\(\(var\(--row-h\) - var\(--fs-base\) \* var\(--lh-tight\)\) \/ 2\)/);
@@ -470,10 +479,11 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     // The group heads and the toggle sit at --row-h.
     expect(declsOf('.ins-group-head', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
     expect(declsOf('.ins-toggle-option', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
-    // Every dense value is a token or a keyword: the pattern bars a px literal and a colour literal (hex, rgb, hsl).
-    for (const sel of ['.ins-row .sess-body', '.ins-row .sess-line', '.ins-group-head', '.ins-toggle-option']) {
-      expect(declsOf(sel, DENSE), sel).not.toMatch(/\d+px|#[0-9a-f]{3,8}\b|rgb|hsl/i);
-    }
+    // Every dense value is a token or a keyword: the pattern bars a px literal and a colour literal (hex, rgb, hsl), in
+    // every rule of the block (T2e review R32, F6), not in a list of selectors that a new rule would be left out of.
+    const dense = rulesIn(DENSE);
+    expect(dense.length, 'the dense block has rules').toBeGreaterThanOrEqual(8);
+    for (const r of dense) expect(r.decls, r.selectors.join(', ')).not.toMatch(/\d+px|#[0-9a-f]{3,8}\b|rgb|hsl/i);
   });
 
   it('nothing of the dense arrangement is declared outside the fine-pointer desk block', () => {

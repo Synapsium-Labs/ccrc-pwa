@@ -69,7 +69,8 @@ import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput
 // The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
 import { randomUUID } from 'node:crypto';
 import type { MeasuredDirectoryRead, MeasuredDisk } from './io.js';
-import { diskVerdict, type DiskVerdict } from './disk.js';
+import { diskMarkFate, diskNotice, diskVerdict, type DiskVerdict } from './disk.js';
+import { clearDiskEpisode, readDiskEpisode, writeDiskEpisode } from './diskepisode.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
 import {
@@ -7126,8 +7127,23 @@ export class FleetWatcher {
       };
       return;
     }
-    const verdict = diskVerdict(this.diskState, read.measured, now);
+    const before = this.diskState;
+    let verdict = diskVerdict(before, read.measured, now);
+    // The open episode is durable (the `pushRelease` rule: a latch that forgets on restart repeats the push). A process
+    // that saw its own held episode close forgets the mark. One with no episode of its own judges the mark by the
+    // filesystem(s) that pushed it: standing now, it resumes that episode (its key is already archived); every one clear
+    // or gone, it forgets (a later rise is new); otherwise it keeps. A mark with no filesystem is stale.
+    const dir = this.deps.cfg.ccrcDir;
+    if (before?.episode !== undefined) {
+      if (verdict.level === 'ok') clearDiskEpisode(dir);
+    } else {
+      const mark = readDiskEpisode(dir);
+      const fate = mark === null ? 'keep' : diskMarkFate(mark.devs, verdict, read.measured);
+      if (mark !== null && fate === 'resume') verdict = { ...verdict, episode: mark.episode };
+      else if (fate === 'forget') clearDiskEpisode(dir);
+    }
     this.diskState = verdict;
+    this.raiseDiskNotice(before, verdict);
     this.diskBlock = {
       at: verdict.at,
       level: verdict.level,
@@ -7136,6 +7152,22 @@ export class FleetWatcher {
       pressure: verdict.level === 'critical',
       holders: [],
     };
+  }
+
+  /**
+   * The disk notice (D-6616, spec §2.5): `diskNotice` decides, this sends it through the notice funnel as a sessionless
+   * `coord` notice. The once-only key is READ before the write (`hasNotice`), so a watcher restarted inside the same
+   * episode raises nothing twice; the archive row `notify` writes carries the key for the next read. A store that
+   * cannot answer costs the dedupe only, never the notice.
+   */
+  private raiseDiskNotice(before: DiskVerdict | null, after: DiskVerdict): void {
+    const n = diskNotice(before, after);
+    if (n === null) return;
+    // Mark the episode BEFORE the push, so a restart between the two finds it.
+    if (n.mode === 'push' && after.episode !== undefined) writeDiskEpisode(this.deps.cfg.ccrcDir, after.episode, n.dev);
+    try { if (this.deps.coord?.hasNotice('coord', '', n.dedupeKey) === true) return; } catch { /* send it: a repeat beats silence */ }
+    notify(this.deps, { kind: 'coord', sessionId: '', runId: null, title: n.title, body: n.body }, n.mode,
+      { tag: 'disk', dedupeKey: n.dedupeKey, degraded: 'feed archive degraded, ring/push unaffected' });
   }
 
   /**
