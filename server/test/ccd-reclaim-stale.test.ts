@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { createHash } from 'node:crypto';
+import { childStaleHoldDigest } from '../src/coord/childReclaimStale.js';
 import {
   CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, plantTmux, type Child,
 } from './childReclaimFixture.js';
@@ -67,6 +68,16 @@ describe('--stale held', () => {
     const attic = h.git(c.main, 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/${CHILD_ID}/`);
     expect(attic.split('\n').filter(Boolean).length, 'the pin kept the work').toBeGreaterThan(0);
   }, 90_000);
+
+  it.each(['waiting\n', '  padded reason \r\n\n', 'two\nlines\n', 'no newline', ''])(
+    'parity: the digest the server computes (%j) is the one ccd releases', (bytes) => {
+      fs.writeFileSync(reg('hold'), bytes);
+      transcript(8);
+      const digest = childStaleHoldDigest(bytes)!;
+      expect(digest).toBe(sha(bytes));
+      const a = evalOf(h, { pre: stale('held', digest) });
+      expect(a.verdict, a.detail).toBe('reclaimable');
+    }, 30_000);
 
   it('a changed hold refuses `held`', () => {
     const digest = hold('first reason\n');

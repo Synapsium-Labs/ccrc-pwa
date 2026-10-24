@@ -4,17 +4,19 @@
 //     (stale)" once while the arm is SHADOWED, and hands the executor an ask only when the operator has armed it
 //     (`$REG/child-stale-reclaim-live`) and the box proves `reclaim-stale-v1`. A terminal child is asked at most once
 //     per seven idle days.
-//   - `childStaleHoldDigest`, the sha256 of the hold the registry read, which ccd compares to its own file's.
+//   - `childStaleHoldDigest`, the sha256 of the hold file's raw bytes, which ccd compares to its own hash of the same file.
 //   - `childReclaimStaleTold`, the executor's last step after a stale-arm reclaim: system mail from the `operator`
 //     role to the minting run's coordinator naming the attic refs, or a coord feed row when there is nobody to tell.
 // The marker this arm reads has NO writer in the tree (`single-definition.test.ts` pins it); this file only reads a
 // listing the caller already took.
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import { CCD_ARGV, RECLAIM_STALE_CAP, capSupported, ccdCan } from '../ccdargv.js';
 import { notify } from '../notice.js';
 import type { NotifyLog } from '../notifylog.js';
 import type { FleetState } from '../fleetstate.js';
-import { HOLD_NO_REASON, HOLD_UNREADABLE, type SessionRecord } from '../registry.js';
+import type { SessionRecord } from '../registry.js';
+import type { FleetIO } from '../io.js';
 import {
   CHILD_STALE_IDLE_MS, childReclaimDetailText, childReclaimStaleVerdict, childReclaimStaleWordOf,
   type ChildReclaimSweepInput, type ChildReclaimSweepVerdict, type ChildStaleAsk, type ChildStaleIdleRead, type ChildStaleWord,
@@ -29,11 +31,19 @@ export const CHILD_STALE_WOULD_TITLE = 'child would be reclaimed (stale)';
 /** The title of the row that stands in for the coordinator's mail when there is nobody to send it to. */
 export const CHILD_STALE_TOLD_TITLE = 'stale child reclaimed';
 
-/** The sha256 of the hold file's bytes as the registry read them, or `null` when those bytes are not what was read: an
- *  unreadable file or an empty one reads as a stand-in sentence, and a digest of a sentence would name no file. */
-export function childStaleHoldDigest(held: string | null): string | null {
-  if (held === null || held === HOLD_UNREADABLE || held === HOLD_NO_REASON) return null;
-  return createHash('sha256').update(held).digest('hex');
+/** The hold file's own bytes, UNTRIMMED, as `$REG/<id>.hold` holds them, or `null` when they cannot be told: the read
+ *  failed, or the text carries a U+FFFD (the file was not UTF-8, so these characters are not its bytes). ccd hashes the
+ *  raw file (`_ws_reclaim_hold_released`), so the digest must be taken of exactly this, never of the registry's trimmed
+ *  reason: `echo reason > <id>.hold` ends in a newline the trimmed text has lost. */
+export async function readStaleHoldBytes(io: Pick<FleetIO, 'readFileMeasured'>, registryDir: string, id: string): Promise<string | null> {
+  const r = await io.readFileMeasured(path.join(registryDir, `${id}.hold`));
+  return r.ok && !r.content.includes('\uFFFD') ? r.content : null;
+}
+
+/** The sha256 of the hold file's raw bytes (`readStaleHoldBytes`), or `null` when they are not known: no digest names
+ *  no file, so the child is kept. An empty file digests as the empty string; ccd's rung accepts an empty readable file. */
+export function childStaleHoldDigest(bytes: string | null): string | null {
+  return bytes === null ? null : createHash('sha256').update(bytes, 'utf8').digest('hex');
 }
 
 /** The server's idle evidence for one marked child (spec §2.7.3, the server half), or `'unmeasured'`. The status
@@ -50,6 +60,8 @@ export function childStaleIdleOf(coord: Pick<CoordStore, 'childStaleActivity'>, 
 export interface ChildStaleJudgement {
   readonly coord: Pick<CoordStore, 'childStaleActivity' | 'recordFeedEvent'>;
   readonly record: SessionRecord;
+  /** The hold file's raw bytes (`readStaleHoldBytes`), `null` when not read or not known. */
+  readonly holdBytes: string | null;
   readonly input: ChildReclaimSweepInput;
   readonly verdict: ChildReclaimSweepVerdict;
   /** The registry listing this pass took, which the arm's switch is read from. */
@@ -75,7 +87,7 @@ export class ChildStaleArm {
     const i: ChildReclaimSweepInput = {
       ...j.input,
       idle: j.input.child.kind === 'child' ? childStaleIdleOf(j.coord, j.record, j.input.child.runId) : 'unmeasured',
-      holdDigest: childStaleHoldDigest(j.record.held),
+      holdDigest: childStaleHoldDigest(j.holdBytes),
     };
     const v = childReclaimStaleVerdict(i, j.verdict);
     if (!v.stale) { this.forget(id); return null; }
