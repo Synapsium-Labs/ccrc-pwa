@@ -406,3 +406,27 @@ export function changeLatchSites(root: string = REPO): CensusSite[] {
 export function changeLatchReported(root: string = REPO): CensusSite[] {
   return changeLatchSitesOf('DelegationLane', root);
 }
+
+/**
+ * D-5867 (Task C1l; ARCH-66 (#801); spec K7, §2.3's redaction row): the JS/TS modules that spell redaction rule
+ * patterns of their own, as repo-relative file names, sorted. `shared/redact.mjs`, the one rule table, is counted: the
+ * exit is that it is the only one (3 before this series, 2 after PR 1, 1 after PR 2). A file is a rule table when its
+ * code lines hold a mask word (`[REDACTED]`, `[redacted]`, `REDACTED_MARK` or the docs `***`) and at least two of the
+ * three shapes every table spells: a `Bearer` pattern, an `Authorization` header pattern and a `token=` query pattern (also as the alternation
+ * `(?:access_token|token)=`).
+ * Code lines only (`codeOf`), so a comment that names a shape does not count. KNOWN WIDTH: a table that spells none of
+ * the three shapes is not seen; the session masker (`accounts/mask.ts`) masks known keys by their exact bytes and is
+ * not a table.
+ */
+export function redactRuleTables(root: string = REPO): string[] {
+  const out: string[] = [];
+  for (const dir of ['shared', 'server/src', 'agent/src', 'pwa/src', 'ccd/history']) {
+    for (const f of sourceFiles(root, dir)) {
+      const code = readFileSync(f, 'utf8').split('\n').map(codeOf).join('\n');
+      const mask = /\[REDACTED\]|\[redacted\]|\bREDACTED_MARK\b|'\*\*\*'|\*\*\*@/.test(code);
+      const shapes = [/\bBearer\b/, /\bAuthorization\b/, /token\)?=/i].filter((re) => re.test(code)).length;
+      if (mask && shapes >= 2) out.push(path.relative(root, f).split(path.sep).join('/'));
+    }
+  }
+  return out.sort();
+}

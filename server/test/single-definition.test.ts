@@ -4709,10 +4709,14 @@ describe('docs failure vocabulary, redactor and ccd wire types are declared once
     for (const name of FUNCTIONS) expect(holdersOf(FUNCTION_DEF(name)), name).toEqual(['shared/docs.ts']);
   });
 
-  it('spells the redactor patterns in one TS file: no second copy of a rule', () => {
-    // Fragments every copy of rules 2 and 3 must contain however it is escaped or quoted.
+  it('spells the redactor patterns in one file, shared/redact.mjs: no second copy of a rule', () => {
+    // Fragments every copy of rules 2 and 3 must contain however it is escaped or quoted. D-5867 (Task C1l; ARCH-66
+    // (#801)): the rows' one home moved from shared/docs.ts to shared/redact.mjs, which `ALL` (`.ts` and `.tsx`) does
+    // not walk, so it is read by path.
+    const home = readFileSync(path.join(ccrcRoot, 'shared', 'redact.mjs'), 'utf8');
     for (const fragment of ['(?:access_token|token)=', 'gh[opsu]_']) {
-      expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(fragment)).map(rel), fragment).toEqual(['shared/docs.ts']);
+      expect(home.includes(fragment), `${fragment} in shared/redact.mjs`).toBe(true);
+      expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(fragment)).map(rel), fragment).toEqual([]);
     }
   });
 
@@ -6632,6 +6636,18 @@ describe('the approval classifier, its class map and the redactor each have one 
 
   it('redactCommand is defined once, in coord/redact.ts', () => {
     expect(holders(/\bfunction redactCommand\b|\bconst redactCommand\s*=/)).toEqual(['server/src/coord/redact.ts']);
+  });
+
+  // D-5867 (Task C1l, ARCH-66 (#801)): the egress rule patterns' one home is `shared/redact.mjs`. `.mjs` is not in
+  // `ALL`, so the home is read by path; the TypeScript holders are `ALL`'s.
+  it('the egress rule patterns have one home, shared/redact.mjs: no TypeScript file spells one', () => {
+    const FRAGMENTS = [/hooks\\\.slack\\\.com/, /gh\[pousr\]_/, /\bSECRET_NAME_TEST\b/, /\(\?:Proxy-\)\?Authorization/];
+    const home = readFileSync(path.join(ccrcRoot, 'shared', 'redact.mjs'), 'utf8');
+    for (const f of FRAGMENTS) {
+      expect(f.test(home), `${f} in shared/redact.mjs`).toBe(true);
+      expect(holders(f), `${f} in a .ts file`).toEqual([]);
+    }
+    expect(FRAGMENTS[0]!.test('const SLACK = /(hooks\\.slack\\.com\\/)/;'), 'CONTROL: the pattern sees a spelling').toBe(true);
   });
 });
 
@@ -8600,5 +8616,21 @@ describe('ccrc history: the headless marker and the arm words are defined once, 
     const named = HISTORY_MJS.flatMap((f) => stallCode(f).split('\n').filter((l) => NAMES_MARKER.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
     expect(named, 'CONTROL: historyPaths names it').toContain(`ccd/history/lib.mjs: ${PATHS_FIELD}`);
     expect(named.filter((x) => !allowed(x.slice(x.indexOf(': ') + 2)))).toEqual([]);
+  });
+});
+
+// D-5867 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1l, Step 4;
+// ARCH-66 (#801); spec §5.1 rule 3). The redactor ratchet, appended after the capability ratchet so no cited line above
+// it moves. The JS/TS modules that spell redaction rule patterns of their own (`consolidationCensus.ts`'s
+// `redactRuleTables`, `shared/redact.mjs` counted) were three: `coord/redact.ts`, `shared/docs.ts` and
+// `ccd/history/lib.mjs`. PR 1 moved the first two into `shared/redact.mjs`; PR 2 moves the third, and then the bound
+// is one. The set may only shrink. The census is loaded inside the row, so this block adds no import line.
+describe('one redaction rule table (ARCH-66): shared/redact.mjs (D-5867)', () => {
+  it('at most two modules spell redaction rule patterns, and no TypeScript module is one', async () => {
+    const { redactRuleTables } = await import('./consolidationCensus.js');
+    const tables = redactRuleTables();
+    expect(tables.length, `a new redaction rule table: ${tables.join(', ')}; add the rules to shared/redact.mjs`).toBeLessThanOrEqual(2);
+    expect(tables.filter((f) => /\.tsx?$/.test(f)), 'a TypeScript redaction table').toEqual([]);
+    expect(tables).toContain('shared/redact.mjs');
   });
 });
