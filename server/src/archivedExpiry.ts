@@ -279,6 +279,9 @@ export const isExpirePreCrumbFailed = (word: string): boolean => (EXPIRE_PRE_CRU
  *  L0, never listed again. (The reclaim side's set lives in `coord/childReclaim.ts`, which an L1 file may not import.) */
 export const EXPIRE_STUCK_WORD: Extract<LcRefusalToken, 'containment-refuted'> = 'containment-refuted';
 
+/** The one terminal word ccd prints on a `failed` document, with `crumb:false` (D-6633). */
+export const EXPIRE_FAILED_TERMINAL_WORD = 'nested-rescue-too-large';
+
 /** `ccd ws-expire …`'s answer (wave 3's plan, "Wave 3b inherits", the verb). Three documents — `expired` and
  *  `refused` at exit 0, `failed` at exit 1 (the breadcrumb is kept and the next attempt resumes it) — and three
  *  conditions that are no document: the two BOX words, and a COMPOSITION error. Anything else with an empty stdout is
@@ -323,6 +326,11 @@ export function parseExpireResult(sessionId: string, stdout: string, stderr: str
       const said = detail === '' ? v.failed : `${v.failed}: ${detail}`;
       // The WORD first (R76's order): the stuck word is stuck whatever `crumb` says (wave 6, ruling B).
       if (v.failed === EXPIRE_STUCK_WORD) return { kind: 'stuck', detail: said };
+      // The nested rescue's too-large word is printed on `failed` before any breadcrumb (D-6633): nothing started and
+      // waiting changes nothing, so it is the terminal refusal it is classed as, not a `restart` that would drop it.
+      if (v.failed === EXPIRE_FAILED_TERMINAL_WORD && v.crumb === false) {
+        return { kind: 'refused', token: v.failed, detail };
+      }
       // `crumb` (#166 spec §5.6; its R76 order, workspace lifecycle wave 6, question (k)): `false` — printed before this
       // attempt's breadcrumb, so nothing it started stands — audits afresh, whatever the word; `true` — printed past a
       // breadcrumb, the resumed arm's `probe-unmeasured` among them — is resumed. Only the two booleans are read: an
