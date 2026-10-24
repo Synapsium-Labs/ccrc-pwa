@@ -307,6 +307,8 @@ _pane_ctx_pct	C3
 _route_word_in	C1
 _route_any	C1
 _route_valid	C1
+_route_fable_shell	C1
+_lane_default_is_fable	C2
 _route_note_floored	C3
 _route_bytes	C1
 _route_argv_check	C1
