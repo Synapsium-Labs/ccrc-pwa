@@ -4939,7 +4939,18 @@ the PR merges while its run waits at `merging`, asking for the merge proof befor
 naming the queue's own `merge_group` CI run as the place to read why, plus a `⤺ dequeued` feed
 record. Each notice goes out once; a restart repeats neither, and since wave 3d it does not repeat
 the merged lane's `✓ merged` feed record either while that record is still in the archive (one written
-before wave 3d whose run has closed since is repeated once, at the deploy). `ci.yml` answers
+before wave 3d whose run has closed since is repeated once, at the deploy). Beside it runs the checks
+lane, `sweepLandingChecks` (stage 1 of PR landing in ccrc; its own beat, never inside the PR sweep, and every
+decision in `server/src/coord/landing.ts`): for each run at `merging` whose advance recorded an episode
+(`merging-at:<head>:<pr>:<mode>`), it reads the PR's required checks with `ccd pr-landing` (one read-only call
+per project, at most 16 sessions each, every 30 s while a check is unsettled or red and every 120 s
+otherwise) and, in `live` mode, mails the coordinator `checks:#<pr>:<episode>.<generation>:<word>@<head7>`
+once per edge — `green`, `red`, `stuck` (still unsettled, or red with nothing after it, 45 minutes on),
+`moved` (the PR head changed) or `left` (closed, draft or no longer bound) — each a `run_events` row written
+with its mail in one transaction, so a restart repeats none. In `shadow` mode, the default until an operator
+creates `landing-checks-live`, it writes the same rows as `landing-shadow:` and mails nothing;
+`landing-disabled` stops every read and edge, and only a live episode's stuck bound still goes. The lane
+merges nothing, writes no branch and touches no merge queue. `ci.yml` answers
 `merge_group` and runs
 what a pull request runs. **Workers never merge**: the session hook denies `gh pr merge` — `--auto`,
 `--squash` and `--admin` included — at any command head it can parse, after stripping quoted text,

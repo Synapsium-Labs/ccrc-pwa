@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import {
+  CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, readChecksRowDetail, readMergingAtDetail,
+  type ChecksMode, type ChecksRowRead,
+} from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
@@ -830,6 +834,13 @@ export type RunsNamingSessionResult =
 export type StallObservation =
   | { recorded: true; eventId: number }
   | { recorded: false; why: StallWriteMiss };
+
+/** The state predicate of the observation writer: a closed union of exactly two members. `active` is the stall lane's
+ *  (a run not idle and not terminal); `episode` is the checks lane's (a run waiting at `merging` whose current episode
+ *  is `episode`, PR landing in ccrc stage 1). */
+export type ObservationPredicate =
+  | { readonly kind: 'active' }
+  | { readonly kind: 'episode'; readonly episode: number };
 
 export type CoordPlacementStampsResult =
   | { ok: true; stamps: CoordPlacementStamp[] }
@@ -2671,6 +2682,16 @@ export class CoordStore {
    * the insert are never split by another writer.
    */
   insertStallObservation(runId: number, detail: string, at: number): StallObservation {
+    return this.insertObservation(runId, detail, at, { kind: 'active' });
+  }
+
+  /** The observation writer, generalised (PR landing in ccrc, stage 1): `insertStallObservation`'s body with the state
+   *  predicate a parameter. `{kind: 'active'}` is the stall lane's, exactly as before (D-3584: `state NOT IN
+   *  INACTIVE_RUN_STATES_SQL`, so an absent or no-longer-active run is `run-gone`). `{kind: 'episode', episode}` is the
+   *  checks lane's: the run waits at `merging` AND its newest transition row into `merging` is `episode`, so a run that
+   *  left `merging`, or re-entered it as a new episode, between the lane's read and this write is `run-gone` too. The
+   *  `(runId, detail)` dedupe is the same for both. OPENS NO TRANSACTION (`insertStallObservation`'s rule). */
+  insertObservation(runId: number, detail: string, at: number, when: ObservationPredicate): StallObservation {
     // D-3584 run-gone-includes-inactive: "gone" is absent OR no longer active. The
     // lane awaits between `stallCandidates` and this write (the pane pid, the live
     // file, `measureClaimant`), so a close can land in that window, and a stall mail
@@ -2678,9 +2699,14 @@ export class CoordStore {
     // closed run (`dueDeliveries` does not filter on run state). The fragment is
     // `stallCandidates`' own, so the candidate and the write cannot disagree about
     // which states are live, and `unknown` still counts as active.
-    const run = this.db.prepare(
-      `SELECT state FROM runs WHERE id = ? AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
-    ).get(runId) as { state: string } | undefined;
+    const run = when.kind === 'active'
+      ? this.db.prepare(
+        `SELECT state FROM runs WHERE id = ? AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
+      ).get(runId) as { state: string } | undefined
+      : this.db.prepare(
+        "SELECT state FROM runs WHERE id = ? AND state = 'merging' AND " +
+        "(SELECT MAX(id) FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging') = ?",
+      ).get(runId, runId, when.episode) as { state: string } | undefined;
     if (run === undefined) return { recorded: false, why: 'run-gone' };
     const seen = this.db.prepare('SELECT 1 AS x FROM run_events WHERE runId = ? AND detail = ? LIMIT 1').get(runId, detail);
     if (seen !== undefined) return { recorded: false, why: 'duplicate' };
@@ -2694,7 +2720,47 @@ export class CoordStore {
    *  rows and its push-only rungs (r3 and the three caps), each recorded BEFORE
    *  it is pushed. */
   recordStallObservation(runId: number, detail: string, at: number): StallObservation {
-    return tx(this.db, () => this.insertStallObservation(runId, detail, at));
+    return this.recordObservation(runId, detail, at, { kind: 'active' });
+  }
+
+  /** `insertObservation` in exactly one transaction, for a caller with none of its own. */
+  recordObservation(runId: number, detail: string, at: number, when: ObservationPredicate): StallObservation {
+    return tx(this.db, () => this.insertObservation(runId, detail, at, when));
+  }
+
+  /** The checks lane's owed-set source (PR landing in ccrc, stage 1; spec §3.2): every run waiting at `merging` that
+   *  names a worker session. Open by construction (`merging` is neither idle nor terminal). */
+  mergingRuns(): { id: number; sessionId: string; project: string; program: string; wave: number; waveOf: number | null }[] {
+    return this.db.prepare(
+      "SELECT id, sessionId, project, program, wave, waveOf FROM runs WHERE state = 'merging' AND sessionId IS NOT NULL ORDER BY id",
+    ).all() as unknown as { id: number; sessionId: string; project: string; program: string; wave: number; waveOf: number | null }[];
+  }
+
+  /** The run's current episode (PR landing in ccrc, stage 1; spec §3.1): its newest transition row into `merging`
+   *  (`fromState <> 'merging'`; observation rows have `fromState = toState` and are never one), read through
+   *  `readMergingAtDetail`. Null when the run has no such row or the row carries no `merging-at:` detail. */
+  currentEpisode(runId: number): { e: number; at: number; head: string; pr: number | null; mode: ChecksMode } | null {
+    const row = this.db.prepare(
+      "SELECT id, at, detail FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging' " +
+      'ORDER BY id DESC LIMIT 1',
+    ).get(runId) as { id: number; at: number; detail: string | null } | undefined;
+    if (row === undefined || row.detail === null) return null;
+    const m = readMergingAtDetail(row.detail);
+    return m === null ? null : { e: row.id, at: row.at, head: m.head, pr: m.pr, mode: m.mode };
+  }
+
+  /** The episode's checks rows (`landing:checks:<e>:` and `landing-shadow:checks:<e>:`), through the one reader, in
+   *  write order. A detail the reader does not know is not a row. */
+  checksRows(runId: number, e: number): { id: number; at: number; row: ChecksRowRead }[] {
+    const out: { id: number; at: number; row: ChecksRowRead }[] = [];
+    const rows = this.db.prepare(
+      'SELECT id, at, detail FROM run_events WHERE runId = ? AND (detail LIKE ? OR detail LIKE ?) ORDER BY id',
+    ).all(runId, `${CHECKS_ROW_PREFIX}${e}:%`, `${CHECKS_SHADOW_ROW_PREFIX}${e}:%`) as { id: number; at: number; detail: string }[];
+    for (const r of rows) {
+      const row = readChecksRowDetail(r.detail);
+      if (row !== null && row.e === e) out.push({ id: r.id, at: r.at, row });
+    }
+    return out;
   }
 
   /**
