@@ -310,8 +310,9 @@ describe('the inline ask\'s keys at the desk (R41 F4, D-6326)', () => {
 // R64 F5: the transcript's live ask card offers "Go to question" at the desk. It raises the mounted inline card (the
 // existing raise path): the card scrolls into view and its first option takes focus. The transcript here holds the live
 // `AskUserQuestion` call, so its card is drawn beside the inline one. Measured layout: at 1280x900 nothing scrolls the
-// card out of the viewport (the page, `.chat` and `.chat-body` have no overflow to scroll), so what this file can hold is
-// that the card is in the viewport after the click and that focus, parked on the body before it, is on the first option.
+// card out of the viewport (the page, `.chat` and `.chat-body` have no overflow to scroll), so the two viewport assertions
+// below are layout pins only (they hold with or without the raise), and what this case holds of the raise is that focus,
+// parked on the body before the click, is on the first option.
 // KNOWN (reported with R64 F5): `InlineCard` focuses with `preventScroll`, so with the forty-line question the first option
 // is focused but lies below the visible part of the card's own scroller; the ruling names the existing raise, unchanged.
 describe('Go to question at the desk (R64 F5, D-6326)', () => {
@@ -326,7 +327,7 @@ describe('Go to question at the desk (R64 F5, D-6326)', () => {
       ? { ...BACKLOG, events: [...BACKLOG.events, CALL] }
       : f));
 
-  it('clicking it with focus on the page body puts the card in the viewport and focus on its first option', async () => {
+  it('clicking it with focus on the page body puts focus on the card\'s first option (the card stays in the viewport)', async () => {
     const opened = await openApp(browser!, view, FIXTURE);
     try {
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
@@ -366,8 +367,8 @@ describe('Go to question at the desk (R64 F5, D-6326)', () => {
         };
       }, CARD);
       expect(after.cards, 'still one inline card').toBe(1);
-      expect(after.top, 'the card starts inside the viewport').toBeGreaterThanOrEqual(0);
-      expect(after.bottom, 'and ends inside it').toBeLessThanOrEqual(after.vh + 1);
+      expect(after.top, 'layout pin: at 1280x900 the card cannot leave the viewport (its top)').toBeGreaterThanOrEqual(0);
+      expect(after.bottom, 'layout pin: at 1280x900 the card cannot leave the viewport (its bottom)').toBeLessThanOrEqual(after.vh + 1);
       expect(after.focusIsFirst, `focus is on the card's first option (it is on ${after.focused})`).toBe(true);
       expect(opened.errors).toEqual([]);
     } finally {
