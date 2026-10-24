@@ -256,7 +256,7 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
     const run: Runner = (cmd, args) => new Promise((resolve) => {
       expect(cmd).toBe('tmux');
       const r = spawnSync(REAL_TMUX!, ['-L', SOCK, '-f', '/dev/null', ...args], { encoding: 'utf8', env: cleanEnv() });
-      resolve({ code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' });
+      resolve({ ran: true, code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' });
     });
     const tx = new Tmux(run);
 

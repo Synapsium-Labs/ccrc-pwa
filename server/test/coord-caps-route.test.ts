@@ -336,7 +336,7 @@ describe('POST /api/coord/caps', () => {
     const runCcd = async (): Promise<CcdResult> => {
       signalHeld();
       await gate;
-      return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+      return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
     };
 
     const { app, coord, home } = await withCoord({ mailToken: TOKEN, runCcd });

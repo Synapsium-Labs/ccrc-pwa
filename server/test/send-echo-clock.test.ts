@@ -37,7 +37,7 @@ function rig(o: { captureMs?: number; echoAtPoll?: number; shown?: string; fakeC
         keys.push(args.at(-1)!);
         if (args.at(-1) === 'Enter') entered = true;
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
     if (args[0] === 'capture-pane') {
       if (++captures > RUNAWAY) throw new Error(`runaway echo wait: ${captures} captures`);
@@ -45,9 +45,9 @@ function rig(o: { captureMs?: number; echoAtPoll?: number; shown?: string; fakeC
       const ansi = args.includes('-e');
       if (ansi && typed && !entered) ansiSinceTyped++;
       const echoed = typed && !entered && o.echoAtPoll !== undefined && ansiSinceTyped >= o.echoAtPoll;
-      return { code: 0, stdout: echoed ? `❯ ${o.shown ?? TEXT}\n` : '❯ \n', stderr: '' };
+      return { ran: true, code: 0, stdout: echoed ? `❯ ${o.shown ?? TEXT}\n` : '❯ \n', stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const deps = o.fakeClock
     ? { sleep: async (ms: number) => { t += ms; }, now: () => t }
@@ -137,13 +137,13 @@ describe('a proven own shape ends the echo wait at the floor (D-6366)', () => {
       if (args[0] === 'send-keys') {
         if (args.includes('-l')) isTyped = true;
         else { keys.push(args.at(-1)!); if (args.at(-1) === 'Enter') entered = true; }
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       }
       if (args[0] === 'capture-pane') {
         if (isTyped && !entered && args.includes('-e')) echoPolls++;
-        return { code: 0, stdout: entered ? submitted : isTyped ? typed : empty, stderr: '' };
+        return { ran: true, code: 0, stdout: entered ? submitted : isTyped ? typed : empty, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     return { d: { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: async () => {} }, keys, polls: () => echoPolls };
   }
@@ -199,14 +199,14 @@ describe('a late echo keeps the echo proof (D-6366)', () => {
       if (args[0] === 'send-keys') {
         if (args.includes('-l')) typed = true;
         else { keys.push(args.at(-1)!); if (args.at(-1) === 'Enter') entered = true; }
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       }
       if (args[0] === 'capture-pane') {
         if (typed && !entered && args.includes('-e')) polls++;
         const row = entered ? MSG.slice(0, 30) : typed && polls >= ECHO_TRIES ? MSG : '';
-        return { code: 0, stdout: `❯ ${row}\n${RULE}\n`, stderr: '' };
+        return { ran: true, code: 0, stdout: `❯ ${row}\n${RULE}\n`, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const d = { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: async () => {} };
     const res = await sendPrompt(d, 'x', MSG);
@@ -230,15 +230,15 @@ describe('with every capture failing after 10 s the proof ends within base\'s bo
       if (args[0] === 'send-keys') {
         if (args.includes('-l')) typed = true;
         if (args.at(-1) === 'Enter') { if (!entered) firstEnterAt = t; entered = true; t += HUNG_MS; }
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       }
       if (args[0] === 'capture-pane') {
-        if (!entered) return { code: 0, stdout: typed ? '❯ hello from the lane\n' : '❯ \n', stderr: '' };
+        if (!entered) return { ran: true, code: 0, stdout: typed ? '❯ hello from the lane\n' : '❯ \n', stderr: '' };
         capturesAfterEnter++;
         t += HUNG_MS;
-        return { code: 1, stdout: '', stderr: 'timed out' };
+        return { ran: true, code: 1, stdout: '', stderr: 'timed out' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const d = { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: async (ms: number) => { t += ms; }, now: () => t };
     const res = await sendPrompt(d, 'x', 'hello from the lane');
@@ -266,18 +266,18 @@ describe('a link blip does not cut the post-Enter watch (D-6366)', () => {
       if (args[0] === 'send-keys') {
         if (args.includes('-l')) typed = true;
         if (args.at(-1) === 'Enter') { enters++; if (enters === 2) atRetry = k; }
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       }
       if (args[0] === 'capture-pane') {
         t += captureMs;
         if (enters > 0) {
           k++;
-          if (failAt.has(k)) return { code: 1, stdout: '', stderr: 'blip' };
-          if (absentAt.has(k)) return { code: 0, stdout: '⏺ a transcript row\n', stderr: '' };
+          if (failAt.has(k)) return { ran: true, code: 1, stdout: '', stderr: 'blip' };
+          if (absentAt.has(k)) return { ran: true, code: 0, stdout: '⏺ a transcript row\n', stderr: '' };
         }
-        return { code: 0, stdout: typed ? '❯ hello from the lane\n' : '❯ \n', stderr: '' };
+        return { ran: true, code: 0, stdout: typed ? '❯ hello from the lane\n' : '❯ \n', stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const d = { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: async (ms: number) => { t += ms; }, now: () => t };
     const res = await sendPrompt(d, 'x', 'hello from the lane');

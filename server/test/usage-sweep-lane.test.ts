@@ -38,9 +38,9 @@ const writeUsage = (home: string, id: string, over: Record<string, unknown> = {}
  *  `ctxPct` describe block uses, so this fixture exercises only the sweep
  *  lanes, never the dialog/pane-capture ones. */
 const idleRun: Runner = async (_cmd, args) => {
-  if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-  if (args[0] === 'list-panes') return { code: 0, stdout: '', stderr: '' };
-  return { code: 0, stdout: '', stderr: '' };
+  if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+  if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '', stderr: '' };
+  return { ran: true, code: 0, stdout: '', stderr: '' };
 };
 
 const makeWatcher = (home: string, io: FleetIO): FleetWatcher => {

@@ -35,7 +35,7 @@ import { mkTmp } from './tmpHelpers.js';
 
 const OWN: BuildInfo = { sha: 'abc1234', ref: 'main', builtAt: '2026-08-15T00:00:00Z', dirty: false };
 
-const deadRunner: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+const deadRunner: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 
 /** Remote-mode deps against a throwaway fixture home, with both build stamps
  *  under the test's control: the fleet host's (on `fleetState.build`, where the

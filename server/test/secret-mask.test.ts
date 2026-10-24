@@ -144,7 +144,7 @@ const backlogFrame = async (transcript: string, masker?: SecretMasker): Promise<
   seedRoster(home);
   seedSession(home, transcript);
   const run: Runner = async (_c, args) => (args[0] === 'list-panes'
-    ? { code: 0, stdout: `${PID}\n`, stderr: '' } : { code: 0, stdout: '', stderr: '' });
+    ? { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' });
   const cfg = loadConfig({ CCRC_HOME: home });
   const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker };
   const app = await buildServer(deps, new Bus());
@@ -194,7 +194,7 @@ describe('the session socket carries only the mask (D-5513)', () => {
     const home = mkTmp('ccrc-mask-ask-');
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
     const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
     const send = (stream as unknown as { send(m: SessionStreamMsg): void }).send;
@@ -369,7 +369,7 @@ describe('the drawer stream (D-5513)', () => {
     const home = mkTmp('ccrc-mask-pty-');
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), spawnPty }, new Bus());
     const port = await listen(app);
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/${ID}?cols=80&rows=24`);
@@ -423,9 +423,9 @@ describe('every other egress of session-derived text (D-5513)', () => {
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const run: Runner = async (_c, args) => {
-      if (args[0] === 'capture-pane') return { code: 0, stdout: `$ env\nKEY=${OAT}\nOR=${ORKEY}\n`, stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '1 10 2000 220 50 0\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: `$ env\nKEY=${OAT}\nOR=${ORKEY}\n`, stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '1 10 2000 220 50 0\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify-log.json'));
@@ -806,7 +806,7 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     const cachePath = path.join(home, 'state-cache.json');
     await saveSnapshot([session(ID)], cachePath);
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const bus = new Bus();
     app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
       stateCachePath: cachePath, fleetState: { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } }, bus);
@@ -1344,9 +1344,9 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     seedRoster(home);
     seedSession(home, '');
     const run: Runner = async (_c, args) => {
-      if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: pane, stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     return buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker }, new Bus());
@@ -1512,10 +1512,10 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     seedRoster(home);
     seedSession(home, '');
     const run: Runner = async (_c, args) => {
-      if (args[0] === 'capture-pane') return { code: 0, stdout: pane(), stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: pane(), stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
       if (args[0] === 'send-keys') onKeys?.(args);
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     return buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker, ...extra }, new Bus());
@@ -1632,7 +1632,7 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     const cachePath = path.join(home, 'state-cache.json');
     await saveSnapshot([fleetRow()], cachePath);
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const bus = new Bus();
     app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
       stateCachePath: cachePath, fleetState: { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } }, bus);
@@ -1667,7 +1667,7 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     const home = mkTmp('ccrc-mask-fu-ws-');
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const bus = new Bus();
     app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker: m }, bus);
     const port = await listen(app);

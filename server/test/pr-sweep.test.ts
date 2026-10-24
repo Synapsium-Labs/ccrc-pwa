@@ -42,11 +42,11 @@ const mergedLine = (id: string, number = 42): string => JSON.stringify({
 function runnerFor(prOut: string, calls: string[][], pid = '4242'): Runner {
   return async (_cmd, args) => {
     calls.push(args);
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${pid}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'pr-state') return { code: 0, stdout: prOut, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${pid}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'pr-state') return { ran: true, code: 0, stdout: prOut, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
 }
 
@@ -76,9 +76,9 @@ describe('the third lane', () => {
     liveIdle(home);
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'pr-state') return new Promise(() => { /* never resolves */ });
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
     const started = Date.now();
@@ -106,9 +106,9 @@ describe('the third lane', () => {
       const run: Runner = async (_cmd, args) => {
         calls.push(args);
         if (args[0] === 'pr-state') return new Promise(() => { /* wedged forever */ });
-        if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-        if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-        return { code: 0, stdout: '', stderr: '' };
+        if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+        if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       };
       const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
       await w.tick();
@@ -293,9 +293,9 @@ describe('the single-flight and due-interval guards hold their line, not just th
     const run: Runner = async (_cmd, args) => {
       calls.push(args);
       if (args[0] === 'pr-state') return new Promise(() => { /* wedged forever */ });
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
     await w.tick();
@@ -320,9 +320,9 @@ describe('the single-flight and due-interval guards hold their line, not just th
     const run: Runner = async (_cmd, args) => {
       calls.push(args);
       if (args[0] === 'pr-state') return new Promise(() => { /* wedged forever */ });
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
     await w.tick();
@@ -352,13 +352,13 @@ describe('the single-flight and due-interval guards hold their line, not just th
         calls.push(args);
         if (args[0] === 'pr-state') {
           const n = calls.filter((c) => c[0] === 'pr-state').length;
-          if (n === 1) return new Promise((resolve) => { resolveA = () => resolve({ code: 0, stdout: '', stderr: '' }); });
-          if (n === 2) return new Promise((resolve) => { resolveB = () => resolve({ code: 0, stdout: '', stderr: '' }); });
-          return { code: 0, stdout: '', stderr: '' };
+          if (n === 1) return new Promise((resolve) => { resolveA = () => resolve({ ran: true, code: 0, stdout: '', stderr: '' }); });
+          if (n === 2) return new Promise((resolve) => { resolveB = () => resolve({ ran: true, code: 0, stdout: '', stderr: '' }); });
+          return { ran: true, code: 0, stdout: '', stderr: '' };
         }
-        if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-        if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-        return { code: 0, stdout: '', stderr: '' };
+        if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+        if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       };
       const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
 
@@ -459,14 +459,14 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     const failing = { value: false };
     const run: Runner = async (_cmd, args) => {
       calls.push(args);
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
       if (args[0] === 'pr-state') {
-        if (failing.value) return { code: 1, stdout: '', stderr: 'gh: rate limited' };
-        return { code: 0, stdout: `${mergedLine('demo-quiet-basin')}\n${mergedLine('demo-still-cove')}`, stderr: '' };
+        if (failing.value) return { ran: true, code: 1, stdout: '', stderr: 'gh: rate limited' };
+        return { ran: true, code: 0, stdout: `${mergedLine('demo-quiet-basin')}\n${mergedLine('demo-still-cove')}`, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
     await w.tick();
@@ -512,14 +512,14 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     liveIdle(home);
     const failing = { value: false };
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
       if (args[0] === 'pr-state') {
-        if (failing.value) return { code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
-        return { code: 0, stdout: `${mergedLine('demo-quiet-basin')}\n${mergedLine('demo-still-cove')}`, stderr: '' };
+        if (failing.value) return { ran: true, code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
+        return { ran: true, code: 0, stdout: `${mergedLine('demo-quiet-basin')}\n${mergedLine('demo-still-cove')}`, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
     await w.tick();
@@ -542,14 +542,14 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     liveIdle(home);
     const failing = { value: false };
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
       if (args[0] === 'pr-state') {
         if (failing.value) return { code: 1, stdout: '', stderr: 'timeout', ran: false, reason: 'timeout', detail: 'timeout' };
-        return { code: 0, stdout: mergedLine('demo-quiet-basin'), stderr: '' };
+        return { ran: true, code: 0, stdout: mergedLine('demo-quiet-basin'), stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
     await w.tick();
@@ -571,16 +571,16 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     const killed = { value: true };
     let prStateCalls = 0;
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
       if (args[0] === 'pr-state') {
         prStateCalls += 1;
-        if (failing.value && killed.value) return { code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
-        if (failing.value) return { code: 1, stdout: '', stderr: '' };
-        return { code: 0, stdout: mergedLine('demo-quiet-basin'), stderr: '' };
+        if (failing.value && killed.value) return { ran: true, code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
+        if (failing.value) return { ran: true, code: 1, stdout: '', stderr: '' };
+        return { ran: true, code: 0, stdout: mergedLine('demo-quiet-basin'), stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const sweeps = (): string[] => warn.mock.calls.map((c) => String(c[0])).filter((s) => s.includes('PR sweep of demo'));

@@ -109,15 +109,15 @@ export async function approvalsFixture(over: ApprovalsFixtureOpts = {}): Promise
     const target = args[2] ?? '';
     const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';
     if (args[0] === 'has-session') {
-      if (unmeasured.has(id)) return { code: 1, stdout: '', stderr: 'server exited unexpectedly' };
-      return gone.has(id) ? { code: 1, stdout: '', stderr: `can't find session: cc-${id}` } : { code: 0, stdout: '', stderr: '' };
+      if (unmeasured.has(id)) return { ran: true, code: 1, stdout: '', stderr: 'server exited unexpectedly' };
+      return gone.has(id) ? { ran: true, code: 1, stdout: '', stderr: `can't find session: cc-${id}` } : { ran: true, code: 0, stdout: '', stderr: '' };
     }
     if (args[0] === 'list-panes') {
       const pid = pids.get(id);
-      return pid === undefined ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: `${pid}\n`, stderr: '' };
+      return pid === undefined ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: `${pid}\n`, stderr: '' };
     }
-    if (args[0] === 'capture-pane') return { code: 0, stdout: panes.get(id) ?? 'ready\n❯ \n', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: panes.get(id) ?? 'ready\n❯ \n', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const log = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));

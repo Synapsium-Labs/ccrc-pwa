@@ -30,7 +30,7 @@ async function appWithCcdSpy(ccdVerbs?: string[]): Promise<{ app: FastifyInstanc
   const home = mkTmp('ccrc-sessions-route-body-');
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const calls: string[][] = [];
-  const run: Runner = async (_cmd, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
+  const run: Runner = async (_cmd, args) => { calls.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; };
   const base = testDeps(home, run);
   const app = await buildServer({
     ...base,

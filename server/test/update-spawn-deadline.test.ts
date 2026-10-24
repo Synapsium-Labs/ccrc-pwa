@@ -111,7 +111,7 @@ describe('an error event never crashes the spawner (M2)', () => {
 
 describe('the LocalUpdateSpawn double answers like the real runner (M1)', () => {
   const parked = () => new Promise<never>(() => {});   // a run that never answers: only the bound can
-  const done = async () => ({ code: 0, stdout: 'accepted\n', stderr: '' });
+  const done = async () => ({ ran: true as const, code: 0, stdout: 'accepted\n', stderr: '' });
 
   it('a killed answer defaults to what the real runner reaches after a group kill with no escapee: 137, stdout \'\', a pid', async () => {
     vi.useRealTimers();

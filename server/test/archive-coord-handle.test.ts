@@ -17,7 +17,7 @@ const TOKEN = 'handle-test-box-token';
 const setup = () => {
   const home = mkTmp('ccrc-handle-');
   const calls: string[][] = [];
-  const run: Runner = async (_cmd, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
+  const run: Runner = async (_cmd, args) => { calls.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const deps = { ...testDeps(home, run), coord, mailToken: TOKEN };
   const app = Fastify();

@@ -111,7 +111,7 @@ interface RunnerConfig {
   wsAddCreatesPerCall?: string[][];
   /** Verbs that fail (`code: 1`) rather than succeed. */
   fail?: ReadonlySet<string>;
-  prState?: { code: number; stdout: string; stderr: string };
+  prState?: { ran: true, code: number; stdout: string; stderr: string };
   panes?: string[];
 }
 
@@ -129,13 +129,13 @@ function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls:
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `${verb} failed` };
+    if (cfg.fail?.has(verb)) return { ran: true as const, code: 1, stdout: '', stderr: `${verb} failed` };
     if (verb === 'ws-add') {
       const ids = cfg.wsAddCreatesPerCall?.[wsAddCalls++] ?? cfg.wsAddCreates ?? [`${PROJECT}-fresh`];
       for (const id of ids) seed(home, id);
       // A DECOY sentence, deliberately wrong: proves the route learns the id
       // from the registry diff, never from parsing this text.
-      return { code: 0, stdout: 'workspace demo-decoy-sentence on claude — /w/x (branch ws/decoy)', stderr: '' };
+      return { ran: true as const, code: 0, stdout: 'workspace demo-decoy-sentence on claude — /w/x (branch ws/decoy)', stderr: '' };
     }
     if (verb === 'pr-state') {
       if (cfg.prState) return cfg.prState;
@@ -143,19 +143,19 @@ function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls:
       // child here has had no PR. Anything else answers as before.
       const id = args[1] === '--session' ? args[2] ?? '' : '';
       const child = id !== '' && existsSync(path.join(home, '.cc-sessions', `${id}.child`));
-      return { code: 0, stdout: child ? `${noPrLine(id)}\n` : '', stderr: '' };
+      return { ran: true as const, code: 0, stdout: child ? `${noPrLine(id)}\n` : '', stderr: '' };
     }
     if (verb === 'capture-pane') {
       const p = panes[Math.min(capIdx, panes.length - 1)]!;
       capIdx++;
-      return { code: 0, stdout: p, stderr: '' };
+      return { ran: true as const, code: 0, stdout: p, stderr: '' };
     }
     // D-5238: the resume arm's live `/clear` gate reads the pane. `ensure` finds it already alive (`cmd_ensure`'s
     // `alive: <id>`), and its pid names the idle live file `openApp` writes — the measured-idle pane every resume
     // case below assumes. A case about the gate itself lives in `dispatch-live-gate.test.ts`.
-    if (verb === 'ensure') return { code: 0, stdout: `alive: ${args[1] ?? ''}\n`, stderr: '' };
-    if (verb === 'list-panes' && args.includes('#{pane_pid}')) return { code: 0, stdout: `${LIVE_PANE}\n`, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };   // ws-hold, ws-release, ws-archive, send-keys, has-session…
+    if (verb === 'ensure') return { ran: true as const, code: 0, stdout: `alive: ${args[1] ?? ''}\n`, stderr: '' };
+    if (verb === 'list-panes' && args.includes('#{pane_pid}')) return { ran: true as const, code: 0, stdout: `${LIVE_PANE}\n`, stderr: '' };
+    return { ran: true as const, code: 0, stdout: '', stderr: '' };   // ws-hold, ws-release, ws-archive, send-keys, has-session…
   };
   return { run, calls };
 }
@@ -685,7 +685,7 @@ describe('POST /api/runs', () => {
     let holds = 0;
     // The second `ws-hold` fails, the way `:656`'s runner fails a verb.
     const failSecondHold: Runner = async (cmd, argv) => {
-      if (argv[0] === 'ws-hold' && ++holds === 2) return { code: 1, stdout: '', stderr: 'ws-hold failed' };
+      if (argv[0] === 'ws-hold' && ++holds === 2) return { ran: true as const, code: 1, stdout: '', stderr: 'ws-hold failed' };
       return run(cmd, argv);
     };
     const w = await openApp(home, failSecondHold); app = w.app;
@@ -1387,9 +1387,9 @@ describe('POST /api/runs/:id/dispatch', () => {
           // cut-short shape, which is why this arm is reachable at all.
           seed(home, 'demo-fresh1');
           spawned = true;
-          return { code: 1, stdout: '', stderr: 'ccd: no wrapper has capacity', killed: true };
+          return { ran: true as const, code: 1, stdout: '', stderr: 'ccd: no wrapper has capacity', killed: true };
         }
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true as const, code: 0, stdout: '', stderr: '' };
       };
       const io: FleetIO = { ...localIO, readdir: async (p) => (spawned ? null : localIO.readdir(p)) };
       const w = await openApp(home, run, { io }); app = w.app;
@@ -2023,7 +2023,7 @@ describe('POST /api/runs/:id/close', () => {
    *  tests build their delivery through a real send rather than poking rows
    *  in directly. */
   const dispatchedRun = async (
-    sessionId: string, projectsRoot: string, prState: { code: number; stdout: string; stderr: string },
+    sessionId: string, projectsRoot: string, prState: { ran: true, code: number; stdout: string; stderr: string },
     over: Partial<Deps> = {},
   ) => {
     const home = mkTmp('ccrc-runs-');
@@ -2041,7 +2041,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close1`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);   // the REAL tip has moved
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const before = okRun(coord.run(id))!.state;
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(409);
@@ -2072,7 +2072,7 @@ describe('POST /api/runs/:id/close', () => {
     writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.prhistory`), '');
     const unreadablePrhistory = degradedReadIO((p) => p.endsWith('.prhistory'));
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { io: unreadablePrhistory, cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -2088,7 +2088,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close3`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     // No `.prhistory` file at all: ABSENT is a MEASURED [].
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(200);
@@ -2099,7 +2099,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close4`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ released: true });
@@ -2113,7 +2113,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close5`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: false });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ released: false });
@@ -2134,7 +2134,7 @@ describe('POST /api/runs/:id/close', () => {
    *  for the queued reclaim and read its one feed row back. `testDeps`' box
    *  advertises no capability, so the executor always ends at `unsupported`:
    *  that row is the proof the hand-off reached it, on this session's queue. */
-  const dispatchedChild = async (sessionId: string, prState: { code: number; stdout: string; stderr: string },
+  const dispatchedChild = async (sessionId: string, prState: { ran: true, code: number; stdout: string; stderr: string },
     over: Partial<Deps> = {}) => {
     const home = mkTmp('ccrc-runs-');
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
@@ -2173,10 +2173,10 @@ describe('POST /api/runs/:id/close', () => {
    *  it swallows every real-world test-execution delay this suite has ever
    *  measured, so it is declared rather than forced onto a fixed clock. */
   const PR_OPEN = (s: string) =>
-    ({ code: 0, stdout: `${ccdLine(s, `ws/${s}`,
+    ({ ran: true as const, code: 0, stdout: `${ccdLine(s, `ws/${s}`,
       [prRow(`ws/${s}`, 'OPEN', { createdAt: new Date(Date.now() + 3_600_000).toISOString() })])}\n`, stderr: '' });
   const PR_NONE = (s: string) =>
-    ({ code: 0, stdout: `${ccdLine(s, `ws/${s}`, [], TIP)}\n`, stderr: '' });
+    ({ ran: true as const, code: 0, stdout: `${ccdLine(s, `ws/${s}`, [], TIP)}\n`, stderr: '' });
   const NONE_CLAIM = { branchTip: TIP, prNumber: null, prPhase: 'none', handoffCommit: TIP };
   const fleetActs = (calls: string[][]) => calls.map((c) => c[0]).filter((v) => v === 'ws-hold' || v === 'ws-release'
     || v === 'ws-archive' || v === 'ws-audit' || v === 'ws-reclaim');
@@ -2284,12 +2284,12 @@ describe('POST /api/runs/:id/close', () => {
       const verb = args[0] ?? '';
       if (verb === 'ws-audit' && args.includes('--reclaim')) {
         seenVerbs.push('ws-audit --reclaim');
-        return { code: 0, stdout: `${JSON.stringify({ id: sessionId, mode: 'reclaim', verdict: 'reclaimable',
+        return { ran: true as const, code: 0, stdout: `${JSON.stringify({ id: sessionId, mode: 'reclaim', verdict: 'reclaimable',
           token: 'a'.repeat(64), childOf: childRunId })}\n`, stderr: '' };
       }
       if (verb === 'ws-reclaim') {
         seenVerbs.push('ws-reclaim');
-        return { code: 0, stdout: `${JSON.stringify({ reclaimed: sessionId, wip: null })}\n`, stderr: '' };
+        return { ran: true as const, code: 0, stdout: `${JSON.stringify({ reclaimed: sessionId, wip: null })}\n`, stderr: '' };
       }
       return baseRun(cmd, args);
     };
@@ -2387,7 +2387,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 2, waveOf: 3,
       claimedBy: CLAIMED_BY });
     if (!('id' in next)) throw new Error('fixture openRun refused');
@@ -2406,7 +2406,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-invalid-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const [survivor] = coord.reconstruct({
       ledger: { slug: 'bad program', title: 'Recovered', waves: [
         { wave: 2, of: 3, handoffCommit: null },
@@ -2435,7 +2435,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-oversize-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const overhead = holdReason('', 22, 333, 1).length;
     const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
     const [survivor] = coord.reconstruct({
@@ -2471,7 +2471,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-nonfinal-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 4, waveOf: 3,
       claimedBy: CLAIMED_BY });
     if (!('id' in next)) throw new Error('fixture openRun refused');
@@ -2490,7 +2490,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close6`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed', archive: true });
     expect(res.statusCode).toBe(200);
     expect(okRun(coord.run(id))!.state).toBe('failed');
@@ -2506,7 +2506,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-arch-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 2, waveOf: 3,
       claimedBy: CLAIMED_BY });
     if (!('id' in next)) throw new Error('fixture openRun refused');
@@ -2528,7 +2528,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-arch-lone`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id,
       { fingerprint: GOOD_CLAIM, final: true, state: 'failed', archive: true });
     expect(res.statusCode).toBe(200);
@@ -2540,7 +2540,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close7`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' },
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' },
       // `pr-state` stays supported — `verifyDone` has its OWN `verbSupported`
       // gate (`fingerprint.ts`) and must succeed here, so the 501 this test
       // proves is close's own fleet-act gate, not a verifyDone side effect.
@@ -2559,7 +2559,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close8`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const first = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(first.statusCode).toBe(200);
     const releasesAfterFirst = calls.filter((c) => c[0] === 'ws-release').length;
@@ -2580,7 +2580,7 @@ describe('POST /api/runs/:id/close', () => {
     // doneness here to re-measure.
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed' });
     expect(res.statusCode).toBe(200);
     expect(okRun(coord.run(id))!.state).toBe('failed');
@@ -2599,7 +2599,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close12`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     await postAdvance(app!, id,
       { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
     const toReview = await postAdvance(app!, id,
@@ -2621,7 +2621,7 @@ describe('POST /api/runs/:id/close', () => {
     const line = JSON.stringify({ pr: 42, branch: `ws/${sessionId}`, phase: 'merged', recordedAt: 12345 });
     writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.prhistory`), `${line}\n`);
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -2643,7 +2643,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionA = `${PROJECT}-close11`;
     const root = gitRoot(PROJECT, `ws/${sessionA}`, TIP);
     const { id: idA, coord } = await dispatchedRun(sessionA, root,
-      { code: 0, stdout: `${ccdLine(sessionA, `ws/${sessionA}`, [prRow(`ws/${sessionA}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionA, `ws/${sessionA}`, [prRow(`ws/${sessionA}`, 'MERGED')])}\n`, stderr: '' });
 
     // A sibling run under the SAME program, seeded directly at the store
     // level — the identical bypass `maxConcurrentWorkers`'s own fixture
@@ -2717,7 +2717,7 @@ describe('GET /api/runs', () => {
     const sessionId = 'demo-list2';
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -3083,9 +3083,9 @@ describe('dispatch/close serialise concurrent requests for the same run (review 
       calls.push(args);
       if (args[0] === 'ws-add') {
         seed(home, ids[spawnIdx]!); spawnIdx++;
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true as const, code: 0, stdout: '', stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true as const, code: 0, stdout: '', stderr: '' };
     };
     const w = await openApp(home, run); app = w.app;
     w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
@@ -3108,7 +3108,7 @@ describe('close cancels the run\'s own outstanding mail (review findings 8/14/26
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -3178,7 +3178,7 @@ describe('a retried close does not spam wave-done-rejected mail (review finding 
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);   // the REAL tip has moved
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -3301,7 +3301,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;

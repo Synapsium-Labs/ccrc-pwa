@@ -238,34 +238,120 @@ export function filesNaming(needles: readonly string[], root: string = REPO): st
 /** How many code lines after a `runCcd(` call `runCcdOldFoldSites` reads for the call's `ran` narrowing. */
 export const RAN_NARROW_WINDOW = 12;
 
-/** D-6034 (ARCH-10, #543): `runCcd(` call expressions under `server/src` still on the OLD fold, which reads `ok` or a
- *  runner's forged code without first asking whether the command ran. A site is on the new fold when the variable it
- *  assigns (`res = await deps.runCcd(…)`, with or without `const`/`let`) is read as `<name>.ran === false` within the
- *  next `RAN_NARROW_WINDOW` code lines, and before a line that opens with `}` at column 0 (the end of the top-level
- *  declaration the call sits in). A line that RETURNS the call's bare result (`return await …runCcd(`, a pass-through
- *  wrapper) folds nothing, and is not a site. Step 2 drives this to 0, and its may-only-shrink pin lands then (spec
- *  §5.1 rule 3). KNOWN WIDTH: a narrowing further down, or in a function the result is handed to, is not seen, and the
- *  site is counted; so is a call whose result is not assigned to a name. */
-export function runCcdOldFoldSites(root: string = REPO): CensusSite[] {
-  const out: CensusSite[] = [];
+/** The readers a `runCcd(` result may be handed to whole, each of which reads `ran` FIRST (D-6034, D-6840). */
+export const RAN_CARRY_READERS: readonly string[] = [
+  'cutShort', 'sweepFailureReason', 'failureDetail', 'classifyAddFailure', 'classifyTitleFailure', 'archiveOutcome',
+];
+
+/** `classify` is a generic name: it counts as a carry reader only in the file that defines the one that reads `ran` first. */
+export const RAN_CARRY_READERS_BY_FILE: Readonly<Record<string, readonly string[]>> = {
+  'server/src/docs/ccdsource.ts': ['classify'],
+};
+
+/** How a `runCcd(` site answers the not-ran arm (ARCH-10, #543; the PR lists each site's chosen arm):
+ *  - `explicit`: the site reads `ran === false` itself, before any reader of the runner's words;
+ *  - `carried`: the site hands the whole result to a reader in `RAN_CARRY_READERS`, which reads `ran` first;
+ *  - `ok-only`: the site reads only `ok` (and the stdout of an ok answer, or the runner's `stderr` as a plain failure
+ *    sentence). The not-ran arm carries `ok: false`, so `tsc` narrows the ran arm by `ok` itself and the site's failure
+ *    path is the one the arm always took: no refusal, box word, die or composition error is read off it. Pinned by
+ *    `RAN_TABLE`, never by this file's regexes. */
+export type RanArm = 'explicit' | 'carried' | 'ok-only';
+
+/** A `runCcd(` site the census cannot classify by reading the code around it, pinned by its file, its trimmed text and
+ *  which of the identical lines in that file it is (`nth`, from 1), so a moved line keeps its row. */
+export interface RanTableRow { readonly file: string; readonly text: string; readonly nth: number; readonly arm: RanArm }
+
+/** The reviewed arm of every `runCcd(` site the code around it does not show: an unassigned result, a result handed
+ *  to a `queue.run` callback, and every site that reads `ok` only. A site that appears in no row, and shows no narrowing
+ *  or carry in the next `RAN_NARROW_WINDOW` code lines, is unaccounted, and the census test fails. */
+export const RAN_TABLE: readonly RanTableRow[] = [
+  { file: 'server/src/archiveAct.ts', text: 'const res = await ports.runCcd(ports.stopArgv());', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/archiveAct.ts', text: 'const archived = await ports.runCcd(archiveArgv);', nth: 1, arm: 'carried' },
+  { file: 'server/src/archiveAct.ts', text: 'const res = await ports.runCcd(ports.stopArgv());', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/coord/childReclaim.ts', text: 'const res = await deps.runCcd(argv);', nth: 3, arm: 'ok-only' },
+  { file: 'server/src/coord/childSpent.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/close.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/close.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/coord/close.ts', text: 'const res = await deps.runCcd(argv);', nth: 3, arm: 'ok-only' },
+  { file: 'server/src/coord/close.ts', text: 'const res = await deps.runCcd(argv);', nth: 4, arm: 'ok-only' },
+  { file: 'server/src/coord/close.ts', text: 'const res = await deps.runCcd(argv);', nth: 5, arm: 'ok-only' },
+  { file: 'server/src/coord/collectOrphanTree.ts', text: 'try { return parseOrphanCensus((await deps.runCcd(CCD_ARGV.wsOrphanCensus())).stdout); } catch { return { kind: \'unreadable\' }; }', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/collectOrphanTree.ts', text: 'try { return parseOrphanAudit((await deps.runCcd(CCD_ARGV.wsOrphanAudit(hex))).stdout, hex); }', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/collectOrphanTree.ts', text: 'const r = await deps.runCcd(CCD_ARGV.wsOrphan(spend.token, hex, spend.rescue, sweepDec(deps.fleetState, \'orphan-tree sweep\')));', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/dispatch.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/dispatch.ts', text: 'const res = await deps.runCcd(CCD_ARGV.ensure(sessionId));', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/dispatch.ts', text: 'const holdRes = await deps.runCcd(holdArgv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/dispatch.ts', text: 'const routeRes = await deps.runCcd(', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/fingerprint.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 3, arm: 'ok-only' },
+  { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(CCD_ARGV.reclaimPause(body.state));', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'return { ok: true, res: await deps.runCcd(CCD_ARGV.docsIndex()) };', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(CCD_ARGV.docsTree(call.project, call.ref === null ? null : docsRefText(call.ref))),', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(call.pin.kind === \'committed\'', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'return { ok: true, res: await deps.runCcd(CCD_ARGV.docsFetch(project, branch)) };', nth: 1, arm: 'carried' },
+  { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'return late !== null ? { refused: late } : { ran: await deps.runCcd(argv) };', nth: 1, arm: 'explicit' },
+  { file: 'server/src/server.ts', text: 'const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 1, arm: 'carried' },
+  { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 4, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 2, arm: 'explicit' },
+  { file: 'server/src/watch.ts', text: 'const res = await this.deps.queue.run(r.id, () => this.deps.runCcd(', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/watch.ts', text: 'const res = await this.deps.runCcd(CCD_ARGV.ensure(d.toId));', nth: 1, arm: 'ok-only' },
+];
+
+/** One `runCcd(` site and how it answers the not-ran arm; `null` when nothing accounts for it. */
+export interface RanSite extends CensusSite { readonly arm: RanArm | null }
+
+/** D-6034, D-6840 (ARCH-10, #543): every `runCcd(` call expression under `server/src`, with how it answers
+ *  the not-ran arm. A site is `explicit` when the variable it assigns (`res = await deps.runCcd(...)`, with or without
+ *  `const`/`let`) is read as `<name>.ran === false` within the next `RAN_NARROW_WINDOW` code lines, and before a line
+ *  that opens with `}` at column 0 (the end of the declaration the call sits in); `carried` when that name is an
+ *  argument of a `RAN_CARRY_READERS` call in the same window; otherwise the site's row in `RAN_TABLE`, else `null`.
+ *  A line that RETURNS the call's bare result (`return await ...runCcd(`, a pass-through wrapper) folds nothing and is
+ *  not a site, nor is a method signature (`runCcd(argv: CcdArgv): ...`). */
+export function runCcdSiteArms(root: string = REPO, table: readonly RanTableRow[] = RAN_TABLE): RanSite[] {
+  const out: RanSite[] = [];
   for (const f of sourceFiles(root, 'server/src')) {
     const file = path.relative(root, f).split(path.sep).join('/');
     const lines = readFileSync(f, 'utf8').split('\n');
+    const seen = new Map<string, number>();
     lines.forEach((text, i) => {
       const code = codeOf(text);
       if (!/\brunCcd\s*\(/.test(code) || /^\s*return\s+(?:await\s+)?[\w.]*\brunCcd\s*\(/.test(code)) return;
+      if (/\brunCcd\s*\(\s*\w+\s*:/.test(code)) return;
+      const key = text.trim();
+      const nth = (seen.get(key) ?? 0) + 1;
+      seen.set(key, nth);
       const name = /(?:^|[^\w$.])([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*await\s+[\w.]*\brunCcd\s*\(/.exec(code)?.[1];
+      let arm: RanArm | null = null;
       if (name !== undefined) {
         const narrow = new RegExp(`\\b${name}\\.ran\\s*===\\s*false\\b`);
+        const carry = new RegExp(`\\b(?:${[...RAN_CARRY_READERS, ...(RAN_CARRY_READERS_BY_FILE[file] ?? [])].join('|')})\\(\\s*${name}\\b`);
+        const stderrRead = new RegExp(`\\b${name}\\.stderr\\b`);
+        let readStderr = false;
         for (const l of lines.slice(i + 1, i + 1 + RAN_NARROW_WINDOW)) {
           if (/^\}/.test(l)) break;
-          if (narrow.test(codeOf(l))) return;
+          const c = codeOf(l);
+          // The narrowing must come BEFORE the first read of the runner's words: a `ran === false` after a `.stderr` read is late.
+          if (narrow.test(c)) { if (!readStderr) arm = 'explicit'; break; }
+          if (stderrRead.test(c)) readStderr = true;
+          if (carry.test(c)) { arm = 'carried'; break; }
         }
       }
-      out.push({ file, line: i + 1, text });
+      arm ??= table.find((r) => r.file === file && r.text === key && r.nth === nth)?.arm ?? null;
+      out.push({ file, line: i + 1, text, arm });
     });
   }
   return out;
+}
+
+/** The sites nothing accounts for. Step 2 drove this to 0, and `consolidation-census.test.ts` pins it there. */
+export function runCcdOldFoldSites(root: string = REPO, table: readonly RanTableRow[] = RAN_TABLE): CensusSite[] {
+  return runCcdSiteArms(root, table).filter((s) => s.arm === null).map(({ file, line, text }) => ({ file, line, text }));
 }
 
 /** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites are reported, tagged

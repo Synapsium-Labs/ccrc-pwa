@@ -464,7 +464,7 @@ describe('draftPr composition — exact title and body', () => {
 });
 
 describe('sweepFailureReason (landing-order wave 3c)', () => {
-  const base = { ok: false as const, stdout: '', stderr: '' };
+  const base = { ran: true as const, ok: false as const, stdout: '', stderr: '' };
   const rows: [string, CcdResult, PrReason][] = [
     ['the agent killed it', { ...base, killed: true, signal: 'SIGTERM' }, 'cut-short'],
     ["the server's own wait ran out", { ...base, killed: UNMEASURED, signal: UNMEASURED, ran: false, reason: 'timeout', detail: 'timeout' }, 'cut-short'],

@@ -38,7 +38,7 @@ const rig = (caps: FleetState) => {
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
-    return { code: 1, stdout: '', stderr: `scripted: ${args[0] ?? ''} answers nothing here` };
+    return { ran: true, code: 1, stdout: '', stderr: `scripted: ${args[0] ?? ''} answers nothing here` };
   };
   const base = testDeps(home, run);
   const listings: string[] = [];

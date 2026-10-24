@@ -57,10 +57,10 @@ const makeRunner = (live: ReadonlySet<string> = new Set()): { run: Runner; execs
     if (cmd === 'tmux' && args[0] === 'has-session') {
       const t = args[2] ?? '';
       return live.has(t)
-        ? { code: 0, stdout: '', stderr: '' }
-        : { code: 1, stdout: '', stderr: `can't find session: ${t}` };
+        ? { ran: true, code: 0, stdout: '', stderr: '' }
+        : { ran: true, code: 1, stdout: '', stderr: `can't find session: ${t}` };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, execs };
 };

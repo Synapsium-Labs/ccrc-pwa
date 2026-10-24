@@ -69,9 +69,9 @@ const mergedLine = (extra: Record<string, unknown> = {}, number = 42): string =>
 });
 
 const runnerFor = (out: () => string): Runner => async (_cmd, args) => {
-  if (args[0] === 'pr-state') return { code: 0, stdout: out(), stderr: '' };
-  if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-  return { code: 0, stdout: '', stderr: '' };
+  if (args[0] === 'pr-state') return { ran: true, code: 0, stdout: out(), stderr: '' };
+  if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+  return { ran: true, code: 0, stdout: '', stderr: '' };
 };
 
 /** Walk a run through the ONE path `RUN_TRANSITIONS` allows to `to`. */
