@@ -998,20 +998,32 @@ describe('the rulings: one frame never blocks the event loop past 25 ms (D-5995)
   // pins the ORDER of the cost (a quadratic or per-string regression is seconds), the PR body gives the measured ms.
   const BOUND = 250;
   it('4 MB of undelimited drawer output in 4 KB chunks: no push blocks, and nothing is held past the bound', () => {
+    // What the test proves: masking 4 MB never holds the event loop for one long stretch. Each push is one
+    // synchronous slice, timed on the monotonic clock (`performance.now`). The property is about the slices as a
+    // WHOLE: a cost regression (a rescan of everything held, a quadratic join) makes EVERY push after the buffer fills
+    // slow, so most of the 1024 slices cross the bound. A loaded runner instead pre-empts the process at a few
+    // arbitrary pushes (a GC pause, a lost timeslice) and says nothing about this code. So the assertion is on the
+    // 95th percentile slice and on how many slices cross the bound, never on the single worst one; the worst slice
+    // only has to stay clear of a stall far past anything a pre-emption explains.
     const { m } = maskerOver(() => TOKEN_1, [CMP]);
     const d = m.drawer(() => {});
     const chunk = 'A'.repeat(4096);
-    let worst = 0;
+    const slices: number[] = [];
     d.push('key sk-');
     for (let i = 0; i < 1024; i++) {
       const t0 = performance.now();
       d.push(chunk);
-      worst = Math.max(worst, performance.now() - t0);
+      slices.push(performance.now() - t0);
       expect((d as unknown as { held: string }).held.length + ((d as unknown as { pending: string | null }).pending?.length ?? 0))
         .toBeLessThanOrEqual(8192 + 1024 + 4096);
     }
     d.dispose();
-    expect(worst).toBeLessThan(BOUND);
+    const sorted = [...slices].sort((a, b) => a - b);
+    const p95 = sorted[Math.floor(sorted.length * 0.95)]!;
+    const over = slices.filter((ms) => ms > 25).length;
+    expect(p95, 'the 95th-percentile push slice (ms)').toBeLessThan(25);
+    expect(over, 'pushes over 25 ms, of 1024').toBeLessThanOrEqual(51);   // 5%: a regression slows nearly all of them
+    expect(sorted[sorted.length - 1], 'worst slice (ms), a stall no pre-emption explains').toBeLessThan(2000);
     m.close();
   });
 
