@@ -34,7 +34,7 @@ import { notify } from '../notice.js';
  *
  * `close.ts`'s kind of file: an L1 decision reached through declared ports.
  * Five things live here and nowhere else —
- *   - the fourteen words `ccd ws-reclaim` and `ccd ws-audit --reclaim` answer
+ *   - the fifteen words `ccd ws-reclaim` and `ccd ws-audit --reclaim` answer
  *     with, and what each one MEANS to the server (gone / terminal / retry);
  *   - `childReclaimGeneration` and `childReclaimLatest`, the one fence and the
  *     one latest-event pick every read of the lifecycle mirror goes through
@@ -62,7 +62,7 @@ import { notify } from '../notice.js';
 export type ChildReclaimToken =
   | 'no-such-session' | 'not-a-workspace' | 'not-a-child' | 'paused' | 'held' | 'attached' | 'tree-busy'
   | 'branch-elsewhere' | 'tree-unreadable' | 'containment-unproven' | 'no-worktree-record' | 'state-changed'
-  | 'in-progress' | 'reap-in-progress';
+  | 'in-progress' | 'reap-in-progress' | 'not-idle';
 
 /** What each word means to the server, spelled ONCE:
  *   - `gone`: the child is already not there. Never a feed row, never an
@@ -90,6 +90,7 @@ export const CHILD_RECLAIM_TOKEN_KIND: Readonly<Record<ChildReclaimToken, 'gone'
   'state-changed': 'retry',
   'in-progress': 'retry',
   'reap-in-progress': 'retry',
+  'not-idle': 'retry',
 };
 
 export function isChildReclaimToken(v: unknown): v is ChildReclaimToken {
@@ -262,13 +263,13 @@ export function childReclaimHasCoordinated(
 export type ChildReclaimDeferWhy =
   | 'presence' | 'siblings-open' | 'siblings-unreadable' | 'marker-unreadable' | 'marker-mismatch'
   | 'unsupported' | 'paused-at-server' | 'generation-changed'
-  | Extract<ChildReclaimToken, 'paused' | 'held' | 'attached' | 'tree-busy' | 'state-changed' | 'in-progress' | 'reap-in-progress'>;
+  | Extract<ChildReclaimToken, 'paused' | 'held' | 'attached' | 'tree-busy' | 'state-changed' | 'in-progress' | 'reap-in-progress' | 'not-idle'>;
 
 const CHILD_RECLAIM_DEFER_WHY: Readonly<Record<ChildReclaimDeferWhy, true>> = {
   presence: true, 'siblings-open': true, 'siblings-unreadable': true, 'marker-unreadable': true,
   'marker-mismatch': true, unsupported: true, 'paused-at-server': true, 'generation-changed': true,
   paused: true, held: true, attached: true, 'tree-busy': true, 'state-changed': true, 'in-progress': true,
-  'reap-in-progress': true,
+  'reap-in-progress': true, 'not-idle': true,
 };
 /** The defer words as a runtime list (spec §5.7), derived from the table's keys and never listed again. */
 export const CHILD_RECLAIM_DEFER_WHYS = Object.keys(CHILD_RECLAIM_DEFER_WHY) as readonly ChildReclaimDeferWhy[];
