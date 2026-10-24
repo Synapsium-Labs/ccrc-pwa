@@ -62,12 +62,18 @@ function targetLevel(fs: DiskFilesystem, held: DiskLevel): DiskLevel {
   return 'ok';
 }
 
-/** Whether every MEASURED filesystem reads below the clear band (`DISK_WARN_PCT - DISK_CLEAR_MARGIN_PCT`, bytes and
- *  inodes alike): the disk has really cleared, whatever any process remembers. A filesystem that tells nothing is
- *  skipped, and a read with nothing measurable is NOT clear: the answer is "keep", never "forget". */
-export function diskClearOfBand(measured: DiskMeasured): boolean {
-  const readable = measured.filesystems.filter(measurable);
-  return readable.length > 0 && readable.every((fs) => !usedAtLeast(fs, DISK_WARN_PCT - DISK_CLEAR_MARGIN_PCT));
+/** What a process with no episode of its own does with the durable mark, judged by the filesystem(s) that pushed it and
+ *  by no other: `resume` when one of them stands at warn/critical now; `forget` when every one reads below its clear band
+ *  or is absent (a mark with no filesystem is stale); else `keep`. A read that tells nothing keeps, never forgets. */
+export function diskMarkFate(devs: readonly string[], v: DiskVerdict, measured: DiskMeasured): 'resume' | 'forget' | 'keep' {
+  const standing = (d: string): boolean => (d === 'mount' ? v.mountsDown.length > 0 : ['warn', 'critical'].includes(v.filesystems.find((f) => f.dev === d)?.level ?? ''));
+  if (devs.some(standing)) return 'resume';
+  const anyReadable = measured.filesystems.some(measurable);
+  const clear = (d: string): boolean => {
+    const fs = measured.filesystems.find((f) => f.dev === d);
+    return d === 'mount' ? anyReadable : fs === undefined ? anyReadable : measurable(fs) && !usedAtLeast(fs, DISK_WARN_PCT - DISK_CLEAR_MARGIN_PCT);
+  };
+  return devs.every(clear) ? 'forget' : 'keep';
 }
 
 /** The fleet fold's order: `unmeasured` outranks `ok`, so a filesystem that cannot be read is never hidden by one that
@@ -143,6 +149,8 @@ export interface DiskNotice {
   readonly title: string;
   readonly body: string;
   readonly dedupeKey: string;
+  /** The filesystem the key names (`mount` for a missing work mount): the episode mark records it. */
+  readonly dev: string;
 }
 
 const GIB = 1024 ** 3;
@@ -171,7 +179,7 @@ export function diskNotice(prev: DiskVerdict | null, next: DiskVerdict): DiskNot
     return {
       mode: 'record-only', title: 'Fleet disk back to normal',
       body: 'Every work filesystem is back under its warning level.',
-      dedupeKey: `disk:fleet:clear:${prev.episode ?? prev.at}`,
+      dedupeKey: `disk:fleet:clear:${prev.episode ?? prev.at}`, dev: 'fleet',
     };
   }
   if ((next.level !== 'warn' && next.level !== 'critical') || RANK[next.level] <= heldRank) return null;
@@ -186,13 +194,13 @@ export function diskNotice(prev: DiskVerdict | null, next: DiskVerdict): DiskNot
     return {
       mode: 'push', title: 'Fleet disk: a work volume is not mounted',
       body: `${next.mountsDown.length} expected work mount${next.mountsDown.length === 1 ? ' is' : 's are'} not mounted (${down.map((i) => `#${i}`).join(', ')}). ${limits}`,
-      dedupeKey: `disk:mount:${next.level}:${episode}`,
+      dedupeKey: `disk:mount:${next.level}:${episode}`, dev: 'mount',
     };
   }
   const others = next.filesystems.filter((f) => f.level === next.level).length - 1;
   return {
     mode: 'push', title: `Fleet disk ${usedPct(worst)}% full · ${gib(worst.availBytes)} free`,
     body: `Holds ${worst.roots.join(', ')}${others > 0 ? `, and ${others} more filesystem${others === 1 ? '' : 's'} at ${next.level}` : ''}.${downText} ${limits}`,
-    dedupeKey: `disk:${worst.dev}:${next.level}:${episode}`,
+    dedupeKey: `disk:${worst.dev}:${next.level}:${episode}`, dev: worst.dev,
   };
 }

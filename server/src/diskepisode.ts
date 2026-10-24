@@ -7,19 +7,22 @@ import path from 'node:path';
 
 function episodePath(ccrcDir: string): string { return path.join(ccrcDir, 'disk-episode'); }
 
-/** The marked episode number, or null when none is marked or the mark is unreadable. */
-export function readDiskEpisode(ccrcDir: string): number | null {
+/** The marked episode and the dev(s) of the filesystem(s) whose rise pushed it, or null when none is marked or the mark
+ *  is unreadable. A mark written before devs were recorded reads with none, which `diskMarkFate` calls stale. */
+export function readDiskEpisode(ccrcDir: string): { episode: number; devs: string[] } | null {
   try {
-    const v = Number(readFileSync(episodePath(ccrcDir), 'utf8').trim());
-    return Number.isFinite(v) && v > 0 ? v : null;
+    const [head, list] = readFileSync(episodePath(ccrcDir), 'utf8').trim().split(/\s+/);
+    const episode = Number(head);
+    if (!Number.isFinite(episode) || episode <= 0) return null;
+    return { episode, devs: list === undefined ? [] : list.split(',') };
   } catch { return null; }
 }
 
 /** A mark that cannot be written costs the restart dedupe only, never the notice. */
-export function writeDiskEpisode(ccrcDir: string, episode: number): void {
+export function writeDiskEpisode(ccrcDir: string, episode: number, dev: string): void {
   try {
     mkdirSync(ccrcDir, { recursive: true });
-    writeFileSync(episodePath(ccrcDir), `${episode}\n`);
+    writeFileSync(episodePath(ccrcDir), `${episode} ${dev}\n`);
   } catch { /* the notice still goes out */ }
 }
 

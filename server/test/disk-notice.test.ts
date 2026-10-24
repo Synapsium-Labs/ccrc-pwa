@@ -4,12 +4,12 @@
 // write so a restarted watcher inside the same episode says nothing twice.
 import { describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { readDiskEpisode } from '../src/diskepisode.js';
-import { diskClearOfBand, diskNotice, diskVerdict, type DiskVerdict } from '../src/disk.js';
+import { diskMarkFate, diskNotice, diskVerdict, type DiskVerdict } from '../src/disk.js';
 import { localIO, type FleetIO, type MeasuredDisk } from '../src/io.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { PushPayload } from '../src/push.js';
@@ -29,20 +29,26 @@ const verdict = (level: DiskLevel, usedPct: number, episode = 100, mountsDown: s
   filesystems: [{ ...fsAt(usedPct), level, pending: null }],
 });
 
-describe('diskClearOfBand: whether the disk has really cleared', () => {
+describe('diskMarkFate: what a process with no episode does with the durable mark', () => {
   const m = (...fs: DiskFilesystem[]): DiskMeasured => ({ filesystems: fs, expectedMounts: [], missing: [] });
-  it('is true below the clear band, false inside it and above', () => {
-    expect(diskClearOfBand(m(fsAt(40)))).toBe(true);
-    expect(diskClearOfBand(m(fsAt(84)))).toBe(false);
-    expect(diskClearOfBand(m(fsAt(90)))).toBe(false);
+  const fate = (devs: string[], ...fs: DiskFilesystem[]) => diskMarkFate(devs, diskVerdict(null, m(...fs), 10), m(...fs));
+  it('resumes while a marked filesystem stands at warn/critical, whatever another reads', () => {
+    expect(fate(['1'], fsAt(86, '1'), fsAt(40, '2'))).toBe('resume');
+    expect(fate(['2'], fsAt(86, '1'), fsAt(93, '2'))).toBe('resume');
   });
-  it('needs every filesystem clear, and inodes count too', () => {
-    expect(diskClearOfBand(m(fsAt(40, '1'), fsAt(84, '2')))).toBe(false);
-    expect(diskClearOfBand(m({ ...fsAt(40), filesFree: 100_000 }))).toBe(false);
+  it('forgets once every marked filesystem is below the clear band or absent, whatever another reads', () => {
+    expect(fate(['1'], fsAt(80, '1'), fsAt(84, '2'))).toBe('forget');
+    expect(fate(['9'], fsAt(40, '1'))).toBe('forget');
+    expect(fate(['1', '2'], fsAt(40, '1'), fsAt(84, '2'))).toBe('keep');
   });
-  it('a read with nothing measurable is not clear', () => {
-    expect(diskClearOfBand(m())).toBe(false);
-    expect(diskClearOfBand(m({ ...fsAt(40), sizeBytes: 0, files: 0 }))).toBe(false);
+  it('keeps a marked filesystem inside the band, and inodes count', () => {
+    expect(fate(['1'], fsAt(84, '1'))).toBe('keep');
+    expect(fate(['1'], { ...fsAt(40, '1'), filesFree: 160_000 })).toBe('keep');
+  });
+  it('a read with nothing measurable forgets nothing, and a mark with no filesystem is stale', () => {
+    expect(fate(['1'])).toBe('keep');
+    expect(fate(['1'], { ...fsAt(40, '1'), sizeBytes: 0, files: 0 })).toBe('keep');
+    expect(fate([], fsAt(86, '1'))).toBe('forget');
   });
 });
 
@@ -282,6 +288,67 @@ describe('sweepDisk sends the notice through the funnel', () => {
     expect(p1.push.notify.mock.calls.length).toBe(1);
     clock += 24 * 3_600_000;
     const p2 = await rig(home, both(86, 84), () => clock);
+    for (let i = 0; i < 2; i += 1) { clock += 60_000; await p2.sweep(); }
+    expect(p2.push.notify.mock.calls.length).toBe(1);
+  });
+
+  const two = (a: number, b: number): MeasuredDisk => ({
+    ok: true, measured: { filesystems: [fsAt(a, '1'), fsAt(b, '2')], expectedMounts: [], missing: [] } satisfies DiskMeasured,
+  });
+  const both = (a: number, b: number): MeasuredDisk[] => [two(a, b), two(a, b)];
+
+  it('a restart that boots with the alarmed filesystem clear forgets the mark though another sits in the band: a later rise pushes', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const p1 = await rig(home, [...both(40, 84), ...both(86, 84)], () => clock);
+    for (let i = 0; i < 4; i += 1) { clock += 60_000; await p1.sweep(); }
+    expect(p1.push.notify.mock.calls.length).toBe(1);
+    const p2 = await rig(home, [...both(80, 84), ...both(80, 84), ...both(86, 84)], () => clock);
+    for (let i = 0; i < 6; i += 1) { clock += 24 * 3_600_000; await p2.sweep(); }
+    expect(p2.push.notify.mock.calls.length).toBe(1);
+  });
+
+  it('with no restart gap: the first process dies holding warn at 84%, the second sees the real fall, and a later rise pushes', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const p1 = await rig(home, [...both(40, 83), ...both(86, 83), ...both(84, 83)], () => clock);
+    for (let i = 0; i < 6; i += 1) { clock += 60_000; await p1.sweep(); }
+    expect(p1.push.notify.mock.calls.length).toBe(1);
+    const p2 = await rig(home, [...both(80, 84), ...both(80, 83), ...both(86, 84)], () => clock);
+    for (let i = 0; i < 6; i += 1) { clock += 6 * 3_600_000; await p2.sweep(); }
+    expect(p2.push.notify.mock.calls.length).toBe(1);
+  });
+
+  it('a restart while the marked filesystem stands re-sends nothing, whatever another filesystem reads', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const p1 = await rig(home, [...both(40, 84), ...both(86, 84)], () => clock);
+    for (let i = 0; i < 4; i += 1) { clock += 60_000; await p1.sweep(); }
+    const p2 = await rig(home, both(86, 40), () => clock);
+    for (let i = 0; i < 2; i += 1) { clock += 6 * 3_600_000; await p2.sweep(); }
+    expect(p2.push.notify.mock.calls.length).toBe(0);
+  });
+
+  it('the mark names the filesystem whose rise pushed it, and a mark with no filesystem is stale: a restart at warn pushes', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const p1 = await rig(home, [...both(40, 40), ...both(86, 40)], () => clock);
+    for (let i = 0; i < 4; i += 1) { clock += 60_000; await p1.sweep(); }
+    const markFile = path.join(home, '.ccrc', 'disk-episode');
+    expect(readFileSync(markFile, 'utf8').trim()).toMatch(/^\d+ 1$/);
+    writeFileSync(markFile, '1\n');
+    const p2 = await rig(home, both(86, 40), () => clock);
+    for (let i = 0; i < 2; i += 1) { clock += 60_000; await p2.sweep(); }
+    expect(p2.push.notify.mock.calls.length).toBe(1);
+  });
+
+  it('a restart resumes the marked episode only for the marked filesystem: another one standing is a new episode and pushes', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const p1 = await rig(home, [...both(40, 40), ...both(86, 40)], () => clock);
+    for (let i = 0; i < 4; i += 1) { clock += 60_000; await p1.sweep(); }
+    expect(p1.push.notify.mock.calls.length).toBe(1);
+    const p2 = await rig(home, both(84, 86), () => clock);
     for (let i = 0; i < 2; i += 1) { clock += 60_000; await p2.sweep(); }
     expect(p2.push.notify.mock.calls.length).toBe(1);
   });

@@ -69,7 +69,7 @@ import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput
 // The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
 import { randomUUID } from 'node:crypto';
 import type { MeasuredDirectoryRead, MeasuredDisk } from './io.js';
-import { diskClearOfBand, diskNotice, diskVerdict, type DiskVerdict } from './disk.js';
+import { diskMarkFate, diskNotice, diskVerdict, type DiskVerdict } from './disk.js';
 import { clearDiskEpisode, readDiskEpisode, writeDiskEpisode } from './diskepisode.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
@@ -1351,8 +1351,6 @@ export class FleetWatcher {
    *  the first sweep lands: absence on the wire reads as UNKNOWN. */
   private lastDiskSweep = 0;
   private diskState: DiskVerdict | null = null;
-  /** Whether this process has met its first standing or clear verdict, after which the durable episode mark is not re-read. */
-  private diskEpisodeResumed = false;
   private diskBlock: DiskHealth | null = null;
   private readiness: FleetReadiness | undefined;
   /** The stale set last reported, as JSON — one warn per CHANGING set, the
@@ -7132,22 +7130,17 @@ export class FleetWatcher {
     const before = this.diskState;
     let verdict = diskVerdict(before, read.measured, now);
     // The open episode is durable (the `pushRelease` rule: a latch that forgets on restart repeats the push). A process
-    // with no memory of its own that meets a standing `warn`/`critical` resumes the episode it marked, so its key is
-    // the one already archived; a clear to `ok` forgets the mark.
-    const standingNow = verdict.level === 'warn' || verdict.level === 'critical';
-    // The first standing verdict this process sees resumes the mark, even when an `unmeasured` pass (a missing mount's
-    // first pass) came before it; an `ok` below the clear band ends the window (the mark is then stale), one inside the band does not.
-    if (standingNow && !this.diskEpisodeResumed) {
-      this.diskEpisodeResumed = true;
-      const marked = readDiskEpisode(this.deps.cfg.ccrcDir);
-      if (marked !== null) verdict = { ...verdict, episode: marked };
-    } else if (verdict.level === 'ok' && (before?.episode !== undefined || diskClearOfBand(read.measured))) {
-      // The mark ends two ways: this process saw a held episode close (a clear is a clear whatever else sits in the
-      // band), or the MEASURED level is below the clear band on every filesystem, whether or not this process ever
-      // held it. A boot reading inside the band (ok by hysteresis alone) leaves the mark and the resume window open,
-      // so a rise that follows is still the marked episode.
-      this.diskEpisodeResumed = true;
-      clearDiskEpisode(this.deps.cfg.ccrcDir);
+    // that saw its own held episode close forgets the mark. One with no episode of its own judges the mark by the
+    // filesystem(s) that pushed it: standing now, it resumes that episode (its key is already archived); every one clear
+    // or gone, it forgets (a later rise is new); otherwise it keeps. A mark with no filesystem is stale.
+    const dir = this.deps.cfg.ccrcDir;
+    if (before?.episode !== undefined) {
+      if (verdict.level === 'ok') clearDiskEpisode(dir);
+    } else {
+      const mark = readDiskEpisode(dir);
+      const fate = mark === null ? 'keep' : diskMarkFate(mark.devs, verdict, read.measured);
+      if (mark !== null && fate === 'resume') verdict = { ...verdict, episode: mark.episode };
+      else if (fate === 'forget') clearDiskEpisode(dir);
     }
     this.diskState = verdict;
     this.raiseDiskNotice(before, verdict);
@@ -7171,7 +7164,7 @@ export class FleetWatcher {
     const n = diskNotice(before, after);
     if (n === null) return;
     // Mark the episode BEFORE the push, so a restart between the two finds it.
-    if (n.mode === 'push' && after.episode !== undefined) writeDiskEpisode(this.deps.cfg.ccrcDir, after.episode);
+    if (n.mode === 'push' && after.episode !== undefined) writeDiskEpisode(this.deps.cfg.ccrcDir, after.episode, n.dev);
     try { if (this.deps.coord?.hasNotice('coord', '', n.dedupeKey) === true) return; } catch { /* send it: a repeat beats silence */ }
     notify(this.deps, { kind: 'coord', sessionId: '', runId: null, title: n.title, body: n.body }, n.mode,
       { tag: 'disk', dedupeKey: n.dedupeKey, degraded: 'feed archive degraded, ring/push unaffected' });
