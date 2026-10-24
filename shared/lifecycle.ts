@@ -79,7 +79,7 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   // days after an archive. A child that coordinated is never taken automatically.
   { name: 'child-workspaces', root: '<worktrees-root>/<project>/<slug> (a --child workspace)', pattern: 'W',
     creators: ['ccd (ws-add --child, minted for a coordinated run)'],
-    collector: 'ws-reclaim on the run\'s close and by the sweep; its stale arm at 7 idle days (behind child-stale-reclaim-live); ws-expire once archived',
+    collector: 'ws-reclaim on the run\'s close and by the sweep; its stale arm at 7 idle days (behind its live switch in shared/switches.ts); ws-expire once archived',
     bound: 'the run\'s close, or 7 idle days when kept, or 7 days after an archive; never while it coordinated',
     tier: 'a worktree plus its pinned attic refs; the work is kept under refs/ccrc/attic/<id>/ before the tree goes', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
