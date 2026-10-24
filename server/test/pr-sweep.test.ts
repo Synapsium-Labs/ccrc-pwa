@@ -14,6 +14,12 @@ import type { PushPayload } from '../src/push.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 
+/** Stamp the PR lane as if it last ran at `ms` (the on-demand stamp reads the wall clock, so the clock is set for it). */
+function stampPrAt(w: FleetWatcher, ms: number): void {
+  const spy = vi.spyOn(Date, 'now').mockReturnValue(ms);
+  try { w.stamp('pr'); } finally { spy.mockRestore(); }
+}
+
 function seed(ids: string[]): string {
   const home = mkTmp('ccrc-');
   const reg = path.join(home, '.cc-sessions');
@@ -310,7 +316,7 @@ describe('the single-flight and due-interval guards hold their line, not just th
   it('the single-flight guard holds even if the due-interval would otherwise allow a new sweep', async () => {
     // Isolates the single-flight guard from the due-interval guard: the test
     // above ("does NOT start a second sweep while wedged") never resets
-    // lastPrSweep, so the due-interval guard would ALSO block a second
+    // the lane's stamp, so the due-interval guard would ALSO block a second
     // sweep on its own — a single-flight guard broken toward "always allow"
     // could hide behind it. Force the due-interval open here so only
     // single-flight stands in the way.
@@ -328,7 +334,7 @@ describe('the single-flight and due-interval guards hold their line, not just th
     await w.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(calls.filter((c) => c[0] === 'pr-state')).toHaveLength(1);
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;   // due-interval bypassed
+    w.kick('pr');   // due-interval bypassed
     await w.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(calls.filter((c) => c[0] === 'pr-state'), 'single-flight must hold even with the due-interval bypassed').toHaveLength(1);
@@ -336,7 +342,7 @@ describe('the single-flight and due-interval guards hold their line, not just th
   });
 
   it("an abandoned sweep's own finally must not clear a NEWER sweep's still-active latch", async () => {
-    // The `if (this.prSweepStartedAt === mySweep)` identity check in
+    // The owner-token identity check in the runner
     // sweepPr's finally, isolated: sweep A wedges and is abandoned past the
     // ceiling; sweep B supersedes it and is ALSO still in flight when A
     // finally settles. A's own finally running unconditionally must not
@@ -377,7 +383,7 @@ describe('the single-flight and due-interval guards hold their line, not just th
       // B is STILL legitimately in flight. Forcing due again must NOT start
       // a third sweep: A's finally clearing the latch out from under B would
       // be exactly the bug the identity check exists to prevent.
-      (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+      w.kick('pr');
       await w.tick();
       await new Promise((r) => setTimeout(r, 50));
       expect(calls.filter((c) => c[0] === 'pr-state'),
@@ -401,7 +407,7 @@ describe('the single-flight and due-interval guards hold their line, not just th
     // releases the single-flight latch) so this test isolates the
     // due-interval guard rather than incidentally riding on single-flight
     // still being fresh.
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
     await w.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(calls.filter((c) => c[0] === 'pr-state'), 'a completed sweep still inside its interval must not repeat').toHaveLength(1);
@@ -420,7 +426,7 @@ describe('the single-flight and due-interval guards hold their line, not just th
     liveIdle(idleHome);
     const idleCalls: string[][] = [];
     const wIdle = new FleetWatcher(testDeps(idleHome, runnerFor('', idleCalls)), new Bus(), 10_000);
-    (wIdle as unknown as { lastPrSweep: number }).lastPrSweep = Date.now() - elapsed;
+    stampPrAt(wIdle, Date.now() - elapsed);
     await wIdle.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(idleCalls.filter((c) => c[0] === 'pr-state'), 'no pending PR — the slow 120s cadence applies').toEqual([]);
@@ -433,7 +439,7 @@ describe('the single-flight and due-interval guards hold their line, not just th
     const openCalls: string[][] = [];
     const wOpen = new FleetWatcher(testDeps(openHome, runnerFor('', openCalls)), new Bus(), 10_000);
     (wOpen as unknown as { prStates: Map<string, PrState> }).prStates.set('demo-quiet-basin', openNotPending);
-    (wOpen as unknown as { lastPrSweep: number }).lastPrSweep = Date.now() - elapsed;
+    stampPrAt(wOpen, Date.now() - elapsed);
     await wOpen.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(openCalls.filter((c) => c[0] === 'pr-state'), 'open with settled checks is not "pending" — the slow cadence still applies').toEqual([]);
@@ -444,7 +450,7 @@ describe('the single-flight and due-interval guards hold their line, not just th
     const activeCalls: string[][] = [];
     const wActive = new FleetWatcher(testDeps(activeHome, runnerFor('', activeCalls)), new Bus(), 10_000);
     (wActive as unknown as { prStates: Map<string, PrState> }).prStates.set('demo-quiet-basin', openPending);
-    (wActive as unknown as { lastPrSweep: number }).lastPrSweep = Date.now() - elapsed;
+    stampPrAt(wActive, Date.now() - elapsed);
     await wActive.tick();
     await vi.waitFor(() => expect(activeCalls.filter((c) => c[0] === 'pr-state')).toHaveLength(1));
     wActive.stop();
@@ -475,11 +481,11 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     // `phase` lands mid-sweep, well before `archiveMerged` and the `finally`
     // that releases the single-flight latch — wait for the FULL first sweep
     // to finish, or forcing a second one below would just bounce off its own
-    // still-fresh `prSweepStartedAt` and never reach the failing branch.
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    // still-fresh flight and never reach the failing branch.
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
 
     failing.value = true;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
     const quiet = w.currentPrStates().get('demo-quiet-basin')!;
@@ -499,7 +505,7 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     expect(calls.filter((c) => c[0] === 'pr-state')).toHaveLength(2);
 
     // A third tick, forced due again, must NOT re-poll this project: it's backed off.
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(calls.filter((c) => c[0] === 'pr-state'), 'an active per-project backoff must block the next due sweep').toHaveLength(2);
@@ -524,10 +530,10 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
 
     failing.value = true;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
     const quiet = w.currentPrStates().get('demo-quiet-basin')!;
@@ -554,10 +560,10 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
 
     failing.value = true;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
     expect(w.currentPrStates().get('demo-quiet-basin')?.reason).toBe('cut-short');
@@ -585,16 +591,16 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const sweeps = (): string[] => warn.mock.calls.map((c) => String(c[0])).filter((s) => s.includes('PR sweep of demo'));
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
-    const internals = w as unknown as { prSweepStartedAt: number; lastPrSweep: number; prBackoff: Map<string, unknown> };
+    const internals = w as unknown as { prBackoff: Map<string, unknown> };
     // One forced pass: waits for the sweep's own runner call AND for its single-flight latch to release, so a step
     // whose state does not change (the second failure) cannot be asserted before its sweep has run.
     const pass = async (): Promise<void> => {
       const before = prStateCalls;
-      internals.lastPrSweep = 0;
+      w.kick('pr');
       internals.prBackoff.clear();
       await w.tick();
       await vi.waitFor(() => expect(prStateCalls).toBe(before + 1));
-      await vi.waitFor(() => expect(internals.prSweepStartedAt).toBe(0));
+      await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
     };
     try {
       await pass();
@@ -714,9 +720,9 @@ describe('the merged lane announces and never acts', () => {
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick();
-    // `prSweepStartedAt` back to 0 is the one signal the whole sweep finished —
+    // the flight clearing is the one signal the whole sweep finished —
     // waiting on the absence of a call otherwise proves only that it is slow.
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     const payload = notify.mock.calls[0]![0];
@@ -740,9 +746,9 @@ describe('the merged lane announces and never acts', () => {
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
 
     // The same sweep again with the SAME PR: the latch holds, no second push.
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
     expect(notify).toHaveBeenCalledTimes(1);
 
     // A NEW pr-state reading, a higher PR number: `boundRow` binds the newest
@@ -750,7 +756,7 @@ describe('the merged lane announces and never acts', () => {
     // actually looks like on the wire.
     (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
       testDeps(home, runnerFor(mergedLine('demo-quiet-basin', 43), calls)).runCcd;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
     expect(notify.mock.calls[1]![0].body).toContain('#43');
@@ -836,12 +842,12 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
       { ...testDeps(home, runnerFor(grey, calls)), push: { notify } as never }, new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
     expect(notify).not.toHaveBeenCalled();
 
     (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
       testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)).runCcd;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(notify.mock.calls[0]![0].body).toContain('nothing archived');
@@ -864,7 +870,7 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
       io: unreadableField('demo-quiet-basin', 'workdir'), push: { notify } as never }, new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
     expect(notify).not.toHaveBeenCalled();
     w.stop();
 
@@ -1022,7 +1028,7 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     const failure = JSON.stringify({ phase: 'unknown', reason: 'timeout' });
     (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
       testDeps(home, runnerFor(failure, calls)).runCcd;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     // Proves the SECOND sweep actually ran and actually failed, so the
     // assertion below is about survival across a failure rather than a
@@ -1072,7 +1078,7 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     expect(noRepo).toContain('"repo":""');        // anti-vacuity
     (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
       testDeps(home, runnerFor(noRepo, calls)).runCcd;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     // The second sweep really ran and really parsed a full line — without this
     // the assertion below could be a no-op tick.
