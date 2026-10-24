@@ -351,12 +351,14 @@ describe.skipIf(!PY)('the backend adapter: the endpoint and the transport (codex
     // With `Connection: close`, http.client hands the socket to the response and closes the connection object first,
     // so closing that object alone leaves the stream open. The driver reads one chunk, closes, then stays alive past
     // the stream's end, so only a close that drops the socket shows as `dropped` before the fake ends its answer.
+    // The fake ends about 0.7 s after the first chunk; the 3 s sleep leaves a wide margin before the driver's exit, or
+    // the helper's fake.close(), could mark `dropped` on its own and so hide a close that does nothing.
     const chunks = Array.from({ length: 8 }, (_, i) =>
       `event: response.created\ndata: {"type":"response.created","response":{"id":"resp_fx${i}","output":[]}}\n\n`);
     const heads: Array<Record<string, string>> = [{ connection: 'close' }, {}];
     for (const headers of heads) {
       const { line, requests } = await post([{ status: 200, headers, sse: { chunks, delayMs: 100 } }],
-        { body: anthropic(), closeAfter: 1 }, { after: [{ op: 'sleep', s: 1.5 }] });
+        { body: anthropic(), closeAfter: 1 }, { after: [{ op: 'sleep', s: 3 }] });
       expect(line.status, JSON.stringify(headers)).toBe(200);
       expect(line.types, JSON.stringify(headers)).toEqual(['response.created']);
       expect(requests[0].dropped, JSON.stringify(headers)).toBe(true);
