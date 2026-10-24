@@ -2664,9 +2664,7 @@ EOF
 # echo). `ccd/ccd-update-sync`, another executable, redacts at its own `say`
 # with the home rule and the `://` scheme rule alone: it prints no release base.
 _upd_redact() {
-  local s="${1:-}" had_extglob=0 LC_ALL=C
-  shopt -q extglob && had_extglob=1
-  shopt -s extglob
+  local s="${1:-}" LC_ALL=C
   # The userinfo strip is bounded to characters a URL authority allows
   # before an '@' — never '/' or whitespace — so an UNRELATED '@' past the
   # authority (a query's `?email=a@example.com`) is left alone. Review fix
@@ -2680,7 +2678,6 @@ _upd_redact() {
   # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn.
   local sre=':(/+)[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
   local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
-  [ "$had_extglob" -eq 1 ] || shopt -u extglob
   # Review fix round 1, M6: the OLD blind substring replace was not anchored
   # to a path boundary — HOME=`/home/u` turned `/home/user2/f` into
   # `~ser2/f` (a PREFIX match with no boundary check at all), and a
