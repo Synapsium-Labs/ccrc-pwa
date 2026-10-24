@@ -371,7 +371,8 @@ export function NewSessionSheet({
           return;
         }
         toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
-        onClose();
+        // A dismissed sheet only says it started: the close is the parent's, and would shut a sheet reopened since.
+        if (mine === generation.current) onClose();
         return;
       }
       // The new row can reach the fleet store before this create's HTTP answer, so what was alive is taken BEFORE it.

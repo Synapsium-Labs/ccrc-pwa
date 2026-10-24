@@ -692,6 +692,23 @@ describe('NewSessionSheet — success opens the new session', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('a named answer this build cannot read, arriving after a dismissal and a reopening, toasts once and leaves the reopened sheet open', async () => {
+    let answer!: (a: { named: false }) => void;
+    vi.spyOn(api, 'workspaceAdd').mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+    const { onClose, flush, close, reopen } = await mount();
+    await pickDemo(flush);
+    startNamed();
+    await flush();
+    close();
+    reopen();
+    await flush();
+    await act(async () => { answer({ named: false }); });
+    await flush();
+    expect(screen.getAllByText('Starting demo on team·max…')).toHaveLength(1);
+    expect(onClose).not.toHaveBeenCalled(); // the parent's close would shut the operator's reopened sheet
+    expect(window.location.pathname).toBe('/');
+  });
+
   it('a sheet dismissed during the wait says it started once, and navigates nowhere', async () => {
     vi.useFakeTimers();
     vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
