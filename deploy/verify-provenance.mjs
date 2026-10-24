@@ -65,7 +65,13 @@ function usage(code) {
   process.stderr.write('usage: node verify-provenance.mjs --bundle <file> (--blob <file> | --blob-sha256 <hex>) --tag vX.Y.Z --owner <owner> --repo <repo> [--backend sigstore|gh] [--trusted-root <file>]\n');
   process.exit(code);
 }
+// D-6842: `why` can carry bytes a release host chose (node's JSON.parse error
+// quotes the bad bundle line), so every byte of its UTF-8 outside printable
+// ASCII, newlines included, is written as `?`: one line, no escape sequence.
+// The verifier's own sentences are spelled in ASCII, so the rule costs them
+// nothing.
 function refuse(why) {
+  why = Buffer.from(String(why), 'utf8').toString('latin1').replace(/[^\x20-\x7e]/g, '?');
   process.stderr.write(`verify-provenance: ${why}\n`);
   process.exit(1);
 }
@@ -131,13 +137,13 @@ function statementOf(json) {
 /** The subject NAME, and — when the caller supplied it — the digest.
  *  Returns the refusal reason, or null when the statement passes. */
 function subjectFailure(st, digest) {
-  if (st === null) return 'the bundle carries no in-toto statement — not an attestation';
+  if (st === null) return 'the bundle carries no in-toto statement - not an attestation';
   const named = st.subject.filter((s) => s && s.name === expectSubject);
   if (named.length === 0) {
-    return `the attestation's subject is ${st.subject.map((s) => s?.name ?? '?').join(', ')}, not ${expectSubject} — a tarball attested under another tag`;
+    return `the attestation's subject is ${st.subject.map((s) => s?.name ?? '?').join(', ')}, not ${expectSubject} - a tarball attested under another tag`;
   }
   if (digest !== null && !named.some((s) => s.digest && s.digest.sha256 === digest)) {
-    return `the attestation names ${expectSubject} with sha256 ${named[0].digest?.sha256 ?? '?'}, but the blob's is ${digest} — not the bytes the workflow built`;
+    return `the attestation names ${expectSubject} with sha256 ${named[0].digest?.sha256 ?? '?'}, but the blob's is ${digest} - not the bytes the workflow built`;
   }
   return null;
 }
@@ -253,7 +259,7 @@ try {
     const r = spawnSync('gh', ['attestation', 'verify', opt.blob, '--bundle', opt.bundle, '--repo', `${opt.owner}/${opt.repo}`,
       '--cert-identity', san, '--cert-oidc-issuer', ISSUER, '--custom-trusted-root', rootPath, '--deny-self-hosted-runners', '--format', 'json'],
     { encoding: 'utf8' });
-    if (r.error) refuse(`gh could not be run (${r.error.message}) — the gh backend needs gh >= 2.49 on PATH`);
+    if (r.error) refuse(`gh could not be run (${r.error.message}) - the gh backend needs gh >= 2.49 on PATH`);
     if (r.status === 0) { acceptedSan = san; acceptedStatements = ghStatements(r.stdout ?? ''); break; }
     lastErr = `${r.stderr ?? ''}${r.stdout ?? ''}`.trim().split('\n').pop() ?? '';
   }
