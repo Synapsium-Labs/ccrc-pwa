@@ -215,6 +215,10 @@ export const ASK_WORD: Record<AskState, string> = {
  *  the card says where to look instead of offering a control that would raise what is already up. The same casing as
  *  `ASK_WORD`'s members, which the state row draws as they are. */
 export const ASK_WORD_BELOW = 'waiting for you, below';
+/** The control beside `ASK_WORD_BELOW` (R64 F5): it raises the inline card that is already up, scrolling it into view and
+ *  focusing its first option, through the same `onAnswer` that `Answer` calls on a phone. Its word is fixed, whatever the
+ *  card is waiting on, because it takes the reader to the question and does not say what the question will ask for. */
+export const ASK_GO_TO_QUESTION = 'Go to question';
 export const ASK_GLYPH: Record<AskState, string> = {
   awaiting: '❯',
   unanswered: '·',
@@ -262,13 +266,14 @@ function AskCard({
    *  make this card answerable. */
   askPending?: boolean;
   /** D-6326: the answer surface is mounted INLINE, right below the transcript (the desk). The awaiting card then says so
-   *  (`ASK_WORD_BELOW`) and offers no Answer: there is no sheet to raise. A phone, or a desk with no inline card
+   *  (`ASK_WORD_BELOW`) and offers `ASK_GO_TO_QUESTION` instead of Answer (R64 F5): there is no sheet to raise, and the
+   *  question stays where it is, so the control takes the reader to it. A phone, or a desk with no inline card
    *  mounted, leaves it false and keeps Answer. */
   askBelow?: boolean;
   /** The control's word: `Answer`, or what the sheet it raises is waiting on (`Submit answers` while the pane is on an
    *  ask's review screen). It still only raises the sheet. */
   answerLabel?: string;
-  /** Raise the answer sheet. NOT an answer — see the state row below. */
+  /** Raise the answer sheet, or, with `askBelow`, the inline card. NOT an answer — see the state row below. */
   onAnswer?: () => void;
 }): ReactNode {
   const answers =
@@ -301,17 +306,20 @@ function AskCard({
               is virtualized, so a row owning an in-flight answer could be
               unmounted mid-send by an ordinary scroll.
 
-              Rendered only when there is a sheet to raise. A button whose
+              Rendered only when there is something to raise. A button whose
               handler is absent would do nothing at all, which is worse than
-              no button. */}
-          {state === 'awaiting' && !below && onAnswer !== undefined && (
+              no button. With the question mounted inline (`below`) the same
+              button, on the same handler, reads `ASK_GO_TO_QUESTION`: the
+              raise then scrolls that card into view and focuses its first
+              option (`AskSurface`'s `InlineCard`), and still sends nothing. */}
+          {state === 'awaiting' && onAnswer !== undefined && (
             <button
               type="button"
               className={`ask-answer ${FOCUS_RING}`}
-              title="Open the answer sheet"
+              title={below ? 'Go to the question below' : 'Open the answer sheet'}
               onClick={onAnswer}
             >
-              {answerLabel}
+              {below ? ASK_GO_TO_QUESTION : answerLabel}
             </button>
           )}
         </p>

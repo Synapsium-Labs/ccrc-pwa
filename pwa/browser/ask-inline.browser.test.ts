@@ -309,7 +309,11 @@ describe('the inline ask\'s keys at the desk (R41 F4, D-6326)', () => {
 
 // R64 F5: the transcript's live ask card offers "Go to question" at the desk. It raises the mounted inline card (the
 // existing raise path): the card scrolls into view and its first option takes focus. The transcript here holds the live
-// `AskUserQuestion` call, so its card is drawn beside the inline one.
+// `AskUserQuestion` call, so its card is drawn beside the inline one. Measured layout: at 1280x900 nothing scrolls the
+// card out of the viewport (the page, `.chat` and `.chat-body` have no overflow to scroll), so what this file can hold is
+// that the card is in the viewport after the click and that focus, parked on the body before it, is on the first option.
+// KNOWN (reported with R64 F5): `InlineCard` focuses with `preventScroll`, so with the forty-line question the first option
+// is focused but lies below the visible part of the card's own scroller; the ruling names the existing raise, unchanged.
 describe('Go to question at the desk (R64 F5, D-6326)', () => {
   const view: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1280 };
   const CALL = {
@@ -322,7 +326,7 @@ describe('Go to question at the desk (R64 F5, D-6326)', () => {
       ? { ...BACKLOG, events: [...BACKLOG.events, CALL] }
       : f));
 
-  it('clicking it with the card scrolled away brings the card into the viewport and focuses its first option', async () => {
+  it('clicking it with focus on the page body puts the card in the viewport and focus on its first option', async () => {
     const opened = await openApp(browser!, view, FIXTURE);
     try {
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
@@ -335,19 +339,18 @@ describe('Go to question at the desk (R64 F5, D-6326)', () => {
       expect(await button.count(), 'premise: the transcript card offers Go to question').toBe(1);
       expect(await opened.page.locator('.tool-ask .ask-state', { hasText: 'waiting for you, below' }).count(), 'beside the word').toBe(1);
 
-      // Scroll the card away as far as this layout lets anything scroll, and measure where that leaves it.
-      const away = await opened.page.evaluate((card) => {
+      // Premise: nothing of the card is focused, and every scroller the layout has is at the far end from the options.
+      const before = await opened.page.evaluate((card) => {
         const el = document.querySelector<HTMLElement>(card)!;
         const chat = el.closest<HTMLElement>('.chat')!;
-        const body = chat.querySelector<HTMLElement>(':scope > .chat-body')!;
-        for (const e of [document.scrollingElement as HTMLElement, document.body, chat, body]) e.scrollTop = e.scrollHeight;
+        for (const e of [document.scrollingElement as HTMLElement, document.body, chat, chat.querySelector<HTMLElement>(':scope > .chat-body')!]) {
+          e.scrollTop = e.scrollHeight;
+        }
         el.querySelector<HTMLElement>('.ask-inline-body')!.scrollTop = 0;
         (document.activeElement as HTMLElement | null)?.blur();
-        const r = el.getBoundingClientRect();
-        return { top: r.top, bottom: r.bottom, vh: window.innerHeight, focusInCard: el.contains(document.activeElement) };
+        return el.contains(document.activeElement);
       }, CARD);
-      console.log('GO-TO-QUESTION away', JSON.stringify(away));
-      expect(away.focusInCard, 'premise: focus is outside the card before the click').toBe(false);
+      expect(before, 'premise: focus is outside the card before the click').toBe(false);
 
       await button.click();
       await opened.page.waitForTimeout(300);
@@ -355,18 +358,17 @@ describe('Go to question at the desk (R64 F5, D-6326)', () => {
         const el = document.querySelector<HTMLElement>(card)!;
         const r = el.getBoundingClientRect();
         const first = el.querySelector<HTMLElement>('.opt[tabindex="0"]');
-        const fr = first?.getBoundingClientRect();
         return {
           top: r.top, bottom: r.bottom, vh: window.innerHeight,
+          cards: document.querySelectorAll('[data-ask-surface]').length,
           focusIsFirst: first !== null && document.activeElement === first,
           focused: document.activeElement?.getAttribute('class') ?? document.activeElement?.tagName ?? '',
-          first: fr === undefined ? null : { top: fr.top, bottom: fr.bottom },
         };
       }, CARD);
-      console.log('GO-TO-QUESTION after', JSON.stringify(after));
+      expect(after.cards, 'still one inline card').toBe(1);
       expect(after.top, 'the card starts inside the viewport').toBeGreaterThanOrEqual(0);
       expect(after.bottom, 'and ends inside it').toBeLessThanOrEqual(after.vh + 1);
-      expect(after.focusIsFirst, `focus is on the first option (it is on ${after.focused})`).toBe(true);
+      expect(after.focusIsFirst, `focus is on the card's first option (it is on ${after.focused})`).toBe(true);
       expect(opened.errors).toEqual([]);
     } finally {
       await opened.ctx.close();

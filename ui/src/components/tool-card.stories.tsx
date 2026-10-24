@@ -102,8 +102,9 @@ export const AskAwaiting: Story = {
 };
 
 /** The same ask at the desk, where the answer surface is an inline card right below the transcript (D-6326). CHECK that
- *  the word reads "waiting for you, below", that `.ask-live` still carries the one live cue, and that there is NO
- *  `Answer` button: there is no sheet to raise, and a control for what is already on screen would only confuse. */
+ *  the word reads "waiting for you, below", that `.ask-live` still carries the one live cue, and that the control beside
+ *  it reads "Go to question", not `Answer` (R64 F5): there is no sheet to raise, so it takes the reader to the card that
+ *  is already on screen and answers nothing itself. */
 export const AskAwaitingBelow: Story = {
   args: {
     use: use({ name: 'AskUserQuestion', input: ASK_INPUT }),
