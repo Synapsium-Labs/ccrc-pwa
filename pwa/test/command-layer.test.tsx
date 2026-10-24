@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { INSTRUMENT, SKINS, Sheet } from '@ccrc/ui';
 import { AUTH_VERDICTS } from '../../shared/api';
 import { CommandLayer } from '../src/command/CommandLayer';
+import { SEARCH_EMPTY } from '../src/command/registry';
 import { actionDoor, commandDoor, doorMark } from '../src/command/door';
 import { CHORD_MS } from '../src/command/useShortcuts';
 import { clearAuthLost, raiseAuthLost, useAuthLost } from '../src/lib/auth';
@@ -117,7 +118,7 @@ describe('opening the palette', () => {
     const input = openPalette();
     fireEvent.change(input, { target: { value: 'zzzzqq' } });
     expect(screen.queryAllByRole('option')).toHaveLength(0);
-    expect(screen.getByText(/No command matches/)).toBeTruthy();
+    expect(screen.getByText(SEARCH_EMPTY)).toBeTruthy();
   });
 });
 

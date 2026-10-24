@@ -14,7 +14,9 @@ import { CONTENT_ID } from '../skins/frame';
 import { useFleetStore } from '../stores/fleet';
 import { useSessionCommandTarget } from '../session/SessionFlows';
 import { baseCommands, fleetOrder } from './commands';
-import { available, rankCommands, type CommandContext, type CommandPage } from './registry';
+import {
+  available, COMMAND_FIELD_WORDS, rankCommands, SEARCH_EMPTY, type CommandContext, type CommandPage,
+} from './registry';
 import { DOOR_EVENT } from './door';
 import { useShortcuts } from './useShortcuts';
 
@@ -199,7 +201,10 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
         onRun={run}
         onBack={page === null ? undefined : () => { setPage(null); setQuery(''); }}
         label={page === null ? 'Command palette' : page.title}
-        placeholder={page === null ? 'Type a command' : `${page.title}…`}
+        // The first level is the top search (D-6714): it says the field's own words, and finds sessions too. A page
+        // keeps its own placeholder and the palette's default empty text.
+        placeholder={page === null ? COMMAND_FIELD_WORDS : `${page.title}…`}
+        empty={page === null ? SEARCH_EMPTY : undefined}
       />
       <Sheet open={sheet && enabled} onClose={() => setSheet(false)} title="Keyboard shortcuts">
         <ul className={RESET_LIST}>
