@@ -110,7 +110,7 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccd-route-apply.test.ts': ['_tmux_recording'],
   'ccd-route-tick.test.ts': ['_advance'],
   'ccd-tick-diet-clock-seam.test.ts': ['_advance'],
-  'ccd-tick-diet-equivalence.test.ts': ['_diet_raw', '_diet_v', '_doc', '_frob_to', '_has_it', '_lc_like', '_user'],
+  'ccd-tick-diet-equivalence-static.test.ts': ['_diet_raw', '_diet_v', '_doc', '_frob_to', '_has_it', '_lc_like', '_user'],
   'ccd-tick-diet-seams.test.ts': ['__memo_scope'],
   'ccd-ws-expire-ladder.test.ts': ['_fp'],
   // The tick diet's runner and row builders, which the two per-locale files share.
