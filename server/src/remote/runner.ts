@@ -35,6 +35,9 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // up to two reads per close) — so every other coordination write can queue
   // behind one slow read for up to this long.
   'pr-state': 25_000,
+  // `pr-landing --project` makes THREE gh calls: one GraphQL read (`PR_LANDING_GQL_TIMEOUT`) and, at most, two REST
+  // reads of the base's rules and protection (`PR_LANDING_REST_TIMEOUT` each). `pr-timeout-budget.test.ts` sums them.
+  'pr-landing': 25_000,
   // Same reach as pr-state: it shells out to `git ls-remote` against origin
   // before it will rename. Without an entry it silently inherits the flat
   // 90 s, which is nine naming lanes' worth. It makes ONE network call, so it

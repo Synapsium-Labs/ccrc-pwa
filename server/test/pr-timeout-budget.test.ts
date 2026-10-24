@@ -99,3 +99,34 @@ describe('pr-state fits inside the bound that kills it', () => {
     for (const c of CALLS) expect(ccdSeconds(c), c).toBeLessThan(outerS);
   });
 });
+
+describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
+  const LOCAL_LOOP_RESERVE = 0.3;
+  // `cmd_pr_landing` makes one GraphQL call and, at most, two REST reads (the base's rules and its protection).
+  // Each is counted: a call left out of this list is a call the bound no longer covers.
+  const CALLS = ['PR_LANDING_GQL_TIMEOUT', 'PR_LANDING_REST_TIMEOUT', 'PR_LANDING_REST_TIMEOUT'] as const;
+
+  it('the pr-landing budget pin holds, every call counted', () => {
+    const secs = CALLS.map((c) => ccdSeconds(c));
+    const budgetS = verbTimeoutMs('pr-landing') / 1000;
+    secs.forEach((s, i) => expect(s, `${CALLS[i]} read as zero`).toBeGreaterThan(0));
+    expect(budgetS, 'the outer bound read as zero').toBeGreaterThan(0);
+    const sum = secs.reduce((a, b) => a + b, 0);
+    expect(sum, `${secs.join('s + ')}s against ${budgetS}s`).toBeLessThanOrEqual(budgetS * (1 - LOCAL_LOOP_RESERVE));
+  });
+
+  it('the pin names every timeout cmd_pr_landing reads', () => {
+    const src = readFileSync(CCD, 'utf8');
+    const start = src.indexOf('\ncmd_pr_landing()');
+    expect(start, 'cmd_pr_landing moved').toBeGreaterThan(0);
+    // The REST reads live in the helper the verb calls; scan the verb and its helpers' timeout reads together.
+    const reads = new Set([...src.matchAll(/\$PR_LANDING_([A-Z]+)_TIMEOUT/g)].map((m) => `PR_LANDING_${m[1]}_TIMEOUT`));
+    expect([...reads].sort()).toEqual([...new Set(CALLS)].sort());
+    const gh = [...src.matchAll(/_plat_timeout "\$PR_LANDING_[A-Z]+_TIMEOUT" gh /g)].length;
+    expect(gh, 'a gh call this pin does not count').toBe(CALLS.length);
+  });
+
+  it('each call alone is under the bound', () => {
+    for (const c of new Set(CALLS)) expect(ccdSeconds(c), c).toBeLessThan(verbTimeoutMs('pr-landing') / 1000);
+  });
+});

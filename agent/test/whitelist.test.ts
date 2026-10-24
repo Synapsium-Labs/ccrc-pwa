@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { canonicalize, checkPath, isExecAllowed } from '../src/whitelist.js';
+import { canonicalize, checkPath, FORBIDDEN_COMMANDS, isExecAllowed } from '../src/whitelist.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, LC_GEN_PREFIX, LC_GEN_SUFFIX } from '../../shared/api.js';
 import { NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
 // critic2, gates 3 related sub-item: the three `rmSync` calls this replaces sat
@@ -284,6 +284,11 @@ describe('whitelist.isExecAllowed', () => {
   it('allows the PR and archive verbs at their pinned prefixes', () => {
     expect(isExecAllowed('ccd', ['pr-state', '--session', 'demo-quiet-basin'])).toBe(true);
     expect(isExecAllowed('ccd', ['pr-state', '--project', 'demo'])).toBe(true);
+    expect(isExecAllowed('ccd', ['pr-landing', '--project', 'demo', '--sessions', 'a:41,b:42'])).toBe(true);
+    expect(isExecAllowed('ccd', ['pr-landing', '--sessions', 'a:41'])).toBe(false);
+    expect(isExecAllowed('ccd', ['pr-landing'])).toBe(false);
+    // the verb shells out to gh itself; the agent is still never granted gh
+    expect((FORBIDDEN_COMMANDS as readonly string[]).includes('gh')).toBe(true);
     expect(isExecAllowed('ccd', ['pr-open', '--session', 'x', '--title', 't', '--body-b64', 'Yg==', '--draft', 'false'])).toBe(true);
     expect(isExecAllowed('ccd', ['ws-archive', '--session', 'x'])).toBe(true);
     expect(isExecAllowed('ccd', ['ws-restore', '--session', 'x'])).toBe(true);
