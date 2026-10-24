@@ -3,6 +3,7 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import { redactCommand } from './redact.js';
+import { REVIEW_CAP_SUMMARY_MAX, reviewCapRefuses, type LastReviewReport } from './reviewcap.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { decideAllocation } from './ledger.js';
@@ -74,7 +75,7 @@ import {
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
 } from '../deadCoordinator.js';
 import {
-  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
+  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES, REVIEW_DONE_SUBJECT,
   isAskReleaseReason, isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
   isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState,
@@ -217,7 +218,7 @@ type HoldReasonRefusal = Extract<HoldReasonVerdict, { ok: false }>;
 
 export type OpenRunResult =
   | { id: number; program: string; state: RunState; holdReason: string }
-  | { refused: 'claimed-by-another' | 'review-in-flight'; by: string }
+  | { refused: 'claimed-by-another' | 'review-in-flight' | 'cap-review-rounds'; by: string }
   | HoldReasonRefusal;
 
 /** A fresh run's exact id is known only after its INSERT. Throwing this private
@@ -1822,6 +1823,11 @@ export class CoordStore {
         if (input.kind === 'review') {
           const inflight = this.reviewInFlightFor(input.reviews ?? -1);
           if (inflight !== null) return { refused: 'review-in-flight' as const, by: String(inflight) };
+          // D-6795: the Nth+1 round is refused unless the operator lifted the cap for this work run. `by` is the count.
+          const rounds = this.reviewRounds(input.reviews ?? -1);
+          if (reviewCapRefuses(rounds, this.reviewCapLifted(input.reviews ?? -1))) {
+            return { refused: 'cap-review-rounds' as const, by: String(rounds) };
+          }
         }
         const now = Date.now();
         this.db.prepare(
@@ -4143,6 +4149,61 @@ export class CoordStore {
     if (!row) return null;
     const id = Number(row.idText);
     return isPositiveDecimalSafeInteger(id) ? id : null;
+  }
+
+  /** D-6795: how many review runs name this work run, in any state (a failed or abandoned round still spent one). */
+  reviewRounds(workRunId: number): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE kind = 'review' AND reviews = ?")
+      .get(workRunId) as { n: number };
+    return Number(row.n);
+  }
+
+  /** D-6795: whether the operator lifted the review-round cap for this work run. */
+  reviewCapLifted(workRunId: number): boolean {
+    const row = this.db.prepare('SELECT liftedAt FROM review_cap WHERE workRunId = ?')
+      .get(workRunId) as { liftedAt: number | null } | undefined;
+    return row !== undefined && row.liftedAt !== null;
+  }
+
+  /** D-6795: record that the cap's ask is raised. True exactly once per work run: the insert that creates the row is
+   *  the raise, so a second refusal (or a restart) finds the row and raises nothing. */
+  raiseReviewCapAsk(workRunId: number, now: number): boolean {
+    const res = this.db.prepare('INSERT OR IGNORE INTO review_cap (workRunId, askedAt, liftedAt) VALUES (?, ?, NULL)')
+      .run(workRunId, now);
+    return Number(res.changes) === 1;
+  }
+
+  /** D-6795: the operator's lift, per work run. Idempotent; false when the run is not a work run on file. */
+  liftReviewCap(workRunId: number, now: number): boolean {
+    const run = this.db.prepare("SELECT 1 AS x FROM runs WHERE id = ? AND kind = 'work'").get(workRunId);
+    if (run === undefined) return false;
+    this.db.prepare(
+      'INSERT INTO review_cap (workRunId, askedAt, liftedAt) VALUES (?, NULL, ?) '
+      + 'ON CONFLICT(workRunId) DO UPDATE SET liftedAt = COALESCE(liftedAt, excluded.liftedAt)',
+    ).run(workRunId, now);
+    return true;
+  }
+
+  /** D-6795: the newest `review-done` mail of a review run naming this work run: its run, the paragraph after the
+   *  fingerprint line, and the first artifact (the report's path). Nulls when no review has reported. */
+  lastReviewReport(workRunId: number): LastReviewReport {
+    const row = this.db.prepare(
+      "SELECT m.runId AS runId, m.body AS body, m.artifacts AS artifacts FROM mail m JOIN runs r ON r.id = m.runId "
+      + "WHERE r.kind = 'review' AND r.reviews = ? AND m.subject = ? ORDER BY m.id DESC LIMIT 1",
+    ).get(workRunId, REVIEW_DONE_SUBJECT) as { runId: number; body: string; artifacts: string } | undefined;
+    if (row === undefined) return { reviewRunId: null, summary: null, report: null };
+    const nl = row.body.indexOf('\n');
+    const text = (nl < 0 ? '' : row.body.slice(nl + 1)).trim();
+    let report: string | null = null;
+    try {
+      const a: unknown = JSON.parse(row.artifacts);
+      if (Array.isArray(a) && typeof a[0] === 'string') report = a[0];
+    } catch { /* an unreadable list names no report */ }
+    return {
+      reviewRunId: Number(row.runId),
+      summary: text === '' ? null : redactCommand(text).slice(0, REVIEW_CAP_SUMMARY_MAX),
+      report,
+    };
   }
 
   programs(): { slug: string; title: string; state: ProgramState }[] {

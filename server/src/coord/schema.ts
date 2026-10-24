@@ -1779,6 +1779,25 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE feed_events ADD COLUMN dedupe_key TEXT;
   CREATE INDEX feed_events_by_dedupe ON feed_events(kind, sessionId, dedupe_key);
   `,
+  // ── 30: user_version 29 -> 30 ─────────────────────────────────────────────
+  // D-6795 (build-spend controls plan 2026-10-24): `review_cap`, one row per WORK run whose review rounds reached
+  // the cap. `askedAt` is when the operator's ask was raised (null while the row records only a lift made ahead of
+  // the cap), `liftedAt` when the operator lifted the cap for that run (null while it stands). Its ONE writer is
+  // `CoordStore` (`raiseReviewCapAsk`, `liftReviewCap`), and the row is what makes the ask once-only: the insert that
+  // creates it is the raise.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 30` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE review_cap (
+    workRunId INTEGER NOT NULL PRIMARY KEY REFERENCES runs(id),
+    askedAt   INTEGER,
+    liftedAt  INTEGER
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
