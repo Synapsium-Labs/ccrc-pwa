@@ -4363,6 +4363,27 @@ such a snapshot, make sure the legacy file is gone. A restore that rolls both fi
 whole file system, is outside this proof: after one, raise the cleanup pause and make a fresh confirmed change in
 Settings before allowing Live.
 
+**Orphan worktrees (fleet disk retention, D-6631).** A linked worktree that no registry row names, and that no collector
+owns, is the orphan-tree lane's: the registry orphans under the worktree root, and the `.claude/worktrees/*` and
+`.superpowers/worktrees/*` checkouts of any project. `ccd ws-audit --orphans` lists them by location class (a path
+outside those places is reported and never audited), `ws-audit --orphan-hex <hex>` answers the first refusal of a
+fourteen-rung ladder or mints a token, and `ccd ws-orphan --expect <token> --tree-hex <hex>` removes the tree with
+`git worktree remove`, never `--force`. A tree is removed only when it is clean, its HEAD is on a remote, no registry row
+names it or a path inside it, nothing holds it, and nothing in it has changed for 7 days. The server is the only
+composer of `ws-orphan`, and a child's deny list names the verb.
+The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the beat in
+`watch.ts`'s `sweepOrphanTrees`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
+pass (4 under pressure) and acts at most once per pass fleet-wide, only on two audits of one unchanged token at least an
+hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`.
+
+It ships in **shadow**: it records `orphan worktree would be removed` in the feed and runs no verb until the operator
+touches `$REG/orphan-tree-live` by hand. A tree whose HEAD is on no remote is `orphan worktree left` until
+`$REG/orphan-tree-rescue-live` also stands (set it only after the lane has run live for a week); the rescue pins HEAD and
+the tree's own reflog under `refs/ccrc/attic/orphan/` first, and a failed pin stops the act. Neither file has a writer
+in the tree. A `ccd-root` tree's branch is deleted with `branch -d`; the branches of the other two classes are left. The
+feed has one row per change of a tree's outcome and none per repeat, and `FleetHealth.disk.orphanTrees` carries counts by
+class and outcome.
+
 **Reclaim's tail, corrected in wave 7 (it is shared with `ws-expire`).** `containment-refuted` is the failed word the
 tail prints when it proves that what it would remove is not only the child's own (another session's row or tree at,
 inside or through it, a workdir that is the main checkout, a link or non-directory at the workdir); the session was

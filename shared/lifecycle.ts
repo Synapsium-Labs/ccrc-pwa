@@ -44,6 +44,20 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd (_child_tmpdir: a --child workspace spawns with TMPDIR here)', 'everything that follows TMPDIR in that session, Claude Code\'s scratch included'],
     collector: 'the reclaim tail (_ws_tmproot_remove, kept while in use); ws-collect for a root that outlived its row (server-composed, witness-gated)',
     bound: 'the child\'s lifetime; a root kept in use, until ws-collect takes it on a server-minted audit token (witness-gated)', tier: 'per child; the scratch ccd-tmp-sweep would otherwise hold under claude-<uid>', ruling: null },
+  // Fleet disk retention DR-19 (D-6631; spec 2026-10-23 section 2.3; resolves policy Open Question 6, option (a)): linked
+  // worktrees no registry row names. W: each is a checkout of a project repository. The server's orphan-tree lane is
+  // the collector, in shadow until `orphan-tree-live` stands; it removes only a clean tree whose HEAD is on a remote (or a
+  // rescued one), never with --force.
+  { name: 'ccd-orphan-worktrees', root: '~/worktrees/<project>/<slug> with no registry row (a ws-gc orphan)', pattern: 'W',
+    creators: ['git worktree add outside ccd ws-add', 'a registry row removed by hand'],
+    collector: 'the orphan-tree lane (server; ccd ws-audit --orphans, ws-audit --orphan-hex, ws-orphan): two unchanged audit tokens at least 1 hour apart, shadow unless orphan-tree-live stands; ws-gc --prune stays the operator\'s',
+    bound: 'until the lane removes it: clean, HEAD on a remote (or pinned into the attic under the rescue arm), unregistered, unheld, quiet for 7 days',
+    tier: '5 trees / 5.16G on the fleet host in the 2026-08 audit', ruling: null },
+  { name: 'agent-worktrees', root: '<main>/.claude/worktrees/<name> and <main>/.superpowers/worktrees/<name> of any checkout', pattern: 'W',
+    creators: ['Claude Code (subagent and workflow checkouts)', 'the superpowers worktree skill'],
+    collector: 'the orphan-tree lane (server), the same ladder as ccd-orphan-worktrees; their branches are left, because the owner is Claude Code or the skill',
+    bound: 'until the lane removes it: clean, HEAD on a remote (or rescued), unregistered, unheld, quiet for 7 days',
+    tier: '~28G across ~94 worktrees measured 2026-08 (the policy\'s largest unassigned class)', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
   // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
   // it lives in the runtime dir, so a reboot empties it — the safe direction for

@@ -1031,6 +1031,17 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       expect(c.ruling, `${c.name} needs a ruling`).toBeTruthy();
     }
   });
+  it('declares the orphan-worktree classes as W rows whose collector is the orphan-tree lane (D-6631)', () => {
+    for (const n of ['ccd-orphan-worktrees', 'agent-worktrees']) {
+      const c = LIFECYCLE.find((x) => x.name === n);
+      expect(c, `shared/lifecycle.ts declares no ${n} class`).toBeTruthy();
+      expect(c!.pattern).toBe('W');
+      expect(c!.collector, `${n} names no collector`).toContain('orphan-tree lane');
+      expect(c!.ruling).toBeNull();
+    }
+    expect(LIFECYCLE.find((x) => x.name === 'agent-worktrees')!.root).toContain('.superpowers/worktrees');
+    expect(LIFECYCLE.find((x) => x.name === 'agent-worktrees')!.collector, 'branches of these trees are left').toContain('branches are left');
+  });
   it('declares the Claude Code temp dir as a session-bound class collected by ccd-tmp-sweep', () => {
     // Policy row #9 named /tmp/claude-<uid> "a root we declare to agents in
     // their own system prompt and then never collect"; it reached 138G on the

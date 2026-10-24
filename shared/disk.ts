@@ -117,6 +117,13 @@ export interface DiskHolder {
   readonly bytes: number;
 }
 
+/** The orphan-worktree lane's census in the `disk` block (spec §2.3, D-6631): how many linked worktrees no registry row
+ *  names, by location class, and how many of the audited ones stand at each outcome. Counts only; it names no path. */
+export interface DiskOrphanTrees {
+  readonly byClass: Readonly<Record<'ccd-root' | 'claude' | 'superpowers' | 'other' | 'not-a-worktree', number>>;
+  readonly byOutcome: Readonly<Record<'pending' | 'would' | 'left' | 'removed', number>>;
+}
+
 /** `FleetHealth.disk`, optional on the wire (additive, no `FLEET_PROTO` bump). Read it through `readDiskHealth`. */
 export interface DiskHealth {
   readonly at: number;
@@ -126,6 +133,8 @@ export interface DiskHealth {
   /** Whether the fleet is in pressure mode (a filesystem is critical). */
   readonly pressure: boolean;
   readonly holders: readonly DiskHolder[];
+  /** Present only once the orphan lane has read a census (D-6631); absent from an older server. */
+  readonly orphanTrees?: DiskOrphanTrees;
 }
 
 const DISK_LEVEL_MAP: Record<DiskLevel, true> = { ok: true, warn: true, critical: true, unmeasured: true };
@@ -203,6 +212,27 @@ export function readDiskMeasured(x: unknown): DiskMeasured | null {
   return { filesystems, expectedMounts, missing };
 }
 
+const CLASS_KEYS = ['ccd-root', 'claude', 'superpowers', 'other', 'not-a-worktree'] as const;
+const OUTCOME_KEYS = ['pending', 'would', 'left', 'removed'] as const;
+function countsOf<K extends string>(v: unknown, keys: readonly K[]): Record<K, number> | null {
+  if (!isObj(v)) return null;
+  const out = {} as Record<K, number>;
+  for (const k of keys) {
+    const n = num(v[k]);
+    if (n === null || !Number.isInteger(n)) return null;
+    out[k] = n;
+  }
+  return out;
+}
+/** The orphan block, or `undefined` when it is absent or malformed. A malformed one drops ALONE: the rest of the block
+ *  still reads, and the lane's counts read as unknown, never as zero. */
+function readOrphanTrees(v: unknown): DiskOrphanTrees | undefined {
+  if (!isObj(v)) return undefined;
+  const byClass = countsOf(v['byClass'], CLASS_KEYS);
+  const byOutcome = countsOf(v['byOutcome'], OUTCOME_KEYS);
+  return byClass === null || byOutcome === null ? undefined : { byClass, byOutcome };
+}
+
 /** THE ONE READER of `FleetHealth.disk`: the block, or `null`. Absent (an older server, or no pass yet) and malformed
  *  alike read as `null`, and `null` is UNKNOWN, never "the disk is fine". `holders` is optional inside the block (an
  *  older server omits it) and reads as none. */
@@ -235,5 +265,9 @@ export function readDiskHealth(x: unknown): DiskHealth | null {
       holders.push({ label: h['label'], bytes });
     }
   }
-  return { at, level: level as DiskLevel, filesystems, expectedMounts, pressure: v['pressure'], holders };
+  const orphanTrees = readOrphanTrees(v['orphanTrees']);
+  return {
+    at, level: level as DiskLevel, filesystems, expectedMounts, pressure: v['pressure'], holders,
+    ...(orphanTrees === undefined ? {} : { orphanTrees }),
+  };
 }

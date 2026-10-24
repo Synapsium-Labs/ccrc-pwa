@@ -7213,6 +7213,40 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
   });
 });
 
+// D-6631 (fleet disk retention DR-19; spec 2026-10-23 sections 2.3 and 4). The orphan-worktree lane ships SHADOW behind two
+// markers, `orphan-tree-live` and `orphan-tree-rescue-live`, set BY HAND in `$REG`. Nothing in the tree writes either:
+// the one file that spells each on a code line is the switchboard (L0, no `node:` import), and every file that names its
+// constant reaches no write. The verb's argv has one composing site, and `--force` has none.
+describe('D-6631: the orphan lane\'s markers have no writer, and its verb one composer', () => {
+  const DEFINER = 'shared/switches.ts';
+  const MARKERS = [['orphan-tree-live', 'ORPHAN_TREE_LIVE_MARKER'], ['orphan-tree-rescue-live', 'ORPHAN_TREE_RESCUE_LIVE_MARKER']] as const;
+  const SHELL_WRITE = /(?:>>?|\btouch\b|\btee\b|\b_reg_set\b|\bprintf\b[^|]*>|\bcp\b|\bmv\b|\bln\b|\binstall\b)/;
+  const TS_WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+  it.each(MARKERS)('%s: no line of shell writes it', (name) => {
+    expect(SHELL_WRITE.test(`touch "$REG/${name}"`), 'CONTROL: the pattern sees a write').toBe(true);
+    const writers = BASH.flatMap((f) => codeLines(f).filter((l) => l.includes(name) && SHELL_WRITE.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(writers, `${name}: a line of shell writes it`).toEqual([]);
+  });
+  it.each(MARKERS)('%s: its one TS holder is the switchboard, which reaches no node: module', (name) => {
+    expect(ALL.filter((f) => stallCode(f).includes(`'${name}'`) || stallCode(f).includes(`"${name}"`)
+      || stallCode(f).includes(`\`${name}`) || stallCode(f).includes(`/${name}`)).map(rel).sort(),
+    `${name} spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it.each(MARKERS)('%s: the files that name its constant reach no write', (_name, constant) => {
+    const holders = ALL.filter((f) => stallCode(f).includes(constant)).map(rel).sort();
+    expect(holders, `${constant}: nobody names it`).toContain(DEFINER);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(TS_WRITE);
+  });
+  it('CCD_ARGV.wsOrphan is composed by the executor alone, and nothing composes --force beside it', () => {
+    const composers = ALL.filter((f) => stallCode(f).includes('CCD_ARGV.wsOrphan(')).map(rel).sort();
+    expect(composers).toEqual(['server/src/coord/collectOrphanTree.ts']);
+    for (const f of ['server/src/orphanTreeLane.ts', 'server/src/coord/collectOrphanTree.ts', 'server/src/orphanTreeSweep.ts']) {
+      expect(stallCode(path.join(ccrcRoot, f)), `${f} spells --force`).not.toContain('--force');
+    }
+  });
+});
+
 // D-5242 (plan Task 17b). APPENDED, for the reason the stall-watch blocks above state. The wake budget has one home
 // (`coord/wakeBudget.ts`, its rule and its two figures) and ONE list it is applied to (`FleetWatcher.admitWake`, the only
 // caller of `wakeAdmit`); the live act's constants are hibernation's definer's, and each lane's declared actor is
