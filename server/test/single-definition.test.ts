@@ -487,16 +487,6 @@ describe('Build 7 nouns', () => {
   // is not here: this case reads `server/src/coord/store.ts` ALONE, never `ALL`
   // and never itself, and `ROOTS` (:33-38) does not include `server/test`. The
   // needles below can therefore be written whole.
-  it('spells the ack guard ONCE — ackableDeliverySql, never a second copy of its clauses (D-6777)', () => {
-    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
-    const CLAUSE = "AND ${prefix}rejectCode = 'undeliverable' AND ${prefix}lastError = ?";
-    const BUILDER = 'const ackableDeliverySql = ';
-    const EXCEPTION = "rejectCode = 'undeliverable' AND";
-    expect(store.split(CLAUSE).length - 1, 'the ack guard clause is not written exactly once').toBe(1);
-    expect(store.split(BUILDER).length - 1, 'the builder is not defined once').toBe(1);
-    expect(store.split(EXCEPTION).length - 1, 'a second spelling of the replay-ceiling exception').toBe(1);
-  });
-
   it('spells the abandonment predicate ONCE — the constant, never a second copy of its clauses', () => {
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
 
@@ -8881,5 +8871,20 @@ describe('codex bridge Stage 2 Task 1: the bridge owns the upstream error codes'
     // failure must never read as an empty list.
     if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
     expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/codexbridge/errors.py']);
+  });
+});
+
+// The ack guard's single spelling (D-6777). Placed at the END of the file so
+// the line anchors other documents cite in this file do not move. It reads
+// `server/src/coord/store.ts` ALONE, never itself, so its needles are whole.
+describe('one ack guard', () => {
+  it('spells the ack guard ONCE — ackableDeliverySql, never a second copy of its clauses (D-6777)', () => {
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    const CLAUSE = "AND ${prefix}rejectCode = 'undeliverable' AND ${prefix}lastError = ?";
+    const BUILDER = 'const ackableDeliverySql = ';
+    const EXCEPTION = "rejectCode = 'undeliverable' AND";
+    expect(store.split(CLAUSE).length - 1, 'the ack guard clause is not written exactly once').toBe(1);
+    expect(store.split(BUILDER).length - 1, 'the builder is not defined once').toBe(1);
+    expect(store.split(EXCEPTION).length - 1, 'a second spelling of the replay-ceiling exception').toBe(1);
   });
 });
