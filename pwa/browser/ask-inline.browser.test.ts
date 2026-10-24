@@ -307,6 +307,18 @@ describe('the inline ask\'s keys at the desk (R41 F4, D-6326)', () => {
   }, 90_000);
 });
 
+/** The live `AskUserQuestion` call the transcript's card is drawn from, so "Go to question" is offered beside the inline card. */
+const CALL = {
+  kind: 'tool_use', uuid: 'a2', ts: TS, toolId: 't1', name: 'AskUserQuestion',
+  input: JSON.stringify({ questions: [{ question: 'Which cache should the service use?', header: 'Cache', multiSelect: false,
+    options: [{ label: 'Redis' }, { label: 'In-process' }] }] }),
+};
+/** `frames` (fixture 1's, with the forty-line question, unless a case names another) with that call in the backlog. */
+const WITH_CALL = (frames: object[] = FRAMES()): object[] =>
+  frames.map((f) => ((f as { type?: string }).type === 'backlog'
+    ? { ...BACKLOG, events: [...BACKLOG.events, CALL] }
+    : f));
+
 // R64 F5: the transcript's live ask card offers "Go to question" at the desk. It raises the mounted inline card (the
 // existing raise path): the card scrolls into view and its first option takes focus. The transcript here holds the live
 // `AskUserQuestion` call, so its card is drawn beside the inline one. Measured layout: at 1280x900 nothing scrolls the
@@ -317,15 +329,6 @@ describe('the inline ask\'s keys at the desk (R41 F4, D-6326)', () => {
 // is focused but lies below the visible part of the card's own scroller; the ruling names the existing raise, unchanged.
 describe('Go to question at the desk (R64 F5, D-6326)', () => {
   const view: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1280 };
-  const CALL = {
-    kind: 'tool_use', uuid: 'a2', ts: TS, toolId: 't1', name: 'AskUserQuestion',
-    input: JSON.stringify({ questions: [{ question: 'Which cache should the service use?', header: 'Cache', multiSelect: false,
-      options: [{ label: 'Redis' }, { label: 'In-process' }] }] }),
-  };
-  const WITH_CALL = (): object[] =>
-    FRAMES().map((f) => ((f as { type?: string }).type === 'backlog'
-      ? { ...BACKLOG, events: [...BACKLOG.events, CALL] }
-      : f));
 
   it('clicking it with focus on the page body puts focus on the card\'s first option (the card stays in the viewport)', async () => {
     const opened = await openApp(browser!, view, FIXTURE);
@@ -370,6 +373,126 @@ describe('Go to question at the desk (R64 F5, D-6326)', () => {
       expect(after.top, 'layout pin: at 1280x900 the card cannot leave the viewport (its top)').toBeGreaterThanOrEqual(0);
       expect(after.bottom, 'layout pin: at 1280x900 the card cannot leave the viewport (its bottom)').toBeLessThanOrEqual(after.vh + 1);
       expect(after.focusIsFirst, `focus is on the card's first option (it is on ${after.focused})`).toBe(true);
+      expect(opened.errors).toEqual([]);
+    } finally {
+      await opened.ctx.close();
+    }
+  }, 90_000);
+});
+
+// R69 F3: "Go to question" must leave the FOCUSED option visible, not only focused. The raise's `preventScroll` focus
+// lands on the first option, which on fixture 1's forty-line question sits below the card's one scroller (`.ask-inline-body`,
+// `scrollTop` 0) and below the window. Review 932 measured it in these three views (scroller 496-769 / option 997-1061 at
+// Refined dark 1280, 496-769 / 976-1040 at 1600, 460-749 / 918-980 at Instrument light 1920, viewport height 900). So the
+// assertion here is geometry, never identity: the option's rect lies inside the scroller's rect AND inside the window.
+// The focus-identity case above stays as its own control (it holds with or without the reveal).
+describe('Go to question reveals the focused option (R69 F3, D-6326)', () => {
+  const GOTO_VIEWS: AppView[] = [
+    { skin: REFINED, theme: PHOSPHOR, width: 1280 },
+    { skin: REFINED, theme: PHOSPHOR, width: 1600 },
+    { skin: INSTRUMENT, theme: 'light', width: 1920 },
+  ];
+  interface Geometry {
+    inCard: boolean; focusIsFirst: boolean; vh: number; scrollTop: number; scrollHeight: number; clientHeight: number;
+    scroller: [number, number]; option: [number, number];
+  }
+  const MEASURE = (card: string): Geometry => {
+    const el = document.querySelector<HTMLElement>(card)!;
+    const body = el.querySelector<HTMLElement>('.ask-inline-body')!;
+    const a = document.activeElement as HTMLElement;
+    const br = body.getBoundingClientRect();
+    const ar = a.getBoundingClientRect();
+    return {
+      inCard: el.contains(a), focusIsFirst: a === el.querySelector<HTMLElement>('.opt[tabindex="0"]'), vh: window.innerHeight,
+      scrollTop: body.scrollTop, scrollHeight: body.scrollHeight, clientHeight: body.clientHeight,
+      scroller: [Math.round(br.top), Math.round(br.bottom)], option: [Math.round(ar.top), Math.round(ar.bottom)],
+    };
+  };
+  /** Open `frames` at `view` with the call in the transcript, park focus on the body, click Go to question, and measure. */
+  async function goTo(view: AppView, frames: object[]): Promise<{ g: Geometry; errors: string[] }> {
+    const opened = await openApp(browser!, view, FIXTURE);
+    try {
+      await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        for (const frame of WITH_CALL(frames)) ws.send(JSON.stringify(frame));
+      });
+      await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
+      await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
+      await opened.page.waitForTimeout(800);
+      await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).click();
+      await opened.page.waitForTimeout(300);
+      return { g: await opened.page.evaluate(MEASURE, CARD), errors: opened.errors };
+    } finally {
+      await opened.ctx.close();
+    }
+  }
+  const inside = (inner: [number, number], outer: [number, number]): boolean => inner[0] >= outer[0] - 1 && inner[1] <= outer[1] + 1;
+
+  for (const view of GOTO_VIEWS) {
+    it(`${named(view)}: the focused first option lies inside the card's scroller and the window after Go to question`, async () => {
+      const { g, errors } = await goTo(view, FRAMES());
+      expect(g.inCard && g.focusIsFirst, 'premise: focus is on the first option (the identity control)').toBe(true);
+      expect(g.scrollHeight, 'premise: the forty-line question overflows the one scroller').toBeGreaterThan(g.clientHeight);
+      expect(inside(g.option, g.scroller), `the option ${JSON.stringify(g.option)} lies inside the scroller ${JSON.stringify(g.scroller)} (scrollTop ${g.scrollTop})`).toBe(true);
+      expect(inside(g.option, [0, g.vh]), `the option ${JSON.stringify(g.option)} lies inside the window (0-${g.vh})`).toBe(true);
+      expect(errors).toEqual([]);
+    }, 90_000);
+  }
+
+  it('a short card (fixture 2, the aged copy) is already showing its first option: Go to question scrolls nothing', async () => {
+    const short = [BACKLOG, { type: 'status', status: 'busy', statusUpdatedAt: null }, ...askFixture(2).frames];
+    const { g, errors } = await goTo({ skin: REFINED, theme: PHOSPHOR, width: 1280 }, short);
+    expect(g.inCard && g.focusIsFirst, 'premise: focus is on the first option').toBe(true);
+    expect(g.scrollTop, 'the short card has nothing to scroll').toBe(0);
+    expect(inside(g.option, g.scroller), `the option ${JSON.stringify(g.option)} lies inside the card's body ${JSON.stringify(g.scroller)}`).toBe(true);
+    expect(errors).toEqual([]);
+  }, 90_000);
+});
+
+// R69 F7: with an answer in flight every option is `disabled` (the roving tab stop, `tabindex="0"`, stays on the first row,
+// which is a disabled button), and a disabled button cannot take focus. Measured in real Chrome before the fix (fixtures 1
+// and 2, an answer click on option 2 whose `/dialog` request never resolves, focus parked on the body, a click on Go to
+// question): `document.activeElement` was the Go to question button itself, outside the card. So the raise focused nothing in
+// the card. The raise now takes an ENABLED highlighted row, else the first enabled option, else the card section (`tabindex
+// -1`), and the in-flight card stays read-only: nothing is enabled and no second request is made.
+describe('Go to question with an answer in flight (R69 F7, D-6326)', () => {
+  it('focus lands on the card section, every option stays disabled, and no second answer is sent', async () => {
+    const opened = await openApp(browser!, { skin: REFINED, theme: PHOSPHOR, width: 1280 }, FIXTURE);
+    try {
+      await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        for (const frame of WITH_CALL()) ws.send(JSON.stringify(frame));
+      });
+      const answers: string[] = [];
+      // A later page route wins over `openApp`'s context route: this one never fulfils, so the answer stays in flight.
+      await opened.page.route('**/api/sessions/*/dialog', (route) => { answers.push(route.request().postData() ?? ''); });
+      await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
+      await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
+      await opened.page.waitForTimeout(800);
+      await opened.page.locator(`${CARD} button.opt`).nth(1).click();
+      await opened.page.waitForSelector(`${CARD} .opt-wait`, { timeout: 10_000 });
+      const flight = await opened.page.evaluate((card) => {
+        const opts = [...document.querySelector<HTMLElement>(card)!.querySelectorAll<HTMLButtonElement>('button.opt')];
+        return { count: opts.length, enabled: opts.filter((o) => !o.disabled).length, stop: opts.filter((o) => o.tabIndex === 0 && o.disabled).length };
+      }, CARD);
+      expect(flight.count, 'premise: the card has option buttons').toBeGreaterThan(1);
+      expect(flight.enabled, 'premise: every option is disabled while the answer is in flight').toBe(0);
+      expect(flight.stop, 'premise: the roving tab stop is a disabled button').toBe(1);
+      expect(answers.length, 'premise: one answer is in flight').toBe(1);
+      await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+      await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).click();
+      await opened.page.waitForTimeout(300);
+      const after = await opened.page.evaluate((card) => {
+        const el = document.querySelector<HTMLElement>(card)!;
+        const a = document.activeElement as HTMLElement;
+        return {
+          isCard: a === el, inCard: el.contains(a), active: `${a.tagName}${a.className ? '.' + String(a.className).split(' ')[0] : ''}`,
+          enabled: [...el.querySelectorAll<HTMLButtonElement>('button.opt')].filter((o) => !o.disabled).length,
+        };
+      }, CARD);
+      expect(after.isCard, `focus is on the card section (it is on ${after.active})`).toBe(true);
+      expect(after.enabled, 'the in-flight card stays read-only: no option was enabled').toBe(0);
+      expect(answers.length, 'no second answer was sent').toBe(1);
       expect(opened.errors).toEqual([]);
     } finally {
       await opened.ctx.close();
