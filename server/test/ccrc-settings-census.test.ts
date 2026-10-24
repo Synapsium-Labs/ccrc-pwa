@@ -15,13 +15,34 @@
 // `_ccrc_knob`/`_keep_knob` calls. Held here, each with its reason, are the
 // exceptions: `ENV_ONLY` (D-6588's 42 environment-only names, in six classes),
 // `SERVER_SETTINGS` (the keys ccrc reads where the server reads them, from the
-// server's own files) and `VAR_KEY_BODIES` (the functions that may hand those
-// readers a key in a variable). A new name reds a row until it is classed.
+// server's own files), `VAR_KEY_BODIES` (the functions that may hand those
+// readers a key in a variable) and `SOURCING_BODIES` (the one function that
+// may source the box env file, for the server). A new name reds a row until
+// it is classed.
 //
-// WHY `set -u` IS A ROW (C7). The scan below sees `${NAME…}` forms and the two
-// bounded readers' literal arguments; a bare `$NAME` is invisible to it. Under
-// `set -u` a bare `$NAME` of an unset environment name aborts ccrc, so an
-// environment-only read must spell a default, which this scan sees.
+// WHAT IT GUARDS: THE SPELLINGS IT NAMES (D-6746). It is not a proof that
+// no other reader exists. It sees a `${NAME…}` or `$NAME` expansion of a
+// setting (C3), a `${NAME…}` with a default or assignment operator and the two
+// bounded readers' literal arguments (C5), the box-env readers' keys and the
+// reader's own indirection and awk program elsewhere (C8), a nameref to a
+// setting (C9), a `-v` test of a CCRC_ name (C10), and `.` or `source` of the
+// box env file in any body SOURCING_BODIES does not list (C11), whether by
+// `$BOX_ENV_FILE`, a `ccrc.env` path or a name bound to either; a name bound
+// through a second variable is not followed. `set -u` (C7) makes a bare
+// `$NAME` of an unset name abort, so an unguarded read must spell a default C5
+// sees; a `-v` test is the guard that needs none, which is why C10 is a row of
+// its own.
+//
+// WHAT IT DOES NOT CATCH, measured by review 891's mutants and named so no
+// reader takes this file for more: `${#NAME}`; an expansion split by a
+// backslash-newline; an indirect call through the timeout helper (a key in a
+// variable, `_upd_validate_timeout "$k"`, or the helper renamed); a nameref
+// whose target is assigned after its declaration, or a `-v` test of a name
+// held in a variable; an environment read from node (`process.env.`), jq
+// (`$ENV.`) or printenv; a two-line loop that reads the box env file
+// (`while IFS== read`); and C6's spacing and export variants of an
+// environment-only example line (`#CCRC_X=`, `#  CCRC_X=`, leading spaces,
+// `export CCRC_X=`, `# export CCRC_X=`).
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -142,6 +163,11 @@ const VAR_KEY_BODIES: Record<string, string> = {
   _ccrc_knob: 'the one reader of a setting',
 };
 
+/** The bodies that may source the box env file, each with its reason: never ccrc reading a setting. */
+const SOURCING_BODIES: Record<string, string> = {
+  _inst_plist_server: 'the macOS server job\'s own launch line, the launchd counterpart of ccrc.service\'s EnvironmentFile: the server\'s reading, in the job\'s shell, never ccrc\'s',
+};
+
 /** Every name read from the environment outside the reader: `${NAME…}` with a
  *  default or assignment operator, and the two bounded readers' literal keys. */
 function envReads(code: string): Set<string> {
@@ -225,6 +251,17 @@ function exampleBlocks(name: string): string[] {
   return out;
 }
 
+/** Every code line of both files that `pick` names a fault on (null: no hit), as `<file>: <fault>: <line>`. */
+function lineHits(pick: (l: string) => string | null): string[] {
+  const out: string[] = [];
+  for (const f of FILES)
+    for (const l of CODE[f].split('\n')) {
+      const why = pick(l);
+      if (why !== null) out.push(`${f}: ${why}: ${l.trim()}`);
+    }
+  return out;
+}
+
 const diff = (a: Iterable<string>, b: Iterable<string>): string[] => {
   const bs = new Set(b);
   return [...new Set(a)].filter((x) => !bs.has(x)).sort();
@@ -296,7 +333,7 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
     expect(names.filter((n) => new RegExp('^(# )?' + n + '=', 'm').test(EXAMPLE))).toEqual([]);
   });
 
-  it('C7: the census is complete only under set -u, which ccd/ccrc keeps', () => {
+  it('C7: ccd/ccrc keeps set -u, so a bare read of an unset name aborts and an unguarded read must spell the default C5 sees', () => {
     expect(CODE['ccd/ccrc'].split('\n').some((l) => /^set -[a-z]*u[a-z]*o pipefail$/.test(l))).toBe(true);
   });
 
@@ -337,5 +374,53 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
       }
     }
     expect(faults).toEqual([]);
+  });
+
+  it('C9: no nameref points at a setting (`local -n r=CCRC_X`, `declare -n`, `typeset -n`)', () => {
+    // A nameref reads its target's value at every use, and its target is a plain word, which C3's `$NAME` scan never sees.
+    const NAMEREF = /\b(?:local|declare|typeset)\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*n[A-Za-z]*\s(.*)$/;
+    expect(lineHits((l) => {
+      const rest = NAMEREF.exec(l)?.[1];
+      if (rest === undefined) return null;
+      const s = SETTINGS.find((x) => new RegExp('\\b' + x + '\\b').test(rest));
+      return s === undefined ? null : `a nameref to ${s}`;
+    })).toEqual([]);
+  });
+
+  it('C10: a -v test of a CCRC_ name reads the environment, so the name is a reasoned exception (never a setting, never unclassified)', () => {
+    // `[[ -v CCRC_X ]] && v="$CCRC_X"` reads an unset name with no default under `set -u`, so C5's `${NAME:-…}` scan never sees it.
+    // The narrowest form that catches it: the tested name itself must be in ENV_ONLY. A rule over every `$CCRC_X` expansion would
+    // need a list of the names the files assign themselves (CCRC_CAP_WORDS, CCRC_ENTRY_PY and two dozen more), a second hand-kept list.
+    // `printf -v` and `command -v` take no test.
+    const TESTED = /(?<!\bprintf)(?<!\bcommand)\s-v\s+["']?(CCRC_[A-Z0-9_]+)/g;
+    expect(lineHits((l) => {
+      const bad = [...l.matchAll(TESTED)].map((m) => m[1]).filter((n) => !(n in ENV_ONLY));
+      return bad.length === 0 ? null : `a -v test of ${bad.join(', ')}, which ENV_ONLY does not class`;
+    })).toEqual([]);
+  });
+
+  it('C11: nothing sources the box env file (`.` or `source` of BOX_ENV_FILE, of a ccrc.env path, or of a name bound to either) but the bodies SOURCING_BODIES lists', () => {
+    // Sourcing it is a whole second reader: bash's parse of every line, every setting set at once, no refusal of a line systemd
+    // reads otherwise. The doctor and the model read the file as text (awk, grep, `_box_env_value`), which is not sourcing.
+    // The names bound to the file are derived: any assignment whose value is a ccrc.env path or BOX_ENV_FILE itself. `.` counts
+    // only as a command (first on a line, after `;`, `&`, `|`, `(`, `{`, `!`, `then`, `do` or `else`), never jq's `.` filter.
+    const FILE_VALUE = /^["']?(?:\$\{?BOX_ENV_FILE\}?|[^\s;&|"']*\/ccrc\.env)["']?$/;
+    const bound = new Set<string>(['BOX_ENV_FILE']);
+    for (const f of FILES)
+      for (const m of CODE[f].matchAll(/(?:^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=(\S+)/gm))
+        if (FILE_VALUE.test(m[2])) bound.add(m[1]);
+    const names = [...bound].map(escapeRe).join('|');
+    const SOURCED = new RegExp('(?:^\\s*|[;&|({!]\\s*|\\b(?:then|do|else)\\s+)(?:\\.|source)\\s+["\']?'
+      + '(?:\\$\\{?(?:' + names + ')\\b|[^\\s;&|"\')]*ccrc\\.env\\b)', 'gm');
+    expect([...bound], 'the file\'s own binding is found').toContain('BOX_ENV_FILE');
+    const owners = new Set<string>();
+    const faults: string[] = [];
+    for (const f of FILES)
+      for (const m of CODE[f].matchAll(SOURCED)) {
+        const o = ownerOf(CODE[f], m.index!);
+        owners.add(o);
+        if (!(o in SOURCING_BODIES)) faults.push(`${f}: ${o} sources the box env file: ${m[0].trim()}`);
+      }
+    expect({ faults, noLongerSourcing: diff(Object.keys(SOURCING_BODIES), owners) }).toEqual({ faults: [], noLongerSourcing: [] });
   });
 });
