@@ -396,6 +396,9 @@ export function NewSessionSheet({
         return;
       }
       // The new row can reach the fleet store before this create's HTTP answer, so what was alive is taken BEFORE it.
+      // The snapshot is defence in depth: past the already-live arm below, no id in it can be a main checkout of this
+      // project, so this sheet cannot reach the freshness conjunct of `startedSessionFor`. That conjunct is pinned at its
+      // owner (`start-program.test.tsx`, "startedSessionFor — the wait arm, directly").
       const preLive = liveIdsIn(fleet.getState().sessions);
       // A live main checkout of this project (any lane: a swap keeps the id) is usually what `ccd start` answers "already
       // running" for, exit 0: the create succeeds and no new row comes, so there is nothing to wait for. The owner is
