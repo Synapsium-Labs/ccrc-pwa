@@ -233,7 +233,7 @@ export function tmpSweepBudget(census: TmpSweepCensus, noticed: ReadonlySet<stri
     const body = `Your scratch and task output hold ${gib(s.bytes)}, over the 20 GiB budget. ${largest}${begun}${rule}` +
       'Entries move to quarantine first and can be moved back; delete or move what you no longer need.';
     out.push({
-      sessionId: s.id, key, subject: `tmp-sweep: over budget (since ${stamp(overSince)})`, body,
+      sessionId: s.id, key, subject: `tmp-sweep: ${s.id} over budget (since ${stamp(overSince)})`, body,
       coordinatorBody: `Session ${s.id}: ${body}`,
     });
   }
