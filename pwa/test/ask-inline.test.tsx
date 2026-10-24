@@ -395,4 +395,52 @@ describe('the composer while a question is up', () => {
     expect(prompt).not.toHaveBeenCalled();
     expect(composer()).toHaveValue('half a thought');
   });
+
+  it('the refusal line leaves once the question is answered and the card is gone, and a Send then goes through', async () => {
+    media(true);
+    const { arrive, prompt, store } = mount();
+    arrive(1);
+    card();
+    const box = composer();
+    fireEvent.change(box, { target: { value: 'half a thought' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText(sendErrorText('dialog-open'))).toBeInTheDocument();
+    expect(prompt).not.toHaveBeenCalled();
+
+    // The question is answered in the terminal: the pane's menu and the hook's envelope both go.
+    act(() => {
+      store.getState().apply({ type: 'dialog_cleared' });
+      store.getState().apply({ type: 'ask_cleared' });
+    });
+    expect(cards(), 'the card is gone').toHaveLength(0);
+    expect(screen.queryByText(sendErrorText('dialog-open')), 'and so is the refusal line').toBeNull();
+    expect(composer(), 'the text is still in the field').toHaveValue('half a thought');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await act(async () => { await Promise.resolve(); });
+    expect(prompt, 'a Send now reaches the store').toHaveBeenCalledTimes(1);
+    expect(prompt.mock.calls[0]!.slice(0, 2), 'with the text').toEqual([ID, 'half a thought']);
+
+    // A later question starts clean: the old refusal does not come back with it.
+    fireEvent.change(composer(), { target: { value: 'another thought' } });
+    arrive(1);
+    card();
+    expect(screen.queryByText(sendErrorText('dialog-open')), 'a new ask shows no stale refusal').toBeNull();
+  });
+
+  it('Stop still interrupts a busy turn while an inline ask is up', async () => {
+    media(true);
+    const interrupt = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
+    const { arrive } = mount({ status: 'busy' });
+    // The composer's Stop takes the send slot (busy, nothing drafted); its settle guard only follows a send, none here.
+    arrive(1);
+    card();
+    const stop = document.querySelector<HTMLElement>('.composer .stop-slot')!;
+    expect(stop, 'Stop is in the send slot').not.toBeNull();
+    fireEvent.click(stop);
+    await act(async () => { await Promise.resolve(); });
+    expect(interrupt).toHaveBeenCalledTimes(1);
+    expect(interrupt).toHaveBeenCalledWith(ID, 'keycap');
+  });
 });
