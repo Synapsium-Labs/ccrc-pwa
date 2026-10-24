@@ -9,12 +9,12 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_TOKEN_KIND, childReclaimTokenKind, parseChildReclaimAudit, parseChildReclaimResult, reclaimChild,
+  CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_TOKEN_KIND, childReclaimStatus, childReclaimTokenKind, isChildReclaimStuckToken, parseChildReclaimAudit, parseChildReclaimResult, reclaimChild,
   type ChildReclaimDeps, type ChildReclaimRequest,
 } from '../src/coord/childReclaim.js';
 import { EXPIRE_TOKEN_KIND, parseExpireAudit, parseExpireResult } from '../src/archivedExpiry.js';
 import { expireArchived, type ExpireArchivedDeps } from '../src/coord/expireArchived.js';
-import { childReclaimTerminalRefusal } from '../src/childReclaimSweep.js';
+import { CHILD_RECLAIM_TIER_NONE, childReclaimTerminalRefusal, childReclaimTierSeed } from '../src/childReclaimSweep.js';
 import { expireTokenKind } from '../src/archivedExpiry.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { FleetState } from '../src/fleetstate.js';
@@ -216,6 +216,35 @@ describe('the too-large word is terminal on the path ccd prints it (a failed doc
     expect(childReclaimTerminalRefusal({ outcome: 'failed', refusal: 'nested-rescue-failed' }, kindOf)).toBe(false);
     expect(childReclaimTerminalRefusal({ outcome: 'failed', refusal: 'containment-unproven' }, kindOf)).toBe(false);
     expect(childReclaimTerminalRefusal({ outcome: 'refused', refusal: 'nested-rescue-too-large' }, kindOf)).toBe(true);
+  });
+});
+
+describe('the too-large word on the failed line the journal prints it on (D-6633)', () => {
+  const T0 = 1_758_500_000_000;
+  const row = (act: string, outcome: string, refusal: string | null = null, at = T0): Record<string, unknown> => ({
+    uid: null, at, act, badact: null, outcome, badoutcome: null, id: 'demo-a', tx: null,
+    verb: act === 'create' ? 'ws-add' : 'ws-reclaim', refusal, detail: null, truncated: false,
+    obs: null, dec: null, meas: null, raw: '', gen: '1', ingestedAt: at + 5,
+  });
+  const generation = [
+    row('create', 'done'),
+    ...Array.from({ length: 6 }, () => [row('reclaim', 'intent'), row('reclaim', 'failed', 'worktree-remove-failed')]).flat(),
+    row('reclaim', 'intent'), row('reclaim', 'failed', 'nested-rescue-too-large'),
+  ] as never[];
+
+  it('the tier seed stops at it: no persistent tier is seeded from the earlier failures', () => {
+    expect(childReclaimTierSeed(generation, T0, isChildReclaimStuckToken, childReclaimTokenKind)).toEqual(CHILD_RECLAIM_TIER_NONE);
+  });
+
+  it('the chip answers refused, with the too-large sentence, over that failed line', () => {
+    const got = childReclaimStatus({
+      run: { id: 41, state: 'done', sessionId: 'demo-a' },
+      event: { act: 'reclaim', outcome: 'failed', refusal: 'nested-rescue-too-large', at: T0 + 9 } as never,
+      row: { kind: 'row', child: { kind: 'child', runId: 41 } },
+      sessionHasOpenRun: false, reviewedRunNotTerminal: false, fleetPaused: false, deferredSince: null,
+      verdict: { kind: 'eligible' }, sweepFailing: false, journalFailingSince: null,
+    });
+    expect(got).toEqual({ word: 'refused', sentence: refusalSentence('nested-rescue-too-large'), at: T0 + 9 });
   });
 });
 

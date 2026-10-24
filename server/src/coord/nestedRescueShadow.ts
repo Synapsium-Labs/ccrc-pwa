@@ -1,4 +1,4 @@
-// DISK RETENTION DR-21 (D-6633; spec 2026-10-23 §2.7.1). L2. The ONE writer of the "a nested repository would be rescued"
+// DISK RETENTION DR-21 (D-6633; spec 2026-10-23 §2.7.1). The ONE writer of the "a nested repository would be rescued"
 // feed row, shared by the reclaim lane and the expiry lane so neither spells the row, and neither writes a second kind.
 // It runs only where an audit refused and said, in `nestedRescue.wouldRescue`, that the arm would have rescued (the key
 // is empty whenever the arm is live or something else refused), and it writes once per `key` — a child's minting run, an
