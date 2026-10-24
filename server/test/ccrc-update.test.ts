@@ -4536,6 +4536,9 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(call('fetching user:s3cretTOKEN@127.0.0.1:1/rel/x and "tok@h/r"')).toBe('fetching 127.0.0.1:1/rel/x and "h/r"');
     // Fix round 3: a '<' or '"' past the run's first character is the password's; one that starts a token still ends prose.
     expect(call('see <u:p<w@h/r> and u:p"w@h/r')).toBe('see <h/r> and h/r');
+    // Fix round 4, F1: a scheme followed by one slash or by three (curl authenticates with both) loses its userinfo, its
+    // slashes kept as written.
+    expect(call('fetching http:/u:s3cretTOKEN@h/r and https:///u:s3cretTOKEN@h/r')).toBe('fetching http:/h/r and https:///h/r');
     for (const kept of ['curl: (6) user@host', 'mail a@example.com today', 'https://h/r?email=a@example.com/y', '@scope/pkg']) {
       expect(call(kept), kept).toBe(kept);
     }
@@ -4750,6 +4753,26 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       expect(detail, raw).toContain(`download failed: ${url}`);
       for (const [where, text] of [['stdout', r.stdout], ['stderr', r.stderr], ['update.json', raw]]) {
         for (const part of ['fleetuser', 'S3cr', 'etTOKEN']) expect(text, `${where} carries ${part}`).not.toContain(part);
+      }
+    });
+  }
+
+  // D-6748 (fix round 4, F1): a scheme followed by one slash (`http:/`) or by three (`https:///`): curl authenticates with
+  // both, and `_upd_release_base` does not validate the scheme, so each reaches the three ways out, from ccrc.env and from
+  // the environment alike. The userinfo goes and the slashes stay as written.
+  for (const [scheme, from] of [['http:/', 'file'], ['http:/', 'env'], ['https:///', 'file'], ['https:///', 'env']] as const) {
+    it(`a base spelled ${scheme} (${from === 'file' ? 'ccrc.env' : 'the environment'}): the fetching line, the die line and update.json's detail carry no part of the userinfo (D-6748, fix round 4)`, () => {
+      const { r, home } = schemeless(`ccrc-redact-slashes-${from}-`, { url: `${scheme}fleetuser:S3cr3tTOKEN@mirror.example/rel`, from });
+      const url = `${scheme}mirror.example/rel/download/v0.0.1/SHA256SUMS`;
+      expect(r.stdout.split('\n'), r.stdout).toContain(`update: fetching ${url} …`);
+      const die = r.stderr.split('\n').filter((l) => l.includes('download failed:'));
+      expect(die, r.stderr).toHaveLength(1);
+      expect(die[0]).toContain(url);
+      const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+      const detail = String(JSON.parse(raw).detail ?? '');
+      expect(detail, raw).toContain(`download failed: ${url}`);
+      for (const [where, text] of [['stdout', r.stdout], ['stderr', r.stderr], ['update.json', raw]]) {
+        for (const part of ['fleetuser', 'S3cr3t', 'TOKEN']) expect(text, `${where} carries ${part}`).not.toContain(part);
       }
     });
   }

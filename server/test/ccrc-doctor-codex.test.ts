@@ -5426,4 +5426,25 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     expect(r.stdout).not.toMatch(/caf|NOTE/);
     expect(r.code).toBe(2);
   });
+
+  // Fix round 4, F1: `http:/` and `https:///` (curl authenticates with both) lose their userinfo, the slashes kept as written.
+  // Each row reads the check twice: as `cmd_doctor` runs it, and with `_upd_redact` made an identity after sourcing, so the
+  // check's OWN mask (which runs first) is measured by itself and not hidden behind `_upd_redact`'s.
+  const runBsOwnMask = (home: string): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _upd_redact() { printf '%s' "$1"; }; _check_box-settings`],
+    { env: doctorEnv(home), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+  it.each([['W24-S13', 'one slash', 'http:/'], ['W24-S14', 'three slashes', 'https:///']] as const)('%s: a mirror base whose scheme has %s (`%s`, which curl authenticates with) prints no credential (D-6748, fix round 4)', (id, _what, scheme) => {
+    const home = settingsBox(`ccrc-doctor-bs-url-${id === 'W24-S13' ? 1 : 3}slash-`, [`CCRC_RELEASE_BASE_URL=${scheme}u:hunter2@mirror.example/r`]);
+    const want = `PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=${scheme}mirror.example/r; `;
+    for (const [how, r] of [['as doctor runs it', runBs(home)], ['the check\'s own mask alone', runBsOwnMask(home)]] as const) {
+      expect(verdict(r).startsWith(want), `${how}: ${r.stdout}${r.stderr}`).toBe(true);
+      expect(r.stdout, how).not.toContain('hunter2');
+      expect(r.code, how).toBe(0);
+    }
+  });
 });

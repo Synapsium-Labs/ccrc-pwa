@@ -2636,13 +2636,13 @@ EOF
 # ── diagnostic helpers (stderr; the RESULT of a verb goes to stdout) ───────
 # `_upd_redact <text>` — what NO die sentence, report detail, WARN or
 # announcement line may carry verbatim (review 155 C17/C18, fix round 1 items
-# 11 and M1): a URL's userinfo (`[scheme://]user:pass@host` -> `[scheme://]host`)
-# and this box's own absolute home directory (-> `~`). TWO CHOKE POINTS, not
-# one — review fix round 1 M1 found a second path that reached `update.json`
-# and the journal unredacted: `UPD_GATE_WHY` (the gate's own failure reason,
-# which can start with `$BOX_ENV_FILE`, an absolute path) flows into
-# `_upd_phase` details through `$why`/`$gate_fail`/`$reason`, none of which
-# passed through `_ccrc_die`.
+# 11 and M1): a URL's userinfo (`[scheme:/…]user:pass@host` -> `[scheme:/…]host`;
+# a scheme's one or more '/' stay as written, D-6748) and this box's own absolute
+# home directory (-> `~`). TWO CHOKE POINTS, not one — review fix round 1 M1
+# found a second path that reached `update.json` and the journal unredacted:
+# `UPD_GATE_WHY` (the gate's own failure reason, which can start with
+# `$BOX_ENV_FILE`, an absolute path) flows into `_upd_phase` details through
+# `$why`/`$gate_fail`/`$reason`, none of which passed through `_ccrc_die`.
 #   1. `_ccrc_die` — the ONE place a message becomes both the printed
 #      refusal (stderr) and a `failed` report detail. No die site anywhere in
 #      this file, present or future, has to remember to redact its own
@@ -2677,8 +2677,8 @@ _upd_redact() {
   # whitespace, '"' or '<') whose host ends at '/', '?' or '#'; prose's
   # `user@host` stays. Past a run's first character '<' and '"' are the
   # password's (curl sends both); under LC_ALL=C no invalid UTF-8 byte ends a
-  # run. A scheme's `https://u:p@x@h` (curl refuses it) is unfixed.
-  s="${s//:\/\/+([^\/@?#[:space:]])@/:\/\/}"
+  # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn.
+  local sre=':(/+)[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
   local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
   [ "$had_extglob" -eq 1 ] || shopt -u extglob
   # Review fix round 1, M6: the OLD blind substring replace was not anchored

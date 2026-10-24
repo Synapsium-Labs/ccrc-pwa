@@ -9939,7 +9939,7 @@ _check_box-settings() {
     elif [ "$KNOB_FROM" = file ]; then
       v="$KNOB"
       if [ "$k" = CCRC_RELEASE_BASE_URL ]; then   # each `[^/@[:space:]]*@` before the authority's first `/` goes
-        pre=""; [[ ! "$v" =~ ^[A-Za-z][A-Za-z0-9+.-]*:// ]] || pre="${BASH_REMATCH[0]}"
+        pre=""; [[ ! "$v" =~ ^[A-Za-z][A-Za-z0-9+.-]*:/+ ]] || pre="${BASH_REMATCH[0]}"
         v="${v#"$pre"}"; [[ ! "$v" =~ ^([^/@[:space:]]*@)+ ]] || v="${v#"${BASH_REMATCH[0]}"}"; v="$pre$v"
       fi
       set+="${set:+, }$k=$v"
