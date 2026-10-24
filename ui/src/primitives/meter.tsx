@@ -38,8 +38,15 @@ export function limitBand(pct: number): LimitBand {
 }
 
 /** The track a fill sits in. Exported beside `fillVariants` because the two
- *  are one unit; the app reaches neither, only `Meter`. */
-export const TRACK = 'meter limit-track block h-(--meter-h) overflow-hidden rounded-full bg-limit-track';
+ *  are one unit; the app reaches neither, only `Meter`.
+ *
+ *  A 1px INSET RING in the tertiary ink (D-6329): a 0% or empty meter stays
+ *  visible at 3:1 on its card. The track fill alone measures 1.07 to 1.16 there
+ *  and the best edge token 1.43, so an empty bar was a blank. The ring is inset
+ *  (a box-shadow, no layout), so the box is the same size; the fill paints over
+ *  it. Gated as `meter track outline` in `pwa/design/contrast-check.mjs`. */
+export const TRACK =
+  'meter limit-track block h-(--meter-h) overflow-hidden rounded-full bg-limit-track ring-1 ring-inset ring-ink-tertiary';
 
 /** The fill's vocabulary, including the `limit-fill--*` hook classes the
  *  suites read. */
