@@ -12,7 +12,7 @@
 // recorded), and print the from → to report. NO sweep here — that is Task 7.
 //
 // ── THE HARNESS, AND WHERE EACH PIECE COMES FROM ──────────────────────────
-// The box fixture is `ccrc-install.test.ts`'s `freshBox` idiom — throwaway
+// The box fixture is `ccrc-installFixture.ts`'s `freshBox` idiom — throwaway
 // $HOME, `healthyDoctorBox`'s answer-shaped stubs, `ccrcEnv`'s recorders for
 // systemctl/loginctl and poisons for journalctl — COPIED here rather than
 // imported, for the reason `build-release.test.ts` states at its own top:
@@ -33,7 +33,7 @@
 //   - STUB: `ccd/ccrc` is a recording stub (argv to a file, exit code chosen
 //     by the test). Everything that measures update's OWN logic — URL choice,
 //     backup ordering, role passthrough, the rollback report — uses this
-//     flavour, because the spine's behaviour is `ccrc-install.test.ts`'s
+//     flavour, because the spine's behaviour is `ccrc-install-*.test.ts`'s
 //     subject, not this file's.
 //
 // NEVER against a real $HOME; no live tmux/systemd/journal is ever reachable
@@ -149,7 +149,7 @@ export function runBounded(argv: string[], env: NodeJS.ProcessEnv, ms = 10000): 
 
 // ── The box fixture (freshBox's pieces, trimmed to this file's needs) ─────
 
-/** `healthyDoctorBox` (ccrc-install.test.ts), with ONE substitution: the curl
+/** `healthyDoctorBox` (ccrc-installFixture.ts), with ONE substitution: the curl
  *  stub is this file's combined release+health stub (below), planted into the
  *  same `doctor-stubs` replant directory so it survives every run's replant. */
 export function healthyBox(home: string): void {
@@ -367,7 +367,7 @@ export function curlFrontPassed(home: string): string {
   return existsSync(p) ? readFileSync(p, 'utf8') : '';
 }
 
-/** `ccrcEnv` (ccrc-install.test.ts), trimmed: it starts from `ccrcContainedEnv` (wave 9 R10d, D-3818) — HOME the
+/** `ccrcEnv` (ccrc-installFixture.ts), trimmed: it starts from `ccrcContainedEnv` (wave 9 R10d, D-3818) — HOME the
  *  fixture, the user bus pointed at two absent paths under it, and recording poisons for gh (later shadowed by the
  *  doctor stub — the shadow answers, never execs), ssh, scp, tmux and launchctl, create-if-absent. It is a SPINE
  *  builder, so it passes `managers: false`: it fronts its own systemctl/systemd-run below, after
@@ -411,7 +411,7 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
     '      echo "	state = running"',
     // The sweep's stay-up gate samples `pid = ` twice per kicked job; a
     // stable default is a job that stayed up, `fixture-pid-churn` a crash
-    // loop. Same knob as ccrc-install.test.ts's stub.
+    // loop. Same knob as ccrc-install-*.test.ts's stub.
     // Split per job kind (design §11's gate): `fixture-pid-churn` churns the
     // SESSION jobs (the sweep's subject), `fixture-main-pid-churn` the
     // ccrc/ccrc-agent jobs (the gate's), so each case measures one of them.
@@ -634,7 +634,7 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
   // `cmd_install` spine (`ccrc update` execs the staged tree's own `ccrc
   // install`), which now includes `_inst_graphify_engine` — a real
   // `python3 -m venv` followed by a real network `pip install` on every role
-  // but `server`. Same fix, same reasoning as `ccrc-install.test.ts`'s own
+  // but `server`. Same fix, same reasoning as `ccrc-install-*.test.ts`'s own
   // `python3` stub (see its comment): answer only `-m venv <path>` by
   // building a fake venv locally, refuse anything else loudly.
   plant('python3', [
@@ -713,7 +713,7 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
   // exit 0 and no stdout, so the installer's
   // `"$VENV/bin/python" -c 'import graphify…'` would read PKG="" and refuse —
   // a fixture reason, not anything this file's update logic is about. Same
-  // fix as `ccrc-install.test.ts`'s own `ccrcEnv`.
+  // fix as `ccrc-installFixture.ts`'s own `ccrcEnv`.
   const gfxPkg = join(home, 'fixture-graphify-pkg');
   mkdirSync(join(gfxPkg, 'skills', 'claude', 'references'), { recursive: true });
   writeFileSync(join(gfxPkg, 'skill.md'), '# fixture graphify skill\n');
@@ -894,7 +894,7 @@ export function fullTree(home: string, opts: { version: string; sha: string }): 
 
 /** The STUB flavour: `ccd/ccrc` records its argv and exits as told — update's
  *  own logic (URLs, ordering, role, report) measured without re-running the
- *  spine `ccrc-install.test.ts` already owns. */
+ *  spine `ccrc-install-*.test.ts` already owns. */
 export function stubTree(home: string, opts: { version: string; installExit?: number }): string {
   const tree = join(home, `payload-${opts.version}`);
   mkdirSync(join(tree, 'ccd'), { recursive: true });
@@ -920,7 +920,7 @@ export function stubTree(home: string, opts: { version: string; installExit?: nu
     + 'if [ -f "$HOME/.ccrc/previous" ]; then cp "$HOME/.ccrc/previous" "$HOME/staged-saw-previous"; else : > "$HOME/staged-saw-no-previous"; fi\n'
     // W4 Task 4: the step marker a real spine's `_inst_step` would leave,
     // from a fixture file — the classifier's subject is cmd_update's READING
-    // of it; the writing is ccrc-install.test.ts's.
+    // of it; the writing is ccrc-install-*.test.ts's.
     + '[ -f "$HOME/fixture-install-step" ] && cp "$HOME/fixture-install-step" "$HOME/.ccrc/install-step"\n'
     // W4 Task 4 (review fix): a spine older than W4 writes no marker, but its
     // `_inst_stamp` still places the release's own stamp. `$0` is the staged
@@ -1258,7 +1258,7 @@ export function pathWithoutJq(home: string): string {
   // and the fixture's node (which only forwards to the real interpreter for
   // calls the verify-provenance shim does not intercept) before any real
   // binary — containment that does not depend on the jq guard firing first
-  // (`ccrc-install.test.ts`'s `pathWithout` idiom: fixture plants win, real
+  // (`ccrc-installFixture.ts`'s `pathWithout` idiom: fixture plants win, real
   // tools are the fallback for what nothing here stubs). `tar`/`gzip`/`awk`
   // have no fixture stub in this suite — those three alone are real-tool
   // symlinks in the fallback directory.
@@ -1431,7 +1431,7 @@ export const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&
 // kept, and the spine a flip back runs is the real one. STUB: Task 2's
 // `installVersionedTree`, with the kept version's own `ccd/ccrc` swapped for
 // `KEPT_SPINE` — the flip's mechanics (argv, the verified flag, the lock
-// descriptor) measured without re-running the spine `ccrc-install.test.ts`
+// descriptor) measured without re-running the spine `ccrc-install-*.test.ts`
 // owns.
 export const V1_SHA = '1'.repeat(40);
 export const V2_SHA = '2'.repeat(40);

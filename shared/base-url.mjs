@@ -15,7 +15,7 @@
 //
 // It imports nothing — not even `node:*`. It does not need to, and a
 // dependency here would be inherited by every bare-`node` caller and by the
-// fixture trees that copy them (`ccrc-install.test.ts`'s TREE_FILES).
+// fixture trees that copy them (`ccrc-installFixture.ts`'s TREE_FILES).
 //
 // The three behaviours the implementation turns on are argued in
 // `shared/base-url.ts`'s header and measured in the suite: `?` and `#` are
