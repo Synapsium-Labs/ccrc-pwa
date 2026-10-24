@@ -18,11 +18,14 @@ export function readDiskEpisode(ccrcDir: string): { episode: number; devs: strin
   } catch { return null; }
 }
 
-/** A mark that cannot be written costs the restart dedupe only, never the notice. */
+/** Marks `dev` as a filesystem whose rise pushed `episode`: the devs of the same episode accumulate, a mark of another
+ *  episode is replaced. A mark that cannot be written costs the restart dedupe only, never the notice. */
 export function writeDiskEpisode(ccrcDir: string, episode: number, dev: string): void {
   try {
     mkdirSync(ccrcDir, { recursive: true });
-    writeFileSync(episodePath(ccrcDir), `${episode} ${dev}\n`);
+    const held = readDiskEpisode(ccrcDir);
+    const devs = held?.episode === episode ? [...new Set([...held.devs, dev])] : [dev];
+    writeFileSync(episodePath(ccrcDir), `${episode} ${devs.join(',')}\n`);
   } catch { /* the notice still goes out */ }
 }
 

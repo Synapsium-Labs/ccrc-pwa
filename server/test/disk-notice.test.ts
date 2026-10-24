@@ -352,4 +352,25 @@ describe('sweepDisk sends the notice through the funnel', () => {
     for (let i = 0; i < 2; i += 1) { clock += 60_000; await p2.sweep(); }
     expect(p2.push.notify.mock.calls.length).toBe(1);
   });
+  it('the mark holds every filesystem whose rise pushed in the episode: a restart while the first still stands re-sends nothing', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const p1 = await rig(home, [...both(40, 40), ...both(86, 40), ...both(86, 93), ...both(86, 80)], () => clock);
+    for (let i = 0; i < 8; i += 1) { clock += 60_000; await p1.sweep(); }
+    expect(p1.push.notify.mock.calls.length).toBe(2);
+    expect(readFileSync(path.join(home, '.ccrc', 'disk-episode'), 'utf8').trim()).toMatch(/^\d+ 1,2$/);
+    const p2 = await rig(home, both(86, 80), () => clock);
+    for (let i = 0; i < 2; i += 1) { clock += 6 * 3_600_000; await p2.sweep(); }
+    expect(p2.push.notify.mock.calls.length).toBe(0);
+  });
+  it('a mark of an older episode is replaced, not extended, when another filesystem opens a new one', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const p1 = await rig(home, [...both(40, 40), ...both(86, 40)], () => clock);
+    for (let i = 0; i < 4; i += 1) { clock += 60_000; await p1.sweep(); }
+    const p2 = await rig(home, [...both(84, 40), ...both(84, 86)], () => clock);
+    for (let i = 0; i < 4; i += 1) { clock += 60_000; await p2.sweep(); }
+    expect(p2.push.notify.mock.calls.length).toBe(1);
+    expect(readFileSync(path.join(home, '.ccrc', 'disk-episode'), 'utf8').trim()).toMatch(/^\d+ 2$/);
+  });
 });
