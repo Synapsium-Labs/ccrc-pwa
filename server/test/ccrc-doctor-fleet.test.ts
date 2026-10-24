@@ -190,8 +190,8 @@ describe('ccrc doctor: rc — the state this box spawns its sessions in', () => 
 // ── room on the filesystem $HOME is on ────────────────────────────────────
 // Stage 2d, Task 2. Spec §5 asks for "disk headroom (including the backup
 // dir)": a ccd workspace is a full clone, `~/.ccrc/coord.db` is a WAL database
-// with no backup to fall back on (server/src/coord/db.ts:144-145), and every
-// deploy copies the shipped tree under `~/ccrc-backups/<ts>/` (deploy.sh:33-34).
+// with no backup to fall back on (server/src/coord/db.ts (the backup restore)), and every
+// deploy copies the shipped tree under `~/ccrc-backups/<ts>/` (deploy.sh (the backup step)).
 // All three land on one filesystem, and all three fail in unhelpful ways when
 // it is full.
 //
@@ -2634,7 +2634,7 @@ describe('ccrc doctor: fleet', () => {
   });
 
   // AN ANSWER THIS CHECK DID NOT UNDERSTAND MUST NOT BECOME A CLAIM THAT THE
-  // OPPOSITE IS TRUE. `connected` is required on the wire (shared/api.ts:1926),
+  // OPPOSITE IS TRUE. `connected` is required on the wire (shared/api.ts (the connected field)),
   // so each of these is a malformed answer — and each used to PASS with the
   // words "in remote mode, connected", which is the strongest claim this check
   // can make, made about the one field the answer did not state. The

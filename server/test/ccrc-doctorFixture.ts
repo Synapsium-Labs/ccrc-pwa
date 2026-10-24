@@ -14,7 +14,7 @@
 //  1. HOME is a throwaway `mkTmp` directory (the one isolation boundary the
 //     whole ccd suite relies on — CLAUDE.md), and `ccrc` is invoked through a
 //     symlink at `<home>/ccrc/ccd/ccrc`. That path is not a convenience: it is
-//     the SHAPE OF A DEPLOYED BOX (`deploy/deploy.sh:276` rsyncs
+//     the SHAPE OF A DEPLOYED BOX (`deploy/deploy.sh (the rsync step)` rsyncs
 //     `agent shared deploy ccd` to `~/ccrc/` on the fleet host), and doctor
 //     resolves the shipped `package.json` relative to its own script, so the
 //     symlink is what lets a test control which `package.json` doctor finds
@@ -67,7 +67,7 @@ export const LIB_SRC = join(REPO, 'ccd', 'ccrc-wrapper-shape');
 /** bash's absolute path, resolved ONCE under this process's real PATH. Every
  *  spawn below hands the child a PATH built only from fixture directories, and
  *  libuv resolves the executable against the CHILD's environment — so spawning
- *  bare `bash` would be ENOENT. Same trick ccrc-cli.test.ts:231 uses. */
+ *  bare `bash` would be ENOENT. Same trick ccrc-cli.test.ts (its bash shim) uses. */
 export const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
 export const realPath = (name: string): string => {
@@ -170,7 +170,7 @@ export function writeChecks(home: string, text: string): void {
 
 /** The shipped `package.json` doctor reads its floor out of. `pkgDir` picks
  *  which box this fixture is: `agent` is what a fleet host has
- *  (deploy.sh:276), `server` is what a server host has (deploy.sh:525). */
+ *  (deploy.sh (the fleet rsync)), `server` is what a server host has (deploy.sh (the server rsync)). */
 export function writePkg(home: string, engines: string | null, pkgDir: 'server' | 'agent' = 'server'): void {
   const d = join(home, 'ccrc', pkgDir);
   mkdirSync(d, { recursive: true });
@@ -336,7 +336,7 @@ export function stubLoginctl(home: string): void {
 // `_check_wrappers` compares two things this box really has: the roster
 // (`~/.ccrc/accounts.json`) and the account wrappers in `~/.local/bin`. Both
 // halves are fixtures here, and both are written in the shape MEASURED on the
-// fleet host (adopt.test.ts:62-111 is the same measurement, from the other
+// fleet host (adopt.test.ts (its box measurement) is the same measurement, from the other
 // side).
 
 export interface RosterEntry {
@@ -709,7 +709,7 @@ export function stubLaunchctl(home: string): void {
     + 'esac');
 }
 
-/** A systemd --user unit FILE, in the directory `deploy.sh:416` really copies
+/** A systemd --user unit FILE, in the directory `deploy.sh (the unit install)` really copies
  *  them to. `_check_services` asks `systemctl` only about units whose file is
  *  HERE, so this is what makes a fixture a server box, a fleet host, or a dev
  *  checkout with no units at all. The CONTENT is irrelevant — nothing reads it;
@@ -938,7 +938,7 @@ export function stubHostname(home: string): void {
 }
 
 /** `n` ccd sessions in the registry, as ccd itself counts them: one `<id>.uuid`
- *  file each (ccd:10222). */
+ *  file each (the ccd scan). */
 export function writeSessions(home: string, n: number): void {
   const reg = join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
@@ -1270,7 +1270,7 @@ export function healthy(prefix: string): string {
     // …and it says which mode this box runs in, coherently — `config` measures
     // exactly that. `local` needs no agent URL or token, which is what makes
     // this file a PASS rather than the boot-refusal FAIL a half-configured
-    // `remote` gets (server/src/index.ts:75-79).
+    // `remote` gets (server/src/index.ts#main).
     'CCRC_FLEET=local',
     'CCRC_HOST=ccrc-fixture.invalid',
     'CCRC_PORT=7788',
@@ -1578,7 +1578,7 @@ export function tableNames(): string[] {
   if (r.status !== 0) throw new Error(`could not read the check table: ${r.stderr}`);
   const names = (r.stdout ?? '').split('\n').filter(Boolean);
   // A scan over an empty list passes everything (the discipline
-  // single-definition.test.ts:52-57 states outright). `"${arr[@]}"` on an
+  // single-definition.test.ts (its array rule) states outright). `"${arr[@]}"` on an
   // UNSET array is not an error under `set -u` in bash 4.4+, so a missing or
   // renamed table would otherwise return [] and quietly disarm every caller —
   // measured: it did, in this suite's own red run.

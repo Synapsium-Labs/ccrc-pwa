@@ -1116,7 +1116,7 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
   });
   it('routing: on a launchd box the census is unmeasured and never invokes systemctl (fix round 2, finding #5)', () => {
     // `_have_systemctl` on darwin tests for launchctl, not systemctl
-    // (ccd:615-618) — so without an explicit darwin check first, this arm
+    // (the ccd darwin guard) — so without an explicit darwin check first, this arm
     // would run an actual `systemctl` on a Mac (exit 127, misattributed as
     // "answered neither active nor inactive"). CCD_OS=darwin must short
     // this out before `_have_systemctl` or `systemctl` is asked anything.
@@ -2094,7 +2094,7 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     expect(r.stdout).not.toContain('ccrc memory --apply');
   });
 
-  // R22 (fix round 2, Important 3): `install-session-hooks.sh:107-115` writes
+  // R22 (fix round 2, Important 3): `install-session-hooks.sh (its hook write)` writes
   // `cur='{}'` and inserts the hook for ANY rostered home lacking a
   // settings.json at all — so absence itself proves the installer has never
   // touched this home, the MAXIMAL case of "will fork on first use". Measured

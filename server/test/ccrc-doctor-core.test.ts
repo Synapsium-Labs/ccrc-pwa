@@ -202,8 +202,8 @@ describe('ccrc doctor: node', () => {
   });
 
   it('reads the AGENT package.json on a fleet box, where that is the only one shipped', () => {
-    // deploy.sh:276 rsyncs `agent shared deploy ccd` to the fleet host: there
-    // is no server/ directory there at all. node-floor.test.ts:45-50 asserts
+    // deploy.sh (the fleet rsync) rsyncs `agent shared deploy ccd` to the fleet host: there
+    // is no server/ directory there at all. node-floor.test.ts (its server-dir assertion) asserts
     // all three declarations are byte-identical, which is why either answer is
     // the same answer — but only if doctor actually looks for both.
     const home = healthy('ccrc-doctor-node-agent-pkg-');
@@ -244,7 +244,7 @@ describe('ccrc doctor: node', () => {
     });
 
   it('accepts a floor with surrounding whitespace, exactly as node-floor.test.ts does', () => {
-    // node-floor.test.ts:38-39 matches against `range.trim()`, so " >=1.0.0 "
+    // node-floor.test.ts (its range match) matches against `range.trim()`, so " >=1.0.0 "
     // leaves all three declarations identical and that suite green. A doctor
     // stricter than the rule it copies would fail a box whose manifests are
     // fine — the check must be as strict as node-floor, not stricter.
@@ -1277,7 +1277,7 @@ describe('ccrc doctor: services', () => {
   itLinux('warns — not fails — when only the cap-scopes timer is stopped', () => {
     // Two different operator actions, so two different classes: a stopped
     // server answers nothing at all, while a stopped cap-scopes timer means
-    // panes spawn without their memory cap (deploy.sh:463's OOM guardrail) —
+    // panes spawn without their memory cap (the OOM guardrail deploy.sh installs) —
     // degraded, not down.
     const home = healthy('ccrc-doctor-services-timer-');
     writeFileSync(join(home, 'fixture-unit-ccd-cap-scopes.timer'), 'inactive\n');
@@ -2515,7 +2515,7 @@ describe('ccrc doctor: update-sync', () => {
 // ── the box's own config file ─────────────────────────────────────────────
 // Stage 2d, Task 2, and the one check whose FAIL is a REPRODUCTION: a
 // `CCRC_FLEET=remote` with no agent URL or token makes the server print one
-// line and exit 1 at boot (server/src/index.ts:75-79). Before this check, that
+// line and exit 1 at boot (server/src/index.ts#main). Before this check, that
 // state was visible only as a service that would not come up.
 //
 // MUTATIONS MEASURED (applied to the shipped check, run, reverted):
@@ -2552,7 +2552,7 @@ describe('ccrc doctor: config', () => {
   it('SKIPS an env-less FLEET-ROLE box rather than advising it to install a server', () => {
     // D-86, from the Task 2 review. THE LIVE FLEET HOST IS THIS FIXTURE: it has
     // no `ccrc.env` (this suite and `_check_fleet` both say so — it carries
-    // `~/.ccrc/agent.env` instead), and `ccrc` ships there (deploy.sh:401), so
+    // `~/.ccrc/agent.env` instead), and `ccrc` ships there (deploy.sh (the ccrc install)), so
     // before the fix every doctor run on it printed "the server's defaults
     // apply: local mode on 127.0.0.1:7788" — about a server that does not run
     // there — with the remedy `ccrc install`, which is the single-box
@@ -2611,9 +2611,9 @@ describe('ccrc doctor: config', () => {
     ['the token is empty', 'CCRC_FLEET=remote\nCCRC_AGENT_URL=ws://fleet.invalid:7789\nCCRC_AGENT_TOKEN=\n'],
     ['only the URL is set', 'CCRC_FLEET=remote\nCCRC_AGENT_URL=ws://fleet.invalid:7789\n'],
   ] as const)('fails a remote box where %s — the server exits at boot in exactly this state', (_what, text) => {
-    // server/src/index.ts:75-79: `if (!cfg.agentUrl || !cfg.agentToken) … exit(1)`.
+    // server/src/index.ts#main: `if (!cfg.agentUrl || !cfg.agentToken) … exit(1)`.
     // Both halves of that condition are reachable here, because "empty" and
-    // "absent" are the same thing to `config.ts:155-156` and must be the same
+    // "absent" are the same thing to `config.ts#loadConfig` and must be the same
     // thing here.
     const home = healthy(`ccrc-doctor-config-remote-${_what.replace(/\W+/g, '-')}-`);
     writeCcrcEnv(home, text);
@@ -2654,7 +2654,7 @@ describe('ccrc doctor: config', () => {
   });
 
   it('reads an ABSENT CCRC_FLEET as local — the same default config.ts applies', () => {
-    // `server/src/config.ts:154`: `env.CCRC_FLEET === 'remote' ? 'remote' : 'local'`.
+    // `server/src/config.ts#loadConfig`: `env.CCRC_FLEET === 'remote' ? 'remote' : 'local'`.
     // A check stricter than the config reader would report a box that runs
     // perfectly well as misconfigured.
     const home = healthy('ccrc-doctor-config-nofleet-');
@@ -2850,7 +2850,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   });
 
   it('reads a value systemd would not set as OFF, exactly as config.ts does', () => {
-    // `config.ts:331` is `env.CCRC_AUTH === 'on'` and nothing else. A check
+    // `config.ts#loadConfig` is `env.CCRC_AUTH === 'on'` and nothing else. A check
     // laxer OR stricter than the reader it describes reports a box nobody is
     // running — `_check_config` pins the same rule for CCRC_FLEET.
     const home = unexposedBox('ccrc-doctor-auth-flagcase-');
@@ -3007,7 +3007,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   });
 
   // ── CCRC_AUTH_SECRET_PATH: the override, and the silent no-op it would be ──
-  // `config.ts:339` is `env.CCRC_AUTH_SECRET_PATH || <default>`, so a box can
+  // `config.ts#loadConfig` is `env.CCRC_AUTH_SECRET_PATH || <default>`, so a box can
   // redirect the gate's secret. A doctor that measured the DEFAULT on such a
   // box would report `PASS auth … gen=1` about a file nothing reads — right
   // after a `ccrc passwd` that wrote the same wrong file. An operator rotating
