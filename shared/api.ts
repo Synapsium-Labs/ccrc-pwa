@@ -10437,6 +10437,12 @@ declare const collectTokenBrand: unique symbol;
  *    string parameter. */
 export type CollectToken = string & { readonly [collectTokenBrand]: true };
 
+declare const orphanTokenBrand: unique symbol;
+/** The consent `ws-orphan` spends (fleet disk retention spec 2026-10-23 §2.3, D-6630): the `token` or the `rescueToken` of a
+ *  `ws-audit --orphan-hex` answer, 64 lowercase hex characters. Phantom brand, like `CollectToken`; the lane's audit reader
+ *  is the one place that casts to it, and `CCD_ARGV.wsOrphan` takes nothing else. */
+export type OrphanToken = string & { readonly [orphanTokenBrand]: true };
+
 /** One arm of `ChildReclaimAttention` (spec §5.9, §5.10): an item of the temp-root collector's.
  *  - `sessionId` is the temp-root id on a per-id item. On a box-wide line it is a `COLLECT_BOX_LABELS` label, which no
  *    session id can equal.

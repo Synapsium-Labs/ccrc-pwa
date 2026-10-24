@@ -72,6 +72,11 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
       // verb its own `['ws-collect','--expect']` — both protected shapes, both through the real exec op.
       [['ws-audit', '--session', 'demo-x', '--collect'], true],
       [['ws-collect', '--expect', 'a'.repeat(64), '--session', 'demo-x'], true],
+      // Fleet disk retention DR-18 (D-6630): the orphan lane's census and audit are `ws-audit` modes with a grant each and run
+      // unprotected (read-only); the verb rides its own `['ws-orphan','--expect']` and starts under `bash -p`.
+      [['ws-audit', '--orphans'], false],
+      [['ws-audit', '--orphan-hex', '2f61'], false],
+      [['ws-orphan', '--expect', 'a'.repeat(64), '--tree-hex', '2f61', '--rescue'], true],
       [['ensure', 'demo-x'], false],
     ];
     let id = 0;
