@@ -58,9 +58,9 @@ export interface AskKeysOptions {
 
 /** The keyboard's engagement with ONE logical ask, shared by every `useAskKeys` the controller renders (R64). */
 export interface AskEngagement {
-  /** Is the keyboard engaged with the ask showing now? Read at the moment of asking, against the identity of THIS render. */
+  /** Is the keyboard engaged with the ask showing now? Read at the moment of asking. */
   readonly engaged: () => boolean;
-  /** A key was handled inside the inline card: engage with the ask showing now. */
+  /** A key was handled inside the inline card: engage with the ask showing now (the owner's layout effect compares). */
   readonly engage: () => void;
 }
 
@@ -143,7 +143,8 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
   const els = useRef(new Map<string, HTMLElement>());
   const engaged = useRef(false);
   // INLINE (D-6326, R64) the engagement is not this hook's: it is the ask's, shared (`opts.engagement`), so it survives
-  // the screen change to the review and back, and ends with the ask. This `engaged` is the phone's, as it always was.
+  // the screen change to the review and back, and ends with the ask. This `engaged` is the phone's alone: only a key handled
+  // outside the inline card sets it, so this hook, which outlives an ask and a crossing below 900, carries nothing from one.
   const latest = useRef({ opts, hl });
   useLayoutEffect(() => {
     latest.current = { opts, hl };
@@ -207,8 +208,8 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
       if (action.type === 'none') return;
       e.preventDefault();
       e.stopPropagation();
-      engaged.current = true;
       if (inline) o.engagement?.engage();
+      else engaged.current = true;
       if (action.type === 'move') {
         focusRow(action.to);
         return;

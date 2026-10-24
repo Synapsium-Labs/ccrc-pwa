@@ -212,8 +212,8 @@ export const ASK_WORD: Record<AskState, string> = {
   answered: 'answered',
 };
 /** The `awaiting` word when the question is on screen right below the transcript (the desk's inline ask surface, D-6326):
- *  the card says where to look instead of offering a control that would raise what is already up. The same casing as
- *  `ASK_WORD`'s members, which the state row draws as they are. */
+ *  the card says where to look, and `ASK_GO_TO_QUESTION` beside it raises what is already up (there is no `Answer`). The
+ *  same casing as `ASK_WORD`'s members, which the state row draws as they are. */
 export const ASK_WORD_BELOW = 'waiting for you, below';
 /** The control beside `ASK_WORD_BELOW` (R64 F5): it raises the inline card that is already up, scrolling it into view and
  *  focusing its first option, through the same `onAnswer` that `Answer` calls on a phone. Its word is fixed, whatever the
