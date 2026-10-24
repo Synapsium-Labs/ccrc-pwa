@@ -360,7 +360,7 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
     // Wait for the poll before asserting an ABSENCE: every row says "limits
     // unknown" until it lands, so this would otherwise pass against the
     // pre-poll state and measure nothing.
-    await waitFor(() => expect(screen.getAllByText('reset')).toHaveLength(3));
+    await waitFor(() => expect(screen.getAllByText(/inferred/)).toHaveLength(3));
     expect(screen.queryByText('suggested')).not.toBeInTheDocument();
     // Not scoring is not hiding: every target is still listed and tappable.
     for (const label of ['team·alt', 'team·b', 'gpt', 'team·d']) {
@@ -368,24 +368,20 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
     }
   });
 
-  it('renders a rolled-over window as "reset", never as a confident 0%', async () => {
-    // `AccountsScreen`'s `Bar` already owns this vocabulary — "reset" (an
-    // inferred zero) ≠ "0%" (measured) ≠ "—" (nobody measured) — and this is
-    // the same fact on a second surface, so it says the same word rather than
-    // inventing a second visual language for it.
-    // `44`, not a round `40`: "40%" CONTAINS "0%", so the negative assertion
-    // below would fire on the honest half and this test would pass for the
-    // wrong reason (measured, first run).
+  it('renders a rolled-over window as 0% named as reset and inferred, its track left empty', async () => {
+    // R48 (the coordinator's ruling): every window everywhere prints a percentage, through `windowReading`. A
+    // rolled-over window prints "0%" and its spoken words say the window reset and the 0% is inferred, so the
+    // reading is no longer the word "reset" and a measured 0% is told apart by those words, not by the glyphs.
+    // `44`, not a round `40`, so the measured half cannot be mistaken for the other 0%.
     stubAccounts([acct({ wrapper: 'claude9', five: 0, seven: 44, fiveRolledOver: true })]);
     renderSwap();
     const row = await screen.findByRole('button', { name: /team·alt/ });
-    await waitFor(() => expect(row).toHaveTextContent('reset'));
-    expect(row).not.toHaveTextContent('0%');
+    await waitFor(() => expect(row).toHaveTextContent('0%, inferred: the window reset'));
     // The measured half is untouched — the flags are per-window.
     expect(row).toHaveTextContent('44%');
     // AND THE TRACK IS LEFT EMPTY on the rolled half — exactly one fill in
-    // this row, the honest one. A bar drawn beside the word "reset" would
-    // contradict it in the same row, and the width would be a number nobody
+    // this row, the honest one. A bar drawn beside an inferred 0% would
+    // claim a measurement in the same row, and the width would be a number nobody
     // took: `limits.ts` happens to zero the value when it sets the flag, so a
     // fill would be invisible TODAY, which is precisely why only a DOM count
     // can hold the rule.
