@@ -23344,17 +23344,21 @@ cmd_rollout() {
   # So: the remote's stderr goes to ours with this box's own label on it
   # (an operator needs to SEE a host-key warning, not have it swallowed),
   # and the check line is looked for ANYWHERE in stdout, first match wins.
-  # The refusal now fires only when no `check: ` line exists at all.
-  local i out first line state box sha caps floor allcurrent=1
+  # The refusal now fires only when no `check: ` line exists at all. Its cause is the remote exit (F11): a nonzero one is the
+  # box's own refusal (a release base it cannot read, an argument an older ccrc does not know), its lines relayed above, so the
+  # installed/new-enough question is asked only of a box that exited 0 with no check line; 255 is ssh's own failure, and 127
+  # the remote shell's command-not-found, each in its own words.
+  local i out first line state box sha caps floor allcurrent=1 crc cwhy
   local -a states=() capss=() floors=()
   for i in "${!boxes[@]}"; do
     : >"$ROLLOUT_ERRF"
-    out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --check --to $ROLLOUT_VERSION" 2>>"$ROLLOUT_ERRF")" || :
+    crc=0; out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --check --to $ROLLOUT_VERSION" 2>>"$ROLLOUT_ERRF")" || crc=$?
     [ -s "$ROLLOUT_ERRF" ] && sed "s/^/${labels[$i]}: /" "$ROLLOUT_ERRF" >&2
     line="$(printf '%s\n' "$out" | grep -m1 '^check: ')" || line=""
     if [ -z "$line" ]; then
       first="${out%%$'\n'*}"
-      echo "$PROG: rollout: the ${labels[$i]} box's 'ccrc update --check' printed no check line (got: ${first:-nothing}) — is ccrc installed there, and new enough to know --check? nothing was touched" >&2
+      case "$crc" in 0) cwhy="is ccrc installed there, and new enough to know --check?" ;; 255) cwhy="ssh failed (exit 255), so the check may not have run there; the lines above say why —" ;; 127) cwhy="its shell found no ccrc to run (exit 127); is ccrc installed there?" ;; *) cwhy="its check refused (exit $crc); the lines above say why —" ;; esac
+      echo "$PROG: rollout: the ${labels[$i]} box's 'ccrc update --check' printed no check line (got: ${first:-nothing}) — $cwhy nothing was touched" >&2
       exit 2
     fi
     box="${line#*box=}"; box="${box%% *}"

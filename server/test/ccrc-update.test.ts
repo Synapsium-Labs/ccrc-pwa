@@ -15414,6 +15414,56 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect([lastReport(home)['phase'], lastReport(home)['detail']], 'rollback').toEqual(['failed', `rollback: ${why}`]);
     });
 
+    // F11 (fix round 1): rollout over a box whose `--check` refuses its release base. The ssh stub runs the remote command for
+    // real, in the box's own fixture HOME with this tree's ccrc first on its PATH and no environment base (a real ssh forwards
+    // none), so the refusal is the box's own reader's; the deploying machine pins from its own local:// release space.
+    it('W24-U6: rollout names a box\'s refused check as the refusal it is, and ssh\'s 255 as ssh\'s (F11)', () => {
+      const home = mkTmp('ccrc-fx-w24-u6-');
+      const box = join(home, 'box');
+      mkdirSync(join(box, '.ccrc'), { recursive: true });
+      mkdirSync(join(box, 'bin'), { recursive: true });
+      mkdirSync(join(box, 'tmp'), { recursive: true });
+      writeFileSync(join(box, '.ccrc', 'ccrc.env'), `CCRC_ROLE=both\nexport CCRC_RELEASE_BASE_URL=${MIRROR}\n`);
+      writeFileSync(join(box, 'bin', 'ccrc'), `#!/bin/sh\nexec '${BASH}' '${join(REPO, 'ccd', 'ccrc')}' "$@"\n`, { mode: 0o755 });
+      mkdirSync(join(home, 'releases', 'download', 'v2.0.0'), { recursive: true });
+      writeFileSync(join(home, 'releases', 'download', 'v2.0.0', 'SHA256SUMS'), `${'0'.repeat(64)}  ccrc-v2.0.0.tar.gz\n`);
+      writeFileSync(join(home, 'deploy.env'), `CCRC_BOX=user@box-a\nCCRC_AGENT_BOX=user@box-a\nCCRC_SSH_KEY=${join(home, 'id_fixture')}\n`);
+      const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
+      for (const k of ['CCRC_BOX', 'CCRC_AGENT_BOX', 'CCRC_SSH_KEY', 'CCRC_SSH_PORT']) delete env[k];
+      Object.assign(env, { CCRC_DEPLOY_ENV: join(home, 'deploy.env'), CCRC_RELEASE_BASE_URL: `local://${home}/releases`, TMPDIR: join(home, 'tmp') });
+      mkdirSync(join(home, 'tmp'), { recursive: true });
+      const bin = join(home, '.local', 'bin');
+      writeFileSync(join(bin, 'ssh'), [
+        '#!/bin/sh',
+        'while [ $# -gt 0 ]; do case "$1" in -p|-i|-o) shift 2 ;; -*) shift ;; *) break ;; esac; done',
+        'shift; cmd="$*"',
+        'case "$cmd" in *"--check"*) [ -f "$HOME/ssh-255" ] && { echo "fixture ssh: connection closed" >&2; exit 255; } ;; esac',
+        `HOME='${box}' TMPDIR='${box}/tmp' CCRC_RELEASE_BASE_URL= PATH='${box}/bin':"$PATH" exec '${BASH}' -c "$cmd"`,
+      ].join('\n'), { mode: 0o755 });
+      writeFileSync(join(bin, 'curl'), [
+        '#!/bin/sh',
+        'dest=""; url=""',
+        'while [ $# -gt 0 ]; do case "$1" in -o) dest="$2"; shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac; done',
+        'src="${url#local://}"; [ -f "$src" ] || { echo "curl: (22) 404 for $url" >&2; exit 22; }',
+        'cp "$src" "$dest"',
+      ].join('\n'), { mode: 0o755 });
+      assertNoRealTool(env, home);
+      const rollout = (): Result => {
+        const p = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollout', '--to', 'v2.0.0'], { env, encoding: 'utf8' });
+        return { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
+      };
+      const lastLine = (s: string): string => s.trimEnd().split('\n').pop() ?? '';
+      const lead = 'ccrc: rollout: the box box\'s \'ccrc update --check\' printed no check line (got: nothing) — ';
+      let r = rollout();
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+      expect(r.stderr).toContain(`box: ${BASE_WHY}`);
+      expect(lastLine(r.stderr)).toBe(`${lead}its check refused (exit 1); the lines above say why — nothing was touched`);
+      writeFileSync(join(home, 'ssh-255'), '');
+      r = rollout();
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+      expect(lastLine(r.stderr)).toBe(`${lead}ssh failed (exit 255), so the check may not have run there; the lines above say why — nothing was touched`);
+    });
+
     it('W24-U4: on macOS a knob-less line the Darwin model rejects leaves the release base at its default, and a named base beside it refuses', () => {
       const knobless = 'CCRC_ROLE=both\nCCRC_PROJECTS_ROOT=~/code\n';
       const home = boxWith('ccrc-fx-w24-u4-', knobless);
