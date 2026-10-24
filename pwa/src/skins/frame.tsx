@@ -53,7 +53,8 @@ export const FLEET_ID = 'fleet';
  *  The phone swap hides the main landmark on the fleet view (`display: none`), and `focus()` on an element that is not
  *  rendered does nothing, so the main landmark is tried first and, when it did not take the focus, the fleet column's
  *  is. Decided by what the browser accepted, never by a skin id, a width or a media query. Without a scroll, as the
- *  frame's other script focuses: a landmark is a page region, not a control to bring into view. */
+ *  frame's switch restore focuses main (`skipToContent`, the skip link's, passes no `preventScroll`): a landmark is a
+ *  page region, not a control to bring into view. */
 export function focusShownLandmark(): void {
   const main = document.getElementById(CONTENT_ID);
   main?.focus({ preventScroll: true });

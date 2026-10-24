@@ -203,6 +203,17 @@ const markerNote = (
 export const rowStateWord = (session: FleetSession): string =>
   hibernatedSince(session) !== null ? 'asleep' : STATE_WORD[session.bucket];
 
+/** Is this session its project's coordinator? `role === 'coordinator'` and nothing else: a null or absent role (an older
+ *  server) is a worker, and claiming a run never makes a session one. THE ONE READER of `FleetSession.role` in
+ *  `pwa/src` (D-5301): the row's facts below and the palette's session entries (`sessionEntries.ts`, D-6714) ask it. */
+export function coordinatorRole(session: FleetSession): boolean {
+  const role: unknown = (session as { role?: unknown }).role;
+  return role === 'coordinator';
+}
+
+/** The word the header and the session details say for a coordinator, and the palette's session entries too. */
+export const COORDINATOR_WORD = 'coordinator';
+
 /** Decide every fact of one session. Pure: the clock comes in as `now`. */
 export function sessionFacts(input: FactInput): SessionFactSet {
   const {
@@ -258,8 +269,6 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     ? `running on ${accountLabel(roster, session.wrapper)} (pool ${acctPool}), project is pool ${projPoolName}`
     : null;
 
-  const role: unknown = (session as { role?: unknown }).role;
-
   return {
     session, now, dead, asleepAt,
     name: sessionLabel(session),
@@ -272,7 +281,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
       : bgWords !== null ? `${state} · ${bgWords.text}` : state,
     statusTitle: wcWords?.title ?? bgWords?.title,
     stateTone: wcWords !== null ? 'coordinator' : state,
-    coordinatorRole: role === 'coordinator',
+    coordinatorRole: coordinatorRole(session),
     workingOn,
     childOf, activeRun, coordinatorName: childRun?.coordinator ?? null, heldRun, heldTitle,
     spawn: spawnChip(session),
@@ -396,7 +405,7 @@ export function headerFacts(f: SessionFactSet): Fact[] {
     { key: 'status', text: headerStatusText(f), ...(f.statusTitle === undefined ? {} : { title: f.statusTitle }) },
     { key: 'lane', text: f.lane.name, ...(f.lane.label === undefined ? {} : { title: f.lane.label }) },
   ];
-  if (f.coordinatorRole) out.push({ key: 'role', text: 'coordinator' });
+  if (f.coordinatorRole) out.push({ key: 'role', text: COORDINATOR_WORD });
   if (f.workingOn !== null) out.push({ key: 'working-on', text: f.workingOn });
   const ctx = contextFact(f);
   // The context fact under its own key — the programme and wave, the child marker, `held`, the PR or the branch.

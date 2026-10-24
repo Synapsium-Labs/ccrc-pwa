@@ -10,12 +10,15 @@ import { useAuthLost } from '../lib/auth';
 import { navigate, useLocation } from '../lib/router';
 import { setSkin } from '../lib/skin';
 import { setTheme } from '../lib/theme';
-import { CONTENT_ID } from '../skins/frame';
+import { focusShownLandmark } from '../skins/frame';
 import { useFleetStore } from '../stores/fleet';
 import { useSessionCommandTarget } from '../session/SessionFlows';
 import { baseCommands, fleetOrder } from './commands';
-import { available, rankCommands, type CommandContext, type CommandPage } from './registry';
+import {
+  available, COMMAND_FIELD_WORDS, rankCommands, SEARCH_EMPTY, type CommandContext, type CommandPage,
+} from './registry';
 import { DOOR_EVENT } from './door';
+import { sessionEntries } from './sessionEntries';
 import { useShortcuts } from './useShortcuts';
 
 /** How long a closing palette may hold focus before the layer restores it:
@@ -62,7 +65,8 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   // main: Escape from a palette opened in the composer left it there), so the
   // layer puts it back on what had it when the palette opened, or, when a
   // command took that away (a route change, a skin switch that replaced a
-  // part), on the main landmark.
+  // part), on the landmark that is on screen (`focusShownLandmark`): the main
+  // one, or the fleet column's where the phone swap hides main.
   const opener = useRef<Element | null>(null);
   // NEVER BEHIND A COVER (D-5679). The login and block screens cover a
   // non-inert app: a restore while one is up would put the passphrase's
@@ -101,12 +105,12 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
       if (!enabledRef.current) return;
       const active = document.activeElement;
       if (active !== null && active !== document.body) return;
-      const content = document.getElementById(CONTENT_ID);
-      const target = back instanceof HTMLElement && back !== document.body && back.isConnected ? back : content;
-      target?.focus({ preventScroll: true });
+      if (back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus({ preventScroll: true });
       // An opener still connected can refuse focus (the phone swap hides the
-      // fleet column with display: none): the main landmark, not the body.
-      if (document.activeElement === document.body) content?.focus({ preventScroll: true });
+      // fleet column with display: none), and so can the main landmark (the
+      // same swap hides it on a phone's fleet view, measured at 390 in T2a's
+      // review): the landmark that is on screen, never the body.
+      if (document.activeElement === null || document.activeElement === document.body) focusShownLandmark();
     };
     t = window.setTimeout(restore, 0);
     return () => window.clearTimeout(t);
@@ -118,6 +122,7 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   const ctx = useMemo<CommandContext>(() => ({
     path,
     sessions: ordered,
+    runs,
     navigate: (href) => navigate(href),
     setSkin,
     setTheme: (choice) => setTheme(choice),
@@ -126,7 +131,7 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     openPalette,
     paletteOpen: open,
     session,
-  }), [path, ordered, openNewSession, openPalette, open, session]);
+  }), [path, ordered, runs, openNewSession, openPalette, open, session]);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 
@@ -161,10 +166,15 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     setSheet(false);
   }, [enabled]);
 
-  const list = useMemo(() => (page === null ? available(commands, ctx) : page.commands), [page, commands, ctx]);
+  // The first level is the top search (D-6714): the commands offered here, then every session, search-only, so an
+  // empty query lists the commands alone and a session ranks after every matching command.
+  const list = useMemo(
+    () => (page === null ? [...available(commands, ctx), ...sessionEntries(ctx.sessions, ctx.runs, 'top')] : page.commands),
+    [page, commands, ctx],
+  );
   const ranked = useMemo(() => rankCommands(query, list), [query, list]);
   const options = useMemo<CommandPaletteOption[]>(
-    () => ranked.map((c) => ({ id: c.id, title: c.title, group: c.group, keys: c.keys })),
+    () => ranked.map((c) => ({ id: c.id, title: c.title, group: c.group, keys: c.keys, label: c.label })),
     [ranked],
   );
 
@@ -198,7 +208,10 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
         onRun={run}
         onBack={page === null ? undefined : () => { setPage(null); setQuery(''); }}
         label={page === null ? 'Command palette' : page.title}
-        placeholder={page === null ? 'Type a command' : `${page.title}…`}
+        // The first level is the top search (D-6714): it says the field's own words, and finds sessions too. A page
+        // keeps its own placeholder and the palette's default empty text.
+        placeholder={page === null ? COMMAND_FIELD_WORDS : `${page.title}…`}
+        empty={page === null ? SEARCH_EMPTY : undefined}
       />
       <Sheet open={sheet && enabled} onClose={() => setSheet(false)} title="Keyboard shortcuts">
         <ul className={RESET_LIST}>
