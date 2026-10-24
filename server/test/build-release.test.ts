@@ -556,8 +556,11 @@ const onlyStep = (steps: WorkflowStep[], what: string): WorkflowStep => {
 
 const RECEIVE_LINE = 'bash deploy/release-main.sh receive --in "$RUNNER_TEMP/release-in" --tag "$CCRC_BUILD_TAG" --digest "$CCRC_BUILD_DIGEST" --out release-out';
 const VERIFY_LINE = 'bash deploy/release-artifact.sh verify --tag "$GITHUB_REF_NAME" --digest "$CCRC_BUILD_DIGEST" --in "$RUNNER_TEMP/release-in" --out release-out';
+// The decision check's step name and its one line (D-6658, renamed by D-6738:
+// the check reads compare's own step output, not the job output).
+const DECISION_NAME = 'Fail when the release decision did not reach compare\'s step output';
 const DECISION_IF = "steps.compare.outputs.release != 'true' && steps.compare.outputs.release != 'false'";
-const DECISION_LINE = 'echo "release-main.yml: the release decision did not reach the job output; failing rather than skipping a release; re-run all jobs" >&2; exit 1';
+const DECISION_LINE = 'echo "release-main.yml: the release decision did not reach compare\'s step output; failing rather than skipping a release; re-run all jobs" >&2; exit 1';
 
 /** What differs between the two split workflows; everything else is held
  *  alike (D-6647, D-6653, D-6657). */
@@ -776,7 +779,7 @@ describe('release.yml: the thin workflow, pinned to the script', () => {
   it('W26-Y6: release.yml has no release decision, so no decision check (D-6653, D-6658)', () => {
     const src = wf();
     expect(src).not.toContain(DECISION_IF);
-    expect(workflowJobs(src).flatMap((j) => j.steps).filter((s) => s.name === 'Fail when the release decision did not reach the job output')).toEqual([]);
+    expect(workflowJobs(src).flatMap((j) => j.steps).filter((s) => s.name === DECISION_NAME)).toEqual([]);
   });
 });
 
@@ -969,7 +972,7 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
       at(/^      - uses: actions\/setup-node@v4$/m),
       at(/^        run: bash deploy\/release-main\.sh prepare /m),
       at(/^        run: bash deploy\/release-main\.sh compare /m),
-      at(/^      - name: Fail when the release decision did not reach the job output$/m),
+      at(/^      - name: Fail when the release decision did not reach compare's step output$/m),
       at(/^        run: bash deploy\/release-artifact\.sh record /m),
       at(/^      - uses: actions\/upload-artifact@v4$/m),
       at(/^      - uses: actions\/download-artifact@v7$/m),
@@ -1035,7 +1038,7 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     },
   });
 
-  it('W26-Y6: a release decision that did not reach the job output fails the build job, right after compare (D-6658)', () => {
+  it('W26-Y6: a release decision that did not reach compare\'s step output fails the build job, right after compare (D-6658, D-6738)', () => {
     const src = wf();
     const build = jobNamed(workflowJobs(src), 'build');
     const compare = build.steps.findIndex((s) => s.id === 'compare');
@@ -1044,7 +1047,7 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     expect(check, 'a step follows compare').toBeDefined();
     // A `|` block: the line carries `: `, which a plain scalar cannot.
     expect(asWritten(check!)).toEqual({
-      name: 'Fail when the release decision did not reach the job output',
+      name: DECISION_NAME,
       if: DECISION_IF,
       run: `${DECISION_LINE}\n`,
     });
