@@ -589,7 +589,7 @@ describe('NewSessionSheet — success opens the new session', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('a workspace row alive before the create is not the new session', async () => {
+  it('a workspace row, alive before the create or appearing during the wait, is not the new session: it is not a main checkout', async () => {
     vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
     const { store, onClose, flush } = await mount();
     showFrame(store, [NEW_WS_ROW]); // alive BEFORE the create, and not a main checkout
