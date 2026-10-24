@@ -533,7 +533,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     expect(Object.keys(GATES).filter((g) => !used.has(g)), 'a gate no call names').toEqual([]);
   });
 
-  it("stopArgvFor's three call sites each stand below their id gate and the pair-part refusal", () => {
+  it("stopArgvFor's two call sites each stand below their id gate and the pair-part refusal", () => {
     const lines = codeOnly(readFileSync(path.join(srcRoot, 'server.ts'), 'utf8')).split('\n');
     const heads = headsOf(lines);
     const callers = lines.flatMap((l, i) => (/\bstopArgvFor\(/.test(l) && !/\bfunction stopArgvFor\(/.test(l)
@@ -542,14 +542,16 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     expect(callers.map((c) => c.head?.name ?? null)).toEqual([
       'POST /api/sessions/:id/stop',
       'POST /api/sessions/:id/archive',
-      'POST /api/sessions/:id/archive',
     ]);
     // The identity arm, which both routes share: `stopPairRefused` (the `stopPair` row's gate) answers 502 (D-5971) with no argv
     // composed. It vets the row's `.project` and refuses the `.wrapper` fallback, so the wrapper is the vetted id's prefix.
     const IDENTITY_ARM = /if \(identity === null \|\| stopPairRefused\(id, read\.record, identity\)\) \{\s*return refuseRoute\(reply, 'registry-unmeasurable'\);/;
+    // ARCH-36: the archive door asks the same refusal as `admitArchive`'s last gate (`coord/archiveAdmission.ts`), and
+    // its one `stopArgvFor(` stands below the admission's refused arm, so a refused part composes no argv.
+    const ARCHIVE_IDENTITY_ARM = /\bawait admitArchive<[\s\S]*\bpairRefused: \(rec, identity\) => stopPairRefused\(id, rec, identity\),[\s\S]*if \(!admitted\.ok\) return refuseRoute\(reply, admitted\.word\);/;
     const GATES_OF: Readonly<Record<string, readonly (readonly [string, RegExp])[]>> = {
       'POST /api/sessions/:id/stop': [['its id gate', /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/], ['stopPairRefused', IDENTITY_ARM]],
-      'POST /api/sessions/:id/archive': [['its id gate', KNOWN_ID], ['stopPairRefused', IDENTITY_ARM]],
+      'POST /api/sessions/:id/archive': [['its id gate', KNOWN_ID], ['stopPairRefused', ARCHIVE_IDENTITY_ARM]],
     };
     for (const c of callers) {
       const before = lines.slice(c.head!.line, c.line + 1).join('\n');
