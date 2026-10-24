@@ -211,6 +211,10 @@ export const ASK_WORD: Record<AskState, string> = {
   unanswered: 'unanswered',
   answered: 'answered',
 };
+/** The `awaiting` word when the question is on screen right below the transcript (the desk's inline ask surface, D-6326):
+ *  the card says where to look instead of offering a control that would raise what is already up. The same casing as
+ *  `ASK_WORD`'s members, which the state row draws as they are. */
+export const ASK_WORD_BELOW = 'waiting for you, below';
 export const ASK_GLYPH: Record<AskState, string> = {
   awaiting: '❯',
   unanswered: '·',
@@ -247,6 +251,7 @@ function AskCard({
   questions,
   result,
   askPending = false,
+  askBelow = false,
   answerLabel = 'Answer',
   onAnswer,
 }: {
@@ -256,6 +261,10 @@ function AskCard({
    *  derivation source. Both shapes are hosted by the same sheet, so both
    *  make this card answerable. */
   askPending?: boolean;
+  /** D-6326: the answer surface is mounted INLINE, right below the transcript (the desk). The awaiting card then says so
+   *  (`ASK_WORD_BELOW`) and offers no Answer: there is no sheet to raise. A phone, or a desk with no inline card
+   *  mounted, leaves it false and keeps Answer. */
+  askBelow?: boolean;
   /** The control's word: `Answer`, or what the sheet it raises is waiting on (`Submit answers` while the pane is on an
    *  ask's review screen). It still only raises the sheet. */
   answerLabel?: string;
@@ -265,6 +274,7 @@ function AskCard({
   const answers =
     result !== undefined && !result.isError ? askAnswers(result.text, questions) : null;
   const state = askState(result, askPending);
+  const below = state === 'awaiting' && askBelow;
   return (
     <div className="tool-ask">
       {questions.map((question, i) => (
@@ -282,7 +292,7 @@ function AskCard({
       {state !== 'answered' && (
         <p className={`ask-state ${ASK_STATE_CLASS[state]}`}>
           <span className="ask-glyph" aria-hidden="true">{ASK_GLYPH[state]}</span>
-          <span className="ask-word">{ASK_WORD[state]}</span>
+          <span className="ask-word">{below ? ASK_WORD_BELOW : ASK_WORD[state]}</span>
           {/* ONE CONTROL, ONE MEANING: `Answer` does not answer. It raises
               `EnvelopeSheet` — the one hardened answer path (`inject/ask.ts`'s
               `askKey` correspondence, `send.ts`'s settle-before-submit) — and
@@ -294,7 +304,7 @@ function AskCard({
               Rendered only when there is a sheet to raise. A button whose
               handler is absent would do nothing at all, which is worse than
               no button. */}
-          {state === 'awaiting' && onAnswer !== undefined && (
+          {state === 'awaiting' && !below && onAnswer !== undefined && (
             <button
               type="button"
               className={`ask-answer ${FOCUS_RING}`}
@@ -340,19 +350,21 @@ export function ToolCard({
   use,
   result,
   askPending,
+  askBelow,
   answerLabel,
   onAnswer,
 }: {
   use: ToolUseEvent;
   result?: ToolResultEvent;
   askPending?: boolean;
+  askBelow?: boolean;
   answerLabel?: string;
   onAnswer?: () => void;
 }): ReactNode {
   const questions = askOf(use);
   if (questions !== null) {
     return (
-      <AskCard questions={questions} result={result} askPending={askPending} answerLabel={answerLabel} onAnswer={onAnswer} />
+      <AskCard questions={questions} result={result} askPending={askPending} askBelow={askBelow} answerLabel={answerLabel} onAnswer={onAnswer} />
     );
   }
   return <GenericToolCard use={use} result={result} />;

@@ -50,6 +50,7 @@ function ChatItemBody({
   onRetry,
   onDiscard,
   askPending,
+  askBelow,
   answerLabel,
   onAnswer,
 }: {
@@ -59,6 +60,8 @@ function ChatItemBody({
   onRetry?: (key: string) => void;
   onDiscard?: (key: string) => void;
   askPending?: boolean;
+  /** D-6326: an inline ask surface is mounted below the transcript (the desk), so a live ask card points at it. */
+  askBelow?: boolean;
   /** The transcript's Answer control's word (decision `ask-answer-control-says-submit`). */
   answerLabel?: string;
   onAnswer?: () => void;
@@ -70,7 +73,7 @@ function ChatItemBody({
       return <MessageBubble event={item.event} id={id} streaming={item.streaming} />;
     case 'tool':
       return (
-        <ToolCard use={item.use} result={item.result} askPending={askPending} answerLabel={answerLabel} onAnswer={onAnswer} />
+        <ToolCard use={item.use} result={item.result} askPending={askPending} askBelow={askBelow} answerLabel={answerLabel} onAnswer={onAnswer} />
       );
     case 'mail':
       return <MailCard envelope={item.envelope} />;
@@ -151,6 +154,8 @@ export interface ChatListProps {
    *  two sources the ask card's state axis is derived from; the other is the
    *  card's own `tool_result`. */
   askPending?: boolean;
+  /** D-6326: the inline ask surface is mounted (the desk): a live ask card says where it is instead of offering Answer. */
+  askBelow?: boolean;
   /** The transcript's Answer control's word (decision `ask-answer-control-says-submit`). */
   answerLabel?: string;
   /** Raise the answer sheet. The transcript never answers anything itself —
@@ -168,6 +173,7 @@ export function ChatListInner({
   onRetry,
   onDiscard,
   askPending,
+  askBelow,
   answerLabel,
   onAnswer,
 }: ChatListProps): ReactNode {
@@ -183,7 +189,7 @@ export function ChatListInner({
             id={id}
             onRetry={onRetry}
             onDiscard={onDiscard}
-            askPending={askPending} answerLabel={answerLabel}
+            askPending={askPending} askBelow={askBelow} answerLabel={answerLabel}
             onAnswer={onAnswer}
           />
         </div>
@@ -683,6 +689,7 @@ function ChatScroller({
   onRetry,
   onDiscard,
   askPending,
+  askBelow,
   answerLabel,
   onAnswer,
   column,
@@ -779,7 +786,7 @@ function ChatScroller({
                 id={id}
                 onRetry={onRetry}
                 onDiscard={onDiscard}
-                askPending={askPending} answerLabel={answerLabel}
+                askPending={askPending} askBelow={askBelow} answerLabel={answerLabel}
                 onAnswer={onAnswer}
               />
             </MeasuredItem>

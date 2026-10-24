@@ -101,6 +101,19 @@ export const AskAwaiting: Story = {
   },
 };
 
+/** The same ask at the desk, where the answer surface is an inline card right below the transcript (D-6326). CHECK that
+ *  the word reads "waiting for you, below", that `.ask-live` still carries the one live cue, and that there is NO
+ *  `Answer` button: there is no sheet to raise, and a control for what is already on screen would only confuse. */
+export const AskAwaitingBelow: Story = {
+  args: {
+    use: use({ name: 'AskUserQuestion', input: ASK_INPUT }),
+    result: undefined,
+    askPending: true,
+    askBelow: true,
+    onAnswer: () => {},
+  },
+};
+
 /** An ask the session moved past, or died holding. CHECK the word is
  *  "unanswered" and NOT "waiting for you", and that there is no Answer button:
  *  a dead session must not beg forever, and a control whose handler is absent is
