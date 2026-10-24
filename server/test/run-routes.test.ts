@@ -1772,12 +1772,6 @@ describe('POST /api/runs/:id/dispatch', () => {
     // silently discarded error — `run_events.detail` names which of
     // sendPrompt's typed refusals fired.
     expect(w.coord.runEvents(opened.id)).toEqual([
-      // D-6794: no route passed, so the work row is filled in and journaled; this fixture's fleet has no
-      // `route-v1`, so the resumed run's `ccd route` is omitted and says so.
-      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
-        detail: 'route-defaulted:work' },
-      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
-        detail: 'route-omitted:no-route-v1-cap' },
       { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator',
         detail: 'clear-refused:dialog-open' },
       // wave 2, F2: every successful dispatch also records its skill preflight,

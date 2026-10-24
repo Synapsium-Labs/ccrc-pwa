@@ -131,14 +131,16 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
   // so the argv a run sends is byte-for-byte what it was before routing existed. No branch on `run.kind`: a review
   // run's SESSION is routed like any other (only the held-out panel it names is exempt).
   // D-6794: a dispatch that passes NO route (`undefined`) gets its run kind's row from the shared table; a route the
-  // coordinator did pass, even an empty one, is never overridden.
+  // coordinator did pass, even an empty one, is never overridden, and a resumed session (already bound) is left alone:
+  // its record holds wave 1's route, its default or a ladder write, none of which an unrouted wave may undo.
   let routeFields: RouteFields | null = null;
   let routeDefaulted = false;
   if (route !== undefined) {
     const parsed = parseRouteFields(route);
     if (!parsed.ok) return refused({ ok: false, kind: 'bad-request', detail: routeParseDetail(parsed) });
     routeFields = routeFieldsOrNull(parsed.route);
-  } else {
+  } else if (run.sessionId === null) {
+    // Fresh spawn only: a resumed session keeps the route wave 1, its default or the ladder wrote.
     routeFields = routeDefaultFor(run.kind);
     routeDefaulted = routeFields !== null;
   }

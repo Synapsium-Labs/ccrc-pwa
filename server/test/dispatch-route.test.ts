@@ -9,7 +9,7 @@
 // one guarded runner, per `testDeps`'s own wiring), so ORDER between a ccd
 // call and a tmux one is observable from one combined `calls` array.
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -344,11 +344,20 @@ describe('a dispatch with no route gets its run kind\'s row (D-6794)', () => {
     expect(r.events().filter((e) => e.startsWith('route-defaulted'))).toEqual(['route-defaulted:review']);
   });
 
-  it('a resumed wave N>=2 with no route is routed by the verb with the row', async () => {
+  it('a resumed wave N>=2 with no route keeps its session record: no route verb, no journal row', async () => {
     const h = await harness({ wave: 2, sessionId: 'demo-existing-default' });
     expect(await h.dispatch()).toMatchObject({ ok: true });
-    expect(h.calls.find((c) => c[0] === 'route')).toEqual(['route', '--session', 'demo-existing-default',
-      '--set', 'class=opus', '--set', 'effort=high', '--set', 'subagent=sonnet', '--set', 'workflow=off',
-      '--set', 'compact=40', '--actor', `run:${h.runId} dispatch`]);
+    expect(h.calls.filter((c) => c[0] === 'route')).toEqual([]);
+    expect(h.events().filter((e) => e.startsWith('route-defaulted') || e.startsWith('arm:'))).toEqual([]);
+  });
+
+  it('a session escalated by the ladder keeps its escalation after an unrouted wave-2 dispatch', async () => {
+    const h = await harness({ wave: 2, sessionId: 'demo-escalated' });
+    // The ladder's write (`POST /api/runs/:id/route`, `kind: ceiling`) lands in the registry through `ccd route`.
+    const field = path.join(h.deps.cfg.home, '.cc-sessions', 'demo-escalated.class');
+    writeFileSync(field, 'fable');
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    expect(h.calls.filter((c) => c[0] === 'route')).toEqual([]);
+    expect(readFileSync(field, 'utf8')).toBe('fable');
   });
 });
