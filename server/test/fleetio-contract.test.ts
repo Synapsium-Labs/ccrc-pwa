@@ -33,7 +33,7 @@ describe('FleetIO — every member states its failure contract (D-5969)', () => 
     expect(members(fleetIoBody())).toEqual([
       'readFileMeasured', 'readFile', 'readFileFromMeasured', 'readFileFrom', 'readFileFromBytesMeasured',
       'readFileB64Measured', 'readdirMeasured', 'readdir', 'statMeasured', 'stat', 'lstatMeasured', 'realpath',
-      'writeFileB64', 'tailFile',
+      'writeFileB64', 'tailFile', 'statfsMeasured',
     ]);
   });
 

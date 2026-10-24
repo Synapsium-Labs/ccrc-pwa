@@ -17,6 +17,7 @@ import type { FleetHealth, FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
+import { readDiskHealth } from '../../shared/disk.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
@@ -716,4 +717,53 @@ describe('/api/fleet/health: the archived-held block (D-5943)', () => {
       expect(older(body)).toEqual(older(without));
     } finally { await app.close(); }
   });
+});
+
+// D-6615 (fleet disk retention spec §2.5): the optional `disk` block. Absent before the first sweep, never `null`; a
+// present block round-trips through its single reader; nothing else on the route moves.
+describe('/api/fleet/health: the disk block (D-6615)', () => {
+  async function lane(env: Record<string, string> = {}) {
+    const home = mkTmp('ccrc-fh-dk-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home, ...env });
+    const io = {
+      ...localIO,
+      statfsMeasured: async () => ({
+        ok: true as const,
+        measured: {
+          filesystems: [{
+            dev: '1', mount: '/work', fsType: 'ext4', roots: ['home'], sizeBytes: 100, availBytes: 50, freeBytes: 50,
+            files: 100, filesFree: 90, readOnly: false,
+          }],
+          expectedMounts: [], missing: [],
+        },
+      }),
+    };
+    const full = {
+      cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io, queue: new KeyedQueue(),
+      fleetState: { connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null },
+    } as never as Deps;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    const app = await buildServer(full, bus, watcher);
+    const health = async (): Promise<Record<string, unknown>> =>
+      (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+    return { app, watcher, health };
+  }
+
+  for (const [name, env] of [['local', {}], ['remote', { CCRC_FLEET: 'remote' }]] as const) {
+    it(`${name} mode: no \`disk\` key before the first sweep (not null), then the block — and nothing else moves`, async () => {
+      const { app, watcher, health } = await lane(env);
+      try {
+        const before = await health();
+        expect('disk' in before, 'absent, never `null`: absence is UNKNOWN').toBe(false);
+        await watcher.sweepDisk();
+        const after = await health();
+        expect(readDiskHealth(after)?.level).toBe('ok');
+        expect(readDiskHealth(after)?.holders).toEqual([]);
+        const { disk: _block, ...rest } = after;
+        expect(rest).toEqual(before);
+      } finally { await app.close(); }
+    });
+  }
 });

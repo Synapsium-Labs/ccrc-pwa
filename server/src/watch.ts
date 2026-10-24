@@ -68,7 +68,9 @@ import {
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 // The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
 import { randomUUID } from 'node:crypto';
-import type { MeasuredDirectoryRead } from './io.js';
+import type { MeasuredDirectoryRead, MeasuredDisk } from './io.js';
+import { diskVerdict, type DiskVerdict } from './disk.js';
+import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
 import {
   DelegationIngestError, delegationBucketDurabilityOf, delegationBucketUtcHour, ingestAndApplyDelegationBucket, readDelegationBucket,
@@ -248,6 +250,8 @@ const NAME_SWEEP_MS = 10_000;
  *  the name sweep, deliberately: this one touches the filesystem per PROJECT,
  *  not per pane. */
 const DIVERGENCE_SWEEP_MS = 60_000;
+/** The disk alarm's clock (D-6615, spec §2.5): one `statfs` pass a minute. */
+const DISK_SWEEP_MS = 60_000;
 
 /** The child-reclaim lane (child-reclamation wave 4, spec §5.7). The
  *  census's cadence, for the census's reason — a child's eligibility moves on
@@ -1342,6 +1346,11 @@ export class FleetWatcher {
    *  `currentX()` on this class already has, and the route turns it into a
    *  `readiness: null` on the wire rather than omitting the key. */
   private lastReadinessSweep = 0;
+  /** The disk alarm's clock, the decider's memory and the block the route serves (D-6615). `diskBlock` is `null` until
+   *  the first sweep lands: absence on the wire reads as UNKNOWN. */
+  private lastDiskSweep = 0;
+  private diskState: DiskVerdict | null = null;
+  private diskBlock: DiskHealth | null = null;
   private readiness: FleetReadiness | undefined;
   /** The stale set last reported, as JSON — one warn per CHANGING set, the
    *  `lastDivergenceJson` idiom, so a standing stale number is not a log
@@ -2167,6 +2176,12 @@ export class FleetWatcher {
     return this.archivedHeldBlock;
   }
 
+  /** The disk alarm's block as the last sweep held it (D-6615), or `null` before the first sweep: absence on the wire
+   *  reads as UNKNOWN, never as a healthy disk. */
+  disk(): DiskHealth | null {
+    return this.diskBlock;
+  }
+
   /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
   delegationReport() {
     return this.delegationLane().report();
@@ -2463,6 +2478,12 @@ export class FleetWatcher {
       if (this.deps.coord && Date.now() - this.lastInventoryAt >= UPDATE_INVENTORY_MS) {
         void this.dispatchInventorySweep();
       }
+
+      // The disk alarm (D-6615) is gated HERE too, above the registry read's fail-shut return, because it reads no
+      // registry: a full disk is exactly when the registry read fails, and the one alarm must still sound. NEVER
+      // awaited: a `statfs` of a stalled volume is what hangs (the agent bounds each root, the link bounds the request),
+      // and the dialog detector must not wait behind it. Own clock (`DISK_SWEEP_MS`).
+      void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
 
       // The server-caps beat (D-5232's mechanism, Task 9b) sits BESIDE the inventory lane, never inside it: that lane
       // is `coord`-gated, and a coord-less server must still keep its fleet's file current. Above the registry's
@@ -7074,6 +7095,47 @@ export class FleetWatcher {
       if (scan === null) continue;      // no global D-ref anywhere: nothing to seed, fail shut
       store.raiseLedgerFloor(project, scan.floor, scan.evidence, now);
     }
+  }
+
+  /**
+   * The disk alarm (D-6615, spec §2.5): ask the fleet io what the work filesystems read, fold it through the pure
+   * decider (`diskVerdict`: the larger of bytes and inodes, hysteresis, a two-measurement debounce) and hold the block
+   * `GET /api/fleet/health` serves. A read that could not be taken (an older agent, a fault on the link) leaves the
+   * decider's memory alone and marks the block `unmeasured`, never `ok`: it keeps a known `warn` or `critical`, so the
+   * one alarm does not go dark exactly when a full box stalls. `holders` stays empty until the holder census fills it.
+   *
+   * PUBLIC for the reason `sweepReadiness` is: `tick()` dispatches it with `void`, so a test that awaits `tick()` has
+   * not awaited this.
+   */
+  async sweepDisk(): Promise<void> {
+    const now = Date.now();
+    if (this.lastDiskSweep !== 0 && now - this.lastDiskSweep < DISK_SWEEP_MS) return;
+    this.lastDiskSweep = now;
+    let read: MeasuredDisk;
+    try { read = await this.deps.io.statfsMeasured(); } catch { read = { ok: false, reason: 'unreadable' }; }
+    const held = this.diskBlock;
+    if (!read.ok) {
+      const standing = held !== null && (held.level === 'warn' || held.level === 'critical');
+      this.diskBlock = {
+        at: held?.at ?? now,
+        level: standing ? held.level : 'unmeasured',
+        filesystems: held?.filesystems ?? [],
+        expectedMounts: held?.expectedMounts ?? [],
+        pressure: held?.pressure ?? false,
+        holders: [],
+      };
+      return;
+    }
+    const verdict = diskVerdict(this.diskState, read.measured, now);
+    this.diskState = verdict;
+    this.diskBlock = {
+      at: verdict.at,
+      level: verdict.level,
+      filesystems: verdict.filesystems.map(({ pending: _pending, ...fs }) => fs),
+      expectedMounts: verdict.expectedMounts,
+      pressure: verdict.level === 'critical',
+      holders: [],
+    };
   }
 
   /**
