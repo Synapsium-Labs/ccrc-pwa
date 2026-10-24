@@ -20,10 +20,10 @@ pressed in the console") and the slow first open of a new session. One task is o
 |---|---|---|---|---|
 | 1 | T1a (D-6324) | server: the structured ask outlives the 30-minute cut while its menu is up | #1133 | **merged** `2978d46ef`; run 782 closed (R31, R47) |
 | 2 | T1b (D-6325) | the ask is Claude's own question: who asks, plain words, Recommended tag, Other, one scroller, no pane text | #1150 | **merged** `30f9bdc9f`; run 783 closed (R45, R58) |
-| 3 | T1c (D-6326) | the ask answered inline in the pane at ≥900; a phone keeps the sheet | #1313 | working, run 911; R49 carry and one prerequisite merge authorized (R55, R56) |
+| 3 | T1c (D-6326) | the ask answered inline in the pane at ≥900; a phone keeps the sheet | #1313 | working, run 911; R69 fixes existing R64 continuity, raise and reset requirements; review 932 closed, not approval |
 | 4 | T2a (D-6327) | the update banner becomes one quiet line, dismissible until a newer release | #1164 | **merged** `24551a5b6`; run 831 closed (R41, R47) |
 | 5 | T2b (D-6328) | no floating `+` at the desk in Instrument | — | planned, after #1116 |
-| 6 | T2c (D-6329) | the desk's lanes row in both skins: full 5h/7d cards with resets, most free first, each a door to its lane; never an empty bar | — | planned, run 802; rewrite brief for R48, then fresh claim check |
+| 6 | T2c (D-6329) | the desk's lanes row in both skins: full 5h/7d cards with resets, most free first, each a door to its lane; never an empty bar | — | dispatched, run 802; R48 brief and scoped overlap consents supplied |
 | 7 | T2d (D-6330) | Inbox and Runs counts show only what waits on the operator | — | planned, after Step 1 and #1116 |
 | 8 | T2e (D-6335) | Instrument's desk: no empty column, no second head in the list column, dense rows | #1153 | **merged** `fd15dd7e0` (R32, R47) |
 | 18 | T2f (D-6371) | Instrument's desk column: no runs row, the chooser in project mode (Q5); its count line is T2g's (R28) | — | planned, after T2d and T2g |
@@ -35,26 +35,26 @@ pressed in the console") and the slow first open of a new session. One task is o
 | 14 | B2 (D-6367) | Retry resumes our own text | #1214 | **merged** `5a4ab3aef`; run 869 closed (R49, R58) |
 | 15 | B3 (D-6368) | the drawer follows its pty; a phone's Return is Enter | #1216 | **merged** `7d3ab55e7`; run 785 closed (R50, R58) |
 | 16 | B4 (D-6369) | the transcript search runs in parallel | #1136 | **merged** `0c45d7c57`; run 786 closed |
-| 17 | B5 (D-6370) | New session opens at once (the unprompted line dropped, R39) | #1227 | working, fix round 2 after review 913; F8 blocks landing (R52, R53, R59) |
+| 17 | B5 (D-6370) | New session opens at once (the unprompted line dropped, R39) | #1227 | awaiting review/landing fences, run 875; R62 says wait, F8 blocks landing and one wording carry remains |
 | 19 | S5 (W2, D-5471; D-6443) | Refined's phone header and FAB, landed by a superseding PR for the unowned #1116 | #1139 | **merged** `f0e873c5d`; run 787 closed; #1116 closed |
 | 20 | S18 (W2, D-5479; D-6389) | Instrument on a desk and Refined on a phone by default, brought forward | #1158 | **merged** `c0841a9f3` (R30, R47) |
 | 21 | T3e (D-6385) | the right-side inspector hides and shows, per device | — | planned, after T3c, T3d, T2e and #1116 |
-| 22 | T3f (D-6386) | Done above Working when grouped by status | — | planned, run 800; dispatch waits for a daily-cap slot |
+| 22 | T3f (D-6386) | Done above Working when grouped by status | #1332 | **merged** `ced97130b`; run 800 done and released (R66) |
 | 23 | T4a (D-6387) | colour where the machine speaks: tool boxes, inline code, failed calls | — | planned, after T1c |
-| 24 | C1 (D-6388) | registry reads bounded | #1217 | **merging**: refreshed head queued after review 912 (R54) |
+| 24 | C1 (D-6388) | registry reads bounded | #1217 | working, run 803; R70 authorizes one new measured map-conflict sync and evidence corrections; new review required |
 | 25 | C0 | the console's responsiveness, measured (research, no PR) | — | **done** (R11): its report became C2 to C10 (R14) |
 | 26 | C2 (D-6434) | the commands and PR routes read one row; the commands route reads a bounded tail | #1210 | **merged** `bea722cdf` (R40, R47) |
 | 27 | C3 (D-6435) | the watcher's tick reads the registry once and captures with bounded concurrency | — | planned, after C1 |
 | 28 | C4 (D-6436) | /api/projects from the watcher's fresh listing; a cached walk | — | planned, after C1 |
-| 29 | C5 (D-6437) | a wheel over a code block scrolls the transcript | — | planned, run 821; prerequisites merged, reconstruct brief and check claims |
-| 30 | C6 (D-6438) | the fleet store keeps unchanged rows; the shell subscribes narrowly | — | planned, run 822; prerequisites merged, reconstruct brief and check claims |
+| 29 | C5 (D-6437) | a wheel over a code block scrolls the transcript | #1339 | working, run 821; R68 investigates all three mono boxes, old pre-only handoff superseded |
+| 30 | C6 (D-6438) | the fleet store keeps unchanged rows; the shell subscribes narrowly | — | dispatched, run 822; scoped T1c consent supplied; T2c's shared app test is run-only |
 | 31 | C7 (D-6439) | the chat's rows memoised; markdown and highlighting cached | — | planned, after C6, C8 and T1c |
 | 32 | C8 (D-6440) | one accounts poll; an equal answer keeps the previous value | — | planned, after C6 |
 | 33 | C9 (D-6441) | the fleet list memoised; its clock a leaf | — | planned, after C6 and C8 |
 | 34 | C10 (D-6442) | the Runs board folds its finished runs | #1197 | **merged** `7a3104abd`; run 823 closed (R44, R58) |
 | 35 | S5a (D-6466) | a phone shows the full accounts strip again, under S5's header | #1151 | **merged** `7ebdff20c` (v0.0.574); run 814 closed |
 | 36 | S5b (D-6530) | the strip's fold at every width: four lanes on a phone, one row at the desk; "+n more" counts the hidden lanes that need the operator | — | planned, after T2c (R22, R48) |
-| 37 | T5a (D-6714) | the top search finds sessions by name, workspace, branch, project and a coordinator's programme, after the commands, coordinators first on an equal match | #1316 | working, run 908; CI after census correction, not a handoff (R58) |
+| 37 | T5a (D-6714) | the top search finds sessions by title and name, workspace, branch, project and a coordinator's programme, after the commands, coordinators first on an equal match | #1316 | reviewed implementation accepted at `e9c38fa05`; run 908 awaits PR-body evidence correction before queueing (R71) |
 | 38 | T2g (D-6715) | Instrument's desk column draws no count line; the status bar's count is the one | #1225 | **merged** `0b717eb08`; run 877 closed (R51, R58) |
 
 ## Decisions & deviations
@@ -448,6 +448,107 @@ pressed in the console") and the slow first open of a new session. One task is o
   reviewer used a fixed process cap, so the next mutation evidence must record the measured thread count plus 1500,
   not claim that a fixed bound proved the required procedure. Run 875 is working; fix-round mail sent. The separate
   read-only check of this ledger batch through R58 returned no additional finding; this entry records the later report.
+- **R60 (2026-10-24)**, C1 left the queue at reviewed head `60bd4a863`. The coordinator measured an OPEN,
+  conflicting PR and a fresh architecture-map-only merge conflict, independently of the unmeasured queue-CI
+  cause. One fresh main merge was authorized, retaining both map additions and no runtime semantic change.
+  An ejection cause or landing-line base was not invented. The resulting head required a fresh whole-branch review.
+- **R61 (2026-10-24)**, T5a review 915 closed before the fix round. The one-home guard had to cover
+  `sessionEntries.ts`, with separate literal group/label mutants and accurate red-first/type-prerequisite evidence.
+  Some spec refuters used stale worker-tree docs, so their votes were not authority-conformance approval. Every
+  participant in the next review received immutable pinned authority by absolute path. The name/title ambiguity
+  was then an operator hold; R64 later resolved it. No speculative main absorb or history rewrite was authorized.
+- **R62 (2026-10-24)**, B5 review 916 at `6b1355a1f` closed with no new runtime finding; the R59 guards,
+  targeted suites and fresh render evidence reproduced. Its remaining minor test comment overstates row
+  replacement: correct wording only in the NEXT authorized fix round. F8 remains deferred NOT DONE and blocks
+  landing; no B5 main sync is authorized. The worker was told to wait without pushing, not to manufacture a new
+  handoff. The C1/B5 second-lander fence is unchanged.
+- **R63 (2026-10-24)**, T1c review 917 at `8ec14a959` closed before send-back. It found lost keyboard
+  continuity and replacement focus theft, plus missing dismissal/raise/geometry/disabled-Deny pins and evidence
+  inaccuracies. Only independent test/comment/evidence fixes were authorized initially; continuation focus,
+  a desktop raise action and the shortcut-file expansion went to the operator. The existing mounted-card Send
+  rule already included the no-menu approval. R64 resolves the three product/scope holds, not the old defects
+  by waiver. Twelve saved screenshots were SIX before/after pairs, not twelve pairs; old-head renders are not
+  proof of a later runtime.
+- **R64 (2026-10-24)**, the operator explicitly selected **Continue Same Ask**, **Add Action**,
+  **Fix In T1c** and **Search Both**. T1c keeps deliberately engaged keyboard control through question/question,
+  question/review and review/back within the SAME logical ask; different ask, replacement or clear releases it,
+  even in a batched replacement. No auto-focus on arrival or reclaim of deliberate external focus. A non-form
+  **Go to question** action calls the existing raise, with no duplicate answer form; phone Answer stays. Extend
+  ONLY the existing `useShortcuts.ts` focused-card guard, plus new `ask-shortcuts.test.tsx`; no T5a shared-test
+  edit consent. T5a searches both shown custom title AND underlying name, display/scoring/order/roles/other terms
+  unchanged. These are actual operator decisions, no longer pending questions. The T1c scope amendments are
+  D-6849 to D-6851; the search term correction stays under D-6714.
+- **R65 (2026-10-24)**, C1 review 918 at `a6dce68df` found no new code defect, but required exact caller-path
+  provenance or withdrawal of the unsupported caller-count claim. A NEW fresh merge probe against `c7a0a58a2`
+  returned rc 1, tree `540852793fccb68dd2cd843730b8c4f32ef213d7`, solely the architecture map. One new main
+  merge was authorized, preserving every main map entry and adding `bounded.ts`; no repeated sync permission.
+  The original unretained search and inferred batching stay historical, not recovered by later green runs.
+  Missing public R60 publication was the coordinator's debt; the durable fix-round authority was not silently
+  replaced by stale worker docs. The resulting `cd9894edf` went to new review 933.
+- **R66 (2026-10-24)**, T3f review 921 accepted the four-file change at `db3e5e58b`, with all three current
+  mutants reproduced and fresh phone/desktop render evidence. The old-order workbench story and rollup-word-order
+  comment are unowned follow-up candidates, not implementation grants. #1332 entered the native queue frozen,
+  then actually MERGED at that original reviewed head at 17:29Z as `ced97130beb807b6ef60e959b7ab114029ea7356`.
+  Run 800's final close was accepted and the done/released row verified. The server owns child cleanup;
+  this coordinator performed none. This source merge is not deployment proof.
+- **R67 (2026-10-24)**, T5a review 923 at `e910525eb` required the existing one-home guard to pin BOTH
+  import module and binding for the builder and details reader, with two independently red second-owner mutants.
+  R64's hidden-name term became required red-first work, with title control and public top/page navigation.
+  Correct evidence, not history: some alleged red-first cases were already green; the detach wait is equivalent
+  but changed; R41 is three items in three commits. Make the Chrome old-restore failure a named focus assertion,
+  not just a wait timeout. Blank-filter deletion is equivalent through the public trimmed-query seam; null
+  mutants still red. Reviewed necessary search departures are D-6845 to D-6848. A new whole-branch review,
+  not old approval, was required. The panel finished before R64 arrived and did not pretend to have reviewed it.
+- **R68 (2026-10-24)**, the operator explicitly chose **All Three Mono Boxes**. C5 investigates
+  `.msg-assist pre`, `WELL` and `.tool-ask-a`, measuring fractional ranges and first-wheel behaviour per box;
+  local whole-pixel line-height corrections are permitted ONLY where reproduced. No blind 20 px assignment,
+  global font change or JS wheel controller. Each changed box needs red-first reproduction, its OWN guard
+  mutant, fresh appearance-delta renders and outside-transcript Well regressions. A non-reproducing box is
+  measured no-fix-needed. The old pre-only handoff is superseded, not accepted. D-6852 records this scope.
+  Preserve the killed first full-run attempt as no-result, separately from the first completed full green;
+  do not run a second full local PWA suite to reset the signal.
+- **R69 (2026-10-24)**, T1c review 932 at `bd0745325` closed before the fix round. R64 already requires
+  aged transcript-copy ask continuity, visible first-option focus after Go to question, and release after a
+  byte-identical clear/re-ask in one batch. Fix those measured defects through the existing logical-identity,
+  engagement and raise owners, not fresh product questions. Add the fixture-7 Send pin and correct Composer's
+  false server-predicate comments; pin actual card/composer node identity, not geometry alone. Report the
+  position guard's independent observability honestly; investigate the disabled/in-flight raise in Chrome,
+  never invent a defect from inconclusive jsdom. Correct PR/history disclosures without rewriting history.
+  The 21-agent panel used ONE minor refuter despite the brief requiring THREE per finding: its coverage is
+  incomplete as requested, not approval. Every finding in the next whole-branch panel gets three refuters.
+- **R70 (2026-10-24)**, C1 review 933 at `cd9894edf` found no important or runtime defect, but its
+  11-agent panel again used ONE minor refuter, not the required THREE. No acceptance is inferred. Evidence-only
+  A1 correction is sufficient: the release-outside-finally mutant's named limiter case times out; credit the
+  necessary `mapBounded` rejection ASSERTION at `bounded-pool.test.ts:148` separately. A2's serial comparison pins
+  concurrency independence, not old-base equivalence; the edge golden is committed and the 80-row identity is
+  measured. A3's later characterization strengthening is not pre-move history. A fresh OPEN/conflicting PR and
+  merge probe against `9c04c0d38` returned rc 1, tree `1def7514d953f0e21480d345ea8785d6db6b53f3`, solely the
+  architecture map. EXACTLY ONE NEW fresh main merge is authorized, retaining every main map entry and adding
+  `bounded.ts` after `shutdownseal.ts`; expanded conflicts stop for a ruling. New suites/mutants/CI and a new
+  whole-branch review are owed. No B5 absorb or waiver of the second-lander fence. macOS probe failure is
+  advisory, not all CI green and not a rerun/wait requirement.
+- **R71 (2026-10-24)**, T5a review 934 at `e9c38fa05` is complete: three Opus/high lenses and THREE
+  Sonnet/high refuters for every finding, 39 agents, no deaths/unverified/unexamined participant, no confirmed
+  defect, three minor advisories and nine refutations. The implementation is ACCEPTED at that frozen head,
+  not merged. The mixed command/session order is pinned in registry and jsdom and measured in Chrome; a project
+  query matching no command does not itself pin browser precedence. A committed mixed-query Chrome guard is a
+  non-blocking follow-up candidate, not a new worker edit grant. Existing commit-message disclosures suffice.
+  Before queueing, correct PR BODY ONLY: carried red/shallow signal, local full green versus initial CI census
+  red/fix, later session-hook failed-jobs-only green rerun, historical browser 16 versus current 20 cases.
+  All 40 current mutation rows were executed, with intentional equivalent/comment survivors; G1, N1 and M19
+  named reds reproduce. Fresh 120 after views/192 records cover five queries in 24 cells; 72 before views for
+  the original three queries are reused and labelled. Required CI at that head is terminal successful,
+  including explicit `test (server)`; selected PR CI is not full-server proof. Run 908 stays awaiting-review
+  until the body correction is verified; the coordinator alone queues it. R61/R64/R67 mail-only authority is
+  now recorded here, not retroactively pretended to have been in the old pinned ref.
+- **Dispatch and overlap state (2026-10-24).** T2c run 802 is dispatched with the R48 full-card brief.
+  Exact holder consents cover only its TopBar header/return, the README update-line paragraph, the first-run
+  accounts-door assertion and FleetTable's stepper extraction; preserve search imports, malformed-project
+  cases and T3f's phone-tab order. C5 run 821 is working on R68. C6 run 822 is dispatched after fresh ALL-claims
+  checking, with T1c consent ONLY for SessionScreen's fleet subscription/parent lookup and new store snapshot
+  identity/throttle cases; preserve all ask/raise wiring and R49 Retry cases. T2c's `app.test.tsx` is run-only,
+  not consented for C6 edits. No consent is inferred from line-disjointness. A queued brief is not proof of
+  worker acknowledgment; missing spawn state is unrecorded, not readiness. Live children are never redispatched.
 - **Open with the operator:** Q2 to Q9 in the plan's §Operator questions (Q1 and Q10 to Q14 are ruled), each with a recommended
   default the tasks build until ruled; and R39's question, whether an unprompted signal (`turnAt` null with a fresh
   generation) becomes a task of its own.
@@ -484,24 +585,27 @@ pressed in the console") and the slow first open of a new session. One task is o
 
 ## Next-wave brief
 
-On the next genuine mail wake, process and acknowledge incoming work first. Review 913 is closed and B5 is working
-on R59's fix round 2; its next verified handoff gets a new review run, never a reuse of 913. B5 F8 and the C1/B5
-second-lander limiter proof still block its landing. T1c is working under R56 and owes the R49 carry, targeted
-post-merge gates and a fresh verified handoff; T5a is working and awaits CI before its handoff. Every new verified
-handoff gets a fresh review run and the fixed held-out panel. Step 1 is reported complete only after T1c also merges,
-with before/after phone and desktop screenshots, never from the worker's status.
+On the next genuine mail wake, acknowledge and process incoming work first. T5a's implementation is accepted
+at `e9c38fa05` under R71, but queueing waits for its PR-body-only evidence correction and a fresh unchanged-head,
+required-CI and changes-requested check. Do not push the reviewed branch. T1c works on R69, C1 on R70's ONE new
+measured-conflict map union, and C5 on R68's all-three-box scope; each NEW verified handoff gets a NEW whole-branch
+review with three refuters for EVERY finding. Reviews 932 and 933 are closed but not complete requested panels.
+B5 remains waiting under R62: F8 is deferred NOT DONE and its wording carry is owed on the next authorized fix
+round. The C1/B5 second-lander proof remains blocking for the second lander.
 
-As caps and fresh path claims allow, reconstruct and dispatch C6 (822, carrying R37 F4 and R44), C5 (821) and T3f
-(800, a fresh unused workspace slug); T1b is merged. T2c (802) needs a rewritten R48 brief before dispatch: no compact
-bar meters, full cards in a row under both bars, per-lane navigation and one shared reading/order/stepper owner.
-It carries R18 and R41; S5b supplies the shared fold only after T2c. Do not reuse an older compact-gauge brief.
-When C1 has merged: C3 (R33 F9, R40 and R46) and C4. C8 after C6; C9 after C6 and C8; C7 after C6, C8 and T1c.
-T2b and T2d land only after Step 1, and T2f after T2d and T2g, with R51, each after its hunks are re-measured on main;
-T3a to T3d after Step 2, T3e after T3c and T3d, T4a after T1c. B3's R50 follow-ups still need an owner.
+T2c (802) and C6 (822) are already dispatched: never redispatch a live worker. Preserve the exact overlap
+consents recorded above; C6 may not edit T2c's shared app test without new hunk-scoped consent. T3f is merged and
+run 800 is done. S5b follows T2c. When C1 merges, dispatch C3 with its R33/R40/R46 carries and C4. C8 follows C6;
+C9 follows C6 and C8; C7 follows C6, C8 and T1c. T2b and T2d land only after Step 1; T2f follows T2d and T2g with
+R51. T3a to T3d follow Step 2, T3e follows T3c and T3d, and T4a follows T1c. Unowned B3/T3f/T5a follow-up candidates
+are not implied implementation assignments.
 
-The actual last cap refusal is 64/64, not proof of the chosen 96. Dispatch once on a wake and stop on a refusal;
-no polling dispatcher. Keep queued branches frozen, land through the native queue, and close a producer only after
-MERGED at its reviewed PR head. Never change another workspace or repository protection settings.
+Step 1 is reported complete only after T1a, T1b AND T1c actually merge, with before/after phone and desktop
+screenshots, never from a handoff, review or queue entry. No source merge proves deployment. The last explicit
+cap refusal was 64/64; later dispatch success does not prove the operator's selected 96 active. Make at most
+one actual dispatch attempt per genuine mail wake and stop after it or a cap refusal; no polling dispatcher.
+Keep queued branches frozen, use the native queue, and close work only after MERGED at its reviewed original
+head. Never change another workspace or repository protection settings.
 Each brief names the plan path, its task, the number it defines, the execution skill
 (superpowers:subagent-driven-development with superpowers:test-driven-development), the routing row (a worker on a
 spec'd plan), and the branch rule: commit on this workspace's own branch, never a separate feature branch.
