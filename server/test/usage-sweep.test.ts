@@ -1,6 +1,6 @@
 // server/test/usage-sweep.test.ts
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -266,9 +266,9 @@ describe('ccd-usage-sweep.py', () => {
 
   // --- D-6799: per-run token attribution, the sweep's half ---
 
-  it('groups the deduplicated usage by registry session id, summing every transcript uuid that maps to it (D-6799)', () => {
+  it('groups the deduplicated usage by registry session id across the live rows (D-6799)', () => {
     const f = fixture();
-    // a second transcript uuid for the SAME registry session (a swap rebinds the uuid): it must add in, not replace
+    // two registry sessions, one transcript uuid each
     writeFileSync(path.join(f.home, '.cc-sessions', 'demo-live.uuid'), 'sess-1\n');
     writeFileSync(path.join(f.home, '.cc-sessions', 'demo-other.uuid'), 'sess-2');
     const s = runSweep(f);
@@ -287,5 +287,32 @@ describe('ccd-usage-sweep.py', () => {
     const per = s['perCcdSession'] as Record<string, Record<string, unknown>>;
     expect(Object.keys(per)).toEqual(['demo-live']);
     expect(s['perCcdSessionUnmapped']).toMatchObject({ records: 1, sessions: 1 });
+  });
+
+  it('sums every uuid a registry session has had: a rotated uuid still counts for its session (D-6799)', () => {
+    const f = fixture();
+    const reg = path.join(f.home, '.cc-sessions');
+    // sweep 1: demo-live is on sess-1
+    runSweep(f);
+    // the row then rotates to sess-2 (a fork hop): the registry now names ONLY sess-2
+    writeFileSync(path.join(reg, 'demo-live.uuid'), 'sess-2');
+    const s = runSweep(f);
+    const per = s['perCcdSession'] as Record<string, Record<string, unknown>>;
+    // sess-1 (3 records) + sess-2 (1 record), both under the one registry session
+    expect(per['demo-live']).toMatchObject({ n: 4 });
+    expect(s['perCcdSessionUnmapped']).toMatchObject({ records: 0, sessions: 0 });
+  });
+
+  it('a uuid whose registry row was removed stays attributed to it, and a bad ledger is rebuilt (D-6799)', () => {
+    const f = fixture();
+    const reg = path.join(f.home, '.cc-sessions');
+    runSweep(f);
+    rmSync(path.join(reg, 'demo-live.uuid'));   // ws-rm after the run finished
+    let s = runSweep(f);
+    expect((s['perCcdSession'] as Record<string, Record<string, unknown>>)['demo-live']).toMatchObject({ n: 3 });
+    writeFileSync(path.join(f.home, 'sweep.json.uuids.json'), '{not json');
+    s = runSweep(f);   // history lost: those records fall back to unmapped, never to a wrong session
+    expect(s['perCcdSession']).toEqual({});
+    expect(s['perCcdSessionUnmapped']).toMatchObject({ records: 4 });
   });
 });

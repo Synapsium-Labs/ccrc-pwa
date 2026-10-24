@@ -37,6 +37,12 @@ describe('boundSessionsOf', () => {
     expect(boundSessionsOf('s-3', [ev('session-rebound: s-1 -> s-2, 0 re-issued'), ev(null), ev('other'),
       ev('session-rebound: s-2 -> s-3, 2 re-issued')])).toEqual(['s-1', 's-2', 's-3']);
   });
+  it('a session the workspace-spent path unbound still counts, beside the fresh one bound after it', () => {
+    const ev = (detail: string | null) => ({ detail });
+    expect(boundSessionsOf('demo-w2', [ev('session-unbound: demo-w1 (workspace-spent #42)')])).toEqual(['demo-w1', 'demo-w2']);
+    // unbound and not yet re-bound: the run still has a past, so the server must not call it "no-session"
+    expect(boundSessionsOf(null, [ev('session-unbound: demo-w1 (workspace-spent #42)')])).toEqual(['demo-w1']);
+  });
   it('no session, no rebound: nothing; a lone session: itself', () => {
     expect(boundSessionsOf(null, [])).toEqual([]);
     expect(boundSessionsOf('s-1', [])).toEqual(['s-1']);

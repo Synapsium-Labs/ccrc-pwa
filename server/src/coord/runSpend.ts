@@ -7,17 +7,28 @@ import type { SessionSpendRead } from '../shares.js';
  *  re-issued` when a run's worker changes (the one writer of that detail). */
 const REBOUND = /^session-rebound: (\S+) -> (\S+), \d+ re-issued$/;
 
-/** Every session this run has had bound: the predecessors its rebound events
- *  name, in order, then the current one, each once. A session bound to a second
- *  run (a worker reused across waves) is counted in each run it served — the
- *  sweep groups by session, not by run, so the figure is the spend of the run's
- *  sessions, an upper bound on the run's own. */
+/** The workspace-spent path (`dispatch.ts` calling `store.clearSession`) nulls the
+ *  run's session and journals `session-unbound: <id> (workspace-spent #<pr>)`; the
+ *  next dispatch binds a fresh session with no predecessor, so no rebound event
+ *  follows. The unbound id is the only trace that session ever served this run. */
+const UNBOUND = /^session-unbound: (\S+) \(/;
+
+/** Every session this run has had bound: those its rebound and unbound events
+ *  name, in journal order, then the current one, each once. A session bound to a
+ *  second run (a worker reused across waves) is counted in each run it served —
+ *  the sweep groups by session, not by run — so the figure can OVER-count a run
+ *  whose worker was reused. It can also UNDER-count: see the sweep's own note on
+ *  which uuids it can attribute. It is a measurement of the sessions' spend, not
+ *  an exact per-run figure. */
 export function boundSessionsOf(current: string | null, events: readonly { detail: string | null }[]): string[] {
   const out: string[] = [];
   const push = (id: string): void => { if (!out.includes(id)) out.push(id); };
   for (const e of events) {
-    const m = e.detail === null ? null : REBOUND.exec(e.detail);
-    if (m !== null) { push(m[1]!); push(m[2]!); }
+    if (e.detail === null) continue;
+    const m = REBOUND.exec(e.detail);
+    if (m !== null) { push(m[1]!); push(m[2]!); continue; }
+    const u = UNBOUND.exec(e.detail);
+    if (u !== null) push(u[1]!);
   }
   if (current !== null) push(current);
   return out;

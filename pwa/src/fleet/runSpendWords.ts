@@ -39,7 +39,9 @@ export function runSpendLine(spend: RunSpend | undefined): RunSpendWords | null 
     measured: true,
     short: `≈ $${spend.proxyUsd.toFixed(2)} · out ${compactCount(t.output)}`,
     long: `in ${compactCount(t.input)} · cache r ${compactCount(t.cacheRead)} w ${compactCount(t.cacheWrite)}`,
-    title: `what this run's sessions have spent, from the usage sweep pass finished ${spend.measuredAt}. ` +
+    title: `what this run's sessions have spent in the usage sweep's 7-day window, from the pass finished ${spend.measuredAt}. ` +
+      'Partial: a session\'s earlier transcripts count only if the sweep saw their uuid while its row named it, ' +
+      'and a worker reused across runs is counted in each. ' +
       'The dollar figure is an API-rate-card proxy, not an invoice; it measures, it is no budget.',
   };
 }

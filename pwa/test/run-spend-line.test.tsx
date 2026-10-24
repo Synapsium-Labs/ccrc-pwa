@@ -28,6 +28,8 @@ describe('runSpendLine', () => {
     expect(l.long).toBe('in 1.2k · cache r 4.5M w 300k');
     expect(l.title).toContain('proxy');
     expect(l.title).toContain('not an invoice');
+    expect(l.title).toContain('7-day window');
+    expect(l.title).toContain('Partial');
     expect(l.title).toContain('2026-10-24T12:00:00Z');
   });
   it('unmeasured says so, with the reason in words, and is never a zero', () => {
@@ -66,12 +68,16 @@ describe('the run row\'s spend line', () => {
     expect(el.getAttribute('data-measured')).toBe('true');
     expect(screen.getAllByTestId('run-spend')).toHaveLength(1);
   });
-  it('a run with no session is not asked about; a failed read says unreadable, not nothing', async () => {
-    const load = vi.fn().mockResolvedValue(MEASURED);
+  it('a run with no session bound NOW is still asked about: the server alone judges "no-session"', async () => {
+    const load = vi.fn().mockResolvedValue(MEASURED);   // an unbound run that once had a worker
     mount(run({ sessionId: null, state: 'planned' }), load);
-    expect(screen.getByTestId('run-spend').getAttribute('data-measured')).toBe('false');
-    expect(load).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByTestId('run-spend').getAttribute('data-measured')).toBe('true'));
+    expect(load).toHaveBeenCalledWith(3);
     cleanup();
+    mount(run({ sessionId: null }), vi.fn().mockResolvedValue({ measured: false, reason: 'no-session' }));
+    await waitFor(() => expect(screen.getByTestId('run-spend').getAttribute('data-measured')).toBe('false'));
+  });
+  it('a failed read says unreadable, not nothing', async () => {
     mount(run(), vi.fn().mockRejectedValue(new Error('boom')));
     await waitFor(() => expect(screen.getByTestId('run-spend').textContent).toContain('not measured'));
   });

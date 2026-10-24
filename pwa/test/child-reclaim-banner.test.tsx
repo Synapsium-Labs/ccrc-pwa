@@ -38,6 +38,8 @@ const item = (over: Partial<Extract<ChildReclaimAttention, { kind: 'terminal' }>
 });
 
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
+/** A held spend read: the board's default would send GET /api/runs/:id through the global fetch. */
+const NO_SPEND = (): Promise<import('../../shared/api').RunSpend> => new Promise(() => {});
 
 const seen = (store: FleetStore, c: CoordStatus | unknown): void => {
   act(() => { store.setState({ coord: c as CoordStatus, coordFrameSeen: true }); });
@@ -298,7 +300,7 @@ describe('the reclaim row', () => {
   it('mounts on /runs, after the pause banner, and nowhere else', () => {
     const store = makeStore();
     seen(store, coord());
-    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     const order = [...container.querySelectorAll('.coord-banner, .child-reclaim-banner')];
     expect(order).toEqual([container.querySelector('.coord-banner'), container.querySelector('.child-reclaim-banner')]);
     cleanup();
