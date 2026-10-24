@@ -6447,6 +6447,24 @@ export interface ChildReclaimStatus {
   readonly at: number | null;
 }
 
+/**
+ * What a run's bound sessions have spent, from the usage sweep (D-6799). A
+ * MEASUREMENT, never a budget: no route refuses on it. `proxyUsd` is the sweep's
+ * API-rate-card proxy over its PRICED classes (an unpriced class adds tokens and
+ * no dollars), so it ranks work and is never an invoice. `measuredAt` is the
+ * sweep pass's own `finishedAt`, so a reader can age the figure.
+ *
+ * Two answers, never one: `measured: false` says WHY nothing could be added up
+ * (no session bound yet, no sweep file, an unreadable or malformed one, or a
+ * sweep that has not yet seen any of the run's sessions), and is never folded
+ * into `measured: true` with zero tokens.
+ */
+export type RunSpendUnmeasuredReason = 'no-session' | 'no-sweep' | 'unreadable' | 'malformed' | 'not-swept';
+export interface RunSpendTokens { input: number; cacheWrite: number; cacheRead: number; output: number }
+export type RunSpend =
+  | { measured: true; tokens: RunSpendTokens; proxyUsd: number; measuredAt: string }
+  | { measured: false; reason: RunSpendUnmeasuredReason };
+
 export interface RunSummary {
   id: number;
   program: string;              // slug

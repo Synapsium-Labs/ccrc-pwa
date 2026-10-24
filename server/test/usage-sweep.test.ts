@@ -263,4 +263,29 @@ describe('ccd-usage-sweep.py', () => {
     const s = runSweep({ home, dirs: { [a]: 'claude' } });
     expect(s['scan']).toMatchObject({ parseErrors: 1, records: 1 });
   });
+
+  // --- D-6799: per-run token attribution, the sweep's half ---
+
+  it('groups the deduplicated usage by registry session id, summing every transcript uuid that maps to it (D-6799)', () => {
+    const f = fixture();
+    // a second transcript uuid for the SAME registry session (a swap rebinds the uuid): it must add in, not replace
+    writeFileSync(path.join(f.home, '.cc-sessions', 'demo-live.uuid'), 'sess-1\n');
+    writeFileSync(path.join(f.home, '.cc-sessions', 'demo-other.uuid'), 'sess-2');
+    const s = runSweep(f);
+    const per = s['perCcdSession'] as Record<string, Record<string, unknown>>;
+    // msg-1 (carried into dir B: counted ONCE), msg-2 and the subagent's msg-3
+    expect(per['demo-live']).toMatchObject({ n: 3, input: 20, output: 1200, cacheWrite: 2000, cacheRead: 120_000 });
+    expect(per['demo-other']).toMatchObject({ n: 1, input: 10, output: 100, cacheWrite: 1000, cacheRead: 10_000 });
+    expect(typeof (per['demo-live'] as Record<string, unknown>)['apiUsd']).toBe('number');
+    // the existing per-transcript block is untouched
+    expect((s['perSession'] as Record<string, unknown>)['sess-1']).toBeDefined();
+  });
+
+  it('a transcript uuid no registry row names is counted apart, never merged into a session (D-6799)', () => {
+    const f = fixture();   // sess-2 has no .uuid row here
+    const s = runSweep(f);
+    const per = s['perCcdSession'] as Record<string, Record<string, unknown>>;
+    expect(Object.keys(per)).toEqual(['demo-live']);
+    expect(s['perCcdSessionUnmapped']).toMatchObject({ records: 1, sessions: 1 });
+  });
 });

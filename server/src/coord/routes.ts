@@ -25,6 +25,8 @@ import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
+import { readSessionSpendMeasured } from '../shares.js';
+import { boundSessionsOf, joinRunSpend } from './runSpend.js';
 import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
@@ -2666,6 +2668,37 @@ export function registerCoordRoutes(
     const signals = deps.coord.runSignals(id);
     if (signals === null) return reply.code(404).send({ ok: false, error: 'unknown-run' });
     return { ok: true, signals };
+  });
+
+  /** D-6799 — ONE run, plus what its bound sessions have spent (the usage sweep's
+   *  `perCcdSession` block joined through the run's current and predecessor
+   *  sessions). ADDITIVE and MEASURING ONLY: `run` is the row `GET /api/runs`
+   *  lists, `spend` is the only new thing, and no route refuses on it. Gated like
+   *  its siblings (a session cookie OR the box token). */
+  app.get('/api/runs/:id', async (req, reply) => {
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id');
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false, error: 'unauthenticated', verdict: session.verdict,
+            detail: 'GET /api/runs/:id takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); the coordinator skill reads it cookieless from the fleet host`,
+          });
+        }
+      }
+    }
+    if (!deps.coord) return notConfigured(reply);
+    const { id: idParam } = req.params as { id: string };
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const read = deps.coord.run(id);
+    if (!read.ok) return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+    if (read.run === null) return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    const bound = boundSessionsOf(read.run.sessionId, deps.coord.runEvents(id));
+    const spend = joinRunSpend(bound, bound.length === 0 ? { kind: 'absent' } : await readSessionSpendMeasured(deps.io, deps.cfg.registryDir));
+    return { ok: true, run: toRunSummary(read.run), spend };
   });
 
   /**

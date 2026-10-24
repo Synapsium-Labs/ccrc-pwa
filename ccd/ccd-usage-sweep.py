@@ -356,6 +356,22 @@ def main():
         s["models"][rec["model"] or "(none)"] = s["models"].get(rec["model"] or "(none)", 0) + 1
         s["efforts"][rec["effort"]] = s["efforts"].get(rec["effort"], 0) + 1
 
+    # D-6799: the SAME deduplicated records, grouped by REGISTRY session id (the
+    # transcript's session uuid -> `$REG/<id>.uuid`). `perSession` above is keyed
+    # by transcript uuid and a swap or a rebind gives one registry session several
+    # uuids, so a reader joining a run to its spend needs this key. A uuid no
+    # registry row names is counted apart, never merged into a session.
+    per_ccd, unmapped_records, unmapped_sessions = {}, 0, set()
+    for rec in records.values():
+        cid = uuid_map.get(rec["sessionId"]) if rec["sessionId"] else None
+        if cid is None:
+            unmapped_records += 1
+            unmapped_sessions.add(rec["sessionId"] or "(none)")
+            continue
+        c = per_ccd.setdefault(cid, bucket())
+        add(c, rec)
+    per_ccd_unmapped = {"records": unmapped_records, "sessions": len(unmapped_sessions)}
+
     for account in sorted(set(dirs.values())):
         acct = per_account.setdefault(account, {"n": 0, "apiUsd": 0.0, "perClass": {}})
         acct["carriedAcrossDirs"] = carried.get(account, 0)
@@ -379,7 +395,8 @@ def main():
            "windowDays": a.days, "now": now, "scan": stats, "attribution": ATTRIBUTION,
            "rates": {"label": RATES_LABEL, "table": {k: list(v) for k, v in PROXY_RATES_USD_PER_MTOK.items()}},
            "perModel": per_model, "perClass": per_class, "perEffort": per_effort,
-           "perAccount": per_account, "perSession": per_session, "orphansReaped": reaped,
+           "perAccount": per_account, "perSession": per_session,
+           "perCcdSession": per_ccd, "perCcdSessionUnmapped": per_ccd_unmapped, "orphansReaped": reaped,
            "orphansSkippedUnreadable": orphans_skipped_unreadable}
     tmp = a.out + ".tmp"
     with open(tmp, "w") as f:
