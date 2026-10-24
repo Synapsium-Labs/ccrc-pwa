@@ -1178,20 +1178,21 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
     expect(b).not.toMatch(/node-version-file/);
   });
 
-  it('is named for the version it runs, needs only the dependency install, and never skips itself', () => {
+  it('is named for the version it runs, needs only select and the dependency install, and never skips itself', () => {
     const b = job('node-floor');
     expect(jobKey(b, 'name'), 'the check name must not claim a version the leg does not run').toBe(`node floor (${floor()})`);
     // A job-level `if:` that skips it reads as red in full-suite and as nothing
-    // on a pull request; a failed `needs:` skips it the same way. So its one
-    // need, `deps` (D-6770: the installed trees), is an optimisation it
-    // survives losing: `!cancelled()` runs it after a failed or skipped
-    // `deps`, and server-deps then installs for itself.
+    // on a pull request; a failed `needs:` skips it the same way. So its
+    // needs are ones it survives losing: `deps` (D-6770: the installed trees)
+    // is an optimisation — `!cancelled()` runs it after a failed or skipped
+    // `deps`, and server-deps then installs for itself — and `select` only
+    // lends its `floor` output (D-6771).
     expect(jobKey(b, 'if')).toBe('${{ !cancelled() }}');
-    expect(needs(b)).toEqual(['deps']);
+    expect(needs(b)).toEqual(['deps', 'select']);
   });
 
-  it('skips by STEP, only on a refresh or a rebuild, like the required legs', () => {
-    const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
+  it('skips by STEP, on a refresh, a rebuild or a pull request that left its inputs alone (D-6771)', () => {
+    const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && needs.select.outputs.floor != 'true')) && 'skip' || 'run' }}";
     const b = job('node-floor');
     expect(b, 'the job-level leg switch').toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
     const s = steps(b);
