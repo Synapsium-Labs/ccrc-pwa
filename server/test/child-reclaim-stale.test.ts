@@ -317,6 +317,23 @@ describe('sweepChildReclaim: the stale arm (D-6639)', () => {
     expect(read.mock.calls.filter((c) => String(c[0]).endsWith('.hold'))).toEqual([]);
   });
 
+  it('held stale children are read together in the pass\'s one gather, never one by one inside its loop', async () => {
+    const f = lane({ armed: true });
+    heldChild(f, 'demo-a'); heldChild(f, 'demo-b');
+    f.advance(8 * DAY);
+    const real = f.io.statMeasured.bind(f.io);
+    let open = 0; let peak = 0;
+    vi.spyOn(f.io, 'statMeasured').mockImplementation(async (p: string) => {
+      if (!String(p).endsWith('.hold')) return real(p);
+      open += 1; peak = Math.max(peak, open);
+      await new Promise((r) => setTimeout(r, 20));
+      open -= 1;
+      return real(p);
+    });
+    await f.pass();
+    expect(peak, 'both holds were being dated at once').toBe(2);
+  });
+
   it('armed: the stale child is asked on the second pass, never the first (twice observed, as every reclaim)', async () => {
     const f = lane({ armed: true });
     heldChild(f);
