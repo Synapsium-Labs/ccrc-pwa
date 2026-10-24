@@ -1,5 +1,5 @@
 // installTreeFixture.ts — the ONE definition of the `ccrc install` fixture
-// tree, shared by `ccrc-install.test.ts` and `ccrc-install-graphify.test.ts`.
+// tree, shared by `ccrc-install-*.test.ts` and `ccrc-install-graphify.test.ts`.
 //
 // Both suites used to carry their own copy of `TREE_FILES` / `TREE_STUBS` /
 // `installFixtureTree`, each citing the other's header as the reason: a
@@ -101,7 +101,7 @@ export const TREE_FILES = [
   // realistic "the operator already has a roster" fixture is no repo file any
   // more — the shipped five-account migration roster left the tree with the
   // stage-5 de-brand (spec §5, D-202) — so FIVE_ACCOUNT_ROSTER (in
-  // `ccrc-install.test.ts`) serialises `DEFAULT_TEST_ROSTER` instead: a roster
+  // `ccrc-install-*.test.ts`) serialises `DEFAULT_TEST_ROSTER` instead: a roster
   // with `claude-b` in it, so "generated FROM the installed roster" stays
   // provable rather than merely plausible.
   'deploy/accounts.default.json',

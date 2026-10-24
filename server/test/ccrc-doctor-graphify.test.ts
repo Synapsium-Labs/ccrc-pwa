@@ -6,7 +6,7 @@
 // ── WHY THIS IS A SEPARATE FILE, WITH ITS OWN FIXTURE ─────────────────────
 // `server/test/ccrc-doctorFixture.ts` already has a `healthy()`/`runDoctor()`/
 // `lineFor()` triad, but nothing in that file is `export`ed — every OTHER
-// doctor-adjacent suite in this tree (`ccrc-install.test.ts`'s own header,
+// doctor-adjacent suite in this tree (`ccrc-installFixture.ts`'s own header,
 // "This is ccrc-doctorFixture.ts's healthy(), adapted") builds its OWN fixture
 // rather than importing one, and this file follows that precedent rather
 // than exporting from a 5000-line suite to save a second file's worth of
@@ -334,7 +334,7 @@ describe('ccrc doctor: graphify', () => {
   // D-1061 (deviation from the brief's plain-English "absent file -> WARN"):
   // an absent census must NOT warn, or every fresh install warns, always —
   // `OnBootSec=5min` means no box has a census for several minutes at
-  // minimum, and D-139 (ccrc-install.test.ts, "ends with doctor, and a box
+  // minimum, and D-139 (ccrc-install-*.test.ts, "ends with doctor, and a box
   // that passes every check exits 0") is an operator ruling that a fresh
   // install ends green. See the check's own comment at condition (6).
   it('does not WARN when the census has never been written — a fresh box, D-1061/D-139', () => {

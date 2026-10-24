@@ -1435,7 +1435,7 @@ export function installModelsOp(home: string): void {
 }
 
 /** The five GPT-lane executables, `GPT_LANE_BINS` — the constant
- *  ccrc-install.test.ts pins to `_inst_bins`' gate: SYMLINKED into the
+ *  ccrc-install-*.test.ts pins to `_inst_bins`' gate: SYMLINKED into the
  *  fixture's shipped tree (`<home>/ccrc/ccd`, `$BOX_TREE_DIR/ccd`, what the
  *  check compares against) and COPIED into `<home>/.local/bin`, as
  *  `_inst_atomic` places them — so a case can edit the placed copy and never
