@@ -26,15 +26,15 @@ export function bindingWindow(a: AccountUsage): { label: '5h' | '7d'; pct: numbe
  *  A lane never read (no percentage) and a lane whose sign-in expired go last, keeping their own relative order: neither
  *  has a use that says it is free. Returns a new array. */
 export function lanesByFree<T extends AccountUsage>(lanes: readonly T[]): T[] {
-  const last = (a: T): boolean => a.authDead === true || bindingPct(a) === null;
-  return lanes
-    .map((lane, i) => ({ lane, i }))
-    .sort((x, y) => {
-      const lx = last(x.lane);
-      const ly = last(y.lane);
-      if (lx !== ly) return lx ? 1 : -1;
-      if (lx) return x.i - y.i;
-      return (bindingPct(x.lane) ?? 0) - (bindingPct(y.lane) ?? 0) || x.i - y.i;
-    })
-    .map((e) => e.lane);
+  // Measure each lane's binding percentage once and split the lanes that go last (never read, or sign-in expired) off
+  // from the ones with a use to sort by, so the sort compares only numbers.
+  const ranked: { lane: T; pct: number; i: number }[] = [];
+  const last: T[] = [];
+  lanes.forEach((lane, i) => {
+    const pct = bindingPct(lane);
+    if (pct === null || lane.authDead === true) last.push(lane);
+    else ranked.push({ lane, pct, i });
+  });
+  ranked.sort((x, y) => x.pct - y.pct || x.i - y.i);
+  return [...ranked.map((e) => e.lane), ...last];
 }
