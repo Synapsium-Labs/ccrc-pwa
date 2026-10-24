@@ -29,8 +29,8 @@ set -uo pipefail
 # This is a LOCAL copy of ccd's `_plat_epoch_ms`, GENERATED from it (ARCH-74) with
 # the three CCRC_* bounds below: this file is installed alone, with no ccd to
 # source, and ccd's comment says why the fallback validates and the write is kept.
-# Regenerate with `node shared/hook-helpers.mjs --write ccd/session-hook.sh
-# ccd/ccd`; hook-helpers-generated.test.ts fails on drift. Never edit between
+# Regenerate with `bash ccd/ccrc restamp ccd/session-hook.sh`;
+# hook-helpers-generated.test.ts fails on drift. Never edit between
 # the BEGIN and END lines by hand.
 # ── BEGIN GENERATED HOOK HELPERS (shared/hook-helpers.mjs; edit that, then regenerate) ──
 # ccrc:generated 1 sha256=0e823de72b94ef597ae7178f9be26de55df7d1080b03790c6b53dfa5056a0d51
