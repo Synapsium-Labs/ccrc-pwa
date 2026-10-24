@@ -213,8 +213,10 @@ export function AccountsScreen(): ReactNode {
   const arrivedAt = useRef<string | null>(null);
   const [arrived, setArrived] = useState<string | null>(null);
   useEffect(() => {
-    if (lane === null) { arrivedAt.current = null; setArrived(null); return; }
-    if (!laneRowExists || arrivedAt.current === lane) return;
+    // The record follows the param: no lane, or a lane with no row, clears the edge and the ref, so a later return to
+    // the lane that was arrived at arrives again (the shell's reset will have put the pane back at the top).
+    if (!laneRowExists || lane === null) { arrivedAt.current = null; setArrived(null); return; }
+    if (arrivedAt.current === lane) return;
     const row = rowRefs.current.get(lane);
     if (row === undefined) return;
     arrivedAt.current = lane;

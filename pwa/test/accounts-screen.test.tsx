@@ -557,6 +557,25 @@ describe('AccountsScreen — opens at a lane (?lane=<id>)', () => {
     expect(document.querySelector('[data-arrived]')).toBeNull();
   });
 
+  it('a known lane, then an unknown one, then the first again scrolls to it once more', async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts?lane=claude');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    await act(async () => {});
+    expect(scroll.calls).toEqual([rowOf('claude')]);
+    // The unknown lane arrives nowhere, and the record of the first follows the param: no edge left on the old row.
+    act(() => { navigate('/accounts?lane=no-such-lane'); });
+    expect(document.querySelector('[data-arrived]')).toBeNull();
+    expect(scroll.calls).toHaveLength(1);
+    // Back to the first: the shell's pane reset has put the pane at the top, so the row must arrive again.
+    act(() => { navigate('/accounts?lane=claude'); });
+    expect(scroll.calls).toEqual([rowOf('claude'), rowOf('claude')]);
+    expect(rowOf('claude')).toHaveAttribute('data-arrived', 'true');
+    expect(document.activeElement).toBe(rowOf('claude'));
+  });
+
   it('with no ?lane= nothing scrolls or takes focus, and each row is still a programmatic focus target only', async () => {
     stubAccounts(twoLanes);
     navigate('/accounts');
