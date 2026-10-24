@@ -473,6 +473,8 @@ describe('_codex_lane_json_ensure — lane.json equals the roster, written only 
     ['bridgeFiles.recordings', (j: Record<string, unknown>): void => { delete (j['bridgeFiles'] as Record<string, unknown>)['recordings']; }],
     ['an empty-string bridgeFiles.store', (j: Record<string, unknown>): void => { (j['bridgeFiles'] as Record<string, unknown>)['store'] = ''; }],
     ['a non-string bridge', (j: Record<string, unknown>): void => { j['bridge'] = 1; }],
+    ['a non-string upstream', (j: Record<string, unknown>): void => { j['upstream'] = 1; }],
+    ['a non-string bridgeFiles.stats', (j: Record<string, unknown>): void => { (j['bridgeFiles'] as Record<string, unknown>)['stats'] = ['bridge.stats.json']; }],
     ['a bridgeFiles that is not an object', (j: Record<string, unknown>): void => { j['bridgeFiles'] = 'bridge.stats.json'; }],
   ] as const)('an older lane.json with no bridge reads stale and is re-rendered (%s)', async (_what, edit) => {
     const { h } = await initialised('ccrc-codex-lanejson-bridge-');
@@ -481,6 +483,25 @@ describe('_codex_lane_json_ensure — lane.json equals the roster, written only 
     const j = JSON.parse(JSON.stringify(rendered)) as Record<string, unknown>;
     edit(j);
     fs.writeFileSync(f, JSON.stringify(j));
+    expect(lib(h, '_codex_lane_json_state codex-a').stdout).toBe('stale\n');
+    const r = lib(h, '_codex_lane_json_ensure codex-a');
+    expect(r.code, r.stderr).toBe(0);
+    expect(laneJson(h, 'codex-a')).toEqual(rendered);
+    expect(lib(h, '_codex_lane_json_state codex-a').stdout).toBe('current\n');
+  });
+
+  // The state reader reads lane.json as ONE document, as `_codex_lane_word`
+  // and the bridge's single `json.loads` do: `jq -e` alone takes its rc from
+  // the last document, so a file whose last document matched would read
+  // `current` and the launch path would never re-render it.
+  it.each([
+    ['two documents, the last current', (cur: string): string => `${JSON.stringify({ id: 'codex-b' })}\n${cur}\n`],
+    ['the current document twice', (cur: string): string => `${cur}\n${cur}\n`],
+  ] as const)('a lane.json of more than one document reads stale and is re-rendered (%s)', async (_what, body) => {
+    const { h } = await initialised('ccrc-codex-lanejson-multidoc-');
+    const f = join(laneDir(h, 'codex-a'), 'lane.json');
+    const rendered = laneJson(h, 'codex-a');
+    fs.writeFileSync(f, body(JSON.stringify(rendered)));
     expect(lib(h, '_codex_lane_json_state codex-a').stdout).toBe('stale\n');
     const r = lib(h, '_codex_lane_json_ensure codex-a');
     expect(r.code, r.stderr).toBe(0);

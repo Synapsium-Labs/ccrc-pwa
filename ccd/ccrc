@@ -12201,12 +12201,17 @@ _codex_row() {   # <id>
 # `materialise --check`'s question (the doctor's), the one comparison: this
 # file reads the roster's codex row through `_codex_row`, which never reads
 # the mode, so a second reader of it here is exactly what D20 forbids.
+# The file is read as ONE document (`-s`, then exactly one), as
+# `_codex_lane_word` below reads it and the bridge's single `json.loads` does:
+# `jq -e` alone takes its rc from the LAST document, so a file whose last of
+# two documents matched would read `current` and never be re-rendered.
 _codex_lane_json_state() {   # <id>
   _codex_row "$1" || return $?
   local lane; lane="$(_codex_lane_dir "$CX_ID")/lane.json"
   if [ ! -e "$lane" ] && [ ! -L "$lane" ]; then printf 'absent\n'; return 0; fi
-  if [ -f "$lane" ] && jq -e --arg id "$CX_ID" --arg cfg "$CX_CFG" --arg auth "$CX_AUTH" \
+  if [ -f "$lane" ] && jq -es --arg id "$CX_ID" --arg cfg "$CX_CFG" --arg auth "$CX_AUTH" \
        --argjson pp "$CX_PROXY" --argjson lp "$CX_LITELLM" '
+       length == 1 and (.[0] |
        type == "object" and .id == $id and .configDir == $cfg and .authDir == $auth
        and .proxyPort == $pp and .litellmPort == $lp
        and (.units | type) == "object"
@@ -12215,7 +12220,7 @@ _codex_lane_json_state() {   # <id>
        and (.bridge | type) == "string" and (.upstream | type) == "string"
        and (.bridgeFiles | type) == "object"
        and all(.bridgeFiles.stats, .bridgeFiles.store, .bridgeFiles.recordings;
-               type == "string" and length > 0)' "$lane" >/dev/null 2>&1; then
+               type == "string" and length > 0))' "$lane" >/dev/null 2>&1; then
     printf 'current\n'
   else
     printf 'stale\n'
