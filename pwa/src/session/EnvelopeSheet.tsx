@@ -31,7 +31,8 @@ import { keyTabs, multiKeys, questionKeys, rowKey, type KeyScreen } from './askK
 import { useAskKeys } from './useAskKeys';
 import './chat.css';
 
-/** The way out of a question this app cannot answer: open the terminal, or not now.
+/** The way out of a question this app cannot answer: open the terminal, or "Not now". "Not now" is the SHEET's only: the inline card
+ *  drops it through `AskContainer` (it covers nothing, so it has nothing to put off), and "Open terminal to answer" stays.
  *
  *  THREE CALL SITES, and none is a near-copy: this content's own dead end (a question that does not match the pane yet,
  *  an approval it cannot send), and `DialogSheet`'s `ask-unreadable` and `terminal-only` surfaces. "Open terminal to
