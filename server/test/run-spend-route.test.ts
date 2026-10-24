@@ -32,7 +32,7 @@ async function setup(opts: { sweep?: Record<string, unknown> | null | 'none'; re
   coord.markDispatched(opened.id, 'demo-w2', 'w', 'ws/w', false);
   if (opts.rebind) coord.recordRunEvent(opened.id, 'coordinator', 'session-rebound: demo-w1 -> demo-w2, 0 re-issued');
   if (opts.sweep !== 'none') writeSweep(home, opts.sweep ?? null);
-  const app = await buildServer({ ...testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' })), mailToken: TOKEN, coord });
+  const app = await buildServer({ ...testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' })), mailToken: TOKEN, coord });
   return { app, id: opened.id };
 }
 const get = (app: FastifyInstance, id: number | string, headers: Record<string, string> = H) =>
@@ -79,7 +79,7 @@ describe('GET /api/runs/:id', () => {
     const opened = coord.openRun({ program: 'demo', title: 'demo', project: 'demo', wave: 1, waveOf: null, claimedBy: 'coord-a' });
     if (!('id' in opened)) throw new Error('openRun refused');
     writeSweep(home, {});
-    const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const base = testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
     const app = await buildServer({ ...base, cfg: { ...base.cfg, authEnabled: true }, mailToken: TOKEN, coord });
     for (let i = 0; i < RUN_SPEND_RATE_LIMIT.max + 1; i += 1) expect((await get(app, opened.id, {})).statusCode).toBe(401);
     expect((await get(app, opened.id)).statusCode).toBe(200);
@@ -93,7 +93,7 @@ describe('GET /api/runs/:id', () => {
     coord.markDispatched(opened.id, 'constructor', 'w', 'ws/w', false);
     writeSweep(home, { other: SPEND(1), ['__proto__']: SPEND(2) });
     clearSessionSpendCache();
-    const app = await buildServer({ ...testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' })), mailToken: TOKEN, coord });
+    const app = await buildServer({ ...testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' })), mailToken: TOKEN, coord });
     const r = await get(app, opened.id);
     expect(r.statusCode).toBe(200);
     expect(r.json().spend).toEqual({ measured: false, reason: 'not-swept' });
