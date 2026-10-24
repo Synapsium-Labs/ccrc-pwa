@@ -412,3 +412,66 @@ describe('wouldRescue names only what arming would clear (D-6632)', () => {
     expect(out.nestedRescue.wouldRescue).toHaveLength(2);
   }, 120_000);
 });
+
+describe('only the nested repository\'s own state decides rescuability (D-6632)', () => {
+  it('a global filter.lfs block (git-lfs installed on the box) does not make a plain repository unrescuable', () => {
+    const c = makeChild(h);
+    plantNested(c.wt);
+    fs.writeFileSync(path.join(h.home, '.gitconfig'),
+      '[filter "lfs"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n\trequired = true\n');
+    const sys = path.join(h.home, 'sys-gitconfig');
+    fs.writeFileSync(sys, '[filter "lfs"]\n\tclean = git-lfs clean -- %f\n\trequired = true\n');
+    arm();
+    const a = evalOf(h, { pre: `export GIT_CONFIG_SYSTEM='${sys}';` });
+    expect(a.verdict).toBe('reclaimable');
+    expect(a.token).not.toBe('');
+  }, 120_000);
+});
+
+describe('a nested repository mid-operation keeps its state: it is not rescued (D-6632)', () => {
+  const stopRebase = (dir: string): void => {
+    h.git(dir, 'checkout', '-q', '-b', 'feat');
+    fs.writeFileSync(path.join(dir, 'n1.txt'), 'feat side\n'); h.git(dir, 'commit', '-q', '-am', 'feat');
+    h.git(dir, 'checkout', '-q', 'main');
+    fs.writeFileSync(path.join(dir, 'n1.txt'), 'main side\n'); h.git(dir, 'commit', '-q', '-am', 'main');
+    h.git(dir, 'checkout', '-q', 'feat');
+    fs.writeFileSync(path.join(dir, 'n2.txt'), 'staged only in the autostash\n'); h.git(dir, 'add', 'n2.txt');
+    try { h.git(dir, 'rebase', '--autostash', 'main'); } catch { /* stops on the conflict, as intended */ }
+    expect(fs.existsSync(path.join(dir, '.git', 'rebase-merge')), 'the rebase is stopped').toBe(true);
+  };
+  const stopAm = (dir: string): void => {
+    h.git(dir, 'checkout', '-q', '-b', 'feat');
+    fs.writeFileSync(path.join(dir, 'n1.txt'), 'feat side\n'); h.git(dir, 'commit', '-q', '-am', 'feat');
+    const patch = path.join(h.home, 'p.patch');
+    fs.writeFileSync(patch, h.git(dir, 'format-patch', '--stdout', '-1') + '\n');
+    h.git(dir, 'checkout', '-q', 'main');
+    fs.writeFileSync(path.join(dir, 'n1.txt'), 'main side\n'); h.git(dir, 'commit', '-q', '-am', 'main');
+    try { h.git(dir, 'am', '-3', patch); } catch { /* stops on the conflict */ }
+    expect(fs.existsSync(path.join(dir, '.git', 'rebase-apply')), 'the am is stopped').toBe(true);
+  };
+  for (const [name, stop] of [['an autostash rebase', stopRebase], ['an am stop', stopAm]] as const) {
+    it(`${name}: the tree stays and no token is minted`, () => {
+      const c = makeChild(h);
+      const n = plantNested(c.wt);
+      stop(n.dir);
+      arm();
+      const a = evalOf(h);
+      expect(a.verdict).toBe('containment-unproven');
+      expect(childReclaimVerb(h, a.token).code).not.toBe(0);
+      intact(c, n.dir);
+    }, 120_000);
+
+    it(`${name}: scratch-rescue refuses it`, () => {
+      makeChild(h);
+      const scratch = path.join(h.home, 'scratch-area', 'sandbox');
+      fs.mkdirSync(scratch, { recursive: true });
+      h.git(scratch, 'init', '-q', '-b', 'main');
+      fs.writeFileSync(path.join(scratch, 'n1.txt'), 'base\n'); h.git(scratch, 'add', 'n1.txt'); h.git(scratch, 'commit', '-q', '-m', 'base');
+      fs.writeFileSync(path.join(scratch, 'n2.txt'), 'x\n'); h.git(scratch, 'add', 'n2.txt'); h.git(scratch, 'commit', '-q', '-m', 'two');
+      stop(scratch);
+      const r = h.run(`cmd_scratch_rescue --session ${CHILD_ID} "${scratch}"`);
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      expect((JSON.parse(r.stdout) as { failed: string }).failed).toBe('nested-rescue-failed');
+    }, 90_000);
+  }
+});

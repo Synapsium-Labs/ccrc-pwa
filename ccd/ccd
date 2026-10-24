@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9d44acdf5926f96e5f0718e8cd16d3fccb904e63e763bd387ac74e8f6a6973d0
+# ccrc:generated 1 sha256=2a5c7ac0f549b9f31370c62707c90dc0d4455f9c37647fa97a0d649b592f6360
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31609,15 +31609,24 @@ _ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }
 # (rc 0, nothing lands), so its token would answer nested-rescue-failed on every pass; it stays containment-unproven.
 # A LINKED WORKTREE of the nested repository (its detached HEAD names a commit no ref does, and the worktree lives outside the tree
 # being removed) and LFS or annex content (in `.git/lfs` or `.git/annex`, which a fetch never moves) hold work the rescue cannot
-# carry, so a repository with either stays containment-unproven.
+# carry, so a repository with either stays containment-unproven. Only the repository's OWN config is read (a global or system
+# `filter.lfs.*` is on every box with git-lfs). A repository mid-operation (rebase, am, merge, an index.lock) keeps state no ref or
+# reflog reaches (the autostash commit, unapplied patches), so it stays containment-unproven too.
 _ws_nested_rescue_shape() {   # what arming WOULD rescue: marker-independent, so the shadow list never names what the arm refuses
   local c
   c=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [[ -n "$c" ]] \
     && git -C "$1" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
     && [[ "$(git -C "$1" rev-parse --is-shallow-repository 2>/dev/null)" == false ]] \
-    && [[ -z "$(git -C "$1" config --get-regexp '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter)|filter\.lfs\..*)$' 2>/dev/null)" ]] \
+    && [[ -z "$(git -C "$1" config --local --get-regexp '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter)|filter\.lfs\..*)$' 2>/dev/null)" ]] \
     && [[ "$(git -C "$1" worktree list --porcelain 2>/dev/null | grep -c '^worktree ')" == 1 ]] \
-    && [[ ! -e "$c/lfs/objects" && ! -e "$c/annex" ]]
+    && [[ ! -e "$c/lfs/objects" && ! -e "$c/annex" ]] \
+    && ! _ws_nested_busy "$1"
+}
+_ws_nested_busy() {   # nested dir -> 0 when an operation is in progress or unprobeable (state no ref or reflog reaches)
+  local f
+  [[ -z "$(_ws_child_op "$1" 2>/dev/null || echo unprobeable)" ]] || return 0
+  for f in MERGE_AUTOSTASH index.lock; do [[ ! -e "$(git -C "$1" rev-parse --path-format=absolute --git-path "$f" 2>/dev/null)" ]] || return 0; done
+  return 1
 }
 _ws_nested_rescuable() { _ws_nested_rescue_live && _ws_nested_rescue_shape "$1"; }
 _ws_nested_secrets() {   # nested rel -> its secret-shaped untracked paths join REAP_SENSITIVE and RECLAIM_SECRETS (the pin drops them)
@@ -31656,6 +31665,7 @@ _ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_R
   # Run under `_ws_reclaim_contained`. Moves no ref in the nested repository; adds refs only under `$base`.
   local main="$1" n="$2" base="$3" id="$4" childof="$5" prefix="$6" wip b a q ref want got specs=() errf orph tips base0 reuse=0 blob tries=0 wantl gotl
   RECLAIM_PIN_WORD=nested-rescue-failed; RECLAIM_RESCUE_ENTRY=""
+  ! _ws_nested_busy "$n" || { RECLAIM_PIN_WHY="the nested repository at $n has an operation in progress — its autostash and patch state is on no ref, so it stays"; return 1; }
   _ws_wip_commit "$n" "$id" "$childof" "$prefix" || { RECLAIM_PIN_WHY="could not capture the uncommitted work of the nested repository at $n: $RECLAIM_WIP_WHY"; return 1; }
   wip="$RECLAIM_WIP_SHA"
   git -C "$n" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
