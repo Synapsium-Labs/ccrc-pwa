@@ -8,7 +8,7 @@ import path from 'node:path';
 import { LANE_SCHEDULE, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS } from '../src/laneSchedule.js';
-import { parsedFile } from './scan/symbols.js';
+import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 const text = (rel: string): string => readFileSync(path.join(SRC, rel), 'utf8');
@@ -370,5 +370,68 @@ describe('the nine sweep lanes outside coordination (D-5862, PR 1b)', () => {
     await runner.run('pr', fn);
     expect(fn, 'did not abandon a run at the ceiling').toHaveBeenCalledTimes(1);
     first.resolve();
+  });
+});
+
+describe('the eight coordination lanes (D-5862, PR 2)', () => {
+  const ROWS: Array<[string, string, string]> = [
+    ['claimRenew', 'wall', 'none'], ['claimLapse', 'wall', 'none'], ['stalls', 'wall', 'skip'], ['idleNudge', 'wall', 'skip'],
+    ['mail', 'wall', 'none'], ['asks', 'wall', 'none'], ['approvalPrune', 'wall', 'none'], ['digestBeat', 'wall', 'none'],
+  ];
+
+  it('each lane is a row on the clock it throttles on today, with the flight it has today', () => {
+    for (const [name, clock, flight] of ROWS) {
+      expect(laneRow(name).clock, `${name}'s clock`).toBe(clock);
+      expect(laneRow(name).flight, `${name}'s flight`).toBe(flight);
+    }
+  });
+
+  it('runSync runs the body once the cadence has elapsed on the injected reading, stamps that reading, and answers whether it ran', () => {
+    const { runner } = rig([row({ name: 'beat', cadenceMs: 100 })]);
+    const fn = vi.fn();
+    expect(runner.runSync('beat', fn, 1_000), 'a first beat').toBe(true);
+    expect(runner.runSync('beat', fn, 1_099), 'a beat inside the cadence').toBe(false);
+    expect(runner.runSync('beat', fn, 1_100), 'a beat at the cadence').toBe(true);
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('runSync with no reading takes the row\'s clock; a throw spends the slot and reaches the caller', () => {
+    const { t, runner } = rig([row({ name: 'beat', cadenceMs: 100 })]);
+    const boom = vi.fn(() => { throw new Error('body failed'); });
+    expect(() => runner.runSync('beat', boom)).toThrow('body failed');
+    expect(runner.runSync('beat', boom), 'a failed beat did not spend its slot').toBe(false);
+    t.wall += 100;
+    expect(() => runner.runSync('beat', boom)).toThrow('body failed');
+    expect(boom).toHaveBeenCalledTimes(2);
+  });
+
+  it('a startsDue row is due at an injected reading of 0, and a plain wall row (stamp 0) is not due before its cadence', () => {
+    const { runner } = rig([row({ name: 'due', cadenceMs: 100, startsDue: true }), row({ name: 'plain', cadenceMs: 100 })]);
+    expect(runner.runSync('due', () => {}, 0)).toBe(true);
+    expect(runner.runSync('plain', () => {}, 50)).toBe(false);
+  });
+
+  it('kick returns a startsDue row to due at any reading', () => {
+    const { runner } = rig([row({ name: 'due', cadenceMs: 100, startsDue: true })]);
+    expect(runner.runSync('due', () => {}, 10_000)).toBe(true);
+    runner.kick('due');
+    expect(runner.runSync('due', () => {}, 0)).toBe(true);
+  });
+});
+
+describe('the declared derivations are references, never a second literal', () => {
+  it('the stall watch\'s cadence is the claim lanes\' constant, by reference', () => {
+    expect(initOf('laneSchedule.ts', 'STALL_SWEEP_MS')).toBe('CLAIM_SWEEP_MS');
+    expect(laneRow('stalls').derivedFrom?.name).toBe('CLAIM_SWEEP_MS');
+    expect(laneRow('stalls').cadenceMs).toBe(laneRow('claimRenew').cadenceMs);
+  });
+
+  it('the digest beat and the approval prune are named rows, not bare literals in the watcher', () => {
+    const digest = sourceOfSymbol(path.join(SRC, 'watch.ts'), 'FleetWatcher.sweepDigest')
+      + sourceOfSymbol(path.join(SRC, 'watch.ts'), 'FleetWatcher.digestBeat');
+    expect(digest).not.toMatch(/-\s*this\.lastDigestBeat/);
+    expect(sourceOfSymbol(path.join(SRC, 'watch.ts'), 'FleetWatcher.sweepApprovals')).not.toMatch(/86_400_000/);
+    expect(laneRow('digestBeat').cadenceMs).toBe(60_000);
+    expect(laneRow('approvalPrune').cadenceMs).toBe(86_400_000);
   });
 });

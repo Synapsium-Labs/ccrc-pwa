@@ -27,10 +27,10 @@ function fakeTmux(panes: (string | null)[], opts: { failLiteral?: boolean } = {}
     if (args[0] === 'capture-pane') {
       const pane = panes[Math.min(capIdx, panes.length - 1)] ?? null;
       capIdx++;
-      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
     }
-    if (opts.failLiteral === true && args[0] === 'send-keys' && args[3] === '-l') return { code: 1, stdout: '', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (opts.failLiteral === true && args[0] === 'send-keys' && args[3] === '-l') return { ran: true, code: 1, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { tmux: new Tmux(run), calls };
 }

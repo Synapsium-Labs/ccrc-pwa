@@ -31,7 +31,7 @@ const TOKEN = 'f'.repeat(64);
 /** Nothing in this suite reaches ccd: an open with no `sessionId` places no
  *  hold, so the runner is never called. It exists because `testDeps` requires
  *  one. */
-const runner: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+const runner: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
 
 const OPEN_BODY = {
   program: 'crossrepo-fixture', title: 'Wave one', project: 'demo',

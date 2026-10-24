@@ -58,7 +58,7 @@ const THIRD_ID = '3f3e3d3c-3b3a-4938-b736-353433323130';
 const MOVE_CAPS: readonly string[] = ['verify', 'node-id', 'floor', 'update-json', UPDATE_GATE_CAP, ROLLBACK_CAP, DETACH_CAP];
 const without = (word: string): string[] => MOVE_CAPS.filter((w) => w !== word);
 
-const failingRunner: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+const failingRunner: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 
 /** A W4-era fleet node: its agent advertises the op, it runs v0.0.9, and its previous install was v0.0.8. */
 const fleetNode = (over: Partial<NodeMeasurement> = {}): NodeMeasurement => ({
@@ -675,7 +675,7 @@ describe('POST /api/updates/rollback (spec §12)', () => {
 
   it('409 no-bundle for a rollback to a tag the catalogue lists no provenance bundle for on a verified node (wave 8 item C, D-3587)', async () => {
     const calls: [string, string[]][] = [];
-    const runner: Runner = (cmd, args) => { calls.push([cmd, [...args]]); return Promise.resolve({ code: 0, stdout: '', stderr: '' }); };
+    const runner: Runner = (cmd, args) => { calls.push([cmd, [...args]]); return Promise.resolve({ ran: true, code: 0, stdout: '', stderr: '' }); };
     const f = await open({ runner });
     catalogue(f.coord);
     expect(f.coord.applyReleaseListing(
@@ -793,7 +793,7 @@ describe('a request write dispatches in the same turn (§18 "a request write tri
     expect(row.requestedTag, 'the request stands until convergence or ack').toBe('v0.0.10');
     // Let the parked spawn answer before the fixture closes. A refused --detach parent is a
     // halting spawn-failed (Task 5's mapping); here it only proves which arm was reached.
-    held.release({ code: 1, stdout: '', stderr: 'update: fixture refusal\n' });
+    held.release({ ran: true, code: 1, stdout: '', stderr: 'update: fixture refusal\n' });
     await vi.waitFor(() => expect(f.coord.node(SERVER_ID)!.updateState).toBe('failed'), { timeout: 3000 });
     expect(held.calls).toEqual([[updateLauncherPath(f.home), [...updateSpawnArgv('update', 'v0.0.10')]]]);
   });
@@ -807,7 +807,7 @@ describe('a request write dispatches in the same turn (§18 "a request write tri
     expect(r.statusCode, r.body).toBe(202);
     expect(f.coord.node(SERVER_ID), 'no dispatch ran in the rollback request')
       .toMatchObject({ updateState: 'pending', updateTarget: 'v0.0.8', requestedKind: 'rollback' });
-    held.release({ code: 1, stdout: '', stderr: 'update: fixture refusal\n' });
+    held.release({ ran: true, code: 1, stdout: '', stderr: 'update: fixture refusal\n' });
     await vi.waitFor(() => expect(f.coord.node(SERVER_ID)!.updateState).toBe('failed'), { timeout: 3000 });
     expect(held.calls).toEqual([[updateLauncherPath(f.home), [...updateSpawnArgv('rollback', 'v0.0.8')]]]);
   });
@@ -825,7 +825,7 @@ describe('a request write dispatches in the same turn (§18 "a request write tri
     expect(row.updateState, 'no dispatch ran in the {all: true} request').toBe('pending');
     expect(row.updateTarget).toBe('v0.0.10');
     expect(row.updateStartedAt!).toBeGreaterThanOrEqual(before);
-    held.release({ code: 1, stdout: '', stderr: 'update: fixture refusal\n' });
+    held.release({ ran: true, code: 1, stdout: '', stderr: 'update: fixture refusal\n' });
     await vi.waitFor(() => expect(f.coord.node(SERVER_ID)!.updateState).toBe('failed'), { timeout: 3000 });
     expect(held.calls).toEqual([[updateLauncherPath(f.home), [...updateSpawnArgv('update', 'v0.0.10')]]]);
   });

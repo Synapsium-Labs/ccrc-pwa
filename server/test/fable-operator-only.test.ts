@@ -39,8 +39,8 @@ async function rig() {
   const calls: string[][] = [];
   const run: Runner = async (_c, args) => {
     calls.push(args);
-    if (args[0] === 'ws-add') { seed(home, `${PROJECT}-fresh`); return { code: 0, stdout: '', stderr: '' }; }
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'ws-add') { seed(home, `${PROJECT}-fresh`); return { ran: true, code: 0, stdout: '', stderr: '' }; }
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   seed(home, CLAIMED_BY);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));

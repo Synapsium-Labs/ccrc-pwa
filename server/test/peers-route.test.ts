@@ -48,11 +48,11 @@ const seed = (home: string, id: string, uuid: string,
 const tmuxRunner = (dead: readonly string[] = []): Runner => async (_cmd, args) => {
   if (args[0] === 'has-session') {
     const target = args.join(' ');
-    return { code: dead.some((d) => target.includes(d)) ? 1 : 0, stdout: '', stderr: '' };
+    return { ran: true, code: dead.some((d) => target.includes(d)) ? 1 : 0, stdout: '', stderr: '' };
   }
-  if (args[0] === 'list-panes') return { code: 0, stdout: '4061\n', stderr: '' };
-  if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
-  return { code: 1, stdout: '', stderr: '' };
+  if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4061\n', stderr: '' };
+  if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
+  return { ran: true, code: 1, stdout: '', stderr: '' };
 };
 
 const openApp = async (home: string, run: Runner, over: Partial<Deps> = {}) => {

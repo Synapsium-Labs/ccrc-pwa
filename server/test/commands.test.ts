@@ -47,8 +47,8 @@ describe('GET /api/sessions/:id/commands', () => {
     writeFileSync(path.join(tdir, `${uuid}.jsonl`), JSON.stringify(skillListing) + '\n');
 
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: '' }; // dead → uses registry workdir
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 1, stdout: '', stderr: '' }; // dead → uses registry workdir
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
@@ -89,8 +89,8 @@ describe('GET /api/sessions/:id/commands', () => {
     writeFileSync(path.join(foreignDir, `${uuid}.jsonl`), JSON.stringify(skillListing) + '\n');
 
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 1, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
@@ -158,9 +158,9 @@ describe('GET /api/sessions/:id/commands', () => {
     utimesSync(decoyFile, future, future);
 
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };  // LIVE
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${pid}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };  // LIVE
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${pid}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
@@ -197,7 +197,7 @@ describe('GET /api/sessions/:id/commands', () => {
       '- skill-e: Last described skill.',
     ].join('\n');
     writeFileSync(path.join(tdir, `${uuid}.jsonl`), JSON.stringify({ attachment: { type: 'skill_listing', isInitial: true, content } }) + '\n');
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${id}/commands` });
@@ -216,7 +216,7 @@ describe('GET /api/sessions/:id/commands', () => {
     const home = mkTmp('ccrc-cmd-');
     seedRoster(home);
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
     const res = await app.inject({ method: 'GET', url: '/api/sessions/nope/commands' });
@@ -238,7 +238,7 @@ describe('GET /api/sessions/:id/commands reads one registry row (D-6434)', () =>
     mkdirSync(tdir, { recursive: true });
     writeFileSync(path.join(tdir, `${uuid}.jsonl`), JSON.stringify({ attachment: { type: 'skill_listing', content: '- a: b' } }) + '\n');
     const c = countingIO();
-    const app = await buildServer({ ...testDeps(home, async () => ({ code: 1, stdout: '', stderr: '' })), io: c.io });
+    const app = await buildServer({ ...testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), io: c.io });
     c.reset();
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${id}/commands` });
     expect(res.statusCode).toBe(200);
@@ -315,7 +315,7 @@ describe('GET /api/sessions/:id/commands reads a bounded tail (D-6434)', () => {
         };
       },
     });
-    const app = await buildServer({ ...testDeps(home, async () => ({ code: 1, stdout: '', stderr: '' })), io });
+    const app = await buildServer({ ...testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), io });
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${id}/commands` });
     expect(res.statusCode).toBe(200);
     const skills = (res.json() as { skills: Rig['skills'] }).skills;

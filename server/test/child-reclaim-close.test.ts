@@ -35,7 +35,7 @@ const FAILED_CLOSE = { fingerprint: { branchTip: 'x', prNumber: null, prPhase: '
 interface Handed { req: ChildReclaimRequest; stateAtCall: RunState | undefined }
 
 const build = (over: { io?: FleetIO; port?: 'record' | 'throw' | 'none';
-  prState?: { code: number; stdout: string; stderr: string } } = {}) => {
+  prState?: { ran: true, code: number; stdout: string; stderr: string } } = {}) => {
   const home = mkTmp('ccrc-child-reclaim-close-');
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
@@ -43,8 +43,8 @@ const build = (over: { io?: FleetIO; port?: 'record' | 'throw' | 'none';
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
-    if (args[0] === 'pr-state') return over.prState ?? { code: 0, stdout: '', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'pr-state') return over.prState ?? { ran: true, code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const base = testDeps(home, run);
   const handed: Handed[] = [];
@@ -463,7 +463,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
 
   it('(i) the only same-branch row predates the minting run’s birth — HOLD, ws-hold only', async () => {
     const row = prRow({ createdAt: iso(BIRTH_MS - HOUR) });   // an hour before birth: INHERITED, dropped
-    const b = build({ prState: { code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
+    const b = build({ prState: { ran: true, code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
     // `markDispatchStarted` BEFORE `setSession`, on `dispatch.ts`'s own
@@ -485,7 +485,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
 
   it('(ii) that row has no createdAt — spent/unplaced, never proven this incarnation — HOLD, ws-hold only, not-finished-undated', async () => {
     const row = prRow();   // no createdAt at all — an older ccd's shape
-    const b = build({ prState: { code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
+    const b = build({ prState: { ran: true, code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
     b.deps.coord.markDispatchStarted(id, BIRTH_MS);
@@ -501,7 +501,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
   it('(iii) the registry .prnumber names an old merged PR whose live row predates birth (the merge-commit path) — HOLD, not-finished-merge-commit', async () => {
     const merged = prRow({ state: 'MERGED', createdAt: iso(BIRTH_MS - HOUR),
       mergedAt: '2020-01-01T00:00:00Z', mergeCommit: { oid: 'f'.repeat(40) } });
-    const b = build({ prState: { code: 0, stdout: `${prLine([merged])}\n`, stderr: '' } });
+    const b = build({ prState: { ran: true, code: 0, stdout: `${prLine([merged])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
     b.deps.coord.markDispatchStarted(id, BIRTH_MS);
@@ -528,7 +528,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
   // wrapper, because none of them seed a fast-path `.prnumber`/`.prhistory`).
   it('(iv) the registry .prnumber names a PR whose live row IS dated to this incarnation — redated to spent/this, RELEASE', async () => {
     const row = prRow({ createdAt: iso(BIRTH_MS + HOUR) });   // an hour after birth: THIS incarnation
-    const b = build({ prState: { code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
+    const b = build({ prState: { ran: true, code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
     b.deps.coord.markDispatchStarted(id, BIRTH_MS);
@@ -557,7 +557,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const foreignRow = prRow({ createdAt: iso(BIRTH_MS + HOUR) });
     const foreignLine = JSON.stringify({ id: 'demo-other', rows: [foreignRow], baseShort: 'main',
       branch: `ws/${ID}`, ahead: 1, tip: TIP, checkedAt: 1 });
-    const b = build({ prState: { code: 0, stdout: `${foreignLine}\n`, stderr: '' } });
+    const b = build({ prState: { ran: true, code: 0, stdout: `${foreignLine}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
     b.deps.coord.markDispatchStarted(id, BIRTH_MS);

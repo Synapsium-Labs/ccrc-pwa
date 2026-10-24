@@ -55,7 +55,7 @@ describe('childReclaimPauseRead — three answers off one listing', () => {
 const fixture = async (over: { visible?: boolean } = {}) => {
   const home = mkTmp('ccrc-child-reclaim-paused-');
   const calls: string[][] = [];
-  const base = testDeps(home, async (_cmd, args) => { calls.push(args); return { code: 1, stdout: '', stderr: '' }; });
+  const base = testDeps(home, async (_cmd, args) => { calls.push(args); return { ran: true, code: 1, stdout: '', stderr: '' }; });
   const reg = base.cfg.registryDir;
   mkdirSync(reg, { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));

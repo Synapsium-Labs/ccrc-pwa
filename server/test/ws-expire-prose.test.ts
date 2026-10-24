@@ -26,7 +26,7 @@ describe('CLAUDE.md’s SAFETY bullet', () => {
   it('forbids ws-expire to every session, and says whose act it is, on what and when', () => {
     expect(md).toContain('**`ws-expire` is forbidden to every session too**');
     expect(md).toContain('it is the SERVER\'s act on an ARCHIVED workspace only, seven days after its archive');
-    expect(md).toContain('(never a main checkout, never a child)');
+    expect(md).toContain('(never a main checkout; a child only through `--child-of` naming');
     expect(md).toContain('with a token that binds that archive and is re-proved on the box');
   });
 });

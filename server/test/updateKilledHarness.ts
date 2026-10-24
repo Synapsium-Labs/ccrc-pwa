@@ -51,7 +51,7 @@ export function harness(o: {
   let accepted = 0;
   const state: FleetState = { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, agentOps: ['update'] };
   const send: SendUpdateOp = async () => ACCEPTED;
-  const recording: Runner = (cmd, args) => { h.spawned += 1; return (o.run ?? (async (): Promise<ExecResult> => ({ code: 0, stdout: '', stderr: '' })))(cmd, args); };
+  const recording: Runner = (cmd, args) => { h.spawned += 1; return (o.run ?? (async (): Promise<ExecResult> => ({ ran: true, code: 0, stdout: '', stderr: '' })))(cmd, args); };
   h.deps = {
     store, role: o.role ?? 'server', ccrcDir: path.join(home, '.ccrc'), localIo: localIO, deadlineMs: 900_000,
     fleet: { state, send: (tag, kind) => { sent.push({ tag, kind }); return send(tag, kind); } },

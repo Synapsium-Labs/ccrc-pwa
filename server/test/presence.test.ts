@@ -178,7 +178,7 @@ describe('/ws/session/:id keeps the open claim', () => {
     home = mkTmp('ccrc-presence-');
     seedRoster(home);
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     clock.t = T0;
     presence = new Presence(() => clock.t);

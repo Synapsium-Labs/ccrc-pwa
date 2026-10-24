@@ -64,7 +64,7 @@ const rig = async (o: Opts = {}) => {
   if (o.live !== false) writeFileSync(path.join(reg, DEAD_COORDINATOR_LANE_LIVE_MARKER), '');
   if (o.paused === true) writeFileSync(path.join(reg, 'reclaim-paused'), '');
   const calls: string[][] = [];
-  const run: Runner = async (_cmd, args) => { calls.push(args); o.onVerb?.(args[0] ?? ''); return { code: 0, stdout: '', stderr: '' }; };
+  const run: Runner = async (_cmd, args) => { calls.push(args); o.onVerb?.(args[0] ?? ''); return { ran: true, code: 0, stdout: '', stderr: '' }; };
   const base = testDeps(home, run);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));

@@ -32,7 +32,7 @@ const auditDoc = (verdict: string, extra: Record<string, unknown> = {}): string 
   sensitive: [], verdict, detail: '', ...extra });
 const expiredDoc = JSON.stringify({ expired: ID, archivedAt: ARCH, wip: null, attic: 3, residueBytes: 0, secretsDropped: 0 });
 
-interface Script { audit?: { code: number; stdout: string; stderr?: string }; verb?: { code: number; stdout: string; stderr?: string } }
+interface Script { audit?: { ran: true, code: number; stdout: string; stderr?: string }; verb?: { ran: true, code: number; stdout: string; stderr?: string } }
 
 const rig = async (over: { script?: Script; caps?: FleetState; live?: boolean; paused?: boolean; visible?: boolean;
   unlistable?: boolean | ReadFailure | 'rejects'; duringAudit?: (reg: string) => void } = {}) => {
@@ -41,13 +41,13 @@ const rig = async (over: { script?: Script; caps?: FleetState; live?: boolean; p
   mkdirSync(reg, { recursive: true });
   if (over.live !== false) writeFileSync(path.join(reg, EXPIRE_LANE_LIVE_MARKER), '');
   if (over.paused === true) writeFileSync(path.join(reg, 'reclaim-paused'), '');
-  const script = over.script ?? { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { code: 0, stdout: expiredDoc } };
+  const script = over.script ?? { audit: { ran: true, code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { ran: true, code: 0, stdout: expiredDoc } };
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     if (args[0] === 'ws-audit') over.duringAudit?.(reg);
     const r = args[0] === 'ws-audit' ? script.audit : args[0] === 'ws-expire' ? script.verb : undefined;
-    return r === undefined ? { code: 1, stdout: '', stderr: `unscripted ${args[0]}` } : { code: r.code, stdout: r.stdout, stderr: r.stderr ?? '' };
+    return r === undefined ? { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0]}` } : { ran: true, code: r.code, stdout: r.stdout, stderr: r.stderr ?? '' };
   };
   const base = testDeps(home, run);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
@@ -78,20 +78,20 @@ describe('the one executor', () => {
 
   it('an expiry that KEPT a leaf carries the words, and its feed row says what was kept and why; an older ccd’s silence is said too (wave 5)', async () => {
     const doc = (over: Record<string, unknown>): string => JSON.stringify({ expired: ID, archivedAt: ARCH, wip: null, attic: 3, residueBytes: 0, secretsDropped: 0, ...over });
-    const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) },
-      verb: { code: 0, stdout: doc({ clipsKept: null, tmpRootKept: 'in-use' }) } } });
+    const s = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('expirable', { token: TOK }) },
+      verb: { ran: true, code: 0, stdout: doc({ clipsKept: null, tmpRootKept: 'in-use' }) } } });
     const out = await expireArchived(s.deps, s.req);
     expect(out).toMatchObject({ kind: 'expired', kept: { clips: null, tmpRoot: 'in-use' } });
     recordExpireFeed({ coord: s.coord, notifyLog: s.deps.notifyLog }, out);
     expect(s.coord.feedEvents(5)[0]!.body).toContain('; ccd kept its temp root (in-use: a process still used it after the bounded wait) — it stays on disk.');
-    const old = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { code: 0, stdout: doc({}) } } });
+    const old = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { ran: true, code: 0, stdout: doc({}) } } });
     const o2 = await expireArchived(old.deps, old.req);
     recordExpireFeed({ coord: old.coord, notifyLog: old.deps.notifyLog }, o2);
     expect(old.coord.feedEvents(5)[0]!.body).toContain('whether its clips directory and temp root were removed is not reported by this box’s ccd (an older build), so it is unmeasured');
   });
 
   it('SHADOW (no `expire-lane-live`): audits and answers "would expire" — ws-expire is never composed', async () => {
-    const s = await rig({ live: false, script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK, sensitive: ['.env', 'id_rsa'] }) } } });
+    const s = await rig({ live: false, script: { audit: { ran: true, code: 0, stdout: auditDoc('expirable', { token: TOK, sensitive: ['.env', 'id_rsa'] }) } } });
     expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'would-expire', sensitive: 2 });
     expect(s.verbs()).toEqual(['ws-audit']);
   });
@@ -144,32 +144,32 @@ describe('the one executor', () => {
   it('an audit document with no `expiresAt` (an older ccd) is no evidence: nothing is composed', async () => {
     const doc = JSON.parse(auditDoc('expirable', { token: TOK })) as Record<string, unknown>;
     delete doc['expiresAt'];
-    const s = await rig({ script: { audit: { code: 0, stdout: JSON.stringify(doc) }, verb: { code: 0, stdout: expiredDoc } } });
+    const s = await rig({ script: { audit: { ran: true, code: 0, stdout: JSON.stringify(doc) }, verb: { ran: true, code: 0, stdout: expiredDoc } } });
     expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'no-evidence' });
     expect(s.verbs()).toEqual(['ws-audit']);
   });
 
   it('a REFUSAL from an audit of another archive is a row that moved too — never folded onto the queued one (review 313, F2)', async () => {
     for (const verdict of ['not-expired', 'containment-unproven']) {
-      const s = await rig({ script: { audit: { code: 0, stdout: auditDoc(verdict, { archivedAt: ARCH + 5, expiresAt: ARCH + 5 + 604_800 }) } } });
+      const s = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc(verdict, { archivedAt: ARCH + 5, expiresAt: ARCH + 5 + 604_800 }) } } });
       expect(await expireArchived(s.deps, s.req), verdict).toMatchObject({ kind: 'deferred', why: 'state-changed' });
     }
   });
 
   it('an audit of ANOTHER archive than the one queued is a row that moved: deferred, never spent', async () => {
-    const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK, archivedAt: ARCH + 5 }) } } });
+    const s = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('expirable', { token: TOK, archivedAt: ARCH + 5 }) } } });
     expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'deferred', why: 'state-changed' });
     expect(s.verbs()).toEqual(['ws-audit']);
   });
 
   it('an expirable audit whose expiresAt is not an instant is a changed state: deferred, ws-expire never composed', async () => {
-    const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK, expiresAt: null }) }, verb: { code: 0, stdout: expiredDoc } } });
+    const s = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('expirable', { token: TOK, expiresAt: null }) }, verb: { ran: true, code: 0, stdout: expiredDoc } } });
     expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'deferred', why: 'state-changed' });
     expect(s.verbs()).toEqual(['ws-audit']);
   });
 
   it('an audit exit 1 is a failure, its document never spent', async () => {
-    const s = await rig({ script: { audit: { code: 1, stdout: auditDoc('unmeasured') } } });
+    const s = await rig({ script: { audit: { ran: true, code: 1, stdout: auditDoc('unmeasured') } } });
     expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'audit-failed' });
     expect(s.verbs()).toEqual(['ws-audit']);
   });
@@ -177,7 +177,7 @@ describe('the one executor', () => {
   it('says WHERE a resumable failure arose: the act’s own audit is `audit-failed`, a failed ws-expire is `failed` — never one value (final review I1)', async () => {
     // Only the verb's failure can have stopped part-way, so only it may move a row onto the persistent tier
     // (`archivedExpiryNextEntry`); folding the two here would put a shadow lane's unreadable audit there.
-    const a = await rig({ script: { audit: { code: 1, stdout: auditDoc('unmeasured', { detail: 'ps is missing' }) } } });
+    const a = await rig({ script: { audit: { ran: true, code: 1, stdout: auditDoc('unmeasured', { detail: 'ps is missing' }) } } });
     const audit = await expireArchived(a.deps, a.req);
     expect(audit).toEqual({ kind: 'audit-failed', detail: 'ws-audit --expire measured nothing: ps is missing',
       sessionId: ID, archivedAt: ARCH, expiresAt: DUE });
@@ -185,8 +185,8 @@ describe('the one executor', () => {
     recordExpireFeed(a.deps, audit);
     expect(a.coord.feedEvents(5)[0]!.body).toBe(`${ID} (archived 2026-09-10 00:26 UTC, due 2026-09-17 00:26 UTC): its expiry's own `
       + 'audit could not be read (ws-audit --expire measured nothing: ps is missing), so no verb ran. It is retried, backing off in between.');
-    const v = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) },
-      verb: { code: 1, stdout: JSON.stringify({ failed: 'pin-failed', detail: 'the attic pin failed' }) } } });
+    const v = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('expirable', { token: TOK }) },
+      verb: { ran: true, code: 1, stdout: JSON.stringify({ failed: 'pin-failed', detail: 'the attic pin failed' }) } } });
     expect(await expireArchived(v.deps, v.req)).toMatchObject({ kind: 'failed', resumable: true, detail: 'pin-failed: the attic pin failed' });
     expect(v.verbs()).toEqual(['ws-audit', 'ws-expire']);
   });
@@ -199,20 +199,20 @@ describe('the one executor', () => {
       [1, JSON.stringify({ failed: 'pin-failed', detail: 'the attic pin failed' }), true],
     ];
     for (const [code, stdout, resumable] of cases) {
-      const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { code, stdout } } });
+      const s = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { ran: true, code, stdout } } });
       const out = await expireArchived(s.deps, s.req);
       expect(out, stdout).toMatchObject({ kind: 'failed', resumable });
       recordExpireFeed(s.deps, out);
       expect(s.coord.feedEvents(10)[0]!.body, stdout).toContain(resumable ? 'It is retried' : 'It is not retried');
     }
-    const unread = await rig({ script: { audit: { code: 1, stdout: auditDoc('unmeasured') } } });
+    const unread = await rig({ script: { audit: { ran: true, code: 1, stdout: auditDoc('unmeasured') } } });
     expect(await expireArchived(unread.deps, unread.req), 'an audit that measured nothing is retried, as the audit’s own')
       .toMatchObject({ kind: 'audit-failed' });
   });
 
   it('containment-refuted comes back STUCK, and its feed row says the act stopped part-way and when it is asked again (wave 6, ruling B)', async () => {
-    const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) },
-      verb: { code: 1, stdout: JSON.stringify({ failed: 'containment-refuted', detail: 'a row outside the tree', crumb: true }) } } });
+    const s = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('expirable', { token: TOK }) },
+      verb: { ran: true, code: 1, stdout: JSON.stringify({ failed: 'containment-refuted', detail: 'a row outside the tree', crumb: true }) } } });
     const out = await expireArchived(s.deps, s.req);
     expect(out).toMatchObject({ kind: 'stuck', detail: 'containment-refuted: a row outside the tree' });
     recordExpireFeed(s.deps, out);
@@ -229,9 +229,9 @@ describe('the one executor', () => {
 
   it('a refusal at audit carries its word — in-use with the processes; a GONE word is gone', async () => {
     const inUse = [{ pid: 7, comm: 'tmux: server', cwd: '/w' }];
-    const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('in-use', { detail: 'process 7 …', inUse }) } } });
+    const s = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('in-use', { detail: 'process 7 …', inUse }) } } });
     expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'refused', token: 'in-use', inUse });
-    const g = await rig({ script: { audit: { code: 0, stdout: auditDoc('not-archived', { archivedAt: null, expiresAt: null }) } } });
+    const g = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('not-archived', { archivedAt: null, expiresAt: null }) } } });
     expect(await expireArchived(g.deps, g.req)).toMatchObject({ kind: 'gone' });
   });
 
@@ -243,20 +243,20 @@ describe('the one executor', () => {
       ['ccd: bad token', { kind: 'composition', detail: 'bad token' }],
     ];
     for (const [stderr, want] of cases) {
-      const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { code: 1, stdout: '', stderr } } });
+      const s = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { ran: true, code: 1, stdout: '', stderr } } });
       expect(await expireArchived(s.deps, s.req), stderr).toMatchObject(want);
     }
   });
 
   it('a flock-unavailable feed row says the lane composes no cleanup on that box until the server restarts (wave 6)', async () => {
     const flock = 'ccd: flock (util-linux) is unavailable — refusing to run the destructive verb unserialised';
-    const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { code: 1, stdout: '', stderr: flock } } });
+    const s = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { ran: true, code: 1, stdout: '', stderr: flock } } });
     const out = await expireArchived(s.deps, s.req);
     expect(out).toMatchObject({ kind: 'box', word: 'flock-unavailable' });
     expect(expireFeedBody(out)).toContain('The lane composes no cleanup on that box, for any archived workspace, until the server restarts.');
     const lock = '/h/.cc-sessions/.reap-demo-quiet-dune.lock';
-    const l = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) },
-      verb: { code: 1, stdout: '', stderr: `ccd: cannot open the reap lock at ${lock}` } } });
+    const l = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('expirable', { token: TOK }) },
+      verb: { ran: true, code: 1, stdout: '', stderr: `ccd: cannot open the reap lock at ${lock}` } } });
     expect(expireFeedBody(await expireArchived(l.deps, l.req)), 'the CONTROL: lock-unopenable halts nothing').not.toContain('until the server restarts');
   });
 
@@ -305,7 +305,7 @@ describe('the one executor', () => {
 
   it('a `not-expired` refusal carries the audit’s own instant, for the lane to learn', async () => {
     const raised = ARCH + 2 * 604_800;
-    const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('not-expired', { expiresAt: raised }) } } });
+    const s = await rig({ script: { audit: { ran: true, code: 0, stdout: auditDoc('not-expired', { expiresAt: raised }) } } });
     expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'refused', token: 'not-expired', auditExpiresAt: raised });
   });
 
@@ -345,5 +345,19 @@ describe('an instant Date cannot render does not throw out of the feed row (D-58
     expect(() => recordExpireFeed(s.deps, corrupt)).not.toThrow();
     expect(s.coord.feedEvents(10).filter((e) => e.sessionId === ID)).toHaveLength(1);
     expect(expireFeedBody(out), 'the CONTROL: a renderable instant keeps its UTC words').toMatch(/archived \d{4}-\d\d-\d\d \d\d:\d\d UTC/);
+  });
+});
+
+describe('the not-ran sentence has one definition', () => {
+  it('only unmeasured.ts spells "was not answered ("', async () => {
+    const { readdirSync, readFileSync, statSync } = await import('node:fs');
+    const walk = (d: string): string[] =>
+      readdirSync(d).flatMap((n) => {
+        const p = path.join(d, n);
+        return statSync(p).isDirectory() ? walk(p) : p.endsWith('.ts') ? [p] : [];
+      });
+    const src = path.resolve(__dirname, '../src');
+    const hits = walk(src).filter((f) => readFileSync(f, 'utf8').includes('was not answered ('));
+    expect(hits.map((f) => path.relative(src, f))).toEqual(['unmeasured.ts']);
   });
 });

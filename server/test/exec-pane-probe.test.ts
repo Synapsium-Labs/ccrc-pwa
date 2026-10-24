@@ -42,7 +42,7 @@ const probeOn = async (r: ExecResult): Promise<{ probe: PaneProbe; calls: string
 
 describe('Tmux.paneProbe', () => {
   it('asks for the six formats in one list-panes, against EXACTLY =cc-<id>:', async () => {
-    const { calls } = await probeOn({ code: 0, stdout: '1 0 2000 220 50 0\n', stderr: '' });
+    const { calls } = await probeOn({ ran: true, code: 0, stdout: '1 0 2000 220 50 0\n', stderr: '' });
     expect(calls).toEqual([['tmux', 'list-panes', '-t', `=cc-${ID}:`, '-F', PANE_PROBE_FORMAT]]);
     // The format string is the contract with tmux, so it is spelled out here
     // rather than only referenced — a reordering would silently swap two of
@@ -52,7 +52,7 @@ describe('Tmux.paneProbe', () => {
   });
 
   it('reads the six numbers off a single-pane window', async () => {
-    const { probe } = await probeOn({ code: 0, stdout: '1 0 2000 220 50 0\n', stderr: '' });
+    const { probe } = await probeOn({ ran: true, code: 0, stdout: '1 0 2000 220 50 0\n', stderr: '' });
     expect(probe).toEqual({ ok: true, history: 0, limit: 2000, width: 220, height: 50, alternate: false });
   });
 
@@ -60,12 +60,12 @@ describe('Tmux.paneProbe', () => {
     // PR #96 read row [0] and mismatched here: pane 0 carried the history,
     // pane 1 was active and is what `capture-pane -t <session>` returns. A
     // probe that describes a pane the capture did not read is worse than none.
-    const { probe } = await probeOn({ code: 0, stdout: '0 278 2000 220 25 0\n1 5 2000 220 24 1\n', stderr: '' });
+    const { probe } = await probeOn({ ran: true, code: 0, stdout: '0 278 2000 220 25 0\n1 5 2000 220 24 1\n', stderr: '' });
     expect(probe).toEqual({ ok: true, history: 5, limit: 2000, width: 220, height: 24, alternate: true });
   });
 
   it("answers `gone` on list-panes' own missing-target message, measured verbatim", async () => {
-    const { probe } = await probeOn({ code: 1, stdout: '', stderr: "can't find window: cc-nope\n" });
+    const { probe } = await probeOn({ ran: true, code: 1, stdout: '', stderr: "can't find window: cc-nope\n" });
     expect(probe).toEqual({ ok: false, reason: 'gone' });
   });
 
@@ -73,21 +73,21 @@ describe('Tmux.paneProbe', () => {
     // What `list-panes -t =cc-nope:` actually says. Read as `unreadable`, a
     // dead session would show the drawer's "could not look" instead of its
     // loss overlay — measured against the real adapter before this arm.
-    const { probe } = await probeOn({ code: 1, stdout: '', stderr: "can't find session: cc-nope\n" });
+    const { probe } = await probeOn({ ran: true, code: 1, stdout: '', stderr: "can't find session: cc-nope\n" });
     expect(probe).toEqual({ ok: false, reason: 'gone' });
   });
 
   it('answers `unreadable` with the reason for any other tmux refusal', async () => {
-    const { probe } = await probeOn({ code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default\n' });
+    const { probe } = await probeOn({ ran: true, code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default\n' });
     expect(probe).toEqual({ ok: false, reason: 'unreadable', detail: 'no server running on /tmp/tmux-1000/default' });
     // An unrecognised FUTURE tmux error must read as "we could not look", never
     // as death — `classifyHasSession`'s polarity (D-308/D-309).
-    const odd = await probeOn({ code: 3, stdout: '', stderr: '' });
+    const odd = await probeOn({ ran: true, code: 3, stdout: '', stderr: '' });
     expect(odd.probe).toEqual({ ok: false, reason: 'unreadable', detail: 'tmux exited 3 with no message' });
   });
 
   it('answers `unparseable` when tmux succeeded but no row claims to be active', async () => {
-    const { probe } = await probeOn({ code: 0, stdout: '0 12 2000 220 25 0\n', stderr: '' });
+    const { probe } = await probeOn({ ran: true, code: 0, stdout: '0 12 2000 220 25 0\n', stderr: '' });
     expect(probe).toEqual({
       ok: false, reason: 'unparseable',
       detail: 'list-panes returned 1 row(s), none active',
@@ -95,7 +95,7 @@ describe('Tmux.paneProbe', () => {
   });
 
   it('answers `unparseable` when the active row is not six numbers', async () => {
-    const { probe } = await probeOn({ code: 0, stdout: '1 0 2000 220 fifty 0\n', stderr: '' });
+    const { probe } = await probeOn({ ran: true, code: 0, stdout: '1 0 2000 220 fifty 0\n', stderr: '' });
     expect(probe).toEqual({
       ok: false, reason: 'unparseable',
       detail: 'active row did not match the six-field shape: 1 0 2000 220 fifty 0',
@@ -103,7 +103,7 @@ describe('Tmux.paneProbe', () => {
   });
 
   it('answers `unparseable` on an empty answer rather than inventing a zero', async () => {
-    const { probe } = await probeOn({ code: 0, stdout: '', stderr: '' });
+    const { probe } = await probeOn({ ran: true, code: 0, stdout: '', stderr: '' });
     expect(probe).toEqual({
       ok: false, reason: 'unparseable',
       detail: 'list-panes returned 0 row(s), none active',
@@ -115,10 +115,10 @@ describe('Tmux.paneProbe', () => {
     // and `unparseable` into one token, or answers `gone` for both. Four
     // inputs, four distinct answers.
     const answers = [
-      (await probeOn({ code: 0, stdout: '1 0 2000 220 50 0\n', stderr: '' })).probe,
-      (await probeOn({ code: 1, stdout: '', stderr: "can't find window: cc-nope\n" })).probe,
-      (await probeOn({ code: 1, stdout: '', stderr: 'boom\n' })).probe,
-      (await probeOn({ code: 0, stdout: '0 1 2 3 4 0\n', stderr: '' })).probe,
+      (await probeOn({ ran: true, code: 0, stdout: '1 0 2000 220 50 0\n', stderr: '' })).probe,
+      (await probeOn({ ran: true, code: 1, stdout: '', stderr: "can't find window: cc-nope\n" })).probe,
+      (await probeOn({ ran: true, code: 1, stdout: '', stderr: 'boom\n' })).probe,
+      (await probeOn({ ran: true, code: 0, stdout: '0 1 2 3 4 0\n', stderr: '' })).probe,
     ].map((p) => (p.ok ? 'ok' : p.reason));
     expect(answers).toEqual(['ok', 'gone', 'unreadable', 'unparseable']);
   });

@@ -33,7 +33,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const deadRunner: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+const deadRunner: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 
 /** Deps in remote mode against a throwaway fixture home. */
 function remoteDeps(

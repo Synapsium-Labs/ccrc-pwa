@@ -3710,7 +3710,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // ccd's own two refusals (D-5240: `cmd_swap`'s manual gate, after both reads above) are the same two 409s, so a
     // turn that began between the in-queue read and ccd's act reaches the operator as `session-busy` with its "swap
     // anyway". Every other ccd failure keeps the generic 502 with ccd's sentence.
-    const ccdRefused = ccdSwapRefusal(res.ran.stderr);
+    // D-6840: a call that never ran has no refusal word to read, only the runner's own words (the 502).
+    const ccdRefused = res.ran.ran === false ? null : ccdSwapRefusal(res.ran.stderr);
     if (ccdRefused !== null) return refuseRoute(reply, ccdRefused);   // `ccd: hibernated:` too (D-5242)
     return reply.code(502).send({ ok: false, stderr: res.ran.stderr });
   });
@@ -4068,6 +4069,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));
+    // D-6840: the reap is destructive, so a call that never ran, or may have, is `indeterminate` (the
+    // empty-handed `parseReap`), never a refusal built from the runner's forged stderr.
+    if (res.ran === false) return parseReap('', 1, '');
     return parseReap(res.stdout, res.ok ? 0 : 1, res.stderr);
   });
 

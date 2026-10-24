@@ -27,7 +27,7 @@ function fixture() {
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
   const calls: string[][] = [];
-  const run: Runner = async (_cmd, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
+  const run: Runner = async (_cmd, args) => { calls.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; };
   const base = testDeps(home, run);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const deps: DispatchRunDeps = {

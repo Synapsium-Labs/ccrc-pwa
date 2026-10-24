@@ -63,9 +63,9 @@ function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls:
     calls.push(args);
     const verb = args[0] ?? '';
     if (verb === 'route' && cfg.fail?.has('route')) {
-      return { code: 1, stdout: '', stderr: cfg.routeStderr ?? 'route failed' };
+      return { ran: true, code: 1, stdout: '', stderr: cfg.routeStderr ?? 'route failed' };
     }
-    if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `${verb} failed` };
+    if (cfg.fail?.has(verb)) return { ran: true, code: 1, stdout: '', stderr: `${verb} failed` };
     if (verb === 'ws-add') {
       const sequence = cfg.wsAddSequence ?? [cfg.wsAddCreates ?? [`${PROJECT}-fresh`]];
       const ids = sequence[Math.min(wsAddCalls, sequence.length - 1)]!;
@@ -76,16 +76,16 @@ function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls:
       const at = args.indexOf('--child');
       const child = at >= 0 ? args[at + 1] : undefined;
       for (const id of ids) seed(home, id, child !== undefined ? { child } : {});
-      return { code: 0, stdout: 'workspace demo-decoy on claude — /w/x (branch ws/decoy)', stderr: '' };
+      return { ran: true, code: 0, stdout: 'workspace demo-decoy on claude — /w/x (branch ws/decoy)', stderr: '' };
     }
     // Rule 3's child gate asks about the child a later wave binds; it has had
     // no PR (`child-reclaim-refusals.test.ts`'s `noPrLine`).
     if (verb === 'pr-state' && args[1] === '--session') {
       const id = args[2] ?? '';
-      return { code: 0, stdout: `${JSON.stringify({ id, rows: [], baseShort: 'main', branch: `ws/${id}`, ahead: 1,
+      return { ran: true, code: 0, stdout: `${JSON.stringify({ id, rows: [], baseShort: 'main', branch: `ws/${id}`, ahead: 1,
         tip: 'f'.repeat(40), checkedAt: 1 })}\n`, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 }

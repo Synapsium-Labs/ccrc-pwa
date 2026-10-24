@@ -329,8 +329,8 @@ describe('the executor’s loose job: its own capabilities, the licence, and the
   const doneDoc = JSON.stringify({ collected: NAME_HEX, record: 'r.1.1', resumed: false, loose: true });
   const looseRig = (o: Parameters<typeof rig>[0] = {}) => {
     const r = rig({ caps: LOOSE_CAPS, ...o });
-    r.answerAudit(() => ({ code: 0, stdout: looseDoc(), stderr: '' }));
-    r.answerAct(() => ({ code: 0, stdout: doneDoc, stderr: '' }));
+    r.answerAudit(() => ({ ran: true, code: 0, stdout: looseDoc(), stderr: '' }));
+    r.answerAct(() => ({ ran: true, code: 0, stdout: doneDoc, stderr: '' }));
     return r;
   };
   const verbs = (r: ReturnType<typeof looseRig>): string[] => r.attempts.map((a) => a[0]!);
@@ -411,7 +411,7 @@ describe('the executor’s loose job: its own capabilities, the licence, and the
   it('a refusal from the loose verb is the witnessed verb’s refusal, read by the same reader', async () => {
     const r = looseRig();
     r.raise(COLLECT_LOOSE_LIVE_MARKER);
-    r.answerAct(() => ({ code: 0, stdout: JSON.stringify({ refused: 'state-changed', detail: 'it moved', paths: [] }), stderr: '' }));
+    r.answerAct(() => ({ ran: true, code: 0, stdout: JSON.stringify({ refused: 'state-changed', detail: 'it moved', paths: [] }), stderr: '' }));
     expect(await collectTempRoot(r.deps, r.job(ID_L))).toMatchObject({ kind: 'acted', result: { kind: 'refused', word: 'state-changed' } });
   });
 });

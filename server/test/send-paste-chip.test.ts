@@ -61,14 +61,14 @@ function phaseTmux(o: { start: string; typed: string; cleared?: string; entered?
     if (args[0] === 'capture-pane') {
       const pane = enters > 0 ? entered[Math.min(enters, entered.length) - 1]!
         : phase === 'typed' ? o.typed : phase === 'cleared' ? (o.cleared ?? EMPTY) : o.start;
-      return { code: 0, stdout: pane, stderr: '' };
+      return { ran: true, code: 0, stdout: pane, stderr: '' };
     }
     if (args[0] === 'send-keys') {
       if (args[3] === '-l') phase = 'typed';
       else if (args.at(-1) === 'C-u' && phase === 'start') phase = 'cleared';
       else if (args.at(-1) === 'Enter') enters++;
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { tmux: new Tmux(run), calls };
 }

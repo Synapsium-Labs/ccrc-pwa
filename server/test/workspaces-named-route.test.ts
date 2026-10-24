@@ -32,7 +32,7 @@ interface Booted { app: FastifyInstance; calls: string[][]; fetched: { n: number
 
 async function boot(o: Opts = {}): Promise<Booted> {
   const calls: string[][] = [];
-  const run: Runner = o.run ?? (async () => ({ code: 0, stdout: '', stderr: '' }));
+  const run: Runner = o.run ?? (async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
   const deps = testDeps(undefined, async (cmd, args) => { calls.push(args); return run(cmd, args); });
   const fetched = { n: 0 };
   const f = o.fetch;
@@ -132,7 +132,7 @@ describe('refusals send no argv', () => {
 
   it('a box that advertised no caps at all refuses a name: no evidence is no', async () => {
     const calls: string[][] = [];
-    const app = await buildServer(testDeps(undefined, async (_c, a) => { calls.push(a); return { code: 0, stdout: '', stderr: '' }; }));
+    const app = await buildServer(testDeps(undefined, async (_c, a) => { calls.push(a); return { ran: true, code: 0, stdout: '', stderr: '' }; }));
     open = app;
     const res = await post(app, { name: 'ENG-1234' });
     expect(res.statusCode).toBe(501);
@@ -265,7 +265,7 @@ describe('a named create', () => {
 });
 
 describe("ccd's refusals", () => {
-  const failing = (stderr: string, extra: object = {}): Runner => async () => ({ code: 1, stdout: '', stderr, ...extra });
+  const failing = (stderr: string, extra: object = {}): Runner => async () => ({ ran: true, code: 1, stdout: '', stderr, ...extra });
 
   it('slug in use is 409 slug-taken, with no residue text', async () => {
     const { app } = await boot({ run: failing('ccd: slug in use: login-cleanup — in /home/u/.cc-sessions: project-a-login-cleanup.workdir') });

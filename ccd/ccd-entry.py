@@ -31,6 +31,7 @@
 #     repository in its project's attic; called only by the temp sweep)
 #   ws-audit --session <value> --reclaim [--defer-expired] — the token skeleton;
 #   ws-audit --session <value> --expire           — the expiry's token skeleton;
+#   ws-audit --session <value> --expire --child-of <value> — the same, for an archived child (expire-child-v1);
 #   ws-audit --session <value> --collect          — the collector's token skeleton;
 #   ws-audit --loose-hex <value> --collect        — the loose arm's token skeleton (D-6625);
 #     <value> is any string here, and the body still validates it as a session id
@@ -157,6 +158,9 @@ def is_protected(argv):
         return True
     # the loose arm's audit (D-6625): `ws-audit --loose-hex <value> --collect` mints the token the loose `ws-collect` trusts
     if len(argv) == 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--loose-hex') and folds_to(argv[3], '--collect'):
+        return True
+    if len(argv) == 6 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
+            and folds_to(argv[3], '--expire') and folds_to(argv[4], '--child-of'):
         return True
     return (len(argv) in (4, 5) and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session')
             and folds_to(argv[3], '--reclaim') and (len(argv) == 4 or folds_to(argv[4], '--defer-expired')))

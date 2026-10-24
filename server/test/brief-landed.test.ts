@@ -45,15 +45,15 @@ const liveHarness = (st: Box): Harness => {
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push([...args]);
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: `❯ ${st.box}\n`, stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: `❯ ${st.box}\n`, stderr: '' };
     if (args[0] === 'send-keys') {
       if (args[3] === '-l') st.box += args[5]!;
       else if (args[3] === 'Enter' && st.enterWorks) st.box = '';
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: '' };
   };
   return { home, calls, run };
 };
