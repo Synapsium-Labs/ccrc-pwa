@@ -56,17 +56,22 @@ runs:
     # real strace, and any shard may be handed that file. python3 is in the
     # image already and named for the same reason as jq — the `ccgpt-*`
     # suites assert it is present whenever `CI` is set.
-    # The key. Lockfile hashes, runner image (name and exact version), arch
-    # and the node setup-node resolved — nothing that varies with a branch.
+    # The key. The trees: lockfile hashes, runner OS image name, arch and the
+    # exact node setup-node resolved. The runner pool mixes image versions
+    # (and so node patch versions), and a tree is plain JavaScript plus
+    # prebuilt binaries chosen by OS and arch, so the image VERSION is left
+    # out of the trees' key (the first run of this key, with it, missed on
+    # every second runner) and stays in the packages' key, where the exact
+    # apt state matters. Nothing here varies with a branch.
     - name: Name the cache entries (linux)
       id: key
       if: inputs.platform == 'linux'
       shell: bash
       run: |
         lock="$(cat server/package-lock.json agent/package-lock.json pwa/package-lock.json ui/package-lock.json | sha256sum | cut -c1-40)"
-        base="$RUNNER_OS-$RUNNER_ARCH-${ImageOS:-none}-${ImageVersion:-none}"
+        base="$RUNNER_OS-$RUNNER_ARCH-${ImageOS:-none}"
         echo "trees=ccrc-deps-v1-$base-$(node --version)-$lock" >> "$GITHUB_OUTPUT"
-        echo "apt=ccrc-apt-v1-$base-$(sha256sum .github/actions/server-deps/action.yml | cut -c1-16)" >> "$GITHUB_OUTPUT"
+        echo "apt=ccrc-apt-v1-$base-${ImageVersion:-none}-$(sha256sum .github/actions/server-deps/action.yml | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
     - name: Restore the installed trees (linux)
       id: trees

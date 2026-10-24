@@ -1086,12 +1086,13 @@ describe('ci.yml: dependencies are installed once per run, and handed to the job
     expect(a).toMatch(/^ {4}- name: Restore the installed trees \(linux\)\n {6}id: trees\n {6}if: inputs\.platform == 'linux'\n {6}uses: actions\/cache\/restore@v4$/m);
   });
 
-  it('the cache key is the lockfile hashes, the runner image and the node version — no branch, ref, run or actor', () => {
+  it('the cache key is the lockfile hashes, the runner image (OS name for the trees, exact version for the packages) and the node version — no branch, ref, run or actor', () => {
     const a = read(DEPS);
     const keyStep = /- name: Name the cache entries \(linux\)\n(?: {6}.*\n| *\n)*/.exec(a)?.[0] ?? '';
     expect(keyStep, 'the key step is gone').not.toBe('');
     for (const lock of ['server', 'agent', 'pwa', 'ui']) expect(keyStep).toContain(`${lock}/package-lock.json`);
-    expect(keyStep).toContain('ImageVersion');
+    expect(keyStep).toContain('ImageOS');
+    expect(keyStep, 'the packages are keyed on the exact image').toContain('ImageVersion');
     expect(keyStep).toContain('node --version');
     expect(keyStep, 'a key that varies with the branch defeats the once-per-run install')
       .not.toMatch(/GITHUB_(?:REF|HEAD_REF|BASE_REF|RUN_ID|RUN_NUMBER|RUN_ATTEMPT|SHA|ACTOR)|github\./);
