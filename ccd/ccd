@@ -16228,6 +16228,8 @@ _ws_orphan_nested_ok() {   # tree -> 0 when the marker is live and EVERY nested 
     [[ -n "$c" ]] || continue
     [[ "$c" == "$pr"/* && "${c##*/}" =~ ^[A-Za-z0-9._-]+$ ]] || return 1   # _ws_leaf_remove takes one id-shaped leaf name; any other keeps the tree
     rel="${c#"$pr"/}"; cc=$(_ws_common_dir "$c") || return 1
+    [[ -z "$(git -C "$1" ls-files -s -- "$rel" 2>/dev/null)" ]] || return 1   # the outer tree tracks this path (a gitlink): git worktree remove would refuse once it is gone
+    _ws_leaf_checkouts "$c" || return 1   # the removal's own predicate (a submodule's .git file with no back-link), so the audit and the act agree
     REAP_SENSITIVE=(); RECLAIM_SECRETS=(); _ws_nested_secrets "$c" "$rel"; (( ${#REAP_SENSITIVE[@]} == 0 )) || return 1   # a secret-shaped file is never carried, so the checkout stays
     if [[ "$cc" == "$mr" ]]; then
       kind=same
@@ -16484,11 +16486,11 @@ _ws_orphan_nested_pin() {   # main tree s16 -> 0 when each nested checkout is pi
     if [[ "$kind" == foreign ]]; then _ws_nested_rescue "$m" "$c" "$b" "orphan-$3" orphan "$rel/" || return 1; continue; fi
     _ws_wip_commit "$c" "orphan-$3" orphan "$rel/" || { RECLAIM_PIN_WHY="$RECLAIM_WIP_WHY"; return 1; }
     wip="$RECLAIM_WIP_SHA"
-    { git -C "$c" reflog show HEAD --format=%H 2>/dev/null | LC_ALL=C sort -u | sed "s#.*#& reflog/&#"; git -C "$c" rev-parse --verify --quiet "HEAD^{commit}" | sed 's/$/ head/'
-      [[ -z "$wip" ]] || echo "$wip wip"; } | while read -r sha got; do
+    { git -C "$c" reflog show HEAD --format=%H 2>/dev/null | LC_ALL=C sort -u | sed "s#.*#& reflog/&#"; git -C "$c" rev-parse --verify --quiet "HEAD^{commit}" | sed 's#.*#& heads/&#'
+      [[ -z "$wip" ]] || echo "$wip wips/$wip"; } | while read -r sha got; do
       [[ "$sha" =~ ^[0-9a-f]{40,64}$ ]] && git -C "$m" update-ref "$b/$got" "$sha" 2>/dev/null && [[ "$(git -C "$m" rev-parse --verify --quiet "$b/$got")" == "$sha" ]] || exit 1
     done
-    [[ "${PIPESTATUS[1]}" == 0 && -n "$(git -C "$m" rev-parse --verify --quiet "$b/head")" ]] || { RECLAIM_PIN_WHY="the nested checkout at $c could not be pinned under $b/"; return 1; }
+    [[ "${PIPESTATUS[1]}" == 0 && -n "$(git -C "$m" for-each-ref --count=1 "$b/heads/")" ]] || { RECLAIM_PIN_WHY="the nested checkout at $c could not be pinned under $b/"; return 1; }
   done <<< "$_WS_ORPHAN_NLIST"
 }
 
