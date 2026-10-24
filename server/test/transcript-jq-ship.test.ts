@@ -47,8 +47,10 @@ describe('the lookup', () => {
     fs.copyFileSync(path.join(REPO, 'ccd', 'ccrc-doctor-checks'), path.join(bin, 'ccrc-doctor-checks'));
     const f = path.join(bin, `${A}.jsonl`);
     fs.writeFileSync(f, JSON.stringify({ type: 'continued-in', sessionId: A, continuedInSessionId: B }) + '\n');
-    const r = spawnSync('bash', ['-c', '. "$1"; _dr_continued_in "$2" "$3"; printf "%s|%s" "$?" "${_DR_CI_NEXT-}"', '_',
-      path.join(bin, 'ccrc-doctor-checks'), f, A], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+    // The paths ride the environment, not argv: CodeQL reads every argv element of a `bash -c` as part of the
+    // command (js/shell-command-injection-from-environment), so the shell text stays constant.
+    const r = spawnSync('bash', ['-c', '. "$TJQ_CHECKS"; _dr_continued_in "$TJQ_FILE" "$TJQ_SID"; printf "%s|%s" "$?" "${_DR_CI_NEXT-}"'],
+      { encoding: 'utf8', env: { ...process.env, HOME: home, TJQ_CHECKS: path.join(bin, 'ccrc-doctor-checks'), TJQ_FILE: f, TJQ_SID: A } });
     const [rc = '', next = ''] = r.stdout.split('|');
     return { rc, next };
   };
