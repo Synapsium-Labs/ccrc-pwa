@@ -42,7 +42,7 @@ const predicateLine = (fn: string): string => {
 
 /** True iff the ccd predicate line returns (stands down) on this pane. */
 const ccdBusy = (fn: string, pane: string): boolean => {
-  const r = spawnSync('bash', ['-c', `probe() { local pane="$1"; ${predicateLine(fn)}\n echo notbusy; }; probe "$1"`, 'bash', pane], { encoding: 'utf8', timeout: 15000 });
+  const r = spawnSync('bash', ['--noprofile', '--norc', '-c', `probe() { local pane="$1"; ${predicateLine(fn)}\n echo notbusy; }; probe "$1"`, 'bash', pane], { encoding: 'utf8', timeout: 15000, env: { PATH: '/usr/bin:/bin', HOME: '/nonexistent' } });
   // The stand-down arms `return` 0 or 1, so the exit status says nothing; stdout and stderr do.
   expect(r.stderr ?? '', 'the probe must not error').toBe('');
   return (r.stdout ?? '').trim() !== 'notbusy';

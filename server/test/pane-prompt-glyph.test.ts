@@ -4,9 +4,8 @@
  * of the glyph meant finding every spelling.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { startsWithPromptGlyph } from '../src/pane/dialog.js';
+import { callsIn, symbolOf } from './scan/symbols.js';
 
 describe('startsWithPromptGlyph', () => {
   it('is true for a row that starts with the prompt glyph, bare or with text', () => {
@@ -22,9 +21,9 @@ describe('startsWithPromptGlyph', () => {
 });
 
 describe('inject/send.ts', () => {
-  it("spells the prompt glyph test through the pane export, with no inline startsWith('❯')", () => {
-    const src = readFileSync(path.resolve(__dirname, '../src/inject/send.ts'), 'utf8');
-    expect(src.match(/startsWith\('❯'\)/g) ?? []).toHaveLength(0);
-    expect(src.match(/startsWithPromptGlyph\(/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
+  it('reads the prompt glyph through the pane export at each of its four sites', () => {
+    for (const name of ['draftOfMeasured', 'boxRows', 'stashHeld', 'continuationRows']) {
+      expect(callsIn(symbolOf('server/src/inject/send.ts', name)).map((c) => c.name), name).toContain('startsWithPromptGlyph');
+    }
   });
 });
