@@ -270,7 +270,6 @@ function cssFiles(dir: string): string[] {
 const GRANDFATHERED_UNGUARDED = new Set([
   'pwa/src/session/chat.css: .compaction-head:hover .compaction-hint',
   'pwa/src/session/chat.css: .dlg-reply-send:not(:disabled):hover',
-  'pwa/src/session/chat.css: .dlg-details-toggle:hover',
   'pwa/src/session/chat.css: .slash-item:hover, .slash-item:focus-visible',
   'ui/src/components/prose.css: .msg-assist a:hover',
   'ui/src/components/prose.css: .code-block-copy:hover, .code-block-copy[data-copied]',

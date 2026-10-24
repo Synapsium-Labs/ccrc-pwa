@@ -31,6 +31,11 @@ interface SheetBaseProps {
    *  takes it: never an input, so a phone's keyboard never rises unasked. A danger confirm passes its Cancel
    *  (`useCancelFirst`). The terminal drawer passes nothing: xterm focuses its own textarea when its socket opens. */
   initialFocus?: RefObject<HTMLElement | null>;
+  /** Does the visible title scroll on its own (D-6325)? Default `true`: capped at 38vh with its own scroller, so a long
+   *  title can never push the body out of reach. `false` drops both, and the title grows inside the one scrolling
+   *  body: a surface whose question must read in full beside its options (the ask sheets) passes it, so the sheet has
+   *  exactly one vertical scroller. */
+  titleScroll?: boolean;
 }
 
 /** `full` and `footer` are exclusive (D-5932): the terminal drawer's glass runs to the safe-area line and has no
@@ -160,6 +165,7 @@ export function Sheet({
   initialFocus,
   footer,
   size = 'md',
+  titleScroll = true,
 }: SheetProps): ReactNode {
   const panelRef = useSheetFocus(open, initialFocus);
   // THE ARM IS CHOSEN BY WIDTH, NEVER BY SKIN (D-5933; the skins spec §5.3). One reading turns the grabber and the
@@ -181,8 +187,9 @@ export function Sheet({
           ? // `anywhere` because the title is dynamic: paths, URLs and
             // snake_case identifiers included, and the panel is position:fixed
             // with nothing to clip against. Capped at 38vh so a long question
-            // can never push the options out of reach.
-            cn('sheet-title max-h-[38vh] flex-none overflow-y-auto mb-4 font-ui text-lg font-semibold leading-tight text-ink-primary [overflow-wrap:anywhere]', desk && 'pe-10')
+            // can never push the options out of reach (`titleScroll={false}` drops the cap: the title then grows inside
+            // the body, the one scroller).
+            cn('sheet-title', titleScroll && 'max-h-[38vh]', 'flex-none', titleScroll && 'overflow-y-auto', 'mb-4 font-ui text-lg font-semibold leading-tight text-ink-primary [overflow-wrap:anywhere]', desk && 'pe-10')
           : 'sr-only'
       }
     >

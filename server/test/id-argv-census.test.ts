@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 49 id-taking calls across 12 files.
+// THE CLAIM: 50 id-taking calls across 13 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -299,10 +299,11 @@ const GATES = {
   },
   /** The routing door asks the predicate of the stored id it is about to write. */
   'routing-door': { file: 'coord/routes.ts', scope: 'POST /api/runs/:id/route', re: /if \(!isRegistryId\(sid\)\) \{/ },
-  /** Advance re-checks the stored id before `verifyDone`, and only there. */
+  /** Advance re-checks the stored id before `verifyDone`, and only there: the last gate of its decider's table
+   *  (ARCH-33), on a forward edge only, so a retreat to `working` composes no argv and is left alone. */
   'advance-gate': {
-    file: 'coord/routes.ts', scope: 'POST /api/runs/:id/advance',
-    re: /if \(to === 'awaiting-review' \|\| to === 'merging'\) \{\s*if \(!isRegistryId\(run\.sessionId\)\) return reply\.code\(409\)\.send\(\{ ok: false, reject: \{ code: 'bad-session' \} \}\);/,
+    file: 'coord/advance.ts', scope: 'GATES',
+    re: /\['storedId', \(c\) => \(\(c\.f\.to === 'awaiting-review' \|\| c\.f\.to === 'merging'\) && !isRegistryId\(c\.run!\.sessionId\)\)\s*\?\s*\{ reject: \{ code: 'bad-session' \} \}/,
   },
   /** Dispatch re-checks the stored id straight after the hold verdict, before any read: the decider's request step
    *  (ARCH-22), which `dispatchRun` runs first and which stops it on any refusal. */
@@ -329,6 +330,12 @@ const GATES = {
   'child-reclaim-outcome': {
     file: 'coord/childReclaim.ts', scope: 'childReclaimOutcome',
     re: /deferred\('marker-unreadable', 'the session id is not a registry id'\)/,
+  },
+  /** The stale arm's mail step refuses a non-registry id before its `ws-attic` argv (it also runs behind the executor's
+   *  `readSessionRecord` `bad-id` deferral). */
+  'stale-told-guard': {
+    file: 'coord/childReclaimStale.ts', scope: 'childReclaimStaleTold',
+    re: /ask === undefined \|\| !isRegistryId\(req\.sessionId\)\) return;/,
   },
   /** Expiry's step 0, before its capability read. */
   'expiry-step-0': { file: 'coord/expireArchived.ts', scope: 'expireArchived', re: EXPIRY_STEP_0 },
@@ -389,6 +396,7 @@ const CENSUS: readonly CensusRow[] = [
   // coord/childReclaim.ts: the close path's child gate (masked by close's gates) and the sweep both reach the one executor.
   { file: 'coord/childReclaim.ts', scope: 'childReclaimAudit', builder: 'wsReclaimAudit', id: 'req.sessionId', origin: ['stored', 'registry'], gate: ['child-reclaim-outcome'] },
   { file: 'coord/childReclaim.ts', scope: 'childReclaimAct', builder: 'wsReclaim', id: 'req.sessionId', origin: ['stored', 'registry'], gate: ['child-reclaim-outcome'] },
+  { file: 'coord/childReclaimStale.ts', scope: 'childReclaimStaleTold', builder: 'wsAttic', id: 'req.sessionId', origin: ['stored', 'registry'], gate: ['stale-told-guard'] },
   { file: 'coord/childReclaim.ts', scope: 'releaseRetiredChildHold', builder: 'wsRelease', id: 'sessionId', origin: ['registry'], gate: ['readSessionRecord'], entry: /\breadSessionRecord\(deps\.io, deps\.cfg, sessionId\)/ },
   // coord/childSpent.ts: `rec` is a FOUND row of `readSessionRecord` (childBindGate, childGateAtClose). The read is in
   // the callers, so the row has no `entry`: the callers case below pins who calls `childSpent` and `childSpentLive`, and
@@ -462,8 +470,8 @@ const CENSUS: readonly CensusRow[] = [
 /** The files whose gates ask the predicate themselves. */
 const GATE_FILES = [
   'server.ts', 'registry.ts', 'watch.ts',
-  'coord/routes.ts', 'coord/openRun.ts', 'coord/dispatchDecide.ts', 'coord/close.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
-  'coord/expireArchived.ts',
+  'coord/routes.ts', 'coord/openRun.ts', 'coord/advance.ts', 'coord/dispatchDecide.ts', 'coord/close.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
+  'coord/expireArchived.ts', 'coord/childReclaimStale.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;
@@ -504,7 +512,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     }
   });
 
-  it('the header claim, "49 id-taking calls across 12 files", matches the scan', () => {
+  it('the header claim, "50 id-taking calls across 13 files", matches the scan', () => {
     const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
     const claim = /^\/\/ THE CLAIM: (\d+) id-taking calls across (\d+) files\b/m.exec(self);
     expect(claim, 'the census claim was removed or reworded without its guard').not.toBeNull();

@@ -1,3 +1,4 @@
+import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import { reviveWsAudit, type ReapResult, type WsAudit } from '../../shared/api.js';
 
 /**
@@ -299,7 +300,8 @@ export function parseAudit(stdout: string): WsAudit | null {
  * disk that ccrc is not entitled to make; the next `ws-audit` reports the
  * breadcrumb and the reap resumes from it.
  */
-export function parseReap(stdout: string, code: number, stderr: string): ReapResult {
+export function parseReap(stdout: string, code: number, rawStderr: string): ReapResult {
+  const stderr = withoutCcdRefusal(rawStderr);
   const text = stdout.trim();
   if (text !== '') {
     try {

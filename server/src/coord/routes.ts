@@ -25,7 +25,7 @@ import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
-import { toRunSummary, type ClaimEndResult, type CoordStore, type StallSettingsWrite } from './store.js';
+import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
 import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
@@ -34,6 +34,7 @@ import { COORDINATOR_INTENT_ACTIONS, COORDINATOR_INTENT_REFUSALS, declareCoordin
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
+import { advanceGate, advanceRequest, type AdvanceBody } from './advance.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
@@ -72,7 +73,7 @@ import {
   type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
-import { refuseRoute, refuseRun } from '../refuse.js';
+import { refuseAdvance, refuseRoute, refuseRun } from '../refuse.js';
 import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
@@ -1759,6 +1760,39 @@ export function registerCoordRoutes(
   });
 
   /**
+   * `POST /api/runs/:id/advance`'s ACT, after `advanceGate` admitted the run (ARCH-33): the forward edges re-measure
+   * the claim, then the advance and the read-back. It decides no gate.
+   */
+  const advanceAct = async (
+    coord: CoordStore, reply: FastifyReply, run: RunRow & { sessionId: string }, id: number, to: RunState, claim: DoneClaim,
+  ): Promise<FastifyReply> => {
+    // Forward motion toward a review claim re-measures; retreating to `working` does not — see the route's docstring.
+    if (to === 'awaiting-review' || to === 'merging') {
+      const verdict = await verifyDone(
+        { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
+        { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
+        claim,
+      );
+      if (!verdict.ok) {
+        coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
+        queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
+          kind: 'status', subject: 'wave-advance-rejected', body: `${verdict.code}: ${verdict.detail}` });
+        return reply.code(409).send({ ok: false, reject: { code: verdict.code, detail: verdict.detail } });
+      }
+    }
+
+    const adv = coord.advance(id, to, 'coordinator');
+    if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
+    // Re-read after the advance for the fresh row. `!` is gone with the type (D-2545): an advance that succeeded and
+    // then read back absent or unreadable is a real condition, and answering it honestly is cheaper than a
+    // non-null assertion that would throw a bare 500 here.
+    const after = coord.run(id);
+    if (!after.ok) return refuseRoute(reply, 'run-unreadable', { detail: after.detail });
+    if (after.run === null) return refuseAdvance(reply, { reject: { code: 'unknown-run' } });
+    return reply.code(200).send({ ok: true, run: toRunSummary(after.run) });
+  };
+
+  /**
    * `POST /api/runs/:id/advance` (fix, review findings 1/15: neither Build 7
    * plan actually authored this route — PR I's own D-9 said "PR J's
    * `POST /api/runs/:id/advance` is what reaches [awaiting-review/merging];
@@ -1794,116 +1828,19 @@ export function registerCoordRoutes(
     if (!requireMailToken(req, reply, 'POST /api/runs/:id/advance')) return;
     const coord = deps.coord;
 
-    const { id: idParam } = req.params as { id: string };
-    const id = parseCanonicalPositiveSafeInteger(idParam);
-    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-
-    const body = (req.body ?? {}) as
-      { to?: unknown;
-        fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown } };
-    const fp = body.fingerprint;
-    if (!isRunState(body.to) ||
-        typeof fp !== 'object' || fp === null ||
-        typeof fp.branchTip !== 'string' || typeof fp.handoffCommit !== 'string' ||
-        typeof fp.prPhase !== 'string' || !(fp.prNumber === null || typeof fp.prNumber === 'number')) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    const to = body.to;
-    const ADVANCE_TARGETS: readonly RunState[] = ['working', 'awaiting-review', 'merging'];
-    if (!ADVANCE_TARGETS.includes(to)) {
-      return reply.code(409).send({ ok: false,
-        reject: { code: 'bad-transition', detail: `POST /api/runs/:id/advance only reaches ${ADVANCE_TARGETS.join('/')} — ` +
-          "'planned'/'dispatched' are POST .../dispatch's job and 'closing'/'done'/'failed' are POST .../close's" } });
-    }
-    const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber as number | null,
+    // The body shape and the target scope are `advanceRequest`'s, the run-dependent gates `advanceGate`'s (ARCH-33,
+    // D-6733); this handler gathers their facts and acts.
+    const parsed = advanceRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), (req.body ?? {}) as AdvanceBody);
+    if (!parsed.ok) return refuseAdvance(reply, parsed.refusal);
+    const { id, to, fingerprint: fp } = parsed.req;
+    const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber,
       prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
 
     return coordMutex.run(async () => {
-    const read = coord.run(id);
-    // D-2545, and the `unknown-run` line below is why it matters: 404 tells
-    // the coordinator this run does not exist, which is a lie about a row
-    // sitting in the table with an integer this process cannot represent.
-    // 503, in the `not-configured` family — a fact about this box, not about
-    // the request. Before any `verifyDone` re-measurement or any advance.
-    if (!read.ok) {
-      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
-    }
-    const run = read.run;
-    if (!run) return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
-    if (!(transitionsFor(run.kind)[run.state] as readonly RunState[]).includes(to)) {
-      return reply.code(409).send({ ok: false, reject: { code: 'bad-transition', from: run.state, to } });
-    }
-    if (run.sessionId === null) {
-      return reply.code(409).send({ ok: false, reject: { code: 'not-dispatched' } });
-    }
-
-    // Design 2026-09-14 §9 invariant 3 — the pair never disagrees. A work run
-    // under review cannot be moved back to `working` until its review run is
-    // terminal: the coordinator closes R (done, or failed if it died) BEFORE
-    // sending W back, so a report and the tip it describes stay one pair.
-    // Checked ahead of the cap: a definite refusal before a contingent one.
-    if (to === 'working' && run.kind === 'work') {
-      const inflight = coord.reviewInFlightFor(id);
-      if (inflight !== null) {
-        return reply.code(409).send({ ok: false, reject: { code: 'review-in-flight', reviewRunId: inflight } });
-      }
-    }
-
-    // Spec 2026-09-14 §7.2 pin 2. Task 1 took the idle states out of
-    // `capsUsage().running`, so the one legal edge back INTO an active state
-    // — `awaiting-review`/`merging` -> `working`, a review sending work back
-    // or a lost merge race — must take the cap check dispatch takes, or the
-    // exclusion is a bypass. `dispatched -> working` is not checked: that run
-    // is already counted. The numbers come from `capsMeasured` (D-2805), the
-    // one reader both routes share; this file's own `.capsUsage(` stays the
-    // caps view's alone, as `coord-caps-route.test.ts` pins.
-    if (to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(run.state)) {
-      const { overConcurrency } = capsMeasured(coord);
-      if (overConcurrency !== null) {
-        // Fields spelled, not spread, to match dispatch.ts's frame; capsMeasured owns the arithmetic.
-        return reply.code(409).send({ ok: false, reject: { code: 'cap-concurrency',
-          limit: overConcurrency.limit, running: overConcurrency.running } });
-      }
-    }
-
-    // Forward motion toward a review claim re-measures; retreating to
-    // `working` does not — see this route's own docstring.
-    if (to === 'awaiting-review' || to === 'merging') {
-      // Spec §2.3: a STORED sessionId is re-checked where the row enters an
-      // id-taking flow. `verifyDone` composes `pr-state --session <id>`, and a
-      // refusal from it records a rejection and queues mail to that id, so
-      // this check stands before it and outside it. A row written before
-      // POST /api/runs checked its ids can hold an id ccd would read as a
-      // flag. Retreating to `working` composes no argv, so such a row can
-      // still be sent back: the check guards this block alone.
-      if (!isRegistryId(run.sessionId)) return reply.code(409).send({ ok: false, reject: { code: 'bad-session' } });
-      const verdict = await verifyDone(
-        { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-        { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
-        claim,
-      );
-      if (!verdict.ok) {
-        coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
-        queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
-          kind: 'status', subject: 'wave-advance-rejected', body: `${verdict.code}: ${verdict.detail}` });
-        return reply.code(409).send({ ok: false, reject: { code: verdict.code, detail: verdict.detail } });
-      }
-    }
-
-    const adv = coord.advance(id, to, 'coordinator');
-    if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
-    // Re-read after the advance for the fresh row. `!` is gone with the type
-    // (D-2545): an advance that succeeded and then read back absent or
-    // unreadable is a real condition, and answering it honestly is cheaper
-    // than a non-null assertion that would throw a bare 500 here.
-    const after = coord.run(id);
-    if (!after.ok) {
-      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: after.detail });
-    }
-    if (after.run === null) {
-      return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
-    }
-    return reply.code(200).send({ ok: true, run: toRunSummary(after.run) });
+      const gate = advanceGate({ to, read: () => coord.run(id), reviewInFlight: () => coord.reviewInFlightFor(id),
+        overConcurrency: () => capsMeasured(coord).overConcurrency });
+      if (!gate.ok) return refuseAdvance(reply, gate.refusal);
+      return advanceAct(coord, reply, gate.run, id, to, claim);
     });
   });
 

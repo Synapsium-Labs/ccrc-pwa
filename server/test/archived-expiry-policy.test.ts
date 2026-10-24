@@ -1114,6 +1114,7 @@ describe('L1', () => {
     const src = readFileSync(path.join(path.dirname(CCD), '..', 'server', 'src', 'archivedExpiry.ts'), 'utf8');
     const froms = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
     // D-5855: the live switch is re-exported from its row in the L0 switchboard.
-    expect(froms).toEqual(['../../shared/api.js', '../../shared/switches.js']);
+    // ARCH-14 (#560): the machine token's reader is L0 too (`shared/ccd-refusal.ts`).
+    expect(froms).toEqual(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js']);
   });
 });

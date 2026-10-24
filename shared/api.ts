@@ -4069,7 +4069,9 @@ export function isMarkerState(v: unknown): v is MarkerState {
 
 /** The sweep's words for a marked child it keeps for a person (child-reclamation
  *  spec §5.9): standing answers, read from records rather than a failed read, that
- *  automatic reclamation never acts on while they stand. Spelled ONCE, as the keys
+ *  automatic reclamation never acts on while they stand. D-6639: `minting-run-absent` and
+ *  `review-report-stale` (and the hold, which is no kept word) now LAPSE: the stale arm reclaims such a child once
+ *  nothing has touched it for seven days and the operator has armed it. No word is removed; their sentences say when. Spelled ONCE, as the keys
  *  of a total table, and the runtime list is derived. The SERVER's sweep answers
  *  them and composes their sentences (`server/src/childReclaimSweep.ts`, which
  *  says what ends each). The PWA renders sentences and never switches on a word. */
@@ -12018,3 +12020,17 @@ export const ACCOUNT_DENY_RULES: readonly string[] = [
   ...ACCOUNT_SECRET_PATHS.map((p) => `Read(${p})`),
   ...ACCOUNT_WRITE_DIRS.map((p) => `Edit(${p})`),
 ];
+
+/** `FleetHealth`'s disk block (D-6615), declared HERE at the foot as an interface merge, with its type import beside it,
+ *  so no line above moves and every line citation into this file (the README's, the specs', the compaction card's)
+ *  still holds. TypeScript merges it into `FleetHealth` above: it is one member of that interface. */
+import type { DiskHealth } from './disk.js';
+export interface FleetHealth {
+  /**
+   * The fleet's disk alarm (`DiskHealth`): the level of the worst work filesystem, each filesystem's own level,
+   * the expected mounts and the pressure flag, held by the watcher's `sweepDisk` once a minute. Optional for the same
+   * absence-permits reason as the blocks above: absent until the first sweep. Read it through `readDiskHealth` alone;
+   * absent reads as UNKNOWN, never as a healthy disk.
+   */
+  disk?: DiskHealth;
+}

@@ -44,6 +44,15 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd (_child_tmpdir: a --child workspace spawns with TMPDIR here)', 'everything that follows TMPDIR in that session, Claude Code\'s scratch included'],
     collector: 'the reclaim tail (_ws_tmproot_remove, kept while in use); ws-collect for a root that outlived its row (server-composed, witness-gated)',
     bound: 'the child\'s lifetime; a root kept in use, until ws-collect takes it on a server-minted audit token (witness-gated)', tier: 'per child; the scratch ccd-tmp-sweep would otherwise hold under claude-<uid>', ruling: null },
+  // D-6639 (fleet disk retention DR-27, spec 2026-10-23 §2.7.3): a `--child` workspace itself, whose collectors the
+  // retention design names. Collected on its run's close; by the sweep once the run is done; by the stale arm after
+  // seven idle days when a hold, an absent run, a review report or a terminal refusal kept it; and by expiry seven
+  // days after an archive. A child that coordinated is never taken automatically.
+  { name: 'child-workspaces', root: '<worktrees-root>/<project>/<slug> (a --child workspace)', pattern: 'W',
+    creators: ['ccd (ws-add --child, minted for a coordinated run)'],
+    collector: 'ws-reclaim on the run\'s close and by the sweep; its stale arm at 7 idle days (behind its live switch in shared/switches.ts); ws-expire once archived',
+    bound: 'the run\'s close, or 7 idle days when kept, or 7 days after an archive; never while it coordinated',
+    tier: 'a worktree plus its pinned attic refs; the work is kept under refs/ccrc/attic/<id>/ before the tree goes', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
   // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
   // it lives in the runtime dir, so a reboot empties it — the safe direction for

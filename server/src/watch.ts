@@ -68,7 +68,9 @@ import {
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 // The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
 import { randomUUID } from 'node:crypto';
-import type { MeasuredDirectoryRead } from './io.js';
+import type { MeasuredDirectoryRead, MeasuredDisk } from './io.js';
+import { diskVerdict, type DiskVerdict } from './disk.js';
+import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
 import {
   DelegationIngestError, delegationBucketDurabilityOf, delegationBucketUtcHour, ingestAndApplyDelegationBucket, readDelegationBucket,
@@ -156,8 +158,9 @@ import {
   type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead, type ChildReclaimSweepEntry,
   type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
   childReclaimAttentionWithLeaves, childReclaimLeafKept, childReclaimLeafKeptSince, type ChildReclaimLeafKept,
-  CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed,
+  CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed, type ChildReclaimSweepInput, type ChildStaleAsk,
 } from './childReclaimSweep.js';
+import { ChildStaleArm, readStaleHoldAt, readStaleHoldBytes, staleHoldWanted, type StaleHoldRead } from './coord/childReclaimStale.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
   EXPIRE_AUDITS_PER_PASS, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
@@ -248,6 +251,8 @@ const NAME_SWEEP_MS = 10_000;
  *  the name sweep, deliberately: this one touches the filesystem per PROJECT,
  *  not per pane. */
 const DIVERGENCE_SWEEP_MS = 60_000;
+/** The disk alarm's clock (D-6615, spec §2.5): one `statfs` pass a minute. */
+const DISK_SWEEP_MS = 60_000;
 
 /** The child-reclaim lane (child-reclamation wave 4, spec §5.7). The
  *  census's cadence, for the census's reason — a child's eligibility moves on
@@ -1138,6 +1143,8 @@ export class FleetWatcher {
    *  dispatch that has run past `CHILD_RECLAIM_STALL_MS` — `childReclaimInFlightSince`
    *  is what tells the two apart. */
   private childReclaimInFlight = new Set<string>();
+  /** D-6639: the stale arm's memory (what its shadow said, when a terminal child was last asked). */
+  private readonly childStale = new ChildStaleArm();
   /** When each in-flight dispatch was sent — `CHILD_RECLAIM_STALL_MS`'s own
    *  clock, and the reason a request that never settles stops holding the
    *  lane's one slot forever. MONOTONIC: a forward wall-clock step must never
@@ -1342,6 +1349,11 @@ export class FleetWatcher {
    *  `currentX()` on this class already has, and the route turns it into a
    *  `readiness: null` on the wire rather than omitting the key. */
   private lastReadinessSweep = 0;
+  /** The disk alarm's clock, the decider's memory and the block the route serves (D-6615). `diskBlock` is `null` until
+   *  the first sweep lands: absence on the wire reads as UNKNOWN. */
+  private lastDiskSweep = 0;
+  private diskState: DiskVerdict | null = null;
+  private diskBlock: DiskHealth | null = null;
   private readiness: FleetReadiness | undefined;
   /** The stale set last reported, as JSON — one warn per CHANGING set, the
    *  `lastDivergenceJson` idiom, so a standing stale number is not a log
@@ -2167,6 +2179,12 @@ export class FleetWatcher {
     return this.archivedHeldBlock;
   }
 
+  /** The disk alarm's block as the last sweep held it (D-6615), or `null` before the first sweep: absence on the wire
+   *  reads as UNKNOWN, never as a healthy disk. */
+  disk(): DiskHealth | null {
+    return this.diskBlock;
+  }
+
   /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
   delegationReport() {
     return this.delegationLane().report();
@@ -2463,6 +2481,12 @@ export class FleetWatcher {
       if (this.deps.coord && Date.now() - this.lastInventoryAt >= UPDATE_INVENTORY_MS) {
         void this.dispatchInventorySweep();
       }
+
+      // The disk alarm (D-6615) is gated HERE too, above the registry read's fail-shut return, because it reads no
+      // registry: a full disk is exactly when the registry read fails, and the one alarm must still sound. NEVER
+      // awaited: a `statfs` of a stalled volume is what hangs (the agent bounds each root, the link bounds the request),
+      // and the dialog detector must not wait behind it. Own clock (`DISK_SWEEP_MS`).
+      void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
 
       // The server-caps beat (D-5232's mechanism, Task 9b) sits BESIDE the inventory lane, never inside it: that lane
       // is `coord`-gated, and a coord-less server must still keep its fleet's file current. Above the registry's
@@ -4246,7 +4270,10 @@ export class FleetWatcher {
     // new one; the executor re-reads the row's marker, open runs, switch and presence before it asks the
     // box; and ccd's audit judges the row's own hold, attachment and tree, and re-proves them in its lock.
     const pass = ++this.childReclaimPassSeq;
-    const regGenerations = await this.childReclaimGatherGenerations(records);
+    // D-6639: the stale arm's hold reads join this ONE gather (held rows past the ceiling on the server's own evidence
+    // only; `judge` keeps any child whose hold was not read), so the pass still awaits only here and at its acts.
+    const [regGenerations, staleHolds] = await Promise.all([
+      this.childReclaimGatherGenerations(records), this.childReclaimGatherStaleHolds(coord, records)]);
     if (pass !== this.childReclaimPassSeq) return;
     // The lane's two clocks, read ONCE for the pass's decisions (spec §5.7),
     // AFTER the gather, so no decision clock is older than the evidence it
@@ -4411,7 +4438,7 @@ export class FleetWatcher {
       .filter((row) => childReclaimTerminalRefusal(row, childReclaimTokenKind)).map((row) => row.sessionId));
     const seen = new Set<string>();
     const judged = new Map<string, ChildReclaimSweepVerdict>();
-    const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number; id: string }[] = [];
+    const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number; id: string; stale: ChildStaleAsk | null }[] = [];
     // Declared here, not at section FOUR below, so the hold-release job (a
     // SEPARATE dispatch from the ordinary reclaim gathered into `due`) can be
     // pushed onto it from inside this same per-child loop, the instant its
@@ -4514,13 +4541,18 @@ export class FleetWatcher {
       // row the gather holds no answer for reads `unreadable`, the unmeasured
       // default, never an optimistic `absent`.
       const regGeneration: ChildReclaimGeneration = regGenerations.get(r.id) ?? { kind: 'unreadable' };
-      const v = childReclaimSweepVerdict({
+      const sweepIn: ChildReclaimSweepInput = {
         sessionId: r.id, child: r.child, identityMeasured: r.unmeasured.length === 0, generation: regGeneration,
         workspace: r.workspace, held, terminal: terminal.has(r.id), mintingRun, reviewedRun, siblings,
         coordinatorClaim: claims.get(r.id), childBornAt, skewMs: CHILD_BIRTH_SKEW_MS, nowMs: now,
-      });
+        idle: 'unmeasured', holdDigest: null,   // the verdict reads neither; the stale arm gathers its own (D-6639)
+      };
+      const v = childReclaimSweepVerdict(sweepIn);
       judged.set(r.id, v);
-      if (!v.eligible) {
+      // D-6639: the stale arm judges BESIDE the verdict. An ask only when armed, on a box that proves the flag.
+      const stale = this.childStale.judge({ coord, record: r, hold: staleHolds.get(r.id), input: sweepIn, verdict: v, names,
+        fleetState: this.deps.fleetState, notifyLog: this.deps.notifyLog, nowMs: now });
+      if (!v.eligible && stale === null) {
         this.childReclaimSweepState.delete(r.id);
         // A hold this build proved belongs to one of this child's own runs,
         // whose accounting has since retired (spec §5.7's "no hold"
@@ -4588,6 +4620,9 @@ export class FleetWatcher {
         }
         continue;
       }
+      // Here the verdict is eligible, or the stale arm asks for the child (`stale` is then non-null).
+      const actRunId = v.eligible ? v.runId : stale?.runId;
+      if (actRunId === undefined) continue;
       this.childReclaimHoldRetiredSeen.delete(r.id);
       // The first eligible verdict after a release ANSWERED seeds nothing: its
       // listing may predate the answer (`childReclaimReleaseAnswered`).
@@ -4604,12 +4639,12 @@ export class FleetWatcher {
       // and the generation change first: ws-add mints the generation and writes
       // the new marker before the mirror can place the new birth.
       // `v.runId` is the marker's own (`childReclaimSweepVerdict`).
-      if (entry === undefined || !childReclaimSameGeneration(entry, childBornAt, v.runId, regGeneration)) {
+      if (entry === undefined || !childReclaimSameGeneration(entry, childBornAt, actRunId, regGeneration)) {
         // A LOST MEMORY NEVER RESETS THE PERSISTENT TIER (spec §5.7): the sighting is seeded from the mirror's
         // current generation, with `lastFailedAt` left null, so a tier child is asked once on its next due pass
         // and then waits its tier pace. It never waits a fresh tier pace, and never falls back to the 15-minute ramp
         // unless the seed cannot read it (no placed birth, a reclaim done/unknown line, or a slice windowed short).
-        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(mono, childBornAt, v.runId, regGeneration,
+        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(mono, childBornAt, actRunId, regGeneration,
           childReclaimTierSeed(tierGenerations.get(r.id) ?? [], childBornAt, isChildReclaimStuckToken, childReclaimTokenKind)));
         continue;
       }
@@ -4618,7 +4653,7 @@ export class FleetWatcher {
       // failure backoff (spec §5.9: "retries back off in between") AND the
       // terminal-refusal pacing — L4 decides no pacing of its own.
       if (!childReclaimDue(entry, mono, CHILD_RECLAIM_SWEEP_MS)) continue;
-      due.push({ r, entry, runId: v.runId, id: r.id });
+      due.push({ r, entry, runId: actRunId, id: r.id, stale });
     }
     this.childReclaimJudged = judged;
     // The list's second publish, and the kept feed row: judging passes only, so a paused or capability-less
@@ -4659,7 +4694,7 @@ export class FleetWatcher {
     }
     const freeSlots = Math.max(0, CHILD_RECLAIM_MAX_IN_FLIGHT - activeInFlight);
     const { order, holderId } = childReclaimAskOrder(due);
-    for (const { r, entry, runId, id } of order.slice(0, freeSlots)) {
+    for (const { r, entry, runId, id, stale } of order.slice(0, freeSlots)) {
       const ask: ChildReclaimAsk = {
         at: asked, licensed: childReclaimDeferExpired(entry, asked, CHILD_RECLAIM_SWEEP_MS), asHolder: id === holderId,
       };
@@ -4688,7 +4723,9 @@ export class FleetWatcher {
         // entry's own key, which this pass's read matched. Every sweep request
         // carries it, licensed or not, and the executor re-proves it.
         licenceGeneration: entry.generation,
+        ...(stale === null ? {} : { stale: { word: stale.word, holdDigest: stale.holdDigest, holdText: stale.holdText } }),
       };
+      if (stale !== null) this.childStale.asked(r.id, runId, stale, now);
       this.childReclaimInFlight.add(r.id);
       this.childReclaimInFlightSince.set(r.id, mono);
       acts.push(this.execChildReclaim(coord, req).then(
@@ -4760,6 +4797,27 @@ export class FleetWatcher {
       marked.map((r) => childReclaimGenerationRead(this.deps.io, this.deps.cfg.registryDir, r.id)
         .catch((): ChildReclaimGeneration => ({ kind: 'unreadable' }))));
     return new Map(marked.map((r, i): [string, ChildReclaimGeneration] => [r.id, reads[i]!]));
+  }
+
+  /** The stale arm's hold reads for this pass, concurrently, for the rows `staleHoldWanted` picks (D-6639). A read that
+   *  throws answers nothing, which keeps the child. */
+  private async childReclaimGatherStaleHolds(
+    coord: CoordStore, records: readonly SessionRecord[],
+  ): Promise<ReadonlyMap<string, StaleHoldRead>> {
+    const nowMs = Date.now();
+    const wanted = records.filter((r) => staleHoldWanted(coord, r, this.deps.fleetState, nowMs));
+    const reads = await Promise.all(wanted.map(async (r): Promise<StaleHoldRead | null> => {
+      try {
+        const [bytes, atMs] = await Promise.all([
+          readStaleHoldBytes(this.deps.io, this.deps.cfg.registryDir, r.id),
+          readStaleHoldAt(this.deps.io, this.deps.cfg.registryDir, r.id),
+        ]);
+        return { bytes, atMs };
+      } catch { return null; }
+    }));
+    const out = new Map<string, StaleHoldRead>();
+    wanted.forEach((r, i) => { const h = reads[i]; if (h !== null && h !== undefined) out.set(r.id, h); });
+    return out;
   }
 
   /** The child-reclaim lane's two clocks, read together
@@ -7074,6 +7132,47 @@ export class FleetWatcher {
       if (scan === null) continue;      // no global D-ref anywhere: nothing to seed, fail shut
       store.raiseLedgerFloor(project, scan.floor, scan.evidence, now);
     }
+  }
+
+  /**
+   * The disk alarm (D-6615, spec §2.5): ask the fleet io what the work filesystems read, fold it through the pure
+   * decider (`diskVerdict`: the larger of bytes and inodes, hysteresis, a two-measurement debounce) and hold the block
+   * `GET /api/fleet/health` serves. A read that could not be taken (an older agent, a fault on the link) leaves the
+   * decider's memory alone and marks the block `unmeasured`, never `ok`: it keeps a known `warn` or `critical`, so the
+   * one alarm does not go dark exactly when a full box stalls. `holders` stays empty until the holder census fills it.
+   *
+   * PUBLIC for the reason `sweepReadiness` is: `tick()` dispatches it with `void`, so a test that awaits `tick()` has
+   * not awaited this.
+   */
+  async sweepDisk(): Promise<void> {
+    const now = Date.now();
+    if (this.lastDiskSweep !== 0 && now - this.lastDiskSweep < DISK_SWEEP_MS) return;
+    this.lastDiskSweep = now;
+    let read: MeasuredDisk;
+    try { read = await this.deps.io.statfsMeasured(); } catch { read = { ok: false, reason: 'unreadable' }; }
+    const held = this.diskBlock;
+    if (!read.ok) {
+      const standing = held !== null && (held.level === 'warn' || held.level === 'critical');
+      this.diskBlock = {
+        at: held?.at ?? now,
+        level: standing ? held.level : 'unmeasured',
+        filesystems: held?.filesystems ?? [],
+        expectedMounts: held?.expectedMounts ?? [],
+        pressure: held?.pressure ?? false,
+        holders: [],
+      };
+      return;
+    }
+    const verdict = diskVerdict(this.diskState, read.measured, now);
+    this.diskState = verdict;
+    this.diskBlock = {
+      at: verdict.at,
+      level: verdict.level,
+      filesystems: verdict.filesystems.map(({ pending: _pending, ...fs }) => fs),
+      expectedMounts: verdict.expectedMounts,
+      pressure: verdict.level === 'critical',
+      holders: [],
+    };
   }
 
   /**

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { isExecAllowed } from '../../agent/src/whitelist.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
-import { localIO } from '../src/io.js';
+import { localIOFor } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { wireCmd } from '../src/remote/runner.js';
 import type { Deps } from '../src/server.js';
@@ -57,5 +57,5 @@ export function testDeps(
   const guarded = guardRunner(run);
   seedRoster(home);
   const cfg = loadConfig({ CCRC_HOME: home });
-  return { cfg, runCcd: ccdRunner(guarded, cfg), tmux: new Tmux(guarded), io: localIO, queue: new KeyedQueue() };
+  return { cfg, runCcd: ccdRunner(guarded, cfg), tmux: new Tmux(guarded), io: localIOFor(cfg.home), queue: new KeyedQueue() };
 }
