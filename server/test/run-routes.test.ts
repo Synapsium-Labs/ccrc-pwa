@@ -4200,21 +4200,45 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
       expect(w.coord.reviewRounds(workId)).toBe(REVIEW_ROUND_CAP);
       // The last review reported: its summary and report path ride the ask.
+      const reportPath = path.join(home, 'review-3.md');
+      writeFileSync(reportPath, '# Review\n\n## Findings\n- **F1 (security, important)** `a.ts:4` — leaks. needs a ruling: keep or drop?\n'
+        + '- **F2 (tests, minor)** `b.ts:9` — no case.\n\n## Whole-branch pass\n- not a finding\n');
       w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
         kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\n2 findings, 1 needs a ruling',
-        artifacts: ['/clips/review-3.md'] });
+        artifacts: [reportPath] });
       const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
       expect(refused.statusCode).toBe(409);
       expect(refused.json()).toEqual({ ok: false, refused: 'cap-review-rounds', by: '3', ask: {
         run: workId, rounds: 3, cap: 3,
-        lastReview: { reviewRunId: ids[2], summary: '2 findings, 1 needs a ruling', report: '/clips/review-3.md' } } });
+        lastReview: { reviewRunId: ids[2], summary: '2 findings, 1 needs a ruling', report: reportPath,
+          findings: { state: 'read', lines: [
+            '**F1 (security, important)** `a.ts:4` — leaks. needs a ruling: keep or drop?',
+            '**F2 (tests, minor)** `b.ts:9` — no case.'] } } } });
       expect(w.coord.reviewRounds(workId)).toBe(3);
       expect(capNotices(notifyLog)).toHaveLength(1);
       expect(capNotices(notifyLog)[0]).toMatchObject({ kind: 'run', runId: workId });
       expect(capNotices(notifyLog)[0]!.body).toContain('2 findings, 1 needs a ruling');
+      // The fixture report's findings reach the notice too, not only the count.
+      expect(capNotices(notifyLog)[0]!.body).toContain('needs a ruling: keep or drop?');
+      expect(capNotices(notifyLog)[0]!.body).toContain('`b.ts:9` — no case.');
       // A second refusal answers the same and raises nothing more.
       expect((await postOpen(app, REVIEW(workId, { title: 'R4 again' }))).statusCode).toBe(409);
       expect(capNotices(notifyLog)).toHaveLength(1);
+    });
+
+    it('keeps an absent report and an unreadable one apart, and falls back to the summary for both', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId, notifyLog } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const gone = path.join(home, 'gone.md');
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\n3 findings', artifacts: [gone] });
+      const absent = (await postOpen(app, REVIEW(workId, { title: 'R4' }))).json() as { ask: { lastReview: { findings: unknown } } };
+      expect(absent.ask.lastReview.findings).toEqual({ state: 'absent' });
+      mkdirSync(gone); // a directory is not a readable file
+      const unreadable = (await postOpen(app, REVIEW(workId, { title: 'R4' }))).json() as { ask: { lastReview: { findings: unknown } } };
+      expect(unreadable.ask.lastReview.findings).toEqual({ state: 'unreadable' });
+      expect(capNotices(notifyLog)[0]!.body).toContain('3 findings');
     });
 
     it('opens the 4th once the operator lifts the cap for that run, and only for that run', async () => {

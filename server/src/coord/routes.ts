@@ -34,7 +34,7 @@ import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { advanceGate, advanceRequest, type AdvanceBody } from './advance.js';
-import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice } from './reviewcap.js';
+import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
@@ -1495,7 +1495,12 @@ export function registerCoordRoutes(
       // D-6795: the refusal carries the structured ask, and the operator is told ONCE per work run: the store's insert
       // is the once-only writer (`raiseReviewCapAsk`), so a repeated refusal or a restart raises nothing more.
       const work = open.reviews!;
-      const ask = reviewCapAsk(work, Number(opened.by), coord.lastReviewReport(work));
+      // The operator rules with the open findings in front of them, so the last review's report is read here (L4, the
+      // agent's read allowlist covers its folder); absent and unreadable stay two values and the notice falls back
+      // to the summary for both.
+      const last = coord.lastReviewReport(work);
+      const read = last.report === null ? null : await deps.io.readFileMeasured(last.report, 5000);
+      const ask = reviewCapAsk(work, Number(opened.by), last, reviewFindingsOf(read));
       if (coord.raiseReviewCapAsk(work, Date.now())) {
         const n = reviewCapNotice(ask);
         notice({ kind: 'run', sessionId: '', title: n.title, body: n.body, runId: work }, 'push',
