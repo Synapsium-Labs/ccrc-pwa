@@ -9866,7 +9866,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // site of this anchor out of the set on its own, and together their `ccd/ccd` growth slides a line back under
         // it that no longer carries its row's token, so it fails again. Measured data, not a prose citation: it is
         // spelled in two parts so the citations ratchet, which polices added prose, does not count a census row.
-        'ccd/ccd' + ':13573-13575',
+        // LEAVES at pr-landing PL-1 (S6-R11): the fix-round `ccd/ccd` edits moved this row's second site out of the set.
         'ccd/ccd:11665-11670',
         // ENTERS at pr-landing PL-1 (S6-R11), spelled in two parts for the citations ratchet.
         'ccd/ccd' + ':13601-13666',
@@ -10114,7 +10114,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8673',
         // RE-MEASURED at the merge of main's `ws-gc --fast` (#123) into named workspaces, from the same run as the
         // `|`-row set above: the spec-2210 site returns for the reason given there, spelled in two parts for the same one.
-        'spec:2210 ccd/ccd' + ':13573-13575',
+        // LEAVES at pr-landing PL-1 (S6-R11): the `spec:2210` site, same cause as the row-level set above.
         // RE-MEASURED for `ccd ws-gc --fast` (D-5886, #123), 35 -> 34: the same second site leaves
         // as in the row-level set above, from the same run. S6-R11, no D-number.
         // LEFT here at model-class auto-advance W2 (S6-R11): `spec:2220 :2874` x2 (the note above this assertion).
