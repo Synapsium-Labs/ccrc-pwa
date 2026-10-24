@@ -4,7 +4,7 @@
 // the bucket bar around it stay the screen's own.
 //
 // STATUS MODE reads `groupByStatus` (statusGroups.ts): the groups, their order, their labels and which fold are that
-// model's, never this file's. Needs you, Working and Done are open; Idle, Cleanup, Archived and Dead fold. A fold is
+// model's, never this file's. Needs you, Done and Working are open; Idle, Cleanup, Archived and Dead fold. A fold is
 // `useFolded`'s, under `status::<bucket>`, and the key means "not as it starts": for a folding group its presence
 // opens it (the archived fold's inversion, `FleetScreen`'s comment), for an open one its presence closes it. So a
 // device that never touched a fold sees the defaults. Needs you, while it holds a row, is HELD open whatever is stored:
@@ -77,8 +77,8 @@ const MODES: readonly { readonly id: GroupMode; readonly label: string }[] = [
 ];
 
 /** The phone's tabs: the three open groups, then All. Labels are the model's. */
-type PhoneTab = 'attention' | 'working' | 'done' | 'all';
-const PHONE_TABS: readonly PhoneTab[] = ['attention', 'working', 'done', 'all'];
+type PhoneTab = 'attention' | 'done' | 'working' | 'all';
+const PHONE_TABS: readonly PhoneTab[] = ['attention', 'done', 'working', 'all'];
 const tabLabel = (t: PhoneTab): string => (t === 'all' ? 'All' : STATUS_GROUPS[t].label);
 
 const STEP: Readonly<Record<string, number>> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
