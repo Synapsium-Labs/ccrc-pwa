@@ -31,6 +31,10 @@ describe('the bash twins of shared/disk.ts', () => {
     expect(bashInt(doctor, '_DR_DISK_CRITICAL_PCT')).toBe(DISK_CRITICAL_PCT);
   });
 
+  it('ccd\'s loose arm spells the critical percent as L0 does (D-6625)', () => {
+    expect(bashInt(read('ccd/ccd'), '_DISK_CRITICAL_PCT')).toBe(DISK_CRITICAL_PCT);
+  });
+
   it('doctor spells the work-root table as L0 does, label and templates in order', () => {
     expect(bashTable(doctor, '_DR_DISK_WORK_ROOTS')).toEqual(DISK_WORK_ROOTS.map((r) => [r.label, ...r.templates]));
   });

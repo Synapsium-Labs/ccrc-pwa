@@ -6483,10 +6483,14 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # `$REG/.ignored-scan.lock` that `_ws_collect_ignored_settled` takes before
 # its one retry. Unlinking that one costs nothing a lock protects: it only
 # lowers contention and is never a gate, so two retries holding two inodes is
-# two retries running at once, each with every refusal intact.
+# two retries running at once, each with every refusal intact. A seventh,
+# D-6625: project `.collect` + slug `loose` -> id `.collect-loose`, aliasing
+# the COLLECT-LOOSE LOCK `$REG/.collect-loose.lock` that ws-collect's loose arm
+# holds over its census, audit and verb; it has no reap lock, since a loose
+# entry has no id.
 #
-# NOT reachable this way, and this set IS the boundary — FOURTEEN dot-prefixed
-# artifacts live under `$REG`; the six above are reachable, these eight are
+# NOT reachable this way, and this set IS the boundary — FIFTEEN dot-prefixed
+# artifacts live under `$REG`; the seven above are reachable, these eight are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
@@ -40000,7 +40004,7 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
 # in-use probe, the checkout and row questions, the removal helper and the pause. What is its own: the lock
 # `$REG/.collect-loose.lock` (no reap lock: there is no id), the record family `$REG/tmpquarantine-loose/`, and names
 # that cross the wire as hex, so no entry's name is ever read as an option. Linux only, like the witnessed arm.
-_DISK_CRITICAL_PCT=92   # equal to L0's DISK_CRITICAL_PCT; the disk-twins pin that reads this line arrives with DR-6
+_DISK_CRITICAL_PCT=92   # equal to L0's DISK_CRITICAL_PCT; server/test/disk-twins.test.ts reads this line
 WS_LOOSE_CENSUS_MAX=1024
 WS_LOOSE_FLOOR_S=172800            # 48 h: twice the witnessed floor
 WS_LOOSE_PRESSURE_FLOOR_S=86400    # 24 h under pressure, never below the witnessed 24 h floor
