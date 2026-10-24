@@ -9834,13 +9834,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'server/test/ccd-ws-reap.test.ts:344',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':3038',
+        // RE-MEASURED at ARCH-74 (#809): the launchd-class helper moved into the platform block of ccd and ccrc, sliding
+        // every later line of those two files; the rows added or dropped in this list (not only this one) follow the slide.
+        'ccd/ccd' + ':3037-3089',
         'ccd/ccd:5797',
         'ccd/ccd:7568',
         'ccd/ccd:11025',
         'ccd/ccd:11665-11670',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
-        'ccd/ccd:13561',
         'ccd/ccd:13567',
         // RE-MEASURED on the merge of disk retention DR-20 (D-6632) with main, 57 -> 55: TWO LEAVE
         // (`:13673` and `:13560-13562`) and none enter. ONE cause: DR-20's two lines above them (its
@@ -9853,7 +9855,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // (`:13673`, `:13560-13562`) because main's insertions above them shift the anchors again off text
         // carrying a row token. Dumped from the merged tree, never retyped. S6-R11 covers it.
         'ccd/ccd:13673',
-        'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
         'ccd/ccd:19098',
         'ccd/ccd:19120',
@@ -9884,6 +9885,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd' + ':13601-13666',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
+        'ccd/ccd' + ':2874',
+        'ccd/ccd' + ':2874',
         // LEFT here at model-class auto-advance W2 (S6-R11): `:2874` x2 (the note above this assertion).
         'ccd/session-hook.sh:993',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
@@ -10094,16 +10097,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'spec:2124 ccd/ccd' + ':3038',
+        'spec:2124 ccd/ccd' + ':3037-3089',
         'spec:2125 ccd/ccd:5797',
         'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
-        'spec:2125 ccd/ccd:13561',
         'spec:2125 ccd/ccd:13567',
         // RE-MEASURED on the DR-20 merge (D-6632), 38 -> 36, from the same run as the `|`-row set above:
         // the same two sites leave for the same 2-line shift. S6-R11 covers it.
         // RE-MEASURED AGAIN on the refusal-v1 (#560) merge, 36 -> 38: the same two sites re-enter. S6-R11.
         'spec:2125 ccd/ccd:13673',
-        'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
         'spec:2125 ccd/ccd:19098',
         'spec:2125 ccd/ccd:19120',

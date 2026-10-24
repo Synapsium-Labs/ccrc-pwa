@@ -53,6 +53,7 @@ _svc_list_sessions	C2
 _svc_run_detached	C2
 _svc_have_user_manager	C2
 _svc_run_supervised	C2
+_launchd_class	C2
 die	K
 _rc_enabled	C2
 _lane_enabled	C1
@@ -763,7 +764,6 @@ cmd_docs_tree	C9
 cmd_docs_show	C9
 cmd_docs_fetch	C9
 _docs_py	C9
-_launchd_class	C2
 _ws_title	C1
 _ws_title_check	C1
 _ws_title_set	C1
