@@ -99,7 +99,6 @@ export async function runTmpSweepCensusLane(
     for (const n of tmpSweepBudget(census, state.noticed)) {
       if (!known.has(n.sessionId)) {
         warnOnce(state, `unknown:${n.sessionId}`, `${n.sessionId} has no registry row; its budget notice is not mailed`);
-        state.noticed.add(n.key);
         continue;
       }
       mailOnce(coord, n.sessionId, n.subject, n.body);

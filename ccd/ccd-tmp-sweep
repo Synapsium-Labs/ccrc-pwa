@@ -522,6 +522,7 @@ try:
 except OSError:
     pass
 # path -> [start, end] of the sweep's own git probe: atimes inside it are the probe's reads, not a touch
+KEPT_MAX = 50   # a session's census row names this many kept entries and counts the rest, so the file stays readable
 pprobed = prev.get('probed') if isinstance(prev.get('probed'), dict) else {}
 probed = {}
 
@@ -949,7 +950,7 @@ if due:
                        'entries': sum(1 for c in cs if not c.get('gone')),
                        'top': [{'name': c['name'], 'bytes': c['bytes']} for c in sorted((x for x in cs if not x.get('gone')), key=lambda x: (-x['bytes'], x['name']))[:5]],
                        'budget': {'state': state, 'overSince': over_since, 'enforceAt': enforce_at,
-                                  'removedBytes': removed, 'kept': kept}}
+                                  'removedBytes': removed, 'kept': kept[:KEPT_MAX], 'keptMore': max(0, len(kept) - KEPT_MAX)}}
     bump('candidates', len(cands))
 else:
     for s in prev.get('sessions', []):

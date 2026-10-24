@@ -188,6 +188,18 @@ describe('tmpSweepBudget — one notice per over-budget episode', () => {
     expect(tmpSweepBudget(c, new Set())[0]!.body).toContain('enforcement has begun');
   });
 
+  it('a session on a root without pressure is not told enforcement has begun, though another root is at pressure', () => {
+    const c = census({ pressure: true, sessions: [overBudget({ enforceAt: T0 + 24 * HOUR })] });
+    const body = tmpSweepBudget(c, new Set())[0]!.body;
+    expect(body).not.toContain('enforcement has begun');
+    expect(body).toContain(new Date(T0 + 24 * HOUR).toISOString());
+  });
+
+  it('a row whose own enforceAt has passed is told enforcement has begun, with no pressure flag', () => {
+    const c = census({ pressure: false, sessions: [overBudget({ enforceAt: T0 - HOUR })] });
+    expect(tmpSweepBudget(c, new Set())[0]!.body).toContain('enforcement has begun');
+  });
+
   it('a session under budget has no notice', () => {
     expect(tmpSweepBudget(census({ sessions: [session()] }), new Set())).toEqual([]);
   });
@@ -317,6 +329,28 @@ describe('runTmpSweepCensusLane', () => {
       expect(r.mailTo('project-z-gone')).toEqual([]);
       expect(warn.mock.calls.filter((c) => String(c[0]).includes('project-z-gone'))).toHaveLength(1);
     } finally { warn.mockRestore(); }
+  });
+
+  it('a notice for an id with no registry row this pass is not latched: the row appearing later is told', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const r = laneRig(json(census({ sessions: [overBudget()] })));
+      await runTmpSweepCensusLane(r.deps, r.state, new Set([COORD]));
+      expect(r.mailTo(WORKER)).toEqual([]);
+      await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+      expect(r.mailTo(WORKER)).toHaveLength(1);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('a census of several MiB (a session far over budget kept many entries) still mails its notice and receipt', async () => {
+    const kept = Array.from({ length: 4000 }, (_, i) => ({ name: `kept-entry-${i}-${'x'.repeat(300)}`, why: 'held-open' }));
+    const big = census({ seq: 1, sessions: [overBudget({ kept })], moved: [moved(1)] });
+    const text = json(big);
+    expect(Buffer.byteLength(text)).toBeGreaterThan(1024 * 1024);
+    const r = laneRig(text);
+    await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+    expect(r.mailTo(WORKER).map((m) => m.subject.split(' ')[1])).toEqual(expect.arrayContaining(['moved']));
+    expect(r.mailTo(WORKER).some((m) => m.subject.includes('over budget'))).toBe(true);
   });
 
   it('over budget, first sighting: one notice to the session and its coordinator naming enforceAt, and no receipt', async () => {

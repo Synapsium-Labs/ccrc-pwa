@@ -166,7 +166,7 @@ describe('the live arm, in shadow and armed', () => {
 
   it('the census the real sweep writes is read by parseTmpSweepCensus, with each session\'s five largest entries in `top`', () => {
     liveSession();
-    for (let i = 1; i <= 6; i++) mk(`e${i}`, { ageS: 1 * DAY, kb: i });
+    for (let i = 1; i <= 6; i++) mk(`e${i}`, { ageS: 1 * DAY, kb: i * 16 });
     const r = sweep();
     expect(r.code, r.err).toBe(0);
     const got = parseTmpSweepCensus(fs.readFileSync(censusPath(), 'utf8'));
