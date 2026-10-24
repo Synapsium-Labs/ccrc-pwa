@@ -401,3 +401,34 @@ describe("New session ends at the bar line's content edge", () => {
     }, 90_000);
   }
 });
+
+// The Accounts screen opened from a card: the page itself must not scroll. A window nobody measured speaks "not measured" in
+// an `sr-only` span, which is absolutely positioned: with no positioned ancestor in the rows it escapes the detail pane (the
+// scroller) and stretches the document, and the lane arrival then scrolls the document and cuts off the header.
+const DESK_SKINS: AppView[] = SKINS.map((skin) => ({ skin, theme: PHOSPHOR, width: 1280 }));
+
+describe('on /accounts at 1280, in both skins, opened from a card, the document does not scroll and the header stays at the top', () => {
+  for (const view of DESK_SKINS) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openDesk(view);
+      try {
+        // The weekly-only lane's card (its other window is unmeasured), by its name.
+        await page.locator('header.shell-accounts .account-gauge', { hasText: 'lane-g' }).click();
+        await page.waitForFunction(() => location.pathname === '/accounts' && document.querySelectorAll('.accounts-row').length === 17, undefined, { timeout: 30_000 });
+        await page.waitForTimeout(600); // the arrival's scroll and focus settle
+        const found = await page.evaluate(() => ({
+          scrollHeight: document.documentElement.scrollHeight, viewport: window.innerHeight, scrollY: window.scrollY,
+          headerTop: document.querySelector('header.shell-accounts')!.getBoundingClientRect().top,
+          unmeasured: [...document.querySelectorAll('.accounts-row .sr-only')].filter((e) => /not measured/i.test(e.textContent ?? '')).length,
+        }));
+        expect(found.unmeasured, 'an unmeasured window speaks on the screen (the fixture reaches the case)').toBeGreaterThan(0);
+        expect(found.scrollHeight, 'the document is as tall as the viewport').toBe(found.viewport);
+        expect(found.scrollY, 'the document has not scrolled').toBe(0);
+        expect(found.headerTop, "the header's top stays at 0").toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
