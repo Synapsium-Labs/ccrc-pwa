@@ -8781,3 +8781,33 @@ describe('one redaction rule table (ARCH-66): shared/redact.mjs (D-5867)', () =>
     expect(tables).toContain('shared/redact.mjs');
   });
 });
+
+// FLEET DISK RETENTION (D-6643, spec 2026-10-23 §2.7.5). APPENDED, for the reason the blocks above state. The stale-archive
+// arm SHIPS SHADOWED: until `$REG/stale-archive-live` exists it records "would archive" and never composes `ws-archive`.
+// The file is the operator's to touch BY HAND on the fleet box, as `expire-lane-live` is, so no line of shell names it
+// and its one TS holder is its definer, an L1 file that reaches no `node:` module and so cannot write it.
+describe('fleet disk retention: the stale-archive arm’s live switch has no writer in the tree', () => {
+  const NAME = 'stale-archive-live';
+  const DEFINER = 'shared/switches.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  it('the files that name its constant are the definer, its re-exporter and the arm, and none reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('STALE_ARCHIVE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/archivedExpiry.ts', 'server/src/coord/staleArchive.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+
+  it('the arm’s verb is composed in one place: only the arm sends ws-archive its --if-no-pane flag', () => {
+    const senders = ALL.filter((f) => /ifNoPane\s*:\s*true/.test(stallCode(f))).map(rel).sort();
+    expect(senders).toEqual(['server/src/coord/staleArchive.ts']);
+  });
+});

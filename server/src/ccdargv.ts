@@ -120,6 +120,10 @@ const decFlags = (dec: ActorFlags | null): readonly string[] =>
     : ['--surface', dec.surface, '--actor', dec.actor,
        ...(dec.reason === null ? [] : ['--reason', dec.reason])];
 
+/** `--if-no-pane`, or nothing: ccd refuses `live` when a pane or an active unit exists (D-6643). */
+const ifNoPaneFlag = (opts: { readonly ifNoPane?: boolean } | null): readonly string[] =>
+  opts !== null && opts.ifNoPane === true ? ['--if-no-pane'] : [];
+
 /**
  * `--defer-expired`, or nothing (child reclamation, spec 2026-09-22 §5.7: the
  * presence defer's ceiling, spent on the audit and the verb alike). A named
@@ -513,8 +517,10 @@ export const CCD_ARGV = {
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>
                argv(['pr-open', '--session', id, '--title', t, '--body-b64', b64, '--draft', draft ? 'true' : 'false']),
-  wsArchive: (id: string, dec: ActorFlags | null) =>
-               argv(['ws-archive', '--session', id, ...decFlags(dec)]),
+  /** `opts.ifNoPane` (D-6642/D-6643, `ARCHIVE_IF_NO_PANE_CAP`): ccd refuses `live` before anything is written when a pane or
+   *  an active unit exists. Only the stale-archive arm sets it; absent, the argv is token for token what it was. */
+  wsArchive: (id: string, dec: ActorFlags | null, opts: { readonly ifNoPane?: boolean } | null = null) =>
+               argv(['ws-archive', '--session', id, ...ifNoPaneFlag(opts), ...decFlags(dec)]),
   wsRestore: (id: string, dec: ActorFlags | null) =>
                argv(['ws-restore', '--session', id, ...decFlags(dec)]),
   wsAudit:   (id: string) => argv(['ws-audit', '--session', id]),
@@ -1001,6 +1007,13 @@ export const RECLAIM_PAUSE_CAP = 'reclaim-pause-v1';
  *  sent to a box with no evidence it exists is the failure the capability reader was built to prevent. Nothing reads
  *  it in this build — wave 3b's lane does, before its first audit. */
 export const EXPIRE_CAP = 'expire-v1';
+
+/** The `ccd caps` token that says `ws-archive` parses `--if-no-pane` (D-6642, fleet disk retention): it refuses `live`
+ *  when a tmux session or an active unit exists, before the manifest. Spelled ONCE in `server/src`; ccd's
+ *  `echo archive-if-no-pane-v1` and `ccdCapTokens.ts` are the other two spellings. READ IT WITH `capSupported`: the
+ *  verb it guards archives, which kills a pane, and an older ccd would reject the flag as a usage error. Its one
+ *  reader is the stale-archive arm (`coord/staleArchive.ts`). */
+export const ARCHIVE_IF_NO_PANE_CAP = 'archive-if-no-pane-v1';
 
 /** The `ccd caps` token that says this box has the native Docs reader (spec 2026-10-01 section 2 (a), docs W2):
  *  `docs-index`, `docs-tree`, `docs-show` and `docs-fetch` at exactly the argv the `docs*` builders above emit — one

@@ -29,6 +29,8 @@ export const HIBERNATE_DISABLED_MARKER = 'hibernate-disabled';
 export const HIBERNATE_LIVE_MARKER = 'hibernate-live';
 /** `$REG/expire-lane-live`: arms the expiry lane's act. */
 export const EXPIRE_LANE_LIVE_MARKER = 'expire-lane-live';
+/** `$REG/stale-archive-live`: arms the stale-archive arm's act (D-6643). */
+export const STALE_ARCHIVE_LIVE_MARKER = 'stale-archive-live';
 /** `$REG/collect-lane-live`: the LEGACY arm of the collector's switch (Settings is the other arm). Kept: it still
  *  arms the lane while it stands and its latch is unset (spec K12). */
 export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
@@ -108,6 +110,10 @@ export const SWITCHES = {
   [EXPIRE_LANE_LIVE_MARKER]: {
     storage: { marker: EXPIRE_LANE_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would expire',
     owner: 'C4', meaning: 'The expiry lane acts: an archived workspace past its time is expired.', writer: 'hand-only',
+  },
+  [STALE_ARCHIVE_LIVE_MARKER]: {
+    storage: { marker: STALE_ARCHIVE_LIVE_MARKER }, default: 'absent: shadow, the arm records what it would archive',
+    owner: 'C4', meaning: 'The stale-archive arm acts: a workspace with no pane for 14 days is archived.', writer: 'hand-only',
   },
   [COLLECT_LANE_LIVE_MARKER]: {
     storage: { marker: COLLECT_LANE_LIVE_MARKER }, default: 'absent: the Settings arm alone decides', owner: 'C4',
