@@ -1986,6 +1986,11 @@ button.metachip:active {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* A focused option revealed with `scrollIntoView({ block: 'nearest' })` stops flush with the scroller's edge, which clips
+   the bottom of its focus ring (drawn --sp-1 outside it); this margin is the room `nearest` leaves it. */
+.ask-inline .opt {
+  scroll-margin-block: var(--sp-1);
+}
 .ask-inline .ask-inline-title {
   margin: 0 0 var(--sp-4);
   font: var(--weight-semibold) var(--fs-lg) / var(--lh-tight) var(--family-ui);
