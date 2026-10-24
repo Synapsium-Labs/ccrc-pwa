@@ -33,7 +33,7 @@ describe('a wheel over a transcript box chains to the transcript (D-6437)', () =
     // 60-line block's scroll range fractional, and at some page offsets Chrome then swallowed the first wheel at the
     // block's end (the browser leg's sweep measures that). Either the round() form over the two tokens or an integer px.
     const names = stripComments(pre).split(';').map((d) => norm(d.slice(0, Math.max(d.indexOf(':'), 0))));
-    const fontAt = names.indexOf('font');
+    const fontAt = names.lastIndexOf('font');
     const lineAt = names.lastIndexOf('line-height');
     expect(fontAt, 'the block sets its font through the shorthand').toBeGreaterThanOrEqual(0);
     expect(lineAt, 'the block declares a line-height after the font shorthand').toBeGreaterThan(fontAt);
