@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WELL } from '@ccrc/ui';
-import { declValue, ruleIn } from './cssRule';
+import { declValue, ruleIn, stripComments } from './cssRule';
 
 const UI = path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components');
 const prose = readFileSync(path.join(UI, 'prose.css'), 'utf8');
@@ -24,7 +24,7 @@ describe('a wheel over a transcript box chains to the transcript (D-6437)', () =
     // `.msg-assist pre` — the rule for the block itself; `ruleIn` matches a whole selector, so `.msg-assist pre code`
     // (a different rule, which sets no containment) cannot stand in for it.
     const pre = ruleIn(prose, '.msg-assist pre');
-    expect(pre, 'the block rule is the one that sets the block\'s scrolling').toContain('max-height: var(--well-max)');
+    expect(declValue(pre, 'max-height'), 'the block rule is the one that sets the block\'s scrolling').toBe('var(--well-max)');
     expect(declValue(pre, 'overscroll-behavior-x'), 'a block scrolls sideways, so it contains that axis').toBe('contain');
     expect(declValue(pre, 'overscroll-behavior'), 'the shorthand would contain y as well').toBeNull();
     expect(declValue(pre, 'overscroll-behavior-y'), 'no y-axis containment inside the transcript').toBeNull();
@@ -36,10 +36,10 @@ describe('a wheel over a transcript box chains to the transcript (D-6437)', () =
 
     // `.tool-ask-a` wraps anywhere, so it carries no overscroll declaration of any spelling.
     const chip = ruleIn(toolCard, '.tool-ask-a');
-    expect(chip, 'the chip rule is the one that caps and scrolls the answer').toContain('max-height: var(--well-max)');
+    expect(declValue(chip, 'max-height'), 'the chip rule is the one that caps and scrolls the answer').toBe('var(--well-max)');
     for (const prop of ['overscroll-behavior', 'overscroll-behavior-x', 'overscroll-behavior-y']) {
       expect(declValue(chip, prop), `.tool-ask-a declares ${prop}`).toBeNull();
     }
-    expect(chip, 'no spelling of overscroll-behavior at all').not.toMatch(/overscroll-behavior/);
+    expect(stripComments(chip), 'no spelling of overscroll-behavior at all').not.toMatch(/overscroll-behavior/);
   });
 });

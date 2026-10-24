@@ -167,7 +167,8 @@
        than growing without limit. */
     max-height: var(--well-max);
     overflow-y: auto;
-    overscroll-behavior: contain;
+    /* No overscroll containment: the chip wraps, so it never scrolls sideways, and a y-axis one would stop a wheel it
+       has nothing left to scroll from reaching the transcript (D-6437). */
   }
   /* No answer came back — declined, interrupted, timed out. The result text is
      the harness briefing the model (the decline preamble alone runs past 1 kB,

@@ -253,7 +253,9 @@
     overflow-x: auto;
     max-height: var(--well-max);
     overflow-y: auto;
-    overscroll-behavior: contain;
+    /* x only: a block scrolls sideways (white-space: pre), but a y-axis containment would stop a wheel it has
+       nothing left to scroll from reaching the transcript (D-6437). */
+    overscroll-behavior-x: contain;
   }
   .msg-assist pre code { background: none; border-radius: 0; padding: 0; color: inherit; font: inherit; }
 

@@ -40,7 +40,11 @@ import type { HTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
 
-/** Token for token as `chat.css .well` declared it.
+/** Token for token as `chat.css .well` declared it, less its overscroll
+ *  containment (D-6437): this wraps and never scrolls sideways, and a y-axis
+ *  containment would stop a wheel it has nothing left to scroll from reaching
+ *  the transcript. Its users outside the transcript chain to the sheet body's
+ *  own containment or to `body`'s.
  *
  *  `py-[10px]` is a literal because the rule was: 10px sits between `--sp-2`
  *  (8px) and `--sp-3` (12px), and the horizontal padding IS `--sp-3`. The
@@ -48,7 +52,7 @@ import { FOCUS_RING } from '../lib/focus';
  *  top — so rounding it to a token would be a visual change dressed as
  *  tidying. */
 export const WELL =
-  'well m-0 max-h-well-max overflow-x-auto overflow-y-auto overscroll-contain'
+  'well m-0 max-h-well-max overflow-x-auto overflow-y-auto'
   + ' rounded-md bg-well px-3 py-[10px] text-ink-on-well'
   + ' font-mono text-sm font-regular leading-mono not-italic normal-nums'
   + ' whitespace-pre-wrap wrap-anywhere';
