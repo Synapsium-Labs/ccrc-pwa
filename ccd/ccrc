@@ -20954,7 +20954,12 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   # trip either bound, holding `update.lock` (and growing `$UPD_STAGE`) for
   # as long as it kept sending. Now also a total `--max-time` and a
   # `--max-filesize`.
-  curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+  # D-6748 (review 926, F1): `-g` on every release curl (this one, the
+  # tarball's, the bundle's and `_upd_asset_listed`'s). curl expands `{…}` and
+  # `[…]` before it parses a URL, so a base spelled `http:{/}/u:p@h`
+  # authenticated while `_upd_redact` printed it whole; with globbing off curl
+  # refuses it (rc 3) before it sends a byte, and never globs the tarball name.
+  curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_SUMS_MAX_TIME" --max-filesize "$CCRC_RELEASE_SUMS_MAX_FILESIZE" \
     --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
     -o "$UPD_STAGE/SHA256SUMS" "$UPD_URL_DIR/SHA256SUMS" \
@@ -21002,7 +21007,7 @@ _upd_fetch() {
   # tarball can legitimately be large, unlike SHA256SUMS (fix round 2 F4,
   # review 167, amended its own fetch above to ALSO carry a total time and
   # size bound; that reasoning does not fit here).
-  curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+  curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
     -o "$UPD_STAGE/$UPD_TARNAME" "$UPD_URL_DIR/$UPD_TARNAME" \
     || _ccrc_die "download failed: $UPD_URL_DIR/$UPD_TARNAME (or did the connection stall — connect ${CCRC_RELEASE_CONNECT_TIMEOUT}s / under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s) — nothing on this box was changed"
@@ -21029,7 +21034,7 @@ _upd_fetch() {
   # Fix round 1 item 12 / review 155 C22: a SMALL probe, so unlike the two
   # fetches above it also gets a TOTAL bound (`CCRC_RELEASE_PROBE_MAX_TIME`,
   # named once and shared with `_upd_asset_listed`).
-  bundle_code="$(curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+  bundle_code="$(curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_PROBE_MAX_TIME" \
     -o "$bundle" -w '%{http_code}' "$UPD_URL_DIR/$UPD_TARNAME.sigstore.json" 2>/dev/null)" || rc=$?
   if [ "$rc" -eq 0 ]; then
@@ -21982,7 +21987,7 @@ _upd_asset_listed() {
     "a whole number of seconds from 1 to 18 (the pre-detach check must answer inside W5's 20-second spawn deadline)" 18
   # Read before the curl, outside its `2>/dev/null`, so the reader's line reaches the operator.
   local b; _upd_release_base >/dev/null && b="$KNOB" || return 3   # in this shell, so the caller has KNOB_WHY
-  code="$(curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+  code="$(curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_PROBE_MAX_TIME" \
     -o /dev/null -w '%{http_code}' "$b/download/$1/$2" 2>/dev/null)" || rc=$?
   [ "$rc" -eq 0 ] && return 0

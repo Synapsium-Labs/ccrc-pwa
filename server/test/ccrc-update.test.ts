@@ -4777,6 +4777,37 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     });
   }
 
+  // D-6748 (fix round 5, review 926's F1): curl expands `{…}` and `[…]` in a URL before it parses it, so a base spelled
+  // `http:{/}/u:p@h` authenticated while `_upd_redact` printed it whole. Every release curl passes `-g`: curl then refuses such
+  // a base (rc 3) before it sends anything, and never globs the tarball name SHA256SUMS supplies. Read off the fixture curl's
+  // full argv, one curl at a time, by the URL it fetched: `_upd_resolve`'s SHA256SUMS, `_upd_fetch`'s tarball and bundle, and
+  // `_upd_asset_listed`'s probe (rollback's pre-check and arm 2's, one function).
+  it('every release curl passes -g: SHA256SUMS, the tarball, the bundle and _upd_asset_listed\'s probe (D-6748, fix round 5)', () => {
+    const home = freshUpdateBox('ccrc-update-globoff-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--to', 'v2.0.0']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases` };
+    replantDoctorStubs(home);
+    assertNoRealTool(env, home);
+    const p = spawnSync(BASH, ['-c', '. "$1"; _upd_asset_listed v2.0.0 SHA256SUMS; echo "rc $?"', 'ccrc-under-test',
+      join(REPO, 'ccd', 'ccrc')], { env, encoding: 'utf8' });
+    expect(p.stdout, `stderr: ${p.stderr}`).toBe('rc 0\n');
+    const argv = curlFullArgv(home);
+    const url = (line: string): string => line.trim().split(/\s+/).pop() ?? '';
+    const globoff = (line: string): boolean => line.trim().split(/\s+/).some((t) => t === '--globoff' || /^-[A-Za-z]*g[A-Za-z]*$/.test(t));
+    const rel = `local://${home}/releases/download/v2.0.0/`;
+    const calls: Array<[string, string[]]> = [
+      ['SHA256SUMS (resolve, then the probe)', argv.filter((l) => url(l) === `${rel}SHA256SUMS`)],
+      ['the tarball', argv.filter((l) => url(l) === `${rel}ccrc-v2.0.0.tar.gz`)],
+      ['the bundle', argv.filter((l) => url(l) === `${rel}ccrc-v2.0.0.tar.gz.sigstore.json`)],
+    ];
+    expect(calls.map(([, ls]) => ls.length), argv.join('\n')).toEqual([2, 1, 1]);
+    expect(calls[0][1][1], 'the second SHA256SUMS call is the probe').toMatch(/ -o \/dev\/null /);
+    for (const [what, ls] of calls) for (const l of ls) expect(globoff(l), `${what}: ${l}`).toBe(true);
+  });
+
   // Fix round 1 item 11 / review 155 C17: the floor death's update.json
   // DETAIL keeps its VERDICT (D-3249) even with a HOME long enough that the
   // RAW path alone would have exceeded `_upd_json_str`'s 200-character cut
