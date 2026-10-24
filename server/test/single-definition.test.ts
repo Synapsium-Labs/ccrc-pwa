@@ -1961,7 +1961,7 @@ describe('one ~/.ccrc/remote-control, spelled once per tool and equal across all
   //   - `ccrc` (`_inst_rc`) is the single-box WRITER, seeding `off`.
   //   - `ccrc-doctor-checks` (`_dr_rc_state`) re-measures it for the operator.
   //     It is sourced under `set -u` by things that are not `ccrc`
-  //     (`ccrc-doctor.test.ts`'s `tableNames()` does exactly that), so a
+  //     (`ccrc-doctorFixture.ts`'s `tableNames()` does exactly that), so a
   //     top-level reference to another tool's variable would make sourcing it
   //     FAIL, and a `${…:-…}` fallback is the second spelling with a branch in
   //     front of it. That is D-92's trade for `CCRC_UNIT_DIR`, unchanged.
@@ -3444,7 +3444,7 @@ describe('one scratch-slug predicate — four prefixes and one infix, three bash
   //   - `ccrc`'s `_mem_is_scratch` is the rule and carries the measurement.
   //     Its two callers (the census and `--apply`) reach it directly.
   //   - `ccrc-doctor-checks`'s `_check_memory` cannot: the table is sourced
-  //     under `set -u` by things that are not `ccrc` (`ccrc-doctor.test.ts`'s
+  //     under `set -u` by things that are not `ccrc` (`ccrc-doctorFixture.ts`'s
   //     `tableNames()`), so a `declare -F` guard would be the second spelling
   //     with a branch in front of it. D-92's trade, unchanged.
   //   - `session-hook.sh` is installed INTO an agent home and sources nothing

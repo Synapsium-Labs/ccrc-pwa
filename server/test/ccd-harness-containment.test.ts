@@ -94,7 +94,7 @@ describe('the harness contains systemctl structurally', () => {
 // The systemd poison above arrived planted from inside `ghContainedEnv`,
 // UNCONDITIONALLY and in `harnessBin()` — the directory that function PREPENDS
 // so nothing can displace the `gh` poison. `ghContainedEnv` is imported by
-// files that run no ccd at all, and one of them, `ccrc-doctor.test.ts`, builds
+// files that run no ccd at all, and one of them, `ccrc-doctorFixture.ts`, builds
 // its PATH from it and then plants its own FUNCTIONAL `systemctl` in a
 // directory of its OWN (`<home>/stub-bin`, second on that PATH). The two stubs
 // were never in the same directory, so the create-if-absent guard could not
@@ -122,7 +122,7 @@ describe('ghContainedEnv contains gh always, systemd only when asked', () => {
    *  `BASH` is bash resolved under the REAL PATH, once — every spawn here hands
    *  the child a fixture-only PATH, and libuv resolves the executable against
    *  the CHILD's env, so bare `bash` would be ENOENT. Same trick
-   *  `ccrc-doctor.test.ts` uses, for the same reason.
+   *  `ccrc-doctorFixture.ts` uses, for the same reason.
    *
    *  This call site runs NO ccd at all — the only one in the suite that
    *  doesn't — and that ONE condition logically ENTAILS both of the scan's
@@ -145,7 +145,7 @@ describe('ghContainedEnv contains gh always, systemd only when asked', () => {
       { encoding: 'utf8', env: { ...env, HOME: home, ...extra } }).trim();
   };
 
-  /** A consumer in `ccrc-doctor.test.ts`'s shape: its own stub directory, its
+  /** A consumer in `ccrc-doctorFixture.ts`'s shape: its own stub directory, its
    *  own FUNCTIONAL `systemctl` in it, and a PATH with no system directory on
    *  it at all. */
   function consumer(prefix: string): { home: string; bin: string } {

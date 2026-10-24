@@ -3,7 +3,7 @@
 //
 // WHY. Before this file, only hooks inside the WORKER processes removed fixtures (`tmpHelpers.ts`'s `afterAll`),
 // and nothing that outlives a killed worker owned them. Measured on a Mac: `timeout 25 vitest run
-// test/ccrc-doctor.test.ts` under a scratch TMPDIR left 11 entries and 15 MB behind, vitest's own 5.6 MB
+// test/ccrc-doctor-codex.test.ts` under a scratch TMPDIR left 11 entries and 15 MB behind, vitest's own 5.6 MB
 // transform dir among them; #316 counted 1,551 directories and 5.74 GiB from five timed-out shards in one
 // morning. Moving cleanup into the main process is not enough on its own either (see `armSignals`).
 //

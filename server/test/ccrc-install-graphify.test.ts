@@ -202,7 +202,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // The containment is unchanged and is the point: neither stub ever execs the
   // real binary, so this box's systemd and logind are as unreachable as they
   // were behind the refusal. What changed is that they now ANSWER the shapes
-  // ccrc asks — and, per `ccrc-doctor.test.ts`'s stub discipline, exit 90 on
+  // ccrc asks — and, per `ccrc-doctorFixture.ts`'s stub discipline, exit 90 on
   // any argv they do not recognise, so a step that started mutating a unit
   // nobody authorised is a loud failure rather than a silent success.
   //

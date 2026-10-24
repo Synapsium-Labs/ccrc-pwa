@@ -96,7 +96,7 @@ export interface CodexLaneRow {
  *  runs before `accounts.sh` is written. So a fixture either production
  *  reader would refuse throws here instead of testing nothing. Returns the
  *  roster object. `accountsSh: false` (Plan 3a Task 4) writes the JSON alone:
- *  `ccrc-doctor.test.ts`' healthy box has no `accounts.sh`, and one would
+ *  `ccrc-doctorFixture.ts`' healthy box has no `accounts.sh`, and one would
  *  give `graphify`'s skills/excludes arms a subject that fixture never set up. */
 export function codexRoster(
   home: string,
