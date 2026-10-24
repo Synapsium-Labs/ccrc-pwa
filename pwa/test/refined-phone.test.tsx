@@ -32,7 +32,6 @@ const { ack, FEED_ACK_KEY } = await import('../src/lib/seen');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
 const { api } = await import('../src/lib/api');
 const { DocsHead } = await import('../src/docs/DocsHead');
-const { ACCOUNTS_DOOR_LABEL } = await import('../src/fleet/laneWords');
 
 /** A Docs visit whose actions are inert: the up door reads only the page. */
 const docsVisit = (): DocsVisit => ({
@@ -184,26 +183,37 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(published()).toBe('');
   });
 
-  it("the phone header shows the full strip: each lane's 5h and 7d rows, the strip one door to /accounts carrying go-accounts", async () => {
+  it("the phone header shows the full strip: each lane's 5h and 7d rows, each card its lane's door, All accounts the go-accounts door", async () => {
     const lanes = [lane('lane-a', 30, 80), lane('lane-b', 12, null), lane('lane-c', null, 5), lane('lane-d', 1, 2), lane('lane-e', 3, 4)];
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
     atWidth(390);
     render(<App />);
-    const strip = await within(head()).findByRole('link', { name: ACCOUNTS_DOOR_LABEL });
+    const strip = await within(head()).findByRole('group', { name: /^account usage, highest lane-a 80%/ });
     await within(strip).findByText('lane-a');
     expect(strip).toHaveClass('accounts-strip');
-    expect(strip).toHaveAttribute('data-command', 'go-accounts');
+    // The strip is no door itself: its cards are, and the end cell's All accounts is the `go-accounts` door.
+    expect(strip).not.toHaveAttribute('data-command');
     const cards = [...strip.querySelectorAll<HTMLElement>('.account-gauge')];
     expect(cards).toHaveLength(lanes.length);
+    // Most free first: lane-d (2), lane-e (4), lane-c (5), lane-b (12), lane-a (80).
+    const name = (card: HTMLElement): string => card.querySelector('.account-gauge-label')?.textContent ?? '';
+    expect(cards.map(name)).toEqual(['lane-d', 'lane-e', 'lane-c', 'lane-b', 'lane-a']);
     const windows = (card: HTMLElement): string[] => [...card.querySelectorAll('.acct-win')].map((w) => w.textContent ?? '');
-    expect(windows(cards[0]!)).toEqual(['5h', '7d']);
-    expect(windows(cards[1]!)).toEqual(['5h']);
-    expect(windows(cards[2]!)).toEqual(['7d']);
+    expect(windows(cards.find((c) => name(c) === 'lane-a')!)).toEqual(['5h', '7d']);
+    expect(windows(cards.find((c) => name(c) === 'lane-b')!)).toEqual(['5h']);
+    expect(windows(cards.find((c) => name(c) === 'lane-c')!)).toEqual(['7d']);
     // One readout of the lanes on the page: the full strip is the phone's.
     expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
-    // The strip is a command door: the layer navigates.
-    fireEvent.click(strip);
+    // A card opens its lane; All accounts is a command door, which the layer navigates.
+    fireEvent.click(cards.find((c) => name(c) === 'lane-b')!);
     expect(location.pathname).toBe('/accounts');
+    expect(location.search).toBe('?lane=lane-b');
+    act(() => { navigate('/'); });
+    const all = await within(head()).findByRole('button', { name: 'All accounts' });
+    expect(all).toHaveAttribute('data-command', 'go-accounts');
+    fireEvent.click(all);
+    expect(location.pathname).toBe('/accounts');
+    expect(location.search).toBe('');
   });
 
   it('Refined renders neither FleetHead nor `.fab`; Instrument still renders both', () => {
