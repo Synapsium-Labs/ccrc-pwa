@@ -83,7 +83,8 @@ describe('the top search lists a project\'s sessions after the commands, the coo
         expect(firstSession).toBe(0);
         await page.keyboard.press('Enter');
         await page.waitForURL(new RegExp(`/s/${encodeURIComponent(LEAD.id)}$`), { timeout: 10_000 });
-        expect(await page.getByRole('combobox').count(), 'the palette closed').toBe(0);
+        // The palette closes (its exit animation runs first, so wait for it to go).
+        await input.waitFor({ state: 'detached', timeout: 5_000 });
         expect(await sideways(page)).toBe(false);
         expect(errors).toEqual([]);
       } finally {

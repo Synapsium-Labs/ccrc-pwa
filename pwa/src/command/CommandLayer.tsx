@@ -18,6 +18,7 @@ import {
   available, COMMAND_FIELD_WORDS, rankCommands, SEARCH_EMPTY, type CommandContext, type CommandPage,
 } from './registry';
 import { DOOR_EVENT } from './door';
+import { sessionEntries } from './sessionEntries';
 import { useShortcuts } from './useShortcuts';
 
 /** How long a closing palette may hold focus before the layer restores it:
@@ -165,10 +166,15 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     setSheet(false);
   }, [enabled]);
 
-  const list = useMemo(() => (page === null ? available(commands, ctx) : page.commands), [page, commands, ctx]);
+  // The first level is the top search (D-6714): the commands offered here, then every session, search-only, so an
+  // empty query lists the commands alone and a session ranks after every matching command.
+  const list = useMemo(
+    () => (page === null ? [...available(commands, ctx), ...sessionEntries(ctx.sessions, ctx.runs, 'top')] : page.commands),
+    [page, commands, ctx],
+  );
   const ranked = useMemo(() => rankCommands(query, list), [query, list]);
   const options = useMemo<CommandPaletteOption[]>(
-    () => ranked.map((c) => ({ id: c.id, title: c.title, group: c.group, keys: c.keys })),
+    () => ranked.map((c) => ({ id: c.id, title: c.title, group: c.group, keys: c.keys, label: c.label })),
     [ranked],
   );
 

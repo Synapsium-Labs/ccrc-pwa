@@ -65,6 +65,15 @@ export interface Command {
   when?: (ctx: CommandContext) => boolean;
   /** Do it, or answer the page it opens. */
   run: (ctx: CommandContext) => void | CommandPage;
+  /** More words it is found by, each scored as the title is: the best of the title and these counts (D-6714). */
+  terms?: readonly string[];
+  /** Among entries of equal score, a lower tier ranks first. Absent on a command, so commands keep their order. */
+  tier?: number;
+  /** Found only by a search: never in the empty list, only by a trimmed query of `SEARCH_MIN` characters or more and
+   *  a contiguous match, and ranked after every entry that is not search-only (a session at the first level). */
+  searchOnly?: boolean;
+  /** The option's exact accessible name, when its title and group would not say it (D-6714). */
+  label?: string;
 }
 
 /** How well `query` matches `title`, or null for no match. Higher is better.
@@ -88,17 +97,35 @@ function score(query: string, title: string): number | null {
   return j === q.length ? 1 : null;
 }
 
-/** The commands that match `query`, best first. Equal scores keep the
- *  registry's order, and an empty query is the whole list as given. */
+/** The lowest score that is a contiguous run of the query (a substring), not a scattered subsequence. */
+const CONTIGUOUS = 2;
+
+/** An entry's score: the best `score` of its title and each of its terms, or null when none matches. */
+function bestScore(query: string, c: Command): number | null {
+  let best = score(query, c.title);
+  for (const term of c.terms ?? []) {
+    const s = score(query, term);
+    if (s !== null && (best === null || s > best)) best = s;
+  }
+  return best;
+}
+
+/** The entries that match `query`, best first (D-6714): every entry that is not search-only before every search-only
+ *  one, then by score, then by tier (lower first), then in the order given. A command carries no tier and is never
+ *  search-only, so the commands rank as they always did. An empty query is the list as given, less the search-only
+ *  entries, and a search-only entry needs `SEARCH_MIN` characters and a contiguous match. */
 export function rankCommands(query: string, commands: readonly Command[]): Command[] {
   const q = query.trim();
-  if (q === '') return [...commands];
-  const scored: { c: Command; s: number; i: number }[] = [];
+  if (q === '') return commands.filter((c) => c.searchOnly !== true);
+  const scored: { c: Command; s: number; i: number; late: number; tier: number }[] = [];
   commands.forEach((c, i) => {
-    const s = score(q, c.title);
-    if (s !== null) scored.push({ c, s, i });
+    const s = bestScore(q, c);
+    if (s === null) return;
+    const late = c.searchOnly === true;
+    if (late && (q.length < SEARCH_MIN || s < CONTIGUOUS)) return;
+    scored.push({ c, s, i, late: late ? 1 : 0, tier: c.tier ?? 0 });
   });
-  return scored.sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.c);
+  return scored.sort((a, b) => a.late - b.late || b.s - a.s || a.tier - b.tier || a.i - b.i).map((x) => x.c);
 }
 
 /** The commands offered in `ctx`: `when` asked of each. */
