@@ -1739,10 +1739,12 @@ list on a phone) shows every account ccd knows about, not just the ones with hea
 It rides the existing `GET /api/accounts` pipeline — no new route, no new
 whitelist grant — with its own 20 s poller. Per account:
 
-- Both windows (5h / 7d) as bars with the strip's exact `%`/`reset`/`—`
-  three-way, never collapsed: `reset` means the window ended and the zero is
-  *inferred* from the reset timestamp; a measured `0%` means something ran
-  and the account really is empty; `—` means nothing has ever been measured.
+- Both windows (5h / 7d) as bars, each read through the one reading the
+  strip uses (`windowReading`): a measured window shows its percentage; a
+  window that rolled over shows `0%`, *inferred* from the reset timestamp
+  and said so to a screen reader (its bar left empty); a measured `0%` is
+  plain, since something ran and the account really is empty; `—` means
+  nothing has ever been measured.
 - A freshness line, **"last reported *age*"**. Telemetry is a byproduct of a
   session rendering its statusline, so an idle account simply stops
   reporting — the screen reads as "last known", never as live. There is no
