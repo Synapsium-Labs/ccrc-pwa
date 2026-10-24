@@ -136,7 +136,7 @@ export class JournalMirror {
     // still ahead of the cursor lost bytes above it.
     //
     // FIX ROUND 1, F6 (task-36-37 review): sweeps CAN overlap — `FleetWatcher`
-    // stamps `lastLifecycleSweep` at the START of a sweep, before this method
+    // stamps the lane's stamp at the START of a sweep, before this method
     // ever runs, so a slow or hung sweep does not hold the next tick's call
     // back. This is bounded, not eliminated: `ingestJournal` is one `tx()` and
     // `uid` dedupes under `INSERT OR IGNORE`, so a second, overlapping pass

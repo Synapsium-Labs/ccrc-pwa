@@ -3702,7 +3702,7 @@ export function decidePassLive(marker, identityNow) {
 //      places the shim and ends with doctor before the timer's first
 //      2-minute tick, so every fresh fleet/both install would end with a
 //      WARN, and "a fresh install ends green" is an operator ruling
-//      (ccrc-install.test.ts pins it). So within SHIM_GRACE_MS of the shim's
+//      (ccrc-install-*.test.ts pins it). So within SHIM_GRACE_MS of the shim's
 //      mtime, and ONLY while no tick has run yet (exit 6, or a bound store
 //      with no ticks row), the answer is PASS `first-tick-pending` and
 //      nothing else is judged. A box that has ticked is judged by its ticks

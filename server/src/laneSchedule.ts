@@ -31,6 +31,59 @@ export const CAPS_REFRESH_MS = 60_000;
  *  once a minute, and at once after a `ready` frame (`triggerInventory`, wired in `index.ts`). */
 export const UPDATE_INVENTORY_MS = 60_000;
 
+/** Task sweeps read every task file of every session, so they run on their own slower clock than the 2 s pane poll: a
+ *  plan advances on the scale of minutes, and the fleet chip is a glance, not a readout. The open session's own stream
+ *  reads its list every tick, so the screen you're looking at stays live regardless. */
+export const TASK_SWEEP_MS = 10_000;
+
+/** The usage sidecar lane's own clock (routing slice 0), the task sweep's shape: a sidecar is fresh for `USAGE_FRESH_S`
+ *  (30 minutes), so re-reading it every 2 s tick would buy nothing for the cost of one agent round trip per session in
+ *  remote mode. */
+export const USAGE_SWEEP_MS = 60_000;
+
+/** The naming lane. Naming does NOT ride the 2 s tick: a title that appears ten seconds late costs nothing, and reading
+ *  transcripts thirty times a minute to learn nothing costs real work (`claimTitleRead`'s docstring has the arithmetic:
+ *  roughly 7.7 MB/min across the agent link at this cadence, five times that on the tick). */
+export const NAME_SWEEP_MS = 10_000;
+
+/** The census lane. A disagreement between sources is a human-timescale event (a rename, a hand-made worktree, a run
+ *  left open) and each sweep reads `<projectsRoot>/<project>/.git/worktrees/` per project, so it runs six times slower
+ *  than the name sweep. */
+export const DIVERGENCE_SWEEP_MS = 60_000;
+
+/** The journal mirror's lane (child-reclamation wave 6; build 9 wave 4). Short, because a destruction's intent and
+ *  outcome pair should be visible while the operator is still looking at the screen. EXPORTED because `mirror.ts`
+ *  cannot import it (L3 importing L4), so the staleness window is passed in from the one construction site;
+ *  `watch.ts` re-exports it for the suites that import it from there. */
+export const LC_SWEEP_MS = 5_000;
+
+/** D13's two ledger lanes. The floor scan reads every plan and spec of every registry-named project, so it runs
+ *  hourly; reconcile reads only the plans of projects with open allocations, every 15 minutes, because `landed` is the
+ *  signal a coordinator watches for. */
+export const LEDGER_FLOOR_SWEEP_MS = 3_600_000;
+export const LEDGER_RECONCILE_SWEEP_MS = 900_000;
+
+/** F3's lane. Ten minutes: slower than the divergence census because the answer only changes when someone installs a
+ *  skill or edits a token, and faster than the ledger floor's hour because an operator waiting to start a program is
+ *  watching this one. EXPORTED so its own suite advances by the real constant; `watch.ts` re-exports it. */
+export const READINESS_SWEEP_MS = 600_000;
+
+/** The PR lane. 8 projects x 1 call / 120 s is ~240 GraphQL calls an hour against a 5000/hr budget with ~4900 free,
+ *  about 5%; measured latency 0.51-0.69 s per call. `PR_SWEEP_ACTIVE_MS` is the row's other cadence, chosen by the
+ *  lane while any project has an open PR whose checks are pending. */
+export const PR_SWEEP_MS = 120_000;
+export const PR_SWEEP_ACTIVE_MS = 30_000;
+
+/** The ceiling of the PR and mail backoffs (15 minutes). A SAFETY interval, not a cadence: it lives here only because
+ *  `PR_SWEEP_STUCK_MS` follows it and the table cannot import the watcher. */
+export const PR_BACKOFF_MAX_MS = 900_000;
+
+/** How long one PR sweep may be in flight before the next is allowed to start anyway: the row's `staleAfterMs`. In
+ *  local mode `realRunner` passes no timeout to `execFile`, so nothing bounds the awaited `ccd` call and a wedged `gh`
+ *  would otherwise hold the single flight shut for the process's lifetime. Same 15 minutes as the backoff ceiling: far
+ *  longer than any real sweep, short enough that wedged is not permanent. A safety interval, never a cadence. */
+export const PR_SWEEP_STUCK_MS = PR_BACKOFF_MAX_MS;
+
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
 
@@ -39,12 +92,16 @@ export type LaneClock = 'mono' | 'wall';
  *  runs overlap (the lane has no guard today). */
 export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 
-export type LaneName = 'caps' | 'catalogue' | 'inventory' | 'serverCaps';
+export type LaneName =
+  | 'caps' | 'catalogue' | 'inventory' | 'serverCaps'
+  | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
   /** How often the lane looks, in milliseconds. */
   readonly cadenceMs: number;
+  /** A second cadence the lane chooses while it has pending work (the PR sweep, while a check is pending). */
+  readonly activeCadenceMs?: number;
   /** Set when `cadenceMs` is a reference to another module's constant: the constant, and why the lane follows it. */
   readonly derivedFrom: { readonly name: string; readonly reason: string } | null;
   readonly clock: LaneClock;
@@ -64,6 +121,18 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   },
   { name: 'inventory', cadenceMs: UPDATE_INVENTORY_MS, derivedFrom: null, clock: 'wall', flight: 'join-rerun', warnKey: null },
   { name: 'serverCaps', cadenceMs: SERVER_CAPS_WRITE_MS, derivedFrom: null, clock: 'wall', flight: 'join', warnKey: null },
+  { name: 'tasks', cadenceMs: TASK_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'usage', cadenceMs: USAGE_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  {
+    name: 'pr', cadenceMs: PR_SWEEP_MS, activeCadenceMs: PR_SWEEP_ACTIVE_MS, derivedFrom: null, clock: 'wall',
+    flight: 'skip', staleAfterMs: PR_SWEEP_STUCK_MS, warnKey: null,
+  },
+  { name: 'names', cadenceMs: NAME_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'divergences', cadenceMs: DIVERGENCE_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'lifecycle', cadenceMs: LC_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'readiness', cadenceMs: READINESS_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'ledgerReconcile', cadenceMs: LEDGER_RECONCILE_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'ledgerFloor', cadenceMs: LEDGER_FLOOR_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
 ];
 
 export function laneRow(name: string): LaneRow {

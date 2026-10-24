@@ -5229,7 +5229,7 @@ removal** (below), which takes back what D-1243 wrote into each rostered home's 
 `~/.ccrc/graph-noise/_default.list`; **excludes**, `graphify-out/` and `.graphifyignore` converged
 into each tree's common-dir `info/exclude`; and **legacy hooks off** — the old per-repo graphify git
 hooks are removed if wholly graphify-generated, left in place and reported if they chain other
-content. (`server/test/ccrc-install.test.ts` pins that sequence, and
+content. (`server/test/ccrc-install-*.test.ts` pins that sequence, and
 `ccrc-install-graphify.test.ts` pins this paragraph's count against it — the enumeration went stale
 for two deviations before that guard existed.)
 
@@ -5812,6 +5812,17 @@ pins them equal) and also shortens the dead arm to 2 days. The live arm scans at
 pass under pressure. Its census, `~/.ccrc/tmp-sweep.json` (`v`, `at`, `liveAt`, `pressure`, `arm`, `seq`,
 `roots`, `sessions` with each one's `budget`, `moved` rows kept 7 days or 1,000, `counts`), is replaced whole
 by a rename at the end of every pass, shadow or live. The sweep is its only writer.
+
+**The test-run arm** (D-6622) rides the same switch and rows. A server test run keeps its fixtures in one
+`ccrc-testrun-XXXXXX` directory under its `TMPDIR`; a later run under the same `TMPDIR` collects one whose
+owner died, but a root no later run visits (a child workspace's own `TMPDIR`, a box nobody tests on any more)
+stays. In the box's `TMPDIR` and in each witnessed child leaf that still has a registry row, the sweep takes a
+top-level directory named exactly `ccrc-testrun-` and six letters or digits (or that name with `.dead`) when no
+socket is bound at its `live.sock` in the kernel's table (the run's own liveness test), nothing under it has
+changed (ctime, not mtime) for 6 hours (1 under pressure), and the holder probe answers nobody. It renames the
+root to its `.dead` twin and then removes it, as the run's own cleanup does, so there is no quarantine and
+the census row (kind `test-run`) carries none. A leaf whose row is gone is not this arm's: `ws-collect` takes
+the whole leaf. Any doubt (a walk that cannot finish, an unreadable socket table, a failing probe) keeps the root.
 
 ### Pane-scope sweep (ccd-scope-sweep)
 

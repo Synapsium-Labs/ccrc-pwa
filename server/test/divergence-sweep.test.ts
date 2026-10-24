@@ -1197,7 +1197,7 @@ describe('sweepDivergences feeds the build-9 arms from what it has already read'
     // to its own closing brace, never the next member's, so it cannot silently widen.
     // D-6114: keyed on the method's symbol (scan/symbols.ts), so the slice follows `sweepDivergences` wherever it
     // moves; a renamed or missing method throws by name.
-    const body = sourceOfSymbol(path.join(ccrcRoot, 'server/src/watch.ts'), 'FleetWatcher.sweepDivergences');
+    const body = sourceOfSymbol(path.join(ccrcRoot, 'server/src/watch.ts'), 'FleetWatcher.divergencesPass');
     expect(body.length, 'the slice collapsed — this assertion would pass vacuously')
       .toBeGreaterThan(2000);
     // D-1157 REWROTE THIS ASSERTION. It used to read

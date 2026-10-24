@@ -160,7 +160,7 @@ describe('ccrc: dispatch and usage', () => {
     // `install` joined it in stage 2d Task 6 — the verb the whole CLI is named
     // for, and the one an operator reaches for FIRST, before there is anything
     // on the box for the other five to measure. Same split: this line owns its
-    // discoverability, `server/test/ccrc-install.test.ts` owns what it does.
+    // discoverability, `server/test/ccrc-install-*.test.ts` owns what it does.
     //
     // `passwd` joined it in stage 3a Task 9 — the ONE writer of
     // `~/.ccrc/auth.scrypt`, and the only way to set the passphrase the PWA's

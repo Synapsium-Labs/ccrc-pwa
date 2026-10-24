@@ -147,6 +147,7 @@ jobs:
       trace_count: ${{ steps.select.outputs.trace_count }}
       map_sha: ${{ steps.select.outputs.map_sha }}
       fallback: ${{ steps.select.outputs.fallback }}
+      floor: ${{ steps.select.outputs.floor }}
     steps:
       # Full depth: the changed set is `git diff <map-sha> HEAD`, and the map's
       # commit must be present to be diffed against.
@@ -180,6 +181,42 @@ jobs:
           else
             echo "::warning::could not diff this change against $BASE; treating its pipeline as changed"
             echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      # D-6771: does this pull request change what `node floor` runs or runs
+      # on, other than through a file a test reads? Answered here, where the
+      # diff is: the manifests and lockfiles, the Node version files, the
+      # history library and the workflow, the floor's own tests and the
+      # vitest config with its setup files. The Select step adds the other
+      # half: the floor's tests the dependency map selects, which covers
+      # every module and helper they import. Read by that job's leg switch —
+      # a path filter on the trigger would skip a required check; this skips
+      # only the one job that is not required. Every event but a pull request
+      # answers true (a merge-queue group and the daily run check every merge
+      # against the floor), and so does a base it cannot diff.
+      - name: Does this pull request touch the node floor's inputs?
+        id: floor
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ format('origin/{0}', github.base_ref) }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif mb=$(git merge-base "$BASE" HEAD) && changed=$(git diff --name-only "$mb" HEAD -- \
+              ':(glob)**/package.json' ':(glob)**/package-lock.json' ':(glob)**/.nvmrc' \
+              ':(glob)ccd/history/**' ':(glob).github/**' \
+              server/test/node-floor.test.ts ':(glob)server/test/history-*.test.ts' server/test/measure-history.test.ts \
+              server/vitest.config.ts server/vitest.select.config.ts \
+              ':(glob)server/test/*.setup.mjs' ':(glob)server/test/*.globalsetup.mjs'); then
+            if [ -n "$changed" ]; then
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              printf 'the node floor runs; its inputs changed:\n%s\n' "$changed"
+            else
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "the node floor is skipped; none of its inputs changed"
+            fi
+          else
+            echo "::warning::could not diff this change against $BASE; running the node floor"
+            echo "run=true" >> "$GITHUB_OUTPUT"
           fi
       # The newest map and duration table come ONLY from artifacts of trusted
       # ci.yml runs on main (main-artifact.mjs: branch main, this repository,
@@ -242,10 +279,15 @@ jobs:
           INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 * * * *' && 'refresh') || '' }}
           FULL_GREEN: ${{ steps.green.outputs.full_green || 'false' }}
           PIPELINE_CHANGED: ${{ steps.pipeline.outputs.changed }}
+          FLOOR: ${{ steps.floor.outputs.run }}
         run: |
           args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
           if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi
           if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
+          # D-6771: the files the node floor runs, read from its own job so the list has one source; select.mjs
+          # answers `floor` true when its selection holds one of them, or when FLOOR (the static inputs) is true.
+          sed -n '/^  node-floor:$/,/^  [a-z-]*:$/p' .github/workflows/ci.yml | sed -n 's/^ *\(test\/[A-Za-z0-9._-]*\.test\.ts\)$/\1/p' > "$RUNNER_TEMP/floor-list.txt"
+          args+=(--floor-list "$RUNNER_TEMP/floor-list.txt" --floor-static "${FLOOR:-true}")
           node .github/ci/select.mjs "${args[@]}"
       # map-build refreshes against EXACTLY the map this job diffed from, not
       # whatever is newest by the time it runs, and is told which tests this
@@ -267,8 +309,8 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # THE ONE INSTALL OF THE RUN (D-6770). Every server shard, trace shard and
-  # the Node-floor leg needs the same four installed trees (server, agent, pwa,
+  # THE ONE INSTALL OF THE RUN (D-6770). Every server shard, trace shard, pwa
+  # shard, the pwa static checks and the Node-floor leg need the same four installed trees (server, agent, pwa,
   # ui) and the same apt packages, and each used to run its own `apt-get` and
   # four `npm ci`. This job installs them once per lockfile set and writes
   # them to the Actions cache; the jobs below `need` it and RESTORE the entry
@@ -457,18 +499,18 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: node .github/ci/verdict.mjs server
 
-  # `test (agent)` and `test (pwa)` — required BY NAME, so this matrix keeps
-  # its id, its axis and its values, and carries no job-level `if:` or
-  # `needs:`: a skipped matrix never expands, and the two checks would never
-  # appear (design 2026-09-23 §4.2). On a refresh or a rebuild every STEP is
-  # skipped instead, which reports the checks green without running them.
-  # Not selected: together they take under three minutes (§3).
+  # `test (agent)` — required BY NAME, so this matrix keeps its id, its axis
+  # and its value, and carries no job-level `if:` or `needs:`: a skipped matrix
+  # never expands, and the check would never appear (design 2026-09-23 §4.2).
+  # On a refresh or a rebuild every STEP is skipped instead, which reports the
+  # check green without running it. `test (pwa)` is no longer a leg of this
+  # matrix: it is the aggregate `pwa` job below (D-6768). Not selected.
   test:
     runs-on: ubuntu-latest
     # A deadline, not the default. Without this key a wedged job runs for
-    # GitHub's 360 minutes before anyone learns it wedged; the slowest leg
-    # here is `pwa` at about 2.5 minutes (measured 2026-09-23), so 30 is a
-    # deadline with room for a cold npm cache, not a guess at the real thing.
+    # GitHub's 360 minutes before anyone learns it wedged; the agent leg takes
+    # about a minute (measured 2026-09-23), so 30 is a deadline with room for
+    # a cold npm cache, not a guess at the real thing.
     # Pinned — key AND ceiling — by server/test/oss-metadata.test.ts.
     timeout-minutes: 30
     env:
@@ -476,11 +518,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [agent, pwa]
+        package: [agent]
     steps:
       # Full depth, as when this matrix also carried the server leg (whose
       # topology-clean needs `origin/main` — see server-shard): unchanged, so
-      # the agent and pwa suites meet the tree exactly as before.
+      # the agent suite meets the tree exactly as before.
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
         with:
@@ -498,19 +540,6 @@ jobs:
         working-directory: ${{ matrix.package }}
         run: npm ci
 
-      # BEFORE the suite, not after it. pwa consumes @ccrc/ui as SOURCE, so
-      # `../ui/src/**` is resolved from ITS OWN directory — Node and vite walk
-      # up from `ui/src/primitives/`, reach `ui/`, and never look inside
-      # `pwa/node_modules`. Without `ui/node_modules` present first, all 119
-      # pwa suites fail at import with "Failed to resolve import
-      # 'class-variance-authority'". Invisible on a developer box, where that
-      # directory already exists; this ordering is the only thing that proves
-      # it on a clean checkout.
-      - name: Install @ccrc/ui
-        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
-        working-directory: ui
-        run: npm ci
-
       # Local binary, never npx: `npx vitest` resolves to a global cache copy
       # with no jsdom and falsely reports "no tests" alongside 39 errors.
       - name: Test
@@ -523,39 +552,158 @@ jobs:
         working-directory: ${{ matrix.package }}
         run: ./node_modules/.bin/tsc --noEmit
 
-      # @ccrc/ui rides the pwa leg rather than taking a matrix value of its
-      # own: `test (agent)` and `test (pwa)` are required BY NAME, so the axis
-      # and its values are pinned, and a third value would mint a check name
-      # nothing is configured to require. The pwa suite already typechecks ui's
-      # SOURCE transitively (it imports it), so what is added here is what that
-      # misses — ui's own tsconfig, which also covers .storybook and the
-      # stories, and the proof that the generated palettes still match their
-      # seeds. Both are cheap; neither has a runner of its own.
+  # The pwa suite, split into three vitest shards (D-6768). The unsharded Test
+  # step measured about 576 s of a 10.8 min job; `--shard=i/3` takes each shard
+  # to about four minutes. No pwa times artifact exists (the published
+  # durations cover the server suite), so the split is vitest's own file split,
+  # not a packed one. The shards need `deps` but run whatever it did
+  # (`!cancelled()`), and every step skips on a refresh or a rebuild: `pwa`
+  # below is required by name and must always get a result to read.
+  pwa-shard:
+    name: pwa ${{ matrix.shard }}/${{ matrix.total }}
+    # The run's one install (D-6770), restored read-only through server-deps
+    # like the server shards; `!cancelled()` so a failed `deps` only costs the
+    # shard its own install. `pwa` below still reads every shard's result.
+    needs: deps
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # A deadline, not the default: a shard is about four minutes plus install,
+    # and the whole unsharded suite was under eleven. Pinned — key AND ceiling —
+    # by server/test/oss-metadata.test.ts.
+    timeout-minutes: 30
+    env:
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+        total: [3]
+    steps:
+      - uses: actions/checkout@v7
+        if: env.CCRC_LEG == 'run'
+        with:
+          fetch-depth: 0
+
+      # '22', as `deps` and the server shards: the trees' cache key names the
+      # node version setup-node resolves, so another string would always miss.
+      - uses: actions/setup-node@v7
+        if: env.CCRC_LEG == 'run'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            agent/package-lock.json
+            pwa/package-lock.json
+            ui/package-lock.json
+
+      # The run's one install (D-6770): pwa/ AND ui/ node_modules, restored
+      # from the `deps` entry (a miss installs them here). BEFORE the suite, not
+      # after it. pwa consumes @ccrc/ui as SOURCE, so `../ui/src/**` is resolved
+      # from ITS OWN directory — Node and vite walk up from
+      # `ui/src/primitives/`, reach `ui/`, and never look inside
+      # `pwa/node_modules`. Without `ui/node_modules` present first, all 119
+      # pwa suites fail at import with "Failed to resolve import
+      # 'class-variance-authority'". Invisible on a developer box, where that
+      # directory already exists; this ordering is the only thing that proves
+      # it on a clean checkout.
+      - uses: ./.github/actions/server-deps
+        if: env.CCRC_LEG == 'run'
+        with:
+          platform: linux
+
+      # Local binary, never npx: `npx vitest` resolves to a global cache copy
+      # with no jsdom and falsely reports "no tests" alongside 39 errors.
+      - name: Test
+        if: env.CCRC_LEG == 'run'
+        working-directory: pwa
+        run: ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }}
+
+  # The pwa checks that are not tests, once (D-6768): the typecheck of pwa runs
+  # here and nowhere else. @ccrc/ui rides this job rather than the shards: the
+  # pwa suite already typechecks ui's SOURCE transitively (it imports it), so
+  # what is added is what that misses — ui's own tsconfig, which also covers
+  # .storybook and the stories, and the proof that the generated palettes still
+  # match their seeds. Same step-level skip as the shards.
+  pwa-static:
+    name: pwa typecheck and storybook
+    # Same install as the shards: the `deps` entry, restored read-only.
+    needs: deps
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+    steps:
+      - uses: actions/checkout@v7
+        if: env.CCRC_LEG == 'run'
+        with:
+          fetch-depth: 0
+
+      # '22', as `deps` and the server shards: the trees' cache key names the
+      # node version setup-node resolves, so another string would always miss.
+      - uses: actions/setup-node@v7
+        if: env.CCRC_LEG == 'run'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            agent/package-lock.json
+            pwa/package-lock.json
+            ui/package-lock.json
+
+      # The same restored install, ui included, before the typecheck, for the
+      # shards' reason above.
+      - uses: ./.github/actions/server-deps
+        if: env.CCRC_LEG == 'run'
+        with:
+          platform: linux
+
+      - name: Typecheck
+        if: env.CCRC_LEG == 'run'
+        working-directory: pwa
+        run: ./node_modules/.bin/tsc --noEmit
+
       - name: Typecheck @ccrc/ui (incl. .storybook and stories)
-        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        if: env.CCRC_LEG == 'run'
         working-directory: ui
         run: ./node_modules/.bin/tsc --noEmit
 
       - name: Generated palettes match their seeds
-        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        if: env.CCRC_LEG == 'run'
         working-directory: ui
         run: npm run themes:check
 
       # Storybook is the design system's only surface that RENDERS its
       # components; everything else about ui is a text scrape (vitest runs with
-      # `css: false`, so nothing in this repo computes a style). Until now CI
-      # only TYPECHECKED the stories — `build-storybook` was never exercised, so
-      # it could have been broken for weeks and no leg would have said. It
-      # builds in seconds and the step costs almost nothing.
-      #
-      # This proves the stories BUILD, not that they look right. RENDERING them
-      # is the `storybook-a11y` job below — that dependency decision was taken,
-      # and this step stays because it is the cheap half and it runs on a leg
-      # that is REQUIRED by name, where that one is not.
+      # `css: false`, so nothing in this repo computes a style). This proves the
+      # stories BUILD, not that they look right. RENDERING them is the
+      # `storybook-a11y` job below, which is not required; this step stays
+      # because it is the cheap half and it runs under a required check.
       - name: Storybook builds (the one surface that renders the components)
-        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        if: env.CCRC_LEG == 'run'
         working-directory: ui
         run: npm run build-storybook
+
+  # `test (pwa)` — required BY NAME, so this job's `name:` is exactly that and
+  # no other job reports it (D-6768). It is the verdict over the shards and the
+  # static checks, modelled on `server` above: `always()`, so it reports even
+  # when a shard failed, and script-free, so it can only ADD red. A shard that
+  # failed, was cancelled or was skipped fails it. On a refresh or a rebuild
+  # the shards run with every step skipped and report success, as `test` does.
+  pwa:
+    name: test (pwa)
+    needs: [pwa-shard, pwa-static]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Refuse a shard or the static checks that did not succeed
+        if: needs.pwa-shard.result != 'success' || needs.pwa-static.result != 'success'
+        run: exit 1
+      - name: Every pwa shard and the static checks succeeded
+        run: echo "pwa shards ${{ needs.pwa-shard.result }}, static ${{ needs.pwa-static.result }}"
 
   # ── the one place a component is RENDERED and MEASURED ─────────────────────
   #
@@ -657,7 +805,7 @@ jobs:
   # A SEPARATE JOB, not a matrix `os` dimension, deliberately: branch
   # protection requires the checks `test (server)` / `test (agent)` /
   # `test (pwa)` / `build-pwa` BY NAME, and adding a matrix axis to `test`
-  # renames two of them. `test-macos` is additive and non-required — a red
+  # renames one of them. `test-macos` is additive and non-required — a red
   # here blocks no pull request, which is the right cost while the leg earns
   # trust, and the PR page still shows it. It DOES gate a promotion:
   # `full-suite` below needs it green (design 2026-09-23 ruling 6).
@@ -857,9 +1005,10 @@ jobs:
       # as the test leg: ui's own node_modules or nothing resolves.
       #
       # `vite build` alone, not `npm run build` (`tsc --noEmit && vite build`):
-      # `test (pwa)`'s Typecheck step already runs that same `tsc --noEmit` on
-      # every run, so the second copy here bought nothing but a duplicate
-      # (D-6770). Exactly one pwa typecheck runs per CI run, in that leg.
+      # `test (pwa)`'s Typecheck step (in `pwa-static`, D-6768) already runs
+      # that same `tsc --noEmit` on every run, so the second copy here bought
+      # nothing but a duplicate (D-6770). Exactly one pwa typecheck runs per CI
+      # run, in that job.
       - if: env.CCRC_LEG == 'run'
         working-directory: ui
         run: npm ci
@@ -928,15 +1077,19 @@ jobs:
   # list is exact. Its `node-version` is pinned equal to `engines.node` by
   # server/test/ci-pipeline.test.ts, and so is its name.
   #
-  # Not required BY NAME (making it a required PR check is a branch-protection
-  # setting, the operator's act), but `full-suite` needs it, so it gates a
-  # stable promotion. No job-level `if:` and no `needs:`: it skips by STEP on a
-  # refresh or a rebuild, like the required legs, because a job skipped by
-  # `if:` reads as red in full-suite. Default checkout depth: nothing on its
-  # list reads the commit range.
+  # Not required BY NAME (the required checks are test (server), test (agent),
+  # test (pwa) and build-pwa), but `full-suite` needs it, so it gates a
+  # stable promotion. Its only job-level `if:` is `!cancelled()`, so a failed
+  # `needs:` never skips it: it skips by STEP on a refresh, a rebuild, or a
+  # pull request that changed none of its inputs (D-6771), like the required
+  # legs, because a job skipped by `if:` reads as red in full-suite. Default
+  # checkout depth: nothing on its list reads the commit range.
   node-floor:
     name: node floor (22.16.0)
-    needs: deps
+    # D-6771: `select` only lends its `floor` output — on a pull request it
+    # runs only when `select` found one of its inputs changed; every other
+    # event runs it unless it is a refresh or a rebuild.
+    needs: [select, deps]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # server-deps installs four packages from a cold cache in about three
@@ -944,7 +1097,7 @@ jobs:
     # list runs in seconds. 30 is a deadline, not an estimate.
     timeout-minutes: 30
     env:
-      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && needs.select.outputs.floor != 'true')) && 'skip' || 'run' }}
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
@@ -1244,7 +1397,7 @@ jobs:
   # request's run (main-artifact.mjs green-full-suite) — and reads the
   # `verdict` output when it called this file itself.
   full-suite:
-    needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos, node-floor, browser-pwa]
+    needs: [select, server, server-shard, server-typecheck, test, pwa, build-pwa, test-macos, node-floor, browser-pwa]
     # Never on a merge-queue run or a pull request: both skip test-macos, and a
     # run that fell back to `full` would read that skip as a red leg (landing-
     # order stage 2; amendment 2026-10-15). Neither is ever the stable gate's
@@ -1271,7 +1424,7 @@ jobs:
       - name: Verdict
         id: verdict
         env:
-          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} build-pwa=${{ needs.build-pwa.result }} test-macos=${{ needs.test-macos.result }} node-floor=${{ needs.node-floor.result }} browser-pwa=${{ needs.browser-pwa.result }}
+          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} pwa=${{ needs.pwa.result }} build-pwa=${{ needs.build-pwa.result }} test-macos=${{ needs.test-macos.result }} node-floor=${{ needs.node-floor.result }} browser-pwa=${{ needs.browser-pwa.result }}
         run: |
           node .github/ci/verdict.mjs full
           echo "verdict=green" >> "$GITHUB_OUTPUT"

@@ -117,9 +117,9 @@ async function harness(first: string, opts: { run?: 'mine' | 'other'; state?: Ru
   let w = new FleetWatcher(deps, new Bus(), 10_000);
   const sweep = async (next?: string): Promise<void> => {
     if (next !== undefined) out = next;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
   };
   /** A server restart: a NEW watcher — every in-memory latch empty — over the
    *  SAME coord.db, which is what a rollout or a crash leaves behind. */

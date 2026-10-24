@@ -111,7 +111,7 @@ function snapshot(box: HistoryBox): string[] {
 }
 
 /** The shim on a REAL terminal (node-pty): stdin IS a TTY here, so only the pane and the switches can refuse.
- *  Lazy, inside each test (ccrc-install.test.ts:5914 lesson); the guard timer is a safety net, never the
+ *  Lazy, inside each test (ccrc-install-*.test.ts lesson); the guard timer is a safety net, never the
  *  assertion. A pty merges stdout and stderr. */
 function shimPty(box: HistoryBox, args: string[], env: Record<string, string> = {}, cwd: string = box.home): Promise<{ code: number; out: string }> {
   const full: Record<string, string> = {};

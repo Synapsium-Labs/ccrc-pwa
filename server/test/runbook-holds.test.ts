@@ -28,7 +28,7 @@
 //
 // NARROW BY DESIGN: this does not pin the runbook's prose, only the
 // exact-match transcript lines it stakes an operator's diff against, and it
-// does not run the full `ccrc install` fixture (`ccrc-install.test.ts`
+// does not run the full `ccrc install` fixture (`ccrc-install-*.test.ts`
 // already pays that cost once per file it needs it in — importing that file
 // here would re-register its ~75 tests as a side effect of the module
 // import, which is waste, not reuse).
@@ -222,7 +222,7 @@ describe('the VM-gate runbook quotes what a real fresh install actually prints',
     const body = cmdInstallBody();
     const loopIdx = body.search(/^\s*for inst_fn in "\$\{CCRC_INST_SPINE\[@\]\}"; do _inst_step "\$inst_fn"; done\s*$/m);
     // W6 Task 3: doctor runs inside `_inst_doctor_tail`, which runs it FIRST
-    // and returns its rc (ccrc-install.test.ts pins both), so the tail's line
+    // and returns its rc (ccrc-install-*.test.ts pins both), so the tail's line
     // is where the spine hands over to doctor.
     const doctorIdx = body.search(/^\s*_inst_doctor_tail\s*$/m);
     expect(loopIdx, body).toBeGreaterThan(-1);

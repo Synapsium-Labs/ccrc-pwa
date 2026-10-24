@@ -1289,6 +1289,9 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.root).toContain(RUN_PREFIX);
     expect(c!.collector).toContain('run-tmp.globalsetup.mjs');
     expect(c!.collector).toContain('RUN_QUIET_S');
+    // The sweep's test-run arm (DR-10, D-6622) is the second collector, for a root no later run visits.
+    expect(c!.collector).toContain('ccd/ccd-tmp-sweep');
+    expect(c!.collector).toContain('test-run arm');
     expect(`${c!.collector} ${c!.bound}`, 'the row carries a copy of RUN_QUIET_S\'s number').not.toContain(String(RUN_QUIET_S));
   });
 

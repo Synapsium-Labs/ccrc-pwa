@@ -1,5 +1,5 @@
 // `ccrc install` — the graphify engine step (`_inst_graphify_engine`). This
-// file mirrors `ccrc-install.test.ts`'s fixture idiom (freshBox / ccrcEnv /
+// file mirrors `ccrc-installFixture.ts`'s fixture idiom (freshBox / ccrcEnv /
 // runInstall / healthyDoctorBox) rather than importing it: that file's
 // helpers are not exported, and importing a sibling `.test.ts` module for its
 // side-effecting `describe()` blocks would register that whole suite a second
@@ -7,14 +7,14 @@
 // comment for the full reasoning behind each piece copied below.
 //
 // The fixture TREE itself (`TREE_FILES` / `TREE_STUBS` / `installFixtureTree`)
-// is the one piece that is NOT copied: both this file and `ccrc-install.test.ts`
+// is the one piece that is NOT copied: both this file and `ccrc-install-*.test.ts`
 // import it from `installTreeFixture.ts`, a plain module with no `describe()`
 // in it, so importing it registers no suite twice. See that module's header
 // for why the two-copy shape it replaces was a real cost, not a style
 // preference.
 //
 // HOME is a throwaway `mkTmp` directory in every test, exactly as in
-// `ccrc-install.test.ts`: this verb writes `~/.ccrc/*` and, as of this task,
+// `ccrc-install-*.test.ts`: this verb writes `~/.ccrc/*` and, as of this task,
 // `~/.ccrc/graphify-venv/` and `~/.ccrc/graphify.pin`. Nothing here may ever
 // run against a real $HOME.
 import { describe, it, expect } from 'vitest';
@@ -53,7 +53,7 @@ const SED = realPath('sed');
 const treeRoot = (home: string): string => join(home, 'checkout');
 const ccrcIn = (root: string): string => join(root, 'ccd', 'ccrc');
 
-/** `ccrc-install.test.ts`'s `healthyDoctorBox`, copied: the stub shapes a
+/** `ccrc-installFixture.ts`'s `healthyDoctorBox`, copied: the stub shapes a
  *  fresh box needs so the install's closing `ccrc doctor` passes. Graphify's
  *  own fixture (`plantFakeVenv`, below) is planted separately by each test —
  *  this function stays scoped to what doctor measures, exactly as its
@@ -116,7 +116,7 @@ function healthyDoctorBox(home: string): void {
     '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker', { mode: 0o755 });
 }
 
-/** A box with a shipped tree and nothing else — `ccrc-install.test.ts`'s
+/** A box with a shipped tree and nothing else — `ccrc-installFixture.ts`'s
  *  `freshBox`, copied. */
 function freshBox(prefix: string): string {
   const home = mkTmp(prefix);
@@ -127,7 +127,7 @@ function freshBox(prefix: string): string {
 
 interface Result { code: number; stdout: string; stderr: string }
 
-/** `ccrc-install.test.ts`'s `ccrcEnv`, copied unchanged — and, since wave 9 R10d (D-3818), starting from the same
+/** `ccrc-installFixture.ts`'s `ccrcEnv`, copied unchanged — and, since wave 9 R10d (D-3818), starting from the same
  *  `ccrcContainedEnv(…, { managers: true, curl: 'poison' })`: this copy has no `adoptPlantedSystemd` and no
  *  systemd-run front, so it takes the manager poisons — its own systemctl below replaces that one. */
 function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
@@ -187,7 +187,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     'esac',
     'echo "fixture systemctl: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
-  // Darwin stubs, copied verbatim from ccrc-install.test.ts's ccrcEnv (the
+  // Darwin stubs, copied verbatim from ccrc-installFixture.ts's ccrcEnv (the
   // macos lane landed on main after this suite forked the helper; without
   // these the install dies at _inst_enable_darwin's launchctl bootstrap
   // BEFORE the graphify steps this suite exists to test — measured on the
@@ -307,7 +307,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
   // graphify Task 3: skips `install-graphify-skill.sh`'s venv-python PKG
-  // resolution, exactly as `ccrc-install.test.ts`'s own `ccrcEnv` now does.
+  // resolution, exactly as `ccrc-installFixture.ts`'s own `ccrcEnv` now does.
   // `plantFakeVenv` below builds `bin/python` as a fake that logs argv and
   // prints nothing, so the installer's `"$VENV/bin/python" -c 'import
   // graphify…'` would read PKG="" and refuse — a fixture reason, not
@@ -320,7 +320,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   return env;
 }
 
-/** `ccrc-install.test.ts`'s `replantDoctorStubs`, copied unchanged. */
+/** `ccrc-installFixture.ts`'s `replantDoctorStubs`, copied unchanged. */
 function replantDoctorStubs(home: string): void {
   const d = join(home, 'doctor-stubs');
   if (!existsSync(d)) return;
@@ -330,7 +330,7 @@ function replantDoctorStubs(home: string): void {
   }
 }
 
-/** `ccrc-install.test.ts`'s `runInstall`, copied unchanged (minus the
+/** `ccrc-installFixture.ts`'s `runInstall`, copied unchanged (minus the
  *  `umask`/`from` options this file's tests never reach for). */
 function runInstall(home: string, args: string[] = ['install'],
   extraEnv: NodeJS.ProcessEnv = {},
@@ -340,7 +340,7 @@ function runInstall(home: string, args: string[] = ['install'],
   for (const [name, body] of Object.entries(opts.stubs ?? {})) {
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
   }
-  // Wave 9 R10d: on the FINAL env, as `ccrc-install.test.ts`'s runner does.
+  // Wave 9 R10d: on the FINAL env, as `ccrc-install-*.test.ts`'s runner does.
   assertNoRealTool(env, home);
   const ccrc = ccrcIn(treeRoot(home));
   const r = spawnSync(BASH, [ccrc, ...args], { env, encoding: 'utf8' });
