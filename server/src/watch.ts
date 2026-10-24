@@ -160,7 +160,7 @@ import {
   childReclaimAttentionWithLeaves, childReclaimLeafKept, childReclaimLeafKeptSince, type ChildReclaimLeafKept,
   CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed, type ChildReclaimSweepInput, type ChildStaleAsk,
 } from './childReclaimSweep.js';
-import { ChildStaleArm, readStaleHoldAt, readStaleHoldBytes } from './coord/childReclaimStale.js';
+import { ChildStaleArm, readStaleHoldAt, readStaleHoldBytes, staleHoldWanted, type StaleHoldRead } from './coord/childReclaimStale.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
   EXPIRE_AUDITS_PER_PASS, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
@@ -4270,7 +4270,10 @@ export class FleetWatcher {
     // new one; the executor re-reads the row's marker, open runs, switch and presence before it asks the
     // box; and ccd's audit judges the row's own hold, attachment and tree, and re-proves them in its lock.
     const pass = ++this.childReclaimPassSeq;
-    const regGenerations = await this.childReclaimGatherGenerations(records);
+    // D-6639: the stale arm's hold reads join this ONE gather (held rows past the ceiling on the server's own evidence
+    // only; `judge` keeps any child whose hold was not read), so the pass still awaits only here and at its acts.
+    const [regGenerations, staleHolds] = await Promise.all([
+      this.childReclaimGatherGenerations(records), this.childReclaimGatherStaleHolds(coord, records)]);
     if (pass !== this.childReclaimPassSeq) return;
     // The lane's two clocks, read ONCE for the pass's decisions (spec §5.7),
     // AFTER the gather, so no decision clock is older than the evidence it
@@ -4547,11 +4550,7 @@ export class FleetWatcher {
       const v = childReclaimSweepVerdict(sweepIn);
       judged.set(r.id, v);
       // D-6639: the stale arm judges BESIDE the verdict. An ask only when armed, on a box that proves the flag.
-      const readHold = async (): Promise<{ bytes: string | null; atMs: number | null }> => ({
-        bytes: await readStaleHoldBytes(this.deps.io, this.deps.cfg.registryDir, r.id),
-        atMs: await readStaleHoldAt(this.deps.io, this.deps.cfg.registryDir, r.id),
-      });
-      const stale = await this.childStale.judge({ coord, record: r, readHold, input: sweepIn, verdict: v, names,
+      const stale = this.childStale.judge({ coord, record: r, hold: staleHolds.get(r.id), input: sweepIn, verdict: v, names,
         fleetState: this.deps.fleetState, notifyLog: this.deps.notifyLog, nowMs: now });
       if (!v.eligible && stale === null) {
         this.childReclaimSweepState.delete(r.id);
@@ -4798,6 +4797,27 @@ export class FleetWatcher {
       marked.map((r) => childReclaimGenerationRead(this.deps.io, this.deps.cfg.registryDir, r.id)
         .catch((): ChildReclaimGeneration => ({ kind: 'unreadable' }))));
     return new Map(marked.map((r, i): [string, ChildReclaimGeneration] => [r.id, reads[i]!]));
+  }
+
+  /** The stale arm's hold reads for this pass, concurrently, for the rows `staleHoldWanted` picks (D-6639). A read that
+   *  throws answers nothing, which keeps the child. */
+  private async childReclaimGatherStaleHolds(
+    coord: CoordStore, records: readonly SessionRecord[],
+  ): Promise<ReadonlyMap<string, StaleHoldRead>> {
+    const nowMs = Date.now();
+    const wanted = records.filter((r) => staleHoldWanted(coord, r, this.deps.fleetState, nowMs));
+    const reads = await Promise.all(wanted.map(async (r): Promise<StaleHoldRead | null> => {
+      try {
+        const [bytes, atMs] = await Promise.all([
+          readStaleHoldBytes(this.deps.io, this.deps.cfg.registryDir, r.id),
+          readStaleHoldAt(this.deps.io, this.deps.cfg.registryDir, r.id),
+        ]);
+        return { bytes, atMs };
+      } catch { return null; }
+    }));
+    const out = new Map<string, StaleHoldRead>();
+    wanted.forEach((r, i) => { const h = reads[i]; if (h !== null && h !== undefined) out.set(r.id, h); });
+    return out;
   }
 
   /** The child-reclaim lane's two clocks, read together

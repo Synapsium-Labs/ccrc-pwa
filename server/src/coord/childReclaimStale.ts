@@ -16,6 +16,7 @@ import { notify } from '../notice.js';
 import type { NotifyLog } from '../notifylog.js';
 import type { FleetState } from '../fleetstate.js';
 import type { SessionRecord } from '../registry.js';
+import { isRegistryId } from '../../../shared/api.js';
 import type { FleetIO } from '../io.js';
 import {
   CHILD_STALE_IDLE_MS, childReclaimDetailText, childReclaimStaleVerdict, childReclaimStaleWordOf,
@@ -68,13 +69,32 @@ export async function readStaleHoldAt(io: Pick<FleetIO, 'statMeasured'>, registr
   return r.ok && Number.isFinite(r.mtimeMs) ? r.mtimeMs : null;
 }
 
+/** The hold file as the gather read it. */
+export interface StaleHoldRead { readonly bytes: string | null; readonly atMs: number | null }
+
+/** Should the pass's gather read this child's hold? Only a held child on a box that proves the flag, whose server-side
+ *  idle evidence is already past the ceiling (a remote fleet pays the round trips for those alone, not for every held
+ *  child on every pass). Synchronous; a throw reads as no. */
+export function staleHoldWanted(
+  coord: Pick<CoordStore, 'childStaleActivity'>, r: SessionRecord, fleetState: Pick<FleetState, 'ccdVerbs'> | undefined, nowMs: number,
+): boolean {
+  try {
+    if (r.child.kind !== 'child' || r.held === null) return false;
+    if (!capSupported(fleetState, RECLAIM_STALE_CAP)) return false;
+    const idle = childStaleIdleOf(coord, r, r.child.runId, null);
+    if (idle === 'unmeasured') return false;
+    const at = [idle.runAt, idle.mailAt, idle.statusAt].filter((x): x is number => x !== null);
+    return at.length > 0 && at.every(Number.isFinite) && nowMs - Math.max(...at) > CHILD_STALE_IDLE_MS;
+  } catch { return false; }
+}
+
 /** What the lane hands `judge` for one marked child. */
 export interface ChildStaleJudgement {
   readonly coord: Pick<CoordStore, 'childStaleActivity' | 'recordFeedEvent'>;
   readonly record: SessionRecord;
-  /** Reads the hold file's raw bytes and write time, called only once the word is `held`, the box proves the flag and
-   *  the server's own idle evidence has passed the ceiling (a remote fleet pays one round trip per held child, not per pass). */
-  readonly readHold: () => Promise<{ readonly bytes: string | null; readonly atMs: number | null }>;
+  /** The hold file's raw bytes and write time as the pass's one gather read them (`wantsHold` chose which rows), or
+   *  `undefined` when none was read for this child. Judging awaits nothing: the lane's per-child loop is synchronous. */
+  readonly hold: StaleHoldRead | undefined;
   readonly input: ChildReclaimSweepInput;
   readonly verdict: ChildReclaimSweepVerdict;
   /** The registry listing this pass took, which the arm's switch is read from. */
@@ -91,7 +111,7 @@ export class ChildStaleArm {
 
   /** The ask for this child this pass, or `null`: not stale, the box cannot take the flag, the arm is shadowed (the
    *  row is written once), or a terminal child was asked within the last seven days. */
-  async judge(j: ChildStaleJudgement): Promise<(ChildStaleAsk & { readonly runId: number }) | null> {
+  judge(j: ChildStaleJudgement): (ChildStaleAsk & { readonly runId: number }) | null {
     const id = j.record.id;
     const word = childReclaimStaleWordOf(j.verdict);
     if (word === null) { this.forget(id); return null; }
@@ -103,9 +123,9 @@ export class ChildStaleArm {
     if (word === 'held') {
       // First on the server's own evidence, with a stand-in digest: no hold is read for a child that is not past the ceiling.
       if (!childReclaimStaleVerdict({ ...i, holdDigest: PENDING_DIGEST }, j.verdict).stale) { this.forget(id); return null; }
-      const hold = await j.readHold();
-      // A hold whose bytes or write time cannot be told keeps the child; writing or renewing a hold is activity.
-      if (hold.bytes === null || hold.atMs === null) return null;
+      const hold = j.hold;
+      // A hold not read, or whose bytes or write time cannot be told, keeps the child; writing or renewing a hold is activity.
+      if (hold === undefined || hold.bytes === null || hold.atMs === null) return null;
       i = { ...i, idle: idleWith(hold.atMs), holdDigest: childStaleHoldDigest(hold.bytes) };
     }
     const v = childReclaimStaleVerdict(i, j.verdict);
@@ -184,7 +204,7 @@ export async function childReclaimStaleTold(
   deps: Pick<ChildReclaimDeps, 'coord' | 'runCcd' | 'fleetState' | 'notifyLog'>, req: ChildReclaimRequest,
 ): Promise<void> {
   const ask = req.stale;
-  if (ask === undefined) return;
+  if (ask === undefined || !isRegistryId(req.sessionId)) return;
   try {
     let refs: string[] | null = null;
     if (ccdCan(deps.fleetState, 'wsAttic')) {

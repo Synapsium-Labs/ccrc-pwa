@@ -255,7 +255,7 @@ describe('the reads are gathered before the loop, so the loop stays synchronous 
     // D-6114: keyed on the method's symbol (scan/symbols.ts), so the slice follows `sweepChildReclaim` wherever it moves.
     const body = codeOnly(sourceOfSymbol(path.join(srcDir, 'watch.ts'), 'FleetWatcher.sweepChildReclaim'));
     const throttle = body.indexOf('this.lastChildReclaimSweep = gate;');
-    const gather = body.indexOf('await this.childReclaimGatherGenerations(records)');
+    const gather = body.indexOf('await Promise.all([\n      this.childReclaimGatherGenerations(records)');
     const decisionClock = body.indexOf('const asked = this.childReclaimLaneNow();');
     const loop = body.indexOf('for (const r of records) {');
     const acts = body.indexOf('await Promise.all(acts);');
