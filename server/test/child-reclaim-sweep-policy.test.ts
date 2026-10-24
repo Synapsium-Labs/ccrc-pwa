@@ -98,13 +98,17 @@ const base = (over: Partial<ChildReclaimSweepInput> = {}): ChildReclaimSweepInpu
   childBornAt: NOW - 3_600_000,
   skewMs: SKEW,
   nowMs: NOW,
+  // D-6639: the stale step's inputs; the sweep verdict reads neither.
+  idle: 'unmeasured',
+  holdDigest: null,
   ...over,
 });
 
 const skip = (over: Partial<ChildReclaimSweepInput>) => childReclaimSweepVerdict(base(over));
 
 /** How `review-report-stale`'s sentence ends (D-5942): its release is the reviewed run's close, not a person's removal. */
-const REVIEW_STALE_ENDING = 'ccrc never reclaims it while the run it reviewed stays open; '
+const REVIEW_STALE_ENDING = 'ccrc does not reclaim it while the run it reviewed stays open, unless nothing has touched '
+  + 'the workspace for seven days and stale reclaim is switched on; '
   + 'closing or abandoning that run releases this workspace, and the sweep can reclaim it then.';
 
 describe('childReclaimSweepVerdict', () => {
@@ -1330,6 +1334,9 @@ describe('CHILD_RECLAIM_SKIP — every skip word classed exactly once, with its 
     return row?.sentence ?? '';
   };
   const KEPT_ENDING = 'ccrc never reclaims it on its own; a person removes it once nothing still needs it.';
+  // D-6639: the words the stale arm lapses say when, so their ending is the lapse, not the common phrase.
+  const LAPSE_ENDING = 'ccrc reclaims it on its own only once nothing has touched it for seven days and stale reclaim is switched on; '
+    + 'until then a person removes it once nothing still needs it.';
   const MARKER_ENDING = 'ccrc never reclaims it on its own; a person removes the marker, never the checkout.';
   const REBUILD = 'After a rebuild, workers may still be running in these.';
   const DOUBT = ['child-birth-unplaced', 'hold-unmeasured', 'identity-unmeasured', 'marker-unreadable',
@@ -1354,12 +1361,15 @@ describe('CHILD_RECLAIM_SKIP — every skip word classed exactly once, with its 
       const s = keptSentenceOf(w);
       expect(s, w).toBe(sentenceOf(w));
       expect(s.endsWith(w === 'not-a-workspace' ? MARKER_ENDING
-        : w === 'review-report-stale' ? REVIEW_STALE_ENDING : KEPT_ENDING), w).toBe(true);
+        : w === 'review-report-stale' ? REVIEW_STALE_ENDING
+        : w === 'minting-run-absent' ? LAPSE_ENDING : KEPT_ENDING), w).toBe(true);
     }
     const rebuild = Object.keys(CHILD_RECLAIM_SKIP).filter((w) => sentenceOf(w).includes(REBUILD)).sort();
     expect(rebuild).toEqual(['minting-run-absent', 'minting-run-postdates-child']);
     // The rebuild sentence comes directly BEFORE the ending, not after it.
-    for (const w of rebuild) expect(sentenceOf(w).endsWith(`${REBUILD} ${KEPT_ENDING}`), w).toBe(true);
+    for (const w of rebuild) {
+      expect(sentenceOf(w).endsWith(`${REBUILD} ${w === 'minting-run-absent' ? LAPSE_ENDING : KEPT_ENDING}`), w).toBe(true);
+    }
   });
 
   it('every doubt sentence ends with the sweep reading again, and the held sentence is said', () => {

@@ -5081,6 +5081,34 @@ describe('fleet disk retention DR-29: the expiry lane’s child switch has no wr
   });
 });
 
+// FLEET DISK RETENTION DR-27 (D-6639; spec 2026-10-23 §2.7.3). APPENDED, for the reason the blocks above state. The
+// child reclaim's stale arm SHIPS SHADOWED: until `$REG/child-stale-reclaim-live` exists the lane records "child would be
+// reclaimed (stale)" and composes no `--stale` argv. The file is the operator's to touch BY HAND on the fleet box, so no
+// line of shell names it, and its TS holders are its definer (an L0 file that reaches no `node:` module and so cannot
+// write it) and the one arm that reads a listing the lane already took.
+describe('fleet disk retention DR-27: the stale arm’s live switch has no writer in the tree', () => {
+  const NAME = 'child-stale-reclaim-live';
+  const DEFINER = 'shared/switches.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  // THE WIDER WRITER, as the expiry lane's block states it: a file that imports the constant and holds an `io` could
+  // write the marker without spelling its name. The files whose code names the constant are pinned, and none reaches a write.
+  it('the files that name its constant are the definer and the arm, and none reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('CHILD_STALE_RECLAIM_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/coord/childReclaimStale.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
 // THE THRESHOLD IS NEVER TYPED BY THE SERVER (the coordinator's ruling (C), wave 3b): ccd's `ws-audit --expire`
 // document carries `expiresAt` (`archivedAt + WS_EXPIRE_AFTER_S`), and the server reads it through ONE reader. Both
 // halves pinned: no seven-day literal in the server or the PWA beside the one that is not an expiry (`limits.ts`'s
