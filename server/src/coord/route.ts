@@ -13,7 +13,7 @@ import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { CLASSES, type ModelClass } from '../../../shared/models.js';
 
 /**
- * `POST /api/runs/:id/route`, decided (D-TBD-decide-route, audit ticket
+ * `POST /api/runs/:id/route`, decided (D-6735, audit ticket
  * ARCH-20, GitHub #546). L1: no `fs`, no fastify, no `reply`, no clock; every
  * import is L0, `shared/`. The route (`coord/routes.ts`, L4) parses the
  * request, gathers the facts through the lookups below, calls `decideRoute`

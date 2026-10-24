@@ -102,7 +102,7 @@ export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
   | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal
   | ArchiveRefusal
-  // The coordinator's route door (D-TBD-decide-route, ARCH-20): `decideRoute` answers a `RunRouteRefuseCode`, sent through `refuseRoute`.
+  // The coordinator's route door (D-6735, ARCH-20): `decideRoute` answers a `RunRouteRefuseCode`, sent through `refuseRoute`.
   | RunRouteRefuseCode;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
