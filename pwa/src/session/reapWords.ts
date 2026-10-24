@@ -8,6 +8,7 @@
 // are reachable by a test directly instead of only through a render — which
 // matters most for the branches a real audit reaches rarely.
 import type { WsAuditChild } from '../../../shared/api';
+import type { ReapAct, ReapCrumb, ReapPhase } from '../../../shared/reapcrumb';
 // Pre-merge fix round, finding 6: byte-for-byte identical to the local
 // `bytes()` the sheet used to define — one shared formatter, imported,
 // rather than two copies that could drift. Its home is `lib/format.ts`
@@ -101,3 +102,27 @@ export const childLine = (c: WsAuditChild): string => {
   const mid = c.busy !== null ? `, mid-${c.busy}` : '';
   return `${c.path} — ${c.branch ?? 'detached'}, ${dirty}${mid}`;
 };
+
+/** Who left the breadcrumb, in a person's words. Total over `ReapAct`: a new act is a compile error here. */
+const ACT_WORDS: Readonly<Record<ReapAct, string>> = {
+  reap: 'Cleanup',
+  reclaim: 'Reclaiming it',
+  expire: 'Expiring it',
+};
+
+/** Where it stopped. Total over `ReapPhase` for the same reason. */
+const PHASE_WORDS: Readonly<Record<ReapPhase, string>> = {
+  children: 'while removing the workspaces nested under it',
+  worktree: 'while removing its checkout',
+  branch: 'while removing its branch',
+  clips: 'while removing its saved clips',
+  artifacts: 'while removing its saved artifacts',
+};
+
+/** The sentence for a breadcrumb that stands (ARCH-25, #531). It never prints the token: a
+ *  crumb this build does not know says so and sends the person to a human, as the server's
+ *  `reaping-phase-unknown` sentence does. */
+export const reapCrumbText = (c: ReapCrumb): string =>
+  c.kind === 'known'
+    ? `${ACT_WORDS[c.act]} stopped part-way, ${PHASE_WORDS[c.phase]}.`
+    : 'Cleanup stopped part-way, at a step this screen does not recognise.';

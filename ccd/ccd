@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=871f89a1f40da0163d4e2f3d83d11196989e0fa40204d440abce75a2619e4311
+# ccrc:generated 1 sha256=0210275544dbad70eaf2f60ab500e996407fd2cfc47ff442c6788d1d096040ca
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -14306,11 +14306,33 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   return "$rc"
 }
 
+_crumb_parse() {   # crumb -> sets _CRUMB_ACT (reap|reclaim|expire) and _CRUMB_PHASE; rc 0 known, 1 unknown, 2 no crumb
+  # THE ONE READER OF A `$REG/<id>.reaping` BREADCRUMB (ARCH-25, #531). One grammar: `<act>:<phase>`, where a BARE
+  # phase is `ws-reap`'s own spelling (`reap`), and `reclaim:` / `expire:` are the other two verbs'. Every caller that
+  # asks "whose is this, and where did it stop" asks here; none strips a prefix or lists a phase itself
+  # (`ccd-crumb-parse.test.ts` scans for exactly that). The act is named even when the phase is not one the act ever
+  # writes (rc 1), so a caller still refuses BY VERB, and the unrecognised crumb is never read loosely: the loose reading
+  # once skipped `git worktree remove` and finished the branch and registry deletes (see `_ws_reap_locked`'s note).
+  _CRUMB_ACT='' _CRUMB_PHASE=''
+  [[ -n "$1" ]] || return 2
+  case "$1" in
+    reclaim:*) _CRUMB_ACT=reclaim _CRUMB_PHASE="${1#reclaim:}" ;;
+    expire:*)  _CRUMB_ACT=expire  _CRUMB_PHASE="${1#expire:}" ;;
+    *)         _CRUMB_ACT=reap    _CRUMB_PHASE="$1" ;;
+  esac
+  case "$_CRUMB_ACT:$_CRUMB_PHASE" in
+    reap:children|reap:worktree|reap:branch|reap:clips) return 0 ;;
+    reclaim:children|reclaim:worktree|reclaim:branch|reclaim:artifacts) return 0 ;;
+    expire:children|expire:worktree|expire:branch|expire:artifacts) return 0 ;;
+  esac
+  return 1
+}
+
 _ws_reap_locked() {   # token id — everything the reap lock serialises
   local token="$1" id="$2"
   local resumed; resumed=$(_reg_get "$id" reaping); ! _ws_reap_crumb_unread "$id" "$resumed" || return 0   # WS-REAP'S MIRROR
   if [[ -n "$resumed" ]]; then
-    [[ "$resumed" != reclaim:* && "$resumed" != expire:* ]] || { _ws_reclaim_mirror "$id" "$resumed"; return 0; }   # see "WS-REAP'S MIRROR", below the RECLAIM region
+    _crumb_parse "$resumed"; [[ "$_CRUMB_ACT" == reap ]] || { _ws_reclaim_mirror "$id" "$resumed"; return 0; }   # see "WS-REAP'S MIRROR", below the RECLAIM region
     # Resume: the tombstone written at (b) is what distinguishes "the user
     # deleted the worktree" from "we did".
     #
@@ -14726,8 +14748,9 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # BEFORE any registered child falls, exactly as `worktree` is written
   # before the PARENT falls, and it is closed the same way — a value this
   # dispatch has never written is still refused, never guessed at.
-  case "$resumed" in
-    ""|children|worktree|branch|clips) : ;;
+  _crumb_parse "$resumed"
+  case "$?" in
+    0|2) : ;;
     *)
       printf '{"refused":"reaping-phase-unknown","detail":%s,"paths":[]}\n' \
         "$(_json_str "breadcrumb phase '$resumed' for $id is not one ccd ever writes — refusing to guess which steps already ran")"
@@ -31156,9 +31179,10 @@ _ws_reclaim_recorded_crumb() {   # id workdir -> rc 0 when the row's own breadcr
   local -a _WS_LOGS=()
   local _WS_KEEP_WHY=''
   crumb=$(_reg_read "$o" reaping) || return 1
-  case "$crumb" in
-    branch|clips) : ;;
-    reclaim:branch|reclaim:artifacts) need=1 ;;
+  _crumb_parse "$crumb" || return 1
+  case "$_CRUMB_ACT/$_CRUMB_PHASE" in
+    reap/branch|reap/clips) : ;;
+    reclaim/branch|reclaim/artifacts) need=1 ;;
     *) return 1 ;;
   esac
   tomb="$REG/.reaped/$o.json"
@@ -35860,12 +35884,10 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # (`crumb`, spec §5.6).
   _WS_RCL_CRUMB=true
   tomb="$REG/.reaped/$id.json"
-  case "$phase" in
-    children|worktree|branch|artifacts) : ;;
-    *) _ws_reclaim_fail "$id" "$lctx" reaping-phase-unknown \
-         "breadcrumb phase '$_WS_RCL_ACT:$phase' for $id is not one ccd ever writes — refusing to guess which steps already ran"
-       return 1 ;;
-  esac
+  _crumb_parse "$_WS_RCL_ACT:$phase" \
+    || { _ws_reclaim_fail "$id" "$lctx" reaping-phase-unknown \
+           "breadcrumb phase '$_WS_RCL_ACT:$phase' for $id is not one ccd ever writes — refusing to guess which steps already ran"
+         return 1; }
   # EVERY DESTRUCTIVE GIT CALL BELOW RUNS CONTAINED (spec §5.6): each `git
   # worktree remove` and each `update-ref -d`, the nested checkouts' and the
   # child's own, under `_ws_reclaim_contained`, as the pins before them do.
@@ -36713,14 +36735,14 @@ _ws_reclaim_fork_contained() {   # `_ws_reclaim_fork`'s body, run under `_ws_rec
   if [[ -z "$rbc" ]] && [[ -e "$REG/$id.reaping" || -L "$REG/$id.reaping" ]]; then
     _ws_reclaim_reset
     _ws_reclaim_unmeasured "a breadcrumb stands at $REG/$id.reaping but cannot be read — which verb left it, and at which step, is unknown" || :
-  elif [[ -n "$rbc" && "$rbc" != reclaim:* ]]; then
+  elif _crumb_parse "$rbc"; [[ -n "$rbc" && "$_CRUMB_ACT" != reclaim ]]; then
     _ws_reclaim_reset
     _reap_refuse reap-in-progress "an interrupted ws-reap of $id stopped at its '$rbc' step — a reclaim never finishes another verb's work" || :
   elif [[ -n "$rbc" ]]; then
     # `RECLAIM_RESUME_PHASE` carries the PHASE, as `LifecycleMeas.resumed` and
     # ws-reap's own `meas.resumed` do — never a 0/1 beside it — and is "" on a
     # fresh act (the caller's `resumed` local, where it keeps one, is this).
-    RECLAIM_RESUME_PHASE="${rbc#reclaim:}"
+    RECLAIM_RESUME_PHASE="$_CRUMB_PHASE"
     _ws_reclaim_resume_eval "$id" "$defer" "$childof" "$RECLAIM_RESUME_PHASE" || :
   else
     _ws_reclaim_eval "$id" "$defer" "$childof" || :
@@ -37273,14 +37295,14 @@ _ws_expire_fork_contained() {   # `_ws_expire_fork`'s body, run under `_ws_recla
   if [[ -z "$rbc" ]] && [[ -e "$REG/$id.reaping" || -L "$REG/$id.reaping" ]]; then
     _ws_reclaim_reset
     _ws_reclaim_unmeasured "a breadcrumb stands at $REG/$id.reaping but cannot be read — which verb left it, and at which step, is unknown" || :
-  elif [[ "$rbc" == reclaim:* ]]; then
+  elif _crumb_parse "$rbc"; [[ "$_CRUMB_ACT" == reclaim ]]; then
     _ws_reclaim_reset
-    _reap_refuse reclaim-in-progress "an interrupted ws-reclaim of $id stopped at its '${rbc#reclaim:}' step — an expiry never finishes another verb's work" || :
-  elif [[ -n "$rbc" && "$rbc" != expire:* ]]; then
+    _reap_refuse reclaim-in-progress "an interrupted ws-reclaim of $id stopped at its '$_CRUMB_PHASE' step — an expiry never finishes another verb's work" || :
+  elif [[ -n "$rbc" && "$_CRUMB_ACT" != expire ]]; then
     _ws_reclaim_reset
     _reap_refuse reap-in-progress "an interrupted ws-reap of $id stopped at its '$rbc' step — an expiry never finishes another verb's work" || :
   elif [[ -n "$rbc" ]]; then
-    RECLAIM_RESUME_PHASE="${rbc#expire:}"
+    RECLAIM_RESUME_PHASE="$_CRUMB_PHASE"
     _ws_expire_resume_eval "$id" "$RECLAIM_RESUME_PHASE" || :
   else
     _ws_expire_eval "$id" || :
@@ -37532,8 +37554,9 @@ _ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 wi
   local id="$1" rbc
   _WS_EXPIRE_SPAWN_FD=""; _WS_EXPIRE_SPAWN_WHY=""
   rbc=$(_reg_get "$id" reaping)
-  if [[ "$rbc" == expire:* ]]; then
-    _WS_EXPIRE_SPAWN_WHY="$id is being expired — an interrupted ws-expire stopped at its '${rbc#expire:}' step, and a pane is never created for a workspace whose teardown has begun"
+  _crumb_parse "$rbc" || :
+  if [[ "$_CRUMB_ACT" == expire ]]; then
+    _WS_EXPIRE_SPAWN_WHY="$id is being expired — an interrupted ws-expire stopped at its '$_CRUMB_PHASE' step, and a pane is never created for a workspace whose teardown has begun"
     return 1
   fi
   [[ -f "$REG/$id.archived" ]] || return 0
@@ -37569,8 +37592,9 @@ _ws_expire_breadcrumb_why() {   # id -> rc 0 with the refusal sentence on stdout
     printf 'a breadcrumb stands at %s but cannot be read — whether %s is being expired is unknown, so it is not brought back' "$REG/$1.reaping" "$1"
     return 0
   fi
-  [[ "$rbc" == expire:* ]] || return 1
-  printf '%s is being expired — an interrupted ws-expire stopped at its %s step; bringing it back now would return a workspace whose teardown has begun' "$1" "'${rbc#expire:}'"
+  _crumb_parse "$rbc" || :
+  [[ "$_CRUMB_ACT" == expire ]] || return 1
+  printf '%s is being expired — an interrupted ws-expire stopped at its %s step; bringing it back now would return a workspace whose teardown has begun' "$1" "'$_CRUMB_PHASE'"
 }
 
 _ws_expire_refuse_return() {   # id verb -> returns 0 when nothing refuses a return; else DIES with the sentence.
@@ -39969,13 +39993,14 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
 _ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _reap_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
 _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` or an `expire:` breadcrumb, on stdout
-  if [[ "$2" == expire:* ]]; then   # ws-expire's interrupted work (workspace lifecycle, spec 2026-09-24 §5.3)
+  _crumb_parse "$2" || :
+  if [[ "$_CRUMB_ACT" == expire ]]; then   # ws-expire's interrupted work (workspace lifecycle, spec 2026-09-24 §5.3)
     printf '{"refused":"expire-in-progress","detail":%s,"paths":[]}\n' \
-      "$(_json_str "an interrupted expiry of $1 stopped at its '${2#expire:}' step — ws-reap never finishes another verb's work")"
+      "$(_json_str "an interrupted expiry of $1 stopped at its '$_CRUMB_PHASE' step — ws-reap never finishes another verb's work")"
     return 0
   fi
   printf '{"refused":"reclaim-in-progress","detail":%s,"paths":[]}\n' \
-    "$(_json_str "an interrupted reclamation of $1 stopped at its '${2#reclaim:}' step — ws-reap never finishes another verb's work")"
+    "$(_json_str "an interrupted reclamation of $1 stopped at its '$_CRUMB_PHASE' step — ws-reap never finishes another verb's work")"
 }
 
 _ws_reap_crumb_unread() {   # id breadcrumb-as-read -> rc 0, having printed ws-reap's refusal, when an ARCHIVED row's
