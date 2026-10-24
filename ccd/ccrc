@@ -409,7 +409,8 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
 # adversarial pass then measured the floor itself: 4.2/4.3 die on ccd's
 # empty-array set -u expansions regardless, so the declared floor is 4.4.)
 # `ccd/session-hook.sh`'s `_hook_epoch_ms` is a deliberate local copy of
-# this body (the hook sources nothing); a test pins the two identical.
+# this body (the hook sources nothing), GENERATED from it by
+# `shared/hook-helpers.mjs` (ARCH-74); a test fails when the two drift.
 #
 # THE SEPARATOR IS NOT ASSUMED TO BE A DOT: `EPOCHREALTIME` is formatted with
 # the LOCALE's decimal point, and a box running a comma locale would otherwise
@@ -1304,6 +1305,35 @@ _svc_run_supervised() {   # <unit> <log> <envfile|-> [NAME=value ...] -- <cmd> [
   ) </dev/null >>"$log" 2>&1 &
   printf 'nohup %s\n' "$!"
   return 0
+}
+# THE LAUNCHD CLASS the server (or agent) job carries (macOS): the
+# first word of ~/.ccrc/launchd-class. `Background` — the default, and what
+# every box ran before this file — is launchd's lowest CPU and I/O class. On a
+# box saturated by other work it starves rather than slows: measured on a busy
+# fleet box, the server's own job took minutes to reach `listen` while a
+# hand-started copy answered /health in seconds, so every update's health gate
+# failed and restored, and the sessions (same class) ran behind everything
+# else. `Standard`, `Adaptive` or `Interactive` in the file changes it. A FILE,
+# not an env var and not ccrc.env, for `_rc_enabled`'s reasons: HOME is ccd's
+# only isolation boundary, ccrc.env carries tokens and a fleet box may have
+# none. OPERATOR-OWNED: nothing writes it. Absent or empty is Background; any
+# other word is named on stderr and reads as Background — each arm prints its
+# own literal, so nothing from the file can reach a plist. The server job and
+# the session plist writer (`_svc_write_session_plist`) read it. It is in this
+# block, so ccd and ccrc carry it byte for byte (ARCH-74); the writers still
+# call it behind `declare -F`.
+_launchd_class() {
+  local f="$HOME/.ccrc/launchd-class" v=""
+  if [ -r "$f" ]; then { IFS= read -r v || true; } < "$f"; fi
+  v="${v%$'\r'}"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%%[[:space:]]*}"
+  case "$v" in
+    ''|Background) printf 'Background' ;;
+    Standard)      printf 'Standard' ;;
+    Adaptive)      printf 'Adaptive' ;;
+    Interactive)   printf 'Interactive' ;;
+    *) printf "ccrc: %s names '%s', not Background, Standard, Adaptive or Interactive — using Background\n" "$f" "$v" >&2
+       printf 'Background' ;;
+  esac
 }
 # ── END PLATFORM LAYER — the byte-identical region ends HERE ────────────
 # Add a new `_plat_*`/`_svc_*` helper ABOVE this line, in BOTH files, or the
@@ -25917,37 +25947,6 @@ console.log("restamped");
     ccrc-unmodified) echo "restamp: $f: already current" ;;
     foreign)         _ccrc_die "restamp: $f carries no ccrc:generated marker — restamp re-stamps a generated file, it never adopts one" ;;
     *)               _ccrc_die "restamp: $f: unexpected verdict '$verdict'" ;;
-  esac
-}
-
-# THE LAUNCHD CLASS the server (or agent) job carries (macOS): the
-# first word of ~/.ccrc/launchd-class. `Background` — the default, and what
-# every box ran before this file — is launchd's lowest CPU and I/O class. On a
-# box saturated by other work it starves rather than slows: measured on a busy
-# fleet box, the server's own job took minutes to reach `listen` while a
-# hand-started copy answered /health in seconds, so every update's health gate
-# failed and restored, and the sessions (same class) ran behind everything
-# else. `Standard`, `Adaptive` or `Interactive` in the file changes it. A FILE,
-# not an env var and not ccrc.env, for `_rc_enabled`'s reasons: HOME is ccd's
-# only isolation boundary, ccrc.env carries tokens and a fleet box may have
-# none. OPERATOR-OWNED: nothing writes it. Absent or empty is Background; any
-# other word is named on stderr and reads as Background — each arm prints its
-# own literal, so nothing from the file can reach a plist. The server job and
-# the session plist writer (`_svc_write_session_plist`, inside the platform
-# block, in ccd and here) read it; ccd carries the same helper, byte for byte.
-# Deliberately OUTSIDE the platform block (no _svc_/_plat_ prefix) so the
-# block's line citations stay put; the writers call it behind `declare -F`.
-_launchd_class() {
-  local f="$HOME/.ccrc/launchd-class" v=""
-  if [ -r "$f" ]; then { IFS= read -r v || true; } < "$f"; fi
-  v="${v%$'\r'}"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%%[[:space:]]*}"
-  case "$v" in
-    ''|Background) printf 'Background' ;;
-    Standard)      printf 'Standard' ;;
-    Adaptive)      printf 'Adaptive' ;;
-    Interactive)   printf 'Interactive' ;;
-    *) printf "ccrc: %s names '%s', not Background, Standard, Adaptive or Interactive — using Background\n" "$f" "$v" >&2
-       printf 'Background' ;;
   esac
 }
 

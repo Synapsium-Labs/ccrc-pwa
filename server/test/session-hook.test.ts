@@ -9824,16 +9824,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:13573-13575',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':3038',
+        // RE-MEASURED at ARCH-74 (#809): the launchd-class helper moved into the platform block of ccd and ccrc, sliding
+        // every later line of those two files; the rows added or dropped in this list (not only this one) follow the slide.
+        'ccd/ccd' + ':3037-3089',
         'ccd/ccd:5797',
         'ccd/ccd:7568',
         'ccd/ccd:11025',
         'ccd/ccd:11665-11670',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
-        'ccd/ccd:13561',
         'ccd/ccd:13567',
         'ccd/ccd:13673',
-        'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
         'ccd/ccd:19098',
         'ccd/ccd:19120',
@@ -9866,14 +9867,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // spelled in two parts so the citations ratchet, which polices added prose, does not count a census row.
         'ccd/ccd' + ':13573-13575',
         'ccd/ccd:11665-11670',
+        'ccd/ccd' + ':13601-13666',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
+        'ccd/ccd' + ':2874',
+        'ccd/ccd' + ':2874',
         // LEFT here at model-class auto-advance W2 (S6-R11): `:2874` x2 (the note above this assertion).
         'ccd/session-hook.sh:993',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':3070',
         'ccd/ccd' + ':3070',
-        'ccd/ccd:2455',
+        'ccd/ccd' + ':2433-2439',
         'ccd/ccd:2793',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':3070',
@@ -9885,6 +9889,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':5353-5362',
         'ccd/ccd:5828-5830',
+        'ccd/ccd' + ':5819-5823',
         // LEFT here at model-class auto-advance W2 (S6-R11): `:5819-5823` (the note above this assertion).
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
@@ -10079,13 +10084,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2123 ccd/ccd:13573-13575',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'spec:2124 ccd/ccd' + ':3038',
+        'spec:2124 ccd/ccd' + ':3037-3089',
         'spec:2125 ccd/ccd:5797',
         'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
-        'spec:2125 ccd/ccd:13561',
         'spec:2125 ccd/ccd:13567',
         'spec:2125 ccd/ccd:13673',
-        'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
         'spec:2125 ccd/ccd:19098',
         'spec:2125 ccd/ccd:19120',
@@ -10109,6 +10113,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // RE-MEASURED at the merge of main's `ws-gc --fast` (#123) into named workspaces, from the same run as the
         // `|`-row set above: the spec-2210 site returns for the reason given there, spelled in two parts for the same one.
         'spec:2210 ccd/ccd' + ':13573-13575',
+        'spec:2220 ccd/ccd' + ':2874',
+        'spec:2220 ccd/ccd' + ':2874',
         // RE-MEASURED for `ccd ws-gc --fast` (D-5886, #123), 35 -> 34: the same second site leaves
         // as in the row-level set above, from the same run. S6-R11, no D-number.
         // LEFT here at model-class auto-advance W2 (S6-R11): `spec:2220 :2874` x2 (the note above this assertion).

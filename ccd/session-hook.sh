@@ -26,18 +26,14 @@ set -uo pipefail
 # server reads a session's state from this file, so every session on the box
 # would read as unsupervised while looking perfectly healthy from the inside.
 #
-# `EPOCHREALTIME` is a bash builtin — no fork, no coreutils, same answer on
-# both platforms (measured against `date +%s%3N` on Linux, to the
-# millisecond). The separator is taken as either `.` or `,` because that field
-# is formatted with the locale's decimal point. BUT the builtin is bash 5.0+
-# and the declared floor is 4.4 — a 4.4 box takes the fallback, and on
-# BSD the bare fallback answers the exact non-number described above. So the
-# fallback VALIDATES, and degrades to whole seconds ×1000: millisecond
-# precision lost, THE WRITE KEPT — the one trade this file's contract allows.
-#
-# This is a LOCAL copy of ccd's `_plat_epoch_ms`, and deliberately so: this
-# file is installed on its own into ~/.cc-sessions and runs as Claude Code's
-# hook, with no ccd around to source. A test pins the two bodies identical.
+# This is a LOCAL copy of ccd's `_plat_epoch_ms`, GENERATED from it (ARCH-74) with
+# the three CCRC_* bounds below: this file is installed alone, with no ccd to
+# source, and ccd's comment says why the fallback validates and the write is kept.
+# Regenerate with `node shared/hook-helpers.mjs --write ccd/session-hook.sh
+# ccd/ccd`; hook-helpers-generated.test.ts fails on drift. Never edit between
+# the BEGIN and END lines by hand.
+# ── BEGIN GENERATED HOOK HELPERS (shared/hook-helpers.mjs; edit that, then regenerate) ──
+# ccrc:generated 1 sha256=0e823de72b94ef597ae7178f9be26de55df7d1080b03790c6b53dfa5056a0d51
 _hook_epoch_ms() {
   if [ -n "${EPOCHREALTIME:-}" ]; then
     local s="${EPOCHREALTIME%%[.,]*}" f="${EPOCHREALTIME#*[.,]}"
@@ -47,6 +43,10 @@ _hook_epoch_ms() {
   local t; t=$(date +%s%3N 2>/dev/null)
   if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
+CCRC_PROJ_CLASS='A-Za-z0-9._-'
+CCRC_PROJ_MAX=64
+CCRC_ID_MAX=128
+# ── END GENERATED HOOK HELPERS ──
 
 _hook_timeout() {
   local bin
@@ -2670,11 +2670,11 @@ COMPACT_SHAPE_PRED='(type=="object" and (.chars|type)=="number" and (.fences|typ
 # measurably false against the shipped test and told the next reader no
 # mechanism existed where one does.) Keeping the three `CCRC_PROJ_CLASS`
 # spellings in step is therefore a reading discipline only because nobody has
-# written that rule — not because no mechanism could express it; if you widen
-# one, widen the other two by hand.
-CCRC_PROJ_CLASS='A-Za-z0-9._-'
-CCRC_PROJ_MAX=64
-CCRC_ID_MAX=128
+# written that rule — not because no mechanism could express it. The constant
+# itself (with `CCRC_PROJ_MAX` and `CCRC_ID_MAX`) is GENERATED into the region
+# near the top of this file from `shared/hook-helpers.mjs` (ARCH-74); the other
+# two spellings are patterns it cannot expand into, so they stay by hand.
+# (The region also holds `_hook_epoch_ms`; see its BEGIN line near the top.)
 # `SUPERVISED_FRESH_MS` (`shared/api.ts`) in seconds — the same 120 s window
 # `_session_state`'s bash twin uses, tolerating 4 missed 30 s beats.
 CCRC_FRESH_S=120
