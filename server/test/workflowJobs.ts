@@ -20,6 +20,11 @@
 //   - in EVERY job, a job's or a step's `with:` and `env:`, when present, is a
 //     mapping: a whole-value expression, a list or a scalar holds keys and
 //     values no check here can read (D-6728);
+//   - in EVERY job, `steps:`, when present, is a list, and each of its items
+//     is a mapping that carries `run:` or `uses:` and none of the step-group
+//     keys (STEP_GROUP_KEYS): a group's nested steps, and an item no check
+//     here reads as a step, would run code every check above passes over
+//     (review 886's F1; D-6737);
 //   - NO job reads a secret: none carries a `secrets:` key, and the whole
 //     parsed job, every key at every depth (container and services env, a
 //     step's if: and working-directory included), never names the `secrets`
@@ -296,6 +301,10 @@ const NO_ALLOWANCE: WriteAllowance = { uses: [], runs: [], needsIn: [], env: {},
 
 /** The two keys whose value every check reads as a mapping (D-6728). */
 const MAPPING_KEYS = ['with', 'env'] as const;
+/** The step keys that nest or schedule other steps, which this guard does not
+ *  read, so a step carrying one is refused rather than recursed into (review
+ *  886's F1). */
+const STEP_GROUP_KEYS = ['parallel', 'background', 'wait', 'wait-all', 'cancel'] as const;
 /** The job keys a build job may not carry (D-6727): `continue-on-error`
  *  passes a failed build, and a `strategy` runs it as several jobs. */
 const BUILD_JOB_FORBIDDEN_KEYS = ['continue-on-error', 'strategy'] as const;
@@ -363,6 +372,25 @@ export function boundaryFindings(
       for (const k of MAPPING_KEYS) {
         if (Object.hasOwn(s.raw, k) && !isMapping(s.raw[k])) out.push(`${J} step ${i + 1} carries ${k === 'env' ? 'an' : 'a'} ${k}: that is not a mapping: ${shown(s.raw[k])}`);
       }
+    });
+
+    // ── every step is read, in every job (review 886's F1; D-6737) ──
+    // readJob folds a `steps:` that is not a list to no steps, and readStep
+    // an item that is not a mapping to an empty step, so each is read here
+    // from the job as parsed.
+    const items = job.raw.steps;
+    if (Object.hasOwn(job.raw, 'steps') && !Array.isArray(items)) out.push(`${J} carries a steps: that is not a list: ${shown(items)}`);
+    job.steps.forEach((s, i) => {
+      const n = i + 1;
+      const item: unknown = (items as unknown[])[i];
+      if (!isMapping(item)) {
+        out.push(`${J} step ${n} is not a mapping: ${shown(item)}`);
+        return;
+      }
+      for (const k of STEP_GROUP_KEYS) {
+        if (Object.hasOwn(s.raw, k)) out.push(`${J} step ${n} carries the step-group key ${k}, which this guard does not read`);
+      }
+      if (s.run === null && s.uses === null) out.push(`${J} step ${n} carries neither run: nor uses:`);
     });
 
     // ── no job reads a secret (D-6663) ──
