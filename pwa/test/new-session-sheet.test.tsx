@@ -740,6 +740,27 @@ describe('NewSessionSheet — success opens the new session', () => {
     expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled(); // the old clock did not end the new start
   });
 
+  it('an unmount during the wait ends it: a later row navigates nowhere, and no listener or clock is kept', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { store, onClose, flush, unmount, listeners } = await mount();
+    await pickDemo(flush);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    const listenersBefore = listeners();
+    startUnnamed();
+    await flush();
+    expect(listeners()).toBe(listenersBefore + 1); // the wait is running
+    unmount(); // the route left the fleet: the sheet is gone, not merely closed
+    await act(async () => {});
+    expect(listeners()).toBe(listenersBefore); // the wait's listener is released: none retained
+    await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+    expect(vi.getTimerCount()).toBe(0);
+    showFrame(store, [NEW_ROW]);
+    await flush();
+    expect(window.location.pathname).toBe('/');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('past 60 s without a frame it toasts and closes, as before, and navigates nowhere', async () => {
     vi.useFakeTimers();
     vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
