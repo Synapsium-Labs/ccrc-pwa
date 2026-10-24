@@ -16,6 +16,7 @@ import {
 } from '../archivedExpiry.js';
 import { isRegistryId } from '../../../shared/api.js';
 import { notify } from '../notice.js';
+import { recordNestedRescueShadow } from './nestedRescueShadow.js';
 
 /**
  * THE EXPIRY LANE'S ONE EXECUTOR (workspace lifecycle spec 2026-09-24 §5.3, wave 3b): `ws-audit --expire`, then
@@ -108,6 +109,8 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
   }
   if (audit.verdict.kind === 'refused') {
     const { token, detail } = audit.verdict;
+    recordNestedRescueShadow(deps, { sessionId, runId: null, key: String(archivedAt), who: `${sessionId} (archived ${archivedAt})`,
+      count: audit.nestedWouldRescue ?? 0 });
     return EXPIRE_TOKEN_KIND[token] === 'gone' ? answer({ kind: 'gone' })
       : answer({ kind: 'refused', token, detail, inUse: audit.inUse,
         auditExpiresAt: audit.expiresAt.kind === 'at' ? audit.expiresAt.at : null });

@@ -119,6 +119,11 @@ const rig = async (over: { mark?: string | null; markSymlink?: 'dangling' | 'liv
                 deferExpired, deferredSinceMs, feedQuiet, licenceGeneration: deferredSinceMs === null ? { kind: 'none' } : { kind: 'absent' } }) };
 };
 
+// D-6633: rung 9's two rescue words ride the act's `failed` document (the pin names them in `RECLAIM_PIN_WORD=<word>`), so
+// the harvest below finds them there and the audit's journal list, which only a refusal reaches, does not carry them.
+const NESTED_RESCUE_WORDS = ['nested-rescue-failed', 'nested-rescue-too-large'];
+const PIN_WORDS = (region: string): string[] => [...new Set([...region.matchAll(/RECLAIM_PIN_WORD=(nested-rescue-[a-z-]+)/g)].map((m) => m[1]!))];
+
 describe('the fourteen words', () => {
   it('are exactly the words ccd’s RECLAIM region refuses with — harvested, both directions', () => {
     const ccd = readFileSync(CCD, 'utf8');
@@ -130,7 +135,9 @@ describe('the fourteen words', () => {
     const harvested = new Set([
       ...[...region.matchAll(/_reap_refuse ([a-z][a-z-]*)/g)].map((m) => m[1]!),
       ...[...region.matchAll(/"refused":"([a-z][a-z-]*)"/g)].map((m) => m[1]!),
+      ...PIN_WORDS(region),
     ]);
+    expect(PIN_WORDS(region).sort(), 'guards the guard: the pin names both rescue words').toEqual(NESTED_RESCUE_WORDS);
     expect([...harvested].sort()).toEqual(Object.keys(CHILD_RECLAIM_TOKEN_KIND).sort());
   });
 
@@ -157,7 +164,7 @@ describe('the fourteen words', () => {
     expect(matches, 'cmd_ws_audit no longer journals a terminal reclaim refusal, or a second site appeared')
       .toHaveLength(1);
     const terminal = Object.entries(CHILD_RECLAIM_TOKEN_KIND)
-      .filter(([, kind]) => kind === 'terminal').map(([token]) => token).sort();
+      .filter(([token, kind]) => kind === 'terminal' && !NESTED_RESCUE_WORDS.includes(token)).map(([token]) => token).sort();
     expect(terminal.length, 'guards the guard: an empty arm would equal an empty list').toBeGreaterThan(0);
     expect(matches[0]![1]!.split('|').sort()).toEqual(terminal);
   });
