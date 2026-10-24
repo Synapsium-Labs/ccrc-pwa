@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0f8e414958fa5e7491341bc485ee0fb789e2ab8addd1f67d7569d634bf34ef1c
+# ccrc:generated 1 sha256=ff48063a43f8398555b7d977b751ac76b31fc7ee01854370f7fdc9557e63d5b1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11323,13 +11323,19 @@ def bound_name(s):
         return None
     return s.encode('utf-8')[:NAME_MAX].decode('utf-8', 'ignore') or None
 
-def cut_list(items):
+def cut_list(items, pins=()):
+    # items: names; pins: names the source pinned to a GitHub App (integration_id / app_id), kept within the cut list.
     seen, out = set(), []
     for n in items:
         if n is not None and n not in seen:
             seen.add(n)
             out.append(n)
-    return {'names': out[:LIST_MAX], 'cut': len(out) > LIST_MAX}
+    kept = out[:LIST_MAX]
+    return {'names': kept, 'cut': len(out) > LIST_MAX, 'pinned': [n for n in kept if n in set(pins)]}
+
+def pinned_of(v):
+    # An older cached document carries no `pinned`: that reads as none.
+    return [n for n in v.get('pinned', []) if isinstance(n, str)] if isinstance(v, dict) and isinstance(v.get('pinned'), list) else []
 
 def rules_doc(rules, protection, base):
     return {'base': base, 'at': int(time.time()), 'rules': rules, 'protection': protection}
@@ -11352,7 +11358,7 @@ elif mode == 'names-rules':
     d = doc(4)
     if not isinstance(d, list):
         sys.exit(1)
-    names = []
+    names, pins = [], []
     for r in d:
         if isinstance(r, dict) and r.get('type') == 'required_status_checks':
             p = r.get('parameters')
@@ -11360,7 +11366,9 @@ elif mode == 'names-rules':
             for c in rs if isinstance(rs, list) else []:
                 if isinstance(c, dict):
                     names.append(bound_name(c.get('context')))
-    sys.stdout.write(json.dumps(cut_list(names)) + '\n')
+                    if is_int(c.get('integration_id')):
+                        pins.append(bound_name(c.get('context')))
+    sys.stdout.write(json.dumps(cut_list(names, pins)) + '\n')
 
 elif mode == 'names-protection':
     d = doc(4)
@@ -11368,14 +11376,16 @@ elif mode == 'names-protection':
         sys.exit(1)
     prot = d.get('protection')
     sc = prot.get('required_status_checks') if isinstance(prot, dict) else None
-    names = []
+    names, pins = [], []
     if isinstance(sc, dict):
         for n in sc.get('contexts') if isinstance(sc.get('contexts'), list) else []:
             names.append(bound_name(n))
         for c in sc.get('checks') if isinstance(sc.get('checks'), list) else []:
             if isinstance(c, dict):
                 names.append(bound_name(c.get('context')))
-    sys.stdout.write(json.dumps(cut_list(names)) + '\n')
+                if is_int(c.get('app_id')) and c.get('app_id') > 0:
+                    pins.append(bound_name(c.get('context')))
+    sys.stdout.write(json.dumps(cut_list(names, pins)) + '\n')
 
 elif mode == 'cache-get':
     (path, base, ttl) = sys.argv[2:5]
@@ -11432,10 +11442,13 @@ elif mode == 'final':
             return []
         return [n for n in nodes if isinstance(n, dict)] if isinstance(nodes, list) else []
 
-    def required_of(row):
+    def required_of(row, named=frozenset()):
+        # A context is carried when GitHub marks it required, or when its name is one the rules or the branch
+        # protection name (a status posted under a pinned App name is not marked required, but it is the answer).
         out = []
         for c in contexts_of(row):
-            if c.get('isRequired') is not True:
+            cname = bound_name(c.get('name')) if c.get('__typename') == 'CheckRun' else bound_name(c.get('context'))
+            if c.get('isRequired') is not True and cname not in named:
                 continue
             if c.get('__typename') == 'CheckRun':
                 name = bound_name(c.get('name'))
@@ -11470,8 +11483,6 @@ elif mode == 'final':
         else:
             b = f['bind']
             row = repo.get('p%d' % i) if isinstance(repo, dict) else None
-            req = required_of(row) if isinstance(row, dict) else []
-            cut = len(req) > LIST_MAX
             unm = []
             rules = prot = None
             if isinstance(rd, dict) and rd.get('base') == f.get('base'):
@@ -11482,12 +11493,16 @@ elif mode == 'final':
             if not names_ok(prot):
                 prot = None
                 unm.append('protection')
+            named = frozenset((rules['names'] if rules else []) + (prot['names'] if prot else []))
+            req = required_of(row, named) if isinstance(row, dict) else []
+            cut = len(req) > LIST_MAX
             cut = cut or bool(rules and rules['cut']) or bool(prot and prot['cut'])
             line.update({'bound': True, 'number': b.get('number'), 'state': b.get('state'),
                          'isDraft': b.get('isDraft') is True, 'base': b.get('baseRefName'), 'head': b.get('headRefOid'),
                          'required': req[:LIST_MAX], 'requiredCut': cut,
                          'rulesNamed': rules['names'] if rules else [],
-                         'protectionNamed': prot['names'] if prot else [], 'unmeasured': unm})
+                         'protectionNamed': prot['names'] if prot else [],
+                         'pinnedNames': sorted(set(pinned_of(rules)) | set(pinned_of(prot))), 'unmeasured': unm})
         sys.stdout.write(json.dumps(line) + '\n')
 PY
 }
