@@ -25,6 +25,23 @@
 //   the pool lag dropped with the chrome ............... "the pool-lag readout shows once at the desk when the epochs differ"
 // Fix round 1 (review 826, F1):
 //   the rail's Inbox door without the count ............ "at the desk with mail unread, the rail's Inbox door names and shows the count, and nothing else in the frame does"
+// T2e review R32, F5 (carried into T2g, D-6715; RUN, this suite alone, then reverted):
+//   `unreadMailCount` without the `isUnseenAt(...)` term  "mail at the ack's own stamp, or before it, is not unread: …"
+//   `isUnseenAt` as `since >= (acks[key] ?? 0)` ........ "mail at the ack's own stamp, or before it, is not unread: …"
+//
+// W2 Task T2g (desk-polish, D-6715): one count at the desk, in the status bar; the list head empty is not drawn.
+// MUTATION TABLE (plan Task T2g Step 3; RUN, each mutant on the working tree, this suite alone unless named, then reverted):
+//   `ListColumn` without `headCount={false}` ........... "at 900, 1280 and 1920 Instrument's list column draws no count line, …", the head-is-the-lag case,
+//                                                         and T2e's census case (the browser leg holds the offset case)
+//   `FleetColumn` passes `headCount` without `|| !desktop`  "at 899 Instrument's list column keeps its count line"
+//   in `FleetScreen`, `poolLag={headCount ? poolLag : null}`  "…the head is the pool lag alone when the epochs differ…", and T2e's "the pool-lag readout shows once at the desk when the epochs differ"
+//   `FleetHead`'s nothing-to-draw `return null` removed  "…and there is no head when they agree", "Refined at 1280 on an empty fleet with no lag draws no …", T2e's census case
+//   Refined's `Sidebar` passes `headCount={false}` ..... "Refined's desk column keeps its count line"
+//   the flag removed and `@media (min-width: 900px) { .shell-nav .fleet-count { display: none } }` in instrument.css
+//                                                       skin-boundary (j) "holds on the real tree" (and three of its siblings, which scan the real sheet), and
+//                                                         "at 900, 1280 and 1920 Instrument's list column draws no count line, …"
+// Row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900, so T2g adds no `flex: none`.
+// Rows 1, 4 and 7 also run in browser/instrument-desk.browser.test.ts (its own table).
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
@@ -32,6 +49,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { FleetSession, NotifyEvent, RunSummary } from '../../shared/api';
+import { poolLagText } from '../src/fleet/poolLag';
 import { fleetSession } from './fleetFixture';
 
 // The bell renders only where the browser can push; this one can, so the doors' census counts it (T2e).
@@ -396,10 +414,10 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
       stubAt(width);
       mount('/');
       expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, unread: 0, bell: 1 });
-      // The list column's head keeps its readouts and drops its chrome.
-      expect(document.querySelector('.shell-nav .fleet-head'), `${width}px`).not.toBeNull();
+      // The list column's head drops its chrome and, with no count line (T2g) and no lag in this fixture, is not drawn.
+      expect(document.querySelector('.shell-nav .fleet-head'), `${width}px`).toBeNull();
       expect(document.querySelector('.shell-nav .fleet-head .wordmark'), `${width}px`).toBeNull();
-      expect(document.querySelector('.shell-nav .fleet-count'), `${width}px: the count line stays`).not.toBeNull();
+      expect(document.querySelector('.shell-nav .fleet-count'), `${width}px: no count line`).toBeNull();
       cleanup();
     }
     // Below 900 nothing changed: the head holds its chrome, and the rail and the bar are not mounted.
@@ -454,11 +472,30 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
       expect(doorCounts(), `${width}px`).toMatchObject({ inbox: 1, mail: 0, unread: 0 });
       cleanup();
     }
-    // Interrupt records and records at or before the ack are not unread.
+    // Interrupt records are not unread (the ack's own stamp is the next case's).
     stubAt(1280);
     act(() => useFleetStore.setState({ feed: unreadFeed(0) }));
     mount('/');
     expect(within(rail()).getByRole('button', { name: 'Inbox' }).textContent).toBe('Inbox');
+  });
+
+  it('mail at the ack\'s own stamp, or before it, is not unread: the Inbox door draws no badge', () => {
+    stubAt(1280);
+    const stamp = Date.now();
+    act(() => { ack(FEED_ACK_KEY, stamp); });
+    const mail = (seq: number, at: number): NotifyEvent => ({ seq, at, kind: 'mail', sessionId: 'x', title: 'seen', body: '', runId: null });
+    // The ack is the watermark: a record AT it was seen (`isUnseenAt` is a strict `>`), and so was an earlier one.
+    act(() => useFleetStore.setState({ feed: [mail(1, stamp), mail(2, stamp - 1_000)] }));
+    mount('/');
+    const door = within(rail()).getByRole('button', { name: 'Inbox' });
+    expect(door.textContent).toBe('Inbox');
+    expect(door.querySelector('.ins-rail-count')).toBeNull();
+    expect(doorCounts()).toMatchObject({ inbox: 1, unread: 0 });
+    cleanup();
+    // One millisecond past the ack is unread, so the pin above is the boundary and not a feed that counts nothing.
+    act(() => useFleetStore.setState({ feed: [mail(1, stamp), mail(3, stamp + 1)] }));
+    mount('/');
+    expect(within(rail()).getByRole('button', { name: 'Inbox, 1 unread' })).toBeInTheDocument();
   });
 
   it('the pool-lag readout shows once at the desk when the epochs differ', () => {
@@ -485,5 +522,63 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
       expect(document.querySelectorAll('[data-banner="offline"]').length, `${width}px: banner stacks`).toBe(1);
       cleanup();
     }
+  });
+});
+
+// ---- Desk polish, T2g (D-6715) ----------------------------------------------------------------------------------
+
+describe('the desk (T2g): one count, in the status bar', () => {
+  const readout = fleetSummary([S, WS], null).readout;
+
+  it("at 900, 1280 and 1920 Instrument's list column draws no count line, and the status bar's fleetSummary is the one count in the frame", () => {
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      const counts = document.querySelectorAll('.fleet-count, .ins-status-summary');
+      expect(counts, `${width}px: count elements`).toHaveLength(1);
+      expect(footer().contains(counts[0]!), `${width}px: inside the status bar`).toBe(true);
+      expect(counts[0]!.textContent, `${width}px`).toBe(readout);
+      // By its text, not its class: a count that came back under a new class name is still a second one.
+      const leaves = [...document.body.querySelectorAll('*')].filter((el) => el.children.length === 0);
+      expect(leaves.filter((el) => (el.textContent ?? '').includes(readout)), `${width}px: leaves that say the count`).toHaveLength(1);
+      cleanup();
+    }
+  });
+
+  it("at 899 Instrument's list column keeps its count line", () => {
+    stubAt(899);
+    mount('/');
+    expect(document.querySelector('.shell-nav .fleet-count')).toHaveTextContent(readout);
+    expect(document.querySelector('footer.shell-status')).toBeNull();
+  });
+
+  it("at the desk the list column's head is the pool lag alone when the epochs differ, and there is no head when they agree", () => {
+    stubAt(1280);
+    act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 3 } }));
+    mount('/');
+    const head = document.querySelector('.shell-nav .fleet-head');
+    expect(head).not.toBeNull();
+    expect(head!.textContent).toBe(poolLagText(5, 3));
+    expect(head!.querySelector('.fleet-count, .wordmark')).toBeNull();
+    cleanup();
+    act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5 } }));
+    mount('/');
+    expect(document.querySelector('.shell-nav section[aria-label="Fleet"]')).not.toBeNull();
+    expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
+  });
+
+  it("Refined's desk column keeps its count line", () => {
+    act(() => { setSkin(REFINED); });
+    stubAt(1280);
+    mount('/');
+    expect(document.querySelector('.shell-nav .fleet-count')).toHaveTextContent(readout);
+  });
+
+  it('Refined at 1280 on an empty fleet with no lag draws no .shell-nav .fleet-head', () => {
+    act(() => { setSkin(REFINED); });
+    stubAt(1280);
+    mount('/', []);
+    expect(document.querySelector('.shell-nav section[aria-label="Fleet"]')).not.toBeNull();
+    expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
   });
 });
