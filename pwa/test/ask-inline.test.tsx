@@ -804,7 +804,8 @@ describe('the transcript stops repeating the ask the card already shows', () => 
       expect(button, 'premise: the transcript card offers Go to question').not.toBeNull();
       act(() => button!.focus());
       fireEvent.click(button!);
-      expect(scrolled, 'the click scrolled the mounted card into view').toEqual([section]);
+      // R69 F3: the card first, then the focused option inside it (the reveal, held in real Chrome by the browser file).
+      expect(scrolled, 'the click scrolled the mounted card into view, then its focused option').toEqual([section, opt(section, /^Redis/)]);
       expect(document.activeElement, 'and focused its first option').toBe(opt(section, /^Redis/));
       // The same button raises again after focus moved away: it is a nonce, not a one-shot.
       act(() => composer().focus());
@@ -868,10 +869,11 @@ describe('the transcript stops repeating the ask the card already shows', () => 
     expect(document.activeElement, 'and takes no focus').toBe(outside);
 
     view.rerender(<DialogSheet id={ID} store={store} raise={1} />);
-    expect(scrolled, 'the raise scrolls the card into view').toEqual([section]);
     const first = section.querySelector<HTMLElement>('.opt[tabindex="0"]');
     expect(first, 'the roving tab stop is the first option').not.toBeNull();
     expect(first).toBe(opt(section, /^Redis/));
+    // R69 F3: the card first, then the focused option inside it.
+    expect(scrolled, 'the raise scrolls the card into view, then its focused option').toEqual([section, first]);
     expect(document.activeElement, 'and focuses it').toBe(first);
     outside.remove();
   });

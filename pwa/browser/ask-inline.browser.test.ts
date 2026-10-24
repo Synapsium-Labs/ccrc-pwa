@@ -325,8 +325,7 @@ const WITH_CALL = (frames: object[] = FRAMES()): object[] =>
 // card out of the viewport (the page, `.chat` and `.chat-body` have no overflow to scroll), so the two viewport assertions
 // below are layout pins only (they hold with or without the raise), and what this case holds of the raise is that focus,
 // parked on the body before the click, is on the first option.
-// KNOWN (reported with R64 F5): `InlineCard` focuses with `preventScroll`, so with the forty-line question the first option
-// is focused but lies below the visible part of the card's own scroller; the ruling names the existing raise, unchanged.
+// (R69 F3 made the raise reveal the focused option: 'Go to question reveals the focused option' holds that geometry.)
 describe('Go to question at the desk (R64 F5, D-6326)', () => {
   const view: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1280 };
 
@@ -439,11 +438,11 @@ describe('Go to question reveals the focused option (R69 F3, D-6326)', () => {
     }, 90_000);
   }
 
-  it('a short card (fixture 2, the aged copy) is already showing its first option: Go to question scrolls nothing', async () => {
+  it('a card whose first option is already in view (fixture 2, the aged copy): Go to question leaves the body unscrolled', async () => {
     const short = [BACKLOG, { type: 'status', status: 'busy', statusUpdatedAt: null }, ...askFixture(2).frames];
     const { g, errors } = await goTo({ skin: REFINED, theme: PHOSPHOR, width: 1280 }, short);
     expect(g.inCard && g.focusIsFirst, 'premise: focus is on the first option').toBe(true);
-    expect(g.scrollTop, 'the short card has nothing to scroll').toBe(0);
+    expect(g.scrollTop, 'the option was already in view, so the card body is not scrolled').toBe(0);
     expect(inside(g.option, g.scroller), `the option ${JSON.stringify(g.option)} lies inside the card's body ${JSON.stringify(g.scroller)}`).toBe(true);
     expect(errors).toEqual([]);
   }, 90_000);
