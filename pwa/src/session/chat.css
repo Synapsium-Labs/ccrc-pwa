@@ -1985,12 +1985,11 @@ button.metachip:active {
   padding-inline: var(--sp-1);
   overflow-y: auto;
   overscroll-behavior: contain;
-}
-/* A focused option revealed with `scrollIntoView({ block: 'nearest' })` stops flush with the scroller's edge, which clips
-   the bottom of its focus ring (base.css's `:focus-visible` outline and offset, drawn outside the option); this margin
-   leaves room for that ring, which is the one the browser test measures from the focused option itself. */
-.ask-inline .opt {
-  scroll-margin-block: var(--sp-1);
+  /* A focused option revealed with `scrollIntoView({ block: 'nearest' })` stops flush with this scroller's edge, which
+     clips the bottom of its focus ring (base.css's `:focus-visible` outline and offset, drawn outside the option). The
+     padding sits on this scroller, the app's own class, so no ui-owned row is restyled (ui-package-boundary): it leaves
+     room for that ring, which the browser test measures from the focused option itself. */
+  scroll-padding-block: var(--sp-1);
 }
 .ask-inline .ask-inline-title {
   margin: 0 0 var(--sp-4);
