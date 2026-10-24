@@ -1404,6 +1404,7 @@ Base `0754e84e2`.
 19. `857832230` docs(plan): fix round 1 as built (run 855, wave 24); it also adds the four R29 survivors to the census header comment (comment lines only).
 20. `cd50ab271` test(ccrc-update): the F12 row is W24-R16, so no two rows share a name; the recorded rulings name the review's report by file (the controller's; it also edited this section's text).
 21. `docs(plan,readme): the round's last stale sentences made true (fix round 1, docs review)`: the review of dispatch D's ten minors, below.
+22. `docs(readme,doctor): the settings paragraph and the box-settings header re-wrapped to their width (fix round 1)`: the two lines the docs review fix left long, re-wrapped in place; no word changed.
 
 #### Claims and consents
 
