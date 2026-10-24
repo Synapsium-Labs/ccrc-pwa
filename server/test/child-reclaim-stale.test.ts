@@ -269,6 +269,19 @@ describe('sweepChildReclaim: the stale arm (D-6639)', () => {
     }]);
   });
 
+  it.each([['a trailing newline, as `echo reason > hold` writes it', 'operator parked this on purpose\n'],
+    ['leading and trailing whitespace', '  spaced reason \r\n\n'],
+    ['an empty file (touch)', ''],
+    ['whitespace only', ' \n']])('armed: a hand hold with %s is asked with the digest of the FILE bytes, not of the trimmed reason', async (_n, bytes) => {
+    const f = lane({ armed: true });
+    const r = f.openRun(); f.abandon(r);
+    f.plant('demo-a', { child: String(r.id), hold: bytes });
+    f.advance(8 * DAY); await f.passes(3);
+    expect(f.requests).toHaveLength(1);
+    expect(f.requests[0]!.stale?.word).toBe('held');
+    expect(f.requests[0]!.stale?.holdDigest).toBe(sha(bytes));
+  });
+
   it('armed: the stale child is asked on the second pass, never the first (twice observed, as every reclaim)', async () => {
     const f = lane({ armed: true });
     heldChild(f);

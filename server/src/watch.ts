@@ -164,7 +164,7 @@ import {
   childReclaimAttentionWithLeaves, childReclaimLeafKept, childReclaimLeafKeptSince, type ChildReclaimLeafKept,
   CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed, type ChildReclaimSweepInput, type ChildStaleAsk,
 } from './childReclaimSweep.js';
-import { ChildStaleArm } from './coord/childReclaimStale.js';
+import { ChildStaleArm, readStaleHoldBytes } from './coord/childReclaimStale.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
   CHILD_SHADOW_OUTCOME, EXPIRE_AUDITS_PER_PASS, EXPIRE_CHILD_LIVE_MARKER, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
@@ -4318,7 +4318,8 @@ export class FleetWatcher {
       const v = childReclaimSweepVerdict(sweepIn);
       judged.set(r.id, v);
       // D-6639: the stale arm judges BESIDE the verdict. An ask only when armed, on a box that proves the flag.
-      const stale = this.childStale.judge({ coord, record: r, input: sweepIn, verdict: v, names,
+      const holdBytes = r.held !== null ? await readStaleHoldBytes(this.deps.io, this.deps.cfg.registryDir, r.id) : null;
+      const stale = this.childStale.judge({ coord, record: r, holdBytes, input: sweepIn, verdict: v, names,
         fleetState: this.deps.fleetState, notifyLog: this.deps.notifyLog, nowMs: now });
       if (!v.eligible && stale === null) {
         this.childReclaimSweepState.delete(r.id);
