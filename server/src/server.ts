@@ -2114,8 +2114,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // C0.2: `knownId` gates 22 request-id routes (18 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
-  // fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
-  // per call in remote mode, before conditional reconfirmation, in front of
+  // fleet's floor is 97 agent-WS operations [registry-read-census:fleet]
+  // per call in remote mode, before its other listed fields and conditional reconfirmation, in front of
   // every human keystroke — purely to answer "does
   // this id exist". Its FIRST statement is the registry-id predicate
   // (`isRegistryId`, L0; path-identity spec §2.3): a name ccd could read as a
@@ -2137,7 +2137,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // "known".
   //
   // Side benefit: this no longer runs `readRegistry`'s full per-session parse
-  // (31 [registry-read-census:fields] field reads; identity failures follow
+  // (4 [registry-read-census:fields] unconditional reads plus one per other listed field; identity failures follow
   // `registry.ts`'s measured drop/degrade ladder), so a transient
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.
