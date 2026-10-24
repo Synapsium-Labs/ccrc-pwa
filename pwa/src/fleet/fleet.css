@@ -527,6 +527,7 @@
   gap: 5px;
 }
 .acct-gauge {
+  position: relative;
   display: grid;
   grid-template-columns: 18px 1fr 34px;
   align-items: center;
@@ -816,7 +817,10 @@
   font-weight: var(--weight-semibold);
   line-height: 1.25;
 }
+/* `position: relative` on both the strip's row and the picker's gauge: the percentage's `sr-only` span is absolutely
+   positioned, and with no positioned ancestor it escaped the detail pane (the scroller) and stretched the document. */
 .acct-row {
+  position: relative;
   display: grid;
   grid-template-columns: 1.5em minmax(0, 1fr) auto auto;
   align-items: center;
