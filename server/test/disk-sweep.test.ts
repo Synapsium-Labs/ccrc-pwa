@@ -3,17 +3,20 @@
 // what the block says when no read could be taken.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rmSync } from 'node:fs';
+import os from 'node:os';
 import type { RunningAgent } from '../../agent/src/server.js';
 import type { ConnectedFleet } from '../src/remote/client.js';
 import { createIo } from '../src/remote/io.js';
-import { localIO, type FleetIO, type MeasuredDisk } from '../src/io.js';
+import { localIO, localIOFor, type FleetIO, type MeasuredDisk } from '../src/io.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { DISK_OP } from '../../shared/agent-protocol.js';
 import type { DiskFilesystem, DiskMeasured } from '../../shared/disk.js';
 import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
 import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 
+const fixtureHome = (): string => mkTmp('ccrc-diskhome-');
 const GIB = 1024 ** 3;
 const fsAt = (usedPct: number, dev = '1'): DiskFilesystem => ({
   dev, mount: '/work', fsType: 'ext4', roots: ['home'], sizeBytes: 100 * GIB, availBytes: (100 - usedPct) * GIB,
@@ -126,18 +129,53 @@ describe('statfsMeasured — the two adapters', () => {
     expect(await io.statfsMeasured()).toEqual({ ok: false, reason: 'unmeasured' });
   });
 
-  it('remote and local adapters answer the same shape for the same fixture', async () => {
+  it('remote and local adapters measure the same fixture home and agree on the values', async () => {
     fixture = makeFixture();
     agent = await bootAgent(fixture);
     fleet = connectToAgent(agent.port);
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     await vi.waitFor(() => expect(fleet!.state.agentOps).toContain(DISK_OP), { timeout: 3000 });
     const remote = await fleet.io.statfsMeasured();
-    const local = await localIO.statfsMeasured();
+    const local = await localIOFor(fixture.home).statfsMeasured();
     expect(remote.ok).toBe(true);
     expect(local.ok).toBe(true);
     if (!remote.ok || !local.ok) return;
-    expect(Object.keys(remote.measured).sort()).toEqual(Object.keys(local.measured).sort());
-    expect(Object.keys(remote.measured.filesystems[0]!).sort()).toEqual(Object.keys(local.measured.filesystems[0]!).sort());
+    const stable = (m: DiskMeasured) => ({
+      fs: m.filesystems.map((f) => [f.dev, f.mount, f.fsType, f.roots, f.sizeBytes, f.files, f.readOnly]),
+      expectedMounts: m.expectedMounts, missing: m.missing,
+    });
+    expect(stable(remote.measured)).toEqual(stable(local.measured));
+    expect(remote.measured.filesystems.length).toBeGreaterThan(0);
+  });
+
+  it('a tick measures the configured home and never the process home', async () => {
+    const home = fixtureHome();
+    const deps = testDeps(home);
+    const spy = vi.spyOn(os, 'homedir').mockImplementation(() => { throw new Error('process home read'); });
+    try {
+      const watcher = new FleetWatcher(deps, new Bus());
+      await watcher.sweepDisk();
+      expect(watcher.disk()!.level, 'a read of the process home would be unreadable, hence unmeasured').not.toBe('unmeasured');
+      expect(spy).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); rmSync(home, { recursive: true, force: true }); }
+  });
+
+  for (const [name, bad] of [
+    ['a filesystem lacking freeBytes', (() => { const { freeBytes: _f, ...rest } = fsAt(99); return { filesystems: [rest], expectedMounts: [], missing: [] }; })()],
+    ['a non-numeric sizeBytes', { filesystems: [{ ...fsAt(50), sizeBytes: '100' }], expectedMounts: [], missing: [] }],
+    ['an empty filesystem element', { filesystems: [{}], expectedMounts: [], missing: [] }],
+    ['an empty expected-mount element', { filesystems: [], expectedMounts: [{}], missing: [] }],
+    ['a missing row with an unknown why', { filesystems: [], expectedMounts: [], missing: [{ label: 'home', why: 'odd' }] }],
+  ] as const) {
+    it(`the remote adapter reads ${name} as unmeasured`, async () => {
+      const io = createIo({ state: { agentOps: [DISK_OP] }, request: async () => bad } as never);
+      expect(await io.statfsMeasured()).toEqual({ ok: false, reason: 'unmeasured' });
+    });
+  }
+
+  it('the remote adapter keeps a well-formed reply whole', async () => {
+    const good = measured(99);
+    const io = createIo({ state: { agentOps: [DISK_OP] }, request: async () => good } as never);
+    expect(await io.statfsMeasured()).toEqual({ ok: true, measured: good });
   });
 });

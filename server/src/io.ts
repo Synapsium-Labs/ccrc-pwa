@@ -467,10 +467,19 @@ export const localIO: FleetIO = {
     };
   },
 
-  // The agent's own measurer, on this box's home: the one implementation of the `disk` op's arithmetic, so the two
-  // adapters cannot disagree about a root (D-6615). It never throws for a disk fault (a fault is a `missing` row).
-  async statfsMeasured() {
-    try { return { ok: true, measured: await measureDisk(os.homedir()) }; }
-    catch { return { ok: false, reason: 'unreadable' }; }
-  },
+  // The process home by default; a server with a configured home wires `localIOFor(cfg.home)` instead.
+  statfsMeasured: () => measureLocalDisk(os.homedir()),
 };
+
+/** The agent's own measurer on `home`: the one implementation of the `disk` op's arithmetic, so the two adapters
+ *  cannot disagree about a root (D-6615). It never throws for a disk fault (a fault is a `missing` row). */
+export async function measureLocalDisk(home: string): Promise<MeasuredDisk> {
+  try { return { ok: true, measured: await measureDisk(home) }; }
+  catch { return { ok: false, reason: 'unreadable' }; }
+}
+
+/** `localIO` measuring the server's CONFIGURED home (`cfg.home`: `CCRC_HOME` or the process home), as every other
+ *  local-mode path does, never the process home behind its back. */
+export function localIOFor(home: string): FleetIO {
+  return { ...localIO, statfsMeasured: () => measureLocalDisk(home) };
+}
