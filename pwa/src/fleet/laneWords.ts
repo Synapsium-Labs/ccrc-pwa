@@ -19,8 +19,9 @@ export const NO_READING = 'no reading';
  *  spoken the same; one that rolled over (the server zeroed it, so the zero is inferred, not measured) is `0%`, spoken
  *  with that said; one never measured is `—`, spoken as not measured. */
 export function windowReading(pct: number | null, rolledOver: boolean): { shown: string; spoken: string } {
-  if (rolledOver) return { shown: '0%', spoken: '0%, inferred: the window reset' };
+  // Never measured first: a window with nothing read has nothing the server could have zeroed, so no flag makes it 0%.
   if (pct === null) return { shown: '—', spoken: 'not measured' };
+  if (rolledOver) return { shown: '0%', spoken: '0%, inferred: the window reset' };
   return { shown: `${pct}%`, spoken: `${pct}%` };
 }
 
@@ -42,7 +43,8 @@ export function lanesRowLabel(lanes: readonly AccountUsage[], roster: readonly R
 export function laneDoorLabel(lane: AccountUsage, roster: readonly RosterWire[], nowSec: number): string {
   const name = accountLabel(roster, lane.wrapper);
   const window = (label: string, pct: number | null, resetAt: number | null, rolledOver: boolean): string => {
-    const when = resetAt === null ? 'no reset time' : formatReset(resetAt, nowSec) === 'now' ? 'resets now' : `resets in ${formatReset(resetAt, nowSec)}`;
+    const left = resetAt === null ? null : formatReset(resetAt, nowSec);
+    const when = left === null ? 'no reset time' : left === 'now' ? 'resets now' : `resets in ${left}`;
     return `${label} ${windowReading(pct, rolledOver).spoken}, ${when}`;
   };
   const windows = [

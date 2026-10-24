@@ -1,5 +1,6 @@
-// The lanes' words (T2c, D-6329): a window's one reading and the row's name. Moved from fleet-pieces.test.tsx; the
-// moved cases' expected words changed in the commit that made them windowReading's and lanesRowLabel's.
+// The lanes' words (T2c, D-6329): a window's one reading, the row's name and a lane card's name. The reading and the
+// row's name moved from fleet-pieces.test.tsx, their expected words changed in the commit that made them
+// windowReading's and lanesRowLabel's; the card's name (laneDoorLabel) and the shared words were added beside them.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import ts from 'typescript';
@@ -18,7 +19,11 @@ describe('the lanes\' words', () => {
   it('a rolled-over window shows 0% and says it reset and the 0% is inferred', () => {
     expect(windowReading(0, true)).toEqual({ shown: '0%', spoken: '0%, inferred: the window reset' });
     // The rolled-over flag wins over whatever percentage came with it: the server zeroed the window.
-    expect(windowReading(0, true).shown).toBe('0%');
+    expect(windowReading(37, true)).toEqual({ shown: '0%', spoken: '0%, inferred: the window reset' });
+  });
+
+  it('a window never measured reads — and not measured, even when it carries a rolled-over flag', () => {
+    expect(windowReading(null, true)).toEqual({ shown: '—', spoken: 'not measured' });
   });
 
   it('a measured window shows its percentage and speaks the same words; one never measured shows — and says not measured', () => {
