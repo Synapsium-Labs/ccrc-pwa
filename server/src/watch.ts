@@ -3,7 +3,7 @@ import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { answeredByBody, approvalRuledBody, askPushBody, withCoordinatorBody } from './askbody.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
+import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
@@ -222,6 +222,7 @@ import {
 } from './coord/collectTempRoot.js';
 
 import { OrphanTreeSweep } from './orphanTreeSweep.js';
+import { orphanCoordinatorSet } from './orphanTreeLane.js';
 import type { DiskOrphanTrees } from '../../shared/disk.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
@@ -5006,6 +5007,15 @@ export class FleetWatcher {
       io: this.deps.io, registryDir: this.deps.cfg.registryDir, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
       queue: this.deps.queue, mono: () => this.childReclaimLaneNow().monoMs,
       epochNow: () => (this.deps.fleetIdentity ?? NO_FLEET_IDENTITY).epochNow(), pressure: () => false,
+      coordinators: () => { const c = orphanCoordinatorSet(coord); if (c === null) throw new Error('coordinator claims unreadable'); return c; },
+      // A containing row that is no workspace (a plain session, a main checkout) is no nesting; an unreadable or absent row keeps the tree.
+      isWorkspace: async (id) => {
+        const r = await readSessionRecord(this.deps.io, this.deps.cfg, id);
+        if (r.kind !== 'found' || r.record.unmeasured.length > 0) return null;
+        // MEASURED: field() collapses an unreadable marker to null, which would read as 'plain session' and audit a worker's tree.
+        const w = await fieldMeasured(this.deps.io, this.deps.cfg.registryDir, id, 'workspace');
+        return w.ok ? true : w.reason === 'absent' ? false : null;
+      },
       record: (title, body) => notify({ notifyLog: this.deps.notifyLog, coord },
         { kind: 'coord', sessionId: '', runId: null, title, body }, 'record-only', { degraded: `orphan-tree lane ${title}, feed archive degraded` }),
     });
