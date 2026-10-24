@@ -6,10 +6,11 @@ import { accountLabel } from '../lib/accounts';
 import { formatReset } from './formatReset';
 import { bindingWindow } from './laneOrder';
 
-/** The door's bare name, the full strip's too: what it is and where it goes. */
+/** The placeholder door's name, shown when there is no lane to name (a row with lanes is a group, named by
+ *  `lanesRowLabel`): what it is and where it goes. */
 export const ACCOUNTS_DOOR_LABEL = 'account usage — open accounts';
 
-/** The Accounts screen's all-lanes choice, named once. */
+/** The strip's end door to the Accounts screen, where every lane has its row, named once. */
 export const ALL_ACCOUNTS = 'All accounts';
 
 /** What a lane never read says in place of a percentage: never 0%, which would claim a measurement. */

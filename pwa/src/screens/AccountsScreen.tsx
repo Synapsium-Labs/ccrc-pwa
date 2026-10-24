@@ -1,10 +1,11 @@
 // Accounts screen (route `/accounts`, Task 6 of Build 3 PR G) — every account
-// ccd knows about, not just the ones with headroom to spare. The compact
-// strip (AccountsStrip) hides a switched-off lane and only shows a window
+// ccd knows about, not just the ones with headroom to spare. The lanes row
+// (AccountsStrip) hides a switched-off lane and only shows a window
 // that "exists" for the account type; this screen's brief is the opposite —
 // "show me my accounts" — so a disabled lane still gets a row (greyed, with
-// its reason) and both windows always render, the %/reset/— three-way saying
-// "unknown" rather than the row disappearing.
+// its reason) and both windows always render, each through `windowReading`
+// (laneWords.ts): `n%` measured, `0%` for a window that rolled over (spoken as
+// inferred), and `—` never measured, rather than the row disappearing.
 //
 // Same /api/accounts pipeline the strip and useProjectedHome already poll —
 // a third reader, not a new route. Its own 20s poller rather than sharing
