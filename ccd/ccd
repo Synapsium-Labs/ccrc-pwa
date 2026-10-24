@@ -40011,7 +40011,7 @@ _WS_LREC_DEV=''; _WS_LREC_INO=''; _WS_LREC_BT=''; _WS_LREC_TYPE=''; _WS_LREC_TOK
 
 _disk_pressure() {   # path -> 0 when the file system holding path is at or over _DISK_CRITICAL_PCT of its bytes or inodes;
   #                      1 when it is not, or could not be read (unmeasured is not pressure: the longer floor holds).
-  #                      Bytes are df's own used / (used + avail), as in shared/disk.ts and `_ts_pressure`
+  #                      Bytes are df's own used / (used + avail), as in shared/disk.ts (the agent's L0 reading)
   local p="${1-}" r
   [[ "$CCD_OS" != darwin && -n "$p" ]] || return 1
   r=$(LC_ALL=C df -Pk -- "$p" 2>/dev/null | awk -v t="$_DISK_CRITICAL_PCT" 'NR == 2 && ($3 + $4) > 0 && $3 * 100 >= t * ($3 + $4) { print "y" }')
