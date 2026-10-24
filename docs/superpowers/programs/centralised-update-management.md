@@ -6009,6 +6009,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   tap. Its coordinator ruled that it does not restart the clock.
   `STATUS 2026-10-24T11:30:26Z fleet=v0.0.615 server=v0.0.615 health=v0.0.615 newest=v0.0.617 intent=*:dev/auto=off`
   `backups=fleet:220M/server:7937M disk=fleet:97G/server:23G`
+- **2026-10-24 12:30 UTC — monitoring: both boxes moved to v0.0.619 by the operator's console tap; settled, no anomalies.**
+  The fleet half ran 12:20:50 to `done` at 12:22:02, the server half from 12:22:15 to `done` at 12:29:28, its report reading
+  `restarting` while it pruned and thinned from 12:25:09. The 12:25 probe caught it in flight, the same three inventory
+  anomalies as the v0.0.615 move, with six backups beside a keep of five. The watchdog read the update as in progress at
+  12:24 and 12:25 and left it alone. It settled with the oldest backup pruned (five kept, 10686M to 8170M) and 22G free.
+  No file of the delegation lane changes from v0.0.615 to v0.0.621, so the broker's soak had nothing to hear before the tap.
+  v0.0.620 and v0.0.621 were released meanwhile.
+  `STATUS 2026-10-24T12:29:57Z fleet=v0.0.619 server=v0.0.619 health=v0.0.619 newest=v0.0.621 intent=*:dev/auto=off`
+  `backups=fleet:221M/server:8170M disk=fleet:95G/server:22G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
