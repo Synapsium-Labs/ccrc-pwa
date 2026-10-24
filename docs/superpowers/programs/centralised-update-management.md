@@ -6032,6 +6032,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   any. Its coordinator ruled that neither restarts the clock. v0.0.625 to v0.0.627 were released meanwhile.
   `STATUS 2026-10-24T16:25:39Z fleet=v0.0.624 server=v0.0.624 health=v0.0.624 newest=v0.0.627 intent=*:dev/auto=off`
   `backups=fleet:222M/server:8318M disk=fleet:93G/server:22G`
+- **2026-10-24 17:25 UTC — monitoring: v0.0.628 to v0.0.630 released; boxes stay on v0.0.624, no anomalies.** v0.0.628
+  changes `ccd/session-hook.sh` (#1323, a deny arm for a Fable model, after the spool block), so the broker's soak was told
+  before any tap. `STATUS 2026-10-24T17:25:42Z fleet=v0.0.624 server=v0.0.624 health=v0.0.624 newest=v0.0.630`
+  `intent=*:dev/auto=off backups=fleet:222M/server:8318M disk=fleet:93G/server:22G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
