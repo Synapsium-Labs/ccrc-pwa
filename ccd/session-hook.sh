@@ -4817,7 +4817,7 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
           | if $e < 0 then "ok"
             else ($c[$o:$e + 1] | join("")) as $t
               | if ($t | test("\\.\\.\\.")) then "ok"
-                elif ($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?model[\"\u0027`]?[[:space:]]*[:,}]")) and ($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?effort[\"\u0027`]?[[:space:]]*[:,}]")) then "ok"
+                elif ($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?model[\"\u0027`]?[[:space:]]*[:,}]")) and (($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?effort[\"\u0027`]?[[:space:]]*[:,}]")) or ($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?model[\"\u0027`]?[[:space:]]*:[[:space:]]*[\"\u0027`](claude-)?haiku"))) then "ok"
                 else "bad" end
             end
         end;
@@ -4833,8 +4833,8 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
       else "" end' <<<"$payload" 2>/dev/null) || fo=""
   fi
   if [[ "$fo" == agent || "$fo" == workflow ]]; then
-    if [[ "$fo" == agent ]]; then foname="names no model"; else foname="has an agent() call that names no model or no effort"; fi
-    foreason="ccrc: this ${tool} call ${foname}, so it would run at the lane default (operator ruling 2026-10-24; D-6798). Name them from the routing matrix: pass model (opus, sonnet or haiku) on an Agent or Task call, and model and effort inline on every agent() call in a Workflow script. Take the row for the work: a mechanical task is haiku or sonnet, judgement is opus."
+    if [[ "$fo" == agent ]]; then foname="names no model"; else foname="has an agent() call that names no model or no effort (a haiku call needs no effort)"; fi
+    foreason="ccrc: this ${tool} call ${foname}, so it would run at the lane default (operator ruling 2026-10-24; D-6798). Name them from the routing matrix: pass model (opus, sonnet or haiku) on an Agent or Task call, and model on every agent() call in a Workflow script, and effort too unless the model is haiku (haiku takes no effort level). Take the row for the work: a mechanical task is haiku or sonnet, judgement is opus."
     if fojson=$(_hook_deny_json "$foreason"); then pre_json=$fojson; fi
   fi
 fi

@@ -73,8 +73,18 @@ describe('a Workflow agent() call must name its model and effort (D-6798)', () =
     expect(fire('Workflow', { script: "await agent({ prompt: 'x', effort: 'high' })" })).not.toBeNull();
   });
   it('one bare agent() among named ones is denied', () => {
-    const script = "await agent({ prompt: 'a', model: 'opus', effort: 'high' });\nawait agent({ prompt: 'b', model: 'haiku' });";
+    const script = "await agent({ prompt: 'a', model: 'opus', effort: 'high' });\nawait agent({ prompt: 'b', effort: 'low' });";
     expect(fire('Workflow', { script })).not.toBeNull();
+  });
+  it('a haiku agent() call needs no effort (haiku takes no effort level)', () => {
+    expect(fire('Workflow', { script: "await agent({ prompt: 'b', model: 'haiku' });" })).toBeNull();
+    expect(fire('Workflow', { script: "await agent({ prompt: 'b', model: 'claude-haiku-4-5' });" })).toBeNull();
+  });
+  it('a call with no model key is denied even beside the word haiku', () => {
+    expect(fire('Workflow', { script: "await agent({ prompt: 'use haiku' });" })).not.toBeNull();
+  });
+  it('the deny reason says haiku takes no effort', () => {
+    expect(fire('Workflow', { script: "await agent({ prompt: 'x' })" })).toMatch(/unless the model is haiku/);
   });
   it('every agent() call naming a model and an effort is allowed', () => {
     const script = "await agent({ prompt: 'a', model: 'opus', effort: 'high' });\nawait agent({ prompt: 'b', model: 'haiku', effort: 'low' });";
