@@ -31,14 +31,25 @@ const OPTIONS: CommandPaletteOption[] = [
   { id: 'palette', title: 'Open the command palette', group: 'Help', keys: [COMMAND_KEY, 'K'] },
 ];
 
-/** The story's own filter, a plain substring: ranking is the app's registry. */
-function Demo({ initial = '', under }: { initial?: string; under?: 'sheet' | 'drawer' }) {
+/** A session found by the top search (D-6714): its `label` is its exact accessible name, read by a screen reader in
+ *  place of the title and group run together. */
+const LABELLED: CommandPaletteOption[] = [
+  ...OPTIONS,
+  { id: 'lead', title: 'lead', group: 'coordinator · project-a', label: 'lead, coordinator, project-a' },
+  { id: 'first', title: 'first', group: 'project-a', label: 'first, project-a' },
+];
+
+/** The story's own filter, a plain substring over the title (and a label, when there is one): ranking is the app's
+ *  registry. */
+function Demo({ initial = '', under, list = OPTIONS }: {
+  initial?: string; under?: 'sheet' | 'drawer'; list?: readonly CommandPaletteOption[];
+}) {
   const [open, setOpen] = useState(true);
   const [query, setQuery] = useState(initial);
-  const options = useMemo(
-    () => OPTIONS.filter((o) => o.title.toLowerCase().includes(query.trim().toLowerCase())),
-    [query],
-  );
+  const options = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return list.filter((o) => o.title.toLowerCase().includes(q) || (o.label ?? '').toLowerCase().includes(q));
+  }, [query, list]);
   return (
     <div className="grid min-h-[640px] place-items-center bg-page p-4">
       <div className="w-[240px]">
@@ -70,6 +81,9 @@ export const Default: Story = { render: () => <Demo /> };
 export const Filtered: Story = { render: () => <Demo initial="go to" /> };
 
 export const NothingMatches: Story = { render: () => <Demo initial="zzz" /> };
+
+/** Options with an accessible name of their own (`label`): the sessions the top search lists after the commands. */
+export const LabelledOptions: Story = { render: () => <Demo initial="project-a" list={LABELLED} /> };
 
 export const OverASheet: Story = { render: () => <Demo under="sheet" /> };
 

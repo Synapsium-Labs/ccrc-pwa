@@ -1,7 +1,7 @@
 // graphifySkillFixture.ts — the graphify skill the install fixtures plant.
 //
 // ONE definition, three consumers (`install-graphify-skill.test.ts`,
-// `ccrc-install-graphify.test.ts`, `ccrc-install.test.ts`). The pinned
+// `ccrc-install-graphify.test.ts`, `ccrc-install-*.test.ts`). The pinned
 // package's own frontmatter, verbatim from `<pkg>/skill.md` at 0.9.9 (read
 // 2026-09-02): the description is the whole reason spec §1's artifact table
 // credits this skill with reaching every session, so every fixture carries the

@@ -86,8 +86,8 @@ function stamp(choice: SkinPreference, id: SkinId): void {
  *  Applied BEFORE it is written, so storage that throws still leaves the
  *  chosen skin on screen. An unknown id asks for AUTO, rather than stamping an
  *  attribute no block answers. The choice is what is remembered, never its
- *  resolution, so a desk handed an unknown id is not pinned to Refined once
- *  Instrument stops being a preview (D-5246). */
+ *  resolution, so a desk handed an unknown id was not pinned to Refined when
+ *  Instrument stopped being a preview (S18), and boots Instrument (D-5246). */
 export function setSkin(choice: string): void {
   const asked = skinPreference(choice);
   stamp(asked, resolveSkin(asked, deskAtBoot));

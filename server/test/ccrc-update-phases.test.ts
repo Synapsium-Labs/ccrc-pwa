@@ -777,7 +777,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
   });
 
   it('_ccrc_die reports `failed` only once the run is reporting, only from the run\'s own shell, with the prefix in front (the one hook)', () => {
-    // `ccrc-install.test.ts`'s one-line-definition idiom: the ONE-LINE definition extracted
+    // `ccrc-install-*.test.ts`'s one-line-definition idiom: the ONE-LINE definition extracted
     // from the shipped file and run alone, `_upd_phase` shadowed by a recorder.
     // Fix round 1 item 11 / review 155 C17: `_ccrc_die` now calls
     // `_upd_redact` (a multi-line function, extracted by its own block regex,

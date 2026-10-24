@@ -136,7 +136,7 @@ export function codexRoster(
  *  `ccd/ccrc`). ONE test-side spelling for the install and uninstall suites,
  *  which typed this list about ten times (final review F4); the product's own
  *  census is `install-census.test.ts`, which reads the gate itself.
- *  `ccrc-install.test.ts` pins this constant against that literal, so a
+ *  `ccrc-install-*.test.ts` pins this constant against that literal, so a
  *  sixth name, or a new order, reds there before any copy can drift. The auth
  *  library `ccgpt-auth.py` is first (codex bridge Stage 1, Task 5): the files
  *  after it will read their credential through it. */
@@ -1263,7 +1263,7 @@ export async function killLaneProcesses(home: string): Promise<void> {
 //
 // WHY A JOIN AND NOT `plantSystemd` ITSELF. `plantSystemd` above plants
 // `systemctl` and `systemd-run` into `<home>/.local/bin` for the codex suites.
-// The three spine harnesses — `ccrcEnv` (ccrc-install.test.ts), `updateEnv`
+// The three spine harnesses — `ccrcEnv` (ccrc-installFixture.ts), `updateEnv`
 // (ccrc-updateFixture.ts), `verbEnv` (ccrc-uninstall.test.ts) — write their
 // OWN `systemctl` over that path on EVERY run, because theirs answer the
 // spine's verbs and plantSystemd's answers the codex tiers'. And none of them
@@ -1368,7 +1368,7 @@ function spineSystemctlBaseline(): string {
  *
  *  `opts.expectAbsent` names any of `systemd-run`/`systemctl` a SPECIFIC
  *  runner call legitimately runs with no spine for at all (round 2, item 1's
- *  "must reach no manager" case — e.g. `ccrc-install.test.ts`'s "a box with
+ *  "must reach no manager" case — e.g. `ccrc-install-*.test.ts`'s "a box with
  *  no systemd" refusal test, whose PATH is built to exclude `systemctl`
  *  everywhere, fixture bin included). For a named tool this REQUIRES
  *  resolution to be EMPTY — nothing on PATH at all — and still THROWS if it
@@ -1573,7 +1573,7 @@ export const strayManagerCalls = (home: string): string[] => recordedLines(join(
 const CCRC_SRC = fileURLToPath(new URL('../../ccd/ccrc', import.meta.url));
 
 /** One function out of ccd/ccrc, column-0 signature to column-0 `}` — the
- *  `_inst_installed` extraction idiom in ccrc-install.test.ts. */
+ *  `_inst_installed` extraction idiom in ccrc-installFixture.ts. */
 export function ccrcFunction(name: string): string {
   const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}`, 'm').exec(readFileSync(CCRC_SRC, 'utf8'));
   if (m === null) throw new Error(`ccd/ccrc has no ${name}() { … } at column 0`);
@@ -1896,7 +1896,7 @@ export function probeRuntime(home: string, catalogueFile: string): ProbeRuntime 
 }
 
 // ── Plan 3a Task 10 — the flip's fixtures (begin) ────────────────────────
-// What the flip cases in `ccrc-install.test.ts` plant, in fixture vocabulary
+// What the flip cases in `ccrc-install-*.test.ts` plant, in fixture vocabulary
 // (ruling R13: by shape only): an `external` row in the shape the GPT lanes
 // had before their flip and the launcher such a row owes, and the class
 // registry and catalogue a flipped lane's `init codex` and refresh leave.

@@ -1,5 +1,5 @@
 // Task 7 fix round 1 (finding #1): the installer wiring in `ccd/ccrc` is
-// pinned by `ccrc-install.test.ts`/`ccrc-uninstall.test.ts`, but `ccrc install`
+// pinned by `ccrc-install-*.test.ts`/`ccrc-uninstall.test.ts`, but `ccrc install`
 // is never what a deploy runs — `deploy/deploy.sh agent` is (CLAUDE.md
 // AGENT-FIRST, Task 8's only sanctioned path). Without this file the agent
 // lane could ship the tree at `~/ccrc/ccd/` while never landing

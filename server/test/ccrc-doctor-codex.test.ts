@@ -482,7 +482,7 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     expect(names.indexOf('codex')).toBe(names.indexOf('models') + 1);
   });
 
-  it("compares exactly GPT_LANE_BINS — the list ccrc-install.test.ts pins to _inst_bins' gate", () => {
+  it("compares exactly GPT_LANE_BINS — the list ccrc-install-*.test.ts pins to _inst_bins' gate", () => {
     const m = /^CODEX_LANE_BINS=\(([^)]*)\)$/m.exec(readFileSync(CHECKS_SRC, 'utf8'));
     expect(m, 'ccrc-doctor-checks no longer declares CODEX_LANE_BINS on one line').toBeTruthy();
     expect(m![1]!.split(' ')).toEqual([...GPT_LANE_BINS]);
@@ -4462,7 +4462,7 @@ describe('ccrc doctor: server-caps (D-5232\'s mechanism)', () => {
     });
   }
 
-  // A FRESH INSTALL ENDS GREEN (D-4168, D-139; `ccrc-install.test.ts` pins it): within one lease of the writer's unit
+  // A FRESH INSTALL ENDS GREEN (D-4168, D-139; `ccrc-install-*.test.ts` pins it): within one lease of the writer's unit
   // file landing, an ABSENT file is a writer that has not had its first beat, and PASSes on its grace word.
   for (const [r, unit, writer] of [['fleet', 'ccd-update-sync.timer', /until ccd-update-sync /], ['both', 'ccrc.service', /until this box's own ccrc server /]] as const) {
     (r === 'fleet' ? itLinux : it)(`PASSes first-write-pending on a ${r} node whose ${unit} landed inside one lease, with no file yet`, () => {
