@@ -1,11 +1,11 @@
 // The lanes' words (T2c, D-6329): a window's one reading, the row's name and a lane card's name. The reading and the
 // row's name moved from fleet-pieces.test.tsx, their expected words changed in the commit that made them
 // windowReading's and lanesRowLabel's; the card's name (laneDoorLabel) and the shared words were added beside them.
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import type { AccountUsage } from '../../shared/api';
+import { parseTs } from './literalWalker';
 import { lanesByFree } from '../src/fleet/laneOrder';
 import { ALL_ACCOUNTS, laneDoorLabel, lanesRowLabel, NO_READING, windowReading } from '../src/fleet/laneWords';
 
@@ -92,7 +92,7 @@ describe('the lanes\' words', () => {
   it('every reading comes from windowReading', () => {
     for (const file of ['AccountMeterRow.tsx', 'AccountRow.tsx']) {
       const path = join(__dirname, '..', 'src', 'fleet', file);
-      const src = ts.createSourceFile(file, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+      const src = parseTs(path);
       let imported = false;
       const resetLiterals: string[] = [];
       const percentTemplates: string[] = [];
