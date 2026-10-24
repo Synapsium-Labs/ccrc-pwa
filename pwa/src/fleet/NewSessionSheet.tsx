@@ -5,8 +5,9 @@
 // narrates the action in plain language ("Start project-c on
 // team·alt") and posts api.createSession. Success opens the new session: the sheet
 // closes and goes to it as soon as /ws/fleet lists its row (a create answers no id), with the old "Starting…" toast
-// as the fallback if no row comes within a minute. A project whose main checkout is ALREADY live (`ccd start` answers
-// "already running", exit 0, and no new row will come) toasts and closes at once, with no wait and no navigation.
+// as the fallback if no row comes within a minute. A project whose main checkout is ALREADY live (usually
+// the session is already running: `ccd start` answers "already running", exit 0, and no new row comes) toasts and closes
+// at once, with no wait and no navigation; where that check over-matches, this is the toast-and-close it always was.
 // Failure toasts ccd's stderr and leaves every choice in place.
 // Step 2 shows the fleet store's last project list the moment it opens, and the fetch on open replaces it.
 //
@@ -396,8 +397,10 @@ export function NewSessionSheet({
       }
       // The new row can reach the fleet store before this create's HTTP answer, so what was alive is taken BEFORE it.
       const preLive = liveIdsIn(fleet.getState().sessions);
-      // A live main checkout of this project (any lane: a swap keeps the id) is what `ccd start` answers "already running"
-      // for, exit 0: the create succeeds and no new row will ever come, so there is nothing to wait for. Taken BEFORE the
+      // A live main checkout of this project (any lane: a swap keeps the id) is usually what `ccd start` answers "already
+      // running" for, exit 0: the create succeeds and no new row comes, so there is nothing to wait for. The owner is
+      // deliberately wider than ccd's own collision test (a live `<A>-demo` while the operator picked lane B still starts a
+      // new `<B>-demo`), and then the sheet falls back to the toast-and-close it had before the wait. Taken BEFORE the
       // create, from the owner `StartProgramSheet` refuses with.
       const alreadyLive = liveMainCheckoutIn(fleet.getState().sessions, project.name) !== null;
       const said = `Starting ${project.name} on ${accountLabel(roster, wrapper)}…`;
