@@ -8,7 +8,8 @@
 // `inbound.call_key` and each `[session, text]` with `inbound.text_key`, and `remember` is fed by the driver's own
 // `reduce` op over streams written below. Ids are `<prefix>_fx<n>`, encrypted content `ENC-<n>`.
 import { describe, it, expect } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { pythonOrSkip } from './ccgptHarness.js';
@@ -36,8 +37,11 @@ function lane(prefix: string): { home: string; dir: string; db: string } {
   return { home, dir, db: path.join(dir, 'reasoning.sqlite') };
 }
 
-async function run(home: string, ops: object[]): Promise<Line[]> {
-  const r = await runBridgeDriver(home, { ops }, {}, { timeoutMs: 60_000 });
+async function run(
+  home: string, ops: object[], o: { consts?: Record<string, unknown>; timeoutMs?: number } = {},
+): Promise<Line[]> {
+  const r = await runBridgeDriver(home, { ops, ...(o.consts ? { consts: o.consts } : {}) }, {},
+    { timeoutMs: o.timeoutMs ?? 60_000 });
   expect(r.timedOut, r.stderr).toBe(false);
   const lines = driverLines(r.stdout);
   expect(lines.map((l) => l.op), `${r.stdout}\n${r.stderr}`).toEqual(ops.map((o) => (o as { op: string }).op));
@@ -123,8 +127,8 @@ describe.skipIf(!PY)('the reasoning store (codex-bridge spec §2.5, D23)', () =>
     expect(other.turn).toBeNull();
     expect(none.turn).toBeNull();
     expect(phased.turn.phase).toBe('final_answer');
-    // A message no reasoning preceded and no phase marks has nothing to replay, so it is not stored.
-    expect(plain.turn).toBeNull();
+    // A message no reasoning preceded and no phase marks still gets its row, with nothing to replay.
+    expect(plain.turn).toEqual({ items: [], phase: null });
   });
 
   it('a phase alone is kept for a text with no reasoning before it', async () => {
@@ -154,24 +158,49 @@ describe.skipIf(!PY)('the reasoning store (codex-bridge spec §2.5, D23)', () =>
     expect(evict.evicted).toBe(1);
     expect(old.turn).toBeNull();
     expect(young.turn).toEqual(turn);
+    // No eviction has run on an expired row (a lane idle since, or just restarted): get still never answers it.
+    const fresh = lane('cb-store-ttl-read-');
+    const now = Math.floor(Date.now() / 1000);
+    const [, , , expired, live] = await run(fresh.home, [
+      { op: 'store-open', path: fresh.db },
+      { op: 'store-put', call: 'call_fx3', turn, now: now - 15 * DAY },
+      { op: 'store-put', call: 'call_fx4', turn, now: now - 13 * DAY },
+      { op: 'store-get', call: 'call_fx3' },
+      { op: 'store-get', call: 'call_fx4' },
+    ]);
+    expect(expired.turn).toBeNull();
+    expect(live.turn).toEqual(turn);
   });
 
   it('past the size cap the oldest go first', async () => {
     const { home, db } = lane('cb-store-cap-');
     const turn = (n: number): object => ({ items: [{ ...rs(n), encrypted_content: `ENC-${n}-${'x'.repeat(400)}` }], phase: null });
-    // Each row is about 500 bytes (its key and its stored JSON), so a 1,200-byte cap keeps two. Every put is 100 s
-    // after the last, past the once-a-minute bound, so each put runs the eviction.
+    // Each row is about 500 bytes (its key and its stored JSON), so a 1,200-byte cap keeps two. The once-a-minute
+    // bound runs on the monotonic clock, so it is lowered to 0 here and each put runs the eviction.
     const ops: object[] = [{ op: 'store-open', path: db, max_bytes: 1200 }];
     for (let n = 1; n <= 4; n += 1) ops.push({ op: 'store-put', call: `call_fx${n}`, turn: turn(n), now: T0 + n * 100 });
     for (let n = 1; n <= 4; n += 1) ops.push({ op: 'store-get', call: `call_fx${n}` });
     ops.push({ op: 'store-dump', path: db });
-    const lines = await run(home, ops);
+    const lines = await run(home, ops, { consts: { 'store.EVICT_EVERY_S': 0 } });
     const gets = lines.slice(5, 9).map((l) => l.turn);
     expect(gets[0]).toBeNull();
     expect(gets[1]).toBeNull();
     expect(gets[2]).toEqual(turn(3));
     expect(gets[3]).toEqual(turn(4));
     const dump = lines[9];
+    expect(dump.rows.reduce((s: number, r: Line) => s + (r.size as number), 0)).toBeLessThanOrEqual(1200);
+  });
+
+  it('a wall clock stepping back does not stop the eviction', async () => {
+    const { home, db } = lane('cb-store-clock-');
+    const turn = (n: number): object => ({ items: [{ ...rs(n), encrypted_content: `ENC-${n}-${'x'.repeat(400)}` }], phase: null });
+    // Each put's wall clock is 100 s BEFORE the last one's; the bound runs on the monotonic clock, so each put still
+    // runs the eviction and the cap holds.
+    const ops: object[] = [{ op: 'store-open', path: db, max_bytes: 1200 }];
+    for (let n = 1; n <= 4; n += 1) ops.push({ op: 'store-put', call: `call_fx${n}`, turn: turn(n), now: T0 - n * 100 });
+    ops.push({ op: 'store-dump', path: db });
+    const lines = await run(home, ops, { consts: { 'store.EVICT_EVERY_S': 0 } });
+    const dump = lines[5];
     expect(dump.rows.reduce((s: number, r: Line) => s + (r.size as number), 0)).toBeLessThanOrEqual(1200);
   });
 
@@ -189,9 +218,88 @@ describe.skipIf(!PY)('the reasoning store (codex-bridge spec §2.5, D23)', () =>
     expect(dump.userVersion).toBe(1);
     expect(dump.journalMode).toBe('wal');
     expect(statSync(db).mode & 0o777).toBe(0o600);
-    for (const s of ['-wal', '-shm']) {
-      if (existsSync(db + s)) expect(statSync(db + s).mode & 0o777, s).toBe(0o600);
-    }
+    // Measured while the store still holds its connection: sqlite removes both WAL files on the last close.
+    expect(dump.modes).toEqual({ '': 0o600, '-wal': 0o600, '-shm': 0o600 });
+  });
+
+  it('a fifo at the store path disables the store and the request still succeeds', async () => {
+    const { home, db } = lane('cb-store-fifo-');
+    execFileSync('mkfifo', ['-m', '600', db]);
+    const [open, put, got, replay] = await run(home, [
+      { op: 'store-open', path: db },
+      { op: 'store-put', call: 'call_fx1', turn: { items: [rs(1)], phase: null } },
+      { op: 'store-get', call: 'call_fx1' },
+      {
+        op: 'from-anthropic', lookup: 'store',
+        body: { model: 'model-6.1-alpha', messages: [{ role: 'user', content: 'start' }] },
+      },
+    ], { timeoutMs: 15_000 });
+    expect(open.disabled).toBe('store:not-a-regular-file');
+    expect(put.disabled).toBe('store:not-a-regular-file');
+    expect(got.turn).toBeNull();
+    expect(replay.request.items.map((i: Line) => i.type)).toEqual(['message']);
+  });
+
+  it('a file swapped in after the start disables the store', async () => {
+    const { home, db } = lane('cb-store-swap-');
+    const other = path.join(home, 'other.sqlite');
+    writeFileSync(other, '', { mode: 0o600 });
+    const [open, put, , threads] = await run(home, [
+      { op: 'store-open', path: db },
+      { op: 'store-put', call: 'call_fx1', turn: { items: [rs(1)], phase: null } },
+      { op: 'store-swap', path: db, link_to: other },
+      // A new thread opens its own connection: the path is no longer the file this store made.
+      { op: 'store-threads', n: 1, each: 1 },
+    ]);
+    expect(open.disabled).toBeNull();
+    expect(put.disabled).toBeNull();
+    expect(threads.raised_in_threads).toEqual([]);
+    expect(threads.disabled).toBe('store:replaced');
+    expect(statSync(other).size).toBe(0);
+  });
+
+  it('a later reply of the same text with no reasoning replaces the earlier reasoning', async () => {
+    const { home, db } = lane('cb-store-supersede-');
+    const [, , , first, , , second, replay] = await run(home, [
+      { op: 'store-open', path: db },
+      stream([rs(1), msg(2, 'Done.')]),
+      { op: 'store-remember', session: 's-1' },
+      { op: 'store-get', session: 's-1', text: 'Done.' },
+      stream([msg(3, 'Done.')]),
+      { op: 'store-remember', session: 's-1' },
+      { op: 'store-get', session: 's-1', text: 'Done.' },
+      {
+        op: 'from-anthropic', lookup: 'store', headers: { 'x-claude-code-session-id': 's-1' },
+        body: {
+          model: 'model-6.1-alpha',
+          messages: [
+            { role: 'user', content: 'one' }, { role: 'assistant', content: 'Done.' },
+            { role: 'user', content: 'two' }, { role: 'assistant', content: 'Done.' },
+            { role: 'user', content: 'three' },
+          ],
+        },
+      },
+    ]);
+    expect(first.turn).toEqual({ items: [rs(1)], phase: null });
+    expect(second.turn).toEqual({ items: [], phase: null });
+    // The earlier turn's reasoning is not replayed before the later message.
+    expect(replay.request.items.map((i: Line) => i.type)).not.toContain('reasoning');
+  });
+
+  it('a reply with no session id keeps no text row', async () => {
+    const { home, db } = lane('cb-store-nosession-');
+    const [, , , text, call, dump] = await run(home, [
+      { op: 'store-open', path: db },
+      stream([rs(1), fc(2, '{}'), rs(3), msg(4, 'Same words.', 'final_answer')]),
+      { op: 'store-remember', session: null },
+      { op: 'store-get', session: null, text: 'Same words.' },
+      { op: 'store-get', call: 'call_fx2' },
+      { op: 'store-dump', path: db },
+    ]);
+    // Every sessionless request shares one text scope, so a text row there would cross conversations.
+    expect(text.turn).toBeNull();
+    expect(call.turn).toEqual({ items: [rs(1)], phase: null });
+    expect(dump.rows.length).toBe(1);
   });
 
   it('a symlink at the store path disables the store and the request still succeeds', async () => {
@@ -252,7 +360,9 @@ describe.skipIf(!PY)('the reasoning store (codex-bridge spec §2.5, D23)', () =>
     const lines = await run(home, [
       { op: 'store-open', path: db },
       stream([
-        { ...rs(1), summary: [] }, msg(2, reply, 'commentary'), rs(3), fc(4, JSON.stringify({ path: input })),
+        { ...rs(1), summary: [] }, msg(2, reply, 'commentary'),
+        { ...rs(3), summary: [{ type: 'summary_text', text: 'SUMMARY-TEXT-fx9 the reasoning in words' }] },
+        fc(4, JSON.stringify({ path: input })),
         { type: 'reasoning', id: 'rs_fx5', summary: [], encrypted_content: 'ENC-5', extra: 'DROP-fx5' },
         msg(6, 'Second reply.'),
       ]),
@@ -269,10 +379,11 @@ describe.skipIf(!PY)('the reasoning store (codex-bridge spec §2.5, D23)', () =>
       for (const item of row.turn.items as Line[]) {
         expect(Object.keys(item).sort()).toEqual(['encrypted_content', 'id', 'summary', 'type']);
         expect(item.type).toBe('reasoning');
+        expect(item.summary).toEqual([]);
       }
     }
     const bytes = storeBytes(db).toString('latin1');
-    for (const needle of [reply, 'REPLY-TEXT', 'Second reply', input, 'TOOL-INPUT', 'DROP-fx5', 'probe_tool']) {
+    for (const needle of [reply, 'REPLY-TEXT', 'Second reply', input, 'TOOL-INPUT', 'DROP-fx5', 'probe_tool', 'SUMMARY-TEXT']) {
       expect(bytes, needle).not.toContain(needle);
     }
     expect(bytes).toContain('ENC-1');

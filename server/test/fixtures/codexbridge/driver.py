@@ -60,8 +60,8 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
   THE REASONING STORE (Task 4): one ReasoningStore per driver process, opened by store-open and used by every later
   store-* op, by store-remember (over the reducer the LAST reduce op built) and by from-anthropic with
   "lookup": "store" (its get in place of the stub). A store key is never passed in: each op names a `call` (keyed by
-  inbound.call_key) or a `session` and a `text` (keyed by inbound.text_key). Every store-* op but store-plant and
-  store-dump also prints "disabled": the store's reason, or None.
+  inbound.call_key) or a `session` and a `text` (keyed by inbound.text_key). Every store-* op but store-plant,
+  store-swap and store-dump also prints "disabled": the store's reason, or None.
   store-open       {path, max_bytes?, ttl_s?, umask?} -> {"disabled"}: os.umask(umask) first when given
   store-put        {call | session + text, turn, now?} -> {"disabled"}
   store-get        {call | session + text} -> {"turn", "disabled"}
@@ -71,8 +71,12 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    gets of its own call keys through the one store
   store-plant      {path, user_version} -> {}: a raw sqlite file with the store's table at that user_version, written
                    without the store
-  store-dump       {path} -> {"rows": [{"key", "turn", "created", "size"}] by key, "userVersion", "journalMode"}: read
-                   through a raw sqlite connection of its own
+  store-swap       {path, link_to} -> {}: the path replaced, after the start, by a symlink to `link_to` (made at a
+                   side name, then os.replace), as a file swapped in under a running store
+  store-dump       {path} -> {"rows": [{"key", "turn", "created", "size"}] by key, "userVersion", "journalMode",
+                   "modes": {"", "-wal", "-shm"}: each file's permission bits, or None when absent, stat'ed BEFORE the
+                   dump's own connection opens, so an open store's WAL files are measured while it holds them}:
+                   read through a raw sqlite connection of its own
 A BridgeError prints as {"error": {status, etype, message, headers, state, code, requestId, kind}, "answer":
 {"status", "headers", "body": parsed JSON}, "event": errors.event(e) as text}. An op that raised prints
 {"raised": <class name>}. Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the package failed to import.
@@ -279,7 +283,18 @@ def _store_op(name, op, cb):
         conn.commit()
         conn.close()
         return {}
+    if name == "store-swap":
+        side = op["path"] + ".swap"
+        os.symlink(op["link_to"], side)
+        os.replace(side, op["path"])
+        return {}
     if name == "store-dump":
+        modes = {}
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                modes[suffix] = os.stat(op["path"] + suffix).st_mode & 0o777
+            except FileNotFoundError:
+                modes[suffix] = None
         conn = sqlite3.connect(op["path"])
         try:
             rows = [{"key": k, "turn": json.loads(v), "created": c, "size": z}
@@ -288,7 +303,7 @@ def _store_op(name, op, cb):
             mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         finally:
             conn.close()
-        return {"rows": rows, "userVersion": version, "journalMode": mode}
+        return {"rows": rows, "userVersion": version, "journalMode": mode, "modes": modes}
     if name == "store-open":
         if "umask" in op:
             os.umask(int(op["umask"]))

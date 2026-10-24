@@ -7,11 +7,16 @@ request (`include: ["reasoning.encrypted_content"]`, upstream openai/codex @ 092
 codex-rs/core/src/client.rs:891-1014); nothing carried them on a lane before the bridge.
 
 WHAT IS STORED, AND NOTHING ELSE. A row is `key -> {"items": [reasoning items], "phase": <name or None>}`. The key is
-`inbound.call_key(call_id)` or `inbound.text_key(session, text)`, a hash: no reply text and no tool input is ever a
-key or a value. An item keeps only `type`, `id`, `summary` and `encrypted_content` (KEPT_FIELDS), and only when it is
-a `reasoning` item with encrypted content; a phase is kept only when it is a bounded name (PHASE_RE). The file is 0600
-(`os.open(..., O_CREAT | O_NOFOLLOW, 0o600)`, then `os.fchmod`, so neither a umask nor a symlink planted at the path
-decides it), in a lane directory the tier's start made 0700; sqlite gives its `-wal` and `-shm` the database's mode.
+`inbound.call_key(call_id)`, the call id, or `inbound.text_key(session, text)`, a session-scoped sha256: no reply
+text and no tool input is ever a key or a value. An item keeps only `type`, `id`, `summary` and `encrypted_content`
+(KEPT_FIELDS), and only when it is a `reasoning` item with encrypted content; its `summary` is always stored as `[]`
+(the bridge never asks for one, and a summary would be plaintext reasoning); a phase is kept only when it is a bounded
+name (PHASE_RE). Every emitted text of a reply gets its row, with no items and no phase when it has neither, so a
+later reply of the same text replaces an earlier reply's reasoning rather than inheriting it. A reply with no session
+id writes no text-keyed row at all (its text key would be shared by every sessionless request); its call rows stand.
+The file is 0600 (`os.open(..., O_CREAT | O_NOFOLLOW, 0o600)`, then `os.fchmod`, so neither a umask nor a symlink
+planted at the path decides it), in a lane directory the tier's start made 0700; sqlite gives its `-wal` and `-shm`
+the database's mode.
 
 THE STORE NEVER FAILS A REQUEST. Any exception inside it (an `sqlite3.Error`, an `OSError`, anything else) disables it
 for the process: `disabled` becomes `store:<exception class>` (or `store:newer-version`, a store written by a newer
@@ -21,10 +26,13 @@ is told once, so the stats file can count it (Task 5's `Stats.outcome`).
 ONE CONNECTION PER THREAD. The server is a ThreadingHTTPServer and sqlite3's default `check_same_thread=True` makes a
 shared connection raise `ProgrammingError` on the first handler thread; each thread opens its own on first use, after
 checking that the path is still the file this store created (a file swapped in after the start disables the store).
+A thread's connection is not freed when the thread ends (it sits in reference cycles until a garbage collection), so
+the server's handler calls `store.close()` in a `finally` on its own thread, once per request.
 
-Eviction: expired rows (older than `ttl_s`, default TTL_S), then the oldest first until the rows' total `size` is at
-most `max_bytes` (default MAX_BYTES); run by `evict()`, and by `put()` at most once every EVICT_EVERY_S. Every
-default is read when it is used, so a test lowers it through the driver's `consts`.
+Expiry: `get` never answers a row older than `ttl_s` (default TTL_S), whether or not an eviction has run. Eviction:
+expired rows, then the oldest first until the rows' total `size` is at most `max_bytes` (default MAX_BYTES); run by
+`evict()`, and by `put()` at most once every EVICT_EVERY_S of the monotonic clock (so a wall-clock step back never
+stalls it). Every default is read when it is used, so a test lowers it through the driver's `consts`.
 """
 
 import json
@@ -75,20 +83,18 @@ def _clean_item(item: object) -> Optional[dict]:
     out = {"type": "reasoning", "encrypted_content": enc}
     if isinstance(item.get("id"), str):
         out["id"] = item["id"]
-    out["summary"] = item["summary"] if isinstance(item.get("summary"), list) else []
+    out["summary"] = []  # never the upstream's summary: the bridge never asks for one, and it would be plaintext
     return {k: out[k] for k in KEPT_FIELDS if k in out}
 
 
 def _clean_turn(turn: object) -> Optional[dict]:
-    """The turn as stored: its reasoning items and its phase; None when nothing of it is worth a row."""
+    """The turn as stored: its reasoning items and its phase (either may be empty); None for a turn that is no dict."""
     if not isinstance(turn, dict):
         return None
     raw = turn.get("items")
     items = [c for c in (_clean_item(i) for i in (raw if isinstance(raw, list) else [])) if c is not None]
     phase = turn.get("phase")
     phase = phase if isinstance(phase, str) and PHASE_RE.fullmatch(phase) else None
-    if not items and phase is None:
-        return None
     return {"items": items, "phase": phase}
 
 
@@ -105,7 +111,7 @@ class ReasoningStore:
         self._local = threading.local()
         self._lock = threading.Lock()
         self._identity = None  # type: Optional[tuple]  ((st_dev, st_ino) of the file this store created)
-        self._last_evict = None  # type: Optional[float]
+        self._last_evict = None  # type: Optional[float]  (time.monotonic() of the last eviction)
         self._guard(self._create)
         self._guard(self._conn)  # the schema, on the constructing thread
 
@@ -180,13 +186,15 @@ class ReasoningStore:
         return self._guard(self._get, key)
 
     def _get(self, key: str) -> Optional[dict]:
-        row = self._conn().execute("SELECT items FROM reasoning WHERE key = ?", (key,)).fetchone()
+        ttl = TTL_S if self._ttl_s is None else self._ttl_s
+        row = self._conn().execute("SELECT items FROM reasoning WHERE key = ? AND created >= ?",
+                                   (key, int(time.time() - ttl))).fetchone()
         if row is None:
             return None
         return _clean_turn(json.loads(row[0]))
 
     def put(self, key: str, turn: dict, *, now: Optional[float] = None) -> None:
-        """Store `turn` under `key` (replacing a row there); a turn with no reasoning item and no phase is not kept."""
+        """Store `turn` under `key`, replacing a row there (a turn with no reasoning item and no phase too)."""
         self._guard(self._put, key, turn, time.time() if now is None else now)
 
     def _put(self, key: str, turn: dict, now: float) -> None:
@@ -197,10 +205,11 @@ class ReasoningStore:
         size = len(text.encode("utf-8")) + len(key.encode("utf-8"))
         self._conn().execute("INSERT OR REPLACE INTO reasoning(key, items, created, size) VALUES (?, ?, ?, ?)",
                              (key, text, int(now), size))
+        tick = time.monotonic()
         with self._lock:
-            due = self._last_evict is None or now - self._last_evict >= EVICT_EVERY_S
+            due = self._last_evict is None or tick - self._last_evict >= EVICT_EVERY_S
             if due:
-                self._last_evict = now
+                self._last_evict = tick
         if due:
             self._evict(now)
 
@@ -231,7 +240,7 @@ class ReasoningStore:
             conn.execute("ROLLBACK")
             raise
         with self._lock:
-            self._last_evict = now
+            self._last_evict = time.monotonic()
         return max(0, removed) + len(doomed)
 
     def close(self) -> None:
@@ -249,7 +258,8 @@ def remember(store: Optional[ReasoningStore], reducer: object, session_id: Optio
     """Store one reply's reasoning for replay. Each reasoning item goes under the key of the first item released after
     it (`Reducer.reasoning`): `call_key(call_id)` for a call, `text_key(session_id, <emitted text>)` for a message;
     each message's emitted text gets a row under its `text_key` carrying its `phase`, with no items when no reasoning
-    preceded it. A reasoning item nothing was released after is not stored. Never raises."""
+    preceded it. With no `session_id` no text-keyed row is written. A reasoning item nothing was released after is
+    not stored. Never raises."""
     if store is None or store.disabled is not None:
         return
     store._guard(_remember, store, reducer, session_id)
@@ -267,10 +277,10 @@ def _remember(store: ReasoningStore, reducer: object, session_id: Optional[str])
         kind, value = keyed
         if kind == "call":
             row(inbound.call_key(value))["items"].append(item)
-        elif kind == "text":
+        elif kind == "text" and session_id:
             row(inbound.text_key(session_id, value))["items"].append(item)
     phases = reducer.phases
-    for index in sorted(reducer.emitted_text):
+    for index in (sorted(reducer.emitted_text) if session_id else []):
         text = reducer.emitted_text[index]
         if not text:
             continue
