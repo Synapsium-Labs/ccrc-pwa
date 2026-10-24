@@ -1,20 +1,20 @@
 # Mail inbox and clean client output — Implementation Plan
 
-> **For agentic workers:** ten PRs, Tasks MI-1 to MI-10, one task per PR. REQUIRED SUB-SKILL: superpowers:subagent-driven-development, with superpowers:test-driven-development for every red-first step. Routing is per task (**Routing** line). Band 1 is mechanical and may go to `handoff-run`. Band 2 is spec-able and may go to `handoff-run` when the weekly pace says so, with the orchestrator reviewing the diff. Band 3 is written and reviewed natively and never handed off. Workers do not edit §Deviations found.
+> **For agentic workers:** eleven PRs, Tasks MI-1 to MI-11, one task per PR. REQUIRED SUB-SKILL: superpowers:subagent-driven-development, with superpowers:test-driven-development for every red-first step. Routing is per task (**Routing** line). Band 1 is mechanical and may go to `handoff-run`. Band 2 is spec-able and may go to `handoff-run` when the weekly pace says so, with the orchestrator reviewing the diff. Band 3 is written and reviewed natively and never handed off. Workers do not edit §Deviations found.
 
-**Spec:** `docs/superpowers/specs/2026-10-24-mail-inbox-design.md` (rev 1).
+**Spec:** `docs/superpowers/specs/2026-10-24-mail-inbox-design.md` (rev 2).
 
-**Deviation:** D-6772, issued by the ledger for this work. The ten further decisions are `D-TBD-api-status-optin` to `D-TBD-nudge-inbox` (ten, in task order), one contiguous block the ledger issues for this plan, defined in §Deviations found in the same commit that substitutes them.
+**Deviation:** D-6772, issued by the ledger for this work. The eleven further decisions are `D-TBD-api-status-optin` to `D-TBD-inbox-cards` (eleven, in task order, MI-11 last), one contiguous block the ledger issues for this plan, defined in §Deviations found in the same commit that substitutes them.
 
 **Base:** `origin/main` `10813b401`. Anchors are `≈:` hints into that commit, and each names its function. Re-ground every anchor in Step 0.
 
-**Deploy class.** MI-1, MI-2, MI-7, MI-8 and MI-9 are FLEET (`ccd/` files and skills, installed by `ccrc update`'s spine, agent lane first). MI-3 to MI-6 and MI-10 are SERVER. No task restarts a session, and each takes effect at the next ordinary release.
+**Deploy class.** MI-1, MI-2, MI-7, MI-8 and MI-9 are FLEET (`ccd/` files and skills, installed by `ccrc update`'s spine, agent lane first). MI-3 to MI-6, MI-10 and MI-11 are SERVER (the PWA ships with the server). No task restarts a session, and each takes effect at the next ordinary release.
 
 ## Gates
 
-- **The ledger block (this PR, before merge).** The ten `D-TBD-<slug>` entries in §Deviations found take one contiguous block from `ccrc-api ledger allocate`, substituted in this PR. `server/test/dtbd.test.ts` is red until then; this Gate is deleted in the same commit.
+- **The ledger block (this PR, before merge).** The eleven `D-TBD-<slug>` entries in §Deviations found take one contiguous block from `ccrc-api ledger allocate`, substituted in this PR. `server/test/dtbd.test.ts` is red until then; this Gate is deleted in the same commit.
 - **Wave 3 waits for wave 2 on the server.** MI-7 and MI-9 teach a route the server must already serve. Release them only once the server box runs MI-6's release (`ccrc update --check` on the server, or `GET /api/updates`).
-- **Wave 4 waits for wave 3 on the fleet.** MI-10 sets `MAIL_INBOX_SINCE` to the release tag MI-7 merged into. That tag is known only after MI-7's merge cuts its prerelease.
+- **Wave 4 waits for wave 3 on the fleet and on the server.** MI-10 sets `MAIL_INBOX_SINCE` to the release tag MI-7 merged into. That tag is known only after MI-7's merge cuts its prerelease. MI-10 also waits until the server box serves MI-11's PWA, so mail read through `mail inbox` shows as cards from the first nudge that names it (spec §3.8).
 - **Open PRs.** Measure them in Step 0 of each task (`gh pr list --state open --json number,files`). The files this plan edits that other work also edits often are `ccd/session-hook.sh`, `ccd/ccrc`, `server/src/watch.ts`, `server/src/coord/routes.ts`, `server/src/coord/store.ts`, `server/src/coord/schema.ts` and `shared/api.ts`. Rebase past any open PR that holds them, and take the next free migration number in MI-4 if one lands first.
 
 ## Global constraints
@@ -31,16 +31,18 @@
 
 ## Review focus
 
-1. **Nothing is acked that was not printed.** The ack follows a print that succeeded, delivery by delivery. A failed print stops the loop.
+1. **Nothing is acked whose write failed, and nothing is acked when fd 1 is a pipe or `/dev/null`.** The ack follows a write that succeeded, delivery by delivery, and a failed write stops the loop. That is all the client can know: a successful write reached fd 1, not a reader (spec §2, §4). Check that the show-only test runs before the read, that a bare run under the measured tool capture still acks, that the footer names every acked delivery, and that the redirect-to-file residual is pinned by a test named as the residual.
 2. **Nothing printed is hidden from replay unless it was acked.** Only an attributed recipient fetch stamps `fetchedAt`. The inbox read stamps nothing.
 3. **The printed set is the ackable set the mailbox still shows.** The inbox selects with the hoisted ack guard AND `OUTSTANDING_OR_ABANDONED_SQL`, so no row is printed forever and refused forever, and no closed run's replay-ceiling park is printed as live.
 4. **Identity is the pane's, and its absence narrows nothing.** No flag or body field selects another session. The server re-measures the pair with `attributionVerdict`. `mail fetch` never refuses for lack of identity: a derive failure fetches unattributed, as today.
 5. **No skew wedges a reader.** The opt-in works with old and new clients. The nudge names `mail inbox` only when the fleet's client carries it.
 6. **No stamped row outlives today's ceiling.** Every `OUTSTANDING_STATES_SQL` holder frees a fetched-but-unacked row when it frees today (spec §3.6's walk), and a repoint clears the stamp.
+7. **A stamp speaks only for the uuid that fetched.** The replay skip and the bound park both compare `fetchedUuid` with the registry's current uuid for `toId`, in `sweepMail`, after the registry was listed. A mismatch clears the stamp and the row replays as today.
+8. **The operator's transcript keeps its mail cards.** An inbox print renders as one card per well-formed entry, and a forged fence, a cut print or a malformed entry renders none (spec §3.8).
 
 ## Tasks
 
-Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server half), **3** MI-7 to MI-9 (the client verb and the skills, fleet), **4** MI-10 (the nudge switch, server).
+Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server half), **3** MI-7 to MI-9 (the client verb and the skills, fleet) and MI-11 (the PWA's inbox cards, server), **4** MI-10 (the nudge switch, server).
 
 | Task | Band | Lane | Depends on |
 |---|---|---|---|
@@ -53,7 +55,8 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
 | MI-7 `ccrc-api mail inbox` | 3 | FLEET | MI-6 on the server box |
 | MI-8 `mail fetch` sends identity | 2 | FLEET | MI-5 |
 | MI-9 skills, references, README | 3 | FLEET (skills) | MI-7 |
-| MI-10 the nudge switch | 3 | SERVER | MI-7's release tag |
+| MI-10 the nudge switch | 3 | SERVER | MI-7's release tag; MI-11 on the server box |
+| MI-11 the PWA renders inbox prints as mail cards | 2 | SERVER (PWA) | MI-6 |
 
 ### Task MI-1: the two status parsers opt in (spec §3.1, §1.3)
 
@@ -165,24 +168,34 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
       cd server && ./node_modules/.bin/vitest run test/mail-hardening.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts --maxWorkers=2
 
-### Task MI-4: `fetchedAt`, the replay skips a fetched row, and its lifetime stays bounded (spec §3.6)
+### Task MI-4: `fetchedAt` and `fetchedUuid`, the replay skips a row fetched by the current uuid, and its lifetime stays bounded (spec §3.6)
 
 **Routing:** band 3. **Lane:** SERVER (L3, migration).
 
 **Files:**
-- Modify `server/src/coord/schema.ts`: migration 30, `ALTER TABLE mail_deliveries ADD COLUMN fetchedAt INTEGER` (≈:1765 is 29, the last today). Take the next free number if another migration lands first.
-- Modify `server/src/coord/store.ts`: `markFetched(id, at): DeliveryWrite`, through `writeDelivery` with `'non-terminal'` and `fetchedAt = COALESCE(fetchedAt, ?)`. `dueDeliveries`' `delivered` arm (≈:5488-5510) gains `AND fetchedAt IS NULL`; the `queued` arm is unchanged.
-- Add `CoordStore.fetchedPastReplayBound(now, replayMs, maxReplays): {id: number; mailId: number; toId: string}[]`: `state = 'delivered' AND fetchedAt IS NOT NULL AND MAX(COALESCE(ingestedAt, 0), COALESCE(deliveredAt, 0)) + (? - replayCount) * ? <= ?`, ordered by id. It selects `state = 'delivered'` directly, not through `OUTSTANDING_STATES_SQL`, so it is not a new holder (spec §3.6).
-- Modify `repointCoordinatorMail` (≈:2210-2216): its SET becomes `toId = ?, fetchedAt = NULL`. Its docstring says why: a stamp is a fact about the old recipient.
-- Modify `server/src/watch.ts#sweepMail`: one pass after the parked-row ceiling (≈:7545-7560) parks each row `fetchedPastReplayBound(now, MAIL_REPLAY_MS, MAIL_REPLAY_MAX_ATTEMPTS)` returns, through `store.rejectDelivery(id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR)` and `this.landed(…)`. Nothing is typed, and no sender is told (the ceiling at ≈:8083 tells nobody either). Set `ceilinged` when any row parks, so `due` is re-read.
+- Modify `server/src/coord/schema.ts`: migration 30, `ALTER TABLE mail_deliveries ADD COLUMN fetchedAt INTEGER` and `ADD COLUMN fetchedUuid TEXT`, both in the one migration (≈:1765 is 29, the last today). Take the next free number if another migration lands first.
+- Modify `server/src/coord/store.ts`: `markFetched(id, at, uuid): DeliveryWrite`, through `writeDelivery` with `'non-terminal'`: `fetchedAt = CASE WHEN fetchedUuid IS ? THEN COALESCE(fetchedAt, ?) ELSE ? END, fetchedUuid = ?`, so the first stamp per uuid stands and a different uuid replaces both. `clearFetched(id, staleUuid): DeliveryWrite`, through `writeDelivery` with `'non-terminal'` and `WHERE fetchedUuid = ?`, setting both columns NULL, so a fresh stamp written in between is never erased. `dueDeliveries` (≈:5488-5510) keeps both arms as they are and adds `fetchedAt` and `fetchedUuid` to the rows it returns.
+- Add `CoordStore.fetchedPastReplayBound(now, replayMs, maxReplays): {id: number; mailId: number; toId: string; fetchedUuid: string}[]`: `state = 'delivered' AND fetchedAt IS NOT NULL AND MAX(COALESCE(ingestedAt, 0), COALESCE(deliveredAt, 0)) + (? - replayCount) * ? <= ?`, ordered by id. It selects `state = 'delivered'` directly, not through `OUTSTANDING_STATES_SQL`, so it is not a new holder (spec §3.6).
+- Modify `repointCoordinatorMail` (≈:2210-2216): its SET becomes `toId = ?, fetchedAt = NULL, fetchedUuid = NULL`. Its docstring says why: a stamp is a fact about the old recipient.
+- Modify `server/src/watch.ts#sweepMail`, after the registry read and `uuidByToId` (≈:7482-7486), with one pure helper, `stampHolds(row, uuidByToId)`: true only when `row.fetchedAt !== null` and `row.fetchedUuid === uuidByToId.get(row.toId)`.
+  - In the due loop, a `delivered` row with `fetchedAt` set is skipped when `stampHolds`, and otherwise has its stamp cleared (`clearFetched(id, row.fetchedUuid)`, through `this.landed(…)`) and replays as an unstamped row does today.
+  - One pass after the parked-row ceiling (≈:7545-7560) takes each row `fetchedPastReplayBound(now, MAIL_REPLAY_MS, MAIL_REPLAY_MAX_ATTEMPTS)` returns. A row for which `stampHolds` is false has its stamp cleared and is not parked. Every other row is parked through `store.rejectDelivery(id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR)` and `this.landed(…)`. Nothing is typed, and no sender is told (the ceiling at ≈:8083 tells nobody either). Set `ceilinged` when any row parks, so `due` is re-read.
 - Modify `server/test/mail-hardening.test.ts` (the writer census names `markFetched`), `server/test/coord-db.test.ts` (the migration), and `server/test/mail-sweep.test.ts` (the replay cases near ≈:1027-1111).
 - Modify `server/src/watch.ts`'s `MAIL_REPLAY_MS` docstring (≈:606-610) and `MAIL_REPLAY_MAX_ATTEMPTS`' (≈:668-677): a fetched row is not replayed, and parks at the moment its owed replays would have reached the ceiling.
 - Modify the store's `OUTSTANDING_STATES_SQL` holder walk (≈:2311ff) only if the scan finds a new holder; the walk in spec §3.6 is the reasoning, and its rows go into `fetchedPastReplayBound`'s docstring.
 - Modify `server/test/mail-peer-quota.test.ts` (the `peer-quota` and `duplicate` bound cases), `server/test/coord-kickoff.test.ts` (`queueSystemMail`'s dedupe on a run-less kickoff) and `server/test/digest.test.ts` (the correction's `duplicate`) for the bound cases.
 
-- [ ] **Step 0: Re-ground.** Read `db.ts`'s migration loop and its rule for a higher `user_version`, `bumpReplayCount`, the replay ceiling in `sweepMail` (≈:8070-8083), `repointCoordinatorMail`, the store's `OUTSTANDING_STATES_SQL` holder walk (≈:2311ff), and `stallDeafMail` (`stall.ts` ≈:925-958). Re-run spec §3.6's holder walk against the code: a holder added since the spec joins the walk and gets a bound case.
+- [ ] **Step 0: Re-ground.** Read `sweepMail`'s registry read (`readRegistryMeasured`, the early return when it is not listed, and `uuidByToId`, ≈:7482-7486), `ccd/ccd#_sync_uuid` (≈:17810-17816) for when the registry's uuid changes, `db.ts`'s migration loop and its rule for a higher `user_version`, `bumpReplayCount`, the replay ceiling in `sweepMail` (≈:8070-8083), `repointCoordinatorMail`, the store's `OUTSTANDING_STATES_SQL` holder walk (≈:2311ff), and `stallDeafMail` (`stall.ts` ≈:925-958). Re-run spec §3.6's holder walk against the code: a holder added since the spec joins the walk and gets a bound case.
 - [ ] **Step 1: Red.**
-  - "a `delivered`, unacked, stamped row is not due at `deliveredAt + MAIL_REPLAY_MS + 1`";
+  - Every "stamped" below means stamped by the uuid the fixture registry still holds for `toId`, unless the case says otherwise.
+  - "a `delivered`, unacked row stamped by the recipient's current uuid is not replayed at `deliveredAt + MAIL_REPLAY_MS + 1`";
+  - "a uuid rotation after the fetch re-arms the replay": stamp under uuid U1, rotate the fixture registry's `.uuid` to U2 (what `_sync_uuid` writes after a `/clear`), sweep at `deliveredAt + MAIL_REPLAY_MS + 1`: the nudge is typed, `replayCount` grows, and `fetchedAt` and `fetchedUuid` are NULL;
+  - "a reused session name re-arms the replay": the same with the registry record removed and re-created under the same id and a new uuid;
+  - "a recipient missing from the registry clears the stamp" and the row then follows today's absent-recipient path, as an unstamped row does;
+  - "an unlistable registry changes no stamp" (the sweep returns before the decision, as it does today);
+  - "a rotated stamp is not parked by the bound": a row stamped under U1 with the registry at U2 is still `delivered` after a sweep past the bound, its stamp is cleared, and it is parked later only by today's replay ceiling;
+  - "`clearFetched` does not erase a fresh stamp": stamp U1, re-stamp U2, then `clearFetched(id, 'U1')` answers `changed: false` and U2 stands;
+  - "`markFetched` under a new uuid replaces the stamp, and under the same uuid keeps the first time";
   - "a stamped row parks without a nudge": at `deliveredAt + MAIL_REPLAY_MAX_ATTEMPTS × MAIL_REPLAY_MS` the sweep leaves it `rejected` / `undeliverable` with `MAIL_REPLAY_CEILING_ERROR`, the fake tmux saw no keys for it, and no sender mail was queued; one millisecond earlier it is still `delivered`;
   - "a stamped row with `replayCount` 19 parks one `MAIL_REPLAY_MS` after its last delivery" (the bound subtracts the replays already made);
   - "a parked stamped row is still ackable (I2(b)) and still listed by `outstandingMailFor` while its run is live";
@@ -192,23 +205,30 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
   - "`repointCoordinatorMail` clears the stamp": a stamped coordinator brief repointed to the heir has `fetchedAt` NULL and is due for replay to the heir;
   - "the same row unstamped is due" (today's behaviour);
   - "a stamped `queued` row is still due for its first delivery";
-  - "`markFetched` keeps the first stamp" (two calls, the first time stands);
+  - "`markFetched` keeps the first stamp" (two calls under one uuid, the first time stands);
   - "`markFetched` on an `acked` or `rejected` row changes nothing and answers `changed: false`";
   - "a stamped row's `replayCount` stops growing across ten replay intervals, and the row stays `delivered`";
   - "`stallDeafMail` still answers deaf at `COORD_DEAF_MS` for a stamped, unacked `wave-done`" (`stall-verdict.test.ts`);
-  - "a database at 29 migrates to 30 with the column, and a server that knows 29 still reads a database at 30" (`coord-db.test.ts`'s existing rollback shape).
+  - "a database at 29 migrates to 30 with both columns, and a server that knows 29 still reads a database at 30" (`coord-db.test.ts`'s existing rollback shape).
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Expected red |
   |---|---|
-  | `AND fetchedAt IS NULL` dropped | "not due at `deliveredAt + MAIL_REPLAY_MS + 1`" |
+  | the stamp test dropped (every stamped row replays) | "stamped by the recipient's current uuid is not replayed" |
+  | `stampHolds` ignores the uuid (any stamp silences) | "a uuid rotation after the fetch re-arms the replay", "a reused session name re-arms the replay" |
+  | an absent registry entry read as a match | "a recipient missing from the registry clears the stamp" |
+  | the bound pass parks without `stampHolds` | "a rotated stamp is not parked by the bound" |
+  | a mismatch skips the replay without clearing the stamp | the rotation case's "`fetchedAt` and `fetchedUuid` are NULL" |
+  | `clearFetched` without `WHERE fetchedUuid = ?` | "`clearFetched` does not erase a fresh stamp" |
+  | `markFetched` keeps the old uuid on a new one | "under a new uuid replaces the stamp" |
+  | migration 30 adds only `fetchedAt` | `coord-db.test.ts`'s column case |
   | the bound pass removed | "parks without a nudge", "does not hold a peer-quota slot", "dedupe frees after the bound" |
   | the bound pass types the nudge before it parks | "the fake tmux saw no keys for it" |
   | the bound without `− replayCount` | "with `replayCount` 19 parks one `MAIL_REPLAY_MS` after" |
   | the bound parks with another `lastError` | "still ackable (I2(b))" |
   | the bound pass tells the sender | "no sender mail was queued" |
-  | the repoint keeps `fetchedAt` | "`repointCoordinatorMail` clears the stamp" |
+  | the repoint keeps `fetchedAt` or `fetchedUuid` | "`repointCoordinatorMail` clears the stamp" (both columns asserted NULL) |
   | the predicate added to the `queued` arm too | "still due for its first delivery" |
   | `COALESCE` dropped | "keeps the first stamp" |
   | `'non-terminal'` replaced by no guard | "on an `acked` or `rejected` row changes nothing" |
@@ -232,13 +252,14 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
 **Routing:** band 2. **Lane:** SERVER (L4).
 
 **Files:**
-- Modify `server/src/coord/routes.ts`'s `GET /api/mail/:id` (≈:1250-1264): read optional `fromId` and `fromUuid` from the query. With both present, run `attributionVerdict(fromId, fromUuid, 'fromUuid')` (≈:643-672). Stamp with `markFetched` only when the verdict is `ok` and `row.toId === fromId`. Serve the envelope in every case, as today.
+- Modify `server/src/coord/routes.ts`'s `GET /api/mail/:id` (≈:1250-1264): read optional `fromId` and `fromUuid` from the query. With both present, run `attributionVerdict(fromId, fromUuid, 'fromUuid')` (≈:643-672). Stamp with `markFetched(id, now, fromUuid)` only when the verdict is `ok` and `row.toId === fromId`, so the stamp carries the uuid the registry just confirmed. Serve the envelope in every case, as today.
 - Add the answer's `fetch` field: `'stamped'`, `'unattributed'` (no pair), `'not-yours'` (verdict ok, `toId` differs), or `'unmeasured'` (verdict `registry-unmeasurable`). A `stale-uuid` or `unknown-sender` verdict answers `'not-yours'` with its code in `fetchRefused`. In `shared/api.ts`: `MAIL_FETCH_MARKS` and its reader, `readMailFetchMark`, which reads an absent field as `'unattributed'`.
 - Modify `server/test/mail-routes.test.ts`.
 
 - [ ] **Step 0: Re-ground.** Read the ack route's ladder (≈:1059-1131), so the fetch uses the same verdict and not a copy of it.
 - [ ] **Step 1: Red.**
-  - "a fetch with the recipient's current pair stamps the row and answers `fetch: 'stamped'`";
+  - "a fetch with the recipient's current pair stamps the row with that uuid (`fetchedUuid`) and answers `fetch: 'stamped'`";
+  - "a second fetch after a `/clear` (the registry's uuid rotated, the new pair) re-stamps with the new uuid";
   - "a fetch with no pair serves the envelope, stamps nothing, and answers `'unattributed'`";
   - "a fetch by another registered session serves the envelope, stamps nothing, and answers `'not-yours'`";
   - "a stale uuid serves the envelope, stamps nothing, and answers `'not-yours'` with `fetchRefused: 'stale-uuid'`";
@@ -251,6 +272,7 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
   | Mutant | Expected red |
   |---|---|
   | the `toId === fromId` check dropped | "by another registered session … stamps nothing" |
+  | the stamp written without the uuid | "stamps the row with that uuid" |
   | the verdict skipped (a pair alone stamps) | "a stale uuid … stamps nothing" |
   | a failed verdict answers 403 instead of serving | "identical in all five cases" |
   | `'unmeasured'` folded into `'unattributed'` | "answers `'unmeasured'`" |
@@ -266,7 +288,7 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
 
 **Files:**
 - Modify `shared/api.ts`: `MAIL_INBOX_PAGE_MAX_BYTES = 20 * 1024`, `MAIL_INBOX_FENCE_INFO = 'ccrc-inbox'`, the wire types `MailInboxEntry {deliveryId: number; text: string}` and `MailInboxAnswer {ok: true; deliveries: MailInboxEntry[]; remaining: number; abandoned: number}`, and `readMailInboxAnswer(x: unknown): MailInboxAnswer | null`.
-- Modify `server/src/coord/envelope.ts`: `renderInboxEntry(deliveryId, storedEnvelope)`, pure. Parse with `parseMailEnvelope`. On `ok`, render `delivery:`, `from:`, `kind:`, `subject:`, `run:` (when set, in `renderEnvelope`'s `run:` shape), `artifacts:` (when any), `--` and the body, inside a fence from `fenceFor` with the info string. On `malformed` or `not-mail`, the stored text verbatim. Also `pageInbox(entries, budget)`, pure: it takes entries in order while the running byte total fits, always at least one, and answers `{page, remaining}`.
+- Modify `server/src/coord/envelope.ts`: `renderInboxEntry(deliveryId, storedEnvelope)`, pure. Parse with `parseMailEnvelope`. On `ok`, render `delivery:`, `from:`, `to:`, `kind:`, `subject:`, `run:` (when set, in `renderEnvelope`'s `run:` shape), `artifacts:` (when any), `--` and the body, inside a fence from `fenceFor` with the info string. On `malformed` or `not-mail`, the stored text verbatim. Also `pageInbox(entries, budget)`, pure: it takes entries in order while the running byte total fits, always at least one, and answers `{page, remaining}`.
 - Modify `server/src/coord/routes.ts`: `GET /api/mail/inbox`, registered with the mail routes: `requireMailToken`, `fromId`/`fromUuid` from the query (both strings, else 400 `bad-kind`), `requireAttribution(reply, fromId, fromUuid, 'fromUuid')`, then `inboxFor`, then render, mask (`maskDeep`, D-5513), page, `abandonedCount`, and the answer.
 - Modify `server/src/auth/gate.ts`'s `EXEMPT` (≈:210-225): `GET /api/mail/inbox`, "a session reading and then acking its own mail: box-token gated and attribution-checked".
 - Modify `server/test/box-token-census.test.ts` and `server/test/auth-gate.test.ts` for the new door.
@@ -274,7 +296,7 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
 
 - [ ] **Step 0: Re-ground.** Read `renderEnvelope`, `fenceFor`, `parseMailEnvelope`, `requireAttribution`, and the fetch route's masking.
 - [ ] **Step 1: Red (renderer and page).**
-  - "an entry shows `delivery`, `from`, `kind`, `subject`, `run` with program and wave, the artifacts and the body, and no `ack:` line";
+  - "an entry shows `delivery`, `from`, `to`, `kind`, `subject`, `run` with program and wave, the artifacts and the body, in that order, and no `ack:` line";
   - "an entry never shows the mail row's own id" (a fixture whose mail id differs from its delivery id);
   - "a body holding a run of six backticks gets a seven-backtick fence";
   - "a body holding a fake `delivery: 9` line stays inside the fence";
@@ -326,17 +348,26 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
 - Modify `ccd/ccrc-api`:
   - a row `[mail.inbox]='GET|/api/mail/inbox|no|-'`; the header's and `ROUTES`' count word becomes thirty-two;
   - extract the request block of `main` (≈:545-589: URL, temp file, curl with the token on stdin, transport check) into one function that sets the body and code, so the inbox loop and every other row share it, and no `refuse` moves into a `$( )`;
-  - `mail inbox`: refuse any argument (`unexpected-id`, `bad-args`); refuse `no-jq` without `jq`; `derive_identity`; read with the derived pair as the query; on a non-200, print the body and the "did not serve the inbox" line (spec §3.5 step 5) and exit 0; on a 200, check the shape with `jq` (a bad shape prints the body and acks nothing); then for each entry in order: `printf '%s\n'` the text, stop on a failed write, ack through the shared request function with the synthesized body, and print the outcome line; then the footer;
+  - `mail inbox`: refuse any argument (`unexpected-id`, `bad-args`); refuse `no-jq` without `jq`; `derive_identity`; decide show-only before the read (`[[ /dev/stdout -ef /dev/null ]] || [[ -p /dev/stdout ]]`, spec §3.5 step 2), and in a show-only run print the "nothing was acked; run it bare" line first and last and send no ack; read with the derived pair as the query; on a non-200, print the body and the "did not serve the inbox" line (spec §3.5 step 5) and exit 0; on a 200, check the shape with `jq` (a bad shape prints the body and acks nothing); then for each entry in order: `printf '%s\n'` the text, stop on a failed write, ack through the shared request function with the synthesized body, and print the outcome line; then the footer, with the line naming every delivery this run acked;
   - `usage`: the verb, and that its stdout is plain text.
 - Modify `server/test/ccrc-api-closed.test.ts`: the body-fill census (≈:316) names the synthesized ack body; the row census and count word.
 - Modify `server/test/ccrc-api.test.ts`, or create `server/test/ccrc-api-inbox.test.ts`, with its fake server (the existing `reply` harness, extended to answer per path).
 
-- [ ] **Step 0: Re-ground.** Read `derive_identity`, the `approvals show` and `asks list` identity blocks (≈:528-543), `splice_body_field`, and the D-2724 comments.
+- [ ] **Step 0: Re-ground and measure.** Read `derive_identity`, the `approvals show` and `asks list` identity blocks (≈:528-543), `splice_body_field`, and the D-2724 comments. Then **measure what fd 1 is under the Claude Code Bash tool** in the implementing session, which runs on the fleet's own build: `[[ -p /dev/stdout ]]`, `[[ -f /dev/stdout ]]`, and `stat -L -c %i /dev/fd/1 /dev/fd/2` (`-f %i` on darwin), and record the result and `claude --version` in the PR body. Spec §1.2 measured one regular file shared with fd 2 (2.1.308, darwin). Also measure fd 1 under the test harness's `spawn` (expected: a socket, neither `-p` nor `-f`).
+  - If fd 1 under the tool **is not a pipe**, build the show-only guard as written.
+  - If it **is a pipe**, stop and report to the orchestrator before writing code: the guard would make every bare run show-only. The footer's acked-delivery line is built either way. Spec Q7 is the operator's ruling on this case.
+  - If fd 1 under the harness's `spawn` is a pipe, the ack-path cases run with stdout on a temp file's descriptor instead, which is the tool's measured shape.
 - [ ] **Step 1: Red.**
   - "two entries are printed in order, each followed by `inbox: acked delivery <n>`, and the fake server saw two acks with the pane's `fromId` and `fromUuid`";
   - "each ack names the `deliveryId` from the answer";
-  - "the ack for entry two is sent only after entry two's text was written" (the fake server records the order of reads and acks, and the client's stdout is a pipe the test reads as it goes);
-  - "stdout closed before the first entry: no ack is sent" (run with `>&-`, and with a reader that exits after one line);
+  - "the ack for entry two is sent only after entry two's text was written" (the fake server records the order of reads and acks, and the client's stdout is a temp file the test reads when each ack arrives);
+  - "stdout closed (`>&-`): the first write fails with `EBADF`, no ack is sent, and the failure is named on stderr" (deterministic: the descriptor is closed before the client starts);
+  - "stdout on `/dev/full`: the first write fails with `ENOSPC` and no ack is sent" (Linux only, skipped where `/dev/full` does not exist; deterministic: every write fails);
+  - "stdout a FIFO whose reader has gone: no ack is sent" (the test makes the FIFO, opens its read end non-blocking, opens the write end for the client, and closes the read end before spawning, so the reader is gone before the first byte; the fake server records zero acks);
+  - "stdout a FIFO with a live reader (the `| tail` shape): every entry is printed, no ack is sent, and the first and last lines are the `run … bare` line";
+  - "stdout on `/dev/null`: no ack is sent";
+  - "RESIDUAL (spec §4): stdout redirected to a regular file acks every entry it wrote, and the footer names each acked delivery" (the case's name says it pins the residual; it is the same shape as the tool's own capture);
+  - "stdout and stderr on one regular file (the tool's measured shape): every entry is printed and acked, and nothing on that file breaks the entries' fences";
   - "an ack answered `stale-uuid` prints `NOT acked` and the loop goes on to the next entry";
   - "an ack with no response prints `NOT acked (transport)` and the exit code is still 0";
   - "`already: true, parked: false` prints `was already acked`; `parked: true` prints `was closed before this ack` with `lastError`";
@@ -353,7 +384,13 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
   | Mutant | Expected red |
   |---|---|
   | ack before print | "only after entry two's text was written" |
-  | the write's status ignored | "stdout closed … no ack is sent" |
+  | the write's status ignored | "stdout closed (`>&-`) … no ack is sent", "on `/dev/full`" |
+  | the `-p` test dropped | "a FIFO with a live reader … no ack is sent" |
+  | the `/dev/null` test dropped | "stdout on `/dev/null`: no ack is sent" |
+  | show-only decided after the first ack | "a FIFO with a live reader" (the first entry would be acked) |
+  | the `run … bare` line printed only last | "the first and last lines" |
+  | the acked-delivery footer dropped | "RESIDUAL … the footer names each acked delivery" |
+  | a regular file treated as show-only | "RESIDUAL …" and "the tool's measured shape" |
   | the loop stops at the first failed ack | "goes on to the next entry" |
   | identity from a `--to` flag | "`mail inbox --to x` refuses" |
   | the id parsed from the text instead of `deliveryId` | "each ack names the `deliveryId`" |
@@ -404,6 +441,7 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
 **Routing:** band 3. **Lane:** FLEET (skills ship with the fleet install). Lands with or after MI-7.
 
 **Files:**
+- Every skill clause that names `mail inbox` says: run it bare, by its full path, with no pipe, no redirect and no `head` or `tail`; a piped run acks nothing; and the footer lists the deliveries it acked, for `mail fetch <delivery>` if their text did not reach you.
 - Modify `ccd/worker-skill/SKILL.md`: "Reading mail is three calls, not one" (≈:218-222) becomes one call, with the three calls kept as the fallback for an inbox the server does not serve. The pinned ack clause (`worker-skill.test.ts` ≈:60) says `mail inbox` acks what it printed, and that the 20 replays apply to a delivery nobody fetched.
 - Modify `ccd/coordinator-skill/SKILL.md` clause 3 (≈:291-299) and its pin in `coordinator-skill.test.ts`.
 - Modify `ccd/reviewer-skill/SKILL.md`'s ack clause and its pin (`reviewer-skill.test.ts` ≈:22).
@@ -412,13 +450,15 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
 - The executable-corpus parity in `ccrc-api-closed.test.ts` (≈:116) covers the new call.
 
 - [ ] **Step 0: Re-ground.** Read every pinned clause the edit touches, and `install-coordinator-skill.test.ts`, which pins the shipped tree.
-- [ ] **Step 1: Red.** Each changed clause's new text is pinned before the prose changes; "every skill that reads mail names `mail inbox`"; "no skill teaches the three calls as the first way"; "the corpora's `ccrc-api` calls all map to `ROUTES`" (the existing parity, which reds until MI-7's row exists).
+- [ ] **Step 1: Red.** Each changed clause's new text is pinned before the prose changes; "every skill that reads mail names `mail inbox`"; "every clause that names `mail inbox` says to run it bare (no pipe, no redirect, no `head` or `tail`)"; "no skill shows `mail inbox` followed by `|` or `>` in an example"; "no skill teaches the three calls as the first way"; "the corpora's `ccrc-api` calls all map to `ROUTES`" (the existing parity, which reds until MI-7's row exists).
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Expected red |
   |---|---|
   | a clause left at its old text | its verbatim pin |
+  | the run-it-bare sentence dropped from one skill | "every clause that names `mail inbox` says to run it bare" |
+  | an example `mail inbox \| tail -n 40` added | "no skill shows `mail inbox` followed by `\|` or `>`" |
   | a skill calls a verb `ROUTES` lacks (`mail read`) | the corpus parity |
 
 - [ ] **Step 4: Verify.**
@@ -444,7 +484,7 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
 - [ ] **Step 1: Red.**
   - "`fleetCarriesMailInbox` is true on a `both` box, on agreed builds, and at or past the floor; false below it, on a tagless divergent build, and with no fleet stamp";
   - "the `'list'` form is byte-identical to today's nudge";
-  - "the `'inbox'` form starts with the same 24 characters, names `~/.local/bin/ccrc-api mail inbox`, and names no route, no `curl -`, no `deliveryId` and no toId";
+  - "the `'inbox'` form starts with the same 24 characters, names `~/.local/bin/ccrc-api mail inbox`, says `Run it bare: no pipe, no redirect, no head or tail`, and names no route, no `curl -`, no `deliveryId` and no toId";
   - "the sweep types the `'inbox'` form when the fleet carries it and the `'list'` form when it does not";
   - "a box holding the `'list'` form is resumed by a park retry while the sweep would type the `'inbox'` form" (and the reverse);
   - "a box holding other text is held with nothing pressed" (unchanged).
@@ -456,6 +496,7 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
   | the floor check dropped (always `'inbox'`) | "false below it" |
   | the `both` arm dropped | "true on a `both` box" |
   | the head changed in the inbox form | "the same 24 characters" |
+  | the run-it-bare sentence dropped | "says `Run it bare …`" |
   | `isOwnNudge` accepts only the current form | "resumed by a park retry … (and the reverse)" |
   | the list form edited | "byte-identical to today's nudge" |
 
@@ -466,11 +507,60 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
       cd server && ./node_modules/.bin/vitest run test/fleet-mail-inbox.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/runs-attribution-switch.test.ts --maxWorkers=2
 
+### Task MI-11: the PWA renders an inbox print as mail cards (spec §3.8)
+
+**Routing:** band 2. **Lane:** SERVER (the PWA bundle ships with the server). Lands before MI-10 (§Gates).
+
+**Files:**
+- Modify `shared/api.ts`: `MailCardFields` (the `MailEnvelope` fields less `id`), and `parseInboxPrint(text): InboxPrintParse`, pure, beside `parseFetchedMailEnvelope` (≈:5601). `InboxPrintParse` is `{ok: true; entries: {deliveryId: number; card: MailCardFields}[]} | {ok: false; why: 'not-inbox'} | {ok: false; why: 'malformed'; at: number}`, a typed union and never a bare null, for the reason `MailEnvelopeParse`'s docstring gives. The rules are spec §3.8's, and its docstring repeats the rank-3 caveat word for word: it asserts nothing about authenticity.
+- Modify `pwa/src/session/chatItems.ts`: in the `tool_result` branch (≈:78-110), under the same `isError` and `truncatedBytes` guards, try `parseInboxPrint` only when `parseFetchedMailEnvelope` did not answer `ok`, and push one `{kind: 'mail'}` item per entry, keyed `mail-<toolId>-<n>`. The `mail` member's `envelope` type becomes `MailCardFields`, and its docstring names the third door (an inbox print).
+- Modify `ui/src/components/mail-card.tsx`: `MailCard` and `runLabel` take `MailCardFields`. Nothing they render changes.
+- Modify `pwa/test/mail-card.test.tsx` (its `buildChatItems` cases) and `server/test/mail-envelope-parse.test.ts` (where `parseFetchedMailEnvelope`'s cases live) for the parser.
+
+- [ ] **Step 0: Re-ground.** Read the `tool_result` arm, `parseFetchedMailEnvelope` and its tests, `MailCard`, and `ChatList`'s height estimate for a `mail` item (≈:259), which reads `artifacts` and `body` only. Read MI-6's merged `renderInboxEntry` and build the fixtures from it, so the parser and the renderer agree by test and not by prose.
+- [ ] **Step 1: Red (parser).**
+  - "a print of two entries, each followed by its `inbox: acked delivery <n>` line, and the footer, parses to two entries in order with their delivery ids and card fields";
+  - "`parseInboxPrint(renderInboxEntry(...))` gives back the fields the renderer was given" (a round trip over every field, run and no run, artifacts and none);
+  - "a forged fence in a body stays body": a body holding a three-backtick `ccrc-inbox` fence with its own `delivery: 9` header, inside a `fenceFor` fence, parses to ONE entry whose body holds the forged text verbatim;
+  - "a body holding a fake `inbox: acked delivery 9` line and a fake `--` stays body";
+  - "a closing fence of a different length does not close the entry", and an entry with no closing fence (a `| head` cut) makes the whole print `not-inbox`;
+  - "a line outside the entries that starts with neither `inbox: ` nor `ccrc-api: ` makes the print `not-inbox`" (the `| grep` shape);
+  - "a show-only print (the `run … bare` line first and last) still parses its whole entries";
+  - "a malformed stored envelope printed verbatim gives no entry", and "a `kind` outside `MailKind` refuses its entry";
+  - "a `mail fetch` result is not an inbox print, and an inbox print is not a fetched envelope" (each parser answers `not-…` on the other's text).
+- [ ] **Step 2: Red (chat items).**
+  - "an inbox `tool_result` of two entries yields its tool card and then two mail cards, keyed `mail-<toolId>-0` and `-1`";
+  - "an `isError` inbox result yields no mail card", and "a result with `truncatedBytes > 0` yields none";
+  - "a forged-fence body yields one card, not two";
+  - "a fetched envelope still yields exactly one card, as today" (the existing cases, re-run unchanged);
+  - "`MailCard` renders an inbox card with sender, recipient, kind, subject, run, artifacts and body, and no control".
+- [ ] **Step 3: Green.**
+- [ ] **Step 4: Mutation table, RUN.**
+
+  | Mutant | Expected red |
+  |---|---|
+  | the closing fence matched by any run of three or more backticks | "a forged fence in a body stays body" |
+  | stray lines outside entries ignored | "makes the print `not-inbox`" (the `| grep` shape) |
+  | an unclosed last entry kept as a card | "an entry with no closing fence … `not-inbox`" |
+  | the `truncatedBytes` guard skipped for the inbox arm | "a result with `truncatedBytes > 0` yields none" |
+  | the inbox arm tried before the fetch arm and a fetched envelope parsed twice | "a fetched envelope still yields exactly one card" |
+  | the key without the entry's index | "keyed `mail-<toolId>-0` and `-1`" |
+  | the header walk accepts fields out of order | the round trip |
+
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/vitest run test/mail-card.test.tsx --maxWorkers=2
+      cd pwa && ./node_modules/.bin/vitest run test/chat.test.tsx --maxWorkers=2
+      cd pwa && ./node_modules/.bin/vitest run test/transcript-rows.test.tsx --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/mail-envelope-parse.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/mail-inbox-render.test.ts --maxWorkers=2
+      cd pwa && ./node_modules/.bin/tsc --noEmit
+
 ## Operator acts
 
 None is needed to build or land a task. Each of these is the operator's:
 
-- **Rule the spec's §8 questions** before MI-2 (Q1, Q4), MI-4 (Q2), MI-6 (Q5) and MI-9 (Q3).
+- **Rule the spec's §8 questions** before MI-2 (Q1, Q4), MI-4 (Q2), MI-6 (Q5), MI-7 (Q7) and MI-9 (Q3).
 - **Deploy wave 2 to the server box before releasing wave 3** (§Gates).
 - **Re-run the transcript audit** seven days after MI-10 deploys, against the bar Q6 sets.
 
@@ -479,6 +569,7 @@ None is needed to build or land a task. Each of these is the operator's:
 - **MI-1, MI-2, MI-7, MI-8, MI-9:** `ccrc rollback`, fleet lane. An older client ignores `CCRC_API_STATUS` and prints the status line, so the opted-in parsers keep working. A rolled-back client lacks `mail inbox`. MI-10's floor then reads the fleet as below it, and the nudge goes back to the list form at the next send.
 - **MI-3 to MI-6:** a revert, or `ccrc rollback`. An older server ignores `fetchedAt`, so fetched rows replay again (the safe direction), and answers `GET /api/mail/inbox` with the `:id` route's 400, which the client reports as "did not serve the inbox".
 - **MI-10:** a revert. The nudge returns to today's text.
+- **MI-11:** a revert. An inbox print then shows as a plain tool card, and a fetched envelope still shows as a mail card. Revert MI-10 first, so the default read path keeps its cards.
 
 ## Deviations found
 
@@ -486,13 +577,14 @@ None is needed to build or land a task. Each of these is the operator's:
 - **D-TBD-api-status-optin** — (MI-1) The two in-tree status parsers, `_apr_call` and `_inst_approval_key`, run the client with `CCRC_API_STATUS=line`. They land one release before the default changes.
 - **D-TBD-api-clean-stdout** — (MI-2) stdout is the body plus exactly one newline. stderr is silent on a 2xx, says `ccrc-api: the server answered <code>` otherwise, and carries the bare `http <code>` line only under `CCRC_API_STATUS=line`. Exit codes are unchanged. The one stderr line on a 2xx is `mail fetch`'s local note (D-TBD-fetch-identity).
 - **D-TBD-ackable-guard** — (MI-3) The ack door's guard is one named SQL fragment. `inboxFor` selects with it AND `OUTSTANDING_OR_ABANDONED_SQL` (joining `runs rr` as `outstandingMailFor` does), so the inbox prints only rows an ack can change and the mailbox still shows. A replay-ceiling park of a closed run is neither printed nor counted: the ack guard alone would print it as live mail (ruling I2(a)). `abandonedCount` is `outstandingMailFor`'s rows minus the inbox set.
-- **D-TBD-fetched-at** — (MI-4) `mail_deliveries.fetchedAt` (migration 30), first stamp wins, through `writeDelivery`'s `'non-terminal'` guard. The replay arm skips a stamped row. A stamped `delivered` row parks, with no nudge and no sender told, through the replay ceiling's own `rejectDelivery(…, MAIL_REPLAY_CEILING_ERROR)` once `MAX(ingestedAt, deliveredAt) + (MAIL_REPLAY_MAX_ATTEMPTS − replayCount) × MAIL_REPLAY_MS` has passed, so every `OUTSTANDING_STATES_SQL` holder (the peer quota and duplicate probes, `queueSystemMail`'s dedupe, the digest correction, `runHealth`) frees it when it frees today. `repointCoordinatorMail` clears the stamp. A printed delivery whose ack failed is not stamped, so it replays.
-- **D-TBD-attributed-fetch** — (MI-5) `GET /api/mail/:id` stamps only when the query's pair passes `attributionVerdict` and names the recipient. The envelope is served in every case, and the answer carries the positive `fetch` marker.
-- **D-TBD-inbox-route** — (MI-6) `GET /api/mail/inbox`: box token, attribution, the caller's inbox set (D-TBD-ackable-guard) oldest first, rendered from the stored envelope with no `ack:` lines, in a `fenceFor` fence with the `ccrc-inbox` info string, masked, cut at `MAIL_INBOX_PAGE_MAX_BYTES` (20 KiB, at least one entry). The read writes nothing. Rejected: an ack on read in the server, and a client loop over list and fetch (spec §3.2, §7).
-- **D-TBD-inbox-verb** — (MI-7) `ccrc-api mail inbox` derives identity from the pane and takes no argument. It prints each entry, and acks it only after the write succeeded, through the existing ack route. It reports each outcome on stdout, exits 0 when the read answered, and needs `jq` for this verb alone.
+- **D-TBD-fetched-at** — (MI-4) `mail_deliveries.fetchedAt` and `fetchedUuid` (migration 30), first stamp per uuid wins, through `writeDelivery`'s `'non-terminal'` guard. `sweepMail` skips the replay of a stamped row only while `fetchedUuid` is the registry's current uuid for `toId` (`uuidByToId`); on a mismatch (a `/clear`, a fork, a reused name, an absent recipient) it clears the stamp through `clearFetched` and the row replays as today. Compaction keeps the uuid and is the residual spec Q2 rules on. A stamped `delivered` row whose uuid still matches parks, with no nudge and no sender told, through the replay ceiling's own `rejectDelivery(…, MAIL_REPLAY_CEILING_ERROR)` once `MAX(ingestedAt, deliveredAt) + (MAIL_REPLAY_MAX_ATTEMPTS − replayCount) × MAIL_REPLAY_MS` has passed, so every `OUTSTANDING_STATES_SQL` holder (the peer quota and duplicate probes, `queueSystemMail`'s dedupe, the digest correction, `runHealth`) frees it when it frees today. `repointCoordinatorMail` clears the stamp. A printed delivery whose ack failed is not stamped, so it replays.
+- **D-TBD-attributed-fetch** — (MI-5) `GET /api/mail/:id` stamps only when the query's pair passes `attributionVerdict` and names the recipient, and the stamp carries that verified uuid. The envelope is served in every case, and the answer carries the positive `fetch` marker.
+- **D-TBD-inbox-route** — (MI-6) `GET /api/mail/inbox`: box token, attribution, the caller's inbox set (D-TBD-ackable-guard) oldest first, rendered from the stored envelope (with a `to:` line for the transcript card) and no `ack:` lines, in a `fenceFor` fence with the `ccrc-inbox` info string, masked, cut at `MAIL_INBOX_PAGE_MAX_BYTES` (20 KiB, at least one entry). The read writes nothing. Rejected: an ack on read in the server, and a client loop over list and fetch (spec §3.2, §7).
+- **D-TBD-inbox-verb** — (MI-7) `ccrc-api mail inbox` derives identity from the pane and takes no argument. It prints each entry, and acks it only after the write succeeded, through the existing ack route: nothing is acked whose write failed. When fd 1 is a pipe or `/dev/null` it is show-only (prints, acks nothing, says to run it bare, first and last). The footer names every acked delivery. A redirect to a file still acks, a residual pinned by a test (spec §4). It reports each outcome on stdout, exits 0 when the read answered, and needs `jq` for this verb alone.
 - **D-TBD-fetch-identity** — (MI-8) `mail fetch` inside a pane sends the pane's `fromId` and `fromUuid` through `try_derive_identity`, a derive that never refuses, so a recipient's fetch stamps. When the pane's identity cannot be derived it fetches unattributed, exactly as today, with one note on stderr. With no pane it fetches unattributed and silent. `derive_identity` is `try_derive_identity` plus today's refusal, so its callers do not change.
-- **D-TBD-skills-inbox** — (MI-9) The worker, coordinator and reviewer skills, both references and the README teach `mail inbox` first, and keep list, fetch and ack as the fallback. The envelope's `ack:` lines and the hold card's `mail list` pointer are unchanged.
-- **D-TBD-nudge-inbox** — (MI-10) The nudge names `mail inbox` only when `fleetCarriesMailInbox` is true (`MAIL_INBOX_SINCE`, in `fleetCarriesRunsAttribution`'s shape). The 24-character head is unchanged, and the park's own-nudge check accepts either form.
+- **D-TBD-skills-inbox** — (MI-9) The worker, coordinator and reviewer skills, both references and the README teach `mail inbox` first, run bare (no pipe, no redirect, no `head` or `tail`), and keep list, fetch and ack as the fallback. The envelope's `ack:` lines and the hold card's `mail list` pointer are unchanged.
+- **D-TBD-nudge-inbox** — (MI-10) The nudge names `mail inbox`, and says to run it bare, only when `fleetCarriesMailInbox` is true (`MAIL_INBOX_SINCE`, in `fleetCarriesRunsAttribution`'s shape), and lands only once the server serves MI-11's cards. The 24-character head is unchanged, and the park's own-nudge check accepts either form.
+- **D-TBD-inbox-cards** — (MI-11) The PWA keeps its transcript mail cards for mail read through `mail inbox`: `parseInboxPrint` (L0, pure, a typed union) and a second `tool_result` arm in `buildChatItems`, under the fetch arm's two guards, one `mail` item per well-formed entry. A forged fence inside a body, a cut print, a stray line outside the entries and a malformed entry give no card. `MailCard` takes `MailCardFields` (no mail id, D-41). The card asserts nothing about authenticity, as today.
 
 ### Decisions recorded while planning
 
@@ -503,12 +595,14 @@ None is needed to build or land a task. Each of these is the operator's:
 
 ## Out of scope
 
-- CI and PR polling, and sleep loops (spec §9, Q7).
+- CI and PR polling, and sleep loops (spec §9, Q8).
 - "Read, not acked" in `MailStrip` (spec §9).
 - Retiring `mail list`, `fetch` and `ack`, or the envelope's `ack:` lines.
 
 ## Review log
 
 **rev 0 (2026-10-24).** Written against `origin/main` `10813b401`.
+
+**rev 2 (2026-10-24), review round 2.** Review focus 1 now states the invariant the client can keep, "nothing is acked whose write failed", plus the measured pipe and `/dev/null` guard. MI-7 Step 0 measures fd 1 under the tool, the build adds show-only runs and the acked-delivery footer, and the non-deterministic "reader exits after one line" case is replaced by `>&-`, `/dev/full`, a FIFO whose reader has gone, a live FIFO, `/dev/null`, and a case that pins the redirect-to-file residual. MI-4 and MI-5 store `fetchedUuid` with the stamp, and the replay skip and the bound park hold only while it matches the registry, with red cases for a uuid rotation, a reused name and an absent recipient. MI-9 and MI-10 say to run the verb bare. MI-11 is new: the PWA renders inbox prints as mail cards, and MI-10 waits for it. Eleven decisions now, not ten.
 
 **rev 1 (2026-10-24), review round 1.** The ten decisions are to be issued as one contiguous ledger block and defined above in the same commit that substitutes them; until then they read `D-TBD-<slug>` and `dtbd.test.ts` is red (§Gates). MI-3's inbox set is the ack guard AND the mailbox's read predicate, with a red case for a closed run's replay-ceiling park. MI-4 keeps the replay ceiling's lifetime for a stamped row (a no-nudge park), clears the stamp on a repoint, and gains red cases for the peer quota, the duplicate probe, `queueSystemMail`'s dedupe and the digest correction. MI-8 uses a non-refusing derive, so `mail fetch` never loses today's read, and its band moves from 1 to 2 because it now refactors the identity derivation.
