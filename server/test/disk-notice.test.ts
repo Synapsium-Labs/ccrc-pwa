@@ -1,0 +1,154 @@
+// D-6616 (fleet disk retention plan Task DR-4, spec §2.5): the disk notice. `diskNotice(prev, next)` is the pure L1
+// decision (what to say when the fleet's level moves); the second block proves what `sweepDisk` does with it through the
+// notice funnel: one push per new level in an episode, a clear recorded and never pushed, and the key read before the
+// write so a restarted watcher inside the same episode says nothing twice.
+import { describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { Bus } from '../src/bus.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { diskNotice, type DiskVerdict } from '../src/disk.js';
+import { localIO, type FleetIO, type MeasuredDisk } from '../src/io.js';
+import { NotifyLog } from '../src/notifylog.js';
+import { FleetWatcher } from '../src/watch.js';
+import type { DiskFilesystem, DiskLevel, DiskMeasured } from '../../shared/disk.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
+
+const GIB = 1024 ** 3;
+const fsAt = (usedPct: number, dev = '8:1', roots: string[] = ['home', 'projects']): DiskFilesystem => ({
+  dev, mount: '/srv/secret-mount', fsType: 'ext4', roots, sizeBytes: 100 * GIB, availBytes: (100 - usedPct) * GIB,
+  freeBytes: (100 - usedPct) * GIB, files: 1_000_000, filesFree: 900_000, readOnly: false,
+});
+/** A verdict as the decider leaves it, built by hand so each case names exactly the level it starts from. */
+const verdict = (level: DiskLevel, usedPct: number, episode = 100, mountsDown: string[] = []): DiskVerdict => ({
+  at: episode + 1, level, episode, mountsDown, expectedMounts: mountsDown.map((p) => ({ path: p, mounted: false })),
+  filesystems: [{ ...fsAt(usedPct), level, pending: null }],
+});
+
+describe('diskNotice: what to say when the fleet level moves', () => {
+  it('ok -> warn pushes, once, with a key that names the filesystem, the level and the episode', () => {
+    const n = diskNotice(verdict('ok', 40), verdict('warn', 86))!;
+    expect(n.mode).toBe('push');
+    expect(n.dedupeKey).toBe('disk:8:1:warn:100');
+  });
+
+  it('a first sighting already at warn or critical pushes too', () => {
+    expect(diskNotice(null, verdict('critical', 95))!.mode).toBe('push');
+    expect(diskNotice(null, verdict('ok', 40))).toBeNull();
+  });
+
+  it('warn -> critical pushes again, under a key of its own', () => {
+    const a = diskNotice(verdict('ok', 40), verdict('warn', 86))!;
+    const b = diskNotice(verdict('warn', 86), verdict('critical', 93))!;
+    expect(b.mode).toBe('push');
+    expect(b.dedupeKey).not.toBe(a.dedupeKey);
+  });
+
+  it('a level that does not move says nothing, and neither does a fall from critical to warn', () => {
+    expect(diskNotice(verdict('warn', 86), verdict('warn', 87))).toBeNull();
+    expect(diskNotice(verdict('critical', 93), verdict('warn', 88))).toBeNull();
+  });
+
+  it('critical -> warn -> critical in one episode reuses the keys, so each level is pushed once', () => {
+    const w1 = diskNotice(verdict('ok', 40), verdict('warn', 86))!;
+    const c1 = diskNotice(verdict('warn', 86), verdict('critical', 93))!;
+    const c2 = diskNotice(verdict('warn', 88), verdict('critical', 93))!;
+    expect(c2.dedupeKey).toBe(c1.dedupeKey);
+    expect(new Set([w1.dedupeKey, c1.dedupeKey]).size).toBe(2);
+  });
+
+  it('a new episode (a rise from ok) has a new key', () => {
+    const a = diskNotice(verdict('ok', 40, 100), verdict('warn', 86, 100))!;
+    const b = diskNotice(verdict('ok', 40, 900), verdict('warn', 86, 900))!;
+    expect(b.dedupeKey).not.toBe(a.dedupeKey);
+  });
+
+  it('a clear to ok is recorded, never pushed', () => {
+    const n = diskNotice(verdict('warn', 86), verdict('ok', 70))!;
+    expect(n.mode).toBe('record-only');
+    expect(n.dedupeKey).toBe('disk:fleet:clear:100');
+  });
+
+  it('ok -> unmeasured and unmeasured -> ok say nothing', () => {
+    expect(diskNotice(verdict('ok', 40), verdict('unmeasured', 40))).toBeNull();
+    expect(diskNotice(verdict('unmeasured', 40), verdict('ok', 40))).toBeNull();
+  });
+
+  it('the title names the percentage and the free bytes; the body names labels, never an absolute path', () => {
+    const n = diskNotice(verdict('ok', 40), verdict('critical', 93))!;
+    expect(n.title).toBe('Fleet disk 93% full · 7 GiB free');
+    expect(n.body).toContain('home');
+    expect(n.body).toContain('projects');
+    expect(`${n.title} ${n.body}`).not.toMatch(/\/srv|\/secret-mount|\/home\//);
+  });
+
+  it('a missing expected mount pages without naming its path', () => {
+    const next = { ...verdict('ok', 40), level: 'critical' as const, mountsDown: ['/data/vol'], expectedMounts: [{ path: '/data/vol', mounted: false }] };
+    const n = diskNotice(verdict('ok', 40), next)!;
+    expect(n.mode).toBe('push');
+    expect(`${n.title} ${n.body}`).not.toContain('/data/vol');
+    expect(n.body).toMatch(/not mounted/);
+  });
+});
+
+/** A watcher over a real coord store and notify log, whose fleet io answers from `answers` (the last repeats). */
+async function rig(home: string, answers: MeasuredDisk[], now: () => number) {
+  mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+  await notifyLog.load();
+  const push = { notify: vi.fn(async () => undefined) };
+  let n = 0;
+  const io: FleetIO = { ...localIO, statfsMeasured: async () => answers[Math.min(n++, answers.length - 1)]! };
+  const deps = { ...testDeps(home), io, coord, notifyLog, push, presence: { isVisible: () => false } };
+  vi.spyOn(Date, 'now').mockImplementation(now);
+  const watcher = new FleetWatcher(deps as never, new Bus());
+  const rewind = (): void => { (watcher as unknown as { lastDiskSweep: number }).lastDiskSweep = 1; };
+  const sweep = async (): Promise<void> => { rewind(); await watcher.sweepDisk(); };
+  return { watcher, coord, push, sweep };
+}
+const reading = (pct: number): MeasuredDisk => ({ ok: true, measured: { filesystems: [fsAt(pct)], expectedMounts: [], missing: [] } satisfies DiskMeasured });
+/** Two equal readings make a level hold (the decider's debounce). */
+const hold = (pct: number): MeasuredDisk[] => [reading(pct), reading(pct)];
+
+describe('sweepDisk sends the notice through the funnel', () => {
+  it('ok -> warn -> critical pushes once at each level, and the rest of the episode is quiet', async () => {
+    const r = await rig(mkTmp('ccrc-dn-'), [...hold(40), ...hold(86), ...hold(86), ...hold(93), ...hold(93)], () => 5_000_000);
+    for (let i = 0; i < 4; i += 1) await r.sweep();
+    expect(r.push.notify.mock.calls.length).toBe(1);
+    expect(r.push.notify.mock.calls[0]![0]).toMatchObject({ title: 'Fleet disk 86% full · 14 GiB free', sessionId: '' });
+    for (let i = 0; i < 4; i += 1) await r.sweep();
+    expect(r.push.notify.mock.calls.length).toBe(2);
+    expect(r.push.notify.mock.calls[1]![0]).toMatchObject({ title: 'Fleet disk 93% full · 7 GiB free' });
+    expect(r.coord.feedEvents(10).map((e) => [e.kind, e.sessionId])).toEqual([['coord', ''], ['coord', '']]);
+  });
+
+  it('a clear to ok is recorded in the feed and never pushed', async () => {
+    const r = await rig(mkTmp('ccrc-dn-'), [...hold(40), ...hold(86), ...hold(40)], () => 5_000_000);
+    for (let i = 0; i < 4; i += 1) await r.sweep();
+    expect(r.push.notify.mock.calls.length).toBe(1);
+    for (let i = 0; i < 3; i += 1) await r.sweep();
+    expect(r.push.notify.mock.calls.length).toBe(1);
+    expect(r.coord.feedEvents(10).map((e) => e.title)).toContain('Fleet disk back to normal');
+  });
+
+  it('a rise after a clear is a new episode and pushes again', async () => {
+    let clock = 5_000_000;
+    const r = await rig(mkTmp('ccrc-dn-'), [...hold(40), ...hold(86), ...hold(40), ...hold(86)], () => clock);
+    for (let i = 0; i < 8; i += 1) { clock += 60_000; await r.sweep(); }
+    expect(r.push.notify.mock.calls.length).toBe(2);
+  });
+
+  it('a restarted watcher inside the same episode re-sends nothing: the archived key is read before the write', async () => {
+    const home = mkTmp('ccrc-dn-');
+    const first = await rig(home, [...hold(40), ...hold(86)], () => 5_000_000);
+    for (let i = 0; i < 4; i += 1) await first.sweep();
+    expect(first.push.notify.mock.calls.length).toBe(1);
+    const again = await rig(home, [...hold(40), ...hold(86)], () => 5_000_000);
+    for (let i = 0; i < 4; i += 1) await again.sweep();
+    expect(again.push.notify.mock.calls.length).toBe(0);
+    expect(again.coord.feedEvents(10).length).toBe(1);
+  });
+});

@@ -69,7 +69,7 @@ import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput
 // The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
 import { randomUUID } from 'node:crypto';
 import type { MeasuredDirectoryRead, MeasuredDisk } from './io.js';
-import { diskVerdict, type DiskVerdict } from './disk.js';
+import { diskNotice, diskVerdict, type DiskVerdict } from './disk.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
 import {
@@ -7126,8 +7126,10 @@ export class FleetWatcher {
       };
       return;
     }
-    const verdict = diskVerdict(this.diskState, read.measured, now);
+    const before = this.diskState;
+    const verdict = diskVerdict(before, read.measured, now);
     this.diskState = verdict;
+    this.raiseDiskNotice(before, verdict);
     this.diskBlock = {
       at: verdict.at,
       level: verdict.level,
@@ -7136,6 +7138,20 @@ export class FleetWatcher {
       pressure: verdict.level === 'critical',
       holders: [],
     };
+  }
+
+  /**
+   * The disk notice (D-6616, spec §2.5): `diskNotice` decides, this sends it through the notice funnel as a sessionless
+   * `coord` notice. The once-only key is READ before the write (`hasNotice`), so a watcher restarted inside the same
+   * episode raises nothing twice; the archive row `notify` writes carries the key for the next read. A store that
+   * cannot answer costs the dedupe only, never the notice.
+   */
+  private raiseDiskNotice(before: DiskVerdict | null, after: DiskVerdict): void {
+    const n = diskNotice(before, after);
+    if (n === null) return;
+    try { if (this.deps.coord?.hasNotice('coord', '', n.dedupeKey) === true) return; } catch { /* send it: a repeat beats silence */ }
+    notify(this.deps, { kind: 'coord', sessionId: '', runId: null, title: n.title, body: n.body }, n.mode,
+      { tag: 'disk', dedupeKey: n.dedupeKey, degraded: 'feed archive degraded, ring/push unaffected' });
   }
 
   /**
