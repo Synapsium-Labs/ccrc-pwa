@@ -137,9 +137,9 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
   return { recorded, archived };
 }
 
-/** D-TBD-banner-funnel (ARCH-59 (#794)): a push that is no `NotifyEvent`, for the one writer that has no ring row to
- *  make: the `notify.sh` banner's model-class push (`POST /api/notify` with `push: true`). D-5211 rules a feed record
- *  out for it, and no `NotifyEvent` kind fits a model-class line (a new kind widens `shared/api.ts`'s union and the
+/** D-6732 (ARCH-59 (#794)): a push that is no `NotifyEvent`, for the one writer that has no ring row to
+ *  make: the `notify.sh` banner's model-class push (`POST /api/notify` with `push: true`). Its missing feed record is
+ *  a residual of W2 that D-5211 states, and no `NotifyEvent` kind fits a model-class line (a new kind widens `shared/api.ts`'s union and the
  *  PWA's per-kind tables), so it takes neither the gate, the ring nor the archive: the caller's policy has already
  *  decided it is pushable, and this only sends it. The push is the funnel's, so the one `PushService.notify` call for a
  *  notice stays in this file. A rejected send is logged under `failed` (the text before ` (reason)`) and never thrown,
@@ -148,7 +148,7 @@ export function notifyPushOnly(deps: Pick<NoticeDeps, 'push'>, payload: PushPayl
   sendPush(deps.push, payload, failed);
 }
 
-/** D-TBD-banner-funnel (ARCH-59 (#794)): the `notify.sh` banner, the bus frames `POST /api/notify` raises. A banner is a
+/** D-6732 (ARCH-59 (#794)): the `notify.sh` banner, the bus frames `POST /api/notify` raises. A banner is a
  *  transient channel the open sockets read, not a ring record: it writes no `NotifyLog` row and no archive row, and it
  *  has no presence gate (it reaches every open console). It is ONE global `notice` frame, and for a
  *  `cc swap: <id> moved <from> -> <to>` line a second frame on the moved session's own stream, after the global one, so

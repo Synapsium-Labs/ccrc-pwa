@@ -271,7 +271,7 @@ describe('notify: the once-only key reaches the archive and decides nothing (D-5
   });
 });
 
-describe('notifyPushOnly: a push with no ring record and no archive row (D-TBD-banner-funnel; ARCH-59 #794)', () => {
+describe('notifyPushOnly: a push with no ring record and no archive row (D-6732; ARCH-59 #794)', () => {
   const PAYLOAD = { title: 'Model classes', body: 'lane-a: opus moved', tag: 'models-advance:lane-a:opus', url: '/accounts' };
 
   it('sends the payload to the push service unchanged, and touches neither the ring nor the archive', async () => {
@@ -296,7 +296,7 @@ describe('notifyPushOnly: a push with no ring record and no archive row (D-TBD-b
   });
 });
 
-describe('noticeBanner: the notify.sh banner\'s bus frames (D-TBD-banner-funnel; ARCH-59 #794)', () => {
+describe('noticeBanner: the notify.sh banner\'s bus frames (D-6732; ARCH-59 #794)', () => {
   const frames = (message: string): unknown[] => {
     const seen: unknown[] = [];
     noticeBanner({ bus: { emit: ((e: string, ...a: unknown[]) => { seen.push([e, ...a]); return true; }) as never } }, message);
