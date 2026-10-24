@@ -46,9 +46,13 @@
 // the box env file (`while IFS== read`); the box env file sourced by another
 // route: `eval "$(cat …)"`, a name bound through a second variable, or a
 // helper that sources a positional parameter (`_svc_run_supervised`'s
-// `. "$1"`) handed the file; and C6's spacing and export variants of an
-// environment-only example line (`#CCRC_X=`, `#  CCRC_X=`, leading spaces,
-// `export CCRC_X=`, `# export CCRC_X=`).
+// `. "$1"`) handed the file; four sourcing shapes the re-review measured
+// surviving C11 and the coordinator ruled named, not caught (R29): a `case`
+// arm (`x) . "$BOX_ENV_FILE" ;;`), `time . …`, a sourcing in a callee that
+// reads a name its caller declared `local` (dynamic scope), and a `.` and its
+// operand split across a backslash-newline; and C6's spacing and export
+// variants of an environment-only example line (`#CCRC_X=`, `#  CCRC_X=`,
+// leading spaces, `export CCRC_X=`, `# export CCRC_X=`).
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';

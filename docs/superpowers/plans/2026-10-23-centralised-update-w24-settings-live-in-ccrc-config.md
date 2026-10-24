@@ -1241,7 +1241,7 @@ Branch base `49e7f187a`.
   drain and the re-install child's probe ceiling. W24-K6 pins the figure against the three literals it is made of.
 - **D-6604** (ruling 16): a comment line with no CR inside it no longer counts as naming a setting, with the macOS
   residual and the one W23 row rewritten on purpose (below).
-- **D-6605** and **D-6606** are unspent.
+- **D-6605** was spent by fix round 1 (F12) and **D-6606** is unspent; see "Fix round 1" below.
 
 ### Departures from the plan text, each with its ruling
 
@@ -1255,14 +1255,17 @@ Branch base `49e7f187a`.
   seconds, and the watchdog uses the largest reading it could decide. The README and the example now say that. The
   retention sentence "stops both" became "stops each keep it is read for (a keep set in the environment is never read
   from the file)".
-- **The example's new heading drops its trailing ` ──`** and its deadline block is rewrapped, no word changed (Ledger R15),
-  so that every line stays within 80 columns, which the global constraint ranks above "verbatim".
+- **The example's new heading drops its trailing ` ──`** and its text is rewrapped (Ledger R15), so that every line stays
+  within 80 columns, which the global constraint ranks above "verbatim". **Corrected by fix round 1 (F20):** the sentence that
+  followed, "its deadline block is rewrapped, no word changed", was false at the tip; the example's actual wording changes
+  are listed under "Fix round 1" below.
 - **The DEFAULTS regex** captures `[^\s;&|)]+` instead of `\S+` (Ledger R16), which swallowed a trailing `;`.
 - **C4 is red between Tasks 5 and 6** (Ledger R17): the census checks a call Task 6 adds. The branch was not pushed in
   between.
-- **U5 was dropped** (Ledger R14): the rollout harness lives in `ccrc-rollout.test.ts`, outside claim group A. U2 covers
+- **U5 was dropped** (Ledger R14; fix round 1 reused the name W24-U5 for a different row, F8 and F9, and W24-U6's ssh stub now
+  reaches `cmd_rollout`'s pin, so the first half of this sentence no longer holds for the rollout read): the rollout harness lives in `ccrc-rollout.test.ts`, outside claim group A. U2 covers
   `_upd_resolve`'s refusal, so the rollout pin's refusal is pinned only through that function.
-- **`_upd_restore`'s arm 2 is left unedited** (Ledger R13). D-6594 said `cmd_rollback` was `_upd_asset_listed`'s only code
+- **`_upd_restore`'s arm 2 is left unedited** (Ledger R13; **superseded by fix round 1, F10**: arm 2 gained its `3)` arm). D-6594 said `cmd_rollback` was `_upd_asset_listed`'s only code
   caller; arm 2 of `_upd_restore` is a second, and its `*)` arm would blame curl for an rc 3. `_upd_restore` is not on the
   consented function list. A rollback by flip whose gate fails reaches it without an earlier `_upd_resolve`, which is
   wider than first measured, but still safe: the reader's own line prints first, and the child refuses.
@@ -1315,10 +1318,11 @@ the setting's source was replaced by the one this plan's brief gave.
 
 ### Measured
 
-- **Growth.** `ccd/ccrc` is +23 net code lines against the merge-base, of a limit of 40 (this wave's stop line is 39); every
-  other counted file is +0. Task 5, Task 6 and the final fixes added none.
-- **Citation debt** is unchanged: `'ccd/ccrc': 5`. One hunk sits below line 11635 (`_models_advance_budget_secs`, one line
-  for one). No added line carries a `file:NNN` citation. The `ccd/ccrc` citation census is unmoved: session-hook's 13 citation
+- **Growth.** `ccd/ccrc` was +23 net code lines against the merge-base before fix round 1, of a limit of 40 (this wave's stop
+  line is 39); every other counted file is +0. Task 5, Task 6 and the final fixes added none. The figure after fix round 1 is
+  +26 (below).
+- **Citation debt** is unchanged: `'ccd/ccrc': 5`. Its sentence "One hunk sits below line 11635 (`_models_advance_budget_secs`, one line
+  for one)" described the hunks before base line 11635 wrongly; corrected by fix round 1 (F21, below): there are several, all netting to zero. No added line carries a `file:NNN` citation. The `ccd/ccrc` citation census is unmoved: session-hook's 13 citation
   rows (the compaction card's anchors, the corpus facts, the debt row, the README census row and the rest) passed unedited.
 - **R7** (the 64 KiB line, `_ccrc_knob CCRC_BACKUP_KEEP 10` over a 65560-byte `ccrc.env`, fixture HOME, three runs each):
   worst 71 ms on a non-comment line (Linux 60, 63, 71; Darwin model 63, 60, 64), and worst 7 ms when the same line is a
@@ -1362,10 +1366,189 @@ the setting's source was replaced by the one this plan's brief gave.
 - **The sibling scripts' operator settings** (`CCRC_KEEPALIVE_MODEL`, `CCRC_KEEPALIVE_PROMPT`, `CCRC_USAGE_SWEEP_DAYS`,
   `CCRC_GRAPH_BUDGET`, `CCRC_GRAPH_MAX_WORKERS`): a ledger row for wave 29, with the shared reader file and the census
   extended to every helper (Reading 9).
-- **`_upd_restore` arm 2's rc-3 line:** a `3)` arm, one line, needs consent for `_upd_restore` (Ledger R13).
-- **`cmd_backup`'s header** still says a lock-held skip exits 0; after a refused setting it exits 1. `cmd_backup` is outside
-  the consented function list.
+- **`_upd_restore` arm 2's rc-3 line** (done by fix round 1, F10) and **`cmd_backup`'s header** (qualified by fix round 1, F13, and
+  README's sentence under consent 8894): both were follow-ups here and are closed.
 - **The macOS server job** appears to exec the server entry even for a fleet role (`_inst_plist_server`). A census scout
   flagged it, unconfirmed; it is outside this wave and was not changed.
 - **The migration** (D-6600) asks no act of this wave: step 2 is the coordinator's reading of the update inventory, and
   steps 0, 3, 4 and 5 are the operator's and the soak's coordinator's.
+
+### Fix round 1 (2026-10-24, mail 8892, review 891)
+
+Review 891 read the wave at `0754e84e2` and found 21 findings (one important). The coordinator ruled in mail 8892 (recorded
+verbatim above, one path replaced by "the review's report"). The round's code is `ccd/ccrc`, the doctor check and tests; this
+dispatch wrote its text.
+
+#### Commits, in order
+
+Base `0754e84e2`.
+
+1. `abad872ff` test(ccrc-update): the three contained spawns go through the bash runner the raw-spawn census accepts (F1).
+2. `1a8943400` test(census): namerefs, `[[ -v ]]` reads and sourcing ccrc.env are pinned, and the residuals named (F4, D-6746).
+3. `9d682314c` test(ccrc-update): a CRLF comment naming a setting beside a model-fault line reads the default (F5).
+4. `96dfc767b` fix(ccrc): the hard-cap term is the sum of the start chain's own ceilings, derived and pinned (F2, D-6744).
+5. `7fd2c9a9e` docs(ccrc): the thinning bound's first-verification overrun and backup's refusal exit are stated where the code is (F3, F13, D-6745).
+6. `71d8e5a7a` test(ccrc-update): W24-D3's hard-cap term follows D-6744's 63 (F2). W24-D3 is red at 4 and 5 alone, green from here.
+7. `418968e2d` fix(ccrc): update's redaction masks a mirror's userinfo with or without a scheme (F7, D-6748).
+8. `2c8e11a76` fix(ccrc): a health window too large for the shell to compare waits 90 like any unusable value (F6, D-6747).
+9. `4edc62331` test(census): sourcing is caught in every command position, bindings are scoped, the residuals named (F4 review).
+10. `b8b502f9b` fix(ccrc): a refused release base's report says why, as a node fault (F8, F9).
+11. `b3bfa2fb2` fix(ccrc): restore arm 2 names an unreadable release base, not curl (F10).
+12. `35a9f457a` fix(ccrc): rollout reports a box's refused check as the refusal it is (F11).
+13. `4c7e942d4` fix(ccrc): a keep refused for its value names where the value came from (F12, D-6605).
+14. `8bc1046b1` fix(ccrc): rollout's every check arm is pinned, and arm 2 says why the base was refused (B2 review).
+15. `ffa40cf3f` fix(ccrc): an ordinary health window stays usable, pinned; the hard-cap and window comments say what they count (B1 review).
+16. `67079345c` fix(doctor): `box-settings` gives the model's own remedy when one odd line stops the whole file (F15).
+17. `819c24f37` docs(plan): review 891's rulings recorded, D-6744 to D-6749 and D-6605 defined, and every sentence the round changed made true.
+18. `ce117fb1b` docs(readme,example): the model-wide causes, backup's refusal exit and the bound's one overrun are stated (F3, F13, F14).
+19. The as-built commit, `docs(plan): fix round 1 as built (run 855, wave 24)`, which also adds the four R29 survivors to the census header comment (comment lines only).
+
+#### Claims and consents
+
+- This run's claims were re-taken ahead of their caps at 01:22Z: 2359 became 2366, and 2363 became 2367 (same paths; a re-take
+  mints a new id).
+- README: the owner's claim on the regions is now 2372 (it replaced 2349, same paths and holder; the owner's notice is mail
+  8906). The grants stand beside it: 8545 (the regions of Task 5) and 8894 (request 8891, forwarded in 8896), both freshly
+  measured live when this round began. The F13 clause is 8894's one clause: inside the ccrc-backup sentence of
+  `**The maintenance verbs.**`, "exit 0" became "exit 0 (1 after a setting refusal, D-6590)", no other change to that paragraph
+  and no reflow. The F14 sentences sit in the `**ccrc's own settings.**` paragraph and the retention region, which 8545 grants.
+
+#### Rulings of the round (the worker's ledger, each with its cost)
+
+- **R29** (the census review's four new C11 survivors: a `case` arm, `time . …`, a sourcing in a callee by dynamic scope, a
+  sourcing split across lines): named as residuals (census header, D-6746), not caught. Cost: a future sourcing in those forms
+  passes the census silently.
+- **R30** (the hard-cap term over-counts, since the parent's probe runs inside the spawn's 20 s): 63 kept, as the ruling's
+  "counted twice" and the safe direction say; the comment accounts for all 23 added seconds. Cost: thinning stops up to 18 s early.
+- **R31** (`_upd_redact` over-masks text glued before a credentialed URL): accepted, display only. Cost: a mangled error line.
+- **R32** (a raw `?`, `#`, `/` or space inside a password still prints): recorded in D-6748 only. Cost: a malformed
+  credential could print; curl refuses such hosts.
+- **R33** (F12 would red two rows in `ccrc-uninstall.test.ts`): it goes ahead, since that file is under this run's claim 2367
+  (the brief was narrow, not the claim); the two rows were updated, old → new, in D-6605. Cost: none.
+- **R34** (W24-U6 carries a minimal copy of the rollout suite's ssh and curl stubs, since `ccrc-rollout.test.ts` is not this
+  run's): accepted for this round. Cost: a second copy of a small stub to keep in step.
+- **R35** (B2 review's Minors 2, 3 and 6): recorded, no change: the 200-character report cap truncates a long `KNOB_WHY`; a
+  rollback prints its cause twice on stderr; F11's notes (an empty stderr file, a pre-`--check` ccrc now reading "refused", a
+  trailing-newline environment base, `set -u` in the main shell, a comment wrap). Cost: a truncated console detail for the
+  long shapes, and one duplicate stderr line.
+- **R36, corrected** (a NUL byte in ccrc.env never reaches the model): the WARN's why says `could not be scanned` (the words an
+  awk failure prints), not "NUL", and the remedy stays the generic "make the file itself readable when it cannot be read or
+  scanned". Kept. An earlier version of this ruling said the why names the NUL; it does not. Cost: doctor does not tell the
+  operator the cause is a NUL byte (the update path's own refusal names it).
+- **R37** (doctor, Linux): a quote left open or a trailing backslash on an EARLIER unrelated line gets the plain-line remedy, and
+  the model's per-key fix naming the line above is dropped. Accepted as a residual: ruling 11 asked only for the model-wide
+  causes. Cost: a misdirected remedy for that shape (the why still names the line); macOS names the line correctly.
+- **R38** (S12 is declared before S11 in the doctor describe): left. Cost: none.
+
+#### Measured
+
+- **Growth.** `ccd/ccrc` is +26 net code lines against the merge-base (11490 → 11516, `netGrowth` at this commit), of the stop
+  line 39; `GROWTH_CHECK=1 growth-check` passes 45 of 45. Every other counted file is +0. The order the coordinator ruled
+  (F7, F6, F8, F10, F11, F12) never reached the stop line, so nothing is carried for growth.
+- **Citation debt** is unchanged (`'ccd/ccrc': 5`); `citations` passes (4); no added line carries a `file:NNN` citation.
+- **raw-spawn-census 7 of 7** (it was 2 failed, 5 passed at `0754e84e2`; main reads 7 of 7).
+- **The F2 chain** (fixture only, no row): 17.95-second asset shims and a five-second health shim, the review's setup. Parent
+  18.016 s plus child 23.029 s = 41.045 s, below the term 63 by 21.955 s (the review's own measurement was 41.041 s).
+- **Mutants per fix**, each on a scratch clone, one at a time, restored by cmp, every one measured red on the row named:
+  F4 (C9 to C11) 10 at first and 22 after the census review, with three controls that stay green and three named residuals
+  surviving; F5 1 (red: the two W24-R15 rows); F2 5 (W24-K6, and W24-D3 for the literal); F7 3; F6 1 for W24-H2 and 2 for W24-H3;
+  F8/F9 5 (W24-U5, U2, U3); F10 2 (the arm deleted, the old sentence restored); F11 5 (`|| :`, the old question, and the
+  `255)`, `0)` and `127)` arms; W24-U6); F12 1 (W24-R9, W24-R10, both uninstall rows); F15 3 by the implementer and six by the
+  review (S8 to S12).
+- **Suites, as each dispatch last measured them** (one file at a time, foreground; `ccrc-update` by describe: W23 99, W24 65
+  before W24-H3's four rows and `W24-H` 9 of 9 after them, the automatic restore 25, restore arm 1 12, update.json at every phase
+  28, rollback 140; the controller's gate re-runs them at the tip), `ccrc-uninstall -t 'ccrc backup'` 7, `ccrc-rollout` 41,
+  `ccrc-versions-warn-arms` 5, `ccrc-settings-census` 11, `ccrc-doctor -t box-settings` 17 (the whole file outruns one call, so
+  its `healthy` and check-list subsets ran too: 18), `single-definition` 848, `private-names` 47, `typecheck-tests` 12,
+  `session-hook -t 'CITATION DEBT'` 1. This dispatch re-ran `docs-parity` 54, `readme-holds` 17, `citations` 4, `topology-clean` 60,
+  `pools-prose` 27, `lifecycle` 83, `dtbd` 1, and `deviation-refs` 31 after `git fetch origin main`.
+- **Not run:** the whole of `ccrc-doctor.test.ts` and of `ccrc-update.test.ts` in one call (each outruns a 600 s call; the
+  gate runs them by describe); the Darwin arms under a real bash 3.2.
+
+#### Recorded, no change (R35)
+
+The 200-character cap on a failed report's detail truncates a long `KNOB_WHY` (the open-quote, backslash and non-ASCII shapes lose
+their tails); a rollback names an unreadable base twice on stderr, once in the reader's line and once in its die; and F11's
+notes above. Each stays as it is, by ruling.
+
+#### F19: every README setting hit, at this commit
+
+`git grep -n -E 'CCRC_(BACKUP_KEEP|BACKUP_DATA_KEEP|VERSIONS_KEEP|UPDATE_HEALTH_S|UPDATE_DEADLINE_MS|RELEASE_BASE_URL|MODELS_ADVANCE_BUDGET_S)' -- README.md`
+gives 25 lines. Each was read in this round; "unchanged" means it still reads true.
+
+| Line | Word | Why |
+|---|---|---|
+| 396 | unchanged | `CCRC_RELEASE_BASE_URL` points the release downloads elsewhere: true. |
+| 421 | changed | the models-budget pointer, `where to set … (a ~/.ccrc/ccrc.env line)` (grant 8545). |
+| 459 | unchanged | the override's existence, true. |
+| 872, 873 | changed | the process-environment wording removed from the sweep's prune and thinning clause (grant 8545). |
+| 958 | unchanged | the gate is bounded by `CCRC_UPDATE_HEALTH_S`, default 90: true. |
+| 985 | unchanged | the watchdog's reports older than `CCRC_UPDATE_DEADLINE_MS`, default 15 minutes: true. |
+| 1143 | unchanged | a lease fails `deadline` past the deadline and at four deadlines: true (the control plane's cap). |
+| 1194 | unchanged | the newest `CCRC_VERSIONS_KEEP`, default 3, complete trees stay: true. |
+| 1195 | changed | the unreadable-input parenthesis names a line `ccrc.env` holds that the reader cannot take (grant 8545). |
+| 1220 | unchanged | `ccrc backup` prunes to the newest `CCRC_BACKUP_KEEP`, 0 to 9999, default 10: true. |
+| 1227 | unchanged | the newest `CCRC_BACKUP_DATA_KEEP` keep the data set: true. |
+| 1234, 1235 | unchanged | the data knob's line grammar, the reader's own: still true. |
+| 1285, 1286, 1287 | changed | the new `**ccrc's own settings.**` paragraph: the seven names (grant 8545). |
+| 1299, 1302 | changed | the same paragraph: the deadline's smallest and largest readings, the doctor check; the F14 sentence on the model-wide causes follows the whole-file sentence. |
+| 1991 | unchanged | the models budget's default 250 seconds in "When the step runs": true. |
+| 2001 | unchanged | `=0` turns the step off, and so does a value that is not a whole number: true. |
+| 2005, 2007 | changed | "Turning the step off": the budget is read from the environment, else ccrc.env, a drop-in still overrides one unit, an unreadable line turns the step off (grant 8545). |
+| 6645 | unchanged | deploy.sh's own prune, `CCRC_BACKUP_KEEP` default 10, environment-only, not this wave's: true. |
+| 6683 | unchanged | retention thins every backup past the newest `CCRC_BACKUP_DATA_KEEP`, and restore refuses such a dir: true. |
+
+Changed lines that name no setting, so they are not hits: the F13 clause in the ccrc-backup sentence (grant 8894), the retention
+explanation "read as every ccrc setting is (below)", and the F14 clause in its model-wide parenthesis (the CR and non-ASCII causes
+"on any line of the file"; grant 8545).
+
+Also grepped, per the plan: "process environment" and "does not set it" in the paragraphs of the hits, none left that says the
+file does not set a setting.
+
+#### F20: the example's actual wording changes, and their rulings
+
+`git diff 49e7f187a..HEAD -- deploy/ccrc.env.example` shows more than a rewrap. The words that changed, against this plan's
+mandated text (Task 5, Step 3):
+
+- **The deadline block** (the final review's fix `fd32d90ae`) says what ccrc reads: the SMALLEST reading among the environment,
+  this file and the exposure file bounds its thinning, the LARGEST it can decide serves the watchdog, and any other spelling
+  starts no verification past "the keep-set's first full one". Rulings: plan rulings 3, 4 and 11 (D-6591, D-6592, D-6602).
+  Fix round 1 adds that the first verification can run past the bound by one verification when the re-stamp is already late
+  (ruling 3 of review 891, D-6745).
+- **The unreadable-file clause** (`fd32d90ae`; Ledger R21) says "refuses, or falls back as its own text says (the health gate
+  waits 90; the watchdog uses the largest reading it could decide)", where the plan said "stops every act". Fix round 1 adds the
+  model-wide causes beside it (an unrelated non-ASCII line, a line with an inner CR: every setting the file names on an
+  assignment-capable line; unnamed settings may still read their defaults), by ruling 11 of review 891 (F14).
+- **The mirror sentence** (`fd32d90ae`) was narrowed from "It may carry user:password@, which ccrc never prints" to "Any
+  user:password@ belongs after the scheme (https://user:password@host/...), where ccrc never prints it". Why: at that commit
+  `_upd_redact` masked userinfo only after a scheme (review 891 F7 measured it). Ruling: D-6594 and ruling 7's mask; no
+  separate coordinator ruling. After D-6748 `_upd_redact` masks both forms, so the sentence is advice now, not a limit, and
+  stays.
+- **The header's first paragraph and the new heading** are as planned (Step 3.1), except that the heading drops its trailing
+  ` ──` and the block is wrapped to 80 columns (Ledger R15).
+
+The earlier as-built sentence "its deadline block is rewrapped, no word changed" is corrected above.
+
+#### F21: the comment-only header changes, accepted (D-6749)
+
+Each changed only comment lines (every changed line there starts with `#`), the platform block is untouched, and the citation
+census is kept:
+
+- `_models_advance_budget_secs`: its three-line header (in place, three lines for three), beside the planned one code line.
+- `_upd_release_base`: its header (the reader's contract, and the in-shell calling pattern after F8).
+- `_upd_gate`: its header (the health window, D-6747's length rule, and that ruling 6's zero and no range hold for what the
+  shell can compare).
+- `_upd_asset_listed`: its header (rc 3, and that `KNOB_WHY` holds the cause for the caller).
+- `_ver_gc`: its two-line header (in place).
+
+The hunks before base line 11635, which the earlier one-line description got wrong (it named only the models-budget line), are,
+against `49e7f187a`, all netting to zero lines: the `update` usage paragraph (four lines became three, one added), the two
+`backup` usage lines (in place); `_upd_redact`'s header line, comment block (12 lines became 11) and one added code line (F7);
+`_models_advance_budget_secs`'s three header lines and its one code line (in place). Session-hook's citation-debt row passes.
+
+#### Carried to wave 29, and not in this round
+
+- `_inst_plist_server`'s fleet-role entry point (an older defect: the base and the tip generate the server entry beside a fleet
+  agent label), and install describe 35's teardown leak (main shares it): both named by the coordinator as ledger items.
+- The sibling scripts' operator settings (unchanged from the follow-ups above).
+- One wart for the next touch: `ccrc-update.test.ts` holds two rows named W24-R10 (the F12 row and Ledger R8's KEEP_FROM row).
