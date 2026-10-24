@@ -151,9 +151,9 @@ async function fetchDocs(deps: CcdDocsDeps, project: string, branch: string | nu
 
 /**
  * Checks 1-7 of section 2 (b), in order; the first match wins.
- * 1. Both halves unmeasured, not ok, empty stdout: the runner's transport catch (`{code:1, stdout:'', stderr:msg}`).
- *    The agent's refusal is `not-granted`, the client's own wait `link-timeout`, anything else `link-failed {cause}`.
- *    An ok answer whose halves are unmeasured (an agent older than both fields) is NOT this: it goes on to parsing.
+ * 1. The runner's `ran: false` arm with both halves unmeasured (the transport catch): the agent's refusal is `not-granted`, the
+ *    client's own wait `link-timeout`, anything else `link-failed {cause}`. An answer that ran, whose halves are
+ *    unmeasured (an agent older than both fields), is NOT this: it goes on to parsing.
  * 2. The runner's deadline fired: `ccd-timeout`.
  * 3. A measured signal ended ccd: `ccd-killed {signal}`.
  * 4. Not ok with stdout: a cut answer (maxBuffer), which the exit contract makes detectable: `answer-overflow`.
@@ -167,10 +167,13 @@ async function fetchDocs(deps: CcdDocsDeps, project: string, branch: string | nu
 function classify<T extends { ok: true }>(verb: DocsVerb, res: CcdResult, job: DocsJob, accept: DocsAccept<T>):
   T | DocsFailureBody {
   const ending = ccdEnding(res);
-  if (ending.kind === 'unmeasured' && !res.ok && res.stdout === '') {
-    if (res.stderr === AGENT_EXEC_REFUSAL) return fail('not-granted');
-    if (res.stderr === LINK_WAIT_EXPIRED) return fail('link-timeout');
-    return fail('link-failed', { cause: stderrHeadOf(res.stderr) });
+  // D-TBD-ran-required: the runner says a call never ran (or may not have), typed, so the link's three faces are read
+  // off its `ran` arm and not inferred from a matching stderr string. Only the arm whose kill halves are unmeasured is
+  // the link: a local spawn error (ccd absent) measured both halves, and stays the `ccd-fault` it always was.
+  if (res.ran === false && ending.kind === 'unmeasured') {
+    if (res.reason === 'spawn' && res.detail === AGENT_EXEC_REFUSAL) return fail('not-granted');
+    if (res.reason === 'timeout' && res.detail === LINK_WAIT_EXPIRED) return fail('link-timeout');
+    return fail('link-failed', { cause: stderrHeadOf(res.detail) });
   }
   if (ending.kind === 'deadline') return fail('ccd-timeout');
   if (ending.kind === 'signal') return fail('ccd-killed', { signal: ending.signal });

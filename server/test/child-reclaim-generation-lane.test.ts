@@ -53,10 +53,10 @@ const fixture = () => {
     calls.push(args);
     if (args[0] === 'ws-release') {
       const id = args[args.indexOf('--session') + 1] ?? '';
-      try { rmSync(path.join(reg, `${id}.hold`)); return { code: 0, stdout: `released ${id}\n`, stderr: '' }; }
-      catch { return { code: 0, stdout: `not held ${id}\n`, stderr: '' }; }
+      try { rmSync(path.join(reg, `${id}.hold`)); return { ran: true as const, code: 0, stdout: `released ${id}\n`, stderr: '' }; }
+      catch { return { ran: true as const, code: 0, stdout: `not held ${id}\n`, stderr: '' }; }
     }
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true as const, code: 1, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const requests: ChildReclaimRequest[] = [];

@@ -72,17 +72,17 @@ function fixture() {
   const panes = new Map<string, string>();
   const unmeasured = new Set<string>();
   const runner: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
     const id = /^=cc-(.*):$/.exec(args[2] ?? '')?.[1] ?? '';
     if (args[0] === 'list-panes') {
       const p = pids.get(id);
-      return { code: 0, stdout: p ? `${p}\n` : '', stderr: '' };
+      return { ran: true, code: 0, stdout: p ? `${p}\n` : '', stderr: '' };
     }
     if (args[0] === 'capture-pane') {
-      if (unmeasured.has(id)) return { code: 1, stdout: '', stderr: 'capture failed' };
-      return { code: 0, stdout: panes.get(id) ?? BARE_PROMPT, stderr: '' };
+      if (unmeasured.has(id)) return { ran: true, code: 1, stdout: '', stderr: 'capture failed' };
+      return { ran: true, code: 0, stdout: panes.get(id) ?? BARE_PROMPT, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const sent: PushPayload[] = [];

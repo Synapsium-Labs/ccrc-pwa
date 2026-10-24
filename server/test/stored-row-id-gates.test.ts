@@ -93,7 +93,7 @@ const answeringPrState = (stdout: string): { run: Runner; calls: string[][] } =>
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
-    return args[0] === 'pr-state' ? { code: 0, stdout, stderr: '' } : { code: 0, stdout: '', stderr: '' };
+    return args[0] === 'pr-state' ? { ran: true, code: 0, stdout, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 };

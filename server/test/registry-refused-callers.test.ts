@@ -60,7 +60,7 @@ const gitRoot = (branch: string, tip: string): string => {
 /** A runner that records every argv and answers `code`. */
 const recording = (calls: string[][], code = 0): Runner => async (_cmd, args) => {
   calls.push([...args]);
-  return { code, stdout: '', stderr: '' };
+  return { ran: true, code, stdout: '', stderr: '' };
 };
 
 const connected: FleetState = { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null };
@@ -138,7 +138,7 @@ describe('dispatch refuses what subtraction cannot see (spec §2.3)', () => {
     const runCcd = async (argv: CcdArgv): Promise<CcdResult> => {
       calls.push([...argv]);
       if (argv[0] === 'ws-add') for (const id of cfg.after ?? []) plant(home, id);
-      return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+      return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
     };
     const base = testDeps(home);
     let listings = 0;
@@ -329,9 +329,9 @@ describe('one refused row wedges nothing fleet-wide (Review Focus 3)', () => {
       if (args[0] === 'capture-pane') {
         const pane = CLEAR_PANES[Math.min(capIdx, CLEAR_PANES.length - 1)]!;
         capIdx += 1;
-        return { code: 0, stdout: pane, stderr: '' };
+        return { ran: true, code: 0, stdout: pane, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const base = testDeps(home, run);
     const deps = { ...base, coord, configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, sendClear: clearSender(base) } as DispatchRunDeps;

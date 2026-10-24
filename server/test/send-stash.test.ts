@@ -155,18 +155,18 @@ function fakeCc(o: FakeOpts = {}) {
       if (enters > 0) {
         sinceFirstEnter++;
         if (pendingLand && sinceFirstEnter === o.landAtCapture) { pendingLand = false; submitNow(); }
-        if (o.failCapture?.(sinceFirstEnter)) return { code: 1, stdout: '', stderr: "can't find pane" };
-        if (o.absentCapture?.(sinceFirstEnter)) return { code: 0, stdout: ['⏺ a long transcript row', 'more transcript'].join('\n') + '\n', stderr: '' };
+        if (o.failCapture?.(sinceFirstEnter)) return { ran: true, code: 1, stdout: '', stderr: "can't find pane" };
+        if (o.absentCapture?.(sinceFirstEnter)) return { ran: true, code: 0, stdout: ['⏺ a long transcript row', 'more transcript'].join('\n') + '\n', stderr: '' };
       }
       if (submits > 0) o.afterSubmit?.(++sinceSubmit, s);
       if (enters > 0) o.afterEnter?.(enters, ++sinceEnter, s);
-      if (blindEnter > 0) { blindEnter--; return { code: 1, stdout: '', stderr: "can't find pane" }; }
+      if (blindEnter > 0) { blindEnter--; return { ran: true, code: 1, stdout: '', stderr: "can't find pane" }; }
       if (blind > 0) {
         blind--;
-        if (o.blindAfterType!.kind === 'dead') return { code: 1, stdout: '', stderr: "can't find pane" };
-        return { code: 0, stdout: ['⏺ a long transcript row', 'more transcript'].join('\n') + '\n', stderr: '' };
+        if (o.blindAfterType!.kind === 'dead') return { ran: true, code: 1, stdout: '', stderr: "can't find pane" };
+        return { ran: true, code: 0, stdout: ['⏺ a long transcript row', 'more transcript'].join('\n') + '\n', stderr: '' };
       }
-      return { code: 0, stdout: render(s), stderr: '' };
+      return { ran: true, code: 0, stdout: render(s), stderr: '' };
     }
     if (args[0] === 'send-keys') {
       if (args[3] === '-l') {
@@ -174,11 +174,11 @@ function fakeCc(o: FakeOpts = {}) {
         keys.push(`lit:${text}`);
         literals++;
         if (literals === 1 && o.blindAfterType) blind = o.blindAfterType.captures;
-        if (o.failLiteral === literals) return { code: 1, stdout: '', stderr: 'refused' };
-        if (o.dropLiterals) return { code: 0, stdout: '', stderr: '' };
+        if (o.failLiteral === literals) return { ran: true, code: 1, stdout: '', stderr: 'refused' };
+        if (o.dropLiterals) return { ran: true, code: 0, stdout: '', stderr: '' };
         if (s.box.length === 0) s.box = [''];
         s.box[s.box.length - 1] += text;
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       }
       const key = args.at(-1)!;
       keys.push(key);
@@ -187,18 +187,18 @@ function fakeCc(o: FakeOpts = {}) {
         if (s.box.length > 0 && s.box[s.box.length - 1] === '' && s.box.length > 1) s.box.pop();
         else if (s.box.length > 0) s.box[s.box.length - 1] = '';
       } else if (key === 'C-s') {
-        if ((o.stashKey ?? 'stash') === 'inert') return { code: 0, stdout: '', stderr: '' };
+        if ((o.stashKey ?? 'stash') === 'inert') return { ran: true, code: 0, stdout: '', stderr: '' };
         if (nonBlank(s.box)) { s.stash = s.box; s.box = []; }
         else if (s.stash !== null && (o.popWorks ?? true)) { s.box = s.stash; s.stash = null; }
       } else if (key === 'Enter') {
         enters++;
         sinceEnter = 0;
-        if (swallow > 0) { swallow--; s.hideIndicator = o.hideAfterSwallow ?? 0; return { code: 0, stdout: '', stderr: '' }; }
-        if (o.landAtCapture !== undefined && submits === 0) { pendingLand = true; return { code: 0, stdout: '', stderr: '' }; }
+        if (swallow > 0) { swallow--; s.hideIndicator = o.hideAfterSwallow ?? 0; return { ran: true, code: 0, stdout: '', stderr: '' }; }
+        if (o.landAtCapture !== undefined && submits === 0) { pendingLand = true; return { ran: true, code: 0, stdout: '', stderr: '' }; }
         submitNow();
       }
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { tmux: new Tmux(run), keys, state: s };
 }
@@ -227,7 +227,7 @@ describe("onDraft: 'stash' (D-5911)", () => {
       typed: capture('stash-held-with-text.ansi'), submitted: capture('stash-restored.ansi'),
     };
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'capture-pane') return { code: 0, stdout: PANES[phase], stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: PANES[phase], stderr: '' };
       if (args[0] === 'send-keys') {
         const k = args[3] === '-l' ? `lit:${args.at(-1)}` : args.at(-1)!;
         keys.push(k);
@@ -235,7 +235,7 @@ describe("onDraft: 'stash' (D-5911)", () => {
         else if (k.startsWith('lit:') && phase === 'stashed') phase = 'typed';
         else if (k === 'Enter' && phase === 'typed') phase = 'submitted';
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const res = await sendPrompt(deps(new Tmux(run)), 'lane-a', 'second thing typed', STASH);
     expect(keys).toEqual(['C-s', 'lit:second thing typed', 'Enter']);
@@ -442,10 +442,10 @@ describe("onDraft: 'stash' (D-5911)", () => {
           if (args[0] === 'capture-pane') {
             // The running-turn capture has an empty box; give it a draft so the carrier is asked.
             const pane = capture(name).replace(/❯ (\x1b\[39m)?\n/, '❯ a draft$1\n');
-            return { code: 0, stdout: pane, stderr: '' };
+            return { ran: true, code: 0, stdout: pane, stderr: '' };
           }
           if (args[0] === 'send-keys') keys.push(args.at(-1)!);
-          return { code: 0, stdout: '', stderr: '' };
+          return { ran: true, code: 0, stdout: '', stderr: '' };
         };
         const res = await sendPrompt(deps(new Tmux(run)), 'lane-a', 'hello', STASH);
         expect(keys, name).toEqual([]);

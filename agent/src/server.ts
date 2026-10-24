@@ -352,13 +352,20 @@ function runExec(
   cmd: string,
   args: string[],
   timeoutMs: number,
-): Promise<{ code: number; stdout: string; stderr: string; killed: boolean; signal: string | null }> {
+): Promise<{ code: number; stdout: string; stderr: string; killed: boolean; signal: string | null; ran?: false; detail?: string }> {
   return new Promise((resolve) => {
     execFile(cmd, args, { maxBuffer: EXEC_MAX_BUFFER, timeout: timeoutMs }, (error, stdout, stderr) => {
       const code = error
         ? (((error as NodeJS.ErrnoException & { code?: number }).code as number | undefined) ?? 1)
         : 0;
+      // D-TBD-ran-required (ARCH-10, #543): a SPAWN error (node names the syscall `spawn <cmd>`: ENOENT, EACCES) means
+      // no child ever existed, so the forged 1 is said to be one: `ran: false`, additive (an older server ignores the key
+      // and reads the exit 1 it always read). Any other string code (a maxBuffer overflow) had a child and stays as it was.
+      const spawnErr = error as (NodeJS.ErrnoException & { syscall?: string }) | null;
+      const neverStarted = spawnErr !== null && typeof spawnErr.code === 'string' && typeof spawnErr.syscall === 'string'
+        && spawnErr.syscall.startsWith('spawn');
       resolve({
+        ...(neverStarted ? { ran: false as const, detail: spawnErr.message } : {}),
         code: typeof code === 'number' ? code : 1,
         stdout: String(stdout),
         stderr: String(stderr),

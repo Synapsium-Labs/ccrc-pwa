@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   feedRecordCallSites, reclaimPauseParseSites, markerDefinitions, markerLiteralFiles, filesNaming,
-  runCcdOldFoldSites, RAN_NARROW_WINDOW, type CensusSite,
+  REPO, runCcdOldFoldSites, runCcdSiteArms, RAN_NARROW_WINDOW, RAN_TABLE, type CensusSite, type RanTableRow,
 } from './consolidationCensus.js';
 import { capabilityChoiceSites, W4_HELD_FILES } from './consolidationCensus.js';
 import { changeLatchSites, changeLatchReported } from './consolidationCensus.js';
@@ -184,14 +184,55 @@ describe('runCcdOldFoldSites: runCcd( call sites under server/src not yet narrow
       .toEqual([['server/src/coord/lane.ts', 3], ['server/src/coord/lane.ts', 17]]);
   });
 
-  it('REAL: the four sites step 1 migrated are off the old fold, and the rest still on it are listed for step 2', () => {
-    const sites = runCcdOldFoldSites();
-    show('runCcdOldFoldSites', sites);
-    const migrated = ['server/src/coord/expireArchived.ts', 'server/src/coord/collectTempRoot.ts'];
-    for (const f of migrated) expect(files(sites), `${f} is still on the old fold`).not.toContain(f);
-    // A query that silently matched nothing would read as "step 2 is done": the swap route is a known old-fold site.
-    expect(sites.some((s) => s.file === 'server/src/server.ts'), 'no server.ts site found').toBe(true);
-    for (const s of sites) expect(s.text, `${s.file}:${s.line}`).toMatch(/\brunCcd\s*\(/);
+  it('FIXTURE: a result handed to a carry reader is carried; a table row accounts for a site by file, text and nth', () => {
+    const t2 = mkdtempSync(path.join(tmpdir(), 'ran-fold-census2-'));
+    try {
+      mkdirSync(path.join(t2, 'server/src'), { recursive: true });
+      writeFileSync(path.join(t2, 'server/src/lane.ts'), [
+        'export async function a(deps: Deps) {',
+        '  const res = await deps.runCcd(argv);',                         // 2: carried
+        '  return cutShort(res);',
+        '}',
+        'export async function b(deps: Deps) {',
+        '  const r = await queue.run(id, () => deps.runCcd(argv));',      // 6: nth 1
+        '  return r.ok;',
+        '}',
+        'export async function c(deps: Deps) {',
+        '  const r = await queue.run(id, () => deps.runCcd(argv));',      // 10: nth 2
+        '  return r.ok;',
+        '}',
+        'export interface P { runCcd(argv: CcdArgv): Promise<CcdResult>; }', // 13: a signature
+      ].join('\n'));
+      const row = (nth: number): RanTableRow => ({ file: 'server/src/lane.ts', text: 'const r = await queue.run(id, () => deps.runCcd(argv));', nth, arm: 'ok-only' });
+      expect(runCcdSiteArms(t2, []).map((x) => [x.line, x.arm])).toEqual([[2, 'carried'], [6, null], [10, null]]);
+      expect(runCcdSiteArms(t2, [row(2)]).map((x) => [x.line, x.arm])).toEqual([[2, 'carried'], [6, null], [10, 'ok-only']]);
+    } finally { rmSync(t2, { recursive: true, force: true }); }
+  });
+
+  it('REAL: every runCcd( site answers the not-ran arm, and the count stays at 0 (D-TBD-ran-required; ARCH-10, #543)', () => {
+    const sites = runCcdSiteArms();
+    show('runCcdSiteArms', sites);
+    // A query that silently matched nothing would read as "every site is accounted": the swap route is a known site.
+    expect(sites.some((x) => x.file === 'server/src/server.ts'), 'no server.ts site found').toBe(true);
+    for (const x of sites) expect(x.text, `${x.file}:${x.line}`).toMatch(/\brunCcd\s*\(/);
+    // This is the may-only-shrink pin at its floor: a new `runCcd(` site must narrow on `ran === false`, hand its
+    // result to a `RAN_CARRY_READERS` reader, or add a reviewed row to `RAN_TABLE`.
+    expect(runCcdOldFoldSites().map((x) => `${x.file}:${x.line}`)).toEqual([]);
+  });
+
+  it('REAL: every RAN_TABLE row names a site that exists and that nothing else already accounts for', () => {
+    const bare = runCcdSiteArms(REPO, []);
+    const keyed = (r: RanTableRow): boolean => {
+      const seen = new Map<string, number>();
+      for (const x of bare) {
+        const k = `${x.file}\n${x.text.trim()}`;
+        const n = (seen.get(k) ?? 0) + 1;
+        seen.set(k, n);
+        if (x.file === r.file && x.text.trim() === r.text && n === r.nth) return x.arm === null;
+      }
+      return false;
+    };
+    expect(RAN_TABLE.filter((r) => !keyed(r)).map((r) => `${r.file}: ${r.text}`)).toEqual([]);
   });
 });
 

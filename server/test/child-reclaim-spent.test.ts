@@ -55,13 +55,13 @@ const fullLine = (rows: unknown[], ahead: number | null = 1, id = ID, tip: strin
 /** Real `testDeps` wiring over a recording runner that answers `pr-state`
  *  with `answer` — no real ccd, no real gh. */
 const harness = (
-  answer: { code: number; stdout: string; stderr: string } = { code: 0, stdout: '', stderr: '' },
+  answer: { ran: true, code: number; stdout: string; stderr: string } = { ran: true, code: 0, stdout: '', stderr: '' },
   over: Partial<ChildSpentDeps> = {},
 ) => {
   const verbs: string[] = [];
   const run: Runner = async (_cmd, args) => {
     verbs.push(args[0] ?? '');
-    return args[0] === 'pr-state' ? answer : { code: 0, stdout: '', stderr: '' };
+    return args[0] === 'pr-state' ? answer : { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const base = testDeps(home, run);
   const deps: ChildSpentDeps = { io: base.io, cfg: base.cfg, runCcd: base.runCcd, ...over };
@@ -112,7 +112,7 @@ describe('childSpent — the fast path', () => {
 
   it('an unreadable .prnumber is evidence of NOTHING — it falls through to the live lookup', async () => {
     put('prnumber', '42');
-    const h = harness({ code: 0, stdout: `${fullLine([prRow('OPEN')])}\n`, stderr: '' },
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([prRow('OPEN')])}\n`, stderr: '' },
       { io: unreadableField(ID, 'prnumber') });
     expect(await verdict(h)).toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'unplaced' });
     expect(h.verbs).toContain('pr-state');
@@ -126,7 +126,7 @@ describe('childSpent — the live lookup', () => {
     ['merged', prRow('MERGED')],
     ['closed', prRow('CLOSED')],
   ] as const)('a bound %s PR → spent/live, naming it', async (_phase, row) => {
-    const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
     expect(await verdict(h)).toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'unplaced' });
   });
 
@@ -146,7 +146,7 @@ describe('childSpent — the live lookup', () => {
     // "isCrossRepository":false,"mergedAt":null,"mergeCommit":null,"url":…,
     // "title":"the work","isDraft":false,"statusCheckRollup":null,"ours":true}
     const row = prRow('OPEN', { number: 42, baseRefName: 'release/9' });
-    const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
     expect(await verdict(h)).toEqual({ kind: 'spent', pr: 42, source: 'live', incarnation: 'unplaced' });
   });
 
@@ -158,7 +158,7 @@ describe('childSpent — the live lookup', () => {
     // "ours":false} — ccd itself computed `ours:false` (the head commit is not
     // reachable from our tip) and STILL printed the row.
     const row = prRow('OPEN', { number: 42, ours: false });
-    const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
     expect(await verdict(h)).toEqual({ kind: 'spent', pr: 42, source: 'live', incarnation: 'unplaced' });
   });
 
@@ -169,13 +169,13 @@ describe('childSpent — the live lookup', () => {
     // too, and it must NOT spend a child whose branch it merely shares a name
     // with.
     const row = prRow('OPEN', { number: 42, isCrossRepository: true });
-    const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
     expect(await verdict(h)).toEqual({ kind: 'unspent' });
   });
 
   it('(iv) a same-branch row with no number cannot be named as spent → unmeasured', async () => {
     const row = prRow('OPEN', { number: undefined });
-    const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
     const v = await verdict(h);
     expect(v.kind).toBe('unmeasured');
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('no number');
@@ -196,7 +196,7 @@ describe('childSpent — the live lookup', () => {
     })()],
     ['isCrossRepository a non-boolean string "false"', prRow('OPEN', { number: 42, isCrossRepository: 'false' })],
   ] as const)('(v) a same-branch row whose repository cannot be established — %s → unmeasured', async (_what, row) => {
-    const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
     const v = await verdict(h);
     expect(v.kind).toBe('unmeasured');
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('could not be established');
@@ -208,7 +208,7 @@ describe('childSpent — the live lookup', () => {
   it('(vii) a line with no branch key at all → unmeasured', async () => {
     const stdout = JSON.stringify(
       { id: ID, rows: [], baseShort: 'main', ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
-    const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${stdout}\n`, stderr: '' });
     const v = await verdict(h);
     expect(v.kind).toBe('unmeasured');
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('no branch');
@@ -227,7 +227,7 @@ describe('childSpent — the live lookup', () => {
     })()],
     ['isCrossRepository:false, headRefName:null', prRow('OPEN', { number: 42, headRefName: null })],
   ] as const)('(viii) a non-fork row whose head branch cannot be read — %s → unmeasured', async (_what, row) => {
-    const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
     const v = await verdict(h);
     expect(v.kind).toBe('unmeasured');
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('head branch could not be read');
@@ -235,7 +235,7 @@ describe('childSpent — the live lookup', () => {
 
   it('(ix) a FORK row with an unreadable head, alone → unspent — forks never count', async () => {
     const row = prRow('OPEN', { number: 42, isCrossRepository: true, headRefName: null });
-    const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
     expect(await verdict(h)).toEqual({ kind: 'unspent' });
   });
 
@@ -248,7 +248,7 @@ describe('childSpent — the live lookup', () => {
   it("(x) a line whose branch tip never resolved (a hand rename) → unmeasured, never unspent", async () => {
     const stdout = JSON.stringify(
       { id: ID, rows: [], baseShort: 'main', branch: 'ws/a', ahead: null, tip: null, checkedAt: 1 });
-    const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${stdout}\n`, stderr: '' });
     const v = await verdict(h);
     expect(v.kind).toBe('unmeasured');
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('tip');
@@ -258,7 +258,7 @@ describe('childSpent — the live lookup', () => {
     const row = prRow('OPEN', { number: 5, headRefName: 'ws/a' });
     const stdout = JSON.stringify(
       { id: ID, rows: [row], baseShort: 'main', branch: 'ws/a', ahead: null, tip: null, checkedAt: 1 });
-    const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${stdout}\n`, stderr: '' });
     expect(await verdict(h)).toEqual({ kind: 'spent', pr: 5, source: 'live', incarnation: 'unplaced' });
   });
 
@@ -271,7 +271,7 @@ describe('childSpent — the live lookup', () => {
   // sha, which the `fullLine` cases rely on).
   it('(xii) a line whose tip KEY IS ABSENT (never sent, not merely null) → unmeasured', async () => {
     const stdout = JSON.stringify({ id: ID, rows: [], baseShort: 'main', branch: BRANCH, ahead: 1, checkedAt: 1 });
-    const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${stdout}\n`, stderr: '' });
     const v = await verdict(h);
     expect(v.kind).toBe('unmeasured');
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('tip');
@@ -283,7 +283,7 @@ describe('childSpent — the live lookup', () => {
   it('(xiii) a line whose branch is explicitly null (not merely an absent key) → unmeasured', async () => {
     const stdout = JSON.stringify(
       { id: ID, rows: [], baseShort: 'main', branch: null, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
-    const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${stdout}\n`, stderr: '' });
     const v = await verdict(h);
     expect(v.kind).toBe('unmeasured');
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('no branch');
@@ -298,7 +298,7 @@ describe('childSpent — the live lookup', () => {
     const good = prRow('OPEN', { number: 42 });
     const bad = prRow('OPEN', { number: 99 }) as Record<string, unknown>;
     delete bad.headRefName;
-    const h = harness({ code: 0, stdout: `${fullLine([good, bad])}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([good, bad])}\n`, stderr: '' });
     expect(await verdict(h)).toEqual({ kind: 'spent', pr: 42, source: 'live', incarnation: 'unplaced' });
   });
 
@@ -307,7 +307,7 @@ describe('childSpent — the live lookup', () => {
     // mutant that picked `rows[0]` OR `rows[rows.length - 1]` instead of the
     // true highest would both answer wrong (F5, review 145).
     const rows = [prRow('OPEN', { number: 7 }), prRow('CLOSED', { number: 9 }), prRow('CLOSED', { number: 8 })];
-    const h = harness({ code: 0, stdout: `${fullLine(rows)}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine(rows)}\n`, stderr: '' });
     expect(await verdict(h)).toEqual({ kind: 'spent', pr: 9, source: 'live', incarnation: 'unplaced' });
   });
 
@@ -322,17 +322,17 @@ describe('childSpent — the live lookup', () => {
   // which PR a workspace's PR CONTROL renders, not whether the branch has been
   // spent. Moved out of the `unmeasured` table below into its own assertion.
   it('a same-branch PR gh reports MERGED but cannot prove → still spends the child (D-3347)', async () => {
-    const h = harness({ code: 0, stdout: `${fullLine([prRow('MERGED', { mergeCommit: null })])}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([prRow('MERGED', { mergeCommit: null })])}\n`, stderr: '' });
     expect(await verdict(h)).toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'unplaced' });
   });
 
   it('no PR bound to the branch → unspent (a research child still hands over)', async () => {
-    const h = harness({ code: 0, stdout: `${fullLine([])}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([])}\n`, stderr: '' });
     expect(await verdict(h)).toEqual({ kind: 'unspent' });
   });
 
   it('a branch level with its base → unspent', async () => {
-    const h = harness({ code: 0, stdout: `${fullLine([], 0)}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${fullLine([], 0)}\n`, stderr: '' });
     expect(await verdict(h)).toEqual({ kind: 'unspent' });
   });
 
@@ -346,14 +346,14 @@ describe('childSpent — the live lookup', () => {
     ['a full line about ANOTHER session', fullLine([prRow('OPEN')], 1, 'demo-other'), 'no line for this session'],
     ['nothing parseable', 'not json', 'no line for this session'],
   ])('%s → unmeasured, never unspent', async (_what, stdout, why) => {
-    const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
+    const h = harness({ ran: true, code: 0, stdout: `${stdout}\n`, stderr: '' });
     const v = await verdict(h);
     expect(v.kind).toBe('unmeasured');
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain(why);
   });
 
   it('a failed ccd call → unmeasured, quoting ccd', async () => {
-    const h = harness({ code: 1, stdout: '', stderr: 'gh: timeout' });
+    const h = harness({ ran: true, code: 1, stdout: '', stderr: 'gh: timeout' });
     expect(await verdict(h)).toEqual({ kind: 'unmeasured', detail: 'pr-state failed: gh: timeout' });
   });
 
@@ -377,7 +377,7 @@ describe('childSpent — the live lookup', () => {
 describe('childSpent — incarnation placement', () => {
   const at = (offsetMs: number, extra: Record<string, unknown> = {}) =>
     prRow('OPEN', { createdAt: iso(BIRTH_MS + offsetMs), ...extra });
-  const live = (rows: unknown[]) => harness({ code: 0, stdout: `${fullLine(rows)}\n`, stderr: '' });
+  const live = (rows: unknown[]) => harness({ ran: true, code: 0, stdout: `${fullLine(rows)}\n`, stderr: '' });
   const HOUR = 3_600_000;
 
   it('the skew is ±120 s', () => {
@@ -463,7 +463,7 @@ describe('childSpent — incarnation placement', () => {
   it('an inherited row does not mask a line that is otherwise unmeasured — the tip still decides', async () => {
     const stdout = JSON.stringify({ id: ID, rows: [at(-HOUR)], baseShort: 'main', branch: BRANCH,
       ahead: 1, tip: null, checkedAt: 1 });
-    const v = await verdict(harness({ code: 0, stdout: `${stdout}\n`, stderr: '' }));
+    const v = await verdict(harness({ ran: true, code: 0, stdout: `${stdout}\n`, stderr: '' }));
     expect(v.kind).toBe('unmeasured');
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('tip');
   });

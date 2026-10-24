@@ -11,20 +11,20 @@ const fake = (responses: Record<string, ExecResult>): { run: Runner; calls: stri
   const calls: string[][] = [];
   const run: Runner = async (cmd, args) => {
     calls.push([cmd, ...args]);
-    return responses[args[0]] ?? { code: 0, stdout: '', stderr: '' };
+    return responses[args[0]] ?? { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 };
 
 describe('Tmux', () => {
   it('hasSession true on code 0, false otherwise', async () => {
-    const ok = new Tmux(fake({ 'has-session': { code: 0, stdout: '', stderr: '' } }).run);
+    const ok = new Tmux(fake({ 'has-session': { ran: true, code: 0, stdout: '', stderr: '' } }).run);
     expect(await ok.hasSession('claude9-project-f')).toBe(true);
-    const no = new Tmux(fake({ 'has-session': { code: 1, stdout: '', stderr: '' } }).run);
+    const no = new Tmux(fake({ 'has-session': { ran: true, code: 1, stdout: '', stderr: '' } }).run);
     expect(await no.hasSession('claude9-project-f')).toBe(false);
   });
   it('panePid parses first pane pid', async () => {
-    const t = new Tmux(fake({ 'list-panes': { code: 0, stdout: '40613\n', stderr: '' } }).run);
+    const t = new Tmux(fake({ 'list-panes': { ran: true, code: 0, stdout: '40613\n', stderr: '' } }).run);
     expect(await t.panePid('x')).toBe(40613);
   });
   it('targets EXACTLY =cc-<id>: and sends literals with -l', async () => {
@@ -110,12 +110,12 @@ describe('Tmux', () => {
  *  (`ccd-session-verdict.test.ts`) so the twins cannot drift apart. */
 describe('classifyHasSession — three answers, not one boolean (D-309)', () => {
   it('live: has-session succeeded', () => {
-    expect(classifyHasSession({ code: 0, stdout: '', stderr: '' })).toEqual({ verdict: 'live' });
+    expect(classifyHasSession({ ran: true, code: 0, stdout: '', stderr: '' })).toEqual({ verdict: 'live' });
   });
 
   for (const row of VERDICT_MESSAGE_ROWS) {
     it(row.name, () => {
-      const v = classifyHasSession({ code: 1, stdout: '', stderr: `${row.message}\n` });
+      const v = classifyHasSession({ ran: true, code: 1, stdout: '', stderr: `${row.message}\n` });
       expect(v.verdict).toBe(row.expected);
       // The message IS the diagnosis (substrate-unreachable spec §2): an
       // unknown must carry it verbatim, because narrowing it here would repeat
@@ -130,7 +130,7 @@ describe('classifyHasSession — three answers, not one boolean (D-309)', () => 
     // SIGSTOPped tmux server blocks `has-session` indefinitely. The child dies
     // by signal having printed nothing; an empty detail is the blank marker
     // reason the spec forbids.
-    const v = classifyHasSession({ code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' });
+    const v = classifyHasSession({ ran: true, code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' });
     expect(v.verdict).toBe('unknown');
     if (v.verdict === 'unknown') {
       expect(v.detail).toContain('SIGTERM');
@@ -139,16 +139,16 @@ describe('classifyHasSession — three answers, not one boolean (D-309)', () => 
   });
 
   it('unknown with a NON-EMPTY detail when NOTHING was measured — the older-agent / dropped-link shape', () => {
-    // `remote/runner.ts` synthesizes `{code:1, stdout:'', stderr:<message>}` on
+    // `remote/runner.ts` synthesizes `{ran: true, code:1, stdout:'', stderr:<message>}` on
     // a transport failure, but an older agent frame can arrive with all three
     // fields defaulted. Absence of evidence is still not evidence of absence.
-    const v = classifyHasSession({ code: 1, stdout: '', stderr: '' });
+    const v = classifyHasSession({ ran: true, code: 1, stdout: '', stderr: '' });
     expect(v.verdict).toBe('unknown');
     if (v.verdict === 'unknown') expect(v.detail.trim()).not.toBe('');
   });
 
   it('sessionVerdict wires the classifier to the has-session argv; hasSession derives, true only for live', async () => {
-    const wedged = fake({ 'has-session': { code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default\n' } });
+    const wedged = fake({ 'has-session': { ran: true, code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default\n' } });
     const t = new Tmux(wedged.run);
     expect((await t.sessionVerdict('myid')).verdict).toBe('unknown');
     expect(wedged.calls[0]).toEqual(['tmux', 'has-session', '-t', '=cc-myid:']);
@@ -156,7 +156,7 @@ describe('classifyHasSession — three answers, not one boolean (D-309)', () => 
     // the callers that kept the boolean — their deliberate collapses are
     // documented at each site, not here.
     expect(await t.hasSession('myid')).toBe(false);
-    const gone = new Tmux(fake({ 'has-session': { code: 1, stdout: '', stderr: "can't find session: cc-myid\n" } }).run);
+    const gone = new Tmux(fake({ 'has-session': { ran: true, code: 1, stdout: '', stderr: "can't find session: cc-myid\n" } }).run);
     expect((await gone.sessionVerdict('myid')).verdict).toBe('gone');
     expect(await gone.hasSession('myid')).toBe(false);
   });
@@ -166,8 +166,8 @@ describe('§1.4/§1.7 — ExecResult.killed is OPTIONAL, and realRunner MEASURES
   const here = path.dirname(fileURLToPath(import.meta.url));
   const ccrcRoot = path.resolve(here, '..', '..');
 
-  it('accepts a bare {code,stdout,stderr} literal — 249 of them exist across 32 files', () => {
-    const r: ExecResult = { code: 0, stdout: '', stderr: '' };
+  it('accepts a bare {ran: true, code,stdout,stderr} literal — 249 of them exist across 32 files', () => {
+    const r: ExecResult = { ran: true, code: 0, stdout: '', stderr: '' };
     expect(r.killed).toBeUndefined();
     expect(r.signal).toBeUndefined();
   });

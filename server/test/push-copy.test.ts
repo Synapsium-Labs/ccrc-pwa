@@ -78,15 +78,15 @@ function seedSessions(home: string, specs: string[]): Map<string, Seeded> {
  *  the busy→idle edge under test can fire a push. */
 function runnerFor(info: Map<string, Seeded>, pane = 'ready\n❯ \n'): Runner {
   return async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') {
       const target = args[2] ?? '';
       const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';   // the exact target `=cc-<id>:` (D-3525)
       const pid = info.get(id)?.pid;
-      return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
+      return { ran: true, code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
     }
-    if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: pane, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
 }
 
@@ -517,7 +517,7 @@ describe('an overload tick whose panePid reads fail fires no "✓ Finished" push
       push,
       sessions: [...ids, 'cc-quiet'].map((id) => `project-a/${id}`),
       wrapRunner: (seeded) => async (cmd, args) => (overloaded && args[0] === 'list-panes'
-        ? { code: 1, stdout: '', stderr: 'server exited unexpectedly' }
+        ? { ran: true, code: 1, stdout: '', stderr: 'server exited unexpectedly' }
         : seeded(cmd, args)),
     });
 
@@ -568,10 +568,10 @@ describe('ask notifications carry actions only where the route would accept them
     const home = mkTmp('ccrc-');
     const info = seedSessions(home, [spec]);
     const runner: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${info.get(id)!.pid}\n`, stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${info.get(id)!.pid}\n`, stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: pane, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const coord = opts.coord ? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))) : undefined;
     const w = new FleetWatcher({

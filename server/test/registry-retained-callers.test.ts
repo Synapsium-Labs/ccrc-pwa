@@ -140,9 +140,9 @@ describe('the watch sweeps omit a refused row (spec §2.3)', () => {
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'ws-rename') {
         renames.push([...args]);
-        return { code: 0, stdout: JSON.stringify({ renamed: args[2], old: 'ws/quiet-mesa', new: args[4] }), stderr: '' };
+        return { ran: true, code: 0, stdout: JSON.stringify({ renamed: args[2], old: 'ws/quiet-mesa', new: args[4] }), stderr: '' };
       }
-      return { code: 1, stdout: '', stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     };
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 2000, cachePathIn(home));
 
@@ -168,13 +168,13 @@ describe('the watch sweeps omit a refused row (spec §2.3)', () => {
       if (args[0] === 'pr-state') {
         prCalls.push([...args]);
         return args[2] === 'demo'
-          ? { code: 0, stdout: mergedLine(VALID), stderr: '' }
-          : { code: 1, stdout: '', stderr: 'gh unreachable' };
+          ? { ran: true, code: 0, stdout: mergedLine(VALID), stderr: '' }
+          : { ran: true, code: 1, stdout: '', stderr: 'gh unreachable' };
       }
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000, cachePathIn(home));
     try {
@@ -199,10 +199,10 @@ describe('the watch sweeps omit a refused row (spec §2.3)', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const captures: string[][] = [];
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'capture-pane') { captures.push([...args]); return { code: 0, stdout: '', stderr: '' }; }
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'capture-pane') { captures.push([...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; }
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000, cachePathIn(home));
     try {

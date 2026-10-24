@@ -37,7 +37,7 @@ describe('the live act, end to end: the control every stop below is measured aga
   it('the token on the argv is the one observation 2’s document carries', async () => {
     const T = 'e'.repeat(64) as CollectToken;
     const r = rig({ obs1: { token: T, arrivedMono: T0 - INTERVAL } });
-    r.answerAudit(() => ({ code: 0, stdout: auditDoc({ witness: r.witness, token: T }), stderr: '' }));
+    r.answerAudit(() => ({ ran: true, code: 0, stdout: auditDoc({ witness: r.witness, token: T }), stderr: '' }));
     await collectTempRoot(r.deps, job);
     expect(r.attempts[1]).toEqual(actOf(T));
   });
@@ -53,7 +53,7 @@ describe('the live act, end to end: the control every stop below is measured aga
     r.hooks.act = () => { r.lane.advance(9); };
     r.answerAct(() => {
       if (how === 'reject') throw new Error('the agent link closed');
-      return { code: 1, stdout: '', stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     });
     expect(await collectTempRoot(r.deps, job))
       .toMatchObject({ kind: 'acted', composedMono: T0, result: { kind: 'no-document' }, arrived: { mono: T0 + 9 } });
@@ -126,7 +126,7 @@ describe('step 4 — observation 2 against observation 1', () => {
     ['an unmeasured probe', 'unmeasured', 1, { verdict: 'unmeasured', unmeasured: 'checkouts' }],
   ] as const)('%s is reported for the lane to fold, and nothing is composed', async (_what, kind, code, over) => {
     const r = rig();
-    r.answerAudit(() => ({ code, stdout: auditDoc({ witness: r.witness, ...over }), stderr: '' }));
+    r.answerAudit(() => ({ ran: true, code, stdout: auditDoc({ witness: r.witness, ...over }), stderr: '' }));
     expect(await collectTempRoot(r.deps, job))
       .toMatchObject({ kind: 'answered', step: 4, why: 'not-collectable', audit: { value: { kind } } });
     expect(r.attempts).toEqual([AUDIT]);
@@ -136,7 +136,7 @@ describe('step 4 — observation 2 against observation 1', () => {
     const r = rig();
     r.answerAudit(() => {
       if (how === 'reject') throw new Error('the runner was killed');
-      return { code: 1, stdout: '', stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     });
     expect(await collectTempRoot(r.deps, job))
       .toMatchObject({ kind: 'answered', step: 4, why: 'not-collectable', audit: { value: { kind: 'no-document' } } });

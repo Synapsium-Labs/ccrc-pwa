@@ -66,10 +66,10 @@ const harness = async (cfg: Cfg) => {
 
   const runCcd = async (argv: CcdArgv): Promise<CcdResult> => {
     if (argv[0] === 'ws-add') seedRow(home, NEW_ID);
-    return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+    return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
   };
 
-  const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
+  const base = testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
   const conf = base.cfg;
 
   // The fixture roster maps wrapper `claude` to suffix `.claude`, and NOTHING in
@@ -169,12 +169,12 @@ describe('the dispatch preflight measures the worker skill and never refuses', (
     // Bind a session that has NO registry row — the resume arm's tolerated case.
     coord.setSession(opened.id, 'demo-ghost-session');
 
-    const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const base = testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
     const asked: string[] = [];
     const deps = {
       ...base, io: localIO, coord,
       runCcd: async (): Promise<CcdResult> =>
-        ({ ok: true, stdout: '', stderr: '', killed: false, signal: null }),
+        ({ ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null }),
       configDir: (w: string): string | undefined => {
         asked.push(w);
         return configDirFor(base.cfg, w);

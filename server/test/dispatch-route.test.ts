@@ -58,18 +58,18 @@ function makeRunner(home: string, cfg: RunnerCfg = {}): { run: Runner; calls: st
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `${verb} failed` };
+    if (cfg.fail?.has(verb)) return { ran: true, code: 1, stdout: '', stderr: `${verb} failed` };
     if (verb === 'ws-add') {
       const ids = cfg.wsAddCreates ?? [`${PROJECT}-fresh`];
       for (const id of ids) seed(home, id);
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
     if (verb === 'capture-pane') {
       const p = panes[Math.min(capIdx, panes.length - 1)]!;
       capIdx++;
-      return { code: 0, stdout: p, stderr: '' };
+      return { ran: true, code: 0, stdout: p, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };   // ensure, ws-hold, route, send-keys, has-session…
+    return { ran: true, code: 0, stdout: '', stderr: '' };   // ensure, ws-hold, route, send-keys, has-session…
   };
   return { run, calls };
 }

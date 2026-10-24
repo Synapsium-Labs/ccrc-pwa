@@ -65,12 +65,12 @@ function makeRunner(home: string, cfg: { wsAddCreates?: string[]; fail?: Readonl
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `${verb} failed` };
+    if (cfg.fail?.has(verb)) return { ran: true, code: 1, stdout: '', stderr: `${verb} failed` };
     if (verb === 'ws-add') {
       for (const id of cfg.wsAddCreates ?? [`${PROJECT}-fresh`]) seed(home, id);
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 }
@@ -133,7 +133,7 @@ function makeCountingRunner(home: string): { run: Runner; calls: string[][] } {
       n += 1;
       seed(home, `demo-race${n}`);
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 }
