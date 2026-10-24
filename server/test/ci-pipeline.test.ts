@@ -140,7 +140,7 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   });
 
   it('the required legs and the browser leg skip by STEP, only on a refresh or a rebuild', () => {
-    const leg = "${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
+    const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
     for (const id of ['test', 'build-pwa', 'browser-pwa']) {
       expect(job(id), `${id}: the job-level leg switch`).toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
       const s = steps(job(id));
@@ -163,7 +163,7 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
 
   // storybook-a11y is advisory, so it skips WHOLE (a job-level `if:`) where
   // the required legs skip step by step — but on the very predicate their
-  // `CCRC_LEG` switch reads, so a push to main runs no test leg of any kind.
+  // `CCRC_LEG` switch reads, so an hourly refresh runs no test leg of any kind.
   // Derived from the `test` leg's own switch: change one predicate without the
   // other and this goes red.
   it('storybook-a11y skips on the required legs\' own refresh/rebuild predicate, and never on a merge-queue run', () => {
@@ -474,12 +474,12 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
 });
 
 describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23 §3, §4.3)', () => {
-  it('triggers: pull_request, main pushes, a daily schedule, dispatch and call — both with a mode', () => {
+  it('triggers: pull_request, a daily and an hourly schedule, dispatch and call — both with a mode, and no push (D-6769)', () => {
     const on = section(read(CI), 'on');
-    expect(on).toMatch(/^ {2}push:\n {4}branches: \[main\]$/m);
+    expect(on, 'a push to main starts no run: the refresh is hourly').not.toMatch(/^ {2}push:/m);
     expect(on).toMatch(/^ {2}pull_request:$/m);
-    expect(on).toMatch(/^ {2}schedule:\n {4}- cron: '17 3 \* \* \*'$/m);
-    expect(on).toMatch(/^ {2}workflow_dispatch:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: choice\n {8}options: \[full, rebuild\]\n {8}default: full$/m);
+    expect(on).toMatch(/^ {2}schedule:\n {4}- cron: '17 3 \* \* \*'\n {4}- cron: '23 \* \* \* \*'$/m);
+    expect(on).toMatch(/^ {2}workflow_dispatch:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: choice\n {8}options: \[full, rebuild, refresh\]\n {8}default: full$/m);
     expect(on).toMatch(/^ {2}workflow_call:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: string$/m);
     expect(on, 'the stable gate reads this output').toMatch(/^ {8}value: \$\{\{ jobs\.full-suite\.outputs\.verdict \}\}$/m);
   });
@@ -528,7 +528,7 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
   });
 
   it('probe-macos runs on pull requests and the daily schedule only — never gating a called or dispatched full run', () => {
-    expect(jobKey(job('probe-macos'), 'if')).toBe("github.event_name == 'pull_request' || github.event_name == 'schedule'");
+    expect(jobKey(job('probe-macos'), 'if')).toBe("github.event_name == 'pull_request' || (github.event_name == 'schedule' && github.event.schedule != '23 * * * *')");
   });
 
   it('every job declares a deadline between 1 and 60 minutes', () => {
@@ -868,20 +868,32 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     expect(build(0, { trace: 'refresh', mapSha: 'a'.repeat(40), handedMap: true }).log).toMatch(/^\.github\/ci\/testmap\.mjs refresh --sha f{40} --old \S+\/select-inputs\/testmap\.json /m);
   });
 
-  it('the map is uploaded whatever the build said, and a last step turns the job red when it said 3 or 4', () => {
+  it('the map is uploaded whatever the build said, and a last step REPORTS a 3 or a 4 without failing the job (D-6769)', () => {
     const b = job('map-build');
     const names = steps(b).map((st) => /^ {6}- (?:name: (.*)|uses: .*)$/m.exec(st)?.[1] ?? '');
     const upload = names.indexOf('Keep the map as an artifact');
-    const red = names.indexOf('Red if the map build reported news');
+    const report = names.indexOf('Report what the map build found');
     expect(upload).toBeGreaterThan(-1);
-    expect(red).toBe(names.length - 1);
-    expect(red).toBeGreaterThan(upload);
+    expect(report).toBe(names.length - 1);
+    expect(report).toBeGreaterThan(upload);
     expect(step(b, 'Build the map')).toMatch(/^ {8}id: build$/m);
-    const last = step(b, 'Red if the map build reported news');
+    const last = step(b, 'Report what the map build found');
     expect(last).toMatch(/^ {8}if: steps\.build\.outputs\.rc != '0'$/m);
-    expect(runScript(last)).toMatch(/\nexit 1\n$/);
+    const script = runScript(last);
+    expect(script, 'the news is an annotation').toContain('::warning::');
+    expect(script, 'and a job summary').toContain('>> "$GITHUB_STEP_SUMMARY"');
+    expect(script, 'and it never fails the job').not.toMatch(/^\s*exit\b|::error::/m);
     // The upload is gated by the pre-upload check only — never by the build's code.
     expect(step(b, 'Keep the map as an artifact')).not.toContain('steps.build');
+  });
+
+  it('the refresh is hourly and coalesced: its own group, never cancelled, and every refresh predicate names the hourly cron (D-6769)', () => {
+    const src = read(CI);
+    const g = /^ {2}group: (.*)$/m.exec(section(src, 'concurrency'))?.[1] ?? '';
+    expect(g).toContain("(github.event.schedule == '23 * * * *' || inputs.mode == 'refresh') && 'refresh'");
+    expect(section(src, 'concurrency')).toMatch(/cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
+    expect(step(job('select'), 'Select')).toContain("INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 * * * *' && 'refresh') || '' }}");
+    expect(src).not.toMatch(/github\.event_name == 'push'/);
   });
 });
 
@@ -976,7 +988,7 @@ describe('ci.yml: the daily run\'s "already green?" question fails SAFE (design 
 
   it('asks main-artifact.mjs green-full-suite, on the schedule only, with the token the module reads', () => {
     const st = step(job('select'), 'Does this commit already carry a green full-suite?');
-    expect(st).toMatch(/^ {8}if: github\.event_name == 'schedule'$/m);
+    expect(st).toMatch(/^ {8}if: github\.event_name == 'schedule' && github\.event\.schedule != '23 \* \* \* \*'$/m);
     expect(st).toMatch(/^ {8}env:\n {10}GITHUB_TOKEN: \$\{\{ github\.token \}\}\n {10}REPO: \$\{\{ github\.repository \}\}\n {10}REPO_ID: \$\{\{ github\.repository_id \}\}\n {10}SHA: \$\{\{ github\.sha \}\}\n {8}run: \|$/m);
     expect(ask('echo found=true').log).toBe(`.github/ci/main-artifact.mjs green-full-suite --repo o/r --repo-id 1001 --sha ${'f'.repeat(40)}\n`);
   });
@@ -1096,7 +1108,7 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
   });
 
   it('skips by STEP, only on a refresh or a rebuild, like the required legs', () => {
-    const leg = "${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
+    const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
     const b = job('node-floor');
     expect(b, 'the job-level leg switch').toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
     const s = steps(b);

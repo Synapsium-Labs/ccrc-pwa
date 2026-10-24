@@ -210,6 +210,13 @@ describe('decideMode', () => {
     expect(decideMode({ event: 'pull_request', fullGreen: false })).toEqual({ tests: 'selected', trace: 'none', skip: false });
   });
 
+  it("the hourly schedule's refresh (input mode refresh) -> none / refresh, never a selection, and a dispatch can ask for it too (D-6769)", () => {
+    expect(decideMode({ event: 'schedule', inputMode: 'refresh', fullGreen: false })).toEqual({ tests: 'none', trace: 'refresh', skip: false });
+    expect(decideMode({ event: 'workflow_dispatch', inputMode: 'refresh', fullGreen: false })).toEqual({ tests: 'none', trace: 'refresh', skip: false });
+    expect(modeInvariantViolation('schedule', 'refresh', 'selected')).toMatch(/refresh/);
+    expect(modeInvariantViolation('schedule', 'refresh', 'none')).toBeNull();
+  });
+
   it('push with no inputMode -> none/refresh', () => {
     expect(decideMode({ event: 'push', fullGreen: false })).toEqual({ tests: 'none', trace: 'refresh', skip: false });
   });
@@ -546,7 +553,7 @@ function allFilesInMatrix(matrixJson: string): string[] {
 describe('select.mjs CLI — push (refresh)', () => {
   it('tests: none; trace: refresh with the affected list, not the whole tree', () => {
     const { repo, mapFile, baseSha } = buildMainFixture();
-    // --input-mode omitted, as ci.yml omits it on a push to main.
+    // --input-mode omitted, as a call from release-stable omits it.
     const { status, outputs } = runSelect(repo, { event: 'push', mapFile });
 
     expect(status).toBe(0);

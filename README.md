@@ -6578,8 +6578,8 @@ runs the same selection and `probe-macos` a fixed probe; neither blocks a pull r
 `.github/` or `server/scripts/`, to a `package.json` or lockfile, a `vitest.*config.*`, a
 `tsconfig*.json`, `.gitattributes` or `.npmrc`, a symlink, a path the map's own baseline reads, or a
 missing map runs the whole server suite instead. A **merge-queue** run (`merge_group`) runs what a
-pull request runs, minus the macOS legs. A **push to `main`** runs no test legs: it re-traces what the
-merge affected and refreshes the map. The **daily** run runs every leg in full, macOS included, ending
+pull request runs, minus the macOS legs. A **push to `main`** starts no run; an **hourly** refresh runs no test legs: it re-traces what
+every merge since the last one affected and refreshes the map. The **daily** run runs every leg in full, macOS included, ending
 in `full-suite` — skipped when `main`'s head already carries a green one from a trusted run;
 `gh workflow run ci.yml --ref <branch> -f mode=full` asks for a full run by hand. A promotion to
 `stable` needs a green `full-suite` on its commit, and `release-stable.yml` runs one first when none

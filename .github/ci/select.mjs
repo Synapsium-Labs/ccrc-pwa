@@ -45,7 +45,8 @@ import { planShards, toMatrix, PROFILES } from './shards.mjs';
  *                                                 plain-bash check, so a PR cannot talk its own selector out of a
  *                                                 full run). A merge-queue run runs what a pull request runs
  *                                                 (operator ruling 2026-09-28, landing-order wave 2).
- *   2. `push` with no `inputMode`               -> none / refresh
+ *   2. `inputMode === 'refresh'`                 -> none / refresh (ci.yml passes it on the hourly schedule, and a
+ *                                                 manual dispatch can; D-6769)
  *   3. `schedule`                                -> fullGreen ? none/none/skip : full/rebuild
  *   4. `inputMode === 'full'`                    -> full / none
  *   5. `inputMode === 'rebuild'`                  -> none / rebuild
@@ -60,7 +61,7 @@ export function decideMode({ event, inputMode, fullGreen }) {
       ? { tests: 'full', trace: 'none', skip: false }
       : { tests: 'selected', trace: 'none', skip: false };
   }
-  if (event === 'push' && !inputMode) {
+  if (inputMode === 'refresh' || (event === 'push' && !inputMode)) {
     return { tests: 'none', trace: 'refresh', skip: false };
   }
   if (event === 'schedule') {
@@ -87,8 +88,8 @@ export function decideMode({ event, inputMode, fullGreen }) {
  */
 export function modeInvariantViolation(event, inputMode, tests) {
   if ((event === 'pull_request' || event === 'merge_group') && tests === 'none') return `a ${event} answered tests: none`;
-  if (tests === 'selected' && (event === 'schedule' || (event === 'push' && !inputMode) || inputMode === 'rebuild')) {
-    return `a ${inputMode === 'rebuild' ? 'rebuild' : event} answered tests: selected`;
+  if (tests === 'selected' && (event === 'schedule' || (event === 'push' && !inputMode) || inputMode === 'refresh' || inputMode === 'rebuild')) {
+    return `a ${inputMode === 'rebuild' || inputMode === 'refresh' ? inputMode : event} answered tests: selected`;
   }
   return null;
 }

@@ -13,8 +13,10 @@
 #                       runs (operator ruling 2026-09-28), the pipeline check
 #                       included, in a concurrency group of its own; no macOS
 #                       leg and no full-suite.
-#   push to main        refresh  — re-trace the tests the merge affected and
-#                       update the map. No test legs.
+#   schedule (hourly)   refresh  — re-trace the tests every merge since the
+#                       last refresh affected and update the map. No test legs.
+#                       Not a push trigger: a refresh per merge held 8-15 runner
+#                       slots for 25-60 minutes and gated nothing (D-6769).
 #   schedule (daily)    full     — every leg, macOS included, plus a traced
 #                       rebuild of the map. Skipped when main's head already
 #                       carries a green `full-suite`.
@@ -44,20 +46,23 @@ permissions:
   contents: read
 
 on:
-  push:
-    branches: [main]
   pull_request:
   # THE MERGE QUEUE (landing-order stage 2, spec §5.2). A queue runs the
   # REQUIRED checks on the group it built before it merges, and a workflow that
   # does not listen for `merge_group` never reports them — the entry waits out
   # the queue's timeout and is removed. This trigger is on `main` BEFORE the
   # operator turns the queue on (the spec's rollout step 1). A queue run runs
-  # what a pull request runs (the mode table above). `push` stays
-  # `branches: [main]`, so the queue's own `gh-readonly-queue/main/*` branches
-  # start no second run.
+  # what a pull request runs (the mode table above). There is no `push`
+  # trigger, so the queue's own `gh-readonly-queue/main/*` branches start no
+  # second run.
   merge_group:
+  # Two schedules. The daily one is the full run; the hourly one is the map
+  # refresh (D-6769). A refresh run is told apart by `github.event.schedule`
+  # being exactly the hourly cron, in every predicate below, so the string
+  # appears in each of them and server/test/ci-pipeline.test.ts pins that.
   schedule:
     - cron: '17 3 * * *'
+    - cron: '23 * * * *'
   # Manual re-run for the day the webhooks don't come: during the 2026-08-06
   # Actions incident GitHub processed ~15% of webhooks, so pushes and PR
   # events silently created NO run. `gh workflow run ci.yml --ref <branch>`
@@ -71,9 +76,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'full: every leg, a verdict (no trace). rebuild: trace every server test and rebuild the map.'
+        description: 'full: every leg, a verdict (no trace). rebuild: trace every server test and rebuild the map. refresh: re-trace what changed since the map and update it.'
         type: choice
-        options: [full, rebuild]
+        options: [full, rebuild, refresh]
         default: full
   workflow_call:
     inputs:
@@ -94,8 +99,11 @@ env:
   CCRC_SELECTION: enforce
 
 # Pull requests: one group per PR, and a newer push cancels the older run.
-# Everything else never cancels, and each mode has its own group, so a merge's
-# refresh can never cancel the daily run. `ci-` first because when
+# Everything else never cancels, and each mode has its own group, so an hourly
+# refresh can never cancel the daily run. The `refresh` group COALESCES: a
+# running refresh is never cancelled, and GitHub keeps at most one pending run
+# per group, replacing an older pending one with the newer, so the one that
+# starts next covers every merge since the last (D-6769). `ci-` first because when
 # release-stable.yml CALLS this file the group is evaluated in the caller's
 # context, where `github.workflow` is `release-stable` — without the prefix the
 # called run would wait on the caller's own group.
@@ -107,7 +115,7 @@ env:
 # could lose its checks, and the queue would remove the entry. Nothing cancels
 # one either — `cancel-in-progress` stays the pull_request event alone.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.run_id) || (github.event_name == 'push' && !inputs.mode) && 'refresh' || format('{0}-{1}-{2}', inputs.mode || 'full', github.event_name, github.ref_name) }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.run_id) || (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh') && 'refresh' || format('{0}-{1}-{2}', inputs.mode || 'full', github.event_name, github.ref_name) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -213,7 +221,7 @@ jobs:
       # CLI, answer "not green", which runs the suite — the safe direction.
       - name: Does this commit already carry a green full-suite?
         id: green
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule' && github.event.schedule != '23 * * * *'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -231,7 +239,7 @@ jobs:
         id: select
         env:
           EVENT: ${{ github.event_name }}
-          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 * * * *' && 'refresh') || '' }}
           FULL_GREEN: ${{ steps.green.outputs.full_green || 'false' }}
           PIPELINE_CHANGED: ${{ steps.pipeline.outputs.changed }}
         run: |
@@ -424,7 +432,7 @@ jobs:
     # Pinned — key AND ceiling — by server/test/oss-metadata.test.ts.
     timeout-minutes: 30
     env:
-      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     strategy:
       fail-fast: false
       matrix:
@@ -540,15 +548,15 @@ jobs:
   # THE SAME MODE SWITCH AS THE TEST LEGS, written as a job-level `if:`. The
   # `test` matrix and `build-pwa` skip by STEP only because they are required
   # by name and a skipped job never reports; this job is not required, so it
-  # skips whole, on exactly their `CCRC_LEG == 'skip'` predicate: a push to
-  # main (refresh — "no test legs") and a rebuild. And no merge-queue run,
+  # skips whole, on exactly their `CCRC_LEG == 'skip'` predicate: an hourly
+  # refresh ("no test legs") and a rebuild. And no merge-queue run,
   # like the other advisory legs. Pinned by server/test/ci-pipeline.test.ts.
   storybook-a11y:
     runs-on: ubuntu-latest
     # The browser download dominates; each skin's build and axe run is ~40s
     # for 180 stories, and the job runs one per skin.
     timeout-minutes: 20
-    if: github.event_name != 'merge_group' && !((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild')
+    if: github.event_name != 'merge_group' && !(github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild')
     steps:
       # No token left behind: at this checkout major the token sits in a file
       # under the runner's temp directory only for the checkout's own fetch,
@@ -704,7 +712,7 @@ jobs:
   probe-macos:
     # Pull requests and the daily run only: an advisory probe must not gate a
     # dispatched full run, or release-stable's called one.
-    if: github.event_name == 'pull_request' || github.event_name == 'schedule'
+    if: github.event_name == 'pull_request' || (github.event_name == 'schedule' && github.event.schedule != '23 * * * *')
     runs-on: macos-latest
     # 25, not 10. The first run was cut at 10 with the auth suite still going,
     # and the reason is D-2661 rather than the suite being big: several cases
@@ -786,7 +794,7 @@ jobs:
     timeout-minutes: 15
     # Required by name, like `test`: no job-level `if:`, steps skip instead.
     env:
-      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
@@ -839,7 +847,7 @@ jobs:
     # cache and a slow Chrome start, as build-pwa's is.
     timeout-minutes: 15
     env:
-      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
@@ -889,7 +897,7 @@ jobs:
     # minutes; the list runs in seconds. 30 is a deadline, not an estimate.
     timeout-minutes: 30
     env:
-      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
@@ -1115,13 +1123,26 @@ jobs:
       # Last, so the map above is published first: the Build step's
       # annotations name each test (3: newly fails under trace; 4: a floor test
       # written unknown). Both stay selected — an unknown test always runs.
-      - name: Red if the map build reported news
+      # News is REPORTED, not failed (D-6769): the hourly refresh gates
+      # nothing, a red one would only page whoever is watching main, and the
+      # map it published is correct. The daily rebuild uses the same step; its
+      # verdict is the full-suite job, not this one.
+      - name: Report what the map build found
         if: steps.build.outputs.rc != '0'
         env:
           RC: ${{ steps.build.outputs.rc }}
         run: |
-          echo "::error::the map was published, but testmap.mjs exited $RC — read the Build the map step's annotations"
-          exit 1
+          case "$RC" in
+            3) what='at least one test newly fails under trace, or timed out' ;;
+            4) what='a floor test lost its breadth and was written unknown' ;;
+            *) what="testmap.mjs exited $RC" ;;
+          esac
+          echo "::warning::the map was published, and the map build reported news: $what — read the Build the map step's annotations"
+          {
+            echo '### Map build news'
+            echo
+            echo "testmap.mjs exited \`$RC\`: $what. The map was published; those tests stay selected until a clean trace replaces them."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # The per-file durations the shard planner packs by, from the untraced
   # full run's JSON reports, published as the `testtimes` artifact. Only on
