@@ -54,6 +54,15 @@ The review's report (`review-886-baf09f32.md`, sent with mail 8813) was gone whe
 - [ ] Amend every comment or plan claim the new majors falsify.
 - [ ] Commit; measure the mutants.
 
+What the new majors change for this repository, read from each action's source at the tag its floating major names on 2026-10-24 (cited in As built):
+
+| Action | Major (tag, commit) | What changes here |
+|---|---|---|
+| `actions/checkout` | v7 (`v7.0.1`, `3d3c42e5aac5`) | Since v6 a persisted credential is a separate git config file under `$RUNNER_TEMP`, which `.git/config` includes by `includeIf "gitdir:…"`; the token is no longer in `.git/config`. With `persist-credentials: false` the token is still written for the checkout's own fetch and removed in the step's `finally`, so nothing is left after the step. With the default, a later `git push` from the workspace authenticates through the include, and the post step removes it at the job's end. v7 also refuses fork-PR checkouts under `pull_request_target`/`workflow_run`, which no workflow here uses. |
+| `actions/setup-node` | v7 (`v7.1.0`, `949feb2413d6`) | An explicit `cache: npm` with `cache-dependency-path` restores exactly as at v4. The automatic cache (v5, narrowed in v6) reads only the root `package.json`'s package-manager fields, and this repository has no root `package.json`. `node-version-file: server/package.json` reads `engines.node`, as before: the file has no `volta` or `devEngines`. |
+| `actions/upload-artifact` | v7 (`v7.0.2`, `cf430e030ddb`) | Every input this repository passes keeps its meaning; the new `archive` input defaults to `true`, so the hand-over is still one zip. |
+| `actions/download-artifact` | v8 (`v8.0.2`, `9000827ccba6`) | Same extractor as v7 (unzip-stream 0.3.4, the same per-segment sanitiser), so every zip entry is still confined under `path`. A digest mismatch now fails the step by default. New: a blob whose content type is not a zip is written raw, as ONE file named by its basename, directly into `path`. Either way the files land in `release-in`, where verify's exact file set refuses anything but the two expected files. The new inputs (`digest-mismatch`, `skip-decompress`) are outside the guard's exact `with:` set, so a write job cannot pass them. |
+
 ### Task 4: the gate and the PR
 
 - [ ] The brief's gates, from `server/`, one at a time, foreground.
