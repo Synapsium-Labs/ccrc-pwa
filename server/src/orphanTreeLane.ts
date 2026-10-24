@@ -228,8 +228,15 @@ export function orphanPopulate(
   return next;
 }
 
-/** A tree nested inside a workspace (DR-23): a candidate only when that workspace is a coordinator some open run is
- *  claimed by. A worker's tree goes with its workspace, and a coordinator list that could not be read keeps everything. */
+/** The workspaces that are coordinators (G4): every id any run was ever claimed by, in any state or generation (open,
+ *  closed, unplaced, displaced) plus the open ones. A throw from either read is null, which keeps the tree. */
+export function orphanCoordinatorSet(coord: { childReclaimCoordinatorClaims(): ReadonlyMap<string, unknown>; openCoordinatorIds(): Iterable<string> }): ReadonlySet<string> | null {
+  try {
+    return new Set([...coord.childReclaimCoordinatorClaims().keys(), ...coord.openCoordinatorIds()]);
+  } catch { return null; }
+}
+
+/** A tree nested inside a workspace (DR-23): a candidate only when that workspace is a coordinator (any run's claimedBy, in any state). A worker's tree goes with its workspace, and a coordinator list that could not be read keeps everything. */
 export function orphanInsideVerdict(inside: string | null, coordinators: ReadonlySet<string> | null): 'candidate' | 'goes-with-workspace' | 'unmeasured' {
   if (inside === null) return 'candidate';
   if (coordinators === null) return 'unmeasured';
