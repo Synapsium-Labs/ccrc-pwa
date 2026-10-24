@@ -9,7 +9,7 @@ import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { readDiskEpisode } from '../src/diskepisode.js';
-import { diskNotice, diskVerdict, type DiskVerdict } from '../src/disk.js';
+import { diskClearOfBand, diskNotice, diskVerdict, type DiskVerdict } from '../src/disk.js';
 import { localIO, type FleetIO, type MeasuredDisk } from '../src/io.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { PushPayload } from '../src/push.js';
@@ -27,6 +27,23 @@ const fsAt = (usedPct: number, dev = '8:1', roots: string[] = ['home', 'projects
 const verdict = (level: DiskLevel, usedPct: number, episode = 100, mountsDown: string[] = []): DiskVerdict => ({
   at: episode + 1, level, episode, mountsDown, expectedMounts: mountsDown.map((p) => ({ path: p, mounted: false })),
   filesystems: [{ ...fsAt(usedPct), level, pending: null }],
+});
+
+describe('diskClearOfBand: whether the disk has really cleared', () => {
+  const m = (...fs: DiskFilesystem[]): DiskMeasured => ({ filesystems: fs, expectedMounts: [], missing: [] });
+  it('is true below the clear band, false inside it and above', () => {
+    expect(diskClearOfBand(m(fsAt(40)))).toBe(true);
+    expect(diskClearOfBand(m(fsAt(84)))).toBe(false);
+    expect(diskClearOfBand(m(fsAt(90)))).toBe(false);
+  });
+  it('needs every filesystem clear, and inodes count too', () => {
+    expect(diskClearOfBand(m(fsAt(40, '1'), fsAt(84, '2')))).toBe(false);
+    expect(diskClearOfBand(m({ ...fsAt(40), filesFree: 100_000 }))).toBe(false);
+  });
+  it('a read with nothing measurable is not clear', () => {
+    expect(diskClearOfBand(m())).toBe(false);
+    expect(diskClearOfBand(m({ ...fsAt(40), sizeBytes: 0, files: 0 }))).toBe(false);
+  });
 });
 
 describe('diskNotice: what to say when the fleet level moves', () => {
@@ -210,8 +227,46 @@ describe('sweepDisk sends the notice through the funnel', () => {
     const first = await rig(home, [...hold(40), ...hold(86)], () => clock);
     for (let i = 0; i < 4; i += 1) { clock += 60_000; await first.sweep(); }
     expect(first.push.notify.mock.calls.length).toBe(1);
-    const again = await rig(home, [reading(40)], () => clock);
+    const again = await rig(home, [reading(84)], () => clock);
     await again.sweep();
     expect(readDiskEpisode(path.join(home, '.ccrc'))).not.toBeNull();
+  });
+
+  it('a boot reading below the clear band forgets the mark, though this process held no episode of its own', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const first = await rig(home, [...hold(40), ...hold(86)], () => clock);
+    for (let i = 0; i < 4; i += 1) { clock += 60_000; await first.sweep(); }
+    const again = await rig(home, [reading(40)], () => clock);
+    await again.sweep();
+    expect(readDiskEpisode(path.join(home, '.ccrc'))).toBeNull();
+  });
+
+  it('a stale mark never silences a new episode: warn, a restart inside the band, days at 40%, then a restart at a new rise', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const p1 = await rig(home, [...hold(40), ...hold(86)], () => clock);
+    for (let i = 0; i < 4; i += 1) { clock += 60_000; await p1.sweep(); }
+    expect(p1.push.notify.mock.calls.length).toBe(1);
+    clock += 3_600_000;
+    const p2 = await rig(home, [reading(84), reading(40), reading(40), reading(86)], () => clock);
+    for (let i = 0; i < 4; i += 1) { clock += 60_000; await p2.sweep(); }
+    expect(p2.push.notify.mock.calls.length).toBe(0);
+    clock += 6 * 3_600_000;
+    const p3 = await rig(home, [...hold(86)], () => clock);
+    for (let i = 0; i < 2; i += 1) { clock += 60_000; await p3.sweep(); }
+    expect(p3.push.notify.mock.calls.length).toBe(1);
+  });
+
+  it('a restart at 84% that then sees 86% stays quiet: the rise is the marked episode, not a new one', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const first = await rig(home, [...hold(40), ...hold(86)], () => clock);
+    for (let i = 0; i < 4; i += 1) { clock += 60_000; await first.sweep(); }
+    expect(first.push.notify.mock.calls.length).toBe(1);
+    clock += 3_600_000;
+    const again = await rig(home, [reading(84), ...hold(86)], () => clock);
+    for (let i = 0; i < 3; i += 1) { clock += 60_000; await again.sweep(); }
+    expect(again.push.notify.mock.calls.length).toBe(0);
   });
 });

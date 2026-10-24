@@ -62,6 +62,14 @@ function targetLevel(fs: DiskFilesystem, held: DiskLevel): DiskLevel {
   return 'ok';
 }
 
+/** Whether every MEASURED filesystem reads below the clear band (`DISK_WARN_PCT - DISK_CLEAR_MARGIN_PCT`, bytes and
+ *  inodes alike): the disk has really cleared, whatever any process remembers. A filesystem that tells nothing is
+ *  skipped, and a read with nothing measurable is NOT clear: the answer is "keep", never "forget". */
+export function diskClearOfBand(measured: DiskMeasured): boolean {
+  const readable = measured.filesystems.filter(measurable);
+  return readable.length > 0 && readable.every((fs) => !usedAtLeast(fs, DISK_WARN_PCT - DISK_CLEAR_MARGIN_PCT));
+}
+
 /** The fleet fold's order: `unmeasured` outranks `ok`, so a filesystem that cannot be read is never hidden by one that
  *  can; it still ranks below a measured `warn` or `critical`. */
 const RANK: Record<DiskLevel, number> = { ok: 0, unmeasured: 1, warn: 2, critical: 3 };

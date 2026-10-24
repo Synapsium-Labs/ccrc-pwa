@@ -69,7 +69,7 @@ import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput
 // The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
 import { randomUUID } from 'node:crypto';
 import type { MeasuredDirectoryRead, MeasuredDisk } from './io.js';
-import { diskNotice, diskVerdict, type DiskVerdict } from './disk.js';
+import { diskClearOfBand, diskNotice, diskVerdict, type DiskVerdict } from './disk.js';
 import { clearDiskEpisode, readDiskEpisode, writeDiskEpisode } from './diskepisode.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
@@ -7136,15 +7136,17 @@ export class FleetWatcher {
     // the one already archived; a clear to `ok` forgets the mark.
     const standingNow = verdict.level === 'warn' || verdict.level === 'critical';
     // The first standing verdict this process sees resumes the mark, even when an `unmeasured` pass (a missing mount's
-    // first pass) came before it; an `ok` seen first ends the resume window, since the mark is then stale.
+    // first pass) came before it; an `ok` below the clear band ends the window (the mark is then stale), one inside the band does not.
     if (standingNow && !this.diskEpisodeResumed) {
       this.diskEpisodeResumed = true;
       const marked = readDiskEpisode(this.deps.cfg.ccrcDir);
       if (marked !== null) verdict = { ...verdict, episode: marked };
-    } else if (verdict.level === 'ok') {
+    } else if (verdict.level === 'ok' && diskClearOfBand(read.measured)) {
+      // The mark's lifetime follows the MEASURED level, not this process's memory: a disk below the clear band has
+      // ended the episode, whether or not this process ever held it. A boot reading inside the band (ok by hysteresis
+      // alone) leaves the mark and the resume window open, so a rise that follows is still the marked episode.
       this.diskEpisodeResumed = true;
-      // The mark is forgotten only by a clear this process saw: the first reading after boot carries no hysteresis.
-      if (before?.episode !== undefined) clearDiskEpisode(this.deps.cfg.ccrcDir);
+      clearDiskEpisode(this.deps.cfg.ccrcDir);
     }
     this.diskState = verdict;
     this.raiseDiskNotice(before, verdict);
