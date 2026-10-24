@@ -1135,9 +1135,10 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
   // 100 000 characters and at that shape at about 16 000: the run must die naming the length, every sentence that leaves the
   // box (the die line, the fetching lines, update.json's detail) must stay within 200 characters, and the run must end in 30 s.
   const worstShape = (n: number): string => `x${'"a'.repeat(Math.floor(n / 4))}@ ${'<x@y/'.repeat(Math.floor(n / 10))}`;
-  const boundedRun = (home: string, args: string[]): { r: Result; ms: number } => {
+  const boundedRun = (home: string, args: string[], locale?: string): { r: Result; ms: number } => {
     mkdirSync(join(home, 'tmp'), { recursive: true });
-    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases` };
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases`,
+      ...(locale === undefined ? {} : { LANG: locale, LC_ALL: locale }) };
     replantDoctorStubs(home);
     assertSpineFrontContained(env, home);
     assertNoRealTool(env, home);
@@ -1152,14 +1153,14 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(r.code, `stderr: ${r.stderr.slice(0, 2000)}`).toBe(1);
     const die = r.stderr.split('\n').filter((l) => l.startsWith(`ccrc: ${lead} is `));
     expect(die, r.stderr.slice(0, 2000)).toHaveLength(1);
-    expect(die[0]).toContain(`${lead} is ${value.length} characters, not a ccrc release's (starts: ${value.slice(0, 40)}) — refusing`);
+    expect(die[0]).toContain(`${lead} is ${value.length} bytes or not printable ASCII, not a ccrc release's (starts: ${value.slice(0, 40)}) — refusing`);
     expect(die[0].length, die[0]).toBeLessThanOrEqual(200);
     const fetching = r.stdout.split('\n').filter((l) => l.startsWith('update: fetching '));
     expect(fetching.length, r.stdout.slice(0, 2000)).toBeGreaterThan(0);
     for (const l of fetching) expect(l.length, l.slice(0, 300)).toBeLessThanOrEqual(200);
     const report = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
     expect(report['phase']).toBe('failed');
-    expect(String(report['detail'])).toContain(`${lead} is ${value.length} characters`);
+    expect(String(report['detail'])).toContain(`${lead} is ${value.length} bytes or not printable ASCII`);
     expect(String(report['detail']).length).toBeLessThanOrEqual(200);
     expect(r.stdout + r.stderr, 'more than 200 characters of the value left the box').not.toContain(value.slice(0, 201));
   };
@@ -1175,8 +1176,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       expect(localUrls(home), 'only SHA256SUMS was fetched').toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
     }, 150_000);
   }
-  // R45: the build.json version's excerpt is already free of control bytes (`_box_build_fields` refuses them); the tarball
-  // name has no such check, so its die prints the 40-character excerpt with every non-printable byte as `?`, read byte-wise.
+  // R45: each die prints its 40-byte excerpt with every byte outside printable ASCII as `?`, read byte-wise (LC_ALL=C).
   it('a 300-character tarball name with an ESC and a CR in its first 40 characters: the die and update.json\'s detail show ? for each, never the byte (D-6751, R45)', () => {
     const home = freshUpdateBox('ccrc-update-bound-name-ctl-');
     plantOldBox(home, { version: 'v1.0.0' });
@@ -1193,7 +1193,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     for (const [where, text] of [['stderr', r.stderr], ['update.json\'s detail', detail]] as const) {
       expect(text, `${where} carries ESC`).not.toContain('\x1b');
       expect(text, `${where} carries CR`).not.toContain('\r');
-      expect(text, where).toContain(`is 300 characters, not a ccrc release's (starts: ${shown})`);
+      expect(text, where).toContain(`is 300 bytes or not printable ASCII, not a ccrc release's (starts: ${shown})`);
     }
     const die = r.stderr.split('\n').filter((l) => l.startsWith("ccrc: SHA256SUMS's tarball name is "));
     expect(die, r.stderr).toHaveLength(1);
@@ -1214,6 +1214,131 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       expect(existsSync(join(home, 'staged-ccrc-argv')), 'the staged install ran').toBe(false);
     }, 150_000);
   }
+
+  // D-6751 (fix round 5 part 2, R46): a value of 200 bytes or fewer used to pass the bound and still carry raw ESC, BEL, CR
+  // or a C1 byte to the operator's terminal (the fetching line, the later dies). Each value must also be printable ASCII,
+  // matched byte-wise under LC_ALL=C, and its length is counted in bytes the same way, whatever the caller's locale.
+  const sumsName = (home: string, name: string | Buffer): void => {
+    const relDir = join(home, 'releases', 'latest', 'download');
+    mkdirSync(relDir, { recursive: true });
+    writeFileSync(join(relDir, 'SHA256SUMS'), Buffer.concat([Buffer.from(`${'a'.repeat(64)}  `), Buffer.from(name), Buffer.from('\n')]));
+  };
+  const nameDie = (r: Result): string[] => r.stderr.split('\n').filter((l) => l.startsWith("ccrc: SHA256SUMS's tarball name is "));
+  const reportRaw = (home: string): Buffer => readFileSync(join(home, '.ccrc', 'update.json'));
+  // A C0 byte but the newline, DEL, a C1 character, or U+FFFD (what a raw byte of 0x80 or more decodes to when it is not UTF-8).
+  const HOSTILE = /[\x00-\x09\x0b-\x1f\x7f-\x9f\ufffd]/;
+  // Every way out a hostile byte could take: stderr, every fetching line on stdout, and update.json.
+  const expectNoHostileByte = (home: string, r: Result): void => {
+    expect(r.stderr, 'stderr').not.toMatch(HOSTILE);
+    for (const l of r.stdout.split('\n').filter((x) => x.startsWith('update: fetching '))) expect(l, 'a fetching line').not.toMatch(HOSTILE);
+    expect(reportRaw(home).toString('utf8'), 'update.json').not.toMatch(HOSTILE);
+  };
+  it('a 30-byte tarball name carrying an OSC 52 clipboard write: the update dies at the read, and no ESC or BEL reaches stderr, a fetching line or update.json (D-6751, R46)', () => {
+    const home = freshUpdateBox('ccrc-update-bound-name-osc-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const name = 'ccrc-\x1b]52;c;SGVsbG8=\x07v1.tar.gz';
+    expect(Buffer.byteLength(name)).toBe(30);
+    sumsName(home, name);
+    const { r } = boundedRun(home, []);
+    expect(r.code, r.stderr).toBe(1);
+    expect(nameDie(r), r.stderr).toEqual(["ccrc: SHA256SUMS's tarball name is 30 bytes or not printable ASCII, not a ccrc release's (starts: ccrc-?]52;c;SGVsbG8=?v1.tar.gz) — refusing; nothing on this box was changed"]);
+    expectNoHostileByte(home, r);
+    expect(localUrls(home), 'only SHA256SUMS was fetched').toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
+  });
+  for (const locale of ['C.UTF-8', 'C'] as const) {
+    it(`a tarball name with one byte 0x9b (a C1 CSI), the caller's locale ${locale}: the update dies at the read and the byte reaches no way out (D-6751, R46)`, () => {
+      const home = freshUpdateBox('ccrc-update-bound-name-c1-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      sumsName(home, Buffer.concat([Buffer.from('ccrc-'), Buffer.from([0x9b]), Buffer.from('2Jv1.tar.gz')]));
+      const { r } = boundedRun(home, [], locale);
+      expect(r.code, r.stderr).toBe(1);
+      expect(nameDie(r), r.stderr).toEqual(["ccrc: SHA256SUMS's tarball name is 17 bytes or not printable ASCII, not a ccrc release's (starts: ccrc-?2Jv1.tar.gz) — refusing; nothing on this box was changed"]);
+      expectNoHostileByte(home, r);
+    });
+  }
+  it('a tarball name of exactly 200 bytes passes the bound, and one of 201 bytes dies at it (D-6751, R46)', () => {
+    for (const [n, dies] of [[200, false], [201, true]] as const) {
+      const home = freshUpdateBox(`ccrc-update-bound-name-edge-${n}-`);
+      plantOldBox(home, { version: 'v1.0.0' });
+      const name = `ccrc-${'x'.repeat(n - 12)}.tar.gz`;
+      expect(name.length).toBe(n);
+      sumsName(home, name);
+      const { r } = boundedRun(home, []);
+      expect(r.code, r.stderr).toBe(1);
+      if (dies) {
+        expect(nameDie(r), r.stderr).toEqual([`ccrc: SHA256SUMS's tarball name is 201 bytes or not printable ASCII, not a ccrc release's (starts: ${name.slice(0, 40)}) — refusing; nothing on this box was changed`]);
+      } else {
+        expect(nameDie(r), `${n} bytes: ${r.stderr}`).toEqual([]);
+        // The fetching line names HOME as `~` (`_upd_redact`), so it is matched by its tail.
+        const fetched = r.stdout.split('\n').filter((l) => l.startsWith('update: fetching ') && l.endsWith(`/releases/latest/download/${name} …`));
+        expect(fetched, `it reached the tarball: ${r.stdout}`).toHaveLength(1);
+        expect(r.stderr, 'and died fetching it').toContain(`ccrc: download failed: local://~/releases/latest/download/${name} `);
+      }
+    }
+  });
+  it('a tarball name of 201 bytes in 107 characters, the caller\'s locale UTF-8: the bound counts bytes and dies (D-6751, R46)', () => {
+    const home = freshUpdateBox('ccrc-update-bound-name-mb-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const name = `ccrc-${'é'.repeat(94)}v.tar.gz`;
+    expect([name.length, Buffer.byteLength(name)]).toEqual([107, 201]);
+    sumsName(home, name);
+    const { r } = boundedRun(home, [], 'C.UTF-8');
+    expect(r.code, r.stderr).toBe(1);
+    expect(nameDie(r), r.stderr).toEqual([`ccrc: SHA256SUMS's tarball name is 201 bytes or not printable ASCII, not a ccrc release's (starts: ccrc-${'?'.repeat(35)}) — refusing; nothing on this box was changed`]);
+  });
+  // The same bound on build.json's version (the unsigned path). A C0 byte such as ESC is refused before it, by
+  // `_box_build_fields` (its die names no value); a C1 byte is refused there only under a UTF-8 locale, so under C it
+  // reaches this bound (review 926's m7). The edge and the byte count are pinned the same way as the name's.
+  const unsignedVersion = (prefix: string, version: string, locale?: string): { home: string; r: Result } => {
+    const home = freshUpdateBox(prefix);
+    plantOldBox(home, { version: 'v1.0.0' });
+    const tree = stubTree(home, { version: 'v2.0.0' });
+    rmSync(join(tree, 'MANIFEST'));
+    writeFileSync(join(tree, 'build.json'), `${JSON.stringify({ sha: 'newsha0000000000000000000000000000000000', ref: 'release',
+      builtAt: '2026-08-21T00:00:00Z', dirty: false, version })}\n`);
+    writeManifest(tree);
+    packRelease(home, tree, { tag: 'v2.0.0', latest: false, bundle: false });
+    const { r } = boundedRun(home, ['--to', 'v2.0.0', '--allow-unsigned'], locale);
+    expect(r.code, r.stderr).toBe(1);
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the staged install ran').toBe(false);
+    return { home, r };
+  };
+  const versionDie = (r: Result): string[] => r.stderr.split('\n').filter((l) => l.startsWith("ccrc: build.json's version is "));
+  const MALFORMED = 'ccrc: the extracted tree\'s build.json is unreadable or malformed (rc 6)';
+  it('an unsigned release whose build.json version carries an OSC 52 write: the update dies, and no ESC or BEL reaches any way out (D-6751, R46)', () => {
+    const { home, r } = unsignedVersion('ccrc-update-bound-version-osc-', 'v\x1b]52;c;SGVsbG8=\x07');
+    expect(r.stderr.split('\n').filter((l) => l.startsWith(MALFORMED)), r.stderr).toHaveLength(1);
+    expectNoHostileByte(home, r);
+  }, 150_000);
+  for (const locale of ['C.UTF-8', 'C'] as const) {
+    it(`an unsigned release whose build.json version carries U+009B (a C1 CSI), the caller's locale ${locale}: the update dies, and the byte reaches no way out (D-6751, R46)`, () => {
+      const { home, r } = unsignedVersion('ccrc-update-bound-version-c1-', 'v2.0.0\u009b2J', locale);
+      if (locale === 'C') {
+        expect(versionDie(r), r.stderr).toEqual(["ccrc: build.json's version is 10 bytes or not printable ASCII, not a ccrc release's (starts: v2.0.0??2J) — refusing; nothing outside the staging dir was touched"]);
+      } else {
+        expect(r.stderr.split('\n').filter((l) => l.startsWith(MALFORMED)), r.stderr).toHaveLength(1);
+      }
+      expectNoHostileByte(home, r);
+    }, 150_000);
+  }
+  it('an unsigned release whose build.json version is exactly 200 bytes passes the bound, and one of 201 bytes dies at it (D-6751, R46)', () => {
+    for (const [n, dies] of [[200, false], [201, true]] as const) {
+      const version = `v${'x'.repeat(n - 1)}`;
+      const { r } = unsignedVersion(`ccrc-update-bound-version-edge-${n}-`, version);
+      if (dies) {
+        expect(versionDie(r), r.stderr).toEqual([`ccrc: build.json's version is 201 bytes or not printable ASCII, not a ccrc release's (starts: ${version.slice(0, 40)}) — refusing; nothing outside the staging dir was touched`]);
+      } else {
+        expect(versionDie(r), `${n} bytes: ${r.stderr}`).toEqual([]);
+        expect(r.stderr, 'it reached the version binding').toContain(`build.json says version '${version}' but the release was resolved as v2.0.0`);
+      }
+    }
+  }, 300_000);
+  it('an unsigned release whose build.json version is 201 bytes in 101 characters, the caller\'s locale UTF-8: the bound counts bytes and dies (D-6751, R46)', () => {
+    const version = `v${'é'.repeat(100)}`;
+    expect([version.length, Buffer.byteLength(version)]).toEqual([101, 201]);
+    const { r } = unsignedVersion('ccrc-update-bound-version-mb-', version, 'C.UTF-8');
+    expect(versionDie(r), r.stderr).toEqual([`ccrc: build.json's version is 201 bytes or not printable ASCII, not a ccrc release's (starts: v${'?'.repeat(39)}) — refusing; nothing outside the staging dir was touched`]);
+  }, 150_000);
 
   // Fix round 1 item 11 / review 155 C17: the floor death's update.json
   // DETAIL keeps its VERDICT (D-3249) even with a HOME long enough that the
