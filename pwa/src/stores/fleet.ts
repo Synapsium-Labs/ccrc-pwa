@@ -11,6 +11,7 @@ import { ReconnectingSocket, wsUrl } from '../lib/ws';
 import { isRecord } from '../lib/wire';
 import { warnNonArrayRoster } from '../lib/accounts';
 import type { DivergenceCensus } from '../fleet/integrityWords';
+import { keepRows } from '../fleet/keepRows';
 import type { AccountsConnect, AccountUsage, LaneWire } from '../../../shared/api';
 
 export interface FleetNotice {
@@ -314,16 +315,59 @@ export interface FleetStoreDeps {
 
 export type FleetStore = UseBoundStore<StoreApi<FleetState>>;
 
+/** The offline snapshot is written at most once in this window (C6, D-6438). */
+const SNAPSHOT_WINDOW_MS = 30_000;
+
 export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
   let socket: ReconnectingSocket | null = null;
   let noticeSeq = 0;
   let rosterTimer: ReturnType<typeof setInterval> | null = null;
+  // The snapshot throttle (C6, D-6438): a scheduler, so it lives here in the store (L4), never in `lib/offline.ts`.
+  // A frame is written at once when no 30 s window is open, and that write opens one; a frame inside an open window
+  // only replaces `pending`, and the window's end writes the newest and opens the next, so writes stay at most one
+  // per window. `pending` is also flushed when the page is hidden or going away and in `disconnect()`, so a closed
+  // or backgrounded page never loses the newest frame to the window. `saveFleetSnapshot`'s refusals (an empty or
+  // degraded frame) are unchanged. One honest edge: when the newest pending frame is one it refuses, the snapshot
+  // stays at the last frame actually written, which can be up to 30 s older than an accepted frame in between that
+  // the window replaced.
+  let pending: FleetSession[] | null = null;
+  let snapshotTimer: ReturnType<typeof setTimeout> | null = null;
 
   return create<FleetState>()((set, get) => {
     const nudge = (): void => socket?.nudge();
+    // ONE writer of the snapshot. `get().roster`, not the bare sessions: the roster travels independently (the poll
+    // below, not this socket), so the snapshot's own roster is read off current state at WRITE time rather than out
+    // of the `fleet` frame, which carries none.
+    const writeSnapshot = (sessions: FleetSession[]): void => saveFleetSnapshot(sessions, get().roster);
+    const openWindow = (): void => {
+      snapshotTimer = setTimeout(() => {
+        snapshotTimer = null;
+        if (pending === null) return; // nothing arrived in the window: the next frame writes at once
+        const sessions = pending;
+        pending = null;
+        writeSnapshot(sessions);
+        openWindow();
+      }, SNAPSHOT_WINDOW_MS);
+    };
+    const scheduleSnapshot = (sessions: FleetSession[]): void => {
+      if (snapshotTimer === null) {
+        writeSnapshot(sessions);
+        openWindow();
+      } else {
+        pending = sessions; // the newest replaces any older one
+      }
+    };
+    const flushSnapshot = (): void => {
+      if (pending === null) return;
+      const sessions = pending;
+      pending = null;
+      writeSnapshot(sessions);
+    };
     const onVisible = (): void => {
       if (document.visibilityState === 'visible') nudge();
+      else if (document.visibilityState === 'hidden') flushSnapshot();
     };
+    const onPageHide = (): void => flushSnapshot();
 
     // One read, not two (`sessions` and `roster` below both come off it) —
     // fix round 1, finding 3. Before this, a cold offline start hydrated
@@ -480,13 +524,16 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
             const msg = asFleetMsg(m);
             if (!msg) return; // unknown frame — ignore
             if (msg.type === 'fleet') {
-              // `get().roster`, not the bare sessions: the roster travels
-              // independently (the poll above, not this socket), so the
-              // snapshot's own roster has to be read off current state
-              // rather than out of `msg` — a `fleet` frame carries none.
-              saveFleetSnapshot(msg.sessions, get().roster); // keep the offline snapshot fresh
-              // ONE `set`, so the array and the flag can never disagree (D-1138).
-              set({ sessions: msg.sessions, fleetFrameSeen: true });
+              // Rows that did not change keep the objects they had (`keepRows`, C6), so an identical frame
+              // is the same array. The offline snapshot is kept fresh on the 30 s throttle above, whether or
+              // not the rows changed.
+              const sessions = keepRows(get().sessions, msg.sessions);
+              scheduleSnapshot(sessions);
+              // An identical array sets nothing once a frame has been seen; the FIRST frame still sets, even
+              // when it equals the hydrated snapshot, for the flag. ONE `set`, so the array and the flag can
+              // never disagree (D-1138).
+              if (sessions === get().sessions && get().fleetFrameSeen) return;
+              set({ sessions, fleetFrameSeen: true });
             } else if (msg.type === 'notice') {
               noticeSeq += 1;
               const notice: FleetNotice = { id: noticeSeq, message: msg.message };
@@ -536,14 +583,23 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         });
         socket.start();
         document.addEventListener('visibilitychange', onVisible);
+        window.addEventListener('pagehide', onPageHide);
         window.addEventListener('online', nudge);
       },
 
       disconnect() {
         document.removeEventListener('visibilitychange', onVisible);
+        window.removeEventListener('pagehide', onPageHide);
         window.removeEventListener('online', nudge);
         socket?.stop();
         socket = null;
+        // The newest pending frame is written, then the window is closed so nothing fires after this and a later
+        // connect's first frame writes at once.
+        flushSnapshot();
+        if (snapshotTimer !== null) {
+          clearTimeout(snapshotTimer);
+          snapshotTimer = null;
+        }
         if (rosterTimer !== null) {
           clearInterval(rosterTimer);
           rosterTimer = null;
