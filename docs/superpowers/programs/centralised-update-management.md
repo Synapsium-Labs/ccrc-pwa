@@ -6068,6 +6068,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   (20:00) measured 41 session-hours and none unmeasured, and no census refusal or staleness line was logged.
   `STATUS 2026-10-24T21:25:47Z fleet=v0.0.646 server=v0.0.646 health=v0.0.646 newest=v0.0.648 intent=*:dev/auto=off`
   `backups=fleet:206M/server:11419M disk=fleet:101G/server:19G`
+- **2026-10-24 22:25 UTC — monitoring: v0.0.647 to v0.0.651 released; boxes stay on v0.0.646, no anomalies.** v0.0.649 changes
+  `watch.ts` (#1239, the collect lane's loose census, in shadow) and v0.0.651 changes `ccd/session-hook.sh` (#1213, one more
+  guarded verb); neither touches the delegation lane, and the broker's soak was told before any tap.
+  `STATUS 2026-10-24T22:25:40Z fleet=v0.0.646 server=v0.0.646 health=v0.0.646 newest=v0.0.651 intent=*:dev/auto=off`
+  `backups=fleet:206M/server:11419M disk=fleet:101G/server:19G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
