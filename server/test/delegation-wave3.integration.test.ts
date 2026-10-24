@@ -1481,14 +1481,14 @@ describe('8. the closed scope census', () => {
   it('no new agent request operation, capability word or protocol bump: `readFrom` is the same op with one optional field', () => {
     expect([FLEET_PROTO, FLEET_PROTO_MIN]).toEqual([1, 1]);
     const proto = read('shared/agent-protocol.ts');
-    // the request ops are a small closed set: exactly main's fifteen (the fifteenth, `account`, is the accounts plan's A8, not
+    // the request ops are a small closed set: main's sixteen (the sixteenth, `disk`, is fleet disk retention's DR-2, D-6614; the fifteenth, `account`, is the accounts plan's A8, not
     // delegation's), whatever form a new one is declared in (an interface, or a `type X = { ...; op: 'x' }` alias, which an
-    // interface-shaped parse cannot see), and exactly main's fifteen members of the union
+    // interface-shaped parse cannot see), and exactly main's sixteen members of the union
     const ops = [...proto.matchAll(/\bop:\s*'([\w-]+)'/g)].map((m) => m[1]!);
     expect(ops, 'every request op the protocol declares').toEqual(['exec', 'read', 'readFrom', 'readB64', 'readdir', 'stat', 'lstat', 'caps', 'writeB64', 'tailOpen',
-      'tailClose', 'ptyOpen', 'update', 'token-sync', 'account']);
+      'tailClose', 'ptyOpen', 'update', 'token-sync', 'account', 'disk']);
     expect(/export type AgentReq = ([^;]+);/.exec(proto)![1]!.split('|').map((m) => m.trim()), 'the union of requests').toEqual(['ExecReq', 'ReadReq', 'ReadFromReq',
-      'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq', 'AccountOpReq']);
+      'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq', 'AccountOpReq', 'DiskReq']);
     expect(proto).toMatch(/export interface ReadFromReq \{ t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes\?: number \}/);
     expect(proto.match(/\bmaxBytes\b/g)!.length).toBeGreaterThan(0);
     // the ready frame, the advertised words and the agent's op switch carry nothing of the broker's

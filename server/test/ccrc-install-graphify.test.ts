@@ -26,6 +26,7 @@ import {
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
@@ -101,6 +102,7 @@ function healthyDoctorBox(home: string): void {
 
   stub('df', [
     'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
+    ...FIXTURE_DF_INODES_LINES,
     '[ "$1" = "-Pk" ] && [ -n "$2" ] || { echo "fixture df: unexpected argv: $*" >&2; exit 90; }',
     'echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
     'echo "/dev/fixture0    104857600  20971520 42991616      21% /"',

@@ -103,6 +103,7 @@ const SERVER_NEVER_SENDS: Readonly<Record<string, string>> = {
   ls: 'the operator\'s listing at a terminal',
   menu: 'the interactive picker at a terminal',
   pick: 'the picker\'s alias, at a terminal',
+  'ws-orphan': 'the server’s orphan-tree removal; the lane that sends it lands with its grants',
   'path-users': 'the read-only probe entry for ccd-tmp-sweep and operators; the server does not send it yet',
   'scratch-rescue': 'the temp sweep\'s box-local act (D-6632), never a server route',
   prefer: 'the operator sets a session\'s home account at a terminal',

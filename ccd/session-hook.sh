@@ -4480,7 +4480,7 @@ def hbt($sep; $head; $tail): any(split($sep; null)[];
   ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
   | $last >= 0 and (.[0:$last] | test($head)));
 def fmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "scratch-rescue", "roll", "claude") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "roll", "claude") as $v
      | select(test(CCD + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; CCD + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "tmux(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\ttmux"),
@@ -4499,7 +4499,7 @@ def norm: gsub("\\\\\n"; "") | gsub("\\$(?=[" + $q + "\"])"; "") | gsub("\\\\(?<
 def EXP: "(?:\\$\\{[^}]*\\}|\\$\\([^)]*\\)|\\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`)";
 def EXPV: WB + EXP + SP + "+" + FLAGS;
 def xmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "scratch-rescue", "roll", "claude") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "roll", "claude") as $v
      | select(test(EXPV + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),

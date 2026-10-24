@@ -177,7 +177,7 @@ _child_deny_json() {
     heads_ccd+=('*/ccd' '~/.local/bin/ccd'); heads_ccrc+=('*/ccrc' '~/.local/bin/ccrc')
   fi
   up=$(_child_deny_upstream); [[ -z "$up" ]] || claudes+=("$up")
-  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect scratch-rescue roll claude; do
+  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect ws-orphan scratch-rescue roll claude; do
     for h in "${heads_ccd[@]}"; do rules+=("Bash($h $v:*)"); done
   done
   for v in update rollback; do

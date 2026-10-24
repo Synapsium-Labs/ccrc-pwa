@@ -316,3 +316,39 @@ describe('changeLatchSites: FleetWatcher\'s hand-rolled "warn once until it chan
     expect(changeLatchSites().map((x) => x.text.trim()).join('\n'), 'a DelegationLane latch was counted').not.toContain('lastMarkWarnHour');
   });
 });
+
+// D-5867 (Task C1l; ARCH-66 (#801)). The redaction census: the JS/TS modules that spell redaction rule patterns of their
+// own. A table is a file whose code lines hold a mask word and two of the three shapes (Bearer, Authorization, token=).
+describe('redactRuleTables: modules that spell redaction rule patterns of their own (D-5867)', () => {
+  let tree = '';
+  beforeAll(() => {
+    tree = mkdtempSync(path.join(tmpdir(), 'consolidation-census-redact-'));
+    const at = (rel: string, body: string): void => {
+      const p = path.join(tree, rel);
+      mkdirSync(path.dirname(p), { recursive: true });
+      writeFileSync(p, body);
+    };
+    at('shared/one.mjs', "const B = /\\b(Bearer)\\s+x/g; const A = /Authorization:/; const R = '[REDACTED]';\n");
+    at('server/src/two.ts', "const H = /Authorization/; const Q = /[?&](?:access_token|token)=/; const M = '***';\n");
+    at('ccd/history/three.mjs', "const REDACTED_MARK = '[redacted]'; const T = /token=/; const B = /Bearer /;\n");
+    at('server/src/prose.ts', "// Bearer and Authorization and token= named in a comment\nconst M = '[REDACTED]';\n");
+    at('server/src/one-shape.ts', "const B = /Bearer /; const M = '[REDACTED]';\n");
+    at('server/src/no-mask.ts', 'const B = /Bearer /; const A = /Authorization/;\n');
+    at('server/src/decl.d.mts', "const B = /Bearer /; const A = /Authorization/; const M = '[REDACTED]';\n");
+  });
+  afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
+
+  it('FIXTURE: a mask word and two shapes make a table; a comment, one shape, no mask and a declaration file do not', async () => {
+    const { redactRuleTables } = await import('./consolidationCensus.js');
+    expect(redactRuleTables(tree)).toEqual(['ccd/history/three.mjs', 'server/src/two.ts', 'shared/one.mjs']);
+  });
+
+  it('REAL: finds shared/redact.mjs and the history redactor, and no TypeScript table', async () => {
+    const { redactRuleTables } = await import('./consolidationCensus.js');
+    const tables = redactRuleTables();
+    console.log(`census redactRuleTables: ${tables.length}\n${tables.map((t) => `  ${t}`).join('\n')}`);
+    expect(tables).toContain('shared/redact.mjs');
+    expect(tables).toContain('ccd/history/lib.mjs');
+    expect(tables.filter((t) => /\.tsx?$/.test(t))).toEqual([]);
+  });
+});
