@@ -1,13 +1,16 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import ts from 'typescript';
 import type { AccountUsage } from '../../shared/api';
 import { CommandLayer } from '../src/command/CommandLayer';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { declValue, ruleIn } from './cssRule';
+import { parseTs } from './literalWalker';
 import { TEST_ROSTER } from './rosterFixture';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -77,6 +80,198 @@ describe('AccountsStrip', () => {
     expect(pct.textContent).toBe('57%');
     // One element holds the text: the query above would have thrown on two.
     expect(screen.getAllByText('40%')).toHaveLength(1);
+  });
+
+  // ── the lanes row (T2c, D-6329, R48): sorted, each card a door, one tab stop, All accounts at the end ──
+  const cardsOf = (container: HTMLElement): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('.account-gauge')];
+  const nameOf = (card: HTMLElement): string => card.querySelector('.account-gauge-label')?.textContent ?? '';
+  const threeLanes = (): AccountUsage[] => [
+    acct({ wrapper: 'lane-a', five: 60, seven: 80, fiveResetAt: nowSec + 3600, sevenResetAt: nowSec + 86400 }),
+    acct({ wrapper: 'lane-b', five: 10, seven: null, fiveResetAt: nowSec + 7200 }),
+    acct({ wrapper: 'lane-c', five: 30, seven: 20, fiveResetAt: nowSec + 600, sevenResetAt: nowSec + 2 * 86400 }),
+  ];
+
+  it('the cards draw lanesByFree\'s order: most free first', async () => {
+    stubAccounts(threeLanes());
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    expect(cardsOf(container).map(nameOf)).toEqual(['lane-b', 'lane-c', 'lane-a']);
+  });
+
+  it('each card is its lane\'s door: a tap and Enter open /accounts?lane=<id>, and it carries data-action open-lane and no data-command', async () => {
+    stubAccounts(threeLanes());
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    for (const card of cardsOf(container)) {
+      expect(card).toHaveAttribute('role', 'link');
+      expect(card).toHaveAttribute('data-action', 'open-lane');
+      expect(card).not.toHaveAttribute('data-command');
+    }
+    const c = cardsOf(container).find((x) => nameOf(x) === 'lane-c')!;
+    fireEvent.click(c);
+    expect(location.pathname + location.search).toBe('/accounts?lane=lane-c');
+    navigate('/');
+    fireEvent.keyDown(cardsOf(container).find((x) => nameOf(x) === 'lane-a')!, { key: 'Enter' });
+    expect(location.pathname + location.search).toBe('/accounts?lane=lane-a');
+    // A link: Space does not activate it.
+    navigate('/');
+    fireEvent.keyDown(c, { key: ' ' });
+    expect(location.pathname).toBe('/');
+  });
+
+  it('a card is named by laneDoorLabel and holds no interactive control of its own', async () => {
+    stubAccounts(threeLanes());
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const b = cardsOf(container).find((x) => nameOf(x) === 'lane-b')!;
+    expect(b).toHaveAccessibleName(/^lane-b: 5h 10%, resets in 2h.* — opens lane-b on the Accounts screen$/);
+    expect(b.querySelector('a, button, input, select, textarea, [tabindex], [role="button"], [role="link"]')).toBeNull();
+  });
+
+  it('the label carries the lane\'s full name as its title', async () => {
+    stubAccounts([acct({ wrapper: 'lane-with-a-much-longer-name', five: 5 })]);
+    const { container } = render(<AccountsStrip />);
+    const label = await screen.findByText('lane-with-a-much-longer-name');
+    expect(label).toHaveAttribute('title', 'lane-with-a-much-longer-name');
+    expect(cardsOf(container)).toHaveLength(1);
+  });
+
+  it('the strip builds no /accounts path of its own', () => {
+    // Parsed with TypeScript: the header comment that names /accounts is not a literal. The one builder is imported.
+    const src = parseTs(path.join(import.meta.dirname, '..', 'src', 'fleet', 'AccountsStrip.tsx'));
+    const literals: string[] = [];
+    let importsBuilder = false;
+    const visit = (n: ts.Node): void => {
+      if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isJsxText(n)) literals.push(n.text);
+      if (ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) literals.push(n.text);
+      if (ts.isImportDeclaration(n)) {
+        const b = n.importClause?.namedBindings;
+        if (b !== undefined && ts.isNamedImports(b) && b.elements.some((e) => (e.propertyName ?? e.name).text === 'accountsLaneHref')) importsBuilder = true;
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(src);
+    expect(literals.filter((l) => l.includes('/accounts'))).toEqual([]);
+    expect(importsBuilder).toBe(true);
+  });
+
+  it('after the last card, All accounts is the go-accounts door', async () => {
+    stubAccounts(threeLanes());
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const all = screen.getByRole('button', { name: 'All accounts' });
+    expect(all).toHaveAttribute('data-command', 'go-accounts');
+    expect(all).not.toHaveAttribute('data-action');
+    expect(all).not.toHaveAttribute('aria-label');
+    expect(all.closest('.accounts-end')).not.toBeNull();
+    const last = cardsOf(container).at(-1)!;
+    expect(last.compareDocumentPosition(all) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(all.closest('.accounts-end')!.parentElement).toBe(container.querySelector('.accounts-strip'));
+  });
+
+  it('with lanes to show the strip is a group named over every live lane, no link and no tab stop; with none it is the go-accounts door', async () => {
+    // The fullest lane is the last in sort order, so a name read over a subset would name another lane.
+    const lanes = ['a', 'b', 'c', 'd', 'e', 'f'].map((x, i) => acct({ wrapper: `lane-${x}`, five: 5 + i * 10, seven: null }));
+    stubAccounts([...lanes, acct({ wrapper: 'lane-off', five: 99, seven: null, disabled: true })]);
+    const { container } = render(<AccountsStrip />);
+    const group = await screen.findByRole('group', { name: 'account usage, highest lane-f 55%' });
+    expect(group).toHaveClass('accounts-strip');
+    expect(group).not.toHaveAttribute('tabindex');
+    expect(group).not.toHaveAttribute('data-command');
+    expect(group).not.toHaveAttribute('data-action');
+    expect(screen.queryByRole('link', { name: 'account usage — open accounts' })).toBeNull();
+    expect(container.querySelectorAll('[role="link"]')).toHaveLength(lanes.length);
+  });
+
+  it('the cards are one tab stop: arrows, Home and End move focus and the stop, stop at either end, and Tab goes on to All accounts', async () => {
+    stubAccounts(threeLanes());
+    const user = userEvent.setup();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const cards = (): HTMLElement[] => cardsOf(container);
+    const stops = (): string[] => cards().filter((c) => c.tabIndex === 0).map(nameOf);
+    // Sorted: lane-b, lane-c, lane-a. The first card holds the stop at mount.
+    expect(stops()).toEqual(['lane-b']);
+    expect(cards().filter((c) => c.tabIndex === -1)).toHaveLength(2);
+    await user.tab();
+    expect(document.activeElement).toBe(cards()[0]);
+    await user.keyboard('{ArrowLeft}');           // no wrap at the start
+    expect(document.activeElement).toBe(cards()[0]);
+    await user.keyboard('{ArrowRight}');
+    expect(document.activeElement).toBe(cards()[1]);
+    expect(stops()).toEqual(['lane-c']);
+    await user.keyboard('{ArrowDown}');
+    expect(document.activeElement).toBe(cards()[2]);
+    await user.keyboard('{ArrowRight}');          // no wrap at the end
+    expect(document.activeElement).toBe(cards()[2]);
+    await user.keyboard('{ArrowUp}');
+    expect(document.activeElement).toBe(cards()[1]);
+    await user.keyboard('{Home}');
+    expect(document.activeElement).toBe(cards()[0]);
+    await user.keyboard('{End}');
+    expect(document.activeElement).toBe(cards()[2]);
+    expect(stops()).toEqual(['lane-a']);
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'All accounts' }));
+    // Shift+Tab comes back to the card that holds the stop.
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(cards()[2]);
+  });
+
+  it('the stop follows its lane through a re-sort, and falls to the first card when that lane leaves', async () => {
+    const first = [acct({ wrapper: 'lane-a', five: 10 }), acct({ wrapper: 'lane-b', five: 20 }), acct({ wrapper: 'lane-c', five: 30 })];
+    const spy = vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: first, projected: { wrapper: 'lane-a', score: 0 }, roster: TEST_ROSTER });
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const user = userEvent.setup();
+    await user.tab();
+    await user.keyboard('{ArrowRight}');           // lane-b holds the stop
+    const stops = (): string[] => cardsOf(container).filter((c) => c.tabIndex === 0).map(nameOf);
+    expect(stops()).toEqual(['lane-b']);
+    // lane-b becomes the fullest on the next poll: it moves to the end, and the stop stays on it.
+    spy.mockResolvedValue({ accounts: [first[0]!, acct({ wrapper: 'lane-b', five: 90 }), first[2]!], projected: { wrapper: 'lane-a', score: 0 }, roster: TEST_ROSTER });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try { await vi.advanceTimersByTimeAsync(20_100); } finally { vi.useRealTimers(); }
+    await within(container).findByText('90%');
+    expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c', 'lane-b']);
+    expect(stops()).toEqual(['lane-b']);
+    // lane-b leaves: the stop falls to the first card.
+    spy.mockResolvedValue({ accounts: [first[0]!, first[2]!], projected: { wrapper: 'lane-a', score: 0 }, roster: TEST_ROSTER });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try { await vi.advanceTimersByTimeAsync(20_100); } finally { vi.useRealTimers(); }
+    await vi.waitFor(() => expect(cardsOf(container)).toHaveLength(2));
+    expect(stops()).toEqual(['lane-a']);
+  });
+
+  it('every card shows each window it has, with its meter, percentage and countdown', async () => {
+    stubAccounts(threeLanes());
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const byName = (n: string): HTMLElement => cardsOf(container).find((c) => nameOf(c) === n)!;
+    const rows = (c: HTMLElement): HTMLElement[] => [...c.querySelectorAll<HTMLElement>('.acct-row')];
+    expect(rows(byName('lane-a')).map((r) => r.querySelector('.acct-win')!.textContent)).toEqual(['5h', '7d']);
+    expect(rows(byName('lane-b')).map((r) => r.querySelector('.acct-win')!.textContent)).toEqual(['5h']);
+    for (const r of rows(byName('lane-a'))) {
+      expect(r.querySelector('.acct-meter')).not.toBeNull();
+      expect(r.querySelector('.acct-pct')!.textContent).toMatch(/^\d+%$/);
+      expect(r.querySelector('.acct-reset')!.textContent).toMatch(/↻ \S/);
+    }
+    expect(rows(byName('lane-a'))[0]!.querySelector('.acct-pct')).toHaveTextContent('60%');
+    expect(rows(byName('lane-a'))[1]!.querySelector('.acct-pct')).toHaveTextContent('80%');
+  });
+
+  it('a lane never read shows no reading and draws no meter', async () => {
+    stubAccounts([acct({ wrapper: 'lane-a', five: null, seven: null }), acct({ wrapper: 'lane-b', five: 25, seven: null })]);
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-b');
+    const cards = cardsOf(container);
+    // Sorted last: a lane never read.
+    expect(cards.map(nameOf)).toEqual(['lane-b', 'lane-a']);
+    const never = cards[1]!;
+    expect(never).toHaveTextContent('no reading');
+    expect(never.querySelector('.acct-row, .acct-meter, .acct-fill')).toBeNull();
+    expect(never).not.toHaveTextContent('0%');
+    expect(never).toHaveAccessibleName('lane-a: no reading — opens lane-a on the Accounts screen');
   });
 
   it('hides an account whose lane is switched off', async () => {
