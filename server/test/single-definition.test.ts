@@ -8849,3 +8849,18 @@ describe('the tmp sweep\'s live-arm marker has no writer in the tree (fleet disk
     expect(stallCode(path.join(ccrcRoot, 'shared/lifecycle.ts'))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
   });
 });
+
+// The ack guard's single spelling (D-6777). Placed at the END of the file so
+// the line anchors other documents cite in this file do not move. It reads
+// `server/src/coord/store.ts` ALONE, never itself, so its needles are whole.
+describe('one ack guard', () => {
+  it('spells the ack guard ONCE — ackableDeliverySql, never a second copy of its clauses (D-6777)', () => {
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    const CLAUSE = "AND ${prefix}rejectCode = 'undeliverable' AND ${prefix}lastError = ?";
+    const BUILDER = 'const ackableDeliverySql = ';
+    const EXCEPTION = "rejectCode = 'undeliverable' AND";
+    expect(store.split(CLAUSE).length - 1, 'the ack guard clause is not written exactly once').toBe(1);
+    expect(store.split(BUILDER).length - 1, 'the builder is not defined once').toBe(1);
+    expect(store.split(EXCEPTION).length - 1, 'a second spelling of the replay-ceiling exception').toBe(1);
+  });
+});
