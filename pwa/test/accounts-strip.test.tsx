@@ -130,29 +130,39 @@ describe('AccountsStrip', () => {
     });
   });
 
-  // Task 6 (Build 3 PR G, Rider A): the strip is the nav affordance onto the
-  // new /accounts screen — "both mounts, one behaviour" (it's rendered twice,
-  // desktop top bar + mobile fleet list, but there's one component to make
-  // tappable). It was a plain `<div role="group">` before this; a real
-  // interactive element earns the tap-target gate.
-  //
-  // The strip is the `go-accounts` command door now (desktop-polish S5a): a tap asks the command layer, which navigates, so the two
-  // nav cases mount the layer beside it.
-  describe('nav affordance (Task 6)', () => {
-    it('is a link to /accounts, reachable by tap or keyboard', async () => {
+  // Task 6 (Build 3 PR G, Rider A) made the strip the nav affordance onto /accounts; T2c (D-6329, R48) splits that
+  // door: with lanes to show, each CARD is the door to its own lane (`actionDoor('open-lane', …)`: it navigates by
+  // itself, so no command layer is needed), and the end cell's All accounts button is the `go-accounts` command door
+  // (the layer navigates). The placeholder strip, with no lane to show, stays the one `go-accounts` door.
+  describe('nav affordance (Task 6, T2c)', () => {
+    it('a card is a link to its lane, reachable by tap, and no command layer is mounted to take it there', async () => {
       stubAccounts([acct({ wrapper: 'claude' })]);
-      render(<><CommandLayer openNewSession={() => {}} /><AccountsStrip /></>);
-      const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
-      fireEvent.click(link);
+      render(<AccountsStrip />);
+      const card = await screen.findByRole('link', { name: /^team·max:/ });
+      fireEvent.click(card);
       expect(location.pathname).toBe('/accounts');
+      expect(location.search).toBe('?lane=claude');
     });
 
-    it('activates on Enter (keyboard-only reachable, not just tap)', async () => {
+    it('a card activates on Enter (keyboard-only reachable, not just tap)', async () => {
       stubAccounts([acct({ wrapper: 'claude' })]);
-      render(<><CommandLayer openNewSession={() => {}} /><AccountsStrip /></>);
-      const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
-      fireEvent.keyDown(link, { key: 'Enter' });
+      render(<AccountsStrip />);
+      const card = await screen.findByRole('link', { name: /^team·max:/ });
+      fireEvent.keyDown(card, { key: 'Enter' });
       expect(location.pathname).toBe('/accounts');
+      expect(location.search).toBe('?lane=claude');
+    });
+
+    it('All accounts goes through the command layer: without one a tap goes nowhere, with one it opens /accounts', async () => {
+      stubAccounts([acct({ wrapper: 'claude' })]);
+      render(<AccountsStrip />);
+      fireEvent.click(await screen.findByRole('button', { name: 'All accounts' }));
+      expect(location.pathname).toBe('/');
+      cleanup();
+      render(<><CommandLayer openNewSession={() => {}} /><AccountsStrip /></>);
+      fireEvent.click(await screen.findByRole('button', { name: 'All accounts' }));
+      expect(location.pathname).toBe('/accounts');
+      expect(location.search).toBe('');
     });
 
     // jsdom evaluates no stylesheet (vitest runs with `css: false`), so a
@@ -160,12 +170,14 @@ describe('AccountsStrip', () => {
     // exists off the shared token, and the render proves the class is still
     // on the element the scrape describes. See test/cssRule.ts for why a text
     // scrape is the right tool here at all.
-    it('is at least one tap tall, off the shared token — the whole strip is now a link', () => {
-      expect(declValue(ruleIn(fleetCss, '.accounts-strip'), 'min-height')).toBe('var(--tap-min)');
+    it('the placeholder door and a card are each at least one tap tall, off the shared token', () => {
+      expect(declValue(ruleIn(fleetCss, '.accounts-strip[role="link"]'), 'min-height')).toBe('var(--tap-min)');
+      expect(declValue(ruleIn(fleetCss, '.account-gauge'), 'min-height')).toBe('var(--tap-min)');
+      expect(declValue(ruleIn(fleetCss, '.account-gauge'), 'cursor')).toBe('pointer');
     });
 
-    it('is the class the rendered link actually carries', async () => {
-      stubAccounts([acct({ wrapper: 'claude' })]);
+    it('the placeholder is the class the rendered link actually carries', async () => {
+      stubAccounts([]);
       render(<AccountsStrip />);
       const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
       expect(link).toHaveClass('accounts-strip');
