@@ -97,6 +97,12 @@
 # entry is RENAMED into `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>` and deleted by a pass one
 # grace later (24 h; 1 h under pressure) after a fresh holder ask. The roots are today's, `/tmp/
 # claude-<uid>` when it differs, and each witnessed child leaf's `claude-<uid>`.
+# THE TEST-RUN ARM (DR-10, D-6622; spec 2.2) rides the same switch and rows. In the box's TMPDIR and in each
+# witnessed child leaf that still has a registry row, a top-level `ccrc-testrun-XXXXXX` (or its `.dead` twin) is
+# removed when no socket is bound at its `live.sock` in /proc/net/unix (the liveness the run itself uses, D-4499),
+# nothing under it has changed (ctime) for 6 hours (1 under pressure), and `ccd path-users` answers nobody.
+# It is renamed to the `.dead` twin, then removed with `rm -rf --one-file-system`, as the run's own `condemn` does.
+# Any doubt (a walk that cannot finish, an unreadable socket table, a probe that fails) keeps it.
 # SHADOW unless `~/.ccrc/tmp-sweep-live-arm` exists: it then lists what it would take and touches
 # nothing. No code in the tree creates that file (single-definition.test.ts pins it). The census
 # `~/.ccrc/tmp-sweep.json` is replaced whole at the end of every pass, shadow or live.
@@ -875,6 +881,98 @@ else:
     for s in prev.get('sessions', []):
         if isinstance(s, dict) and s.get('uuid'): sessions[s['uuid']] = s
 
+# ── the test-run arm (DR-10, D-6622): dead `ccrc-testrun-*` roots no later run revisits ──
+TR_RE = re.compile(r'^ccrc-testrun-[A-Za-z0-9]{6}(\.dead)?$')
+QUIET = pair('TS_QUIET')
+UNIX = E.get('CCD_TMP_SWEEP_UNIX') or '/proc/net/unix'
+def bound_paths():
+    """the paths with a socket bound in the kernel's table, or None when it cannot be read (then nothing is dead)"""
+    try:
+        with open(UNIX) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    return set(ln.split(None, 7)[7] for ln in lines[1:] if len(ln.split(None, 7)) == 8 and not ln.split(None, 7)[7].startswith('@'))
+def newest_ctime(path, ctr):
+    """newest ctime and bytes under path (links not followed, no other filesystem); None when the walk cannot finish"""
+    try: top = os.lstat(path)
+    except OSError: return None
+    newest, nbytes, t0, stack = 0.0, 0, time.monotonic(), [(path, top)]
+    while stack:
+        p, st = stack.pop()
+        ctr[0] += 1
+        if time.monotonic() - t0 > WALK_S or ctr[0] > WALK_ENTRIES: return None
+        newest = max(newest, st.st_ctime); nbytes += st.st_blocks * 512
+        if not stat.S_ISDIR(st.st_mode) or st.st_dev != top.st_dev: continue
+        try:
+            with os.scandir(p) as it:
+                for k in it: stack.append((k.path, os.lstat(k.path)))
+        except OSError: return None
+    return newest, nbytes
+
+def test_run_arm():
+    global seq
+    bases = [(ln.split('\t')[0], ln.split('\t')[1] == '1') for ln in E.get('TS_TRBASES', '').split('\n') if '\t' in ln]
+    def spellings(base, nm):
+        return list(dict.fromkeys([os.path.join(base, nm), os.path.join(os.path.realpath(base), nm)]))
+    def cheap(base, pr, nm):
+        """None with the run's bytes when no socket is bound at its live.sock and nothing under it changed for the quiet
+        window; else why not. The holder ask is separate (one batch)."""
+        bound = bound_paths()
+        if bound is None: return 'unmeasured', 0
+        if any(os.path.join(x, 'live.sock') in bound for x in spellings(base, nm)): return 'listening', 0
+        w = newest_ctime(os.path.join(base, nm), [0])
+        if w is None: return 'unmeasured', 0
+        if NOW - w[0] < by_p(QUIET, pr): return 'recent', 0
+        return None, w[1]
+    cands = []
+    for base, pr in bases:
+        try: names = sorted(os.listdir(base))
+        except OSError: continue
+        for nm in names:
+            if not TR_RE.fullmatch(nm): continue
+            try: st = os.lstat(os.path.join(base, nm))
+            except OSError: continue
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid(): continue
+            bump('testRunCandidates')
+            why, nbytes = cheap(base, pr, nm)
+            if why: bump('testRun' + why.capitalize()); continue
+            cands.append((base, pr, nm, nbytes))
+    if not cands: return
+    held = ccd_users([x for c in cands for x in spellings(c[0], c[2])])
+    for base, pr, nm, nbytes in cands:
+        v = [held.get(x, 'unmeasured') for x in spellings(base, nm)]
+        if 'held' in v: bump('testRunHeld'); continue
+        if any(x != 'nobody' for x in v): bump('testRunUnmeasured'); continue
+        d = os.path.join(base, nm)
+        if ARMED:
+            if time.time() - WALL0 > LIVE_BUDGET_S: bump('timeBudget'); continue
+            # the last look, as late as it can be: socket, quiet window, then the holders
+            why, nbytes = cheap(base, pr, nm)
+            if not why:
+                v = ccd_users(spellings(base, nm)).values()
+                why = 'held' if 'held' in v else 'unmeasured' if any(x != 'nobody' for x in v) else None
+            if why: bump('testRun' + why.capitalize()); continue
+            dead = d if d.endswith('.dead') else d + '.dead'
+            try:
+                if dead != d: os.rename(d, dead)
+            except OSError:
+                bump('failed'); continue
+            if subprocess.run(['rm', '-rf', '--one-file-system', '--', dead], stderr=subprocess.DEVNULL).returncode != 0:
+                bump('failed'); continue
+        seq += 1
+        row = {'seq': seq, 'id': '', 'uuid': '', 'name': nm, 'kind': 'test-run', 'bytes': nbytes, 'at': now_ms,
+               'shadow': not ARMED, 'quarantine': None, 'from': nm, 'root': base}
+        newrows.append(row)
+        if ARMED:
+            try:
+                with open(JOURNAL, 'a') as jf:
+                    jf.write(json.dumps(row) + '\n'); jf.flush(); os.fsync(jf.fileno())
+            except OSError: pass
+        bump('testRunRemoved' if ARMED else 'testRunWouldRemove')
+
+test_run_arm()
+
 moved = [r for r in moved + newrows if now_ms - r.get('at', 0) <= MOVED_DAYS * 86400 * 1000][-MOVED_KEEP:]
 for k, v in pprobed.items():
     if k not in probed and isinstance(v, list) and os.path.lexists(k): probed[k] = v
@@ -896,6 +994,24 @@ for r in newrows:
     print('%s %s ./%s %dK' % ('would-move' if r['shadow'] else 'moved', r['kind'], r['from'], r['bytes'] // 1024))
 print('live arm (%s): %s' % (out['arm'], ', '.join('%s %d' % (k, v) for k, v in sorted(counts.items())) or 'nothing to do'))
 PYEOF
+# The test-run arm's TMPDIRs (spec 2.2): the box's own and each witnessed child leaf that still has a registry
+# row (a leaf with none is ws-collect's whole). A line is `physical<TAB>1 under pressure`, each on its own filesystem.
+TR_BASES=""
+_ts_add_trbase() {   # dir
+  local p f=0; p="$(realpath -e -- "$1" 2>/dev/null)" || return 0
+  [ -d "$p" ] && [ "$p" != / ] || return 0
+  case $'\n'"$TR_BASES" in *$'\n'"$p"$'\t'*) return 0 ;; esac
+  _ts_pressure "$p" && f=1
+  TR_BASES+="$p"$'\t'"$f"$'\n'
+}
+_ts_add_trbase "${TMPDIR:-/tmp}"
+if [ -n "$_ts_cctmp" ]; then
+  for _w in "$HOME/.cc-sessions/tmproots"/*; do
+    _id="${_w##*/}"; [[ "$_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [ -f "$_w" ] && [ ! -L "$_w" ] || continue
+    [ -e "$HOME/.cc-sessions/$_id.child" ] || [ -e "$HOME/.cc-sessions/$_id.uuid" ] || continue
+    [ -L "$HOME/.cc-tmp/$_id" ] || _ts_add_trbase "$_ts_cctmp/$_id"
+  done
+fi
 live_line=""
 if [ -z "$aborted" ] && [ -n "$LIVE_ROOTS" ]; then
   if ! command -v python3 >/dev/null 2>&1; then
@@ -905,7 +1021,7 @@ if [ -z "$aborted" ] && [ -n "$LIVE_ROOTS" ]; then
   else
     live_uuids=""; for _u in "${!LIVE[@]}"; do [[ "$_u" =~ ^$UUID_ANY$ ]] && live_uuids+="$_u"$'\n'; done
     arm=0; [ -e "$LIVE_ARM" ] && arm=1
-    out="$(TS_ROOTS="${LIVE_ROOTS%$'\n'}" TS_LIVE="$live_uuids" TS_DRY="$DRY" TS_ARM="$arm" \
+    out="$(TS_ROOTS="${LIVE_ROOTS%$'\n'}" TS_TRBASES="${TR_BASES%$'\n'}" TS_QUIET="$TS_AGES_TEST_RUN_QUIET" TS_LIVE="$live_uuids" TS_DRY="$DRY" TS_ARM="$arm" \
       TS_AGE_UNTOUCHED="$TS_AGES_LIVE_UNTOUCHED" TS_AGE_FLOOR="$TS_AGES_BUDGET_UNTOUCHED_FLOOR" \
       TS_GRACE_QUARANTINE="$TS_AGES_QUARANTINE_GRACE" TS_GRACE_BUDGET="$TS_AGES_BUDGET_GRACE" \
       TS_CADENCE="$TS_AGES_LIVE_CADENCE" TS_BUDGET_BYTES=$((CCD_TMP_BUDGET_GB * CCD_TMP_BUDGET_UNIT_BYTES)) \
