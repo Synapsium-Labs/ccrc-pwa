@@ -479,6 +479,12 @@ For each outstanding row, with `:id` below filled in from its `deliveryId`
    indefinitely.
 3. Then act.
 
+The server also answers `GET /api/mail/inbox?fromId=<your id>&fromUuid=<your uuid>`:
+every delivery you can still ack, oldest first, each rendered and masked under its
+delivery id, in pages of at most 20 KiB (`remaining` counts what the page left out).
+It writes nothing and acks nothing. Until your `ccrc-api` carries `mail inbox`, steps
+1 and 2 above stay the way to read and act.
+
 **Sending mail of your own** — a rejection (§4), a question, a status
 update — is `POST /api/mail`, body:
 
