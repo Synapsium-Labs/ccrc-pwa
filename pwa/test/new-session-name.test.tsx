@@ -160,8 +160,9 @@ describe('a name starts a workspace on the account that was picked', () => {
     expect(screen.queryByText(/^Starting/)).not.toBeInTheDocument();
   });
 
-  it('opens the id the SERVER answered, not the one the preview showed (the box may suffix a taken slug)', async () => {
-    // The preview said `demo-eng-1234`; by the time the create landed the box answered another (the slug was taken).
+  it('opens the id the SERVER answered, whatever the preview showed', async () => {
+    // The preview said `demo-eng-1234`; the answer names another id. The sheet navigates to the id it was answered and
+    // never rebuilds one from the preview or the typed text.
     vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: true, id: 'demo-eng-1234-2', slug: 'eng-1234-2', title: 'ENG-1234 - Fix the login flow' });
     await openAt();
     await pickDemo();
