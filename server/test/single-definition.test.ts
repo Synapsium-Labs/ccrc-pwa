@@ -8786,3 +8786,32 @@ describe('one redaction rule table (ARCH-66): shared/redact.mjs (D-5867)', () =>
     expect(tables).toContain('shared/redact.mjs');
   });
 });
+
+describe('the tmp sweep\'s live-arm marker has no writer in the tree (fleet disk retention DR-8, D-6620)', () => {
+  // `~/.ccrc/tmp-sweep-live-arm` arms the live arm's moves and its budget removals; without it the arm only records
+  // what it would take. Like the stall watch's markers it is touched by hand and removed by hand, so nothing in the
+  // tree may create it. Three halves: exactly one shell file names it on a code line (the sweep, which READS it);
+  // in that file the name is assigned once and the variable is only ever tested with `-e`; and in TypeScript exactly
+  // one file names it, shared/lifecycle.ts, which says so in a row's text and imports no node: module, so it cannot
+  // write the marker.
+  const NAME = 'tmp-sweep-live-arm';
+  const SWEEP = path.join(ccrcRoot, 'ccd', 'ccd-tmp-sweep');
+
+  it('CONTROL: the shell corpus was walked and the sweep is in it', () => {
+    expect(BASH.map(rel)).toContain('ccd/ccd-tmp-sweep');
+  });
+  it('the sweep is the one shell file that names it', () => {
+    expect(holdersOf(NAME)).toEqual(['ccd/ccd-tmp-sweep']);
+  });
+  it('in the sweep it is assigned once and only ever tested with -e', () => {
+    const lines = codeLines(SWEEP);
+    expect(lines.filter((l) => l.includes(NAME)).map((l) => l.trim())).toEqual(['LIVE_ARM="$HOME/.ccrc/tmp-sweep-live-arm"']);
+    const uses = lines.filter((l) => /\bLIVE_ARM\b/.test(l) && !l.includes(NAME)).map((l) => l.trim());
+    expect(uses.length, 'CONTROL: the sweep reads it').toBeGreaterThan(0);
+    for (const u of uses) expect(u, 'a use of LIVE_ARM that is not a -e test could write it').toMatch(/\[ -e "\$LIVE_ARM" \]/);
+  });
+  it('in TypeScript only the lifecycle manifest names it, and that file reaches no node: module', () => {
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel)).toEqual(['shared/lifecycle.ts']);
+    expect(stallCode(path.join(ccrcRoot, 'shared/lifecycle.ts'))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+});
