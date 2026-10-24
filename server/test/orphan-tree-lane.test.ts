@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { collectOrphanTree } from '../src/coord/collectOrphanTree.js';
 import { OrphanTreeSweep, type OrphanSweepDeps } from '../src/orphanTreeSweep.js';
-import { ORPHAN_LICENCE_MS, ORPHAN_CENSUS_MS, orphanLicence, parseOrphanAudit, parseOrphanCensus } from '../src/orphanTreeLane.js';
+import { ORPHAN_LICENCE_MS, ORPHAN_CENSUS_MS, orphanInsideVerdict, orphanLicence, orphanCoordinatorSet, parseOrphanAudit, parseOrphanCensus } from '../src/orphanTreeLane.js';
 import { readDiskHealth } from '../../shared/disk.js';
 import { ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, RECLAIM_PAUSE_MARKER } from '../../shared/switches.js';
 import type { CcdResult } from '../src/lifecycle.js';
@@ -346,12 +346,29 @@ describe('DR-23: trees nested inside a workspace', () => {
     expect(r.acts()).toEqual([]);
   });
 
-  it('a coordinator that ends between the audits stops the act', async () => {
-    const r = rig(); armed(r); r.coordinators.add('lane-a');
+  it('a coordinator whose runs are all terminal is still a candidate, and the act goes ahead', async () => {
+    const claims = new Map<string, unknown>([['lane-a', 7]]);
+    const set = orphanCoordinatorSet({ childReclaimCoordinatorClaims: () => claims, openCoordinatorIds: () => [] });
+    expect(set?.has('lane-a')).toBe(true);
+    const r = rig(); armed(r); for (const id of set!) r.coordinators.add(id);
     r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'lane-a');
-    await r.sweep.pass();
-    r.coordinators.delete('lane-a'); r.advance(HOUR); await r.sweep.pass();
-    expect(r.acts()).toEqual([]);
+    await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toHaveLength(1);
+  });
+
+  it('a displacement-only claimant is a candidate; one that never claimed anything is reported only', () => {
+    const claims = new Map<string, unknown>([['displaced', 'unplaced'], ['open-one', 'open']]);
+    const set = orphanCoordinatorSet({ childReclaimCoordinatorClaims: () => claims, openCoordinatorIds: () => ['open-one'] });
+    expect(orphanInsideVerdict('displaced', set)).toBe('candidate');
+    expect(orphanInsideVerdict('open-one', set)).toBe('candidate');
+    expect(orphanInsideVerdict('worker-w', set)).toBe('goes-with-workspace');
+  });
+
+  it('either claim read throwing is null, which keeps the tree', () => {
+    const boom = (): never => { throw new Error('x'); };
+    expect(orphanCoordinatorSet({ childReclaimCoordinatorClaims: boom, openCoordinatorIds: () => [] })).toBeNull();
+    expect(orphanCoordinatorSet({ childReclaimCoordinatorClaims: () => new Map(), openCoordinatorIds: boom })).toBeNull();
+    expect(orphanInsideVerdict('lane-a', null)).toBe('unmeasured');
   });
 
   it('a tree inside nothing is unaffected, and a census row with a malformed inside is unreadable', () => {
