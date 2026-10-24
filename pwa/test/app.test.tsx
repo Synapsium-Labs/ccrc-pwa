@@ -94,7 +94,7 @@ describe('App /accounts?lane= (T2c, D-6329)', () => {
     // One array for the pane's scrollTop writes and the arrival's scrollIntoView calls: their ORDER is the property.
     const log: string[] = [];
     vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(function (this: HTMLElement) {
-      const lane = this.getAttribute('data-lane');
+      const lane = this.matches('.accounts-row[data-lane]') ? this.getAttribute('data-lane') : null;
       if (lane !== null) log.push(`scroll:${lane}`);
     });
     navigate('/accounts?lane=claude');
