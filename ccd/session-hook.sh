@@ -4712,6 +4712,28 @@ if [[ -n "$apf" ]]; then
   esac
 fi
 
+# FABLE RUNS ONLY WHEN THE OPERATOR SELECTS IT (D-6792; operator ruling 2026-10-24): on every session, an Agent or Task
+# call whose `model` names Fable, and a Workflow call whose script or input names a Fable model for an agent
+# (`model: 'fable'`, `"model":"fable"`, `claude-fable-*`), is denied, with a reason that points at opus, sonnet or haiku.
+# An accident guard, and it fails open like the arm above: a payload jq cannot parse, or an envelope that cannot be
+# built, says nothing. The prefilter is a builtin glob on the payload, so a call that never names Fable forks nothing.
+FABLE_RE="(^|[^[:alnum:]_])model[\"'\`]?[[:space:]]*[:=,(][[:space:]]*[\"'\`]?[[:alnum:]_./-]*[Ff][Aa][Bb][Ll][Ee]|[Cc][Ll][Aa][Uu][Dd][Ee]-[Ff][Aa][Bb][Ll][Ee]"
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
+      && ( "${tool:-}" == Agent || "${tool:-}" == Task || "${tool:-}" == Workflow ) && "${payload,,}" == *fable* ]]; then
+  fbl=$(jq -r --arg re "$FABLE_RE" '
+    .tool_input as $i
+    | if .tool_name == "Agent" or .tool_name == "Task" then
+        (if ($i.model | type) == "string" and ($i.model | test("fable"; "i")) then "y" else "" end)
+      elif .tool_name == "Workflow" then
+        (if any($i | .. | select(type == "object") | .model?; type == "string" and test("fable"; "i"))
+            or any($i | .. | strings; test($re)) then "y" else "" end)
+      else "" end' <<<"$payload" 2>/dev/null) || fbl=""
+  if [[ "$fbl" == y ]]; then
+    freason="ccrc: this ${tool} call names a Fable model. Fable runs only when the operator selects it (operator ruling 2026-10-24; D-6792): a coordinator, a worker, an agent or a script never picks it. Use opus, sonnet or haiku for the agent's model instead, and leave the choice of Fable to the operator."
+    if fjson=$(_hook_deny_json "$freason"); then pre_json=$fjson; fi
+  fi
+fi
+
 # `carry-only-a-main-thread-wait` (D-4039, task review): who raised the wait. `waitby` is "subagent" only when THIS event
 # freshly set `waiting` and carries an `agent_id` (`$paid`); it is stored as the additive key `waitBy`, preserved with
 # the carried state below, and absent everywhere else, so every other write keeps today's shape byte for byte.
