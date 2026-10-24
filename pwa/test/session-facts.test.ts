@@ -154,12 +154,33 @@ describe('coordinatorRole and COORDINATOR_WORD (D-6714)', () => {
 
     // SessionDetails.tsx imports the word and spells it nowhere: no JSX text and no string that is the whole word.
     const details = path.join(SRC, 'session', 'SessionDetails.tsx');
-    const imported = parseTs(details).statements.some((st) => ts.isImportDeclaration(st)
+    const importsWord = (file: string): boolean => parseTs(file).statements.some((st) => ts.isImportDeclaration(st)
       && st.importClause?.namedBindings !== undefined && ts.isNamedImports(st.importClause.namedBindings)
       && st.importClause.namedBindings.elements.some((e) => e.name.text === 'COORDINATOR_WORD'));
-    expect(imported, 'SessionDetails.tsx imports COORDINATOR_WORD').toBe(true);
+    expect(importsWord(details), 'SessionDetails.tsx imports COORDINATOR_WORD').toBe(true);
     const spelled = nodes(details, (n) => isCoordinatorLiteral(n) || (ts.isJsxText(n) && n.text.trim() === 'coordinator'));
     expect(spelled.map((n) => n.getText()), 'SessionDetails.tsx spells the word').toEqual([]);
+
+    // sessionEntries.ts (the palette's session builder) imports the word; its two wording arrows `groupWords` and
+    // `labelWords` reference it and hold no string or template text that spells it; nothing else in the file does.
+    const entries = path.join(SRC, 'command', 'sessionEntries.ts');
+    expect(importsWord(entries), 'sessionEntries.ts imports COORDINATOR_WORD').toBe(true);
+    type TextPart = ts.StringLiteral | ts.NoSubstitutionTemplateLiteral | ts.TemplateHead | ts.TemplateMiddle | ts.TemplateTail;
+    const textPart = (n: ts.Node): n is TextPart => ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)
+      || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n);
+    const spellsWord = (n: ts.Node): boolean => textPart(n) && /\bcoordinator\b/i.test(n.text);
+    for (const name of ['groupWords', 'labelWords']) {
+      const owners = parseTs(entries).statements.filter(ts.isVariableStatement).flatMap((st) => st.declarationList.declarations)
+        .filter((d) => d.name.getText() === name && d.initializer !== undefined && ts.isArrowFunction(d.initializer));
+      expect(owners, `sessionEntries.ts has the top-level arrow ${name}`).toHaveLength(1);
+      const body = (owners[0]!.initializer as ts.ArrowFunction).body;
+      const inBody: ts.Node[] = [];
+      const walk = (n: ts.Node): void => { inBody.push(n); ts.forEachChild(n, walk); };
+      walk(body);
+      expect(inBody.some((n) => ts.isIdentifier(n) && n.text === 'COORDINATOR_WORD'), `${name} says COORDINATOR_WORD`).toBe(true);
+      expect(inBody.filter(spellsWord).map((n) => n.getText()), `${name} spells the word`).toEqual([]);
+    }
+    expect(nodes(entries, spellsWord).map((n) => n.getText()), 'sessionEntries.ts spells the word').toEqual([]);
 
     // coordinatorRole is the only `role === 'coordinator'` comparison in pwa/src.
     const comparisons = files(SRC).flatMap((f) => nodes(f, roleComparison)
