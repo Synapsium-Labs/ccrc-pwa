@@ -878,7 +878,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     for (const box of screen.getAllByRole('checkbox')) expect(box, 'a box in the gap').toBeEnabled();
   });
 
-  it('a permission prompt\'s Deny sends nothing in the gap', () => {
+  it('a permission prompt\'s Deny is disabled in the gap, and a click on it sends nothing', () => {
     const interrupt = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never);
     const store = connected(askFixture(7));
     mount(store);
