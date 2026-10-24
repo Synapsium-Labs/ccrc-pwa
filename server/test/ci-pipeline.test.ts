@@ -178,8 +178,10 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     // Comment lines are not calls: the job's own comments name `npx` to say why it is absent.
     const code = (st: string): string => st.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     for (const st of s) expect(code(st), `storybook-a11y: an npx call:\n${st}`).not.toMatch(/\bnpx\b/);
-    expect(job('storybook-a11y'), 'the checkout leaves its token in .git/config')
-      .toMatch(/^ {6}- uses: actions\/checkout@v4\n {8}with:\n {10}persist-credentials: false$/m);
+    // A version pin is a deliberate edit, so a future bump reds it again
+    // (D-6739: the pins name the majors #364 moved to).
+    expect(job('storybook-a11y'), 'the checkout leaves its token behind')
+      .toMatch(/^ {6}- uses: actions\/checkout@v7\n {8}with:\n {10}persist-credentials: false$/m);
   });
 
   // ONE AXE RUN PER SKIN (D-5093, its verification clause). The ids are read
@@ -1069,8 +1071,10 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
   it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {
     const s = steps(job('browser-pwa'));
     expect(s, 'the browser leg has exactly five steps').toHaveLength(5);
-    expect(s[0]).toMatch(/^ {6}- uses: actions\/checkout@v4\n/);
-    expect(s[1]).toMatch(/^ {6}- uses: actions\/setup-node@v4\n/);
+    // A version pin is a deliberate edit, so a future bump reds it again
+    // (D-6739: the pins name the majors #364 moved to).
+    expect(s[0]).toMatch(/^ {6}- uses: actions\/checkout@v7\n/);
+    expect(s[1]).toMatch(/^ {6}- uses: actions\/setup-node@v7\n/);
     expect(s[1]).toMatch(/^ {10}node-version: '22'$/m);
     expect(s[1]).toMatch(/^ {10}cache-dependency-path: pwa\/package-lock\.json$/m);
     expect(step(job('browser-pwa'), 'Install')).toMatch(/^ {8}working-directory: pwa\n {8}run: npm ci\n/m);

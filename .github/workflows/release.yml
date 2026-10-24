@@ -31,7 +31,9 @@ jobs:
   # step the dependencies bring, so it holds contents: read and nothing else.
   # It has no write token and no id-token, so no code it runs can publish or
   # sign, and its checkout sets persist-credentials: false, so no credential
-  # is left in the checkout's git config for that code to find.
+  # is left on the runner for that code to find: at this checkout major the
+  # token is written to a file under the runner's temp directory for the
+  # checkout's own fetch, and removed when that step ends.
   build:
     runs-on: ubuntu-latest
     # 30: the build is most of the run.
@@ -121,9 +123,12 @@ jobs:
 
       # Into the runner's temp directory, outside the checkout (D-6657). The
       # path alone keeps nothing off this job's scripts: what does is the
-      # extractor. This major's (unzip-stream 0.3.4) confines every zip entry
-      # under release-in, where @v4 to @v6 wrote an `x/../../..` entry outside
-      # it; and verify refuses any entry but the two expected files (D-6726).
+      # extractor. This major keeps v7's (unzip-stream 0.3.4), which
+      # confines every zip entry under release-in, where @v4 to @v6 wrote an
+      # `x/../../..` entry outside it. An artifact that is not a zip is
+      # written raw, as one file named by its basename, into release-in.
+      # Either way, verify refuses anything but the two expected files,
+      # and a digest mismatch fails the download itself (D-6726, D-6739).
       - uses: actions/download-artifact@v8
         with:
           name: release-${{ github.ref_name }}

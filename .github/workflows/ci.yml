@@ -550,8 +550,10 @@ jobs:
     timeout-minutes: 20
     if: github.event_name != 'merge_group' && !((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild')
     steps:
-      # No token left behind in .git/config: everything below runs third-party
-      # npm code, and none of it has any reason to talk to GitHub.
+      # No token left behind: at this checkout major the token sits in a file
+      # under the runner's temp directory only for the checkout's own fetch,
+      # removed when that step ends. Everything below runs third-party npm
+      # code, and none of it has any reason to talk to GitHub.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false

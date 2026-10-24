@@ -71,7 +71,9 @@ jobs:
   # what they produced), so it holds contents: read and nothing else. It has
   # no write token and no id-token, so no code it runs can push, publish or
   # sign. Its checkout sets persist-credentials: false, so no credential is
-  # left in the checkout's git config for that code to find. Nothing in this
+  # left on the runner for that code to find: at this checkout major the token
+  # is written to a file under the runner's temp directory for the checkout's
+  # own fetch, and removed when that step ends. Nothing in this
   # job writes to origin: prepare's `git ls-remote` is anonymous on this
   # public repository, and compare's token is this job's read token. The
   # script reads any non-zero exit of those calls as "origin does not hold
@@ -184,7 +186,9 @@ jobs:
   # keep and no secret in this repo. ci.yml's stance is that a writing job
   # asks in the diff — this is that ask. It installs nothing and has no
   # setup-node, so no npm cache is ever restored into it (D-6651). Its
-  # checkout keeps its credential: the publish arm pushes the tag with it.
+  # checkout keeps its credential: the publish arm pushes the tag with it. At
+  # this checkout major it lives in a file under the runner's temp directory
+  # that the checkout's git config includes, removed at the job's end.
   # It starts only on a release decision, so a skip mints no write token
   # (D-6658).
   publish:
@@ -207,9 +211,12 @@ jobs:
 
       # Into the runner's temp directory, outside the checkout (D-6657). The
       # path alone keeps nothing off this job's scripts: what does is the
-      # extractor. This major's (unzip-stream 0.3.4) confines every zip entry
-      # under release-in, where @v4 to @v6 wrote an `x/../../..` entry outside
-      # it; and receive's verify refuses any entry but the two expected files (D-6726).
+      # extractor. This major keeps v7's (unzip-stream 0.3.4), which
+      # confines every zip entry under release-in, where @v4 to @v6 wrote an
+      # `x/../../..` entry outside it. An artifact that is not a zip is
+      # written raw, as one file named by its basename, into release-in.
+      # Either way, receive's verify refuses anything but the two expected files,
+      # and a digest mismatch fails the download itself (D-6726, D-6739).
       - uses: actions/download-artifact@v8
         with:
           name: release-${{ needs.build.outputs.tag }}

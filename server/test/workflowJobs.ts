@@ -210,7 +210,11 @@ const DOWNLOAD_PATH = '${{ runner.temp }}/release-in';
  *  LEADING run of `../`, so a zip entry `x/../../../<f>` lands outside the
  *  download path, beside the write token and OIDC; `@v7` bundles 0.3.4, which
  *  rewrites every `..` segment and so confines every entry under the path,
- *  where verify's exact file set refuses it. Spelled `@v<N>` exactly: a minor
+ *  where verify's exact file set refuses it. `@v8`, which both publish jobs
+ *  use (D-6739), bundles the same 0.3.4 and sanitiser; it adds a raw, non-zip
+ *  write of ONE file named by its basename into the path, which verify's
+ *  exact file set refuses as it refuses an extra zip entry, and it fails a
+ *  digest mismatch by default. Spelled `@v<N>` exactly: a minor
  *  pin or a SHA names code this floor has not read, and an older major reopens
  *  the hole. */
 const DOWNLOAD_MAJOR_FLOOR = 7;

@@ -586,8 +586,10 @@ interface SplitShape {
  *  job-level `if:`, no `strategy`, nothing else. */
 const BUILD_JOB_KEYS = ['outputs', 'permissions', 'runs-on', 'steps', 'timeout-minutes'];
 /** Each publish action at its pinned version, in order (D-6726, D-6729):
- *  the checkout and the attest at `@v4`, the download at `@v7`. */
-const PUBLISH_USES_PINNED = ['actions/checkout@v4', 'actions/download-artifact@v7', 'actions/attest-build-provenance@v4'];
+ *  the checkout at `@v7`, the download at `@v8`, the attest at `@v4`. A
+ *  version pin is a deliberate edit, so a future bump reds it again (D-6739:
+ *  the pins name the majors #364 moved to). */
+const PUBLISH_USES_PINNED = ['actions/checkout@v7', 'actions/download-artifact@v8', 'actions/attest-build-provenance@v4'];
 /** The two values the publish steps are handed (D-6729). */
 const GH_TOKEN_VALUE = '${{ github.token }}';
 const BUNDLE_PATH_VALUE = '${{ steps.attest.outputs.bundle-path }}';
@@ -656,7 +658,7 @@ function splitRows(file: string, shape: SplitShape): void {
 
   // D-6729 (F13): each publish action at its version, read from the parsed
   // step, so a SHA, a minor pin or a moved major is a red here.
-  it(`W26-Y8: ${file}: the publish job uses exactly checkout@v4, download-artifact@v7 and attest-build-provenance@v4, in that order`, () => {
+  it(`W26-Y8: ${file}: the publish job uses exactly checkout@v7, download-artifact@v8 and attest-build-provenance@v4, in that order`, () => {
     expect(jobNamed(jobs(), 'publish').steps.flatMap((s) => (s.uses === null ? [] : [s.uses]))).toEqual(PUBLISH_USES_PINNED);
   });
 
@@ -710,12 +712,14 @@ describe('release.yml: the thin workflow, pinned to the script', () => {
     // Split (D-6653): the build job builds, records and uploads; the publish
     // job downloads, verifies, attests, names the bundle, writes the notes
     // and publishes, in that order.
+    // A version pin is a deliberate edit, so a future bump reds it again
+    // (D-6739: the pins name the majors #364 moved to).
     const at = (re: RegExp): number => src.search(re);
     const order = [
       at(/^        run: bash deploy\/build-release\.sh /m),
       at(/^        run: bash deploy\/release-artifact\.sh record /m),
-      at(/^      - uses: actions\/upload-artifact@v4$/m),
-      at(/^      - uses: actions\/download-artifact@v7$/m),
+      at(/^      - uses: actions\/upload-artifact@v7$/m),
+      at(/^      - uses: actions\/download-artifact@v8$/m),
       at(/^        run: bash deploy\/release-artifact\.sh verify /m),
       at(/^      - uses: actions\/attest-build-provenance@v4$/m),
       at(/^      - name: Name the provenance bundle$/m),
@@ -966,23 +970,25 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
 
   it('W25-Y3: the steps run in one order — checkout, setup-node, prepare, compare, the decision check, record, upload, download, receive, attest, publish — and setup-node carries no condition', () => {
     const src = wf();
+    // A version pin is a deliberate edit, so a future bump reds it again
+    // (D-6739: the pins name the majors #364 moved to).
     const at = (re: RegExp): number => src.search(re);
     const order = [
-      at(/^      - uses: actions\/checkout@v4$/m),
-      at(/^      - uses: actions\/setup-node@v4$/m),
+      at(/^      - uses: actions\/checkout@v7$/m),
+      at(/^      - uses: actions\/setup-node@v7$/m),
       at(/^        run: bash deploy\/release-main\.sh prepare /m),
       at(/^        run: bash deploy\/release-main\.sh compare /m),
       at(/^      - name: Fail when the release decision did not reach compare's step output$/m),
       at(/^        run: bash deploy\/release-artifact\.sh record /m),
-      at(/^      - uses: actions\/upload-artifact@v4$/m),
-      at(/^      - uses: actions\/download-artifact@v7$/m),
+      at(/^      - uses: actions\/upload-artifact@v7$/m),
+      at(/^      - uses: actions\/download-artifact@v8$/m),
       at(/^        run: bash deploy\/release-main\.sh receive /m),
       at(/^      - uses: actions\/attest-build-provenance@v4$/m),
       at(/^        run: bash deploy\/release-main\.sh publish /m),
     ];
     expect(order.every((i) => i > -1), `every step is present: ${order.join(',')}`).toBe(true);
     expect([...order].sort((x, y) => x - y)).toEqual(order);
-    const setup = src.indexOf('      - uses: actions/setup-node@v4\n');
+    const setup = src.indexOf('      - uses: actions/setup-node@v7\n');
     const setupBlock = src.slice(setup, src.indexOf('\n      - ', setup + 1));
     expect(setupBlock, 'setup-node runs on every merge').not.toMatch(/^\s+if:/m);
   });
@@ -1167,8 +1173,10 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     expect(g).toMatch(/^    timeout-minutes: 5$/m);
     expect(g).toMatch(/^      found: \$\{\{ steps\.look\.outputs\.found \}\}$/m);
     const gateSteps = g.split(/^(?= {6}- )/m).filter((p) => /^ {6}- /.test(p));
+    // A version pin is a deliberate edit, so a future bump reds it again
+    // (D-6739: the pins name the majors #364 moved to).
     expect(gateSteps.map((st) => /^ {6}- (?:name: (.*)|uses: (.*))$/m.exec(st)?.slice(1).find(Boolean))).toEqual([
-      'actions/checkout@v4', 'Look for a green full-suite on this commit',
+      'actions/checkout@v7', 'Look for a green full-suite on this commit',
     ]);
     const look = gateSteps[1];
     expect(look).toMatch(/^ {8}id: look$/m);
