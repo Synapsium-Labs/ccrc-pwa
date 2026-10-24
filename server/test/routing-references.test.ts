@@ -153,7 +153,8 @@ describe('review-panel.md — the held-out panel, model and effort LITERAL on ev
   it('caps each lens at its 8 most severe findings, in the schema and in the prompt (D-6796)', () => {
     const script = blocks[0]!;
     expect(script).toMatch(/findings: \{ type: 'array', maxItems: 8,/);
-    expect(script).toMatch(/8 most severe/);
+    // every lens prompt carries the cap, not just one of them
+    expect(script.match(/8 most severe/g)?.length).toBe(3);
     expect(panel).toContain('8 most severe');
   });
 
@@ -166,6 +167,34 @@ describe('review-panel.md — the held-out panel, model and effort LITERAL on ev
     expect(script).toMatch(/const confirmed = [^\n]*!== 'minor'/);
     expect(panel).toContain('advisory');
     expect(panel.replace(/\s+/g, ' ')).toContain('never fails a wave alone');
+  });
+
+  it('keeps the 2-of-3 kill rule for critical and important, and kills a minor on one refutation (D-6796)', async () => {
+    const run = async (severity: string, votes: Array<{ refuted: boolean } | null>) => {
+      const body = blocks[0]!.replace(/^export const meta/m, 'const meta');
+      const fn = new Function('args', 'agent', 'pipeline', 'parallel', 'log', 'phase',
+        `return (async () => {\n${body}\n})()`);
+      let v = 0;
+      const agent = async (_p: string, o: { phase: string }) =>
+        o.phase === 'Lenses' ? { findings: [{ file: 'a.ts', claim: 'c', severity }] } : (votes[v++] ?? null);
+      const pipeline = async (items: unknown[], s1: (x: unknown) => Promise<unknown>, s2: (r: unknown, x: unknown) => Promise<unknown>) =>
+        Promise.all(items.map(async (x) => s2(await s1(x), x)));
+      const parallel = (fs: Array<() => Promise<unknown>>) => Promise.all(fs.map((f) => f()));
+      return fn({ repo: 'r', base: 'b', tip: 't', plan: 'p', spec: 's', wave: 1 }, agent, pipeline, parallel, () => {}, () => {}) as Promise<
+        { confirmed: unknown[]; advisory: unknown[]; refuted: unknown[] }>;
+    };
+    // two refuters die, the one left votes refuted: stays confirmed (the main rule: refuted < 2)
+    const one = await run('critical', [null, null, { refuted: true }]);
+    expect(one.confirmed.length).toBe(1);
+    expect(one.refuted.length).toBe(0);
+    // two of three refute: dropped
+    const two = await run('important', [{ refuted: true }, { refuted: true }, { refuted: false }]);
+    expect(two.refuted.length).toBe(1);
+    // a minor with its single refuter refuting is dropped; surviving it is advisory only
+    expect((await run('minor', [{ refuted: true }])).refuted.length).toBe(1);
+    const adv = await run('minor', [{ refuted: false }]);
+    expect(adv.advisory.length).toBe(1);
+    expect(adv.confirmed.length).toBe(0);
   });
 
   it('never names Fable, and never inherits: the prose says so and the script obeys', () => {

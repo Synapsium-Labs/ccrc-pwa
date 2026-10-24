@@ -65,7 +65,7 @@ const READ_ONLY = `Work in ${A.repo}. Read only: never edit, commit, stash, chec
 const LENSES = [
   { key: 'correctness', prompt: `${READ_ONLY}\nReview the diff ${RANGE} (git -C ${A.repo} diff ${RANGE}) for CORRECTNESS: does the code do what its own comments and tests say at every seam the diff touches? A guard that cannot red for the thing it claims to guard is a finding. Return only findings you can point at, and at most your 8 most severe.` },
   { key: 'spec', prompt: `${READ_ONLY}\nReview the diff ${RANGE} for SPEC CONFORMANCE against the plan at ${A.plan} (its tasks for wave ${A.wave}) and the spec at ${A.spec}: a plan step skipped, a constraint weakened, a deviation not ledgered in the plan's Deviations section is a finding. Return only findings you can point at, and at most your 8 most severe.` },
-  { key: 'reproduce', prompt: `${READ_ONLY}\nFor every claim the commits in ${RANGE} make (git -C ${A.repo} log ${RANGE}): a suite green, a measurement, a mutation red — attempt to REPRODUCE it from the tree at ${A.tip} without modifying it (read the test files and the commands the messages name; you may run read-only commands and the named vitest suites from inside their package with ./node_modules/.bin/vitest run, foreground). A claim that does not reproduce is a finding, whatever the message says.` },
+  { key: 'reproduce', prompt: `${READ_ONLY}\nFor every claim the commits in ${RANGE} make (git -C ${A.repo} log ${RANGE}): a suite green, a measurement, a mutation red — attempt to REPRODUCE it from the tree at ${A.tip} without modifying it (read the test files and the commands the messages name; you may run read-only commands and the named vitest suites from inside their package with ./node_modules/.bin/vitest run, foreground). A claim that does not reproduce is a finding, whatever the message says. Return at most your 8 most severe.` },
 ]
 const FINDINGS = {
   type: 'object',
@@ -92,7 +92,8 @@ const results = await pipeline(
       .then((votes) => ({ lens: l.key, finding: f, votes: votes.filter(Boolean) })))),
 )
 const judged = results.filter(Boolean).flat()
-const killed = (j) => j.votes.filter((v) => v.refuted).length * 2 > j.votes.length
+const kills = (j) => j.votes.filter((v) => v.refuted).length
+const killed = (j) => j.finding.severity === 'minor' ? kills(j) >= 1 : kills(j) >= 2
 const survived = judged.filter((j) => j.votes.length > 0 && !killed(j))
 const confirmed = survived.filter((j) => j.finding.severity !== 'minor')
 const advisory = survived.filter((j) => j.finding.severity === 'minor')
