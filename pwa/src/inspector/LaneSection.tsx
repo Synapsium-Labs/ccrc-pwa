@@ -1,7 +1,7 @@
 // The inspector's Lane (W2 Task S8, D-5474): the session's lane as ONE meter, its name in mono. The reading is the
-// lane's BINDING window, the fuller of its two (the one that runs out first), through `AccountMeterRow`, the accounts
-// strip's and screen's own row, so the three-way "reset" / "0%" / "—" and the reset countdown mean what they mean
-// there. The numbers come from the fleet store's `usage`, the store's one read of `GET /api/accounts`; a session route
+// lane's BINDING window, the fuller of its two (the one that runs out first, `bindingWindow`'s in laneOrder.ts), through
+// `AccountMeterRow`, the accounts strip's and screen's own row; a rolled-over window reads "0%" through `windowReading`
+// (laneWords.ts), spoken as inferred, and the reset countdown means what it means there. The numbers come from the fleet store's `usage`, the store's one read of `GET /api/accounts`; a session route
 // opens no poll of its own.
 import type { ReactNode } from 'react';
 import { useNow } from '@ccrc/ui';
