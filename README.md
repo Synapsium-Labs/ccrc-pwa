@@ -1221,7 +1221,7 @@ to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — ne
 at or after the second it began, or the newest earlier tree backup, the newest earlier valid coordination snapshot and the
 newest earlier one that holds data (each chosen on its own, so a newer snapshot of an empty box never evicts the last one
 with data; `deploy/coordination-snapshot.mjs` decides what is valid, and a classifier that cannot run or answers out of
-its table prunes nothing and says why), and nothing at all, exit 0, while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or
+its table prunes nothing and says why), and nothing at all, exit 0 (1 after a setting refusal, D-6590), while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or
 the lock cannot be measured; hand-made siblings are never touched), as update and rollback do after a passed gate.
 After its prune, and only an update or `ccrc backup` (never a rollback by flip, which takes no backup; a rollback by re-install thins as the update it runs), the run thins the coordination
 data set (D-6346): of the backups that carry one, the newest `CCRC_BACKUP_DATA_KEEP` keep it, counting this run's own first, and
@@ -1235,7 +1235,7 @@ tabs, a line is skipped when it is a comment (`#` or `;`) or another key's `[exp
 refused when it names the knob as a whole word any other way, `export CCRC_BACKUP_DATA_KEEP=` included; a line holding a CR
 past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file that names the knob on a line that could
 assign it (a comment line counts only when a CR sits inside it, D-6604), but that the box's model of systemd cannot decide (a value a quote or a backslash carries across lines, a CR that leads
-a line or sits inside one, a non-ASCII byte in an assignment) refuses too: unmeasured is not unset (D-6365). On Linux a `ccrc.env`
+a line or sits inside one, a non-ASCII byte in an assignment, the last two on any line of the file, not only the knob's own) refuses too: unmeasured is not unset (D-6365). On Linux a `ccrc.env`
 that names the knob only on comment lines with no CR inside them, or not at all, reads as the default, whatever else it holds
 but a NUL byte, since systemd cannot set it from that file; on macOS,
 whose launchd job sources the file with bash, one the model cannot decide still refuses (this knob alone; every other setting reads the Linux rule there). A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
@@ -1294,7 +1294,9 @@ update before anything on the box changes (D-6594), the models budget turns the 
 and the versions keep stops the versions prune while `ccrc versions` still lists (D-6596). When `ccrc.env` cannot be
 read at all (unreadable, or holding a NUL byte), every act that reads a setting from it refuses, or falls back as its
 own text says (the health gate waits its 90 seconds; the watchdog uses the largest reading it could decide), and each
-says so. The thinning's time bound takes the smallest reading of `CCRC_UPDATE_DEADLINE_MS` the server may hold (the
+says so. Two causes on an unrelated line are model-wide too, an unrelated non-ASCII (UTF-8) `NAME=value` line and a line with an
+inner CR: they refuse every setting the file names on an assignment-capable line, whichever line the fault sits on, while a setting
+the file does not name may still read its default. The thinning's time bound takes the smallest reading of `CCRC_UPDATE_DEADLINE_MS` the server may hold (the
 environment, `ccrc.env`, and `~/.ccrc/exposure.env`, which the server reads too), and the watchdog the largest (D-6591,
 D-6602). On macOS a file the box's model of systemd cannot decide refuses only the settings it names, and
 `CCRC_BACKUP_DATA_KEEP` always (D-6587). `ccrc doctor`'s `box-settings` check reads `ccrc.env` alone and names a line
