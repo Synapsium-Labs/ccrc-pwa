@@ -17032,4 +17032,78 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     expect(r.stdout).not.toMatch(/^PASS box-settings/m);
     expect(r.code).toBe(2);
   });
+
+  // Fix round 1, F15: a cause on ANOTHER key's line that leaves the model of the file (`_box_unit_env`) unable to decide it
+  // refuses every setting the file names, each on a plain line, so the remedy is the model's own (its BUE_FIX), given once.
+  /** `_check_box-settings` with `CCD_OS` set AFTER sourcing (ccrc recomputes it from the host at source time), so the
+   *  Darwin model runs on any host. */
+  const runBsOs = (home: string, os: 'linux' | 'darwin'): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; CCD_OS=${os}; _check_box-settings`],
+    { env: doctorEnv(home), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const PLAIN_REMEDY = "rewrite each named line in the box's ccrc.env as a plain KEY=value line (deploy/ccrc.env.example shows each), "
+    + 'or make the file itself readable when it cannot be read or scanned';
+  const remedyOf = (r: Result): string => out(r)[1] ?? '';
+  const count = (hay: string, needle: string): number => hay.split(needle).length - 1;
+
+  it.each(['linux', 'darwin'] as const)('W24-S8 (%s): an unrelated non-ASCII line gives the model\'s own remedy, once, not the plain-line one', (os) => {
+    const home = settingsBox(`ccrc-doctor-bs-utf8-${os}-`, ['CCRC_BACKUP_KEEP=5', 'CCRC_VERSIONS_KEEP=3', 'NOTE=café']);
+    const r = runBsOs(home, os);
+    expect(r.stdout, r.stderr).toMatch(/^WARN box-settings: CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env line 4 .*; CCRC_VERSIONS_KEEP cannot be measured: /m);
+    const fix = os === 'linux'
+      ? 'keep every NAME=value line of ~/.ccrc/ccrc.env to ASCII (a non-ASCII host goes in as its punycode xn-- form;'
+      : 'rewrite line 4 of ~/.ccrc/ccrc.env as NAME=value,';
+    expect(remedyOf(r), 'the model\'s own fix').toMatch(new RegExp(`^ {2}remedy: ${fix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    expect(count(remedyOf(r), fix), 'given once for the two settings it refused').toBe(1);
+    expect(remedyOf(r), 'not only the plain-line rewrite: both lines are already plain').not.toContain(PLAIN_REMEDY);
+    expect(remedyOf(r)).toMatch(/; until then the act that reads it refuses, or falls back as its line says$/);
+    expect(r.stdout, 'never a value or another byte of the file').not.toMatch(/caf|NOTE|=5|=3/);
+    expect(r.stdout, '$HOME prints as ~').not.toContain(home);
+    expect(out(r)).toHaveLength(2);
+    expect(r.code).toBe(2);
+  });
+
+  it.each(['linux', 'darwin'] as const)('W24-S9 (%s): an unrelated line with an inner CR gives the model\'s CR fix', (os) => {
+    const home = settingsBox(`ccrc-doctor-bs-cr-${os}-`, ['CCRC_BACKUP_KEEP=5', 'NOTE=a\rb']);
+    const r = runBsOs(home, os);
+    expect(r.stdout, r.stderr).toMatch(/^WARN box-settings: CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env line 3 /m);
+    expect(remedyOf(r)).toMatch(os === 'linux'
+      ? /^ {2}remedy: save ~\/\.ccrc\/ccrc\.env with one line ending per line \(LF, or CRLF\) and no bare carriage return inside a line /
+      : /^ {2}remedy: save ~\/\.ccrc\/ccrc\.env without carriage returns /);
+    expect(remedyOf(r)).not.toContain(PLAIN_REMEDY);
+    expect(r.stdout).not.toMatch(/NOTE|=5/);
+    expect(r.code).toBe(2);
+  });
+
+  it.each(['linux', 'darwin'] as const)('W24-S10 (%s): a refusal for the setting\'s own line alone keeps the plain-line remedy', (os) => {
+    const r = runBsOs(settingsBox(`ccrc-doctor-bs-shape-${os}-`, ['export CCRC_BACKUP_KEEP=5']), os);
+    expect(r.stdout, r.stderr).toMatch(/^WARN box-settings: CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take/m);
+    expect(remedyOf(r)).toBe(`  remedy: ${PLAIN_REMEDY}; until then the act that reads it refuses, or falls back as its line says`);
+    expect(r.code).toBe(2);
+  });
+
+  it.each(['linux', 'darwin'] as const)('W24-S12 (%s): a quote the setting\'s own line leaves open — the Linux model refuses that line alone, macOS the whole file', (os) => {
+    // On Linux the model's per-line shape arm sets a BUE_FIX too, but its cause is the setting's own line, so the plain-line
+    // remedy stands; on macOS the model refuses the whole file for any line, so its fix (naming the line) is carried.
+    const r = runBsOs(settingsBox(`ccrc-doctor-bs-openq-${os}-`, ['CCRC_BACKUP_KEEP="5']), os);
+    expect(r.stdout, r.stderr).toMatch(/^WARN box-settings: CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env /m);
+    if (os === 'linux') expect(remedyOf(r)).toBe(`  remedy: ${PLAIN_REMEDY}; until then the act that reads it refuses, or falls back as its line says`);
+    else expect(remedyOf(r)).toMatch(/^ {2}remedy: rewrite line 2 of ~\/\.ccrc\/ccrc\.env as NAME=value,.*; until then the act that reads it refuses, or falls back as its line says$/);
+    expect(r.code).toBe(2);
+  });
+
+  it.each(['linux', 'darwin'] as const)('W24-S11 (%s): causes mixed — the model\'s fix, then the plain-line clause for the other refusal', (os) => {
+    // The model-wide refusal comes FIRST in CCRC_SETTINGS' order, so a cause the check failed to clear per setting would
+    // be pinned on the later, scan-refused one and drop the plain-line clause.
+    const home = settingsBox(`ccrc-doctor-bs-mixed-${os}-`, ['CCRC_BACKUP_KEEP=5', 'export CCRC_VERSIONS_KEEP=3', 'NOTE=café']);
+    const r = runBsOs(home, os);
+    expect(r.stdout, r.stderr).toMatch(/; CCRC_VERSIONS_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take/m);
+    expect(remedyOf(r)).toMatch(os === 'linux' ? /^ {2}remedy: keep every NAME=value line of ~\/\.ccrc\/ccrc\.env to ASCII / : /^ {2}remedy: rewrite line 4 of ~\/\.ccrc\/ccrc\.env as NAME=value,/);
+    expect(remedyOf(r)).toContain(`; for each other refusal, ${PLAIN_REMEDY}; until then the act that reads it refuses, or falls back as its line says`);
+    expect(r.stdout).not.toMatch(/caf|NOTE/);
+    expect(r.code).toBe(2);
+  });
 });

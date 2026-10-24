@@ -9684,10 +9684,21 @@ _check_snapshot-posture() {
 # reads `user:password@host/...` as http, and `_upd_redact` strips only what follows `://`), so it never prints. A line
 # the reader refuses, or a file it cannot read at all, WARNs with each reason; until it is rewritten, the act that reads
 # that setting refuses or falls back, as its own line says. No role skip: every role reads its own settings.
+# A refusal whose cause is MODEL-WIDE (F15) — a line the model of the file (`_box_unit_env`, which the reader asks in this
+# shell) cannot decide, so every setting it is asked for refuses, the setting's own line plain: on Linux the rc-3 arms
+# that set BEW_CAUSE (a CR inside a line, a non-ASCII NAME=value line), on macOS every arm, since there the model refuses
+# the whole file — gives the model's own remedy, BUE_FIX (the file and line numbers, never its bytes), once however many
+# settings it refused; the plain-line clause stays for any other refusal. Both are reset per setting: the reader sets
+# them only when it asks the model, so a stale one would pin a cause on a setting it never reached.
 _check_box-settings() {
-  local k v pre set="" unset="" why="" none="none of ccrc's settings"   # a `'` inside "${set:-…}" would open a quote in bash
+  local k v pre set="" unset="" why="" fix="" other=0 none="none of ccrc's settings"   # a `'` inside "${set:-…}" would open a quote in bash
+  local plain="rewrite each named line in the box's ccrc.env as a plain KEY=value line (deploy/ccrc.env.example shows each), or make the file itself readable when it cannot be read or scanned"
   for k in "${CCRC_SETTINGS[@]}"; do
+    BUE_FIX=""; BEW_CAUSE=""
     if ! _ccrc_knob "$k" "" file; then why+="${why:+; }$KNOB_WHY"
+      if [ -n "$BUE_FIX" ] && { [ "${CCD_OS:-linux}" = darwin ] || [ -n "$BEW_CAUSE" ]; }; then
+        case "$fix" in *"$BUE_FIX"*) ;; *) fix+="${fix:+; }$BUE_FIX" ;; esac
+      else other=1; fi
     elif [ "$KNOB_FROM" = file ]; then
       v="$KNOB"
       if [ "$k" = CCRC_RELEASE_BASE_URL ]; then   # each `[^/@[:space:]]*@` before the authority's first `/` goes
@@ -9700,8 +9711,8 @@ _check_box-settings() {
     fi
   done
   if [ -n "$why" ]; then
-    _dr_warn box-settings "$(_upd_redact "$why")" \
-      "rewrite each named line in the box's ccrc.env as a plain KEY=value line (deploy/ccrc.env.example shows each), or make the file itself readable when it cannot be read or scanned; until then the act that reads it refuses, or falls back as its line says"
+    if [ -n "$fix" ] && [ "$other" -eq 0 ]; then plain="$fix"; elif [ -n "$fix" ]; then plain="$fix; for each other refusal, $plain"; fi
+    _dr_warn box-settings "$(_upd_redact "$why")" "$(_upd_redact "$plain; until then the act that reads it refuses, or falls back as its line says")"
     return 2
   fi
   _dr_pass box-settings "$(_upd_redact "the box's ccrc.env sets ${set:-$none}${unset:+; not set there, so the default applies unless the environment sets it:$unset}")"
