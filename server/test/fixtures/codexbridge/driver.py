@@ -86,7 +86,14 @@ THE COUNT ESTIMATOR, THE KNOWN NAMES AND THE STATS FILE (Task 5): one Stats per 
                    is that float, which JSON cannot carry
   known            -> {"families": stats.FAMILIES, "known": {family: sorted names}, "prefixes": {family: [prefix]}}
   stats-open       {path, lane, umask?} -> {"doc": the Stats' snapshot}: os.umask(umask) first when given
-  stats-call       {method, args?, kwargs?} -> {"result"}: one public Stats method called with them
+  stats-call       {method, args?, kwargs?} -> {"result"}: one public Stats method called with them; an argument
+                   {"float": "nan"|"inf"} is that float, and {"itemsOf": [...]} is an object whose items() answers that
+                   list (each inner list as a tuple, any other element as itself), a mapping with malformed items
+  stats-race       {flush?: kwargs, during: [{method, args?, kwargs?}, ...], waitS} -> {"result", "duringFinished",
+                   "duringResults", "duringRaised", "duringAlive"}: Stats.flush(**flush) with os.fsync wrapped once;
+                   inside that fsync, before the real one, a second thread makes the `during` calls in order and is
+                   joined for at most waitS ("duringFinished": whether it ended inside the write); after the flush it
+                   is joined for at most 10 s ("duringAlive": still running then)
   stats-snapshot   -> {"doc"}: the in-memory document, as the next flush would write it (but `updatedAt`)
   stats-fault      {call, errno, times} -> {}: the next `times` calls of os.<call> raise OSError(<errno>), then the
                    original is restored (a full disk at fsync, for example)
@@ -388,6 +395,56 @@ def _fault(op):
     return {}
 
 
+def _stats_arg(value):
+    """A stats-call argument: {"float": ...} as _float_arg reads it, {"itemsOf": [...]} as a mapping whose items()
+    answers that list (an inner list as a tuple), any other value as itself."""
+    if isinstance(value, dict) and list(value) == ["itemsOf"]:
+        items = [tuple(v) if isinstance(v, list) else v for v in value["itemsOf"]]
+
+        class _Items(object):
+            def items(self):
+                return list(items)
+
+        return _Items()
+    return _float_arg(value)
+
+
+def _stats_race(stats, op):
+    """Stats.flush(**op["flush"]) while a second thread makes op["during"]'s calls inside its write's fsync."""
+    during, wait_s = op.get("during") or [], float(op["waitS"])
+    results, raised, box = [], [], {}
+    original = os.fsync
+
+    def calls():
+        try:
+            for c in during:
+                args = [_stats_arg(v) for v in c.get("args") or []]
+                kwargs = {k: _stats_arg(v) for k, v in (c.get("kwargs") or {}).items()}
+                results.append(getattr(stats, c["method"])(*args, **kwargs))
+        except Exception as e:  # reported, never swallowed
+            raised.append(type(e).__name__)
+
+    def fsync_once(fd):
+        os.fsync = original  # once: the thread's own flush, if any, fsyncs for real
+        th = threading.Thread(target=calls, daemon=True)
+        box["thread"] = th
+        th.start()
+        th.join(wait_s)
+        box["finished"] = not th.is_alive()
+        return original(fd)
+
+    os.fsync = fsync_once
+    try:
+        result = stats.flush(**(op.get("flush") or {}))
+    finally:
+        os.fsync = original
+    th = box.get("thread")
+    if th is not None:
+        th.join(10.0)
+    return {"result": result, "duringFinished": box.get("finished"), "duringResults": results,
+            "duringRaised": raised, "duringAlive": th is not None and th.is_alive()}
+
+
 def _stats_op(name, op, cb):
     if name == "stats-open":
         if "umask" in op:
@@ -398,7 +455,11 @@ def _stats_op(name, op, cb):
         method = op["method"]
         if method.startswith("_") or not hasattr(_STATE["stats"], method):
             _usage("no Stats method " + json.dumps(method))
-        return {"result": getattr(_STATE["stats"], method)(*(op.get("args") or []), **(op.get("kwargs") or {}))}
+        args = [_stats_arg(v) for v in op.get("args") or []]
+        kwargs = {k: _stats_arg(v) for k, v in (op.get("kwargs") or {}).items()}
+        return {"result": getattr(_STATE["stats"], method)(*args, **kwargs)}
+    if name == "stats-race":
+        return _stats_race(_STATE["stats"], op)
     if name == "stats-snapshot":
         return {"doc": _STATE["stats"].snapshot()}
     if name == "stats-fault":

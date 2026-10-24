@@ -17,9 +17,10 @@ is D24's estimate, so it says `estimated: true`. Times are ISO-8601 UTC with mil
 
 NOTHING HERE HOLDS CONTENT. A name is bounded by NAME_RE (else `unrecognised`), at most NAMES_MAX per family (then
 `overflow`); a header's value is never kept, except an `x-codex-` header's, for the usage poller, and only when it has
-the shape the poller reads (USAGE_VALUE_RE: a number or a boolean, at most VALUE_MAX characters). Any other value of
-that family is dropped, its name still counted by `header_names`: the family also carries Codex's `x-codex-turn-state`
-sticky-routing token and free text (upstream openai/codex @ 092d3ac, codex-rs/codex-api/src/sse/responses.rs:32,
+the shape the poller reads (USAGE_VALUE_RE: a decimal number or a boolean, at most VALUE_MAX characters) and its name
+is not in TOKEN_HEADERS. Any other value of that family is dropped, its name still counted by `header_names`: the
+family also carries Codex's `x-codex-turn-state` sticky-routing token, an opaque value of no fixed shape (so refused by
+name, whatever its value), and free text (upstream openai/codex @ 092d3ac, codex-rs/codex-api/src/sse/responses.rs:32,
 65-71; codex-rs/core/src/client.rs:288-302; codex-rs/codex-api/src/rate_limits.rs:182). A request id is kept only
 under errors.REQUEST_ID_RE. A route or refusal key is `<route>/<model>`, each part bounded by NAME_RE.
 
@@ -37,7 +38,9 @@ fsync + rename, at most every FLUSH_S unless forced; a failed one is counted in 
 retried at the next flush call, whatever FLUSH_S says, so nothing is lost. A flush serialises the document under the
 lock and writes it outside it, under a second lock, so a slow fsync never stalls a counter: an unforced flush while
 another write is in flight writes nothing (its changes stay dirty for the next one), a forced one waits for it. No
-method raises into a request: a malformed argument is ignored.
+method raises into a request: a malformed argument is ignored (a headers argument that is not a mapping of headers,
+or a header item that is not a (name, value) pair, counts nothing; a byte count that is not an int moves no ratio), and
+a `now` that is not a finite number in range reads as the wall clock.
 
 Every constant is read when it is used, so the test driver's `consts` reach it.
 """
@@ -58,12 +61,19 @@ FAMILIES = tuple(known.KNOWN)  # the ten D3 families, in the plan's order; spell
 NAME_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,64}$")
 UNRECOGNISED = errors.UNRECOGNISED_CODE  # "unrecognised"
 OVERFLOW = "overflow"
+# D-TBD-stats-extra-bounds: routes, refusals and outcome keys share the per-family cap, each collapsing past it to the
+# one key OVERFLOW (outside the `<route>/<model>` key shape), and OVERFLOW is listed in `unexplained` like any name.
 NAMES_MAX = 256  # names per family (and routes, refusals and outcome keys) before OVERFLOW
 VALUE_MAX = 64  # an x-codex- header value's length; a longer one is dropped, never cut (a cut number is wrong)
-USAGE_VALUE_RE = re.compile(r"^(?:-?[0-9][0-9.eE+-]*|true|false)$")  # the x-codex- values the usage poller reads
-HEADERS_MAX = 64  # x-codex- headers kept from one response
+# D-TBD-stats-usage-value-shape: narrower than the plan's "values bounded to 64 printable characters".
+USAGE_VALUE_RE = re.compile(r"^(?:-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false)$")  # what the poller can read
+# x-codex- headers whose value is a token, never kept whatever its shape (upstream openai/codex @ 092d3ac,
+# codex-rs/codex-api/src/sse/responses.rs:32; codex-rs/core/src/client.rs:288-302: the sticky-routing token).
+TOKEN_HEADERS = frozenset({"x-codex-turn-state"})
+HEADERS_MAX = 64  # x-codex- headers kept from one response (D-TBD-stats-extra-bounds)
 FLUSH_S = 10.0  # an unforced flush writes at most this often
-READ_MAX = 16 * 2**20  # a stats file larger than this is unreadable, so the start resets it
+READ_MAX = 16 * 2**20  # a stats file larger than this is unreadable, so the start resets it (D-TBD-stats-extra-bounds)
+# D-TBD-stats-extra-outcome-keys: two outcome keys outside the plan's closed list.
 FLUSH_FAILED = "stats:flush-failed"
 RESET = "stats:reset"
 UNKNOWN_FAMILY = "stats:unknown-family"
@@ -72,6 +82,16 @@ UNKNOWN_FAMILY = "stats:unknown-family"
 def _iso(t: float) -> str:
     stamp = datetime.datetime.fromtimestamp(t, tz=datetime.timezone.utc)
     return stamp.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (stamp.microsecond // 1000)
+
+
+def _stamp(now: object) -> str:
+    """`now` as `_iso` writes it, or the wall clock's when `now` is not a finite number in range (never raised)."""
+    if isinstance(now, (int, float)) and not isinstance(now, bool):
+        try:
+            return _iso(now)
+        except (ValueError, OverflowError, OSError):
+            pass
+    return _iso(time.time())
 
 
 def _bounded(value: object) -> str:
@@ -105,11 +125,13 @@ def _is_route_key(key: object) -> bool:
 
 
 def _header_pairs(headers: object) -> list:
-    """The (name, value) pairs of a response's headers, or none when `headers` is not a mapping of headers."""
+    """The (name, value) pairs of a response's headers, or none when `headers` is not a mapping of headers; an item
+    that is not a pair is skipped."""
     try:
-        return list(headers.items())  # type: ignore[attr-defined]
+        items = list(headers.items())  # type: ignore[attr-defined]
     except Exception:
         return []
+    return [item for item in items if isinstance(item, tuple) and len(item) == 2]
 
 
 class Stats:
@@ -124,6 +146,8 @@ class Stats:
         self._retry = False
         self._last_flush = None  # type: Optional[float]
         started = _iso(time.time())
+        # D-TBD-stats-null-usage-headers: `usageHeaders` and `lastUpstreamRequestId` are null until a first value, and
+        # neither is carried across a restart.
         self._doc = {
             "version": VERSION, "lane": lane, "since": started, "startedAt": started, "updatedAt": started,
             "routes": {}, "refusals": {}, "outcomes": {}, "names": {}, "unexplained": {}, "usageHeaders": None,
@@ -217,7 +241,7 @@ class Stats:
 
     # ── the counters ──
     def _slot(self, table: Dict[str, object], key: str) -> str:
-        """`key`, or OVERFLOW when `table` already holds NAMES_MAX other keys."""
+        """`key`, or OVERFLOW when `table` already holds NAMES_MAX other keys (D-TBD-stats-extra-bounds)."""
         if key in table or len(table) - (OVERFLOW in table) < NAMES_MAX:
             return key
         return OVERFLOW
@@ -245,7 +269,8 @@ class Stats:
             self._dirty = True
 
     def header_names(self, headers: Mapping[str, str]) -> None:
-        """Count each response header's NAME, lower-cased, under `responseHeader`; never its value."""
+        """Count each response header's NAME, lower-cased, under `responseHeader`; never its value. A method the plan
+        does not list (D-TBD-stats-header-names)."""
         pairs = _header_pairs(headers)
         with self._lock:
             for header, _ in pairs:
@@ -287,25 +312,27 @@ class Stats:
             self._dirty = True
 
     def refusal(self, route: str, model: str, tokens: int, window: int, *, now: Optional[float] = None) -> None:
-        """The latest context refusal per route and model (spec §2.7): D24's estimate and the lane's window then."""
+        """The latest context refusal per route and model (spec §2.7): D24's estimate and the lane's window then. `now`
+        is optional, the wall clock (D-TBD-stats-now-optional)."""
         if not (_is_int(tokens) and _is_int(window)):
             return
         with self._lock:
             refusals = self._doc["refusals"]
             key = self._slot(refusals, _route_key(route, model))
-            refusals[key] = {"tokens": tokens, "window": window, "at": _iso(time.time() if now is None else now),
-                             "estimated": True}
+            refusals[key] = {"tokens": tokens, "window": window, "at": _stamp(now), "estimated": True}
             self._dirty = True
 
     def usage_headers(self, headers: Mapping[str, str], *, now: Optional[float] = None) -> None:
         """Keep the `x-codex-` headers of one response, by prefix, whose value has the poller's shape (USAGE_VALUE_RE,
-        at most VALUE_MAX characters); every other value is dropped, and every other header's value is never kept. A
-        response with none leaves the last snapshot standing."""
+        at most VALUE_MAX characters) and whose name is not in TOKEN_HEADERS; every other value is dropped, and every
+        other header's value is never kept. A response with none leaves the last snapshot standing. `now` is optional,
+        the wall clock (D-TBD-stats-now-optional)."""
         prefix = known.CODEX_HEADER_PREFIX
         values = {}  # type: Dict[str, str]
         for header, value in _header_pairs(headers):
             name = header.lower() if isinstance(header, str) else ""
-            if not name.startswith(prefix) or not NAME_RE.fullmatch(name) or not isinstance(value, str):
+            if (not name.startswith(prefix) or not NAME_RE.fullmatch(name) or name in TOKEN_HEADERS
+                    or not isinstance(value, str)):
                 continue
             value = value.strip()
             if not (len(value) <= VALUE_MAX and USAGE_VALUE_RE.fullmatch(value)):
@@ -316,7 +343,7 @@ class Stats:
         if not values:
             return
         with self._lock:
-            self._doc["usageHeaders"] = {"at": _iso(time.time() if now is None else now), "values": values}
+            self._doc["usageHeaders"] = {"at": _stamp(now), "values": values}
             self._dirty = True
 
     def request_id(self, rid: Optional[str]) -> None:

@@ -575,3 +575,106 @@ describe.skipIf(!PY)('the stats file\'s added guards (codex-bridge Stage 2, Task
     expect(snap.doc.names).toEqual({});
   });
 });
+
+// Review fix round 2 (Task 5): the flush's write lock, a malformed `now` and header item, and the x-codex- value rule.
+// The `stats-race` op runs a flush whose fsync, once, lets a second thread make Stats calls while the write is in
+// flight; `duringFinished` says whether that thread ended inside the write.
+describe.skipIf(!PY)('the stats file\'s write lock and value rules (codex-bridge Stage 2, Task 5 fix round 2)', () => {
+  const race = (flush: Record<string, unknown>, during: object[], waitS: number): object =>
+    ({ op: 'stats-race', flush, during: during.map((c) => ({ args: [], kwargs: {}, ...c })), waitS });
+
+  it('a counter call returns while a flush\'s write is in fsync, and its change goes out with the next flush', async () => {
+    const { home, file } = lane('cb-stats-race-counter-');
+    const [, , r, next] = await run(home, [
+      open(file),
+      call('outcome', ['2xx']),
+      race({ force: true }, [{ method: 'outcome', args: ['fx-during'] }], 5),
+      call('flush'),
+    ], { consts: { 'stats.FLUSH_S': 0 } });
+    expect(r.result).toBe(true);
+    expect(r.duringFinished).toBe(true); // the counter never waited for the fsync
+    expect(r.duringRaised).toEqual([]);
+    expect(r.duringAlive).toBe(false);
+    expect(next.result).toBe(true); // the change made during the write stayed dirty
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 1, 'fx-during': 1 });
+  });
+
+  it('an unforced flush while a write is in flight writes nothing, and its change goes out with the next one', async () => {
+    const { home, file } = lane('cb-stats-race-unforced-');
+    const [, , r, next] = await run(home, [
+      open(file),
+      call('outcome', ['2xx']),
+      race({ force: true }, [{ method: 'outcome', args: ['fx-during'] }, { method: 'flush' }], 5),
+      call('flush'),
+    ], { consts: { 'stats.FLUSH_S': 0 } });
+    expect(r.result).toBe(true);
+    expect(r.duringFinished).toBe(true); // the unforced flush did not wait for the write in flight
+    expect(r.duringResults).toEqual([null, false]);
+    expect(r.duringRaised).toEqual([]);
+    expect(next.result).toBe(true);
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 1, 'fx-during': 1 });
+  });
+
+  it('a forced flush while a write is in flight waits for it, then writes', async () => {
+    const { home, dir, file } = lane('cb-stats-race-forced-');
+    const [, , r] = await run(home, [
+      open(file),
+      call('outcome', ['2xx']),
+      race({ force: true }, [{ method: 'outcome', args: ['fx-during'] }, { method: 'flush', kwargs: { force: true } }],
+        0.5),
+    ]);
+    expect(r.result).toBe(true);
+    expect(r.duringFinished).toBe(false); // it waited for the write in flight
+    expect(r.duringAlive).toBe(false);
+    expect(r.duringRaised).toEqual([]);
+    expect(r.duringResults).toEqual([null, true]);
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 1, 'fx-during': 1 });
+    expect(readdirSync(dir)).toEqual([STATS]);
+  });
+
+  it('a malformed now reads as the wall clock, and a header item that is not a pair is skipped', async () => {
+    const { home, file } = lane('cb-stats-badnow-');
+    const [o, , , , , clock, , , snap] = await run(home, [
+      open(file),
+      call('refusal', ['backend', 'model-fx-str', 5, 6], { now: 'x' }),
+      call('refusal', ['backend', 'model-fx-nan', 5, 6], { now: { float: 'nan' } }),
+      call('refusal', ['backend', 'model-fx-big', 5, 6], { now: 1e300 }),
+      call('refusal', ['backend', 'model-fx-bool', 5, 6], { now: true }),
+      call('usage_headers', [{ 'x-codex-fx-a': '1' }], { now: 'x' }),
+      call('header_names', [{ itemsOf: [['x-codex-fx-b', '2'], 7, ['a', 'b', 'c'], 'xy'] }]),
+      call('usage_headers', [{ itemsOf: [['x-codex-fx-c', '3'], 7, ['a', 'b', 'c'], 'xy'] }], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(clock.result).toBeNull();
+    const started = Date.parse(o.doc.startedAt as string);
+    const doc = snap.doc as Line;
+    for (const model of ['model-fx-str', 'model-fx-nan', 'model-fx-big', 'model-fx-bool']) {
+      const at = doc.refusals[`backend/${model}`].at as string;
+      expect(at, model).toMatch(ISO);
+      expect(Date.parse(at), model).toBeGreaterThanOrEqual(started - 1000); // the wall clock, never 1970
+    }
+    expect(doc.names.responseHeader).toEqual({ 'x-codex-fx-b': 1 });
+    expect(doc.usageHeaders).toEqual({ at: '2023-11-14T22:13:20.000Z', values: { 'x-codex-fx-c': '3' } });
+  });
+
+  it('a near-miss number and a token header are never kept as x-codex- values', async () => {
+    const { home, file } = lane('cb-stats-nearmiss-');
+    // `x-codex-turn-state` is Codex's sticky-routing token (upstream openai/codex @ 092d3ac,
+    // codex-rs/core/src/client.rs:288-302); an all-digit value under it is still a token.
+    const TOKEN = '9081726354453627';
+    const headers = {
+      'x-codex-fx-near': '1-2', 'x-codex-fx-dots': '1..5', 'x-codex-fx-exp': '9e+e-', 'x-codex-fx-trail': '1.',
+      'x-codex-turn-state': TOKEN, 'x-codex-fx-ok': '1.5e-3', 'x-codex-fx-n': '-17',
+    };
+    await run(home, [
+      open(file),
+      call('usage_headers', [headers], { now: 1_700_000_000 }),
+      call('header_names', [headers]),
+      call('flush', [], { force: true }),
+    ]);
+    expect(readFileSync(file, 'utf8')).not.toContain(TOKEN);
+    const doc = readDoc(file);
+    expect(doc.usageHeaders.values).toEqual({ 'x-codex-fx-ok': '1.5e-3', 'x-codex-fx-n': '-17' });
+    expect(doc.names.responseHeader['x-codex-turn-state']).toBe(1); // the name is still counted
+  });
+});
