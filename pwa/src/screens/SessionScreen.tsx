@@ -21,6 +21,9 @@ import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
+import { heldAskLine } from '../session/askWords';
+import { heldCoordinatorWords } from '../session/sessionHeaderView';
+import { sessionLabel } from '../fleet/sessionLabel';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
 import { useQueuedRoute } from '../session/useQueuedRoute';
@@ -43,7 +46,7 @@ import { HistoryTab } from '../session/HistoryTab';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import { modelOptions, effortOptions, type PickOption } from '../lib/models';
 import '../session/chat.css';
-import { answerControlLabel } from '../session/askLive';
+import { answerControlLabel, askSource } from '../session/askLive';
 import { hibernatedSince, hibernatedWords } from '../fleet/hibernated';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
@@ -180,7 +183,13 @@ export function SessionScreen({
   // which is why the card's own `tool_result` wins over both.
   const liveAsk = useStore((s) => s.ask);
   const liveDialog = useStore((s) => s.dialog);
-  const askPending = liveAsk !== null || liveDialog !== null;
+  const liveAskFrameSeen = useStore((s) => s.askFrameSeen);
+  // D-6325: pending exactly when the LIVE inputs make the sheet something (`askSource`, the one decider). On a first
+  // connection, before its first ask frame the sheet is nothing, so a control offered then would raise nothing. A
+  // reconnect's gap is different: the sheet there is the held surface, but the card follows the connection, not the hold,
+  // so while `askFrameSeen` is down it reads unanswered without its Answer control until the new connection decides.
+  // The sheet's own hold through the gap is `DialogSheet`'s.
+  const askPending = askSource({ ask: liveAsk, dialog: liveDialog, askFrameSeen: liveAskFrameSeen }).kind !== 'none';
   // Decision `ask-answer-control-says-submit`: while the pane is on an ask's review screen, the transcript's control
   // says what the sheet it raises is waiting on, so a hidden sheet is one labelled click from Submit.
   const answerLabel = answerControlLabel(liveDialog);
@@ -331,6 +340,12 @@ export function SessionScreen({
   // snapshot speaks for the session (same fallback the header does), so a
   // dead session is read-only and a busy one wears the caret from first paint.
   const effectiveStatus = liveStatus(status, live);
+  // D-6325: who asks, for the header of every ask surface. The held line comes from the header's own gated words
+  // (`heldCoordinatorWords`: only a `working` row), so a dead or idle row that keeps a stale `withCoordinator` shows none.
+  const heldWords = heldCoordinatorWords(live, status);
+  const asker = live === null
+    ? null
+    : { session: sessionLabel(live), project: live.project, held: heldWords === null ? null : heldAskLine(heldWords.short) };
   const dead = effectiveStatus === 'dead';
   const pulsing = chatPulsing(live, effectiveStatus);
   const loading = uuid === null && missingFile === null;
@@ -661,7 +676,7 @@ export function SessionScreen({
         />
       </div>
 
-      <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} raise={raise} />
+      <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} raise={raise} asker={asker} />
       <PickSheet
         open={picker === 'model'}
         onClose={() => setPicker(null)}

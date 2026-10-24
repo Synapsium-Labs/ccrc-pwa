@@ -262,6 +262,23 @@ describe('Sheet', () => {
       expect(title).toHaveClass('max-h-[38vh]');
       expect(title).toHaveClass('overflow-y-auto');
     });
+
+    // D-6325: an ask sheet has exactly ONE vertical scroller, the body. `titleScroll={false}` is the opt-in that drops
+    // the title's own cap and scroller so a long question grows inside the body; default `true` is every other sheet,
+    // unchanged, and the wrapping guard above holds either way.
+    it('titleScroll={false} drops the title\'s own cap and scroller; the default keeps both', () => {
+      const { unmount } = render(
+        <Sheet open title="a question" onClose={() => {}}><p>body</p></Sheet>,
+      );
+      expect(document.querySelector('.sheet-title')).toHaveClass('max-h-[38vh]', 'overflow-y-auto');
+      unmount();
+      render(<Sheet open title="a question" titleScroll={false} onClose={() => {}}><p>body</p></Sheet>);
+      const title = document.querySelector('.sheet-title');
+      expect(title).not.toHaveClass('max-h-[38vh]');
+      expect(title).not.toHaveClass('overflow-y-auto');
+      expect(title).toHaveClass('[overflow-wrap:anywhere]');
+      expect(title).toHaveClass('flex-none');
+    });
   });
 });
 

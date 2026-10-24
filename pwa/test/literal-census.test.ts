@@ -53,9 +53,10 @@
 //
 // Baseline: 4 passed.
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import { parseTs, isSpecifier } from './literalWalker';
 
 const PKG = path.join(import.meta.dirname, '..', '..');
 
@@ -85,23 +86,10 @@ const MIN_CHARS = 25;
  *  point, so no real string can contain it. */
 const HOLE = '';
 
-/** An import/export specifier, or a `import()` argument — the three positions
- *  where a string names a MODULE rather than saying something. Excluded by
- *  position, not by shape. */
-function isSpecifier(n: ts.Node): boolean {
-  const p = n.parent as ts.Node | undefined;
-  if (p === undefined) return false;
-  if (ts.isImportDeclaration(p) || ts.isExportDeclaration(p)) return p.moduleSpecifier === n;
-  if (ts.isCallExpression(p) && p.expression.kind === ts.SyntaxKind.ImportKeyword) return true;
-  if (ts.isImportTypeNode(p) || (p.parent !== undefined && ts.isImportTypeNode(p.parent))) return true;
-  return false;
-}
-
 function literals(): Map<string, string[]> {
   const found = new Map<string, string[]>();
   for (const [name, file] of FILES) {
-    const src = ts.createSourceFile(
-      file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const src = parseTs(file);
     const visit = (n: ts.Node): void => {
       let text: string | null = null;
       if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) && !isSpecifier(n)) {

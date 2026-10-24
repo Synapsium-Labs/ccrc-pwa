@@ -20,6 +20,7 @@ import { DIALOG_TAB_REFUSE_TEXT } from '../src/session/askWords';
 import { createSessionStore } from '../src/stores/session';
 import { CC296_LONG, TOOLS_SIZES, pane } from './askPanes';
 import { declValue, ruleIn } from './cssRule';
+import { askFixture } from './askFixtures';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -128,6 +129,7 @@ function renderAsk(first: Dialog, envelope: typeof CC296_LONG | null = CC296_LON
     makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) },
   });
   act(() => {
+    store.getState().apply({ type: 'ask_cleared' });
     store.getState().apply({ type: 'dialog', dialog: first });
     if (envelope !== null) store.getState().apply({ type: 'ask', ask: envelope, key: null });
   });
@@ -215,24 +217,45 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it('Chat\'s digit only highlights Chat (it declines the whole ask); the free-text row\'s digit focuses the field', async () => {
+  it('Chat\'s digit only highlights Chat (it declines the whole ask); the free-text row\'s digit chooses Other and puts the cursor in the field', async () => {
     pointer('fine');
     const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     renderAsk(q1());
     await frame();
+    // Other is a row of the list while its field is closed: a button, no field yet.
+    expect(screen.queryByRole('textbox')).toBeNull();
     fireEvent.keyDown(document.activeElement!, { key: '4' });
     expect(spy).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(row(/^Chat about this/));
+    expect(document.activeElement).toBe(row(/^Talk it over in the chat instead/));
     fireEvent.keyDown(document.activeElement!, { key: '3' });
-    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Answer in your own words' }));
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Your own answer' }));
+    expect(spy, 'choosing Other answers nothing').not.toHaveBeenCalled();
   });
 
-  it('the own-words field keeps ←/→ and digits; ↑ leaves it for the last option', async () => {
+  it('↓ from the last option reaches the Other row, and Enter on it opens the field with the cursor in it', async () => {
+    pointer('fine');
+    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    renderAsk(q1());
+    await frame();
+    const user = userEvent.setup();
+    await user.keyboard('{ArrowDown}{ArrowDown}');
+    expect(document.activeElement).toBe(row(/^Other/));
+    expect(document.activeElement).toHaveAttribute('aria-keyshortcuts', '3');
+    await user.keyboard('{Enter}');
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Your own answer' }));
+    expect(spy).not.toHaveBeenCalled();
+    // ↓ from the field is Chat; ↑ from Chat is the field again (the model's `words` row).
+    await user.keyboard('{ArrowDown}');
+    expect(document.activeElement).toBe(row(/^Talk it over in the chat instead/));
+  });
+
+  it('the own-answer field keeps ←/→ and digits; ↑ leaves it for the last option', async () => {
     pointer('fine');
     const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
     renderAsk(q1());
     await frame();
-    const field = screen.getByRole('textbox', { name: 'Answer in your own words' });
+    fireEvent.click(row(/^Other/));
+    const field = screen.getByRole('textbox', { name: 'Your own answer' });
     field.focus();
     fireEvent.keyDown(field, { key: 'ArrowRight' });
     fireEvent.keyDown(field, { key: '1' });
@@ -267,6 +290,24 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
     expect(tab).not.toHaveBeenCalled();
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
     expect(tab).toHaveBeenCalledWith(SESSION_ID, { dialogId: review().id, to: 'prev' });
+  });
+
+  // The transcript's copy is ONE question, so its own place in the copy is always 0; the key place is the question's
+  // place on the pane's tab row, by its header (`headerTab`). ← must work on tab 2 of a three-tab pane (D-6325).
+  it.each([
+    ['Tracing', true, 'tab 2 of 3: ← moves the pane back'],
+    ['Cache', false, 'tab 1 of 3: nothing before it'],
+    ['A header no tab carries', true, 'a place it cannot tell: the server decides'],
+  ])('a transcript copy with the header %s: ← sends %s (%s)', async (header, sends) => {
+    pointer('fine');
+    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+    const fx = askFixture(2).dialog!;
+    renderAsk({ ...fx, ask: { ...fx.ask!, header } }, null);
+    await frame();
+    expect(document.querySelector('[data-source="transcript"]')).not.toBeNull();
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
+    if (sends) expect(tab).toHaveBeenCalledWith(SESSION_ID, { dialogId: fx.id, to: 'prev' });
+    else expect(tab).not.toHaveBeenCalled();
   });
 
   it('the review\'s ↑/↓ wrap between Submit and Cancel', async () => {
@@ -418,42 +459,87 @@ describe('the tab strip (decision ask-tab-strip)', () => {
     expect(tab).toHaveBeenCalledWith(SESSION_ID, { dialogId: review().id, to: 2 });
   });
 
-  it('the scraped sheet (the envelope aged out) knows its tab by the transcript\'s header, and sends it as from', () => {
-    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+  // D-6325, R3: a strip's chips carry Claude's own headers and are drawn only when the pane's tab row has exactly one tab
+  // per question. Once the envelope has aged out the copy is the transcript's ONE question, so a two-tab row gets no
+  // strip (the accepted loss: the envelope keeps the strip while it lasts), and a pane with no copy at all is
+  // unreadable and draws nothing of its tab row. The strip's own behaviour is pinned above, over the envelope.
+  it('the aged-out sheet draws no strip over a two-tab row: one question\'s copy cannot label two tabs', () => {
     const second = CC296_LONG.questions[1]!;
     const enriched: Dialog = {
       ...q2(),
       ask: { question: second.question, header: second.header, multiSelect: false, options: second.options },
     };
     renderAsk(enriched, null);
-    expect(screen.getByRole('button', { name: /^Go to Table supply/ })).toHaveAttribute('aria-current', 'step');
-    fireEvent.click(screen.getByRole('button', { name: /^Go to Water rota/ }));
-    expect(tab).toHaveBeenCalledWith(SESSION_ID, { dialogId: q2().id, to: 1, from: 2 });
+    expect(screen.getByRole('heading', { name: second.question })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Questions in this ask' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Go to / })).toBeNull();
   });
 
-  it('the scraped sheet with no header to place it: question chips wait, Submit still goes', () => {
-    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+  it('with no copy of the question there is no strip, and none of the tab row is shown', () => {
     renderAsk(q2(), null);
-    expect(screen.getByRole('button', { name: /^Go to Water rota/ })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Go to Submit' }));
-    expect(tab).toHaveBeenCalledWith(SESSION_ID, { dialogId: q2().id, to: 'submit' });
+    expect(screen.queryByRole('group', { name: 'Questions in this ask' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Go to / })).toBeNull();
+    expect(screen.getByRole('heading', { name: "Claude is asking a question this screen can't read yet." })).toBeInTheDocument();
   });
 
-  it('the chip of the screen showing is scrolled into the strip\'s view, and again when the screen changes', async () => {
-    const seen: string[] = [];
-    const scroll = vi.fn(function (this: HTMLElement) { seen.push(this.getAttribute('aria-label') ?? ''); });
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { value: scroll, configurable: true });
+  it('the chip of the screen showing is brought into the strip sideways only, and again when the screen changes', async () => {
+    // D-6325: the strip's chip used to be `scrollIntoView`ed, whose `block: 'nearest'` also scrolled the sheet body
+    // (with one scroller a long question put the strip below the fold, so the body opened scrolled down to the chip).
+    // Now the strip's own `scrollLeft` moves, from the rectangles, and nothing else scrolls: `scrollIntoView` is never
+    // called. jsdom lays nothing out, so each rectangle is staged: the strip is 100px wide at the page's left edge and
+    // a chip sits at `chipLeft - strip.scrollLeft`, 80px wide.
+    const intoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { value: intoView, configurable: true });
+    const rect = (left: number, width: number): DOMRect => ({
+      left, right: left + width, top: 0, bottom: 44, width, height: 44, x: left, y: 0, toJSON: () => ({}),
+    });
+    const chipLeft: Record<string, number> = {
+      'Go to Table supply, not answered yet': 150, 'Go to Submit': 240,
+    };
+    const rects = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('ask-tabs')) return rect(0, 100);
+      const name = this.getAttribute('aria-label') ?? '';
+      const at = chipLeft[name];
+      const strip = this.closest<HTMLElement>('.ask-tabs');
+      return at === undefined || strip === null ? rect(0, 0) : rect(at - strip.scrollLeft, 80);
+    });
     try {
       vi.spyOn(api, 'answerDialogTab').mockResolvedValue({ ok: true, next: review() });
       renderAsk(q2());
-      expect(seen).toEqual(['Go to Table supply, not answered yet']);
-      expect(scroll).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+      const strip = screen.getByRole('group', { name: 'Questions in this ask' });
+      // Chip 1 spans 150-230 against a 0-100 strip: its right edge is brought to the strip's (230 - 100).
+      expect(strip.scrollLeft).toBe(130);
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: 'Go to Submit' }));
       });
-      expect(seen.at(-1)).toBe('Go to Submit');
+      // Submit spans 240-320 at the page. The review is a new screen with its own strip, which starts at 0 and is
+      // scrolled by its chip's right edge over the strip's (320 - 100).
+      expect(screen.getByRole('group', { name: 'Questions in this ask' }).scrollLeft).toBe(220);
+      expect(intoView, 'the sheet body is never scrolled by the strip').not.toHaveBeenCalled();
     } finally {
+      rects.mockRestore();
       delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it('the open-time focus never scrolls the sheet (D-6325), and an arrow key\'s focus keeps its scroll', async () => {
+    pointer('fine');
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      renderAsk(q2());
+      await frame();
+      // The calls that landed on an option row: the open-time focus of `useAskKeys`.
+      const onRow = (): FocusOptions[] => focus.mock.calls.flatMap((c, i) =>
+        (focus.mock.contexts[i] as HTMLElement).classList.contains('opt') ? [(c[0] ?? {}) as FocusOptions] : []);
+      expect(onRow().length, 'the open-time focus ran on a row').toBeGreaterThan(0);
+      expect(onRow().every((o) => o.preventScroll === true), 'and with preventScroll').toBe(true);
+      focus.mockClear();
+      fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+      expect(focus, 'an arrow key moved the focus').toHaveBeenCalled();
+      expect(onRow().length, 'on a row').toBeGreaterThan(0);
+      expect(onRow().every((o) => o.preventScroll === undefined), 'with the normal scroll').toBe(true);
+    } finally {
+      focus.mockRestore();
     }
   });
 
