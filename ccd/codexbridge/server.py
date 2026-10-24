@@ -51,7 +51,7 @@ already in flight (a refresher tick, a request's `ensure_fresh` or `refresh_reje
 bound, until DRAIN_S + STOP_MARGIN_S - EXIT_MARGIN_S after the signal (the KILL comes at DRAIN_S + STOP_MARGIN_S,
 Task 11), so a refresh the token endpoint has answered reaches the disk before the process ends; then the stats file
 is flushed. The return is 0. The credential wait is a step the plan's drain text does not have
-(D-TBD-drain-waits-for-credentials).
+(D-6834).
 
 Every constant is read when it is used, so the test driver's `consts` reach it.
 """

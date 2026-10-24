@@ -782,7 +782,7 @@ def retry_unsaved(auth_dir: str) -> str:
     `lastRequestId`, bound to the new file: a config-error that bars under this config (it is about ccrc's OAuth
     client, not a file's token, so no request follows until the config changes), and a current upstream state,
     limit-paused or ineligible (it is about the account, not a file's token, whether it stood at the refresh or was
-    recorded since; D-TBD-task6-refresh-keeps-upstream). `"still-unsaved"`: the commit failed again and the record
+    recorded since; D-6829). `"still-unsaved"`: the commit failed again and the record
     stays. A raise: while that file,
     still in place, reads `unreadable`, the commit's refusal (Unreadable) propagates and the record stays (D-6560)."""
     p = paths_for(auth_dir)
@@ -1333,7 +1333,7 @@ def _refreshed_fields(prev: Optional[dict], request_id: Optional[str]) -> Tuple[
     `("ok", None, request_id)`, unless the current status `prev` holds a state an upstream answer set
     (`record_upstream`, _UPSTREAM_STATES). That state is kept with its code and its request id, the upstream answer's
     (spec §2.4 keeps the upstream request id in the status), because a token refresh says nothing about the account's
-    quota or eligibility (D-TBD-task6-refresh-keeps-upstream). The refresh that commits, or whose commit cannot write
+    quota or eligibility (D-6829). The refresh that commits, or whose commit cannot write
     (`_refresh_locked`), the one whose commit lands later (`retry_unsaved`), and a transient failure over an upstream
     state (`_refresh_locked`'s RefreshFailed arm) write this. What replaces a kept upstream state:
     `record_upstream(state="ok")` after the bridge's next 2xx, a refusal (needs-signin, config-error), and a sign-in
@@ -1393,7 +1393,7 @@ def _refresh_locked(auth_dir: str, r: Reading, old: object, lane: Optional[str])
     `held(auth_dir)`. Extracted from `ensure_fresh` as a move, so that `refresh_rejected` runs the same body
     (codex-bridge Stage 2, Task 6), and since changed in one place: a committed refresh, and one whose commit cannot
     write, write `_refreshed_fields`, which keeps a current upstream state with its code and request id
-    (D-TBD-task6-refresh-keeps-upstream)."""
+    (D-6829)."""
     key = _key(auth_dir)
     p = paths_for(auth_dir)
     from_unsaved = _from_unsaved(auth_dir, old)
