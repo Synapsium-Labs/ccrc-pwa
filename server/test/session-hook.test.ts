@@ -9842,6 +9842,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:7568',
         'ccd/ccd:11025',
         'ccd/ccd:11665-11670',
+        // ENTERS at pr-landing PL-1 (S6-R11): `_pr_bind_facts`, `cmd_pr_landing` and the `bind` mode move `ccd/ccd` below the
+        // pr-state region; dumped from the instrument, spelled in two parts for the citations ratchet.
+        'ccd/ccd' + ':13588-13653',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
@@ -9901,6 +9904,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':5385-5388',
         // LEFT at the hook-helpers refactor (ARCH-74, S6-R11): `:4642-4653`, its +30 `ccd/ccd` shift.
+        // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
+        'ccd/ccd' + ':5353-5362',
+        'ccd/ccd:5828-5830',
+        // ENTERS at pr-landing PL-1 (S6-R11), spelled in two parts for the citations ratchet.
+        'ccd/ccd' + ':5819-5823',
         // LEFT here at model-class auto-advance W2 (S6-R11): `:5819-5823` (the note above this assertion).
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
