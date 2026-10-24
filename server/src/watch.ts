@@ -221,6 +221,9 @@ import {
   collectRetireLatch,
 } from './coord/collectTempRoot.js';
 
+import { OrphanTreeSweep } from './orphanTreeSweep.js';
+import type { DiskOrphanTrees } from '../../shared/disk.js';
+
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
 
 /** Task sweeps read every task file of every session, so they run on their own
@@ -1221,6 +1224,9 @@ export class FleetWatcher {
    *    (Task 5's `collectPassClass`), keyed by the pass that queued them; the latest pass whose calls have all settled is
    *    the one the pass-scoped box lines read. */
   private lastCollectSweep: number | null = null;
+  /** The orphan-worktree lane (D-6631): its pass, built on first use, and its throttle on the monotonic clock. */
+  private orphanTrees: OrphanTreeSweep | null = null;
+  private lastOrphanTreeSweep: number | null = null;
   private collectSweeping = false;
   private readonly collectStartMono: number;
   private collectGen = 0;
@@ -2618,6 +2624,9 @@ export class FleetWatcher {
       // gather; this listing feeds its pre-filter, which is economy and never a permission.
       void this.sweepTempRootCollect(records, registryRead.names)
         .catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the ORPHAN-WORKTREE lane (fleet disk retention, D-6631), a fifth sibling at the
+      // same cadence and under the same pause. It reads no tick listing; its census is its own.
+      void this.sweepOrphanTrees().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
       // is ~4.3 s of sleeps per message plus one round trip per line
@@ -4983,6 +4992,29 @@ export class FleetWatcher {
     } finally {
       this.collectSweeping = false;
     }
+  }
+
+  /** THE ORPHAN-WORKTREE LANE's beat (D-6631; spec 2026-10-23 section 2.3): throttled here, decided in `orphanTreeLane.ts`,
+   *  asked in `coord/collectOrphanTree.ts`, remembered in `orphanTreeSweep.ts`. Shadow until `orphan-tree-live` stands. */
+  async sweepOrphanTrees(): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    const gate = this.childReclaimLaneNow().monoMs;
+    if (this.lastOrphanTreeSweep !== null && gate - this.lastOrphanTreeSweep < CHILD_RECLAIM_SWEEP_MS) return;
+    this.lastOrphanTreeSweep = gate;
+    this.orphanTrees ??= new OrphanTreeSweep({
+      io: this.deps.io, registryDir: this.deps.cfg.registryDir, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
+      queue: this.deps.queue, mono: () => this.childReclaimLaneNow().monoMs,
+      epochNow: () => (this.deps.fleetIdentity ?? NO_FLEET_IDENTITY).epochNow(), pressure: () => false,
+      record: (title, body) => notify({ notifyLog: this.deps.notifyLog, coord },
+        { kind: 'coord', sessionId: '', runId: null, title, body }, 'record-only', { degraded: `orphan-tree lane ${title}, feed archive degraded` }),
+    });
+    await this.orphanTrees.pass();
+  }
+
+  /** The `disk` block's `orphanTrees` (D-6631), or null before the lane's first census. */
+  orphanTreesHealth(): DiskOrphanTrees | null {
+    return this.orphanTrees?.health() ?? null;
   }
 
   /** One pass of the collector's lane, run only while no other pass runs. Its ONE await is the gather. It queues its
