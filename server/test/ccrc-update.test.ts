@@ -4808,6 +4808,70 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     for (const [what, ls] of calls) for (const l of ls) expect(globoff(l), `${what}: ${l}`).toBe(true);
   });
 
+  // D-6751 (fix round 5, review 926's F2): two values the release host supplies, SHA256SUMS's tarball name and the staged
+  // build.json's version (under --allow-unsigned, nothing but the transport checksum vouches for it), are held to 200
+  // characters where each is read. Neither curl's --max-filesize (curl 8.4.0 or later, the default knob) nor anything else bounds
+  // them otherwise, and `_upd_redact`'s loops grow about x7-8 per doubling on the review's combined shape (a failing `"a` run,
+  // then `<x@y/` units). The fixture curl serves each value whole, as an older curl or a raised knob would let through, at
+  // 100 000 characters and at that shape at about 16 000: the run must die naming the length, every sentence that leaves the
+  // box (the die line, the fetching lines, update.json's detail) must stay within 200 characters, and the run must end in 30 s.
+  const worstShape = (n: number): string => `x${'"a'.repeat(Math.floor(n / 4))}@ ${'<x@y/'.repeat(Math.floor(n / 10))}`;
+  const boundedRun = (home: string, args: string[]): { r: Result; ms: number } => {
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases` };
+    replantDoctorStubs(home);
+    assertSpineFrontContained(env, home);
+    assertNoRealTool(env, home);
+    const t0 = Date.now();
+    // The spawn's own 90 s kill only ends a run the bound did not; the 30 s assertion below is the row's measure.
+    const p = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', ...args], { env, encoding: 'utf8', timeout: 90_000 });
+    return { r: { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' }, ms: Date.now() - t0 };
+  };
+  const expectBounded = (home: string, run: { r: Result; ms: number }, lead: string, value: string): void => {
+    const { r, ms } = run;
+    expect(ms, `the run took ${ms} ms`).toBeLessThan(30_000);
+    expect(r.code, `stderr: ${r.stderr.slice(0, 2000)}`).toBe(1);
+    const die = r.stderr.split('\n').filter((l) => l.startsWith(`ccrc: ${lead} is `));
+    expect(die, r.stderr.slice(0, 2000)).toHaveLength(1);
+    expect(die[0]).toContain(`${lead} is ${value.length} characters, not a ccrc release's (starts: ${value.slice(0, 40)}) — refusing`);
+    expect(die[0].length, die[0]).toBeLessThanOrEqual(200);
+    const fetching = r.stdout.split('\n').filter((l) => l.startsWith('update: fetching '));
+    expect(fetching.length, r.stdout.slice(0, 2000)).toBeGreaterThan(0);
+    for (const l of fetching) expect(l.length, l.slice(0, 300)).toBeLessThanOrEqual(200);
+    const report = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+    expect(report['phase']).toBe('failed');
+    expect(String(report['detail'])).toContain(`${lead} is ${value.length} characters`);
+    expect(String(report['detail']).length).toBeLessThanOrEqual(200);
+    expect(r.stdout + r.stderr, 'more than 200 characters of the value left the box').not.toContain(value.slice(0, 201));
+  };
+  for (const [label, name] of [['100 000 characters', `ccrc-${'x'.repeat(100_000 - 12)}.tar.gz`],
+    ['the combined worst shape at about 16 000 characters', worstShape(16_000)]] as const) {
+    it(`SHA256SUMS naming a tarball of ${label}: the update dies at the read naming its length, every sentence within 200 characters, within 30 s (D-6751, fix round 5)`, () => {
+      const home = freshUpdateBox('ccrc-update-bound-name-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      const relDir = join(home, 'releases', 'latest', 'download');
+      mkdirSync(relDir, { recursive: true });
+      writeFileSync(join(relDir, 'SHA256SUMS'), `${'a'.repeat(64)}  ${name}\n`);
+      expectBounded(home, boundedRun(home, []), 'SHA256SUMS\'s tarball name', name);
+      expect(localUrls(home), 'only SHA256SUMS was fetched').toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
+    }, 150_000);
+  }
+  for (const [label, version] of [['100 000 characters', `v${'x'.repeat(100_000 - 1)}`],
+    ['the combined worst shape at about 16 000 characters', worstShape(16_000)]] as const) {
+    it(`an unsigned release whose build.json names a version of ${label}: the update dies at the read naming its length, every sentence within 200 characters, within 30 s (D-6751, fix round 5)`, () => {
+      const home = freshUpdateBox('ccrc-update-bound-version-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      const tree = stubTree(home, { version: 'v2.0.0' });
+      rmSync(join(tree, 'MANIFEST'));
+      writeFileSync(join(tree, 'build.json'), `${JSON.stringify({ sha: 'newsha0000000000000000000000000000000000', ref: 'release',
+        builtAt: '2026-08-21T00:00:00Z', dirty: false, version })}\n`);
+      writeManifest(tree);
+      packRelease(home, tree, { tag: 'v2.0.0', latest: false, bundle: false });
+      expectBounded(home, boundedRun(home, ['--to', 'v2.0.0', '--allow-unsigned']), 'build.json\'s version', version);
+      expect(existsSync(join(home, 'staged-ccrc-argv')), 'the staged install ran').toBe(false);
+    }, 150_000);
+  }
+
   // Fix round 1 item 11 / review 155 C17: the floor death's update.json
   // DETAIL keeps its VERDICT (D-3249) even with a HOME long enough that the
   // RAW path alone would have exceeded `_upd_json_str`'s 200-character cut
