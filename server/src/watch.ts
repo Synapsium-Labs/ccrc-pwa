@@ -68,6 +68,8 @@ import {
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 // The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { MeasuredDirectoryRead, MeasuredDisk } from './io.js';
 import { diskNotice, diskVerdict, type DiskVerdict } from './disk.js';
 import type { DiskHealth } from '../../shared/disk.js';
@@ -7127,7 +7129,15 @@ export class FleetWatcher {
       return;
     }
     const before = this.diskState;
-    const verdict = diskVerdict(before, read.measured, now);
+    let verdict = diskVerdict(before, read.measured, now);
+    // The open episode is durable (the `pushRelease` rule: a latch that forgets on restart repeats the push). A process
+    // with no memory of its own that meets a standing `warn`/`critical` resumes the episode it marked, so its key is
+    // the one already archived; a clear to `ok` forgets the mark.
+    const standingNow = verdict.level === 'warn' || verdict.level === 'critical';
+    if (standingNow && before === null) {
+      const marked = this.readDiskEpisode();
+      if (marked !== null) verdict = { ...verdict, episode: marked };
+    } else if (verdict.level === 'ok') this.clearDiskEpisode();
     this.diskState = verdict;
     this.raiseDiskNotice(before, verdict);
     this.diskBlock = {
@@ -7146,9 +7156,30 @@ export class FleetWatcher {
    * episode raises nothing twice; the archive row `notify` writes carries the key for the next read. A store that
    * cannot answer costs the dedupe only, never the notice.
    */
+  private diskEpisodePath(): string { return path.join(this.deps.cfg.ccrcDir, 'disk-episode'); }
+
+  private readDiskEpisode(): number | null {
+    try {
+      const v = Number(readFileSync(this.diskEpisodePath(), 'utf8').trim());
+      return Number.isFinite(v) && v > 0 ? v : null;
+    } catch { return null; }
+  }
+
+  /** A mark that cannot be written costs the restart dedupe only, never the notice. */
+  private writeDiskEpisode(episode: number): void {
+    try {
+      mkdirSync(this.deps.cfg.ccrcDir, { recursive: true });
+      writeFileSync(this.diskEpisodePath(), `${episode}\n`);
+    } catch { /* the notice still goes out */ }
+  }
+
+  private clearDiskEpisode(): void { try { rmSync(this.diskEpisodePath(), { force: true }); } catch { /* nothing to forget */ } }
+
   private raiseDiskNotice(before: DiskVerdict | null, after: DiskVerdict): void {
     const n = diskNotice(before, after);
     if (n === null) return;
+    // Mark the episode BEFORE the push, so a restart between the two finds it.
+    if (n.mode === 'push' && after.episode !== undefined) this.writeDiskEpisode(after.episode);
     try { if (this.deps.coord?.hasNotice('coord', '', n.dedupeKey) === true) return; } catch { /* send it: a repeat beats silence */ }
     notify(this.deps, { kind: 'coord', sessionId: '', runId: null, title: n.title, body: n.body }, n.mode,
       { tag: 'disk', dedupeKey: n.dedupeKey, degraded: 'feed archive degraded, ring/push unaffected' });

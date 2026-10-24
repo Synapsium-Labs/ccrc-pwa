@@ -11,6 +11,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { diskNotice, type DiskVerdict } from '../src/disk.js';
 import { localIO, type FleetIO, type MeasuredDisk } from '../src/io.js';
 import { NotifyLog } from '../src/notifylog.js';
+import type { PushPayload } from '../src/push.js';
 import { FleetWatcher } from '../src/watch.js';
 import type { DiskFilesystem, DiskLevel, DiskMeasured } from '../../shared/disk.js';
 import { testDeps } from './helpers.js';
@@ -99,7 +100,7 @@ async function rig(home: string, answers: MeasuredDisk[], now: () => number) {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
-  const push = { notify: vi.fn(async () => undefined) };
+  const push = { notify: vi.fn(async (_p: PushPayload) => undefined) };
   let n = 0;
   const io: FleetIO = { ...localIO, statfsMeasured: async () => answers[Math.min(n++, answers.length - 1)]! };
   const deps = { ...testDeps(home), io, coord, notifyLog, push, presence: { isVisible: () => false } };
@@ -141,14 +142,28 @@ describe('sweepDisk sends the notice through the funnel', () => {
     expect(r.push.notify.mock.calls.length).toBe(2);
   });
 
-  it('a restarted watcher inside the same episode re-sends nothing: the archived key is read before the write', async () => {
+  it('a restarted watcher inside the same episode re-sends nothing, though the clock moved on: the episode is durable', async () => {
     const home = mkTmp('ccrc-dn-');
-    const first = await rig(home, [...hold(40), ...hold(86)], () => 5_000_000);
+    let clock = 5_000_000;
+    const first = await rig(home, [...hold(40), ...hold(86)], () => clock);
     for (let i = 0; i < 4; i += 1) await first.sweep();
     expect(first.push.notify.mock.calls.length).toBe(1);
-    const again = await rig(home, [...hold(40), ...hold(86)], () => 5_000_000);
+    clock += 6 * 3_600_000;
+    const again = await rig(home, [...hold(86), ...hold(86)], () => clock);
     for (let i = 0; i < 4; i += 1) await again.sweep();
     expect(again.push.notify.mock.calls.length).toBe(0);
     expect(again.coord.feedEvents(10).length).toBe(1);
+  });
+
+  it('a clear forgets the episode: a restart after it that meets a new warn pushes', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const first = await rig(home, [...hold(40), ...hold(86), ...hold(40)], () => clock);
+    for (let i = 0; i < 6; i += 1) { clock += 60_000; await first.sweep(); }
+    expect(first.push.notify.mock.calls.length).toBe(1);
+    clock += 3_600_000;
+    const again = await rig(home, [...hold(86)], () => clock);
+    for (let i = 0; i < 2; i += 1) { clock += 60_000; await again.sweep(); }
+    expect(again.push.notify.mock.calls.length).toBe(1);
   });
 });
