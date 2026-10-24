@@ -162,38 +162,43 @@ export interface LaneRow {
   readonly startsDue?: true;
 }
 
+// Every row throttles on the monotonic clock: the operator ruled OA-C4 (a) on 2026-10-24 (#803), so the 21 rows that
+// throttled on `Date.now()` moved after the expiry and dead-coordinator pair (spec K11, §5.1 rule 1b). A cadence is real
+// time: a wall clock stepped back runs a lane at its cadence, and one stepped forward never runs it early. Verdicts keep
+// reading the wall clock (an `expiresAt`, a `closedAt`, a digest day); `LaneClock` keeps its 'wall' member for a row that
+// might ask for it, and none does.
 export const LANE_SCHEDULE: readonly LaneRow[] = [
-  { name: 'caps', cadenceMs: CAPS_REFRESH_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'caps', cadenceMs: CAPS_REFRESH_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   {
-    name: 'catalogue', cadenceMs: CATALOGUE_POLL_INTERVAL_MS, derivedFrom: null, clock: 'wall', flight: 'none',
+    name: 'catalogue', cadenceMs: CATALOGUE_POLL_INTERVAL_MS, derivedFrom: null, clock: 'mono', flight: 'none',
     warnKey: 'ccrc-server: the catalogue poller rejected — this is a bug, poll() should never reject',
   },
-  { name: 'inventory', cadenceMs: UPDATE_INVENTORY_MS, derivedFrom: null, clock: 'wall', flight: 'join-rerun', warnKey: null },
-  { name: 'serverCaps', cadenceMs: SERVER_CAPS_WRITE_MS, derivedFrom: null, clock: 'wall', flight: 'join', warnKey: null },
-  { name: 'tasks', cadenceMs: TASK_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'usage', cadenceMs: USAGE_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'inventory', cadenceMs: UPDATE_INVENTORY_MS, derivedFrom: null, clock: 'mono', flight: 'join-rerun', warnKey: null },
+  { name: 'serverCaps', cadenceMs: SERVER_CAPS_WRITE_MS, derivedFrom: null, clock: 'mono', flight: 'join', warnKey: null },
+  { name: 'tasks', cadenceMs: TASK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'usage', cadenceMs: USAGE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   {
-    name: 'pr', cadenceMs: PR_SWEEP_MS, activeCadenceMs: PR_SWEEP_ACTIVE_MS, derivedFrom: null, clock: 'wall',
+    name: 'pr', cadenceMs: PR_SWEEP_MS, activeCadenceMs: PR_SWEEP_ACTIVE_MS, derivedFrom: null, clock: 'mono',
     flight: 'skip', staleAfterMs: PR_SWEEP_STUCK_MS, warnKey: null,
   },
-  { name: 'names', cadenceMs: NAME_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'divergences', cadenceMs: DIVERGENCE_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'lifecycle', cadenceMs: LC_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'readiness', cadenceMs: READINESS_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'ledgerReconcile', cadenceMs: LEDGER_RECONCILE_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'ledgerFloor', cadenceMs: LEDGER_FLOOR_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'claimRenew', cadenceMs: CLAIM_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'claimLapse', cadenceMs: CLAIM_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'names', cadenceMs: NAME_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'divergences', cadenceMs: DIVERGENCE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'lifecycle', cadenceMs: LC_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'readiness', cadenceMs: READINESS_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'ledgerReconcile', cadenceMs: LEDGER_RECONCILE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'ledgerFloor', cadenceMs: LEDGER_FLOOR_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'claimRenew', cadenceMs: CLAIM_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'claimLapse', cadenceMs: CLAIM_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   {
-    name: 'stalls', cadenceMs: STALL_SWEEP_MS, clock: 'wall', flight: 'skip', warnKey: null,
+    name: 'stalls', cadenceMs: STALL_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
     derivedFrom: { name: 'CLAIM_SWEEP_MS', reason: 'the stall watch needs no finer beat than the claim lanes it runs after' },
   },
-  { name: 'idleNudge', cadenceMs: IDLE_NUDGE_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'skip', warnKey: null },
-  { name: 'mail', cadenceMs: MAIL_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'asks', cadenceMs: ASK_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'idleNudge', cadenceMs: IDLE_NUDGE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
+  { name: 'mail', cadenceMs: MAIL_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'asks', cadenceMs: ASK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   // The prune's failure is caught by `sweepApprovals`' own try (its sentence names the whole sweep), so no warnKey.
-  { name: 'approvalPrune', cadenceMs: APPROVAL_PRUNE_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'digestBeat', cadenceMs: DIGEST_BEAT_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null, startsDue: true },
+  { name: 'approvalPrune', cadenceMs: APPROVAL_PRUNE_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'digestBeat', cadenceMs: DIGEST_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null, startsDue: true },
   // The four lanes that select destructive acts. Child reclaim is the census's own cadence; the other three are its siblings on
   // the same tick, at the same cadence, and follow it by reference. All four throttle on the monotonic clock (spec K11, §5.1
   // rule 1b: a cadence is real time, so a wall clock stepped back must not hold a lane for the step, nor one stepped forward

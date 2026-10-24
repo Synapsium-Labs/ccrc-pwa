@@ -1,14 +1,14 @@
 // Characterization (D-5862; ARCH-68 #803; spec K11): the nine lanes outside coordination that `FleetWatcher.tick`
-// throttles on a wall-clock `last*` field: the task, usage, PR, name, divergence, lifecycle, readiness and the two
+// throttled on a wall-clock `last*` field and now throttles on the monotonic clock (OA-C4, ruled (a) on #803): the task, usage, PR, name, divergence, lifecycle, readiness and the two
 // ledger sweeps. Each is driven through its own entry (the method `tick` calls) on a fake wall clock, and what a lane
 // did is read off an effect it cannot do without (a registry listing, a sidecar read, a token read, a mirror sweep, an
 // allocation read). Pinned per lane: the first call runs, a call inside the cadence skips, a wall clock stepped back
-// holds the lane and stepped forward runs it; a second call while a pass that never settles is running does not start
+// no longer holds the lane (after, it runs at its cadence) and stepped forward never runs it early; a second call while a pass that never settles is running does not start
 // another (the slot is stamped before the work is awaited); a pass that throws rejects the call, spends the slot and
 // leaves the next due call running. Lifecycle is also reached through `tick` (the child-mark kick, a body that never settles
-// delays neither tick), and the PR sweep's stuck-run boundary has its own rows. The wall lanes take no
-// injected monotonic clock, so none is driven here; the monotonic lanes are pinned in the lane-schedule rows. Fixture
-// homes only.
+// delays neither tick), and the PR sweep's stuck-run boundary has its own rows. Each rig injects `Deps.monotonicMs`
+// (`mono`), so the throttle is driven by the very clock it reads: `at` moves both clocks together (real time passing) and
+// `wallAt` moves the wall clock alone (a step). Fixture homes only.
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -28,7 +28,13 @@ const HOUR = 3_600_000;
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
-const at = (ms: number): void => { vi.spyOn(Date, 'now').mockReturnValue(ms); };
+/** The injected monotonic clock (`Deps.monotonicMs`), on the same epoch as the fake wall clock. */
+let mono = NOW;
+const monotonicMs = (): number => mono;
+/** Real time passing: both clocks read `ms`. */
+const at = (ms: number): void => { mono = ms; vi.spyOn(Date, 'now').mockReturnValue(ms); };
+/** A wall-clock step with no real time passing: only the wall clock moves. */
+const wallAt = (ms: number): void => { vi.spyOn(Date, 'now').mockReturnValue(ms); };
 
 /** A watcher on a fixture home whose io counts what each lane reads. */
 function rig() {
@@ -47,7 +53,7 @@ function rig() {
     readFileMeasured: async (p: string) => { fileReads.push(p); return localIO.readFileMeasured(p); },
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const w = new FleetWatcher({ ...testDeps(home), cfg, io, coord } as never, new Bus(), 10_000);
+  const w = new FleetWatcher({ ...testDeps(home), monotonicMs, cfg, io, coord } as never, new Bus(), 10_000);
   return { home, cfg, coord, w, registryListings, otherListings, fileReads };
 }
 type Rig = ReturnType<typeof rig>;
@@ -92,7 +98,7 @@ const LANES: Lane[] = [
   { key: 'pr', cadenceMs: 120_000, run: (r) => call(r, 'sweepPr'), watch: (r) => () => r.registryListings.length },
 ];
 
-describe.each(LANES)('the $key lane (wall clock)', (lane) => {
+describe.each(LANES)('the $key lane (monotonic clock)', (lane) => {
   it('runs on the first call, skips inside its cadence, runs once the cadence has elapsed', async () => {
     const r = rig(); const ran = lane.watch(r);
     at(NOW);
@@ -109,17 +115,22 @@ describe.each(LANES)('the $key lane (wall clock)', (lane) => {
     expect(ran(), 'did not run at its cadence').toBeGreaterThan(first);
   });
 
-  it('a wall clock stepped back one hour holds the lane; stepped forward it runs at once', async () => {
+  // The AFTER row of OA-C4 (#803). BEFORE, the lane throttled on `Date.now()`: a wall clock stepped back one hour held it for
+  // the hour (a whole cadence of real time did not run it), and one stepped forward ran it at once. AFTER, the cadence is real
+  // time: the step back runs it at its cadence and the step forward never runs it early.
+  it('a wall clock stepped back one hour runs the lane at its cadence; stepped forward it never runs early', async () => {
     const r = rig(); const ran = lane.watch(r);
     at(NOW);
     await lane.run(r);
     const first = ran();
-    at(NOW - HOUR);
+    wallAt(NOW - HOUR);
+    mono = NOW + lane.cadenceMs;
     await lane.run(r);
-    expect(ran(), 'a step back no longer holds the lane').toBe(first);
-    at(NOW + HOUR);
+    expect(ran(), 'AFTER: a wall step back, a whole cadence of real time, runs the lane').toBeGreaterThan(first);
+    const second = ran();
+    wallAt(NOW + HOUR);
     await lane.run(r);
-    expect(ran(), 'a step forward did not run the lane').toBeGreaterThan(first);
+    expect(ran(), 'AFTER: a wall step forward ran the lane early').toBe(second);
   });
 });
 
@@ -200,7 +211,7 @@ describe('a lane that throws keeps its slot', () => {
     seedRoster(home);
     const listed: string[] = [];
     const io: FleetIO = { ...localIO, readdir: async (p: string) => { listed.push(p); return localIO.readdir(p); } };
-    const w = new FleetWatcher({ ...testDeps(home), io } as never, new Bus(), 10_000);
+    const w = new FleetWatcher({ ...testDeps(home), monotonicMs, io } as never, new Bus(), 10_000);
     at(NOW);
     await w.sweepLedgerFloor([REC]);
     at(NOW + HOUR);
@@ -280,7 +291,7 @@ describe('the PR sweep: single flight that abandons a stuck run', () => {
       if (args[0] === 'pr-state') return new Promise((res) => { settle.push(res); });
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    const w = new FleetWatcher({ ...testDeps(home, run), monotonicMs } as never, new Bus(), 10_000);
     const sweep = (): Promise<void> => (w as unknown as Any)['sweepPr']!();
     return { w, settle, sweep };
   }
