@@ -492,8 +492,6 @@ export async function dispatchRun(
   const admit = decideDispatch({ step: 'admit', names: await deps.io.readdir(deps.cfg.registryDir),
     caps: () => capsMeasured(coord) });
   if (admit.kind !== 'go') return stopped(coord, id, admit);
-  // D-6794: the journal says the route was the table's row, not the coordinator's.
-  if (routeDefaulted) coord.recordRunEvent(id, 'coordinator', `route-defaulted:${run.kind}`);
 
   // ONE MEASUREMENT, SPENT TWICE — the dispatch's own dec, hoisted above the
   // fresh-spawn branch because BOTH of this function's ccd writes are the same
@@ -539,6 +537,9 @@ export async function dispatchRun(
     ? await spawnFresh(deps, run, routeFields, childSlug, dispatchDec)
     : await resumeBound(deps, run, run.sessionId, dispatchDec);
   if ('ok' in bound) return bound;
+  // D-6794: the journal says the route was the table's row, not the coordinator's. After the spawn's refusals, so a
+  // dispatch that never ran leaves no row claiming a route it did not apply.
+  if (routeDefaulted) coord.recordRunEvent(id, 'coordinator', `route-defaulted:${run.kind}`);
   const { sessionId, resumed, liveGate, adopted, adoptedSpawn } = bound;
 
   // The hold: claimed AS SOON AS the session id exists, and on a resume BEFORE the injected `/clear` (R7: the `/clear`

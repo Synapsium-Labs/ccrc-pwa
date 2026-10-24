@@ -92,7 +92,8 @@ const harness = (cfg: HarnessCfg) => {
   };
   return {
     runId: opened.id, calls,
-    dispatch: (route?: unknown, slug?: unknown) => dispatchRun(deps, opened.id, 'go', undefined, route, slug),
+    // An EMPTY route is a passed route (D-6794): these rows are about `--child`, not the run kind's default row.
+    dispatch: (route: unknown = {}, slug?: unknown) => dispatchRun(deps, opened.id, 'go', undefined, route, slug),
     wsAdds: (): string[][] => calls.filter((c) => c[0] === 'ws-add'),
     events: (): string[] =>
       coord.runEvents(opened.id).map((e) => e.detail).filter((d): d is string => d !== null),
