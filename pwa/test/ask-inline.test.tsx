@@ -39,15 +39,10 @@ vi.mock('react-virtuoso', async () => {
   };
 });
 
-const realScrollIntoView = Element.prototype.scrollIntoView;
-
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  // jsdom has no `scrollIntoView`: a case that defines one puts it back.
-  if (realScrollIntoView === undefined) Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
-  else Element.prototype.scrollIntoView = realScrollIntoView;
 });
 
 const ID = 'lane-a-project-a';
@@ -302,7 +297,10 @@ describe('the transcript stops repeating the ask the card already shows', () => 
   it('Answer\'s raise scrolls the card into view and focuses its first option', () => {
     media(true);
     const scrolled: Element[] = [];
-    Element.prototype.scrollIntoView = function scrollIntoView(this: Element): void { scrolled.push(this); };
+    // `setup.ts` gives jsdom a no-op `scrollIntoView` on HTMLElement's prototype, which shadows Element's: spy there.
+    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(function scrollIntoView(this: Element): void {
+      scrolled.push(this);
+    });
     const prompt = vi.fn().mockResolvedValue(undefined);
     const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } });
     const fx = askFixture(1);
