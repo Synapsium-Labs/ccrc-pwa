@@ -4992,6 +4992,30 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
   });
 });
 
+// DISK RETENTION DR-20 (D-6632). APPENDED for the reason the stall-watch blocks above state. `nested-rescue-live` arms the
+// nested-repository rescue; the operator touches it by hand, so the ONE shell line that names it is ccd/ccd's read and nothing
+// else under ccd/ or deploy/ names it on a code line.
+describe('the nested rescue: its arming file has no writer in the tree', () => {
+  it('nested-rescue-live: one shell holder, ccd/ccd, whose one line is a read; no TS holder', () => {
+    expect(holdersOf('nested-rescue-live'), 'a line of shell other than ccd/ccd names it — a writer in waiting').toEqual(['ccd/ccd']);
+    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '').filter((l) => l.includes('nested-rescue-live')))
+      .toEqual(['_ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }']);
+    expect(ALL.filter((f) => stallCode(f).includes('nested-rescue-live')).map(rel)).toEqual([]);
+  });
+  it('nested-rescue-live: no other file under ccd/ or deploy/ names it on a code line', () => {
+    const others = bashRoots.flatMap((dir) => {
+      const walk = (d: string): string[] => readdirSync(d).flatMap((e) => {
+        const p = path.join(d, e);
+        return statSync(p).isDirectory() ? walk(p) : (BASH.includes(p) || p.endsWith('.md') ? [] : [p]);
+      });
+      return walk(dir);
+    });
+    expect(others.length, 'the walk reached the non-shell files').toBeGreaterThan(40);
+    expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
+      .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes('nested-rescue-live'))).map(rel)).toEqual([]);
+  });
+});
+
 // WORKSPACE LIFECYCLE WAVE 3b (spec 2026-09-24 §5.3, the coordinator's safety ruling (E)). APPENDED, for the reason
 // the stall-watch blocks above state: `session-hook.test.ts`'s citation audit cites this file by line. The expiry lane
 // SHIPS SHADOWED: until `$REG/expire-lane-live` exists it audits and records "would expire" and never composes
