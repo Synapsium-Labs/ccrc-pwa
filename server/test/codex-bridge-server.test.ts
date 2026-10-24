@@ -377,6 +377,19 @@ describe.skipIf(!PY)('the overflow and the usage that compaction reads (D-6415, 
     });
   });
 
+  it('a settings.json nested too deep to decode is the default window: the overflow is still a 400', async () => {
+    await withBridge([{ status: 400, body: { error: { code: 'context_length_exceeded', message: 'too long' } } }], async ({ bridge, lane }) => {
+      // JSON that nests past the decoder's recursion limit: json.loads raises RecursionError, not a ValueError
+      writeFileSync(lane.settings, `{"env": ${'['.repeat(100000)}${']'.repeat(100000)}}`);
+      const a = await call(bridge, '/v1/messages', { body: messages({ text: big }) });
+      expect(a.status, a.text).toBe(400);
+      expect(a.json?.error.message).toMatch(/^prompt is too long: \d+ tokens > \d+ maximum$/);
+      const stats = await statsWhen(lane, (d) => d.refusals[`backend/${MODEL}`] !== undefined && d.outcomes['4xx'] === 1);
+      expect(stats.refusals[`backend/${MODEL}`]).toMatchObject({ window: 200000, estimated: true });
+      expect(stats.outcomes['5xx']).toBeUndefined();
+    });
+  });
+
   it('the usage that reaches Claude Code makes compaction fire at window − 33k', async () => {
     const sse = textReply('ok', { input: 367000, cached: 300000, cacheWrite: 10000, output: 10 });
     await withBridge([{ status: 200, sse }], async ({ bridge }) => {
@@ -508,6 +521,8 @@ describe.skipIf(!PY)('the drain (Review Focus 3, D-6429)', () => {
       expect(exit).toEqual({ code: 0, signal: null });
       expect(exitAt).toBeLessThan(500 + 1500);
       expect(readStats(lane).outcomes['drain-cut']).toBe(1);
+      // the cut stream is counted drain-cut alone, never also 5xx by its own request (D-6835)
+      expect(readStats(lane).outcomes['5xx']).toBeUndefined();
     }, { consts: { 'server.DRAIN_S': 0.5 } });
   });
 
@@ -706,9 +721,10 @@ describe.skipIf(!PY)('the continuation and the fold (D-6410, D-6431, Review Focu
       });
       const left = Date.now();
       const cpu0 = cpuSeconds(pid);
-      // the request ends (its handler counts the 5xx and flushes) once a ping finds the client gone, long before the
-      // held head: a wait that kept waiting for the helper, spinning or not, ends only after it, about 2000 ms on
-      const ended = statsWhen(lane, (d) => d.outcomes['5xx'] === 1).then((d) => ({ d, at: Date.now() - left }));
+      // the request ends (its handler counts it client-gone, never 5xx, D-6835, and flushes) once a ping finds the
+      // client gone, long before the held head: a wait that kept waiting for the helper, spinning or not, ends only
+      // after it, about 2000 ms on
+      const ended = statsWhen(lane, (d) => d.outcomes['client-gone'] === 1).then((d) => ({ d, at: Date.now() - left }));
       await sleep(1800);
       const spent = cpuSeconds(pid) - cpu0;
       expect(up.requests).toHaveLength(2);
@@ -716,7 +732,8 @@ describe.skipIf(!PY)('the continuation and the fold (D-6410, D-6431, Review Focu
       // spin a whole core until the held head (about 1.5 s of this window)
       expect(spent).toBeLessThan(0.4);
       const end = await ended;
-      expect(end.d.outcomes['5xx']).toBe(1);
+      expect(end.d.outcomes['client-gone']).toBe(1);
+      expect(end.d.outcomes['5xx'], 'a client that went away is not an upstream failure').toBeUndefined();
       expect(end.at).toBeLessThan(1500);
       // the abandoned helper's Upstream is closed once the head comes (by its explicit close, and under CPython by the
       // reference count as well), so the held body is dropped then, not ended by the fake 3000 ms later
@@ -881,6 +898,46 @@ describe.skipIf(!PY)('an undecidable catalogue is the bridge\'s fault, not the c
       });
     });
   }
+});
+
+describe.skipIf(!PY)('a lane.json nested too deep to decode refuses the start', () => {
+  it('the start exits with its one ccgpt-proxy: direct: line, never a traceback', async () => {
+    const home = mkTmp('cb-server-');
+    const lane = plantBridgeLane(home, LANE);
+    writeFileSync(join(lane.laneDir, 'lane.json'), `${'['.repeat(100000)}${']'.repeat(100000)}`);
+    const err = await spawnBridge(home, LANE, { consts: BASE_CONSTS }).then(() => null, (e: Error) => e);
+    expect(err).not.toBeNull();
+    expect(err!.message).toMatch(/: ccgpt-proxy: direct: lane\.json in CCGPT_LANE_DIR is missing or not JSON\n?$/);
+    expect(err!.message).not.toContain('Traceback');
+    expect(err!.message).not.toContain('RecursionError');
+  });
+});
+
+describe.skipIf(!PY)('the stats file\'s request id is bounded as the status file\'s (plan Global Constraints)', () => {
+  it('an upstream x-request-id equal to the lane\'s access token or account id is never written to the stats file', async () => {
+    const fail = (rid: string): ResponsesAnswer => ({ status: 500, body: { error: { code: 'server_error', message: 'no' } }, headers: { 'x-request-id': rid } });
+    // the access token is planted with the lane, so its answer's header is set once the lane exists (the fake's queue
+    // holds these same objects)
+    const answers = [fail('req-fx-control'), fail(FIXTURE_ACCOUNT_ID), fail('req-fx-placeholder')];
+    await withBridge(answers, async ({ bridge, lane, up }) => {
+      const token = lane.cred!.access;
+      answers[2].headers = { 'x-request-id': token };
+      let n = 0;
+      for (const rid of ['req-fx-control', FIXTURE_ACCOUNT_ID, token]) {
+        const a = await call(bridge, '/v1/messages', { body: messages() });
+        expect(a.status, rid).toBeGreaterThanOrEqual(500);
+        n += 1;
+        const stats = await statsWhen(lane, (d) => d.outcomes['5xx'] === n);
+        expect(stats.outcomes['5xx'], rid).toBe(n);
+        // the control is kept; an echo of a secret leaves the last bounded id standing
+        expect(stats.lastUpstreamRequestId, rid).toBe('req-fx-control');
+        const text = readFileSync(lane.stats, 'utf8');
+        expect(text, rid).not.toContain(FIXTURE_ACCOUNT_ID);
+        expect(text, rid).not.toContain(token);
+      }
+      expect(up.requests).toHaveLength(3);
+    });
+  });
 });
 
 describe.skipIf(!PY)('the request body, through the shim\'s hooks', () => {

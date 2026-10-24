@@ -2682,17 +2682,19 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
       '                (None, "rate_limit_exceeded", "req-fixture-up-9"), ("ok", None, "req-fixture-up-10")]:',
       '    out([s, mod.record_upstream(args[0], state=s, code=c, request_id=r), st(args[0])])',
     ];
+    // The answer is the bounded request id, written or not (the whole-wave fix round, WS-2): the bridge's stats file
+    // is given that and nothing else.
     expect(await libLines(home, steps, { args: [dir] })).toEqual([
-      ['limit-paused', true, ['limit-paused', 'usage_limit_reached', 'req-fixture-up-1']],
-      ['ok', true, ['ok', null, 'req-fixture-up-2']],
-      [null, true, ['ok', 'rate_limit_exceeded', 'req-fixture-up-3']],
-      ['ineligible', true, ['ineligible', 'usage_not_included', 'req-fixture-up-4']],
-      ['limit-paused', true, ['limit-paused', 'usage_limit_reached', 'req-fixture-up-5']],
-      [null, true, ['limit-paused', null, null]],
-      ['ok', true, ['ok', null, null]],
-      [null, true, ['ok', 'rate_limit_exceeded', 'req-fixture-up-9']],
+      ['limit-paused', 'req-fixture-up-1', ['limit-paused', 'usage_limit_reached', 'req-fixture-up-1']],
+      ['ok', 'req-fixture-up-2', ['ok', null, 'req-fixture-up-2']],
+      [null, 'req-fixture-up-3', ['ok', 'rate_limit_exceeded', 'req-fixture-up-3']],
+      ['ineligible', 'req-fixture-up-4', ['ineligible', 'usage_not_included', 'req-fixture-up-4']],
+      ['limit-paused', 'req-fixture-up-5', ['limit-paused', 'usage_limit_reached', 'req-fixture-up-5']],
+      [null, null, ['limit-paused', null, null]],
+      ['ok', null, ['ok', null, null]],
+      [null, 'req-fixture-up-9', ['ok', 'rate_limit_exceeded', 'req-fixture-up-9']],
       // ok is written only over an upstream state: over ok it writes nothing, so the code standing there is kept.
-      ['ok', false, ['ok', 'rate_limit_exceeded', 'req-fixture-up-9']],
+      ['ok', 'req-fixture-up-10', ['ok', 'rate_limit_exceeded', 'req-fixture-up-9']],
     ]);
     // A barring state is the refresher's: no upstream answer writes over it, not even its code or request id.
     const current = (await libLines(home, ['out(mod.config_hash())'], { args: [dir] }))[0] as unknown as string;
@@ -2708,7 +2710,7 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
         '    out([s, mod.record_upstream(args[0], state=s, code="usage_limit_reached", request_id="req-fixture-up-6"), st(args[0])])',
       ], { args: [dir] });
       expect(lines, barring.state).toEqual(['ok', 'limit-paused', 'ineligible', null].map((s) => [
-        s, false, [barring.state, barring.lastErrorCode, barring.lastRequestId],
+        s, 'req-fixture-up-6', [barring.state, barring.lastErrorCode, barring.lastRequestId],
       ]));
       expect(statusText(dir), `${barring.state} is left byte for byte`).toBe(text);
     }
@@ -2733,7 +2735,7 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
     const [line] = await libLines(home, [
       'out(mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id="req-fixture-up-7"))',
     ], { args: [dir] });
-    expect(line).toBe(true);
+    expect(line).toBe('req-fixture-up-7');
     const st = statusOf(dir);
     expect(st).toMatchObject({
       version: 1, family: 'chatgpt-backend', state: 'limit-paused', lastErrorCode: 'usage_limit_reached',
@@ -2750,7 +2752,7 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
     const stored = fileRecord(other).expires_at;
     expect((await libLines(home, [
       'out(mod.record_upstream(args[0], state="ineligible", code="usage_not_included", request_id=None))',
-    ], { args: [other] }))[0]).toBe(true);
+    ], { args: [other] }))[0]).toBeNull();
     expect(statusOf(other)).toMatchObject({
       state: 'ineligible', lastErrorCode: 'usage_not_included', lastRequestId: null, lastRefreshAt: null,
       expiresAt: stored, unsaved: false,
@@ -2759,15 +2761,15 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
     // And with no credential at all there is nothing to bind a status to.
     const none = join(home, 'lane-c');
     expect((await libLines(home, [
-      'out(mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id=None))',
-    ], { args: [none] }))[0]).toBe(false);
+      'out(mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id="req-fixture-up-16"))',
+    ], { args: [none] }))[0]).toBeNull();
     expect(existsSync(statusPath(none))).toBe(false);
     expect(existsSync(none), 'no lock was taken and no directory made').toBe(false);
     expectStatusClean(dir, tokensOf(t));
     expectStatusClean(other, tokensOf(u));
   });
 
-  it('a held lock makes record_upstream answer false within its wait', async () => {
+  it('a held lock makes record_upstream answer None within its wait', async () => {
     const home = mkTmp('codex-auth-upstream-busy-');
     const dir = laneDir(home);
     plantBackendCredential(dir);
@@ -2785,23 +2787,23 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
       'if not taken.wait(5):',
       '    sys.exit("the holder never took the lock")',
       't0 = time.monotonic()',
-      'res = mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id=None, wait_s=0.3)',
+      'res = mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id="req-fixture-up-17", wait_s=0.3)',
       'elapsed = time.monotonic() - t0',
       // With no wait_s, the bound is RECORD_WAIT_S, read when called (the library's header rule).
       'default = mod.RECORD_WAIT_S',
       'mod.RECORD_WAIT_S = 0.3',
       't1 = time.monotonic()',
-      'res2 = mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id=None)',
+      'res2 = mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id="req-fixture-up-17")',
       'elapsed2 = time.monotonic() - t1',
       'done.set()',
       'th.join()',
       'out({"result": res, "elapsed": elapsed, "result2": res2, "elapsed2": elapsed2, "default": default,',
       '     "signature": inspect.signature(mod.record_upstream).parameters["wait_s"].default})',
     ], { args: [dir] });
-    expect(line.result).toBe(false);
+    expect(line.result).toBeNull();
     expect(line.elapsed, 'it waited its bound').toBeGreaterThanOrEqual(0.25);
     expect(line.elapsed, 'and no longer').toBeLessThan(1.5);
-    expect(line.result2).toBe(false);
+    expect(line.result2).toBeNull();
     expect(line.elapsed2, 'a changed RECORD_WAIT_S is the bound').toBeGreaterThanOrEqual(0.25);
     expect(line.elapsed2, 'and no longer').toBeLessThan(1.5);
     expect(line.default, 'the wait is 2 s by default').toBe(2.0);
@@ -2823,8 +2825,8 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
       'out([mod.record_upstream(args[0], state="limit-paused", code="Usage_Limit_Reached", request_id="req-fixture-up-8"), st(args[0])])',
     ], { args: [dir, ...echoes] });
     expect(lines).toEqual([
-      ...echoes.map(() => [true, ['limit-paused', 'unrecognised', null]]),
-      [true, ['limit-paused', 'usage_limit_reached', 'req-fixture-up-8']],
+      ...echoes.map(() => [null, ['limit-paused', 'unrecognised', null]]),
+      ['req-fixture-up-8', ['limit-paused', 'usage_limit_reached', 'req-fixture-up-8']],
     ]);
     expectStatusClean(dir, tokensOf(t));
   });
@@ -2857,7 +2859,7 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
       expect(statusIdentity(statusText(dir)), 'bound to the new file').toEqual(fileIdentity(dir));
       expect((await libLines(home, [
         'out(mod.record_upstream(args[0], state="ok", code=None, request_id="req-fixture-up-12"))',
-      ], { args: [dir] }))[0]).toBe(true);
+      ], { args: [dir] }))[0]).toBe('req-fixture-up-12');
       expect(statusOf(dir), upstream).toMatchObject({ state: 'ok', lastErrorCode: null, lastRequestId: 'req-fixture-up-12' });
       expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
     }

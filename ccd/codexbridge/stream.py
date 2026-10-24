@@ -69,6 +69,7 @@ class AnthropicStream:
         self.finished = False
         self.closed = False  # cut, failed, answered or the client went away: nothing more is written
         self.client_gone = False
+        self.drain_cut = False  # the drain cut it (`cut`), which counts it `drain-cut` itself (D-6835)
         self.events = []  # type: List[Tuple[str, dict]]
         self.last_write_at = time.monotonic()
         self._lock = threading.Lock()
@@ -186,6 +187,7 @@ class AnthropicStream:
         try:
             if self.closed or self.finished:
                 return False
+            self.drain_cut = True  # before `closed`, so a request thread that sees it closed sees this too
             if self.committed and not self.buffered:
                 self._fail_locked(e)
             else:

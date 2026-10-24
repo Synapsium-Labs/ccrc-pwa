@@ -175,7 +175,7 @@ def config_from_env(environ: Mapping[str, str]) -> BridgeConfig:
     try:
         with open(os.path.join(lane_dir, LANE_FILE), "rb") as f:
             manifest = json.loads(f.read().decode("utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):  # nesting past the decoder's recursion limit is not JSON either
         _refuse("lane.json in CCGPT_LANE_DIR is missing or not JSON")
     if not isinstance(manifest, dict) or manifest.get("id") != lane:
         _refuse("lane.json in CCGPT_LANE_DIR names another lane")
@@ -258,11 +258,12 @@ def catalogue_ids(path: str) -> Optional[List[str]]:
 
 def lane_window(config_dir: str) -> int:
     """The lane's CLAUDE_CODE_MAX_CONTEXT_TOKENS from `<configDir>/settings.json`, read now; DEFAULT_WINDOW when the
-    file or the value is absent or not a positive whole number."""
+    file or the value is absent or not a positive whole number, and when the file is unreadable or not JSON (nesting
+    past the decoder's recursion limit among it: RecursionError), so an overflow is still its prompt-too-long 400."""
     try:
         with open(os.path.join(config_dir, "settings.json"), "rb") as f:
             doc = json.loads(f.read().decode("utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return DEFAULT_WINDOW
     env = doc.get("env") if isinstance(doc, dict) else None
     value = env.get(WINDOW_KEY) if isinstance(env, dict) else None
@@ -283,6 +284,19 @@ def overflow_answer(e: errors.BridgeError, req: inbound.NeutralRequest, st: stat
     out = errors.overflow(n, m)
     out.request_id = e.request_id
     return out
+
+
+def _count_failure(st: stats.Stats, out: stream.AnthropicStream, e: errors.BridgeError) -> None:
+    """D-6835: a failed message's outcome, once its answer has been written. A stream the drain cut is counted
+    `drain-cut` by the drain, so nothing more here; one whose client went away (`client_gone`, a write it could not
+    take) is `stats.CLIENT_GONE`; any other is `4xx` or `5xx` by the answer's status. So `5xx` counts only what the
+    bridge or the upstream answered, never an interrupt or a restart."""
+    if out.drain_cut:
+        return
+    if out.client_gone:
+        st.outcome(stats.CLIENT_GONE)
+        return
+    st.outcome("4xx" if 400 <= e.status < 500 else "5xx")
 
 
 def _bounded_class(e: BaseException) -> str:
@@ -531,15 +545,20 @@ class _Request:
         return self._auth_call(lib.ensure_fresh, cfg.auth_dir, lane=cfg.lane)
 
     def record(self, e: errors.BridgeError, rid: Optional[str]) -> None:
-        """The upstream state, code and request id, in the status file (best effort)."""
+        """The upstream state, code and request id, in the status file (best effort), and the request id the library
+        answers, bounded against the lane's tokens and account id, in the stats file: the only request id the stats
+        file is given. Every call site records BEFORE the failure is answered (D-6836), so the library's lock wait,
+        RECORD_WAIT_S, bounds how long that answer is delayed while another holder has the lock."""
         lib = self.lib
         if lib is None:
             return
         try:
-            lib.record_upstream(self.state.cfg.auth_dir, state=e.state, code=e.code,
-                                request_id=e.request_id or rid)
+            bounded = lib.record_upstream(self.state.cfg.auth_dir, state=e.state, code=e.code,
+                                          request_id=e.request_id or rid)
         except Exception as x:  # best effort: the answer is what matters
             log_exception(x)
+            return
+        self.state.stats.request_id(bounded)
 
     # ── the count ──
     def count_tokens(self) -> Tuple[int, Dict[str, str], bytes]:
@@ -592,7 +611,7 @@ class _Request:
                 if result.kind == "overflow":
                     result = overflow_answer(result, req, st.stats, cfg.config_dir)
                 out.error(result)
-                st.stats.outcome("4xx" if 400 <= result.status < 500 else "5xx")
+                _count_failure(st.stats, out, result)
                 return
             red, term, reading = result
             store.remember(st.store, red, req.session_id)
@@ -711,7 +730,6 @@ class _Request:
             st.stats.name("responseHeader", _media_type(up.headers))
             st.stats.usage_headers(up.headers)
             rid = errors.request_id_of(up.headers)  # the table's own reader of x-request-id / request-id, bounded
-            st.stats.request_id(rid)
             if 200 <= up.status < 300:
                 return self._reduce(turn, up, out, rid, reading)
             e = backend.error_of(up, now=time.time())
@@ -865,7 +883,7 @@ def _make_handler(state: _State) -> type:
                     _Request(state, self).messages(out)
                 except errors.BridgeError as e:
                     out.error(e)
-                    state.stats.outcome("4xx" if 400 <= e.status < 500 else "5xx")
+                    _count_failure(state.stats, out, e)
                 except Exception as e:  # every exception is answered here, and logged by its class only
                     log_exception(e)
                     out.error(errors.unavailable("the bridge failed"))

@@ -22,7 +22,8 @@ is not in TOKEN_HEADERS. Any other value of that family is dropped, its name sti
 family also carries Codex's `x-codex-turn-state` sticky-routing token, an opaque value of no fixed shape (so refused by
 name, whatever its value), and free text (upstream openai/codex @ 092d3ac, codex-rs/codex-api/src/sse/responses.rs:32,
 65-71; codex-rs/core/src/client.rs:288-302; codex-rs/codex-api/src/rate_limits.rs:182). A request id is kept only
-under errors.REQUEST_ID_RE. A route or refusal key is `<route>/<model>`, each part bounded by NAME_RE.
+under errors.REQUEST_ID_RE, and the bridge gives it only the id the credential library bounded against the lane's
+tokens and account id (`server._Request.record`), as the status file's is bounded. A route or refusal key is `<route>/<model>`, each part bounded by NAME_RE.
 
 A RESTART LOSES NOTHING THE READERS NEED: construction loads a valid version-1 file of the same lane and carries its
 refusals (the hourly refresh may not have read them yet, Task 15), each route's ratio, request count and largest
@@ -82,6 +83,10 @@ READ_MAX = 16 * 2**20  # a stats file larger than this is unreadable, so the sta
 FLUSH_FAILED = "stats:flush-failed"
 RESET = "stats:reset"
 UNKNOWN_FAMILY = "stats:unknown-family"
+# D-6835: a third outside that list. A message whose client went away before its answer was written is counted
+# CLIENT_GONE, never `5xx` (the 7-day watch's upstream failure rate); one the drain cut is counted `drain-cut` alone,
+# by the drain, and nothing else.
+CLIENT_GONE = "client-gone"
 
 
 def _iso(t: float) -> str:

@@ -81,7 +81,9 @@ READ_RETRY_S = 0.05  # ... this far apart, then answers unreadable
 # ── the lock and the commit ──────────────────────────────────────────────────────────────────────────────────────
 LOCK_POLL_S = 0.05  # held() polls a non-blocking flock this often ...
 LOCK_WAIT_S = 60.0  # ... until this bound, then raises LockTimeout
-RECORD_WAIT_S = 2.0  # record_upstream's bound on the same lock: best effort, after a reply is sent
+# record_upstream's bound on the same lock, best effort. The bridge records an upstream failure BEFORE it answers
+# it (D-6836), so this wait also bounds how long that answer is delayed while another holder has the lock.
+RECORD_WAIT_S = 2.0
 FILE_MODE = 0o600  # every file the library makes, set by fchmod after creation (umask-proof)
 DIR_MODE = 0o700  # every authDir level held() makes, set by chmod after mkdir
 
@@ -1540,7 +1542,7 @@ def _bounded_upstream(code: Optional[str], request_id: Optional[str],
 
 
 def record_upstream(auth_dir: str, *, state: Optional[str], code: Optional[str], request_id: Optional[str],
-                    wait_s: Optional[float] = None) -> bool:
+                    wait_s: Optional[float] = None) -> Optional[str]:
     """Record what an upstream answer says about the lane in its status file. Best effort; never touches the network.
 
     `state` is `ok`, `limit-paused`, `ineligible` or None (any other value is a ValueError, raised before anything is
@@ -1554,20 +1556,26 @@ def record_upstream(auth_dir: str, *, state: Optional[str], code: Optional[str],
     there are kept); a current state the refresher writes (needs-signin, config-error), and plan-disabled, which no
     upstream answer sets or clears, are left as they are, code and request id included, and the answer is False.
 
-    True when the status was written. False, with nothing written, when: the lock is still held after `wait_s`
-    (LockTimeout) or cannot be taken (any other AuthError); the credential is not present (nothing to bind a status
-    to; then no lock is taken and no directory made); the current state is not one an upstream answer moves; `state`
-    is `ok` and the current state is `ok` too; or the write failed."""
+    Nothing is written when: the lock is still held after `wait_s` (LockTimeout) or cannot be taken (any other
+    AuthError); the credential is not present (nothing to bind a status to; then no lock is taken and no directory
+    made); the current state is not one an upstream answer moves; `state` is `ok` and the current state is `ok` too;
+    or the write failed.
+
+    The answer is the request id as `_bounded_upstream` bounds it against the lane's tokens and account id, once the
+    lock is taken over a present credential, whether the status was written or not; None when that bound keeps none,
+    and when the credential is not present or the lock is not taken. The bridge writes this answer, and nothing else,
+    as its stats file's request id, so that file's id is bounded as the status file's is (plan Global Constraints)."""
     if state is not None and state not in _RECORDABLE:
         raise ValueError("ccgpt-auth: record_upstream records ok, limit-paused, ineligible or None")
     if read(auth_dir).credential != "present":
-        return False
+        return None
     wait = RECORD_WAIT_S if wait_s is None else wait_s
     try:
         with held(auth_dir, wait):
             r, old = _read_raw(auth_dir)
             if r.credential != "present":
-                return False
+                return None
+            bounded_code, rid = _bounded_upstream(code, request_id, _secrets_of(auth_dir))
             prev = read_status(auth_dir)
             if prev is None:
                 current = "ok"  # type: object
@@ -1578,12 +1586,12 @@ def record_upstream(auth_dir: str, *, state: Optional[str], code: Optional[str],
                 kept = dict(expiresAt=prev.get("expiresAt"), lastRefreshAt=prev.get("lastRefreshAt"),
                             identity=_identity_from_json(prev.get("identity")), unsaved=prev.get("unsaved") is True)
             if current not in _RECORDABLE or (state == "ok" and current == "ok"):
-                return False
-            bounded_code, rid = _bounded_upstream(code, request_id, _secrets_of(auth_dir))
-            return write_status(auth_dir, state=current if state is None else state, lastErrorCode=bounded_code,
-                                lastRequestId=rid, **kept)
+                return rid
+            write_status(auth_dir, state=current if state is None else state, lastErrorCode=bounded_code,
+                         lastRequestId=rid, **kept)
+            return rid
     except AuthError:
-        return False
+        return None
 
 
 def half_life_s(r: Reading) -> float:
@@ -1595,17 +1603,6 @@ def half_life_s(r: Reading) -> float:
     if type(exp) is int and type(iat) is int and exp > iat:
         return (exp - iat) / 2.0
     return float(EXPIRY_SKEW_S)
-
-
-def tier_access_token(auth_dir: str, lane: Optional[str] = None) -> Tuple[str, Optional[str]]:
-    """The LiteLLM tier's door (codex-bridge Stage 1, Task 6; D-6372): `ensure_fresh`, answered as the access token
-    and the account id. ccrc's LiteLLM patch calls this from the tier's `Authenticator.get_access_token`, so the
-    tier, the one refresher in litellm mode, refreshes under this library's lock, re-read and atomic commit, and
-    LiteLLM's own refresh, write and device flow are never reached. Raises AuthError, never a sign-in."""
-    r = ensure_fresh(auth_dir, lane=lane)
-    if not r.access_token:
-        raise Unreadable(r.detail)  # unreachable for a present reading (D-6541); never an empty bearer token
-    return (r.access_token, r.account_id)
 
 
 # ── the device-code sign-in ──────────────────────────────────────────────────────────────────────────────────────
