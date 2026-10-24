@@ -182,7 +182,8 @@ servers when the runs finish.
 "Match this device" is the default, and it asks the device, not the window:
 Instrument at a desk with a mouse (a pointer that can hover and is fine),
 Refined on a phone or a tablet (D-5096). It is read once per page load, so
-narrowing a desktop window does not change the skin, and neither does a reload: only the device's input does.
+narrowing a desktop window does not change the skin, and neither does a
+reload: only the device's input does.
 
 Settings › Appearance › Layout picks one for this device, and so does the
 command palette: ⌘K (Ctrl+K off a Mac), then "Switch layout →", then a skin or

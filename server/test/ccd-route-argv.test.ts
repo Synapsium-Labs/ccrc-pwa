@@ -457,7 +457,7 @@ describe('_route_argv_check IS cmd_route\'s validator, measured against the ship
     const diverged = argv.filter((l) => !verb.includes(l) && verb.includes(undiverge(l)));
     // LITERAL ratchets, never a count computed from the thing under test: a line
     // reworded on EITHER side falls out of both sets, and the number reds.
-    expect(verbatim).toHaveLength(11);
+    expect(verbatim).toHaveLength(12);   // D-6791: +1, the shared fable-operator-only refusal
     expect(diverged).toHaveLength(2);
     // The substance, named one arm at a time, so a drop cannot hide behind a
     // structural line (`case "$rc" in`, `esac`, `done`) that still matches.

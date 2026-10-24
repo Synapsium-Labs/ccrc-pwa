@@ -1468,7 +1468,7 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
     // until then reported "unstamped" for ever. It does not widen either list,
     // because it writes through `BOX_STAMP_FILE` — the one line this file
     // already pins — and that is exactly the property these assertions are
-    // for. `server/test/ccrc-install.test.ts` ("writes the stamp through
+    // for. `server/test/ccrc-install-units.test.ts` ("writes the stamp through
     // BOX_STAMP_FILE") holds the other half: that the new writer really goes
     // through that variable rather than merely not duplicating the literal.
     expect(holdersOf('.ccrc/build.json')).toEqual([
@@ -3041,7 +3041,7 @@ describe('the release owner literal — two named assignments, and no third spel
   // deliberate:
   //   - license.test.ts pins the VALUE — both lanes name the ruled owner, and
   //     the previous org survives nowhere in shipping code;
-  //   - ccrc-update.test.ts pins the AGREEMENT — install.sh's owner/repo pair
+  //   - ccrc-update-kept.test.ts pins the AGREEMENT — install.sh's owner/repo pair
   //     and ccd/ccrc's are equal, so the two lanes download the same release;
   //   - THIS pins the COUNT — those two assignments are the only spellings of
   //     the org anywhere in shipped code, so a third copy (a hardcoded release
@@ -3357,7 +3357,7 @@ describe('the Codex runtime — one LiteLLM requirement, in one file', () => {
 describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTree', () => {
   // The same shape as "extraction finding — one path to the ccd script"
   // above, applied to a copy that was made for a stated reason and copied
-  // anyway: `ccrc-install.test.ts` and `ccrc-install-graphify.test.ts` each
+  // anyway: the `ccrc-install-*.test.ts` family (one fixture module since D-6767) and `ccrc-install-graphify.test.ts` each
   // carried their own `TREE_FILES` / `TREE_STUBS` / `installFixtureTree`,
   // both headers citing the same excuse (importing a sibling `.test.ts` module
   // for its helpers double-registers that file's `describe` blocks). The
@@ -3397,7 +3397,7 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
     for (const d of testDirs) expect(sources(d).length, rel(d)).toBeGreaterThan(0);
     expect(testFiles.length).toBeGreaterThan(40);
     expect(testFiles.map(rel)).toContain('server/test/installTreeFixture.ts');
-    expect(testFiles.map(rel)).toContain('server/test/ccrc-install.test.ts');
+    expect(testFiles.map(rel)).toContain('server/test/ccrc-installFixture.ts');
     expect(testFiles.map(rel)).toContain('server/test/ccrc-install-graphify.test.ts');
     expect(testFiles.map(rel)).toContain('server/test-e2e/helpers.ts');
   });
@@ -3429,7 +3429,7 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
   it('is what the two former copy sites now import', () => {
     // Not just "the copies are gone" — that is satisfied by deleting the
     // fixture. Each former copy site must still reach the shared module.
-    for (const f of ['ccrc-install.test.ts', 'ccrc-install-graphify.test.ts']) {
+    for (const f of ['ccrc-installFixture.ts', 'ccrc-install-graphify.test.ts']) {
       const src = readFileSync(path.join(testDir, f), 'utf8');
       expect(src, f).toMatch(
         /import\s*\{[^}]*\binstallFixtureTree\b[^}]*\}\s*from\s*'\.\/installTreeFixture\.js'/);
@@ -4990,6 +4990,30 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
     expect(others.length, 'the walk reached the non-shell files').toBeGreaterThan(40);
     expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
       .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes('scope-sweep-live'))).map(rel)).toEqual([]);
+  });
+});
+
+// DISK RETENTION DR-20 (D-6632). APPENDED for the reason the stall-watch blocks above state. `nested-rescue-live` arms the
+// nested-repository rescue; the operator touches it by hand, so the ONE shell line that names it is ccd/ccd's read and nothing
+// else under ccd/ or deploy/ names it on a code line.
+describe('the nested rescue: its arming file has no writer in the tree', () => {
+  it('nested-rescue-live: one shell holder, ccd/ccd, whose one line is a read; no TS holder', () => {
+    expect(holdersOf('nested-rescue-live'), 'a line of shell other than ccd/ccd names it — a writer in waiting').toEqual(['ccd/ccd']);
+    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '').filter((l) => l.includes('nested-rescue-live')))
+      .toEqual(['_ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }']);
+    expect(ALL.filter((f) => stallCode(f).includes('nested-rescue-live')).map(rel)).toEqual([]);
+  });
+  it('nested-rescue-live: no other file under ccd/ or deploy/ names it on a code line', () => {
+    const others = bashRoots.flatMap((dir) => {
+      const walk = (d: string): string[] => readdirSync(d).flatMap((e) => {
+        const p = path.join(d, e);
+        return statSync(p).isDirectory() ? walk(p) : (BASH.includes(p) || p.endsWith('.md') ? [] : [p]);
+      });
+      return walk(dir);
+    });
+    expect(others.length, 'the walk reached the non-shell files').toBeGreaterThan(40);
+    expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
+      .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes('nested-rescue-live'))).map(rel)).toEqual([]);
   });
 });
 
@@ -7915,6 +7939,15 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(writersOf('mail-disabled')).toEqual([]);
   });
 
+  // D-6785 (PR landing in ccrc, stage 1): the checks lane's two markers are rows of the switchboard with writer
+  // `hand-only`. Nothing in the tree writes `landing-disabled` or `landing-checks-live` (the operator arms the lane
+  // by hand, after a week of agreeing shadow rows).
+  it.each(['landing-disabled', 'landing-checks-live'])('%s: hand-only, no writer in the tree', (name) => {
+    expect(SWITCHES[name as 'landing-disabled' | 'landing-checks-live'].writer).toBe('hand-only');
+    expect(constsOf(name), 'CONTROL: the switchboard defines it').toHaveLength(1);
+    expect(writersOf(name)).toEqual([]);
+  });
+
   // D-5855 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1a; ARCH-70 (#805)).
   // The switchboard's exit: `mail-disabled` is defined once (2 -> 1 on C1a's tip; the count may only shrink), and so
   // is every other marker row; and every marker literal a `const *_MARKER` defines under `server/src` or `shared/` is
@@ -8871,5 +8904,57 @@ describe('codex bridge Stage 2 Task 1: the bridge owns the upstream error codes'
     // failure must never read as an empty list.
     if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
     expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/codexbridge/errors.py']);
+  });
+});
+
+// The ack guard's single spelling (D-6777). Placed at the END of the file so
+// the line anchors other documents cite in this file do not move. It reads
+// `server/src/coord/store.ts` ALONE, never itself, so its needles are whole.
+describe('one ack guard', () => {
+  it('spells the ack guard ONCE — ackableDeliverySql, never a second copy of its clauses (D-6777)', () => {
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    const CLAUSE = "AND ${prefix}rejectCode = 'undeliverable' AND ${prefix}lastError = ?";
+    const BUILDER = 'const ackableDeliverySql = ';
+    const EXCEPTION = "rejectCode = 'undeliverable' AND";
+    expect(store.split(CLAUSE).length - 1, 'the ack guard clause is not written exactly once').toBe(1);
+    expect(store.split(BUILDER).length - 1, 'the builder is not defined once').toBe(1);
+    expect(store.split(EXCEPTION).length - 1, 'a second spelling of the replay-ceiling exception').toBe(1);
+  });
+});
+
+// FLEET DISK RETENTION DR-15 (D-6627; spec 2026-10-23 §2.4). APPENDED, for the reason the blocks above state:
+// `session-hook.test.ts`'s citation audit cites this file by line. The collector's LOOSE arm SHIPS SHADOWED: a loose
+// `~/.cc-tmp` entry is removed only while `$REG/collect-loose-live` stands AND the lane itself is effectively live. The
+// file is the operator's to touch BY HAND, as `collect-lane-live` is, so no line of shell names it and its one
+// TypeScript spelling is its switchboard row, an L0 file that reaches no `node:` module and so cannot write it.
+describe('fleet disk retention DR-15: the collector’s loose-arm marker has no writer in the tree', () => {
+  const NAME = 'collect-loose-live';
+  const DEFINER = 'shared/switches.ts';
+  const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  it('the files that name its constant are the definer and the executor, which reads it from the registry listing alone', () => {
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('COLLECT_LOOSE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/coord/collectTempRoot.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+
+  it('it is read in ONE place, nearest the argv: the job consults it after the lane’s own switch and before the loose verb', () => {
+    // D-6114: keyed on the job's symbol (scan/symbols.ts), never a literal slice of the file.
+    const job = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server/src/coord/collectTempRoot.ts'), 'collectTempRoot'));
+    expect(job.match(/\blooseMarker\b/g)?.length, 'the job reads the final listing’s marker once').toBe(1);
+    const at = (needle: string): number => job.split('\n').findIndex((l) => l.includes(needle));
+    const [live, marker, verb] = [at('collectLaneLive(lane)'), at('looseMarker'), at('wsCollectLoose(')];
+    expect([live, marker, verb].every((i) => i > -1), 'an anchor is gone').toBe(true);
+    expect(live).toBeLessThan(marker);
+    expect(marker).toBeLessThan(verb);
   });
 });

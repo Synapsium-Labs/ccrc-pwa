@@ -1083,6 +1083,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/sessions/:id/pane/history': /maskTextSliced\(r\.text, \{ rows: true \}\)/,
     '/api/mail': /mail: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(mail\)/,
     '/api/mail/:id': /envelope: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(row\.envelope\)/,
+    '/api/mail/inbox': /text: masker\.maskDeep\(renderInboxEntry\(/,   // D-6778: each rendered entry is masked before paging
     '/api/runs/:id/items': /items: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
     '/api/feed': /events: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
   };

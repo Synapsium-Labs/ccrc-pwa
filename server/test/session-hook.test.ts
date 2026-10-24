@@ -9817,6 +9817,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // branch's `cmd_ws_gc` lines above this anchor slide a different `ccd/ccd` line under it,
         // one that happens to carry a token of its row: a coincidental pass, not a repair. Neither
         // corpus document changed, so nothing was re-pointed. S6-R11 covers it, so no D-number.
+        // RE-MEASURED for `ws-archive --if-no-pane` (D-6642) after its rebase onto `ws-orphan` (D-6629), 57 -> 57:
+        // nothing enters or leaves. S6-R11 covers it, so no D-number.
+        // RE-MEASURED for `ws-archive --if-no-pane` (D-6642) after its rebase onto the collector's loose arm (D-6625),
+        // 57 -> 58, dumped from the rebased tree: ONE ENTERS (the range that left above, spelled in two parts below) and
+        // none leaves; the branch's `cmd_ws_archive` lines slide a line under it that no longer carries its row's token.
+        // The site-level set below has no mirror for it. Neither corpus document changed. S6-R11, no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9832,6 +9838,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
         'ccd/ccd:13567',
+        // RE-MEASURED on the merge of disk retention DR-20 (D-6632) with main, 57 -> 55: TWO LEAVE
+        // (`:13673` and `:13560-13562`) and none enter. ONE cause: DR-20's two lines above them (its
+        // `nested-rescue-v1` caps row and its `_ws_rescue_doc` call in `cmd_ws_audit`) slide every `ccd/ccd` line below down 2, and
+        // both anchors now hold text carrying a token of their row (`:13673` a comment reading "destroyed").
+        // A coincidental pass, not a repair. Measured by running this test with `origin/main`'s `ccd/ccd`
+        // and with the merged one, everything else the same tree. Neither corpus document changed, so
+        // nothing was re-pointed. S6-R11 covers it.
+        // RE-MEASURED AGAIN on the merge with main's refusal-v1 (#560), 55 -> 57: the same TWO RE-ENTER
+        // (`:13673`, `:13560-13562`) because main's insertions above them shift the anchors again off text
+        // carrying a row token. Dumped from the merged tree, never retyped. S6-R11 covers it.
         'ccd/ccd:13673',
         'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
@@ -9866,6 +9882,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // spelled in two parts so the citations ratchet, which polices added prose, does not count a census row.
         'ccd/ccd' + ':13573-13575',
         'ccd/ccd:11665-11670',
+        'ccd/ccd' + ':13601-13666',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         // LEFT here at model-class auto-advance W2 (S6-R11): `:2874` x2 (the note above this assertion).
@@ -10074,6 +10091,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // those sites. S6-R11, no D-number.
       // RE-MEASURED on the merge of `origin/main` at `77c11245` into docs W1, 35 -> 35, FROM THE SAME RUN as
       // the row-pass set above: stated 35, base 35, tree 35, nothing entered or left. S6-R11, no D-number.
+      // RE-MEASURED for `ws-archive --if-no-pane` (D-6642) after its rebase onto `ws-orphan` (D-6629), 38 -> 38,
+      // FROM THE SAME RUN as the row-pass set above: nothing entered or left. S6-R11, no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
@@ -10084,6 +10103,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
         'spec:2125 ccd/ccd:13567',
+        // RE-MEASURED on the DR-20 merge (D-6632), 38 -> 36, from the same run as the `|`-row set above:
+        // the same two sites leave for the same 2-line shift. S6-R11 covers it.
+        // RE-MEASURED AGAIN on the refusal-v1 (#560) merge, 36 -> 38: the same two sites re-enter. S6-R11.
         'spec:2125 ccd/ccd:13673',
         'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',

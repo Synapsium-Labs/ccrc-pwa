@@ -103,6 +103,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
   **`ws-orphan` is forbidden to every session too** (D-6629): it is the SERVER's act on an ORPHANED worktree only (a linked
   worktree no registry row names, under the ccd worktree root or a `.claude`/`.superpowers` worktrees directory), behind a
   token re-proved on the box, never `--force` — never a session's verb, and never run against the live host from a shell or a test.
+  **`scratch-rescue` is forbidden to every session too** (D-6632): the temp sweep's act, which only adds attic refs for a session's scratch repository (`ccd scratch-rescue --session <id> <path>`), behind the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
   or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
@@ -470,12 +471,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   with its own argument — are the census, not this bullet. What does need saying here are the
   coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4),
   `POST /api/coord/caps` (wave 6), `POST /api/coord/reclaim-pause` (child-reclamation wave 4),
-  `POST /api/coord/stall-watch` (stall-watch settings wave 1) and `POST /api/coord/collect-lane`
-  (child-reclamation wave 10, which also refuses `live` while sign-in is dark) are
+  `POST /api/coord/stall-watch` (stall-watch settings wave 1), `POST /api/coord/collect-lane`
+  (child-reclamation wave 10, which also refuses `live` while sign-in is dark) and `POST /api/coord/review-cap`
+  (D-6795, the operator's lift of the review-round cap for one work run) are
   session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other four are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other five are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST

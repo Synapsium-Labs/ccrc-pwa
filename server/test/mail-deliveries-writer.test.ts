@@ -10,7 +10,7 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore } from '../src/coord/store.js';
+import { CoordStore, MAIL_REPLAY_CEILING_ERROR, MAIL_RUN_CLOSED_ERROR } from '../src/coord/store.js';
 import {
   OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, outstandingDeliveryStates,
 } from '../../shared/api.js';
@@ -158,5 +158,30 @@ describe('store.ts writes mail_deliveries in exactly one place (D-5997)', () => 
   it('the hand-typed outstanding literal is gone', () => {
     expect(code).not.toMatch(/OUTSTANDING_STATES_SQL\s*=\s*["'`]\('queued/);
     expect(code).toMatch(/const OUTSTANDING_STATES_SQL = `\('\$\{OUTSTANDING_DELIVERY_STATES\.join\("','"\)\}'\)`;/);
+  });
+});
+
+describe('the ack guard\'s answers, by row shape (characterized before the guard is hoisted)', () => {
+  const ackable = (s: CoordStore, id: number): boolean => {
+    const r = s.markAcked(id, NOW);
+    return r.ok;
+  };
+
+  it('acks a queued row, a parked queued row and the replay-ceiling park; refuses a run-closed park and an acked row', () => {
+    const s = store();
+    const q = queued(s);
+    const parkedQueued = queued(s);
+    s.db.prepare('UPDATE mail_deliveries SET parkedAt = ? WHERE id = ?').run(NOW, parkedQueued);
+    const ceiling = queued(s);
+    expect(s.rejectDelivery(ceiling, 'undeliverable', MAIL_REPLAY_CEILING_ERROR)).toEqual({ changed: true, state: 'rejected' });
+    const runClosed = queued(s);
+    expect(s.rejectDelivery(runClosed, 'undeliverable', MAIL_RUN_CLOSED_ERROR)).toEqual({ changed: true, state: 'rejected' });
+    const done = acked(s);
+
+    expect(ackable(s, q)).toBe(true);
+    expect(ackable(s, parkedQueued)).toBe(true);
+    expect(ackable(s, ceiling)).toBe(true);
+    expect(ackable(s, runClosed)).toBe(false);
+    expect(ackable(s, done)).toBe(false);
   });
 });

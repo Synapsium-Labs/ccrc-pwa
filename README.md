@@ -4301,6 +4301,22 @@ cleanup row, and an answer that stands for the whole box is listed once.
   lane reports a change only when an act job next reads the file, so a missing "now live" or "now shadowed" row means not
   yet seen, never unchanged.
 
+**The loose arm (fleet disk retention, spec 2026-10-23 §2.4, D-6627; reverses D-5888).** The lane also takes an entry
+directly under `~/.cc-tmp` that no witness and no registry row names. Each pass asks `ccd ws-audit --collect-census` once, a
+read-only listing of those entries, classed and bounded at 1,024, every name travelling as hex. Only the `loose` class (a
+regular file or a directory of this uid) joins the population, as an id `loose:<hex>` that the temp-root id predicate refuses,
+so no witnessed argv can be built from it; a census that is unreadable or cut at its bound adds no entry, and says why. An
+entry a killed verb left in the quarantine joins by its record. The lane's licence, pacing and gates are the witnessed arm's,
+with two changes: the open-run hold's "a fresh collection whose witness names no run" does not apply (a loose entry has no run
+to wait for), and the verb is composed only while `$REG/collect-loose-live` stands **and** the lane itself is effectively
+live. The marker is read from the act job's last registry listing, after the lane's own switch, so a pause, a withdrawn
+capability or a shadowed lane stops a loose act too, and the marker alone arms nothing. Without both, the lane records
+"temp entry would be collected" once per entry and token. Nothing in the tree writes the marker; it is the operator's to
+touch by hand, as `collect-lane-live` is. It needs `collect-loose-v1` in `ccd caps`: without it the census is never asked.
+Its rows read "temp entry collected" and "temp entry would be collected", name the entry (decoded, made one safe line), and
+list no attention item, because a loose entry is no session. When the census is cut, unmeasured, past the population cap, or has quarantine records it could not read, the arm considers
+nothing it cannot vouch for and one box line ("collector / loose temp entries") says why.
+
 **The switch in Settings (child reclamation wave 10).** The lane now has two arms, then one. It is live when either
 holds:
 - the legacy file `$REG/collect-lane-live` stands and its retirement has not been recorded;
@@ -5206,7 +5222,7 @@ removal** (below), which takes back what D-1243 wrote into each rostered home's 
 `~/.ccrc/graph-noise/_default.list`; **excludes**, `graphify-out/` and `.graphifyignore` converged
 into each tree's common-dir `info/exclude`; and **legacy hooks off** — the old per-repo graphify git
 hooks are removed if wholly graphify-generated, left in place and reported if they chain other
-content. (`server/test/ccrc-install.test.ts` pins that sequence, and
+content. (`server/test/ccrc-install-*.test.ts` pins that sequence, and
 `ccrc-install-graphify.test.ts` pins this paragraph's count against it — the enumeration went stale
 for two deviations before that guard existed.)
 
@@ -5582,8 +5598,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8501-8503`), each with an operator sentence of its own at `:8553`,
-`:8561` and `:8574`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8506-8508`), each with an operator sentence of its own at `:8558`,
+`:8566` and `:8579`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5782,6 +5798,12 @@ and any doubt (the probe failing, a walk running out of time) keeps the entry.
 
 A taken entry is renamed into `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>`; a pass 24 hours later (1 hour
 under pressure) asks the holder probe again and deletes it, so the session has a working day to move it back.
+**Finished task output is capped, not moved.** A `tasks/*.output` regular file over 1 GiB, unheld, with no mtime or
+ctime in the last hour, is rewritten as its first 64 MiB, one marker line (`[ccd-tmp-sweep: <n> bytes cut at <ts>]`)
+and its last 64 MiB. The new file is written beside it and renamed over, so a failed write leaves the original
+byte-identical, and the holder probe is asked last, just before the rename. The census records it as a `moved` row
+of kind `output-capped` (counted `capped`, or `wouldCap` in shadow).
+
 **It ships in shadow:** without `~/.ccrc/tmp-sweep-live-arm` it records what it would take and touches
 nothing (no code in the tree creates that file; arming is the operator's). Pressure is the sweep's own
 measure of its filesystem (92% of bytes or inodes used, the same figure `shared/disk.ts` holds; `disk-twins.test.ts`
@@ -5789,6 +5811,17 @@ pins them equal) and also shortens the dead arm to 2 days. The live arm scans at
 pass under pressure. Its census, `~/.ccrc/tmp-sweep.json` (`v`, `at`, `liveAt`, `pressure`, `arm`, `seq`,
 `roots`, `sessions` with each one's `budget`, `moved` rows kept 7 days or 1,000, `counts`), is replaced whole
 by a rename at the end of every pass, shadow or live. The sweep is its only writer.
+
+**The test-run arm** (D-6622) rides the same switch and rows. A server test run keeps its fixtures in one
+`ccrc-testrun-XXXXXX` directory under its `TMPDIR`; a later run under the same `TMPDIR` collects one whose
+owner died, but a root no later run visits (a child workspace's own `TMPDIR`, a box nobody tests on any more)
+stays. In the box's `TMPDIR` and in each witnessed child leaf that still has a registry row, the sweep takes a
+top-level directory named exactly `ccrc-testrun-` and six letters or digits (or that name with `.dead`) when no
+socket is bound at its `live.sock` in the kernel's table (the run's own liveness test), nothing under it has
+changed (ctime, not mtime) for 6 hours (1 under pressure), and the holder probe answers nobody. It renames the
+root to its `.dead` twin and then removes it, as the run's own cleanup does, so there is no quarantine and
+the census row (kind `test-run`) carries none. A leaf whose row is gone is not this arm's: `ws-collect` takes
+the whole leaf. Any doubt (a walk that cannot finish, an unreadable socket table, a failing probe) keeps the root.
 
 ### Pane-scope sweep (ccd-scope-sweep)
 

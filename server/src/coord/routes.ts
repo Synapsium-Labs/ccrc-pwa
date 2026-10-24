@@ -27,7 +27,7 @@ import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
 import { readSessionSpendMeasured } from '../shares.js';
 import { boundSessionsOf, joinRunSpend } from './runSpend.js';
-import { renderEnvelope } from './envelope.js';
+import { pageInbox, renderEnvelope, renderInboxEntry } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
 import { DelegationCheckpointError, type DelegationDurability } from './delegation-checkpoint.js';
@@ -36,6 +36,7 @@ import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { advanceGate, advanceRequest, type AdvanceBody } from './advance.js';
+import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
@@ -65,7 +66,7 @@ import {
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
   parseCanonicalPositiveSafeInteger,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
-  MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
+  MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES, MAIL_INBOX_PAGE_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
   isRegistryId, isSessionIdShape, routeEventDetail,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
@@ -1221,6 +1222,40 @@ export function registerCoordRoutes(
   });
 
   /**
+   * `GET /api/mail/inbox?fromId=<id>&fromUuid=<uuid>` (mail inbox, spec §3.3; D-6778) — the caller's own unacked
+   * mail, rendered, oldest first, one page. The client prints each entry and acks it by `POST /api/mail/:id/ack`;
+   * this route acks nothing and writes nothing (no state, no attempt count, no stamp).
+   *
+   * Gates: the box token, then `requireAttribution` (the check `approvals show` and `asks list` use), so the
+   * pair is re-measured against the registry and nobody reads another session's mail.
+   *
+   * REFUSALS ARE NOT RECORDED (D-6779). Every refusal here goes through `requireMailToken`, `requireAttribution`
+   * or `refuseRoute`, never the ingress's recording `refuse`: `mail_rejections` is the record of mail that was
+   * refused, and a refused read refuses no mail. A stale uuid is also what a session sees for a few seconds after
+   * every `/clear`, so recording it would add a row per nudge and say nothing.
+   *
+   * Registered BEFORE `GET /api/mail/:id`; Fastify matches a static segment before a parameter either way.
+   */
+  app.get('/api/mail/inbox', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'GET /api/mail/inbox')) return;
+    const coord = deps.coord;
+
+    const q = req.query as { fromId?: unknown; fromUuid?: unknown };
+    if (typeof q.fromId !== 'string' || typeof q.fromUuid !== 'string') {
+      return refuseRoute(reply, 'bad-kind', { detail: 'fromId and fromUuid are required strings' });
+    }
+    const fromId = q.fromId;
+    if (!(await requireAttribution(reply, fromId, q.fromUuid, 'fromUuid'))) return;
+
+    const rows = coord.inboxFor(fromId);
+    const masker = deps.masker ?? SHAPE_ONLY_MASKER;
+    const entries = rows.map((r) => ({ deliveryId: r.deliveryId, text: masker.maskDeep(renderInboxEntry(r.deliveryId, r.envelope)) }));
+    const { page, remaining } = pageInbox(entries, MAIL_INBOX_PAGE_MAX_BYTES);
+    return reply.code(200).send({ ok: true, deliveries: page, remaining, abandoned: coord.abandonedCount(fromId) });
+  });
+
+  /**
    * `GET /api/mail/:id` (robust-mail-delivery spec §1.2) — the body channel
    * the reference nudge (`coord/envelope.ts`'s `renderMailNudge`) points a
    * worker at instead of typing the envelope into its pane. Serves the
@@ -1498,6 +1533,23 @@ export function registerCoordRoutes(
         ...('limit' in opened ? { limit: opened.limit } : {}),
         detail: opened.detail,
       });
+    }
+    if ('refused' in opened && opened.refused === 'cap-review-rounds') {
+      // D-6795: the refusal carries the structured ask, and the operator is told ONCE per work run: the store's insert
+      // is the once-only writer (`raiseReviewCapAsk`), so a repeated refusal or a restart raises nothing more.
+      const work = open.reviews!;
+      // The operator rules with the open findings in front of them, so the last review's report is read here (L4, the
+      // agent's read allowlist covers its folder); absent and unreadable stay two values and the notice falls back
+      // to the summary for both.
+      const last = coord.lastReviewReport(work);
+      const read = last.report === null ? null : await deps.io.readFileMeasured(last.report, 5000);
+      const ask = reviewCapAsk(work, Number(opened.by), last, reviewFindingsOf(read));
+      if (coord.raiseReviewCapAsk(work, Date.now())) {
+        const n = reviewCapNotice(ask);
+        notice({ kind: 'run', sessionId: '', title: n.title, body: n.body, runId: work }, 'push',
+          { tag: `review-cap-${work}`, degraded: 'ask recorded, feed archive degraded' });
+      }
+      return refuseRun(reply, 'cap-review-rounds', { by: opened.by, ask });
     }
     if ('refused' in opened) return refuseRun(reply, opened.refused, { by: opened.by });
 
@@ -2091,6 +2143,25 @@ export function registerCoordRoutes(
    *  saying something the other does not. */
   const capsView = (store: NonNullable<Deps['coord']>): CoordCapsView =>
     ({ caps: store.caps(), usage: store.capsUsage(), updatedAt: store.capsUpdatedAt() });
+
+  /**
+   * `POST /api/coord/review-cap` (D-6795): the operator lifts the review-round cap for ONE work run, `{ run: <id> }`.
+   * Caps-style: session-gated like `/api/coord/caps`, no box token, because no machine lane may lift a cap on its own
+   * work. After it the run's next review opens as before. Idempotent; 404 for an id that is not a work run.
+   */
+  app.post('/api/coord/review-cap', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const run = (req.body as { run?: unknown } | null | undefined)?.run;
+    if (!isPositiveDecimalSafeInteger(run)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'run must be a positive work run id' });
+    }
+    const lifted = await coordMutex.run(async () => coord.liftReviewCap(run, Date.now()));
+    if (!lifted) return refuseRoute(reply, 'not-found', { detail: `run ${run} is not a work run` });
+    notice({ kind: 'coord', sessionId: '', title: 'review cap lifted', body: `run ${run}`, runId: run },
+      'record-only', { degraded: 'cap lifted, feed archive degraded' });
+    return reply.code(200).send({ ok: true, run, rounds: coord.reviewRounds(run), cap: REVIEW_ROUND_CAP, lifted: true });
+  });
 
   app.get('/api/coord/caps', async (_req, reply) => {
     if (!deps.coord) return notConfigured(reply);

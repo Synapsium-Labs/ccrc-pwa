@@ -37,6 +37,10 @@ export const ORPHAN_TREE_LIVE_MARKER = 'orphan-tree-live';
 /** `$REG/orphan-tree-rescue-live`: arms the lane's rescue arm, for a tree whose HEAD is on no remote; it means nothing
  *  unless `orphan-tree-live` also stands. */
 export const ORPHAN_TREE_RESCUE_LIVE_MARKER = 'orphan-tree-rescue-live';
+/** `$REG/collect-loose-live`: arms the collector's LOOSE arm (fleet disk retention spec 2026-10-23 section 2.4, D-6627):
+ *  a loose `~/.cc-tmp` entry is removed only while it stands AND the lane itself is effectively live. No writer in the
+ *  tree. */
+export const COLLECT_LOOSE_LIVE_MARKER = 'collect-loose-live';
 /** `$REG/dead-coordinator-lane-live`: arms the dead-coordinator lane's act. */
 export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
 /** `$REG/idle-compact-nudge-disabled`: the idle-compaction nudge's kill switch. */
@@ -47,6 +51,10 @@ export const MAIL_GATE_STRICT_MARKER = 'mail-gate-strict';
 export const MAIL_GATE_BUSY_MARKER = 'mail-gate-busy';
 /** `$REG/mail-gate-busy-shadow`: the mail gate's first hand-armed step. */
 export const MAIL_GATE_BUSY_SHADOW_MARKER = 'mail-gate-busy-shadow';
+/** `$REG/landing-disabled`: the PR-landing checks lane's kill switch; it wins over the live marker. */
+export const LANDING_DISABLED_MARKER = 'landing-disabled';
+/** `$REG/landing-checks-live`: arms NEW episodes of the checks lane live (otherwise they run in shadow). */
+export const LANDING_CHECKS_LIVE_MARKER = 'landing-checks-live';
 
 /** The spec's bounded contexts (consolidation spec 2026-10-19 §2), the `owner` of a row. */
 export const SWITCH_OWNER_MAP = {
@@ -129,6 +137,11 @@ export const SWITCHES = {
     owner: 'C4', meaning: 'With the orphan lane live, a tree whose HEAD is on no remote is pinned into the attic and then removed.',
     writer: 'hand-only',
   },
+  [COLLECT_LOOSE_LIVE_MARKER]: {
+    storage: { marker: COLLECT_LOOSE_LIVE_MARKER }, default: 'absent: shadow, the lane records what loose entries it would remove',
+    owner: 'C4', meaning: 'The collector\'s loose arm acts: an idle entry under the fleet temp directory that no session '
+      + 'witnessed is removed, once the lane itself is live.', writer: 'hand-only',
+  },
   [DEAD_COORDINATOR_LANE_LIVE_MARKER]: {
     storage: { marker: DEAD_COORDINATOR_LANE_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would end',
     owner: 'C5', meaning: 'The dead-coordinator lane acts: a programme whose coordinator is gone is ended.',
@@ -150,6 +163,16 @@ export const SWITCHES = {
   [MAIL_GATE_BUSY_SHADOW_MARKER]: {
     storage: { marker: MAIL_GATE_BUSY_SHADOW_MARKER }, default: 'absent: the shell mode', owner: 'C5',
     meaning: 'The gate decides busy as the busy mode would, delivers nothing more, and logs what it would have sent.',
+    writer: 'hand-only',
+  },
+  [LANDING_DISABLED_MARKER]: {
+    storage: { marker: LANDING_DISABLED_MARKER }, default: 'absent: the checks lane reads and writes its rows', owner: 'C4',
+    meaning: 'The PR-landing checks lane makes no read and writes no edge or mail; it wins over the live marker, and a live episode keeps only its stuck bound.',
+    writer: 'hand-only',
+  },
+  [LANDING_CHECKS_LIVE_MARKER]: {
+    storage: { marker: LANDING_CHECKS_LIVE_MARKER }, default: 'absent: new episodes run in shadow, nothing is mailed', owner: 'C4',
+    meaning: 'New PR-landing episodes are live: the checks lane mails the coordinator when the required checks settle.',
     writer: 'hand-only',
   },
   'stall-watch-level': {

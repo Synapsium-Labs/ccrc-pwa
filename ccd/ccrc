@@ -1738,7 +1738,7 @@ BOX_TOKEN_SYNC_REPORT="$HOME/.ccrc/token-sync.json"
 #   box-token lifecycle wave 1 — token-sync (`cmd_token` and the
 #        `ccd/ccrc-token-sync` it runs: the verb ccrc-agent's `token-sync` op
 #        spawns). Every os: the op runs it in the foreground, never --detach.
-# ccrc-install.test.ts pins every word to the machinery it names, so a word
+# ccrc-install-*.test.ts pins every word to the machinery it names, so a word
 # cannot ship ahead of its code.
 CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions token-sync)
 
@@ -1965,7 +1965,7 @@ BOX_TREE_DIR="$HOME/ccrc"
 # `${BOX_UNIT_DIR:-…}` fallback IS the second spelling with an extra branch in
 # front of it. `_check_path` records the same trade for `WRAPPER_BIN_DIR` and
 # the same remedy: keep the mechanism instead of the promise —
-# `ccrc-install.test.ts` compares the two literals and goes red on a drift.
+# `ccrc-install-*.test.ts` compares the two literals and goes red on a drift.
 # (D-92.)
 # WHERE THIS BOX'S SERVICE MANAGER READS ITS JOB FILES. The comment above
 # explains why this is one literal and not two; the platform arm below does
@@ -2044,7 +2044,7 @@ BOX_MIGRATION_FILE="$HOME/.ccrc/migrating-to"
 # DELIBERATE cross-file second spelling of D-92's class: `install.sh
 # --release` runs before any ccrc exists on the box, so it cannot read this
 # pair, and this file runs on boxes install.sh has long left. The two are
-# held equal by `server/test/ccrc-update.test.ts` (the pin IS the mechanism;
+# held equal by `server/test/ccrc-update-kept.test.ts` (the pin IS the mechanism;
 # a comment would be the promise). `CCRC_RELEASE_BASE_URL` overrides the
 # derived `…/releases` prefix — the same test seam and mirror escape hatch
 # install.sh documents. Stage 5 de-brands the pair in both files at once.
@@ -2743,7 +2743,7 @@ _upd_redact() {
 # own refusal sentences, which deliberately name absolute paths
 # (`ccrc-expose.test.ts`'s "shadow refusal" cases), must print byte-for-byte
 # what they always did. ONE LINE ON PURPOSE —
-# `ccrc-install.test.ts` and `ccrc-update.test.ts` extract this definition
+# `ccrc-install-*.test.ts` and the `ccrc-update-*.test.ts` files extract this definition
 # by `^_ccrc_die\(\) \{.*\}$` and run it alone under `set -u` (hence
 # `${UPD_FAIL_PREFIX:-}` and `${UPD_REDACT_ACTIVE:-0}` both defaulting) —
 # each harness that actually triggers a die also picks `_upd_redact`'s
@@ -7136,7 +7136,7 @@ _acct_add_parse() {
 #     converged" (:5569) or "… generated from $HOME/.ccrc/accounts.json"
 #     (:5575); `cmd_wrappers` prints a line per written account and a
 #     `summary: …` line (:2904). Read that off the SOURCE, not off a suite:
-#     `ccrc-install.test.ts:2687-2688` pins only `cmd_wrappers`' summary onto
+#     `ccrc-install-*.test.ts` pins only `cmd_wrappers`' summary onto
 #     `install`'s stdout, and nothing in server/test/ pins the accounts.sh
 #     lines at all. For `install` that transcript IS the answer. Here it is
 #     the REMEDY, and this verb's stdout is one JSON object — so it goes to
@@ -7315,7 +7315,7 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # install-coordinator-skill.sh:36, install-worker-skill.sh:36,
   # install-reviewer-skill.sh:31, install-graphify-skill.sh:77). So the
   # scripts are called directly,
-  # `ccrc-install.test.ts:1812-1893`'s 23-entry `_inst_*` spine is untouched, and no
+  # `ccrc-install-*.test.ts`'s 23-entry `_inst_*` spine is untouched, and no
   # agent restart is needed — every one of them is idempotent per home.
   local dir="$1" burl="$2" models="$3" n step stands=""
   # THIS RUN'S ARRAY, NOT THE SHELL'S (D-2127). It becomes `provisioned:[…]` on stdout
@@ -8082,7 +8082,7 @@ _acct_disable() {   # [--id X]
 # `_inst_accounts_sh` PRINTS ("install: accounts.sh: …") and refuses through
 # `_ccrc_die`, which writes nothing to stdout. Both are wrong for a verb whose
 # entire stdout is one JSON object, and neither can be fixed in that function —
-# it is `cmd_install`'s own step and `ccrc-install.test.ts` pins the spine that
+# it is `cmd_install`'s own step and `ccrc-install-*.test.ts` pins the spine that
 # calls it. So: stdout to /dev/null, and the call in a SUBSHELL so `_ccrc_die`'s
 # `exit 1` ends the subshell rather than this verb, leaving the `||` to phrase
 # the refusal as JSON. stderr is NOT redirected — the generator's own
@@ -13825,7 +13825,7 @@ cmd_models() {
 # array to know which steps precede `_inst_tree`. One list: a step added here
 # runs on install and on update, and is classified, without anyone
 # remembering a second copy. One name per line and nothing else inside the
-# parentheses — `ccrc-install.test.ts`'s order pin, the graphify step census
+# parentheses — `ccrc-install-*.test.ts`'s order pin, the graphify step census
 # and `runbook-holds.test.ts` read it line by line.
 CCRC_INST_SPINE=(
   _inst_banner
@@ -14362,7 +14362,7 @@ _inst_rc() {   # seed-once, the third file on the user-owned side of the rule
   # EOF-before-delimiter: `printf 'off'` with no newline reads as OFF for the
   # wrong reason, and `printf 'on'` with no newline reads as OFF outright.
   # `server/test/ccd-rc-flag.test.ts` pins that measurement and
-  # `ccrc-install.test.ts` asserts these bytes WHOLE, newline included.
+  # `ccrc-install-*.test.ts` asserts these bytes WHOLE, newline included.
   #
   # THE PATH IS A LOCAL, not a fourth entry in the top-level block at :91-107.
   # That block exists because `version`, `status` and `doctor` all READ the
@@ -15421,7 +15421,7 @@ _inst_keep_aside() {   # <src> <dest> — copy a PERSONAL file aside before repl
 
 # ── _inst_shim — the launcher `ccrc` on PATH ─────────────────────────────
 # THE BYTES BELOW ARE `deploy/deploy.sh`'s `install_ccrc_shim` HEREDOC, EXACTLY,
-# and `server/test/ccrc-install.test.ts` extracts both and compares them. Two
+# and `server/test/ccrc-install-*.test.ts` extracts both and compares them. Two
 # generators of one artifact is a drift waiting to happen — a box whose
 # launcher came from the older of them fails in a way neither generator's own
 # tests can see — so the agreement is a pin rather than a convention. It also
@@ -21737,7 +21737,7 @@ _upd_backup_set() {
   # (launchd has none — `ccd` mints a plist per session) and the names are
   # labels, so the loop below would have copied nothing and the backup would
   # have been silently short of the very files a rollback needs. Measured by
-  # `ccrc-update.test.ts`'s "the backup is COMPLETE before the install step
+  # `ccrc-update-fetch.test.ts`'s "the backup is COMPLETE before the install step
   # runs".
   #
   # The per-SESSION plists are deliberately not swept: an update does not
@@ -22907,7 +22907,7 @@ _upd_sweep() {
     fi
   done
   # fix round 1 item 7 (review 196 F8): the argv-order pin is
-  # `ccrc-update.test.ts`'s "with KillMode=process resolving per unit, the
+  # `ccrc-update-fetch.test.ts`'s "with KillMode=process resolving per unit, the
   # sweep runs: preflight, try-restart, the failed warn query, the active
   # verify query — in that argv order" case — cited by title, since its line
   # range moves.

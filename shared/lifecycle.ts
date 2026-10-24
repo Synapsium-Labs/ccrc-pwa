@@ -45,7 +45,9 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd-tmp-sweep'], collector: 'ccd-tmp-sweep (replaced whole every pass; moved rows kept 7 days or 1,000)',
     bound: 'rolling', tier: 'at most 1,000 moved rows plus one row per live session', ruling: null },
   // D-5888 (#298): a `--child` workspace's temp root, the policy's ruling 4. Only the per-id leaf: loose
-  // top-level entries in ~/.cc-tmp are a separate class with no owner yet, and this row does not claim them.
+  // top-level entries in ~/.cc-tmp are a separate class, and this row does not claim them. D-5888 declined them because
+  // nothing identified them; that is REVERSED by D-6627 (fleet disk retention spec 2026-10-23 section 2.4): the loose
+  // arm of ws-collect binds an entry's own identity in a token, and the class has its own row, `cc-tmp-loose-entries`.
   { name: 'child-tmp-roots', root: '~/.cc-tmp/<id>/', pattern: 'S',
     creators: ['ccd (_child_tmpdir: a --child workspace spawns with TMPDIR here)', 'everything that follows TMPDIR in that session, Claude Code\'s scratch included'],
     collector: 'the reclaim tail (_ws_tmproot_remove, kept while in use); ws-collect for a root that outlived its row (server-composed, witness-gated)',
@@ -64,6 +66,13 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     collector: 'the orphan-tree lane (server), the same ladder as ccd-orphan-worktrees; their branches are left, because the owner is Claude Code or the skill',
     bound: 'until the lane removes it: clean, HEAD on a remote (or rescued), unregistered, unheld, quiet for 7 days',
     tier: '~28G across ~94 worktrees measured 2026-08 (the policy\'s largest unassigned class)', ruling: null },
+  // D-6627: a top-level entry of ~/.cc-tmp that no witness and no registry row names. The loose arm of ws-collect owns it
+  // (the same lane, quarantine, re-proof and switch as the witnessed arm), shadowed until $REG/collect-loose-live stands.
+  { name: 'cc-tmp-loose-entries', root: '~/.cc-tmp/<name>', pattern: 'S',
+    creators: ['everything that writes into ~/.cc-tmp outside a witnessed child leaf (a tool run with TMPDIR set by hand, a human)'],
+    collector: 'ws-collect loose arm (server-composed; a regular file or directory of this uid, quiet for 48 hours (24 under disk pressure), unheld, no registry row at, inside or through it, bound by a token over its own identity)',
+    bound: '48 hours untouched (24 under disk pressure), then taken on a server-minted audit token; links and special files stay the operator\'s',
+    tier: '18 directories and 105 loose files, about 6.7 GiB, measured 2026-10-06', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
   // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
   // it lives in the runtime dir, so a reboot empties it — the safe direction for
@@ -147,7 +156,7 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.
   { name: 'server-test-run-dirs', root: '${TMPDIR:-/tmp}/ccrc-testrun-<6>/ (+ .dead mid-removal)', pattern: 'E',
     creators: ['server vitest globalSetup (server/test/run-tmp.globalsetup.mjs)'],
-    collector: 'server/test/run-tmp.globalsetup.mjs (teardown; SIGTERM/SIGINT/SIGHUP/exit arm; a later run\'s reap at setup and teardown: owner socket refuses AND ctime-quiet for RUN_QUIET_S)',
-    bound: 'one test run; after a SIGKILL, until a later run under the same TMPDIR finds it quiet',
+    collector: 'server/test/run-tmp.globalsetup.mjs (teardown; SIGTERM/SIGINT/SIGHUP/exit arm; a later run\'s reap at setup and teardown: owner socket refuses AND ctime-quiet for RUN_QUIET_S); ccd/ccd-tmp-sweep\'s test-run arm (DR-10, D-6622) for a root no later run visits: no socket bound at live.sock, ctime-quiet 6 h (1 h under pressure), unheld, in the box\'s TMPDIR and each witnessed child leaf with a row; shadow unless the live arm\'s marker exists',
+    bound: 'one test run; after a SIGKILL, until a later run under the same TMPDIR finds it quiet, or the sweep\'s test-run arm does (6 h quiet)',
     tier: '1,551 dirs / 5.74 GiB from five timed-out shards in one morning (#316, 2026-10-07)', ruling: null },
 ];
