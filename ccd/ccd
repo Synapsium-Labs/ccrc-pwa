@@ -31663,11 +31663,15 @@ _ws_nested_same() {   # main nested base wip -> 0 when `$base/` already holds TH
 _ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_RESCUE_ENTRY (one JSON object); 1 with
   #                         RECLAIM_PIN_WORD (nested-rescue-too-large | nested-rescue-failed) and RECLAIM_PIN_WHY.
   # Run under `_ws_reclaim_contained`. Moves no ref in the nested repository; adds refs only under `$base`.
-  local main="$1" n="$2" base="$3" id="$4" childof="$5" prefix="$6" wip b a q ref want got specs=() errf orph tips base0 reuse=0 blob tries=0 wantl gotl
+  local main="$1" n="$2" base="$3" id="$4" childof="$5" prefix="$6" wip b a q ref want got specs=() errf orph tips base0 reuse=0 blob tries=0 wantl gotl c
   RECLAIM_PIN_WORD=nested-rescue-failed; RECLAIM_RESCUE_ENTRY=""
   ! _ws_nested_busy "$n" || { RECLAIM_PIN_WHY="the nested repository at $n has an operation in progress — its autostash and patch state is on no ref, so it stays"; return 1; }
+  _ws_nested_rescue_shape "$n" || { RECLAIM_PIN_WHY="the nested repository at $n has a shape a fetch cannot carry (LFS or annex content, a linked worktree, a partial or shallow clone) — it stays"; return 1; }
   _ws_wip_commit "$n" "$id" "$childof" "$prefix" || { RECLAIM_PIN_WHY="could not capture the uncommitted work of the nested repository at $n: $RECLAIM_WIP_WHY"; return 1; }
   wip="$RECLAIM_WIP_SHA"
+  # A global clean filter can write content into `.git/lfs` while the WIP is staged and commit only a pointer: look again.
+  c=$(git -C "$n" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [[ -n "$c" && ! -e "$c/lfs/objects" && ! -e "$c/annex" ]] \
+    || { RECLAIM_PIN_WHY="staging the uncommitted work of the nested repository at $n wrote LFS or annex content a fetch never moves — it stays"; return 1; }
   git -C "$n" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
     || { RECLAIM_PIN_WHY="the nested repository at $n has no commit at HEAD — there is nothing to pin it by, so it stays"; return 1; }
   errf=$(_plat_mktemp) || { RECLAIM_PIN_WHY="could not make a scratch file to rescue $n"; return 1; }

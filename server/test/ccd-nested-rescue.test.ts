@@ -475,3 +475,43 @@ describe('a nested repository mid-operation keeps its state: it is not rescued (
     }, 90_000);
   }
 });
+
+describe('scratch-rescue never claims a rescue a fetch cannot carry (LFS or annex content, D-6632)', () => {
+  const scratchRepo = (): string => {
+    makeChild(h);
+    const scratch = path.join(h.home, 'scratch-area', 'sandbox');
+    fs.mkdirSync(scratch, { recursive: true });
+    h.git(scratch, 'init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(scratch, 'a.txt'), 'a\n'); h.git(scratch, 'add', 'a.txt'); h.git(scratch, 'commit', '-q', '-m', 'a');
+    return scratch;
+  };
+  const refused = (scratch: string): void => {
+    const r = h.run(`cmd_scratch_rescue --session ${CHILD_ID} "${scratch}"`);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect((JSON.parse(r.stdout) as { failed: string }).failed).toBe('nested-rescue-failed');
+  };
+
+  it('a repository whose .git/lfs/objects holds content: nested-rescue-failed', () => {
+    const scratch = scratchRepo();
+    fs.mkdirSync(path.join(scratch, '.git', 'lfs', 'objects', 'ab'), { recursive: true });
+    fs.writeFileSync(path.join(scratch, '.git', 'lfs', 'objects', 'ab', 'only-copy'), 'x'.repeat(1024));
+    refused(scratch);
+  }, 90_000);
+
+  it('a repository with .git/annex: nested-rescue-failed', () => {
+    const scratch = scratchRepo();
+    fs.mkdirSync(path.join(scratch, '.git', 'annex'), { recursive: true });
+    refused(scratch);
+  }, 90_000);
+
+  it('a global clean filter that writes into .git/lfs/objects while the WIP is staged: nested-rescue-failed', () => {
+    const scratch = scratchRepo();
+    const clean = path.join(h.home, 'clean.sh');
+    fs.writeFileSync(clean, '#!/bin/sh\nmkdir -p .git/lfs/objects/ab && cat > .git/lfs/objects/ab/only-copy\necho "version pointer"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(h.home, '.gitconfig'), `[filter "lfs"]\n\tclean = ${clean} %f\n`);
+    fs.writeFileSync(path.join(scratch, '.gitattributes'), '*.bin filter=lfs\n');
+    h.git(scratch, 'add', '.gitattributes'); h.git(scratch, 'commit', '-q', '-m', 'attrs');
+    fs.writeFileSync(path.join(scratch, 'big.bin'), 'the only copy\n');
+    refused(scratch);
+  }, 90_000);
+});
