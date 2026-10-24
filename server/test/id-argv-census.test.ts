@@ -464,8 +464,8 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'watch.ts', scope: 'sweepMail', builder: 'ensure', id: 'd.toId', origin: ['stored', 'registry'], gate: ['registry-refused'], entry: /\bconst rec = records\.find\(\(r\) => r\.id === d\.toId\);[\s\S]*?if \(rec === undefined \|\| identity === null\) \{/ },
   // watch.ts: the naming sweep's rows come from the listing, which never builds a refused name; the `entry` ties the
   // loop's `r` to `readRegistry`'s output.
-  { file: 'watch.ts', scope: 'sweepNames', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
-  { file: 'watch.ts', scope: 'sweepNames', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
+  { file: 'watch.ts', scope: 'namesPass', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
+  { file: 'watch.ts', scope: 'namesPass', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
 ];
 
 /** The files whose gates ask the predicate themselves. */

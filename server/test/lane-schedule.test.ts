@@ -309,3 +309,66 @@ describe('LaneRunner — the catch', () => {
     expect(() => runner.runNow('catalogue', async () => {})).toThrow(/warnKey/);
   });
 });
+
+describe('the nine sweep lanes outside coordination (D-5862, PR 1b)', () => {
+  const NINE: Array<[string, number]> = [
+    ['tasks', 10_000], ['usage', 60_000], ['pr', 120_000], ['names', 10_000], ['divergences', 60_000],
+    ['lifecycle', 5_000], ['readiness', 600_000], ['ledgerReconcile', 900_000], ['ledgerFloor', 3_600_000],
+  ];
+
+  it.each(NINE)('the %s row exists, on the wall clock as it is today, at %i ms', (name, cadenceMs) => {
+    const r = laneRow(name);
+    expect(r.cadenceMs).toBe(cadenceMs);
+    expect(r.clock).toBe('wall');
+    expect(r.derivedFrom).toBeNull();
+  });
+
+  it('only the PR sweep is single-flight, abandoning a stuck run at the backoff ceiling, and it carries both cadences', () => {
+    const pr = laneRow('pr');
+    expect(pr.flight).toBe('skip');
+    expect(pr.staleAfterMs).toBe(900_000);
+    expect(pr.activeCadenceMs).toBe(30_000);
+    for (const [name] of NINE) if (name !== 'pr') expect(laneRow(name).flight, `${name} has no guard today`).toBe('none');
+  });
+
+  it('each cadence has one home, here: the watcher declares none of them', () => {
+    const w = text('watch.ts');
+    for (const c of ['TASK_SWEEP_MS', 'USAGE_SWEEP_MS', 'NAME_SWEEP_MS', 'DIVERGENCE_SWEEP_MS', 'LC_SWEEP_MS', 'READINESS_SWEEP_MS',
+      'LEDGER_FLOOR_SWEEP_MS', 'LEDGER_RECONCILE_SWEEP_MS', 'PR_SWEEP_MS', 'PR_SWEEP_ACTIVE_MS', 'PR_SWEEP_STUCK_MS', 'PR_BACKOFF_MAX_MS']) {
+      expect(w, `${c} is declared a second time in watch.ts`).not.toMatch(new RegExp(`const ${c}\\s*=\\s*[0-9]`));
+      expect(text('laneSchedule.ts'), `${c} is declared nowhere here`).toMatch(new RegExp(`export const ${c}\\b`));
+    }
+  });
+
+  it('the watcher keeps no clock or guard of these lanes', () => {
+    const w = text('watch.ts');
+    for (const f of ['lastTaskSweep', 'lastUsageSweep', 'lastPrSweep', 'prSweepStartedAt', 'lastNameSweep', 'lastDivergenceSweep',
+      'lastLifecycleSweep', 'lastReadinessSweep', 'lastLedgerFloor', 'lastLedgerReconcile']) {
+      expect(w, `${f} is still a field of the watcher`).not.toMatch(new RegExp(`\\b${f}\\b`));
+    }
+  });
+
+  it('due(name, true) reads a row\'s active cadence; a row without one ignores the flag', () => {
+    const { t, runner } = rig([row({ name: 'pr', cadenceMs: 120, activeCadenceMs: 30 }), row({ name: 'plain', cadenceMs: 120 })]);
+    runner.stamp('pr'); runner.stamp('plain');
+    t.wall += 30;
+    expect(runner.due('pr')).toBe(false);
+    expect(runner.due('pr', true)).toBe(true);
+    expect(runner.due('plain', true), 'a row with no active cadence ran early').toBe(false);
+    t.wall += 90;
+    expect(runner.due('pr')).toBe(true);
+  });
+
+  it('a run is abandoned at exactly staleAfterMs, not a millisecond later', async () => {
+    const { t, runner } = rig([row({ name: 'pr', flight: 'skip', cadenceMs: 10, staleAfterMs: 1000 })]);
+    const first = deferred();
+    void runner.run('pr', () => first.promise);
+    t.wall += 999;
+    expect(runner.run('pr', async () => {}), 'abandoned a run younger than the ceiling').toBeNull();
+    t.wall += 1;
+    const fn = vi.fn(async () => {});
+    await runner.run('pr', fn);
+    expect(fn, 'did not abandon a run at the ceiling').toHaveBeenCalledTimes(1);
+    first.resolve();
+  });
+});

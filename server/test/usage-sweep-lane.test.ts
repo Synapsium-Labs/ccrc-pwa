@@ -121,7 +121,7 @@ describe('FleetWatcher usage sweep lane (routing slice 0)', () => {
     // the same private-field poke `dialog.test.ts` avoids needing by calling
     // `sweepHookStates()` directly, not available to us here since the
     // throttle itself is what this test is exercising.
-    (watcher as unknown as { lastUsageSweep: number }).lastUsageSweep = 0;
+    watcher.kick('usage');
     degrade = true;
     await watcher.tick();
 
@@ -153,7 +153,7 @@ describe('FleetWatcher usage sweep lane (routing slice 0)', () => {
     (watcher as unknown as { usage: Map<string, typeof prev> }).usage.set('demo-usage-d', prev);
 
     degrade = true;
-    (watcher as unknown as { lastUsageSweep: number }).lastUsageSweep = 0;
+    watcher.kick('usage');
     await watcher.tick();
 
     const carried = watcher.currentUsage().get('demo-usage-d');
