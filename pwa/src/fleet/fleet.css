@@ -804,11 +804,11 @@
   display: grid;
   gap: 1px;
 }
-/* What a lane never read says in place of its windows (laneWords' NO_READING): quiet, and no meter beside it. */
+/* What a lane never read says in place of its windows (laneWords' NO_READING): no meter beside it. It sets no colour of
+   its own: it reads in the card's ink, which the contrast gate already measures on the card. */
 .acct-unread {
   font-family: var(--family-mono);
   font-size: var(--fs-2xs);
-  color: var(--ink-secondary);
 }
 .account-gauge-label {
   font-family: var(--family-mono);
