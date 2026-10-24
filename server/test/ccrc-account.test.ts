@@ -5776,6 +5776,58 @@ describe('ccrc account remove', () => {
     } finally { await killLaneProcesses(home); }
   });
 
+  // Codex bridge Stage 2, Task 11: a direct lane's one tier, the bridge, on the shim's port. Its stand-in holds the
+  // bridge's exact argv (`<python3> -I <shim file> --ccrc-bridge=direct --ccrc-lane=<id>`, the shim file a tiny server
+  // here) and answers `/ccgpt/lane` in the bridge's shape; it is reparented through nohup, so a stop reaps it while
+  // `spawnSync` blocks this event loop, and it ends itself after 60 s whatever happens.
+  it.skipIf(!PY3 || process.platform === 'darwin')('C2b: a direct lane\'s running bridge is stopped FIRST, then its bridge files are reaped', async () => {
+    const home = box('ccrc-account-remove-codex-bridge-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, { ...lane, exec: { ...lane.exec, bridge: 'direct' } }, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    const dir = join(home, '.ccrc', 'codex', lane.id);
+    const lj = JSON.parse(readFileSync(join(dir, 'lane.json'), 'utf8')) as Record<string, unknown>;
+    writeFileSync(join(dir, 'lane.json'), `${JSON.stringify({ ...lj, bridge: 'direct', upstream: 'backend',
+      bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' } }, null, 2)}\n`);
+    const bridgeFiles = ['bridge.stats.json', 'reasoning.sqlite', 'reasoning.sqlite-wal', 'reasoning.sqlite-shm',
+      'record-streams', 'bridge-instructions'].map((f) => join(dir, f));
+    for (const f of bridgeFiles) writeFileSync(f, 'fixture\n', { mode: 0o600 });
+    mkdirSync(join(dir, 'recordings'), { mode: 0o700 });
+    writeFileSync(join(dir, 'recordings', 'r1.sse'), 'event: fixture\n\n');
+    const shim = join(home, '.local', 'bin', 'ccgpt-proxy.py');
+    mkdirSync(path.dirname(shim), { recursive: true });
+    writeFileSync(shim, [
+      'import http.server, json, os, threading',
+      'class H(http.server.BaseHTTPRequestHandler):',
+      '    def do_GET(self):',
+      '        b = json.dumps({"lane": "codex-a", "mode": "direct"}).encode()',
+      '        self.send_response(200); self.send_header("Content-Type", "application/json")',
+      '        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)',
+      '    def log_message(self, *a): pass',
+      's = http.server.HTTPServer(("127.0.0.1", int(os.environ["FAKE_BRIDGE_PORT"])), H)',
+      'threading.Timer(60, lambda: os._exit(0)).start()',
+      's.serve_forever()', ''].join('\n'), { mode: 0o755 });
+    const plant = spawnSync(BASH, ['-c',
+      'FAKE_BRIDGE_PORT="$2" nohup "$0" -I "$1" --ccrc-bridge=direct --ccrc-lane=codex-a </dev/null >/dev/null 2>&1 & echo $!',
+      PY3!, shim, String(lane.exec.proxyPort)], { encoding: 'utf8' });
+    const pid = Number(plant.stdout.trim());
+    expect(pid > 1, plant.stderr).toBe(true);
+    await eventually(() => portAccepts(lane.exec.proxyPort), 'the stand-in bridge to bind', 10_000);
+    writeFileSync(join(dir, 'bridge.pid'), `${pid}\n`, { mode: 0o600 });
+    writeFileSync(join(dir, 'bridge.started'), '{"fixture":"bridge"}\n', { mode: 0o600 });
+    plantTmux(home, []);
+    const r = run(home, ['account', 'remove', '--id', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    oneObject(r);
+    await eventually(() => !alive(pid), 'the bridge to stop with its account', 15_000);
+    expect(await portAccepts(lane.exec.proxyPort)).toBe(false);
+    for (const f of [...state.reaped, ...bridgeFiles, join(dir, 'bridge.pid'), join(dir, 'bridge.started'), join(dir, 'recordings')]) {
+      expect(existsSync(f), `${f} survived the reap`).toBe(false);
+    }
+  }, 60_000);
+
   it.skipIf(!PY3 || process.platform === 'darwin' || !HAVE_FLOCK)(
     'C3: a stop that fails refuses the removal before the roster changes, and reaps nothing', async () => {
       const home = box('ccrc-account-remove-codex-stuck-');

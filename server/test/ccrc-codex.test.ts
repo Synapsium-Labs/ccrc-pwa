@@ -46,6 +46,7 @@ import {
   AUTH_LIB, AUTH_ROUTES, driverLines, fakeAuthServer, plantBackendCredential, runAuthDriver,
   syntheticJwt, type AuthAnswer, type AuthScript,
 } from './codexAuthFixture.js';
+import { BRIDGE_MODELS, writeBridgeCatalogue } from './codexBridgeFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -1428,7 +1429,8 @@ describe('_codex_started_json and _codex_tier_stale — "running the update" is 
     lib(h, '_codex_tier_stale codex-a litellm; a=$?; _codex_tier_stale codex-a shim; echo "litellm=$a shim=$?"').stdout.trim();
   const record = (h: string): void => {
     fs.mkdirSync(laneDir(h, 'codex-a'), { recursive: true });
-    const r = lib(h, 'for t in $CODEX_TIERS; do _codex_started_json "$t" > "$(_codex_lane_dir codex-a)/$t.started" || exit 1; done');
+    // The two runtime tiers this describe is about; the bridge's record is Task 11's (the bridge tier describe).
+    const r = lib(h, 'for t in litellm shim; do _codex_started_json "$t" > "$(_codex_lane_dir codex-a)/$t.started" || exit 1; done');
     expect(r.code, r.stderr).toBe(0);
   };
 
@@ -2558,8 +2560,10 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     const s = codex(home, ['stop', 'codex-a']);
     expect(s.code, s.stderr).toBe(0);
     expect(s.stdout).toBe(tier === 'shim'
-      ? 'ccrc codex: codex-a: litellm not running, shim foreign\n'
-      : 'ccrc codex: codex-a: litellm foreign, shim not running\n');
+      // The bridge serves on the shim's port (codex-bridge Stage 2), so the
+      // listener there is foreign to it too.
+      ? 'ccrc codex: codex-a: litellm not running, shim foreign, bridge foreign\n'
+      : 'ccrc codex: codex-a: litellm foreign, shim not running, bridge not running\n');
     expect(s.stderr).toContain(`port ${port} (codex-a's ${tier} tier) is held by a listener that is not this lane's`);
     expect(s.stderr).toMatch(/ccrc left it running\.$/m);
     expect(stopCalls(home)).toEqual([]);
@@ -2579,8 +2583,9 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     };
     const stopped = { state: 'stopped', via: null, pid: null };
     expect(status()).toEqual({
-      id: 'codex-a', tiers: { litellm: stopped, shim: stopped }, runtime: { generation: gen }, lane: { json: 'current' },
-      auth: expect.objectContaining({ credential: 'present', state: 'ok' }),
+      id: 'codex-a', mode: 'litellm', upstream: 'backend', tiers: { litellm: stopped, shim: stopped, bridge: stopped },
+      runtime: { generation: gen }, lane: { json: 'current' },
+      auth: expect.objectContaining({ credential: 'present', state: 'ok' }), bridge: null,
     });
     const lj = join(laneDir(home, 'codex-a'), 'lane.json');
     const good = fs.readFileSync(lj, 'utf8');
@@ -2600,6 +2605,9 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
       // Review A2: named in `_codex_foreign_what`'s words, never a sentence
       // of status's own.
       `ccrc codex: codex-a: shim FOREIGN — port ${a.proxyPort} (codex-a's shim tier) is held by a listener that is not this lane's: its identity check failed. `
+        + `Stop whatever holds port ${a.proxyPort}, or give codex-a other ports in ~/.ccrc/accounts.json. ccrc will neither adopt nor stop it.`,
+      // The bridge serves on the shim's port (codex-bridge Stage 2), so the listener there is foreign to it too.
+      `ccrc codex: codex-a: bridge FOREIGN — port ${a.proxyPort} (codex-a's bridge tier) is held by a listener that is not this lane's: its identity check failed. `
         + `Stop whatever holds port ${a.proxyPort}, or give codex-a other ports in ~/.ccrc/accounts.json. ccrc will neither adopt nor stop it.`,
       `ccrc codex: codex-a: runtime ${gen}; lane.json current`,
       '',
@@ -2641,13 +2649,14 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     const st = codex(home, ['status', 'codex-a', '--json']);
     expect((JSON.parse(st.stdout) as { tiers: unknown }).tiers).toEqual({
       litellm: { state: 'running', via: 'nohup', pid: lit }, shim: { state: 'running', via: 'nohup', pid: shim },
+      bridge: { state: 'stopped', via: null, pid: null },
     });
     const again = codex(home, ['start', 'codex-a']);
     expect(again.code, again.stderr).toBe(0);
     expect(again.stdout).toBe(`ccrc codex: codex-a: litellm adopted (nohup ${lit}), shim adopted (nohup ${shim})\n`);
     const s = codex(home, ['stop', 'codex-a']);
     expect(s.code, s.stderr).toBe(0);
-    expect(s.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim stopped\n');
+    expect(s.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim stopped, bridge not running\n');
     await eventually(() => !alive(lit) && !alive(shim), 'both nohup tiers to exit');
     for (const f of ['litellm.pid', 'shim.pid', 'litellm.started', 'shim.started']) {
       expect(fs.existsSync(join(d, f)), f).toBe(false);
@@ -2684,7 +2693,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     // stop: nothing of codex-a's runs, nothing is foreign, and the stale files go.
     const s = codex(home, ['stop', 'codex-a']);
     expect(s.code, s.stderr).toBe(0);
-    expect(s.stdout).toBe('ccrc codex: codex-a: litellm not running, shim not running\n');
+    expect(s.stdout).toBe('ccrc codex: codex-a: litellm not running, shim not running, bridge not running\n');
     expect(s.stderr).toBe('');
     expect(fs.existsSync(join(ad, 'litellm.pid')) || fs.existsSync(join(ad, 'shim.pid')), 'stale pidfiles kept').toBe(false);
     await bStillUp();
@@ -2755,7 +2764,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     // Every stop stops a 4 (ruling R8): it is this lane's, by its command line.
     const s = codex(home, ['stop', 'codex-a']);
     expect(s.code, s.stderr).toBe(0);
-    expect(s.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim stopped\n');
+    expect(s.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim stopped, bridge not running\n');
     await eventually(() => !alive(pid), 'the starting tier to exit');
   }, 120_000);
 
@@ -3200,7 +3209,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
       + `is held by a process that is not this lane's LiteLLM: pid ${mine} is this lane's by its command line`, 'm'));
     const s = codex(home, ['stop', 'codex-a']);
     expect(s.code, s.stderr).toBe(0);
-    expect(s.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim stopped\n');
+    expect(s.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim stopped, bridge not running\n');
     expect(s.stderr).toMatch(new RegExp(`port ${a.litellmPort} \\(codex-a's litellm tier\\) is held by a listener that is not this lane's.*ccrc left it running\\.$`, 'm'));
     await eventually(() => !alive(mine), 'this lane\'s LiteLLM to exit');
     expect(await portAccepts(a.litellmPort)).toBe(true);
@@ -3290,6 +3299,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     expect((JSON.parse(j.stdout) as { tiers: Record<string, unknown> }).tiers).toEqual({
       litellm: { state: 'foreign', via: 'nohup', pid: mine.pid },
       shim: { state: 'stopped', via: null, pid: null },
+      bridge: { state: 'stopped', via: null, pid: null },
     });
   }, 60_000);
 
@@ -3320,7 +3330,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
       }
       const st = codex(home, ['stop', 'codex-a']);
       expect(st.code, st.stderr).toBe(0);
-      expect(st.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim stopped\n');
+      expect(st.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim stopped, bridge not running\n');
       // BY EXACT UNIT NAME — each proven by its MainPID first — the front tier
       // first, and nothing of codex-b's.
       expect(stopCalls(home)).toEqual([
@@ -3428,8 +3438,9 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
       const st = codex(home, ['status', 'codex-a', '--json']);
       expect(st.code).toBe(0);
       expect(JSON.parse(st.stdout)).toEqual({
-        id: 'codex-a',
-        tiers: { litellm: { state: 'running', via: 'systemd', pid: lit }, shim: { state: 'running', via: 'systemd', pid: shim } },
+        id: 'codex-a', mode: 'litellm', upstream: 'backend', bridge: null,
+        tiers: { litellm: { state: 'running', via: 'systemd', pid: lit }, shim: { state: 'running', via: 'systemd', pid: shim },
+          bridge: { state: 'stopped', via: null, pid: null } },
         runtime: { generation: path.basename(rt.gen) },
         lane: { json: 'current' },
         auth: expect.objectContaining({ credential: 'present', state: 'ok' }),
@@ -3497,7 +3508,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
       fakeUnit(home, 'ccgpt-codex-a-litellm.service', { state: 'active', pid: lit.pid });
       const s = codex(home, ['stop', 'codex-a']);
       expect(s.code, s.stderr).toBe(0);
-      expect(s.stdout).toBe('ccrc codex: codex-a: litellm foreign, shim foreign\n');
+      expect(s.stdout).toBe('ccrc codex: codex-a: litellm foreign, shim foreign, bridge foreign\n');
       for (const t of ['shim', 'litellm']) {
         expect(s.stderr).toMatch(new RegExp(`the unit ccgpt-codex-a-${t}\\.service is active but is not codex-a's ${t} tier.*ccrc left it running\\.$`, 'm'));
       }
@@ -3528,7 +3539,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
       expect(r.code, r.stderr).toBe(0);
       expect(r.stdout).toMatch(/^ccrc codex: codex-a: litellm started \(systemd /);
       expect(s.code, s.stderr).toBe(0);
-      expect(s.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim stopped\n');
+      expect(s.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim stopped, bridge not running\n');
       expect(await portAccepts(a.litellmPort)).toBe(false);
       expect(await laneAnswer(a.proxyPort)).toBeNull();
     }, 120_000);
@@ -3565,7 +3576,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
       failUnitStop(home, unit, false);
       const s2 = codex(home, ['stop', 'codex-a']);
       expect(s2.code, s2.stderr).toBe(0);
-      expect(s2.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim not running\n');
+      expect(s2.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim not running, bridge not running\n');
       await eventually(() => !alive(mine), 'this lane\'s LiteLLM unit process to exit');
       expect(await portAccepts(a.litellmPort)).toBe(true);
     }, 120_000);
@@ -3960,4 +3971,398 @@ describe.skipIf(!pythonOrSkip())('ccrc codex login — the auth library signs th
       await srv.close();
     }
   });
+});
+
+// ── codex bridge Stage 2, Task 11: the `bridge` tier ─────────────────────────────────────────────────────────────
+// A `direct` lane runs ONE tier, `bridge`: the shim file in `direct` mode, under the system `python3`, on the shim's
+// port and unit, its key read in process from runtime.env (plan 2026-10-22, Task 11; spec 2026-10-15 §2.1, D18-D20).
+// The two modes share that port and unit, so on a healthy lane the other mode's tier reads rc 2 (`listener-other-
+// mode` or `unit-unproven`), which every walk reads as `not running` once the lane's own mode tier has answered 0 or
+// 4 (`_codex_tier_is_other_mode`). Every bridge a case starts gets loopback upstream and auth bases (ghContainedEnv,
+// forwarded by `_codex_start_tier`), and its refresher's first tick (60 s) never comes inside a case.
+/** The `origin/main` commit wave 2 was cut from: the build a rollback returns to (plan, "Before Task 1"). */
+const WAVE2_BASE = 'c5c3e9cdeae8f091e7dd2da195fc6ebc5c15dd2d';
+
+describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11)', () => {
+  const PY_ABS = PY === null ? '' : fs.realpathSync(PY);
+  interface BBox { home: string; proxyPort: number; litellmPort: number; shimFile: string }
+
+  /** `ccrc codex <args>` as the launcher runs it, with a 20 s readiness bound. `drop` names variables taken out of the
+   *  environment (never a case that starts a real process: a bridge always gets its loopback bases). */
+  function cx(home: string, args: string[], extra: NodeJS.ProcessEnv = {}): Result {
+    const r = spawnSync(BASH, [join(home, 'ccrc', 'ccd', 'ccrc'), 'codex', ...args], {
+      env: env(home, { CCRC_CODEX_READY_S: '20', ...extra }), encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'], timeout: 150_000,
+    });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  }
+  const statusJson = (home: string): Record<string, unknown> => {
+    const r = cx(home, ['status', 'codex-a', '--json']);
+    expect(r.code, r.stderr).toBe(0);
+    return JSON.parse(r.stdout) as Record<string, unknown>;
+  };
+  const tiersOf = (home: string): Record<string, { state: string; via: string | null; pid: number | null }> =>
+    statusJson(home)['tiers'] as Record<string, { state: string; via: string | null; pid: number | null }>;
+  const keyOf = (home: string): string =>
+    /^LITELLM_MASTER_KEY=(sk-[0-9a-f]{48})$/m.exec(fs.readFileSync(join(laneDir(home, 'codex-a'), 'runtime.env'), 'utf8'))![1]!;
+  const STOPPED = { state: 'stopped', via: null, pid: null };
+
+  /** One lane, `codex-a`, in `mode` (default `direct`): the box's tree with a COPY of the package beside its ccrc
+   *  (where `_codex_bridge_dir` names it, so a case may change it), the shipped shim and auth library placed, a class
+   *  registry and lane.json through the real verb, a fresh backend credential, the fake runtime unless `runtime` is
+   *  false, and a litellm.yaml on a `litellm` lane. Its cleanup is the real product stop. */
+  async function bridgeBox(o: {
+    userManager: boolean; mode?: 'litellm' | 'direct'; upstream?: 'backend' | 'siwc'; runtime?: boolean;
+  }): Promise<BBox> {
+    const home = box('ccrc-codex-bridge-', { userManager: o.userManager });
+    const { shimFile } = plantCodexBins(home);
+    fs.cpSync(join(REPO, 'ccd', 'codexbridge'), join(home, 'ccrc', 'ccd', 'codexbridge'),
+      { recursive: true, filter: (src) => !src.includes('__pycache__') });
+    const [proxyPort, litellmPort] = await freePorts(2);
+    codexRoster(home, [{
+      id: 'codex-a', proxyPort: proxyPort!, litellmPort: litellmPort!,
+      ...(o.mode === 'litellm' ? {} : { bridge: 'direct' as const }),
+      ...(o.upstream !== undefined ? { upstream: o.upstream } : {}),
+    }]);
+    if (o.runtime !== false) plantFakeRuntime(home);
+    registerLaneCleanup(home, 'codex:codex-a', () => { cx(home, ['stop', 'codex-a']); });
+    const init = ccrc(home, ['models', 'codex-a', 'init', 'codex']);
+    expect(init.code, init.stderr).toBe(0);
+    const authDir = join(home, codexAuthDir('codex-a'));
+    fs.mkdirSync(authDir, { recursive: true, mode: 0o700 });
+    plantBackendCredential(authDir);
+    if (o.mode === 'litellm') plantLaneConfig(home, 'codex-a');
+    return { home, proxyPort: proxyPort!, litellmPort: litellmPort!, shimFile };
+  }
+
+  /** A process whose command line is this lane's LiteLLM tier's (`--config <litellm.yaml>`), binding nothing: a
+   *  retired tier still starting, held by `litellm.pid` (L16's shape, reparented through nohup so a stop reaps it). */
+  async function plantRetiredLitellm(home: string): Promise<number> {
+    const yaml = plantLaneConfig(home, 'codex-a');
+    const plant = spawnSync(BASH, ['-c',
+      'nohup "$0" -B -c "import time; time.sleep(600)" --config "$1" </dev/null >/dev/null 2>&1 & echo $!',
+      PY!, yaml], { encoding: 'utf8' });
+    const pid = Number(plant.stdout.trim());
+    expect(pid > 1, plant.stderr).toBe(true);
+    fs.writeFileSync(join(laneDir(home, 'codex-a'), 'litellm.pid'), `${pid}\n`);
+    await eventually(() => psArgs(pid).includes(`--config ${yaml}`), 'the planted tier to exec');
+    return pid;
+  }
+
+  it('a direct lane starts the bridge tier only, on the shim\'s port and unit, with the key read in process', async () => {
+    const { home, proxyPort, shimFile } = await bridgeBox({ userManager: true });
+    const catalogue = join(home, '.ccrc', 'models', 'codex-a.json');
+    writeBridgeCatalogue(catalogue, BRIDGE_MODELS);
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    const units = laneJson(home, 'codex-a')['units'] as { litellm: string; shim: string };
+    expect(r.stdout).toBe(`ccrc codex: codex-a: bridge started (systemd ${units.shim})\n`);
+    const runs = systemdRunArgv(home);
+    expect(runs, 'one unit, the shim\'s name, and nothing for LiteLLM').toHaveLength(1);
+    const argv = runs[0]!;
+    expect(argv).toContain(`--unit=${units.shim}`);
+    // The key never reaches the unit: no EnvironmentFile, no variable, no value.
+    expect(argv.filter((x) => x.includes('EnvironmentFile'))).toEqual([]);
+    expect(argv.join('\n')).not.toMatch(/LITELLM_MASTER_KEY|sk-[0-9a-f]{48}/);
+    expect(argv).toEqual(expect.arrayContaining([
+      '--setenv=CCGPT_BRIDGE=direct', '--setenv=CCGPT_ACCOUNT_ID=codex-a', `--setenv=CCGPT_PROXY_PORT=${proxyPort}`,
+      `--setenv=CCGPT_BRIDGE_DIR=${join(home, 'ccrc', 'ccd', 'codexbridge')}`,
+      `--setenv=CCGPT_LANE_DIR=${laneDir(home, 'codex-a')}`, `--setenv=CCRC_CODEX_AUTH_LIB=${authLib(home)}`,
+      '--setenv=CCGPT_CCRC_VERSION=dev', `--setenv=CCGPT_CATALOGUE=${catalogue}`, `--setenv=HOME=${home}`,
+    ]));
+    const cmd = argv.slice(argv.indexOf('--') + 1);
+    expect(path.isAbsolute(cmd[0]!), cmd[0]).toBe(true);
+    expect(cmd.slice(1)).toEqual(['-I', shimFile, '--ccrc-bridge=direct', '--ccrc-lane=codex-a']);
+    const lane = await laneAnswer(proxyPort);
+    expect(lane?.status).toBe(200);
+    expect(JSON.parse(lane!.body)).toEqual({ lane: 'codex-a', mode: 'direct' });
+    // The key was read in process: refused without it, served with it.
+    const url = `http://127.0.0.1:${proxyPort}/v1/models`;
+    expect((await fetch(url, { signal: AbortSignal.timeout(5000) })).status).toBe(401);
+    const ok = await fetch(url, { headers: { 'x-api-key': keyOf(home) }, signal: AbortSignal.timeout(5000) });
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { data: Array<{ id: string }> }).data.map((m) => m.id)).toEqual([...BRIDGE_MODELS]);
+    const rec = JSON.parse(fs.readFileSync(join(laneDir(home, 'codex-a'), 'bridge.started'), 'utf8')) as Record<string, string>;
+    expect(Object.keys(rec)).toEqual(['interpreter', 'code', 'bridge', 'mode']);
+    expect(rec).toMatchObject({ interpreter: cmd[0], code: sha256(shimFile), mode: 'direct' });
+    expect(rec['bridge']).toMatch(/^[0-9a-f]{64}$/);
+    for (const f of ['litellm.started', 'shim.started', 'litellm.pid', 'shim.pid']) {
+      expect(fs.existsSync(join(laneDir(home, 'codex-a'), f)), f).toBe(false);
+    }
+  }, 120_000);
+
+  itLinux('start refuses a running litellm tier on a direct lane', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    expect(lib(home, '_codex_runtime_env_ensure codex-a').code).toBe(0);
+    const pid = await plantRetiredLitellm(home);
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toMatch(/^ccrc codex: retired-tier-running: codex-a runs in direct mode, and its litellm tier .*Nothing was started\.$/m);
+    expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'bridge.pid')), 'a bridge was started beside it').toBe(false);
+    expect(alive(pid), 'start stopped the retired tier (that is the stop\'s, and the switch\'s)').toBe(true);
+  }, 120_000);
+
+  it.each([false, true])('start, status and stop on a healthy direct lane do not misfire (user manager: %s)', async (um) => {
+    const { home, proxyPort } = await bridgeBox({ userManager: um });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^ccrc codex: codex-a: bridge started \((systemd|nohup) [^)]+\)\n$/);
+    const again = cx(home, ['start', 'codex-a']);
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout).toMatch(/^ccrc codex: codex-a: bridge adopted \((systemd|nohup) [^)]+\)\n$/);
+    expect(again.stderr).toBe('');
+    const st = statusJson(home);
+    expect([st['mode'], st['upstream']]).toEqual(['direct', 'backend']);
+    const tiers = st['tiers'] as Record<string, { state: string }>;
+    expect(tiers['bridge']!.state).toBe('running');
+    expect([tiers['shim'], tiers['litellm']]).toEqual([STOPPED, STOPPED]);
+    const text = cx(home, ['status', 'codex-a']);
+    expect(text.stdout).toMatch(/^ccrc codex: codex-a: bridge running \(/m);
+    expect(text.stdout).not.toMatch(/FOREIGN|UNPROVEN|UNKNOWN/);
+    const s = cx(home, ['stop', 'codex-a']);
+    expect(s.code, s.stderr).toBe(0);
+    expect(s.stdout).toBe('ccrc codex: codex-a: litellm not running, shim not running, bridge stopped\n');
+    expect(s.stderr).toBe('');
+    await eventually(async () => !(await portAccepts(proxyPort)), 'the bridge to stop listening');
+  }, 120_000);
+
+  it('a litellm lane\'s running shim is not a bridge', async () => {
+    const { home } = await bridgeBox({ userManager: false, mode: 'litellm' });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^ccrc codex: codex-a: litellm started \(nohup \d+\), shim started \(nohup \d+\)\n$/);
+    const st = statusJson(home);
+    expect(st['mode']).toBe('litellm');
+    const tiers = st['tiers'] as Record<string, { state: string }>;
+    expect([tiers['litellm']!.state, tiers['shim']!.state]).toEqual(['running', 'running']);
+    expect(tiers['bridge']).toEqual(STOPPED);
+    const text = cx(home, ['status', 'codex-a']);
+    expect(text.stdout).toMatch(/^ccrc codex: codex-a: bridge stopped$/m);
+    expect(text.stdout).not.toMatch(/FOREIGN|UNPROVEN|UNKNOWN/);
+    const s = cx(home, ['stop', 'codex-a']);
+    expect(s.code, s.stderr).toBe(0);
+    expect(s.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim stopped, bridge not running\n');
+    expect(s.stderr).toBe('');
+  }, 120_000);
+
+  it('today\'s build refuses a running bridge instead of adopting it', async () => {
+    // The build a rollback returns to, read from the clone: FAIL, never skip, when it is absent.
+    const has = spawnSync('git', ['-C', REPO, 'cat-file', '-e', `${WAVE2_BASE}^{commit}`], { encoding: 'utf8' });
+    expect(has.status, `${WAVE2_BASE} is not in this clone: fetch it, this case never skips`).toBe(0);
+    const { home, proxyPort } = await bridgeBox({ userManager: false });
+    plantLaneConfig(home, 'codex-a');
+    const d = laneDir(home, 'codex-a');
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    const pid = Number(/^ccrc codex: codex-a: bridge started \(nohup (\d+)\)$/m.exec(r.stdout)?.[1]);
+    expect(alive(pid), r.stdout).toBe(true);
+    const old = spawnSync('git', ['-C', REPO, 'show', `${WAVE2_BASE}:ccd/ccrc`], { maxBuffer: 64 << 20 });
+    expect(old.status, String(old.stderr)).toBe(0);
+    const cur = join(home, 'ccrc', 'ccd', 'ccrc');
+    fs.rmSync(cur);
+    fs.writeFileSync(cur, old.stdout, { mode: 0o755 });
+    try {
+      const o = cx(home, ['start', 'codex-a']);
+      expect(o.code, o.stdout).toBe(1);
+      expect(o.stderr).toMatch(new RegExp(`^ccrc codex: port-foreign: port ${proxyPort} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: its identity check failed\\. .*Nothing was started\\.$`, 'm'));
+      for (const f of ['litellm.pid', 'shim.pid', 'litellm.started', 'shim.started']) expect(fs.existsSync(join(d, f)), f).toBe(false);
+      const os = statusJson(home);
+      expect((os['tiers'] as Record<string, { state: string }>)['shim']!.state).toBe('foreign');
+      expect(alive(pid)).toBe(true);
+    } finally {
+      fs.rmSync(cur);
+      fs.symlinkSync(join(REPO, 'ccd', 'ccrc'), cur);
+    }
+  }, 120_000);
+
+  itLinux('the bridge\'s argv proves the bridge and not today\'s shim', async () => {
+    const home = box('ccrc-codex-bridge-argv-');
+    // The placed shim file is a sleeper here, so a process can hold a bridge's exact argv and serve nothing; and
+    // `python3` on PATH is a fixture link, so the interpreter `_codex_python` names is not the one `ps` prints.
+    const shim = join(home, '.local', 'bin', 'ccgpt-proxy.py');
+    fs.writeFileSync(shim, 'import time\ntime.sleep(60)\n', { mode: 0o755 });
+    fs.symlinkSync(PY_ABS, join(home, '.local', 'bin', 'python3'));
+    const c = spawn(PY_ABS, ['-I', shim, '--ccrc-bridge=direct', '--ccrc-lane=codex-a'], { stdio: 'ignore' });
+    trackChild(home, c);
+    await eventually(() => psArgs(c.pid!).includes('--ccrc-bridge=direct'), 'the sleeper to exec');
+    expect(psArgs(c.pid!).trim().startsWith(`${PY_ABS} -I ${shim} `), psArgs(c.pid!)).toBe(true);
+    const r = lib(home, `for t in bridge shim; do _codex_pid_is_tier codex-a "$t" ${c.pid}; echo "$t=$?"; done`);
+    expect(r.stdout, r.stderr).toBe('bridge=0\nshim=1\n');
+    // The build a rollback returns to never proves it as its shim either.
+    const old = spawnSync('git', ['-C', REPO, 'show', `${WAVE2_BASE}:ccd/ccrc`], { maxBuffer: 64 << 20 });
+    expect(old.status, String(old.stderr)).toBe(0);
+    const base = join(home, 'ccrc', 'ccd', 'ccrc-base');
+    fs.writeFileSync(base, old.stdout, { mode: 0o755 });
+    const b = spawnSync(BASH, ['-c', `. "${base}"; _codex_pid_is_tier codex-a shim ${c.pid}; echo "shim=$?"`],
+      { env: env(home), encoding: 'utf8', timeout: 15_000 });
+    expect(b.stdout, b.stderr).toBe('shim=1\n');
+  });
+
+  it('a changed package makes a running bridge stale', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    const stale = (): string => lib(home, '_codex_tier_stale codex-a bridge; echo "rc=$?"').stdout;
+    expect(stale()).toBe('rc=1\n');
+    fs.appendFileSync(join(home, 'ccrc', 'ccd', 'codexbridge', 'stats.py'), '\n# fixture: the next release of the package\n');
+    expect(stale()).toBe('rc=0\n');
+  }, 120_000);
+
+  itLinux('stop is mode-blind', async () => {
+    const { home, proxyPort } = await bridgeBox({ userManager: false });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    // A retired LiteLLM tier beside the bridge: stop stops both, whatever the mode says.
+    const lit = await plantRetiredLitellm(home);
+    const s = cx(home, ['stop', 'codex-a']);
+    expect(s.code, s.stderr).toBe(0);
+    expect(s.stdout).toBe('ccrc codex: codex-a: litellm stopped, shim not running, bridge stopped\n');
+    await eventually(() => !alive(lit), 'the retired tier to exit');
+    // A lane.json whose mode cannot be read: the stop walks bridge, shim, litellm and still stops the bridge.
+    const again = cx(home, ['start', 'codex-a']);
+    expect(again.code, again.stderr).toBe(0);
+    const lj = join(laneDir(home, 'codex-a'), 'lane.json');
+    fs.writeFileSync(lj, JSON.stringify({ ...laneJson(home, 'codex-a'), bridge: 'nope' }));
+    const s2 = cx(home, ['stop', 'codex-a']);
+    expect(s2.code, s2.stderr).toBe(0);
+    expect(s2.stdout).toBe('ccrc codex: codex-a: litellm not running, shim not running, bridge stopped\n');
+    await eventually(async () => !(await portAccepts(proxyPort)), 'the bridge to stop listening');
+  }, 120_000);
+
+  it('the nohup stop waits at least DRAIN_S plus the margin', () => {
+    const home = box('ccrc-codex-bridge-wait-');
+    const r = lib(home, 'for t in litellm shim bridge; do printf "%s=%s\\n" "$t" "$(_codex_stop_wait_s "$t")"; done');
+    expect(r.stdout, r.stderr).toBe('litellm=10\nshim=10\nbridge=10\n');
+    // The package's own two constants, read from the package itself.
+    const c = spawnSync(PY_ABS, ['-I', '-c', [
+      'import sys', 'sys.dont_write_bytecode = True', 'sys.path.insert(0, sys.argv[1])',
+      'from codexbridge import server', 'print(server.DRAIN_S + server.STOP_MARGIN_S)'].join('; '),
+    join(REPO, 'ccd')], { encoding: 'utf8' });
+    expect(c.status, c.stderr).toBe(0);
+    expect(10).toBeGreaterThanOrEqual(Number(c.stdout.trim()));
+    // The nohup arm's TERM-to-KILL wait is that function's answer, never a literal of its own.
+    const m = /^_codex_stop_tier\(\) \{[\s\S]*?\n\}$/m.exec(fs.readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'));
+    expect(m?.[0]).toMatch(/while kill -0 "\$pid" 2>\/dev\/null && \[ "\$n" -lt "\$\(_codex_stop_wait_s "\$tier"\)" \]; do sleep 1/);
+  });
+
+  it('status --json names the mode and the bridge\'s stats', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    expect(statusJson(home)['bridge']).toBeNull();
+    const doc = {
+      version: 1, lane: 'codex-a', since: '2026-10-20T00:00:00.000Z', startedAt: '2026-10-24T09:00:00.000Z',
+      updatedAt: '2026-10-24T10:00:00.000Z', routes: {},
+      refusals: { 'backend/model-6.1-alpha': { tokens: 410000, window: 400000, at: '2026-10-24T09:30:00.000Z', estimated: true } },
+      outcomes: { ok: 3, '4xx': 1 }, names: {}, unexplained: { event: ['response.fx_new'] },
+      usageHeaders: null, lastUpstreamRequestId: 'req_fx1',
+    };
+    fs.writeFileSync(join(laneDir(home, 'codex-a'), 'bridge.stats.json'), JSON.stringify(doc), { mode: 0o600 });
+    const st = statusJson(home);
+    expect([st['mode'], st['upstream']]).toEqual(['direct', 'backend']);
+    expect(st['bridge']).toEqual({
+      statsAt: doc.updatedAt, lastUpstreamRequestId: 'req_fx1', refusals: doc.refusals, outcomes: doc.outcomes,
+      unexplained: doc.unexplained,
+    });
+    expect((st['tiers'] as Record<string, unknown>)['bridge']).toEqual(STOPPED);
+    fs.writeFileSync(join(laneDir(home, 'codex-a'), 'bridge.stats.json'), 'not json');
+    expect(statusJson(home)['bridge']).toBeNull();
+  }, 60_000);
+
+  it('removal reaps the bridge files, the markers and the recordings directory', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    const d = laneDir(home, 'codex-a');
+    const files = ['bridge.started', 'bridge.pid', 'bridge-instructions', 'record-streams', 'liveprobe-allowed',
+      'liveprobe.count', 'bridge.stats.json', 'reasoning.sqlite', 'reasoning.sqlite-wal', 'reasoning.sqlite-shm'];
+    for (const f of files) fs.writeFileSync(join(d, f), 'fixture\n');
+    fs.mkdirSync(join(d, 'recordings', 'nested'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(join(d, 'recordings', 'nested', 'r1.sse'), 'event: fixture\n\n');
+    const r = lib(home, '_codex_reap_files codex-a; echo "rc=$?"');
+    expect(r.stdout, r.stderr).toBe('rc=0\n');
+    expect(fs.existsSync(d), fs.existsSync(d) ? fs.readdirSync(d).join(' ') : '').toBe(false);
+    // A symlinked recordings directory, and what it points at, are left alone.
+    const again = lib(home, '_codex_lane_json_ensure codex-a');
+    expect(again.code, again.stderr).toBe(0);
+    const elsewhere = join(home, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    fs.writeFileSync(join(elsewhere, 'keep.sse'), 'event: fixture\n\n');
+    fs.symlinkSync(elsewhere, join(d, 'recordings'));
+    const r2 = lib(home, '_codex_reap_files codex-a; echo "rc=$?"');
+    expect(r2.stdout, r2.stderr).toBe('rc=0\n');
+    expect(fs.lstatSync(join(d, 'recordings')).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(join(elsewhere, 'keep.sse'), 'utf8')).toBe('event: fixture\n\n');
+    expect(fs.existsSync(join(d, 'lane.json'))).toBe(false);
+  }, 60_000);
+
+  it('a bridge started through ccrc codex start under ghContainedEnv gets both bases', async () => {
+    const { home } = await bridgeBox({ userManager: true });
+    const e = env(home);
+    const up = e['CCGPT_BRIDGE_UPSTREAM_BASE'];
+    const auth = e['CCRC_CODEX_AUTH_BASE'];
+    expect(up, 'ghContainedEnv set no upstream base').toMatch(/^http:\/\/127\.0\.0\.1:\d+/);
+    expect(auth, 'ghContainedEnv set no auth base').toMatch(/^http:\/\/127\.0\.0\.1:\d+/);
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(systemdRunArgv(home)[0]).toEqual(expect.arrayContaining([
+      `--setenv=CCGPT_BRIDGE_UPSTREAM_BASE=${up!}`, `--setenv=CCRC_CODEX_AUTH_BASE=${auth!}`]));
+  }, 120_000);
+
+  it('with neither base set, neither is forwarded', async () => {
+    // `_codex_start_tier` alone, its platform helper a recorder that starts nothing: with neither variable set, no
+    // bridge may run at all (it would name the live endpoints), so nothing does.
+    const { home } = await bridgeBox({ userManager: false });
+    const rec = '_svc_run_supervised() { printf \'%s\\n\' "$@" > "$HOME/svc-bridge"; echo "nohup 999999"; }';
+    const r = lib(home, `${rec}\nunset CCGPT_BRIDGE_UPSTREAM_BASE CCRC_CODEX_AUTH_BASE\n_codex_start_tier codex-a bridge`);
+    expect(r.code, r.stderr).toBe(0);
+    const argv = fs.readFileSync(join(home, 'svc-bridge'), 'utf8').split('\n');
+    const pairs = argv.slice(0, argv.indexOf('--'));
+    expect(pairs).toContain('CCGPT_BRIDGE=direct');
+    expect(pairs.filter((p) => /^(CCGPT_BRIDGE_UPSTREAM_BASE|CCRC_CODEX_AUTH_BASE)=/.test(p))).toEqual([]);
+    fs.rmSync(join(laneDir(home, 'codex-a'), 'bridge.pid'), { force: true });
+  }, 60_000);
+
+  it('siwc is refused upstream-unsupported', async () => {
+    const { home } = await bridgeBox({ userManager: false, upstream: 'siwc' });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc codex: upstream-unsupported: .*siwc.*Stage 3.*Nothing was started\.$/m);
+    expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'bridge.pid'))).toBe(false);
+  }, 60_000);
+
+  it('python3 below 3.9 is refused', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    // A python3 that says 3.8 when asked its version and is the real one for everything else (the auth library).
+    fs.writeFileSync(join(home, '.local', 'bin', 'python3'),
+      `#!/bin/bash\ncase "$*" in *version_info*) echo 3.8; exit 0 ;; esac\nexec "${PY_ABS}" "$@"\n`, { mode: 0o755 });
+    expect(lib(home, '_codex_python >/dev/null; echo "rc=$?"').stdout).toBe('rc=1\n');
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc codex: python-too-old: .*3\.8.*3\.9/m);
+    expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'bridge.pid'))).toBe(false);
+  }, 60_000);
+
+  it('a direct lane starts and reads not-stale with no LiteLLM runtime', async () => {
+    const { home, proxyPort } = await bridgeBox({ userManager: false, runtime: false });
+    expect(spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['python'], { env: env(home) }).status,
+      'the fixture planted a runtime').not.toBe(0);
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse((await laneAnswer(proxyPort))!.body)).toEqual({ lane: 'codex-a', mode: 'direct' });
+    expect(lib(home, '_codex_tier_stale codex-a bridge; echo "rc=$?"').stdout).toBe('rc=1\n');
+  }, 120_000);
+
+  it('a new gateway key under a running bridge restarts the bridge tier', async () => {
+    const { home, proxyPort } = await bridgeBox({ userManager: false });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    const was = Number(/bridge started \(nohup (\d+)\)/.exec(r.stdout)?.[1]);
+    fs.writeFileSync(join(laneDir(home, 'codex-a'), 'runtime.env'), 'LITELLM_MASTER_KEY=not-a-key\n', { mode: 0o600 });
+    const again = cx(home, ['start', 'codex-a']);
+    expect(again.code, again.stderr).toBe(0);
+    const now = Number(/^ccrc codex: codex-a: bridge started \(nohup (\d+)\)$/m.exec(again.stdout)?.[1]);
+    expect(now > 1 && now !== was, again.stdout).toBe(true);
+    await eventually(() => !alive(was), 'the old bridge to exit');
+    const ok = await fetch(`http://127.0.0.1:${proxyPort}/v1/models`,
+      { headers: { 'x-api-key': keyOf(home) }, signal: AbortSignal.timeout(5000) });
+    expect(ok.status, 'the bridge serving is not the one started with the new key').not.toBe(401);
+  }, 120_000);
 });

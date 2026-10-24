@@ -7445,12 +7445,20 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
 #   - a LiteLLM tier down under a live session is a WARN (2b-2's hazard: a
 #     tier that died after a start that wrote stays down until the next
 #     start, D-3716).
+# THE LANE'S MODE (codex-bridge Stage 2, Task 11): the walk is the lane's own
+# mode's tiers (`_codex_mode_tiers` of `_codex_lane_mode`), never
+# `$CODEX_TIERS`; a lane.json naming no readable mode is walked mode-blind,
+# `bridge shim litellm`, and its own row (the lane.json check) says why. The
+# other mode's tier reading rc 2 on a healthy lane is `not running`
+# (`_codex_tier_is_other_mode`), never foreign. The per-mode rows are Task 13's.
 _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
-  local id="$1" tier q word own lq=3 sq=3 unread='' refix=''
+  local id="$1" tier q word own lq=3 sq=3 unread='' refix='' mode walk
   local -a words=()
-  for tier in $CODEX_TIERS; do
+  if mode="$(_codex_lane_mode "$id" 2>/dev/null)"; then walk="$(_codex_mode_tiers "$mode")"; else walk='bridge shim litellm'; fi
+  for tier in $walk; do
     CX_LISTEN_WHY=''
     _codex_tier_ours "$id" "$tier" 2>/dev/null; q=$?
+    if _codex_tier_is_other_mode "$id" "$tier" "$q"; then q=1; fi
     case "$q" in
       0|4)
         word="$tier running"; [ "$q" -eq 4 ] && word="$tier starting"
@@ -7485,7 +7493,7 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
         _dr_cx_warn "$id's $tier tier could not be measured${CX_LISTEN_WHY:+ ($CX_LISTEN_WHY)} — unmeasured, never read as running or as stopped" \
           "run: ccrc codex status $id — it asks the same question and says what it could see" ;;
     esac
-    if [ "$tier" = litellm ]; then lq="$q"; else sq="$q"; fi
+    case "$tier" in litellm) lq="$q" ;; shim) sq="$q" ;; esac
   done
   case "$lq:$sq" in
     [04]:1)

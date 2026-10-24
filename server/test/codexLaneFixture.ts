@@ -86,6 +86,10 @@ export interface CodexLaneRow {
   /** Default `codex`. `none` exists so a suite can build a roster on which the
    *  telemetry-keyed `CCRC_CODEX_BACKEND` and `exec.kind` disagree. */
   telemetry?: 'codex' | 'none';
+  /** `exec.bridge` (codex bridge Stage 2, Task 10); absent unless a case names it, so every older roster is unchanged. */
+  bridge?: 'litellm' | 'direct';
+  /** `exec.upstream` (Task 10); absent unless a case names it. */
+  upstream?: 'backend' | 'siwc';
 }
 
 /** Writes `~/.ccrc/accounts.json` — the upstream `claude` row, one
@@ -116,6 +120,8 @@ export function codexRoster(
         exec: {
           kind: 'codex', provider: 'openai',
           proxyPort: l.proxyPort, litellmPort: l.litellmPort, authDir: codexAuthDir(l.id),
+          ...(l.bridge !== undefined ? { bridge: l.bridge } : {}),
+          ...(l.upstream !== undefined ? { upstream: l.upstream } : {}),
         },
         homeAble: false, telemetry: l.telemetry ?? 'codex',
       })),

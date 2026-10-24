@@ -2055,6 +2055,9 @@ function runUninstCodex(c: {
    *  step reads it through `_codex_tier_is_our_handle` and names a 2 through
    *  `_codex_foreign_what`. */
   oursWhy?: Record<string, string>;
+  /** Codex bridge Stage 2, Task 11: each lane's mode, as `_codex_lane_mode` answers it (`litellm` when unnamed);
+   *  `null` is a lane.json naming no readable mode, rc 1. The step's tier order is `_codex_stop_order`'s (real). */
+  modes?: Record<string, 'litellm' | 'direct' | null>;
 }): {
   code: number; stdout: string; stderr: string; calls: string[]; home: string; kept: Record<string, string>;
   /** `CX_LOCK_FD` and `CX_LOCK_ID` after the step returned: empty unless a
@@ -2099,6 +2102,20 @@ function runUninstCodex(c: {
     ccrcLine(/^_codex_lane_dir\(\).*$/m, '_codex_lane_dir'),
     ccrcFunction('_codex_tier_is_our_handle'),
     ccrcFunction('_uninst_codex_by_hand'),
+    // Codex bridge Stage 2, Task 11: the stop order and the other-mode reading, REAL; the mode, stubbed by table.
+    [
+      '_codex_lane_mode() {',
+      '  case "${1:-}" in',
+      ...Object.entries(c.modes ?? {}).map(([id, m]) => (m === null
+        ? `    ${id}) echo "ccrc codex: lane-mode-unreadable: fixture" >&2; return 1 ;;`
+        : `    ${id}) printf '%s\\n' ${m} ;;`)),
+      "    *) printf 'litellm\\n' ;;",
+      '  esac',
+      '}',
+    ].join('\n'),
+    ccrcFunction('_codex_mode_tiers'),
+    ccrcFunction('_codex_stop_order'),
+    ccrcFunction('_codex_tier_is_other_mode'),
     '_codex_foreign_what() { CX_FOREIGN_CODE=fixture-code; CX_FOREIGN_WHAT="fixture holder of $1\'s $2 tier (${CX_TIER_WHY:-no why})"; CX_FOREIGN_FIX=\'fixture remedy.\'; }',
     lockStub(c.lockRefuse ?? [], c.lockNoFlock ?? []),
     recordingStub('_codex_tier_ours', c.ours, 1, {}, c.oursWhy ?? {}),
@@ -2177,7 +2194,7 @@ describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)'
     const r = runUninstCodex({ ours: { 'codex-a litellm': 2 }, oursWhy: { 'codex-a litellm': 'listener-other-process' } });
     expect(r.code).toBe(0);
     expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim',
-      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', UNLOCK_A]);
+      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', '_codex_tier_ours codex-a bridge', UNLOCK_A]);
     expect(r.stdout).toMatch(/— stopped: codex-a litellm; left alone: none; not stopped: none; /);
   });
 
@@ -2188,7 +2205,7 @@ describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)'
   it('a unit whose identity is only unproven is left running, named in _codex_foreign_what\'s words, with the way to finish by hand — never "not this lane" (review A2/E2)', () => {
     const r = runUninstCodex({ ours: { 'codex-a litellm': 2 }, oursWhy: { 'codex-a litellm': 'unit-unproven' } });
     expect(r.code).toBe(0);
-    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_tier_ours codex-a litellm', UNLOCK_A]);
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_tier_ours codex-a litellm', '_codex_tier_ours codex-a bridge', UNLOCK_A]);
     expect(r.stdout).toContain('uninstall: codex: codex-a litellm: left alone — fixture holder of codex-a\'s litellm tier (unit-unproven), '
       + 'and an uninstall stops only what it can prove ccrc started. It may be this lane\'s own tier between two of its restarts; '
       + `once uninstall finishes: ${byHand('codex-a', 'litellm')}\n`);
@@ -2227,25 +2244,25 @@ describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)'
     expect(src).toMatch(/rm -rf -- "\$\{rt:\?[^}]*\}"/);
   });
 
-  it('the hardcoded front-first tier set is CODEX_TIERS reversed, so a third tier cannot be silently missed', () => {
-    // Fix round 1 (spec-6): `local -a tiers=(shim litellm)` is a second
-    // hand-kept list of the tiers, in PF-18's stop order — the same
-    // precedent `_codex_stop_lane` sets. This pin catches a future
-    // CODEX_TIERS that grows (or changes) without this step following: the
-    // SET must match (a missing/extra tier reds the sorted-equality check),
-    // and the ORDER must be the exact reverse of CODEX_TIERS's own
-    // declaration (litellm first, for its "litellm <word>, shim <word>"
-    // answer — the opposite of a stop sequence).
+  it('the front-first tier order is _codex_stop_order\'s, whose mode-blind order is CODEX_TIERS reversed, so a tier cannot be silently missed', () => {
+    // Fix round 1 (spec-6) pinned a hand-kept `local -a tiers=(shim litellm)`
+    // against CODEX_TIERS. Codex bridge Stage 2, Task 11 retired that second
+    // list: the step reads `_codex_stop_order`, the one helper
+    // `_codex_stop_lane` reads too. Its mode-blind order (a lane.json naming
+    // no readable mode) must be EXACTLY CODEX_TIERS reversed, and each mode's
+    // order the same SET, so a fourth tier added to CODEX_TIERS alone reds.
     const codexTiersLine = ccrcLine(/^CODEX_TIERS=.*$/m, 'CODEX_TIERS=');
     const m1 = /^CODEX_TIERS="([^"]*)"$/.exec(codexTiersLine);
     expect(m1, `CODEX_TIERS= is not the expected quoted-string shape: ${codexTiersLine}`).toBeTruthy();
     const declared = m1![1]!.trim().split(/\s+/).filter(Boolean);
     const src = ccrcFunction('_uninst_codex');
-    const m2 = /local -a tiers=\(([^)]*)\)/.exec(src);
-    expect(m2, '_uninst_codex has no hardcoded `local -a tiers=(...)`').toBeTruthy();
-    const hardcoded = m2![1]!.trim().split(/\s+/).filter(Boolean);
-    expect(hardcoded.slice().sort()).toEqual(declared.slice().sort());
-    expect(hardcoded).toEqual([...declared].reverse());
+    expect(src, '_uninst_codex keeps a hand-kept tier list').not.toMatch(/local -a tiers=\([a-z]/);
+    expect(src).toMatch(/read -r -a tiers <<<"\$\(_codex_stop_order "\$id"\)"/);
+    const order = ccrcFunction('_codex_stop_order');
+    const words = [...order.matchAll(/printf '([a-z ]+)\\n'/g)].map((m) => m[1]!.split(' '));
+    expect(words.length, order).toBe(3);
+    for (const w of words) expect(w.slice().sort()).toEqual(declared.slice().sort());
+    expect(words.at(-1), 'the mode-blind order is the last printf').toEqual([...declared].reverse());
   });
 
   it('a roster that cannot be read: no lane is asked or stopped, it is said in its own line, and the runtime still goes', () => {
@@ -2272,7 +2289,7 @@ describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)'
   it('a running lane of ours: each tier is identity-checked under the lane lock, then stopped front-first; the runtime goes; everything §13 keeps is byte-identical', () => {
     const r = runUninstCodex({ ours: { 'codex-a litellm': 0, 'codex-a shim': 0 } });
     expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_stop_tier codex-a shim',
-      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', UNLOCK_A]);
+      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', '_codex_tier_ours codex-a bridge', UNLOCK_A]);
     expect(r.stdout).toBe(`uninstall: codex: 1 codex lane(s) in the roster — stopped: codex-a shim, codex-a litellm; left alone: none; not stopped: none; the runtime at ${RT} removed; ${KEPT}\n`);
     expect(existsSync(join(r.home, '.ccrc', 'runtime', 'codex'))).toBe(false);
     expect(r.lockAfter).toBe('');
@@ -2282,7 +2299,7 @@ describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)'
   it('a tier of ours that is still STARTING (4) is stopped too — it is ccrc\'s own, and would outlive its runtime', () => {
     const r = runUninstCodex({ ours: { 'codex-a litellm': 4 } });
     expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim',
-      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', UNLOCK_A]);
+      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', '_codex_tier_ours codex-a bridge', UNLOCK_A]);
     expect(r.stdout).toMatch(/— stopped: codex-a litellm; left alone: none; not stopped: none; /);
   });
 
@@ -2290,7 +2307,7 @@ describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)'
     // `codex-a shim` at rc 1 is the CONTROL for the next mutation row: a
     // step that stopped every non-zero tier would stop it too.
     const r = runUninstCodex({ ours: { 'codex-a litellm': 2 }, oursWhy: { 'codex-a litellm': 'listener-unidentified' } });
-    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_tier_ours codex-a litellm', UNLOCK_A]);
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_tier_ours codex-a litellm', '_codex_tier_ours codex-a bridge', UNLOCK_A]);
     // Review A2: named in `_codex_foreign_what`'s words (its fixture here),
     // never a "not this lane" sentence of the step's own.
     expect(r.stdout).toMatch(/^uninstall: codex: codex-a litellm: left alone — fixture holder of codex-a's litellm tier \(listener-unidentified\), and an uninstall stops only what ccrc started$/m);
@@ -2301,7 +2318,7 @@ describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)'
 
   it('an identity answer the step cannot read is left alone too, in its own sentence, with the same-named-unit caution (fix round 1)', () => {
     const r = runUninstCodex({ ours: { 'codex-a shim': 3 } });
-    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_tier_ours codex-a litellm', UNLOCK_A]);
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_tier_ours codex-a litellm', '_codex_tier_ours codex-a bridge', UNLOCK_A]);
     expect(r.stdout).toContain(`uninstall: codex: codex-a shim: left alone — whether it is this lane's could not be measured, and an uninstall stops only what it can prove ccrc started. Once uninstall finishes: ${byHand('codex-a', 'shim')}\n`);
     expect(r.stdout).toMatch(/left alone: codex-a shim;/);
   });
@@ -2324,7 +2341,7 @@ describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)'
     const r = runUninstCodex({ ours: { 'codex-a litellm': 0 }, stopWords: { 'codex-a litellm': 'foreign' } });
     expect(r.code).toBe(0);
     expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim',
-      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', UNLOCK_A]);
+      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', '_codex_tier_ours codex-a bridge', UNLOCK_A]);
     expect(r.stderr).toBe('');
     // The stop names the holder itself (its `_codex_foreign_what` note, on
     // stderr); this line points at that, and never says "not this lane" of
@@ -2352,14 +2369,15 @@ describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)'
     });
     expect(r.code).toBe(0);
     expect(r.calls).toEqual([LOCK_A, LOCK_B, '_codex_tier_ours codex-b shim',
-      '_codex_tier_ours codex-b litellm', '_codex_stop_tier codex-b litellm', UNLOCK_B]);
+      '_codex_tier_ours codex-b litellm', '_codex_stop_tier codex-b litellm', '_codex_tier_ours codex-b bridge', UNLOCK_B]);
     expect(r.stderr).toMatch(/^uninstall: codex: codex-a: not stopped — its lane lock could not be taken/m);
     // Fix round 1 (spec-3/mut-5): the same-named-unit caution, one line, once
     // per unstoppable-lock lane (not once per tier — this arm names the lane).
     // Fix wave (N3): the unit where a user manager runs, the pidfile where
     // none does, and the caution, from the one by-hand clause.
     expect(r.stderr).toContain(`uninstall: codex: codex-a: not stopped — its lane lock could not be taken (the line above says why), so neither of its tiers was measured. ccrc itself is gone once uninstall finishes, so stop them by hand before any reinstall: ${byHand('codex-a', '*')}\n`);
-    expect(r.stdout).toMatch(/— stopped: codex-b litellm; left alone: none; not stopped: codex-a shim, codex-a litellm; the runtime at \$HOME\/\.ccrc\/runtime\/codex removed; /);
+    // Codex bridge Stage 2, Task 11: every tier of the stop order is unmeasured, the bridge included.
+    expect(r.stdout).toMatch(/— stopped: codex-b litellm; left alone: none; not stopped: codex-a shim, codex-a litellm, codex-a bridge; the runtime at \$HOME\/\.ccrc\/runtime\/codex removed; /);
     expect(r.lockAfter).toBe('');
   });
 
@@ -2370,10 +2388,36 @@ describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)'
     // over a removed runtime. `_codex_unlock -` is the release of nothing.
     const r = runUninstCodex({ lockNoFlock: ['codex-a'], ours: { 'codex-a litellm': 0, 'codex-a shim': 0 } });
     expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_stop_tier codex-a shim',
-      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', '_codex_unlock -']);
+      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', '_codex_tier_ours codex-a bridge', '_codex_unlock -']);
     expect(r.stderr).not.toMatch(/its lane lock could not be taken/);
     expect(r.stdout).toMatch(/— stopped: codex-a shim, codex-a litellm; left alone: none; not stopped: none; /);
     expect(r.lockAfter).toBe('');
+  });
+
+  // ── codex bridge Stage 2, Task 11: the order is the lane's mode's ──
+  it('a direct lane is walked bridge, shim, litellm, and its running bridge is stopped and named', () => {
+    const r = runUninstCodex({ modes: { 'codex-a': 'direct' }, ours: { 'codex-a bridge': 0 } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a bridge', '_codex_stop_tier codex-a bridge',
+      '_codex_tier_ours codex-a shim', '_codex_tier_ours codex-a litellm', UNLOCK_A]);
+    expect(r.stdout).toMatch(/— stopped: codex-a bridge; left alone: none; not stopped: none; /);
+  });
+
+  it('a lane whose mode cannot be read is walked mode-blind, bridge, shim, litellm, and never skipped', () => {
+    const r = runUninstCodex({ modes: { 'codex-a': null }, ours: { 'codex-a shim': 0, 'codex-a litellm': 0 } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a bridge', '_codex_tier_ours codex-a shim',
+      '_codex_stop_tier codex-a shim', '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', UNLOCK_A]);
+    expect(r.stdout).toMatch(/— stopped: codex-a shim, codex-a litellm; left alone: none; not stopped: none; /);
+  });
+
+  it('the by-hand clause names the shim\'s unit, bridge.pid and the bridge\'s own marker for the bridge', () => {
+    const r = spawnSync(BASH, ['-c', `${ccrcFunction('_uninst_codex_by_hand')}\n_uninst_codex_by_hand codex-a bridge`],
+      { encoding: 'utf8' });
+    expect(r.stdout).toBe('systemctl --user status ccgpt-codex-a-shim (or, where no user manager runs, the pid in '
+      + '$HOME/.ccrc/codex/codex-a/bridge.pid), confirm that MainPID\'s or pid\'s argv names this lane '
+      + '(--ccrc-bridge=direct --ccrc-lane=codex-a, or a path under $HOME/.ccrc/runtime/codex) — a same-named unit may '
+      + 'belong to another tool on this box — and only then stop it');
   });
 });
 
@@ -2393,12 +2437,14 @@ describeLinux('ccrc uninstall: the codex lanes on a real lane (Plan 2b-2 Task 11
    *  every lane's rendered config (Task 5's `plantLaneConfig`, ruling R20: a
    *  case's `ccrc codex start` refuses `litellm-unrendered` without one), and
    *  Task 4's fake runtime and fake user manager. */
-  async function codexUninstallBox(prefix: string, ids: string[]): Promise<{ home: string; lanes: LanePorts[] }> {
+  async function codexUninstallBox(prefix: string, ids: string[],
+    opts: { bridge?: 'direct' } = {}): Promise<{ home: string; lanes: LanePorts[] }> {
     const lanes = await freeLanes(ids);
     const home = mkTmp(prefix);
     homes.push(home);
     plantInstalledBox(home);
-    codexRoster(home, lanes);
+    // Codex bridge Stage 2, Task 11: `bridge: 'direct'` makes every lane a direct one.
+    codexRoster(home, lanes.map((l) => ({ ...l, ...(opts.bridge !== undefined ? { bridge: opts.bridge } : {}) })));
     for (const l of lanes) plantLaneConfig(home, l.id);
     plantCodexBins(home);
     plantFakeRuntime(home, { version: '1.101.0' });
@@ -2491,6 +2537,60 @@ describeLinux('ccrc uninstall: the codex lanes on a real lane (Plan 2b-2 Task 11
     expect(r.stdout).toMatch(/^uninstall: codex: codex-a litellm: left alone — /m);
     expect(stops(home).filter((l) => l.includes(units.litellm))).toEqual([]);
     expect(await portAccepts(lane!.litellmPort)).toBe(true);
+  }, 120_000);
+
+  // ── codex bridge Stage 2, Task 11: a direct lane's bridge, and a lane.json from before it ──
+  const UNINST_LINE = /^uninstall: codex: 1 codex lane\(s\) in the roster — stopped: ([^;]*); left alone: ([^;]*); not stopped: ([^;]*);/m;
+  const setLaneJson = (home: string, edit: (j: Record<string, unknown>) => void): void => {
+    const lj = join(home, '.ccrc', 'codex', 'codex-a', 'lane.json');
+    const j = JSON.parse(readFileSync(lj, 'utf8')) as Record<string, unknown>;
+    edit(j);
+    writeFileSync(lj, `${JSON.stringify(j, null, 2)}\n`);
+  };
+
+  it('uninstall stops a direct lane\'s bridge', async () => {
+    const { home, lanes: [lane] } = await codexUninstallBox('ccrc-uninst-codex-bridge-', ['codex-a'], { bridge: 'direct' });
+    initLane(home, 'codex-a');
+    plantLaneAuth(home, 'codex-a');
+    const units = laneUnits(home, 'codex-a');
+    const s = runVerb(home, 'codex', ['start', 'codex-a'], READY);
+    expect(s.code, `ccrc codex start codex-a:\n${s.stdout}\n${s.stderr}`).toBe(0);
+    expect(s.stdout).toBe(`ccrc codex: codex-a: bridge started (systemd ${units.shim})\n`);
+    expect(JSON.parse((await laneAnswer(lane!.proxyPort))!.body)).toEqual({ lane: 'codex-a', mode: 'direct' });
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(stops(home).some((l) => l.includes(units.shim)), managerCalls(home).join('\n')).toBe(true);
+    await eventually(async () => !(await portAccepts(lane!.proxyPort)), 'the bridge to stop listening', 15_000);
+    expect(UNINST_LINE.exec(r.stdout)?.slice(1), r.stdout).toEqual(['codex-a bridge', 'none', 'none']);
+    expect(r.stdout).not.toMatch(/^uninstall: codex: codex-a \S+: left alone/m);
+  }, 120_000);
+
+  it('a lane.json with no bridge key still has its running shim and LiteLLM tiers stopped', async () => {
+    const { home, lanes: [lane] } = await codexUninstallBox('ccrc-uninst-codex-oldjson-', ['codex-a']);
+    initLane(home, 'codex-a');
+    plantLaneAuth(home, 'codex-a');
+    const s = runVerb(home, 'codex', ['start', 'codex-a'], READY);
+    expect(s.code, `ccrc codex start codex-a:\n${s.stdout}\n${s.stderr}`).toBe(0);
+    // A lane.json from before the bridge: no `bridge`, so its mode cannot be read.
+    setLaneJson(home, (j) => { delete j['bridge']; });
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(UNINST_LINE.exec(r.stdout)?.slice(1), r.stdout).toEqual(['codex-a shim, codex-a litellm', 'none', 'none']);
+    await eventually(async () => !(await portAccepts(lane!.proxyPort)), 'the shim to stop listening', 15_000);
+    await eventually(async () => !(await portAccepts(lane!.litellmPort)), 'litellm to stop listening', 15_000);
+  }, 120_000);
+
+  it('uninstall with an unreadable lane mode still stops a running bridge', async () => {
+    const { home, lanes: [lane] } = await codexUninstallBox('ccrc-uninst-codex-nomode-', ['codex-a'], { bridge: 'direct' });
+    initLane(home, 'codex-a');
+    plantLaneAuth(home, 'codex-a');
+    const s = runVerb(home, 'codex', ['start', 'codex-a'], READY);
+    expect(s.code, `ccrc codex start codex-a:\n${s.stdout}\n${s.stderr}`).toBe(0);
+    setLaneJson(home, (j) => { j['bridge'] = 'nope'; });
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(UNINST_LINE.exec(r.stdout)?.slice(1), r.stdout).toEqual(['codex-a bridge', 'none', 'none']);
+    await eventually(async () => !(await portAccepts(lane!.proxyPort)), 'the bridge to stop listening', 15_000);
   }, 120_000);
 });
 
