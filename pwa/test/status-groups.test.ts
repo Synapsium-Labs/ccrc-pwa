@@ -4,6 +4,14 @@
 // case runs one fixture through this model and through `BucketBar` itself, so
 // the two counts are compared on what the operator would see, not on a copy
 // of BucketBar's rule.
+//
+// W2 desk polish, Task T3f (D-6386): Done above Working. MUTATION TABLE (plan Task T3f Step 3; RUN, each mutant on a
+// `git archive` copy of a234acfe2, this suite and instrument-list's, then restored):
+//   Working back above Done (STATUS_GROUPS' done and working orders swapped)
+//                       "the open groups are ordered Needs you, Done, Working; the folded four follow"
+//   a folded group moved among the open ones (Idle at order 1.5)
+//                       "the open groups are ordered Needs you, Done, Working; the folded four follow"
+// The instrument-list suite's rows for these, and for PHONE_TABS alone, are that file's header's.
 import { describe, it, expect, expectTypeOf, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { render, cleanup } from '@testing-library/react';
