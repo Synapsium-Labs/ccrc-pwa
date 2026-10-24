@@ -37,7 +37,8 @@ from . import errors, reducer
 
 # The `x-codex-` response headers: the usage poller's family (`ccd/ccgpt-usage.py`), and Codex's rate-limit, credit
 # and safety-buffering headers. Read by this prefix only, so the poller's five names stay spelled once (the plan's
-# Global Constraints). `stats.Stats.usage_headers` keeps their values by the same prefix, a number or a boolean only.
+# Global Constraints). `stats.Stats.usage_headers` keeps their values by the same prefix, under the rule its docstring
+# states: a decimal number or a boolean (stats.USAGE_VALUE_RE), and never a stats.TOKEN_HEADERS name's value.
 CODEX_HEADER_PREFIX = "x-codex-"
 
 # The event types the reducer acts on (reducer.Reducer.feed) are not listed: the reducer never counts one, so a copy

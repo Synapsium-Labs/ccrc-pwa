@@ -634,19 +634,24 @@ describe.skipIf(!PY)('the stats file\'s write lock and value rules (codex-bridge
 
   it('a malformed now reads as the wall clock, and a header item that is not a pair is skipped', async () => {
     const { home, file } = lane('cb-stats-badnow-');
-    const [o, , , , , clock, , , snap] = await run(home, [
+    const [o, , , , , clock, early, , , snap] = await run(home, [
       open(file),
       call('refusal', ['backend', 'model-fx-str', 5, 6], { now: 'x' }),
       call('refusal', ['backend', 'model-fx-nan', 5, 6], { now: { float: 'nan' } }),
       call('refusal', ['backend', 'model-fx-big', 5, 6], { now: 1e300 }),
       call('refusal', ['backend', 'model-fx-bool', 5, 6], { now: true }),
       call('usage_headers', [{ 'x-codex-fx-a': '1' }], { now: 'x' }),
+      { op: 'stats-snapshot' }, // read before the next usage_headers call replaces the snapshot
       call('header_names', [{ itemsOf: [['x-codex-fx-b', '2'], 7, ['a', 'b', 'c'], 'xy'] }]),
       call('usage_headers', [{ itemsOf: [['x-codex-fx-c', '3'], 7, ['a', 'b', 'c'], 'xy'] }], { now: 1_700_000_000 }),
       { op: 'stats-snapshot' },
     ]);
     expect(clock.result).toBeNull();
     const started = Date.parse(o.doc.startedAt as string);
+    const first = (early.doc as Line).usageHeaders as { at: string; values: Record<string, string> };
+    expect(first.values).toEqual({ 'x-codex-fx-a': '1' });
+    expect(first.at).toMatch(ISO);
+    expect(Date.parse(first.at)).toBeGreaterThanOrEqual(started - 1000); // the wall clock, never 1970
     const doc = snap.doc as Line;
     for (const model of ['model-fx-str', 'model-fx-nan', 'model-fx-big', 'model-fx-bool']) {
       const at = doc.refusals[`backend/${model}`].at as string;

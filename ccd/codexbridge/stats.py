@@ -65,10 +65,15 @@ OVERFLOW = "overflow"
 # one key OVERFLOW (outside the `<route>/<model>` key shape), and OVERFLOW is listed in `unexplained` like any name.
 NAMES_MAX = 256  # names per family (and routes, refusals and outcome keys) before OVERFLOW
 VALUE_MAX = 64  # an x-codex- header value's length; a longer one is dropped, never cut (a cut number is wrong)
-# D-TBD-stats-usage-value-shape: narrower than the plan's "values bounded to 64 printable characters".
+# D-TBD-stats-usage-value-shape: narrower than the plan's "keeps every header whose lower-cased name starts `x-codex-`,
+# values bounded to 64 printable characters": a value is kept only in the poller's shape (USAGE_VALUE_RE), and a
+# TOKEN_HEADERS name's value is never kept, whatever its shape.
 USAGE_VALUE_RE = re.compile(r"^(?:-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false)$")  # what the poller can read
-# x-codex- headers whose value is a token, never kept whatever its shape (upstream openai/codex @ 092d3ac,
-# codex-rs/codex-api/src/sse/responses.rs:32; codex-rs/core/src/client.rs:288-302: the sticky-routing token).
+# D-TBD-stats-usage-value-shape: x-codex- headers whose value is a token, never kept whatever its shape (upstream
+# openai/codex @ 092d3ac, codex-rs/codex-api/src/sse/responses.rs:32; codex-rs/core/src/client.rs:288-302: the
+# sticky-routing token). A deny-list, grown only by review against upstream: known.PREFIXES explains every x-codex-
+# name, so a new token-carrying x-codex- header never reaches `unexplained`, Task 17's drift row never warns on it,
+# and a value of it in USAGE_VALUE_RE's shape is kept.
 TOKEN_HEADERS = frozenset({"x-codex-turn-state"})
 HEADERS_MAX = 64  # x-codex- headers kept from one response (D-TBD-stats-extra-bounds)
 FLUSH_S = 10.0  # an unforced flush writes at most this often
