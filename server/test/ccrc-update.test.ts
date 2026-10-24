@@ -6295,8 +6295,9 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     appendFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=local://${home}/releases\n`);
     const r = runUpdate(home, [], { CCRC_RELEASE_BASE_URL: '' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
-    expect(r.stdout.split('\n')).toContain('update: arm 2: CCRC_RELEASE_BASE_URL could not be read (the line above says why), so no host '
-      + 'was asked whether v1.0.0 ships a bundle — the restore child\'s own resolve decides');
+    expect(r.stdout.split('\n')).toContain('update: arm 2: CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env names it on a line '
+      + 'this reader does not take (it reads only a plain KEY=value line), so no host was asked whether v1.0.0 ships a bundle — the '
+      + 'restore child\'s own resolve decides');
     expect(r.stderr).toContain('ccrc: CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take');
     expect(r.stdout).not.toContain('curl failed');
     expect(restoreChildArgv(home)).toEqual([
@@ -15349,8 +15350,9 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       }
     }
 
-    // ── Task 4 (D-6594): the release mirror is a setting. The rollout pin's twin (the deploying machine's base) has no row here:
-    // no harness in this file reaches `cmd_rollout`'s pin without a real box, and W24-U2 holds `_upd_resolve`'s refusal it runs.
+    // ── Task 4 (D-6594): the release mirror is a setting. W24-U2 holds `_upd_resolve`'s refusal, which the rollout pin (the
+    // deploying machine's base) runs too; W24-U6's ssh stub reaches `cmd_rollout` in this file, and a leg with an `export` base
+    // line in the deploying HOME's ccrc.env would pin that twin (it has none yet).
     const MIRROR = 'http://127.0.0.1:9/releases';
     const BASE_WHY = 'ccrc: CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take '
       + '(it reads only a plain KEY=value line)';
@@ -15427,54 +15429,57 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect([lastReport(home)['phase'], lastReport(home)['detail']], 'rollback').toEqual(['failed', `rollback: ${why}`]);
     });
 
-    // F11 (fix round 1): rollout over a box whose `--check` refuses its release base. The ssh stub runs the remote command for
-    // real, in the box's own fixture HOME with this tree's ccrc first on its PATH and no environment base (a real ssh forwards
-    // none), so the refusal is the box's own reader's; the deploying machine pins from its own local:// release space.
-    it('W24-U6: rollout names a box\'s refused check as the refusal it is, and ssh\'s 255 as ssh\'s (F11)', () => {
-      const home = mkTmp('ccrc-fx-w24-u6-');
+    // F11 (fix round 1; B2 review, Minors 1 and 5): rollout over a box whose `--check` answers each of the four arms. The
+    // deploying machine is this file's update fixture (`freshUpdateBox`, `updateEnv`: its combined curl serves the local://
+    // pin), with only `ssh` planted. The stub runs the remote command for real, in the box's own fixture HOME with this
+    // tree's ccrc first on its PATH and no environment base (a real ssh forwards none), so the refusal is the box's own
+    // reader's. Switch files pick the other arms: `ssh-255` (ssh's own failure), `ssh-nonsense` (exit 0, no check line)
+    // and `ssh-nobin` (a remote PATH of /usr/bin:/bin, where no ccrc lives, so bash answers 127).
+    it('W24-U6: rollout names a box\'s refused check as the refusal it is, and ssh\'s 255, rc 0 and 127 each in their own words (F11)', () => {
+      const home = freshUpdateBox('ccrc-fx-w24-u6-');
       const box = join(home, 'box');
       mkdirSync(join(box, '.ccrc'), { recursive: true });
       mkdirSync(join(box, 'bin'), { recursive: true });
       mkdirSync(join(box, 'tmp'), { recursive: true });
+      mkdirSync(join(home, 'tmp'), { recursive: true });
       writeFileSync(join(box, '.ccrc', 'ccrc.env'), `CCRC_ROLE=both\nexport CCRC_RELEASE_BASE_URL=${MIRROR}\n`);
       writeFileSync(join(box, 'bin', 'ccrc'), `#!/bin/sh\nexec '${BASH}' '${join(REPO, 'ccd', 'ccrc')}' "$@"\n`, { mode: 0o755 });
       mkdirSync(join(home, 'releases', 'download', 'v2.0.0'), { recursive: true });
       writeFileSync(join(home, 'releases', 'download', 'v2.0.0', 'SHA256SUMS'), `${'0'.repeat(64)}  ccrc-v2.0.0.tar.gz\n`);
       writeFileSync(join(home, 'deploy.env'), `CCRC_BOX=user@box-a\nCCRC_AGENT_BOX=user@box-a\nCCRC_SSH_KEY=${join(home, 'id_fixture')}\n`);
-      const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
+      const env: NodeJS.ProcessEnv = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_DEPLOY_ENV: join(home, 'deploy.env'),
+        CCRC_RELEASE_BASE_URL: `local://${home}/releases` };
       for (const k of ['CCRC_BOX', 'CCRC_AGENT_BOX', 'CCRC_SSH_KEY', 'CCRC_SSH_PORT']) delete env[k];
-      Object.assign(env, { CCRC_DEPLOY_ENV: join(home, 'deploy.env'), CCRC_RELEASE_BASE_URL: `local://${home}/releases`, TMPDIR: join(home, 'tmp') });
-      mkdirSync(join(home, 'tmp'), { recursive: true });
-      const bin = join(home, '.local', 'bin');
-      writeFileSync(join(bin, 'ssh'), [
+      replantDoctorStubs(home);
+      writeFileSync(join(home, '.local', 'bin', 'ssh'), [
         '#!/bin/sh',
         'while [ $# -gt 0 ]; do case "$1" in -p|-i|-o) shift 2 ;; -*) shift ;; *) break ;; esac; done',
-        'shift; cmd="$*"',
-        'case "$cmd" in *"--check"*) [ -f "$HOME/ssh-255" ] && { echo "fixture ssh: connection closed" >&2; exit 255; } ;; esac',
-        `HOME='${box}' TMPDIR='${box}/tmp' CCRC_RELEASE_BASE_URL= PATH='${box}/bin':"$PATH" exec '${BASH}' -c "$cmd"`,
-      ].join('\n'), { mode: 0o755 });
-      writeFileSync(join(bin, 'curl'), [
-        '#!/bin/sh',
-        'dest=""; url=""',
-        'while [ $# -gt 0 ]; do case "$1" in -o) dest="$2"; shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac; done',
-        'src="${url#local://}"; [ -f "$src" ] || { echo "curl: (22) 404 for $url" >&2; exit 22; }',
-        'cp "$src" "$dest"',
+        `shift; cmd="$*"; p='${box}/bin':"$PATH"; [ -f "$HOME/ssh-nobin" ] && p=/usr/bin:/bin`,
+        'case "$cmd" in *"--check"*) [ -f "$HOME/ssh-255" ] && { echo "fixture ssh: connection closed" >&2; exit 255; }',
+        '  [ -f "$HOME/ssh-nonsense" ] && { echo nonsense; exit 0; } ;; esac',
+        `HOME='${box}' TMPDIR='${box}/tmp' CCRC_RELEASE_BASE_URL= PATH="$p" exec '${BASH}' -c "$cmd"`,
       ].join('\n'), { mode: 0o755 });
       assertNoRealTool(env, home);
       const rollout = (): Result => {
         const p = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollout', '--to', 'v2.0.0'], { env, encoding: 'utf8' });
         return { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
       };
-      const lastLine = (s: string): string => s.trimEnd().split('\n').pop() ?? '';
-      const lead = 'ccrc: rollout: the box box\'s \'ccrc update --check\' printed no check line (got: nothing) — ';
-      let r = rollout();
-      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
-      expect(r.stderr).toContain(`box: ${BASE_WHY}`);
-      expect(lastLine(r.stderr)).toBe(`${lead}its check refused (exit 1); the lines above say why — nothing was touched`);
-      writeFileSync(join(home, 'ssh-255'), '');
-      r = rollout();
-      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
-      expect(lastLine(r.stderr)).toBe(`${lead}ssh failed (exit 255), so the check may not have run there; the lines above say why — nothing was touched`);
+      const last = (got: string, tail: string): string =>
+        `ccrc: rollout: the box box's 'ccrc update --check' printed no check line (got: ${got}) — ${tail} nothing was touched`;
+      const leg = (sw: string | null, got: string, tail: string): Result => {
+        for (const f of ['ssh-255', 'ssh-nonsense', 'ssh-nobin']) rmSync(join(home, f), { force: true });
+        if (sw !== null) writeFileSync(join(home, sw), '');
+        const r = rollout();
+        expect(r.code, `${sw ?? 'refusal'}: stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+        expect(r.stderr.trimEnd().split('\n').pop(), sw ?? 'refusal').toBe(last(got, tail));
+        return r;
+      };
+      expect(leg(null, 'nothing', 'its check refused (exit 1); the lines above say why —').stderr).toContain(`box: ${BASE_WHY}`);
+      leg('ssh-255', 'nothing', 'ssh failed (exit 255), so the check may not have run there; the lines above say why —');
+      leg('ssh-nonsense', 'nonsense', 'is ccrc installed there, and new enough to know --check?');
+      expect(['/usr/bin/ccrc', '/bin/ccrc'].filter((f) => existsSync(f)), 'the 127 leg\'s premise: no ccrc on /usr/bin:/bin').toEqual([]);
+      leg('ssh-nobin', 'nothing', 'its shell found no ccrc to run (exit 127); is ccrc installed there?');
+      expect(curlUrls(home), 'the pin was fetched through the combined curl').toContain(`local://${home}/releases/download/v2.0.0/SHA256SUMS`);
     });
 
     it('W24-U4: on macOS a knob-less line the Darwin model rejects leaves the release base at its default, and a named base beside it refuses', () => {
