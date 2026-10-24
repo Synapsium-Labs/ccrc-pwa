@@ -394,7 +394,7 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
   it('reads a window nobody measured as "—" even when its rolled-over flag is set (never measured is not zero)', async () => {
     // `value === null` decides first: a window with nothing read has nothing the server could have zeroed, so a
     // flag beside it must not turn it into the inferred "0%". The measured half (44) stays untouched.
-    stubAccounts([acct({ wrapper: 'claude9', five: null as never, seven: 44, fiveRolledOver: true })]);
+    stubAccounts([acct({ wrapper: 'claude9', five: null, seven: 44, fiveRolledOver: true })]);
     renderSwap();
     const row = await screen.findByRole('button', { name: /team·alt/ });
     await waitFor(() => expect(row).toHaveTextContent('not measured'));

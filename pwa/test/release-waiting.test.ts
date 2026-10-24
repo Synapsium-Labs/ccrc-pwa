@@ -5,7 +5,7 @@
 // was renamed ("renders on a newer release…" became "names a newer release…"), and its `role="status"` assertion went
 // with the banner. The banner's "silent with no answer at all (updates={null})" case did not move here: it went to
 // update-indicator.test.tsx ("nothing renders when no release waits, and nothing before the first updates answer").
-// The `releaseWaitingWords`, `releaseWaitingDoorName` and `shownRelease` describes at the end are new, not moved.
+// The `releaseWaitingWords`, `releaseWaitingDoorName` and `shownRelease` cases at the end are new, not moved.
 import { describe, expect, it } from 'vitest';
 import type { FleetHealth, NodeWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';

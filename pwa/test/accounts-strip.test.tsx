@@ -259,7 +259,7 @@ describe('AccountsStrip', () => {
       const byName = (n: string): HTMLElement => cardsOf(container).find((c) => nameOf(c) === n)!;
       act(() => { byName('lane-b').focus(); });
       expect(document.activeElement).toBe(byName('lane-b'));
-      // lane-b becomes the fullest on the next poll: it moves from first to last, and focus must go with it.
+      // lane-b becomes the fullest on the next poll: it moves from the middle to last, and focus must go with it.
       spy.mockResolvedValue(reply([first[0]!, acct({ wrapper: 'lane-b', five: 90 }), first[2]!]));
       await act(async () => { await vi.advanceTimersByTimeAsync(20_100); });
       expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c', 'lane-b']);

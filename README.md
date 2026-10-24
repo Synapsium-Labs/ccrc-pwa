@@ -1087,7 +1087,8 @@ In remote mode the foot of the fleet screen always
 carries `BuildLine`: `fleet <version> · server <version>`, read from the node inventory. A side reads
 `unversioned (<sha>)` for a stamp with no tag and adds `dirty` for a dirty tree; it is amber unless the side
 is a clean versioned release, and `—` when that node's stamp cannot be stated (never measured, unread, or the
-node unreachable). On every screen at a desk, and on the fleet screen below 900 px, one quiet update line (`↑ vX available`, a door to Settings › Updates,
+node unreachable). On every screen at a desk, and on the fleet screen below 900 px, one quiet update line
+(`↑ vX available`, a door to Settings › Updates,
 its title `vX is out on <channel> — …`) and a `→ vX` on that node's side of `BuildLine` appear while a measured
 node with a channel, whose stamp was read, that is not a macOS node, has a newer desired tag; the line also waits
 until GitHub has answered since the server started. Refined shows it as a row under its bar at a desk, Instrument
