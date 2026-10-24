@@ -252,6 +252,11 @@ export const SENTENCES: Record<string, string> = {
   'child': 'This workspace was created for a run, so it is cleaned up when that run closes, never by the seven-day expiry. Nothing was removed.',
   'live': 'This archived workspace has a session running — a pane, or a service that would start one — so nothing was removed. The cleanup tries again later.',
   'in-use': 'A process on this box has its working directory inside this archived workspace — a shell someone opened there, say — so nothing was removed. The cleanup tries again later.',
+  // ── nested-rescue-v1 (disk retention §2.7.1, D-6633). ccd's pin prints these two on a `failed` document, after a rescuable
+  // nested repository was found and the rescue was tried: the first is terminal (the repository's objects the main store
+  // lacks are over the bound; it is reported, never retried), the second retries (a fetch or a re-prove failed).
+  'nested-rescue-too-large': 'A repository nested in this workspace holds more history than the rescue will carry into the attic, so nothing was removed. It is reported, and not tried again.',
+  'nested-rescue-failed': 'Rescuing a repository nested in this workspace into the attic did not complete, so nothing was removed. The cleanup tries again later.',
   'expire-in-progress': 'An interrupted seven-day cleanup of this workspace is waiting to finish, and ws-reap never finishes another verb’s work. Nothing was removed.',
 };
 

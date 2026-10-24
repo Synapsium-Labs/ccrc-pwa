@@ -4997,11 +4997,22 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
 // nested-repository rescue; the operator touches it by hand, so the ONE shell line that names it is ccd/ccd's read and nothing
 // else under ccd/ or deploy/ names it on a code line.
 describe('the nested rescue: its arming file has no writer in the tree', () => {
-  it('nested-rescue-live: one shell holder, ccd/ccd, whose one line is a read; no TS holder', () => {
+  // DR-21 (D-6633) gives it its one TS holder, its switchboard row in `shared/switches.ts` (L0, no `node:` module, so it
+  // cannot write the marker); the server only shows what the arm would do.
+  it('nested-rescue-live: one shell holder, ccd/ccd, whose one line is a read; one TS holder, its definer, which reaches no write', () => {
     expect(holdersOf('nested-rescue-live'), 'a line of shell other than ccd/ccd names it — a writer in waiting').toEqual(['ccd/ccd']);
     expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '').filter((l) => l.includes('nested-rescue-live')))
       .toEqual(['_ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }']);
-    expect(ALL.filter((f) => stallCode(f).includes('nested-rescue-live')).map(rel)).toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes('nested-rescue-live')).map(rel), 'spelled on a code line outside shared/switches.ts')
+      .toEqual(['shared/switches.ts']);
+    expect(stallCode(path.join(ccrcRoot, 'shared/switches.ts')), 'shared/switches.ts reaches a node: module or require, so it could write the marker')
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+    // THE WIDER WRITER: a file that imports the constant and holds an io could write it without spelling the name.
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    for (const f of ALL.filter((x) => stallCode(x).includes('NESTED_RESCUE_LIVE_MARKER'))) {
+      expect(stallCode(f), `${rel(f)} names the constant and reaches a write`).not.toMatch(WRITE);
+    }
   });
   it('nested-rescue-live: no other file under ccd/ or deploy/ names it on a code line', () => {
     const others = bashRoots.flatMap((dir) => {
