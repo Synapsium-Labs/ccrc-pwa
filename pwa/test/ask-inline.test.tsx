@@ -641,25 +641,26 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(card().contains(document.activeElement), 'R1: focus is inside the card after the reconnect').toBe(true);
   });
 
-  it('a menu that vanishes and returns in ONE batch (dialog_cleared, then a screen) is a new ask and takes no focus from the body', async () => {
-    // Premises: fixture 1's envelope up and engaged by a key; focus falls to the body; ONE batch clears the pane's menu and
-    // paints the next question. The envelope never changed, so only the generation (`dialog_cleared` counts) can tell.
+  it('an aged ask\'s menu that vanishes and returns in ONE batch (dialog_cleared, then a screen) is a new ask and takes no focus from the body', async () => {
+    // Premises: fixture 2 (no envelope, the transcript's copy) up and engaged by a key; focus falls to the body; ONE batch
+    // clears the pane's menu and paints the next aged question. With no hook envelope the pane's menu is all there is of the
+    // ask, so a vanished menu is the ask's end and only the generation (`dialog_cleared` counts) can tell it from one ask.
     media(true);
     vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
-    arrive(1);
+    arrive(2);
+    expect(store.getState().ask, 'premise: no envelope is held').toBeNull();
     const first = opt(card(), /^Redis/);
     act(() => first.focus());
     key(first, '1');
     act(() => (document.activeElement as HTMLElement | null)?.blur());
     act(() => {
       store.getState().apply({ type: 'dialog_cleared' });
-      store.getState().apply({ type: 'dialog', dialog: nextScreen() });
+      store.getState().apply({ type: 'dialog', dialog: agedQuestion2() });
     });
     await frame();
-    expect(within(card()).getByText(QUESTION_2), 'premise: question 2 is in the card').toBeInTheDocument();
-    expect(store.getState().ask, 'premise: the envelope never changed').not.toBeNull();
+    expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
     expect(card().contains(document.activeElement), 'the returned menu took focus from the body').toBe(false);
   });
 
