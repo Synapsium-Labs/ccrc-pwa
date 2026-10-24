@@ -3462,9 +3462,10 @@ general remote-shell:
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
   `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), the
-  fleet's projects root, and exactly the nine `$HOME/.ccrc` node files by
+  fleet's projects root, and exactly the ten `$HOME/.ccrc` node files by
   name (`NODE_FILES`, `shared/agent-protocol.ts`; the ninth,
-  `box-token-generation`, holds a generation id, never a token) — a live symlink inside
+  `box-token-generation`, holds a generation id, never a token; the tenth, `tmp-sweep.json`, is the tmp sweep's
+  census, which the server's census lane reads and mails from, D-6624) — a live symlink inside
   `$HOME/.ccrc` carrying one is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the update inventory refuses to read as that file; never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
   list did not widen for the transcript resolver or the supervisor
   heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
