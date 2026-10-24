@@ -9828,6 +9828,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:7568',
         'ccd/ccd:11025',
         'ccd/ccd:11665-11670',
+        // ENTERS at pr-landing PL-1 (S6-R11): `_pr_bind_facts`, `cmd_pr_landing` and the `bind` mode move `ccd/ccd` below the
+        // pr-state region; dumped from the instrument, spelled in two parts for the citations ratchet.
+        'ccd/ccd' + ':13588-13653',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
@@ -9845,7 +9848,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:5810-5811',
         'ccd/ccd:12032-12034',
         'ccd/ccd:11665-11670',
-        'ccd/ccd:12594-12659',
         'ccd/ccd:13809',
         'ccd/ccd:13812',
         'ccd/ccd:6425',
@@ -9864,8 +9866,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // site of this anchor out of the set on its own, and together their `ccd/ccd` growth slides a line back under
         // it that no longer carries its row's token, so it fails again. Measured data, not a prose citation: it is
         // spelled in two parts so the citations ratchet, which polices added prose, does not count a census row.
-        'ccd/ccd' + ':13573-13575',
+        // LEAVES at pr-landing PL-1 (S6-R11): the fix-round `ccd/ccd` edits moved this row's second site out of the set.
         'ccd/ccd:11665-11670',
+        // ENTERS at pr-landing PL-1 (S6-R11), spelled in two parts for the citations ratchet.
+        'ccd/ccd' + ':13601-13666',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         // LEFT here at model-class auto-advance W2 (S6-R11): `:2874` x2 (the note above this assertion).
@@ -9885,6 +9889,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':5353-5362',
         'ccd/ccd:5828-5830',
+        // ENTERS at pr-landing PL-1 (S6-R11), spelled in two parts for the citations ratchet.
+        'ccd/ccd' + ':5819-5823',
         // LEFT here at model-class auto-advance W2 (S6-R11): `:5819-5823` (the note above this assertion).
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
@@ -10108,7 +10114,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8673',
         // RE-MEASURED at the merge of main's `ws-gc --fast` (#123) into named workspaces, from the same run as the
         // `|`-row set above: the spec-2210 site returns for the reason given there, spelled in two parts for the same one.
-        'spec:2210 ccd/ccd' + ':13573-13575',
+        // LEAVES at pr-landing PL-1 (S6-R11): the `spec:2210` site, same cause as the row-level set above.
         // RE-MEASURED for `ccd ws-gc --fast` (D-5886, #123), 35 -> 34: the same second site leaves
         // as in the row-level set above, from the same run. S6-R11, no D-number.
         // LEFT here at model-class auto-advance W2 (S6-R11): `spec:2220 :2874` x2 (the note above this assertion).
