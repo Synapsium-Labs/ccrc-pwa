@@ -2,10 +2,11 @@
 // the terms it is found by, for the top search ('top', search-only) and the "Open session…" page ('page'). Pure: no
 // React, no store.
 //
-// A session is found by its title (`sessionLabel`), its workspace slug, its branch, its project and its card when that
-// differs, and, for a session that claims open runs, each programme's title and slug. A run's worker (`sessionId`) gets
-// none of its programme's words: they belong to the claimant. A coordinator (`coordinatorRole`, never a claim) ranks
-// first on an equal match, then the other sessions, then the exited ones.
+// A session is found by its shown title (`sessionLabel`) and its underlying name (which a custom title may hide), its
+// workspace slug, its branch, its project and its card when that differs, and, for a session that claims open runs,
+// each programme's title and slug. A run's worker (`sessionId`) gets none of its programme's words: they belong to the
+// claimant. A coordinator (`coordinatorRole`, never a claim) ranks first on an equal match, then the other sessions,
+// then the exited ones.
 import { boardHome, type FleetSession, type RunSummary } from '../../../shared/api';
 import { isRunClosed, programmeTitle } from '../fleet/runWords';
 import { COORDINATOR_WORD, coordinatorRole } from '../fleet/sessionFacts';
@@ -37,7 +38,7 @@ export function sessionEntries(
     const lead = coordinatorRole(s);
     const card = boardHome(s);
     const programmes = open.filter((r) => r.claimedBy === s.id).flatMap((r) => [programmeTitle(r.program, open), r.program]);
-    const terms = [s.workspace, s.branch, s.project, card === s.project ? null : card, ...programmes]
+    const terms = [s.name, s.workspace, s.branch, s.project, card === s.project ? null : card, ...programmes]
       .filter((t): t is string => typeof t === 'string' && t.trim() !== '');
     return {
       id: `open-session-${s.id}`,
