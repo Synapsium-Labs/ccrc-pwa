@@ -37,14 +37,11 @@ from . import errors, reducer
 
 # The `x-codex-` response headers: the usage poller's family (`ccd/ccgpt-usage.py`), and Codex's rate-limit, credit
 # and safety-buffering headers. Read by this prefix only, so the poller's five names stay spelled once (the plan's
-# Global Constraints). `stats.Stats.usage_headers` keeps their values by the same prefix.
+# Global Constraints). `stats.Stats.usage_headers` keeps their values by the same prefix, a number or a boolean only.
 CODEX_HEADER_PREFIX = "x-codex-"
 
-# The event types the reducer acts on (reducer.Reducer.feed); never counted, listed so the table is whole.
-_HANDLED_EVENTS = frozenset({
-    "response.created", "response.output_item.added", "response.output_text.delta", "response.output_item.done",
-    "response.completed", "response.incomplete", "response.failed", "error",
-})
+# The event types the reducer acts on (reducer.Reducer.feed) are not listed: the reducer never counts one, so a copy
+# here would only hide the drift of the reducer ceasing to handle one.
 # The event types the Codex CLI skips on purpose over HTTP SSE (codex-api/src/sse/responses.rs:480-491) that the
 # reducer's IGNORED_EVENTS does not hold.
 _CODEX_SKIPPED_EVENTS = frozenset({"codex.response.metadata", "response.metadata"})
@@ -58,7 +55,7 @@ KNOWN = {
         # the names inbound counts for a shape it maps
         "thinking-block", "is_error", "defer_loading", "output_config.format",
     }),
-    "eventType": reducer.IGNORED_EVENTS | _HANDLED_EVENTS | _CODEX_SKIPPED_EVENTS,
+    "eventType": reducer.IGNORED_EVENTS | _CODEX_SKIPPED_EVENTS,
     # R12's unmapped items, skipped and counted (plan Task 3)
     "itemType": frozenset({"web_search_call", "image_generation_call", "compaction"}),
     "errorCode": errors.ALL_CODES,

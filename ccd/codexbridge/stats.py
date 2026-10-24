@@ -16,8 +16,12 @@ largest upstream `input_tokens` of a reply the model accepted (the caller report
 is D24's estimate, so it says `estimated: true`. Times are ISO-8601 UTC with milliseconds.
 
 NOTHING HERE HOLDS CONTENT. A name is bounded by NAME_RE (else `unrecognised`), at most NAMES_MAX per family (then
-`overflow`); a header's value is never kept, except an `x-codex-` header's, bounded to VALUE_MAX printable
-characters, for the usage poller; a request id is kept only under errors.REQUEST_ID_RE.
+`overflow`); a header's value is never kept, except an `x-codex-` header's, for the usage poller, and only when it has
+the shape the poller reads (USAGE_VALUE_RE: a number or a boolean, at most VALUE_MAX characters). Any other value of
+that family is dropped, its name still counted by `header_names`: the family also carries Codex's `x-codex-turn-state`
+sticky-routing token and free text (upstream openai/codex @ 092d3ac, codex-rs/codex-api/src/sse/responses.rs:32,
+65-71; codex-rs/core/src/client.rs:288-302; codex-rs/codex-api/src/rate_limits.rs:182). A request id is kept only
+under errors.REQUEST_ID_RE. A route or refusal key is `<route>/<model>`, each part bounded by NAME_RE.
 
 A RESTART LOSES NOTHING THE READERS NEED: construction loads a valid version-1 file of the same lane and carries its
 refusals (the hourly refresh may not have read them yet, Task 15), each route's ratio, request count and largest
@@ -28,9 +32,12 @@ constructor flushes at once, so the file the doctor reads changes at the restart
 lane too).
 
 One writer per lane (the lane's one bridge process); every method takes one lock, so handler threads share one Stats.
-A flush is tmp + fchmod 0600 + fsync + rename, at most every FLUSH_S unless forced; a failed one is counted in memory
-(`stats:flush-failed`) and retried at the next flush call, whatever FLUSH_S says, so nothing is lost. No method raises
-into a request.
+A flush is tmp (`<path>.tmp`, one name, so a killed writer's leftover is overwritten, never left) + fchmod 0600 +
+fsync + rename, at most every FLUSH_S unless forced; a failed one is counted in memory (`stats:flush-failed`) and
+retried at the next flush call, whatever FLUSH_S says, so nothing is lost. A flush serialises the document under the
+lock and writes it outside it, under a second lock, so a slow fsync never stalls a counter: an unforced flush while
+another write is in flight writes nothing (its changes stay dirty for the next one), a forced one waits for it. No
+method raises into a request: a malformed argument is ignored.
 
 Every constant is read when it is used, so the test driver's `consts` reach it.
 """
@@ -52,7 +59,8 @@ NAME_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,64}$")
 UNRECOGNISED = errors.UNRECOGNISED_CODE  # "unrecognised"
 OVERFLOW = "overflow"
 NAMES_MAX = 256  # names per family (and routes, refusals and outcome keys) before OVERFLOW
-VALUE_MAX = 64  # an x-codex- header value's length
+VALUE_MAX = 64  # an x-codex- header value's length; a longer one is dropped, never cut (a cut number is wrong)
+USAGE_VALUE_RE = re.compile(r"^(?:-?[0-9][0-9.eE+-]*|true|false)$")  # the x-codex- values the usage poller reads
 HEADERS_MAX = 64  # x-codex- headers kept from one response
 FLUSH_S = 10.0  # an unforced flush writes at most this often
 READ_MAX = 16 * 2**20  # a stats file larger than this is unreadable, so the start resets it
@@ -82,8 +90,26 @@ def _is_ratio(value: object) -> bool:
             and count.RATIO_MIN <= value <= count.RATIO_MAX)
 
 
-def _printable(value: str) -> bool:
-    return all(" " <= ch <= "~" for ch in value)
+def _route_key(route: object, model: object) -> str:
+    return _bounded(route) + "/" + _bounded(model)
+
+
+def _is_route_key(key: object) -> bool:
+    """A key `_route_key` (or `_slot`'s OVERFLOW) can have written: each part bounded as it was built."""
+    if key == OVERFLOW:
+        return True
+    if not isinstance(key, str) or "/" not in key:
+        return False
+    route, model = key.split("/", 1)
+    return _bounded(route) == route and _bounded(model) == model
+
+
+def _header_pairs(headers: object) -> list:
+    """The (name, value) pairs of a response's headers, or none when `headers` is not a mapping of headers."""
+    try:
+        return list(headers.items())  # type: ignore[attr-defined]
+    except Exception:
+        return []
 
 
 class Stats:
@@ -93,6 +119,7 @@ class Stats:
         self.path = path
         self.lane = lane
         self._lock = threading.RLock()
+        self._write_lock = threading.Lock()  # one write at a time, held without self._lock (flush)
         self._dirty = False
         self._retry = False
         self._last_flush = None  # type: Optional[float]
@@ -148,7 +175,7 @@ class Stats:
         if isinstance(old.get("since"), str) and NAME_RE.fullmatch(old["since"]):
             doc["since"] = old["since"]
         for key, row in (old.get("routes") or {}).items() if isinstance(old.get("routes"), dict) else ():
-            if isinstance(row, dict) and _bounded(key) == key:
+            if isinstance(row, dict) and _is_route_key(key):
                 doc["routes"][key] = {
                     "requests": row["requests"] if _is_int(row.get("requests")) else 0,
                     "bytesPerToken": row["bytesPerToken"] if _is_ratio(row.get("bytesPerToken"))
@@ -157,7 +184,7 @@ class Stats:
                     "promptTokensLast": 0,
                 }
         for key, row in (old.get("refusals") or {}).items() if isinstance(old.get("refusals"), dict) else ():
-            if (isinstance(row, dict) and _bounded(key) == key and _is_int(row.get("tokens"))
+            if (isinstance(row, dict) and _is_route_key(key) and _is_int(row.get("tokens"))
                     and _is_int(row.get("window")) and isinstance(row.get("at"), str)
                     and NAME_RE.fullmatch(row["at"])):
                 doc["refusals"][key] = {"tokens": row["tokens"], "window": row["window"], "at": row["at"],
@@ -219,8 +246,9 @@ class Stats:
 
     def header_names(self, headers: Mapping[str, str]) -> None:
         """Count each response header's NAME, lower-cased, under `responseHeader`; never its value."""
+        pairs = _header_pairs(headers)
         with self._lock:
-            for header in list(headers.keys()):
+            for header, _ in pairs:
                 self.name("responseHeader", header.lower() if isinstance(header, str) else UNRECOGNISED)
 
     def outcome(self, key: str) -> None:
@@ -229,7 +257,7 @@ class Stats:
 
     def _route(self, route: str, model: str) -> dict:
         routes = self._doc["routes"]
-        key = self._slot(routes, _bounded(route) + "/" + _bounded(model))
+        key = self._slot(routes, _route_key(route, model))
         row = routes.get(key)
         if row is None:
             row = routes[key] = {"requests": 0, "bytesPerToken": count.SEED_BYTES_PER_TOKEN, "promptTokensMax": 0,
@@ -254,7 +282,7 @@ class Stats:
             row = self._route(route, model)
             row["promptTokensMax"] = max(row["promptTokensMax"], input_tokens)
             row["promptTokensLast"] = input_tokens
-            if image_count == 0 and not continued:
+            if image_count == 0 and not continued and _is_int(countable_bytes):
                 row["bytesPerToken"] = count.updated_ratio(row["bytesPerToken"], countable_bytes, input_tokens)
             self._dirty = True
 
@@ -264,24 +292,25 @@ class Stats:
             return
         with self._lock:
             refusals = self._doc["refusals"]
-            key = self._slot(refusals, _bounded(route) + "/" + _bounded(model))
+            key = self._slot(refusals, _route_key(route, model))
             refusals[key] = {"tokens": tokens, "window": window, "at": _iso(time.time() if now is None else now),
                              "estimated": True}
             self._dirty = True
 
     def usage_headers(self, headers: Mapping[str, str], *, now: Optional[float] = None) -> None:
-        """Keep the `x-codex-` headers of one response, by prefix: a printable value, cut to VALUE_MAX characters.
-        Every other header's value is never kept. A response with none leaves the last snapshot standing."""
+        """Keep the `x-codex-` headers of one response, by prefix, whose value has the poller's shape (USAGE_VALUE_RE,
+        at most VALUE_MAX characters); every other value is dropped, and every other header's value is never kept. A
+        response with none leaves the last snapshot standing."""
         prefix = known.CODEX_HEADER_PREFIX
         values = {}  # type: Dict[str, str]
-        for header, value in list(headers.items()):
+        for header, value in _header_pairs(headers):
             name = header.lower() if isinstance(header, str) else ""
             if not name.startswith(prefix) or not NAME_RE.fullmatch(name) or not isinstance(value, str):
                 continue
             value = value.strip()
-            if not _printable(value):
+            if not (len(value) <= VALUE_MAX and USAGE_VALUE_RE.fullmatch(value)):
                 continue
-            values[name] = value[:VALUE_MAX]
+            values[name] = value
             if len(values) >= HEADERS_MAX:
                 break
         if not values:
@@ -300,7 +329,7 @@ class Stats:
     def ratio(self, route: str, model: str) -> float:
         """D24's bytes per token for this route and model: the calibrated ratio, else the seed."""
         with self._lock:
-            row = self._doc["routes"].get(_bounded(route) + "/" + _bounded(model))
+            row = self._doc["routes"].get(_route_key(route, model))
             return row["bytesPerToken"] if row is not None else count.SEED_BYTES_PER_TOKEN
 
     def snapshot(self) -> dict:
@@ -310,7 +339,7 @@ class Stats:
 
     # ── the write ──
     def _write(self, data: bytes) -> None:
-        tmp = "%s.tmp.%d" % (self.path, os.getpid())
+        tmp = self.path + ".tmp"
         try:
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
             try:
@@ -332,23 +361,30 @@ class Stats:
     def flush(self, *, force: bool = False) -> bool:
         """Write the file when something changed, at most every FLUSH_S (a forced flush, and the first call after a
         failed one, write at once). True when it wrote; a failure is counted and kept for the next call, never
-        raised."""
-        with self._lock:
-            tick = time.monotonic()
-            if not force:
-                if not self._dirty:
-                    return False
-                if not self._retry and self._last_flush is not None and tick - self._last_flush < FLUSH_S:
-                    return False
-            self._doc["updatedAt"] = _iso(time.time())
-            data = json.dumps(self._doc, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        raised. The write runs outside self._lock; an unforced flush while another write is in flight returns False."""
+        if not self._write_lock.acquire(blocking=force):
+            return False
+        try:
+            with self._lock:
+                tick = time.monotonic()
+                if not force:
+                    if not self._dirty:
+                        return False
+                    if not self._retry and self._last_flush is not None and tick - self._last_flush < FLUSH_S:
+                        return False
+                self._doc["updatedAt"] = _iso(time.time())
+                data = json.dumps(self._doc, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                self._dirty = False  # a change made during the write sets it again
             try:
                 self._write(data)
             except Exception:  # a full disk, a removed directory: counted, retried at the next call
-                self._count(FLUSH_FAILED)
-                self._retry = True
+                with self._lock:
+                    self._count(FLUSH_FAILED)
+                    self._retry = True
                 return False
-            self._last_flush = tick
-            self._dirty = False
-            self._retry = False
+            with self._lock:
+                self._last_flush = tick
+                self._retry = False
             return True
+        finally:
+            self._write_lock.release()

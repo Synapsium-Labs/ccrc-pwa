@@ -82,7 +82,8 @@ THE COUNT ESTIMATOR, THE KNOWN NAMES AND THE STATS FILE (Task 5): one Stats per 
   count            {estimate?: [[bytes, ratio, images?], ...], ratio?: [[old, bytes, tokens], ...],
                    ratioWalk?: [[start, bytes, tokens, n], ...]} -> {"estimate", "ratio", "ratioWalk", "consts"}:
                    count.estimate / count.updated_ratio over each row (ratioWalk applies the same sample n times),
-                   and the module's constants with inbound.IMAGE_TOKENS
+                   and the module's constants with inbound.IMAGE_TOKENS; an estimate row's {"float": "nan"|"inf"}
+                   is that float, which JSON cannot carry
   known            -> {"families": stats.FAMILIES, "known": {family: sorted names}, "prefixes": {family: [prefix]}}
   stats-open       {path, lane, umask?} -> {"doc": the Stats' snapshot}: os.umask(umask) first when given
   stats-call       {method, args?, kwargs?} -> {"result"}: one public Stats method called with them
@@ -344,6 +345,13 @@ def _store_op(name, op, cb):
     return out
 
 
+def _float_arg(value):
+    """{"float": "<text>"} as float(<text>) (NaN and infinity, which JSON cannot carry); any other value as itself."""
+    if isinstance(value, dict) and list(value) == ["float"]:
+        return float(value["float"])
+    return value
+
+
 def _count_op(op, cb):
     count = cb.count
     walk = []
@@ -353,7 +361,7 @@ def _count_op(op, cb):
             r = count.updated_ratio(r, nbytes, tokens)
         walk.append(r)
     return {
-        "estimate": [count.estimate(*row) for row in op.get("estimate") or []],
+        "estimate": [count.estimate(*[_float_arg(v) for v in row]) for row in op.get("estimate") or []],
         "ratio": [count.updated_ratio(*row) for row in op.get("ratio") or []],
         "ratioWalk": walk,
         "consts": {"SEED_BYTES_PER_TOKEN": count.SEED_BYTES_PER_TOKEN, "ALPHA": count.ALPHA,

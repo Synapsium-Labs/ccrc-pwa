@@ -9,7 +9,9 @@
 // closed loopback URL: nothing here makes a request. Model ids are neutral, lanes are `lane-a`/`lane-b`, and the
 // `x-codex-` headers used here are fixture names under that prefix, never the usage poller's own names.
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import {
+  mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, existsSync, lstatSync, symlinkSync,
+} from 'node:fs';
 import path from 'node:path';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -221,18 +223,18 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
 
   it('x-codex- headers are kept by prefix, others never', async () => {
     const { home, file } = lane('cb-stats-headers-');
-    const long = 'v'.repeat(100);
+    // A value longer than VALUE_MAX (64) is dropped, never cut: a cut number is a wrong number.
     const [, , snap] = await run(home, [
       open(file),
       call('usage_headers', [{
-        'X-Codex-Fx-Alpha': '42.5', 'x-codex-fx-long': long, 'x-codex-fx-ctl': 'a\u0007b', 'x-other-fx': '7',
-        'retry-after': '30',
+        'X-Codex-Fx-Alpha': '42.5', 'x-codex-fx-long': '1'.repeat(65), 'x-codex-fx-max': '1'.repeat(64),
+        'x-codex-fx-flag': 'true', 'x-codex-fx-ctl': '4\u00072', 'x-other-fx': '7', 'retry-after': '30',
       }], { now: 1_700_000_000.25 }),
       { op: 'stats-snapshot' },
     ]);
     expect(snap.doc.usageHeaders).toEqual({
       at: '2023-11-14T22:13:20.250Z',
-      values: { 'x-codex-fx-alpha': '42.5', 'x-codex-fx-long': 'v'.repeat(64) },
+      values: { 'x-codex-fx-alpha': '42.5', 'x-codex-fx-max': '1'.repeat(64), 'x-codex-fx-flag': 'true' },
     });
   });
 
@@ -386,5 +388,190 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     const doc = readDoc(file);
     expect(doc.unexplained).toEqual({ eventType: ['response.fx_new_event'] });
     expect(doc.since).toBe('2026-01-01T00:00:00.000Z');
+  });
+});
+
+// Review fix round 1 (Task 5): a case for each guard the task added beyond the plan's list, each with a measured
+// mutation row in the commit body.
+describe.skipIf(!PY)('the stats file\'s added guards (codex-bridge Stage 2, Task 5 fix round 1)', () => {
+  /** A valid lane-a version-1 file with one carried outcome, as raw text. */
+  const plantedValid = (): string => JSON.stringify({
+    version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: { '2xx': 9 }, names: {},
+    unexplained: {}, usageHeaders: null, lastUpstreamRequestId: null,
+  });
+
+  it('a ratio that is not a finite positive number estimates at the seed', async () => {
+    const { home } = lane('cb-count-badratio-');
+    const [c] = await run(home, [{
+      op: 'count',
+      estimate: [[7, 3.5], [7, 0], [7, -2], [7, { float: 'nan' }], [7, { float: 'inf' }], [7, true]],
+    }]);
+    // ceil(7 / 3.5) = 2, the seed's estimate, for every row.
+    expect(c.estimate).toEqual([2, 2, 2, 2, 2, 2]);
+  });
+
+  it('a carried field of the wrong type or range is not carried', async () => {
+    const { home, file } = lane('cb-stats-badfield-');
+    const at = '2026-01-02T00:00:00.000Z';
+    // Raw text, so a NaN reaches the loader as Python's json reads it.
+    const body = `{"version": 1, "lane": "lane-a", "since": "has space", "startedAt": "${at}", "updatedAt": "${at}",
+      "routes": {
+        "backend/model-fx-low": {"requests": "x", "bytesPerToken": 0.01, "promptTokensMax": -1, "promptTokensLast": 5},
+        "backend/model-fx-high": {"requests": 3, "bytesPerToken": 50, "promptTokensMax": 7},
+        "backend/model-fx-nan": {"requests": 2, "bytesPerToken": NaN, "promptTokensMax": 1},
+        "backend/model-fx-ok": {"requests": 4, "bytesPerToken": 4.5, "promptTokensMax": 9},
+        "has space/model-fx": {"requests": 1, "bytesPerToken": 4.5, "promptTokensMax": 1},
+        "nokey": {"requests": 1, "bytesPerToken": 4.5, "promptTokensMax": 1}
+      },
+      "refusals": {
+        "backend/model-fx-tokens": {"tokens": "x", "window": 1, "at": "${at}", "estimated": true},
+        "backend/model-fx-window": {"tokens": 1, "window": -5, "at": "${at}", "estimated": true},
+        "backend/model-fx-at": {"tokens": 1, "window": 1, "at": "has space", "estimated": true},
+        "has space/model-fx": {"tokens": 1, "window": 1, "at": "${at}", "estimated": true},
+        "backend/model-fx-ok": {"tokens": 5, "window": 6, "at": "${at}", "estimated": true}
+      },
+      "outcomes": {"2xx": "x", "has space": 1, "4xx": 2},
+      "names": {"eventType": {"has space": 1, "response.fx_a": "x", "response.fx_b": 3}},
+      "unexplained": {"eventType": ["response.fx_b", 7, "has space"]},
+      "usageHeaders": null, "lastUpstreamRequestId": null}`;
+    writeFileSync(file, body, { mode: 0o600 });
+    const [o] = await run(home, [open(file)]);
+    const doc = o.doc as Line;
+    expect(doc.since).toBe(doc.startedAt); // a since outside NAME_RE is not carried
+    expect(doc.routes).toEqual({
+      'backend/model-fx-low': { requests: 0, bytesPerToken: 3.5, promptTokensMax: 0, promptTokensLast: 0 },
+      'backend/model-fx-high': { requests: 3, bytesPerToken: 3.5, promptTokensMax: 7, promptTokensLast: 0 },
+      'backend/model-fx-nan': { requests: 2, bytesPerToken: 3.5, promptTokensMax: 1, promptTokensLast: 0 },
+      'backend/model-fx-ok': { requests: 4, bytesPerToken: 4.5, promptTokensMax: 9, promptTokensLast: 0 },
+    });
+    expect(doc.refusals).toEqual({ 'backend/model-fx-ok': { tokens: 5, window: 6, at, estimated: true } });
+    expect(doc.outcomes).toEqual({ '4xx': 2 });
+    expect(doc.names).toEqual({ eventType: { 'response.fx_b': 3 } });
+    expect(doc.unexplained).toEqual({ eventType: ['response.fx_b'] });
+  });
+
+  it('a symlink at the stats path is replaced, never followed', async () => {
+    const { home, file } = lane('cb-stats-symlink-');
+    const decoy = path.join(home, 'decoy.json');
+    writeFileSync(decoy, plantedValid(), { mode: 0o600 });
+    symlinkSync(decoy, file);
+    const [o] = await run(home, [open(file)]);
+    expect(o.doc.outcomes).toEqual({ 'stats:reset': 1 });
+    expect(readFileSync(decoy, 'utf8')).toBe(plantedValid());
+    expect(lstatSync(file).isSymbolicLink()).toBe(false);
+    expect(readDoc(file).outcomes).toEqual({ 'stats:reset': 1 });
+  });
+
+  it('a symlink at the tmp name is never written through', async () => {
+    const { home, dir, file } = lane('cb-stats-tmplink-');
+    const decoy = path.join(home, 'decoy.txt');
+    writeFileSync(decoy, 'DECOY', { mode: 0o600 });
+    symlinkSync(decoy, `${file}.tmp`);
+    const [, , failed, snap, retried] = await run(home, [
+      open(file),
+      call('name', ['requestField', 'metadata']),
+      call('flush', [], { force: true }),
+      { op: 'stats-snapshot' },
+      call('flush'),
+    ]);
+    expect(failed.result).toBe(false);
+    expect(snap.doc.outcomes).toEqual({ 'stats:flush-failed': 1 });
+    expect(retried.result).toBe(true);
+    expect(readFileSync(decoy, 'utf8')).toBe('DECOY');
+    expect(readdirSync(dir)).toEqual([STATS]);
+    expect(lstatSync(file).isSymbolicLink()).toBe(false);
+  });
+
+  it('a killed writer\'s leftover tmp file is overwritten, never left', async () => {
+    const { home, dir, file } = lane('cb-stats-staletmp-');
+    writeFileSync(`${file}.tmp`, 'partial', { mode: 0o600 });
+    await run(home, [open(file), call('outcome', ['2xx']), call('flush', [], { force: true })]);
+    expect(readdirSync(dir)).toEqual([STATS]);
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 1 });
+  });
+
+  it('a stats file over READ_MAX starts fresh', async () => {
+    const { home, file } = lane('cb-stats-readmax-');
+    const size = Buffer.byteLength(plantedValid());
+    writeFileSync(file, plantedValid(), { mode: 0o600 });
+    const [at] = await run(home, [open(file)], { consts: { 'stats.READ_MAX': size } });
+    expect(at.doc.outcomes).toEqual({ '2xx': 9 });
+    writeFileSync(file, plantedValid(), { mode: 0o600 });
+    const [over] = await run(home, [open(file)], { consts: { 'stats.READ_MAX': size - 1 } });
+    expect(over.doc.outcomes).toEqual({ 'stats:reset': 1 });
+  });
+
+  it('a response keeps at most 64 x-codex- headers', async () => {
+    const { home, file } = lane('cb-stats-headersmax-');
+    const headers: Record<string, string> = {};
+    for (let i = 0; i < 65; i += 1) headers[`x-codex-fx-h${i}`] = String(i);
+    const [, , snap] = await run(home, [open(file), call('usage_headers', [headers], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' }]);
+    const values = snap.doc.usageHeaders.values as Record<string, string>;
+    expect(Object.keys(values)).toHaveLength(64);
+    expect(values['x-codex-fx-h63']).toBe('63');
+    expect(values['x-codex-fx-h64']).toBeUndefined();
+  });
+
+  it('an x-codex- value that is not a number or a boolean is never kept', async () => {
+    const { home, file } = lane('cb-stats-turnstate-');
+    const SENTINEL = 'SENTINEL-tok_fx1';
+    await run(home, [
+      open(file),
+      call('usage_headers', [{
+        'x-codex-fx-state': `${SENTINEL}AbCdEf0123`, 'x-codex-fx-promo': `${SENTINEL} free text`,
+        'x-codex-fx-percent': '12', 'x-codex-fx-flag': 'false',
+      }], { now: 1_700_000_000 }),
+      call('header_names', [{ 'x-codex-fx-state': `${SENTINEL}AbCdEf0123` }]),
+      call('flush', [], { force: true }),
+    ]);
+    const raw = readFileSync(file, 'utf8');
+    expect(raw).not.toContain(SENTINEL);
+    const doc = readDoc(file);
+    expect(doc.usageHeaders.values).toEqual({ 'x-codex-fx-percent': '12', 'x-codex-fx-flag': 'false' });
+    expect(doc.names.responseHeader).toEqual({ 'x-codex-fx-state': 1 }); // the name is still counted
+  });
+
+  it('a family outside FAMILIES counts stats:unknown-family and records nothing', async () => {
+    const { home, file } = lane('cb-stats-family-');
+    const [, , snap] = await run(home, [open(file), call('name', ['noSuchFamily', 'fx-name']),
+      { op: 'stats-snapshot' }]);
+    expect(snap.doc.outcomes).toEqual({ 'stats:unknown-family': 1 });
+    expect(snap.doc.names).toEqual({});
+    expect(snap.doc.unexplained).toEqual({});
+  });
+
+  it('a route key longer than 64 characters survives a restart', async () => {
+    const { home, file } = lane('cb-stats-longkey-');
+    const model = `model-${'x'.repeat(54)}`; // 60 characters, so `backend/<model>` is 68
+    const key = `backend/${model}`;
+    await run(home, [
+      open(file),
+      call('usage', ['backend', model, 40_000, 10_000], { image_count: 0 }),
+      call('refusal', ['backend', model, 450_000, 400_000], { now: 1_700_000_000 }),
+      call('flush', [], { force: true }),
+    ]);
+    const [second] = await run(home, [open(file)]);
+    expect(second.doc.routes[key]).toMatchObject({ promptTokensMax: 10_000 });
+    expect(second.doc.routes[key].bytesPerToken).toBeCloseTo(3.6, 12);
+    expect(second.doc.refusals[key]).toEqual({ tokens: 450_000, window: 400_000, at: '2023-11-14T22:13:20.000Z',
+      estimated: true });
+  });
+
+  it('a malformed argument is ignored, never raised into a request', async () => {
+    const { home, file } = lane('cb-stats-badarg-');
+    // `run` fails the case on any op that raised.
+    const [, , , , , snap] = await run(home, [
+      open(file),
+      call('usage', ['backend', MODEL, 'x', 10_000], { image_count: 0 }),
+      call('header_names', [null]),
+      call('usage_headers', [[1, 2]], { now: 1_700_000_000 }),
+      call('header_names', [[1, 2]]),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.routes[ROUTE_KEY]).toMatchObject({ bytesPerToken: 3.5, promptTokensMax: 10_000 });
+    expect(snap.doc.usageHeaders).toBeNull();
+    expect(snap.doc.names).toEqual({});
   });
 });
