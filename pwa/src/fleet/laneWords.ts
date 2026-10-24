@@ -3,10 +3,17 @@
 // percentage, a rolled-over one a zero that says it is inferred, a never-measured one a dash that says so.
 import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountLabel } from '../lib/accounts';
+import { formatReset } from './formatReset';
 import { bindingWindow } from './laneOrder';
 
 /** The door's bare name, the full strip's too: what it is and where it goes. */
 export const ACCOUNTS_DOOR_LABEL = 'account usage — open accounts';
+
+/** The Accounts screen's all-lanes choice, named once. */
+export const ALL_ACCOUNTS = 'All accounts';
+
+/** What a lane never read says in place of a percentage: never 0%, which would claim a measurement. */
+export const NO_READING = 'no reading';
 
 /** A window's one reading: `shown` is what prints, `spoken` what a screen reader hears. A measured window is `n%`,
  *  spoken the same; one that rolled over (the server zeroed it, so the zero is inferred, not measured) is `0%`, spoken
@@ -26,6 +33,21 @@ export function lanesRowLabel(lanes: readonly AccountUsage[], roster: readonly R
     if (w === null || w.pct === null) continue;
     if (top === null || w.pct > top.pct) top = { lane, w, pct: w.pct };
   }
-  if (top === null) return 'account usage, no reading';
+  if (top === null) return `account usage, ${NO_READING}`;
   return `account usage, highest ${accountLabel(roster, top.lane.wrapper)} ${windowReading(top.w.pct, top.w.rolledOver).spoken}`;
+}
+
+/** A lane card's accessible name: the lane, each window it has with its spoken reading and its countdown, and where the
+ *  card goes. A lane never read says `NO_READING`, never a zero. */
+export function laneDoorLabel(lane: AccountUsage, roster: readonly RosterWire[], nowSec: number): string {
+  const name = accountLabel(roster, lane.wrapper);
+  const window = (label: string, pct: number | null, resetAt: number | null, rolledOver: boolean): string => {
+    const when = resetAt === null ? 'no reset time' : formatReset(resetAt, nowSec) === 'now' ? 'resets now' : `resets in ${formatReset(resetAt, nowSec)}`;
+    return `${label} ${windowReading(pct, rolledOver).spoken}, ${when}`;
+  };
+  const windows = [
+    lane.five !== null ? window('5h', lane.five, lane.fiveResetAt, lane.fiveRolledOver === true) : null,
+    lane.seven !== null ? window('7d', lane.seven, lane.sevenResetAt, lane.sevenRolledOver === true) : null,
+  ].filter((w): w is string => w !== null);
+  return `${name}: ${windows.length === 0 ? NO_READING : windows.join('; ')} — opens ${name} on the Accounts screen`;
 }

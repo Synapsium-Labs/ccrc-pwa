@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AccountUsage } from '../../shared/api';
 import { lanesByFree } from '../src/fleet/laneOrder';
-import { lanesRowLabel, windowReading } from '../src/fleet/laneWords';
+import { ALL_ACCOUNTS, laneDoorLabel, lanesRowLabel, NO_READING, windowReading } from '../src/fleet/laneWords';
 
 const nowSec = Math.floor(Date.now() / 1000);
 const lane = (wrapper: string, five: number | null, seven: number | null, over: Partial<AccountUsage> = {}): AccountUsage => ({
@@ -52,5 +52,30 @@ describe('the lanes\' words', () => {
     expect(lanesRowLabel([lane('lane-a', 0, 40, { fiveRolledOver: true })], [])).toBe('account usage, highest lane-a 40%');
     // A measured zero beside a rolled-over zero is still measured.
     expect(lanesRowLabel([lane('lane-a', 0, 0, { fiveRolledOver: true })], [])).toBe('account usage, highest lane-a 0%');
+    // The card's name takes the same spoken words for its window.
+    expect(laneDoorLabel(lane('lane-a', 0, null, { fiveRolledOver: true, fiveResetAt: nowSec + 600 }), [], nowSec)).toContain(
+      '5h 0%, inferred: the window reset, resets in 10m',
+    );
+  });
+
+  it('the shared words are named once', () => {
+    expect(ALL_ACCOUNTS).toBe('All accounts');
+    expect(NO_READING).toBe('no reading');
+  });
+
+  it('a card\'s name says its lane, each window\'s reading and its reset, and where it opens', () => {
+    const card = lane('lane-a', 40, 0, { fiveResetAt: nowSec + 2 * 3600 + 10 * 60 + 30, sevenResetAt: nowSec + 3 * 86400 + 60, sevenRolledOver: true });
+    expect(laneDoorLabel(card, [], nowSec)).toBe(
+      'lane-a: 5h 40%, resets in 2h 10m; 7d 0%, inferred: the window reset, resets in 3d — opens lane-a on the Accounts screen',
+    );
+    // Only a window the lane has is named (a weekly-only lane has no 5h), and a missing reset time is said so.
+    expect(laneDoorLabel(lane('lane-b', null, 25), [], nowSec)).toBe('lane-b: 7d 25%, no reset time — opens lane-b on the Accounts screen');
+    expect(laneDoorLabel(lane('lane-b', 25, null, { fiveResetAt: nowSec - 5 }), [], nowSec)).toBe('lane-b: 5h 25%, resets now — opens lane-b on the Accounts screen');
+  });
+
+  it('a never-read lane\'s name says no reading, never 0%', () => {
+    const label = laneDoorLabel(lane('lane-a', null, null), [], nowSec);
+    expect(label).toBe('lane-a: no reading — opens lane-a on the Accounts screen');
+    expect(label).not.toMatch(/0%/);
   });
 });
