@@ -228,8 +228,17 @@ take it is never blocked on: the server journals the omission instead and
 moves on, as `route-omitted:no-route-argv-cap` (wave 1's argv path) or
 `route-omitted:no-route-v1-cap` (wave N ≥ 2's verb path) — two DIFFERENT
 run events because the two are different parse paths that can ship one
-without the other. Omitting `route` sends the identical bare argv it
-always has. The brief still names the routing in prose (clause 13) — this
+without the other. Omitting `route` on a fresh spawn fills the run
+kind's default row from `shared/route-defaults.ts` (the matrix's spec'd-worker
+row for `work`, the review-session row for `review`) and journals
+`route-defaulted:<kind>`. The default's class is a PREFERENCE, never a
+requirement: the server sends it with `--route-default`, so ccd places by it
+like the coordinator row's own default, and a project whose in-pool lanes are all
+at the seven-day ceiling still places a defaulted dispatch (a class YOU pass is
+strict and is refused at the ceiling, `no account available for placement`). A
+ccd without `route-default-v1` gets no default route at all and the server
+journals `route-omitted:no-route-default-cap`; a resumed wave with no `route` keeps its session's
+record; an empty `{}` is a passed route and is sent bare. The brief still names the routing in prose (clause 13) — this
 object is what carries that placement to the fleet, never a replacement
 for saying so.
 

@@ -2881,3 +2881,13 @@ describe('the stall clause quotes what the stall watch sends and reads (stall wa
     }
   });
 });
+
+describe('wave-lifecycle route default (D-6794)', () => {
+  it('says an omitted route fills the run kind default, not a bare argv', () => {
+    const text = refs('wave-lifecycle.md').replace(/\s+/g, ' ');
+    expect(text).toContain('Omitting `route` on a fresh spawn fills the run kind\'s default row');
+    expect(text).toContain('`route-defaulted:<kind>`');
+    expect(text).toContain('an empty `{}` is a passed route and is sent bare');
+    expect(text).not.toContain('sends the identical bare argv it always has');
+  });
+});
