@@ -13,6 +13,7 @@ import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { WorkflowView } from './workflows.js';
+import type { DiskHealth } from './disk.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -3639,6 +3640,13 @@ export interface FleetHealth {
    * Read it through `readArchivedHeld` alone. No PWA surface renders it yet (the PWA epic's, under the UI rule).
    */
   archivedHeld?: ArchivedHeld;
+  /**
+   * The fleet's disk alarm (D-6615, `DiskHealth`): the level of the worst work filesystem, each filesystem's own level,
+   * the expected mounts and the pressure flag, held by the watcher's `sweepDisk` once a minute. Optional for the same
+   * absence-permits reason as the blocks above: absent until the first sweep. Read it through `readDiskHealth` alone;
+   * absent reads as UNKNOWN, never as a healthy disk.
+   */
+  disk?: DiskHealth;
 }
 
 /**

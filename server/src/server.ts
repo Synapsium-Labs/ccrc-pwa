@@ -1256,6 +1256,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The ranked held bytes (D-5943), composed by the expiry lane once per pass and read here ONCE. Absent before the
     // lane's first pass: absence reads as UNKNOWN, never as nothing held (`FleetHealth.archivedHeld`).
     const archivedHeld = watcher?.archivedHeld() ?? undefined;
+    // The disk alarm's block (D-6615), held by `sweepDisk`. Absent before its first sweep: absence reads as UNKNOWN.
+    const disk = watcher?.disk() ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       // The two stamps: with a coordination database, the inventory's rows —
       // re-measured every minute by `sweepInventory`, superseded rows excluded
@@ -1279,6 +1281,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         ...(lifecycle ? { lifecycle } : {}),
         ...(delegation ? { delegation } : {}),
         ...(archivedHeld ? { archivedHeld } : {}),
+        ...(disk ? { disk } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1301,6 +1304,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ...(lifecycle ? { lifecycle } : {}),
       ...(delegation ? { delegation } : {}),
       ...(archivedHeld ? { archivedHeld } : {}),
+      ...(disk ? { disk } : {}),
     };
   });
 
