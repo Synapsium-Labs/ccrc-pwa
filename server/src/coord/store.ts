@@ -3,6 +3,7 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import { redactCommand } from './redact.js';
+import { REVIEW_CAP_SUMMARY_MAX, reviewCapRefuses, type LastReviewReport } from './reviewcap.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { decideAllocation } from './ledger.js';
@@ -74,7 +75,7 @@ import {
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
 } from '../deadCoordinator.js';
 import {
-  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
+  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES, REVIEW_DONE_SUBJECT,
   isAskReleaseReason, isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
   isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState,
@@ -217,7 +218,7 @@ type HoldReasonRefusal = Extract<HoldReasonVerdict, { ok: false }>;
 
 export type OpenRunResult =
   | { id: number; program: string; state: RunState; holdReason: string }
-  | { refused: 'claimed-by-another' | 'review-in-flight'; by: string }
+  | { refused: 'claimed-by-another' | 'review-in-flight' | 'cap-review-rounds'; by: string }
   | HoldReasonRefusal;
 
 /** A fresh run's exact id is known only after its INSERT. Throwing this private
@@ -1081,6 +1082,20 @@ interface MeasuredRunRow { row: RunRowDb; nums: RunNumbers }
  */
 const OUTSTANDING_STATES_SQL = `('${OUTSTANDING_DELIVERY_STATES.join("','")}')`;
 
+/** D-6777: THE ACK DOOR'S GUARD, spelled once. A delivery is ackable when its
+ *  state is not terminal, or when it is exactly the replay-ceiling park
+ *  (orchestrator ruling I2(b)): `state = 'rejected'`, `rejectCode =
+ *  'undeliverable'` and `lastError` equal to `MAIL_REPLAY_CEILING_ERROR`. The
+ *  write (`writeDeliveries`' `'ack'` arm) has no table alias and the inbox read
+ *  has `d`, so this is one builder: `prefix` is `''` for the write and `'d.'`
+ *  for the read. The guard reads no run, so it admits a replay-ceiling park
+ *  whatever its run's state; `inboxFor` ANDs the read predicate to hide the
+ *  closed-run ones. Returns the SQL and its one bound argument. */
+const ackableDeliverySql = (prefix: string): { sql: string; args: readonly string[] } => ({
+  sql: `(${prefix}state NOT IN ${TERMINAL_DELIVERY_SQL} OR (${prefix}state = 'rejected' AND ${prefix}rejectCode = 'undeliverable' AND ${prefix}lastError = ?))`,
+  args: [MAIL_REPLAY_CEILING_ERROR],
+});
+
 /** The WRITE-side complement of `OUTSTANDING_STATES_SQL` above, built from L0's
  *  `TERMINAL_DELIVERY_STATES` by the same `.join` interpolation
  *  `CoordStore.TERMINAL_SQL` already uses for work items. Every delivery-row
@@ -1822,6 +1837,11 @@ export class CoordStore {
         if (input.kind === 'review') {
           const inflight = this.reviewInFlightFor(input.reviews ?? -1);
           if (inflight !== null) return { refused: 'review-in-flight' as const, by: String(inflight) };
+          // D-6795: the Nth+1 round is refused unless the operator lifted the cap for this work run. `by` is the count.
+          const rounds = this.reviewRounds(input.reviews ?? -1);
+          if (reviewCapRefuses(rounds, this.reviewCapLifted(input.reviews ?? -1))) {
+            return { refused: 'cap-review-rounds' as const, by: String(rounds) };
+          }
         }
         const now = Date.now();
         this.db.prepare(
@@ -2288,7 +2308,7 @@ export class CoordStore {
    * the narrow side (`dueDeliveries`) that does not use the constant at all, and
    * omitted `runHealth`, which is the single reader whose OUTPUT this arm moves.
    *
-   * On the composed `OUTSTANDING_OR_ABANDONED_SQL` — four readers:
+   * On the composed `OUTSTANDING_OR_ABANDONED_SQL` — four readers, plus the mail inbox's two (D-6777):
    *   `outstandingMailFor(<heir>)` — the point. Reached from `GET /api/mail?to=`
    *     and from `sessionws.ts`'s `checkMail`, so the heir's live socket shows
    *     it with no wire change.
@@ -2307,6 +2327,10 @@ export class CoordStore {
    *     `OUTSTANDING_OR_ABANDONED_SQL`'s `COALESCE(rr.state, '')` reads a
    *     non-NULL state on every row it can select. It is `GET
    *     /api/mail?program=`'s default, non-`all`, arm.
+   *   `inboxFor(<id>)` and `abandonedCount(<id>)` (mail inbox, D-6777) — read-only
+   *     and keyed on the CALLER's own id, never an heir's: they join `runs rr`
+   *     LEFT exactly as `outstandingMailFor` does and move no row, so the re-queue
+   *     cannot reach them any way it cannot reach `outstandingMailFor`.
    *
    * On the narrower `OUTSTANDING_STATES_SQL` — the holders below, in file order
    * (the count is the scan's, not this list's):
@@ -4145,6 +4169,61 @@ export class CoordStore {
     return isPositiveDecimalSafeInteger(id) ? id : null;
   }
 
+  /** D-6795: how many review runs name this work run, in any state (a failed or abandoned round still spent one). */
+  reviewRounds(workRunId: number): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE kind = 'review' AND reviews = ?")
+      .get(workRunId) as { n: number };
+    return Number(row.n);
+  }
+
+  /** D-6795: whether the operator lifted the review-round cap for this work run. */
+  reviewCapLifted(workRunId: number): boolean {
+    const row = this.db.prepare('SELECT liftedAt FROM review_cap WHERE workRunId = ?')
+      .get(workRunId) as { liftedAt: number | null } | undefined;
+    return row !== undefined && row.liftedAt !== null;
+  }
+
+  /** D-6795: record that the cap's ask is raised. True exactly once per work run: the insert that creates the row is
+   *  the raise, so a second refusal (or a restart) finds the row and raises nothing. */
+  raiseReviewCapAsk(workRunId: number, now: number): boolean {
+    const res = this.db.prepare('INSERT OR IGNORE INTO review_cap (workRunId, askedAt, liftedAt) VALUES (?, ?, NULL)')
+      .run(workRunId, now);
+    return Number(res.changes) === 1;
+  }
+
+  /** D-6795: the operator's lift, per work run. Idempotent; false when the run is not a work run on file. */
+  liftReviewCap(workRunId: number, now: number): boolean {
+    const run = this.db.prepare("SELECT 1 AS x FROM runs WHERE id = ? AND kind = 'work'").get(workRunId);
+    if (run === undefined) return false;
+    this.db.prepare(
+      'INSERT INTO review_cap (workRunId, askedAt, liftedAt) VALUES (?, NULL, ?) '
+      + 'ON CONFLICT(workRunId) DO UPDATE SET liftedAt = COALESCE(liftedAt, excluded.liftedAt)',
+    ).run(workRunId, now);
+    return true;
+  }
+
+  /** D-6795: the newest `review-done` mail of a review run naming this work run: its run, the paragraph after the
+   *  fingerprint line, and the first artifact (the report's path). Nulls when no review has reported. */
+  lastReviewReport(workRunId: number): LastReviewReport {
+    const row = this.db.prepare(
+      "SELECT m.runId AS runId, m.body AS body, m.artifacts AS artifacts FROM mail m JOIN runs r ON r.id = m.runId "
+      + "WHERE r.kind = 'review' AND r.reviews = ? AND m.subject = ? ORDER BY m.id DESC LIMIT 1",
+    ).get(workRunId, REVIEW_DONE_SUBJECT) as { runId: number; body: string; artifacts: string } | undefined;
+    if (row === undefined) return { reviewRunId: null, summary: null, report: null };
+    const nl = row.body.indexOf('\n');
+    const text = (nl < 0 ? '' : row.body.slice(nl + 1)).trim();
+    let report: string | null = null;
+    try {
+      const a: unknown = JSON.parse(row.artifacts);
+      if (Array.isArray(a) && typeof a[0] === 'string') report = a[0];
+    } catch { /* an unreadable list names no report */ }
+    return {
+      reviewRunId: Number(row.runId),
+      summary: text === '' ? null : redactCommand(text).slice(0, REVIEW_CAP_SUMMARY_MAX),
+      report,
+    };
+  }
+
   programs(): { slug: string; title: string; state: ProgramState }[] {
     const rows = this.db.prepare('SELECT slug, title, state FROM programs ORDER BY slug')
       .all() as { slug: string; title: string; state: string }[];
@@ -5160,6 +5239,46 @@ export class CoordStore {
   }
 
   /**
+   * D-6777 (mail inbox, spec §3.3 step 3): the caller's INBOX SET, oldest first
+   * — the deliveries a session can print AND ack, still shown by its mailbox.
+   * It is the ack door's guard (`ackableDeliverySql`, the same fragment
+   * `writeDeliveries` uses) AND `OUTSTANDING_OR_ABANDONED_SQL`, over
+   * `outstandingMailFor`'s own join (`LEFT JOIN runs rr`), so `ABANDONED_PARK_SQL`
+   * reads the same run.
+   *
+   * Neither predicate alone is the rule. The ack guard alone reads no run, so it
+   * would print a closed run's replay-ceiling park as live (ruling I2(a) hides
+   * that row from the mailbox, while ruling I2(b) still lets it be acked). The
+   * read predicate alone would print a park-ceiling rejection that the ack door
+   * refuses, forever. Pure read: no row changes.
+   */
+  inboxFor(toId: string): { deliveryId: number; envelope: string }[] {
+    const ack = ackableDeliverySql('d.');
+    return this.db.prepare(
+      'SELECT d.id AS deliveryId, d.envelope FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      'LEFT JOIN runs rr ON rr.id = m.runId ' +
+      `WHERE d.toId = ? AND ${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL} ORDER BY d.id ASC`,
+    ).all(toId, ...ack.args) as unknown as { deliveryId: number; envelope: string }[];
+  }
+
+  /** D-6777: how many deliveries `outstandingMailFor`'s predicate admits that
+   *  `inboxFor` does not (the park-ceiling rejection and its kin). `inboxFor` is
+   *  a subset of that predicate by construction, so this is a plain difference. */
+  abandonedCount(toId: string): number {
+    const ack = ackableDeliverySql('d.');
+    const base = this.db.prepare(
+      'SELECT COUNT(*) AS n FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      `LEFT JOIN runs rr ON rr.id = m.runId WHERE d.toId = ? AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
+    ).get(toId) as { n: number };
+    const inbox = this.db.prepare(
+      'SELECT COUNT(*) AS n FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      'LEFT JOIN runs rr ON rr.id = m.runId ' +
+      `WHERE d.toId = ? AND ${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
+    ).get(toId, ...ack.args) as { n: number };
+    return base.n - inbox.n;
+  }
+
+  /**
    * Every delivery of a mail belonging to THIS PROGRAMME (design §4), newest
    * first — the read side of `GET /api/mail?program=<slug>`.
    *
@@ -5370,10 +5489,11 @@ export class CoordStore {
    * `{changed, state}` for a one-row write.
    */
   private writeDeliveries(set: string, setArgs: readonly SqlArg[], guard: DeliveryGuard, where: string, whereArgs: readonly SqlArg[]): number {
+    const ack = ackableDeliverySql('');
     const guardSql = guard === 'outstanding' ? `state IN ${OUTSTANDING_STATES_SQL}`
       : guard === 'non-terminal' ? `state NOT IN ${TERMINAL_DELIVERY_SQL}`
-      : `(state NOT IN ${TERMINAL_DELIVERY_SQL} OR (state = 'rejected' AND rejectCode = 'undeliverable' AND lastError = ?))`;
-    const guardArgs = guard === 'ack' ? [MAIL_REPLAY_CEILING_ERROR] : [];
+      : ack.sql;
+    const guardArgs = guard === 'ack' ? ack.args : [];
     return Number(this.db.prepare(`UPDATE mail_deliveries SET ${set} WHERE ${guardSql} AND (${where})`)
       .run(...setArgs, ...guardArgs, ...whereArgs).changes);
   }

@@ -1,7 +1,7 @@
 // The lane-state backfill (accounts plan Task A11; D-5518, G35; D-5755). A lane rostered before the lane-state file
 // existed has none, and `enable`'s readiness (A13) reads it, so `ccrc install` writes one with `check` absent for every
 // rostered lane that lacks one, and leaves an existing file byte for byte. `ccrc update` runs the staged tree's install
-// spine (`_upd_*`; `ccrc-update.test.ts` pins that it does), so it backfills through the same step: the cases below
+// spine (`_upd_*`; `ccrc-update-*.test.ts` pins that it does), so it backfills through the same step: the cases below
 // drive that step, `_inst_lane_state`, sourced, and pin its place in `CCRC_INST_SPINE`.
 import { describe, it, expect, beforeEach } from 'vitest';
 import { spawnSync } from 'node:child_process';

@@ -1901,6 +1901,7 @@ describe('the model files, and who reads each one', () => {
     expect(holders).toEqual([
       'ccd/ccd',                // ROUTE_CLASSES and _route_valid's degraded arm — routing spec §5.1
       'ccd/ccrc',               // MODELS_CLASSES — the usage-error gate
+      'ccd/session-hook.sh',    // the Fable arm's deny reason and prefilter name the classes in prose (D-6792) — no walk
       'deploy/models-op.mjs',   // CLASSES — the mutation walk
       'pwa/src/lib/models.ts',  // the picker's aliases — spec §1/§8/§13.4, deleted by Plan 3a
       'shared/modelenv.mjs',    // the env block's key order and the TSV's
@@ -3040,7 +3041,7 @@ describe('the release owner literal — two named assignments, and no third spel
   // deliberate:
   //   - license.test.ts pins the VALUE — both lanes name the ruled owner, and
   //     the previous org survives nowhere in shipping code;
-  //   - ccrc-update.test.ts pins the AGREEMENT — install.sh's owner/repo pair
+  //   - ccrc-update-kept.test.ts pins the AGREEMENT — install.sh's owner/repo pair
   //     and ccd/ccrc's are equal, so the two lanes download the same release;
   //   - THIS pins the COUNT — those two assignments are the only spellings of
   //     the org anywhere in shipped code, so a third copy (a hardcoded release
@@ -7914,6 +7915,15 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(writersOf('mail-disabled')).toEqual([]);
   });
 
+  // D-6785 (PR landing in ccrc, stage 1): the checks lane's two markers are rows of the switchboard with writer
+  // `hand-only`. Nothing in the tree writes `landing-disabled` or `landing-checks-live` (the operator arms the lane
+  // by hand, after a week of agreeing shadow rows).
+  it.each(['landing-disabled', 'landing-checks-live'])('%s: hand-only, no writer in the tree', (name) => {
+    expect(SWITCHES[name as 'landing-disabled' | 'landing-checks-live'].writer).toBe('hand-only');
+    expect(constsOf(name), 'CONTROL: the switchboard defines it').toHaveLength(1);
+    expect(writersOf(name)).toEqual([]);
+  });
+
   // D-5855 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1a; ARCH-70 (#805)).
   // The switchboard's exit: `mail-disabled` is defined once (2 -> 1 on C1a's tip; the count may only shrink), and so
   // is every other marker row; and every marker literal a `const *_MARKER` defines under `server/src` or `shared/` is
@@ -8331,7 +8341,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/collectLane.ts': 7,
       'server/src/config.ts': 3,
       'server/src/coord/caps.ts': 6,
-      'server/src/coord/close.ts': 8,
+      'server/src/coord/close.ts': 2,
       'server/src/coord/collectLaneJournal.ts': 5,
       'server/src/coord/db.ts': 4,
       'server/src/coord/delegation-checkpoint.ts': 33,
@@ -8847,5 +8857,43 @@ describe('the tmp sweep\'s live-arm marker has no writer in the tree (fleet disk
   it('in TypeScript only the lifecycle manifest names it, and that file reaches no node: module', () => {
     expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel)).toEqual(['shared/lifecycle.ts']);
     expect(stallCode(path.join(ccrcRoot, 'shared/lifecycle.ts'))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+});
+
+// CODEX BRIDGE STAGE 2, TASK 1: the upstream error codes (the seven sets) are module constants in
+// ccd/codexbridge/errors.py, and every other reader imports errors.ALL_CODES rather than spell one. APPENDED, for the
+// reason the blocks above state: session-hook.test.ts's citation audit cites this file by line. The codes are read from
+// the module itself, so this row holds no second copy of them. ccd/ccgpt-usage.py and ccd/ccgpt-auth.py are left out:
+// they classify other endpoints.
+describe('codex bridge Stage 2 Task 1: the bridge owns the upstream error codes', () => {
+  it('the upstream error codes are spelled once, in codexbridge/errors.py', () => {
+    const py = spawnSync('python3', ['-I', '-c', [
+      'import sys', 'sys.dont_write_bytecode = True', 'sys.path.insert(0, sys.argv[1])',
+      'from codexbridge import errors', 'print("\\n".join(sorted(errors.ALL_CODES)))',
+    ].join('\n'), path.join(ccrcRoot, 'ccd')], { encoding: 'utf8' });
+    expect(py.status, py.stderr).toBe(0);
+    const codes = py.stdout.split('\n').filter(Boolean);
+    expect(codes.length).toBeGreaterThanOrEqual(16);
+    const r = spawnSync('git', ['-C', ccrcRoot, 'grep', '-l', '-w', ...codes.flatMap((c) => ['-e', c]), '--',
+      'ccd', 'shared', 'deploy', 'server/src', ':!ccd/ccgpt-usage.py', ':!ccd/ccgpt-auth.py'], { encoding: 'utf8' });
+    // git grep answers 1 for "no match" and above 1 for a failure: neither is the answer this row expects, and a
+    // failure must never read as an empty list.
+    if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/codexbridge/errors.py']);
+  });
+});
+
+// The ack guard's single spelling (D-6777). Placed at the END of the file so
+// the line anchors other documents cite in this file do not move. It reads
+// `server/src/coord/store.ts` ALONE, never itself, so its needles are whole.
+describe('one ack guard', () => {
+  it('spells the ack guard ONCE — ackableDeliverySql, never a second copy of its clauses (D-6777)', () => {
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    const CLAUSE = "AND ${prefix}rejectCode = 'undeliverable' AND ${prefix}lastError = ?";
+    const BUILDER = 'const ackableDeliverySql = ';
+    const EXCEPTION = "rejectCode = 'undeliverable' AND";
+    expect(store.split(CLAUSE).length - 1, 'the ack guard clause is not written exactly once').toBe(1);
+    expect(store.split(BUILDER).length - 1, 'the builder is not defined once').toBe(1);
+    expect(store.split(EXCEPTION).length - 1, 'a second spelling of the replay-ceiling exception').toBe(1);
   });
 });

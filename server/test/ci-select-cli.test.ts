@@ -142,7 +142,7 @@ function parseGithubOutput(text: string): Record<string, string> {
   return out;
 }
 
-type RunOpts = { event: string; inputMode?: string; selection?: 'shadow' | 'enforce'; fullGreen?: 'true' | 'false'; mapFile?: string; timesFile?: string; traceList?: string };
+type RunOpts = { event: string; inputMode?: string; selection?: 'shadow' | 'enforce'; fullGreen?: 'true' | 'false'; mapFile?: string; timesFile?: string; traceList?: string; floorList?: string; floorStatic?: string };
 
 function runSelect(repo: string, opts: RunOpts) {
   const io = mkTmp('ccrc-ci-select-io-');
@@ -162,6 +162,8 @@ function runSelect(repo: string, opts: RunOpts) {
   if (opts.mapFile) args.push('--map', opts.mapFile);
   if (opts.timesFile) args.push('--times', opts.timesFile);
   if (opts.traceList) args.push('--trace-list', opts.traceList);
+  if (opts.floorList) args.push('--floor-list', opts.floorList);
+  if (opts.floorStatic) args.push('--floor-static', opts.floorStatic);
 
   let status = 0;
   let stderr = '';
@@ -650,5 +652,42 @@ describe('select.mjs CLI — workflow_dispatch', () => {
 
     const traced = uniqueFilesInMatrix(outputs.trace_matrix);
     expect(traced).toEqual(new Set(['test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts', 'test/d.test.ts']));
+  });
+});
+
+describe('select.mjs CLI — the node floor answer (D-6771)', () => {
+  // The fixture's pull request selects a, b and c (not d). The floor leg runs when its static inputs moved, when
+  // everything runs, or when the selection holds a test the floor runs: a module those tests import is a read
+  // in the map, so it selects them.
+  function floorOf(listed: string[], opts: { floorStatic?: string; fixture?: 'main' | 'full' } = {}): string {
+    const { repo, mapFile } = opts.fixture === 'full' ? buildFullTriggerFixture() : buildMainFixture();
+    const floorList = path.join(repo, 'floor-list.txt');
+    writeFileSync(floorList, listed.map((f) => `${f}\n`).join(''));
+    const r = runSelect(repo, { event: 'pull_request', mapFile, floorList, floorStatic: opts.floorStatic ?? 'false' });
+    expect(r.status).toBe(0);
+    return r.outputs.floor;
+  }
+
+  it('is true when the selection holds a test the floor runs', () => {
+    expect(floorOf(['test/d.test.ts', 'test/a.test.ts'])).toBe('true');
+  });
+
+  it('is false when the selection holds none of them and the static inputs did not move', () => {
+    expect(floorOf(['test/d.test.ts'])).toBe('false');
+  });
+
+  it('is true when the static inputs moved, whatever the selection holds', () => {
+    expect(floorOf(['test/d.test.ts'], { floorStatic: 'true' })).toBe('true');
+  });
+
+  it('is true when everything runs', () => {
+    expect(floorOf(['test/zzz.test.ts'], { fixture: 'full' })).toBe('true');
+  });
+
+  it('is true with no list to read, and with an empty or unreadable one', () => {
+    const { repo, mapFile } = buildMainFixture();
+    expect(runSelect(repo, { event: 'pull_request', mapFile, floorStatic: 'false' }).outputs.floor).toBe('true');
+    expect(floorOf([])).toBe('true');
+    expect(runSelect(repo, { event: 'pull_request', mapFile, floorStatic: 'false', floorList: path.join(repo, 'absent.txt') }).outputs.floor).toBe('true');
   });
 });

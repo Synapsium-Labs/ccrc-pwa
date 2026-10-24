@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 49 id-taking calls across 12 files.
+// THE CLAIM: 47 id-taking calls across 12 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -54,6 +54,7 @@ const ID_BUILDERS = {
   wsReclaimAudit: 'id', wsReclaim: 'id', wsExpireAudit: 'id', wsExpire: 'id',
   wsCollectAudit: 'id', wsCollect: 'id', wsAttic: 'id',
   wsOrphanCensus: 'no-id', wsOrphanAudit: 'no-id', wsOrphan: 'no-id',   // an orphaned tree travels as hex, never as an id (D-6630)
+  wsCollectCensus: 'no-id', wsCollectLooseAudit: 'no-id', wsCollectLoose: 'no-id',   // a loose entry's name travels as hex, never as an id (D-6626)
   wsHold: 'id', wsRelease: 'id', wsRename: 'id', wsTitle: 'id',
   coordPause: 'no-id', reclaimPause: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',
@@ -313,15 +314,16 @@ const GATES = {
     file: 'coord/dispatchDecide.ts', scope: 'decideRequest',
     re: /if \(!hold\.ok\) return refused\(hold\);\s*if \(run\.sessionId !== null && !isRegistryId\(run\.sessionId\)\) return refused\(\{ ok: false, kind: 'bad-session' \}\);/,
   },
-  /** The abandon arm closes a bad stored id `failed` with no fleet act, and records its one event. */
+  /** The abandon arm closes a bad stored id `failed` with no fleet act: the decider's request step names it `unnamed`
+   *  (ARCH-35), and `abandonRun` then takes no sibling read, hold or release for it. */
   'close-abandon-branch': {
-    file: 'coord/close.ts', scope: 'closeRun',
-    re: /isRegistryId\(run\.sessionId\)[\s\S]*?'fleet-act-omitted:bad-session'/,
+    file: 'coord/closeDecide.ts', scope: 'decideRequest',
+    re: /unnamed: run\.sessionId !== null && !isRegistryId\(run\.sessionId\)/,
   },
-  /** Every other close refuses `bad-session`, straight above the review hand-off. */
+  /** Every other close refuses `bad-session`, straight above the review hand-off (the decider's request step). */
   'close-gate': {
-    file: 'coord/close.ts', scope: 'closeRun',
-    re: /!isRegistryId\(run\.sessionId\)\)[^;]*kind: 'bad-session'[^;]*;\s*\}?\s*if \(run\.kind === 'review'\) return closeReviewRun\(/,
+    file: 'coord/closeDecide.ts', scope: 'decideRequest',
+    re: /if \(!isRegistryId\(run\.sessionId\)\) return refused\(\{ ok: false, kind: 'bad-session' \}\);\s*if \(run\.kind === 'review'\) return go\(/,
   },
   /** `resolveDoneBranch` holds a refused id (`tip-unmeasurable`), so a review close reaches no `pr-state` for it. */
   'fingerprint-check': {
@@ -379,6 +381,10 @@ interface CensusRow {
   readonly entry?: RegExp;
 }
 
+/** `closeRun` asks the decider's request step first and returns its refusal, so each arm below runs on a stored id the
+ *  step vetted (ARCH-35). */
+const CLOSE_DECIDED = /\bdecideClose\(\{ step: 'request'[\s\S]*?if \(req\.kind !== 'go'\) return stopped\(deps, req\);/;
+
 const KNOWN_ID = /\bknownId\(\s*id\s*\)/;
 
 /** `sweepNames` walks `readRegistry`'s own output, which never carries a refused row. */
@@ -397,12 +403,12 @@ const CENSUS: readonly CensusRow[] = [
   // the callers, so the row has no `entry`: the callers case below pins who calls `childSpent` and `childSpentLive`, and
   // the read above each caller's call.
   { file: 'coord/childSpent.ts', scope: 'childSpentLive', builder: 'prStateSession', id: 'rec.id', origin: ['stored', 'request'], gate: ['readSessionRecord'] },
-  // coord/close.ts: the abandon arm's fleet act, then the coordinator close's three acts, then the review close's two.
-  { file: 'coord/close.ts', scope: 'closeRun', builder: 'wsHold', id: 'run.sessionId', origin: ['stored'], gate: ['close-abandon-branch'] },
-  { file: 'coord/close.ts', scope: 'closeRun', builder: 'wsRelease', id: 'run.sessionId', origin: ['stored'], gate: ['close-abandon-branch'] },
-  { file: 'coord/close.ts', scope: 'closeRun', builder: 'wsArchive', id: 'run.sessionId', origin: ['stored'], gate: ['close-gate'] },
-  { file: 'coord/close.ts', scope: 'closeRun', builder: 'wsRelease', id: 'run.sessionId', origin: ['stored'], gate: ['close-gate'] },
-  { file: 'coord/close.ts', scope: 'closeRun', builder: 'wsHold', id: 'run.sessionId', origin: ['stored'], gate: ['close-gate'] },
+  // coord/close.ts: the one composer of the fleet verb a `decideClose` plan names (ARCH-35), then the review close's two.
+  // `fleetArgv` is reached only through `actOnFleet`, which `abandonRun` and `closeWorkRun` call below their decider's
+  // plan, and those only from `closeRun` below the request step: the callers case pins each hop.
+  { file: 'coord/close.ts', scope: 'fleetArgv', builder: 'wsArchive', id: 'sessionId', origin: ['stored'], gate: ['close-gate'] },
+  { file: 'coord/close.ts', scope: 'fleetArgv', builder: 'wsRelease', id: 'sessionId', origin: ['stored'], gate: ['close-abandon-branch', 'close-gate'] },
+  { file: 'coord/close.ts', scope: 'fleetArgv', builder: 'wsHold', id: 'sessionId', origin: ['stored'], gate: ['close-abandon-branch', 'close-gate'] },
   { file: 'coord/close.ts', scope: 'closeReviewRun', builder: 'wsHold', id: 'sessionId', origin: ['stored'], gate: ['close-gate'] },
   { file: 'coord/close.ts', scope: 'closeReviewRun', builder: 'wsRelease', id: 'sessionId', origin: ['stored'], gate: ['close-gate'] },
   // coord/collectTempRoot.ts: the learning audit is reached from the population and from the executor's step 1.
@@ -458,14 +464,14 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'watch.ts', scope: 'sweepMail', builder: 'ensure', id: 'd.toId', origin: ['stored', 'registry'], gate: ['registry-refused'], entry: /\bconst rec = records\.find\(\(r\) => r\.id === d\.toId\);[\s\S]*?if \(rec === undefined \|\| identity === null\) \{/ },
   // watch.ts: the naming sweep's rows come from the listing, which never builds a refused name; the `entry` ties the
   // loop's `r` to `readRegistry`'s output.
-  { file: 'watch.ts', scope: 'sweepNames', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
-  { file: 'watch.ts', scope: 'sweepNames', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
+  { file: 'watch.ts', scope: 'namesPass', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
+  { file: 'watch.ts', scope: 'namesPass', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
 ];
 
 /** The files whose gates ask the predicate themselves. */
 const GATE_FILES = [
   'server.ts', 'registry.ts', 'watch.ts',
-  'coord/routes.ts', 'coord/route.ts', 'coord/openRun.ts', 'coord/advance.ts', 'coord/dispatchDecide.ts', 'coord/close.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
+  'coord/routes.ts', 'coord/route.ts', 'coord/openRun.ts', 'coord/advance.ts', 'coord/dispatchDecide.ts', 'coord/closeDecide.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
   'coord/expireArchived.ts',
 ] as const;
 
@@ -507,7 +513,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     }
   });
 
-  it('the header claim, "49 id-taking calls across 12 files", matches the scan', () => {
+  it('the header claim, "47 id-taking calls across 12 files", matches the scan', () => {
     const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
     const claim = /^\/\/ THE CLAIM: (\d+) id-taking calls across (\d+) files\b/m.exec(self);
     expect(claim, 'the census claim was removed or reworded without its guard').not.toBeNull();
@@ -586,6 +592,10 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     // own parameter on to `childSpentLive` adds no gate of its own: its callers vet it.
     const CALLERS: Readonly<Record<string, readonly string[]>> = {
       closeReviewRun: ['coord/close.ts | closeRun'],
+      abandonRun: ['coord/close.ts | closeRun'],
+      closeWorkRun: ['coord/close.ts | closeRun'],
+      actOnFleet: ['coord/close.ts | abandonRun', 'coord/close.ts | closeWorkRun'],
+      fleetArgv: ['coord/close.ts | actOnFleet'],
       refuseSpentChild: ['coord/dispatch.ts | resumeBound'],
       resumeBound: ['coord/dispatch.ts | dispatchRun'],
       expireAudit: ['coord/expireArchived.ts | expireArchived', 'coord/expireArchived.ts | learnExpiry'],
@@ -600,6 +610,16 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     /** `<callee> <- <file> | <scope>`: the caller's decider refuses first, and the call runs only on its admitted open. */
     const DECIDED_ABOVE: Readonly<Record<string, RegExp>> = {
       'resumeBound <- coord/dispatch.ts | dispatchRun': DISPATCH_DECIDED,
+      'closeReviewRun <- coord/close.ts | closeRun': CLOSE_DECIDED,
+      'abandonRun <- coord/close.ts | closeRun': CLOSE_DECIDED,
+      'closeWorkRun <- coord/close.ts | closeRun': CLOSE_DECIDED,
+      'actOnFleet <- coord/close.ts | abandonRun':
+        /\bdecideClose\(\{ step: 'abandon'[\s\S]*?if \(act\.kind !== 'go'\) return stopped\(deps, act\);[\s\S]*\bactOnFleet\(/,
+      'actOnFleet <- coord/close.ts | closeWorkRun':
+        /\bdecideClose\(\{ step: 'close'[\s\S]*?if \(act\.kind !== 'go'\) return stopped\(deps, act\);[\s\S]*\bactOnFleet\(/,
+      // The composer builds the argv and asks `ccdCan` of that same row (closeRun's own order before ARCH-35); nothing in
+      // `actOnFleet` acts before it, and the order test below pins that ccd runs only after the verb step admits it.
+      'fleetArgv <- coord/close.ts | actOnFleet': /\): Promise<CloseHalt \| null> \{\n\s*const verb = fleetArgv\(/,
       'holdAndBindSession <- coord/routes.ts | POST /api/runs':
         /\bconst pre = await openRunPreconditions\(\{[\s\S]*?if \(!pre\.ok\) return sendOpenRunRefusal\(reply, pre\.refusal\);[\s\S]*\bholdAndBindSession\(coord, reply, opened, sessionId\)/,
     };
@@ -653,6 +673,15 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     expect(code).toMatch(
       /\bdecideRoute\(\{[\s\S]*?if \(!decision\.ok\) return refuseRoute\(reply, decision\.refused, [\s\S]*?CCD_ARGV\.route(Set)?\(/,
     );
+  });
+
+  it('actOnFleet runs the composed argv only after decideClose\'s verb step admits the composer\'s own ccdCan', () => {
+    const body = sourceOfSymbol('server/src/coord/close.ts', 'actOnFleet');
+    expect(body).toMatch(new RegExp(
+      String.raw`const verb = fleetArgv\(deps, id, sessionId, act\);\s*`
+      + String.raw`const can = decideClose\(\{ step: 'verb', verb: act\.verb, can: verb\.can \}\);\s*`
+      + String.raw`if \(can\.kind !== 'go'\) return stopped\(deps, can\);[\s\S]*\bdeps\.runCcd\(verb\.argv\)`));
+    expect(body.match(/\bdeps\.runCcd\(/g)).toHaveLength(1);
   });
 
   it('CONTROL: the expiry step-0 pin reads the capability in either form, and not another row or token (D-5866)', () => {

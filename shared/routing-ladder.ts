@@ -140,9 +140,8 @@ const classEscalation = (current: RungCurrent, scope: 'main' | 'subagent', reaso
  *  `xhigh` and only when priorSameKind ≥ 1 (a second failed check of the same kind). Any failed check first reverses `lastDemotion` if it is
  *  not yet reversed (mode 'reverse-demotion'), CLAMPED BY SCOPE — a subagent never receives back an origin rung it could not itself hold (an
  *  effort of `max`, or a class above `SUBAGENT_CLASS_CEILING`), answering `ceiling` instead; in `main` scope the reversal restores any origin,
- *  `max` included — and a class origin above `MAIN_CLASS_CEILING` too, because a reversal is not an escalation: it puts back a rung the
- *  session was already ON, which above that ceiling can only have been a human's explicit choice (the same reason ccd's `_route_restore`
- *  may restore a recorded top-class intent). The ladder then applies on the NEXT failure. haiku: an effort rung is a class rung to sonnet·high. `effort: 'auto'` counts
+ *  `max` included, but NOT a class origin above `MAIN_CLASS_CEILING` (D-6790: the top class runs only when the operator selects it, so no
+ *  automatic step puts it back — `ceiling`; ccd's `_route_restore` of a recorded intent is the swap path's, not this ladder's). The ladder then applies on the NEXT failure. haiku: an effort rung is a class rung to sonnet·high. `effort: 'auto'` counts
  *  as 'high' for the arithmetic (the model's default); 'ultracode' answers no-effort-rungs (its next rung is a class rung the caller decides).
  *  Whether a demotion is "not yet reversed" is bookkeeping the CALLER owns (Task 2 derives `lastDemotion` from the run's own event history) —
  *  this function only decides what a reversal, once handed one, is allowed to restore. */
@@ -167,6 +166,17 @@ export function escalate(
       return {
         kind: 'ceiling',
         why: `the unreversed demotion's origin (class ${lastDemotion.from}) is unreachable for a subagent — a subagent ladder ends at ${SUBAGENT_CLASS_CEILING}`,
+      };
+    }
+    // D-6790: a reversal is not an escalation, but no automatic step restores a class above the main ceiling either:
+    // a session demoted off the top class stays where it is, and the operator chooses it again by hand.
+    if (
+      lastDemotion.field === 'class' &&
+      classIndex(lastDemotion.from as ModelClass) > classIndex(MAIN_CLASS_CEILING)
+    ) {
+      return {
+        kind: 'ceiling',
+        why: `the unreversed demotion's origin (class ${lastDemotion.from}) is above ${MAIN_CLASS_CEILING} — no automatic step restores it; only the operator selects it`,
       };
     }
     return {

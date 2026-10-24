@@ -325,11 +325,11 @@ event, with no `message_stop`. "State" is what the bridge records through `recor
 | a request feature the bridge does not map | 400 `invalid_request_error`, message `capability_rejected: <class>` | — | — | D-6414 |
 | a `model` not in the lane catalogue | 404 `not_found_error`, `x-should-retry: false`; never sent upstream | — | — | Routes above |
 
-`classify_http` reads the body's `error.code` (and `error.type`) BEFORE the HTTP status, so a code's row wins over its
-status's row (`slow_down` and `server_is_overloaded` both arrive as 503). `login-failed`, Stage 1's ninth word, is
-raised only by `sign_in_device`, which the bridge never calls; an `AuthError` whose word is in neither set is the
-401 row. Every error keeps the upstream request id (`x-request-id`, else `request-id`) in the stats file and, with its
-code, in the status file. A prompt-too-long 400 carries no `x-should-retry` header: the measured recovery used none.
+`classify_http` reads the body's `error.code` (and `error.type`) BEFORE the HTTP status, so a code's row wins over its status's row (`slow_down` and
+`server_is_overloaded` both arrive as 503). `login-failed`, Stage 1's ninth word, is raised only by `sign_in_device`, which the bridge never calls; an
+`AuthError` whose word is in neither set is the 401 row. Every error keeps the upstream request id (`x-request-id`, else `request-id`) in the stats
+file and, with its code, in the status file, except when `record_upstream`'s lock is not taken or no credential is present: then the library answers
+None and no request id reaches the stats file (D-6827). A prompt-too-long 400 carries no `x-should-retry` header: the measured recovery used none.
 
 **The commit point** (R17). The bridge holds the HTTP status line until the first of: the reducer releases its first
 block event, a NON-failure terminal event arrives (`completed`, or `incomplete` with a known reason), or `HOLD_S =
@@ -418,8 +418,12 @@ its own timer, Task 8).
 **What it delivers:** the `codexbridge` package, the library's three additions, and the shim's `direct` entry, all
 tested end to end against a fake Responses backend and Stage 1's fake auth server.
 **PR boundary:** one PR, cut after the docs PR and Stage 1 wave 1 merged; it ends when Task 9 is green.
-**Effect on a live box:** new files in the tree and a changed shim file (so a rollout's spine restarts each running
-`litellm`-mode shim once, the started record's hash having changed); nothing starts the bridge.
+**Effect on a live box:** new files in the tree, a changed shim file and a changed auth library, `ccd/ccgpt-auth.py`
+(Task 6; D-6825 to D-6830, D-6836). A rollout's spine restarts each running `litellm`-mode shim once, and each running
+litellm tier once too: a tier's started record hashes its code, and the litellm tier's code is the runtime stamp
+followed by `ccgpt-auth.py` (`_codex_started_json`, `ccd/ccrc:12689-12708`), so the library's change reads as stale.
+The one exception is D-6691's: a run whose runtime build failed leaves a litellm tier already on the current
+generation running. Nothing starts the bridge.
 
 ### Task 1: the package, the SSE parser and the error table
 
@@ -900,12 +904,12 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
     refresh body `ensure_fresh` runs under the lock. That body is extracted into `_refresh_locked(auth_dir, r, lane)`
     first, as a move with Stage 1's suite unchanged and green (a characterization commit of its own). The rejected
     token is compared in memory, never stored or logged.
-  - `record_upstream(auth_dir: str, *, state: Optional[str], code: Optional[str], request_id: Optional[str], wait_s:
-    float = 2.0) -> bool` — best effort, under `held(auth_dir, wait_s)`: `state` in `{"ok", "limit-paused",
-    "ineligible", None}` (any other value is a `ValueError`, a programming error); writes `limit-paused`/`ineligible`
-    over `ok`; writes `ok` only over `limit-paused` or `ineligible`; never over `needs-signin` or `config-error`;
-    merges `lastErrorCode` and `lastRequestId` (bounded as Stage 1 bounds them) into the current status, keeping
-    every refresher field; `LockTimeout` → `False`; never touches the network.
+  - `record_upstream(auth_dir: str, *, state: Optional[str], code: Optional[str], request_id: Optional[str], wait_s: float = 2.0) ->
+    Optional[str]` — best effort, under `held(auth_dir, wait_s)`: `state` in `{"ok", "limit-paused", "ineligible", None}` (any other value
+    is a `ValueError`, a programming error); writes `limit-paused`/`ineligible` over `ok`; writes `ok` only over `limit-paused` or
+    `ineligible`; never over `needs-signin` or `config-error`; merges `lastErrorCode` and `lastRequestId` (bounded as Stage 1 bounds them)
+    into the current status, keeping every refresher field; answers the request id after `_bounded_upstream`, whether or not the status was
+    written (`None` when it is dropped, when the credential is not present, or when the lock is not taken); never touches the network (D-6839).
   - `half_life_s(r: Reading) -> float` — `(exp − iat) / 2` from the access token's claims when both are integers and
     `exp > iat`, else `EXPIRY_SKEW_S`; the designated refresher passes it as `within_s` (spec §2.6, "at about half the
     token lifetime").
@@ -1751,8 +1755,10 @@ first live step uses: recordings with a scrubber, and a bounded live probe.
   `git diff origin/main -- . | grep -nE '^\+.*eyJ[A-Za-z0-9_-]{10,}' || echo clean` → `clean`. Read every changed
   prose line once for lane, host or account names.
 - [ ] **Step 4: No test can reach a live endpoint.** `git diff origin/main -- server/test | grep -n
-  'chatgpt\.com' || echo clean` → only the `DEFAULT_BASE` assertion of Task 7; `'every contained env names a
-  loopback CCGPT_BRIDGE_UPSTREAM_BASE'` green.
+  'chatgpt\.com' || echo clean` → Task 7's three lines in `server/test/codex-bridge-backend.test.ts`, none of which
+  connects: the `DEFAULT_BASE` assertion (:271), the refused-list entry (:281, a base the adapter refuses at start)
+  and the TLS recorder's host (:345, read from a recorder that raises before any I/O); `'every contained env names a
+  loopback CCGPT_BRIDGE_UPSTREAM_BASE'` (:373, D-6831) green.
 - [ ] **Step 5: Report** the wave-done with every task's measured mutation rows, any further `D-TBD-<slug>`, and the
   PR's selected-tests summary.
 
@@ -1814,7 +1820,9 @@ a session's next turn answers; `bridge.stats.json` moves.
 - zero empty tool calls: `outcomes.emptyArguments` stays 0 (the reducer counts a released `tool_use` whose input is
   `{}` for a tool whose schema has required properties, Task 3's R8), and no session reports an empty `tool_use`
   input;
-- a 5xx rate (`outcomes.5xx` / requests) no worse than the baseline's (from `litellm.log`, counts only);
+- a 5xx rate (`outcomes.5xx` / requests) no worse than the baseline's (from `litellm.log`, counts only); a stream whose client
+  went away (`outcomes.client-gone`) and one a restart's drain cut (`outcomes.drain-cut`) are not upstream failures and are
+  not counted `5xx` (D-6835; only the handler's unexpected-exception arm still counts one), so they stay out of this rate;
 - a compaction rate no worse than the baseline's, measured the SAME way for both weeks from lane-b's transcripts, as
   the spec measured its 2.35% (§1.1): automatic `compact_boundary` records over assistant calls, deduplicated by
   record id and attributed by the model that answered (`outcomes.compactionRequests` is a cross-check, not the
@@ -1880,9 +1888,8 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 
 ## Deviations found
 
-Every entry is unnumbered: the controller issues the numbers and replaces each slug in this plan and in any code
-comment that cites it. A further departure found while executing is written `D-TBD-<slug>` and named in the task's
-report.
+Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1). A
+further departure found while executing is written `D-TBD-<slug>` and named in the task's report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
 
@@ -2100,3 +2107,474 @@ report.
 - **Why:** the offline runs found one sender only: the re-send after a mid-stream error (`stub.md` runs 06/07); there
   is no second feature to tell it from.
 - **Cost if wrong:** a new `stream:false` sender is visible only as a rise in the one counter.
+
+### D-6804 — the error table answers the overflow row without its numbers
+
+- **Departs from:** The contract's error table (plan :314), whose answer before and after commit is exactly `prompt is
+  too long: N tokens > M maximum`. Task 1's interface (plan :453) does not say who fills in N and M.
+- **What changed:** `classify_http` and `classify_failed` answer the overflow row with kind `overflow`, code
+  `context_length_exceeded`, 400 `invalid_request_error` and the bare text `prompt is too long`
+  (`ccd/codexbridge/errors.py:199-202`, docstring :23-26). The server swaps in `overflow(N, M)` and keeps the upstream
+  request id (`ccd/codexbridge/server.py:277-286`, called at :611-612).
+- **Why:** The error table cannot know N (the D24 estimate) or M (the lane's window), and the backend's overflow message
+  has no counts (D-6415). Only the server holds both numbers.
+- **Cost if wrong:** A path that answers a classified overflow without going through `overflow_answer` sends the bare
+  text. Claude Code's loose substring match still reads it as an overflow, but no refusal reaches the stats file for
+  D25.
+
+### D-6805 — `BridgeError` carries the row it came from
+
+- **Departs from:** Task 1's interface (plan :448-449), which lists `BridgeError`'s fields as `status`, `etype`,
+  `message`, `headers`, `state`, `code` and `request_id`.
+- **What changed:** `BridgeError` gains `kind`: overflow, billing, rate, ineligible, policy, overloaded, unavailable,
+  refused, auth or capability, with `refused` as the default (`ccd/codexbridge/errors.py:99-117`). The server uses it to
+  tell the overflow row from every other 400 (`ccd/codexbridge/server.py:611`).
+- **Why:** Task 8 must rebuild the overflow answer and no other. Finding that answer by reading its message or code
+  would tie the server to the table's wording.
+- **Cost if wrong:** The attribute is additive. A `BridgeError` built elsewhere without `kind` defaults to `refused`, so
+  an overflow built that way would not be rebuilt with its numbers.
+
+### D-6806 — the usage limit's retry-after also reads `resets_in_seconds`
+
+- **Departs from:** The contract's error table (plan :315) and Task 1's test (plan :494-495): `retry-after: <s>` comes
+  "from `resets_at` when known".
+- **What changed:** `_retry_after_from_reset` reads `resets_at` (epoch seconds) and, when that is absent,
+  `resets_in_seconds` (seconds from now). It answers nothing for a time already past
+  (`ccd/codexbridge/errors.py:182-191`). The errors suite pins it (`server/test/codex-bridge-errors.test.ts:101`).
+- **Why:** The one usage-limit body this repository has seen (spec 2026-09-13, row S1-R10) names `resets_in_seconds`.
+  Nothing shows the backend sending `resets_at`, so reading only the plan's field could leave every limit answer without
+  a retry-after.
+- **Cost if wrong:** If `resets_in_seconds` means anything other than seconds from now, the retry-after is off by the
+  difference. `x-should-retry: false` still stops Claude Code retrying, so the only cost is a misleading header.
+
+### D-6807 — `countable_bytes` counts the UTF-8 bytes sent, the developer text once
+
+- **Departs from:** Task 2's count (plan :596-597): the byte length of `json.dumps({"developer", "items", "tools"},
+  separators=(",", ":"))`, read together with Step 3 (plan :631), which puts the developer message at `items[0]`.
+- **What changed:** The count dumps the items without the leading developer item, with `ensure_ascii=False`, and
+  measures the UTF-8 length with `surrogatepass` (`ccd/codexbridge/inbound.py:540-543`, :558; docstring :22-25). The
+  `Sys é.` case pins it (`server/test/codex-bridge-inbound.test.ts:549`).
+- **Why:** Read literally, the formula counts the system text twice, once as `developer` and once as `items[0]`. Its
+  default ASCII escaping also counts a non-ASCII character as 6 bytes rather than the 2-3 it takes on the wire. The
+  plan's stated intent is what the bridge sends.
+- **Cost if wrong:** D24's ratio is calibrated against this same count, so one consistent definition costs nothing. Only
+  a count made the plan's literal way would disagree with it.
+
+### D-6808 — the image-bytes case compares two images, then no image
+
+- **Departs from:** Task 2's case `'images and dropped blocks never count as bytes'` (plan :626-627): two requests equal
+  but for a 200 KB image and a signed thinking block, with `countable_bytes` equal and `image_count` 1 and 0.
+- **What changed:** The case compares a 200 KB image plus a signed thinking block against a 4-byte image with no
+  thinking: equal bytes, `image_count` 1 and 1. It then compares against no image (`image_count` 0), whose difference is
+  exactly the emptied `input_image` part (`server/test/codex-bridge-inbound.test.ts:527-547`).
+- **Why:** Under the plan's own formula an image's `image_url` is emptied but its part still counts its shape. Equal
+  bytes and image counts of 1 and 0 cannot both hold.
+- **Cost if wrong:** None in the code; only the test's shape changes. Rows I5 and I14 still turn it red.
+
+### D-6809 — an unknown content block is a plain 400, never dropped
+
+- **Departs from:** Task 2's mapping table (plan :560-587), which names only `document` and server tools among the
+  refused inputs and says nothing of any other block type or image source.
+- **What changed:** A content block of any other type (user side, assistant side or inside a tool result), and an image
+  source that is neither base64 nor url, get a plain 400 naming the bounded type, with `x-should-retry: false`, counted
+  `unsupportedField:<type>` as a server tool is (`ccd/codexbridge/inbound.py:130-135`, :204, :228, :378). The case is at
+  `server/test/codex-bridge-inbound.test.ts:574`.
+- **Why:** Dropping an unknown block silently would lose content the model was meant to see. A retry would send the same
+  block again, so the answer says not to retry.
+- **Cost if wrong:** A new block type Claude Code starts sending fails the request until it is mapped. The type is named
+  in the refusal and in the stats file the first time it appears.
+
+### D-6810 — only the billing block's first line is removed
+
+- **Departs from:** Task 2's system row (plan :564): "a block starting `BILLING_PREFIX` removed".
+- **What changed:** `_drop_billing` removes only the first line of a block or string that starts with `BILLING_PREFIX`
+  and keeps the rest of its text (`ccd/codexbridge/inbound.py:169-177`, used at :183). The case is at
+  `server/test/codex-bridge-inbound.test.ts:599`.
+- **Why:** Removing the whole block would lose any system text after the billing line in the same block, or in a string
+  `system` value.
+- **Cost if wrong:** If Claude Code ever puts more varying text after the billing line in that block, that text reaches
+  the developer message and can break the prefix cache. Row I1 pins that the line itself never reaches it.
+
+### D-6811 — the bridge driver takes a large action from a file
+
+- **Departs from:** Task 1's fixture interface (plan :463-467): `runBridgeDriver` spawns `python3 -I driver.py` with one
+  JSON action. Task 2's file list does not name the fixture.
+- **What changed:** An action longer than `ARG_INLINE_MAX` (64 KiB in UTF-8 bytes) is written to
+  `<home>/.driver-action-<n>.json`, mode 0600, inside the fixture HOME, and passed as `@<path>`
+  (`server/test/codexBridgeFixture.ts:39`, :46-52, :80-82; `server/test/fixtures/codexbridge/driver.py:7-8`).
+- **Why:** Linux refuses a single argument longer than 128 KiB (E2BIG), and Task 2's no-size-cap tool-result case needs
+  a 700,000-character body.
+- **Cost if wrong:** This is test-only and the file stays inside a fixture HOME. A wrong limit fails a large-body case
+  loudly; it never reaches the shipped tree.
+
+### D-6812 — `needs_continuation` takes the refusal flag, required
+
+- **Departs from:** Task 3's interface (plan :683): `needs_continuation(t: Terminal, emitted_tool_use: bool) -> bool`.
+- **What changed:** The signature is `needs_continuation(t, emitted_tool_use, *, refusal: bool)`, keyword-only with no
+  default. It answers True exactly when the terminal has no error and `stop_reason` answers None
+  (`ccd/codexbridge/reducer.py:497-502`). The server passes the reducer's flag (`ccd/codexbridge/server.py:624`).
+- **Why:** Without the flag, a refused reply that also says `end_turn:false` answered True while `stop_reason` answered
+  `refusal`, so it would have been continued upstream. Making the flag required means a two-argument call fails with a
+  TypeError rather than reopening that gap.
+- **Cost if wrong:** A future caller has to pass the flag. A refused `end_turn:false` reply is never continued, which is
+  the intent.
+
+### D-6813 — `stop_reason` raises on a failed terminal
+
+- **Departs from:** Task 3's interface (plan :682): `stop_reason(...) -> Optional[str]` ("None means continue"), which
+  does not say what it answers for a terminal that carries an error.
+- **What changed:** `stop_reason` raises ValueError when `t.error` is set: a failed, truncated or unknown-reason
+  incomplete terminal (`ccd/codexbridge/reducer.py:478-482`). The server answers every failure from `_one_response`'s
+  BridgeError before it asks for a stop reason (`ccd/codexbridge/server.py:609-623`).
+- **Why:** None already means "continue", so no `Optional[str]` value is safe to give for a failure. Raising turns a
+  misuse into a loud error, where a value would quietly lead to a continuation or a wrong stop.
+- **Cost if wrong:** A caller that asks for a failed terminal's stop reason gets an exception. In the server that
+  exception is caught and answered as 503 `api_error`, never a wrong stop reason.
+
+### D-6814 — live text streams content part 0 only
+
+- **Departs from:** Task 3's R14 (plan :700), "the item at the release cursor forwards `output_text.delta` as
+  `text_delta` at once", and the interface's `emitted_text` "per message `output_index`" (plan :678).
+- **What changed:** Only content part 0 goes live, an absent `content_index` read as 0
+  (`ccd/codexbridge/reducer.py:296`, docstring :34-42). A later part is sent at the done event, as a suffix when R10
+  merges it and otherwise as a block of its own. Folded in from Task 3's unslugged deviation 13: `emitted_text` is keyed
+  by every output_index whose text was sent, including a live index that finished as a call or as reasoning
+  (`ccd/codexbridge/reducer.py:309`).
+- **Why:** Forwarding a later part live sent the text twice when a refusal part came first. Claude Code sends back the
+  text it was sent, so the store must key that text whatever the item at that index turned out to be.
+- **Cost if wrong:** A message whose first part is a refusal never streams live, so its text arrives at the done event.
+  Such a message has not been seen in any recorded stream.
+
+### D-6815 — `errors.unavailable` is public, the unavailable row's one writer
+
+- **Departs from:** Task 1's errors interface (plan :448-462), which has no public builder for the unavailable row. Task
+  3's file list does not name `errors.py`.
+- **What changed:** `errors.unavailable(what, code=None, rid=None)` is public, renamed from `_unavailable`
+  (`ccd/codexbridge/errors.py:234-237`). The reducer's truncation and unknown-incomplete-reason failures are built
+  through it (`ccd/codexbridge/reducer.py:214`, :446).
+- **Why:** It removes the reducer's own copy of the 503 `api_error` row, so the row is built in one place.
+- **Cost if wrong:** The interface gains one public name. A change to the unavailable row's shape now reaches the
+  reducer's failures too, which is the intent.
+
+### D-6816 — the reasoning store tells its caller when it disables
+
+- **Departs from:** Task 4's interface (plan :788-791): `ReasoningStore(path, *, max_bytes=None, ttl_s=None)`, whose
+  failure is "counted `store:<class>`" with no way given to reach the stats file.
+- **What changed:** `ReasoningStore` takes an optional `outcome: Callable[[str], None]`, called once with the reason
+  when the store disables. `disabled` holds the same string (`ccd/codexbridge/store.py:105-111`, :131-140). The server
+  passes `stats.outcome` (`ccd/codexbridge/server.py:943`).
+- **Why:** The store cannot import the stats file, and Task 8's text does not say who counts the failure. A callback
+  keeps the count inside the store's own failure path.
+- **Cost if wrong:** The callback is best effort, and a failure inside it is swallowed. No case pins that a disabled
+  store's reason reaches the stats file; the server suite only asserts there is no `store:` outcome on a healthy run
+  (`server/test/codex-bridge-server.test.ts:307`).
+
+### D-6817 — a reply with no session id keeps no text row
+
+- **Departs from:** Task 4's `remember` (plan :792-795), which keys every emitted text by `text_key(session_id, …)` and
+  has no case for a missing session.
+- **What changed:** `_remember` writes no text-keyed row, neither reasoning nor phase, when `session_id` is falsy.
+  Call-keyed rows still stand (`ccd/codexbridge/store.py:281-288`). The case is at
+  `server/test/codex-bridge-store.test.ts:309`.
+- **Why:** Without a session, every sessionless request would share one text scope, and two unrelated replies of the
+  same text would swap reasoning. That breaks spec §2.5's "in that session only".
+- **Cost if wrong:** A client that sends no session header gets no reasoning replay for text-only turns. Claude Code
+  always sends `x-claude-code-session-id`.
+
+### D-6818 — `Stats.header_names` counts response header names
+
+- **Departs from:** Task 5's `Stats` interface (plan :842-852), which lists no method that counts response header names,
+  though D3's `responseHeader` family needs one.
+- **What changed:** `Stats.header_names(headers)` counts each header name, lower-cased and bounded by `NAME_RE`, under
+  `responseHeader`, and never its value (`ccd/codexbridge/stats.py:281-287`). The server calls it once per upstream
+  response, beside `usage_headers` (`ccd/codexbridge/server.py:729-731`).
+- **Why:** The family needs a place where a header's name is counted and its value dropped. Without this method, Task 8
+  would have to spell that rule itself.
+- **Cost if wrong:** The interface gains one public method, and `snapshot()`, read only by the test driver, is a second.
+  A wrong rule shows up as a name in `unexplained`, never as a value.
+
+### D-6819 — `now` is optional on `refusal` and `usage_headers`
+
+- **Departs from:** Task 5's interface (plan :847, :849), which makes `now` a required keyword-only `float`, while Task
+  8's text calls `stats.refusal("backend", model, N, window)` with no `now` (plan :1078).
+- **What changed:** Both methods take `now: Optional[float] = None` and use the wall clock when it is None. A malformed
+  `now` also reads as the wall clock (`ccd/codexbridge/stats.py:324-326`, :335-339; `_stamp` :97-104).
+- **Why:** The plan's two tasks disagree. With an optional `now`, both spellings work and the server needs no clock
+  argument.
+- **Cost if wrong:** A caller that meant to pass a test clock and forgot gets the wall clock, so the stamp is right but
+  cannot be predicted in a test.
+
+### D-6820 — two outcome keys outside the closed list
+
+- **Departs from:** Task 5's closed list of outcome keys (plan :865-868).
+- **What changed:** `stats:flush-failed` counts a failed flush (the plan says only "counted in memory").
+  `stats:unknown-family` counts a `name()` call with a family outside FAMILIES (`ccd/codexbridge/stats.py:82-85`).
+- **Why:** The plan asks for a flush failure to be counted but gives it no key. A wrong family must be visible without
+  recording anything under it.
+- **Cost if wrong:** Task 17's doctor reads `outcomes` and has to know these two keys, D-6833's `catalogue-unreadable`
+  and D-6835's `client-gone`, outside Task 5's closed list, and Task 4's `store:*` family (D-6816), or it shows them as
+  unknown.
+
+### D-6821 — `usageHeaders` and `lastUpstreamRequestId` start null
+
+- **Departs from:** Task 5's stats file shape (plan :861-862), which gives `usageHeaders` as `{"at", "values"}` and says
+  nothing of its value before a first response or across a restart.
+- **What changed:** Both fields are `null` until a first value, and neither is carried across a restart
+  (`ccd/codexbridge/stats.py:159-165`).
+- **Why:** A snapshot carried from an earlier process would be read as current, and an empty object would be read as "no
+  x-codex- headers were sent".
+- **Cost if wrong:** Task 14's usage poller must read `null` as "no snapshot" and fall back to its own request. A reader
+  that expects an object fails on a fresh or restarted bridge.
+
+### D-6822 — an x-codex- value is kept only in the poller's shape, never a token header's
+
+- **Departs from:** Task 5's `usage_headers` (plan :849-850): "keeps every header whose lower-cased name starts
+  `x-codex-`, values bounded to 64 printable characters".
+- **What changed:** A value is kept only when it matches `USAGE_VALUE_RE` (a decimal number or a boolean) within
+  `VALUE_MAX`. A longer value is dropped, never cut. A `TOKEN_HEADERS` name's value (`x-codex-turn-state`, the
+  sticky-routing token) is never kept, whatever its shape (`ccd/codexbridge/stats.py:68-78`).
+- **Why:** Any printable 64-character value would write the upstream's routing token, and any other opaque value, into a
+  non-secret file. The poller reads numbers and booleans only.
+- **Cost if wrong:** `TOKEN_HEADERS` is a deny-list. Every x-codex- name is explained by prefix, so a new token-carrying
+  header never reaches `unexplained`, and a value of it in the numeric shape is kept. It is a limit of the deny-list
+  that the plan's Known limits do not name yet.
+
+### D-6823 — the stats file's other bounds
+
+- **Departs from:** Task 5's bounds (plan :854): "at most 256 names per family, then `overflow`". The plan sets no bound
+  on routes, refusals, outcome keys, kept headers or the file's size.
+- **What changed:** Routes, refusals and outcome keys share `NAMES_MAX = 256`, each collapsing to the one key `overflow`
+  past it, outside the `<route>/<model>` shape (`ccd/codexbridge/stats.py:64-67`, `_slot` :253-257). `overflow` is
+  listed in `unexplained` like any name. `HEADERS_MAX = 64` bounds the x-codex- headers kept from one response (:79). A
+  file larger than `READ_MAX = 16 MiB` is unreadable, so the start resets it (:81).
+- **Why:** Every table the bridge fills from upstream or client input must have a bound, or a hostile or drifting
+  upstream grows the file without limit.
+- **Cost if wrong:** Past a cap, counts merge under `overflow` and the rows' detail is lost. An oversized file is reset
+  at the next start and counts `stats:reset`.
+
+### D-6824 — Task 6's cases run the library through an inline runner
+
+- **Departs from:** Task 6's first case (plan :918-920): "two driver processes call `refresh_rejected`". The Stage 1
+  driver has no op for any of the three new functions.
+- **What changed:** The cases run the library through `runLib`, an async inline-python runner in the suite
+  (`server/test/codex-auth-lib.test.ts:2485`, `libLines` :2524). It keeps the driver's isolation: env built from
+  scratch, a loopback auth base only, a fixture HOME, bytecode off.
+- **Why:** `server/test/fixtures/codexauth/driver.py` was outside the task's files.
+- **Cost if wrong:** A second, small spawner sits beside `runAuthDriver`. Moving the cases onto driver ops later is
+  mechanical.
+
+### D-6825 — `_refresh_locked` takes the parsed credential
+
+- **Departs from:** Task 6's extraction (plan :904): `_refresh_locked(auth_dir, r, lane)`.
+- **What changed:** The signature is `_refresh_locked(auth_dir, r, old, lane)`, where `old` is the parsed object
+  `_read_raw` classified (`ccd/ccgpt-auth.py:1389`). Both `ensure_fresh` and `refresh_rejected` pass it (:1386, :1510).
+- **Why:** The body needs that object for the stored `id_token` and for the unsaved-record test. Re-reading it inside
+  would have added a read and changed what was meant to be a move.
+- **Cost if wrong:** None outside the library: the function is private.
+
+### D-6826 — `refresh_rejected` runs `ensure_fresh`'s pre-lock checks
+
+- **Departs from:** Task 6's `refresh_rejected` (plan :901-906), which lists only the steps taken under `held`.
+- **What changed:** Before the lock, a reading the refresher cannot use raises (`_raise_for`), and a status that bars
+  the credential is raised at once (`ccd/ccgpt-auth.py:1499-1502`). The case is at
+  `server/test/codex-auth-lib.test.ts:2622` (Task 6 fix round 1's mutation rows B1 and B2, commit `c66c6d62a`: the
+  pre-lock bar removed, and the pre-lock `_raise_for` removed).
+- **Why:** Without these checks, a barred lane or a missing credential would wait on a held lock before answering, where
+  `ensure_fresh` answers at once.
+- **Cost if wrong:** A reading served from the unsaved record is barred only under the lock, so that one case still
+  waits. Every other barred answer is immediate.
+
+### D-6827 — `record_upstream`'s transitions where the plan is silent, and what it answers
+
+- **Departs from:** Task 6's `record_upstream` (plan :907-912), which names `limit-paused`/`ineligible` over `ok`, `ok`
+  over those two only, and "never over `needs-signin` or `config-error`", and answers `-> bool`, `LockTimeout` →
+  `False`, with the case `'a held lock makes record_upstream answer false within its wait'` (plan :924-925).
+- **What changed:** The two upstream states write over each other, so the latest answer wins. `plan-disabled` is left
+  alone like the refresher's states. A barring status keeps its own code and request id, and nothing is written. With no
+  status, the base is the credential's reading (`ccd/ccgpt-auth.py:1544-1595`, `_RECORDABLE` :1477). Since the
+  whole-wave fix round the answer is not a bool: it is the request id as `_bounded_upstream` bounds it (D-6828), once
+  the lock is taken over a present credential, whether the status was written or not. It is None when that bound keeps
+  no id, when no credential is present (then no lock is taken and no directory made), and when the lock is not taken.
+  `_Request.record` writes that answer, and nothing else, as the stats file's `lastUpstreamRequestId`
+  (`ccd/codexbridge/server.py:547-561`); the write after every response's head is gone. The cases are at
+  `server/test/codex-auth-lib.test.ts:2672`, :2772 (named `… answer None within its wait`) and :2814, and
+  `server/test/codex-bridge-server.test.ts:917`.
+- **Why:** Each transition needed an answer, and these keep every state the refresher owns untouched while only the
+  upstream's own states move. The answer changed because the Global Constraints bound the stats file's request ids as
+  Stage 1's status file bounds them (plan :148-150), and only the library holds the lane's tokens and account id to
+  check an echo against. No caller read the bool: both bridge call sites ignored it.
+- **Cost if wrong:** A lane that flips between limit-paused and ineligible shows the latest one only; nothing bars on
+  either state. The stats file's `lastUpstreamRequestId` now names the last upstream failure, never a 2xx's id: the one
+  2xx call of `record_upstream` (`ccd/codexbridge/server.py:651`, clearing a standing upstream state) passes no request
+  id and its answer is not written. Bounding a 2xx's id would mean passing it there and writing the answer. A failure
+  recorded while the lock wait times out, or with no credential present, gives the stats file no request id (the answer
+  is None), so the id standing there is an earlier failure's, or none.
+
+### D-6828 — an upstream code or request id that echoes a secret is dropped
+
+- **Departs from:** Task 6's `record_upstream` (plan :911): `lastErrorCode` and `lastRequestId` "bounded as Stage 1
+  bounds them".
+- **What changed:** `_bounded_upstream` applies Stage 1's bounds. It then replaces a code that echoes a token or the
+  account id with `unrecognised`, and drops such a request id, case-folded (`ccd/ccgpt-auth.py:1526-1541`, `_secrets_of`
+  :1513-1523). The case is at `server/test/codex-auth-lib.test.ts:2814` (Task 6 fix round 1's mutation rows A6a and A6b,
+  commit `c66c6d62a`: `_bounded_upstream`'s code echo check removed, and its request-id echo check removed).
+- **Why:** Both fields come from an upstream answer and land in a non-secret status file. A value that fits its pattern
+  can still carry a secret.
+- **Cost if wrong:** A real code that happens to contain a token's text is recorded as `unrecognised`, which is a
+  vanishingly unlikely loss of one word.
+
+### D-6829 — a token refresh keeps an upstream state
+
+- **Departs from:** Task 6's extraction of `_refresh_locked` (plan :904-906) as a move of Stage 1's body, under which a
+  committed refresh writes `ok`. It also departs from D-6422, which makes `record_upstream` the only writer of the
+  upstream states.
+- **What changed:** A committed refresh, one whose commit cannot write, the later landing of an unsaved one
+  (`retry_unsaved`) and a transient refresh failure all keep a current `limit-paused` or `ineligible`, with its code and
+  request id (`_refreshed_fields`, `ccd/ccgpt-auth.py:1331-1347`, used at :808, :1432, :1450). It is cleared by
+  `record_upstream(state="ok")` after the bridge's next 2xx, by a refusal, or by a sign-in.
+- **Why:** A token refresh says nothing about the account's quota or eligibility. Wiping the state on every refresh
+  would hide a standing limit from the status.
+- **Cost if wrong:** On a lane switched to litellm with an upstream state standing, nothing clears it until a refusal or
+  a sign-in. It bars nothing (`_bars`) and shows only in `ccrc codex status --json`. The proposed remedy is for Task
+  12's switch to call `record_upstream(state="ok")`. This needs a ruling.
+
+### D-6830 — `record_upstream`'s wait is a named constant
+
+- **Departs from:** Task 6's signature (plan :907-908): `wait_s: float = 2.0`.
+- **What changed:** `RECORD_WAIT_S = 2.0` sits beside `LOCK_WAIT_S` (`ccd/ccgpt-auth.py:86`, its comment :84-85).
+  `wait_s: Optional[float] = None` resolves to it when called (:1544-1545, :1573). The case is at
+  `server/test/codex-auth-lib.test.ts:2772` (Task 6 fix round 1's mutation row B6, commit `c66c6d62a`: the wait bound
+  early, as a 2.0 literal).
+- **Why:** A constant read when called can be lowered by a test, which a literal default cannot. The value is the
+  plan's.
+- **Cost if wrong:** None: the default is unchanged.
+
+### D-6831 — the upstream base pin lives in the backend suite
+
+- **Departs from:** Task 7's file list and case (plan :943, :992-993), which put `'every contained env names a loopback
+  CCGPT_BRIDGE_UPSTREAM_BASE'` in `server/test/ccgpt-harness.test.ts`.
+- **What changed:** The case is in `server/test/codex-bridge-backend.test.ts:373`, in its own describe. It makes the
+  same assertions as Stage 1's auth-base pin, plus a check that the two endpoints are independent.
+  `ccgpt-harness.test.ts` is untouched.
+- **Why:** `ccgpt-harness.test.ts` was outside the wave's claims, and the task could edit only claimed files.
+- **Cost if wrong:** A reader looking for the pin in the harness suite will not find it there. Moving it is one `it`
+  block.
+
+### D-6832 — the bridge refuses a lane.json without `bridgeFiles`
+
+- **Departs from:** The contract (plan :279, :284), which reads the bridge file names from `lane.json` at start but does
+  not say what an absent `bridgeFiles` does. Task 10, which adds the field to `laneManifest`, comes after Task 8.
+- **What changed:** `config_from_env` requires `bridgeFiles.stats` and `.store`, each a plain file name, and otherwise
+  exits with one `ccgpt-proxy: direct:` line naming the remedy `ccrc update` (`ccd/codexbridge/server.py:182-189`). The
+  fixture plants the field.
+- **Why:** The Global Constraints spell the names once, in `laneManifest` (plan :143-145). A Python default would be a
+  second spelling.
+- **Cost if wrong:** Until Task 10 lands, the bridge refuses every real `lane.json`. Nothing starts a bridge in wave 1,
+  so nothing changes live.
+
+### D-6833 — an undecidable catalogue is the bridge's 503, never a substitution
+
+- **Departs from:** The contract's Routes (plan :296-299) and Task 8 (plan :1082), which answer a model outside the
+  catalogue with 404 and say `/v1/models` lists the catalogue's ids, but give no row for a catalogue that cannot be
+  read. It also departs from Task 5's closed list of outcome keys (plan :865-868).
+- **What changed:** `catalogue_ids` answers None when the file is absent, unreadable, not JSON, too deeply nested, has
+  no `models` list, or has a row that is not an object with a non-empty string `id`. It answers [] only for a literal
+  empty list (`ccd/codexbridge/server.py:236-256`). Both `POST /v1/messages` and `GET /v1/models` then answer 503
+  `api_error`, retryable, counted `catalogue-unreadable` (:97, :478-481, :582-584, :858-860).
+- **Why:** Reading a broken catalogue as empty would answer every model 404 and count it as `modelSubstitution`, so the
+  bridge's own fault would look like the client's.
+- **Cost if wrong:** A lane with a broken catalogue fails every request with a retryable 503 until the catalogue is
+  fixed. Task 13's doctor, Task 16's README and Task 17 must learn the row and the key.
+
+### D-6834 — the drain waits for credential calls in flight
+
+- **Departs from:** Task 8's drain (plan :1088-1097, D-6429): cut the open streams, "wait up to 1 s for those writes,
+  flush the stats file, return 0".
+- **What changed:** Right after the cut, the credential flight is closed, so no new credential call starts. Before the
+  flush, the drain waits for the calls still in flight until `DRAIN_S + STOP_MARGIN_S - EXIT_MARGIN_S` after the signal
+  (`ccd/codexbridge/server.py:974-978`, `EXIT_MARGIN_S` :86; docstring :44-54).
+- **Why:** A refresh that the token endpoint has already answered must reach the disk before the process ends. Otherwise
+  the rotated refresh token is lost and the lane lands in needs-signin.
+- **Cost if wrong:** A stop can take up to the whole stop bound, less one second, when a refresh is in flight. The KILL
+  still comes at `DRAIN_S + STOP_MARGIN_S`.
+
+### D-6835 — a stream its client closed is counted `client-gone`, not `5xx`
+
+- **Departs from:** Task 5's closed list of outcome keys (plan :865-868), which has no key for a client that went away,
+  and the bridge's count of every failed message as `4xx` or `5xx` by its answer's status, under which a user's
+  interrupt, and a stream the drain had already counted `drain-cut`, also counted `5xx`: the measure of the runbook's
+  7-day watch (plan :1823).
+- **What changed:** `_count_failure` counts a failed message once its answer is written, at both places that counted by
+  status (`ccd/codexbridge/server.py:289-299`, called at :614 and :886). A stream the drain cut
+  (`AnthropicStream.drain_cut`, set in `cut` before `closed`, `ccd/codexbridge/stream.py:72`, :190) adds nothing,
+  because the drain counts it `drain-cut` (`server.py:973`). A stream whose client went away (`client_gone`, set by a
+  write that failed, `stream.py:87-89`) is counted `client-gone`, `stats.CLIENT_GONE`
+  (`ccd/codexbridge/stats.py:86-89`), another key outside the plan's list, beside D-6820's two, D-6833's
+  `catalogue-unreadable` and Task 4's `store:*` family. Any other failure is `4xx` or `5xx` as before, and the handler's arm for an unexpected
+  exception still counts `5xx`. The cases are at `server/test/codex-bridge-server.test.ts:523-525` (the drain) and
+  :727-736 (a client gone mid-reply).
+- **Why:** The 7-day watch compares `outcomes.5xx` over requests with the litellm baseline. Counted as `5xx`, every user
+  interrupt and every stream a restart cut would read as an upstream failure.
+- **Cost if wrong:** A failure answered after the client left is counted `client-gone`, never `5xx`, whatever caused it,
+  so an upstream fault that coincides with a departed client is missed by the rate. Task 13's and Task 17's readers of
+  `outcomes` must learn the key. The runbook's watch line names both keys (plan :1823-1825).
+
+### D-6836 — an upstream failure is recorded before its answer is sent, bounded by `RECORD_WAIT_S`
+
+- **Departs from:** D-6422's cost line, "a two-second lock wait at most, best effort, after a reply is sent", and the
+  library's comment on `RECORD_WAIT_S`, which said the same.
+- **What changed:** No behaviour changes: the order stands, and the comments now state it. Every call of
+  `_Request.record` comes before the failure it records is answered: in `_post` before it raises
+  (`ccd/codexbridge/server.py:667`), and in `_one_response` (:740, :746) and `_reduce` (:796, :802) before each returns
+  its error, which `messages()` then answers (:609-614), or, for `_post`'s raise, the handler (:884-886). The
+  `RECORD_WAIT_S` comment (`ccd/ccgpt-auth.py:84-86`) and `_Request.record`'s docstring
+  (`ccd/codexbridge/server.py:547-551`) say that the record precedes the reply and that its lock wait bounds the reply's
+  delay.
+- **Why:** The text said the opposite of the code. Recording first leaves the status file naming a limit or an
+  ineligibility by the time Claude Code reads the answer, and the stats file's request id is that same call's answer
+  (D-6827); recording after would need a second path for a best-effort write.
+- **Cost if wrong:** While another holder has the credential lock (the bridge's own refresher in a token request, or a
+  sign-in), each failure's answer is delayed up to `RECORD_WAIT_S`, 2 s. The lock wait then gives up: the record is
+  skipped, never the answer.
+
+### D-6837 — the replay corpus is pinned byte-exact by a root `.gitattributes`
+
+- **Departs from:** The File Structure (plan :244) and Task 3's files (plan :658-659), which name the corpus and its
+  case `'the committed corpus is what make_streams.py writes'` (plan :744) but no `.gitattributes`; the repository had
+  none.
+- **What changed:** A repository-root `.gitattributes` holds one `#` line and
+  `server/test/fixtures/codexbridge/streams/* -text` (`.gitattributes:1-2`), so git never converts the corpus's line
+  endings; `git check-attr text` on a corpus file answers `unset`.
+- **Why:** The case compares the committed files with a fresh `make_streams.py` run byte for byte
+  (`server/test/codex-bridge-replay.test.ts:160`). The corpus holds 59 LF files, 2 CRLF streams and 1 empty one, so a
+  checkout under `core.autocrlf=true` changed 59 of its 62 files; with the attribute none changes (measured on scratch
+  clones).
+- **Cost if wrong:** None at run time. A change to `.gitattributes` makes a pull request run the full suite once
+  (`.github/ci/select-tests.mjs:165`). A corpus file placed outside `streams/` would not be covered.
+
+### D-6838 — `ccrc-codex.test.ts` keeps the loopback bridge base in its env
+
+- **Departs from:** Task 7's files (plan :940-943), which give every contained env a loopback
+  `CCGPT_BRIDGE_UPSTREAM_BASE` (plan :980-981) but do not name `server/test/ccrc-codex.test.ts`, whose `env()` deleted
+  every `CCRC_CODEX_` and `CCGPT_` key except `CCRC_CODEX_AUTH_BASE`.
+- **What changed:** `env()` also keeps `CCGPT_BRIDGE_UPSTREAM_BASE`, with a comment in the style of Stage 1's
+  (`server/test/ccrc-codex.test.ts:81-86`). A new case pins both bases to `^http://127\.0\.0\.1:\d+$` (:3560-3564).
+  Nothing else in the file changed.
+- **Why:** Wave 2's bridge tier (Task 11) and `switch` (Task 12) are tested in this suite, and the tier passes the
+  variable on only when its caller has it set (plan :275, :1316). Without the exemption, a `direct` tier started from
+  this env would get no upstream base, and the adapter would fall back to the live endpoint, `DEFAULT_BASE`
+  (`server/test/codex-bridge-backend.test.ts:271-275`).
+- **Cost if wrong:** None in wave 1, where nothing in this suite starts a bridge. With the exemption removed, the new
+  case is red (measured).
+
+### D-6839 — `record_upstream` answers the bounded request id, not a bool
+
+- **Departs from:** Task 6's bool answer: the interface (plan :907-912) gave `record_upstream` as `-> bool`, with
+  `LockTimeout` → `False`.
+- **What changed:** `record_upstream` answers `Optional[str]`: the request id after `_bounded_upstream` bounds it
+  against the lane's tokens and account id (`ccd/ccgpt-auth.py:1526-1541`), whether or not the status was written, and
+  None when that bound drops it, when the credential is not present, or when the lock is not taken
+  (`ccd/ccgpt-auth.py:1544-1595`). `_Request.record` writes that answer, and nothing else, as the stats file's
+  `lastUpstreamRequestId` (`ccd/codexbridge/server.py:547-561`). Task 6's interface now reads so.
+- **Why:** The stats file's request id is bounded as Stage 1's status file bounds its own (whole-wave finding WS-2).
+- **Cost if wrong:** A caller that read the bool, of which there was none.

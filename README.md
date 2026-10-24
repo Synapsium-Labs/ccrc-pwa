@@ -2975,10 +2975,12 @@ fleet `ccd` that does not advertise `route-apply-v1`); the chip wears `queued` u
 back (on a session whose row carries no routing record yet, a toast says so after 60 s without a read-back). The
 new-session sheet seeds `class`, `effort` and `workflow` at creation. An operator spawn with nothing chosen gets
 the coordinator row, `class=opus effort=ultracode subagent=sonnet workflow=on`; a dispatched worker gets a record
-only when its run names one. **Fable is never reached by a default or an escalation** — both automatic ladders
-(`shared/routing-ladder.ts`) stop at `opus` — only by an explicit class choice: the picker's Fable row,
-`ccd route --set class=fable`, `--route class=fable` at creation, a coordinator's manual `field`/`value` write
-through `POST /api/runs/:id/route`, or the operator's own `/model fable` typed in the session, which the next
+only when its run names one. **Fable runs only when the operator selects it** (D-6790, ruling 2026-10-24). Neither automatic ladder
+(`shared/routing-ladder.ts`) reaches it — both stop at `opus`, and a reversal of a demotion off `fable` answers `ceiling`
+rather than restoring it — and every box-token route write refuses it with `409 fable-operator-only`: a coordinator's
+manual `field`/`value` write or ladder result through `POST /api/runs/:id/route`, and the `route` a dispatch sends. Only
+the operator's own paths remain: the picker's Fable row, the new-session sheet's class and a new workspace's route (all
+behind the cookie session), or the operator's own `/model fable` typed in the session, which the next
 stop or spawn keeps in the record (`[actor=operator-session]`, stage 7 above).
 
 **Placement and swaps route by class.** A lane serves `fable` only on an Anthropic backend whose **Fable share** —
@@ -5580,8 +5582,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8501-8503`), each with an operator sentence of its own at `:8553`,
-`:8561` and `:8574`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8506-8508`), each with an operator sentence of its own at `:8558`,
+`:8566` and `:8579`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5787,6 +5789,17 @@ pins them equal) and also shortens the dead arm to 2 days. The live arm scans at
 pass under pressure. Its census, `~/.ccrc/tmp-sweep.json` (`v`, `at`, `liveAt`, `pressure`, `arm`, `seq`,
 `roots`, `sessions` with each one's `budget`, `moved` rows kept 7 days or 1,000, `counts`), is replaced whole
 by a rename at the end of every pass, shadow or live. The sweep is its only writer.
+
+**The test-run arm** (D-6622) rides the same switch and rows. A server test run keeps its fixtures in one
+`ccrc-testrun-XXXXXX` directory under its `TMPDIR`; a later run under the same `TMPDIR` collects one whose
+owner died, but a root no later run visits (a child workspace's own `TMPDIR`, a box nobody tests on any more)
+stays. In the box's `TMPDIR` and in each witnessed child leaf that still has a registry row, the sweep takes a
+top-level directory named exactly `ccrc-testrun-` and six letters or digits (or that name with `.dead`) when no
+socket is bound at its `live.sock` in the kernel's table (the run's own liveness test), nothing under it has
+changed (ctime, not mtime) for 6 hours (1 under pressure), and the holder probe answers nobody. It renames the
+root to its `.dead` twin and then removes it, as the run's own cleanup does, so there is no quarantine and
+the census row (kind `test-run`) carries none. A leaf whose row is gone is not this arm's: `ws-collect` takes
+the whole leaf. Any doubt (a walk that cannot finish, an unreadable socket table, a failing probe) keeps the root.
 
 ### Pane-scope sweep (ccd-scope-sweep)
 

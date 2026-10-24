@@ -14,7 +14,7 @@
 // The documents are built from spec §9's grammar here, never imported from
 // W2's renderer: Task 15 feeds W2's real route through this same puller once
 // W2 has merged (D-3235). `intentDoc` is this file's
-// own, on the field names of Task 8's `intentDoc` in `ccrc-update.test.ts`
+// own, on the field names of Task 8's `intentDoc` in `ccrc-updateFixture.ts`
 // but NOT a copy of it and never an import of it (importing a .test.ts
 // registers its whole suite — `build-release.test.ts`'s stated reason): it
 // reads a LIVE clock where Task 8's is frozen at `INTENT_NOW`, because the

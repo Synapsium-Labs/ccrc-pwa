@@ -1,6 +1,6 @@
 import {
   FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, RUN_STATES, TERMINAL_RUN_STATES, isRegistryId,
-  parseRouteEventDetail, parseRouteFields,
+  parseRouteEventDetail, parseRouteFields, routeNamesFable,
 } from '../../../shared/api.js';
 import type {
   FailureKind, RouteField, RouteMode, RunRouteRefuseCode, RunState, RunSummary,
@@ -38,6 +38,9 @@ import { CLASSES, type ModelClass } from '../../../shared/models.js';
  * them, so a refusal costs only the reads ahead of it, and a manual write
  * reads neither.
  */
+
+/** D-6790: the sentence both `fable-operator-only` refusals on `POST /api/runs/:id/route` carry. */
+const FABLE_OPERATOR_ONLY_DETAIL = "class fable is the operator's to select";
 
 /** `POST /api/runs/:id/route`'s routable run states (review finding #6, ruling
  *  S5-R4): every `RunState` not in `TERMINAL_RUN_STATES`, derived rather than
@@ -253,6 +256,8 @@ export async function decideRoute(facts: RouteFacts): Promise<RouteDecision> {
 
   const { how } = ask;
   if (how.by === 'manual') {
+    // D-6790: Fable runs only when the operator selects it; this door is a coordinator's, on the box token.
+    if (routeNamesFable({ [how.field]: how.value })) return refused('fable-operator-only', { detail: FABLE_OPERATOR_ONLY_DETAIL });
     return { ok: true, move: { sid, mode: 'manual', field: how.field, from: '?', to: how.value, kind: null, effortReset: null } };
   }
   const rung = await measureRung(facts, sid);
@@ -260,7 +265,15 @@ export async function decideRoute(facts: RouteFacts): Promise<RouteDecision> {
   const { current, rawClass, degraded } = rung;
 
   const kind = how.by === 'kind' ? how.kind : null;
-  const { lastDemotion, priorSameKind } = foldRouteTrail(facts.trail(sid), sid, kind);
+  const folded = foldRouteTrail(facts.trail(sid), sid, kind);
+  const { priorSameKind } = folded;
+  // Ruling S5-R17, applied before the ladder: a demotion whose `to` is no longer the measured value was cleared out
+  // of band. D-6790: a live class demotion whose origin is above the main ceiling (fable) is never restored by an
+  // automatic step, but it must not freeze the ladder either, so it falls through to the plain ladder.
+  const dem = folded.lastDemotion;
+  const demLive = dem !== null && dem.to === (dem.field === 'class' ? current.class : current.effort);
+  const fableOrigin = dem !== null && dem.field === 'class' && routeNamesFable({ class: dem.from });
+  const lastDemotion = demLive && !fableOrigin ? dem : null;
   let target: RungTarget | { kind: 'floor'; why: string } = how.by === 'kind'
     ? escalate(how.kind, current, 'main', priorSameKind, lastDemotion)
     : demote(current, how.field);
@@ -278,6 +291,9 @@ export async function decideRoute(facts: RouteFacts): Promise<RouteDecision> {
   }
 
   if (target.kind !== 'move') return refused(target.kind, { detail: target.why });
+  // D-6790: the same predicate over a ladder result. The ladders stop at the ceiling, so this is the backstop that
+  // keeps a future rung or a stored trail from carrying a coordinator past it.
+  if (routeNamesFable({ [target.field]: target.to })) return refused('fable-operator-only', { detail: FABLE_OPERATOR_ONLY_DETAIL });
 
   // A degraded session's own record may already intend the class the ladder
   // just computed (the served class escalated, not the intended one): writing

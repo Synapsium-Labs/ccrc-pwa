@@ -4712,6 +4712,133 @@ if [[ -n "$apf" ]]; then
   esac
 fi
 
+# FABLE RUNS ONLY WHEN THE OPERATOR SELECTS IT (D-6792; operator ruling 2026-10-24): on every session, an Agent or Task
+# call whose `model` names Fable, and a Workflow call whose script or input names a Fable model for an agent
+# (`model: 'fable'`, `"model":"fable"`, `claude-fable-*`), is denied, with a reason that points at opus, sonnet or haiku.
+# An accident guard, and it fails open like the arm above: a payload jq cannot parse, or an envelope that cannot be
+# built, says nothing. The prefilter is a builtin glob on the payload, so a call that never names Fable forks nothing.
+FABLE_RE="(^|[^[:alnum:]_])model[\"'\`]?[[:space:]]*[:=,(][[:space:]]*[\"'\`]?[[:alnum:]_./-]*[Ff][Aa][Bb][Ll][Ee]|[Cc][Ll][Aa][Uu][Dd][Ee]-[Ff][Aa][Bb][Ll][Ee]"
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
+      && ( "${tool:-}" == Agent || "${tool:-}" == Task || "${tool:-}" == Workflow ) && "${payload,,}" == *fable* ]]; then
+  fbl=$(jq -r --arg re "$FABLE_RE" '
+    .tool_input as $i
+    | if .tool_name == "Agent" or .tool_name == "Task" then
+        (if ($i.model | type) == "string" and ($i.model | test("fable"; "i")) then "y" else "" end)
+      elif .tool_name == "Workflow" then
+        (if any($i | .. | select(type == "object") | .model?; type == "string" and test("fable"; "i"))
+            or any($i | .. | strings; test($re)) then "y" else "" end)
+      else "" end' <<<"$payload" 2>/dev/null) || fbl=""
+  if [[ "$fbl" == y ]]; then
+    freason="ccrc: this ${tool} call names a Fable model. Fable runs only when the operator selects it (operator ruling 2026-10-24; D-6792): a coordinator, a worker, an agent or a script never picks it. Use opus, sonnet or haiku for the agent's model instead, and leave the choice of Fable to the operator."
+    if fjson=$(_hook_deny_json "$freason"); then pre_json=$fjson; fi
+  fi
+fi
+
+# A FAN-OUT NAMES ITS MODEL, AND A WORKFLOW AGENT ITS EFFORT TOO (D-6798; operator ruling 2026-10-24): on every session, an
+# Agent or Task call whose `tool_input` names no `model`, and a Workflow call whose script has an `agent(...)` call
+# naming no `model` or no `effort`, is denied, with a reason that sends the agent to the routing matrix. A call that names
+# nothing runs at the lane default, which is the spend this arm bounds. An accident guard, and it fails open like the arm
+# above: a payload jq cannot parse, an envelope that cannot be built, or a script it cannot read says nothing. Only an
+# Agent, Task or Workflow call forks a jq, so every other tool pays nothing.
+# A script is read as code: strings, template literals, regex literals and comments are skipped (an unbalanced quote means
+# unknown, and allows), so an `agent(` quoted in a prompt is no
+# call and the word `model` in a prompt is no option. An `agent(` call is denied only when its options are visible: no
+# second argument at all, or an inline `{...}` object (the first argument, or the one after the first top-level comma)
+# with no `model:` or no `effort:` key (shorthand `{ model, effort }` counts). Options held in a shared object or an
+# expression, or an inline object that spreads one, are unknown and allow. The script is `script`, else the file at
+# `scriptPath` (regular file, at most 256 KiB; missing, unreadable or larger allows). A saved workflow run by `name` is
+# not read.
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
+      && ( "${tool:-}" == Agent || "${tool:-}" == Task || "${tool:-}" == Workflow ) ]]; then
+  fosrc=""
+  if [[ "${tool:-}" == Workflow ]]; then
+    fopath=$(jq -r '.tool_input | if (.script | type) == "string" then "" elif (.scriptPath | type) == "string" then .scriptPath else "" end' <<<"$payload" 2>/dev/null) || fopath=""
+    if [[ -n "$fopath" && -f "$fopath" && -r "$fopath" && ! -L "$fopath" ]]; then
+      fosize=$(wc -c <"$fopath" 2>/dev/null) || fosize=""
+      fosize=${fosize//[[:space:]]/}
+      [[ "$fosize" =~ ^[0-9]+$ ]] && (( fosize <= 262144 )) && fosrc=$(cat -- "$fopath" 2>/dev/null) || fosrc=""
+    fi
+  fi
+  fo=""
+  # A Workflow call pays the character walk only when the word `agent` appears at all (a cheap test before the fork).
+  if [[ "${tool:-}" != Workflow || "$payload$fosrc" == *agent* ]]; then
+  fo=$(jq -r --arg file "$fosrc" '
+    def quote: . == "\"" or . == "\u0027" or . == "`";
+    def skipc($c; $i):
+      if $c[$i] == "/" and $c[$i + 1] == "/" then (first(range($i; $c | length) | select($c[.] == "\n")) // ($c | length))
+      elif $c[$i] == "/" and $c[$i + 1] == "*" then ((first(range($i + 2; ($c | length) - 1) | select($c[.] == "*" and $c[. + 1] == "/")) // ($c | length)) + 2)
+      elif $c[$i] == "/" and ((first(range($i - 1; -1; -1) | select(($c[.] | test("[[:space:]]")) | not)) // null) as $p | $p == null or ($c[$p] | test("[(,=:!&|?{;\\[]"))) then
+        (($c | length) as $n | {j: ($i + 1), k: false}
+         | until(.j >= $n or (.k | not) and $c[.j] == "/"; if $c[.j] == "\\" then .j += 2 elif $c[.j] == "[" then .k = true | .j += 1 elif $c[.j] == "]" then .k = false | .j += 1 else .j += 1 end)
+         | .j + 1)
+      else null end;
+    # Walk from $from; "comma" stops at the first top-level comma, "bal" at the close of the bracket opened at $from.
+    # The result is that index, or -1 when the enclosing bracket closes first or the text ends.
+    def scan($c; $from; $mode):
+      {i: $from, d: 0, q: null, r: null}
+      | until(.r != null or .i >= ($c | length);
+          $c[.i] as $ch
+          | if .q != null then
+              (if $ch == "\\" then .i += 2 elif $ch == .q then .q = null | .i += 1 else .i += 1 end)
+            elif skipc($c; .i) != null then .i = skipc($c; .i)
+            elif ($ch | quote) then .q = $ch | .i += 1
+            elif $ch == "(" or $ch == "[" or $ch == "{" then .d += 1 | .i += 1
+            elif $ch == ")" or $ch == "]" or $ch == "}" then
+              (if .d == 0 then .r = -1 else .d -= 1 | (if $mode == "bal" and .d == 0 then .r = .i else . end) | .i += 1 end)
+            elif $ch == "," and .d == 0 and $mode == "comma" then .r = .i
+            else .i += 1 end)
+      | .r // -9;
+    def isid: . != null and test("[A-Za-z0-9_.$]");
+    # The index just after the "(" of every agent( call outside a string or comment.
+    def calls($c):
+      {i: 0, q: null, h: []}
+      | until(.i >= ($c | length);
+          $c[.i] as $ch
+          | if .q != null then
+              (if $ch == "\\" then .i += 2 elif $ch == .q then .q = null | .i += 1 else .i += 1 end)
+            elif skipc($c; .i) != null then .i = skipc($c; .i)
+            elif ($ch | quote) then .q = $ch | .i += 1
+            elif $ch == "a" and ($c[.i:.i + 5] | join("")) == "agent" and ((.i > 0 and ($c[.i - 1] | isid)) | not) then
+              (first(range(.i + 5; $c | length) | select(($c[.] | test("[[:space:]]")) | not)) // null) as $j
+              | if $j != null and $c[$j] == "(" then .h += [$j + 1] | .i = $j + 1 else .i += 5 end
+            else .i += 1 end)
+      | if .q != null then [] else .h end;
+    def ws($c; $i): (first(range($i; $c | length) | select(($c[.] | test("[[:space:]]")) | not)) // ($c | length));
+    # "bad" when this call surely names no model or no effort, else "ok" (including every case that cannot be seen).
+    def judge($c; $h):
+      ws($c; $h) as $a
+      | (if $c[$a] == "{" then $a
+         else (scan($c; $h; "comma")) as $k
+           | if $k == -9 then -3 elif $k < 0 then (if $c[$a] == "." and $c[$a + 1] == "." then -3 else -2 end) else ws($c; $k + 1) as $b | (if $c[$b] == "{" then $b elif $c[$b] == ")" then -2 else -3 end) end
+         end) as $o
+      | if $o == -2 then "bad"
+        elif $o == -3 then "ok"
+        else scan($c; $o; "bal") as $e
+          | if $e < 0 then "ok"
+            else ($c[$o:$e + 1] | join("")) as $t
+              | if ($t | test("\\.\\.\\.")) then "ok"
+                elif ($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?model[\"\u0027`]?[[:space:]]*[:,}]")) and (($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?effort[\"\u0027`]?[[:space:]]*[:,}]")) or ($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?model[\"\u0027`]?[[:space:]]*:[[:space:]]*[\"\u0027`](claude-)?haiku"))) then "ok"
+                else "bad" end
+            end
+        end;
+    .tool_input as $i
+    | if .tool_name == "Agent" or .tool_name == "Task" then
+        (if ($i | type) == "object" and (($i.model | type) != "string" or $i.model == "") then "agent" else "" end)
+      elif .tool_name == "Workflow" and ($i | type) == "object" then
+        (if ($i.script | type) == "string" then $i.script elif $file != "" then $file else null end) as $s
+        | if $s == null then ""
+          else ($s | split("")) as $c
+            | if any(calls($c)[]; judge($c; .) == "bad") then "workflow" else "" end
+          end
+      else "" end' <<<"$payload" 2>/dev/null) || fo=""
+  fi
+  if [[ "$fo" == agent || "$fo" == workflow ]]; then
+    if [[ "$fo" == agent ]]; then foname="names no model"; else foname="has an agent() call that names no model or no effort (a haiku call needs no effort)"; fi
+    foreason="ccrc: this ${tool} call ${foname}, so it would run at the lane default (operator ruling 2026-10-24; D-6798). Name them from the routing matrix: pass model (opus, sonnet or haiku) on an Agent or Task call, and model on every agent() call in a Workflow script, and effort too unless the model is haiku (haiku takes no effort level). Take the row for the work: a mechanical task is haiku or sonnet, judgement is opus."
+    if fojson=$(_hook_deny_json "$foreason"); then pre_json=$fojson; fi
+  fi
+fi
+
 # `carry-only-a-main-thread-wait` (D-4039, task review): who raised the wait. `waitby` is "subagent" only when THIS event
 # freshly set `waiting` and carries an `agent_id` (`$paid`); it is stored as the additive key `waitBy`, preserved with
 # the carried state below, and absent everywhere else, so every other write keeps today's shape byte for byte.

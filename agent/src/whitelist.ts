@@ -630,6 +630,12 @@ export const EXEC_WHITELIST = {
     ['ws-audit', '--orphans'],
     ['ws-audit', '--orphan-hex'],
     ['ws-orphan', '--expect'],
+    // THE COLLECTOR'S LOOSE ARM (fleet disk retention spec 2026-10-23 §2.4, D-6626). Two read-only `ws-audit` modes: the
+    // census of the entries directly under the scratch root (names as hex) and one such entry's audit, which mints the
+    // token. Neither destroys anything, and neither is gated in `REQUIRED_VERB_FLAG` (`ws-audit` is not). The loose VERB
+    // rides `['ws-collect','--expect']` above (its token leads), so it takes no prefix of its own.
+    ['ws-audit', '--collect-census'],
+    ['ws-audit', '--loose-hex'],
     // RENAME AN EXISTING WORKSPACE (named workspaces S9, design 2026-10-20 §6): `ws-title --session <id> (--title <text>
     // | --clear)` writes a workspace's operator title and its `named` marker, or removes both, and nothing else — no
     // worktree, branch, transcript or session is touched. Granted on `--session` and ENROLLED in `REQUIRED_VERB_FLAG`

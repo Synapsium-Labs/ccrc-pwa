@@ -11,6 +11,8 @@ import {
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner, fleetHostBannerShows } from '../fleet/FleetHostBanner';
 import { HaltBanner, haltBannerShows } from '../fleet/HaltBanner';
+import { DiskBanner } from '../fleet/DiskBanner';
+import { diskBannerShows } from '../fleet/diskWords';
 import { UpdateIndicator } from '../fleet/UpdateIndicator';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
 import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner';
@@ -406,6 +408,8 @@ export function FleetBanners(): ReactNode {
           shows: fleetHostBannerShows(fleetHealth),
           node: <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} stale={stale} />,
         },
+        // The disk alarm (D-6617), from the same health poll as the fleet-host banner above.
+        { id: 'disk', shows: diskBannerShows(fleetHealth), node: <DiskBanner health={fleetHealth} /> },
         // The halt, with each halting node's Ack in place (programme wave 14, R15(a)). Re-polls on every Ack. The
         // release that waits is not a banner (D-6327): it is the quiet update line, placed once per width.
         {

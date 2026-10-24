@@ -158,8 +158,8 @@ describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s 
     // because a required leg skipped by `if:` reads as PASSING to the queue.
     const req = new Set<string>();
     const walk = (id: string): void => { if (req.has(id)) return; req.add(id); needsOf(all.get(id) ?? []).forEach(walk); };
-    ['server', 'test', 'build-pwa'].forEach(walk);
-    expect([...req].sort()).toEqual(['build-pwa', 'select', 'server', 'server-shard', 'server-typecheck', 'test']);
+    ['server', 'test', 'pwa', 'build-pwa'].forEach(walk);
+    expect([...req].sort()).toEqual(['build-pwa', 'deps', 'pwa', 'pwa-shard', 'pwa-static', 'select', 'server', 'server-shard', 'server-typecheck', 'test']);
     for (const id of req) {
       const code = (all.get(id) ?? []).filter((l) => !/^\s*#/.test(l) && !PIPELINE_STEP_LINES.includes(l)).join('\n');
       expect(code, `\`${id}\` mentions merge_group — a required leg skipped by if: reports as PASSING, and the queue would merge an untested tree`)

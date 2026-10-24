@@ -603,6 +603,7 @@ same, and shows as `absent`.
 | `not-dispatched` | this run has no worker session to re-measure against |
 | `bad-transition` | `to` is not reachable from the run's current state |
 | `review-in-flight` | a non-terminal review run already names this work run — on an OPEN, a second reviewer for one wave; on an ADVANCE to `working`, a send-back while its review is still open. Close the review run first (body `{"state":"failed"}` if it died — no fingerprint needed), then retry. |
+| `cap-review-rounds` | on an OPEN of a review run: the work run already has three review runs, in any state. The server raised one ask to the operator carrying the run, its round count and the last review's open findings (the refusal body carries the same under `ask`). Do not retry the open and do not look for another way to start a review: the operator lifts the cap per run, and a further open then succeeds. Meanwhile rule on the findings you already hold. |
 | `stale-review` | the reviewed branch's live tip is not the `reviewedTip` the report describes — the worker pushed after wave-done, or the report is about an older tip. Do not rule on it: close the review run with body `{"state":"failed"}` (no fingerprint needed), mail the worker the code and detail verbatim, and open a fresh review run against the live tip once its re-measured wave-done arrives. (A malformed `reviewedTip` reaching the verifier directly also answers this code, but the close route refuses that shape as `bad-request` first.) |
 | `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
 
@@ -704,7 +705,8 @@ Partial success on a ledger write is how tallies drift.
 
 **The handoff review is a REVIEW RUN, and the held-out panel is its shape** (clause 14,
 `references/review-panel.md`): three Opus lenses over the wave's commit range, three Sonnet
-refuters per finding, majority deciding, model and effort literal in the script. The REVIEWER
+refuters per critical or important finding (one per minor, returned as advisory), at most 8 findings per lens,
+majority deciding, model and effort literal in the script. The REVIEWER
 runs it — this session dispatches the review run and rules on the report it returns (step 1
 below, clause 12); a lens that returned nothing is a review not yet done, never an approval.
 

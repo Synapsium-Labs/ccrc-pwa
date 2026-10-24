@@ -80,7 +80,7 @@ export function removeTmpFixturesSince(mark: number): void {
 
 /** OPT-IN, for a file whose one end-of-file sweep is too big for one hook: called at a file's top level, it
  *  registers a root `beforeEach` that marks `made.length` and a root `afterEach` that removes what the test
- *  made from that mark on. R20a measured `ccrc-update.test.ts`: about 650 directories and 2.5 GB in its one
+ *  made from that mark on. R20a measured `ccrc-update-*.test.ts`: about 650 directories and 2.5 GB in its one
  *  `afterAll`, which overran vitest's 20 s hook timeout on two CI shards while every test passed. A directory
  *  made BEFORE the mark (at collection time, or in a `beforeAll`) is left for the `afterAll`. A root
  *  `afterEach` runs after every describe-level one (vitest runs a test's after-hooks innermost first), so a

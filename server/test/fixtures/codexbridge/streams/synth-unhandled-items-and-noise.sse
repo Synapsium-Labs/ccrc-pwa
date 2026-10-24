@@ -1,0 +1,30 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_fx1","object":"response","status":"in_progress","output":[]},"sequence_number":0}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_fx1"},"sequence_number":1}
+
+event: response.mystery.event
+data: {"type":"response.mystery.event","detail":"x","sequence_number":2}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"web_search_call","id":"ws_fx0","status":"completed","action":{"type":"search","query":"q"}},"sequence_number":3}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"type":"compaction","id":"cmp_fx1","encrypted_content":"ENC-1"},"sequence_number":4}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":2,"item":{"type":"mystery_item","id":"mys_fx2","status":"completed"},"sequence_number":5}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":3,"item":{"type":"message","id":"msg_fx3","role":"assistant","status":"in_progress","content":[]},"sequence_number":6}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":3,"item":{"type":"message","id":"msg_fx3","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Done.","annotations":[]}]},"sequence_number":7}
+
+event: response.another_unknown
+data: {"type":"response.another_unknown","sequence_number":8}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_fx1","object":"response","status":"completed","output":[{"type":"web_search_call","id":"ws_fx0","status":"completed","action":{"type":"search","query":"q"}},{"type":"compaction","id":"cmp_fx1","encrypted_content":"ENC-1"},{"type":"mystery_item","id":"mys_fx2","status":"completed"},{"type":"message","id":"msg_fx3","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Done.","annotations":[]}]}],"usage":{"input_tokens":9,"output_tokens":2,"total_tokens":11},"end_turn":false},"sequence_number":9}
+

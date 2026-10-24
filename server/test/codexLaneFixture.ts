@@ -1264,7 +1264,7 @@ export async function killLaneProcesses(home: string): Promise<void> {
 // WHY A JOIN AND NOT `plantSystemd` ITSELF. `plantSystemd` above plants
 // `systemctl` and `systemd-run` into `<home>/.local/bin` for the codex suites.
 // The three spine harnesses — `ccrcEnv` (ccrc-install.test.ts), `updateEnv`
-// (ccrc-update.test.ts), `verbEnv` (ccrc-uninstall.test.ts) — write their
+// (ccrc-updateFixture.ts), `verbEnv` (ccrc-uninstall.test.ts) — write their
 // OWN `systemctl` over that path on EVERY run, because theirs answer the
 // spine's verbs and plantSystemd's answers the codex tiers'. And none of them
 // planted any `systemd-run`, so on a Linux box the name resolved to the REAL

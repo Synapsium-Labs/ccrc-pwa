@@ -379,9 +379,20 @@ export function stubContainedTool(
  *  CCRC_CODEX_AUTH_BASE when it names one, else CLOSED_AUTH_BASE. An environment VALUE, not a poison: only the
  *  auth library reads it, so it moves no other code path (the opt-in rule below is about poisons), and unset or
  *  EMPTY the library reads the live endpoint, so an empty caller value names none (`runAuthDriver`'s rule). */
-function containedAuthBase(env: NodeJS.ProcessEnv): { CCRC_CODEX_AUTH_BASE: string } {
+function containedAuthBase(env: NodeJS.ProcessEnv): { CCRC_CODEX_AUTH_BASE: string; CLAUDECODE: string } {
   const named = env['CCRC_CODEX_AUTH_BASE'];
-  return { CCRC_CODEX_AUTH_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE };
+  // D-6791: `ccd` refuses class=fable from a Claude Code session's shell (CLAUDECODE set), so a suite run from inside
+  // one must not inherit it: the harness answers empty unless the test names CCRC_TEST_CLAUDECODE.
+  return { CCRC_CODEX_AUTH_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE, CLAUDECODE: env['CCRC_TEST_CLAUDECODE'] ?? '' };
+}
+
+/** The codex bridge's upstream for every contained env (codex-bridge Stage 2, Task 7): the caller's own
+ *  CCGPT_BRIDGE_UPSTREAM_BASE when it names one, else CLOSED_AUTH_BASE, by `containedAuthBase`'s rule. Only the
+ *  bridge's backend adapter reads it, and unset or EMPTY it names the live endpoint, so an empty caller value names
+ *  none. */
+function containedBridgeBase(env: NodeJS.ProcessEnv): { CCGPT_BRIDGE_UPSTREAM_BASE: string } {
+  const named = env['CCGPT_BRIDGE_UPSTREAM_BASE'];
+  return { CCGPT_BRIDGE_UPSTREAM_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE };
 }
 
 export function ghContainedEnv(
@@ -396,7 +407,7 @@ export function ghContainedEnv(
   // consumer it hurts, because the damage shows up as a wrong ANSWER in a file
   // that never mentioned systemd (see the header). Opt-in makes the widening
   // land at the call site, where the reviewer of that call site can see it.
-  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...containedAuthBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
+  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...containedAuthBase(env), ...containedBridgeBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
   // THE SECOND STRUCTURAL BOUNDARY for the ccd runners, and the reason it is a
   // poison rather than an absence: `_have_systemctl` is `command -v systemctl`,
   // so REMOVING systemctl would send every ccd test down `_supervised_start`'s
@@ -465,7 +476,7 @@ export function ghContainedEnv(
   // Prepended to whatever the caller passed, never the other way round: a
   // snippet that supplies its own PATH must not be able to displace the poison,
   // which is the difference between structural and advisory.
-  return { ...env, ...bus, ...containedAuthBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
+  return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
 }
 
 /** The one reader every append-only call log in this file goes through: absent

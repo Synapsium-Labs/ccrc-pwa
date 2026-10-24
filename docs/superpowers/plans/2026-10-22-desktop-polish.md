@@ -513,11 +513,15 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
       cd ui && ./node_modules/.bin/tsc --noEmit
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
 
-**Carried (R41, R45)**, each in its own commit. Step 0 re-grounds the anchors, which are at #1150's head.
+**Carried (R41, R45, R49)**, each in its own commit. Step 0 re-grounds the anchors, which are at #1150's head.
 - From T2a's last review (R41's F4): if the inline card is not a dialog, `useAskKeys` fires only from the page body, so a click on the fleet column's space at the desk takes the card's keys away. T1c measures it at the desk and pins what it finds.
 - From T1b's last review (R45), text only: `ask-structured.test.tsx`'s Deny gap case (≈:881-888) is renamed to say the disabled Deny sends nothing, or drives `claim()`'s refusal (F1); `session.ts`'s comment (≈:302-306) says a dialog also falls at the drop and an ask does not (F2; B2 edits that file too, so after B2 lands or with its consent); `DialogSheet.tsx` (≈:219) and `dialog-sheet.test.tsx` (≈:2937) cite fix round 2's own review, not review 844, which is T2a's (F3); `audit.mjs`'s pointer for the sheet's ground (≈:885) names `ui/src/primitives/sheet.tsx` (≈:275) (F4).
 
-**Acceptance.** Every Step 1 case green and every mutant red as tabled; desk and phone renders before and after in the PR body; the answer requests byte-identical to T1b's.
+**R49 prerequisite carry (operator exception R56).** T1c also modifies `pwa/test/stores.test.ts` and the safety comments only in `server/src/inject/send.ts`, claiming both first. B2 #1214 has merged. Its `retryResumes` matrix gains `['type-failed + draft', refusal('type-failed', 'my message'), false]`; restoring the old arm that resumes `type-failed` with a draft must red that row, then current code greens it. Add the executed row to the mutation table. In a separate commit, the `boxRowCap` comment and both related safety passages distinguish tail's fail-closed acceptance from whole's refusal only at the formula's cap, `floor((paneRows - 10) / 2)`, measured on build 2.1.300. No prompt behaviour change. Run stores, send-paste-chip and citations, alongside the targeted T1c gates and typechecks. The corrected audit pointer is `ui/src/primitives/sheet.tsx#Sheet`, not a numeric line.
+
+R56 authorizes exactly one fresh-fetch `git merge origin/main` into T1c's workspace branch to obtain those otherwise absent prerequisites, even though its merge probe is clean. Report the exact main SHA and every resolution. It grants no rebase, update-branch, cherry-pick or second absorption, and changes no other task's sync fence. Refresh targeted suites and affected render evidence; keep reused evidence labelled. No second full local PWA run or full local server run; CI supplies the full PWA gate. A fresh verified handoff receives independent whole-branch review.
+
+**Acceptance.** Every Step 1 case green and every mutant red as tabled; desk and phone renders before and after in the PR body; the answer requests byte-identical to T1b's. R49's inherited test and comments are complete, with their targeted evidence.
 
 **Rollback.** A plain revert returns the desk to T1b's centred dialog; the phone is unchanged either way. Revert T1c before T1b (§Rollback).
 
@@ -828,7 +832,9 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/instrument-shell.test.tsx test/instrument-list.test.tsx test/fleet-class-chooser.test.tsx test/fleet-screen.test.tsx test/fleet-css.test.ts test/tap-targets.test.tsx test/control-census.test.ts
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
 
-**Acceptance.** No runs row and no inert chooser in Instrument's desk column. **Rollback.** A plain revert.
+**Carried (R51), each intended change in its own commit.** T2f's Files also include `pwa/browser/instrument-desk.browser.test.ts`, `pwa/test/instrument-shell.test.tsx` and the comment-only passages of `pwa/src/fleet/FleetHead.tsx`. Serve a waiting update view in `WITH_RUNS` and assert the indicator is drawn at the 900 boundary, alongside the whole count. Add the missing column-presence assertions to both no-head loops. Correct the mutation footer: rows 1 and 4 also run in the browser, row 7 only there. Name the frame's status bar and the rail's doors in FleetHead/FleetScreen comments. List all seven measured reds for row 6 rather than only five. Run the instrument-desk browser file as well as Step 5's suites; preserve the status-bar count, pool lag and phone line. These are T2g's accepted follow-ups, not a second implementation of its flags.
+
+**Acceptance.** No runs row and no inert chooser in Instrument's desk column; R51's carried fixture, guard and comment fixes complete. **Rollback.** A plain revert.
 
 ### Task T2g: Instrument's desk column draws no count line; the status bar's count is the one (D-6715) — after T2e merges
 
@@ -1189,8 +1195,8 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
 **Files:** Modify `pwa/src/fleet/NewSessionSheet.tsx` (≈:152-200, ≈:309-337), `pwa/src/screens/SessionScreen.tsx` (≈:336, ≈:560-606; dropped, R39), `pwa/src/stores/session.ts` (one tolerant reader of `unprompted`; dropped, R39), `server/src/sessionws.ts` (watched; the backlog's missing-transcript answer; dropped, R39, though (c) below still edits it), `shared/api.ts` (the `backlog` frame gains an optional `unprompted?: true`: additive, absence-permits, read once; dropped, R39). Tests: `pwa/test/new-session-sheet.test.tsx`, `server/test/sessionws.test.ts` (its unprompted cases dropped, R39; (c) below adds one), `pwa/test/stores.test.ts` (dropped, R39). Modify, each intended change in its own commit: `session-lifecycle.test.tsx` (≈:521-544) and `chat.test.tsx` (≈:610-615), where their fixture is an unprompted live row (dropped, R39).
 
 **The shape** (§What the operator saw, row B-b).
-- **Open it.** On success, a named create whose answer carries an id closes the sheet and navigates to it. Otherwise (an unnamed create, or a named answer this build cannot read) the sheet stays in its starting state until `startedSessionFor` (`startProgramPolicy.ts` ≈:134) finds the new row on a fleet frame, bounded at 60 s, then navigates; past the bound, today's toast and close. A dismissed sheet never navigates.
-- **No wait for the project list.** Step 2 renders the fleet store's cached projects at once and refreshes from `/api/projects` in the background.
+- **Open it.** On success, a named create whose answer carries an id closes the sheet and navigates to it, without a starting toast. A named answer this build cannot read keeps today's toast and close (D-6801); it never waits for a workspace row that `startedSessionFor` cannot match. An unnamed create for a truly new main checkout stays in its starting state until that existing predicate finds the new row on a fleet frame, bounded at 60 s, then navigates without a toast; past the bound, today's toast and close. An already-live main checkout instead keeps the pre-B5 immediate toast and close, with no navigation, listener or clock, through the existing wrapper-independent `liveMainCheckoutIn` policy (R52). A dismissed or unmounted sheet never navigates or closes a newer sheet.
+- **No wait for the project list.** Step 2 renders the fleet store's cached projects at once and refreshes from `/api/projects` in the background. A cached pick is reconciled by workdir against the fresh rows before crossing/start decisions; a removed row or newly crossing pick is withdrawn, while a deliberate crossing pick keeps the existing policy (R52 F5).
 - **Say what is true: dropped (R39).** The bullet assumed a brand-new session has no turn marker. Step 0 found one: the session hook writes it on SessionStart `startup`, with `turnAt` null, so a new session's marker reads present and its absence cannot mean that no turn has started. By the plan's own fallback the bullet is dropped and the "Can't find this session's transcript" banner stays. `turnAt` null is not used either, because a resumed or swapped session can read null while it has history. An unprompted signal goes to the operator as a task of its own.
 
 - [ ] **Step 0: Re-ground.** `startedSessionFor` and `useProgramAttempt`'s wait; what each create route answers; the turn marker's writer (`ccd/session-hook.sh`) and its reader's absent and unreadable answers.
@@ -1218,7 +1224,7 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
       cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/pwa-rings.test.ts
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
 
-**Acceptance.** The new session is on screen without a hunt; an unprompted session keeps today's banner (R39). **Rollback.** A plain revert; no wire change.
+**Acceptance.** The new session is on screen without a hunt; dismissal/unmount, reopen and cache-refresh races are pinned; the already-live fallback is unchanged; F8 is complete before landing. An unprompted session keeps today's banner (R39). **Rollback.** A plain revert; no wire change.
 
 #### B5 additions (rev 4)
 
@@ -1230,6 +1236,10 @@ Three items join Task B5: (a) comes from C0, (b) from B4's review (the ledger's 
 - `pwa/test/fleet-screen.test.tsx`;
 - `server/src/transcript/resolve.ts` (a comment only);
 - `server/test/transcript-ladder.test.ts`.
+
+**R52 fix-round requirements.** Restore the deleted dismissal case beside toast-once: no retained fleet listener or 60 s clock, and an old clock cannot end a reopened wait. Separately execute unsubscribe and clear-timeout mutants. A real unmount during the wait followed by row arrival must cause no navigation or close and retain no listener/clock; deleting its cleanup must red before the normal deadline. A late unreadable named answer may toast once but cannot close or re-enable a reopened sheet; its generation-guard mutant must red. The fresh project reconciliation and deliberate-crossing cases also carry executed mutants. Account honestly for the pre-live exclusion pin at its policy owner if the immediate-close arm makes it unreachable from the sheet. The fallback header and four reported departure slugs must agree with the actual behaviour. The two prerequisite start-test edits are D-6803.
+
+**R59 guard completion.** Pin the unnamed post-create generation guard on its own: an already-live create answers after dismissal and reopen, toasts once, and cannot navigate, close or re-enable the newer sheet. Separately pin a deliberate crossing cached pick that stays crossing after a changed refresh (`crossPool: true`) and one that becomes eligible (no `crossPool`); both survive reconciliation and red when every changed row is withdrawn. Keep `preLive` as a disclosed policy input whose freshness conjunct is pinned at its owner, not reachable through this sheet's already-live arm. Rename the workspace-row case to its actual non-main-checkout exclusion. Remove the bare-sheet case's vacuous root-fallback assertion without losing its error-line pin, and correct the returned-id case's impossible taken-slug-suffix premise. No new product behaviour or main-sync authorization. F8 and the C1 second-lander fence still block landing.
 
 **(a) A malformed `/api/projects` answer must not take the app down.** This item is red first.
 
@@ -1249,7 +1259,7 @@ The mutant: "`projects` returns the body unchecked", red in all three.
 Other changes to B5:
 - B5's Step 2 growth check now names `api.ts` beside `sessionws.ts`.
 - B5's first Verify line gains `test/api.test.ts` and `test/fleet-screen.test.tsx`.
-- If T1b has merged, B5 adds its new sentence to `plain-words.test.ts`'s `api.ts` entries and re-runs it; otherwise nothing scans it.
+- T1b has merged, so B5 must widen `plain-words.test.ts`'s actual `api.ts` read beyond its `dialog-open` key to include the new inline `Error` sentence, update the length pin and run the suite. R53 defers this to an authorized landing sync because the suite is absent from B5's branch; it is not waived or complete, and blocks landing. Do not speculative-sync or copy/cherry-pick the missing suite merely to bypass that boundary.
 
 Fences:
 - B2 edits `api.ts`'s `prompt` ≈:1179, which is line-disjoint. Each PR has its own 40-line budget.
@@ -2519,6 +2529,15 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
 - **D-6763** — `task-read-caught-at-start` (Task C2): the PR route's task read is caught as it starts, where the shape put the no-op catch on the failed pr-state path. The whole-branch review measured that a task read rejecting while pr-state was pending was an unhandled rejection, which exits Node. A good pr-state still awaits the tasks.
 - **D-6764** — `six-reads-counts-the-routes-own-reads` (Task C2): "at most six bounded reads" is pinned as the route's own reads, because `resolveTranscript` already makes a `stat`, a `statMeasured` and an 8 KiB tail read. The case asserts exactly five range reads of at most 256 KiB, at most two `statMeasured` calls, and every `readFileFromMeasured` within the last 8 KiB; nothing reads the transcript whole.
 - **D-6765** — `c1-request-bound-counts-unconditional-hold` (Task C1): the Step 1 bound "at most <today's present-field count + the listing> requests" cannot be met under the plan's own rule, because `.hold` is read unconditionally and a row with no `.hold` file still costs a request. The case bounds "<present fields + the listing + the unheld rows' hold reads>", which on its 80 rows equals the measured count, 849 (review 878).
+
+### Additional departures issued 2026-10-24 and defined here
+
+`POST /api/ledger/deviations` issued four numbers for the reviewed B3 and B5 departures, D-6800 to 6803. All four are defined here in the allocation act. B5's dropped unprompted bullet stays under D-6370 and R39, not a second number.
+
+- **D-6800** — `shared-pty-exit-code` (Task B3, reviewed in run 905, R50): the pty-exit socket close code is declared once in `shared/api.ts`, outside B3's original Files, and both ends read that one constant. The code and its meaning are unchanged by the move.
+- **D-6801** — `named-unreadable-closes-as-today` (Task B5, reviewed in run 906, R52): a named create whose answer cannot be read keeps today's toast and close, rather than waiting for a workspace row that `startedSessionFor` cannot match. After dismissal or a reopen it may toast, but cannot close the newer sheet; the generation guard is pinned in the fix round.
+- **D-6802** — `navigating-success-shows-no-toast` (Task B5, reviewed in run 906): a success that navigates shows no starting toast, for both a readable named answer and an unnamed new row. A dismissal or timeout keeps the fallback toast; an already-live main checkout keeps the pre-B5 immediate toast and close (R52), without navigation or a wait.
+- **D-6803** — `out-of-files-start-tests` (Task B5, ruled in R52 F7): prerequisite edits to `pwa/test/new-session-name.test.tsx` and `pwa/test/lifecycle-ui.test.tsx`, outside B5's original Files, are retained in separate intended-change commits. The navigation and location-reset assertions follow the new success path; the dismissed-named case retains the server-title toast pin. Review 906 measured no lost pin.
 
 ## Out of scope
 

@@ -2080,7 +2080,7 @@ describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3
   });
 });
 
-// R20a's opt-in (tmpHelpers' `removeTmpFixturesEachTest`), for the same reason as `ccrc-update.test.ts`: every
+// R20a's opt-in (tmpHelpers' `removeTmpFixturesEachTest`), for the same reason as `ccrc-update-*.test.ts`: every
 // `mkTmp` in this file is inside a test, no test reads another's home and none registers an `onTestFinished`, so
 // each test's homes can go when it ends. Its one `afterAll` was otherwise left 41 homes, 584 MB and about 15,900
 // entries, measured at 6.4 s on a loaded dev box and at 0.65 s on a re-run at load ~50: an end-of-file removal's

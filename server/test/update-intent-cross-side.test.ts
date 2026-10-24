@@ -131,12 +131,12 @@ function fleetNode(): string {
   const bin = path.join(home, '.local', 'bin');
   mkdirSync(bin, { recursive: true });
   // `local://<path>` is a release asset on disk (missing = curl's own
-  // 404/exit-22 shape, ccrc-update.test.ts's convention). The intent route's
+  // 404/exit-22 shape, ccrc-updateFixture.ts's convention). The intent route's
   // body is written to `$dest` (curl's real `-o` semantics; ccd-update-sync's
   // own invocation is `-o "$body_tmp" -w '%{http_code}'`, D-3280 — the body
   // goes to a FILE, never through stdout/a bash variable, so the stub must
   // write it there too and print only the status code) — the same shape this
-  // file's `local://` case and ccrc-update.test.ts's own combined stub use
+  // file's `local://` case and ccrc-updateFixture.ts's own combined stub use
   // whenever `-o` is present. Every URL is recorded.
   writeFileSync(path.join(bin, 'curl'), [
     '#!/bin/sh',
@@ -233,7 +233,7 @@ function releaseLayout(root: string, dir: string, tag: string): void {
 /** A `local://` curl stub matching `_upd_resolve`/`_upd_fetch`'s PLAIN
  *  `curl -fsSL -o dest [-w '%{http_code}'] url` invocation (no `-K`, unlike
  *  the intent route's) — the same shape `fleetNode`'s own `local://` case
- *  and `ccrc-update.test.ts`'s combined stub use whenever `-o` is present.
+ *  and `ccrc-updateFixture.ts`'s combined stub use whenever `-o` is present.
  *  D-3284 (final review): `_upd_fetch`'s bundle fetch now measures the
  *  status via `-w`, exactly as `_upd_asset_listed` (D-3261) already did —
  *  this stub answers it the same way the combined stub does, or `-w`'s

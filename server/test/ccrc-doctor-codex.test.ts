@@ -4069,7 +4069,7 @@ CCRC_DOCTOR_CHECKS=(delegation-hooks)
 // The server half of the Docs pair: `$BOX_TREE_DIR/server/dist-pwa/sw.js`, the worker both lanes install, must not
 // refuse the app shell to `/docs`. The build already refuses such a knob (`pwa/src/lib/sw-denylist.ts`, §7.3); this
 // check is the one measurement of the bundle actually installed. Every body below is `swJs()`'s one-line,
-// workbox-shaped text, the same text `healthy()`, `TREE_STUBS` and `ccrc-update.test.ts`'s tree plant, so a verdict
+// workbox-shaped text, the same text `healthy()`, `TREE_STUBS` and `ccrc-updateFixture.ts`'s tree plant, so a verdict
 // here is a verdict on the shape a real build emits. Each knob entry is printed by `String(new RegExp(...))`, which
 // is how a RegExp reaches `sw.js` (`/^\/wiki(\/|$)/`), built as `sw-denylist.ts` builds it.
 // The check SKIPs on either fleet evidence `_check_update-exposure` uses, a recorded `CCRC_ROLE=fleet` or a unit

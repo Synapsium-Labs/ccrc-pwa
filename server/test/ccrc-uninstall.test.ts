@@ -14,7 +14,7 @@
 // role-aware journalctl passthrough.
 //
 // ── THE HARNESS ───────────────────────────────────────────────────────────
-// `ccrc-update.test.ts`'s box idiom, trimmed to this file's needs and COPIED
+// `ccrc-updateFixture.ts`'s box idiom, trimmed to this file's needs and COPIED
 // rather than imported (importing a .test.ts registers its whole suite —
 // build-release.test.ts's stated reason). Everything runs against a throwaway
 // $HOME; systemctl and journalctl are RECORDING stubs (no real systemd, no
@@ -110,7 +110,7 @@ function verbEnv(home: string): NodeJS.ProcessEnv {
   ].join('\n') + '\n');
   // ── Plan 2b-2 Task 11: the transient-unit launcher, contained ──────────
   // Same reasoning as ccrcEnv's/updateEnv's own comment (ccrc-install.test.ts,
-  // ccrc-update.test.ts): `_uninst_codex` reaches `systemd-run` through the
+  // ccrc-updateFixture.ts): `_uninst_codex` reaches `systemd-run` through the
   // lane library's identity checks and stops, and this harness planted none
   // until now (m-platform §3.2).
   adoptPlantedSystemd(home);
@@ -1673,10 +1673,10 @@ describe('ccrc uninstall: the codex step, in order and contained (Plan 2b-2 Task
     };
     const uninstallSrc = readFileSync(join(here, 'ccrc-uninstall.test.ts'), 'utf8');
     const installSrc = readFileSync(join(here, 'ccrc-install.test.ts'), 'utf8');
-    const updateSrc = readFileSync(join(here, 'ccrc-update.test.ts'), 'utf8');
+    const updateSrc = readFileSync(join(here, 'ccrc-updateFixture.ts'), 'utf8');
     expect(between(uninstallSrc, /^function runVerb\(/m, 'spawnSync(BASH'))
       .toMatch(/assertSpineFrontContained\(env, home\)/);
-    expect(between(updateSrc, /^function runUpdate\(/m, 'spawnSync(BASH'))
+    expect(between(updateSrc, /^export function runUpdate\(/m, 'spawnSync(BASH'))
       .toMatch(/assertSpineFrontContained\(env, home\)/);
 
     // Fix round 3 (C4): "on its FINAL env" is an ORDER, and the order is

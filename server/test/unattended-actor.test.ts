@@ -106,7 +106,7 @@ describe('every unattended ccd call site names itself', () => {
       .toEqual([]);
   });
 
-  it('found EXACTLY the fifteen pinned call sites — not a floor, an exact count', () => {
+  it('found EXACTLY the thirteen pinned call sites — not a floor, an exact count', () => {
     // `toBeGreaterThanOrEqual(10)` was a floor, not a count: an eleventh
     // unattended call site — a NEW verb call this file's `SITES` array below
     // has no entry for — would satisfy `11 >= 10` silently, so a mislabelled
@@ -144,7 +144,7 @@ describe('every unattended ccd call site names itself', () => {
 });
 
 /**
- * Fifteen sites — seven distinct labels, plus two that spend `dispatchRun`'s hoisted `dispatchDec` — each identified by the code AROUND
+ * Thirteen sites — six distinct labels, plus two that spend `dispatchRun`'s hoisted `dispatchDec` — each identified by the code AROUND
  * the label rather than by the label itself — so a mutation that swaps two
  * valid labels between two valid sites cannot hide by also moving the
  * anchor. `close.ts`'s five `closeRun` sites share one identical label
@@ -175,21 +175,17 @@ const SITES: readonly Site[] = [
   { file: 'watch.ts', what: 'sweepNames real rename (the queued `runCcd` call)',
     find: /CCD_ARGV\.wsRename\(r\.id, branch, sweepDec\(this\.deps\.fleetState, ('[^']*')\)\)\)\);/,
     label: "'sweep:names'" },
-  { file: 'coord/close.ts', what: 'abandon-arm hold (a surviving sibling claims the workspace)',
-    find: /CCD_ARGV\.wsHold\(run\.sessionId, handoff\.reason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\)/,
-    label: '`run:${id} close`' },
-  { file: 'coord/close.ts', what: 'abandon-arm release (no survivor)',
-    find: /: CCD_ARGV\.wsRelease\(run\.sessionId, sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
-    label: '`run:${id} close`' },
-  { file: 'coord/close.ts', what: 'ordinary close, failed+archive branch',
-    find: /const argv = CCD_ARGV\.wsArchive\(run\.sessionId, sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
-    label: '`run:${id} close`' },
-  { file: 'coord/close.ts', what: 'ordinary close, final+safe release branch',
-    find: /const argv = CCD_ARGV\.wsRelease\(run\.sessionId, sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
-    label: '`run:${id} close`' },
-  { file: 'coord/close.ts', what: 'ordinary close, non-final/sibling-survivor hold branch',
-    find: /const argv = CCD_ARGV\.wsHold\(\n\s+run\.sessionId, nextHold\.reason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\),\n\s+\);/,
-    label: '`run:${id} close`' },
+  // ARCH-35 (#556): `closeRun`'s five sites became ONE composer, `fleetArgv`, which `decideClose`'s plan feeds: the
+  // verb is the decider's answer and the actor is spelled once, in `dec` (pinned below). Three builders, three sites.
+  { file: 'coord/close.ts', what: 'close, the composed archive (`fleetArgv`)',
+    find: /case 'wsArchive':\n\s+return \{ argv: CCD_ARGV\.wsArchive\(sessionId, (dec)\), can: ccdCan\(deps\.fleetState, 'wsArchive'\) \};/,
+    label: 'dec' },
+  { file: 'coord/close.ts', what: 'close, the composed release (`fleetArgv`)',
+    find: /case 'wsRelease':\n\s+return \{ argv: CCD_ARGV\.wsRelease\(sessionId, (dec)\), can: ccdCan\(deps\.fleetState, 'wsRelease'\) \};/,
+    label: 'dec' },
+  { file: 'coord/close.ts', what: 'close, the composed hold (`fleetArgv`)',
+    find: /case 'wsHold':\n\s+return \{ argv: CCD_ARGV\.wsHold\(sessionId, act\.reason, (dec)\), can: ccdCan\(deps\.fleetState, 'wsHold'\) \};/,
+    label: 'dec' },
   // Task 7 (D-2796): `closeReviewRun` gets its own fleet act — a review run
   // closes on its own claim (design 2026-09-14 §5), one arm, one function,
   // never routed through `closeRun`'s shared machinery — so its two sites
@@ -262,6 +258,13 @@ const SITES: readonly Site[] = [
 ];
 
 describe('each unattended label is pinned to its own call site', () => {
+  it('coord/close.ts — the close composer declares the run it closes as the actor, once, for all three of its builders', () => {
+    const src = readFileSync(path.join(srcRoot, 'coord/close.ts'), 'utf8');
+    const m = /function fleetArgv\(deps: CloseRunDeps, id: number, sessionId: string, act: FleetAct\): FleetVerb \{\n\s+const dec = sweepDec\(deps\.fleetState, (`[^`]*`)\);/.exec(src);
+    expect(m, 'fleetArgv moved or was rewritten; update the anchor before trusting this guard again').not.toBeNull();
+    expect(m![1]).toBe('`run:${id} close`');
+  });
+
   it.each(SITES)('$file — $what declares exactly its own label', ({ file, find, label }) => {
     const src = readFileSync(path.join(srcRoot, file), 'utf8');
     const m = find.exec(src);
