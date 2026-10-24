@@ -835,8 +835,23 @@ describe('_transcript_last_turn_ts (D-3102, D-3104)', () => {
       row({ timestamp: 'not-a-time' }),
     ]))).toBe('0:1789000000');
   });
+  it('a newest turn whose text holds a lone surrogate escape still counts (the retry reads the line, not the error)', () => {
+    const line = row({ timestamp: ISO(1789000900), message: { role: 'assistant', content: [{ type: 'text', text: 'cut \ud83d' }] } });
+    expect(line).toContain('\\ud83d');
+    expect(read(write([row({ timestamp: ISO(1789000000) }), line]))).toBe('0:1789000900');
+  });
   it('an unparseable line is skipped rather than trusted', () => {
     expect(read(write([row({ timestamp: ISO(1789000000) }), '{"type":"assistant","mess']))).toBe('0:1789000000');
+  });
+  it('a fractional-second stamp is read at whole seconds (the 19-character truncation, ARCH-65 pin)', () => {
+    expect(read(write([
+      row({ timestamp: '2026-10-01T00:00:00.123456Z' }),
+      row({ timestamp: '2026-10-01T00:00:07.9Z' }),
+    ]))).toBe('0:1790812807');
+  });
+  it('a partial FIRST line (a window cut mid-record) is skipped and the rest still answers (ARCH-65 pin)', () => {
+    expect(read(write(['ssistant","timestamp":"2026-10-01T00:09:00.000Z","message":{}}', row({ timestamp: ISO(1789000000) })])))
+      .toBe('0:1789000000');
   });
   it('no real turn in the window: rc 1', () => {
     expect(read(write([
@@ -864,7 +879,7 @@ describe('_transcript_last_turn_ts (D-3102, D-3104)', () => {
     // "no real turn", which the caller FAILS OPEN on — the pre-D-3103
     // behaviour, never a false refusal, but also never the fix.
     const src = fs.readFileSync(CCD, 'utf8');
-    expect(src).toContain('rows=$(tail -n "$COMPACT_TURN_TAIL_LINES" "$f" 2>/dev/null) || return 2');
+    expect(src).toContain('tail -n "$COMPACT_TURN_TAIL_LINES" -- "$f" 2>/dev/null');
     expect(Number(h.sh('echo "$COMPACT_TURN_TAIL_LINES"'))).toBeGreaterThan(
       Number(h.sh('echo "$REDRIVE_TAIL_LINES"')));
   });

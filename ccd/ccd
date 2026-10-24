@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=60242abc3ec5e8f469348dd8db684afd68d94db7b218183267f8c46b65c075b8
+# ccrc:generated 1 sha256=e88eab37bf5973cd2f1c1c746c0ad0f4ae4b294a7efc990998c34b70a10cbd00
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -16618,133 +16618,22 @@ _cfg_dir() { _ccrc_cfg_dir "$1"; }   # wrapper -> the CLAUDE_CONFIG_DIR that wra
 # three disagree about what the last line even is.
 CONTINUED_IN_TAIL_BYTES=8192
 
-# WHAT COUNTS AS A MARKER — ONE RULE, THREE READERS (D-4940). This jq program
-# is the rule both bash readers run (`_continued_in_of` below, and
-# `_dr_continued_in` in ccd/ccrc-doctor-checks, which carries this exact text
-# because it cannot source this file); `tailRecordOf`/`continuationInTail`
-# (`server/src/transcript/parse.ts`) is the same rule in TypeScript, where the
-# rule is written out in full. `server/test/continued-in-parity.test.ts` holds
-# the two bash spellings byte-equal and runs all three readers over one table
-# of transcripts. In short: the window's lines are read NEWEST FIRST; a
-# top-level `continued-in` record decides (a successor, or none when it is not
-# this file's valid marker), a top-level user/assistant record that Claude
-# Code's own reader calls a finished turn decides "none", and every other
-# line — re-stamped metadata, an interruption notice, a tool result, a
-# streamed record with no `stop_reason` yet, a line that does not parse, the
-# window's cut first line — is stepped over.
+# WHAT COUNTS AS A MARKER — ONE RULE, THREE READERS (D-4940), the jq half of it
+# in ONE FILE (ARCH-65): `ccd/lib/transcript.jq` holds the program, with the
+# reasons it is jq and not a bash pattern, and both bash readers (this file's
+# `_continued_in_of`, `_dr_continued_in` in ccd/ccrc-doctor-checks) load it with
+# `jq -L`. `continuationInTail` (`server/src/transcript/parse.ts`) is the same
+# rule in TypeScript. `server/test/continued-in-parity.test.ts` runs all three
+# over one table. A box with no jq follows nothing, and `ccrc doctor`'s jq
+# check FAILs that box.
 #
-# JQ, NOT A BASH PATTERN, AND WHY (review finding F1). The old reader matched
-# substrings anywhere on the last line, so a tool call whose INPUT held a
-# marker-shaped object, with the record's own top-level `sessionId` late on the
-# line, read as a marker: ccd wrote the registry to a session the operator was
-# not in while the server, which parses, refused it. Deciding the MARKER exactly
-# in bash is possible (it is a flat object); deciding that a nested line's own
-# top-level `type` is user or assistant is not, short of a JSON parser. Cost:
-# one `jq` beside the one `tail`, and both run only once per quiescence (the
-# read budget below), never per tick. A box with no jq follows nothing — no
-# output is "no successor" — and `ccrc doctor`'s jq check FAILs that box.
-#
-# A FINISHED TURN, AS CLAUDE CODE TELLS ONE (`complete`, `prompt`). Its own
-# reader (2.1.296) steps over every user/assistant record that is not one: an
-# assistant record whose `stop_reason` is not a string or that is an API
-# error, and a user record that is meta, a compact summary, a tool result, or
-# whose every text is empty, a slash command's echo, a leading tag
-# (`<local-command-stdout>`, `<system-reminder>`, …) or an interruption
-# notice. Stopping at those as well declined a follow Claude Code makes, and
-# those are the records most likely to land after a busy session is forked.
-# `jstrim`/`jsws` are JavaScript's `trim()` and `\s`, code point for code
-# point, and `tagled`/`cmdname` are its two patterns, so the test is the same
-# on the same string. Claude Code turns every newline into a space before
-# testing; here that step is folded into the tests instead (both treat a
-# newline exactly as a space: whitespace to `jstrim` and `tagled`, and NOT a
-# place `cmdname`'s `.` stops — it stops at `\r`, U+2028 and U+2029 only).
-# The one place this rule stops where Claude Code might step over is a text
-# holding a `<pasted_content id="` literal, which Claude Code unwraps first
-# and this program does not.
-#
-# NO `first`, `limit`, `any`, `all`, `isempty` OR `label` (review of D-4940,
-# measured): on jq 1.6 a `try` swallows the `break` those are built on when it
-# sits between the label and the break, so `first(… try fromjson …)` emitted
-# EVERY deciding line, and the older marker behind a user turn won. Two
-# guards now, either of which alone holds on jq 1.6 (both measured): every
-# decision is collected into an array and the newest taken from it, so there
-# is no break to swallow; and each parse's `try` sits inside its own array
-# constructor, so no break could cross it. The parity test pins the first by
-# spelling, and runs the table on every jq it finds.
-#
-# The uuid test is `explode`d character classes, not `test()`: jq's `$` also
-# matches before a trailing newline (a successor `"<uuid>\n"` would pass
-# `^…$`), and a jq built without Oniguruma has no `test()` at all.
-#
-# jq and `JSON.parse` agree on every line a JSON serializer writes but two,
-# measured on jq 1.6, 1.7.1 and 1.8.2. A LONE SURROGATE ESCAPE (`"\ud83d"`,
-# what `JSON.stringify` writes for a string cut mid-emoji) is refused by every
-# jq; `unsurrogate` rewrites each surrogate escape into a plain one and parses
-# again, which changes no decision this program makes (none reads a character
-# that is not ASCII or whitespace). NESTING DEEPER THAN 256 is refused by jq
-# before 1.8, and is left as it is: such a line is skipped here while the
-# server reads it, so a finished turn nested that deep after a marker is one
-# this reader steps over and the server stops at — recorded, not pinned,
-# because which jq refuses it is the variable. The surrogate row is in the
-# parity table. jq also accepts inputs no serializer writes (`nan`, `NaN`, `Infinity`;
-# on 1.6 a leading `+`), where the server skips the line. Duplicate keys: jq,
-# `JSON.parse` and Claude Code all keep the LAST.
-CONTINUED_IN_JQ='def jsws: . == 9 or . == 10 or . == 11 or . == 12 or . == 13 or . == 32 or . == 160 or . == 5760
-  or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239 or . == 8287 or . == 12288 or . == 65279;
-def jstrim: explode as $c
-  | [range(0; $c | length) | select($c[.] | jsws | not)] as $k
-  | if $k == [] then "" else $c[$k[0]:$k[-1] + 1] | implode end;
-def tagled: explode as $c
-  | ($c | length) > 2 and $c[0] == 60 and $c[1] >= 97 and $c[1] <= 122
-  and ([range(2; $c | length) | select($c[.] as $x
-         | ($x >= 48 and $x <= 57) or ($x >= 65 and $x <= 90) or ($x >= 97 and $x <= 122) or $x == 95 or $x == 45 | not)] as $k
-       | $k != [] and ($c[$k[0]] as $x | $x == 62 or ($x | jsws)));
-def cmdname: split("<command-name>") as $s
-  | [range(1; $s | length) | $s[.:] | join("<command-name>")
-     | split("\r")[0] | split("\u2028")[0] | split("\u2029")[0] | select(contains("</command-name>"))] != [];
-def prompttext:
-  if contains("<pasted_content id=\"") then true
-  else jstrim as $n
-  | if $n == "" then false
-    elif ($n | cmdname) then false
-    elif ($n | split("<bash-input>") | length > 1 and (.[1:] | join("<bash-input>") | contains("</bash-input>"))) then true
-    elif ($n | startswith("[Request interrupted by user")) and ($n | ltrimstr("[Request interrupted by user") | contains("]")) then false
-    elif ($n | tagled) then false
-    else true end
-  end;
-def prompt: .isMeta != true and .isCompactSummary != true and (.message | type) == "object"
-  and (.message.content as $x
-       | if ($x | type) == "string" then ($x | prompttext)
-         elif ($x | type) == "array" then
-           [$x[] | select(type == "object" and .type == "tool_result")] == []
-           and [$x[] | select(type == "object" and .type == "text" and (.text | type) == "string") | select(.text | prompttext)] != []
-         else false end);
-def complete: ((has("isApiErrorMessage") | not) or .isApiErrorMessage == false)
-  and (.message | type) == "object" and (.message.stop_reason | type) == "string";
-def unsurrogate: reduce ("d", "D") as $d (.; reduce ("8", "9", "a", "b", "c", "d", "e", "f", "A", "B", "C", "D", "E", "F") as $h
-  (.; split("\\u" + $d + $h) | join("\\uff")));
-def tailrec($l):
-  ($l | contains("\"type\":\"continued-in\"")) as $m
-  | ($l | (contains("\"type\":\"user\"") or contains("\"type\":\"assistant\""))) as $t
-  | if ($m or $t) | not then "skip"
-    else [$l | try fromjson catch ($l | unsurrogate | try fromjson catch empty)]
-    | if . == [] or (.[0] | type) != "object" then "skip"
-      else .[0]
-      | if $m and .type == "continued-in" and (.continuedInSessionId | type) == "string" then
-          .continuedInSessionId as $to
-          | if ((has("sessionId") | not) or .sessionId == $u)
-               and ($to | length) == 36
-               and ([$to | explode[] | select((. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)) | not)] == [])
-               and $to != $u
-            then "+" + $to else "stop" end
-        elif $t and .type == "assistant" then (if complete then "stop" else "skip" end)
-        elif $t and .type == "user" then (if prompt then "stop" else "skip" end)
-        else "skip" end
-      end
-    end;
-[(split("\n") | reverse[]) as $l | tailrec($l) | select(. != "skip")] | (.[0] // "stop")
-| select(startswith("+")) | .[1:]
-'
+# WHERE THE FILE IS. Beside this script when run from a tree (`<tree>/ccd/lib`:
+# tests, `ccrc install`), else where the installers put it
+# (`$HOME/.cc-sessions/lib`, beside the hook helpers). A missing file is a jq
+# that fails to load, which every reader already answers as "NOT MEASURED".
+TRANSCRIPT_JQ_LIB="${BASH_SOURCE[0]%/*}/lib"
+[[ -f "$TRANSCRIPT_JQ_LIB/transcript.jq" ]] || TRANSCRIPT_JQ_LIB="$HOME/.cc-sessions/lib"
+CONTINUED_IN_JQ='include "transcript"; continued_in($u)'
 
 # Memos, per session id, for the read budget below. `ccd supervise` is one
 # long-lived process per session, so these are already per-session state and
@@ -16977,16 +16866,6 @@ _ci_extant() {   # addresses (one per line, on $1) -> rc 0 and _CI_F set to the 
   return 1
 }
 
-_ci_transcript_path() {   # id cfg uuid -> the live transcript for uuid, tried both spellings, or nothing
-  # The PRINTING form, for the callers that are not on a per-tick path (the
-  # resume walk, `_ci_chain_end`) and that are already inside a `$( )` of
-  # their own.
-  local addrs
-  addrs=$(_ci_addrs "$1" "$2" "$3") || return 1
-  _ci_extant "$addrs" || return 1
-  printf '%s' "$_CI_F"
-}
-
 _continued_in_of() {   # file uuid -> the successor uuid the file's tail window names, or nothing; rc 2 = NOT MEASURED
   # Claude Code's own statement about itself, read by the rule all three
   # readers share (`CONTINUED_IN_JQ` above, D-4940): newest line first, the
@@ -17018,7 +16897,7 @@ _continued_in_of() {   # file uuid -> the successor uuid the file's tail window 
   # that failed feeds jq an empty window, which jq answers 0.
   local f="$1" uuid="$2" ps
   tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null \
-    | jq -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null
+    | jq -L "$TRANSCRIPT_JQ_LIB" -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null
   ps="${PIPESTATUS[0]}:${PIPESTATUS[1]}"
   [[ "$ps" == 0:0 ]] || return 2
   return 0
@@ -17108,7 +16987,7 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
     _ci_walk_has "$id" "$next" && return 0                # already on this walk — a shorter local cycle, stop
     # Both spellings, same as the current file. The ADDRESSES are what the
     # decline below remembers, so they are resolved here rather than inside
-    # `_ci_transcript_path`, which would throw them away.
+    # `_ci_addrs`/`_ci_extant`, which would throw them away.
     pend=$(_ci_addrs "$id" "$cfg" "$next") || return 0
     if ! _ci_extant "$pend" || [[ ! -s "$_CI_F" ]]; then
       # ANNOUNCED BUT NOT YET WRITTEN — A DECLINE, NOT A VERDICT (D-4942).
@@ -17575,11 +17454,12 @@ _ci_chain_end() {   # id cfg -> rc 0, _CI_END* set: where the registry uuid's ch
   uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" && -n "$cfg" ]] || return 1
   seen=" $uuid "
   while (( n < _CI_WALK_CAP )); do
-    f=$(_ci_transcript_path "$id" "$cfg" "$uuid") || break
+    _ci_extant "$(_ci_addrs "$id" "$cfg" "$uuid")" || break
+    f="$_CI_F"
     next=$(_continued_in_of "$f" "$uuid"); rc=$?
     if (( rc == 2 )); then _CI_END_UNREAD=1; break; fi
     [[ -n "$next" && "$seen" != *" $next "* ]] || break
-    sf=$(_ci_transcript_path "$id" "$cfg" "$next")
+    sf=""; _ci_extant "$(_ci_addrs "$id" "$cfg" "$next")" && sf="$_CI_F"
     if [[ -z "$sf" || ! -s "$sf" ]]; then
       if _ci_bg_scan "$cfg" "$next" "${next:0:8}"; then
         _CI_END_HELD="${_CI_BGJ:-pid $_CI_BGP}" _CI_END_HID="$next" _CI_END_HPID="$_CI_BGP"
@@ -22101,9 +21981,9 @@ _operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the
   # is logged once. ONE READER: the same
   # `_operator_choice_read` over the same journal. An incoming transcript that is
   # absent (the ordinary case right after a `/clear`), not a readable regular file
-  # (`_ci_transcript_path` answers only a regular file), or that the reader fails
+  # (`_ci_extant` answers only a regular file), or that the reader fails
   # on contributes no lines; the outgoing ones stand alone, as the keep's always do.
-  if [[ -n "$sid" && -n "$icfg" ]] && fin=$(_ci_transcript_path "$id" "$icfg" "$sid") && [[ -r "$fin" ]]; then
+  if [[ -n "$sid" && -n "$icfg" ]] && _ci_extant "$(_ci_addrs "$id" "$icfg" "$sid")" && fin="$_CI_F" && [[ -r "$fin" ]]; then
     inc=$(_operator_choice_read "$fin" "$typed") || inc=""
   fi
   if [[ -z "$inc" ]]; then
@@ -24824,49 +24704,16 @@ _transcript_last_turn_ts() {   # transcript-path -> 0 + the newest REAL turn's e
   # THE TIMESTAMP IS PARSED, NOT TRUSTED. Claude Code writes RFC3339 in UTC with
   # a literal `Z`; anything this cannot read is skipped as if the row carried no
   # timestamp at all, so a malformed row can only make the answer OLDER (fail
-  # open at the caller), never newer.
-  local f="$1" rows rc
+  # open at the caller), never newer. The reading itself is `last_turn_ts` in
+  # `ccd/lib/transcript.jq` (ARCH-65; it was an inline python program).
+  local f="$1" out
   [[ -f "$f" && -r "$f" ]] || return 2
-  rows=$(tail -n "$COMPACT_TURN_TAIL_LINES" "$f" 2>/dev/null) || return 2
-  command -v python3 >/dev/null 2>&1 || return 2
-  printf '%s\n' "$rows" | LC_ALL=C.UTF-8 python3 -c '
-import calendar, json, sys, time
-
-newest = None
-for raw in sys.stdin:
-    try:
-        row = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        continue
-    if not isinstance(row, dict):
-        continue
-    if row.get("type") not in ("user", "assistant"):
-        continue
-    if row.get("isCompactSummary") is True or row.get("isMeta") is True:
-        continue
-    message = row.get("message")
-    content = message.get("content") if isinstance(message, dict) else None
-    if row.get("type") == "user" and isinstance(content, str) and content.startswith(
-        ("<local-command-caveat>", "<command-name>", "<local-command-stdout>")
-    ):
-        continue
-    stamp = row.get("timestamp")
-    if not isinstance(stamp, str) or len(stamp) < 19:
-        continue
-    try:
-        epoch = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
-    except ValueError:
-        continue
-    if newest is None or epoch > newest:
-        newest = epoch
-
-if newest is None:
-    raise SystemExit(1)
-print(newest)
-' 2>/dev/null
-  rc=$?
-  [[ "$rc" -le 1 ]] && return "$rc"
-  return 2
+  command -v jq >/dev/null 2>&1 || return 2
+  out=$(set -o pipefail
+        tail -n "$COMPACT_TURN_TAIL_LINES" -- "$f" 2>/dev/null \
+          | jq -L "$TRANSCRIPT_JQ_LIB" -rRs 'include "transcript"; last_turn_ts' 2>/dev/null) || return 2
+  [[ -n "$out" ]] || return 1
+  printf '%s\n' "$out"
 }
 
 COMPACT_TURN_DETAIL=""
@@ -24887,7 +24734,7 @@ _compact_no_turns() {   # id -> 0 iff the transcript PROVES no real turn since `
   # FAIL OPEN, AND THAT IS THE WHOLE SHAPE OF THIS GUARD. It answers 0 only on a
   # POSITIVE measurement that nothing happened; every other condition — no
   # `lastcompact` to be unchanged since, a transcript this box cannot name or
-  # read, a tail window holding no real turn, python absent — answers 1 and the
+  # read, a tail window holding no real turn, jq absent — answers 1 and the
   # compactor behaves exactly as it did before D-3103. A new guard that silences
   # the compactor on an unreadable transcript would trade a wasteful compaction
   # for a session that never compacts at all, which is the #67 R1 shape
@@ -24909,7 +24756,7 @@ _compact_no_turns() {   # id -> 0 iff the transcript PROVES no real turn since `
   ts=$(_transcript_last_turn_ts "$f") || return 1
   # THE DIGIT TESTS ARE FIRST AND INSIDE THE SAME `[[ ]]` as the arithmetic —
   # D-299's shape, and BOTH operands need one: `last` is a registry field (torn
-  # or hand-edited is the threat model) and `ts` is this box's own python
+  # or hand-edited is the threat model) and `ts` is this box's own jq
   # stdout, which is a pipeline that can answer anything at all if it is ever
   # replaced. `ccd-arith-containment.test.ts`'s SITES table pins this line.
   [[ "$last" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ && "$ts" -le "$last" ]] || return 1
