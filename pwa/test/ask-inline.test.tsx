@@ -1090,7 +1090,11 @@ class ScriptedSocket {
   onerror: ((ev: Event) => void) | null = null;
   onmessage: ((ev: MessageEvent) => void) | null = null;
   readyState = 0;
-  constructor(readonly url: string, sockets: ScriptedSocket[]) { sockets.push(this); }
+  readonly url: string;
+  constructor(url: string, sockets: ScriptedSocket[]) {
+    this.url = url;
+    sockets.push(this);
+  }
   close(): void {}
   send(): void {}
   open(): void { this.readyState = 1; this.onopen?.(new Event('open')); }
