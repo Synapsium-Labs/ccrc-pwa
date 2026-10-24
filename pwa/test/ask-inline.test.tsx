@@ -615,6 +615,28 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(card().contains(document.activeElement), 'the new ask took focus from the body').toBe(false);
   });
 
+  it('a menu that vanishes and returns in ONE batch (dialog_cleared, then a screen) is a new ask and takes no focus from the body', async () => {
+    // Premises: fixture 1's envelope up and engaged by a key; focus falls to the body; ONE batch clears the pane's menu and
+    // paints the next question. The envelope never changed, so only the generation (`dialog_cleared` counts) can tell.
+    media(true);
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, '1');
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    act(() => {
+      store.getState().apply({ type: 'dialog_cleared' });
+      store.getState().apply({ type: 'dialog', dialog: nextScreen() });
+    });
+    await frame();
+    expect(within(card()).getByText(QUESTION_2), 'premise: question 2 is in the card').toBeInTheDocument();
+    expect(store.getState().ask, 'premise: the envelope never changed').not.toBeNull();
+    expect(card().contains(document.activeElement), 'the returned menu took focus from the body').toBe(false);
+  });
+
   it('an aged ask\'s same screen sent again releases nothing: the next screen still takes the keys back', async () => {
     // Premises: engaged on fixture 2 by a key; the SAME dialog frame arrives again (a repeat, no clear); focus falls to the
     // body; the next aged question arrives. A repeated frame is no lifecycle event.
