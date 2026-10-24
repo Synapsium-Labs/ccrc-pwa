@@ -5393,6 +5393,39 @@ export const PEER_MAIL_HOURLY = 12;
  *  system rather than of two files agreeing. */
 export const MAIL_ENVELOPE_FENCE = 'ccrc-mail';
 
+/** D-6778 (mail inbox, spec §3.3 step 4): the page budget of `GET /api/mail/inbox`, in bytes of rendered text.
+ *  Twenty KiB holds two bodies at `MAIL_BODY_MAX_BYTES` with their headers; a page always holds one entry. */
+export const MAIL_INBOX_PAGE_MAX_BYTES = 20 * 1024;
+
+/** D-6778: the info string on the fence one inbox entry is printed in. Deliberately NOT `MAIL_ENVELOPE_FENCE`, so
+ *  `parseFetchedMailEnvelope` answers `not-mail` on an inbox print (spec §3.4). */
+export const MAIL_INBOX_FENCE_INFO = 'ccrc-inbox';
+
+/** One printed inbox entry: the DELIVERY id (the only id shown) and the rendered, masked text. */
+export interface MailInboxEntry { deliveryId: number; text: string }
+
+/** `GET /api/mail/inbox`'s 200 body. `remaining` counts ackable deliveries the page budget left out; `abandoned`
+ *  counts mailbox rows the inbox set leaves out (parks an ack refuses). */
+export interface MailInboxAnswer { ok: true; deliveries: MailInboxEntry[]; remaining: number; abandoned: number }
+
+/** D-6778: read the inbox answer off the wire, or `null` when it is not that shape. */
+export function readMailInboxAnswer(x: unknown): MailInboxAnswer | null {
+  if (typeof x !== 'object' || x === null) return null;
+  const o = x as Record<string, unknown>;
+  if (o.ok !== true || !Array.isArray(o.deliveries)) return null;
+  const count = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+  if (!count(o.remaining) || !count(o.abandoned)) return null;
+  const deliveries: MailInboxEntry[] = [];
+  for (const d of o.deliveries) {
+    if (typeof d !== 'object' || d === null) return null;
+    const e = d as Record<string, unknown>;
+    if (typeof e.deliveryId !== 'number' || !Number.isSafeInteger(e.deliveryId) || e.deliveryId <= 0) return null;
+    if (typeof e.text !== 'string') return null;
+    deliveries.push({ deliveryId: e.deliveryId, text: e.text });
+  }
+  return { ok: true, deliveries, remaining: o.remaining, abandoned: o.abandoned };
+}
+
 /** A delivered envelope, read back out of a transcript turn. The same ten
  *  fields `coord/envelope.ts`'s `EnvelopeInput` renders FROM — deliberately,
  *  so `parse(render(x)) === x` is an object comparison and a field one side
