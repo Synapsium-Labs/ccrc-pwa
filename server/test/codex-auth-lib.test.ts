@@ -2907,6 +2907,48 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
       expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
     }
   });
+
+  it('a transient failure keeps an upstream state with the upstream answer\'s code and request id, and plan-disabled until a commit', async () => {
+    const home = mkTmp('codex-auth-upstream-transient-');
+    const codes: Record<string, string> = {
+      'limit-paused': 'usage_limit_reached', ineligible: 'usage_not_included', 'plan-disabled': 'plan_disabled',
+    };
+    for (const planted of ['limit-paused', 'ineligible', 'plan-disabled']) {
+      const dir = join(home, `lane-${planted}`);
+      const t = plantBackendCredential(dir);
+      plantStatus(dir, { state: planted, lastErrorCode: codes[planted], lastRequestId: 'req-fixture-up-14' });
+      const answer = issuedAnswer();
+      // A coded 500 with a request id, then a dropped connection (no code, no request id), then a 200.
+      await withAuth({
+        token: [
+          { status: 500, body: { error: 'server_error' }, headers: { 'x-request-id': 'req-fixture-refresh-5' } },
+          { status: 500, drop: true },
+          { status: 200, body: answer, headers: { 'x-request-id': 'req-fixture-refresh-6' } },
+        ],
+      }, async (srv) => {
+        const lines = await libLines(home, [
+          ...ST,
+          'for _ in range(3):',
+          '    r = reading(call(mod.ensure_fresh, args[0], within_s=7200, lane="lane-a"))',
+          '    out([r.get("error", r.get("credential")), st(args[0])])',
+        ], { base: srv.base, args: [dir] });
+        expect(srv.requests, planted).toHaveLength(3);
+        if (planted === 'plan-disabled') {
+          // Stage 1's rule, now stated: carried over a transient failure with the failure's fields, ok after a commit.
+          expect(lines, planted).toEqual([
+            ['refresh-failed', ['plan-disabled', 'server_error', 'req-fixture-refresh-5']],
+            ['refresh-failed', ['plan-disabled', null, null]],
+            ['present', ['ok', null, 'req-fixture-refresh-6']],
+          ]);
+        } else {
+          // A token refresh, failed or committed, says nothing about the account: the upstream answer's fields stay.
+          const kept = [planted, codes[planted], 'req-fixture-up-14'];
+          expect(lines, planted).toEqual([['refresh-failed', kept], ['refresh-failed', kept], ['present', kept]]);
+        }
+      });
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    }
+  });
 });
 
 describe.skipIf(!PY)('half_life_s: when the designated refresher refreshes (codex-bridge Stage 2, Task 6)', () => {

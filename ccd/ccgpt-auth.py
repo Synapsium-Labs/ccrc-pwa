@@ -59,11 +59,13 @@ BACKEND_KEYS = ("access_token", "refresh_token", "id_token", "device_code_reques
 
 # ── states (the status file's `state`) ───────────────────────────────────────────────────────────────────────────
 # Who SETS each state, and who only CARRIES one forward. The refresher (`_refresh_locked`, reached from `ensure_fresh`
-# and `refresh_rejected`) sets ok, needs-signin and config-error; over a committed refresh it carries a current
-# upstream state with its code and request id (`_refreshed_fields`), and over a transient failure any current state
-# but needs-signin and config-error (`_unchanged_state`). `retry_unsaved` sets ok, or carries what the refresh it lands
-# would have: a barring config-error or a current upstream state. `sign_in_device` sets ok over any state. A refusal
-# (needs-signin, config-error) replaces any state. `record_upstream`, a direct lane's door in this library
+# and `refresh_rejected`) sets ok, needs-signin and config-error; over a committed refresh, or one whose commit cannot
+# write, it carries a current upstream state with its code and request id (`_refreshed_fields`), and over a transient
+# failure any current state but needs-signin and config-error (`_unchanged_state`), an upstream state again with its
+# own code and request id, any other with the failure's. `retry_unsaved` sets ok, or carries a current upstream state
+# as the refresh it lands would have (`_refreshed_fields`), or keeps a config-error that bars under this config.
+# `sign_in_device` sets ok over any state. A refusal (needs-signin, config-error) replaces any state, unless an unsaved
+# record stands against a needs-signin (then it writes nothing). `record_upstream`, a direct lane's door in this library
 # (codex-bridge Stage 2), sets the two states an upstream answer sets, _UPSTREAM_STATES, and clears them to ok.
 # Nothing in this library sets plan-disabled: it is accepted, carried over a transient failure, and written over with
 # ok by a committed refresh, as in Stage 1.
@@ -777,8 +779,8 @@ def retry_unsaved(auth_dir: str) -> str:
     reaches here: `_refresh_locked` drops the record. Carried, each with its `state`, `lastErrorCode` and
     `lastRequestId`, bound to the new file: a config-error that bars under this config (it is about ccrc's OAuth
     client, not a file's token, so no request follows until the config changes), and a current upstream state,
-    limit-paused or ineligible (it is about the account, not a file's token, and the refresh that produced the record
-    kept it too; D-TBD-task6-refresh-keeps-upstream). `"still-unsaved"`: the commit failed again and the record
+    limit-paused or ineligible (it is about the account, not a file's token, whether it stood at the refresh or was
+    recorded since; D-TBD-task6-refresh-keeps-upstream). `"still-unsaved"`: the commit failed again and the record
     stays. A raise: while that file,
     still in place, reads `unreadable`, the commit's refusal (Unreadable) propagates and the record stays (D-6560)."""
     p = paths_for(auth_dir)
@@ -1329,8 +1331,9 @@ def _refreshed_fields(prev: Optional[dict], request_id: Optional[str]) -> Tuple[
     `("ok", None, request_id)`, unless the current status `prev` holds a state an upstream answer set
     (`record_upstream`, _UPSTREAM_STATES). That state is kept with its code and its request id, the upstream answer's
     (spec §2.4 keeps the upstream request id in the status), because a token refresh says nothing about the account's
-    quota or eligibility (D-TBD-task6-refresh-keeps-upstream). Both the refresh that commits (`_refresh_locked`) and
-    the one whose commit lands later (`retry_unsaved`) write this. What replaces a kept upstream state:
+    quota or eligibility (D-TBD-task6-refresh-keeps-upstream). The refresh that commits, or whose commit cannot write
+    (`_refresh_locked`), the one whose commit lands later (`retry_unsaved`), and a transient failure over an upstream
+    state (`_refresh_locked`'s RefreshFailed arm) write this. What replaces a kept upstream state:
     `record_upstream(state="ok")` after the bridge's next 2xx, a refusal (needs-signin, config-error), and a sign-in
     (`sign_in_device`, a new file, so no status is current). plan-disabled is not kept: a committed refresh writes ok
     over it, as in Stage 1 (`_unchanged_state` carries it over a transient failure, as in Stage 1 too)."""
@@ -1421,8 +1424,11 @@ def _refresh_locked(auth_dir: str, r: Reading, old: object, lane: Optional[str])
         raise _state_error(e.word, e.code, e.request_id, lane) from None
     except RefreshFailed as e:
         if not standing:
-            write_status(auth_dir, state=_unchanged_state(prev), lastErrorCode=e.code,
-                         lastRequestId=e.request_id, **failed)
+            state, code, req = _unchanged_state(prev), e.code, e.request_id
+            if state in _UPSTREAM_STATES:
+                # A kept upstream state keeps the upstream answer's code and request id, as a commit does.
+                state, code, req = _refreshed_fields(prev, e.request_id)
+            write_status(auth_dir, state=state, lastErrorCode=code, lastRequestId=req, **failed)
         raise
     refreshed = dict(lastRefreshAt=time.time(), lastRequestId=rid)
     try:
