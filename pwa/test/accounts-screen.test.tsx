@@ -14,7 +14,7 @@ import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
-import { declValue, ruleIn } from './cssRule';
+import { atBlock, declValue, ruleIn } from './cssRule';
 import { TEST_ROSTER } from './rosterFixture';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -574,6 +574,16 @@ describe('AccountsScreen — opens at a lane (?lane=<id>)', () => {
     expect(scroll.calls).toEqual([rowOf('claude'), rowOf('claude')]);
     expect(rowOf('claude')).toHaveAttribute('data-arrived', 'true');
     expect(document.activeElement).toBe(rowOf('claude'));
+  });
+
+  it('the arrived row keeps a mark under forced colours, where the accent edge (a box-shadow) is dropped', () => {
+    const forced = atBlock(fleetCss, '@media (forced-colors: active)');
+    // Both states: arrived, and arrived while focused (the `:focus` outline reset is more specific than the first).
+    for (const sel of ['.accounts-row[data-arrived]', '.accounts-row[data-arrived][tabindex="-1"]:focus']) {
+      const rule = ruleIn(forced, sel);
+      expect(declValue(rule, 'outline'), sel).toBe('2px solid CanvasText');
+      expect(declValue(rule, 'outline-offset'), sel).toBe('-2px');
+    }
   });
 
   it('with no ?lane= nothing scrolls or takes focus, and each row is still a programmatic focus target only', async () => {

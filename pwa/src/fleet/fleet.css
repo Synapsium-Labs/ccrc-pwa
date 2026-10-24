@@ -915,6 +915,13 @@
     outline: 2px solid CanvasText;
     outline-offset: -2px;
   }
+  /* The arrived lane's row (AccountsScreen): its accent edge is an inset box-shadow, dropped here, and its focus ring
+     is removed by the script-focus rule (`:focus`, so the second selector outranks it), so the same inset outline marks it. */
+  .accounts-row[data-arrived],
+  .accounts-row[data-arrived][tabindex="-1"]:focus {
+    outline: 2px solid CanvasText;
+    outline-offset: -2px;
+  }
   /* D-5495: the folded card's name stands in for the hidden selected row with
      the same tint and rail, which forced colours drop too; every card name is
      semibold already, so it takes the row's outline. */
