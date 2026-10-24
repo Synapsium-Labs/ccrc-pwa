@@ -11349,7 +11349,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
 # `pullRequest(number:)`: either way every real call would fail. No datum from a session, a PR or GitHub enters the
 # text. The owner and name travel as `$o` and `$r`, the numbers as `-F n<i>=<int>`.
 PR_LANDING_RULES_TTL=600
-PR_LANDING_ALIAS='    p@I@: pullRequest(number: $n@I@) { number state isDraft isCrossRepository headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name status conclusion databaseId app { databaseId } checkSuite { workflowRun { databaseId } } isRequired(pullRequestNumber: $n@I@) } ... on StatusContext { context state isRequired(pullRequestNumber: $n@I@) } } } } } } } }'
+PR_LANDING_ALIAS='    p@I@: pullRequest(number: $n@I@) { number state isDraft isCrossRepository headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name status conclusion databaseId checkSuite { app { databaseId } workflowRun { databaseId } } isRequired(pullRequestNumber: $n@I@) } ... on StatusContext { context state isRequired(pullRequestNumber: $n@I@) } } } } } } } }'
 
 _gh_pr_landing_query() {   # K -> the GraphQL document for K aliased pull requests, on stdout
   local k="$1" i decl='$o: String!, $r: String!' body=""
@@ -11506,8 +11506,9 @@ elif mode == 'final':
                 continue
             if c.get('__typename') == 'CheckRun':
                 name = bound_name(c.get('name'))
-                app = c.get('app') if isinstance(c.get('app'), dict) else {}
-                run = ((c.get('checkSuite') or {}).get('workflowRun') or {}) if isinstance(c.get('checkSuite'), dict) else {}
+                suite = c.get('checkSuite') if isinstance(c.get('checkSuite'), dict) else {}
+                app = suite.get('app') if isinstance(suite.get('app'), dict) else {}
+                run = suite.get('workflowRun') if isinstance(suite.get('workflowRun'), dict) else {}
                 state = c.get('conclusion') or c.get('status')
                 entry = {'name': name, 'appId': app.get('databaseId') if is_int(app.get('databaseId')) else None,
                          'state': state if isinstance(state, str) else None,
@@ -11610,7 +11611,11 @@ cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<
   doc=$(_gh_pr_landing_query "$k") || die "bad session count"
   local -a gargs=(-f "query=$doc" -f "o=${repo%%/*}" -f "r=${repo#*/}")
   for (( i = 0; i < k; i++ )); do gargs+=(-F "n$i=${prs[$i]}"); done
-  answer=$(_plat_timeout "$PR_LANDING_GQL_TIMEOUT" gh api graphql "${gargs[@]}" 2>/dev/null) || answer=""
+  # gh exits 1 for a GraphQL error and still prints the body (`data` with the failed alias null, plus `errors`): that
+  # body is kept when rc is 0, or rc is 1 and `rows` parses data.repository from it. A timeout (124/137) or any other rc drops it.
+  local grc=0
+  answer=$(_plat_timeout "$PR_LANDING_GQL_TIMEOUT" gh api graphql "${gargs[@]}" 2>/dev/null) || grc=$?
+  (( grc == 0 || grc == 1 )) || answer=""
   if [[ -n "$answer" ]] && rows=$(_pr_landing_py rows "$k" 4<<<"$answer" 2>/dev/null) && [[ -n "$rows" ]]; then gqlok=1; else rows="[]"; fi
 
   # THE BINDING, per session, through the code `pr-state` binds with and persisting nothing.

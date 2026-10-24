@@ -79,7 +79,7 @@ const second = (project: string, slug: string): string => {
 type Ctx = Record<string, unknown>;
 const run = (name: string, conclusion: string | null, over: Ctx = {}): Ctx => ({
   __typename: 'CheckRun', name, status: conclusion === null ? 'IN_PROGRESS' : 'COMPLETED', conclusion,
-  databaseId: 1000, app: { databaseId: 15368 }, checkSuite: { workflowRun: { databaseId: 77 } }, isRequired: true, ...over,
+  databaseId: 1000, checkSuite: { app: { databaseId: 15368 }, workflowRun: { databaseId: 77 } }, isRequired: true, ...over,
 });
 const status = (context: string, state: string, over: Ctx = {}): Ctx => ({
   __typename: 'StatusContext', context, state, isRequired: true, ...over,
@@ -153,6 +153,25 @@ describe('the GraphQL read', () => {
     expect(timeouts()).toContain(`timeout ${ccdSeconds('PR_LANDING_GQL_TIMEOUT')}`);
   });
 
+  it('the document selects the App id under checkSuite, never on the CheckRun itself (GitHub validates this, the fixture gh does not)', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0)]));
+    emptyRules();
+    landing('demo', 'demo-quiet-basin:41');
+    const q = calls().find((c) => c[1] === 'graphql')!.find((a) => a.startsWith('query='))!;
+    const checkRun = /\.\.\. on CheckRun \{([^]*?isRequired\([^)]*\))/.exec(q)![1]!;
+    expect(checkRun.replace(/\s+/g, ' ').trim()).toBe(
+      'name status conclusion databaseId checkSuite { app { databaseId } workflowRun { databaseId } } isRequired(pullRequestNumber: $n0)');
+  });
+
+  it("a CheckRun's App id is read from checkSuite.app", () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [run('build', 'SUCCESS', { checkSuite: { app: { databaseId: 777 }, workflowRun: { databaseId: 5 } } })])]));
+    emptyRules();
+    const l = landing('demo', 'demo-quiet-basin:41').lines[0]!;
+    expect(l.required[0]).toMatchObject({ appId: 777, runId: 5 });
+  });
+
   it('the document for 3 sessions declares exactly $n0..$n2', () => {
     const t0 = workspace('demo', 'quiet-basin');
     const t1 = second('demo', 'still-cove');
@@ -202,6 +221,26 @@ describe('the GraphQL read', () => {
     const r = landing('demo', 'demo-quiet-basin:41,demo-still-cove:42');
     expect(r.lines[1]).toEqual({ id: 'demo-still-cove', unmeasured: ['pr-unreadable'] });
     expect(r.lines[0]!.bound).toBe(true);
+  });
+
+  it('gh exiting 1 with a body whose one alias is null still binds the sibling and reads the null as pr-unreadable', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    second('demo', 'still-cove');
+    const body = answer([pr(41, 'quiet-basin', t0), null]) as Record<string, unknown>;
+    body.errors = [{ type: 'NOT_FOUND', path: ['repository', 'p1'], message: 'Could not resolve to a PullRequest' }];
+    put('gql.json', JSON.stringify(body));
+    put('gql-rc', '1');
+    emptyRules();
+    const r = landing('demo', 'demo-quiet-basin:41,demo-still-cove:42');
+    expect(r.lines[1]).toEqual({ id: 'demo-still-cove', unmeasured: ['pr-unreadable'] });
+    expect(r.lines[0]!.bound).toBe(true);
+  });
+
+  it('gh exiting 1 with no usable body is unmeasured graphql', () => {
+    workspace('demo', 'quiet-basin');
+    put('gql.json', '{"errors":[{"message":"Field x doesn\'t exist"}]}');
+    put('gql-rc', '1');
+    expect(landing('demo', 'demo-quiet-basin:41').lines).toEqual([{ id: 'demo-quiet-basin', unmeasured: ['graphql'] }]);
   });
 
   it('the GraphQL call timing out answers unmeasured graphql and still prints one line per id', () => {
