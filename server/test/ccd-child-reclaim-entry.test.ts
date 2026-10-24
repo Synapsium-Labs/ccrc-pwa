@@ -481,6 +481,13 @@ const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegEx
   ['valid audit --reclaim', ['ws-audit', '--session', 'x', '--reclaim'], true, null],
   ['valid audit --reclaim --defer-expired', ['ws-audit', '--session', 'x', '--reclaim', '--defer-expired'], true, null],
   ['plain audit', ['ws-audit', '--session', 'x'], false, null],
+  // The stale arm's audit (fleet disk retention DR-26): the same protected skeleton with the stale flags in its tail.
+  ['valid audit --reclaim --stale terminal', ['ws-audit', '--session', 'x', '--reclaim', '--stale', 'terminal'], true, null],
+  ['valid audit --reclaim --stale held --hold-digest', ['ws-audit', '--session', 'x', '--reclaim', '--stale', 'held', '--hold-digest', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'], true, null],
+  ['valid audit --reclaim, the stale flags in the other order with --defer-expired', ['ws-audit', '--session', 'x', '--reclaim', '--hold-digest', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '--defer-expired', '--stale', 'held'], true, null],
+  ['audit, a stale flag with no value (the body’s parser owns that)', ['ws-audit', '--session', 'x', '--reclaim', '--stale'], true, null],
+  ['audit, an extra token after the stale flags', ['ws-audit', '--session', 'x', '--reclaim', '--stale', 'held', 'extra'], false, USAGE],
+  ['audit, the stale flags without --reclaim', ['ws-audit', '--session', 'x', '--stale', 'held'], false, USAGE],
   ['audit, --defer-expired alone', ['ws-audit', '--session', 'x', '--defer-expired'], false, USAGE],
   ['valid audit skeleton with a session value the body will reject', ['ws-audit', '--session', '../../etc/passwd', '--reclaim'], true, null],
   // Not malformed for the BODY: `--reclaim` lands in the id position and is a well-formed

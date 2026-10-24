@@ -251,6 +251,7 @@ export const SENTENCES: Record<string, string> = {
   'child': 'This workspace was created for a run, so it is cleaned up when that run closes, never by the seven-day expiry. Nothing was removed.',
   'live': 'This archived workspace has a session running — a pane, or a service that would start one — so nothing was removed. The cleanup tries again later.',
   'in-use': 'A process on this box has its working directory inside this archived workspace — a shell someone opened there, say — so nothing was removed. The cleanup tries again later.',
+  'not-idle': 'This child worked within the last seven days (its transcript, its session records or its pane), so a stale reclaim left it alone. It is asked again once it has been idle for seven days.',
   'expire-in-progress': 'An interrupted seven-day cleanup of this workspace is waiting to finish, and ws-reap never finishes another verb’s work. Nothing was removed.',
 };
 

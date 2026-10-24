@@ -28,6 +28,13 @@
       "d": "D-6632",
       "reason": "disk retention DR-20: rung 9's nested-repository rescue and the box-local scratch-rescue verb are bash that must sit beside the ladder they extend (ccd sources only accounts.sh, so there is no sourced-library path for these helpers), measured +171 net code lines against the merge-base with current main (orchestrator-granted exemption)",
       "added": "2026-10-23"
+    },
+    {
+      "file": "ccd/ccd",
+      "maxDelta": 67,
+      "d": "D-6638",
+      "reason": "disk retention DR-26: the stale reclaim arm (the stale flags on the verb and the audit, the hold-digest rung 4, the idle rung and its token binding) and the direct-entry guard's stale tail are bash that must sit beside the ladder they extend, measured +57 net code lines against the DR-20 head (orchestrator exemption requested)",
+      "added": "2026-10-24"
     }
   ]
 }

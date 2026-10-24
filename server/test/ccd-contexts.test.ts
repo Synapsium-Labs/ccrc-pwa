@@ -22,7 +22,7 @@ import {
 } from './consolidationCensus.js';
 
 /** The cross-context reference count on the day this ratchet landed. May only go DOWN. */
-const BASELINE = 521;
+const BASELINE = 522;   // DR-26 (D-6638): the stale reclaim's one edge, the ladder's `_transcript_path` read; named in its PR
 
 const nameOf = (text: string): string => /^([A-Za-z_][A-Za-z0-9_]*)\(/.exec(text)![1]!;
 

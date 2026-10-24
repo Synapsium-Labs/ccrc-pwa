@@ -532,6 +532,9 @@ _ws_scratch_rescue_run	C4
 cmd_scratch_rescue	C4
 _ws_reclaim_logs_readable	C4
 _ws_reclaim_eval	C4
+_ws_stale_argv	C4
+_ws_reclaim_hold_released	C4
+_ws_reclaim_stale_idle	C4
 _ws_reclaim_ladder	C4
 _ws_reclaim_eval_absent	C4
 _ws_reclaim_resume_eval	C4
