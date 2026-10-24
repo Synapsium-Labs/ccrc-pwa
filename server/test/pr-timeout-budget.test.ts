@@ -102,7 +102,9 @@ describe('pr-state fits inside the bound that kills it', () => {
 
 describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
   const LOCAL_LOOP_RESERVE = 0.3;
-  // `cmd_pr_landing` makes one GraphQL call and, at most, two REST reads (the base's rules and its protection).
+  // `cmd_pr_landing` makes one GraphQL call and, at most, two REST reads (the base's rules and its protection) for
+  // ONE uncached base: the loop over bases spends a single REST budget, and `ccd-pr-landing.test.ts` pins the cap with
+  // a fixture call naming sessions on two uncached bases (at most 3 gh calls).
   // Each is counted: a call left out of this list is a call the bound no longer covers.
   const CALLS = ['PR_LANDING_GQL_TIMEOUT', 'PR_LANDING_REST_TIMEOUT', 'PR_LANDING_REST_TIMEOUT'] as const;
 
@@ -124,6 +126,13 @@ describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
     expect([...reads].sort()).toEqual([...new Set(CALLS)].sort());
     const gh = [...src.matchAll(/_plat_timeout "\$PR_LANDING_[A-Z]+_TIMEOUT" gh /g)].length;
     expect(gh, 'a gh call this pin does not count').toBe(CALLS.length);
+  });
+
+  it('the rules loop hands the REST budget to one base only', () => {
+    const src = readFileSync(CCD, 'utf8');
+    const loop = src.slice(src.indexOf('\ncmd_pr_landing()'));
+    expect(loop).toMatch(/_pr_landing_rules "\$project" "\$repo" "\$rb" "\$rest"/);
+    expect(loop).toMatch(/\(\( hit == 1 \)\) \|\| rest=0/);
   });
 
   it('each call alone is under the bound', () => {
