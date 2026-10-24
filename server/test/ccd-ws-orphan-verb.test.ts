@@ -384,6 +384,27 @@ describe('the nested-checkout rescue (DR-22)', () => {
     expect(h.git(main(), 'rev-parse', `${b}/reflog/${dhead}`)).toBe(dhead);
   }, 90_000);
 
+  it('the read-only audit runs no program of a foreign nested repository (its core.fsmonitor is contained)', () => {
+    const t = claudeTree(); arm(); const n = foreign(t);
+    const touched = path.join(h.home, 'fsmonitor-ran');
+    const hook = path.join(h.home, 'fsmon.sh');
+    fs.writeFileSync(hook, `#!/bin/sh\necho x >> "${touched}"\n`, { mode: 0o755 });
+    h.git(n, 'config', 'core.fsmonitor', hook);
+    audit(t);
+    expect(fs.existsSync(touched)).toBe(false);
+  }, 60_000);
+
+  it('a nested same-repository worktree that git has locked gets no rescue token, and the verb removes nothing', () => {
+    const t = claudeTree(); arm(); const d = sameRepo(t);
+    h.git(main(), 'worktree', 'lock', '--reason', 'keep me', d);
+    const a = audit(t);
+    expect(a.rescueToken).toBeNull();
+    expect(a.refusal).toBe('nested-checkout');
+    const r = orphan(t, 'f'.repeat(64), '--rescue');
+    expect(r.doc['removed']).toBeUndefined();
+    expect(fs.existsSync(d)).toBe(true);
+  }, 90_000);
+
   it('the rescue token without --rescue refuses nested-checkout, and nothing is pinned or removed', () => {
     const t = claudeTree(); arm(); const n = foreign(t);
     const r = orphan(t, rescueOf(t));
