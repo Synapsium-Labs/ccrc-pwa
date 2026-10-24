@@ -226,10 +226,11 @@ describe('the inline ask holds one vertical scroller and leaves the transcript i
   }
 });
 
-// At 1600 Refined draws its inspector rail, so the session pane is narrower than the reading measure: the card yields
-// to it (`max-width: min(var(--measure-chat), 100%)`) and the page gains no sideways scroll. The card's own rule takes
-// its two insets off that bound (`.ask-inline`'s `max-width`), which `pageSide <= 0` alone cannot see: a card that was
-// too wide by two insets still fits the page. So the width is measured against what bounds it.
+// At 1600 Refined draws its inspector rail and the page gains no sideways scroll. The card is bounded by
+// `min(var(--measure-chat), 100%)` less its two insets (`.ask-inline`'s `max-width`), which `pageSide <= 0` alone cannot
+// see: a card that was too wide by two insets still fits the page. So the width is measured against what bounds it. As
+// measured here the column (880px) is WIDER than the reading measure (820px), so the measure binds and the `100%` arm,
+// the card yielding to a column narrower than the measure, is not exercised at this width.
 describe('the inline ask at 1600 with the inspector rail (D-6326)', () => {
   const view: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1600 };
   let measured: Measure | undefined;
@@ -250,7 +251,8 @@ describe('the inline ask at 1600 with the inspector rail (D-6326)', () => {
     const { column, measure, inset } = m.bound;
     const width = m.card.right - m.card.left;
     const room = Math.min(measure, column) - 2 * inset;
-    expect(measure, 'premise: the reading measure and the inset resolved from their tokens').toBeGreaterThan(2 * inset);
+    expect(inset, 'premise: the inset resolved from its token').toBeGreaterThan(0);
+    expect(measure, 'premise: the reading measure resolved from its token').toBeGreaterThan(2 * inset);
     expect(width, `the card (${width}px) is no wider than min(measure ${measure}px, column ${column}px) less two ${inset}px insets`)
       .toBeLessThanOrEqual(room + 1);
     expect(Math.abs(m.card.left - m.field.left), `card left ${m.card.left}, field left ${m.field.left}`).toBeLessThanOrEqual(1);
