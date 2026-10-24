@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4bc79ce09a7a92dbe350612b9e1dc2b1a2a03f02bf517c42b5b120e0d59d936d
+# ccrc:generated 1 sha256=aa3a49d5187fc2d2ef0669f18b82c0d4cbeff705f87278e9dbfc9a854c81df03
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -21793,6 +21793,11 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   done
   rows=$(_route_picker_rows "$picker")
   if [[ "$cls" == default || -z "$cls" ]]; then want="Default"; else want="${cls^}"; fi
+  # D-6793: the picker's Default row follows the lane's saved default, so on an Anthropic lane whose settings.json
+  # defaults to Fable it would switch the live pane to Fable. Operator-only: type the Opus row instead. A named
+  # class (the operator's own fable included) is never touched. Not measured on a live pane here (no ssh); the guard
+  # only ever picks Opus over a possible Fable.
+  [[ "$want" == Default ]] && _is_anthropic_backend "$w" && _lane_default_is_fable "$w" && want="Opus"
   while IFS=$'\t' read -r n cur label desc; do
     [[ -n "$n" ]] || continue
     [[ "$cur" == 1 ]] && curs="$n"

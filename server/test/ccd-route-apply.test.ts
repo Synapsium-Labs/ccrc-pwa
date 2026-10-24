@@ -613,6 +613,29 @@ describe('the final review\'s three writer/typer defects, each pinned where it h
     expect(h.reg(ID, 'routeapplied')).toContain('class=default');
   });
 
+  describe('D-6793: the picker\'s Default row on a lane whose saved default is Fable', () => {
+    const setDefault = (model: string): void => {
+      const d = h.sh('_cfg_dir claude').trim();
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ model }));
+    };
+    const toDefault = (): void => {
+      h.sh(`_reg_set ${ID} class default; _reg_set ${ID} routeapplied "class=opus"`);
+      after('model', PICKER_PANE); after('s', ACK_MODEL('Opus 5'));
+    };
+    it('class=default types the Opus row (Down, Down), never the Default row', () => {
+      setDefault('fable'); toDefault();
+      h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
+      expect(keys()).toEqual(['-l /model', 'Enter', 'Down', 'Down', '-l s']);
+    });
+    it('class=default on a lane whose default is not Fable still types the Default row', () => {
+      setDefault('opus'); toDefault();
+      after('s', ACK_MODEL('Sonnet 5'));
+      h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
+      expect(keys()).toEqual(['-l /model', 'Enter', '-l s']);
+    });
+  });
+
   it('(4) a class write VOIDS a standing degraded stamp — the tap is not silently a no-op', () => {
     // FINDING 4. `_route_wanted` answers the class SERVED, and the `degraded`
     // stamp is a statement about the PREVIOUS class: with `class=fable
