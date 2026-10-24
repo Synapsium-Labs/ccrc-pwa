@@ -25,7 +25,7 @@ import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
-import { renderEnvelope } from './envelope.js';
+import { pageInbox, renderEnvelope, renderInboxEntry } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
 import { DelegationCheckpointError, type DelegationDurability } from './delegation-checkpoint.js';
@@ -64,7 +64,7 @@ import {
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
   parseCanonicalPositiveSafeInteger,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
-  MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
+  MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES, MAIL_INBOX_PAGE_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
   isRegistryId, isSessionIdShape, routeEventDetail,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
@@ -1211,6 +1211,40 @@ export function registerCoordRoutes(
       : all ? coord.mailForRecipient(to!, limit) : coord.outstandingMailFor(to!, limit);
     // Session-derived text, masked before it leaves (D-5513, accounts plan Task A10).
     return reply.code(200).send({ ok: true, mail: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(mail) });
+  });
+
+  /**
+   * `GET /api/mail/inbox?fromId=<id>&fromUuid=<uuid>` (mail inbox, spec §3.3; D-6778) — the caller's own unacked
+   * mail, rendered, oldest first, one page. The client prints each entry and acks it by `POST /api/mail/:id/ack`;
+   * this route acks nothing and writes nothing (no state, no attempt count, no stamp).
+   *
+   * Gates: the box token, then `requireAttribution` (the check `approvals show` and `asks list` use), so the
+   * pair is re-measured against the registry and nobody reads another session's mail.
+   *
+   * REFUSALS ARE NOT RECORDED (D-6779). Every refusal here goes through `requireMailToken`, `requireAttribution`
+   * or `refuseRoute`, never the ingress's recording `refuse`: `mail_rejections` is the record of mail that was
+   * refused, and a refused read refuses no mail. A stale uuid is also what a session sees for a few seconds after
+   * every `/clear`, so recording it would add a row per nudge and say nothing.
+   *
+   * Registered BEFORE `GET /api/mail/:id`; Fastify matches a static segment before a parameter either way.
+   */
+  app.get('/api/mail/inbox', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'GET /api/mail/inbox')) return;
+    const coord = deps.coord;
+
+    const q = req.query as { fromId?: unknown; fromUuid?: unknown };
+    if (typeof q.fromId !== 'string' || typeof q.fromUuid !== 'string') {
+      return refuseRoute(reply, 'bad-kind', { detail: 'fromId and fromUuid are required strings' });
+    }
+    const fromId = q.fromId;
+    if (!(await requireAttribution(reply, fromId, q.fromUuid, 'fromUuid'))) return;
+
+    const rows = coord.inboxFor(fromId);
+    const masker = deps.masker ?? SHAPE_ONLY_MASKER;
+    const entries = rows.map((r) => ({ deliveryId: r.deliveryId, text: masker.maskDeep(renderInboxEntry(r.deliveryId, r.envelope)) }));
+    const { page, remaining } = pageInbox(entries, MAIL_INBOX_PAGE_MAX_BYTES);
+    return reply.code(200).send({ ok: true, deliveries: page, remaining, abandoned: coord.abandonedCount(fromId) });
   });
 
   /**
