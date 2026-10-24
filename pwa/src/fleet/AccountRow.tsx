@@ -4,10 +4,11 @@
 // and NewSessionSheet's step 1) and was reached through one of them; ONE row
 // component is the point, so it lives where neither sheet owns it.
 //
-// TWO BORROWED VOCABULARIES, both deliberate and both argued below: the
-// three-way "reset" / "0%" / "—" is `AccountsScreen`'s `Bar` word for word,
-// and the condemned lane says that screen's own sentence. A second visual
-// language for the same fact is the thing this row refuses to invent.
+// TWO SHARED VOCABULARIES, both deliberate and both argued below: a window's
+// reading is `windowReading`'s (laneWords.ts, R48: every window prints a
+// percentage), the same function `AccountMeterRow` renders, and the condemned
+// lane says the Accounts screen's own sentence. A second visual language for
+// the same fact is the thing this row refuses to invent.
 //
 // The classes stay `acct-*`: fleet.css grounds them. The shape moves, the
 // ground stays.
@@ -16,20 +17,23 @@ import type { RosterWire } from '../../../shared/api';
 import { Chip, ListRow, Meter, limitBand } from '@ccrc/ui';
 import { accountHue, accountLabel } from '../lib/accounts';
 import { condemned, type AccountFacts } from './accountPicker';
+import { windowReading } from './laneWords';
 import { PoolTag } from './PoolTag';
 import './fleet.css';
 
 /** One thin gauge row — mono label · track · tabular percentage. Spans only,
  *  so the row stays valid inside the AccountRow button.
  *
- *  THE THREE-WAY IS `AccountsScreen`'s `Bar`, WORD FOR WORD: "reset" (an
- *  inferred zero) ≠ a measured "0%" ≠ "—" (nobody measured it). That screen
- *  already owns the vocabulary for exactly this state and this is the same fact
- *  on a second surface, so it says the same word rather than inventing a second
- *  visual language for it. The track is left EMPTY for a rolled-over window,
- *  which is what `Bar` renders too — its fill is `width: 0%` there, because the
- *  0 it would draw is the inferred one. A confident bar and the word "reset"
- *  would contradict each other in the same row.
+ *  THE READING IS `windowReading`'s, NO LONGER `AccountsScreen`'s `Bar` WORD FOR
+ *  WORD (R48, the coordinator's ruling: every window everywhere prints a
+ *  percentage): a measured window prints `n%` once; a rolled-over one (an
+ *  inferred zero) prints "0%", and a window nobody measured prints "—". Where
+ *  the spoken words differ from what is shown, the glyphs are `aria-hidden`
+ *  and the words sit beside them in an `sr-only` span, so the row's button name
+ *  gains "inferred: the window reset" or "not measured". The track is left
+ *  EMPTY for a rolled-over window, which `Meter` draws for a null `pct`: the 0
+ *  a fill would draw is the inferred one, and a confident bar beside an
+ *  inferred 0% would claim a measurement in the same row.
  *
  *  The bar itself is `Meter`, the one meter every gauge draws through
  *  (D-5098); this keeps only the `acct-gauge` wrapper and the words. */
@@ -37,12 +41,19 @@ function Gauge({ label, value, rolledOver, off = false }: {
   label: string; value: number | null; rolledOver: boolean; off?: boolean;
 }): ReactNode {
   const pct = rolledOver || value === null ? null : Math.min(100, Math.max(0, value));
+  // The reading takes the clamped, rounded value; a rolled-over window carries no value, only the flag.
+  const { shown, spoken } = windowReading(pct === null ? null : Math.round(pct), rolledOver);
   return (
     <span className="acct-gauge">
       <span>{label}</span>
       <Meter pct={pct} band={pct === null ? 'none' : limitBand(pct)} off={off} />
       <span className="acct-gauge-pct">
-        {rolledOver ? 'reset' : pct === null ? '—' : `${Math.round(pct)}%`}
+        {spoken === shown ? shown : (
+          <>
+            <span aria-hidden="true">{shown}</span>
+            <span className="sr-only">{spoken}</span>
+          </>
+        )}
       </span>
     </span>
   );
@@ -57,7 +68,7 @@ function Gauge({ label, value, rolledOver, off = false }: {
  *  upstream, and it says so in `AccountsScreen`'s own words ("sign-in expired
  *  on the fleet host") through `AccountsScreen`'s own `data-disabled`
  *  attribute — the second vocabulary this file is careful not to invent, for
- *  the same reason `Gauge` borrows "reset" from `Bar`. The row stays TAPPABLE:
+ *  the same reason `Gauge` shares `windowReading`. The row stays TAPPABLE:
  *  a measurement can be wrong, and the manual swap it feeds accepts the target
  *  regardless (see `disabledWrappers`), so removing the affordance would only
  *  hide the one destination a bad probe run left. `condemned` is the single
