@@ -15349,6 +15349,21 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
         });
       }
     }
+    // Ruling 6's other side (fix round 1, B1 review I1): an ordinary multi-digit window is USABLE, from either source, and so is
+    // one of exactly 18 characters, so a guard that widens, or slips to 18, reds here. The same harness: four probes 30 s apart,
+    // and the gate ends at 120, not 90.
+    for (const win of ['120', '000000000000000120']) {
+      for (const from of ['ccrc.env', 'the environment'] as const) {
+        it(`W24-H3: CCRC_UPDATE_HEALTH_S=${win} from ${from} is used as written, with no WARN (ruling 6)`, () => {
+          const home = boxWith('ccrc-fx-w24-h3-', from === 'ccrc.env' ? `CCRC_UPDATE_HEALTH_S=${win}\n` : 'CCRC_ROLE=both\n');
+          const r = bareSourced(home, 'sleep() { :; }; _upd_gate_probe() { SECONDS=$((SECONDS + 30)); UPD_GATE_WHY="fixture: never up"; '
+            + 'return 1; }; _upd_gate server v2.0.0', from === 'ccrc.env' ? [] : [`CCRC_UPDATE_HEALTH_S=${win}`], ['timeout', '10']);
+          expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+          expect(r.stdout).not.toContain('WARN');
+          expect(r.stdout.split('\n')).toContain('update: gate FAILED after 120s — fixture: never up');
+        });
+      }
+    }
 
     // ── Task 4 (D-6594): the release mirror is a setting. W24-U2 holds `_upd_resolve`'s refusal, which the rollout pin (the
     // deploying machine's base) runs too; W24-U6's ssh stub reaches `cmd_rollout` in this file, and a leg with an `export` base

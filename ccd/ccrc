@@ -21352,8 +21352,10 @@ _upd_gate_probe() {   # <role> <version> -> 0 pass, 1 fail; UPD_GATE_WHY
 # environment else ccrc.env (D-6593), so a console-driven run and the
 # watchdog's rollback wait what the operator set; a line the reader refuses
 # WARNs and waits 90, as a value that is not digits does, and one of more than
-# 18 digits, which the shell's integer test cannot compare (D-6747): ruling 6's
-# zero and no range hold for every value it can. Never a refusal: the
+# 18 characters, which past 18 significant digits the shell's integer test
+# cannot compare (D-6747): ruling 6's zero and no range hold for every value of
+# at most 18 characters. A zero-padded value longer than that (19 zeros, or
+# `0000000000000000030`) is comparable but waits 90 too, as ruled. Never a refusal: the
 # gate runs after the install, so refusing cannot undo it, and a rollback's
 # gate must still judge the box. Never a shorter wait: a short window reads a
 # slow but healthy box as failed and restores it.
@@ -23968,11 +23970,14 @@ _bak_gc() {   # <lead word: update|rollback>
   # The time bound (D-6591, D-6601), for both leads whenever the caller re-stamped (`_bak_restamp`): the smaller of the re-stamp's
   # term and the hard cap's, each less the margin. The hard cap is the control plane's D-3407 (`deadlineExpired`: the lease ends at
   # UPDATE_DEADLINE_HARD_CAP_FACTOR deadlines past its start, which no re-stamp pushes out). The bash knows no lease start, but its
-  # own report's startedAt (UPD_REPORT_STARTED) follows it by at most the sum of the start chain's own ceilings, 63 s (D-6744; D-6603's
-  # 40 left out the health call): the spawn's UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS; the release-host probe of a re-install
-  # rollback, twice (the parent's `_upd_asset_listed` before it detaches, and the detached child's repeat), each at the
-  # CCRC_RELEASE_PROBE_MAX_TIME ceiling `_upd_asset_listed` validates; and `_upd_fleet_warn`'s `_box_health` call before the first
-  # `_upd_phase`, at CCRC_HEALTH_TIMEOUT's default. W24-K6 derives the literal from those four and pins it. No literal bounds D-6744's
+  # own report's startedAt (UPD_REPORT_STARTED) follows it by at most the sum of the start chain's own ceilings, 63 s (D-6744): the
+  # spawn's UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS; the release-host probe of a re-install rollback, twice (the parent's
+  # `_upd_asset_listed` before it detaches, and the detached child's repeat), each at the CCRC_RELEASE_PROBE_MAX_TIME ceiling
+  # `_upd_asset_listed` validates; and `_upd_fleet_warn`'s `_box_health` call before the first `_upd_phase`, at CCRC_HEALTH_TIMEOUT's
+  # default. D-6603's 40 was the spawn and one probe; the 23 added are the child's repeat probe (18) and the health call (5). The
+  # parent's probe runs INSIDE the spawn's 20 s bound (its ceiling is 18 so that it fits), so counting it as ruled over-counts the
+  # chain by up to 18 s: a larger term only stops the thinning earlier, the safe direction (R30 keeps it). W24-K6 derives the
+  # literal from those four and pins it. No literal bounds D-6744's
   # residuals: the transient unit's start under the service manager, and a lease stamped before its dispatch. The bound holds for
   # every GATED verification (D-6745): when the re-stamp is already late, the keep-set's first full verification, which
   # `_bak_keepset` never gates (ruling 4), can run past `until`, and past the hard cap, by one classifier call (W24-K1 measures one).
