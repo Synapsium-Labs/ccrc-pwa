@@ -535,6 +535,7 @@ describe('session store optimistic send', () => {
       ['enter-ignored + draft', refusal('enter-ignored', 'my message'), true],
       ['verify-failed, no draft', refusal('verify-failed'), false],
       ['type-failed', refusal('type-failed'), false],
+      ['type-failed + draft', refusal('type-failed', 'my message'), false],
       ['draft-present', refusal('draft-present', 'someone else'), false],
       ['not-alive', refusal('not-alive'), false],
       ['box-unreadable', refusal('box-unreadable'), false],
