@@ -1459,13 +1459,15 @@ describe('release-main.sh: source pins', () => {
     expect(s).toContain('fingerprint() { node -e "$FP_JS" "$1" | LC_ALL=C sort; }');
   });
   // W26-P1 scans each write-job arm's body AND the body of every function of
-  // release-main.sh that the arm calls, transitively, a `trap` handler included
-  // (review 886's F7): a helper the arm reaches runs in the write job too.
-  // A call is a defined name as a word in a body's code, which is the body with
-  // its comments and quoted text removed, keeping what a `$( … )` runs inside
-  // double quotes: so `trap cleanup EXIT` counts, and a name inside a message
-  // ("re-run prepare") does not. A one-line function (`die() { …; }`) is a body
-  // too. The assertions read the bodies as written, comments and strings included.
+  // release-main.sh that the arm calls, transitively, an unquoted `trap`
+  // handler included (review 886's F7): a helper the arm reaches runs in the
+  // write job too. A call is a defined name as a word in a body's code, which is
+  // the body with its comments and quoted text removed, keeping what a `$( … )`
+  // runs inside double quotes: so `trap cleanup EXIT` counts, and a name inside
+  // a message ("re-run prepare") does not. So a quoted handler
+  // (`trap 'cleanup' EXIT`), an `eval` string and a `bash -c` string are not
+  // followed. A one-line function (`die() { …; }`) is a body too. The
+  // assertions read the bodies as written, comments and strings included.
   const defined = (): string[] => [...src().matchAll(/^([a-z_]+)\(\) \{/gm)].map((m) => m[1]!);
   const bodyOf = (name: string): string =>
     fn(name) || (new RegExp(`^${name}\\(\\) \\{ .*\\}$`, 'm').exec(src())?.[0] ?? '');

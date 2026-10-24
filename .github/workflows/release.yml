@@ -30,10 +30,12 @@ jobs:
   # THE BUILD JOB runs the builder, and with it every install script and build
   # step the dependencies bring, so it holds contents: read and nothing else.
   # It has no write token and no id-token, so no code it runs can publish or
-  # sign, and its checkout sets persist-credentials: false, so no credential
-  # is left on the runner for that code to find: at this checkout major the
-  # token is written to a file under the runner's temp directory for the
-  # checkout's own fetch, and removed when that step ends.
+  # sign, and its checkout sets persist-credentials: false, so the checkout
+  # leaves no credential behind for that code to find (the job's own read
+  # token remains): at this checkout major the token is written to a file
+  # under the runner's temp directory for the checkout's own fetch, and the
+  # checkout removes that file in the step's own cleanup; a failed removal
+  # does not fail the step, the action only warns or says nothing, as at v4.
   build:
     runs-on: ubuntu-latest
     # 30: the build is most of the run.
@@ -126,9 +128,13 @@ jobs:
       # extractor. This major keeps v7's (unzip-stream 0.3.4), which
       # confines every zip entry under release-in, where @v4 to @v6 wrote an
       # `x/../../..` entry outside it. An artifact that is not a zip is
-      # written raw, as one file named by its basename, into release-in.
-      # Either way, verify refuses anything but the two expected files,
-      # and a digest mismatch fails the download itself (D-6726, D-6739).
+      # written raw, as one file into release-in, named by the basename of
+      # the blob's download filename, which whoever wrote the blob chooses,
+      # not by the artifact's name. Either way, verify refuses anything but
+      # the two expected files (D-6726, D-6739). This major also fails a
+      # digest mismatch, but against the digest the upload recorded, which
+      # the build job controls: it proves the transfer, not the build. The
+      # build's digest this job trusts is the one verify checks.
       - uses: actions/download-artifact@v8
         with:
           name: release-${{ github.ref_name }}

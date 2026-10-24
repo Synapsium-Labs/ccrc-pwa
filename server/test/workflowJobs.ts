@@ -214,7 +214,10 @@ const DOWNLOAD_PATH = '${{ runner.temp }}/release-in';
  *  use (D-6739), bundles the same 0.3.4 and sanitiser; it adds a raw, non-zip
  *  write of ONE file named by its basename into the path, which verify's
  *  exact file set refuses as it refuses an extra zip entry, and it fails a
- *  digest mismatch by default. Spelled `@v<N>` exactly: a minor
+ *  digest mismatch by default, against the digest the upload recorded, which
+ *  the build job controls: that proves the transfer, not the build, and the
+ *  build's digest a publish job trusts is the one verify checks. Spelled
+ *  `@v<N>` exactly: a minor
  *  pin or a SHA names code this floor has not read, and an older major reopens
  *  the hole. */
 const DOWNLOAD_MAJOR_FLOOR = 7;

@@ -1056,7 +1056,7 @@ jobs:
           got=0
           for f in "${recs[@]}"; do
             d=$(dirname "$f")
-            if [ "$d" = "$RUNNER_TEMP/records" ]; then n=records; else n=$(basename "$d"); fi
+            n=$(basename "$d")
             cp "$f" "$RUNNER_TEMP/flat/$n.json"; got=$((got + 1))
           done
           if [ "$got" -ne "$want" ]; then
