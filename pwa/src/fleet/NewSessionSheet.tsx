@@ -5,7 +5,9 @@
 // narrates the action in plain language ("Start project-c on
 // team·alt") and posts api.createSession. Success opens the new session: the sheet
 // closes and goes to it as soon as /ws/fleet lists its row (a create answers no id), with the old "Starting…" toast
-// as the fallback if no row comes within a minute. Failure toasts ccd's stderr and leaves every choice in place.
+// as the fallback if no row comes within a minute. A project whose main checkout is ALREADY live (`ccd start` answers
+// "already running", exit 0, and no new row will come) toasts and closes at once, with no wait and no navigation.
+// Failure toasts ccd's stderr and leaves every choice in place.
 // Step 2 shows the fleet store's last project list the moment it opens, and the fetch on open replaces it.
 //
 // THE NAME FIELD (named workspaces S8, design 2026-10-20 §2.1) sits under the project list. Empty, nothing about
@@ -15,7 +17,8 @@
 // intact; an account refusal returns to the account step, with the project and the name kept. A crossing project or
 // an account a workspace never starts on closes the door: the field is disabled with its sentence and no name is
 // ever sent (`nameDoorReason`). A workspace create answers its session's id, so that success closes the sheet and
-// opens the session at once, with no toast.
+// opens the session at once, with no toast; an answer this build cannot read names no id, so it keeps the toast and the
+// close (and only a sheet still the same one closes: a dismissed sheet says it started and leaves the parent alone).
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
