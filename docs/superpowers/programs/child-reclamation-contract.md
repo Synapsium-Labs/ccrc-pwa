@@ -157,7 +157,7 @@ in wave 2.
   | `tree-busy` | retryable | NEW; an in-progress git operation in the child's OWN tree (`_ws_child_op` on the parent workdir) |
   | `branch-elsewhere` | terminal | reused |
   | `tree-unreadable` | terminal | reused; after a permission-normalisation pass over the child's tree |
-  | `containment-unproven` | terminal | NEW; a nested checkout of a DIFFERENT repository (different git common dir) that is dirty or holds commits unreachable from its own upstream |
+  | `containment-unproven` | terminal | NEW; a nested checkout of a DIFFERENT repository (different git common dir) that is dirty or holds commits unreachable from its own upstream; under `$REG/nested-rescue-live` it is rescued into the attic instead (D-6632), and the pin may answer `nested-rescue-too-large` (terminal) or `nested-rescue-failed` (retryable) |
   | `state-changed` | retryable | reused; fingerprint mismatch |
   | `in-progress` | retryable | reused; the shared reap lock is contended |
   | `reap-in-progress` | retryable | NEW; the breadcrumb carries a `ws-reap` phase |

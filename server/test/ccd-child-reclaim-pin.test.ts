@@ -267,7 +267,7 @@ describe('the attic pins', () => {
 });
 
 describe('the only commit ccd writes', () => {
-  it('is one `commit-tree` line, inside _ws_reclaim_commit_tree — no `git commit` at all — whose only callers are the WIP commit and the reflog keep; and _ws_wip_commit is called only from _ws_reclaim_pin', () => {
+  it('is one `commit-tree` line, inside _ws_reclaim_commit_tree — no `git commit` at all — whose only callers are the WIP commit and the reflog keep; and _ws_wip_commit is called only from _ws_reclaim_pin and the nested rescue', () => {
     // ONE writer, so ONE identity: the reflog keep (`_ws_reclaim_keep_reflogs`)
     // writes through the WIP commit's own helper, never a second copy of it.
     const src = fs.readFileSync(CCD, 'utf8');
@@ -286,8 +286,11 @@ describe('the only commit ccd writes', () => {
     expect(callers, 'the commit writer’s call sites, by enclosing function').toEqual(['_ws_wip_commit', '_ws_wip_commit', '_ws_reclaim_keep_reflogs']);
     const pinBody = src.slice(src.indexOf('_ws_reclaim_pin() {'), src.indexOf('_ws_reclaim_secrets_json() {'));
     const calls = (s: string): number => [...s.matchAll(/^[^#\n]*_ws_wip_commit "/gm)].length;
-    expect(calls(src)).toBe(2);
-    expect(calls(pinBody), 'a second caller of the commit helper').toBe(calls(src));
+    // D-6632: the nested rescue (`_ws_nested_rescue`, which `_ws_reclaim_pin` and `ccd scratch-rescue` both reach) is the one other caller.
+    const rescueBody = src.slice(src.indexOf('_ws_nested_rescue() {'), src.indexOf('_ws_scratch_rescue_run() {'));
+    expect(calls(src)).toBe(3);
+    expect(calls(pinBody), 'a caller of the commit helper beside the pin and the nested rescue').toBe(2);
+    expect(calls(rescueBody)).toBe(1);
   });
 });
 
