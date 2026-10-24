@@ -277,6 +277,22 @@ export function NewSessionSheet({
     }
   }, [project, wrapperPool]);
 
+  // The picked project follows the CURRENT row. A pick from the store's cached list holds that list's row, and the fetch
+  // that answers later replaces the list, not the pick: the crossing re-check above, the name door and `crossPool` all
+  // read the row, so it is re-resolved by workdir (the list's own identity) whenever the shown list changes. Found: the
+  // current row replaces it, and the crossing effect re-checks it from current data. Gone: the selection is withdrawn,
+  // as that effect withdraws an eligible-to-crossing change.
+  useEffect(() => {
+    if (project === null || shown === null) return;
+    const current = shown.find((candidate) => candidate.workdir === project.workdir);
+    if (current === undefined) {
+      setProject(null);
+      selectedCrossingRef.current = null;
+    } else if (current !== project) {
+      setProject(current);
+    }
+  }, [shown]);
+
   const pickProject = (candidate: ProjectRow): void => {
     selectedCrossingRef.current = isCrossing(candidate);
     setProject(candidate);

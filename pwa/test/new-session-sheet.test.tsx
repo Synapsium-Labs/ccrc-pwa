@@ -826,6 +826,28 @@ describe('NewSessionSheet — step 2 shows the cached project list at once', () 
     expect(store.getState().projects).toBe(cached);
   });
 
+  it('a project picked from the cache is withdrawn when the fetch makes it a crossing one', async () => {
+    let answer!: (r: { roots: string[]; projects: ProjectRow[] }) => void;
+    open([proj('demo')], new Promise((resolve) => { answer = resolve; }));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    fireEvent.click(await screen.findByText('demo'));
+    expect(screen.getByRole('button', { name: /^Start demo/ })).toBeEnabled();
+    // The fresh read tags the project for another pool than the picked account's: a crossing project is not a plain pick.
+    await act(async () => { answer({ roots: ['/w'], projects: [proj('demo', { state: 'tagged', name: 'pool-b' })] }); });
+    expect(await screen.findByRole('button', { name: 'Choose a project' })).toBeDisabled();
+  });
+
+  it('a project picked from the cache is withdrawn when the fetch no longer lists it', async () => {
+    let answer!: (r: { roots: string[]; projects: ProjectRow[] }) => void;
+    open([proj('demo')], new Promise((resolve) => { answer = resolve; }));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    fireEvent.click(await screen.findByText('demo'));
+    expect(screen.getByRole('button', { name: /^Start demo/ })).toBeEnabled();
+    await act(async () => { answer({ roots: ['/w'], projects: [proj('other')] }); });
+    expect(await screen.findByText('other')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose a project' })).toBeDisabled();
+  });
+
   it('a failed fetch shows the error line only when there is no cached list to show', async () => {
     open([proj('cached-a')], Promise.reject(new Error('agent link is down')));
     fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
