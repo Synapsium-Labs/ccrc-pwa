@@ -41,7 +41,7 @@ jobs:
     outputs:
       digest: ${{ steps.record.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full depth: build-release.sh names the artifact by `git tag
           # --points-at HEAD` and refuses an untagged HEAD — the tag ref must
@@ -51,7 +51,7 @@ jobs:
 
       # Its npm cache is restored into this job only, which holds no write
       # token (D-6652).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # The newest Node satisfying the engines range in server/package.json; the floor
           # itself is declared in the three package.json files and pinned by node-floor.test.ts.
@@ -81,7 +81,7 @@ jobs:
       # The hand-over (D-6657): one artifact named for the tag, holding exactly
       # the tarball and its SHA256SUMS, kept seven days so a failed publish job
       # can be re-run alone. Stored as it is: the tarball is compressed already.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ github.ref_name }}
           path: |
@@ -112,7 +112,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full depth: the notes are what changed since the previous release
           # tag, read from git.
@@ -124,7 +124,7 @@ jobs:
       # extractor. This major's (unzip-stream 0.3.4) confines every zip entry
       # under release-in, where @v4 to @v6 wrote an `x/../../..` entry outside
       # it; and verify refuses any entry but the two expected files (D-6726).
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: release-${{ github.ref_name }}
           path: ${{ runner.temp }}/release-in
