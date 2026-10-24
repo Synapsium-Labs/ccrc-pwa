@@ -8,7 +8,8 @@
 // `.md-table-wrap` does; `WELL` (pre-wrap) and `.tool-ask-a` (overflow-wrap: anywhere) cannot, so they carry none.
 //
 // vitest runs with `css: false`, so this reads the two stylesheets and the class string as text (`cssRule.ts`).
-// The behaviour itself — a wheel moving the scroller — is `browser/wheel-chain.browser.test.ts`'s, in a real Chrome.
+// The behaviour itself — a wheel moving the scroller — is the three `browser/wheel-chain*.browser.test.ts` files', in a
+// real Chrome.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -18,6 +19,15 @@ import { declValue, norm, ruleIn, stripComments } from './cssRule';
 const UI = path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components');
 const prose = readFileSync(path.join(UI, 'prose.css'), 'utf8');
 const toolCard = readFileSync(path.join(UI, 'tool-card.css'), 'utf8');
+
+// A mono box wraps its text in whole pixels: 13px x 1.55 = 20.15px makes a tall box's scroll range fractional, and at
+// some page offsets Chrome then latches the first wheel at the box's end to the box, which cannot move (the browser leg
+// sweeps eight offsets per box). Either the round() form over the two tokens or an integer px, in whatever spacing.
+const WHOLE_PIXEL = /^(round\(down,calc\(var\(--fs-sm\)\*var\(--lh-mono\)\),1px\)|\d+px)$/;
+
+/** A rule's declaration names in source order, comments stripped, so a declaration can be placed AFTER another. */
+const declNames = (rule: string): string[] =>
+  stripComments(rule).split(';').map((d) => norm(d.slice(0, Math.max(d.indexOf(':'), 0))));
 
 describe('a wheel over a transcript box chains to the transcript (D-6437)', () => {
   it('each transcript box carries exactly its containment', () => {
@@ -29,19 +39,8 @@ describe('a wheel over a transcript box chains to the transcript (D-6437)', () =
     expect(declValue(pre, 'overscroll-behavior'), 'the shorthand would contain y as well').toBeNull();
     expect(declValue(pre, 'overscroll-behavior-y'), 'no y-axis containment inside the transcript').toBeNull();
 
-    // A WHOLE-PIXEL line height, declared AFTER the `font` shorthand (which resets it): 13px x 1.55 = 20.15px made a
-    // 60-line block's scroll range fractional, and at some page offsets Chrome then swallowed the first wheel at the
-    // block's end (the browser leg's sweep measures that). Either the round() form over the two tokens or an integer px.
-    const names = stripComments(pre).split(';').map((d) => norm(d.slice(0, Math.max(d.indexOf(':'), 0))));
-    const fontAt = names.lastIndexOf('font');
-    const lineAt = names.lastIndexOf('line-height');
-    expect(fontAt, 'the block sets its font through the shorthand').toBeGreaterThanOrEqual(0);
-    expect(lineAt, 'the block declares a line-height after the font shorthand').toBeGreaterThan(fontAt);
-    const line = (declValue(pre, 'line-height') ?? '').replace(/\s+/g, '');
-    expect(line, 'a whole-pixel line height').toMatch(WHOLE_PIXEL);
-
-    // `WELL` wraps its lines, so it never scrolls sideways: no token of its own begins `overscroll`
-    // (neither `overscroll-contain` nor `overscroll-x-contain`).
+    // `WELL` wraps its lines, so it never scrolls sideways: no token of its own begins `overscroll`, so it carries
+    // neither Tailwind's both-axes overscroll utility nor its x-only one.
     const overscrollTokens = WELL.split(/\s+/).filter((t) => t.startsWith('overscroll'));
     expect(overscrollTokens, 'WELL carries no overscroll token').toEqual([]);
 
@@ -55,19 +54,30 @@ describe('a wheel over a transcript box chains to the transcript (D-6437)', () =
   });
 });
 
-// A mono box wraps its text in whole pixels: 13px x 1.55 = 20.15px makes a tall box's scroll range fractional, and at
-// some page offsets Chrome then latches the first wheel at the box's end to the box, which cannot move (the browser leg
-// sweeps eight offsets per box). Either the round() form over the two tokens or an integer px, in whatever spacing.
-const WHOLE_PIXEL = /^(round\(down,calc\(var\(--fs-sm\)\*var\(--lh-mono\)\),1px\)|\d+px)$/;
-
 describe('a mono box in the transcript declares a whole-pixel line height (D-6437, R68)', () => {
+  it('.msg-assist pre declares a whole-pixel line height', () => {
+    // Declared AFTER the `font` shorthand, which resets it. Either the round() form over the tokens or an integer px.
+    const pre = ruleIn(prose, '.msg-assist pre');
+    const names = declNames(pre);
+    const fontAt = names.lastIndexOf('font');
+    const lineAt = names.lastIndexOf('line-height');
+    expect(fontAt, 'the block sets its font through the shorthand').toBeGreaterThanOrEqual(0);
+    expect(lineAt, 'the block declares a line-height after the font shorthand').toBeGreaterThan(fontAt);
+    const line = (declValue(pre, 'line-height') ?? '').replace(/\s+/g, '');
+    expect(line, 'a whole-pixel line height').toMatch(WHOLE_PIXEL);
+  });
+
   it('WELL declares a whole-pixel line height', () => {
     // Tailwind spells it as one arbitrary-value `leading` class (spaces as underscores), or as an arbitrary
     // `line-height` property class. `leading-mono` is the token's unitless 1.55, which is the defect.
     const lineTokens = WELL.split(/\s+/).filter((t) => /^leading-|^\[line-height:/.test(t));
     expect(lineTokens, 'WELL carries exactly one line-height class').toHaveLength(1);
     const m = /^(?:leading-\[(.*)\]|\[line-height:(.*)\])$/.exec(lineTokens[0]!);
-    expect(m, `WELL's line-height class ${lineTokens[0]} must be an arbitrary whole-pixel value (a bracketed leading class), not the unitless token`).not.toBeNull();
+    expect(
+      m,
+      `WELL's line-height class ${lineTokens[0]} must be an arbitrary whole-pixel value (a bracketed leading class), `
+      + 'not the unitless token',
+    ).not.toBeNull();
     const value = (m![1] ?? m![2] ?? '').replace(/_/g, '').replace(/\s+/g, '');
     expect(value, 'a whole-pixel line height').toMatch(WHOLE_PIXEL);
   });
@@ -75,7 +85,7 @@ describe('a mono box in the transcript declares a whole-pixel line height (D-643
   it('.tool-ask-a declares a whole-pixel line height', () => {
     // After the `font` shorthand, which resets it.
     const chip = ruleIn(toolCard, '.tool-ask-a');
-    const names = stripComments(chip).split(';').map((d) => norm(d.slice(0, Math.max(d.indexOf(':'), 0))));
+    const names = declNames(chip);
     const fontAt = names.lastIndexOf('font');
     const lineAt = names.lastIndexOf('line-height');
     expect(fontAt, 'the chip sets its font through the shorthand').toBeGreaterThanOrEqual(0);
@@ -84,4 +94,3 @@ describe('a mono box in the transcript declares a whole-pixel line height (D-643
     expect(line, 'a whole-pixel line height').toMatch(WHOLE_PIXEL);
   });
 });
-
