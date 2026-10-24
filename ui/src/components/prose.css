@@ -251,13 +251,14 @@
     border-radius: var(--r-md);
     padding: 10px var(--sp-3);
     font: var(--weight-regular) var(--fs-sm) / var(--lh-mono) var(--family-mono);
-    /* A WHOLE-PIXEL line (13px x 1.55 = 20.15px): a fractional line box
-       makes the block's scroll range fractional (60 lines = 1228.44px, max
-       scrollTop 988), and at some page offsets Chrome latches the first
-       wheel at the block's end to the block, which cannot move, so the wheel
-       never reaches the transcript (D-6437). Declared after the shorthand,
-       which resets line-height. Tracks --fs-sm and --lh-mono (each defined
-       once, in tokens.css, for every skin and width). */
+    /* A WHOLE-PIXEL line: the tokens give 20.15px (13px x 1.55), rounded
+       down to 20px. A fractional line box makes the block's scroll range
+       fractional (60 lines = 1228.44px, max scrollTop 988), and at some page
+       offsets Chrome latches the first wheel at the block's end to the
+       block, which cannot move, so the wheel never reaches the transcript
+       (D-6437). Declared after the shorthand, which resets line-height.
+       Tracks --fs-sm and --lh-mono (each defined once, in tokens.css, for
+       every skin and width). WELL and .tool-ask-a declare the same value. */
     line-height: round(down, calc(var(--fs-sm) * var(--lh-mono)), 1px);
     overflow-x: auto;
     max-height: var(--well-max);

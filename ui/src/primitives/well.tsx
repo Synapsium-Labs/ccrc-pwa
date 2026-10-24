@@ -43,8 +43,9 @@ import { FOCUS_RING } from '../lib/focus';
 /** Token for token as `chat.css .well` declared it, less its overscroll
  *  containment and with a whole-pixel line height (both D-6437). This wraps
  *  and never scrolls sideways, and a y-axis containment would stop a wheel it
- *  has nothing left to scroll from reaching the transcript. Its users outside
- *  the transcript chain to the sheet body's own containment or to `body`'s.
+ *  has nothing left to scroll from reaching the transcript. Its two users
+ *  outside the transcript, the ask sheet's `opt-preview` and the unsent-draft
+ *  sheet's `draft-well`, chain to their sheet body's own containment.
  *
  *  The line height is `--fs-sm` x `--lh-mono` rounded DOWN to a whole pixel
  *  (20px, not 20.15px): a fractional line box makes a tall well's scroll range
