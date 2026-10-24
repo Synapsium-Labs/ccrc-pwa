@@ -1,0 +1,6 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_fx1","object":"response","status":"in_progress","output":[]},"sequence_number":0}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_fx1","object":"response","status":"failed","error":{"code":"something_new","message":"the request failed"},"output":[]},"sequence_number":1}
+

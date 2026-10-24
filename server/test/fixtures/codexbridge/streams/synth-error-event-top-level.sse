@@ -1,0 +1,6 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_fx1","object":"response","status":"in_progress","output":[]},"sequence_number":0}
+
+event: error
+data: {"type":"error","code":"insufficient_quota","message":"quota","param":null,"sequence_number":1}
+

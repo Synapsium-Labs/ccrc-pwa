@@ -157,6 +157,8 @@ export type DispatchOutcome =
    *  the pause listing, and the run stays `planned`. This is a stored defect, not a transient: a retry cannot change
    *  it, and `POST /api/runs/:id/abandon` closes such a run with no fleet act. */
   | { ok: false; kind: 'bad-session' }
+  /** D-6790: the dispatch's `route` names class `fable`, which only the operator selects. Refused before any fleet act. */
+  | { ok: false; kind: 'fable-operator-only' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
   /** `detail` is PRESENT for the malformed-`route` refusal (routing spec
    *  §5.3, slice 4: `route: <why>[ <field>]`) and for the two `slug` refusals

@@ -229,6 +229,7 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
     // Spec §2.3, a stored defect: the run's session id is not a registry id, and nothing was read or composed.
     case 'bad-session': return refuseRoute(reply, 'bad-session');
+    case 'fable-operator-only': return refuseRoute(reply, 'fable-operator-only');
     // `detail` spread, not `detail: r.detail`: an L4 adapter may not narrow a
     // distinction it received (`route: <why>[ <field>]` or `slug: <why>`,
     // present only for those refusals), so its PRESENCE rides the wire exactly as
