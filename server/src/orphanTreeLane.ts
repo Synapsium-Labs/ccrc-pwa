@@ -30,10 +30,13 @@ export const isAuditedClass = (c: OrphanClass): c is OrphanAuditedClass => (ORPH
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const HEX = /^(?:[0-9a-f]{2})+$/;
 const TOKEN = /^[0-9a-f]{64}$/;
+const INSIDE_ID = /^[A-Za-z0-9._-]{1,120}$/;
 
 // ── what ccd answers ─────────────────────────────────────────────────────────
 
-export interface OrphanRow { readonly hex: string; readonly cls: OrphanClass }
+/** `inside` is the registry id of the workspace whose workdir CONTAINS the tree (DR-22, G4), else null. A ccd that does not
+ *  print it reads as null: such a tree is never inside anything this lane knows. */
+export interface OrphanRow { readonly hex: string; readonly cls: OrphanClass; readonly inside: string | null }
 export type OrphanCensus =
   | { readonly kind: 'census'; readonly rows: readonly OrphanRow[]; readonly truncated: boolean }
   | { readonly kind: 'unreadable' };
@@ -48,7 +51,9 @@ export function parseOrphanCensus(stdout: string): OrphanCensus {
   for (const r of doc['rows']) {
     if (!isObj(r) || typeof r['pathHex'] !== 'string' || !HEX.test(r['pathHex']) || typeof r['class'] !== 'string') return { kind: 'unreadable' };
     if (!(ORPHAN_CLASSES as readonly string[]).includes(r['class'])) return { kind: 'unreadable' };
-    rows.push({ hex: r['pathHex'], cls: r['class'] as OrphanClass });
+    const ins = r['inside'];
+    if (ins !== undefined && ins !== null && (typeof ins !== 'string' || !INSIDE_ID.test(ins))) return { kind: 'unreadable' };
+    rows.push({ hex: r['pathHex'], cls: r['class'] as OrphanClass, inside: typeof ins === 'string' ? ins : null });
   }
   return { kind: 'census', rows, truncated: doc['truncated'] };
 }
@@ -190,6 +195,8 @@ export function orphanFeedRow(hex: string, cls: OrphanClass, o: OrphanOutcome): 
 
 export interface OrphanTreeMemory {
   readonly cls: OrphanAuditedClass;
+  /** The workspace the tree sits inside (DR-23), or null. */
+  readonly inside: string | null;
   /** The standing first sighting, or null. */
   readonly obs: OrphanObservation | null;
   /** Earliest monotonic instant the next audit may be asked. */
@@ -205,14 +212,36 @@ export const orphanCensusDue = (lastMono: number | null, nowMono: number, pressu
 
 /** The population after a census. A truncated one adds nothing and drops nothing ("the lane audits nothing new that
  *  pass"); a whole one keeps the memory of every tree it still lists and forgets the rest. */
-export function orphanPopulate(prev: OrphanMemory, census: Extract<OrphanCensus, { kind: 'census' }>, nowMono: number): OrphanMemory {
+export function orphanPopulate(
+  prev: OrphanMemory, census: Extract<OrphanCensus, { kind: 'census' }>, nowMono: number, coordinators: ReadonlySet<string> | null,
+): OrphanMemory {
   if (census.truncated) return prev;
   const next = new Map<string, OrphanTreeMemory>();
   for (const r of census.rows) {
-    if (!isAuditedClass(r.cls)) continue;
-    next.set(r.hex, prev.get(r.hex) ?? { cls: r.cls, obs: null, nextMono: nowMono, outcome: null });
+    if (!isAuditedClass(r.cls) || orphanInsideVerdict(r.inside, coordinators) !== 'candidate') continue;
+    next.set(r.hex, { ...(prev.get(r.hex) ?? { cls: r.cls, obs: null, nextMono: nowMono, outcome: null }), inside: r.inside });
   }
   return next;
+}
+
+/** A tree nested inside a workspace (DR-23): a candidate only when that workspace is a coordinator some open run is
+ *  claimed by. A worker's tree goes with its workspace, and a coordinator list that could not be read keeps everything. */
+export function orphanInsideVerdict(inside: string | null, coordinators: ReadonlySet<string> | null): 'candidate' | 'goes-with-workspace' | 'unmeasured' {
+  if (inside === null) return 'candidate';
+  if (coordinators === null) return 'unmeasured';
+  return coordinators.has(inside) ? 'candidate' : 'goes-with-workspace';
+}
+
+/** The trees held back this pass: nested in a workspace that is no longer a known coordinator (or whose list is unreadable). */
+export function orphanHeldBack(memory: OrphanMemory, coordinators: ReadonlySet<string> | null): ReadonlySet<string> {
+  const held = new Set<string>();
+  for (const [hex, m] of memory) if (orphanInsideVerdict(m.inside, coordinators) !== 'candidate') held.add(hex);
+  return held;
+}
+
+/** The feed row for a tree reported and never audited. */
+export function orphanGoesWithRow(hex: string, cls: OrphanClass): { readonly title: string; readonly body: string } {
+  return { title: 'orphan worktree left', body: `${orphanPathOfHex(hex)} (${cls}): it goes with its workspace` };
 }
 
 /** Counts by class (every census row) and by outcome (every audited tree). `removed` is the lane's running count. */

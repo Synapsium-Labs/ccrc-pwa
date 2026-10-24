@@ -14,7 +14,7 @@ import {
 } from './coord/collectOrphanTree.js';
 import {
   ORPHAN_AUDITS_PER_PASS, ORPHAN_AUDITS_PER_PASS_PRESSURE, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_QUEUE_KEY,
-  ORPHAN_RETRY_MS, orphanCensusDue, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
+  ORPHAN_RETRY_MS, isAuditedClass, orphanCensusDue, orphanGoesWithRow, orphanHeldBack, orphanInsideVerdict, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
   orphanRemember, orphanRescueArmed, orphanTreesHealth,
   type OrphanFold, type OrphanMemory, type OrphanRow, type OrphanTreeMemory,
 } from './orphanTreeLane.js';
@@ -33,6 +33,8 @@ export interface OrphanSweepDeps {
   readonly pressure: () => boolean;
   /** One feed row, `kind:'coord'`, record-only. Never throws. */
   readonly record: (title: string, body: string) => void;
+  /** The ids some open run is claimed by (DR-23). Throws when the store cannot be read, which keeps every nested tree. */
+  readonly coordinators: () => ReadonlySet<string>;
 }
 
 export class OrphanTreeSweep {
@@ -42,12 +44,18 @@ export class OrphanTreeSweep {
   private sweeping = false;
   private removed = 0;
   private measured = false;
+  private reported = new Set<string>();
 
   constructor(private readonly deps: OrphanSweepDeps) {}
 
   /** The `disk` block's `orphanTrees`: null until a census has been read. */
   health(): DiskOrphanTrees | null {
     return this.measured ? orphanTreesHealth(this.rows, this.memory, this.removed) : null;
+  }
+
+  /** The coordinators now, or null when the store cannot be read. */
+  private coordinators(): ReadonlySet<string> | null {
+    try { return this.deps.coordinators(); } catch { return null; }
   }
 
   private ccd(): CollectOrphanDeps {
@@ -97,10 +105,18 @@ export class OrphanTreeSweep {
       this.lastCensus = now;
       if (c.truncated) return;
       this.rows = c.rows;
-      this.memory = orphanPopulate(this.memory, c, now);
+      const coords = this.coordinators();
+      this.memory = orphanPopulate(this.memory, c, now, coords);
+      for (const r of c.rows) {
+        if (!isAuditedClass(r.cls) || orphanInsideVerdict(r.inside, coords) !== 'goes-with-workspace' || this.reported.has(r.hex)) continue;
+        this.reported.add(r.hex);
+        const row = orphanGoesWithRow(r.hex, r.cls);
+        d.record(row.title, row.body);
+      }
       this.measured = true;
     }
-    const offers = orphanOffers(this.memory, d.mono(), pressure ? ORPHAN_AUDITS_PER_PASS_PRESSURE : ORPHAN_AUDITS_PER_PASS, new Set());
+    const held = orphanHeldBack(this.memory, this.coordinators());
+    const offers = orphanOffers(this.memory, d.mono(), pressure ? ORPHAN_AUDITS_PER_PASS_PRESSURE : ORPHAN_AUDITS_PER_PASS, held);
     if (offers.act !== null) await this.actOn(offers.act, rescueArmed, censusMs);
     for (const hex of offers.learn) if (!(await this.learnOn(hex, rescueArmed, censusMs))) return;
   }
