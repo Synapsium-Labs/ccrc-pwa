@@ -42,6 +42,13 @@
       "d": "D-6625",
       "reason": "fleet disk retention DR-13: the loose arm of ws-collect (census, audit, verb, record family, pressure twin) as one new region of ccd/ccd; the verb shares the witnessed arm's helpers and cannot live in another file, because ccd is installed as one digest-checked body (measured +578 net code lines against the merge-base with main after DR-7 merged; the census also lists the loose record family)",
       "added": "2026-10-23"
+    },
+    {
+      "file": "ccd/session-hook.sh",
+      "maxDelta": 111,
+      "d": "D-6798",
+      "reason": "build-spend gap 4: the PreToolUse fan-out arm that denies an Agent/Task without model and a Workflow agent() without model/effort, measured +101 net code lines against the merge-base while D-6792 is unmerged; kept inline because a second installed hook file would need install, update, backup and uninstall support in ccd/ccrc",
+      "added": "2026-10-24"
     }
   ]
 }
