@@ -4201,8 +4201,8 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       expect(w.coord.reviewRounds(workId)).toBe(REVIEW_ROUND_CAP);
       // The last review reported: its summary and report path ride the ask.
       const reportPath = path.join(home, 'review-3.md');
-      writeFileSync(reportPath, '# Review\n\n## Findings\n- **F1 (security, important)** `a.ts:4` — leaks. needs a ruling: keep or drop?\n'
-        + '- **F2 (tests, minor)** `b.ts:9` — no case.\n\n## Whole-branch pass\n- not a finding\n');
+      writeFileSync(reportPath, '# Review\n\n## Findings\n- **F1 (security, important)** `a.ts#leak` — leaks. needs a ruling: keep or drop?\n'
+        + '- **F2 (tests, minor)** `b.ts#case` — no case.\n\n## Whole-branch pass\n- not a finding\n');
       w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
         kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\n2 findings, 1 needs a ruling',
         artifacts: [reportPath] });
@@ -4212,15 +4212,15 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
         run: workId, rounds: 3, cap: 3,
         lastReview: { reviewRunId: ids[2], summary: '2 findings, 1 needs a ruling', report: reportPath,
           findings: { state: 'read', lines: [
-            '**F1 (security, important)** `a.ts:4` — leaks. needs a ruling: keep or drop?',
-            '**F2 (tests, minor)** `b.ts:9` — no case.'] } } } });
+            '**F1 (security, important)** `a.ts#leak` — leaks. needs a ruling: keep or drop?',
+            '**F2 (tests, minor)** `b.ts#case` — no case.'] } } } });
       expect(w.coord.reviewRounds(workId)).toBe(3);
       expect(capNotices(notifyLog)).toHaveLength(1);
       expect(capNotices(notifyLog)[0]).toMatchObject({ kind: 'run', runId: workId });
       expect(capNotices(notifyLog)[0]!.body).toContain('2 findings, 1 needs a ruling');
       // The fixture report's findings reach the notice too, not only the count.
       expect(capNotices(notifyLog)[0]!.body).toContain('needs a ruling: keep or drop?');
-      expect(capNotices(notifyLog)[0]!.body).toContain('`b.ts:9` — no case.');
+      expect(capNotices(notifyLog)[0]!.body).toContain('`b.ts#case` — no case.');
       // A second refusal answers the same and raises nothing more.
       expect((await postOpen(app, REVIEW(workId, { title: 'R4 again' }))).statusCode).toBe(409);
       expect(capNotices(notifyLog)).toHaveLength(1);

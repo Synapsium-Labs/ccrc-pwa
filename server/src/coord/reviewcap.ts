@@ -1,3 +1,4 @@
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { redactCommand } from './redact.js';
 
 /**
@@ -25,8 +26,7 @@ export interface LastReviewReport { reviewRunId: number | null; summary: string 
 export type ReviewFindings =
   | { state: 'read'; lines: string[] }
   | { state: 'unnamed' }
-  | { state: 'absent' }
-  | { state: 'unreadable' };
+  | { state: ReadFailure };
 
 /** The structured ask the refusal answers with and the notice words. */
 export interface ReviewCapAsk {
@@ -57,7 +57,7 @@ export function extractOpenFindings(report: string): string[] {
 }
 
 /** Words the read of a report as a `ReviewFindings`. */
-export const reviewFindingsOf = (read: { ok: true; content: string } | { ok: false; reason: 'absent' | 'unreadable' } | null): ReviewFindings =>
+export const reviewFindingsOf = (read: { ok: true; content: string } | { ok: false; reason: ReadFailure } | null): ReviewFindings =>
   read === null ? { state: 'unnamed' }
     : read.ok ? { state: 'read', lines: extractOpenFindings(read.content) }
       : { state: read.reason };
