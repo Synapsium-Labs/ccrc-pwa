@@ -21838,6 +21838,9 @@ _upd_restore_arm2() {
         echo "update: arm2-refused: $UPD_PREV_TAG ships no bundle — run ccrc update --to $UPD_PREV_TAG --downgrade --allow-unsigned by hand"
         _upd_phase reverted "arm2-refused: $UPD_PREV_TAG ships no bundle; run ccrc update --to $UPD_PREV_TAG --downgrade --allow-unsigned by hand"
         return 1 ;;
+      # F10: the base could not be read, so no host was asked. Like `*)`, the child decides: it runs the NEW tree, whose
+      # reader may take a line this one refused; if it refuses too, its own resolve dies before any change, and arm 3 follows.
+      3) echo "update: arm 2: CCRC_RELEASE_BASE_URL could not be read (the line above says why), so no host was asked whether $UPD_PREV_TAG ships a bundle — the restore child's own resolve decides" ;;
       *)
         echo "update: arm 2: could not ask the release host whether $UPD_PREV_TAG ships a bundle within ${CCRC_RELEASE_PROBE_MAX_TIME}s (curl failed, timed out, or the host answered neither 200 nor 404) — the restore child's own fetch decides" ;;
     esac

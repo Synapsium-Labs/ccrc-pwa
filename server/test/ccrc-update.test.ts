@@ -6287,6 +6287,23 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     expect(String(lastReport(home)['detail'])).toMatch(/^arm2: restored v1\.0\.0; gate: /);
   });
 
+  // F10 (fix round 1): `_upd_asset_listed`'s rc 3 is a base this box cannot read, never curl or the host. The new tree's install
+  // adds an `export` mirror line beside the plain one the parent fetched through, so only arm 2's question meets the refusal.
+  it('a release base arm 2 cannot read is named as that, not as curl, and the restore child still decides (F10)', () => {
+    const home = freshUpdateBox('ccrc-update-restore-base-');
+    plantRestoreBox(home, { onInstall: [`printf 'export CCRC_RELEASE_BASE_URL=local://%s/releases\\n' "$HOME" >> "$HOME/.ccrc/ccrc.env"`] });
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=local://${home}/releases\n`);
+    const r = runUpdate(home, [], { CCRC_RELEASE_BASE_URL: '' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout.split('\n')).toContain('update: arm 2: CCRC_RELEASE_BASE_URL could not be read (the line above says why), so no host '
+      + 'was asked whether v1.0.0 ships a bundle — the restore child\'s own resolve decides');
+    expect(r.stderr).toContain('ccrc: CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take');
+    expect(r.stdout).not.toContain('curl failed');
+    expect(restoreChildArgv(home)).toEqual([
+      join(home, 'ccrc', 'ccd', 'ccrc'), 'update', '--to', 'v1.0.0', '--no-gate', '--from', 'restore',
+    ]);
+  });
+
   it('a spine that COMPLETED and then failed its gate, restored by arm 3: the completed-install record goes, so the box reads incomplete — never converged on the release it backed out of', () => {
     const home = freshUpdateBox('ccrc-update-restore-unrecord-');
     // What a completed v2.0.0 spine leaves before the gate runs: its stamp and
