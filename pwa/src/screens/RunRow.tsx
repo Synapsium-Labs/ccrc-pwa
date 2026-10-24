@@ -28,12 +28,18 @@ import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
 import '../fleet/fleet.css';
 
-// `memo` (D-6442): the board re-renders each second while a dispatch is pending,
+// `memo` (D-6442, D-6438): the board re-renders each second while a dispatch is pending,
 // and a finished row's props are stable between those ticks (the run object from
 // the cold read, booleans, state setters, and `nowMs` from `finishedClock`), so a
-// tick re-renders no finished row. Not stable across fleet frames: every frame
-// brings new session objects, so a fleet frame re-renders every row with a live
-// session (at most 20 finished rows, by the fold) until C6's row reuse.
+// tick inside one 30 s step re-renders no finished row. A fleet frame re-renders a
+// finished row only when its own `session` or its `coordSession` changed: the fleet
+// store keeps the object of every row that did not change (`keepRows`, C6), so an
+// identical frame re-renders none, and a frame that changes one session re-renders
+// the rows holding it. A coordinator shared by many rows (`coordSession`) is one
+// such change: when its row changes, every finished row it claims re-renders. Before
+// C6 every frame brought new session objects and re-rendered every finished row with
+// a live session. The board mounts at most 20 finished rows until Show more
+// (`FINISHED_FOLD`), so these are counts out of at most 20.
 export const RunRow = memo(function RunRow({
   run,
   nowMs,
