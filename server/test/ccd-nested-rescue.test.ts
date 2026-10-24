@@ -159,6 +159,29 @@ describe('with the marker a nested repository is rescued, then the tree goes', (
     expect(audit.sensitive).toContain(`${REL}/.env`);
   }, 120_000);
 
+  it('an IGNORED secret and a MODIFIED tracked secret are declared too', () => {
+    const c = makeChild(h);
+    const n = plantNested(c.wt);
+    fs.writeFileSync(path.join(n.dir, '.gitignore'), '.env.local\n'); h.git(n.dir, 'add', '.gitignore');
+    fs.writeFileSync(path.join(n.dir, 'id_rsa'), 'k1\n'); h.git(n.dir, 'add', 'id_rsa'); h.git(n.dir, 'commit', '-q', '-m', 'keys');
+    fs.writeFileSync(path.join(n.dir, 'id_rsa'), 'k2\n');
+    fs.writeFileSync(path.join(n.dir, '.env.local'), 'TOKEN=x\n');
+    arm();
+    expect(evalOf(h).verdict).toBe('reclaimable');
+    const audit = JSON.parse(h.sh(`${CHILD_STUBS} cmd_ws_audit --session ${CHILD_ID} --reclaim`)) as { sensitive: string[] };
+    expect(audit.sensitive).toContain(`${REL}/.env.local`);
+    expect(audit.sensitive).toContain(`${REL}/id_rsa`);
+  }, 120_000);
+
+  it('a nested repository with a non-standard .git directory (git-crypt keys) stays containment-unproven', () => {
+    const c = makeChild(h);
+    const n = plantNested(c.wt);
+    fs.mkdirSync(path.join(n.dir, '.git', 'git-crypt', 'keys'), { recursive: true });
+    fs.writeFileSync(path.join(n.dir, '.git', 'git-crypt', 'keys', 'default'), 'key\n');
+    arm();
+    expect(evalOf(h).verdict).toBe('containment-unproven');
+  }, 120_000);
+
   it('a nested repository with no commit yet stays containment-unproven under the marker (no token to retry forever)', () => {
     const c = makeChild(h);
     const dir = path.join(c.wt, REL);
@@ -211,6 +234,9 @@ describe('with the marker a nested repository is rescued, then the tree goes', (
     const r = childReclaimVerb(h, tok, { pre: 'git() { case "$*" in *" fetch "*) return 0 ;; esac; command git "$@"; };' });
     expect(doc(r)['failed']).toBe('nested-rescue-failed');
     intact(c, n.dir);
+    expect(h.git(c.main, 'for-each-ref', `refs/ccrc/attic/${CHILD_ID}/`), 'a failed re-prove leaves no claim or partial refs').toBe('');
+    childReclaimVerb(h, tok, { pre: 'git() { case "$*" in *" fetch "*) return 0 ;; esac; command git "$@"; };' });
+    expect(h.git(c.main, 'for-each-ref', `refs/ccrc/attic/${CHILD_ID}/`), 'a retry does not accumulate again-* bases').toBe('');
   }, 120_000);
 
   it('a commit only a reflog names is pinned too (a reset-away tip is not lost)', () => {
@@ -411,6 +437,38 @@ describe('wouldRescue names only what arming would clear (D-6632)', () => {
       { nestedRescue: { wouldRescue: string[] } };
     expect(out.nestedRescue.wouldRescue).toHaveLength(2);
   }, 120_000);
+});
+
+describe('without the marker a later nested checkout never changes the refusal (D-6632)', () => {
+  it('a rescuable repository then a same-repository nested checkout holding an index lock: still containment-unproven, not tree-busy', () => {
+    const c = makeChild(h);
+    plantNested(c.wt, 'vendor/aaa');
+    const own = path.join(c.wt, 'vendor', 'zzz');
+    h.git(c.main, 'worktree', 'add', '-q', '--detach', own);
+    fs.writeFileSync(h.git(own, 'rev-parse', '--path-format=absolute', '--git-path', 'index') + '.lock', '');
+    const a = evalOf(h);
+    expect(a.verdict, a.detail).toBe('containment-unproven');
+    const out = JSON.parse(h.sh(`${CHILD_STUBS} cmd_ws_audit --session ${CHILD_ID} --reclaim`)) as
+      { nestedRescue?: { wouldRescue: string[] } };
+    expect(out.nestedRescue?.wouldRescue, 'the walk still fills the shadow list').toEqual([path.join(fs.realpathSync(c.wt), 'vendor', 'aaa')]);
+  }, 120_000);
+});
+
+describe('scratch-rescue asks the rescue shape itself (D-6632)', () => {
+  it('a dirty shallow clone is refused with the shape reason, before any WIP is staged', () => {
+    makeChild(h);
+    const src = path.join(h.home, 'shallow-src2');
+    fs.mkdirSync(src, { recursive: true });
+    h.git(src, 'init', '-q', '-b', 'main');
+    for (const k of [1, 2]) { fs.writeFileSync(path.join(src, `s${k}.txt`), `${k}\n`); h.git(src, 'add', `s${k}.txt`); h.git(src, 'commit', '-q', '-m', `s${k}`); }
+    const scratch = path.join(h.home, 'scratch-area', 'sandbox');
+    fs.mkdirSync(path.dirname(scratch), { recursive: true });
+    h.git(path.dirname(scratch), 'clone', '-q', '--depth', '1', `file://${src}`, path.basename(scratch));
+    fs.writeFileSync(path.join(scratch, 'edit.txt'), 'dirty\n');
+    const r = h.run(`cmd_scratch_rescue --session ${CHILD_ID} "${scratch}"`);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(r.stdout + r.stderr).toContain('shape a fetch cannot carry');
+  }, 90_000);
 });
 
 describe('only the nested repository\'s own state decides rescuability (D-6632)', () => {
