@@ -115,12 +115,11 @@
     border-bottom: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
   }
-  /* One card per account across the width, as many to a line as the width holds.
-     A card's floor is only what its name and two windows need now that the name
-     sits beside them rather than above them; below that floor the tracks drop to
-     fewer to a line and the row wraps onto another line rather than truncating a
-     readout. auto-fill, not auto-fit, so the tracks keep a card's width when the
-     last line holds fewer cards than the line. */
+  /* One card per lane across the width, as many to a line as the width holds, and the end cell, All accounts, in the
+     track after the last card. A card's floor is only what its name and two windows need now that the name sits beside
+     them rather than above them; below that floor the tracks drop to fewer to a line and the row wraps onto another
+     line rather than truncating a readout. auto-fill, not auto-fit, so the tracks keep a card's width when the last
+     line holds fewer cards than the line. */
   .shell-accounts .accounts-strip {
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: var(--sp-2);
@@ -142,13 +141,23 @@
     border: 1px solid var(--edge-subtle);
     border-radius: var(--r-md);
   }
+  /* The end cell sits inline in the next track here, not on a row of its own as on a phone. */
+  .shell-accounts .accounts-end {
+    grid-column: auto;
+  }
+  /* The lane's name gives first: a long one is cut with an ellipsis (its full name is the label's `title`) so the
+     windows keep their countdowns inside the card. The windows never shrink below their own content. */
   .shell-accounts .account-gauge-label {
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: var(--fs-meta);
   }
   .shell-accounts .acct-rows {
-    flex: 1;
-    min-width: 0;
+    flex: 1 1 auto;
+    min-width: min-content;
     gap: 1px;
   }
   /* The meter is the only elastic column, so it — never a number — is what gives
@@ -166,6 +175,7 @@
   }
   .shell-accounts .acct-win {
     color: var(--ink-secondary);
+    font-size: var(--fs-meta);
   }
   /* The percentage leads: primary ink, medium, one step up in size. */
   .shell-accounts .acct-pct {
@@ -175,6 +185,10 @@
   }
   .shell-accounts .acct-reset {
     color: var(--ink-secondary);
+    font-size: var(--fs-meta);
+  }
+  .shell-accounts .acct-unread {
+    font-size: var(--fs-meta);
   }
   /* No height for the meter: it is `Meter`'s, from `--meter-h` (D-5098), so
      the strip's meters take the skin's shape like every other. */

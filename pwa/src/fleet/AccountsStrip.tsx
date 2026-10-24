@@ -171,7 +171,7 @@ export function AccountsStrip(): ReactNode {
                 Only render a window that exists (gpt, Codex Pro, is weekly-only); a lane with neither says
                 NO_READING and draws no row, so no meter claims a zero nobody measured. */}
             <div className="acct-rows">
-              {a.five === null && a.seven === null && <span className="acct-none">{NO_READING}</span>}
+              {a.five === null && a.seven === null && <span className="acct-unread">{NO_READING}</span>}
               {a.five !== null && <AccountMeterRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} rolledOver={a.fiveRolledOver} off={off} />}
               {a.seven !== null && <AccountMeterRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} rolledOver={a.sevenRolledOver} off={off} />}
             </div>
