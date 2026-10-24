@@ -937,8 +937,10 @@ describe('token pairs the gate must keep measuring', () => {
   });
 
   // THE EMPTY METER STAYS VISIBLE (T2c, D-6329). `Meter`'s track carries a 1px
-  // inset ring in --ink-tertiary, because no edge token reaches 1.5:1 on a
-  // card (the fill-on-track pairs say nothing about a 0% bar). A non-text
+  // inset ring in --ink-tertiary, because no edge token clears 3:1 on a card
+  // in every palette (--edge-strong, the strongest, measures 1.43 to 2.15
+  // over the twelve palettes and both grounds; the fill-on-track pairs say
+  // nothing about a 0% bar). A non-text
   // mark, so 3:1, on the desk card's ground (--bg-raised) and the phone
   // card's (--bg-surface). Distinct from the 4.5 `ink-tertiary / raised`
   // text pairs, which `measured` would otherwise find first.
