@@ -8873,3 +8873,50 @@ describe('codex bridge Stage 2 Task 1: the bridge owns the upstream error codes'
     expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/codexbridge/errors.py']);
   });
 });
+
+// CODEX BRIDGE STAGE 2, TASK 10 (spec D20): the bridge's three file names are spelled once, in `laneManifest`
+// (`deploy/models-op.mjs`), copied into `lane.json` as `bridgeFiles` and read from there by bash and Python; and the
+// roster's two new exec fields reach bash only through that rendered file, never through a second `jq` over the
+// roster. APPENDED, for the reason the block above states (session-hook.test.ts's citation audit cites this file by
+// line). The file-name scan reads QUOTED literals only, over shipped code: a docstring that names a file in backticks
+// is prose, and the test tree's fixtures plant the names on purpose.
+describe('codex bridge Stage 2 Task 10: the bridge file names and the lane mode have one source each', () => {
+  const BRIDGE_FILE_NAMES = ['bridge.stats.json', 'reasoning.sqlite', 'recordings'] as const;
+  const shipped = (): string[] => {
+    const r = spawnSync('git', ['-C', ccrcRoot, 'ls-files', '--', 'ccd', 'shared', 'deploy', 'server/src',
+      'agent/src', 'pwa/src'], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    return r.stdout.split('\n').filter(Boolean).filter((f) => existsSync(path.join(ccrcRoot, f)));
+  };
+
+  it('the bridge file names are spelled once, in laneManifest', () => {
+    const files = shipped();
+    expect(files, 'CONTROL: the corpus holds the writer').toContain('deploy/models-op.mjs');
+    for (const name of BRIDGE_FILE_NAMES) {
+      const quoted = new RegExp(`['"]${name.replace(/\./g, '\\.')}['"]`);
+      const holders = files.filter((f) => quoted.test(readFileSync(path.join(ccrcRoot, f), 'utf8'))).sort();
+      expect(holders, name).toEqual(['deploy/models-op.mjs']);
+    }
+    // ...and inside that file, in laneManifest's own body, exactly once each.
+    const src = readFileSync(path.join(ccrcRoot, 'deploy', 'models-op.mjs'), 'utf8');
+    const start = src.indexOf('function laneManifest(');
+    expect(start, 'laneManifest must be findable').toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    for (const name of BRIDGE_FILE_NAMES) {
+      const quoted = new RegExp(`['"]${name.replace(/\./g, '\\.')}['"]`, 'g');
+      expect((body.match(quoted) ?? []).length, `${name} in laneManifest`).toBe(1);
+      expect((src.match(quoted) ?? []).length, `${name} in models-op.mjs`).toBe(1);
+    }
+  });
+
+  it('no ccd file reads exec.bridge from the roster', () => {
+    // A bare `.bridge` or `.upstream` is lane.json's (`_codex_lane_mode`, `_codex_lane_upstream`) and is not scanned.
+    const ccd = shipped().filter((f) => f.startsWith('ccd/'));
+    expect(ccd, 'CONTROL: the corpus holds ccd/ccrc').toContain('ccd/ccrc');
+    const holders = ccd.filter((f) => /\bexec\.(bridge|upstream)\b/.test(readFileSync(path.join(ccrcRoot, f), 'utf8')));
+    expect(holders).toEqual([]);
+    // CONTROL: the one bash reader of the mode reads lane.json's key, so the scan above is not vacuously empty of
+    // a reader.
+    expect(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8')).toMatch(/^_codex_lane_mode\(\)\s+\{/m);
+  });
+});

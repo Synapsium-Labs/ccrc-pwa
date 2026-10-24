@@ -629,6 +629,13 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['a codex lane with an interior-/./ authDir', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: '.local/./share/ccrc/codex-a' }), acct({ id: 'up', configDirSuffix: '.up' }))],
     ['a codex lane with an authDir under .ccrc', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: '.ccrc/codex/codex-a' }), acct({ id: 'up', configDirSuffix: '.up' }))],
     ['a codex lane whose provider is not openai', roster(codexAcct('codex-a', '.claude-codex-a', { provider: 'anthropic' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    // exec.bridge and exec.upstream (codex-bridge Stage 2, Task 10): absent is
+    // the default, a present word outside the set is refused on both sides —
+    // the mirror reading an unknown word as the default would be LAXER.
+    ['a codex lane with an unknown exec.bridge (bad-exec-bridge)', roster(codexAcct('codex-a', '.claude-codex-a', { bridge: 'proxy' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with a written-null exec.bridge (bad-exec-bridge)', roster(codexAcct('codex-a', '.claude-codex-a', { bridge: null }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with an unknown exec.upstream (bad-exec-upstream)', roster(codexAcct('codex-a', '.claude-codex-a', { upstream: 'chatgpt' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with a non-string exec.upstream (bad-exec-upstream)', roster(codexAcct('codex-a', '.claude-codex-a', { upstream: 7 }), acct({ id: 'up', configDirSuffix: '.up' }))],
     ['two codex lanes whose shim and LiteLLM ports collide', roster(
       codexAcct('codex-a', '.claude-codex-a', { proxyPort: 45010, litellmPort: 45011 }),
       codexAcct('codex-b', '.claude-codex-b', { proxyPort: 45011, litellmPort: 45013 }),

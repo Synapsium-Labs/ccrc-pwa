@@ -1345,14 +1345,48 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
         authDir: '.codex-a-auth',
         proxyPort: 45010,
         litellmPort: 45011,
+        bridge: 'litellm',
+        upstream: 'backend',
         probeModel: classesOf('codex-a')['haiku'],
         units: { litellm: 'ccgpt-codex-a-litellm.service', shim: 'ccgpt-codex-a-shim.service' },
+        bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' },
       });
       expect(classesOf('codex-a')['haiku']).toBe('gpt-x-mini');
       expect(fs.statSync(lanePath()).mode & 0o777).toBe(0o600);
     } finally {
       process.umask(prevUmask);
     }
+  });
+
+  // codex-bridge Stage 2, Task 10 (spec D20): ONE reader per layer. The mode and the
+  // route are the PARSED account's (`rosterFromJson`'s resolved pair), never the raw
+  // row's `exec`, so the default is spelled only in the two validators. A row with no
+  // `exec.bridge` is the case that tells them apart: the raw row has nothing to copy.
+  it('laneManifest copies the parsed account\'s bridge, not the raw row', () => {
+    op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    expect(Object.prototype.hasOwnProperty.call(CODEX_LANE.exec, 'bridge')).toBe(false);
+    const lane = laneOf();
+    expect(lane['bridge']).toBe('litellm');
+    expect(lane['upstream']).toBe('backend');
+    // Control, the other way: a named value is copied as named.
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts,
+      { ...CODEX_LANE, exec: { ...CODEX_LANE.exec, bridge: 'direct', upstream: 'siwc' } }, CODEX_EXTERNAL] });
+    const r = op('materialise', '--file', rosterPath(), '--id', 'codex-a');
+    expect(r.code, JSON.stringify(r.body)).toBe(0);
+    expect(laneOf()['bridge']).toBe('direct');
+    expect(laneOf()['upstream']).toBe('siwc');
+  });
+
+  it('a roster the mirror refuses for its bridge word renders no lane.json at all', () => {
+    op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    const before = fs.readFileSync(lanePath(), 'utf8');
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts,
+      { ...CODEX_LANE, exec: { ...CODEX_LANE.exec, bridge: 'proxy' } }, CODEX_EXTERNAL] });
+    const r = op('materialise', '--file', rosterPath(), '--id', 'codex-a');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('roster-invalid');
+    expect(String(r.body['detail'])).toMatch(/exec\.bridge/);
+    expect(fs.readFileSync(lanePath(), 'utf8')).toBe(before);
   });
 
   it('with haiku unassigned, OMITS probeModel rather than choosing another class', () => {

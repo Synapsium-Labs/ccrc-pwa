@@ -1588,6 +1588,8 @@ roster `parseRoster` throws on is refused by the CLI too.
 | `exec.provider` | `isProviderId`, defaulted to `anthropic` on `generated` | `PROVIDER_IDS` | “an unknown exec.provider on a generated account” |
 | `exec.baseUrl` | `BASE_URL_OK`, and `base-url-required` where the provider ships no default | imported — `BASE_URL_OK` from `./base-url.mjs`, the one rule this file does not re-spell | “an unparseable exec.baseUrl” |
 | `exec.models` | `MODEL_ID_RE` over four required aliases, plus `selectable` containment | `MODEL_ID_RE` | “exec.models missing the subagent alias” |
+| `exec.bridge` | `CODEX_BRIDGE_MODES` on a `codex` lane, absent reading its first word, `litellm`; rendered into `lane.json` | `CODEX_BRIDGE_MODES` | “a codex lane with an unknown exec.bridge” |
+| `exec.upstream` | `CODEX_UPSTREAMS` on a `codex` lane, absent reading its first word, `backend`; rendered into `lane.json` | `CODEX_UPSTREAMS` | “a codex lane with an unknown exec.upstream” |
 
 Each row is resolved against the three files it names by
 `server/test/readme-roster-mirror.test.ts`, so a gate deleted from either

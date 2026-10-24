@@ -12194,6 +12194,13 @@ _codex_row() {   # <id>
 # `units` is checked for PRESENCE, not value, deliberately:
 # its one derivation is `laneManifest`'s, a second one here is exactly what
 # single-definition forbids, and its only input — `id` — IS compared.
+# `bridge`, `upstream` and `bridgeFiles` (codex-bridge Stage 2, Task 10) are
+# checked for PRESENCE too, for the same reason and one more: a lane.json
+# rendered before the bridge existed lacks them, reads `stale`, and is
+# re-rendered by the one writer. Whether the words MATCH the roster is
+# `materialise --check`'s question (the doctor's), the one comparison: this
+# file reads the roster's codex row through `_codex_row`, which never reads
+# the mode, so a second reader of it here is exactly what D20 forbids.
 _codex_lane_json_state() {   # <id>
   _codex_row "$1" || return $?
   local lane; lane="$(_codex_lane_dir "$CX_ID")/lane.json"
@@ -12204,13 +12211,52 @@ _codex_lane_json_state() {   # <id>
        and .proxyPort == $pp and .litellmPort == $lp
        and (.units | type) == "object"
        and (.units.litellm | type) == "string" and (.units.litellm | length) > 0
-       and (.units.shim | type) == "string" and (.units.shim | length) > 0' "$lane" >/dev/null 2>&1; then
+       and (.units.shim | type) == "string" and (.units.shim | length) > 0
+       and (.bridge | type) == "string" and (.upstream | type) == "string"
+       and (.bridgeFiles | type) == "object"
+       and all(.bridgeFiles.stats, .bridgeFiles.store, .bridgeFiles.recordings;
+               type == "string" and length > 0)' "$lane" >/dev/null 2>&1; then
     printf 'current\n'
   else
     printf 'stale\n'
   fi
   return 0
 }
+
+# A lane's two words, read from its RENDERED lane.json and nowhere else
+# (codex-bridge spec D20: one reader per layer, and in bash that layer is the
+# file `laneManifest` writes, never the roster). `_codex_lane_mode <id>` prints
+# `litellm` or `direct`, `_codex_lane_upstream <id>` prints `backend` or
+# `siwc`, each on stdout at rc 0; anything else — no lane.json, not a regular
+# file, not a JSON object, the key absent, or a value that is not exactly one of
+# the two words — is rc 1 with one `lane-mode-unreadable` (or
+# `lane-upstream-unreadable`) line and NOTHING on stdout. Never a default: a
+# lane.json from before the bridge has no `bridge`, and reading that as
+# `litellm` would let a caller choose tiers for a lane whose file it could not
+# read. A caller captures the word and its rc first (`mode="$(_codex_lane_mode
+# "$id")"; mrc=$?`), never inside another command's argument. The membership
+# test runs inside jq, so a value with a trailing newline (which `$( … )` would
+# strip into a word) is refused, not matched.
+_codex_lane_word() {   # <id> <key> <refusal code> <words, space-separated>
+  local id="${1:-}" key="$2" code="$3" words="$4" lane v
+  _codex_shape || return 1
+  if ! [[ "$id" =~ $WRAPPER_ID_RE ]]; then
+    _codex_say "$code" "'$id' is not an account id, so no lane.json can be read for it."
+    return 1
+  fi
+  lane="$(_codex_lane_dir "$id")/lane.json"
+  if [ -f "$lane" ] && v="$(jq -er --arg k "$key" --arg w "$words" '
+       if type == "object" then .[$k] else empty end
+       | . as $v | if type == "string" and any(($w | split(" "))[]; . == $v) then . else empty end' \
+       "$lane" 2>/dev/null)"; then
+    printf '%s\n' "$v"
+    return 0
+  fi
+  _codex_say "$code" "$lane names no $key this ccrc knows (${words// / or }), so the lane's tiers cannot be chosen. 'ccrc doctor --fix' re-renders it from the roster."
+  return 1
+}
+_codex_lane_mode()     { _codex_lane_word "${1:-}" bridge lane-mode-unreadable "litellm direct"; }
+_codex_lane_upstream() { _codex_lane_word "${1:-}" upstream lane-upstream-unreadable "backend siwc"; }
 
 # lane.json equals the roster row, or is made to by the ONE writer:
 # `deploy/models-op.mjs`'s existing `materialise` op. Converged is a no-op —

@@ -460,6 +460,40 @@ describe('_codex_lane_json_ensure — lane.json equals the roster, written only 
     expect(laneJson(h, 'codex-a')['units']).toEqual(units);
   });
 
+  // codex-bridge Stage 2, Task 10: `bridge`, `upstream` and `bridgeFiles` are
+  // checked for PRESENCE, as `units` is, so a lane.json rendered before the
+  // bridge existed reads stale and the one writer re-renders it. One key at a
+  // time, for the reason the field case above measured.
+  it.each([
+    ['bridge', (j: Record<string, unknown>): void => { delete j['bridge']; }],
+    ['upstream', (j: Record<string, unknown>): void => { delete j['upstream']; }],
+    ['bridgeFiles', (j: Record<string, unknown>): void => { delete j['bridgeFiles']; }],
+    ['bridgeFiles.store', (j: Record<string, unknown>): void => { delete (j['bridgeFiles'] as Record<string, unknown>)['store']; }],
+    ['a non-string bridge', (j: Record<string, unknown>): void => { j['bridge'] = 1; }],
+    ['a bridgeFiles that is not an object', (j: Record<string, unknown>): void => { j['bridgeFiles'] = 'bridge.stats.json'; }],
+  ] as const)('an older lane.json with no bridge reads stale and is re-rendered (%s)', async (_what, edit) => {
+    const { h } = await initialised('ccrc-codex-lanejson-bridge-');
+    const f = join(laneDir(h, 'codex-a'), 'lane.json');
+    const rendered = laneJson(h, 'codex-a');
+    const j = JSON.parse(JSON.stringify(rendered)) as Record<string, unknown>;
+    edit(j);
+    fs.writeFileSync(f, JSON.stringify(j));
+    expect(lib(h, '_codex_lane_json_state codex-a').stdout).toBe('stale\n');
+    const r = lib(h, '_codex_lane_json_ensure codex-a');
+    expect(r.code, r.stderr).toBe(0);
+    expect(laneJson(h, 'codex-a')).toEqual(rendered);
+    expect(lib(h, '_codex_lane_json_state codex-a').stdout).toBe('current\n');
+  });
+
+  it('a freshly rendered lane.json carries the three keys and reads current', async () => {
+    const { h } = await initialised('ccrc-codex-lanejson-bridge-current-');
+    expect(laneJson(h, 'codex-a')).toMatchObject({
+      bridge: 'litellm', upstream: 'backend',
+      bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' },
+    });
+    expect(lib(h, '_codex_lane_json_state codex-a').stdout).toBe('current\n');
+  });
+
   it('a lane with no class registry is no-registry, names init, and writes nothing', async () => {
     const h = box('ccrc-codex-lanejson-noreg-');
     await twoLanes(h);
@@ -495,6 +529,75 @@ describe('_codex_lane_json_ensure — lane.json equals the roster, written only 
     expect(r.stdout).toBe('state=2 ensure=2\n');
     expect(r.stderr).toMatch(/^ccrc codex: usage: /m);
     expect(fs.existsSync(join(h, '.ccrc', 'codex'))).toBe(false);
+  });
+});
+
+// codex-bridge Stage 2, Task 10 (spec D20): the ONE bash reader of a lane's mode, and its twin for the route. Each
+// reads the RENDERED lane.json, never the roster, and answers a word or refuses: rc 1 with its own code, never a default.
+describe('_codex_lane_mode and _codex_lane_upstream — the lane\'s words, read from lane.json only', () => {
+  async function rendered(prefix: string): Promise<string> {
+    const h = box(prefix);
+    await twoLanes(h);
+    const init = ccrc(h, ['models', 'codex-a', 'init', 'codex']);
+    expect(init.code, init.stderr).toBe(0);
+    return h;
+  }
+  const rewrite = (h: string, edit: (j: Record<string, unknown>) => void): void => {
+    const f = join(laneDir(h, 'codex-a'), 'lane.json');
+    const j = laneJson(h, 'codex-a');
+    edit(j);
+    fs.writeFileSync(f, JSON.stringify(j));
+  };
+  const ask = (h: string): Result =>
+    lib(h, 'm="$(_codex_lane_mode codex-a)"; a=$?; u="$(_codex_lane_upstream codex-a)"; b=$?; '
+      + 'printf "mode=%s|%s upstream=%s|%s\\n" "$a" "$m" "$b" "$u"');
+
+  it('_codex_lane_mode reads lane.json, and refuses an absent or unknown word', async () => {
+    const h = await rendered('ccrc-codex-lanemode-');
+    expect(ask(h).stdout).toBe('mode=0|litellm upstream=0|backend\n');
+    rewrite(h, (j) => { j['bridge'] = 'direct'; j['upstream'] = 'siwc'; });
+    expect(ask(h).stdout).toBe('mode=0|direct upstream=0|siwc\n');
+    for (const [what, edit] of [
+      ['absent', (j: Record<string, unknown>): void => { delete j['bridge']; delete j['upstream']; }],
+      ['unknown', (j: Record<string, unknown>): void => { j['bridge'] = 'proxy'; j['upstream'] = 'chatgpt'; }],
+      ['null', (j: Record<string, unknown>): void => { j['bridge'] = null; j['upstream'] = null; }],
+      ['a number', (j: Record<string, unknown>): void => { j['bridge'] = 1; j['upstream'] = 1; }],
+      ['a word with a trailing newline', (j: Record<string, unknown>): void => { j['bridge'] = 'direct\n'; j['upstream'] = 'backend\n'; }],
+    ] as const) {
+      rewrite(h, edit);
+      const r = ask(h);
+      expect(r.stdout, what).toBe('mode=1| upstream=1|\n');
+      expect(r.stderr, what).toMatch(/^ccrc codex: lane-mode-unreadable: /m);
+      expect(r.stderr, what).toMatch(/^ccrc codex: lane-upstream-unreadable: /m);
+    }
+  });
+
+  it('never reads the roster: a roster word lane.json does not carry is not the answer', async () => {
+    const h = await rendered('ccrc-codex-lanemode-roster-');
+    const f = join(h, '.ccrc', 'accounts.json');
+    const j = JSON.parse(fs.readFileSync(f, 'utf8')) as { accounts: Array<Record<string, unknown>> };
+    const exec = j.accounts.find((x) => x['id'] === 'codex-a')!['exec'] as Record<string, unknown>;
+    exec['bridge'] = 'direct';
+    exec['upstream'] = 'siwc';
+    fs.writeFileSync(f, JSON.stringify(j));
+    // lane.json is now stale against the roster, and the reader still answers what lane.json says.
+    expect(ask(h).stdout).toBe('mode=0|litellm upstream=0|backend\n');
+  });
+
+  it('an absent lane.json, a directory in its place, a file that is not JSON and a malformed id each refuse rc 1', async () => {
+    const h = await rendered('ccrc-codex-lanemode-shapes-');
+    const f = join(laneDir(h, 'codex-a'), 'lane.json');
+    fs.writeFileSync(f, 'not json\n');
+    expect(ask(h).stdout).toBe('mode=1| upstream=1|\n');
+    fs.writeFileSync(f, '["litellm"]\n');
+    expect(ask(h).stdout).toBe('mode=1| upstream=1|\n');
+    fs.rmSync(f);
+    expect(ask(h).stdout).toBe('mode=1| upstream=1|\n');
+    fs.mkdirSync(f);
+    expect(ask(h).stdout).toBe('mode=1| upstream=1|\n');
+    const bad = lib(h, '_codex_lane_mode ../codex-a; a=$?; _codex_lane_upstream ../codex-a; echo "mode=$a upstream=$?"');
+    expect(bad.stdout).toBe('mode=1 upstream=1\n');
+    expect(bad.stderr).toMatch(/^ccrc codex: lane-mode-unreadable: /m);
   });
 });
 

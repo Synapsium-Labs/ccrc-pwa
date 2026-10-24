@@ -205,10 +205,21 @@ function refuseRegistry(e, id) {
  *  `clearSettingsEnv` read through the same type test. Its docstring there
  *  says why a FIFO must never be opened by name. */
 
+/** Each raw roster row `readRoster` returned, mapped to `rosterFromJson`'s
+ *  validated projection of it (codex-bridge spec D20, Stage 2 Task 10). Keyed
+ *  by the row OBJECT, so the projection travels with the very account every op
+ *  already passes down (`findAccount` returns an element of `json.accounts`)
+ *  and no signature between the dispatcher and `laneManifest` changes. A
+ *  WeakMap, not a field on the row: the raw JSON stays exactly what was read. */
+const PARSED_OF = new WeakMap();
+
 /** THE ONE ROSTER READ, and it is READ-ONLY. Absent and unreadable are two
  *  codes: the remedies differ. Type-tested (`readRegular`, Plan 3b Task A6):
  *  every op reads the roster before anything else, so a FIFO here used to
- *  hang every verb; it is `roster-unreadable` now, through the same arm. */
+ *  hang every verb; it is `roster-unreadable` now, through the same arm.
+ *  The validator's result is KEPT (it used to be discarded): `rosterFromJson`
+ *  returns its accounts in declaration order, so row `i` of the raw file is
+ *  account `i` of the parse, and `PARSED_OF` records the pair. */
 function readRoster(file) {
   let raw;
   try {
@@ -229,12 +240,14 @@ function readRoster(file) {
   } catch (e) {
     return { err: ['roster-invalid', `${file} is not valid JSON: ${e.message}`] };
   }
+  let parsed;
   try {
-    rosterFromJson(json);
+    parsed = rosterFromJson(json);
   } catch (e) {
     const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
     return { err: ['roster-invalid', `${file}: ${e.message}${remedy}`] };
   }
+  json.accounts.forEach((raw, i) => { PARSED_OF.set(raw, parsed.accounts[i]); });
   return { json };
 }
 
@@ -886,14 +899,30 @@ function laneManifest(account, registry) {
   if (!isObj(account.exec) || account.exec.kind !== 'codex') return null;
   const { id } = account;
   const probeModel = registry.classes.haiku;
+  // `bridge` and `upstream` are the PARSED account's (codex-bridge spec D20):
+  // `rosterFromJson` resolves an absent key to its set's default, so the
+  // default is spelled in the two validators and nowhere here. A row with no
+  // projection never came through `readRoster`, which is a defect in this
+  // file, not a roster to render a guess for.
+  const parsed = PARSED_OF.get(account);
+  if (parsed === undefined) throw new Error(`laneManifest: account "${id}" was not read through readRoster`);
   return {
     id,
     configDir: account.configDirSuffix,
     authDir: account.exec.authDir,
     proxyPort: account.exec.proxyPort,
     litellmPort: account.exec.litellmPort,
+    bridge: parsed.bridge,
+    upstream: parsed.upstream,
     ...(probeModel === null ? {} : { probeModel }),
     units: { litellm: `ccgpt-${id}-litellm.service`, shim: `ccgpt-${id}-shim.service` },
+    // The bridge's three file names, spelled HERE and nowhere else in shipped
+    // code (`single-definition.test.ts` pins that): `bash` and the bridge read
+    // them from `lane.json`. `stats` is the bridge's one non-secret output,
+    // `store` the reasoning store (sqlite adds its `-wal`/`-shm` beside it),
+    // `recordings` a directory written only while the lane's `record-streams`
+    // marker exists.
+    bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' },
   };
 }
 
