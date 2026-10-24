@@ -217,7 +217,7 @@ describe('the app bar (W2 Task S4b)', () => {
     render(<App />);
     const line = bar().querySelector<HTMLElement>('.ref-bar')!;
     await within(bar()).findByText('lane-g');
-    expect(line.querySelector('.accounts-compact, .accounts-strip, .account-gauge, .meter')).toBeNull();
+    expect(line.querySelector('.accounts-strip, .account-gauge, .meter')).toBeNull();
     // The header holds two lines, in order: the bar's, then the lanes row, with a card for every lane.
     expect([...bar().children]).toEqual([line, bar().querySelector('.accounts-strip')]);
     expect(bar().querySelectorAll('.accounts-strip > .account-gauge')).toHaveLength(lanes.length);
@@ -231,7 +231,6 @@ describe('the app bar (W2 Task S4b)', () => {
       // The full strip at every width: at the desk it sits in the header under the bar's line, below 900 in the column.
       const readouts = document.querySelectorAll('.accounts-strip');
       expect(readouts).toHaveLength(1);
-      expect(document.querySelectorAll('.accounts-compact')).toHaveLength(0);
       // Every banner keeps a slot while it is mounted, shown or not, so one slot per id is one stack.
       for (const id of ['fleet-host', 'halt', 'substrate', 'offline', 'connecting', 'passkey']) {
         expect(document.querySelectorAll(`.banner-slot[data-banner="${id}"]`), id).toHaveLength(1);

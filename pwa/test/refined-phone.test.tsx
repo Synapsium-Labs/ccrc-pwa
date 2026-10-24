@@ -199,21 +199,11 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(windows(cards[0]!)).toEqual(['5h', '7d']);
     expect(windows(cards[1]!)).toEqual(['5h']);
     expect(windows(cards[2]!)).toEqual(['7d']);
-    // One readout of the lanes on the page: the full strip is the phone's, and no compact grid sits beside it.
-    expect(document.querySelectorAll('.accounts-strip, .accounts-compact')).toHaveLength(1);
+    // One readout of the lanes on the page: the full strip is the phone's.
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
     // The strip is a command door: the layer navigates.
     fireEvent.click(strip);
     expect(location.pathname).toBe('/accounts');
-  });
-
-  it('the phone header mounts no compact grid', async () => {
-    const lanes = [lane('lane-a', 30, 80), lane('lane-b', 12, null)];
-    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
-    atWidth(390);
-    render(<App />);
-    await within(head()).findByText('lane-a');
-    expect(document.querySelector('.accounts-compact')).toBeNull();
-    expect(head().querySelector('[data-compact]')).toBeNull();
   });
 
   it('Refined renders neither FleetHead nor `.fab`; Instrument still renders both', () => {

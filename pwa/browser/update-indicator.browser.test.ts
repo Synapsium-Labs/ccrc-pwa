@@ -4,10 +4,10 @@
 // directly under the app bar (the frame's `.shell-banners` slot, `data-form="row"`, after the banner stack, so the bar's
 // first line is what it was and "New session" never moves); Instrument holds it in the status bar (`data-form="status"`);
 // below 900 both skins hold the same 44px row. What jsdom cannot hold lives here, with SEVENTEEN lanes in the roster
-// (the bar's gauges give up their room first):
+// (the lanes row's cards wrap onto more lines rather than shrink):
 //
 //  1. At the desk the bar's first line (`header.shell-accounts`) holds no indicator; the row under it holds exactly one,
-//     its door, words, stale words and × whole inside the row and the viewport; every gauge that shows is whole, "New
+//     its door, words, stale words and × whole inside the row and the viewport; every lane card is whole, "New
 //     session" is whole inside the viewport and the bar; the page does not scroll sideways; no page errors. Refined at
 //     900, 1280 and 1920 and Instrument (status bar) at 900, both palettes, with a FRESH view and then a STALE one (a later
 //     poll failed, so the stale words follow the version): the route answers the view once and HTTP 500 afterwards, and a
@@ -18,7 +18,7 @@
 //     a touch screen: headless Chrome ignores the DevTools pointer media feature (measured, as refined-bar does), so
 //     `openApp` takes `touch`.
 //
-// The gauge check below is refined-bar.browser.test.ts's, rewritten and not imported: that file is a test file (its
+// The card check below is refined-bar.browser.test.ts's, rewritten and not imported: that file is a test file (its
 // `beforeAll` builds the app), and it keeps the check inline.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/update-indicator.browser.test.ts )`.
@@ -157,7 +157,7 @@ async function lineFaults(page: Page, holderSel: string, barSel: string | null, 
     const centres = [...line.children].map((c) => c.getBoundingClientRect()).filter((r) => r.height > 0).map((r) => (r.top + r.bottom) / 2);
     if (Math.max(...centres) - Math.min(...centres) > 2) out.push('the parts of the line are not on one row');
     // The bar (Refined): every direct child lies whole inside it and the viewport, "New session" included, and every
-    // gauge that shows is whole inside its row with its reading whole (refined-bar's check).
+    // card of the lanes row is whole inside its row with its readings whole (refined-bar's check).
     if (bar !== null) {
       const bb = bar.getBoundingClientRect();
       for (const c of [...bar.querySelector('.ref-bar')!.children] as HTMLElement[]) {
@@ -167,24 +167,18 @@ async function lineFaults(page: Page, holderSel: string, barSel: string | null, 
       const fresh = bar.querySelector<HTMLElement>('.ref-bar-new');
       if (fresh === null) out.push('no New session');
       else inside('New session', fresh.getBoundingClientRect(), bb, 'the bar');
-      const lanes = bar.querySelector<HTMLElement>('.accounts-compact-lanes');
-      const wrap = bar.querySelector<HTMLElement>('.accounts-compact');
-      if (lanes !== null && wrap !== null) {
-        const r = lanes.getBoundingClientRect();
-        const d = wrap.getBoundingClientRect();
-        const shown = [...lanes.querySelectorAll<HTMLElement>('.accounts-compact-gauge')]
-          .filter((g) => getComputedStyle(g).visibility !== 'hidden' && g.getBoundingClientRect().top < r.bottom - 1);
-        for (const g of shown) {
+      // The lanes row under the line (T2c, D-6329): every card whole inside the row, its readings whole.
+      const row = bar.querySelector<HTMLElement>('.accounts-strip');
+      if (row !== null) {
+        const r = row.getBoundingClientRect();
+        for (const g of row.querySelectorAll<HTMLElement>('.account-gauge')) {
           const gr = g.getBoundingClientRect();
-          const pct = g.querySelector<HTMLElement>('.accounts-compact-pct')!;
-          const pr = pct.getBoundingClientRect();
-          const name = g.querySelector<HTMLElement>('.accounts-compact-name')!.textContent;
+          const name = g.querySelector<HTMLElement>('.account-gauge-label')!.textContent;
           if (gr.right > r.right + 0.5) out.push(`${name} sticks out of the row (${gr.right} > ${r.right})`);
-          if (pr.right > r.right + 0.5 || pr.right > d.right + 0.5) out.push(`${name}'s ${pct.textContent} is cut`);
-          if (pct.scrollWidth > pct.clientWidth + 0.5) out.push(`${name}'s reading overflows its box`);
+          for (const pct of g.querySelectorAll<HTMLElement>('.acct-pct')) {
+            if (pct.getBoundingClientRect().right > gr.right + 0.5 || pct.scrollWidth > pct.clientWidth + 0.5) out.push(`${name}'s ${pct.textContent} is cut`);
+          }
         }
-        const more = wrap.querySelector<HTMLElement>('.accounts-compact-more');
-        if (more !== null && more.getBoundingClientRect().right > d.right + 0.5) out.push('+n is cut');
       }
     }
     if (document.documentElement.scrollWidth > window.innerWidth + 0.5) out.push(`the page scrolls sideways (${document.documentElement.scrollWidth} > ${window.innerWidth})`);
@@ -213,8 +207,8 @@ describe("at the desk the bar's first line is unchanged and the update line is o
         const holder = refined ? ROW : STATUS_BAR;
         const bar = refined ? BAR : null;
         await page.waitForSelector(`${holder} .update-indicator-dismiss`, { timeout: 20_000 });
-        if (refined) await page.waitForFunction(() => document.querySelectorAll('.ref-bar .accounts-compact-gauge').length > 0, undefined, { timeout: 20_000 });
-        await page.waitForTimeout(300); // the gauges' ResizeObserver settles
+        if (refined) await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length > 0, undefined, { timeout: 20_000 });
+        await page.waitForTimeout(300); // layout settles
         const fresh = await lineFaults(page, holder, bar, false);
         expect(fresh.faults, 'a fresh view').toEqual([]);
 

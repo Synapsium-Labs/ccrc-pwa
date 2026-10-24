@@ -453,7 +453,6 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
           render(<App />);
           const strips = document.querySelectorAll('.accounts-strip');
           expect(strips).toHaveLength(1);
-          expect(document.querySelectorAll('.accounts-compact')).toHaveLength(0);
           const bar = document.querySelector('header.shell-accounts');
           const fleet = screen.getByRole('region', { name: 'Fleet' });
           if (desk) {

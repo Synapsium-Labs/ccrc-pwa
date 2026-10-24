@@ -340,7 +340,7 @@ describe('the lanes row (T2c, D-6329)', () => {
     mount('/');
     const line = topBar().querySelector<HTMLElement>('.ins-topbar')!;
     await within(topBar()).findByText('lane-h');
-    expect(line.querySelector('.accounts-compact, .accounts-strip, .account-gauge, .meter, .ins-meters')).toBeNull();
+    expect(line.querySelector('.accounts-strip, .account-gauge, .meter')).toBeNull();
     expect([...topBar().children]).toEqual([line, topBar().querySelector('.accounts-strip')]);
     expect(topBar().querySelectorAll('.accounts-strip > .account-gauge')).toHaveLength(lanes.length);
   });
@@ -357,7 +357,6 @@ describe('one instance per width', () => {
       expect(document.querySelectorAll('[data-banner="offline"]').length, `${at}: banner stacks`).toBe(1);
       const meters = document.querySelectorAll('.accounts-strip');
       expect(meters.length, `${at}: lanes`).toBe(1);
-      expect(document.querySelectorAll('.accounts-compact').length, `${at}: no compact gauges`).toBe(0);
       expect(meters[0]!.closest('header.shell-accounts') !== null, at).toBe(desk);
       // The rail and the status bar are desk parts: mounted at 900, absent at 899.
       expect(document.querySelectorAll('nav[aria-label="Primary"]').length, `${at}: rail`).toBe(desk ? 1 : 0);
