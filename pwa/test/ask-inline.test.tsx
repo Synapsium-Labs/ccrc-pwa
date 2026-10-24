@@ -21,6 +21,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ChatEvent, Dialog, FleetSession } from '../../shared/api';
 import { api, sendErrorText } from '../src/lib/api';
+import { ChatListInner } from '../src/session/ChatList';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
@@ -372,6 +373,22 @@ describe('the transcript stops repeating the ask the card already shows', () => 
     expect(live().querySelector('button.ask-answer'), 'no Answer while the card is up').toBeNull();
     // Positive content: the transcript still shows the question line itself.
     expect(document.querySelector('.tool-ask .tool-ask-q')?.textContent).toBe(QUESTION);
+  });
+
+  // The mutation table's row for `askBelow` (D-6326): through `SessionScreen` an awaiting card at the desk always has the
+  // inline card beside it, so the width and the mounted card agree there. The card itself must follow the screen's fact,
+  // never the width: rendered at a desk width with no inline card, it keeps Answer.
+  it('at a desk width with no inline card mounted, the live ask card keeps Answer; askBelow alone takes it away', () => {
+    media(true);
+    const onAnswer = vi.fn();
+    const view = render(<ChatListInner id={ID} events={[ASK_CALL]} pending={[]} askPending onAnswer={onAnswer} />);
+    const answer = view.container.querySelector<HTMLButtonElement>('button.ask-answer');
+    expect(answer?.textContent, 'the desk width alone keeps Answer').toBe('Answer');
+    fireEvent.click(answer!);
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+    view.rerender(<ChatListInner id={ID} events={[ASK_CALL]} pending={[]} askPending askBelow onAnswer={onAnswer} />);
+    expect(view.container.querySelector('button.ask-answer'), 'askBelow takes Answer away').toBeNull();
+    expect(view.container.querySelector('.tool-ask .ask-state')?.textContent ?? '').toMatch(/waiting for you, below/i);
   });
 
   it('Answer\'s raise scrolls the card into view and focuses its first option', () => {
