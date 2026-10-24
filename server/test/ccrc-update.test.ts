@@ -1494,6 +1494,9 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     const child = spawn(process.execPath, ['-e', HOST_JS, String(bytes), String(everyMs)], { stdio: ['ignore', 'pipe', 'ignore'] });
     let out = '';
     child.stdout!.on('data', (d: Buffer) => { out += d.toString(); });
+    // `close`, not `exit`: the host prints its count as it exits, and `exit` can fire before that last chunk is
+    // read, which reads as "sent 0".
+    const closed = new Promise<void>((resolve) => { child.once('close', () => resolve()); });
     const port = await new Promise<number>((resolve, reject) => {
       const t0 = Date.now();
       const iv = setInterval(() => {
@@ -1503,9 +1506,8 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       }, 20);
     });
     const stop = async (): Promise<number> => {
-      if (child.exitCode === null && child.signalCode === null) {
-        await new Promise<void>((resolve) => { child.once('exit', () => resolve()); child.kill('SIGTERM'); });
-      }
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      await closed;
       const m = /sent (\d+)/.exec(out);
       return m ? Number(m[1]) : 0;
     };
@@ -1546,7 +1548,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       expect(elapsedMs, `took ${elapsedMs}ms; stderr: ${r.stderr}`).toBeGreaterThanOrEqual(1800);
       expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(10_000);
       // The host really was above the floor the whole time.
-      expect(sent / (elapsedMs / 1000), `sent ${sent} bytes in ${elapsedMs}ms`).toBeGreaterThan(1500);
+      expect(sent / (elapsedMs / 1000), `sent ${sent} bytes in ${elapsedMs}ms; stderr: ${r.stderr}`).toBeGreaterThan(1500);
       expect(r.stderr).toMatch(/curl: \(28\) Operation timed out after 2\d{3} milliseconds/);
       expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS \(is there a release, or did the connection stall.*or did it time out after 2s \/ exceed 1048576 bytes\)/);
     } finally {
