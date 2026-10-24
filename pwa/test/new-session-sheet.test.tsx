@@ -714,6 +714,32 @@ describe('NewSessionSheet — success opens the new session', () => {
     expect(screen.queryByText('Starting demo on team·max…')).toBeNull(); // the bound says nothing a second time
   });
 
+  it('a dismissal during the wait ends that wait, so a reopened sheet\'s own start is not cut short by its clock', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession')
+      .mockResolvedValueOnce(undefined) // the first start: answered, then waiting for its row
+      .mockImplementationOnce(() => new Promise<void>(() => {})); // the reopened sheet's start never answers
+    const { flush, close, reopen, listeners } = await mount();
+    await pickDemo(flush);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); }); // the sheet's own debounces have fired
+    const listenersBefore = listeners();
+    startUnnamed();
+    await flush();
+    expect(listeners()).toBe(listenersBefore + 1); // the wait is running: it listens to the fleet store
+    close();
+    await flush();
+    expect(listeners()).toBe(listenersBefore); // the dismissal released the listener...
+    await act(async () => { await vi.advanceTimersByTimeAsync(55_000); }); // (the dismissal's toast has expired by now)
+    expect(vi.getTimerCount()).toBe(0); // ...and the wait's 60 s clock (a closed sheet polls nothing, and the toast has gone)
+    reopen();
+    await flush();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(7_000); }); // 62 s after the FIRST wait began
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled(); // the old clock did not end the new start
+  });
+
   it('past 60 s without a frame it toasts and closes, as before, and navigates nowhere', async () => {
     vi.useFakeTimers();
     vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
