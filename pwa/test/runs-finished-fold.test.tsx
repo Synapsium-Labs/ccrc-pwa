@@ -249,7 +249,8 @@ describe('the fold’s words (D-6442)', () => {
 describe('measurement — Step 0 of C10 (D-6442)', () => {
   // On demand only, from `pwa/`: `CCRC_MEASURE=1 ./node_modules/.bin/vitest run
   // --silent=false --reporter=verbose test/runs-finished-fold.test.tsx -t measurement`.
-  // Both flags are needed: without them the run passes and prints no `[C10 step 0]` line.
+  // `--reporter=verbose` is the flag that matters: without it the run passes and prints no `[C10 step 0]`
+  // line (measured with vitest 4.1.10: `--reporter=verbose` alone prints it; `--silent=false` alone does not).
   // No timing assertion: the numbers go to the console and the PR body. Real
   // `performance.now` is left alone (only timers and Date are faked), because a
   // faked clock would report every Profiler duration as zero.
