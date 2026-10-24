@@ -8895,7 +8895,6 @@ describe('one ack guard', () => {
     expect(store.split(CLAUSE).length - 1, 'the ack guard clause is not written exactly once').toBe(1);
     expect(store.split(BUILDER).length - 1, 'the builder is not defined once').toBe(1);
     expect(store.split(EXCEPTION).length - 1, 'a second spelling of the replay-ceiling exception').toBe(1);
-    });
   });
 });
 
