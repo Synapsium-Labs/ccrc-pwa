@@ -34,8 +34,9 @@ gh() {
     'api graphql') [[ -f "$HOME/gql-rc" ]] && rc=$(cat "$HOME/gql-rc"); [[ -f "$HOME/gql.json" ]] && cat "$HOME/gql.json"; return "$rc" ;;
   esac
   case "$1 $2" in
-    'api repos/o/r/rules/branches/main') [[ -f "$HOME/rules-rc" ]] && rc=$(cat "$HOME/rules-rc"); [[ -f "$HOME/rules.json" ]] && cat "$HOME/rules.json"; return "$rc" ;;
-    'api repos/o/r/branches/main') [[ -f "$HOME/branch.json" ]] && cat "$HOME/branch.json"; return 0 ;;
+    'api repos/o/r/rules/branches/'*) [[ -f "$HOME/rules-rc" ]] && rc=$(cat "$HOME/rules-rc")
+      if [[ -f "$HOME/rules-\${2##*/}.json" ]]; then cat "$HOME/rules-\${2##*/}.json"; elif [[ -f "$HOME/rules.json" ]]; then cat "$HOME/rules.json"; fi; return "$rc" ;;
+    'api repos/o/r/branches/'*) if [[ -f "$HOME/branch-\${2##*/}.json" ]]; then cat "$HOME/branch-\${2##*/}.json"; elif [[ -f "$HOME/branch.json" ]]; then cat "$HOME/branch.json"; fi; return 0 ;;
     'pr list') echo '[]'; return 0 ;;
   esac
   return 1
@@ -317,6 +318,42 @@ describe('the required contexts', () => {
     expect(l.pinnedNames).toEqual(['deploy']);
   });
 
+  it('a check run from another App under a pinned name, not marked required, is not carried', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [
+      run('lint', 'SUCCESS', { isRequired: false, checkSuite: { app: { databaseId: 999 }, workflowRun: { databaseId: 5 } } }),
+    ])]));
+    put('rules.json', [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'lint', integration_id: 15368 }] } }]);
+    put('branch.json', { protected: false });
+    const l = landing('demo', 'demo-quiet-basin:41').lines[0]!;
+    expect(l.required).toEqual([]);
+    expect(l.rulesNamed).toEqual(['lint']);
+    expect(l.pinnedNames).toEqual(['lint']);
+  });
+
+  it('a status under a pinned name is carried and pinnedNames lists it (the protection document pins too)', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [status('sec', 'SUCCESS', { isRequired: false }), status('free', 'SUCCESS', { isRequired: false })])]));
+    put('rules.json', []);
+    put('branch.json', { protected: true, protection: { required_status_checks: { checks: [{ context: 'sec', app_id: 15368 }, { context: 'free', app_id: -1 }] } } });
+    const l = landing('demo', 'demo-quiet-basin:41').lines[0]!;
+    expect(l.required.map((c: Ctx) => c.name)).toEqual(['sec']);
+    expect(l.pinnedNames).toEqual(['sec']);
+  });
+
+  it('a same-named non-required check run failing does not make the line red', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [
+      run('lint', 'SUCCESS', { databaseId: 1 }),
+      run('lint', 'FAILURE', { databaseId: 2, isRequired: false, checkSuite: { app: { databaseId: 999 }, workflowRun: { databaseId: 6 } } }),
+    ])]));
+    put('rules.json', [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'lint', integration_id: 15368 }] } }]);
+    put('branch.json', { protected: false });
+    const l = landing('demo', 'demo-quiet-basin:41').lines[0]!;
+    expect(l.required).toHaveLength(1);
+    expect(l.required[0]).toMatchObject({ name: 'lint', state: 'SUCCESS', appId: 15368, checkId: 1 });
+  });
+
   it('a check run with an empty conclusion and IN_PROGRESS keeps its status', () => {
     const l = one([run('build', null)]);
     expect(l.required[0]).toMatchObject({ name: 'build', state: 'IN_PROGRESS', appId: 15368, checkId: 1000, runId: 77 });
@@ -365,7 +402,7 @@ describe('the required contexts', () => {
 });
 
 describe('the rules cache', () => {
-  const cachePath = (): string => path.join(h.home, '.cc-sessions', 'pr-landing', 'demo.rules.json');
+  const cachePath = (): string => path.join(h.home, '.cc-sessions', 'pr-landing', 'demo.rules.main.json');
   const restCalls = (): string[][] => calls().filter((c) => c[0] === 'api' && c[1] !== 'graphql');
   const setup = (): void => {
     const t0 = workspace('demo', 'quiet-basin');
@@ -419,6 +456,27 @@ describe('the rules cache', () => {
     expect(fs.existsSync(cachePath())).toBe(false);
   });
 
+  it('the rules are read once per distinct base, each cached in its own file', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    const t1 = second('demo', 'tall-fern');
+    h.git(path.join(h.home, 'projects', 'demo'), 'branch', 'release', 'HEAD');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-tall-fern.base'), 'origin/release\n');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [run('lint', 'SUCCESS')]), pr(42, 'tall-fern', t1, [run('e2e', 'SUCCESS')], { baseRefName: 'release' })]));
+    put('rules-main.json', [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'lint' }] } }]);
+    put('rules-release.json', [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'e2e' }] } }]);
+    put('branch.json', { protected: false });
+    const lines = landing('demo', 'demo-quiet-basin:41,demo-tall-fern:42').lines;
+    expect(restCalls().map((c) => c[1]).sort()).toEqual([
+      'repos/o/r/branches/main', 'repos/o/r/branches/release', 'repos/o/r/rules/branches/main', 'repos/o/r/rules/branches/release']);
+    expect(lines.map((l) => l.rulesNamed)).toEqual([['lint'], ['e2e']]);
+    expect(lines.map((l) => l.unmeasured)).toEqual([[], []]);
+    expect(fs.existsSync(cachePath())).toBe(true);
+    expect(fs.existsSync(cachePath().replace('main', 'release'))).toBe(true);
+    fs.rmSync(path.join(h.home, 'gh-landing.log'));
+    expect(landing('demo', 'demo-quiet-basin:41,demo-tall-fern:42').lines.map((l) => l.rulesNamed)).toEqual([['lint'], ['e2e']]);
+    expect(restCalls()).toEqual([]);
+  });
+
   it('no REST call is made when nothing bound', () => {
     workspace('demo', 'quiet-basin');
     put('gql.json', answer([null]));
@@ -459,6 +517,7 @@ describe('the binding', () => {
       ['other branch', { headRefName: 'ws/elsewhere' }],
     ];
     void stranger;
+    let boundBoth = 0, unboundBoth = 0;
     for (const [label, over] of fixtures) {
       const row = pr(42, 'quiet-basin', tip, [], over);
       const { commits: _c, ...listRow } = row;
@@ -472,7 +531,12 @@ cmd_pr_state --session demo-quiet-basin`).split('\n')[0]!);
       emptyRules();
       const l = landing('demo', 'demo-quiet-basin:42').lines[0]!;
       expect(l.bound === true, label).toBe(state.number === 42);
+      if (label === 'bound') expect([state.number, l.bound, l.number], label).toEqual([42, true, 42]);
+      if (l.bound === true && state.number === 42) boundBoth++;
+      if (l.bound !== true && state.number !== 42) unboundBoth++;
     }
+    expect(boundBoth).toBeGreaterThanOrEqual(1);
+    expect(unboundBoth).toBeGreaterThanOrEqual(1);
   });
 });
 

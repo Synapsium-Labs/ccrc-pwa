@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ff48063a43f8398555b7d977b751ac76b31fc7ee01854370f7fdc9557e63d5b1
+# ccrc:generated 1 sha256=49afb21a5e00e622177721c324ec4c8e7a19715de6a75ac805b8b30aab1a4393
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11424,7 +11424,7 @@ elif mode == 'cache-put':
     sys.stdout.write(json.dumps(d) + '\n')
 
 elif mode == 'final':
-    # fd 4 the GraphQL answer (maybe empty), fd 5 one facts line per session, fd 6 the rules document (maybe empty).
+    # fd 4 the GraphQL answer (maybe empty), fd 5 one facts line per session, fd 6 the rules documents, one line per base (maybe empty).
     k = int(sys.argv[2])
     a = doc(4)
     repo = a.get('data', {}).get('repository') if isinstance(a, dict) and isinstance(a.get('data'), dict) else None
@@ -11433,7 +11433,16 @@ elif mode == 'final':
             facts = [json.loads(l) for l in f.read().split('\n') if l.strip()]
     except Exception:
         facts = []
-    rd = doc(6)
+    rds = {}   # fd 6: one rules document per line, one per distinct base
+    try:
+        with open('/dev/fd/6') as f:
+            for l in f.read().split('\n'):
+                if l.strip():
+                    d = json.loads(l)
+                    if isinstance(d, dict) and isinstance(d.get('base'), str):
+                        rds[d['base']] = d
+    except Exception:
+        pass
 
     def contexts_of(row):
         try:
@@ -11442,14 +11451,19 @@ elif mode == 'final':
             return []
         return [n for n in nodes if isinstance(n, dict)] if isinstance(nodes, list) else []
 
-    def required_of(row, named=frozenset()):
-        # A context is carried when GitHub marks it required, or when its name is one the rules or the branch
-        # protection name (a status posted under a pinned App name is not marked required, but it is the answer).
+    def required_of(row, pinned=frozenset()):
+        # A CheckRun is carried only when GitHub marks it required for this PR: a same-named run from another App is
+        # not the pinned one, and carrying it would read green while GitHub still blocks. A StatusContext is carried
+        # when GitHub marks it required, or when its name is one the rules or the branch protection pin to an App (a
+        # status posted under a pinned name is not marked required, but it is the answer; PL-3 flags it unverifiable).
         out = []
         for c in contexts_of(row):
-            cname = bound_name(c.get('name')) if c.get('__typename') == 'CheckRun' else bound_name(c.get('context'))
-            if c.get('isRequired') is not True and cname not in named:
-                continue
+            if c.get('__typename') == 'CheckRun':
+                if c.get('isRequired') is not True:
+                    continue
+            elif c.get('__typename') == 'StatusContext':
+                if c.get('isRequired') is not True and bound_name(c.get('context')) not in pinned:
+                    continue
             if c.get('__typename') == 'CheckRun':
                 name = bound_name(c.get('name'))
                 suite = c.get('checkSuite') if isinstance(c.get('checkSuite'), dict) else {}
@@ -11485,7 +11499,8 @@ elif mode == 'final':
             row = repo.get('p%d' % i) if isinstance(repo, dict) else None
             unm = []
             rules = prot = None
-            if isinstance(rd, dict) and rd.get('base') == f.get('base'):
+            rd = rds.get(f.get('base'))
+            if isinstance(rd, dict):
                 rules, prot = rd.get('rules'), rd.get('protection')
             if not names_ok(rules):
                 rules = None
@@ -11493,8 +11508,8 @@ elif mode == 'final':
             if not names_ok(prot):
                 prot = None
                 unm.append('protection')
-            named = frozenset((rules['names'] if rules else []) + (prot['names'] if prot else []))
-            req = required_of(row, named) if isinstance(row, dict) else []
+            pins = sorted(set(pinned_of(rules)) | set(pinned_of(prot)))
+            req = required_of(row, frozenset(pins)) if isinstance(row, dict) else []
             cut = len(req) > LIST_MAX
             cut = cut or bool(rules and rules['cut']) or bool(prot and prot['cut'])
             line.update({'bound': True, 'number': b.get('number'), 'state': b.get('state'),
@@ -11502,7 +11517,7 @@ elif mode == 'final':
                          'required': req[:LIST_MAX], 'requiredCut': cut,
                          'rulesNamed': rules['names'] if rules else [],
                          'protectionNamed': prot['names'] if prot else [],
-                         'pinnedNames': sorted(set(pinned_of(rules)) | set(pinned_of(prot))), 'unmeasured': unm})
+                         'pinnedNames': pins, 'unmeasured': unm})
         sys.stdout.write(json.dumps(line) + '\n')
 PY
 }
@@ -11510,13 +11525,15 @@ PY
 _pr_landing_rules() {   # project repo base -> the rules document, ONE JSON line, always
   # Cache hit: no gh call. Miss: the rules read (`rules/branches/<base>`) and the public branch view
   # (`branches/<base>`), each under its own timeout, both plain GETs. A read failure is a miss and is never cached.
-  local project="$1" repo="$2" base="$3" cache got r="" p="" enc
-  cache="$REG/pr-landing/$project.rules.json"
+  local project="$1" repo="$2" base="$3" cache got r="" p="" enc="_"
+  # One cache file per project and base (the base's slashes encoded, so the name stays one path component); a base
+  # outside the allowed spelling makes no REST call, writes nothing, and shares the `_` name only as a miss.
+  [[ "$base" =~ ^[A-Za-z0-9._/-]+$ && "$base" != -* ]] && enc="${base//\//%2F}"
+  cache="$REG/pr-landing/$project.rules.$enc.json"
   if got=$(_pr_landing_py cache-get "$cache" "$base" "$PR_LANDING_RULES_TTL" 2>/dev/null) && [[ -n "$got" ]]; then
     printf '%s\n' "$got"; return 0
   fi
   if [[ "$base" =~ ^[A-Za-z0-9._/-]+$ && "$base" != -* ]]; then
-    enc="${base//\//%2F}"
     r=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/rules/branches/$enc" 2>/dev/null) || r=""
     p=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/branches/$enc" 2>/dev/null) || p=""
     r=$(_pr_landing_py names-rules 4<<<"$r" 2>/dev/null) || r=""
@@ -11567,7 +11584,7 @@ cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<
   if [[ -n "$answer" ]] && rows=$(_pr_landing_py rows "$k" 4<<<"$answer" 2>/dev/null) && [[ -n "$rows" ]]; then gqlok=1; else rows="[]"; fi
 
   # THE BINDING, per session, through the code `pr-state` binds with and persisting nothing.
-  local branch base baseShort tip ahead workdir wthead registered BIND_REFUSAL facts="" bind ruleBase=""
+  local branch base baseShort tip ahead workdir wthead registered BIND_REFUSAL facts="" bind bases=$'\n'
   for (( i = 0; i < k; i++ )); do
     id="${ids[$i]}"
     if ! _pr_bind_facts "$id" "$main" ""; then
@@ -11580,14 +11597,17 @@ cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<
         unreadable-alias) facts+="$(printf '{"id":"%s","unreadable":true}' "$id")"$'\n' ;;
         '')            facts+="$(printf '{"id":"%s","bind":null}' "$id")"$'\n' ;;
         *)             facts+="$(printf '{"id":"%s","bind":%s,"base":%s}' "$id" "$bind" "$(_json_str "$baseShort")")"$'\n'
-                       [[ -n "$ruleBase" ]] || ruleBase="$baseShort" ;;
+                       [[ "$bases" == *$'\n'"$baseShort"$'\n'* ]] || bases+="$baseShort"$'\n' ;;
       esac
     fi
   done
 
   # THE RULES, only when someone bound (a GraphQL failure or an all-unbound call makes no REST call).
-  local rules=""
-  [[ -z "$ruleBase" ]] || rules=$(_pr_landing_rules "$project" "$repo" "$ruleBase")
+  # once per DISTINCT base among the bound sessions (stacked work binds to other bases), one document per line.
+  local rules="" rb
+  while IFS= read -r rb; do
+    [[ -z "$rb" ]] || rules+="$(_pr_landing_rules "$project" "$repo" "$rb")"$'\n'
+  done <<< "$bases"
   _pr_landing_py final "$k" 4<<<"$answer" 5<<<"$facts" 6<<<"$rules"
 }
 
