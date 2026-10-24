@@ -12,7 +12,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { readRegistry } from '../src/registry.js';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
-import { seedRoster, testDeps } from './helpers.js';
+import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { CLAIM_LEASE_MS, CLAIM_HARD_CAP_MS, type Divergence } from '../../shared/api.js';
 
@@ -34,7 +34,7 @@ const fixture = () => {
   const cfg = loadConfig({ CCRC_HOME: home } as never);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const bus = new Bus();
-  const watcher = new FleetWatcher({ ...testDeps(home), cfg, io: localIO, coord } as never, bus, 10_000);
+  const watcher = new FleetWatcher(withFakeClock({ ...testDeps(home), cfg, io: localIO, coord } as never), bus, 10_000);
   const claim = (over: Partial<Parameters<CoordStore['claimAttempt']>[0]> = {}) => {
     const r = coord.claimAttempt({
       project: 'demo', paths: ['server/src/io.ts'], sessionId: 'demo-quiet-basin',
@@ -200,7 +200,7 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
 
   it('runs with NO coord at all — the testDeps shape every watcher test depends on', () => {
     const home = mkTmp('ccrc-claim-sweep-');
-    const w = new FleetWatcher(testDeps(home), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home)), new Bus(), 10_000);
     expect(() => { w.renewClaims([], NO_REFUSED); w.lapseClaims([], NO_REFUSED); }).not.toThrow();
   });
 });

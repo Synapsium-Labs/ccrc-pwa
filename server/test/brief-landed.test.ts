@@ -20,7 +20,7 @@ import { queueSystemMail } from '../src/coord/rundefsTx.js';
 import type { PushPayload } from '../src/push.js';
 import { MAIL_SUBJECT_MAX_BYTES } from '../../shared/api.js';
 import { briefNotTakenSubject } from '../src/coord/briefwatch.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const WORKER = 'project-a-quiet-basin';
@@ -93,7 +93,7 @@ const dispatched = (coord: CoordStore): { runId: number; deliveryId: number } =>
 
 const primed = async (h: Harness, coord: CoordStore, push: unknown): Promise<FleetWatcher> => {
   const deps: Deps = { ...testDeps(h.home, h.run), coord, push: push as never };
-  const w = new FleetWatcher(deps, new Bus(), 2000);
+  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
   await w.tick();
   return w;
 };

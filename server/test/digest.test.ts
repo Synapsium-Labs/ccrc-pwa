@@ -295,6 +295,10 @@ describe('the digest hour (spec §10: 07:00 UTC by default, ~/.ccrc/digest-hour 
 });
 
 describe('the digest beat (FleetWatcher.sweepDigest)', () => {
+  // The beat throttles on the monotonic clock (OA-C4, #803) and decides on the `now` it is handed. The fixture's beats are
+  // minutes apart in the `now` they hand, so `sweepAt` lets the same real time pass on the injected monotonic clock.
+  let mono = 0;
+  const sweepAt = (w: FleetWatcher, now: number): void => { mono = now; w.sweepDigest(now); };
   interface Beat { coord: CoordStore; home: string; sent: PushPayload[]; log: NotifyLog; watcher: () => FleetWatcher }
   async function beat(): Promise<Beat> {
     const { coord, home } = store();
@@ -303,7 +307,7 @@ describe('the digest beat (FleetWatcher.sweepDigest)', () => {
     await log.load();
     const sent: PushPayload[] = [];
     const runner: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
-    const deps = { ...testDeps(home, runner), coord, notifyLog: log,
+    const deps = { ...testDeps(home, runner), monotonicMs: () => mono, coord, notifyLog: log,
       push: { notify: async (p: PushPayload) => { sent.push(p); } } as never };
     return { coord, home, sent, log, watcher: () => new FleetWatcher(deps, new Bus(), 10_000) };
   }
@@ -315,13 +319,13 @@ describe('the digest beat (FleetWatcher.sweepDigest)', () => {
     seedDay(b.coord);
     const w = b.watcher();
     // Before the hour the newest closed day is the 17th, whose window holds only the early answer.
-    w.sweepDigest(Date.parse('2026-10-18T06:59:00Z'));
+    sweepAt(w, Date.parse('2026-10-18T06:59:00Z'));
     expect(b.sent.map((p) => [p.title, p.url])).toEqual([['Coordinators decided 1 thing in your name', '/digest?day=2026-10-17']]);
     expect(b.coord.digestDay('2026-10-17')).toMatchObject({ count: 1 });
     expect(b.coord.digestDay(DAY)).toBeNull();
     b.sent.length = 0;
     b.coord.db.exec("DELETE FROM feed_events");
-    w.sweepDigest(Date.parse('2026-10-18T07:00:30Z'));
+    sweepAt(w, Date.parse('2026-10-18T07:00:30Z'));
     expect(b.sent).toHaveLength(1);
     expect(b.sent[0]).toMatchObject({
       title: 'Coordinators decided 6 things in your name',
@@ -330,17 +334,17 @@ describe('the digest beat (FleetWatcher.sweepDigest)', () => {
     });
     expect(feedCoord(b.coord)).toEqual([{ kind: 'coord', title: 'Coordinators decided 6 things in your name', body: b.sent[0]!.body }]);
     expect(b.coord.digestDay(DAY)).toMatchObject({ day: DAY, count: 6 });
-    w.sweepDigest(Date.parse('2026-10-18T09:00:00Z'));
+    sweepAt(w, Date.parse('2026-10-18T09:00:00Z'));
     expect(b.sent).toHaveLength(1);
   });
 
   it('a restart at the digest hour sends no second push', async () => {
     const b = await beat();
     seedDay(b.coord);
-    b.watcher().sweepDigest(Date.parse('2026-10-18T07:00:30Z'));
+    sweepAt(b.watcher(), Date.parse('2026-10-18T07:00:30Z'));
     expect(b.sent).toHaveLength(1);
-    b.watcher().sweepDigest(Date.parse('2026-10-18T07:01:40Z'));
-    b.watcher().sweepDigest(Date.parse('2026-10-18T07:03:00Z'));
+    sweepAt(b.watcher(), Date.parse('2026-10-18T07:01:40Z'));
+    sweepAt(b.watcher(), Date.parse('2026-10-18T07:03:00Z'));
     expect(b.sent).toHaveLength(1);
     expect(feedCoord(b.coord)).toHaveLength(1);
   });
@@ -352,17 +356,17 @@ describe('the digest beat (FleetWatcher.sweepDigest)', () => {
     answerAsk(b.coord, q, PARENT, 'Red', Date.parse('2026-10-18T08:00:00Z'));
     writeFileSync(path.join(b.home, '.ccrc', DIGEST_HOUR_FILE), '9');
     const w = b.watcher();
-    w.sweepDigest(Date.parse('2026-10-18T07:30:00Z'));
+    sweepAt(w, Date.parse('2026-10-18T07:30:00Z'));
     expect(b.sent).toEqual([]);
     expect(b.coord.digestDay(DAY)).toBeNull();
-    w.sweepDigest(Date.parse('2026-10-18T09:00:30Z'));
+    sweepAt(w, Date.parse('2026-10-18T09:00:30Z'));
     expect(b.sent).toHaveLength(1);
     expect(b.sent[0]).toMatchObject({ title: 'Coordinators decided 1 thing in your name', url: `/digest?day=${DAY}` });
   });
 
   it('a day with nothing decided sends none, and is claimed so the beat does not rebuild it', async () => {
     const b = await beat();
-    b.watcher().sweepDigest(Date.parse('2026-10-18T07:00:30Z'));
+    sweepAt(b.watcher(), Date.parse('2026-10-18T07:00:30Z'));
     expect(b.sent).toEqual([]);
     expect(feedCoord(b.coord)).toEqual([]);
     expect(b.coord.digestDay(DAY)).toMatchObject({ count: 0 });
