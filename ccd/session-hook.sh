@@ -4740,7 +4740,8 @@ fi
 # nothing runs at the lane default, which is the spend this arm bounds. An accident guard, and it fails open like the arm
 # above: a payload jq cannot parse, an envelope that cannot be built, or a script it cannot read says nothing. Only an
 # Agent, Task or Workflow call forks a jq, so every other tool pays nothing.
-# A script is read as code: strings, template literals and comments are skipped, so an `agent(` quoted in a prompt is no
+# A script is read as code: strings, template literals, regex literals and comments are skipped (an unbalanced quote means
+# unknown, and allows), so an `agent(` quoted in a prompt is no
 # call and the word `model` in a prompt is no option. An `agent(` call is denied only when its options are visible: no
 # second argument at all, or an inline `{...}` object (the first argument, or the one after the first top-level comma)
 # with no `model:` or no `effort:` key (shorthand `{ model, effort }` counts). Options held in a shared object or an
@@ -4758,11 +4759,18 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
       [[ "$fosize" =~ ^[0-9]+$ ]] && (( fosize <= 262144 )) && fosrc=$(cat -- "$fopath" 2>/dev/null) || fosrc=""
     fi
   fi
+  fo=""
+  # A Workflow call pays the character walk only when the word `agent` appears at all (a cheap test before the fork).
+  if [[ "${tool:-}" != Workflow || "$payload$fosrc" == *agent* ]]; then
   fo=$(jq -r --arg file "$fosrc" '
     def quote: . == "\"" or . == "\u0027" or . == "`";
     def skipc($c; $i):
       if $c[$i] == "/" and $c[$i + 1] == "/" then (first(range($i; $c | length) | select($c[.] == "\n")) // ($c | length))
       elif $c[$i] == "/" and $c[$i + 1] == "*" then ((first(range($i + 2; ($c | length) - 1) | select($c[.] == "*" and $c[. + 1] == "/")) // ($c | length)) + 2)
+      elif $c[$i] == "/" and ((first(range($i - 1; -1; -1) | select(($c[.] | test("[[:space:]]")) | not)) // null) as $p | $p == null or ($c[$p] | test("[(,=:!&|?{;\\[]"))) then
+        (($c | length) as $n | {j: ($i + 1), k: false}
+         | until(.j >= $n or (.k | not) and $c[.j] == "/"; if $c[.j] == "\\" then .j += 2 elif $c[.j] == "[" then .k = true | .j += 1 elif $c[.j] == "]" then .k = false | .j += 1 else .j += 1 end)
+         | .j + 1)
       else null end;
     # Walk from $from; "comma" stops at the first top-level comma, "bal" at the close of the bracket opened at $from.
     # The result is that index, or -1 when the enclosing bracket closes first or the text ends.
@@ -4779,7 +4787,7 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
               (if .d == 0 then .r = -1 else .d -= 1 | (if $mode == "bal" and .d == 0 then .r = .i else . end) | .i += 1 end)
             elif $ch == "," and .d == 0 and $mode == "comma" then .r = .i
             else .i += 1 end)
-      | .r // -1;
+      | .r // -9;
     def isid: . != null and test("[A-Za-z0-9_.$]");
     # The index just after the "(" of every agent( call outside a string or comment.
     def calls($c):
@@ -4790,18 +4798,18 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
               (if $ch == "\\" then .i += 2 elif $ch == .q then .q = null | .i += 1 else .i += 1 end)
             elif skipc($c; .i) != null then .i = skipc($c; .i)
             elif ($ch | quote) then .q = $ch | .i += 1
-            elif $ch == "a" and ($c[.i:.i + 5] | join("")) == "agent" and (($c[.i - 1] | isid) | not) and .i >= 0 then
+            elif $ch == "a" and ($c[.i:.i + 5] | join("")) == "agent" and ((.i > 0 and ($c[.i - 1] | isid)) | not) then
               (first(range(.i + 5; $c | length) | select(($c[.] | test("[[:space:]]")) | not)) // null) as $j
               | if $j != null and $c[$j] == "(" then .h += [$j + 1] | .i = $j + 1 else .i += 5 end
             else .i += 1 end)
-      | .h;
+      | if .q != null then [] else .h end;
     def ws($c; $i): (first(range($i; $c | length) | select(($c[.] | test("[[:space:]]")) | not)) // ($c | length));
     # "bad" when this call surely names no model or no effort, else "ok" (including every case that cannot be seen).
     def judge($c; $h):
       ws($c; $h) as $a
       | (if $c[$a] == "{" then $a
          else (scan($c; $h; "comma")) as $k
-           | if $k < 0 then (if $c[$a] == "." and $c[$a + 1] == "." then -3 else -2 end) else ws($c; $k + 1) as $b | (if $c[$b] == "{" then $b elif $c[$b] == ")" then -2 else -3 end) end
+           | if $k == -9 then -3 elif $k < 0 then (if $c[$a] == "." and $c[$a + 1] == "." then -3 else -2 end) else ws($c; $k + 1) as $b | (if $c[$b] == "{" then $b elif $c[$b] == ")" then -2 else -3 end) end
          end) as $o
       | if $o == -2 then "bad"
         elif $o == -3 then "ok"
@@ -4823,6 +4831,7 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
             | if any(calls($c)[]; judge($c; .) == "bad") then "workflow" else "" end
           end
       else "" end' <<<"$payload" 2>/dev/null) || fo=""
+  fi
   if [[ "$fo" == agent || "$fo" == workflow ]]; then
     if [[ "$fo" == agent ]]; then foname="names no model"; else foname="has an agent() call that names no model or no effort"; fi
     foreason="ccrc: this ${tool} call ${foname}, so it would run at the lane default (operator ruling 2026-10-24; D-6798). Name them from the routing matrix: pass model (opus, sonnet or haiku) on an Agent or Task call, and model and effort inline on every agent() call in a Workflow script. Take the row for the work: a mechanical task is haiku or sonnet, judgement is opus."

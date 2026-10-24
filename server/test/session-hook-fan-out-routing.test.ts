@@ -108,6 +108,16 @@ describe('a Workflow agent() call is read as code, not as text (D-6798)', () => 
     expect(fire('Workflow', { script: "await agent('x', { model: 'opus' })" })).not.toBeNull();
     expect(fire('Workflow', { script: "await agent('x')" })).not.toBeNull();
   });
+  it('a quote inside a regex literal does not flip the string state', () => {
+    expect(fire('Workflow', { script: "const re = /'/; await agent('p', {model:'opus', effort:'low'}); const s = 'agent(foo)'" })).toBeNull();
+    expect(fire('Workflow', { script: "const re = /'/; await agent('p', {model:'opus'})" })).not.toBeNull();
+  });
+  it('an unterminated string is unknown, so it is allowed', () => {
+    expect(fire('Workflow', { script: "await agent('p" })).toBeNull();
+  });
+  it('a script that starts with agent( and ends on an identifier character is still read', () => {
+    expect(fire('Workflow', { script: "agent('x')\nfoo" })).not.toBeNull();
+  });
   it('commas inside the prompt or a nested call do not end the first argument', () => {
     expect(fire('Workflow', { script: "await agent(f(a, b) + 'x, y', { model: 'opus', effort: 'high' })" })).toBeNull();
     expect(fire('Workflow', { script: "await agent(f(a, b) + 'x, y', { model: 'opus' })" })).not.toBeNull();
