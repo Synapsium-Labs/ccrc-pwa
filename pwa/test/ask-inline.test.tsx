@@ -529,7 +529,9 @@ describe('the transcript stops repeating the ask the card already shows', () => 
     desk.arrive(1);
     card();
     expect(live().textContent ?? '', 'the card says where the question is').toMatch(/waiting for you, below/i);
-    expect(live().querySelector('button.ask-answer'), 'no Answer while the card is up').toBeNull();
+    // R64 F5: the card offers "Go to question" (it raises what is already up) and never "Answer" (there is no sheet).
+    expect(live().querySelector('button.ask-answer')?.textContent, 'the card offers Go to question').toBe('Go to question');
+    expect(within(live()).queryByRole('button', { name: 'Answer' }), 'and no Answer while the card is up').toBeNull();
     // Positive content: the transcript still shows the question line itself.
     expect(document.querySelector('.tool-ask .tool-ask-q')?.textContent).toBe(QUESTION);
   });
@@ -537,7 +539,7 @@ describe('the transcript stops repeating the ask the card already shows', () => 
   // The mutation table's row for `askBelow` (D-6326): through `SessionScreen` an awaiting card at the desk always has the
   // inline card beside it, so the width and the mounted card agree there. The card itself must follow the screen's fact,
   // never the width: rendered at a desk width with no inline card, it keeps Answer.
-  it('at a desk width with no inline card mounted, the live ask card keeps Answer; askBelow alone takes it away', () => {
+  it('at a desk width with no inline card mounted, the live ask card keeps Answer; askBelow alone turns it into Go to question', () => {
     media(true);
     const onAnswer = vi.fn();
     const view = render(<ChatListInner id={ID} events={[ASK_CALL]} pending={[]} askPending onAnswer={onAnswer} />);
@@ -546,7 +548,10 @@ describe('the transcript stops repeating the ask the card already shows', () => 
     fireEvent.click(answer!);
     expect(onAnswer).toHaveBeenCalledTimes(1);
     view.rerender(<ChatListInner id={ID} events={[ASK_CALL]} pending={[]} askPending askBelow onAnswer={onAnswer} />);
-    expect(view.container.querySelector('button.ask-answer'), 'askBelow takes Answer away').toBeNull();
+    expect(view.container.querySelector('button.ask-answer')?.textContent, 'askBelow turns Answer into Go to question').toBe('Go to question');
+    expect(within(view.container).queryByRole('button', { name: 'Answer' }), 'askBelow takes Answer away').toBeNull();
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>('button.ask-answer')!);
+    expect(onAnswer, 'Go to question calls the same raise').toHaveBeenCalledTimes(2);
     expect(view.container.querySelector('.tool-ask .ask-state')?.textContent ?? '').toMatch(/waiting for you, below/i);
   });
 
