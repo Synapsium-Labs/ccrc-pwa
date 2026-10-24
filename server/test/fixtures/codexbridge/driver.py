@@ -57,6 +57,22 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    "failedRaises": the class stop_reason raises for a failed terminal,
                    "twoArgContinuationRaises": the class the two-argument needs_continuation call raises (None if it
                    answers)}
+  THE REASONING STORE (Task 4): one ReasoningStore per driver process, opened by store-open and used by every later
+  store-* op, by store-remember (over the reducer the LAST reduce op built) and by from-anthropic with
+  "lookup": "store" (its get in place of the stub). A store key is never passed in: each op names a `call` (keyed by
+  inbound.call_key) or a `session` and a `text` (keyed by inbound.text_key). Every store-* op but store-plant and
+  store-dump also prints "disabled": the store's reason, or None.
+  store-open       {path, max_bytes?, ttl_s?, umask?} -> {"disabled"}: os.umask(umask) first when given
+  store-put        {call | session + text, turn, now?} -> {"disabled"}
+  store-get        {call | session + text} -> {"turn", "disabled"}
+  store-evict      {now?} -> {"evicted", "disabled"}
+  store-remember   {session} -> {"disabled"}: store.remember over the last reduce op's Reducer
+  store-threads    {n, each} -> {"mismatches", "raised_in_threads", "disabled"}: `n` threads, each `each` puts and
+                   gets of its own call keys through the one store
+  store-plant      {path, user_version} -> {}: a raw sqlite file with the store's table at that user_version, written
+                   without the store
+  store-dump       {path} -> {"rows": [{"key", "turn", "created", "size"}] by key, "userVersion", "journalMode"}: read
+                   through a raw sqlite connection of its own
 A BridgeError prints as {"error": {status, etype, message, headers, state, code, requestId, kind}, "answer":
 {"status", "headers", "body": parsed JSON}, "event": errors.event(e) as text}. An op that raised prints
 {"raised": <class name>}. Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the package failed to import.
@@ -69,9 +85,14 @@ import importlib
 import importlib.util
 import json
 import os
+import sqlite3
 import sys
+import threading
 
 sys.dont_write_bytecode = True
+
+# The process's one reasoning store and the Reducer the last reduce op built (the store-* ops, above).
+_STATE = {"store": None, "reducer": None}
 
 
 def _emit(line):
@@ -215,6 +236,80 @@ def _reduce(op, cb):
     }
     if op.get("trace"):
         out["trace"] = trace
+    _STATE["reducer"] = r
+    return out
+
+
+def _store_key(op, cb):
+    if "call" in op:
+        return cb.inbound.call_key(op["call"])
+    return cb.inbound.text_key(op.get("session"), op["text"])
+
+
+def _store_threads(store, cb, n, each):
+    """`n` threads, each putting and getting `each` turns under call keys of its own through the ONE store."""
+    mismatches, raised = [0], []
+
+    def work(t):
+        try:
+            for i in range(each):
+                key = cb.inbound.call_key("call_fx%d_%d" % (t, i))
+                turn = {"items": [{"type": "reasoning", "id": "rs_fx%d_%d" % (t, i), "summary": [],
+                                   "encrypted_content": "ENC-%d-%d" % (t, i)}], "phase": None}
+                store.put(key, turn)
+                if store.get(key) != turn:
+                    mismatches[0] += 1
+        except Exception as e:  # reported, never swallowed
+            raised.append(type(e).__name__)
+
+    threads = [threading.Thread(target=work, args=(t,)) for t in range(n)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    return {"mismatches": mismatches[0], "raised_in_threads": raised}
+
+
+def _store_op(name, op, cb):
+    if name == "store-plant":
+        conn = sqlite3.connect(op["path"])
+        conn.execute("CREATE TABLE reasoning(key TEXT PRIMARY KEY, items TEXT NOT NULL, created INTEGER NOT NULL, "
+                     "size INTEGER NOT NULL)")
+        conn.execute("PRAGMA user_version = %d" % int(op["user_version"]))
+        conn.commit()
+        conn.close()
+        return {}
+    if name == "store-dump":
+        conn = sqlite3.connect(op["path"])
+        try:
+            rows = [{"key": k, "turn": json.loads(v), "created": c, "size": z}
+                    for k, v, c, z in conn.execute("SELECT key, items, created, size FROM reasoning ORDER BY key")]
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            conn.close()
+        return {"rows": rows, "userVersion": version, "journalMode": mode}
+    if name == "store-open":
+        if "umask" in op:
+            os.umask(int(op["umask"]))
+        _STATE["store"] = cb.store.ReasoningStore(op["path"], max_bytes=op.get("max_bytes"), ttl_s=op.get("ttl_s"))
+        out = {}
+    elif name == "store-put":
+        _STATE["store"].put(_store_key(op, cb), op["turn"], now=op.get("now"))
+        out = {}
+    elif name == "store-get":
+        out = {"turn": _STATE["store"].get(_store_key(op, cb))}
+    elif name == "store-evict":
+        out = {"evicted": _STATE["store"].evict(now=op.get("now"))}
+    elif name == "store-remember":
+        cb.store.remember(_STATE["store"], _STATE["reducer"], op.get("session"))
+        out = {}
+    elif name == "store-threads":
+        out = _store_threads(_STATE["store"], cb, int(op["n"]), int(op["each"]))
+    else:
+        _usage("unknown op " + json.dumps(name))
+        return None
+    out["disabled"] = _STATE["store"].disabled
     return out
 
 
@@ -286,6 +381,8 @@ def _run(op, pkg, cb):
 
         def lookup(key):
             lookups.append(key)
+            if op.get("lookup") == "store":
+                return _STATE["store"].get(key)
             return stored.get(key)
 
         sink = cb.ListSink()
@@ -340,6 +437,8 @@ def _run(op, pkg, cb):
         except Exception as e:  # the answer this op reports
             two_arg = type(e).__name__
         return {"rows": rows, "failedRaises": raised, "twoArgContinuationRaises": two_arg}
+    if name.startswith("store-"):
+        return _store_op(name, op, cb)
     _usage("unknown op " + json.dumps(name))
     return None
 
