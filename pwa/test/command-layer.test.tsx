@@ -266,7 +266,8 @@ describe('the base commands, through the palette', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     const page = screen.getByRole('combobox');
     expect(page.getAttribute('value') ?? (page as HTMLInputElement).value, 'a page starts empty').toBe('');
-    // The option's accessible name is its title then its group ("InstrumentLayout"), so no word boundary follows.
+    // jsdom names the option its title then its group run together ("InstrumentLayout"), so the pattern needs no word
+    // boundary after the title; Chrome names the same option "Instrument Layout".
     expect(screen.getByRole('option', { name: /^Instrument/ })).toBeTruthy();
     for (const o of screen.getAllByRole('option')) expect(o.textContent ?? '', 'Instrument is no longer a preview').not.toContain('(preview)');
     expect(screen.getByRole('option', { name: /Match this device/ })).toBeTruthy();
