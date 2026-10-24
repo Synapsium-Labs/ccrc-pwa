@@ -886,7 +886,9 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     const store = connected(askFixture(7));
     mount(store);
     drop();
-    fireEvent.click(screen.getByRole('button', { name: /^Deny/ }));
+    const deny = screen.getByRole('button', { name: /^Deny/ });
+    expect(deny, 'Deny in the gap').toBeDisabled();
+    fireEvent.click(deny);
     expect(interrupt).not.toHaveBeenCalled();
   });
 
