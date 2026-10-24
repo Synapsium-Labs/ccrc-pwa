@@ -85,7 +85,7 @@ describe("the ids are W2's door table's", () => {
 
 describe('the session commands (W2 Task S2d)', () => {
   const ctx = (session: CommandContext['session']): CommandContext => ({
-    path: '/s/project-a-one', sessions: [], navigate: () => {}, setSkin: () => {}, setTheme: () => {},
+    path: '/s/project-a-one', sessions: [], runs: [], navigate: () => {}, setSkin: () => {}, setTheme: () => {},
     openShortcuts: () => {}, openNewSession: () => {}, openPalette: () => {}, paletteOpen: false, session,
   });
 

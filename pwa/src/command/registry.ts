@@ -2,7 +2,17 @@
 // them. Pure: no store, no DOM. Both skins reach the same registry (the ⌘K
 // palette in each, and Instrument's top-bar field in W2), so a command added
 // here is in every skin, the palette and the shortcut sheet at once.
-import type { FleetSession } from '../../../shared/api';
+import type { FleetSession, RunSummary } from '../../../shared/api';
+
+/** Instrument's command field's words and accessible name (`TopBar.tsx`). The palette's words live here, beside what
+ *  a command is, so the field and the palette say them from one home. */
+export const COMMAND_FIELD_WORDS = 'Search or run a command';
+
+/** What the palette's first level says when neither a command nor a session matches. */
+export const SEARCH_EMPTY = 'No session or command matches.';
+
+/** The fewest characters of a trimmed query that may find a search-only entry (a session at the first level, D-6714). */
+export const SEARCH_MIN = 2;
 
 /** What a command may read and do. Built by `CommandLayer` per run, so a
  *  command never holds a stale store snapshot. */
@@ -11,6 +21,8 @@ export interface CommandContext {
   path: string;
   /** The fleet in the fleet screen's own order (`fleetOrder`). */
   sessions: readonly FleetSession[];
+  /** The open runs (the store's runs frame), so a session's entry can name the programmes it coordinates (D-6714). */
+  runs: readonly RunSummary[];
   navigate: (href: string) => void;
   setSkin: (choice: string) => void;
   setTheme: (choice: string) => void;

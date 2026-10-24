@@ -118,6 +118,7 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   const ctx = useMemo<CommandContext>(() => ({
     path,
     sessions: ordered,
+    runs,
     navigate: (href) => navigate(href),
     setSkin,
     setTheme: (choice) => setTheme(choice),
@@ -126,7 +127,7 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     openPalette,
     paletteOpen: open,
     session,
-  }), [path, ordered, openNewSession, openPalette, open, session]);
+  }), [path, ordered, runs, openNewSession, openPalette, open, session]);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 
