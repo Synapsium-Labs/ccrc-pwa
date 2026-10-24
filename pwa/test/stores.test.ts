@@ -1939,7 +1939,8 @@ describe('fleet store', () => {
     });
 
     it('is NOT persisted, and a fresh store starts null even with a snapshot on disk', () => {
-      // The offline snapshot is written on every `fleet` frame. Nothing pooled
+      // The offline snapshot is written on the first `fleet` frame at once, then at
+      // most once per 30 s window (C6). Nothing pooled
       // may ride it: `FleetSnapshot` has no field for it, and this asserts
       // that in the two directions that matter — the bytes on disk, and what a
       // cold store reads back.
