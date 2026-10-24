@@ -25883,23 +25883,9 @@ _uninst_purge() {
   fi
 }
 
-# ARCH-74 (#809): the hook's generated region is rewritten by shared/hook-helpers.mjs.
-# Prints regenerated | current | refused-missing | nothere (no region: not a hook).
-_restamp_hook_region() {
-  node --no-warnings --input-type=module -e '
-import { readFileSync, writeFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
-const [, mod, hookPath, ccdPath] = process.argv.slice(1);
-const h = await import(pathToFileURL(mod).href);
-const hook = readFileSync(hookPath, "utf8");
-if (h.extractHookRegion(hook) === null) { console.log("nothere"); process.exit(0); }
-const ccd = readFileSync(ccdPath, "utf8");
-const v = h.checkHookRegion(hook, ccd);
-if (v === "current") { console.log("current"); process.exit(0); }
-writeFileSync(hookPath, h.applyHookRegion(hook, ccd));
-console.log("regenerated");
-' - "$1" "$2" "$3" 2>/dev/null
-}
+# ARCH-74 (#809): the hook's generated region is rewritten by shared/hook-helpers.mjs --restamp.
+# Prints regenerated | current | refused-missing (BEGIN present, region damaged) | nothere.
+_restamp_hook_region() { node --no-warnings "$1" --restamp "$2" "$3" 2>/dev/null; }
 
 # After restamping ccd/ccd, say whether the sibling hook's region has gone stale.
 _restamp_hook_note() {
