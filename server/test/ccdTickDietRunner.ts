@@ -1,7 +1,7 @@
 // The tick diet's differential runner, shared by the files that run its per-locale rows (#387, tick-diet spec §9).
 //
 // `ccd-tick-diet-equivalence-static.test.ts` runs the locale-free parts (E0, E1, E2, E4 and the static censuses E8d,
-// E8g and E10d), `-rows` and `-route` the rows under `C` (D-6767), and `ccd-tick-diet-equivalence-utf8.test.ts` the
+// E8g and E10d), `-rows` and `-route` the rows under `C` (D-6767), and `ccd-tick-diet-equivalence-utf8-<part>.test.ts` the
 // same rows under the UTF-8 locale. Those files call `registerLocaleRows`, at the end of this file, with their own
 // entry of `LOCALES`. Everything above it is the harness's body, moved here whole from the one file that held it: the
 // vendored-name tables the rows read, the function reader, the runner (`runBatch`, `PRELUDE`, `runScript`), the locale
@@ -1254,8 +1254,8 @@ export function rawHomeMeasuredCalls(src: string): string[] {
 /** Registers the seven per-locale blocks (E3, E5 to E10) for ONE entry of `LOCALES`. Each keeps its
  *  `describe.each(…)` form, called on a one-element array, so a full test name is the one it was when a single file
  *  ran both locales (`… under 'C' (…)` and `… under 'the UTF-8 locale' (…)`).
- *  `ccd-tick-diet-equivalence-rows` and `-route.test.ts` call it with `LOCALES[0]` and `ccd-tick-diet-equivalence-utf8.test.ts` with `LOCALES[1]`. `parts`, when given, names
- *  the blocks to register (`'E3'`, `'E5'`, …); a file that runs a share of the `C` rows passes its share, so the blocks
+ *  `ccd-tick-diet-equivalence-rows` and `-route.test.ts` call it with `LOCALES[0]` and the `ccd-tick-diet-equivalence-utf8-<part>.test.ts` files with `LOCALES[1]`. `parts`, when given, names
+ *  the blocks to register (`'E3'`, `'E5'`, …); a file that runs a share of a locale's rows passes its share, so the blocks
  *  split across files by `describe` with every title unchanged (D-6767). Omitted, every block is registered. */
 export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readonly string[]): void {
   /** `describe.each([loc])` for block `id`, or a no-op when `parts` is given and leaves `id` out. */

@@ -8,7 +8,7 @@
 //
 // SEVERAL FILES (D-6767). This file runs the locale-free parts (E0, E1, E2, E4 and the static censuses E8d, E8g and
 // E10d). The rows under `C` are `ccd-tick-diet-equivalence-rows` and `-route.test.ts` (the table is
-// `ccd-tick-diet-equivalenceFixture.ts`'s); `ccd-tick-diet-equivalence-utf8.test.ts` runs the same rows under the UTF-8 locale. The
+// `ccd-tick-diet-equivalenceFixture.ts`'s); `ccd-tick-diet-equivalence-utf8-limits`, `-utf8-registry` and `-utf8-route.test.ts` run the same rows under the UTF-8 locale. The
 // runner, the row builders and the per-locale blocks (E3, E5 to E10) live in `ccdTickDietRunner.ts`, whose
 // `registerLocaleRows` each of those files calls with its own entry of `LOCALES` and its own blocks. A full test name is unchanged by the split.
 //
