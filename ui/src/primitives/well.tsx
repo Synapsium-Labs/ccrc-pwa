@@ -41,10 +41,16 @@ import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
 
 /** Token for token as `chat.css .well` declared it, less its overscroll
- *  containment (D-6437): this wraps and never scrolls sideways, and a y-axis
- *  containment would stop a wheel it has nothing left to scroll from reaching
- *  the transcript. Its users outside the transcript chain to the sheet body's
- *  own containment or to `body`'s.
+ *  containment and with a whole-pixel line height (both D-6437). This wraps
+ *  and never scrolls sideways, and a y-axis containment would stop a wheel it
+ *  has nothing left to scroll from reaching the transcript. Its users outside
+ *  the transcript chain to the sheet body's own containment or to `body`'s.
+ *
+ *  The line height is `--fs-sm` x `--lh-mono` rounded DOWN to a whole pixel
+ *  (20px, not 20.15px): a fractional line box makes a tall well's scroll range
+ *  fractional, and at some page offsets Chrome then latches the first wheel at
+ *  the well's end to the well, which cannot move, so it never reaches the
+ *  transcript. `.msg-assist pre` and `.tool-ask-a` declare the same value.
  *
  *  `py-[10px]` is a literal because the rule was: 10px sits between `--sp-2`
  *  (8px) and `--sp-3` (12px), and the horizontal padding IS `--sp-3`. The
@@ -54,7 +60,8 @@ import { FOCUS_RING } from '../lib/focus';
 export const WELL =
   'well m-0 max-h-well-max overflow-x-auto overflow-y-auto'
   + ' rounded-md bg-well px-3 py-[10px] text-ink-on-well'
-  + ' font-mono text-sm font-regular leading-mono not-italic normal-nums'
+  + ' font-mono text-sm font-regular not-italic normal-nums'
+  + ' leading-[round(down,calc(var(--fs-sm)*var(--lh-mono)),1px)]'
   + ' whitespace-pre-wrap wrap-anywhere';
 
 export interface WellProps extends HTMLAttributes<HTMLPreElement> {

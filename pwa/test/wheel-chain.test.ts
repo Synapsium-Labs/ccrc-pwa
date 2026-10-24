@@ -38,7 +38,7 @@ describe('a wheel over a transcript box chains to the transcript (D-6437)', () =
     expect(fontAt, 'the block sets its font through the shorthand').toBeGreaterThanOrEqual(0);
     expect(lineAt, 'the block declares a line-height after the font shorthand').toBeGreaterThan(fontAt);
     const line = (declValue(pre, 'line-height') ?? '').replace(/\s+/g, '');
-    expect(line, 'a whole-pixel line height').toMatch(/^(round\(down,calc\(var\(--fs-sm\)\*var\(--lh-mono\)\),1px\)|\d+px)$/);
+    expect(line, 'a whole-pixel line height').toMatch(WHOLE_PIXEL);
 
     // `WELL` wraps its lines, so it never scrolls sideways: no token of its own begins `overscroll`
     // (neither `overscroll-contain` nor `overscroll-x-contain`).
@@ -62,12 +62,12 @@ const WHOLE_PIXEL = /^(round\(down,calc\(var\(--fs-sm\)\*var\(--lh-mono\)\),1px\
 
 describe('a mono box in the transcript declares a whole-pixel line height (D-6437, R68)', () => {
   it('WELL declares a whole-pixel line height', () => {
-    // Tailwind spells it as one arbitrary-value class, `leading-[<value>]` (spaces as underscores), or as an arbitrary
-    // property `[line-height:<value>]`. `leading-mono` is the token's unitless 1.55, which is the defect.
+    // Tailwind spells it as one arbitrary-value `leading` class (spaces as underscores), or as an arbitrary
+    // `line-height` property class. `leading-mono` is the token's unitless 1.55, which is the defect.
     const lineTokens = WELL.split(/\s+/).filter((t) => /^leading-|^\[line-height:/.test(t));
     expect(lineTokens, 'WELL carries exactly one line-height class').toHaveLength(1);
     const m = /^(?:leading-\[(.*)\]|\[line-height:(.*)\])$/.exec(lineTokens[0]!);
-    expect(m, `WELL's line-height class ${lineTokens[0]} is an arbitrary value, not a unitless token`).not.toBeNull();
+    expect(m, `WELL's line-height class ${lineTokens[0]} must be an arbitrary whole-pixel value (a bracketed leading class), not the unitless token`).not.toBeNull();
     const value = (m![1] ?? m![2] ?? '').replace(/_/g, '').replace(/\s+/g, '');
     expect(value, 'a whole-pixel line height').toMatch(WHOLE_PIXEL);
   });
