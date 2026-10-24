@@ -10,7 +10,7 @@ import { readSessionRecord, type SessionRecord } from '../registry.js';
 import { refusalSentence } from '../wsaudit.js';
 import { CHILD_BIRTH_SKEW_MS, type ChildSpentVerdict } from './childSpent.js';
 import {
-  CHILD_RECLAIM_PRE_LOCK_TOKEN, CHILD_RECLAIM_SKIP, childReclaimCoordinated, childReclaimFailingPastCeiling,
+  CHILD_RECLAIM_FAILED_TERMINAL_WORD, CHILD_RECLAIM_PRE_LOCK_TOKEN, CHILD_RECLAIM_SKIP, childReclaimTerminalRefusal, childReclaimCoordinated, childReclaimFailingPastCeiling,
   childReclaimFailingSentence, childReclaimFailingWord, childReclaimFailureLine, childReclaimJournalRow,
   childReclaimSameGenerationKey, isChildReclaimKeptVerdict, type ChildReclaimFeedQuiet, type ChildReclaimKeptAttention,
   type ChildReclaimPreLockToken, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
@@ -984,6 +984,11 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
             detail: `ws-reclaim refused with a word this build does not know: ${v.refused}` };
     }
     if (typeof v.failed === 'string') {
+      // The nested rescue's too-large word is printed on `failed` with no breadcrumb (D-6633): nothing started
+      // and nothing will change by waiting, so it is the terminal refusal it is classed as.
+      if (v.failed === CHILD_RECLAIM_FAILED_TERMINAL_WORD && v.crumb === false) {
+        return { kind: 'refused', token: v.failed, detail: typeof v.detail === 'string' ? v.detail : '' };
+      }
       // Fix round 2, review minor C: an empty `detail` must not render
       // "…failed: ." — omit the separator rather than leave it dangling.
       const detail = typeof v.detail === 'string' ? v.detail : '';
@@ -2021,6 +2026,10 @@ export function childReclaimStatus(input: ChildReclaimStatusInput): ChildReclaim
     if (event.outcome === 'refused' && token !== null) {
       if (kind === 'gone') return null;
       if (kind === 'terminal') return { word: 'refused', sentence: childReclaimTokenSentence(token), at: event.at };
+    }
+    // The nested rescue's too-large word arrives on a `failed` line (D-6633) and is settled all the same.
+    if (token !== null && childReclaimTerminalRefusal(event, childReclaimTokenKind)) {
+      return { word: 'refused', sentence: childReclaimTokenSentence(token), at: event.at };
     }
   }
   const row = input.row;

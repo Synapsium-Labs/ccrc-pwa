@@ -9,11 +9,13 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_TOKEN_KIND, parseChildReclaimAudit, reclaimChild,
+  CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_TOKEN_KIND, childReclaimTokenKind, parseChildReclaimAudit, parseChildReclaimResult, reclaimChild,
   type ChildReclaimDeps, type ChildReclaimRequest,
 } from '../src/coord/childReclaim.js';
-import { EXPIRE_TOKEN_KIND, parseExpireAudit } from '../src/archivedExpiry.js';
+import { EXPIRE_TOKEN_KIND, parseExpireAudit, parseExpireResult } from '../src/archivedExpiry.js';
 import { expireArchived, type ExpireArchivedDeps } from '../src/coord/expireArchived.js';
+import { childReclaimTerminalRefusal } from '../src/childReclaimSweep.js';
+import { expireTokenKind } from '../src/archivedExpiry.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
@@ -179,6 +181,41 @@ describe('the expiry lane records one "would rescue" row per refused archive', (
     const s = await rig({});
     await expireArchived(s.deps, s.req);
     expect(s.rows().filter((e) => e.title === SHADOW_TITLE)).toEqual([]);
+  });
+});
+
+// ccd prints both rescue words on the act's `failed` document (and journals them through `_lc_fail`), never as a refusal.
+// The too-large word must still be terminal on that path: a repository over the bound is not re-measured every pass.
+describe('the too-large word is terminal on the path ccd prints it (a failed document, no breadcrumb)', () => {
+  const ID = 'demo-quiet-basin';
+  const failed = (word: string, crumb?: boolean): string =>
+    JSON.stringify({ failed: word, detail: 'over the bound', ...(crumb === undefined ? {} : { crumb }) });
+
+  it('the reclaim act: {failed, crumb:false} reads as the terminal refusal, and is not tried again', () => {
+    const r = parseChildReclaimResult(ID, failed('nested-rescue-too-large', false), '');
+    expect(r).toEqual({ kind: 'refused', token: 'nested-rescue-too-large', detail: 'over the bound' });
+    expect(childReclaimTokenKind('nested-rescue-too-large')).toBe('terminal');
+  });
+
+  it('the expiry act: {failed, crumb:false} keeps the word as a terminal refusal, not a restart', () => {
+    const r = parseExpireResult(ID, failed('nested-rescue-too-large', false), '');
+    expect(r).toEqual({ kind: 'refused', token: 'nested-rescue-too-large', detail: 'over the bound' });
+    expect(expireTokenKind('nested-rescue-too-large')).toBe('terminal');
+  });
+
+  it('past a breadcrumb, or with the retry word, it stays a failure on both lanes', () => {
+    expect(parseChildReclaimResult(ID, failed('nested-rescue-too-large', true), '')).toMatchObject({ kind: 'failed' });
+    expect(parseChildReclaimResult(ID, failed('nested-rescue-failed', false), '')).toMatchObject({ kind: 'failed' });
+    expect(parseExpireResult(ID, failed('nested-rescue-too-large', true), '')).toMatchObject({ kind: 'failed' });
+    expect(parseExpireResult(ID, failed('nested-rescue-failed', false), '')).toMatchObject({ kind: 'restart' });
+  });
+
+  it('the journal: a failed line carrying the too-large word is a terminal refusal; no other failed word is', () => {
+    const kindOf = childReclaimTokenKind;
+    expect(childReclaimTerminalRefusal({ outcome: 'failed', refusal: 'nested-rescue-too-large' }, kindOf)).toBe(true);
+    expect(childReclaimTerminalRefusal({ outcome: 'failed', refusal: 'nested-rescue-failed' }, kindOf)).toBe(false);
+    expect(childReclaimTerminalRefusal({ outcome: 'failed', refusal: 'containment-unproven' }, kindOf)).toBe(false);
+    expect(childReclaimTerminalRefusal({ outcome: 'refused', refusal: 'nested-rescue-too-large' }, kindOf)).toBe(true);
   });
 });
 
