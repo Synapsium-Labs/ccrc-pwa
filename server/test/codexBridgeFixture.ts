@@ -128,8 +128,10 @@ export const RESPONSES_HEADER_VALUES = [
 
 /** One request `fakeResponses` saw: the method and path; `headers`, every header NAME, lower-cased, in the order
  *  sent; `values`, the value of each name in RESPONSES_HEADER_VALUES that was sent; `authorizationSha256`, the sha256
- *  hex of the authorization value (null when none was sent); and `body`, the body parsed as JSON (null when it is not
- *  an object). JSON.parse keeps a body's key order, so `Object.keys(body)` is the order the bridge wrote. */
+ *  hex of the authorization value (null when none was sent); `body`, the body parsed as JSON (null when it is not
+ *  an object), JSON.parse keeping its key order, so `Object.keys(body)` is the order the bridge wrote; and `dropped`,
+ *  set true when the connection closed before the scripted answer was ended (the client dropped it mid-stream), false
+ *  until then. */
 export type ResponsesRequest = {
   method: string;
   path: string;
@@ -138,6 +140,7 @@ export type ResponsesRequest = {
   authorizationSha256: string | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   body: Record<string, any> | null;
+  dropped: boolean;
 };
 
 /** The path the fake answers, the backend adapter's RESPONSES_PATH under a base with no path of its own. */
@@ -202,10 +205,13 @@ export async function fakeResponses(
       } catch {
         body = null;
       }
-      requests.push({
+      const seen: ResponsesRequest = {
         method: req.method ?? '', path: urlPath, headers: names, values,
         authorizationSha256: typeof auth === 'string' ? createHash('sha256').update(auth).digest('hex') : null, body,
-      });
+        dropped: false,
+      };
+      requests.push(seen);
+      res.once('close', () => { if (!res.writableEnded) seen.dropped = true; });
       if (req.method !== 'POST' || urlPath !== RESPONSES_ROUTE) {
         res.writeHead(404, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: { code: 'not_found' } }));

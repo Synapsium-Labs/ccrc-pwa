@@ -235,7 +235,15 @@ def post(base: str, body: bytes, headers: List[Tuple[str, str]], *, idle_s: Opti
     for name, value in resp.getheaders():
         key = name.lower()
         received[key] = received[key] + ", " + value if key in received else value
-    return Upstream(resp.status, received, _chunks(resp), conn.close)
+
+    def close() -> None:
+        # The response first: for a `will_close` answer (`Connection: close`, or no length and not chunked)
+        # getresponse has already closed `conn` and handed the socket to the response, whose file still holds it, so
+        # conn.close() alone would leave the socket open (CPython http/client.py, HTTPConnection.getresponse).
+        resp.close()
+        conn.close()
+
+    return Upstream(resp.status, received, _chunks(resp), close)
 
 
 def error_of(upstream: Upstream, *, now: float) -> errors.BridgeError:

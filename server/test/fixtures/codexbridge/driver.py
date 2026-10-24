@@ -108,13 +108,20 @@ THE BACKEND ADAPTER (Task 7). A request is built from an Anthropic body through 
                    encode_body's bytes as text}: build_body with instructions_form read from `laneDir`'s marker
                    (backend.instructions_form), False with no laneDir
   backend-ua       {version} -> {"ua", "platform": [system, release, machine]}
-  backend-post     {body, headers?, output_config?, laneDir?, version?, idle_s?, now?, and either authDir + lib (Stage
+  backend-post     {body, headers?, output_config?, laneDir?, version?, idle_s?, now?, closeAfter?, and either authDir + lib (Stage
                    1's library loaded by path; the headers from backend.headers_for over its ensure_fresh reading) or
                    token + accountId? (backend.build_headers)} -> {"status", "headers" (the upstream's, lower-cased),
                    "bytes" (the stream's length), "types" (each parsed SSE event's type), "headAt" and "elapsed"
                    (seconds from the call), "timeout" (UpstreamTimeout's phase, or None), "error" (a non-2xx answer
                    through backend.error_of, as a BridgeError prints, or None)}: one backend.post to
-                   upstream_base(os.environ), every chunk read
+                   upstream_base(os.environ), every chunk read; with `closeAfter: n`, Upstream.close() is called once
+                   n chunks are read and nothing more is read (a later `sleep` op keeps the process, and so the
+                   socket, alive unless close dropped it)
+  backend-tls      {token} -> {"constructed": [{"cls", "host", "port", "timeout", "verifyMode", "checkHostname"}],
+                   "postRaised"}: one backend.post to backend.DEFAULT_BASE with http.client's HTTPSConnection and
+                   HTTPConnection and socket.create_connection each replaced by a recorder that raises before any I/O
+                   (restored after), so nothing reaches the network; `verifyMode` is the context's ssl.VerifyMode name
+                   (None with no context), and `postRaised` the class post raised
 A BridgeError prints as {"error": {status, etype, message, headers, state, code, requestId, kind}, "answer":
 {"status", "headers", "body": parsed JSON}, "event": errors.event(e) as text}. An op that raised prints
 {"raised": <class name>}. Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the package failed to import.
@@ -129,7 +136,9 @@ import importlib.util
 import json
 import os
 import platform
+import socket
 import sqlite3
+import ssl
 import sys
 import threading
 import time
@@ -663,6 +672,8 @@ def _backend_op(name, op, cb):
     if name == "backend-ua":
         return {"ua": backend.user_agent(op["version"]),
                 "platform": [platform.system(), platform.release(), platform.machine()]}
+    if name == "backend-tls":
+        return _backend_tls(op, backend)
     req = _neutral(op, cb)
     form = backend.instructions_form(op["laneDir"]) if op.get("laneDir") else False
     body = backend.build_body(req, instructions_form=form)
@@ -687,9 +698,14 @@ def _backend_op(name, op, cb):
         out["status"], out["headers"] = up.status, dict(up.headers)
         if 200 <= up.status < 300:
             parser = cb.sse.SseParser()
+            read = 0
             for chunk in up.chunks:
                 out["bytes"] += len(chunk)
                 out["types"].extend(ev.type for ev in parser.feed(chunk))
+                read += 1
+                if op.get("closeAfter") is not None and read >= op["closeAfter"]:
+                    up.close()
+                    break
             out["types"].extend(ev.type for ev in parser.close())
         else:
             out["error"] = _bridge_error(cb.errors, backend.error_of(up, now=op.get("now", time.time())))
@@ -700,6 +716,44 @@ def _backend_op(name, op, cb):
             up.close()
     out["elapsed"] = time.monotonic() - t0
     return out
+
+
+class _NoNetwork(Exception):
+    """Raised by backend-tls's recorders, before any I/O."""
+
+
+def _backend_tls(op, backend):
+    constructed = []
+
+    def recorder(cls_name):
+        def make(host, port=None, timeout=None, **kwargs):
+            context = kwargs.get("context")
+            constructed.append({
+                "cls": cls_name, "host": host, "port": port, "timeout": timeout,
+                "verifyMode": None if context is None else ssl.VerifyMode(context.verify_mode).name,
+                "checkHostname": None if context is None else context.check_hostname,
+            })
+            raise _NoNetwork()
+        return make
+
+    def no_connect(*args, **kwargs):
+        constructed.append({"cls": "socket.create_connection"})
+        raise _NoNetwork()
+
+    saved = (http.client.HTTPSConnection, http.client.HTTPConnection, socket.create_connection)
+    http.client.HTTPSConnection = recorder("HTTPSConnection")
+    http.client.HTTPConnection = recorder("HTTPConnection")
+    socket.create_connection = no_connect
+    try:
+        headers = backend.build_headers(op["token"], None, None, backend.user_agent("dev"))
+        try:
+            backend.post(backend.DEFAULT_BASE, b"{}", headers)
+            raised = None
+        except Exception as e:  # the answer this op reports
+            raised = type(e).__name__
+    finally:
+        http.client.HTTPSConnection, http.client.HTTPConnection, socket.create_connection = saved
+    return {"constructed": constructed, "postRaised": raised}
 
 
 def main():

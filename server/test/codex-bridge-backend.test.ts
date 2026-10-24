@@ -6,8 +6,8 @@
 // Every case runs the package through `runBridgeDriver` in a mkTmp HOME. A request is built from an Anthropic body by
 // the package's own `inbound.from_anthropic`, so no case spells a neutral request. The upstream is `fakeResponses`, an
 // in-process server on 127.0.0.1, reached through CCGPT_BRIDGE_UPSTREAM_BASE; a case that needs no answer leaves that
-// variable at CLOSED_AUTH_BASE. The bearer token is a synthetic JWT or a fixture string, and the fake records it only
-// as a sha256.
+// variable at CLOSED_AUTH_BASE. The bearer token is a synthetic JWT built at runtime, and the fake records it only as a
+// sha256.
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -15,7 +15,7 @@ import path, { join } from 'node:path';
 import { pythonOrSkip, runPy, runPyAsync } from './ccgptHarness.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { AUTH_LIB, CLOSED_AUTH_BASE, FIXTURE_ACCOUNT_ID, plantBackendCredential } from './codexAuthFixture.js';
+import { AUTH_LIB, CLOSED_AUTH_BASE, FIXTURE_ACCOUNT_ID, plantBackendCredential, syntheticJwt } from './codexAuthFixture.js';
 import { driverLines, fakeResponses, runBridgeDriver, type ResponsesAnswer } from './codexBridgeFixture.js';
 
 const PY = pythonOrSkip();
@@ -27,12 +27,18 @@ it('this box has a usable python3', () => {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Line = Record<string, any>;
 
+/** The bearer token of every case without a planted credential: built at runtime, never a literal. */
+const TOKEN = syntheticJwt({ sub: 'fixture-backend' });
+
 /** Run `ops` in one driver process; every op must print its line, and none may raise unless `allowRaise`. */
 async function run(
   ops: object[],
-  o: { env?: Record<string, string>; home?: string; timeoutMs?: number; allowRaise?: boolean } = {},
+  o: {
+    env?: Record<string, string>; home?: string; timeoutMs?: number; allowRaise?: boolean; consts?: Record<string, unknown>;
+  } = {},
 ): Promise<Line[]> {
-  const r = await runBridgeDriver(o.home ?? mkTmp('cb-backend-'), { ops }, o.env ?? {}, { timeoutMs: o.timeoutMs ?? 10_000 });
+  const action = o.consts ? { ops, consts: o.consts } : { ops };
+  const r = await runBridgeDriver(o.home ?? mkTmp('cb-backend-'), action, o.env ?? {}, { timeoutMs: o.timeoutMs ?? 10_000 });
   expect(r.timedOut, `${r.stdout}\n${r.stderr}`).toBe(false);
   const lines = driverLines(r.stdout);
   expect(lines.map((l) => l.op), `${r.stdout}\n${r.stderr}`).toEqual(ops.map((x) => (x as { op: string }).op));
@@ -40,14 +46,15 @@ async function run(
   return lines;
 }
 
-/** One backend-post against a fake that answers `answers`; the op's line and what the fake recorded. */
+/** One backend-post against a fake that answers `answers`, then the `after` ops; the post's line and what the fake
+ *  recorded. */
 async function post(
   answers: ResponsesAnswer[], op: Record<string, unknown>,
-  o: { env?: Record<string, string>; home?: string; timeoutMs?: number } = {},
+  o: { env?: Record<string, string>; home?: string; timeoutMs?: number; consts?: Record<string, unknown>; after?: object[] } = {},
 ): Promise<{ line: Line; requests: Awaited<ReturnType<typeof fakeResponses>>['requests'] }> {
   const fake = await fakeResponses(answers);
   try {
-    const [line] = await run([{ op: 'backend-post', token: 'tok-fixture-1', ...op }],
+    const [line] = await run([{ op: 'backend-post', token: TOKEN, ...op }, ...(o.after ?? [])],
       { ...o, env: { ...(o.env ?? {}), CCGPT_BRIDGE_UPSTREAM_BASE: fake.base } });
     return { line, requests: fake.requests };
   } finally {
@@ -179,6 +186,23 @@ describe.skipIf(!PY)('the backend adapter: the body (codex-bridge spec §2.2, §
     expect(withFormat.keys.slice(-2)).toEqual(['prompt_cache_key', 'text']);
     expect(without.keys).not.toContain('text');
   });
+
+  it("the request's tools, tool choice and parallel flag are what the body sends", async () => {
+    const tools = [{
+      type: 'custom', name: 'fixture_lookup', description: 'Looks a fixture up.',
+      input_schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
+    }];
+    const body = anthropic({ tools, tool_choice: { type: 'tool', name: 'fixture_lookup', disable_parallel_tool_use: true } });
+    const [translated] = await run([{ op: 'from-anthropic', body }]);
+    expect(translated.request.tools).toHaveLength(1);
+    expect(translated.request.tool_choice).toEqual({ type: 'function', name: 'fixture_lookup' });
+    expect(translated.request.parallel_tool_calls).toBe(false);
+    const { requests } = await post([{ status: 200, sse: COMPLETED }], { body });
+    const sent = requests[0].body!;
+    expect(sent.tools).toEqual(translated.request.tools);
+    expect(sent.tool_choice).toEqual({ type: 'function', name: 'fixture_lookup' });
+    expect(sent.parallel_tool_calls).toBe(false);
+  });
 });
 
 describe.skipIf(!PY)('the backend adapter: the headers (codex-bridge spec §2.2, D27)', () => {
@@ -199,7 +223,7 @@ describe.skipIf(!PY)('the backend adapter: the headers (codex-bridge spec §2.2,
     expect(req.values.accept).toBe('text/event-stream');
     expect(req.values['accept-encoding']).toBe('identity');
     expect(req.headers).toContain('authorization');
-    expect(req.authorizationSha256).toBe(createHash('sha256').update('Bearer tok-fixture-1').digest('hex'));
+    expect(req.authorizationSha256).toBe(createHash('sha256').update(`Bearer ${TOKEN}`).digest('hex'));
   });
 
   it('session-id carries the Claude Code session id and prompt_cache_key the cache key', async () => {
@@ -294,8 +318,9 @@ describe.skipIf(!PY)('the backend adapter: the endpoint and the transport (codex
     const [consts] = await run([{ op: 'backend-consts' }]);
     expect(consts.IDLE_TIMEOUT_S).toBe(300);
     const created = 'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_fx1","output":[]}}\n\n';
+    // no idle_s: the default path, IDLE_TIMEOUT_S read when post is called, lowered through the driver's consts
     const { line } = await post([{ status: 200, sse: { chunks: [created], holdOpenMs: 2000 } }],
-      { body: anthropic(), idle_s: 0.3 });
+      { body: anthropic() }, { consts: { 'backend.IDLE_TIMEOUT_S': 0.3 } });
     expect(line.status).toBe(200);
     expect(line.types).toEqual(['response.created']);
     expect(line.timeout).toBe('read');
@@ -309,6 +334,33 @@ describe.skipIf(!PY)('the backend adapter: the endpoint and the transport (codex
     expect(line.status).toBeNull();
     expect(line.timeout).toBe('head');
     expect(line.elapsed).toBeLessThan(2);
+  });
+
+  it('the default endpoint is reached over TLS verified by the default context', async () => {
+    // The driver replaces http.client's two connection classes and socket.create_connection with recorders that raise
+    // before any I/O, so this case reaches nothing; it reads what post would have connected with.
+    const [consts, tls] = await run([{ op: 'backend-consts' }, { op: 'backend-tls', token: TOKEN }]);
+    expect(tls.postRaised).toBe('_NoNetwork');
+    expect(tls.constructed).toEqual([{
+      cls: 'HTTPSConnection', host: 'chatgpt.com', port: 443, timeout: consts.CONNECT_TIMEOUT_S,
+      verifyMode: 'CERT_REQUIRED', checkHostname: true,
+    }]);
+  });
+
+  it('close drops the connection mid-stream, a Connection: close answer included', async () => {
+    // With `Connection: close`, http.client hands the socket to the response and closes the connection object first,
+    // so closing that object alone leaves the stream open. The driver reads one chunk, closes, then stays alive past
+    // the stream's end, so only a close that drops the socket shows as `dropped` before the fake ends its answer.
+    const chunks = Array.from({ length: 8 }, (_, i) =>
+      `event: response.created\ndata: {"type":"response.created","response":{"id":"resp_fx${i}","output":[]}}\n\n`);
+    const heads: Array<Record<string, string>> = [{ connection: 'close' }, {}];
+    for (const headers of heads) {
+      const { line, requests } = await post([{ status: 200, headers, sse: { chunks, delayMs: 100 } }],
+        { body: anthropic(), closeAfter: 1 }, { after: [{ op: 'sleep', s: 1.5 }] });
+      expect(line.status, JSON.stringify(headers)).toBe(200);
+      expect(line.types, JSON.stringify(headers)).toEqual(['response.created']);
+      expect(requests[0].dropped, JSON.stringify(headers)).toBe(true);
+    }
   });
 });
 
