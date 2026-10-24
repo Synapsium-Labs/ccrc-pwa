@@ -58,10 +58,13 @@ export function parseOrphanCensus(stdout: string): OrphanCensus {
   return { kind: 'census', rows, truncated: doc['truncated'] };
 }
 
+/** The refusals a rescue token may sit beside: rung 9 (commits on no remote) and rung 11 (a nested checkout). */
+export type RescuableWord = 'head-not-on-remote' | 'nested-checkout';
+
 /** `ws-audit --orphan-hex`, as the lane reads it. `token` and `rescuable` carry the consent `ws-orphan` spends. */
 export type OrphanAudit =
   | { readonly kind: 'token'; readonly token: OrphanToken }
-  | { readonly kind: 'rescuable'; readonly rescueToken: OrphanToken; readonly detail: string }
+  | { readonly kind: 'rescuable'; readonly word: RescuableWord; readonly rescueToken: OrphanToken; readonly detail: string }
   | { readonly kind: 'refused'; readonly word: string; readonly detail: string }
   | { readonly kind: 'unmeasured'; readonly detail: string }
   | { readonly kind: 'unreadable'; readonly detail: string };
@@ -78,8 +81,8 @@ export function parseOrphanAudit(stdout: string, hex: string): OrphanAudit {
   if (doc['verdict'] === 'token') {
     return typeof doc['token'] === 'string' && TOKEN.test(doc['token']) ? { kind: 'token', token: doc['token'] as OrphanToken } : bad('the audit token is malformed');
   }
-  if (refusal === 'head-not-on-remote' && typeof doc['rescueToken'] === 'string') {
-    return TOKEN.test(doc['rescueToken']) ? { kind: 'rescuable', rescueToken: doc['rescueToken'] as OrphanToken, detail } : bad('the rescue token is malformed');
+  if ((refusal === 'head-not-on-remote' || refusal === 'nested-checkout') && typeof doc['rescueToken'] === 'string') {
+    return TOKEN.test(doc['rescueToken']) ? { kind: 'rescuable', word: refusal, rescueToken: doc['rescueToken'] as OrphanToken, detail } : bad('the rescue token is malformed');
   }
   if (doc['verdict'] === 'unmeasured' || refusal === 'unmeasured') return { kind: 'unmeasured', detail };
   return refusal !== null && /^[a-z][a-z0-9-]{0,40}$/.test(refusal) ? { kind: 'refused', word: refusal, detail } : bad('the audit verdict is unknown');
@@ -159,6 +162,7 @@ export const ORPHAN_LEFT_SENTENCE: Readonly<Record<string, string>> = {
   'head-not-on-remote': 'its HEAD has commits on no remote, and the rescue arm is not armed',
   'secrets-ignored': 'an ignored file in it looks like a secret',
   'nested-checkout': 'it holds a nested checkout',
+  'nested-checkout-rescuable': 'it holds a nested checkout with work on no remote, and the rescue arm is not armed',
   'in-use': 'a process holds it',
   'changed-recently': 'something in it changed within the floor',
   paused: 'cleanup is paused fleet-wide',
@@ -301,7 +305,7 @@ export function orphanFoldAudit(m: OrphanTreeMemory, audit: OrphanAudit, nowMono
     case 'rescuable':
       return rescueArmed
         ? keep(observe(m, audit.rescueToken, true, nowMono), null)
-        : keep({ ...m, obs: null, nextMono: nowMono + censusMs }, left('head-not-on-remote', audit.detail));
+        : keep({ ...m, obs: null, nextMono: nowMono + censusMs }, left(audit.word === 'nested-checkout' ? 'nested-checkout-rescuable' : audit.word, audit.detail));
     case 'refused': return keep({ ...m, obs: null, nextMono: nowMono + censusMs }, left(audit.word, audit.detail));
     case 'unmeasured': case 'unreadable': return keep({ ...m, obs: null, nextMono: nowMono + ORPHAN_RETRY_MS }, null);
   }

@@ -17,6 +17,7 @@ const tok = (c: string): string => c.repeat(64);
 interface Tree { cls: string; audit: Record<string, unknown>; inside?: string | null }
 const clean = (c: string): Record<string, unknown> => ({ verdict: 'token', refusal: null, detail: '', token: tok(c), rescueToken: null });
 const refused = (word: string, detail = ''): Record<string, unknown> => ({ verdict: 'refused', refusal: word, detail, token: null, rescueToken: null });
+const rung11 = (c: string): Record<string, unknown> => ({ verdict: 'refused', refusal: 'nested-checkout', detail: 'a loose fixture repository', token: null, rescueToken: tok(c) });
 const rung9 = (c: string): Record<string, unknown> => ({ verdict: 'refused', refusal: 'head-not-on-remote', detail: 'two commits on no remote', token: null, rescueToken: tok(c) });
 
 function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-flags-v1']) {
@@ -366,5 +367,17 @@ describe('DR-23: trees nested inside a workspace', () => {
     r.addInside('/p/.claude/worktrees/ghost', 'claude', rung9('a'), 'lane-a');
     await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
     expect(r.acts()).toEqual([]);
+  });
+
+  it('a rung-11-only rescue token is left under orphan-tree-live alone, and spent with --rescue under both markers', async () => {
+    const r = rig(); r.markers.add(ORPHAN_TREE_LIVE_MARKER); r.coordinators.add('lane-a');
+    const h = r.addInside('/p/.claude/worktrees/wf_x', 'claude', rung11('b'), 'lane-a');
+    await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts(), 'no rescue marker: left').toEqual([]);
+    expect(r.feed[0]!.body).toContain('rescue arm is not armed');
+    r.markers.add(ORPHAN_TREE_RESCUE_LIVE_MARKER);
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toHaveLength(1);
+    expect(r.acts()[0]!.slice(0, 6)).toEqual(['ws-orphan', '--expect', tok('b'), '--tree-hex', h, '--rescue']);
   });
 });
