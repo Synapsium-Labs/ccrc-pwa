@@ -1,4 +1,5 @@
-import { isReadFromRange, type TailData, type TailReset } from '../../../shared/agent-protocol.js';
+import { DISK_OP, isReadFromRange, type TailData, type TailReset } from '../../../shared/agent-protocol.js';
+import { readDiskMeasured } from '../../../shared/disk.js';
 import type { FleetIO, ReadFailure } from '../io.js';
 import type { FleetClient } from './client.js';
 
@@ -223,6 +224,20 @@ export function createIo(client: FleetClient): FleetIO {
 
     async tailFile(path, offset, onData, onReset) {
       return openRemoteTail(client, path, offset, onData, onReset);
+    },
+
+    /** The agent's `disk` op (D-6615). An agent whose `ready.ops` does not name it is never sent it (it would answer
+     *  `bad-request`): that is `unmeasured`, exactly as a fault on the wire or a reply in no shape this reader knows
+     *  is. `readDiskMeasured` checks every element of the reply, so a half-formed one is never taken for a measurement. */
+    async statfsMeasured() {
+      if (!(client.state.agentOps ?? []).includes(DISK_OP)) return { ok: false, reason: 'unmeasured' };
+      try {
+        const r = (await client.request({ t: 'req', op: DISK_OP })) as Record<string, unknown>;
+        const measured = readDiskMeasured(r);
+        return measured === null ? { ok: false, reason: 'unmeasured' } : { ok: true, measured };
+      } catch {
+        return { ok: false, reason: 'unmeasured' };
+      }
     },
   };
 }

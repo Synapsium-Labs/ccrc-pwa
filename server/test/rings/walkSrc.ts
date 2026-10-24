@@ -28,18 +28,21 @@ export interface WalkOptions {
   flat?: boolean;
   /** Narrows the source files kept (tested against the repo-relative path). */
   match?: RegExp;
+  /** Replaces `SOURCE_RE` as the extension test, for a rule that reads a kind of file the other rules do not (the
+   *  PWA's `.css`, which stage 4 gives a ring and a context). Declarations, tests and stories stay out. */
+  extensions?: RegExp;
 }
 
 /** Every source file under `roots`, repo-relative and sorted. `node_modules` is never entered. Throws, naming the
  *  roots, when fewer than `min` files are found. */
-export function walkSrc({ roots, min, flat = false, match }: WalkOptions): string[] {
+export function walkSrc({ roots, min, flat = false, match, extensions = SOURCE_RE }: WalkOptions): string[] {
   const out: string[] = [];
   const visit = (dir: string, depth: number): void => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
         if (!flat && e.name !== 'node_modules') visit(abs, depth + 1);
-      } else if (SOURCE_RE.test(e.name) && !NOT_SOURCE_RE.test(e.name)) {
+      } else if (extensions.test(e.name) && !NOT_SOURCE_RE.test(e.name)) {
         const r = rel(abs);
         if (!match || match.test(r)) out.push(r);
       }

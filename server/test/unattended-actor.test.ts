@@ -36,6 +36,7 @@ import { ACTOR_FLAGS_CAP, CCD_ARGV, sweepDec } from '../src/ccdargv.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import { childReclaimReleaseActor } from '../src/coord/childReclaim.js';
 import { configDirFor } from '../src/config.js';
 import type { Runner } from '../src/exec.js';
@@ -350,7 +351,7 @@ describe('an interpolated label carries the RUN ID ACTUALLY IN SCOPE, not merely
       // before the argv this test reads is ever built (measured).
       fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-hold', ACTOR_FLAGS_CAP],
                     rosterFp: null, build: null },
-      tmux: base.tmux, queue: base.queue,
+      sendClear: clearSender(base),
     };
     const outcome = await dispatchRun(deps, opened.id, 'do the thing', undefined);
     expect(outcome.ok, `fixture must actually reach the hold step: ${JSON.stringify(outcome)}`).toBe(true);

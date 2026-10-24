@@ -1,7 +1,10 @@
 import { constants as fsConstants, createReadStream, watch, type FSWatcher } from 'node:fs';
 import { lstat, mkdir, open, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import type { ReadFailure } from '../../shared/agent-protocol.js';
+import type { DiskMeasured } from '../../shared/disk.js';
+import { measureDisk } from '../../agent/src/disk.js';
 import { isReadFromRange, LANE_STATE_DIR_NAME, laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
 /** Why a read couldn't produce content — and, since `MeasuredStat` below,
@@ -72,6 +75,13 @@ export type MeasuredStat =
 export type MeasuredPathKind =
   | { ok: true; kind: 'regular' | 'symlink' | 'other' }
   | { ok: false; reason: ReadFailure | 'unmeasured' };
+
+/** The `disk` measurement as a seam answers it: what the work filesystems read (`DiskMeasured`, the decider's input),
+ *  or why nothing was read. `unmeasured` is an agent too old to answer the op or any fault on the wire; `unreadable`
+ *  is a local fault. Neither is ever evidence of a healthy disk, and `absent` has no meaning here. */
+export type MeasuredDisk =
+  | { ok: true; measured: DiskMeasured }
+  | { ok: false; reason: 'unreadable' | 'unmeasured' };
 
 /** A binary read that distinguishes its THREE failure modes. `too-large` is
  *  not a fault and not an absence: the file is there and this transport
@@ -231,6 +241,11 @@ export interface FleetIO {
     onData: (chunk: Buffer) => void,
     onReset: (size: number) => void,
   ): Promise<() => void>;
+  /** The filesystems the fleet's work roots (`DISK_WORK_ROOTS`) live on, with their sizes, free space and inodes, and
+   *  the expected mounts. Takes no path: the adapter resolves the roots itself, against ITS box's home.
+   *  Failure contract: never rejects; locally a fault is `unreadable`, and remotely an agent too old to answer the
+   *  op, a malformed reply, or any fault on the wire is `unmeasured`; never a measurement of zero. */
+  statfsMeasured(): Promise<MeasuredDisk>;
 }
 
 /** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
@@ -451,4 +466,20 @@ export const localIO: FleetIO = {
       stopWatching();
     };
   },
+
+  // The process home by default; a server with a configured home wires `localIOFor(cfg.home)` instead.
+  statfsMeasured: () => measureLocalDisk(os.homedir()),
 };
+
+/** The agent's own measurer on `home`: the one implementation of the `disk` op's arithmetic, so the two adapters
+ *  cannot disagree about a root (D-6615). It never throws for a disk fault (a fault is a `missing` row). */
+export async function measureLocalDisk(home: string): Promise<MeasuredDisk> {
+  try { return { ok: true, measured: await measureDisk(home) }; }
+  catch { return { ok: false, reason: 'unreadable' }; }
+}
+
+/** `localIO` measuring the server's CONFIGURED home (`cfg.home`: `CCRC_HOME` or the process home), as every other
+ *  local-mode path does, never the process home behind its back. */
+export function localIOFor(home: string): FleetIO {
+  return { ...localIO, statfsMeasured: () => measureLocalDisk(home) };
+}

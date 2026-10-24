@@ -1065,6 +1065,549 @@ Proposed: one batched exec per `_ws_reclaim_workdir_shared` call (stat, link wal
   - `-ef` on the main checkout refuses a bind spelling.
   - A record that names the child's directory only through another spelling answers rc 1 or 2 at the ladder, never a hit.
 
+### 4.12 As built (W3)
+
+W3 built this section's PI1 B, PI2 L1, PI3 B, PI4 D, PI5 A, PI6 M4, PI7 P1 (P2 for a row with a valid field), PI8 B2
+and PI10 O2, and items 1 to 9 and the worktree half of item 20 of §7. PI9 K1's reach was stated in W0 and is unchanged.
+This subsection records where what W3 built narrows, corrects or spells out §4.1 to §4.11, and names the residuals it
+leaves. It amends, and rewrites none of the text above. Every claim is measured at the wave's tip unless it says
+otherwise. Every identity input W3 added may only add a placement or a hold: none releases a row, or turns a refusal
+into a pass.
+
+**The entry field (PI1 B, PI2 L1).**
+- Each session's entry identity is one field, `$REG/<id>.workdirid`: one line with no trailing newline, in one of two
+  forms:
+  - valid: `v1<TAB><dev>:<ino>:<btime or -><TAB><at_ms><TAB><physical pwd -P><TAB><logical spelling>`;
+  - pending: `v1<TAB>pending<TAB><at_ms><TAB>-<TAB><logical>`.
+
+  `<at_ms>` is exactly 13 digits. A birth time is a positive integer or `-`. The physical path is plain and absolute,
+  and no control character stands anywhere but the four TABs. A body over 8320 bytes is unparseable. One regex, held
+  by the one reader, `_ws_workdirid_read`, is the grammar's single definition.
+- `workdirid-pending-form`: §4.3's grammar has one form, and as built it has two. The parent writes the pending form
+  through `_spawn_workdirid_pending` directly before each of `_spawn_start`'s two `_tmux_new_session` calls, the
+  primary and the retry. The pane replaces it after its `cd` succeeds and before `exec`. A pending field whose logical
+  spelling equals the row's current `.workdir` holds every child, and its detail names the row and the remedy,
+  "stop and start that session" (`pending-hold-remedy-stops-then-starts`, below). So a pane that cannot record where
+  it entered leaves a hold, as §4.11 asks. A pending write
+  that fails unlinks the field, so a stale valid field never survives it.
+- The reader answers one of seven words in `_WS_WDID_STATE`, by rules taken in a fixed order: `legacy-absent` (no
+  field), `legacy-link` (a link, whose target is never read), `unmeasured` (not a regular file, or a failed open or
+  read), `legacy-unparseable` (over the cap, a failed regex, or a physical path that is not plain), `legacy-stale` (its
+  logical spelling differs from the current `.workdir`), `pending`, and `valid`. It returns 0 for `valid`, 1 for every
+  `legacy-*` word, and 2 for `pending` and `unmeasured`. The stale rule comes before the pending one, so a stale
+  pending line reads legacy.
+- `workdirid-unreadable-holds`: §4.3 names a missing, unparseable or link field legacy. As built, a field that is not a
+  regular file (a directory, a FIFO), or that cannot be read, answers `unmeasured`, a hold, as `.workdir`'s own
+  unreadable rule does. The reader checks the type before it opens the file, and reads a bounded number of bytes. It
+  mirrors `_reg_read`'s refusals and calls nothing of the registry's own.
+- The pane's writer is one composer, `_plat_workdirid_pane`: one line in the platform layer, byte-identical in
+  `ccd/ccrc`. It prints a brace-free `/bin/sh -c '<script>'` fragment, ending ` 2>/dev/null && `, for every workdir
+  that `.workdir` itself accepts, a backslash included. It prints nothing only for an empty argument, an argument
+  holding a control character or a `'` (both of which `.workdir` refuses too), or an id holding a `/`. Each `\` rides
+  inside the fragment's single-quoted arguments as `\0134`, which the script decodes with `printf %b` before it writes,
+  so the field holds the logical spelling byte-equal to `.workdir`, and the one reader and its grammar are unchanged.
+  The script measures `pwd -P` and
+  the stat of `.`, in the form `_plat_btime` uses on that system, writes temp-then-rename, and exits 0 on every path.
+  The field round-trips to `valid` under sh, bash and dash, measured; and, judged by their quoting rules, under zsh,
+  and under fish for every spelling without `\\` or a trailing `\` (`fish-spawn-cd-reads-backslash-escapes`, below).
+  The zsh and fish cases skip where the shell is absent.
+- Each launch command enters the workdir, runs the writer with its errors discarded, then enters the workdir again and
+  execs: `cd '<wd>' && <fragment>true; cd '<wd>' && exec env …`, which reads `cd '<wd>' && true; cd '<wd>' && exec env …`
+  when the composer printed nothing. So a writer that cannot start, is killed or fails never stops the `exec`. A failed
+  first `cd` skips the writer and leaves the parent's `pending`; the `exec` runs exactly when the second `cd` succeeds,
+  so a `cd` that fails both times execs nothing. For an absolute `.workdir`, the only form `cmd_start` and ws-add
+  store, both `cd`s enter the same directory, so no transcript path changed, and the exec'd process's `OLDPWD` now
+  names the workdir; a relative one is `relative-workdir-second-cd-does-not-enter`, below. A link in the workdir
+  re-pointed between the two `cd`s, a window measured at about 7 ms (the whole fragment), leaves a field that names
+  the first directory entered while the process lives in the second. The row is placed at both while the link stands
+  re-pointed. If the link is then pointed back, it is placed at the first only, and the second is seen by the cwd probe
+  alone, while a process lives there (`repointed-alias-for-legacy-rows-until-respawn`, below).
+- The same composer writes the two seeds: `start` writes a valid field directly after its `.workdir` write, and ws-add
+  appends the same statement to its `.workdir` line in place. The pending line has the one writer above.
+- `_reg_purge`'s loop already unlinks the field, so purging needed no code. Its inventory comment was not edited.
+
+**The rows rung (PI3 B, PI6 M4, PI8 B2).**
+- `_ws_reclaim_workdir_shared` makes one walk per call, `_ws_reclaim_idwalk`: one `python3 -I` exec under
+  `_plat_timeout`, bounded by `WS_RECLAIM_WALK_S` (5 s). In that one exec it:
+  - stats every prefix of each row's complete resolved spelling;
+  - walks the link components of each row's raw spelling;
+  - reads the mount table;
+  - asks `_plat_btime` for the birth times, inside the same bound.
+
+  Its reply carries indices and numbers, never a path, and ends with its own line count. A timeout, a failure, or a
+  reply not read whole answers unmeasured, never "no row". The rung then matches the reply with its own list of
+  requests, one line each in order, so a list cut short on its way to the walk holds too, and the walk refuses a last
+  request cut before its end. Its maps live for one call, so every re-ask builds its own.
+- Ancestry. A row whose resolved identity equals the child's is SHARED, and a row with the child's identity in its
+  ancestor chain is NESTED, as well as by today's strings. The standing leaves are targets too, as NESTED. Identities
+  measured at one instant compare device and inode alone. Identities compared across time compare through
+  `_ws_ident_eq`, which adds the birth time when both sides carry one.
+- `rows-walk-second-mountinfo-reader`: the walk asks §4.5 step 3's mount hold, reading the table as a declared second
+  reader through `_ws_collect_mountinfo`'s seam. It holds the child unmeasured when a mount point lies at or under it,
+  or when a mount on its device has a root at or under its device-relative path (`//deleted` included). A device that
+  mountinfo and the stat of the child disagree on fails closed. A parity pin holds the walk's mount-point answer equal
+  to `_ws_collect_mounts_clear`'s on the same tables, and a source pin names exactly two readers of the seam. On Darwin
+  the caller does not ask (one line), and the ancestry arm stands alone.
+- The rung has three callers, and each now places by identity: the reclaim and expiry ladder, `_ws_reclaim_owned`, and
+  the collector's row rule, `_ws_collect_rows_clear`.
+- `w2-mount-asks-shadowed-by-the-reask`: three askers now read the mount table through this rung: the ladder's
+  in-lock recompute, `_ws_reclaim_owned` at the tail's start, and the tail's re-ask before every standing forced
+  removal. So a mount under the child is caught before W2's step-3 and step-4 asks (§3.10). Those asks are now a
+  backstop for a mount that appears in the instant after the re-ask. W2's behavioural cases moved their plants to that
+  instant, and their assertions are unchanged.
+- `collect-reprove-table-moves-to-the-gap`: the collector's row rule now reads the table before its move, so a table
+  that cannot be read answers `probe-unmeasured` before the move. One collector reprove case moved its unreadable table
+  to the `moved` gap, and its assertions are unchanged.
+- `unproc-also-by-walked-position`: §4.8's m1 refuses a link whose raw target matches `^/+proc(/|$)`. As built, a row
+  is also refused `unproc` when the walk's link-free position enters `/proc` through a relative target.
+- `double-slash-rows-placed-by-identity-pins-move`: a row whose spelling resolves to a `//` path, and a child whose own
+  workdir does, used to be unplaced by strings alone. As built, each is placed by its device and inode ancestry as well.
+  So where such a row truly lies inside the child, the ladder answers the terminal `containment-unproven` (fresh), and a
+  resumed tail answers `containment-refuted`, in place of the retryable unmeasured that strings alone gave. A resolved
+  `//` row outside the child stays unmeasured, with the unplaced clause. No row is released, and the pins of the
+  suites that held the old answers moved to the new ones.
+- `rows-rung-pass-b-holds-an-unlisted-answer`: the rung's reading of the walk's reply holds the child unmeasured for
+  any answer word it does not list for a row, a target or the table, naming the word as read ("unexpected walk answer
+  <word>"), where such a word used to fall through as no hold. The walk's own no-hold words (`T ok`, `A ok`, `P clean`
+  and `M clear`) keep their meaning, and the walk emits no other word today, so no answer it gives changes.
+- `rows-rung-holds-mask-later-terminal-words`: the rows rung runs before most of the ladder's later rungs, and before
+  `_ws_reclaim_owned`'s later proofs. Its holds `unpend`, `unfield`, `unrec`, `unwalk` and `unmount` answer `unmeasured`
+  at the ladder and 2 at owned, and they answer there first. So a child that would have met a later terminal word
+  (`no-worktree-record`, `not-a-workspace`, the git-directory rung's, `branch-elsewhere` or `tree-unreadable`, or
+  owned's moved-check and identity proofs) answers the retryable word instead. Each is a refusal either way, and this
+  subsection's opening rule, that an identity input may only add a placement or a hold, licenses it. This entry names
+  the rung's position, as `record-two-spellings-reads-unmeasured` does for the record reader. The reach of `unpend` is
+  its own residual, `pending-row-holds-every-child-box-wide`, below.
+- What following links leaves to judgement:
+  - that a real bind's `stat` returns the source's device and inode for every path below it, a source on another file
+    system included;
+  - that `pwd -P` and `/proc/<pid>/cwd` read the bind's spelling in ccd's namespace;
+  - that mountinfo's device field equals `stat`'s on the fleet's file systems (measured on the fleet box before the
+    first edit);
+  - that a link appearing after the resolve is measured as the namespace reads it now, which only adds.
+- Each new not-asked answer (`unwalk`, `unmount`, `unpend`, `unfield`, `unrec`) is decided after the outrank line, so a
+  string placement still answers the terminal `containment-unproven`. Each names rows by id only.
+- The rung's git reads of a gone row's repository stay unbounded (`rows-rung-git-reads-unbounded`). A runner that kills
+  the audit there gets no document, which the server reads as a failed audit and retries: it fails closed.
+- The budget. The collect audit's probes are `WS_COLLECT_IDLE_SCAN_S` (30 s), `WS_PATH_USERS_SCAN_S` (10 s),
+  `REAP_SCAN_SECONDS` (30 s) and now `WS_RECLAIM_WALK_S` (5 s), with one `_plat_timeout` grace: about 78 s, or 83 s at
+  the widest grace, against ws-audit's 90 s runner row. ccd's collector header states the same sum.
+
+**Entry placement (PI3 step 2, PI7 P2).**
+- A valid field may only add. For a row with a valid field:
+  1. its recorded identity, or its recorded physical path, equal to the child's is terminal SHARED (PI7 P2);
+  2. its recorded physical path inside the child, or at or inside a standing leaf, by string, is NESTED;
+  3. its recorded path, walked now, equal to the child or lying inside it or a leaf, by device and inode, is SHARED or
+     NESTED;
+  4. the mismatch rule: when its recorded identity differs from its current one, and the recorded path no longer stands
+     with that identity, it is unmeasured (`unrec`), "entered a directory other than the one their workdir names now".
+- The mismatch rule is asked only of a row whose current spelling resolved complete. A gone row gets rules 1 to 3,
+  never 4, and is released only by R54's arms, as before, save one whose field reads `pending`: that field holds the
+  child whatever those arms answer (`gone-row-with-pending-field-holds-despite-its-release-arms`, below). A recorded
+  path outside the child never moves a row out of any placement.
+- Birth times are read only where a rule compares across time: the field against the child, and the mismatch rule. A
+  birth time that could not be read holds (`unwalk`), and is never read as "none". A recorded path that is gone adds
+  nothing by itself. It only tells the mismatch rule that the path does not stand.
+- A pending field holds (`unpend`), and so does a field that is not a regular file or cannot be read (`unfield`). A
+  legacy field, whatever its word, leaves its row to today's string rule plus the ancestry above.
+- The count. The reclaim audit document carries `"legacyRows"` and `"pendingRows"`: `legacyRows` counts the other
+  rows whose field is in a `legacy-*` state, and `pendingRows` those whose field reads `pending`. A field that reads
+  `unmeasured` is in neither, and it holds the child. `null` means not counted: the ladder never reached the rung, or the rung could not list
+  the registry. The expiry audit document carries the same two keys. No server reader was added.
+
+**The moved-check (R54).**
+- R54's identity moved-check is built in `_ws_reclaim_moved_check`. The rung records each gone row's valid field in
+  `_WS_RECORDED_IDS`, beside the git directories it already recorded. Each nested checkout's identity is compared with
+  every recorded identity, birth time included where both carry one. A match holds the child, and a checkout whose identity cannot be read
+  holds it unmeasured. It never releases a row.
+- `moved-check-identity-failure-preempted-a-proof`: the check's identity arm keeps its first unmeasured answer (an
+  identity measure that failed, or the rule's other answer) and returns it only after every checkout and every recorded
+  identity was asked, so a proof found later in the same call still refuses. An immediate return would have pre-empted
+  that proof with a weaker word. The git-directory arm still returns 2 at once, as before W3.
+- Its limit stands: a gone row whose field records a subdirectory of a moved tree is not matched.
+
+**The main checkout and the record (PI10 O2).**
+- `_ws_reclaim_owned` measures two identities last, after every proof above and its moved-check: the main
+  checkout's, followed whole, and the tree's own when it stands. So a failed measure (2) never pre-empts a proof (1).
+  Equal device and inode refuse (1): the tree "is the project directory … itself, under another spelling". Birth times
+  are not compared there. A failed measure answers 2.
+- `ladder-main-checkout-ef`: §4.8 adds `-ef` to the owned arm. As built, the ladder's own main-checkout compare gains
+  it too, beside its string compare, and refuses `not-a-workspace` "under another spelling".
+- `_ws_reclaim_record` uses identity only to refuse. After its string scan, a first (main) stanza that is the tree by
+  `-ef` sets `RECLAIM_REC_MAIN`. Any stanza but the first and the string-matched one that is the tree answers 2: "two
+  of … worktree records name the tree". `record-main-hit-keeps-the-terminal-refusal`: once the first stanza names the
+  tree by its string, a hit, no later stanza's answer counts (each is still compared by `-ef`, so
+  `record-ef-has-no-deadline` reaches it, and is then skipped), so a row naming the main checkout keeps the terminal
+  `not-a-workspace`, and the owned check its proof, rather than weakening to unmeasured. That keep needs a string hit.
+  A first stanza that names the tree only by `-ef` sets `RECLAIM_REC_MAIN` and makes later stanzas count for nothing
+  the same way, but is no hit: the refusal stands (the reader answers 0, with `RECLAIM_REC_MAIN` set) only where
+  another stanza hit by string, and with none it is the residual
+  `record-main-by-another-spelling-reads-no-worktree-record`, below.
+  `record-by-another-spelling-reads-unmeasured`: when only a stanza naming the tree under another spelling records it,
+  the reader answers 2, so the ladder answers the retryable `unmeasured` where it answered the terminal
+  `no-worktree-record`, whose detail was false (git does record the tree), and the owned check answers 2. Both refuse,
+  and nothing is removed. `record-two-spellings-reads-unmeasured`: when two of git's records name the standing tree,
+  one by its string and one under another spelling, the reader's 2 comes before the ladder's terminal
+  `branch-elsewhere`, `containment-unproven` and `tree-unreadable`, so where one of them would have answered, the
+  ladder answers the retryable `unmeasured`, and the owned check answers 2. That is an added hold: no token is minted,
+  and nothing is removed. ws-expire reaches both shapes, and a later pass asks the whole ladder again and mints its
+  own token, carrying nothing from the pass that answered unmeasured. Identity never makes a hit. Every 2 carries its cause in `_WS_REC_WHY`, which
+  its three callers print, and a list failure keeps its exact sentence. The comments that said no `_ws_realpath` answer
+  is read there were corrected.
+
+**The cwd probe (PI4 D).**
+- `cwd-probe-adopts-the-path-users-walk`: one probe, `_ws_cwd_users`, answers nobody (0), in use (1, with the pids) or
+  unmeasured (2). A process is in use when the string of its cwd link meets the tree's physical spelling, OR the
+  device and inode ancestry of the directory that link names meets the tree.
+  - The physical spelling is the tree's parent resolved by `_ws_dir_physical`, with the leaf not followed. The cwd link
+    and lsof print physical paths, so a tree spelled through a linked root would otherwise never match by string.
+  - Beyond §4.6, the probe adopts `_ws_path_users`' fixed-point relisting, its leader-thread walk and its own-chain
+    exclusion, and has its own bound, `WS_CWD_USERS_SCAN_S` (10 s).
+  - The identity arm walks the `..` chain of the directory a cwd link names, so it sees a process that entered through
+    an alias of the tree, or through a mount of the tree itself. A bind whose source lies strictly inside the tree is
+    not reached by that walk, because a cwd on the bind climbs its own mount's chain. In ccd's own namespace the rows
+    rung's mount hold refuses the child while such a bind stands, so nothing is removed.
+  - It skips a process only on ENOENT or ESRCH of that process's own cwd link or stat file, or on the ruled EACCES
+    exception (a link that answers EACCES or EPERM at its first read is not seen: another user's process, or a
+    same-user one the kernel will not let this process follow, such as a non-dumpable process, an exec of an unreadable
+    binary, or an LSM denial). An ENOENT on opening the link after a successful read is confirmed through the stat
+    file (the process is gone, and is skipped), or by a second readlink of that link that answers ENOENT (the task
+    let go of that cwd since its link was read; ENOENT alone there: EACCES, any other errno or a path answers
+    unmeasured). A process whose own link vanished at its first read, or was let go of in that sense, is not skipped
+    for that alone: the walk asks it through its threads first
+    (`cwd-probe-confirms-a-vanished-link-by-a-second-read`, below). Any other failure answers unmeasured, never
+    "nobody".
+  - On Darwin it uses ws-expire's lsof arm, `_ws_expire_lsof`, by string alone.
+- ws-expire moved onto it. `_ws_expire_cwd_users` keeps its name, its contract and its parent resolve, and asks the
+  shared probe.
+- `cwd-wait-only-waits`: §4.6 asks the probe inside the post-kill wait. As built, the wait asks it of the tree, read
+  early from the tombstone, and only waits: it ends when nobody is inside or at its bound, and never refuses. The gates
+  are the asks at step 3 and step 4.
+- `cwd-refusal-reuses-worktree-remove-failed`: the probe is asked of the child before each standing nested checkout's
+  `keep_of` and its forced removal, and before the child's. An in-use or unmeasured answer fails the reclaim or the
+  expiry as `worktree-remove-failed`, retryable. The tree, the branch and the breadcrumb are kept, and the detail is cut
+  to 300 bytes by `_ws_leaf_why_line`. The server's sentence for that word now ends "or a process still works inside
+  it".
+- `cwd-probe-confirms-a-vanished-link-by-a-second-read`: §4.6 skips a process whose link vanished. As built, a process
+  whose own cwd link answers ENOENT at its first read, or whose open answers ENOENT while its stat file still stands
+  and the second readlink above answers ENOENT too, is asked again through its threads, `task/<tid>/cwd`,
+  the leader's tid kept, each by the string arm and then the identity arm.
+  The link is looked up by pid, and a thread's `execve` lets the leader exit and only then hands the pid to the exec'ing
+  thread, so the leader's vanished link proves nothing about the pid. The walk runs in passes, bounded as the whole walk
+  is by `WS_CWD_USERS_SCAN_S`: each pass lists `task/` (a `task/` that cannot be listed is unmeasured), asks every tid
+  not asked before, and then reads `/proc/<pid>/cwd` again. A hit ends the walk. A link that reads again is a pid that
+  changed hands, and is judged afresh, where any further vanish or failure is unmeasured. A vanished, reaped or
+  outside-the-tree answer accepts the walk only on a pass whose `task/` listing named no tid not asked before (or
+  whose `task/` vanished); any other pass runs another. A thread whose own link vanished is skipped only under that
+  rule. The facts this rests on are Linux 6.8's, read by function: `do_exit` runs `exit_files` before `exit_fs`,
+  `de_thread` calls `exchange_tids` before it releases the old leader, and `proc_pid_readlink` answers EACCES when no
+  task bears the pid.
+- `cwd-probe-read-once-more-answers-eacces-for-a-reaped-pid`: at that per-pass read of the pid's own link only, a
+  readlink failing with EACCES exactly (not EPERM) counts as the pid's release when the stat file, read after it,
+  answers ENOENT or ESRCH, because the kernel answers EACCES there for a pid reaped mid-call. It is still subject to the
+  settled-listing rule. A stat file that reads, a zombie included, answers unmeasured, as does every other errno. The
+  first top-level read's EACCES or EPERM stays the ruled not-seen skip, and the second readlink of the open's ENOENT
+  route still answers unmeasured on EACCES. The proof holds on a `/proc` mounted without hidepid=invisible or
+  hidepid=ptraceable, in the probe's own pid namespace. Under either, a task this user may not ptrace is hidden and its
+  paths answer ENOENT; under hidepid=noaccess they answer EPERM, and an LSM denial answers EACCES or EPERM, as the
+  module chooses. Each falls inside the not-seen limit at the first read, and an EPERM at the per-pass read answers
+  unmeasured.
+- `cwd-probe-holds-a-double-slash-physical-root`: `_ws_dir_physical` answers a `//`-leading physical path for a
+  directory reached through a link whose target begins with `//` (and for `//` or `//tmp` given directly). ws-expire's
+  adapter, `_ws_expire_cwd_users`, resolves the tree's parent before it asks and hands the probe that `//` spelling,
+  which the probe's plain-path gate refuses, so a `//`-leading physical root still holds ws-expire's own probe, through
+  its adapter's gate, unmeasured. A tree whose parent resolves to a `//`-leading path holds through the probe itself
+  too, on Darwin as on Linux: the shared probe collapses a `//`-leading parent before its string compare
+  (`cwd-probe-collapses-a-double-slash-parent`, below), so the tail's asks compare the spelling `/proc` and lsof print.
+  The old expiry probe compared that `//` spelling against
+  kernel-printed cwds, which never begin with `//`, so it answered nobody there. The new answer fails closed and is not
+  redesigned; it was measured at the mechanism, not end to end through the adapter.
+- `cwd-probe-collapses-a-double-slash-parent`: `_ws_dir_physical` keeps the `//` that a link's target opens with,
+  while `/proc` and lsof print one slash, so the probe collapses a `//`-leading parent to one slash before its string
+  compare, as the rows rung's target 0 and W2's mount question already do. Without it, a process inside a tree asked
+  by a spelling under such a link went unseen on Darwin, where the string compare is the only arm.
+
+**The tail window (PI5 A).**
+- The owned call records the tree's identity and the main checkout's identity. Each standing nested checkout's proof
+  (`_ws_reclaim_nested_proven`) records that checkout's identity.
+- `_ws_reclaim_reask` re-proves, fresh and with nothing cached: first `_ws_reclaim_owned` whole (fresh rows, fresh
+  maps, the mount hold included), then the main checkout's, the tree's and the checkout's identities against those
+  recorded. The tail asks it at each of the four sites: before a standing nested checkout's `keep_of` and its forced
+  removal, and before the child's. At each site the order is the cwd ask, then the re-ask, then W2's mount ask, then
+  `keep_of` or the forced removal. So the identity compare stands as close to the act as W2's mount ask allows, and the
+  probe's bounded walk stands outside the window the re-ask leaves. The cwd ask has a window of its own,
+  `cwd-ask-to-opendir-window`, below. For a checkout the re-ask also proves its path a second time, after the identity
+  compare: `reask-re-proves-the-nested-checkouts-path`, below.
+- `reask-words-follow-the-owned-call`: owned's proof (1) fails as `containment-refuted`, a new emission site in the tail
+  ws-expire shares. Every other answer (an identity that differs or cannot be measured, and owned's 2) fails as
+  `worktree-remove-failed`. Both keep the tree, the branch and the breadcrumb, and both cut their detail.
+- `reappeared-tree-refuses`: a tree that owned proved absent, and that stands again at a forced removal, is refused as
+  `worktree-remove-failed`.
+- What remains is the window from the last identity compare, through W2's mount read, to git's own opendir, so W2's
+  window is narrowed, not closed.
+
+**The wordings (PI7 P1).**
+- Neither `//` remedy says "re-point" now. The child's says "restore the link whose target opens with // to its
+  original target, or stop the session and purge its row; never replace a link to clear this", and another row's
+  carries the same restore among its remedies.
+- The `..` detail is true of a row that is the child: "a '..' in it could not be walked the way that session's own cd
+  walked it". The fail-shut order (the rest's `..` test before the head's) is unchanged.
+- The `unproc` clause reads "name a workdir under /proc, or one reached through a link into /proc".
+- `pending-hold-remedy-stops-then-starts`: the pending clause's remedy reads "stop and start that session (ccd stop
+  <id>, then ccd start <id>), or purge its row once its session has ended", because `ccd start` answers "already
+  running" for a live session and changes nothing, and a live pane is the commonest pending case. C3 changed no other
+  remedy and no refusal word (the `unfield` remedy's change is its own, below).
+- `unfield-remedy-restarts-without-a-stop`: the `unfield` clause's remedy, for a field that is not a regular file or
+  cannot be read, read "remove what stands at that field and restart that session", which names no stop for a live
+  pane. It reads "remove what stands at that field, then stop and start that session (ccd stop <id>, then ccd start
+  <id>)": the first step clears the hold, and the second lets the pane record its entry again. The wording alone
+  changed. The hold, its return path and the writer of the field are as before, and the verbs are the operator's to
+  run.
+- `reask-re-proves-the-nested-checkouts-path`: the re-ask compared a standing nested checkout's identity after
+  resolving its parent through any link (`_ws_path_ident` refuses a link only at the leaf), so a checkout moved out of
+  the child, with a link left in its parent path, measured the same and passed, and `git worktree remove --force` then
+  removed it through the link. With a checkout, the re-ask now derives the tree's physical root afresh
+  (`_ws_dir_physical`, a root that cannot be resolved answering 2) after the identity compare and runs
+  `_ws_reclaim_nested_proven` on that root and the checkout again: no link at any component, each a directory, resolving
+  to itself. Only an answer of 0 with the checkout still standing goes on; a refusal, or a checkout that vanished in the
+  window, answers 2 (`worktree-remove-failed`). The first proof's results are preserved on every exit (restored after
+  the second proof), which is workspace-lifecycle's condition for this proof. The tail does read the first proof's
+  `GONE` after the removal, but a re-ask lets the tail go on only when both proofs answered `GONE` 0, so no path
+  observes the restore today; it would keep that read the first proof's own if an edit let a non-zero second answer
+  through, which is a counterfactual and no licence to let one through or to relax a guard. The call arguments and
+  order of the tail are as before, and the re-ask without a checkout asks nothing more. This narrows the race and does
+  not close it: the second proof is one instant, not an atomic proof, and `reask-to-opendir-window` stands. `ws-expire`
+  reaches the same check, because its tail is the shared one and passes the checkout's path to the same re-ask. A
+  refusal there is the same `worktree-remove-failed`, printed past the breadcrumb (`crumb` true), which the server
+  reads as a failed but resumable attempt, never a final one.
+
+**The suites.**
+- `darwin-prefixes-take-the-identity-shims`: on a Linux host, a forced-Darwin full tail now measures identities, and GNU
+  `stat -f` reads the BSD format as a file name. So this programme's four forced-Darwin prefixes, and the `darwin()`
+  helper of `ccd-child-reclaim-verb.test.ts`, take host-conditional `_plat_devino` and `_plat_btime` shims, beside a
+  listing stub for `_ws_expire_lsof`. The change is test-only, and a macOS host runs those cases unshimmed.
+- `audit-document-key-pins-outside-the-boundary`: the two new keys red the exact key pin of each audit document that
+  carries them, in suites outside this wave's own. Each such pin gains `legacyRows` and `pendingRows` in one line, and
+  every other assertion is unchanged.
+- This wave's files whose cases walk the real `/proc` joined CLAUDE.md's load-flake list: `ccd-worktree-identity-fence.test.ts`,
+  `ccd-reclaim-moved-identity.test.ts`, `ccd-cwd-users.test.ts`, `ccd-reclaim-tail-cwd.test.ts` and
+  `ccd-reclaim-tail-window.test.ts`.
+- `r77-cases-time-their-race-through-a-python3-shim`: the probe's race cases time their steps through a test-local
+  `python3` shim ahead of the real one on `PATH`, which wraps the probe's own python and is unreachable from shipped ccd.
+  `os.stat` is among the timed calls, so a step at the stat can restore a permission-made EACCES and remove the stat
+  file or keep it, with real errnos, measured as a non-root user (the five permission rows skip, visibly, when run as
+  root). Two errnos no fixture file system can return are fabricated, by raising in place of the next call: ESRCH, and
+  the EPERM row. The per-pass case is mutation-pinned, not red-first against the commit before the per-pass re-read.
+- The gates also met three things that are not departures from anything:
+  `growth-check-armed-reds-w3s-ccd-growth` (main's growth check, which reds a pull request that grows `ccd/ccd` by more
+  than its net-line limit, reds this wave's `ccd/ccd` row until the operator's exemption lands; this wave edits neither
+  the check nor its data);
+  `fixture-volume-at-the-ws-add-disk-floor` (the volume the fixtures sit on holds less free space than ws-add's 10 GB
+  floor, so every gate ran with `CCD_DISK_FLOOR_GB=1`, ccd's own refuse-only override, and nothing was edited for it);
+  and `gate-chunk-8-outruns-the-foreground-bound` (one chunk of the gate list, which holds the doctor suite, runs past
+  the 600 s a foreground call allows, so it ran once, alone, in the background).
+
+**Entry counts.**
+- Measured on the fleet box before the first edit, counts only:
+  - 81 registry rows, 0 of them with an entry field, so 81 legacy rows and no pending one; 0 whose workdir is gone, 0 of
+    them with a breadcrumb;
+  - spellings: 5 through a link, 0 opening with two slashes, 0 holding a `..`, 0 holding a backslash, 0 holding a C1
+    control byte; 0 reaching the proc file system by a link's raw target and 0 by its walked position; 0 whose links
+    could not be walked;
+  - 483 prefixes, at most 7 deep; 0 pairs of rows placed by string, 0 by identity, and 0 by identity alone;
+  - mounts: a table of 53 lines; 81 workdirs whose device field matched their stat and 0 that did not; 0 mount points
+    and 0 roots at or under a workdir; 81 rows with a second spelling, 0 of them spelled through the wider mount; the
+    temp root's device field matched: 1;
+  - birth times: 81 kept and 0 not kept; 0 workdirs where the pane's stat would fail;
+  - git: 404 admin entries, 0 of them blank; 0 records naming the main checkout by identity, and 0 sharing an inode;
+  - processes: 304 of the same user; 177 working in a workdir by string and 0 by identity alone; 22 with a deleted cwd,
+    0 unwalkable, 3 unreadable (EACCES), and 0 on a network or FUSE mount; the walk took 794 stats in 20 ms.
+- Not measured, and judged instead: leaf ancestry (no stat was taken under the clips or temp-root leaves), the agent's
+  mount namespace against the panes' (no service manager was read), and a hung network cwd. Each is held or refused
+  where it is met, never released.
+
+**Stated residuals.**
+- `reg-purge-inventory-omits-workdirid`: `_reg_purge`'s inventory comment does not name the field. Its loop unlinks it.
+- `legacy-row-count-has-no-doctor-line`: the legacy count rides the audit document alone, and no doctor line counts it.
+  A doctor line would need a second parser of the grammar.
+- `rows-rung-git-reads-unbounded`: the rung's git reads of a gone row's repository have no bound of their own (above).
+- `human-gated-removals-ask-no-cwd`: ws-reap's tail and the other human-gated removals ask no cwd question. Forwarded
+  to workspace lifecycle.
+- `cwd-probe-sees-no-open-fds`: open file descriptors are not probed. An fd arm added later must not read only
+  `/proc/<pid>/fd`: that path answers EACCES for a zombie leader whose live threads still hold files, and in the window
+  between `exit_mm` and `exit_files`, on main too.
+- `cwd-probe-sees-a-session-only-while-it-runs`: the probe sees another session only while it has a live process inside
+  the tree. Entry identity is the cure.
+- `surviving-background-job-holds-the-reclaim`: a background job of the child's own pane that outlives the kill holds
+  the reclaim until it exits, as it holds an expiry. The refusal names that process's pid and command, and it clears
+  once that process is stopped and the act is retried.
+- `reask-identity-is-per-attempt`: the recorded identities live for one attempt, and no tombstone field carries them.
+  A resumed attempt re-proves them.
+- `reask-to-opendir-window`: the window from the last identity compare, through W2's mount read, to git's own opendir
+  (§4.7). The cwd probe's bounded walk comes before the re-ask, outside that window. For a nested checkout the second
+  proof of its path (`reask-re-proves-the-nested-checkouts-path`) narrows this window and does not close it: it runs
+  once, directly after the identity compare, and the window from there to git's own opendir stays.
+- `cwd-ask-to-opendir-window`: the cwd ask's own window. The probe is asked before the re-ask, so a process that enters
+  the tree after it, during the re-ask, W2's mount read or git's own run, is not asked. Each process's window opens at
+  its own read inside the walk, not when the probe ends. The probe also measures the tree at its path as it walks, and
+  never compares that measure with the identity the act recorded. So a tree moved away during its walk and moved back
+  before the re-ask is probed as whatever stood at the path, and a tree moved away at the probe's absence check
+  answers "nobody" with no walk at all and, moved back before the re-ask, passes it on equal identity.
+- `tail-reasks-can-outrun-the-act-row`: a tail with N standing nested checkouts makes 2N+2 re-asks against the act's
+  240 s runner row. Each site also runs a cwd walk before its re-ask, the post-kill wait adds more, and the git reads
+  inside each re-ask have no bound of their own, so the row can be outrun. A kill there fails closed at a breadcrumbed
+  step, and a timed-out re-ask answers unmeasured.
+- `identity-found-after-the-kill-repeats`: an identity, cwd or row refusal found at step 3 or step 4 comes after the
+  pane kill, so every retry fails the same way until the cause is gone, as W2's `mount-found-after-the-kill-repeats`.
+- `worktree-ask-to-force-window`: narrowed by the re-ask, not closed.
+- `git-mount-crossing-unmeasured`: no session runs a privileged container, so nobody measured whether
+  `git worktree remove --force` crosses a bind or FUSE mount. Every ask comes before git runs and only refuses. The
+  operator may measure it on a throwaway box of their own choosing.
+- `exdev-class-moot-under-pi5-a`: the EXDEV class belongs to closing the window (PI5 B), which was not ruled. The
+  operator may measure it on the same terms.
+- `repointed-alias-for-legacy-rows-until-respawn`: a legacy row's re-pointed alias stays unseen until that session
+  respawns and records its entry. The cwd probe covers it while a process lives inside. A row with a valid field has
+  the same hole through the launch command's two `cd`s: a link in its workdir re-pointed between them (a window of
+  about 7 ms), and later pointed back, leaves a field that names the first directory entered while the process lives in
+  the second, and none of the placement rules fire, so the row is placed at the first only until that session respawns.
+- `other-mount-namespaces-fuse-views-and-overlay`: §4.5's out-of-scope set stands.
+- `ancestry-stands-alone-on-darwin`: Darwin has no mount table, so ancestry is its one identity arm.
+- `moved-check-misses-a-subdirectory-of-a-moved-tree`: a gone row whose field records a subdirectory of a moved tree is
+  not matched.
+- `entry-field-identity-does-not-survive-a-device-renumbering`: the mismatch rule compares a field's recorded device,
+  inode and birth time with today's as raw numbers. A device renumbering (a reboot that orders the disks another way,
+  or a volume detached and attached again), or a copy of the worktree volume onto another, which changes every inode
+  too, turns every valid field whose current spelling resolves complete, and that no respawn has rewritten, into an
+  `unrec` hold. Archived, stopped and held rows keep their old field, so each of them holds every child's reclaim,
+  expiry and collection, ws-expire of an archived row included. The mismatch rule fails closed. The moved-check's
+  identity arm does not:
+  - it compares the same recorded numbers raw, so a renumbering disarms it, and no checkout's identity can equal a
+    recorded one;
+  - for a gone row placed by R54's breadcrumb arm it is the only hold, because the git-directory arm is asked only of
+    git-record rows, and a gone row is never asked the mismatch rule;
+  - so a tree moved inside the child for such a row is not held, unless another row's `unrec` holds the child. Once
+    every other row has respawned, which is the runbook's own remedy, none does.
+
+  The runbook: after such an event, restart or purge every row that is not running, and stop and start every pane that
+  kept running across a volume detach and re-attach, because its field was written before the event; the `unrec`
+  clause names each one by id.
+- `gone-row-with-pending-field-holds-despite-its-release-arms`: a gone row whose field reads `pending` holds every
+  child, even where R54's git-record or breadcrumb arm would release it, because the field is read before any arm can
+  skip a row, and a pending field names a pane that may be entering anywhere. A spawn made while the row's tree is
+  gone, such as the unit's own respawn, which does not test the workdir first, writes such a field, and the pane's
+  failing `cd` leaves it in place. It holds collection as well as reclaim and expiry, and any pending row holds every
+  child on the box, not only those of one repository (`pending-row-holds-every-child-box-wide`, below). It fails
+  closed, and purging the row clears it.
+- `pending-row-holds-every-child-box-wide`: the `unpend` hold has no placement test. A row whose field reads `pending`
+  holds every child's reclaim, expiry and collection, whatever that child's tree, because a pending pane may be
+  entering anywhere. Narrowing it to rows placed by their strings would defeat the field, so it stands. It fails closed,
+  and it reaches three ways:
+  1. Any spawn's pending window can strike a tail in progress, for every spawn writes `pending` first. The tail's
+     re-ask runs the rung again, so its answer becomes `worktree-remove-failed`, after the child's session was
+     stopped. The server retries a reclaim.
+  2. The expiry verb's in-lock verdict prints `probe-unmeasured` with a `crumb` that the server reads before its word
+     rule. A pending window there makes that attempt restart from its audit (a fresh arm, whose restart backs off on the
+     server's restart lane) or stay resumable (a resumed arm). It is final only where the breadcrumb stands but could
+     not be read, so no `crumb` is said, or where ccd is older and says none. Workspace lifecycle has received this
+     reading as the pending hold's, not as new scope; it asks no server change and no arming decision, and W3 changes
+     nothing on the server.
+  3. A row that stays pending for good holds every child until it is purged: fish as the pane shell on Linux, a control
+     byte (`workdirid-physical-control-byte-stays-pending`), or a gone row's respawn, whose pane's `cd` fails every
+     time.
+- `workdirid-temp-leaks-on-sigkill`: a writer killed between its temp write and its rename leaves the dot-leading temp,
+  as `_reg_set`'s does.
+- `workdirid-pending-unwritable-keeps-the-old-field`: when both the pending write and its unlink fail, the earlier
+  field stands.
+- `failed-pending-write-reads-legacy`: a pending write that fails, when its unlink succeeds, leaves the row
+  `legacy-absent` (today's rule) until a later spawn's writes succeed.
+- `workdirid-fifo-swap-after-type-check`: a FIFO swapped in between the reader's type check and its open blocks the
+  open. It is the registry reader's own window.
+- `cwd-probe-can-wait-on-a-hung-network-cwd`: a child in uninterruptible sleep outlives the bound's TERM. The probe's
+  parent resolve and its absence stat also run before the walk with no bound of their own, so a hung network mount
+  under either hangs the probe too. A hang only, never a release.
+- `darwin-cwd-parse-unbounded-as-today`: on Darwin the probe parses lsof's listing directly, as ws-expire did, and never
+  under `_plat_timeout`, so that parse has no bound of its own.
+- `fish-spawn-cd-reads-backslash-escapes`: under a fish pane shell, the launch command's own `cd '<wd>'`, which W3 did
+  not change, reads `\\` and a trailing `\` inside single quotes as escapes, so a pane whose workdir holds either never
+  enters it, and its field stays `pending`, a hold that restarting the session does not clear. That pane never started
+  before W3 either, and purging the row clears the hold. The composer's fragment carries every backslash as an escape
+  of its own, so the field round-trips to `valid` under sh, bash and dash, measured, and, by their quoting rules,
+  under zsh, and under fish for every spelling without `\\` or a trailing `\`. On Linux the launch command's earlier
+  tool-child assignment (`${…-}`) is not fish syntax, so a fish pane there parses nothing and every row stays
+  `pending`; the backslash case is the Darwin arm's alone.
+- `workdirid-physical-control-byte-stays-pending`: `.workdir`'s control-character guard, the composer's and the pane
+  script's each run in their own process's locale, and the reader in the C locale. So a byte that one locale classes as
+  a control character and another does not (a C1 byte, 0x80 to 0x9f, under a UTF-8 locale), or a control byte in the
+  physical path alone, can leave a field `pending` for good. It fails closed: such a row holds, and is never released.
+  Before the first edit no `.workdir` on the fleet box held a C1 byte.
+- `relative-workdir-second-cd-does-not-enter`: the launch command asks `cd '<wd>'` twice, and for a relative `.workdir`
+  the second `cd` resolves against the directory the first one entered, so that row's next respawn, made with the
+  stored value, execs nothing, or execs in another directory. `cmd_start` and ws-add store an absolute spelling, so
+  only an older row can hold a relative one. Before the first edit no `.workdir` on the fleet box was relative. On any
+  other deployment, restarting such a row with `start`, which stores the absolute spelling, or purging it clears it.
+- `record-ef-has-no-deadline`: a git record stanza on a hung network mount blocks the record reader's `-ef` stat with no
+  bound. It is the class of the reader's own unbounded `git worktree list`, and a hang, never a release.
+- `record-ef-unstattable-stanza-reads-as-another-tree`: the record reader's `-ef` reads a stanza it cannot stat,
+  whether its path is gone or cannot be searched, as another tree, never as unmeasured. So a stanza that names the
+  standing tree under another spelling, below a directory ccd cannot search, is not seen, and the reader answers from
+  its string scan alone, as it did before W3 compared any identity there. It is a residual by ruling, not a hold: a
+  hold on every stat failure but a proven absence would hold every child of a repository that has one unreadable
+  sibling record, and a gone sibling's stanza must match nothing.
+- `record-main-by-another-spelling-reads-no-worktree-record`: identity never makes a hit, so a first (main) stanza that
+  names the tree only by `-ef` (a bind spelling, for example), with no stanza matching by string, sets
+  `RECLAIM_REC_MAIN` and no hit.
+  - The record reader answers 1, where a string hit would have answered 0.
+  - The ladder then refuses. The common-directory check before its record branch can refuse first, with
+    `containment-unproven`; what git answers there for a bind spelling is unmeasured. Past it, the ladder refuses with
+    the terminal `no-worktree-record` where `_ws_reclaim_no_record` finds every admin entry readable and none naming
+    the tree, and then its detail ("has no worktree record") is false, because git does record the tree. Where an
+    admin entry cannot be read, or one names the tree, it refuses with the retryable `unmeasured` instead. It never
+    reaches its own main-checkout refusal or its `-ef` compare of the project directory (`ladder-main-checkout-ef`),
+    which stand behind a string hit alone.
+  - `_ws_reclaim_owned` answers 2 (`worktree-remove-failed`), before it reads `RECLAIM_REC_MAIN`.
+  - The shape is refused either way, and nothing grants on it: no token is minted and nothing is removed. No code
+    changed to cure it.
+- `cwd-probe-pure-bash-watcher-sleep-reads-as-a-user`: on a box with no `timeout` or `gtimeout`, `_plat_timeout`'s
+  pure-bash watcher runs `sleep` outside the own chain the probe excludes. With ccd's own cwd inside the tree, that
+  `sleep` reads as a user: a false in-use only.
+- `cwd-probe-per-thread-cwd-unasked`: a thread with its own fs_struct (`unshare(CLONE_FS)`, or cloned without
+  CLONE_FS) is not asked while its leader's cwd link reads. It is pre-existing on main.
+- `cwd-probe-pid-handoff-between-reads`: between the read before the settling listing and that listing, an `execve`
+  hands the pid to a thread never asked while live. That thread then creates a thread sharing its cwd and loses its own
+  fs before the next read. No finite read schedule closes it, and it is narrower than main.
+- `cwd-probe-task-listing-can-skip-a-tid`: one listing of `task/` that spans more than one getdents buffer while
+  threads exit can skip a tid. The passes narrow this and do not close it.
+- `cwd-probe-asks-no-process-root`: the probe never asks `/proc/<pid>/root`, so a process in a chroot inside the tree,
+  with its cwd outside it, is not seen. It is the same on main and in `_ws_path_users`.
+- Pid and tid reuse, a limit with no slug: a pid or a tid is asked once per walk, keyed by number, so a task that takes
+  a reused number after that read, or takes the pid after the stat file's answer, is not asked.
+- `vanished-checkout-arms-ask-no-cwd`: the vanished arms' `git worktree remove` without force, a nested checkout's and
+  the child's own, asks no cwd or identity question, beside W2's `vanished-checkout-arms-ask-no-mounts`. So a tree that
+  stands again, clean or holding only ignored files, after its absence was proven, is removed. It is the same on main,
+  and the tail's own comment says so.
+- W2's standing set, unchanged: `human-gated-removals-ask-no-mounts`, `vanished-checkout-arms-ask-no-mounts` and the
+  rest of §3.10's list, but for the carries closed or narrowed below.
+
+**Closed and narrowed carries.**
+- Closed, each verified at the tip by this spec's prose suite:
+  - `no-whole-child-mount-ask-before-step-3`: the rung's mount hold covers the whole child. Owned asks it at the tail's
+    start, and the re-ask asks it before every standing forced removal, so a mount anywhere under the child is asked
+    before step 3's loop.
+  - §7 items 1 to 3 and 5 to 8: `r31-repointed-alias-resolves-complete`, `r31-bind-mount-spelling-resolves-complete`,
+    `r54-recorded-basis-dev-ino-ancestry`, `proc-symlink-row-places-at-ccds-cwd`,
+    `unres-false-detail-for-row-that-is-the-child`, `double-slash-remedy-wordings` and
+    `owned-main-checkout-ambient-realpath`.
+- Narrowed, not closed:
+  - `owned-to-worktree-remove-window` (§7 item 4): narrowed by the identity compares and the fresh re-asks, as its row
+    says. Closing it is a later wave, and no scheduled wave closes it.
+  - `audit-normalise-has-no-mount-ask`: the worktree half is asked now, because the ladder's rung holds a mount under
+    the child at the audit. The clips leaf's half stands, forwarded to workspace lifecycle.
+  - `registry-row-pass-carries-no-bound`: child reclamation's carry. The identity walk is bounded and the gone rows'
+    git reads are not, so §7 item 9 reads `Built (W3), git reads standing`.
+  - `in-use-probe-misses-another-mount` (§7 item 20): its worktree half is built. Its temp-root half was W4's, and
+    stands.
+  - `worktree-ask-to-force-window`: narrowed by the re-ask.
+
 ## 5. The collector switch in Settings
 
 The operator asked for a Settings switch for the collector lane. This section adds a signed-in console-session arm alongside the fleet-box marker, then moves control solely to Settings after one operator hand step. Before that migration, a standing marker remains an independent arm and Settings refuses to call the lane Off. The implementation needs no `ccd/ccd` or agent behavior change, but it does update `ccd/ccrc` so backup and manual-downgrade output preserve the live generation journal.
@@ -1534,15 +2077,15 @@ This table has one row for every carried item (37 from the pre-flight and three 
 
 | # | Slug | Class | Wave | Status | What |
 |---|---|---|---|---|---|
-| 1 | r31-repointed-alias-resolves-complete | safety | W3 | Proposed | entry identity at every spawn, cwd probe for legacy rows (PI1, PI2, PI4) |
-| 2 | r31-bind-mount-spelling-resolves-complete | safety | W3 | Proposed | ancestry plus one mountinfo export refusal (PI3) |
-| 3 | r54-recorded-basis-dev-ino-ancestry | safety | W3 | Proposed | identity moved-check beside the git and breadcrumb arms, add-only: it may hold, never release (PI3) |
-| 4 | owned-to-worktree-remove-window | safety | W3 | Proposed | narrow with identity compares and fresh re-asks; closing is a later wave (PI5) |
-| 5 | proc-symlink-row-places-at-ccds-cwd (m1) | safety | W3 | Proposed | link walk plus entry identity mismatch (PI6) |
-| 6 | unres-false-detail-for-row-that-is-the-child | prose | W3 | Proposed | reword; identity-first SHARED for valid fields (PI7) |
-| 7 | double-slash-remedy-wordings | prose | W3 | Proposed | "restore the link", never "re-point" (PI7) |
-| 8 | owned-main-checkout-ambient-realpath | correctness | W3 | Proposed | `-ef` as a second refusal in the owned arm; record reader gains refusals only (PI10) |
-| 9 | rows-rung-git-reads-unbounded (constraint) | correctness | W3 | Proposed | one batched call with a deadline, maps per call, budget pin (PI8) |
+| 1 | r31-repointed-alias-resolves-complete | safety | W3 | Built (W3) | entry identity at every spawn, cwd probe for legacy rows (PI1, PI2, PI4) |
+| 2 | r31-bind-mount-spelling-resolves-complete | safety | W3 | Built (W3) | ancestry plus one mountinfo export refusal (PI3) |
+| 3 | r54-recorded-basis-dev-ino-ancestry | safety | W3 | Built (W3) | identity moved-check beside the git and breadcrumb arms, add-only: it may hold, never release (PI3) |
+| 4 | owned-to-worktree-remove-window | safety | W3 | Built (W3) | narrow with identity compares and fresh re-asks; closing is a later wave (PI5) |
+| 5 | proc-symlink-row-places-at-ccds-cwd (m1) | safety | W3 | Built (W3) | link walk plus entry identity mismatch (PI6) |
+| 6 | unres-false-detail-for-row-that-is-the-child | prose | W3 | Built (W3) | reword; identity-first SHARED for valid fields (PI7) |
+| 7 | double-slash-remedy-wordings | prose | W3 | Built (W3) | "restore the link", never "re-point" (PI7) |
+| 8 | owned-main-checkout-ambient-realpath | correctness | W3 | Built (W3) | `-ef` as a second refusal in the owned arm; record reader gains refusals only (PI10) |
+| 9 | rows-rung-git-reads-unbounded (constraint) | correctness | W3 | Built (W3), git reads standing | one batched call with a deadline, maps per call, budget pin (PI8) |
 | 10 | corrupt-admin-entry-box-wide-reach-via-rung9 | correctness | W0 | Proposed | state the reach in the contract; it stays a hold (PI9) |
 | 11 | tail-drop-believes-an-absent-leaf | correctness | W2 | Built (W2) | ask the recorded device before each drop (TR3) |
 | 12 | tail-drop-ignores-a-recordless-slot | correctness | W2 | Built (W2) | slot check inside the drop helper (TR4) |
@@ -1553,7 +2096,7 @@ This table has one row for every carried item (37 from the pre-flight and three 
 | 17 | c5-compare-and-drop-aside-orphan | safety | W2 | Built (W2) | admit one valid aside into population and ccd admission, then restore it under the reap lock (TR6) |
 | 18 | floor-knob-zero-strip-is-quadratic | correctness | W2 | Built (W2) | linear regex capture (TR7) |
 | 19 | same-fs-bind-at-or-inside-leaf (removal helper) | safety | W2 | Built (W2) | mount question in `_ws_leaf_remove` before normalise and before rm, and before every standing nested-checkout and child forced removal (TR5) |
-| 20 | in-use-probe-misses-another-mount | safety | W3, W4 | Proposed | worktree half by string OR dev:ino (PI4); temp-root half in W4 (TR11) |
+| 20 | in-use-probe-misses-another-mount | safety | W3, W4 | Built (W3), temp-root half standing | worktree half by string OR dev:ino (PI4); temp-root half in W4 (TR11) |
 | 21 | ccd-cured-standing-residuals | correctness | standing, W4 | Proposed | standing; root sentinel cures renumbering only (TR10) |
 | 22 | registry-id-shape-gate (SECURITY) | security | W1a | Proposed | `isRegistryId`, `readSessionRecord.kind`, `RegistryRead.refused`, and classification or migration of all 12 compatibility callers (SEC2) |
 | 23 | run-and-pwa-session-ids-unshaped | security | W1a | Proposed | gate `knownId`, POST /api/runs, every stored-row argv seam including child-spent, and stop builder order (SEC2) |

@@ -1,4 +1,4 @@
-// What's new (D-5549): the update banner's "See what's new" opens a sheet in
+// What's new (D-5549): Settings › Updates' "See what's new" opens a sheet in
 // place — every release newer than what the fleet runs, newest first, each
 // with its notes grouped New / Fixed / Faster / Behind the scenes (the last
 // folded), as PLAIN TEXT, every `#NNN` a link built from the number and the
@@ -12,11 +12,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { NodeWire, ReleaseWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { navigate } from '../src/lib/router';
+import { api } from '../src/lib/api';
 import { useFleetStore } from '../src/stores/fleet';
-import { UpdateBanner } from '../src/fleet/UpdateBanner';
 import { WhatsNewSheet, whatsNewReleases } from '../src/fleet/WhatsNewSheet';
 import { ReleaseList } from '../src/screens/updates';
 import { declValue, ruleIn } from './cssRule';
+import { renderSettings } from './settingsHost';
 
 afterEach(() => {
   cleanup();
@@ -76,7 +77,7 @@ const releaseRow = (tag: string): HTMLElement => {
 };
 
 describe('whatsNewReleases: what the update would bring', () => {
-  it('every release above the oldest version a behind node runs, up to the banner tag, newest first', () => {
+  it('every release above the oldest version a behind node runs, up to the waiting tag, newest first', () => {
     const w = whatsNewReleases(view(), 'v0.0.9');
     expect(w.since).toBe('v0.0.7');
     expect(w.releases.map((r) => r.tag)).toEqual(['v0.0.9', 'v0.0.8']);
@@ -87,7 +88,7 @@ describe('whatsNewReleases: what the update would bring', () => {
     expect(whatsNewReleases(v, 'v0.0.9').releases.map((r) => r.tag)).toEqual(['v0.0.9', 'v0.0.8', 'v0.0.7']);
   });
 
-  it('no measured version behind: just the banner tag, and no "since"', () => {
+  it('no measured version behind: just the waiting tag, and no "since"', () => {
     const v = view({ nodes: [fleetNode({ current: null, stampRead: 'absent' })] });
     const w = whatsNewReleases(v, 'v0.0.9');
     expect(w.since).toBeNull();
@@ -95,19 +96,27 @@ describe('whatsNewReleases: what the update would bring', () => {
   });
 });
 
-describe("the banner's See what's new opens the sheet in place", () => {
-  it('stays on the fleet screen and shows the sheet: title, count, the releases newest first', () => {
-    render(<UpdateBanner updates={view()} />);
+describe("Settings › Updates' See what's new opens the sheet in place", () => {
+  // The fleet's update line is a door to this page (UpdateIndicator); the sheet and its Update all live here.
+  const mountUpdates = async (v: UpdatesView = view()): Promise<void> => {
+    vi.spyOn(api, 'updates').mockResolvedValue(v);
+    renderSettings('updates');
+    await screen.findByRole('button', { name: "See what's new" });
+  };
+
+  it('stays on the page and shows the sheet: title, count, the releases newest first', async () => {
+    await mountUpdates();
+    const here = location.pathname;
     fireEvent.click(screen.getByRole('button', { name: "See what's new" }));
-    expect(location.pathname).toBe('/');
+    expect(location.pathname).toBe(here);
     expect(within(sheet()).getByText("What's new since v0.0.7")).toBeInTheDocument();
     expect(within(sheet()).getByText('2 releases')).toBeInTheDocument();
     const tags = [...sheet().querySelectorAll('[data-tag]')].map((e) => e.getAttribute('data-tag'));
     expect(tags).toEqual(['v0.0.9', 'v0.0.8']);
   });
 
-  it('Update all in the footer opens the same move sheet as the banner\'s; Close closes', async () => {
-    render(<UpdateBanner updates={view()} />);
+  it("Update all in the footer opens the same move sheet as Settings' own; Close closes", async () => {
+    await mountUpdates();
     fireEvent.click(screen.getByRole('button', { name: "See what's new" }));
     fireEvent.click(within(sheet()).getByRole('button', { name: 'Update all' }));
     expect(await screen.findByRole('button', { name: 'Update v0.0.9' })).toBeInTheDocument();
@@ -118,9 +127,9 @@ describe("the banner's See what's new opens the sheet in place", () => {
     await waitFor(() => expect(screen.queryByText("What's new since v0.0.7")).toBeNull());
   });
 
-  it('while a node halts the fleet, the footer\'s Update all is disabled and says why', () => {
+  it("while a node halts the fleet, the footer's Update all is disabled and says why", async () => {
     const halted = view({ nodes: [fleetNode({ update: { state: 'failed', target: 'v0.0.9', startedAt: 1, detail: 'gate' } }), serverNode()] });
-    render(<UpdateBanner updates={halted} />);
+    await mountUpdates(halted);
     fireEvent.click(screen.getByRole('button', { name: "See what's new" }));
     const button = within(sheet()).getByRole('button', { name: 'Update all' });
     expect(button).toBeDisabled();
@@ -129,9 +138,9 @@ describe("the banner's See what's new opens the sheet in place", () => {
 
   // D-6031: the reason sits in the pinned footer, straight above the button it explains. Left at the end of the
   // scrolling body it was thousands of pixels below the greyed button whenever several releases scrolled.
-  it('while a node halts the fleet, the reason line is in the footer, above Update all', () => {
+  it('while a node halts the fleet, the reason line is in the footer, above Update all', async () => {
     const halted = view({ nodes: [fleetNode({ update: { state: 'failed', target: 'v0.0.9', startedAt: 1, detail: 'gate' } }), serverNode()] });
-    render(<UpdateBanner updates={halted} />);
+    await mountUpdates(halted);
     fireEvent.click(screen.getByRole('button', { name: "See what's new" }));
     const button = within(sheet()).getByRole('button', { name: 'Update all' });
     const line = document.getElementById(button.getAttribute('aria-describedby') ?? '');

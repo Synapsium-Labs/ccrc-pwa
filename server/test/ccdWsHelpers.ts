@@ -290,7 +290,7 @@ export const WS_ADD_REAL_SPAWN = `
  *
  *  It is NOT "the one stub directory in the suite", and reading it that way is
  *  what broke five `ccrc status` tests: a consumer that never runs ccd
- *  (`ccrc-doctor.test.ts`) keeps its own `<home>/stub-bin`, and only the
+ *  (`ccrc-doctorFixture.ts`) keeps its own `<home>/stub-bin`, and only the
  *  poisons this file actually plants can shadow what is in it. That set is `gh`
  *  for every caller, plus systemd, tmux and the net tools (ssh, scp, curl) for a
  *  caller that ASKS — see `ghContainedEnv`. Since wave 18 a functional stub of a
@@ -326,7 +326,7 @@ export function harnessBin(home: string): string {
  * at all, and anything planted here lands in a directory it PREPENDS — so an
  * unconditional systemd poison displaces the `systemctl` such a file planted on
  * its own PATH, in a directory the create-if-absent guard below can never see.
- * Measured: planting it unconditionally took `ccrc-doctor.test.ts` from 170/170
+ * Measured: planting it unconditionally took `ccrc-doctorFixture.ts` from 170/170
  * to 165/170, and every failure named `ccrc status`, three files from the edit.
  */
 export interface ContainOpts {
@@ -423,7 +423,7 @@ export function ghContainedEnv(
   // literal. Re-planting would break both suites and read as a mystery.
   //
   // That guard only answers WITHIN this directory, which is why it did not
-  // save `ccrc-doctor.test.ts`: its `systemctl` lives in `<home>/stub-bin`, so
+  // save `ccrc-doctorFixture.ts`: its `systemctl` lives in `<home>/stub-bin`, so
   // there was nothing here to be absent, and the poison won on ordering alone.
   // Displaceability inside `harnessBin` and remit outside it are two different
   // questions, and only the second one has an answer that helps a stranger.
@@ -599,6 +599,12 @@ export const toolAdjToken = (h: Pick<CcdHarness, 'sh'>): string => {
   const v = h.sh('_tool_adj_env');
   return v ? ` ${v}` : '';
 };
+
+/** D-6636: the session's own temp root, as `_spawn_start` splices it after the TMPDIR token — the child's leaf
+ *  when one is given, else the box's `TMPDIR` as the harness's ccd sees it (`/tmp` when unset) — with its leading
+ *  space. Read the box's value through the same shell, so a harness whose TMPDIR differs still pins byte-exact. */
+export const sessionTmpToken = (h: Pick<CcdHarness, 'sh'>, childLeaf?: string): string =>
+  ` CCRC_SESSION_TMPDIR='${childLeaf ?? h.sh('printf %s "${TMPDIR:-/tmp}"')}'`;
 
 export function makeCcdHarness(prefix: string): CcdHarness {
   const home = mkTmp(prefix);

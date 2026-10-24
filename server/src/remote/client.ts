@@ -24,8 +24,10 @@ import { createSpawnPty } from './pty.js';
 
 /**
  * Single authenticated WS connection to a `ccrc-agent` on a REMOTE fleet
- * host, wrapped in reconnect-with-backoff + heartbeat so the rest of the
- * server (Runner/FleetIO consumers) never has to think about the transport.
+ * host, wrapped in a deadline from socket to ready, reconnect-with-backoff and
+ * a heartbeat, and logging one line per kind per stretch without a ready
+ * link, so the rest of the server (Runner/FleetIO consumers) never has to
+ * think about the transport.
  * `connectFleet` is the public entry point — it wires this client into the
  * `Runner`/`FleetIO`/`SpawnPty` seams the rest of the server already speaks.
  */
@@ -39,6 +41,10 @@ export interface RemoteFleetConfig {
   token: string;
   /** ms between heartbeat pings while connected. Default 15000. */
   heartbeatMs?: number;
+  /** ms from a new socket's creation to the agent's `ready` before that attempt is terminated and retried: one wall
+   *  clock over TCP connect, the upgrade and the hello (wave 27, D-6514; #1160's name, D-6724). Default 15000. A test
+   *  seam like the fields around it; the composition root passes only `url` and `token`. */
+  connectTimeoutMs?: number;
   /** initial reconnect delay. Default 1000. */
   reconnectMinMs?: number;
   /** reconnect delay ceiling (doubles each failed attempt up to this). Default 30000. */
@@ -70,7 +76,19 @@ interface Pending {
 type TailListener = (msg: TailData | TailReset) => void;
 type PtyListener = (msg: PtyData | PtyExit) => void;
 
+/** The kinds of line a stretch without a ready link prints, each at most once per stretch; all but `refused` can
+ *  open one (wave 27, D-6520, D-6527). */
+type LinkLine = 'lost' | 'no-pong' | 'never-ready' | 'no-ready' | 'refused';
+/** One stretch without a ready link that has printed a line: when it opened, which kinds it printed, and how many
+ *  attempts ended without a ready since. Private to the client; never on `state`, never on the wire. */
+interface LinkEpisode { since: number; logged: Set<LinkLine>; failedAttempts: number }
+
 const DEFAULT_HEARTBEAT_MS = 15_000;
+// The heartbeat only starts at `ready`, so without this deadline a socket that never reaches `ready` is unwatched:
+// a peer that accepts TCP and never answers the upgrade (an agent mid-shutdown or mid-reboot behind the listen
+// backlog) stranded the controller on a half-open socket for over an hour. Generous against a slow link — the
+// whole handshake is two small frames — and equal to the default request timeout (wave 27, D-6516).
+const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_RECONNECT_MIN_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
@@ -78,6 +96,29 @@ const HEARTBEAT_MISS_LIMIT = 2;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
+}
+
+/** The phase a pre-ready attempt is in, named only as far as the socket's own `readyState` proves it (D-6520):
+ *  `ws` holds CONNECTING from the constructor until a validated 101, across the TCP connect and the upgrade. */
+function preReadyPhase(readyState: number): string {
+  if (readyState === WebSocket.CONNECTING) return 'connect or upgrade unanswered';
+  if (readyState === WebSocket.OPEN) return 'ready not sent';
+  if (readyState === WebSocket.CLOSING) return 'closing';
+  return 'closed';
+}
+
+/** A peer's close reason, read as untrusted (D-6527, D-6529). A peer that echoes the hello must not put the token in
+ *  the journal, so a reason repeating any 8 consecutive characters of it (all of a shorter token) is withheld; one
+ *  that breaks the token up on purpose already holds it, so this covers the accidental echo. The check runs on the
+ *  full decoded text. Otherwise: every character outside printable ASCII becomes `?`, cut to 64; empty prints `-`. */
+function refusalReason(reason: Buffer, token: string): string {
+  const full = reason.toString('utf8');
+  const width = Math.min(8, token.length);
+  for (let i = 0; width > 0 && i + width <= token.length; i++) {
+    if (full.includes(token.slice(i, i + width))) return '[withheld: repeats the token]';
+  }
+  const text = full.replace(/[^\x20-\x7e]/g, '?').slice(0, 64);
+  return text === '' ? '-' : text;
 }
 
 /**
@@ -152,9 +193,9 @@ export class LinkNotSentError extends Error {
  * attempt, hello/ready handshake, a request table keyed by numeric id
  * (ids are never reused across reconnects; not required to be — every
  * in-flight request is rejected the moment its socket goes away), a
- * heartbeat that force-closes a silently-dead socket, and exponential
- * reconnect backoff. `state`/`onStateChange` surface connectivity to
- * callers; `onTail`/`offTail`/`onConnected` are the internal seam
+ * deadline that ends an attempt with no ready, a heartbeat that force-closes
+ * a silently-dead socket, and exponential reconnect backoff.
+ * `state`/`onStateChange` surface connectivity to callers; `onTail`/`offTail`/`onConnected` are the internal seam
  * `remote/io.ts` (and, from T4, `remote/pty.ts`) build on.
  */
 export class FleetClient {
@@ -177,8 +218,10 @@ export class FleetClient {
   private backoffMs: number;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private connectTimer: NodeJS.Timeout | null = null;
   private awaitingPong = false;
   private missedPongs = 0;
+  private episode: LinkEpisode | null = null;
 
   private readonly pending = new Map<number, Pending>();
   private readonly tailListeners = new Map<number, TailListener>();
@@ -191,6 +234,7 @@ export class FleetClient {
       url: cfg.url,
       token: cfg.token,
       heartbeatMs: cfg.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
+      connectTimeoutMs: cfg.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
       reconnectMinMs: cfg.reconnectMinMs ?? DEFAULT_RECONNECT_MIN_MS,
       reconnectMaxMs: cfg.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS,
       requestTimeoutMs: cfg.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -333,6 +377,7 @@ export class FleetClient {
       this.reconnectTimer = null;
     }
     this.stopHeartbeat();
+    this.clearConnectDeadline();
     // Path-identity spec 2026-10-12 §5.2: this path never reaches `onClose`. The socket is nulled below, so the
     // 'close' event's handler returns at its stale-socket guard, and this path therefore invalidates on its own.
     // `state.connected` is left as it was: changing it would change shutdown for every other reader.
@@ -355,17 +400,22 @@ export class FleetClient {
     let ws: WebSocket;
     try {
       ws = new WebSocket(this.cfg.url);
-    } catch {
+    } catch (err) {
+      // A throw here depends only on the URL, so no `ready` can follow: the boot line, once, naming the error and
+      // never its message, which for an unparsable URL carries the URL (D-6526).
+      this.note('never-ready', 'no ready since the server started (socket not created: '
+        + `${err instanceof Error ? err.name : 'a non-Error throw'}); retrying`);
       this.markDown();
       this.scheduleReconnect();
       return;
     }
     this.socket = ws;
+    this.armConnectDeadline(ws);
     ws.on('open', () => {
       ws.send(JSON.stringify({ t: 'hello', token: this.cfg.token }));
     });
     ws.on('message', (raw) => this.onMessage(ws, raw));
-    ws.on('close', () => this.onClose(ws));
+    ws.on('close', (code, reason) => this.onClose(ws, code, reason));
     ws.on('error', () => {
       // 'close' always follows 'error' for a ws socket — reconnect logic lives there.
     });
@@ -426,6 +476,7 @@ export class FleetClient {
     // trigger among them) already reads the new epoch, with nothing measured under it.
     this.identity.invalidate('awaiting-inventory');
     this.ready = true;
+    this.clearConnectDeadline();
     // Mutated directly rather than pushed through setState, whose change
     // detection compares only connected/downSince — a reconnect to an upgraded
     // agent must still refresh this.
@@ -525,18 +576,26 @@ export class FleetClient {
     this.everConnected = true;
     this.backoffMs = this.cfg.reconnectMinMs;
     this.setState({ connected: true, downSince: null });
+    const ep = this.episode;
+    this.episode = null;
+    if (ep) {
+      console.warn(`ccrc-server: agent link: ready again, ${Date.now() - ep.since}ms after this stretch's first line `
+        + `(${ep.failedAttempts} attempts ended without a ready)`);
+    }
     this.startHeartbeat();
     for (const cb of this.connectListeners) cb(isReconnect);
   }
 
-  private onClose(ws: WebSocket): void {
+  private onClose(ws: WebSocket, code: number, reason: Buffer): void {
     if (ws !== this.socket) return; // a stale handler for a socket we already replaced
+    const wasReady = this.ready;
     // Path-identity spec 2026-10-12 §5.2: right after the guard, before the pending rejections, the synthesized pty
     // exits and `markDown`'s state listeners, so none of them can read the closed connection's node as known.
     this.identity.invalidate('link-down');
     this.socket = null;
     this.ready = false;
     this.stopHeartbeat();
+    this.clearConnectDeadline();
     this.rejectAllPending(new Error('disconnected'));
     // The agent kills every open pty on disconnect (per its own connection-
     // close handler) — synthesize the same `exit` locally for anything still
@@ -548,6 +607,18 @@ export class FleetClient {
     }
     this.ptyListeners.clear();
     this.markDown();
+    if (wasReady) {
+      if (!this.episode) this.note('lost', `lost (close ${code}); reconnecting`);
+    } else {
+      // No episode is open here only before the first `ready` since start: every later loss of a ready link has
+      // opened one (D-6520).
+      const ep = this.episode
+        ?? this.note('never-ready', `no ready since the server started (close ${code}); retrying`);
+      ep.failedAttempts++;
+      if (code >= 4400 && code <= 4499) {
+        this.note('refused', `agent refused the hello (close ${code} ${refusalReason(reason, this.cfg.token)}); retrying`);
+      }
+    }
     if (this.closed) return;
     this.scheduleReconnect();
   }
@@ -590,6 +661,28 @@ export class FleetClient {
     this.pending.clear();
   }
 
+  /** One wall-clock bound per attempt, from socket creation to `ready` (wave 27, D-6514; #1160's timer, D-6724).
+   *  `onReady`, `onClose` and `close()` clear it, and it re-checks when it fires (D-6517): a ready link is left alone;
+   *  otherwise the CAPTURED socket is terminated, never `this.socket`. `terminate` on CONNECTING aborts the handshake
+   *  and on OPEN destroys the socket; either way `close` follows and `onClose` reconnects with the existing backoff.
+   *  A deadline whose attempt is no longer current says nothing: its line and count belong to the current attempt. */
+  private armConnectDeadline(ws: WebSocket): void {
+    this.clearConnectDeadline();
+    this.connectTimer = setTimeout(() => {
+      this.connectTimer = null;
+      if (ws !== this.socket || this.ready) return; // a stale timer for a socket we already replaced
+      this.note('no-ready', `no ready within ${this.cfg.connectTimeoutMs}ms (${preReadyPhase(ws.readyState)}); `
+        + 'terminating this attempt and retrying');
+      ws.terminate(); // -> 'close' -> onClose -> reconnect (ws emits it for a CONNECTING socket too)
+    }, this.cfg.connectTimeoutMs);
+    this.connectTimer.unref?.();
+  }
+
+  private clearConnectDeadline(): void {
+    if (this.connectTimer) clearTimeout(this.connectTimer);
+    this.connectTimer = null;
+  }
+
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.awaitingPong = false;
@@ -598,6 +691,8 @@ export class FleetClient {
       if (this.awaitingPong) {
         this.missedPongs++;
         if (this.missedPongs >= HEARTBEAT_MISS_LIMIT) {
+          this.note('no-pong', `no pong to ${HEARTBEAT_MISS_LIMIT} heartbeats ${this.cfg.heartbeatMs}ms apart; `
+            + 'terminating the socket and reconnecting');
           this.socket?.terminate(); // -> 'close' -> reconnect
           return;
         }
@@ -613,6 +708,16 @@ export class FleetClient {
   private stopHeartbeat(): void {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
+  }
+
+  /** One `ccrc-server: agent link:` line per kind per episode; opens the episode if none is open, and returns it
+   *  (D-6520). */
+  private note(kind: LinkLine, text: string): LinkEpisode {
+    const ep = this.episode ?? (this.episode = { since: Date.now(), logged: new Set(), failedAttempts: 0 });
+    if (ep.logged.has(kind)) return ep;
+    ep.logged.add(kind);
+    console.warn(`ccrc-server: agent link: ${text}`);
+    return ep;
   }
 }
 

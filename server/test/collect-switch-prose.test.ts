@@ -61,7 +61,7 @@ describe("the switch's prose is true (path-identity spec §5)", () => {
     expect(s).toContain('Live is refused while sign-in is dark (`403 sign-in-unarmed`).');
 
     const settings = flat(between('README, the Settings paragraph', README,
-      '**Settings, the update banner and release pushes', 'In remote mode the foot'));
+      '**Settings, the update line and release pushes', 'In remote mode the foot'));
     const lead = 'Settings then has a further section, **Temp root collector**';
     expect(settings.indexOf(lead), 'the section follows Stall watch')
       .toBeGreaterThan(settings.indexOf('Settings then has a further section, **Stall watch**'));

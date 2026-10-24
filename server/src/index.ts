@@ -7,7 +7,7 @@ import { generateAccountsSh } from '../../shared/generate.mjs';
 import { readBuildInfo, type BuildInfo } from './buildinfo.js';
 import { realRunner, Tmux } from './exec.js';
 import { ccdRunner } from './lifecycle.js';
-import { localIO } from './io.js';
+import { localIOFor } from './io.js';
 import { attachPty } from './pty.js';
 import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
@@ -219,7 +219,7 @@ if (cfg.fleetMode === 'remote') {
   // be read stays unmeasured; the connection label is never an identity.
   const localFleetIdentity = new FleetIdentityCell();
   deps = {
-    cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
+    cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIOFor(cfg.home),
     spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
     poolEdgeLog,
     catalogue,

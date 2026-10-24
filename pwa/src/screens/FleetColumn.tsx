@@ -12,10 +12,25 @@ import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { FleetScreen } from './FleetScreen';
 import { useFleetStore } from '../stores/fleet';
 
-/** `barHoldsChrome`: the skin's frame holds the fleet's chrome at a desk, the head's wordmark and doors in its bar
- *  and the banner stack under it (Refined, W2 Task S4b), so the column leaves them out there; below 900 it keeps
- *  them. One instance of each at any width, as with the accounts strip. */
-export function FleetColumn({ barHoldsChrome = false }: { barHoldsChrome?: boolean } = {}): ReactNode {
+/** The skin's frame holds part of the fleet's chrome at a desk, and the column leaves out what it holds; below 900 it
+ *  keeps all of it (one instance of each at any width, as with the accounts strip). Three flags, because the three
+ *  things are held by different parts (W2 desk polish T2e, D-6335; before it, one `barHoldsChrome` drove both of the first
+ *  two; T2g, D-6715, adds the third):
+ *  - `headChrome`: the head's wordmark and its Docs, Accounts, Settings, Inbox and Bell doors. Instrument's top bar
+ *    holds the wordmark and its rail holds the doors, so its column draws none of them. The pool-lag readout stays,
+ *    because it is drawn outside that gate.
+ *  - `headCount`: the head's count line. Instrument's status bar prints the fleet's count at every desk width, so its
+ *    column draws none; Refined's frame has no such bar, so its column keeps the line.
+ *  - `banners`: the banner stack. Refined's frame places the stack under its bar; Instrument's `Banners` part is `null`,
+ *    so its column is where the stack is drawn, and a flag tied to the head's would drop it there altogether.
+ *  Each reads "the column draws it at a desk", and defaults to true. */
+export function FleetColumn(
+  { headChrome = true, headCount = true, banners = true }: {
+    headChrome?: boolean;
+    headCount?: boolean;
+    banners?: boolean;
+  } = {},
+): ReactNode {
   const { path } = useLocation();
   const at = matchRoute(path);
   const selectedId = at?.route.id === 'session' ? at.param : null;
@@ -29,8 +44,9 @@ export function FleetColumn({ barHoldsChrome = false }: { barHoldsChrome?: boole
     <FleetScreen
       selectedId={selectedId}
       showAccounts={!desktop}
-      banners={!(barHoldsChrome && desktop)}
-      headChrome={!(barHoldsChrome && desktop)}
+      banners={banners || !desktop}
+      headChrome={headChrome || !desktop}
+      headCount={headCount || !desktop}
       epoch={pools?.epoch}
       observedEpoch={pools?.observedEpoch}
     />

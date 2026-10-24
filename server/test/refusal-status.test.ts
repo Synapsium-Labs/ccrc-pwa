@@ -86,19 +86,22 @@ function refusalSends(text: string): Send[] {
   return out;
 }
 /** A computed status that IS a table: the helpers' own one send each —
- *  `refuseRun`'s `RUN_REFUSAL_STATUS` included (D-5384). */
-const TABLE_STATUS = /^(?:RUN_)?REFUSAL_STATUS\[/;
+ *  `refuseRun`'s `RUN_REFUSAL_STATUS` (D-5384) and `refuseAdvance`'s `ADVANCE_REJECT_STATUS` (ARCH-33) included. */
+const TABLE_STATUS = /^(?:(?:RUN_)?REFUSAL_STATUS|ADVANCE_REJECT_STATUS)\[/;
 /** A `refuseRoute` call naming its word as a literal. */
 const HELPER_WORD = /\brefuseRoute\(\s*reply\s*,\s*'([^']+)'/g;
+/** A word a pure decider answers as `refused('<word>'` (`coord/route.ts`): the route sends it through `refuseRoute(reply, decision.refused, …)`. */
+const DECIDER_WORD = /\brefused\('([^']+)'/g;
 
 /** Measured on landing day (D-5381). MAY ONLY SHRINK: a file whose count
  *  falls lowers its pin in the same change; a new inline send is red — answer
  *  it with `refuseRoute` (or a file's typed helper) instead. Counts every
  *  literal-status refusal send, whatever its body's key order or headers. */
 const INLINE_SEND_PINS: Readonly<Record<string, number>> = {
+  'archiveAct.ts': 2,     // ARCH-36 (#559): the archive door's two 502 `{stderr}` sends, MOVED from server.ts with the act (server.ts fell by five: those two, and the door's gate sends, now `refuseRoute` calls)
   'auth/gate.ts': 2,
-  'coord/routes.ts': 149,  // D-5384: the open route's 24 precondition, child-gate, openRun-conflict and hold-verb sends answer through refuseRoute/refuseRun; D-5298: requireAttribution's 5 through refuseRoute; path identity W1a: the advance route's stored-id reject (`reject: { code: 'bad-session' }`, the advance route's own inline body, which no helper sends)
-  'server.ts': 123,       // D-5971 (#549, ARCH-11b): the eight 503 `registry-unmeasurable` sends answer through refuseRoute; D-5242: the swap route's three 409s (session-busy, status-unknown and the new hibernated) answer through refuseRoute; path identity W1a: its `readSessionRecord` `kind` switches' four literal 503s are refuseRoute calls since D-5971
+  'coord/routes.ts': 119,  // ARCH-20 (#546): the route door's 18 inline sends answer through `decideRoute`'s typed refusal and `refuseRoute`; ARCH-33 (D-6733): the advance route's gate refusals answer through refuseAdvance, so only its verifyDone and advance rejects stay inline; D-5384: the open route's 24 precondition, child-gate, openRun-conflict and hold-verb sends answer through refuseRoute/refuseRun; D-5298: requireAttribution's 5 through refuseRoute; path identity W1a's stored-id reject is a `refuseAdvance` row since ARCH-33
+  'server.ts': 118,       // ARCH-36 (#559): the archive door's gate and plan refusals answer through refuseRoute, its two 502 `{stderr}` sends moved to archiveAct.ts; // D-5971 (#549, ARCH-11b): the eight 503 `registry-unmeasurable` sends answer through refuseRoute; D-5242: the swap route's three 409s (session-busy, status-unknown and the new hibernated) answer through refuseRoute; path identity W1a: its `readSessionRecord` `kind` switches' four literal 503s are refuseRoute calls since D-5971
   'token/routes.ts': 2,   // the rotate route's 501, a `RotateAnswer`; the claim door's oversized-body 413
 };
 
@@ -160,6 +163,7 @@ describe('REFUSAL_STATUS (D-5381)', () => {
     for (const { text } of sources()) {
       for (const { word } of refusalSends(text)) if (word !== null) sent.add(word);
       for (const m of text.matchAll(HELPER_WORD)) sent.add(m[1]);
+      for (const m of text.matchAll(DECIDER_WORD)) sent.add(m[1]);
     }
     expect(GENERIC_REFUSALS.filter((w) => !sent.has(w))).toEqual([]);
   });
@@ -198,7 +202,7 @@ describe('registry-unmeasurable has one status (D-5971)', () => {
   it('server.ts answers it through refuseRoute, never inline', () => {
     const text = sources().find((s) => s.rel === 'server.ts')!.text;
     expect(sendsOfWord(text).map((s) => s.line)).toEqual([]);
-    expect([...text.matchAll(/\brefuseRoute\(\s*reply\s*,\s*'registry-unmeasurable'/g)].length).toBeGreaterThanOrEqual(8);
+    expect([...text.matchAll(/\brefuseRoute\(\s*reply\s*,\s*'registry-unmeasurable'/g)].length).toBeGreaterThanOrEqual(5); // ARCH-36 (#559): the archive door's three moved to `admitArchive`, whose word the route sends through refuseRoute
   });
 
   it('the scan is live — it catches a 503 send, a ternary, a header chain and any quote style of the word', () => {

@@ -69,17 +69,14 @@ describe('EFFORT_LADDER — ccd/ccd\'s ROUTE_EFFORT_STOPS is its bash mirror', (
 describe('shared/routing-ladder.ts is L0 — imports nothing but its two shared/ siblings', () => {
   const code = () => readFileSync(path.join(root, 'shared/routing-ladder.ts'), 'utf8');
 
-  it('imports only ./models.js and ./api.js, never node:*', () => {
+  it('imports only ./models.js and ./api.js', () => {
     const src = code()
       .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
       .replace(/\/\/[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
     const specifiers = [...src.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]!);
     expect(specifiers.length, 'no import specifiers found — the scan is over nothing').toBeGreaterThan(0);
-    for (const s of specifiers) {
-      expect(s, `shared/routing-ladder.ts imports a node builtin — the PWA bundles this file`).not.toMatch(/^node:/);
-    }
     expect(new Set(specifiers)).toEqual(new Set(['./models.js', './api.js']));
   });
 
-  // The whole-source node: belt is server/test/rings/shared-imports.test.ts now (D-6045): it parses every edge.
+  // The no-`node:*` belt is server/test/rings/shared-imports.test.ts (D-6045; stage 4 retired this file's own loop, the exact set above being the stricter rule): it parses every edge.
 });

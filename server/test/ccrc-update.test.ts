@@ -35,13 +35,14 @@
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { killGroup } from './spawnGroup.js';
+import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { createHash } from 'node:crypto';
 import { createServer as createNetServer, type AddressInfo } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync,
   statSync, lstatSync, chmodSync, readdirSync, appendFileSync, renameSync, rmSync,
-  symlinkSync, readlinkSync, utimesSync,
+  symlinkSync, readlinkSync, utimesSync, openSync, closeSync, constants as fsConstants,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -118,7 +119,7 @@ const FLOCK = realPath('flock');
 
 interface Result { code: number; stdout: string; stderr: string }
 
-/** GNU `timeout -k`, probed the same way `ccrc-doctor.test.ts`'s own
+/** GNU `timeout -k`, probed the same way `ccrc-doctorFixture.ts`'s own
  *  `DOCTOR_DEADLINE_BIN` is (fix round 1 items 9 and 23-C21): a FIFO block
  *  happens inside a GRANDCHILD (`jq`'s or `flock`'s own open), which a bare
  *  `spawnSync` `timeout` option cannot reach — only `timeout -k`, which puts
@@ -299,6 +300,7 @@ function healthyBox(home: string): void {
 
   stub('df', [
     'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
+    ...FIXTURE_DF_INODES_LINES,
     '[ "$1" = "-Pk" ] && [ -n "$2" ] || { echo "fixture df: unexpected argv: $*" >&2; exit 90; }',
     'echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
     'echo "/dev/fixture0    104857600  20971520 42991616      21% /"',
@@ -705,7 +707,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     `exec ${REAL_NODE} "$@"`,
   ].join('\n') + '\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT',
-    'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+    'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
   // The health gate (design §11) probes once and decides at a 0 s deadline;
@@ -1494,6 +1496,9 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     const child = spawn(process.execPath, ['-e', HOST_JS, String(bytes), String(everyMs)], { stdio: ['ignore', 'pipe', 'ignore'] });
     let out = '';
     child.stdout!.on('data', (d: Buffer) => { out += d.toString(); });
+    // `close`, not `exit`: the host prints its count as it exits, and `exit` can fire before that last chunk is
+    // read, which reads as "sent 0".
+    const closed = new Promise<void>((resolve) => { child.once('close', () => resolve()); });
     const port = await new Promise<number>((resolve, reject) => {
       const t0 = Date.now();
       const iv = setInterval(() => {
@@ -1503,9 +1508,8 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       }, 20);
     });
     const stop = async (): Promise<number> => {
-      if (child.exitCode === null && child.signalCode === null) {
-        await new Promise<void>((resolve) => { child.once('exit', () => resolve()); child.kill('SIGTERM'); });
-      }
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      await closed;
       const m = /sent (\d+)/.exec(out);
       return m ? Number(m[1]) : 0;
     };
@@ -1546,7 +1550,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       expect(elapsedMs, `took ${elapsedMs}ms; stderr: ${r.stderr}`).toBeGreaterThanOrEqual(1800);
       expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(10_000);
       // The host really was above the floor the whole time.
-      expect(sent / (elapsedMs / 1000), `sent ${sent} bytes in ${elapsedMs}ms`).toBeGreaterThan(1500);
+      expect(sent / (elapsedMs / 1000), `sent ${sent} bytes in ${elapsedMs}ms; stderr: ${r.stderr}`).toBeGreaterThan(1500);
       expect(r.stderr).toMatch(/curl: \(28\) Operation timed out after 2\d{3} milliseconds/);
       expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS \(is there a release, or did the connection stall.*or did it time out after 2s \/ exceed 1048576 bytes\)/);
     } finally {
@@ -4101,8 +4105,10 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     let r = runUpdate(moved);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     // W4 Task 5: the gate writes `checking` BEFORE the sweep's `restarting`
-    // (design §11 — the gate precedes the sweep; nothing reads the order).
-    expect(phases(moved)).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'checking', 'restarting', 'done']);
+    // (design §11 — the gate precedes the sweep; nothing reads the order). Wave 23 (D-6356): a second `restarting`, the
+    // re-stamp right before the prune and thinning take the lock again, so the deadline measures from it.
+    expect(phases(moved)).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'checking', 'restarting', 'restarting', 'done']);
+    expect(reportWrites(moved).map((w) => w['detail']).slice(-2, -1)).toEqual(['pruning and thinning ~/ccrc-backups']);
     // The stub box answers no KillMode, so its sweep is REFUSED, and the update's own `done` records that (R10k, D-5315):
     // exit 0, `detail` null, the word in `sweep`. On Darwin the arm reads job files instead, so only its presence is pinned.
     const movedSweep = lastReport(moved)['sweep'];
@@ -4157,15 +4163,16 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
 
     for (const home of [moved, same, refused, restoreHome, ...(process.platform === 'darwin' ? [] : [detached])]) {
       const raw = readFileSync(join(home, 'update-json-writes'), 'utf8').split('\n').filter((l) => l !== '');
-      // Wave 17 (D-5314): every write before the sweep keeps the seven keys; the sweep's own `done` is the one write that
-      // carries the eighth, after them. The converged no-op, the refusal and the restore never sweep, so they keep seven.
+      // Wave 17 (D-5314): every write before the sweep keeps the seven keys; the writes after the sweep carry the eighth,
+      // after them: the re-stamp before the prune and thinning (wave 23, D-6356) and the update's own `done`. The converged
+      // no-op, the refusal and the restore never sweep, so they keep seven.
       const swept = home === moved;
-      for (const l of raw) {
+      raw.forEach((l, i) => {
         const w = JSON.parse(l) as { phase: string };
         expect(Object.keys(w), `${home}: the ${w.phase} write`)
-          .toEqual(swept && w.phase === 'done' ? [...REPORT_KEYS, 'sweep'] : REPORT_KEYS);
-      }
-      if (swept) expect(raw.filter((l) => l.includes('"sweep"')), 'only the write after the sweep carries it').toHaveLength(1);
+          .toEqual(swept && i >= raw.length - 2 ? [...REPORT_KEYS, 'sweep'] : REPORT_KEYS);
+      });
+      if (swept) expect(raw.filter((l) => l.includes('"sweep"')), 'only the writes after the sweep carry it').toHaveLength(2);
       // The file on disk IS the last rename, and no staged copy is left beside it.
       expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')).toBe(`${raw[raw.length - 1]}\n`);
       expect(readdirSync(join(home, '.ccrc')).filter((f) => f.startsWith('update.json.'))).toEqual([]);
@@ -4184,8 +4191,9 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     const w = reportWrites(home);
     // W4 Task 5: the gate's `checking` is the eighth report; the order and
-    // the count are pinned together, so neither can drift alone.
-    expect(w.map((x) => x['phase'])).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'checking', 'restarting', 'done']);
+    // the count are pinned together, so neither can drift alone. Wave 23 (D-6356) adds the second `restarting`, the
+    // re-stamp before the prune and thinning.
+    expect(w.map((x) => x['phase'])).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'checking', 'restarting', 'restarting', 'done']);
     // latest/download: nothing names a tag until SHA256SUMS has been read.
     expect(w[0]!['phase']).toBe('resolving');
     expect(w[0]!['target']).toBeNull();
@@ -4202,7 +4210,9 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       prev = Number(x['updatedAt']);
       expect(x['from']).toBe('cli');
       expect(Number.isInteger(x['pid'])).toBe(true);
-      expect(x['detail']).toBeNull();   // no phase of a clean run carries one
+      // No phase of a clean run carries one, except the re-stamp before the prune and thinning (wave 23, D-6356): the
+      // second `restarting`, the write before `done`.
+      expect(x['detail']).toBe(x === w[w.length - 2] ? 'pruning and thinning ~/ccrc-backups' : null);
     }
   });
 
@@ -5642,7 +5652,7 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
   // THE ARMS, SOURCED. `ccrc` recomputes CCD_OS from $OSTYPE at source time
   // (ccd/ccrc:109-114), so the Darwin arms of a whole `ccrc update` run only
   // on the macOS leg — which is non-required and measured unable to finish.
-  // Sourced (the `_check_routing` idiom in ccrc-doctor.test.ts), CCD_OS is
+  // Sourced (the `_check_routing` idiom in ccrc-doctorFixture.ts), CCD_OS is
   // set AFTER the file computed it, and `_ccrc_job_stayed_up` is shadowed to
   // record its argument, so every leg measures which arm ran: the arm's
   // CHOICE is the subject here, the two-sample check is the itDarwin case's.
@@ -13262,6 +13272,17 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
   const backupRoot = (home: string): string => join(home, 'ccrc-backups');
   const CP_REV1 = encodeDelegationCheckpoint({ ...emptyDelegationCheckpoint(), revision: 1 });
   const CP_REV2 = encodeDelegationCheckpoint({ ...emptyDelegationCheckpoint(), revision: 2 });
+  /** One whole journal record: the wave-23 rows plant it beside a checkpoint and a database, so a capture holds all three members. */
+  const W23_JOURNAL = Buffer.from(encodeDelegationJournalRecord(buildDelegationJournalRecord({
+    sequence: 1, acceptedAt: '2026-10-15T10:00:00.000Z', previousDigest: null,
+    entry: {
+      kind: 'evidence-accepted',
+      event: {
+        v: 1, eventKind: 'SessionStart', source: 'startup', observedAt: '2026-10-15T09:59:00.000Z', sessionId: 'lane-a-demo', parentIncarnation: 'g1',
+        claudeSessionId: '11111111-2222-3333-4444-555555555555', eventId: 'e'.repeat(64), bucket: '2026101509', startOffset: 0, endOffset: 120,
+      },
+    },
+  })));
   const manifestOf = (dir: string): string => join(dir, 'coordination-snapshot.json');
 
   /** A `node` in front of the real one on PATH: it records which of the two helpers ran and, at the capture, what the backup
@@ -13282,10 +13303,24 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       '    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_STDERR" ]; then echo "Debugger listening on ws://127.0.0.1:0/fixture" >&2; fi',
       `    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_EXTRA" ]; then PATH='${updateEnv(home).PATH ?? ''}'; o="$(node "$@")"; r=$?; printf '%s\\nextra: line\\n' "$o"; exit $r; fi`,
       '    if [ "$3" = capture ]; then echo "present: $(ls -A "$5" | tr "\\n" " ")" >> "$HOME/node-order"; fi',
+      // Wave 23 (D-6346): `thin` answers FX_THIN_EXIT when it is set, and a copy of the report as it stands when it is asked.
+      '    if [ "$3" = thin ] && [ -f "$HOME/.ccrc/update.json" ]; then cp "$HOME/.ccrc/update.json" "$HOME/thin-saw-update.json"; fi',
+      // ...and whether ~/.ccrc/update.lock is held as it is asked: a fresh open conflicts with the caller's flock (review 794, F11).
+      '    if [ "$3" = thin ]; then if flock -n "$HOME/.ccrc/update.lock" true 2>/dev/null; then echo free; else echo held; fi > "$HOME/thin-lock-state"; fi',
+      // ...and the arguments it was asked with, one a line (D-6464's `--until`).
+      '    if [ "$3" = thin ]; then printf "%s\\n" "$@" > "$HOME/thin-args"; fi',
+      '    if [ "$3" = thin ] && [ -n "$FX_THIN_EXIT" ]; then exit "$FX_THIN_EXIT"; fi',
       '    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_FAIL" ]; then exit 70; fi ;;',
       'esac',
       // On to whatever `node` the fixture box would otherwise have resolved (its verifier shim included), not the real one.
       `PATH='${updateEnv(home).PATH ?? ''}'; exec node "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 });
+    // D-6464: `FX_JQ_UPDATED_AT` answers cmd_update's read-back of the re-stamp's `updatedAt`; every other jq call is the real one.
+    writeFileSync(join(bin, 'jq'), [
+      '#!/bin/sh',
+      'if [ -n "$FX_JQ_UPDATED_AT" ] && [ "$2" = ".updatedAt | numbers" ]; then printf "%s\\n" "$FX_JQ_UPDATED_AT"; exit 0; fi',
+      `PATH='${updateEnv(home).PATH ?? ''}'; exec jq "$@"`,
       '',
     ].join('\n'), { mode: 0o755 });
     return bin;
@@ -13313,7 +13348,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     writeFileSync(join(home, '.ccrc', 'delegation-checkpoint.json'), bytes);
   };
-  type Kind = 'v1-sidecars' | 'v1-empty' | 'legacy-db' | 'invalid' | 'tree' | 'tree+v1' | 'plain';
+  type Kind = 'v1-sidecars' | 'v1-empty' | 'legacy-db' | 'invalid' | 'tree' | 'tree+v1' | 'tree+v1-full' | 'plain';
   /** One timestamped backup dir of a given kind. 'v1-sidecars' is a REAL helper capture of a checkpoint (no journal, no DB). */
   const plantDir = (home: string, name: string, kind: Kind): string => {
     const dir = join(backupRoot(home), name);
@@ -13337,7 +13372,20 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       db.exec('CREATE TABLE fixture (x INTEGER)');
       db.close();
     }
-    if (kind === 'tree' || kind === 'tree+v1') mkdirSync(join(dir, 'agent-dist'), { recursive: true });
+    if (kind === 'tree+v1-full') {
+      // A REAL capture of a live journal, checkpoint and database (the wave-23 rows count and thin these), plus a tree entry.
+      const mini = mkTmp('ccrc-fx-snap-full-');
+      mkdirSync(join(mini, '.ccrc'));
+      writeFileSync(join(mini, '.ccrc', 'delegation-checkpoint.json'), CP_REV1);
+      writeFileSync(join(mini, '.ccrc', 'delegation-events.log'), W23_JOURNAL);
+      plantCoordDb(mini);
+      const db = new DatabaseSync(join(dir, 'coord.db'));
+      db.exec('CREATE TABLE fixture (x INTEGER); INSERT INTO fixture VALUES (42);');
+      db.close();
+      const r = helper(mini, ['capture', '--dir', dir]);
+      expect(r.code, r.stderr).toBe(0);
+    }
+    if (kind === 'tree' || kind === 'tree+v1' || kind === 'tree+v1-full') mkdirSync(join(dir, 'agent-dist'), { recursive: true });
     return dir;
   };
 
@@ -13740,6 +13788,705 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
       expect(r.stdout).toMatch(/the newest earlier tree backup, the newest earlier valid coordination snapshot and the newest earlier one that holds data;/);
       expect(r.stdout).not.toMatch(/the newest earlier coord\.db snapshot/);
+    });
+  });
+
+  // Wave 23 (centralised update, D-6346 to D-6360): after the prune an update and `ccrc backup` thin the coordination data set of every
+  // backup past the newest CCRC_BACKUP_DATA_KEEP that carry one. The helper's own rows are in `coordination-snapshot.test.ts`; these are the
+  // CALLER's: the knob, who thins and who does not, the lines, the exits, the report.
+  describe('W23: update and ccrc backup thin the data set past CCRC_BACKUP_DATA_KEEP (D-6346, D-6347, D-6350)', () => {
+    // Describe-local kill list for the lock holder of B4, the pruner describe's pattern.
+    const lingerers: string[] = [];
+    afterEach(() => {
+      for (const f of lingerers.splice(0)) {
+        if (!existsSync(f)) continue;
+        const pid = Number(readFileSync(f, 'utf8').trim());
+        if (!Number.isInteger(pid) || pid <= 1) continue;
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+      }
+    });
+    const NAMES = ['20250101-000000', '20250102-000000', '20250103-000000', '20250104-000000', '20250105-000000'];
+    /** A box whose update or backup takes a data-bearing backup of its own: a database and a checkpoint to capture. */
+    const box = (prefix: string): string => {
+      const home = freshUpdateBox(prefix);
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantCoordDb(home);
+      plantLiveCheckpoint(home);
+      return home;
+    };
+    const dirOf = (home: string, name: string): string => join(backupRoot(home), name);
+    const word = (home: string, name: string): string => helper(home, ['classify', '--from', dirOf(home, name)]).stdout.trim();
+    const listing = (home: string, name: string): string[] => readdirSync(dirOf(home, name)).sort();
+    const recordOf = (home: string, name: string): Record<string, unknown> =>
+      JSON.parse(readFileSync(join(dirOf(home, name), 'coordination-thinned.json'), 'utf8'));
+    /** Every entry of the named dirs, a file by its content digest: what "byte-identical" compares. */
+    const fingerprint = (home: string, names: string[]): Record<string, string[]> =>
+      Object.fromEntries(names.map((n) => [n, readdirSync(dirOf(home, n), { recursive: true, encoding: 'utf8' }).sort().map((f) => {
+        const p = join(dirOf(home, n), f);
+        return statSync(p).isFile() ? `${f}:${createHash('sha256').update(readFileSync(p)).digest('hex')}` : `${f}/`;
+      })]));
+    const plantFull = (home: string, names: string[] = NAMES): void => { for (const n of names) plantDir(home, n, 'tree+v1-full'); };
+    /** The line `thin` prints for a dir it thinned, led by `lead`. */
+    const thinLine = (lead: string, name: string, keep = 3): RegExp => new RegExp(
+      `^${lead} thinned ${name}: dropped its coordination data set \\(\\d+M: coord\\.db, delegation-events\\.log, delegation-checkpoint\\.json, coordination-snapshot\\.json\\); `
+      + `its code is kept, and coordination-thinned\\.json records when and why \\(CCRC_BACKUP_DATA_KEEP=${keep}\\)$`, 'm');
+    /** A REAL thinned dir at `name`: three full captures thinned at a keep of 2 in a scratch box, the oldest copied in. */
+    const plantThinned = (home: string, name: string): void => {
+      const t = mkTmp('ccrc-fx-w23-thinned-');
+      for (const n of ['30000101-000001', '30000101-000002', '30000101-000003']) plantDir(t, n, 'tree+v1-full');
+      const r = helper(t, ['thin', '--keep', '2', '--by', 'backup', '--own', dirOf(t, '30000101-000003'), '--dir', dirOf(t, '30000101-000002'), '--dir', dirOf(t, '30000101-000001')]);
+      expect(r.code, `${r.stderr}\n${r.stdout}`).toBe(0);
+      cpSync(dirOf(t, '30000101-000001'), dirOf(home, name), { recursive: true });
+      expect(listing(home, name)).toEqual(['agent-dist', 'coordination-thinned.json']);
+    };
+    /** The checkout's ccrc (or another file) sourced, then `script`, in the fixture box's environment; `timeout` (ms) bounds a row a hang must fail. */
+    const sourced = (home: string, script: string, env: NodeJS.ProcessEnv = {}, ccrc: string = join(REPO, 'ccd', 'ccrc'), timeout?: number): Result => {
+      const r = spawnSync(BASH, ['-c', `. "$1"; ${script}`, 'ccrc-under-test', ccrc], { env: { ...updateEnv(home), ...env }, encoding: 'utf8', timeout });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    const stubUpdate = (home: string): void => { packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' }); };
+
+    it('W23-B1: ccrc backup with five earlier full dirs and the default keeps three data sets (its own and the two newest earlier) and thins the other three, code kept, one line each, by backup', () => {
+      const home = box('ccrc-fx-w23-b1-');
+      plantFull(home);
+      const r = runBackup(home);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      const thinned = ['20250103-000000', '20250102-000000', '20250101-000000'];
+      for (const n of thinned) {
+        expect(listing(home, n), n).toEqual(['agent-dist', 'coordination-thinned.json']);
+        expect(recordOf(home, n), n).toMatchObject({ by: 'backup', rule: { knob: 'CCRC_BACKUP_DATA_KEEP', keep: 3 }, source: 'v1' });
+        expect(r.stdout, n).toMatch(thinLine('backup:', n));
+      }
+      const at = thinned.map((n) => r.stdout.indexOf(`backup: thinned ${n}:`));
+      expect(at, 'newest first').toEqual([...at].sort((a, b) => a - b));
+      expect(r.stdout).toMatch(/^backup: coordination data sets: 3 kept, 3 thinned this run, 0 left as they are$/m);
+      for (const n of ['20250105-000000', '20250104-000000']) expect(helper(home, ['validate', '--from', dirOf(home, n)]).stdout, n).toMatch(/^v1: /);
+      expect(word(home, path.basename(ownDir(r))), 'this run\'s own').toBe('v1');
+    });
+
+    it('W23-B2: an update whose gate passes thins the same way, after its prune, under update: backups:, and its records say by update', () => {
+      const home = box('ccrc-fx-w23-b2-');
+      stubUpdate(home);
+      plantFull(home);
+      const r = runUpdate(home);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      for (const n of ['20250103-000000', '20250102-000000', '20250101-000000']) {
+        expect(listing(home, n), n).toEqual(['agent-dist', 'coordination-thinned.json']);
+        expect(recordOf(home, n), n).toMatchObject({ by: 'update', rule: { keep: 3 } });
+        expect(r.stdout, n).toMatch(thinLine('update: backups:', n));
+      }
+      expect(r.stdout).toMatch(/^update: backups: coordination data sets: 3 kept, 3 thinned this run, 0 left as they are$/m);
+      expect(word(home, '20250105-000000')).toBe('v1');
+      expect(word(home, '20250104-000000')).toBe('v1');
+      expect(word(home, path.basename(announcedBackupDir(r.stdout, home))), 'this run\'s own').toBe('v1');
+    });
+
+    it('W23-B3: a CCRC_BACKUP_DATA_KEEP of 0, 1, 00, 10000, x or ٣ refuses: an update WARNs and prunes and thins nothing; ccrc backup dies after its backup', () => {
+      const four = NAMES.slice(0, 4);
+      const home = box('ccrc-fx-w23-b3-update-');
+      stubUpdate(home);
+      plantFull(home, four);
+      const before = fingerprint(home, four);
+      const u = runUpdate(home, [], { CCRC_BACKUP_DATA_KEEP: '1', CCRC_BACKUP_KEEP: '0' });
+      expect(u.code, `stderr: ${u.stderr}\nstdout: ${u.stdout}`).toBe(0);
+      expect(u.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999 — nothing pruned or thinned$/m);
+      expect(u.stdout).not.toMatch(/^update: backups: (pruned|thinned)/m);
+      expect(fingerprint(home, four), 'every planted dir is byte-identical').toEqual(before);
+      for (const v of ['0', '1', '00', '10000', 'x', '٣']) {
+        const h = box('ccrc-fx-w23-b3-backup-');
+        plantFull(h, four);
+        const b4 = fingerprint(h, four);
+        const r = runBackup(h, [], { CCRC_BACKUP_DATA_KEEP: v, CCRC_BACKUP_KEEP: '0' });
+        expect(r.code, `${v}: stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+        expect(r.stderr, v).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP='[^']*' is not a whole number from 2 to 9999 — nothing was pruned or thinned$/m);
+        expect(r.stdout, v).toMatch(/^backup: \S+/m);
+        expect(readdirSync(backupRoot(h)), `${v}: the backup was taken first`).toHaveLength(5);
+        expect(fingerprint(h, four), v).toEqual(b4);
+      }
+    });
+
+    itLinux('W23-B4: a failed gate (exit 4), --no-gate, a --from restore child and another holder of update.lock thin nothing', () => {
+      const expectUntouched = (home: string, before: Record<string, string[]>, out: string, by: string): void => {
+        expect(fingerprint(home, NAMES), by).toEqual(before);
+        expect(out, by).not.toMatch(/thinned|thinning|coordination data sets/);
+      };
+      // The failed gate: P5's box.
+      const g = freshUpdateBox('ccrc-fx-w23-b4-gate-');
+      plantRestoreBox(g);
+      plantFull(g);
+      const gBefore = fingerprint(g, NAMES);
+      const gr = runUpdate(g);
+      expect(gr.code, `stderr: ${gr.stderr}\nstdout: ${gr.stdout}`).toBe(4);
+      expectUntouched(g, gBefore, gr.stdout, 'failed gate');
+      // --no-gate: P6's.
+      const n = freshUpdateBox('ccrc-fx-w23-b4-nogate-');
+      plantOldBox(n, { version: 'v1.0.0' });
+      stubUpdate(n);
+      plantFull(n);
+      const nBefore = fingerprint(n, NAMES);
+      const nr = runUpdate(n, ['--no-gate']);
+      expect(nr.code, `stderr: ${nr.stderr}\nstdout: ${nr.stdout}`).toBe(0);
+      expectUntouched(n, nBefore, nr.stdout, '--no-gate');
+      // Another holder of update.lock at prune time: P12's.
+      const l = freshUpdateBox('ccrc-fx-w23-b4-lock-');
+      plantOldBox(l, { version: 'v1.0.0' });
+      stubUpdate(l);
+      plantKillModeDropIn(l);
+      writeFileSync(join(l, 'fixture-sweep-hold-lock'), '');
+      plantFull(l);
+      const lBefore = fingerprint(l, NAMES);
+      const lr = runUpdate(l);
+      lingerers.push(join(l, 'sweep-lock-holder-pid'));
+      expect(lr.code, `stderr: ${lr.stderr}\nstdout: ${lr.stdout}`).toBe(0);
+      expect(lr.stdout).toMatch(/^update: backups: skipped — another ccrc run holds ~\/\.ccrc\/update\.lock; nothing was pruned$/m);
+      expectUntouched(l, lBefore, lr.stdout, 'lock holder');
+      // The arm-2 child: a REAL `ccrc update --no-gate --from restore` under the parent's lock (the FULL-flavour arm-2 box).
+      const c = freshUpdateBox('ccrc-fx-w23-b4-child-');
+      plantOldBox(c, { version: 'v1.0.0' });
+      writeFileSync(join(c, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+      packRelease(c, stubTree(c, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+      packRelease(c, fullTree(c, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+      writeFileSync(join(c, 'fixture-health-pin'), 'v1.0.0\n');
+      plantFull(c);
+      const cBefore = fingerprint(c, NAMES);
+      const cr = runUpdate(c);
+      expect(cr.code, `stderr: ${cr.stderr}\nstdout: ${cr.stdout}`).toBe(4);
+      expect(cr.stdout, 'the child really ran').toMatch(/^update: sweep: skipped — a --from restore run returns the supervisors' own build/m);
+      expectUntouched(c, cBefore, cr.stdout, 'restore child');
+    }, 240_000);
+
+    it('W23-B5: a dir named at or after this run\'s lock second is neither counted nor thinned', () => {
+      const home = box('ccrc-fx-w23-b5-');
+      plantFull(home, ['20250101-000000', '20250102-000000', '20250103-000000', '20250110-000001', '29991231-000000']);
+      const r = sourced(home, [
+        'R="$HOME/ccrc-backups"',
+        'UPD_BAK_FLOOR=20250110-000000; UPD_BACKUP_DIR="$R/20250110-000001"',
+        'CCRC_BACKUP_DATA_KEEP=2; _bak_data_keep || { echo "knob: $BAK_DATA_KEEP_WHY"; exit 1; }',
+        '_bak_list; _bak_keepset; echo "keepset rc $?"',
+        '_bak_thin backup "row:"; echo "rc $?"',
+      ].join('\n'));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^keepset rc 0$/m);
+      expect(r.stdout).toMatch(thinLine('row:', '20250102-000000', 2));
+      expect(r.stdout).toMatch(thinLine('row:', '20250101-000000', 2));
+      expect(r.stdout).toMatch(/^row: coordination data sets: 2 kept, 2 thinned this run, 0 left as they are$/m);
+      expect(r.stdout).toMatch(/^rc 0$/m);
+      for (const n of ['29991231-000000', '20250110-000001', '20250103-000000']) expect(word(home, n), n).toBe('v1');
+      for (const n of ['20250102-000000', '20250101-000000']) expect(word(home, n), n).toBe('thinned');
+    });
+
+    it('W23-B6: own named below an earlier full dir (a clock stepped back) is still counted first', () => {
+      const home = box('ccrc-fx-w23-b6-');
+      plantFull(home, ['20250101-000000', '20250105-000000', '20250106-000000', '20250107-000000']);
+      const r = sourced(home, [
+        'R="$HOME/ccrc-backups"',
+        'UPD_BAK_FLOOR=20250110-000000; UPD_BACKUP_DIR="$R/20250101-000000"',
+        'CCRC_BACKUP_DATA_KEEP=2; _bak_data_keep || exit 1',
+        '_bak_list; _bak_keepset; _bak_thin backup "row:"; echo "rc $?"',
+      ].join('\n'));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^rc 0$/m);
+      for (const n of ['20250101-000000', '20250107-000000']) expect(word(home, n), `${n} stays`).toBe('v1');
+      for (const n of ['20250105-000000', '20250106-000000']) expect(word(home, n), `${n} is thinned`).toBe('thinned');
+    });
+
+    it('W23-B7: the classifier failing stops the prune and the thinning alike', () => {
+      const home = box('ccrc-fx-w23-b7-');
+      plantFull(home);
+      const before = fingerprint(home, NAMES);
+      const r = runBackup(home, [], withShim(home, { FX_CLASSIFY_FAIL: '1' }));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^backup: prune skipped — the coordination snapshot classifier failed/m);
+      expect(r.stdout).not.toMatch(/thinned|thinning/);
+      expect(nodeOrder(home)).not.toContain('helper thin');
+      expect(fingerprint(home, NAMES)).toEqual(before);
+    });
+
+    it('W23-B8: a thinned dir is never a snapshot keep: the next prune treats it as a code-only dir', () => {
+      const home = box('ccrc-fx-w23-b8-');
+      for (const n of ['20250101-000000', '20250102-000000', '20250103-000000']) plantThinned(home, n);
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(existsSync(dirOf(home, '20250103-000000')), 'the newest earlier tree backup is kept by the tree keep').toBe(true);
+      expect(existsSync(dirOf(home, '20250102-000000'))).toBe(false);
+      expect(existsSync(dirOf(home, '20250101-000000'))).toBe(false);
+      expect(r.stdout).not.toMatch(/thinned|WARN/);
+    });
+
+    it('W23-B9: the helper failing (exit 70) or missing from the tree is one WARN line each, worded apart, and the run\'s exit is unchanged', () => {
+      const home = box('ccrc-fx-w23-b9-');
+      stubUpdate(home);
+      plantFull(home);
+      const u = runUpdate(home, [], withShim(home, { FX_THIN_EXIT: '70' }));
+      expect(u.code, `stderr: ${u.stderr}\nstdout: ${u.stdout}`).toBe(0);
+      expect(u.stdout).toMatch(/^update: backups: WARN: the coordination data set could not be thinned \(the helper exited 70\) — every backup it had not reached is untouched$/m);
+      for (const n of NAMES) expect(word(home, n), n).toBe('v1');
+      // The helper missing from the running tree. Only thinned dirs below the floor: a full one would stop `_bak_keepset`'s classifier first (B7's arm).
+      const h = freshUpdateBox('ccrc-fx-w23-b9-missing-');
+      plantOldBox(h, { version: 'v1.0.0' });
+      for (const n of ['20250101-000000', '20250102-000000']) plantThinned(h, n);
+      const tree = join(h, 'older-tree', 'ccd');
+      mkdirSync(tree, { recursive: true });
+      copyFileSync(join(REPO, 'ccd', 'ccrc'), join(tree, 'ccrc'));
+      expect(existsSync(join(h, 'older-tree', 'deploy'))).toBe(false);
+      const m = sourced(h, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"', {}, join(tree, 'ccrc'));
+      expect(m.code, `stderr: ${m.stderr}\nstdout: ${m.stdout}`).toBe(0);
+      expect(m.stdout).toMatch(/^update: backups: WARN: deploy\/coordination-snapshot\.mjs is missing from this tree, so nothing was thinned$/m);
+      expect(m.stdout).not.toMatch(/could not be thinned|thinning skipped/);
+      expect(m.stdout).toMatch(/^rc 1$/m);
+    });
+
+    it('W23-B10: thin refusing (exit 3) makes _bak_gc return 1 with no WARN of its own, and the prune lines are unchanged', () => {
+      const run = (thinExit: string): Result => {
+        const home = box(`ccrc-fx-w23-b10-${thinExit}-`);
+        plantDir(home, '20250101-000000', 'plain');
+        plantFull(home, ['20250102-000000', '20250103-000000', '20250104-000000']);
+        return sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"',
+          { ...withShim(home, { FX_THIN_EXIT: thinExit }), CCRC_BACKUP_KEEP: '3', CCRC_BACKUP_DATA_KEEP: '2' });
+      };
+      const refused = run('3');
+      const quiet = run('0');
+      expect(refused.code, `stderr: ${refused.stderr}\nstdout: ${refused.stdout}`).toBe(0);
+      expect(refused.stdout).toMatch(/^rc 1$/m);
+      expect(quiet.stdout).toMatch(/^rc 0$/m);
+      expect(refused.stdout).not.toMatch(/could not be thinned|WARN/);
+      const pruned = (r: Result): string[] => r.stdout.split('\n').filter((l) => /^update: backups: pruned /.test(l));
+      expect(pruned(refused)).toHaveLength(1);
+      expect(pruned(refused)).toEqual(pruned(quiet));
+    });
+
+    it('W23-B11: a ccrc backup inside an update\'s unlocked sweep keeps that update\'s pre-update backup at the lowest keep', () => {
+      const home = box('ccrc-fx-w23-b11-');
+      plantFull(home, ['20250101-000000', '20250102-000000', '20250103-000000', '20250104-000000']);
+      // The update's report, as the sweep leaves it: another process's, `restarting`.
+      const report = '{"target":"v9.9.9","phase":"restarting","startedAt":1,"updatedAt":1,"detail":null,"from":"cli","pid":999999}\n';
+      writeFileSync(join(home, '.ccrc', 'update.json'), report);
+      const r = runBackup(home, [], { CCRC_BACKUP_DATA_KEEP: '2' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(word(home, '20250104-000000'), 'the update\'s own pre-update backup is the newest earlier data set, so it is counted').toBe('v1');
+      for (const n of ['20250101-000000', '20250102-000000', '20250103-000000']) expect(word(home, n), n).toBe('thinned');
+      expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8'), 'a backup writes no report').toBe(report);
+    });
+
+    it('W23-B12: the knob set only in ~/.ccrc/ccrc.env is honoured: 9999 thins nothing, and 1 there is refused like 1 in the environment', () => {
+      const four = NAMES.slice(0, 4);
+      const home = box('ccrc-fx-w23-b12-big-');
+      plantFull(home, four);
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_BACKUP_DATA_KEEP=9999\n');
+      const r = runBackup(home);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).not.toMatch(/thinned|thinning/);
+      for (const n of four) expect(word(home, n), n).toBe('v1');
+      const bad = box('ccrc-fx-w23-b12-one-');
+      plantFull(bad, four);
+      writeFileSync(join(bad, '.ccrc', 'ccrc.env'), 'CCRC_BACKUP_DATA_KEEP=1\n');
+      const b = runBackup(bad);
+      expect(b.code, `stderr: ${b.stderr}\nstdout: ${b.stdout}`).toBe(1);
+      expect(b.stderr).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999 — nothing was pruned or thinned$/m);
+      // The process environment wins over the file.
+      const e = box('ccrc-fx-w23-b12-env-');
+      plantFull(e, four);
+      writeFileSync(join(e, '.ccrc', 'ccrc.env'), 'CCRC_BACKUP_DATA_KEEP=1\n');
+      const er = runBackup(e, [], { CCRC_BACKUP_DATA_KEEP: '9999' });
+      expect(er.code, `stderr: ${er.stderr}\nstdout: ${er.stdout}`).toBe(0);
+      expect(er.stdout).not.toMatch(/thinned|thinning/);
+    });
+
+    it('W23-B13: a rollback by flip never thins, and _bak_thin reads a helper that predates thinning by name: one skipped line, rc 0, no WARN', () => {
+      const home = box('ccrc-fx-w23-b13-');
+      plantFull(home);
+      const before = fingerprint(home, NAMES);
+      const g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc rollback; echo "rc $?"', { CCRC_BACKUP_DATA_KEEP: '2' });
+      expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+      expect(g.stdout).not.toMatch(/thinned|thinning/);
+      expect(fingerprint(home, NAMES), 'a rollback touched no data set').toEqual(before);
+      // A tree whose helper has no `thin`: a stub that is not the real one.
+      const tree = join(home, 'older-tree');
+      mkdirSync(join(tree, 'ccd'), { recursive: true });
+      mkdirSync(join(tree, 'deploy'), { recursive: true });
+      copyFileSync(join(REPO, 'ccd', 'ccrc'), join(tree, 'ccd', 'ccrc'));
+      writeFileSync(join(tree, 'deploy', 'coordination-snapshot.mjs'), '// a helper from before thinning\n');
+      const s = sourced(home, [
+        'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; BAK_KEEP_DATA=""; CCRC_BACKUP_DATA_KEEP=2',
+        '_bak_data_keep || exit 1; _bak_list; _bak_thin update "update: backups:"; echo "rc $?"',
+      ].join('\n'), {}, join(tree, 'ccd', 'ccrc'));
+      expect(s.code, `stderr: ${s.stderr}\nstdout: ${s.stdout}`).toBe(0);
+      expect(s.stdout).toBe('update: backups: thinning skipped — this tree\'s coordination-snapshot helper predates it; nothing was thinned\nrc 0\n');
+      expect(fingerprint(home, NAMES)).toEqual(before);
+    });
+
+    it('W23-B14: on a downgrade, a thinned own backup is reported as thinned, never as one that held no coord.db', () => {
+      const home = box('ccrc-fx-w23-b14-');
+      const run = (setup: (dir: string) => void): Result => {
+        const dir = join(home, 'own-backup');
+        rmSync(dir, { recursive: true, force: true });
+        mkdirSync(join(dir, 'agent-dist'), { recursive: true });
+        setup(dir);
+        return sourced(home, `UPD_VERSION=v1.0.0; UPD_BACKUP_DIR="${dir}"; _upd_report "old" "v2.0.0"`);
+      };
+      const thinned = run((d) => writeFileSync(join(d, 'coordination-thinned.json'), '{}\n'));
+      expect(thinned.code, `stderr: ${thinned.stderr}`).toBe(0);
+      expect(thinned.stdout).toMatch(/^update: rollback:   \(this run's backup no longer holds coord\.db: a later ccrc run thinned it; 'ccrc coordination-snapshot validate --from \S+' says when and by which verb — restore from a backup that still carries one\)$/m);
+      expect(thinned.stdout).not.toContain('(no coord.db existed before this run');
+      const neither = run(() => undefined);
+      expect(neither.stdout).toMatch(/^update: rollback:   \(no coord\.db existed before this run — there is nothing to restore\)$/m);
+      expect(neither.stdout).not.toContain('no longer holds coord.db');
+    });
+
+    itLinux('W23-B15: a completed update re-stamps its report as restarting, pruning and thinning, before _bak_gc runs; a report another pid wrote is not re-stamped', () => {
+      const home = box('ccrc-fx-w23-b15-');
+      stubUpdate(home);
+      plantFull(home, ['20250101-000000']);
+      const r = runUpdate(home, [], withShim(home));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      const saw = JSON.parse(readFileSync(join(home, 'thin-saw-update.json'), 'utf8')) as Record<string, unknown>;
+      expect(saw['phase']).toBe('restarting');
+      expect(saw['detail']).toBe('pruning and thinning ~/ccrc-backups');
+      expect(Number(saw['updatedAt'])).toBeGreaterThanOrEqual(Number(saw['startedAt']));
+      // A foreign report written mid-sweep (the sweep describe's knob) is left as it is.
+      const f = box('ccrc-fx-w23-b15-foreign-');
+      stubUpdate(f);
+      plantKillModeDropIn(f);
+      writeFileSync(join(f, 'fixture-sweep-units'), UNIT_LINES);
+      writeFileSync(join(f, 'fixture-sweep-active'), UNIT_LINES);
+      writeFileSync(join(f, 'fixture-sweep-foreign-report'), 'yes\n');
+      plantFull(f, ['20250101-000000']);
+      const fr = runUpdate(f, [], withShim(f));
+      expect(fr.code, `stderr: ${fr.stderr}\nstdout: ${fr.stdout}`).toBe(0);
+      const fsaw = JSON.parse(readFileSync(join(f, 'thin-saw-update.json'), 'utf8')) as Record<string, unknown>;
+      expect(fsaw).toEqual({ target: 'v9.9.9', phase: 'resolving', startedAt: 1, updatedAt: 1, detail: null, from: 'cli', pid: 999999 });
+    });
+
+    itLinux('W23-B19: thin runs while this run holds ~/.ccrc/update.lock, for an update and for ccrc backup (review 794, F11)', () => {
+      const u = box('ccrc-fx-w23-b19-update-');
+      stubUpdate(u);
+      plantFull(u, ['20250101-000000']);
+      const r = runUpdate(u, [], withShim(u));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(readFileSync(join(u, 'thin-lock-state'), 'utf8'), 'the update thins under its lock').toBe('held\n');
+      const b = box('ccrc-fx-w23-b19-backup-');
+      plantFull(b, ['20250101-000000']);
+      const br = runBackup(b, [], withShim(b));
+      expect(br.code, `stderr: ${br.stderr}\nstdout: ${br.stdout}`).toBe(0);
+      expect(readFileSync(join(b, 'thin-lock-state'), 'utf8'), 'ccrc backup thins under its lock').toBe('held\n');
+    });
+
+    it('W23-B20: an update passes thin a time budget, the re-stamp\'s own instant plus the deadline less the 235 s margin; ccrc backup passes none (D-6464)', () => {
+      /** One update through the shim: the report thin saw, and the `--until` it was given. */
+      const update = (prefix: string, extra: NodeJS.ProcessEnv = {}): { saw: { updatedAt: number }; until: number } => {
+        const u = box(prefix);
+        stubUpdate(u);
+        plantFull(u, ['20250101-000000']);
+        const r = runUpdate(u, [], withShim(u, { CCRC_UPDATE_DEADLINE_MS: '900000', ...extra }));
+        expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+        const saw = JSON.parse(readFileSync(join(u, 'thin-saw-update.json'), 'utf8'));
+        expect(saw, 'thin sees the re-stamp').toMatchObject({ phase: 'restarting', detail: 'pruning and thinning ~/ccrc-backups' });
+        const args = readFileSync(join(u, 'thin-args'), 'utf8').split('\n');
+        expect(args.filter((a) => a === '--until'), 'one bound').toHaveLength(1);
+        return { saw, until: Number(args[args.indexOf('--until') + 1]) };
+      };
+      const plain = update('ccrc-fx-w23-b20-update-');
+      expect(plain.until, 'the re-stamp plus 900 s, less 235').toBe(plain.saw.updatedAt + 900 - 235);
+      // The instant is the one read back from the report, not the second before it: a read-back that answers otherwise wins.
+      expect(update('ccrc-fx-w23-b20-readback-', { FX_JQ_UPDATED_AT: '1700000000' }).until).toBe(1700000000 + 900 - 235);
+      // A read-back that is not whole seconds falls back to the second read just before the re-stamp, never later than it.
+      const odd = update('ccrc-fx-w23-b20-odd-', { FX_JQ_UPDATED_AT: '1700000000.5' });
+      expect(odd.until).toBeLessThanOrEqual(odd.saw.updatedAt + 900 - 235);
+      expect(odd.until).toBeGreaterThanOrEqual(odd.saw.updatedAt + 900 - 235 - 5);
+      const b = box('ccrc-fx-w23-b20-backup-');
+      plantFull(b, ['20250101-000000']);
+      const br = runBackup(b, [], withShim(b, { CCRC_UPDATE_DEADLINE_MS: '900000' }));
+      expect(br.code, `stderr: ${br.stderr}\nstdout: ${br.stdout}`).toBe(0);
+      const bargs = readFileSync(join(b, 'thin-args'), 'utf8').split('\n');
+      expect(bargs, 'ccrc backup thins').toContain('thin');
+      expect(bargs, 'with no bound').not.toContain('--until');
+    });
+
+    it('W23-B16: _bak_thin with an empty or unparsable floor returns 1 and passes nothing', () => {
+      for (const floor of ['', 'garbage', '20250110']) {
+        const home = box('ccrc-fx-w23-b16-');
+        plantFull(home, NAMES.slice(0, 3));
+        const r = sourced(home, `UPD_BAK_FLOOR='${floor}'; UPD_BACKUP_DIR=""; BAK_KEEP_DATA=""; CCRC_BACKUP_DATA_KEEP=2; _bak_data_keep; _bak_list; _bak_thin update "x:"; echo "rc $?"`, withShim(home));
+        expect(r.code, `${floor}: stderr: ${r.stderr}`).toBe(0);
+        expect(r.stdout, floor).toBe('rc 1\n');
+        expect(nodeOrder(home), floor).not.toContain('helper thin');
+        for (const n of NAMES.slice(0, 3)) expect(word(home, n), `${floor}: ${n}`).toBe('v1');
+      }
+    });
+
+    it('W23-B17: a ccrc.env line the reader does not take refuses like an invalid value: an export line, a spaced = and a key led by a vertical tab, nothing pruned or thinned, the file named and never its bytes (D-6365)', () => {
+      const four = NAMES.slice(0, 4);
+      for (const [tag, text] of [['export', 'export CCRC_BACKUP_DATA_KEEP=9999\n'], ['spaced', 'CCRC_BACKUP_DATA_KEEP = 9999\n'], ['vtab', '\vCCRC_BACKUP_DATA_KEEP=9999\n']] as const) {
+        const home = box(`ccrc-fx-w23-b17-${tag}-`);
+        plantFull(home, four);
+        const before = fingerprint(home, four);
+        writeFileSync(join(home, '.ccrc', 'ccrc.env'), text);
+        const r = runBackup(home);
+        expect(r.code, `${tag}: stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+        expect(r.stderr, tag).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take \(it reads only a plain KEY=value line\) — nothing was pruned or thinned$/m);
+        expect(r.stdout + r.stderr, `${tag}: the refusal never prints the file's bytes`).not.toContain('9999');
+        expect(fingerprint(home, four), `${tag}: no data set was touched`).toEqual(before);
+      }
+    });
+
+    // D-6365's ONE positive rule (review 806, F1 and F4), asked of `_bak_data_keep` directly, a row per shape on each side.
+    const K = 'CCRC_BACKUP_DATA_KEEP';
+    const bytes = (...parts: (string | number[])[]): Buffer =>
+      Buffer.concat(parts.map((p) => (typeof p === 'string' ? Buffer.from(p, 'utf8') : Buffer.from(p))));
+    const REFUSED: readonly (readonly [string, Buffer])[] = [
+      ['+=', bytes(`${K}+=9999\n`)],
+      [':=', bytes(`${K}:=9999\n`)],
+      ['a space before =', bytes(`${K} =9999\n`)],
+      ['a tab before =', bytes(`${K}\t=9999\n`)],
+      ['a UTF-8 NBSP before =', bytes(`${K} =9999\n`)],
+      ['a UTF-8 NBSP lead', bytes(` ${K}=9999\n`)],
+      ['a Latin-1 0xA0 lead', bytes([0xa0], `${K}=9999\n`)],
+      ['a 0xFF lead', bytes([0xff], `${K}=9999\n`)],
+      ['a vertical-tab lead', bytes(`\v${K}=9999\n`)],
+      ['an export of the knob', bytes(`export ${K}=9999\n`)],
+      ['the bare name with no =', bytes(`${K}\n`)],
+      ['an odd line beside a plain one', bytes(`${K}=4\nexport ${K}=9999\n`)],
+      // systemd ends a line at a bare CR, so what follows it is a line of its own there (fix round 2's own review).
+      ['a bare CR inside another key\'s line', bytes(`FOO=1\r${K}=9999\n`)],
+      ['a bare CR inside a comment', bytes(`# note\r${K}=9999\n`)],
+      // Every position is tested, not the first occurrence only: systemd reads `${K}=9999` as a line of its own (review 847, R8).
+      ['a bare CR after an _OLD key, then the knob', bytes(`${K}_OLD=1\r${K}=9999\n`)],
+    ];
+    /** Each with the keep it reads: the line's value, or the default 3 where the line is not the knob's. */
+    const READ: readonly (readonly [string, Buffer, number])[] = [
+      ['a comment naming the knob', bytes(`# ${K}=9999\n`), 3],
+      ['a ;-comment naming the knob', bytes(`; ${K}=9999\n`), 3],
+      ['the _OLD suffix key', bytes(`${K}_OLD=9999\n`), 3],
+      ['an OLD_ prefix key', bytes(`OLD_${K}=9999\n`), 3],
+      ['a value that mentions the knob', bytes(`NOTE=see ${K}=4\n`), 3],
+      ['an export of another key whose value mentions the knob', bytes(`export NOTE=${K}=4\n`), 3],
+      ['CRLF', bytes(`${K}=4\r\n`), 4],
+      ['a tab lead', bytes(`\t${K}=4\n`), 4],
+      ['a quoted value', bytes(`${K}="4"\n`), 4],
+      ['an absent key', bytes('CCRC_BACKUP_KEEP=4\n'), 3],
+      // The value is read through the unit model (review 817, F1 and F8): bytes in any locale, trimmed as systemd trims it.
+      ['a Latin-1 é in a comment above the knob', bytes('# tuned for the caf', [0xe9], `\n${K}=9\n`), 9],
+      ['a trailing space', bytes(`${K}=4 \n`), 4],
+      ['a trailing tab', bytes(`${K}=4\t\n`), 4],
+      ['a trailing space before CRLF', bytes(`${K}=4 \r\n`), 4],
+      // A ccrc.env whose bytes never hold the knob as a whole token cannot set it, so it reads 3 whatever the model or systemd makes of
+      // the rest (the coordinator's ruling on review 839): the model is not asked, so none of these stops the prune.
+      ['a valid UTF-8 value and no knob', bytes('NOTE=café\n'), 3],
+      ['a lone UTF-8 lead byte in a value and no knob', bytes('FOO=', [0xc3], '\n'), 3],
+      ['a bare CR inside a comment and no knob', bytes('# a\rb\n'), 3],
+      ['a comment ending in two CRs and no knob', bytes('# note\r\r\n'), 3],
+      ['a bare CR inside a value and no knob', bytes('FOO=a\rb\n'), 3],
+      ['a quoted value spanning lines over a UTF-8 comment and no knob', bytes('FOO="x\n# café\n"\n'), 3],
+      // Only a whole token counts: an `_OLD` or `OLD_` key beside a value the model refuses still reads 3.
+      ['an _OLD suffix key beside a non-ASCII value', bytes(`${K}_OLD=9999\nNOTE=café\n`), 3],
+      ['an OLD_ prefix key beside a non-ASCII value', bytes(`OLD_${K}=9999\nNOTE=café\n`), 3],
+    ];
+    const UNTAKEN = `rc 1 keep  why ${K} cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take (it reads only a plain KEY=value line)\n`;
+    /** What the unit model cannot decide refuses with its own clause, naming the file (review 817, F1 and F2): each with that clause's opening. */
+    const SHAPE = `names ${K} in a shape this reader does not decide`;
+    const UNDECIDED: readonly (readonly [string, Buffer, string])[] = [
+      ['a double-quoted value spanning lines over a later knob line', bytes(`${K}=9\nFOO="x\n${K}=2\n"\n`), SHAPE],
+      ['a single-quoted value spanning lines over a later knob line', bytes(`${K}=9\nFOO='x\n${K}=2\n'\n`), SHAPE],
+      ['a backslash continuation over a later knob line', bytes(`${K}=9\nFOO=x\\\n${K}=2\n`), SHAPE],
+      ['a comment ending in a backslash over a later knob line', bytes(`${K}=9\n# note \\\n${K}=2\n`), SHAPE],
+      ['the only knob line inside another key\'s quoted value', bytes(`FOO="x\n${K}=2\n"\n`), SHAPE],
+      // systemd skips a file whose values are not valid UTF-8, which the model does not check, so it decides neither 9 nor the default.
+      ['a lone UTF-8 lead byte ending another key\'s value above the knob', bytes('FOO=', [0xc3], `\n${K}=9\n`), 'line 1 has a non-ASCII byte in a NAME=value line'],
+      ['a CR lead', bytes(`\r${K}=4\n`), 'line 1 has a carriage return inside a line'],
+      // A token in a comment counts as naming the knob (review 839), so the model is asked and its refusal stands.
+      ['a comment naming the knob above a non-ASCII value', bytes(`# ${K} is tuned below\nNOTE=café\n`), 'line 2 has a non-ASCII byte in a NAME=value line'],
+    ];
+    /** `_bak_data_keep` over a ccrc.env holding `text`, the whole shell under LC_ALL=`locale`, on the Linux arm of the unit model
+     *  (`_box_unit_env`; a macOS box models its launchd job's bash, `_box_unit_env_shell`, which refuses a CR anywhere). */
+    const dataKeep = (home: string, text: Buffer | null, locale: string, env: NodeJS.ProcessEnv = {}): string => {
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      if (text === null) rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+      else writeFileSync(join(home, '.ccrc', 'ccrc.env'), text);
+      const r = sourced(home, 'CCD_OS=linux; _bak_data_keep; echo "rc $? keep ${BAK_DATA_KEEP} why ${BAK_DATA_KEEP_WHY}"', { LC_ALL: locale, ...env });
+      expect(r.code, r.stderr).toBe(0);
+      return r.stdout;
+    };
+    const undecided = (out: string, clause: string, shape: string): void => {
+      expect(out.startsWith(`rc 1 keep  why ${K} cannot be measured: ~/.ccrc/ccrc.env ${clause}`), `${shape}: ${out}`).toBe(true);
+      expect(out, `${shape}: the refusal never prints the file's bytes`).not.toMatch(/=\d/);
+    };
+    /** The UTF-8 half's locale: C.UTF-8, else en_US.UTF-8, and only one `locale -a` lists; null skips that half, by name. */
+    const UTF8: string | null = (() => {
+      const flat = (l: string): string => l.trim().toLowerCase().replace(/-/g, '');
+      const listed = (spawnSync('locale', ['-a'], { encoding: 'utf8' }).stdout ?? '').split('\n').map(flat);
+      return ['C.UTF-8', 'en_US.UTF-8'].find((l) => listed.includes(flat(l))) ?? null;
+    })();
+
+    it.each(REFUSED)('W23-B17: %s refuses under LC_ALL=C, as unmeasured (D-6365, review 806 F1)', (_shape, text) => {
+      expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17r-'), text, 'C')).toBe(UNTAKEN);
+    });
+
+    it.each(READ)('W23-B17: %s reads under LC_ALL=C, never refused (D-6365, review 806 F1, F4; review 817 F1, F8; review 839)', (_shape, text, keep) => {
+      expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17a-'), text, 'C')).toBe(`rc 0 keep ${keep} why \n`);
+    });
+
+    it.each(UNDECIDED)('W23-B17: %s is a shape the unit model does not decide, so it refuses under LC_ALL=C, as unmeasured (D-6365, review 817 F1, F2)', (shape, text, clause) => {
+      undecided(dataKeep(freshUpdateBox('ccrc-fx-w23-b17d-'), text, 'C'), clause, shape);
+    });
+
+    // ccrc.env alone (the coordinator's ruling on review 839): no process that thins receives the exposure file, so nothing there is
+    // read for the knob, whether it names the knob, names it empty, cannot be read or cannot be decided.
+    const EXPOSED: readonly (readonly [string, (exp: string) => void])[] = [
+      ['an exposure file that names the knob', (exp) => { writeFileSync(exp, `CCRC_AUTH=on\n${K}=2\n`); }],
+      ['an exposure file that names the knob with an empty value', (exp) => { writeFileSync(exp, `${K}=\n`); }],
+      ['an exposure file that cannot be read', (exp) => { writeFileSync(exp, 'CCRC_AUTH=on\n'); chmodSync(exp, 0o000); }],
+      ['an exposure file holding an internationalised origin', (exp) => { writeFileSync(exp, bytes('CCRC_ORIGIN=https://b', [0xc3, 0xbc], 'cher.example\n')); }],
+    ];
+    /** `dataKeep` in a fresh box whose exposure file is planted by `plant`, beside a ccrc.env holding `text` (null: none). */
+    const exposed = (plant: (exp: string) => void, text: Buffer | null, locale: string): string => {
+      const home = freshUpdateBox('ccrc-fx-w23-b17x-');
+      const exp = join(home, '.ccrc', 'exposure.env');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      plant(exp);
+      try { return dataKeep(home, text, locale); } finally { chmodSync(exp, 0o600); }
+    };
+    it.each(EXPOSED)('W23-B17: %s beside ccrc.env\'s 9 reads 9: only the environment or ccrc.env sets the knob (D-6365, review 839)', (_shape, plant) => {
+      expect(exposed(plant, bytes(`${K}=9\n`), 'C')).toBe('rc 0 keep 9 why \n');
+    });
+    it('W23-B17: with no ccrc.env, an exposure file that names the knob reads the default 3 (D-6365, review 839)', () => {
+      expect(exposed(EXPOSED[0]![1], null, 'C')).toBe('rc 0 keep 3 why \n');
+    });
+    it('W23-B17: an undecidable ccrc.env still refuses with the exposure file left out, with one beside it or none (D-6365, review 839)', () => {
+      const span = UNDECIDED[0]!;
+      undecided(dataKeep(freshUpdateBox('ccrc-fx-w23-b17p-'), span[1], 'C'), span[2], `${span[0]}, no exposure file`);
+      undecided(exposed((exp) => { writeFileSync(exp, 'CCRC_AUTH=on\n'); }, span[1], 'C'), span[2], `${span[0]}, an exposure file beside it`);
+    });
+    it('W23-B17: on macOS the model is asked even when no line names the knob, since the launchd job\'s bash can build the name: a backslash-newline inside it and a quoted declare refuse, a plain file reads 3 (D-6347, D-6365, review 839)', () => {
+      const darwin = (text: Buffer, locale: string): string => {
+        const home = freshUpdateBox('ccrc-fx-w23-b17m-');
+        mkdirSync(join(home, '.ccrc'), { recursive: true });
+        writeFileSync(join(home, '.ccrc', 'ccrc.env'), text);
+        const r = sourced(home, 'CCD_OS=darwin; _bak_data_keep; echo "rc $? keep ${BAK_DATA_KEEP} why ${BAK_DATA_KEEP_WHY}"', { LC_ALL: locale });
+        expect(r.code, r.stderr).toBe(0);
+        return r.stdout;
+      };
+      for (const loc of ['C', ...(UTF8 === null ? [] : [UTF8])]) {
+        undecided(darwin(bytes(`CCRC_ROLE=server\nCCRC_BACKUP_DATA_KEE\\\nP=50\n`), loc), 'line 2 is not a plain NAME=value line', `${loc}: the name split by a backslash-newline`);
+        undecided(darwin(bytes('declare CCRC_BACKUP_DATA_"KEEP"=50\n'), loc), 'line 1 is not a plain NAME=value line', `${loc}: a quoted declare`);
+        expect(darwin(bytes('CCRC_ROLE=server\n'), loc), `${loc}: a plain file that never names the knob`).toBe('rc 0 keep 3 why \n');
+      }
+    });
+    it.each(UNDECIDED)('W23-B17: the environment\'s 5 wins beside %s, with no refusal (D-6360, D-6365, review 839 F2)', (_shape, text) => {
+      expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17v-'), text, 'C', { [K]: '5' })).toBe('rc 0 keep 5 why \n');
+    });
+
+    it('W23-B17: a ccrc.env that holds a NUL byte, and a scan that cannot run or is killed, could not be scanned: each refuses (D-6365, fix round 2)', () => {
+      const SCANNED = `rc 1 keep  why ${K} cannot be measured: ~/.ccrc/ccrc.env could not be scanned\n`;
+      // bash's `read` drops a NUL, so the line `_box_env_value` reads is not the one in the file.
+      for (const text of [bytes(`export CCRC_BACKUP\u0000_DATA_KEEP=9999\n`), bytes(`${K}=4\nNOTE=\u0000\n`), bytes('NOTE=x\u0000y\n')]) {
+        expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17n-'), text, 'C')).toBe(SCANNED);
+      }
+      for (const [why, body] of [['an awk that cannot run', 'exit 127'], ['an awk that is killed', 'kill -TERM $$']]) {
+        const home = freshUpdateBox('ccrc-fx-w23-b17k-');
+        const bin = join(home, 'awk-shim');
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, 'awk'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+        mkdirSync(join(home, '.ccrc'), { recursive: true });
+        writeFileSync(join(home, '.ccrc', 'ccrc.env'), `export ${K}=9999\n`);
+        const r = sourced(home, '_bak_data_keep; echo "rc $? keep ${BAK_DATA_KEEP} why ${BAK_DATA_KEEP_WHY}"', { LC_ALL: 'C', PATH: `${bin}:${updateEnv(home).PATH ?? ''}` });
+        expect(r.stdout, why).toBe(SCANNED);
+      }
+    });
+
+    it.skipIf(UTF8 === null)(`W23-B17: under a UTF-8 locale (${UTF8 ?? 'none: locale -a lists neither C.UTF-8 nor en_US.UTF-8, so this half is skipped'}) every shape answers as under LC_ALL=C, because the scan and the unit model read bytes (D-3833, D-3979, D-6365, review 806 F1, review 817 F1, review 839 F4)`, () => {
+      const loc = UTF8!;
+      const charmap = spawnSync('locale', ['charmap'], { env: { ...process.env, LC_ALL: loc }, encoding: 'utf8' }).stdout ?? '';
+      expect(charmap.trim(), `${loc} is a UTF-8 locale on this runner`).toBe('UTF-8');
+      const home = freshUpdateBox('ccrc-fx-w23-b17u-');
+      for (const [shape, text] of REFUSED) expect(dataKeep(home, text, loc), shape).toBe(UNTAKEN);
+      for (const [shape, text, keep] of READ) expect(dataKeep(home, text, loc), shape).toBe(`rc 0 keep ${keep} why \n`);
+      for (const [shape, text, clause] of UNDECIDED) undecided(dataKeep(home, text, loc), clause, shape);
+      for (const [shape, text] of UNDECIDED) expect(dataKeep(home, text, loc, { [K]: '5' }), `the environment beside ${shape}`).toBe('rc 0 keep 5 why \n');
+      for (const [shape, plant] of EXPOSED) expect(exposed(plant, bytes(`${K}=9\n`), loc), shape).toBe('rc 0 keep 9 why \n');
+      expect(exposed(EXPOSED[0]![1], null, loc), 'no ccrc.env').toBe('rc 0 keep 3 why \n');
+    });
+
+    /** 12 code-only backups beside a ccrc.env that never names the knob, then `_bak_gc update` at CCRC_BACKUP_KEEP=10 on the named arm. */
+    const pruneTwelve = (os: 'linux' | 'darwin'): { home: string; names: string[]; g: Result } => {
+      const home = box(`ccrc-fx-w23-b17g-${os}-`);
+      const names = Array.from({ length: 12 }, (_, i) => `202501${String(i + 1).padStart(2, '0')}-000000`);
+      for (const n of names) plantDir(home, n, 'tree');
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\nNOTE=café\n');
+      return { home, names, g: sourced(home, `CCD_OS=${os}; UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"`, { CCRC_BACKUP_KEEP: '10' }) };
+    };
+    it('W23-B17: a ccrc.env that never names the knob does not stop the prune: _bak_gc update prunes 12 backups to 10 at CCRC_BACKUP_KEEP=10, with no WARN (review 839; on the Linux arm, review 847)', () => {
+      const { home, names, g } = pruneTwelve('linux');
+      expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+      expect(g.stdout).not.toMatch(/WARN/);
+      expect(g.stdout).toMatch(/^rc 0$/m);
+      for (const n of names.slice(0, 2)) expect(g.stdout).toMatch(new RegExp(`^update: backups: pruned \\$HOME/ccrc-backups/${n}`, 'm'));
+      expect(readdirSync(backupRoot(home)).sort(), 'the newest ten are left').toEqual(names.slice(2));
+    });
+
+    it('W23-B17: on macOS the same ccrc.env stops the prune: the Darwin model refuses NOTE=café, _bak_gc WARNs, returns 1 and leaves all 12 (review 839 departure 1, review 847)', () => {
+      const { home, names, g } = pruneTwelve('darwin');
+      expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+      expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env line 2 is not a plain NAME=value line\b.* — nothing pruned or thinned$/m);
+      expect(g.stdout).toMatch(/^rc 1$/m);
+      expect(g.stdout, 'no prune line').not.toMatch(/^update: backups: pruned /m);
+      expect(readdirSync(backupRoot(home)).sort(), 'all twelve are left').toEqual(names);
+    });
+
+    it.skipIf(process.getuid?.() === 0)('W23-B18: a ccrc.env that is there but cannot be read refuses, never falls back to the default: nothing pruned or thinned (D-6365)', () => {
+      const four = NAMES.slice(0, 4);
+      const home = box('ccrc-fx-w23-b18-');
+      plantFull(home, four);
+      const before = fingerprint(home, four);
+      const env = join(home, '.ccrc', 'ccrc.env');
+      writeFileSync(env, 'CCRC_BACKUP_DATA_KEEP=9999\n');
+      chmodSync(env, 0o000);
+      const g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"');
+      chmodSync(env, 0o600);
+      expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+      expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env is there but cannot be read — nothing pruned or thinned$/m);
+      expect(g.stdout).toMatch(/^rc 1$/m);
+      expect(g.stdout, 'no prune line and no thinning line').not.toMatch(/^update: backups: (pruned|thinned|coordination data sets)/m);
+      expect(fingerprint(home, four), 'no data set was touched').toEqual(before);
+    });
+
+    it.each([
+      ['a dangling link', (env: string): void => { symlinkSync(join(dirname(env), 'no-such.env'), env); }],
+      ['a directory', (env: string): void => { mkdirSync(env); }],
+      // Opened, a FIFO with no writer blocks for ever, so the row runs under a bound and a hang fails it (review 839 F1).
+      ['a FIFO', (env: string): void => { expect(spawnSync('mkfifo', [env]).status).toBe(0); }],
+    ] as const)('W23-B18: %s at ccrc.env cannot be read, so it refuses, never falls back to the default: nothing pruned or thinned (D-6365, review 806 F5, review 839 F1)', (_shape, plant) => {
+      const four = NAMES.slice(0, 4);
+      const home = box('ccrc-fx-w23-b18x-');
+      plantFull(home, four);
+      const before = fingerprint(home, four);
+      const env = join(home, '.ccrc', 'ccrc.env');
+      rmSync(env, { force: true });
+      plant(env);
+      let g: Result;
+      try {
+        g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"', {}, join(REPO, 'ccd', 'ccrc'), 60_000);
+      } finally {
+        // The bound kills bash, not a grandchild blocked opening the FIFO; a writer that opens and closes it lets that one see EOF.
+        if (lstatSync(env, { throwIfNoEntry: false })?.isFIFO()) closeSync(openSync(env, fsConstants.O_RDWR | fsConstants.O_NONBLOCK));
+      }
+      expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+      expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env is there but cannot be read — nothing pruned or thinned$/m);
+      expect(g.stdout).toMatch(/^rc 1$/m);
+      expect(g.stdout, 'no prune line and no thinning line').not.toMatch(/^update: backups: (pruned|thinned|coordination data sets)/m);
+      expect(fingerprint(home, four), 'no data set was touched').toEqual(before);
+    });
+
+    it('W23-S1: the own-dir and floor filter is spelled once, in _bak_ours, and _bak_keepset, _bak_removable and _bak_thin each call it', () => {
+      const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+      const body = (name: string): string => {
+        const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src);
+        expect(m, `ccd/ccrc has no ${name}`).not.toBeNull();
+        return m![0];
+      };
+      expect(src.split('= "$UPD_BACKUP_DIR" ]').length - 1, 'the own-dir clause').toBe(1);
+      expect(src.split('${UPD_BAK_FLOOR//-/}').length - 1, 'the floor comparison').toBe(1);
+      expect(body('_bak_ours'), 'the one spelling').toContain('= "$UPD_BACKUP_DIR" ]');
+      for (const fn of ['_bak_keepset', '_bak_removable', '_bak_thin']) expect(body(fn), fn).toMatch(/^ +.*_bak_ours "\$d"/m);
     });
   });
 

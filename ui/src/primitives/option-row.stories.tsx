@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
+import { Chip } from './chip';
 import { OptionRow } from './option-row';
 
 const meta = {
@@ -38,10 +39,12 @@ export const InAList: Story = {
   ),
 };
 
-/** With and without the sublabel, side by side. CHECK that the sublabel reads
- *  as BODY COPY rather than as meta — it is the sentence the 3-line TUI box
- *  had to throw away, so it is the row's whole reason to be legible — and
- *  that a row without one does not reserve empty space for it. */
+/** With and without the sublabel, side by side. CHECK that the label is the
+ *  row's name (medium weight) and the sublabel sits under it in secondary ink
+ *  with a clear gap (D-6325: 8px, where it was 5), reading as BODY COPY rather
+ *  than as meta — it is the sentence the 3-line TUI box had to throw away, so
+ *  it is the row's whole reason to be legible — and that a row without one
+ *  does not reserve empty space for it. */
 export const WithAndWithoutSublabel: Story = {
   render: () => (
     <div style={{ borderTop: '1px solid var(--edge-subtle)' }}>
@@ -149,4 +152,37 @@ export const Checkboxes: Story = {
       <OptionRow checked={false} index={4} label="Sampling" disabled />
     </div>
   ),
+};
+
+/** A tag after the label (`tag`, D-6325): the ask sheets' `Recommended`. CHECK
+ *  that the tag sits on the label's line, right after its last word, and wraps
+ *  with it when the label is long (the long row); that the label's own text is
+ *  unchanged by it; and that the sublabel still sits under the whole line. */
+export const Tagged: Story = {
+  render: () => {
+    // The app dresses it (`dlg-header-chip`, chat.css); the story spells the same paint so it stands alone.
+    const recommended = (
+      <Chip style={{ marginLeft: 'var(--sp-2)', background: 'var(--accent-tint)', color: 'var(--accent)' }}>Recommended</Chip>
+    );
+    return (
+      <div style={{ maxWidth: 360, borderTop: '1px solid var(--edge-subtle)' }}>
+        <OptionRow
+          glyph=""
+          index={1}
+          label="Forward-fill per class"
+          tag={recommended}
+          sublabel="Inherits the last rate seen for that class, so a gap never reads as zero."
+          onClick={() => {}}
+        />
+        <OptionRow glyph="" index={2} label="Emit only complete rows" onClick={() => {}} />
+        <OptionRow
+          glyph=""
+          index={3}
+          label="Rewrite the whole table from the last full snapshot and replay every later change"
+          tag={recommended}
+          onClick={() => {}}
+        />
+      </div>
+    );
+  },
 };

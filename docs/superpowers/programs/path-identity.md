@@ -1,7 +1,7 @@
 # Program: path-identity
 
 Spec: `docs/superpowers/specs/2026-10-12-path-identity-design.md` (W0; merged as #360 = `837a099c0`, 2026-10-12 18:48)
-Plans: `docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md` (W1a), `docs/superpowers/plans/2026-10-12-path-identity-w1b-ccd-id-hardening.md` (W1b), `docs/superpowers/plans/2026-10-15-path-identity-w2-absences-and-mounts.md` (W2), `docs/superpowers/plans/2026-10-20-path-identity-w3-worktree-identity.md` (W3)
+Plans: `docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md` (W1a), `docs/superpowers/plans/2026-10-12-path-identity-w1b-ccd-id-hardening.md` (W1b), `docs/superpowers/plans/2026-10-15-path-identity-w2-absences-and-mounts.md` (W2), `docs/superpowers/plans/2026-10-20-path-identity-w3-worktree-identity.md` (W3), `docs/superpowers/plans/2026-10-21-growth-check-pr-exemption.md` (W3's landing prerequisite, run 748)
 Contract: `docs/superpowers/programs/child-reclamation-contract.md` (this programme continues child-reclamation's contract; its rulings land in a new section)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-mesa`   Workspace: **a fresh child per wave**
 Parent programme: `child-reclamation` (#166). Its contract R71 names this follow-up.
@@ -11,6 +11,10 @@ identity: an id string where it needs the session the id means, and a path strin
 path reaches. This programme replaces each such comparison with an identity check, or holds when identity cannot
 be measured. Every change refuses or holds more at the verb it touches. The spec's section 7 lists all 41 carried
 items, each with its wave and its decision.
+
+**Status: complete.** W3, the last scheduled wave, landed as #1132 (`357fec3bf`, 2026-10-23 14:28), and run 722
+closed at 2026-10-23 14:29. W4 is not scheduled (PG1 B). What stays open is listed under Carried constraints, each item
+with its owner and next step.
 
 ## Waves
 
@@ -25,9 +29,213 @@ Run-level wave numbers map onto the spec's wave names as below. W0 (the spec) ne
 | 2 | W1b correction | the census guard's `_reg_get_to`/`_reg_read_to` blind spot (review 575 F4), a mutation proof for the census rows `6968de956` added, and the records the landing left owed | server test + docs | #735 | **merged** `397be1ec5` (2026-10-19 22:31), head `8f0d1121b`; review 647; run **640 closed** done (2026-10-19) |
 | 2 | W1 records follow-up | appended corrections to the W1a plan, the W1b plan and the spec, after reviews 647 and 649 | docs | #838 | **merged** `eb488c288` (2026-10-20 01:03), head `2d62a63e2`; reviews 661 and 663; run **655 closed** done |
 | 3 | W2 | absences and mounts (spec section 3) | ccd/ccd + server, fleet box first | #1008 | **merged** `ab4cc62cb` (2026-10-20 22:29), head `8b3ce4b9d`; five absorptions of main, each on a measured conflict (the stamp, or foot appends); full CI run 39500623605 read the equivalence file 100/100; reviews 709 and 719; run **652 closed** done |
-| 4 | W3 | worktree path identity (spec section 4) | ccd/ccd + one server string, fleet box first | — | run **722 planned** (opened 2026-10-20 22:30, before run 652 closed); plan written (this PR); dispatch needs the plan merged and the consents (workspace-lifecycle PG2 A, plus run 308 and delegation for `_spawn_start`'s two launch statements) |
+| 4 | W3 | worktree path identity (spec section 4) | ccd/ccd + one server string, fleet box first | #1132 | **merged** `357fec3bf` (2026-10-23 14:28), head `c64e21643`; dispatched 2026-10-21 from the plan merged as #1055 (`c10173d0e`); one absorption of main (`270824d3e`); reviews 790, 835 and 859; fix rounds R82 and R83; R39's full CI run 39859336719 at `059ffa60f` red only on the exempt growth row and a macOS harness exit that is not W3's; run **722 closed** done (2026-10-23 14:29) |
+| 4 | W3 landing prerequisite | the growth check's named-PR exemption (D-6211): `server/test/growth-exemptions.json`, read from `origin/main` only, withheld from a PR that edits the check's own files; the list ships empty | server test | #1084 | **merged** `2c4438d32` (2026-10-21 17:07), head `1e9e971e6`; reviews 750, 752, 756 and 757, fix rounds 1 to 3; review 757's two residuals carried; run **748 closed** done (2026-10-21) |
+| 4 | W3 exemption entry | one entry: #1132 may grow `ccd/ccd` by up to 760 net code lines; the exemption-age stamp's size goes from 0 to 1 | server test data | #1135 | **merged** `bd895fbe4` (2026-10-23 12:03), head `5ac7e3d28`; opened at cap 751 (`cd8b05a5f`), re-measured to 760 after fix round 1; enqueued ahead of #1132; the coordinator's own PR, no run |
+| 4 | W3 exemption removal | removes #1135's entry once #1132 has landed; the stamp's size goes back to 0 | server test data | #1179 | **merged** `60866e4ed` (2026-10-23 15:04), head `f7235b547`, through the merge queue; the list is empty again, as #1084 shipped it; the coordinator's own PR, no run |
 
 ## Decisions & deviations
+
+- **2026-10-23 14:29 — W3 IS LANDED (#1132 = `357fec3bf`); RUN 722 IS CLOSED; THE PROGRAMME IS COMPLETE.**
+  - **Landing.** #1132 merged through the merge queue, alone in its group, as `357fec3bf` at 2026-10-23 14:28, head `c64e21643`. Run 722 then closed done at 2026-10-23 14:29, with `prPhase: merged`. The close was final and queued the child's reclaim; run 722 was the programme's only open run. The worker was told to release its claims and make no further commits (8573).
+  - **The exemption entry goes.** #1179 (merged as `60866e4ed` at 15:04) removes #1135's entry from `server/test/growth-exemptions.json` and returns the exemption-age stamp to size 0. The list is empty again, as #1084 shipped it.
+  - **The contract's R83 is amended.** W2 left one text change owed to child-reclamation's contract
+    (`aside-joins-the-population`). This closing PR makes it: R83's step 3 now admits the compare-and-drop aside's id,
+    as `collectPopulation` does.
+  - **What the programme delivered.**
+    - W1a gave the server one id gate, `isRegistryId`, in front of the registry readers, `knownId`, `POST /api/runs`, every stored-row argv seam and the two executor seams (spec 2.3). W1b made ccd's decision-flag loops refuse a dash-led value, tightened the id predicates, capped the composed id at 222, put pure checks before the collect reap lock, and refused a dot-leading id at ws-reclaim and ws-expire entry (spec 2.4 to 2.6).
+    - W2 made the temp-root tail and the collector ask the recorded device, the quarantine and the mount table before a removal or a witness drop (spec section 3).
+    - W3 made worktree placement, the cwd probe and the tail window before `git worktree remove` compare identity (device, inode and birth time) where they compared spellings, and hold where identity cannot be measured (spec section 4).
+    - Every change refuses or holds more. None releases a row or turns a refusal into a pass.
+  - **Nothing is scheduled.** W4 stays unscheduled (PG1 B). The follow-ups are under Carried constraints, each with its owner.
+
+- **2026-10-23 14:14 — REVIEW 859 IS CLOSED; R84 ACCEPTS W3; #1132 IS ENQUEUED ALONE.**
+  - **Review 859** (review-done 8567) read `c64e21643`, fix round 2. It found three minor findings, confirmed 3-0, 2-1 and 3-0, plus one of its own, refuted 2-1 and kept visible.
+    - Every condition of 8484, every 8110 item-1 condition and every I7 condition holds at the final bytes.
+    - `ccd/ccd` is byte-identical to `059ffa60f` once comments are stripped.
+    - All 11 suites were green on the first run, and PR run 39956620708 is green.
+    - The run closed done with its reviewed tip and report.
+  - **R84.**
+    - F2 is not a defect. R83 F1 owed each of the three records the substance: the restore is 8110's condition, and no path observes it today. The equivalent-mutant measurement, and who made it, are ledger facts, so D-6433 is their one record. The header and spec §4.12 carry the substance, which is all 8484 asks of them. Nothing returns to workspace-lifecycle's consent.
+    - F1 and F3 are carried to this ledger as one residual, `w3-prose-cwd-loop-labels-and-again-arm`, with no third round. The precedent is review 663, and review 757's minors were carried the same way. Its four parts are under Carried constraints.
+    - The ledger names `418a4cbf7`, `c4cd23a28` and `b099721d2` (Carried constraints).
+    - W3 is accepted at `c64e21643`.
+  - **The exemption check, before the enqueue.** #1132's 43 files touch none of main's growth machinery (the seven `GROWTH_MACHINERY` paths, plus `growth-waivers.json`, D-6223) and none of the modules `growthCheck.ts` loads. So #1135's entry applies to it.
+  - **Enqueued.** Run 722 went to `merging`. #1132 was enqueued alone at 14:14 with `--match-head-commit c64e21643`, first in an empty queue.
+  - **Notes, not findings (R84).** I7's "exactly one failed ask" CONTROL is sound. The wave-done's "the bullet: 20 -> 24" is the `ccd/ccd` header's "THEN, FOR A CHECKOUT" bullet; spec §4.12's bullet grows from 13 to 17 lines over the round, and the header's 73 to 77 is stated correctly. One D-6433 sentence reads as if the restore's place were why the earlier exits preserve the globals. Each of its facts is true, so the problem is prose only.
+  - **Mails.** The worker holds and keeps its claims until #1132 reads MERGED (8569). Workspace-lifecycle was told that a new independent review gave the final-byte proof its consent asked for (8570).
+
+- **2026-10-23 14:01 — FIVE COEXISTENCE CONSENTS ON W3'S CLAIMED FILES, TO THE UPDATE PROGRAMME AND THE CODEX BRIDGE.** Each was given while W3 held its claims. Each keeps out of W3's lines, and none moved W3's citation census.
+  - **Update programme wave 23** (run 775; asked 7946, consented 7949, 2026-10-22). Its `_bak_*`, `_keep_why` and `_upd_report` edits in `ccd/ccrc`, `cmd_update`'s `_bak_gc update` line and three usage paragraphs. Conditions:
+    - never the `_plat_` block, or W3's one `ccd/ccrc` line (about :426);
+    - before landing, tell this coordinator and ccrc history if it moves the `ccd/ccrc` citation census (W3 is pinned to 5 at `MAXREF` 19162);
+    - the first ready PR lands, and the second merges main.
+  - **The codex bridge**, Stage 1 Task 5 (2026-10-22): four additive places in `ccd/ccrc`. The worker consented (7974), and this coordinator sent wave 23's census conditions (7980). #1165 later merged as `a68c90f15` without moving the census (8354).
+  - **Update programme wave 25** (run 793; asked 8080, consented 8081, 2026-10-22). Two rewordings in CLAUDE.md, outside the load-flake bullet that W3 edits. Conditions: stay out of that bullet; place both edits by content; the second to land absorbs only on a measured conflict.
+  - **Update programme wave 24** (run 855; asked 8539, consented 8542, 2026-10-23). The `ccd/ccrc` settings readers, and in-place `_upd_*`, `_bak_*`, `_ver_gc`, `cmd_versions` and usage lines, all below :426 and outside the platform block. Conditions as for wave 23, plus: the second to land measures merge-tree and absorbs by an ordinary merge only on a conflict or a red; never rebase, force-push or "Update branch".
+  - **Update programme wave 26** (run 858; asked 8559, consented 2026-10-23). One clause in CLAUDE.md's "Deploy = release + rollout" bullet, outside the load-flake bullet. The same landing conditions as wave 24.
+
+- **2026-10-23 13:35 — FIX ROUND 2 IS VERIFIED AT `c64e21643`; REVIEW 859 IS DISPATCHED.**
+  - **The wave-done (8531).** Fingerprint `c64e21643`, PR #1132 open, suite green. Six commits, `059ffa60f..c64e21643`, a fast-forward pushed once at 12:52; five files, +57/-13, all inside R83's licence.
+    - F1: the re-ask header grows from 73 to 77 lines, comment lines only, so `ccd/ccd`'s growth stays +760.
+    - F2: removing EPERM from the comments reds the relabelled pin (m1). Removing the code's EACCES use does not (m2), the expected shape.
+    - F3: deleting the arm reds the new case I7 on its detail only. The copy was restored and checked with `cmp`.
+    - PR run 39956620708 is green on every job it ran, the growth row included (exempt at cap 760).
+  - **Re-measured.** Origin, the worker's clean checkout and the PR head all read `c64e21643`. `ccd/ccd` grows +760 net code lines against the merge base `cd622b2f6`, and `ccd/ccrc` +1. `git merge-tree` onto `origin/main` `49e7f187a` is clean, and the merged `ccd/ccd` reads `ccrc-unmodified`.
+  - **Review run 859.** Run 722 went to `awaiting-review`, and review 859 was dispatched with a fourth lens, `consent-8484`: workspace-lifecycle's 8484 and 8110 conditions, and I7.
+  - The worker, answering a stall check, was told to wait for review 859 and the ruling: no pushes, no rebase, no merge of main, and claims kept until #1132 merges (8536).
+
+- **2026-10-23 11:41 — REVIEW 835 IS CLOSED (FIVE MINOR); R83 SENDS W3 TO FIX ROUND 2; #1135 IS ENQUEUED AHEAD OF #1132.**
+  - **Review 835** (dispatched at 09:02, after the daily cap refused it the evening before; review-done 8480) read `059ffa60f`, unmoved.
+    - Four Opus lenses (correctness, spec, reproduce, and the wave lens `conditions-and-reach`) and Sonnet refuters: three findings confirmed, two refuted 3-0. The reviewer added two of its own.
+    - Every 8110 condition is met, every R82 item matches its ruling, and the whole-branch checks hold.
+    - F7's red-first case and mutations a and b reproduce. The reviewer's mutation c (the restore moved before the verdict) reds I5, I6 and E5.
+    - The CI reds are not W3's.
+  - **The findings, all minor.**
+    - F1: the restore of the first proof's three globals is unobservable (an equivalent mutant, the reviewer's mutation d), yet three records give it a reason.
+    - F2: the prose test's EPERM pin checks comments under a "rule" label.
+    - F3: the re-ask's root-resolution arm has no case.
+    - F4: D-6154's emulation clause does not say whose emulation it was.
+    - F5: `b099721d2`'s body names the wrong cause.
+  - **R83, fix round 2.** This programme fixes minor record findings in a round when it can; W1b's fix round 2 did so for eight.
+    - F1, text: the re-ask header in `ccd/ccd` (comment lines and the restamp only), spec §4.12's bullet and D-6433 say the restore is 8110's condition and that no path observes it today.
+    - F2: the EPERM pin moves to its own assertion, labelled as the comment pin it is.
+    - F3: a pin is owed, by CLAUDE.md's mutation-table rule and because 8110's condition 1 names the arm's reason. One case in `ccd-reclaim-tail-window.test.ts` fails only the re-ask's own resolution and asserts the hold and the detail. Deleting the arm must red it on the detail.
+    - F4: D-6154 says R82's fact check reproduced the `os.O_PATH` cause by emulation, the round's own shim did not, and R39's green macOS 3/4 measures the fix, not the cause.
+    - F5: D-6154 names `b099721d2` by sha, and so does this ledger.
+    - No new number. One push, after workspace-lifecycle's word. CI is the PR run only: `ccd/ccd` changes in comments only, and R39's run at `059ffa60f` stands for behaviour.
+    - Not reopened: the two refuted findings; `reask-second-proof-identity-unchecked-against-cid`, which stays a follow-up; the Sonnet trailers; and `5efd9c785`.
+  - **Workspace-lifecycle consented with conditions (8484, 11:43)**, appended to R83 verbatim as its Amendment 1, and relayed to the worker (8486).
+    - The 8110 behaviour stays unchanged, and no executable line changes beyond the restamp.
+    - The text says preservation is the consent condition and has no observable tail effect today. A future-edit example is counterfactual, never a licence. The non-atomic caveat stays, and the equivalent mutant is reported as the reviewer's.
+    - F3's deletion must red on the detail, not on the outcome. The copy is restored to exact bytes and checked with `cmp`, and no live ccd is used.
+    - The consent is scoped. It is not acceptance of the round, merge, rollout or expiry arming, and a new independent review owes the final-byte proof.
+  - **#1135 was enqueued at 11:41** (`--match-head-commit 5ac7e3d28`, every check green), ahead of #1132, so that fix round 2's PR run reads the entry from main. Fix round 2 changes `ccd/ccd` in comments only, so the cap of 760 holds. #1135 **merged as `bd895fbe4` at 12:03**.
+  - **Pushed.** The worker pushed fix round 2 once at 12:52, `059ffa60f..c64e21643`, six commits (8522).
+
+- **2026-10-22 22:43 — FIX ROUND 1 IS VERIFIED AT `059ffa60f`; THE FULL CI RUN'S ONLY REDS ARE NOT W3'S; REVIEW 835 IS OPENED.**
+  - **The round.**
+    - The fix-round mail went out, but the advance of run 722 back to `working` was refused at the concurrency cap (14/14). The worker held, and undid one early local commit that was never pushed (8105). The retried advance was accepted.
+    - The round was built under R82 and its Amendment 1. Two more items were ruled during it (8173): an E5 ws-expire mirror of F7, test-only, yes; and a compare of the second proof's identity with `cid` is a follow-up, `reask-second-proof-identity-unchecked-against-cid`, because it is beyond 8110's consent.
+    - A reboot of the fleet box at 20:05 killed the worker's final-gates workflow. Nothing was lost or pushed.
+  - **Pushed once** (8275; its count corrected in 8298): `0135c60b3..059ffa60f`, 27 commits, 12 files.
+    - F7 is red-first. At `0135c60b3`, case I5 removed the moved checkout through the link, and its branch was deleted. Built, it answers `worktree-remove-failed`, and the checkout stands.
+    - Mutation a (the second proof deleted) reds I5 and I6. Mutation b (the GONE hold dropped) reds I6. E5 is red-first at `0135c60b3` too.
+    - F7 adds 9 net code lines.
+  - **#1135's cap is re-measured.** At `059ffa60f`, `ccd/ccd` grows +760 (17869 to 18629) and `ccd/ccrc` +1, and the same on a merge with main `7ebdff20c`. None of the seven `GROWTH_MACHINERY` paths is in the diff (43 files). An armed probe on a simulated merge group reads `ccd/ccd` exempt at cap 760. The cap went from 751 to 760 in `5ac7e3d28`.
+  - **CI at `059ffa60f`.**
+    - PR run 39859327712 is red only on the growth row, `ccd/ccd: delta +760`, which #1135 exempts once it is on main.
+    - R39's full run, 39859336719, ran all 12 server shards. Its only reds are that growth row (Linux shard 7 and macOS 2/4) and one macOS 3/4 case, `ccd-limit-banner`'s "a FIFO at the path", which exited 125.
+    - 125 is the test harness's own `setpgid` exit (`BOUNDED` in `ccdWsHelpers.ts`), so the function under test never ran. W3 touches neither that file nor the function. It is a harness flake candidate, not W3's (Carried constraints).
+    - Review 790's three macOS reds did not recur, and neither did E0c's 125.
+  - **The wave-done (8298):** fingerprint `059ffa60f`, PR #1132 open, suite green. Run 722 went to `awaiting-review`.
+  - **Review run 835** was opened with a fourth lens, `conditions-and-reach`, which walks 8110's conditions and F7's reach (the reclaim tail, the verb tail and ws-expire's E5). Its dispatch was refused at the fleet's daily cap (64/64), and it went out on 2026-10-23 at 09:02.
+
+- **2026-10-22 15:49 — REVIEW 790 IS CLOSED; R82 SENDS W3 TO FIX ROUND 1; WORKSPACE-LIFECYCLE CONSENTS WITH CONDITIONS (8110).**
+  - **Review 790** (review-done 8087) read `0135c60b3`, unmoved. Four Opus lenses (correctness, spec, reproduce, and the wave lens `never-weaker`) and 15 Sonnet refuters: 2 confirmed, 3 refuted, none unexamined.
+    - F1, important as a record: the record reader's `-ef` main arm changes no outcome without a string hit. Its comment and spec §4.12 overclaim, and D-6130's text is right.
+    - F2, important by consequence: three macOS cases that the base passes go red (the expire ladder's rung 5, twice, and EXP-2's CONTROL). Main's `full-suite` would then read red, which blocks promotion to `stable`.
+    - F3: R76's two files carry edits beyond the six pins. F4: R76 (2)'s remedy pin is missing. F5: the absorb's merge message, `270824d3e`, keeps git's conflict comment block.
+    - F6: the rows rung's new holds mask the ladder's later terminal words. F7: the re-ask cannot see a nested checkout moved out and replaced by a link in its parent path. F8: a residual's "fails closed" overclaims.
+    - F9: R39's shard 7 never ran. The reviewer ran its 29 files at the tip, all green.
+  - **R82.** The code facts were measured first (five Opus finders, each checked by a Sonnet refuter). Then:
+    - F1: text only, plus the residual `record-main-by-another-spelling-reads-no-worktree-record`. D-6130 records the narrowing.
+    - F2: three test-only fixes, `expire-ladder-fake-proc-alone-pair-is-linux-only`, `expire-ladder-bashpid-asked-clears-its-fake-root` and `exp-2-control-is-host-dependent`, under D-6154. None hides a Darwin defect. E0c's 125 is the harness's, not W3's.
+    - F3 accepted as made, and F4 fixed, under D-6155.
+    - F5: this ledger records it (Carried constraints). No history is rewritten.
+    - F6: named as D-6432 `rows-rung-holds-mask-later-terminal-words`, with the residual `pending-row-holds-every-child-box-wide`. No code change.
+    - F7: fixed as D-6433 `reask-re-proves-the-nested-checkouts-path`. The re-ask runs the nested proof again on a freshly resolved root, after the `cid` compare, with a STOP fallback.
+    - F8 and the residual statements: text. New residuals `vanished-checkout-arms-ask-no-cwd` and `cwd-probe-asks-no-process-root`.
+    - Parked items: 1 and 2 are follow-ups (Carried constraints); 3 rides with F3; 7 is the `unfield` remedy, under D-6152.
+    - Numbers: D-6432 and D-6433 were issued. The six wave-time numbers, D-6155 to D-6160, went to R76, PF-2, R77 with R78, R78 (2), C1 and C2. The per-task entries D-6140 to D-6154 carry the rest.
+  - **Workspace-lifecycle consented with conditions** to the four items that reach ws-expire (8110). The conditions were appended to R82 as its Amendment 1 and relayed to the worker verbatim.
+    - F7: only on the existing path with a nonempty checkout, after the `cid` compare. The root is resolved afresh, and a failure to resolve it sets the reason and answers 2. Go on only on rc 0 with the second proof's own GONE 0. Test the second values before restoring the first, and preserve the first on every exit. No `cid` reassignment and no pinned-line move. Red-first fixtures, and both mutations red. The wording claims a narrowed race, not an atomic proof.
+    - F2: exactly the two expire-ladder edits. The R39 macOS results at the final head are disclosed in full.
+    - Parked item 7: text and exact quoting pins only.
+    - F1: comments and spec text only, keeping the real distinction.
+  - **Amendment 1 also corrects R82's F6 item 2.** R82 read the expiry verb's `probe-unmeasured` as final for an archive whose in-lock verdict meets a pending window. It had read only the fallback line. The server reads the breadcrumb flag first: a fresh arm restarts from its audit, a resumed arm stays resumable, and only an absent or unreadable breadcrumb is final. No server change and no arming decision follow.
+
+- **2026-10-22 13:39 — W3'S FIRST WAVE-DONE (7990): PR #1132 AT `0135c60b3`; REVIEW 790 IS DISPATCHED; #1135 IS OPENED AND HELD.**
+  - **The wave-done.** Tip `0135c60b3`, PR #1132 (opened 13:34), suite red with a shallow failure. Origin and the PR head read the same sha. Main had moved by two docs-only PRs, so there was no absorb trigger. `ccd/ccrc` changes in one line, and `ccd/ccd` grows by 751 net code lines. Run 722 went to `awaiting-review`, its 15 items settled done.
+  - **Review run 790** was dispatched with the panel and a wave lens, `never-weaker`. It also judged the worker's parked items and residuals.
+  - **#1135, the exemption entry** (`cd8b05a5f`, opened 13:51): an entry with `pr` 1132, `file` 'ccd/ccd', `cap` 751, a reason, the ruling 'operator 2026-10-21: W3 named exempt for ccd/ccd' and `since` 2026-10-22, and the exemption-age stamp's size from 0 to 1.
+    - Red-first: the age test reads "1 entries, stamp says 0" until the stamp moves.
+    - A scratch decision test on #1132's rows reads exempt at PR 1132, and red with no entry, another PR number, no PR, a cap of 750, or a machinery file touched.
+    - It was held out of the queue until the review's verdict, with the cap re-measured after any fix round.
+  - **CI at `0135c60b3` (8042).**
+    - PR run 39788014752 is red only on the ruled growth row. #1135's own PR run is green.
+    - R39's full run, 39787806000, is red. Linux server shard 7 ran no test (an apt 403 on the runner). The other 11 shards were green, the equivalence file among them.
+    - Three macOS files are red that main's daily run at `cd622b2f6` passes: `ccd-tick-diet-equivalence` E0c (`script rc 125`), `ccd-ws-expire-ladder` rung 5 (two cases), and `ccd-reclaim-main-identity` EXP-2's CONTROL.
+    - R70: the macOS round-trip rows passed.
+    - The facts went to review 790, and the macOS reds to the fix round.
+
+- **2026-10-22 13:31 — THE BUILD ENDS WITH R81'S FIX (`0135c60b3`); ITS WAVE-TIME RULINGS WERE R76 TO R81.** Each is recorded in the plan's Deviations found. Each is add-only: no row is released, and no refusal becomes a pass.
+  - **R76 (2026-10-21; Task 3's STOP, 7637 and 7640).** The new identity arm places `//`-spelled rows NESTED on Linux, and six pins in two child-reclamation test files went red.
+    - Option (a): a row truly inside the child gets the terminal `containment-unproven` (fresh) or `containment-refuted` (a resumed tail), in place of a retryable hold that can never clear on Linux.
+    - Four conditions: the six pins move to one expectation, every other assertion byte-identical; a new case keeps the unplaced arm measured for a row outside the child; a positive pin with a mutation row; and plan-text records.
+    - Workspace-lifecycle was told, not asked. Number: D-6155.
+  - **R77 (2026-10-21; Task 9's STOP, 7757).** The cwd probe answered unmeasured for a process that exits between its readlink and its open.
+    - The coordinator's kernel check (three Opus lenses) refuted the worker's fix as proposed. A non-leader thread's `execve` lets the leader die and hands its pid to the live thread, which that fix would skip.
+    - Ruled: a second readlink confirms a vanished link; a vanished process is asked through its threads to a bounded fixed point, its leader tid kept; and the process link is read once more after the walk.
+    - Workspace-lifecycle consented (7763) with seven conditions: only ENOENT confirms at the second readlink; the stat confirmation stays beside it; the thread walk keeps the leader and is bounded; the final re-read is judged afresh; mutation-paired fixtures through test-local seams only; the probe's header scopes its safety sentence, names the kernel ordering it relies on and states its limits; and the wave-done names the departure with its measurements.
+    - Number: D-6157.
+  - **R78 (2026-10-21 and 22; question 7772).** The task review found R77 as built still beaten by a double exchange.
+    - Ruled: every pass lists `task/`, asks each new tid, then reads the process link again, and accepts only on a listing that names no new tid. At that per-pass read only, EACCES exactly, followed by a stat that answers gone, counts as gone.
+    - Workspace-lifecycle consented (7782) with ten conditions, and confirmed the coordinator's two reshapes (7786).
+    - The residual is `cwd-probe-pid-handoff-between-reads`. No finite read schedule closes it, and it is narrower than main.
+    - Built as `63fa96afd`. Measured: 0 of 1000 walks unmeasured at natural load; under six fork loops, 2 of 100, against 38 of 100 for R77 as first built (`44ed8a4fe`). Neither box mounts `/proc` with `hidepid`.
+    - Numbers: D-6157 and D-6158.
+  - **The #1099 census STOP (2026-10-21, 7797).** #1099 moved `session-hook.test.ts`'s `'ccd/ccd'` census from 147 to 151; `MAXREF` (19162) and `'ccd/ccrc'` (5) did not move.
+    - The worker stopped under the brief's A.4. The coordinator concurred with ccrc history's coordinator under Task 14 (4a): compare HEAD with main's lines, edit no number, and leave `session-hook.test.ts` untouched.
+    - The ccrc history coordinator released the STOP (7798) on conditions: the merged tree reads exactly 19162/151/5, any other value is a fresh STOP, and `session-hook.test.ts` in full plus the citations test pass before the push.
+    - The absorb at `270824d3e` read 19162/151/5.
+  - **R79 (2026-10-22; the wave's own final review at `cba1824e6`).** No critical finding.
+    - C1 (important): the cwd probe kept a `//`-leading physical parent, so Darwin's string-only arm answered "nobody" for a process inside. Fixed with the walk's own collapse idiom (D-6159).
+    - C2: pass B holds an unlisted answer word (D-6160).
+    - C3: the pending remedy reads "stop and start that session", because `ccd start` answers "already running" before the seed (`pending-hold-remedy-stops-then-starts`, under D-6152).
+    - Workspace-lifecycle consented (7835) with four conditions, before the fallback. The commit is `637a7dbd3`.
+  - **R80 (2026-10-22; 7866, ruled 7867): a semantic conflict with #1078.**
+    - #1078 (the accounts plan's Task A9, D-6202) merged after W3 branched. Its `ccd-spawn-account-settings.test.ts` pinned the pre-W3 launch line, `cd <dir> && exec env`, so two of its cases went red on W3's first full run at `8e179689d`. The file is green on main.
+    - No ccrc run or claim held that work, so the coordinator ruled: `line()` reads the pane fragment from ccd's composer, as its sibling suites do, with no assertion, case, title or ccd change. Built as `1f1573413`.
+    - W3 records it in D-6154 as `account-settings-spawn-pin-reads-the-pane-fragment`. D-6202 stays the accounts plan's own number, and that plan is not edited.
+    - The same run's `boot.test.ts` red is load.
+  - **R81 (2026-10-22; 7978, ruled 7979): the cwd-users CONTROL at Task 14 Step 2.**
+    - A helper needed a tid that the file system lists after the leader's, and on the fixture volume's ext4 hash order none of the 16 it offered was. The test-only fix offers 1023 tids, and the CONTROL stays (`cwd-users-after-leader-offers-more-tids`, under D-6154).
+    - Load rulings: `ccd-reclaim-tail-cwd`'s ask counts at a long TMPDIR and load 70 are accepted provisionally as load (`reclaim-tail-cwd-wait-ask-counts-under-load`). `ccd-ws-collect-move`'s in-use refusal is not W3's file; it is a main-side candidate for these records (Carried constraints).
+
+- **2026-10-21 17:07 — #1084 MERGES: THE GROWTH CHECK CAN EXEMPT AN OPERATOR-NAMED PR; RUN 748 IS CLOSED.**
+  - **Why.** Task 0's report (7585) found that #1058 (D-6178) had armed the growth check that day. A PR that grows `ccd/ccd` by more than 40 net code lines fails `test (server)`, and W3's boundary forbids both waivers. W3 adds several hundred lines.
+  - **The operator ruled "Name W3 exempt" for `ccd/ccd`**: a narrow exemption keyed by PR number, capped at W3's measured growth, red-first, dated, and in its own small PR before W3's. The worker was told that the growth red is not a trigger to absorb main, and to report the delta at wave-done (7661).
+  - **Run 748** ("W3 landing prerequisite", wave 4 of 4; D-6211 issued with one spare, which stays unused and undefined) built the mechanism in #1084.
+    - `server/test/growth-exemptions.json` lists `{pr, file, cap, reason, ruling, since}`.
+    - The armed rows read it from `origin/main` only, never from the PR's own tree.
+    - The PR number comes from the CI ref, paired with the event name.
+    - A PR whose diff edits the check's own files gets no exemption.
+    - The list ships empty.
+  - **Reviews and fix rounds.**
+    - Review 750: the `origin/main` read was pinned only in a function body, and the exemption-age CONTROL pinned the live list's size. Fix round 1: one armed helper, a fixture CONTROL, a pure decision table, and the exemption withheld when the diff touches `GROWTH_MACHINERY`.
+    - Review 752: the machinery list was unpinned, and a one-line edit to `growthCheck.ts` could exempt its own PR. Fix round 2: a literal pin of the seven paths and an end-to-end case. The check's own bodies are ruled inside the trust boundary, and **the outside half is this coordinator's landing act**: before enqueueing an exempted PR, compare its file list with main's machinery and the check's loads. Any overlap means no exempted landing.
+    - Review 756: a test-infrastructure file could exempt its own PR by replacing a git object. Fix round 3: test infrastructure is ruled inside the boundary, the armed git reads use `--no-replace-objects`, and the imports row walks the closure and fails closed on a load it cannot follow.
+    - Review 757 read `1e9e971e6`: clean but for two residuals, carried here (Carried constraints). The PR body's one over-claiming sentence was corrected over the API, with no commit.
+  - **Landed.** #1084 merged through the merge queue as `2c4438d32` (head `1e9e971e6`). Run 748 closed done.
+  - **The merge queue.** Main has a merge queue since 2026-10-21 07:07. This coordinator lands with `gh pr merge <n> --match-head-commit <sha>`, and a run waits at `merging` until its PR reads MERGED.
+
+- **2026-10-21 06:09 — W3'S PLAN MERGES (#1055 = `c10173d0e`); RUN 722 IS DISPATCHED, EVERY CONSENT IN HAND.**
+  - **What held #1055.** Its required `test (server)` was red three times on a leaked `sleep` from `_plat_timeout`'s pure-bash watcher, a main-side defect that re-runs could not clear. #1038 (D-6123) fixed it, and no landing line held #1038.
+    - The operator ruled that this coordinator land #1038 once the model-class programme consented, which it did (7468).
+    - A separate session landed an identical change first: #1038 merged as `27755979e` at 05:51.
+    - Main was merged into #1055, its CI went green, and it merged at 06:09.
+  - **Run 308's condition is met.** #435 merged as `d8cd47658` at 03:54, before W3's PR.
+  - **Consents in the brief:**
+    - workspace-lifecycle 7443, with R75's conditions, confirmed in 7455 (answering 7452);
+    - run 308 7440;
+    - delegation 7437;
+    - ccrc history 7436 (acknowledged);
+    - model-class auto-advance 7441 and 7456: the composer line in the platform block, and W3's other `ccd/ccd` edits beside its claim.
+
+    The brief's annex carries each with its conditions.
+  - **Run 722 was dispatched** to a fresh child with the plan's 15 tasks (0 to 14). `MAXREF` 19162 and the citation counts 147 and 5 were re-measured on `c10173d0e`.
+  - **Task 0 (7585): no STOP.** `MAXREF` 19162, `'ccd/ccd'` 147, `'ccd/ccrc'` 5 and `BASELINE` 521. On the fleet box, counts only: 81 rows, all legacy (none has an entry field yet); `spell-not-absolute`, `spell-c1` and `spell-backslash` all 0; no device mismatch.
 
 - **2026-10-21 — W3'S PLAN IS WRITTEN: `2026-10-20-path-identity-w3-worktree-identity.md`, 15 tasks (0 to 14), one PR from a fresh child.**
   - **How it was made.** It was grounded in six areas against W2's frozen head, then framed by an architect, a critic and a reviser, and drafted by one Opus drafter per task. It went through two review rounds over seven slices plus cross-task and safety lenses, each finding put to a Sonnet refuter (69 findings, then 61, all confirmed and fixed), three single-author integration passes, and a final verification.
@@ -670,32 +878,86 @@ Run-level wave numbers map onto the spec's wave names as below. W0 (the spec) ne
 
 ## Carried constraints
 
-- **Every `ccd/ccd` edit waits for workspace-lifecycle W6 (#351) to merge, and the ccd waves then go in series** (W1b, W2, W3). W1a and child-reclamation's wave 10 edit no `ccd/ccd`.
-- **Anything shared with ws-expire needs the consent of workspace-lifecycle's coordinator, per wave** (PG2 A). That covers W2's tail and step 4, and W3's ladder, tail and ws-expire's probe.
-- **Review 388's carries:** the wave-9 lane-case title over-claims order (item 38), the contract's Task 5 line counts three indents where there are two (item 39), and `collectBoxProbesAtArrival` says "latest change" at four sites (item 40). Items 38 and 40 ride child-reclamation's wave 10 if it touches those files, otherwise W2; item 39 rides the contract section.
-- **Comment carries that need a `ccd/ccd` restamp** (items 29 to 31) ride the first wave that restamps `ccd/ccd`, which is W1b. They are worded line-neutrally, because the collector header sits under the frozen citation-corpus anchors.
-- **The macOS purge-refused red** (item 37) is a stated residual; reopen it only if it recurs.
-- **Review 500's exception is one row and its landing record only.** Bound wave 10's prose guard without weakening its assertions; require the outside-section relocation mutation to red. A structured empty findings list is a completed lens, while null/no output stays unverified. No other inherited EOF-slice repair is authorized.
-- **No merge authority follows from accepted content, a fingerprint, a report or a landing claim.** The pending approvals for #429, #434 and #436 remain separate. No W2 dispatch until its approved plan merges and both predecessors land and close as required; preserve programme continuity by opening the successor before the last producer closes. Since 2026-10-19 the operator has given this coordinator merge authority for the programme's PRs.
-- **The W1a plan's review-661 correction at Row 3's dispatched case carries two wording slips** (review 663; they came from the coordinator's ruling text). Under the close-gate mutant, the case reds on its first, inline assertion of the `closeRun` result, not on `out`. Its rejection and mail lines would red, and neither its `calls` line nor its run-state line can. This rides the next wave that appends to the W1a plan's records, or failing that the programme's closing records.
-- **Carries from W2** (review 709's readings and review 719):
-  - `aside-lister-mirrors-the-records-lister`: the follow-up is one exact-lister helper for the records, asides and slots listers. It needs workspace-lifecycle's consent.
-  - `fuse-mount-skipped-not-crossed`: `_ws_leaf_remove`'s header wording rides W3's restamp of `ccd/ccd`.
-  - `aside-half-not-in-the-id-argv-census`: a `GATES` entry rides the next wave that may edit `id-argv-census`.
-  - Review 719's three minor record findings (T6.17's "third" arm, Task 17's slot not naming the fix round's absorptions, and one commit message's "every CONTROL") go to the programme's closing records.
-- **Closed:** `cmd_hibernate`'s header comment (review 641 F1) was fixed by W2, which now names the recorded departure.
+The programme is closed. This section is its closing record, in four parts: what is closed, the records owed to this
+ledger and written here, the follow-ups left open with their owners, and what still binds later work.
+
+### Closed
+
+- **Every `ccd/ccd` edit waited for workspace-lifecycle W6 (#351), and the ccd waves went in series.** Moot: #351 merged on 2026-10-13, and W1b, W2 and W3 then landed in that order.
+- **Review 388's carries.** Items 38 and 40 were built by child-reclamation's wave 10 (#384). Item 39 was corrected in the contract's rulings section (R98).
+- **Comment carries 29 to 31** rode W1b's restamp of `ccd/ccd` (spec section 7: Built (W1b)).
+- **Review 500's exception** bound child-reclamation wave 10's prose guard. Wave 10 merged as #384 (`0b3ff2f62`), so the exception has nothing left to bind.
+- **"No merge authority follows from accepted content…"** was superseded on 2026-10-19, when the operator gave this coordinator merge authority for the programme's PRs.
+- **`cmd_hibernate`'s header comment** (review 641 F1) was fixed by W2.
+- **The R83 text amendment** (child-reclamation contract's R83, not this programme's R83 of 2026-10-23). W2's note in the contract (`aside-joins-the-population`) said the coordinator's docs change amends R83's text. This closing PR makes it: R83's step 3 now admits ONE dot-leading shape, in `tmproots` alone, the compare-and-drop aside `.<id>.drop.<pid>`, whose id joins the population when the id predicate holds, and still drops every other dot-leading name uncounted. That is the rule `collectPopulation` builds.
+- **W3's carries (R37, R49).** W3 closes `no-whole-child-mount-ask-before-step-3` (review 790 confirms it closed on Linux). It narrows `audit-normalise-has-no-mount-ask` (the worktree half), and narrows child-reclamation's "the registry row pass carries no bound of its own": the walk is bounded, and the gone rows' git reads are not.
+- **Spec section 7, items 1 to 3 and 5 to 8** are built by W3 (`r31-repointed-alias-resolves-complete`, `r31-bind-mount-spelling-resolves-complete`, `r54-recorded-basis-dev-ino-ancestry`, `proc-symlink-row-places-at-ccds-cwd`, `unres-false-detail-for-row-that-is-the-child`, `double-slash-remedy-wordings` and `owned-main-checkout-ambient-realpath`), pinned as closed by `path-identity-w3-prose.test.ts`.
+- **Spec section 7 cells that read stale, recorded here:**
+  - items 10 and 39 still read "Proposed", but the contract's rulings section did both: R97 states the blank admin entry's box-wide reach, and R98 corrects Task 5's indent count;
+  - items 22 and 23 still read "Proposed", but W1a built them (#397);
+  - item 41 still reads "Ruled in principle", but child-reclamation's wave 10 built the collector's Settings switch (#384).
+
+### Closing records, written here
+
+- **The W1a plan's review-661 correction at Row 3's dispatched case carries two wording slips** (review 663; they came from the coordinator's ruling text). Under the close-gate mutant, the case reds on its first, inline assertion of the `closeRun` result, not on `out`. Its rejection and mail lines would red, and neither its `calls` line nor its run-state line can. No wave appended to the W1a plan's records after review 663, so this ledger is that correction's record.
+- **Review 719's three minor record findings on W2:**
+  1. Mutation row T6.17 in the W2 plan says it turns "the third `(( rc == 0 )) || {`" in `_ws_tmproot_witness_drop`. The arm it means, the re-proof's, is the second of the three. Read by the ordinal alone, the row points at the second-read arm, which the pins do not guard. The arm's quoted reason in the same sentence is unambiguous. The word should be "second".
+  2. Task 17's slot in the W2 plan (D-5186) records three absorptions and full run 39463359525, and ends "The branch was pushed with no fourth merge." The fix round made two more absorptions, `014c5288e` and `8b3ce4b9d` (both stamp-only), and two more full runs: 39490319500 at `014c5288e`, and 39500623605 at `8b3ce4b9d`, W2's merged head.
+  3. `ccd-leaf-nul-backlink.test.ts` and commit `3068e394f`'s message say every CONTROL asserts exactly one occurrence. Only one of the two cases has a CONTROL; the other builds the same one-newline path, so behaviour is unchanged. The sentence over-claims.
+- **Review 757's two residuals on #1084:**
+  1. The closure row neither follows nor flags three load forms: `vi.importActual` and `vi.importMock` (and the module factories of `vi.mock` and `vi.doMock`), `import.meta.glob`, and a computed-key `createRequire` reached through `process.getBuiltinModule`. So the row's title ("every load in them can be followed") says more than the row does. No file under `server/test` uses any of the three today, and a PR that adds one edits a machinery file and is withheld. This coordinator's landing check treats those loads as imports.
+  2. A string literal that contains `import(` false-reds the closure row, with a misleading message. It errs the safe way, and no such string stands today.
+- **R84's residual `w3-prose-cwd-loop-labels-and-again-arm`** (review 859 F1 and F3), in `path-identity-w3-prose.test.ts` at about lines 265 to 270, in four parts:
+  1. the loop labelled "the probe has no ${e} rule" checks comment pins for ENOENT, ESRCH and EACCES, not rules;
+  2. the comment `c64e21643` added says the code skips EPERM "only at the first read" and reads it as unmeasured "everywhere else", but `again()` also skips a PermissionError for an exiting thread;
+  3. the probe's header says nothing of that `again()` arm (text from before fix round 2);
+  4. no test pins that arm.
+
+  Each pin's own assertion is right. The behaviour is pinned in `ccd-cwd-users.test.ts` (W11, W5b) and `ccd-path-users-esrch.test.ts`.
+- **Commit bodies in public history that state a wrong or a loose claim.** No history is rewritten; each is corrected where named.
+  - `b099721d2` gives the expire ladder's `alone` pair the `$BASHPID` case's macOS cause. The pair's cause is the forced-Linux mount-table read, or GNU `stat` under forced Linux. D-6154 corrects it by sha (R83 F5).
+  - `5efd9c785` says a Darwin host "asks lsof instead". On Darwin the in-use probe answers unmeasured before it asks for a root. `c35c9c90b` and D-6154 correct it.
+  - `418a4cbf7` states the re-ask's reach condition backwards (it says both proofs answered absent, where the checkout stands) and garbles whose identity is never reassigned. D-6433 corrects it by sha.
+  - `c4cd23a28` says "the tail's reads on the first-proof branch run no re-ask". That branch is the first-GONE-1 branch, as D-6433 states.
+  - `270824d3e`, W3's absorb of main, ends with git's conflict comment block after the attribution line (review 790 F5). It is cosmetic and names only a public path.
+  - Five commits carry a Sonnet attribution trailer (`4e9a5eeb2`, `6eac9352f`, `c4cd23a28`, `b28ce237a` and `9bcdc01df`), the harness's attribution for the model that wrote them. That is attribution, not a claim about the code, and nothing is owed (R83).
+- **Workspace-lifecycle's note from R77**, recorded and not a condition: an fd arm that reads only `/proc/<pid>/fd` gets EACCES for a zombie leader whose live threads still hold files, and in the window between `exit_mm` and `exit_files`. It exists on main too.
+
+### Follow-ups left open
+
+- **R82's parked item 1, "the double remedy under rule (d) with `un`".** It changes no outcome, and it reaches ws-expire. Owner: whichever wave next edits the rows rung's remedies, with workspace-lifecycle's consent.
+- **R82's parked item 2, "the probe's exit-3 detail names no pid".** Measured: 17 explicit `sys.exit(3)` sites, plus implicit ones through the catch-all handler. A module-level `cur` would collide with `scan()`'s lsof `cur` and turn an rc 0 into 3, so the safe shape uses another name, and five `toBe` pins move. Owner: a later wave that edits `_ws_cwd_users`, with workspace-lifecycle's consent, because ws-expire reaches the probe.
+- **`reask-second-proof-identity-unchecked-against-cid`.** The re-ask's second nested proof does not compare its identity with `cid`; that compare is beyond 8110's consent. Review 835 measured git 2.43 refusing a swap for a plain directory and a swap for another worktree, and removing only a copy of the same checkout. Owner: a later ccd wave, with workspace-lifecycle's consent.
+- **`reask-to-opendir-window`, a stated residual (R32, R55).** The window from the re-ask's last identity compare, through W2's mount read, to git's opendir stays open. D-6433 narrows the race; it is not an atomic proof. No wave is scheduled for it.
+- **`fuse-mount-skipped-not-crossed` (review 709).** W3's restamp did not carry it. At `c64e21643`, `_ws_leaf_remove`'s header still says that on the measured box the crossing of a same-uid FUSE mount "is live, not latent". Mechanically, `rm --one-file-system` and `find -xdev` skip a mount on another device rather than cross it. Owner: the next wave that restamps `ccd/ccd` and may edit that header.
+- **Review 709's two other W2 carries, not done:**
+  - `aside-lister-mirrors-the-records-lister`: one exact-lister helper for the records, asides and slots listers. It needs workspace-lifecycle's consent.
+  - `aside-half-not-in-the-id-argv-census`: a `GATES` entry in `id-argv-census`. W3 did not edit that file, so it rides the next wave that does.
+- **The macOS `rc=125` harness exit, a flake candidate.** `BOUNDED` in `ccdWsHelpers.ts` exits 125 when `setpgid` fails, so the function under test never runs. It was seen on W3's branch twice (E0c at `0135c60b3`, and `ccd-limit-banner`'s FIFO case at `059ffa60f`) and on one other branch once (run 39791656483). Main's daily run at `cd622b2f6` was green on all four macOS legs. Owner: none yet; it is a candidate for the harness, not for a wave here. Report it if it recurs.
+- **`ccd-ws-collect-move`, a main-side candidate (Task 14 Step 2, R81).** At a long TMPDIR and load 81 to 89 it refused in use, with a same-uid process holding the per-run parent. The process's command was not recorded, and the file is green alone. It is not W3's file. Owner: child-reclamation (the collector), whose coordinator is this programme's. Measure it if it recurs.
+- **`pty-interrupt-record-takes-an-unchecked-id` (D-5846).** Raised with the operator on 2026-10-19. No coordinated programme owns it, and this ledger has no later record of it.
+- **Spec section 7 items that stand.** W4 is not scheduled (PG1 B), so each stays a stated residual:
+  - item 4, `owned-to-worktree-remove-window`: narrowed by W3; `worktree-ask-to-force-window` is narrowed, not closed;
+  - item 9, `rows-rung-git-reads-unbounded`: the gone rows' git reads stay unbounded;
+  - item 13, `device-test-cannot-see-a-same-device-bind-mount`: standing; a root sentinel only if W4 runs;
+  - item 15, `rec-eq-f-recycled-admin`: standing; its birth order would be measured in W4;
+  - item 20, `in-use-probe-misses-another-mount`: the temp-root half stands (W4);
+  - item 21, `ccd-cured-standing-residuals`: standing;
+  - item 37, `macos-purge-refused-red`: deferred; reopen it only if it recurs.
+- **W3's stated residuals** are listed in spec §4.12 and pinned by `path-identity-w3-prose.test.ts`. None needs a wave. Two of them are workspace-lifecycle's to weigh: `pending-row-holds-every-child-box-wide`, before the expiry lane is armed (R82's Amendment 1 states its expiry reach), and `human-gated-removals-ask-no-cwd`, forwarded under R26.
+
+### Still binding on later work
+
+- **Anything shared with ws-expire needs the consent of workspace-lifecycle's coordinator** (PG2 A), per change. That covers parked items 1 and 2, the second proof's `cid` compare and the asides lister above.
 
 ## Next-wave brief
 
-**State at 2026-10-20 22:35.** W1 and W2 are landed and closed. W3 is run 722, `planned`. Its plan is written and in review (path-identity W3, spec section 4). The coordinator has merge authority.
+**Final state.** There is no next wave. The programme is complete: #1132 merged as `357fec3bf` at 2026-10-23 14:28, run
+722 closed at 2026-10-23 14:29, and #1179 (`60866e4ed`) removed #1135's exemption entry. W4 is not scheduled (PG1 B).
 
-**Before W3's dispatch.**
-- The W3 plan merges, with its deviation numbers issued and defined.
-- These consents are in the brief:
-  - workspace-lifecycle's PG2 A consent for W3's ladder, tail and ws-expire's probe, including one in-place printf edit in the expire audit document and its key pin;
-  - run 308's and delegation's consents for `_spawn_start`'s two launch statements: the two inserted lines and the two edited command-string lines. Otherwise the spawn task waits for them.
-- Claims are re-measured.
+**Any later work starts from:**
+- the follow-ups under Carried constraints, each with its owner;
+- the stated residuals in spec §3.10 and §4.12, and the contract's §17 notes for W1b, W2 and W3;
+- workspace-lifecycle's consent for anything ws-expire reaches (PG2 A).
 
-**After W3.** The programme's closing records: the W1a wording carry, review 719's three findings, the R83 text amendment, and the section 7 items left open.
-
-Keep the carried constraints above. The older dated entries are history.
+The older dated entries are history.

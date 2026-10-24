@@ -16,8 +16,9 @@ import {
   type ChildReclaimPreLockToken, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
   childReclaimDetailText, type ChildReclaimLeafKept,
   CHILD_RECLAIM_STUCK_RETRY, childReclaimStuckHeld, childReclaimStuckRow, childReclaimStuckSentence,
-  type ChildReclaimSweepOutcome,
+  type ChildReclaimSweepOutcome, isChildReclaimPreLockToken,
 } from '../childReclaimSweep.js';
+import { readCcdRefusal, withoutCcdRefusal } from '../../../shared/ccd-refusal.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { readSwitches } from '../../../shared/switches.js';
@@ -900,7 +901,16 @@ function matchChildReclaimLockUnopenableDie(err: string): string | null {
 function matchChildReclaimPreLockDie(
   stderr: string,
 ): { readonly msg: string; readonly token: ChildReclaimPreLockToken | null } | null {
-  const err = stderr.trim();
+  // The machine token first (`refusal-v1`, #560): when ccd printed one for `reclaim` and it is one of the four pre-lock
+  // words, the die's prose is not read at all, so rewording it cannot reclassify the die. `msg` is whatever the die said.
+  const said = readCcdRefusal(stderr);
+  if (said !== null && said.act === 'reclaim' && isChildReclaimPreLockToken(said.token)) {
+    const last = withoutCcdRefusal(stderr).trim().split('\n').pop() ?? '';
+    return { msg: last.startsWith('ccd: ') ? last.slice('ccd: '.length) : last, token: said.token };
+  }
+  // The fallback: a ccd without `refusal-v1`, or a word this build does not list. The token lines are dropped so the
+  // whole-output matchers below read what they always read.
+  const err = withoutCcdRefusal(stderr).trim();
   if (err === '') return null;
   const lock = matchChildReclaimLockUnopenableDie(err);
   if (lock !== null) return { msg: lock, token: CHILD_RECLAIM_PRE_LOCK_TOKEN.lock };
@@ -965,8 +975,8 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
       return { kind: 'failed', resume, detail: detail === '' ? v.failed : `${v.failed}: ${detail}`, token: v.failed };
     }
   }
-  const err = stderr.trim();
-  const die = matchChildReclaimPreLockDie(err);
+  const err = withoutCcdRefusal(stderr).trim();
+  const die = matchChildReclaimPreLockDie(stderr);
   if (die !== null) return { kind: 'failed', resume: 'pre-lock-die', detail: die.msg, token: die.token };
   return { kind: 'failed', resume: 'resumable', token: null,
     detail: err === '' ? 'ws-reclaim answered nothing — it may have been cut short; the next attempt resumes it' : err };

@@ -6,7 +6,7 @@
 // tree rather than a pair of files.
 //
 // ── WHY THE FIXTURE IS A COPIED TREE, NOT SYMLINKS ────────────────────────
-// `ccrc-doctor.test.ts` installs `ccrc` into its fixture as SYMLINKS at
+// `ccrc-doctorFixture.ts` installs `ccrc` into its fixture as SYMLINKS at
 // `<home>/ccrc/ccd/` — the shape of a deployed box — and that is right for
 // doctor, which only ever READS the tree it is run from. Install is the other
 // half: it reads the tree AND writes the box, and Task 7 makes it COPY that
@@ -78,6 +78,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { renderCcdEntry } from './ccdWsHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
@@ -133,7 +134,7 @@ function realPath(name: string): string {
 }
 
 /** bash's absolute path, resolved ONCE, for the same reason
- *  `ccrc-doctor.test.ts:66` resolves it: libuv looks the executable up in the
+ *  `ccrc-doctorFixture.ts's `BASH`` resolves it: libuv looks the executable up in the
  *  CHILD's environment, and one runner below hands the child a PATH with no
  *  system directory on it at all — spawning bare `bash` there is ENOENT, which
  *  surfaces as a spawn failure (`status === null`) rather than as anything the
@@ -194,7 +195,7 @@ const versionDir = (home: string, ...rel: string[]): string =>
  *  `FAIL git_email` (a throwaway HOME has no ~/.gitconfig), `FAIL linger` and
  *  `FAIL wrappers` (the roster's upstream account has no binary).
  *
- *  This is `ccrc-doctor.test.ts`'s `healthy()`, adapted: the same stub shapes,
+ *  This is `ccrc-doctorFixture.ts`'s `healthy()`, adapted: the same stub shapes,
  *  minus everything the INSTALL itself now provides. It plants no roster (the
  *  verb seeds one), no `ccrc.env` (the verb writes one), no unit files (the
  *  verb installs them) and no `systemctl`/`loginctl` (the runner's recorders
@@ -223,7 +224,7 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
     writeFileSync(join(d, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 
   // `gh auth status --hostname github.com`, answered with the shape a box
-  // authenticated for the 'repo' scope really prints (ccrc-doctor.test.ts's
+  // authenticated for the 'repo' scope really prints (ccrc-doctorFixture.ts's
   // GH_OK). It REPLACES `ghContainedEnv`'s poison, and the containment is not
   // weakened by that: this stub never execs the real gh either, and unlike the
   // poison it exits 90 — loudly — on any argv but the one ccrc asks.
@@ -288,6 +289,7 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
   // disk is that afternoon. Same table shape as the doctor suite's.
   stub('df', [
     'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
+    ...FIXTURE_DF_INODES_LINES,
     '[ "$1" = "-Pk" ] && [ -n "$2" ] || { echo "fixture df: unexpected argv: $*" >&2; exit 90; }',
     'echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
     'echo "/dev/fixture0    104857600  20971520 42991616      21% /"',
@@ -303,7 +305,7 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
 
   // The upstream account's binary, which the roster this verb seeds declares
   // and `_check_wrappers` looks for. A few bytes of ELF prove "not a script"
-  // without the real ~300 MB (ccrc-doctor.test.ts's `writeBinary`).
+  // without the real ~300 MB (ccrc-doctorFixture.ts's `writeBinary`).
   //
   // `mkdir` runs UNCONDITIONALLY (A2-NEW): `~/.local/bin` itself is not what
   // `opts.upstream = false` is testing the absence of — it is the shipped
@@ -448,7 +450,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // The containment is unchanged and is the point: neither stub ever execs the
   // real binary, so this box's systemd and logind are as unreachable as they
   // were behind the refusal. What changed is that they now ANSWER the shapes
-  // ccrc asks — and, per `ccrc-doctor.test.ts`'s stub discipline, exit 90 on
+  // ccrc asks — and, per `ccrc-doctorFixture.ts`'s stub discipline, exit 90 on
   // any argv they do not recognise, so a step that started mutating a unit
   // nobody authorised is a loud failure rather than a silent success.
   //
@@ -772,7 +774,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
   // makes one call per install. Zeroed here rather than per test, for the
-  // reason `ccrc-doctor.test.ts` zeroes `CCRC_DOCTOR_GH_TIMEOUT` in its own
+  // reason `ccrc-doctorFixture.ts` zeroes `CCRC_DOCTOR_GH_TIMEOUT` in its own
   // runner — a knob whose only reason to exist is that a test must not wait out
   // a production timeout, and one call site is where it cannot be forgotten.
   env['CCRC_VERIFY_SETTLE'] = '0';
@@ -1723,7 +1725,7 @@ describe('ccrc install: the files the operator owns', () => {
       // a config the server REFUSES TO BOOT on (server/src/index.ts:75-79), and
       // doctor's `config` check reproduces that refusal at the end of this same
       // run. A half-configured remote box is a real state and it has its own
-      // test in ccrc-doctor.test.ts; this test is about a file being kept, and
+      // test in the `ccrc-doctor-*` test files; this test is about a file being kept, and
       // a fixture that was also secretly a broken-config fixture would fail for
       // the wrong reason.
       'CCRC_AGENT_URL=ws://198.51.100.7:7789',
@@ -5033,7 +5035,7 @@ describe('ccrc install: the unit directory is spelled the same in both files', (
     // THE DELIBERATE SECOND SPELLING, held by a mechanism instead of a promise
     // (D-92, and `_check_path`'s own note about `WRAPPER_BIN_DIR` for the same
     // trade). `ccrc-doctor-checks` cannot read `ccrc`'s variable: it is sourced
-    // under `set -u` by things that are not `ccrc` — ccrc-doctor.test.ts's
+    // under `set -u` by things that are not `ccrc` — ccrc-doctorFixture.ts's
     // `tableNames()` does exactly that — so a top-level
     // `CCRC_UNIT_DIR="$BOX_UNIT_DIR"` would make sourcing it fail outright, and
     // a `:-` fallback IS the second spelling with a branch in front. So: two
@@ -5846,7 +5848,7 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
   // A readable env file names the flag in a shape the reader cannot decide (on macOS: either file is not plain
   // assignments). The line says so from `_box_unit_env`'s own `BUE_WHY`, in both arms; it never borrows the rc-2
   // sentence ("is there and cannot be read"), which is about an exposure file the reader cannot open.
-  /** The platform's own clause of a not-measured verdict about `file` (ccrc-doctor.test.ts's `expectUndecided`). */
+  /** The platform's own clause of a not-measured verdict about `file` (ccrc-doctorFixture.ts's `expectUndecided`). */
   const expectUndecided = (detail: string, file: string): void => {
     expect(detail).toContain(file);
     expect(detail).toContain('was not measured');

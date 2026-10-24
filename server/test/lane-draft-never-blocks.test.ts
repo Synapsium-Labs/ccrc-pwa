@@ -21,6 +21,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { renderMailNudge } from '../src/coord/envelope.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import { ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import { configDirFor } from '../src/config.js';
 import type { PushPayload } from '../src/push.js';
@@ -215,7 +216,7 @@ describe("dispatch's `/clear` stashes a draft (D-5912)", () => {
       ...base, coord,
       fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-add', 'ensure', 'ws-hold', ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_CAP],
         rosterFp: null, build: null },
-      configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
+      configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
     };
     const out = await dispatchRun(deps, opened.id, 'go', undefined, undefined);
     expect(out).toMatchObject({ ok: true, resumed: true, clearedAt: expect.any(Number) });
@@ -243,7 +244,7 @@ interface Site { file: string; fn: string; policy: Policy }
  *  operator-initiated send refuses or replaces it, as the operator asked. A new call is red until it is classified
  *  here. The definition in `inject/send.ts` is not a call. */
 const CALL_SITES: readonly Site[] = [
-  { file: 'coord/dispatch.ts', fn: 'dispatchRun', policy: 'stash' },              // the wave N>=2 `/clear`
+  { file: 'inject/send.ts', fn: 'clearSender', policy: 'stash' },                 // the wave N>=2 `/clear`, dispatch's `sendClear` port (ARCH-22)
   { file: 'server.ts', fn: 'POST /api/sessions/:id/prompt', policy: 'refuse-or-replace' },   // the PWA's human send
   { file: 'watch.ts', fn: 'idleNudgeOne', policy: 'stash' },                     // the idle compact nudge
   { file: 'watch.ts', fn: 'sweepMail', policy: 'stash' },                        // every mail
@@ -321,8 +322,8 @@ describe('every `sendPrompt` call is classified (D-5912)', () => {
   });
 
   it('…and a lane that drops `stash` is red', () => {
-    const files = srcFiles().map((f) => f.rel === 'coord/dispatch.ts'
+    const files = srcFiles().map((f) => f.rel === 'inject/send.ts'
       ? { ...f, text: f.text.replace("'/clear', { onDraft: 'stash' })", "'/clear')") } : f);
-    expect(tableFaults(callSites(files))).toEqual(['coord/dispatch.ts dispatchRun: onDraft (none) breaks policy stash']);
+    expect(tableFaults(callSites(files))).toEqual(['inject/send.ts clearSender: onDraft (none) breaks policy stash']);
   });
 });

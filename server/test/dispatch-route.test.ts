@@ -14,6 +14,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import type { Runner } from '../src/exec.js';
 import { ACTOR_FLAGS_CAP, CCD_ARGV, ROUTE_ARGV_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import { configDirFor } from '../src/config.js';
@@ -100,7 +101,7 @@ const harness = async (cfg: HarnessCfg = {}) => {
   const deps: DispatchRunDeps = {
     ...base, coord,
     fleetState: { connected: true, downSince: null, ccdVerbs: cfg.ccdVerbs ?? DEFAULT_VERBS, rosterFp: null, build: null },
-    configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
+    configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
   };
   return {
     coord, deps, runId: opened.id, calls,

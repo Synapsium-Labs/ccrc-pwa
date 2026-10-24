@@ -1,7 +1,8 @@
 // D-5089 (plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 1): `askLive`, the pure reading the sheet
 // takes off a live AskUserQuestion pane. Which of the envelope's questions the pane is painting (`liveQuestion`), the
-// one its title names when labels cannot say (`namedQuestion`), the review screen (`isAskReview`) and its summary read
-// from `raw` (`reviewSummary`), and the free-text row (`freeTextSlot`).
+// one its title names when labels cannot say (`namedQuestion`), the review screen (`isAskReview`), and the free-text
+// row (`freeTextSlot`). D-6325: `paneQuestion` and `reviewSummary` are gone with their cases: they read the pane's text
+// for a renderer, and no surface may show it (`askSource`, `ask-source.test.ts`).
 //
 // Every screen is a recorded one (`askPanes.ts`, copied from `parseDialog` and kept equal to it by
 // `server/test/dialog.test.ts`), named by its fixture. A shape no recording shows is DERIVED from one in the test, and
@@ -13,11 +14,9 @@ import {
   isAskReview,
   liveQuestion,
   namedQuestion,
-  paneQuestion,
   paneTicks,
   questionCorresponds,
   questionKey,
-  reviewSummary,
   rowText,
   slotHolds,
   slotHoldsPart,
@@ -256,59 +255,6 @@ describe('isAskReview: the review screen, told by its body\'s last line and its 
   });
 });
 
-describe('reviewSummary: the review\'s lines, read from raw (D-5089)', () => {
-  it('a skipped question: the warning, then each answered question and its answer, and no ready line', () => {
-    expect(reviewSummary(pane('cc300-ask-review-skipped'))).toEqual([
-      '⚠ You have not answered all questions',
-      '',
-      ' ● Which pets do you like?',
-      '   → Dogs',
-      ' ● Which mode?',
-      '   → Safe',
-    ]);
-  });
-
-  it('the heading goes (it is the sheet\'s title), and so does the indent every line shares', () => {
-    expect(reviewSummary(pane('cc300-ask-review-same-labels'))).toEqual([
-      '● Enable caching?',
-      '  → Yes',
-      '● Enable tracing?',
-      '  → - only in staging, sampled 10%',
-    ]);
-  });
-
-  it('a review taller than the parser\'s climb is read whole, from the tab row down', () => {
-    const d = pane('cc300-ask-review-4q-long');
-    expect(d.body).not.toContain('→ Postgres');
-    const lines = reviewSummary(d);
-    expect(lines[0]).toBe('● Should the `ledger` table use **Postgres** or SQLite?');
-    expect(lines).toContain('  → Postgres');
-    expect(lines[2]).toMatch(/^│ ● When the new release is ready/);
-    expect(lines.at(-1)).toMatch(/END-C$/);
-    expect(lines.some((l) => /ready to submit/i.test(l) || /^review your answers$/i.test(l.trim()))).toBe(false);
-  });
-
-  it('a raw with no tab row starts after the rule (DERIVED)', () => {
-    const review = pane('cc300-ask-review-same-labels');
-    const tabRow = '←  ☒ Caching  ☒ Tracing  ✔ Submit  →';
-    expect(review.raw).toContain(tabRow);
-    const noTabs = { ...review, raw: review.raw.replace(`${tabRow}\n`, '') };
-    expect(reviewSummary(noTabs)).toEqual(reviewSummary(review));
-  });
-
-  it('the LAST ready line is the review\'s (DERIVED: the same words said in chat above it)', () => {
-    const review = pane('cc300-ask-review-same-labels');
-    const anchor = 'Afterwards reply with the raw answers only.';
-    expect(review.raw).toContain(anchor);
-    const chatty = { ...review, raw: review.raw.replace(anchor, `${anchor}\n\nReady to submit your answers?`) };
-    expect(reviewSummary(chatty)).toEqual(reviewSummary(review));
-  });
-
-  it('a screen with no ready line has no summary', () => {
-    expect(reviewSummary(pane('cc300-ask-q1-of-2'))).toEqual([]);
-  });
-});
-
 describe('freeTextSlot: the free-text row under the question\'s n options (D-5090)', () => {
   it('the empty row at n+1', () => {
     expect(freeTextSlot(pane('cc300-ask-same-labels-q2'), 2)).toEqual({ kind: 'empty', index: 3 });
@@ -395,32 +341,5 @@ describe('questionKey: the question a free-text row belongs to, whatever the row
       options: drink.options.map((o) => (o.index === 2 ? { ...o, label: 'Cocoa' } : o)),
     });
     expect(questionKey(relabelled, 3)).not.toBe(questionKey(drink, 3));
-  });
-});
-
-describe('paneQuestion: the question and what the pane painted above it, without the ask\'s chrome (D-5089)', () => {
-  it('drops the tab row and the question\'s own row', () => {
-    expect(paneQuestion(pane('cc300-ask-q2-of-2-single'))).toEqual({ question: 'Which drink?', preamble: '' });
-    expect(paneQuestion(pane('cc300-ask-markdown-question')))
-      .toEqual({ question: 'Should the `ledger` table use **Postgres** or SQLite?', preamble: '' });
-  });
-
-  it('a wrapped question is its barred rows, joined, bars gone', () => {
-    expect(paneQuestion(pane('cc300-ask-wrapped-question')))
-      .toEqual({ question: FOUR_Q.questions[1]!.question, preamble: '' });
-  });
-
-  it('a one-question ask keeps its header above the question', () => {
-    expect(paneQuestion(pane('cc300-ask-1q-open'))).toEqual({ question: 'Which colour?', preamble: 'Colour' });
-    expect(paneQuestion(pane('ask-2col-chat-about')).preamble).toBe('Revised fix');
-  });
-
-  it('a body that never paints the title keeps the title and the whole body, the tab row aside (DERIVED)', () => {
-    expect(paneQuestion(screen('cc300-ask-q2-of-2-single', { title: 'Do you want to proceed?', body: 'Bash command\n\n  rm -rf build' })))
-      .toEqual({ question: 'Do you want to proceed?', preamble: 'Bash command\n\n  rm -rf build' });
-    expect(paneQuestion(screen('cc300-ask-q2-of-2-single', { body: undefined }))).toEqual({ question: 'Which drink?', preamble: '' });
-    // Only the LAST painting of the title is the question: an earlier line that reads the same is the pane's.
-    expect(paneQuestion(screen('cc300-ask-q2-of-2-single', { body: 'Which drink?\n\nFor the team call\n\nWhich drink?' })))
-      .toEqual({ question: 'Which drink?', preamble: 'Which drink?\n\nFor the team call' });
   });
 });

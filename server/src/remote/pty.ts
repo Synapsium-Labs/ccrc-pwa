@@ -17,10 +17,20 @@ function isPtyExit(msg: PtyData | PtyExit): msg is PtyExit {
  * registered early just wait). If `kill()` lands before the ptyId comes
  * back, the pty is closed the moment it's assigned rather than left running
  * on the agent.
+ *
+ * A closed `RemotePty` writes nothing (D-6368). It closes on `kill()`, on the
+ * agent's `exit` frame, on the exit `client.ts` synthesizes for every
+ * listener when the link drops, and on a failed open; the last three fire the
+ * exit listeners (at most once) so the drawer bridge can end its socket. The
+ * agent numbers ptys per connection from 1, so after a reconnect a stale
+ * RemotePty's id belongs to a different session's pty, and its keys must die
+ * here. No `close` frame goes out for an exited pty: the agent already
+ * dropped it, and after a reconnect that id may be someone else's.
  */
 export class RemotePty implements PtyLike {
   private ptyId: number | null = null;
   private closed = false;
+  private exited = false;
   private readonly dataListeners = new Set<(data: string) => void>();
   private readonly exitListeners = new Set<() => void>();
   private readonly queue: Array<(ptyId: number) => void> = [];
@@ -39,11 +49,12 @@ export class RemotePty implements PtyLike {
     try {
       const res = await this.client.request({ t: 'req', op: 'ptyOpen', sessionId, cols, rows });
       const id = (res as { ptyId?: unknown }).ptyId;
-      if (typeof id !== 'number') return;
+      if (typeof id !== 'number') { this.failOpen(); return; }
       ptyId = id;
     } catch {
-      // Disconnected or forbidden before we ever got a ptyId — the drawer
-      // just never receives data; nothing more to clean up.
+      // Disconnected or forbidden before we ever got a ptyId — nothing is
+      // left on the agent to clean up, but the drawer must hear it is dead.
+      this.failOpen();
       return;
     }
     if (this.closed) {
@@ -55,7 +66,11 @@ export class RemotePty implements PtyLike {
     this.ptyId = ptyId;
     this.client.onPty(ptyId, (msg) => {
       if (isPtyExit(msg)) {
-        for (const l of this.exitListeners) l();
+        // Closed first, then the client's listener released (`kill()` returns early once closed, so nothing else
+        // would), then the exit fires. No `close` frame: the agent already dropped this pty (D-6368).
+        this.closed = true;
+        this.client.offPty(ptyId);
+        this.fireExit();
         return;
       }
       const text = Buffer.from(msg.dataB64, 'base64').toString('utf8');
@@ -70,10 +85,8 @@ export class RemotePty implements PtyLike {
     return { dispose: () => this.dataListeners.delete(listener) };
   }
 
-  /** Not part of `PtyLike` (the local drawer bridge doesn't consume pty
-   *  exit) but exposed so callers that care can observe the agent's
-   *  `PtyExit` — the wire protocol carries it, and dropping it silently
-   *  would be a real signal thrown away. */
+  /** Part of `PtyLike` since D-6368: the drawer bridge closes its socket on it. Fires at most once, for the agent's
+   *  `PtyExit`, the exit the client synthesizes on a link drop, and a failed open; never for a `kill()`. */
   onExit(listener: () => void): { dispose(): void } {
     this.exitListeners.add(listener);
     return { dispose: () => this.exitListeners.delete(listener) };
@@ -100,6 +113,21 @@ export class RemotePty implements PtyLike {
     }
     // If the ptyId hasn't come back yet, `open()`'s closed-check above
     // sends the close as soon as it does.
+  }
+
+  /** The open never produced a pty: closed, the queued sends dropped, exit fired — unless `kill()` got there first
+   *  (a pty the bridge killed needs no exit). */
+  private failOpen(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.queue.length = 0;
+    this.fireExit();
+  }
+
+  private fireExit(): void {
+    if (this.exited) return;
+    this.exited = true;
+    for (const l of this.exitListeners) l();
   }
 
   private withPtyId(fn: (ptyId: number) => void): void {

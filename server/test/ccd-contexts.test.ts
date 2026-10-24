@@ -21,8 +21,8 @@ import {
   ccdHeredocBraces,
 } from './consolidationCensus.js';
 
-/** The cross-context reference count on the day this ratchet landed. May only go DOWN. */
-const BASELINE = 521;
+/** The cross-context reference count on the day this ratchet landed. May only go DOWN, except a new destructive verb: ws-orphan (D-6629) adds the same eight lifecycle-journal calls into C1 that ws-collect makes. */
+const BASELINE = 529;
 
 const nameOf = (text: string): string => /^([A-Za-z_][A-Za-z0-9_]*)\(/.exec(text)![1]!;
 
@@ -146,7 +146,7 @@ describe('ccd cross-context references: the ratchet (D-6054)', () => {
     // call. A K row is a kernel or platform helper every context uses; add one here only with that reason in the PR.
     expect(ccdContextRows().map((r) => r.text.split('\t')).filter(([, c]) => c === 'K').map(([n]) => n)).toEqual([
       '_plat_mv_notdir', '_plat_ln_swap', '_plat_ctime', '_plat_mtime', '_plat_size', '_plat_btime', '_plat_devino',
-      '_plat_bytes', '_plat_epoch_ms', '_plat_cp_replace', '_plat_mktemp', '_plat_mktemp_d', '_plat_mode',
+      '_plat_bytes', '_plat_epoch_ms', '_plat_workdirid_pane', '_plat_cp_replace', '_plat_mktemp', '_plat_mktemp_d', '_plat_mode',
       '_plat_date_to_epoch', '_plat_sha256', '_plat_sha256_check', '_plat_uuid', '_plat_ppid', '_plat_cgroup',
       '_plat_timeout', '_plat_timeout_capability', '_plat_timeout_strict', 'die', '_json_str', '_fmt_eta', '_now_s_to',
       '_now_s', '_file_read_to',

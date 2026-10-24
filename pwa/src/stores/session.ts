@@ -108,6 +108,15 @@ export interface SessionState {
    *  rationale and how it relates to (and takes display priority over)
    *  `dialog` above. */
   ask: HookAsk | null;
+  /** D-6325: has an `ask` or `ask_cleared` frame arrived on THIS connection? `ask` above survives a dropped socket
+   *  (the automatic reconnect never calls `disconnect()`), so by itself it cannot tell "no envelope" from "not yet
+   *  told": an ask surface treats the stream as `none` until this reads true (`askLive.ts`'s `askSource`). It is the
+   *  surface's LIVENESS: false when the store is created, the moment the socket is anything but open (the drop, and
+   *  every reconnect attempt, so before any open) and on `disconnect()`; a dialog frame never sets it. `dialog` falls
+   *  with it at the drop, so a menu kept from before it is never read as current. While it is false the sheet that was
+   *  showing stays up, read-only, and sends nothing (`the-ask-holds-through-a-reconnect`). Per connection, never
+   *  persisted. */
+  askFrameSeen: boolean;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
   /** D-5372: the tasks frame's `touchedAt` (newest task file mtime, epoch ms);
    *  absent when the frame carried none. Replaced with every tasks frame. */
@@ -177,6 +186,9 @@ export type SessionSnapshot = Pick<
   SessionState,
   'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'ask' | 'tasks' | 'tasksTouchedAt' | 'mail'
 > & {
+  /** D-6325. Optional HERE only, like `workflows`: `snapshotOf` always carries it, and a snapshot built without it (the
+   *  reducer's own suites) reads as false. */
+  askFrameSeen?: boolean;
   /** D-5560. Optional HERE only: `snapshotOf` always carries both, and a
    *  snapshot built without them (the reducer's own suites) reads as no rows. */
   workflows?: WorkflowView[];
@@ -292,10 +304,11 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     // initial state) null it out — `rotated` below touches events/uuid/offset
     // only, because a transcript switch does not itself mean a live menu (or
     // the hook's envelope for one) went away.
+    // Either frame is this connection's statement about the envelope, so either sets `askFrameSeen` (D-6325).
     case 'ask':
-      return { ...s, ask: msg.ask };
+      return { ...s, ask: msg.ask, askFrameSeen: true };
     case 'ask_cleared':
-      return { ...s, ask: null };
+      return { ...s, ask: null, askFrameSeen: true };
     case 'rotated':
       // FIVE transcript facts die with the transcript (final review, Minor 6;
       // `fileMeasured` joined them with the measured-read completion) — only
@@ -346,6 +359,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   statusUpdatedAt: s.statusUpdatedAt,
   dialog: s.dialog,
   ask: s.ask,
+  askFrameSeen: s.askFrameSeen,
   tasks: s.tasks,
   tasksTouchedAt: s.tasksTouchedAt,
   workflows: s.workflows,
@@ -364,6 +378,16 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
  *  can share this one narrowing rule. */
 const pathsOf = (p: { attachments?: PendingAttachment[] }): string[] | undefined =>
   p.attachments?.length ? p.attachments.map((a) => a.path) : undefined;
+
+/** D-6367, R38, R43: Retry sends `resume` (the server presses Enter on the box whole instead of typing again) when the
+ *  refusal may have left OUR text in the box. Every `enter-ignored` resumes, drafted or not: a landed send can still
+ *  be answered enter-ignored with a blind final read (no draft), and Retry must never type a second copy. The
+ *  server's resume answers `nothing-to-submit` over an empty box (types nothing), presses one Enter over our own
+ *  text, and answers `draft-present` over anything else. `verify-failed` resumes only with a non-empty draft. Every
+ *  other code retries as today, `type-failed` included: the server's `type-failed` refusal carries no draft, so it
+ *  retries without `resume` (R43 F3). */
+const retryResumes = (code: string | undefined, draft: string | undefined): boolean =>
+  code === 'enter-ignored' || (code === 'verify-failed' && typeof draft === 'string' && draft !== '');
 
 /** Object URLs die with the pending that owned them. */
 const revoke = (p: PendingSend | undefined): void => {
@@ -688,7 +712,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
     const dispatch = async (
       key: string,
       text: string,
-      opts: { replaceDraft?: boolean; attachments?: string[] } = {},
+      opts: { replaceDraft?: boolean; attachments?: string[]; resume?: boolean } = {},
     ): Promise<void> => {
       try {
         await apiImpl.prompt(id, text, opts);
@@ -753,6 +777,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       statusUpdatedAt: null,
       dialog: null,
       ask: null,
+      askFrameSeen: false,
       tasks: [],
       workflows: [],
       workflowsUnreadable: false,
@@ -818,7 +843,18 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
             return file === null ? since : `${since}&sinceFile=${encodeURIComponent(file)}`;
           },
           onMessage: (m) => get().apply(m as SessionStreamMsg),
-          onState: (conn) => set({ conn }),
+          // D-6325 (`the-ask-holds-through-a-reconnect`): the flag is the surface's LIVENESS, so it falls the moment the
+          // socket is anything but open, not only when the next one opens. A new connection has said nothing about the
+          // envelope yet: the `ask` the store holds is the last connection's, and it is not current until this one's
+          // first `ask` or `ask_cleared` frame sets the flag again. Every connect passes through a non-open state first
+          // (`ReconnectingSocket.connect` reports `connecting`, and a drop reports `down`), so the flag is already down
+          // before any open and `onOpen` below needs no reset of its own. From the drop to that first frame nothing is
+          // live: the sheet keeps what it showed, read-only (`DialogSheet`).
+          // `dialog` falls with it (review 843's F1): a new stream frames the menu it sees before its first `ask` frame,
+          // but never the absence of one, so a menu kept from before the drop would be read as current once that frame
+          // arrived, and offered live. The sheet's hold keeps its own copy. A connect whose first pane read fails shows no
+          // menu until the next tick frames one.
+          onState: (conn) => set(conn === 'open' ? { conn } : { conn, askFrameSeen: false, dialog: null }),
           // Re-stated on EVERY open, automatic reconnects included: the
           // server's presence registry is keyed per connection, so a reconnect
           // starts with no claim at all and a session the operator is still
@@ -851,9 +887,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // function — only an explicit teardown (leaving the session screen,
         // a swap/compact cycle) does. This is the belt to that fix's braces:
         // whatever the next connect delivers is authoritative, never a
-        // leftover from before the drop. `dialog` is untouched — the scraped
-        // channel has no analogous "was this fleet host still writing while
-        // we were gone" gap, since the pane is re-scraped fresh every poll.
+        // leftover from before the drop. `dialog` is not cleared here: a drop
+        // lowers it through the socket's own state (`onState`, D-6325),
+        // because a new stream frames the menu it sees but never the absence
+        // of one; after this explicit teardown nothing renders it.
         //
         // `mail` gets the identical belt-and-braces (fix round 1, finding 3's
         // named residual): `sessionws.ts`'s own per-connection sentinel now
@@ -891,7 +928,11 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // `workflows` too (D-5560): its server half states the first read on
         // every connect (`lastWorkflowsJson`), and an explicit teardown clears
         // the rows here so a finished workflow is never left on screen as running.
-        set({ ask: null, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false });
+        //
+        // `askFrameSeen` (D-6325) goes with the `ask` it qualifies: the next connection has not spoken yet.
+        set({
+          ask: null, askFrameSeen: false, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false,
+        });
       },
 
       async send(text, opts = {}) {
@@ -909,6 +950,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       retry(key) {
         const p = get().pending.find((x) => x.key === key);
         if (!p || p.state !== 'failed') return;
+        const resume = retryResumes(p.code, p.draft); // before the set below clears both
         // Spread, never re-list: an object literal here is exactly why
         // `attachments` used to vanish on retry, and it would swallow every
         // field added after it too.
@@ -918,7 +960,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
                               submittable: undefined, queued: undefined,
                               sentAfter: reSendBar(x, s.events) } : x),
         }));
-        void dispatch(key, p.text, { replaceDraft: p.replaceDraft, attachments: pathsOf(p) });
+        void dispatch(key, p.text, { replaceDraft: p.replaceDraft, attachments: pathsOf(p), ...(resume ? { resume } : {}) });
       },
 
       /** Re-send a pending in place after a draft conflict — same record, so the

@@ -86,6 +86,9 @@
 //   an input event's window never closes ............... the two insertText window-closes cases
 //   a keyCode-229 keydown's window never closes ........ the two 229 window-closes cases
 //   every keydown opens a window, a real key's too ..... the real-key case
+// and for D-6368 (RUN 2026-10-23 on this tree; RED):
+//   the line-feed mapping applied outside a window ..... the line-feed case (Ctrl+J, both views)
+//   insertedFrame passes a lone line feed raw .......... the line-feed case (both views), and the pure case
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react';
 import type { Terminal as XTerm } from '@xterm/xterm';
@@ -306,6 +309,11 @@ describe('insertedFrame: what an insertion is sent as', () => {
     expect(out.endsWith(PASTE_CLOSE)).toBe(true);
     expect(insertedFrame('a\nb')).toBe(typedFrame('a\nb'));
     expect(insertedFrame(PASTE_CLOSE), 'a lone end marker inserted is text').toBe('[201~');
+  });
+
+  it('a lone line feed is Enter (D-6368); a longer text holding one is still a paste', () => {
+    expect(insertedFrame('\n')).toBe(KEY_SEQ.enter);
+    expect(insertedFrame('a\nb')).toBe(typedFrame('a\nb'));
   });
 });
 
@@ -737,6 +745,25 @@ describe('text a keyboard inserts cannot end a bracketed paste or submit a line'
     expect(sent[0], 'the diff xterm read after the 229 keydown').toBe('hello');
     expect(sent).toHaveLength(2);
     expect(sent[1], 'a reply after the 229 insertion was framed as typed text: its window never closed').toMatch(DCS_REPLY);
+  });
+
+  // A PHONE'S RETURN (D-6368). The keyboard puts a line feed into xterm's
+  // textarea after a keyCode-229 keydown; xterm reads the growth a task later
+  // and sends it as data, a lone LF, which Claude Code reads as a newline, not
+  // a submit. Inside the window that 229 keydown opened it is Enter. A physical
+  // Ctrl+J is a keydown xterm sends at once, no window open, and stays an LF.
+  it.each(['wrapped', 'grid'] as const)('%s view: inside an insertion window a lone line feed is Enter; outside it Ctrl+J is unchanged', async (view) => {
+    const d = mount(view);
+    act(() => { fireEvent.keyDown(d.ta, { key: 'Unidentified', keyCode: 229 }); });
+    d.ta.value += '\n';
+    await tick();
+    await windowsClosed();
+    expect(d.ws.inputs(), 'a phone Return reaches the socket as Enter').toEqual(['\r']);
+    expect(d.ws.inputs().join(''), 'a lone line feed went out raw').not.toContain('\n');
+    realKey(d.ta, 'j', { ctrlKey: true });
+    await tick();
+    await windowsClosed();
+    expect(d.ws.inputs(), 'a physical Ctrl+J, outside any window, is still a line feed').toEqual(['\r', '\n']);
   });
 
   it('a real key opens no window: a reply that lands while the key is still being sent is untouched', async () => {

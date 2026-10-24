@@ -74,13 +74,15 @@
       // and is fine, Refined on everything else — by primary input, never by
       // width, and read once, here and in initSkin, never subscribed to. The
       // flag below mirrors Instrument's `preview` in skins.ts (it is the
-      // negation), so while Instrument is a preview the rule answers Refined
-      // on every device. The W2 commit that flips `preview` must flip it too.
+      // negation): Instrument is no longer a preview (S18), so it is true; were
+      // Instrument a preview again, the rule would answer Refined on every device.
+      // A commit that changes `preview` must change it too, and the test reds
+      // until it does.
       // A missing or throwing matchMedia means not a desk. This never throws.
       // The key, the choice, the query, both results and the flag are bound
       // to skins.ts by test/skin-boot.test.tsx, which also runs this script.
       try {
-        var AUTO_DESK = false;
+        var AUTO_DESK = true;
         var s = null;
         var desk = false;
         try { s = localStorage.getItem('ccrc-skin'); } catch {}

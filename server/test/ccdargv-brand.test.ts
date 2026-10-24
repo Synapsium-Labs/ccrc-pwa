@@ -77,6 +77,7 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
   'b5-aliased-namespace.ts':  { what: 'the CCD_ARGV namespace aliased, argv still raw', codes: ['TS2345'] },
   'b6-no-run-on-deps.ts':     { what: 'Deps carries no raw runner at all', codes: ['TS2339'] },
   'b7-collect-token-plain-string.ts': { what: "a plain string as ws-collect's token (spec §5.10)", codes: ['TS2345'] },
+  'b9-orphan-token-plain-string.ts': { what: "a plain string as ws-orphan's token (fleet disk retention, D-6630)", codes: ['TS2345'] },
   // D-5517, D-5751: not a CcdArgv bypass, but this is the suite that compiles `bypasses/` and holds each fixture to its
   // codes; the per-field cases are in the describe at the end of this file.
   'b8-roster-wire-open-string.ts': { what: "a plain string into RosterWire's lane-kind fields", codes: ['TS2322'] },

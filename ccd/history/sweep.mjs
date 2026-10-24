@@ -836,8 +836,9 @@ export function applyEventLine(db, c, ev) {
   if (rec.ev === 'SessionStart') return applyEpochLine(db, c, ev);
   if (rec.ev === 'recall') {
     const g = joinGeneration({ lineGen: rec.gen ?? null, observedGen: ev.obs.generation });
-    // This is a live drain observation after line/registry generation joining; replay never re-observes controls.
-    if (c.replay !== true && decideRecallOff({ file: recallOffPresence(c.home, rec.id), generation: g.generation }) === 'stale') bump(db, 'recall_off_stale');
+    // This is a live drain observation after line/registry generation joining; replay never re-observes controls. A line
+    // carrying `arm` is an eval call (W2-D43), excluded from live counters: it bumps nothing and reads no recall-off file.
+    if (c.replay !== true && typeof rec.arm !== 'string' && decideRecallOff({ file: recallOffPresence(c.home, rec.id), generation: g.generation }) === 'stale') bump(db, 'recall_off_stale');
     db.prepare('INSERT INTO recall_calls (event_key, ccrc_id, generation, ts_ms, verb, rc, ms, arm) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (event_key) DO NOTHING')
       .run(ev.key, rec.id, g.generation, ev.tsMs, rec.cmd, rec.rc, rec.ms, rec.arm ?? null);
     return g.via === 'line' ? [] : [journalRecord('verdict', c.now(), { event_key: ev.key, kind: 'generation-joined', ccrc_id: rec.id, generation: g.generation, via: g.via })];

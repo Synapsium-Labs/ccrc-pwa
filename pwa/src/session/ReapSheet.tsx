@@ -11,7 +11,7 @@ import type { ReactNode } from 'react';
 import type { FleetSession, ReapResult, WsAudit } from '../../../shared/api';
 import { Button, Sheet, toast } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
-import { childLine, sizeText } from './reapWords';
+import { childLine, reapCrumbText, sizeText } from './reapWords';
 import { ReapAuditRows } from './ReapAuditRows';
 import './chat.css';
 
@@ -162,7 +162,7 @@ export function ReapSheet({
             {/* The breadcrumb, said out loud. A retry after a killed reap used
                 to re-audit an empty directory and certify "0 files". */}
             {shown.reaping !== null && (
-              <p className="reap-refusal">{`Cleanup stopped part-way (${shown.reaping}).`}</p>
+              <p className="reap-refusal">{reapCrumbText(shown.reaping)}</p>
             )}
 
             <ReapAuditRows

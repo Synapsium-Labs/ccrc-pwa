@@ -22,6 +22,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, 
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { RECORDS_FORMAT, readRecordsDir } from '../../.github/ci/testmap.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
@@ -139,7 +140,7 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   });
 
   it('the required legs and the browser leg skip by STEP, only on a refresh or a rebuild', () => {
-    const leg = "${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
+    const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
     for (const id of ['test', 'build-pwa', 'browser-pwa']) {
       expect(job(id), `${id}: the job-level leg switch`).toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
       const s = steps(job(id));
@@ -162,7 +163,7 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
 
   // storybook-a11y is advisory, so it skips WHOLE (a job-level `if:`) where
   // the required legs skip step by step — but on the very predicate their
-  // `CCRC_LEG` switch reads, so a push to main runs no test leg of any kind.
+  // `CCRC_LEG` switch reads, so an hourly refresh runs no test leg of any kind.
   // Derived from the `test` leg's own switch: change one predicate without the
   // other and this goes red.
   it('storybook-a11y skips on the required legs\' own refresh/rebuild predicate, and never on a merge-queue run', () => {
@@ -178,8 +179,10 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     // Comment lines are not calls: the job's own comments name `npx` to say why it is absent.
     const code = (st: string): string => st.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     for (const st of s) expect(code(st), `storybook-a11y: an npx call:\n${st}`).not.toMatch(/\bnpx\b/);
-    expect(job('storybook-a11y'), 'the checkout leaves its token in .git/config')
-      .toMatch(/^ {6}- uses: actions\/checkout@v4\n {8}with:\n {10}persist-credentials: false$/m);
+    // A version pin is a deliberate edit, so a future bump reds it again
+    // (D-6739: the pins name the majors #364 moved to).
+    expect(job('storybook-a11y'), 'the checkout leaves its token behind')
+      .toMatch(/^ {6}- uses: actions\/checkout@v7\n {8}with:\n {10}persist-credentials: false$/m);
   });
 
   // ONE AXE RUN PER SKIN (D-5093, its verification clause). The ids are read
@@ -471,12 +474,12 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
 });
 
 describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23 §3, §4.3)', () => {
-  it('triggers: pull_request, main pushes, a daily schedule, dispatch and call — both with a mode', () => {
+  it('triggers: pull_request, a daily and an hourly schedule, dispatch and call — both with a mode, and no push (D-6769)', () => {
     const on = section(read(CI), 'on');
-    expect(on).toMatch(/^ {2}push:\n {4}branches: \[main\]$/m);
+    expect(on, 'a push to main starts no run: the refresh is hourly').not.toMatch(/^ {2}push:/m);
     expect(on).toMatch(/^ {2}pull_request:$/m);
-    expect(on).toMatch(/^ {2}schedule:\n {4}- cron: '17 3 \* \* \*'$/m);
-    expect(on).toMatch(/^ {2}workflow_dispatch:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: choice\n {8}options: \[full, rebuild\]\n {8}default: full$/m);
+    expect(on).toMatch(/^ {2}schedule:\n {4}- cron: '17 3 \* \* \*'\n {4}- cron: '23 \* \* \* \*'$/m);
+    expect(on).toMatch(/^ {2}workflow_dispatch:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: choice\n {8}options: \[full, rebuild, refresh\]\n {8}default: full$/m);
     expect(on).toMatch(/^ {2}workflow_call:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: string$/m);
     expect(on, 'the stable gate reads this output').toMatch(/^ {8}value: \$\{\{ jobs\.full-suite\.outputs\.verdict \}\}$/m);
   });
@@ -525,7 +528,7 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
   });
 
   it('probe-macos runs on pull requests and the daily schedule only — never gating a called or dispatched full run', () => {
-    expect(jobKey(job('probe-macos'), 'if')).toBe("github.event_name == 'pull_request' || github.event_name == 'schedule'");
+    expect(jobKey(job('probe-macos'), 'if')).toBe("github.event_name == 'pull_request' || (github.event_name == 'schedule' && github.event.schedule != '23 * * * *')");
   });
 
   it('every job declares a deadline between 1 and 60 minutes', () => {
@@ -595,7 +598,55 @@ describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)'
   it('times-build merges the durations from the workspace root — the times CLI makes keys relative to its cwd', () => {
     const st = step(job('times-build'), 'Merge the durations');
     expect(st, 'a working-directory would make every key server-relative').not.toMatch(/working-directory:/);
-    expect(runScript(st)).toContain('node .github/ci/shards.mjs times --out "$RUNNER_TEMP/ci-cache/testtimes.json" "$RUNNER_TEMP"/times/*/times.json');
+    expect(runScript(st)).toContain('node .github/ci/shards.mjs times --out "$RUNNER_TEMP/ci-cache/testtimes.json" "${reports[@]}"');
+  });
+});
+
+// D-6740: download-artifact v5 and later extract a `pattern:` download that
+// matches ONE artifact straight into its path, with no `<name>/` directory;
+// several still land one directory each. Both readers are run here, as the
+// runner runs them, against both layouts.
+describe('ci.yml: times-build reads a single-artifact pattern download too (D-6740)', () => {
+  function merge(layout: Record<string, string>): { status: number | null, stdout: string, argv: string, rt: string } {
+    const ws = mkTmp('ccrc-ci-times-');
+    const rt = join(ws, 'rt');
+    for (const [rel, body] of Object.entries(layout)) {
+      mkdirSync(path.dirname(join(rt, 'times', rel)), { recursive: true });
+      writeFileSync(join(rt, 'times', rel), body);
+    }
+    mkdirSync(join(rt, 'times'), { recursive: true });
+    const bin = fakeBin({ node: 'printf "%s\\n" "$@" > "$NODE_LOG"' });
+    const log = join(ws, 'node.log');
+    const r = runStep(step(job('times-build'), 'Merge the durations'), ws, { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: rt, NODE_LOG: log });
+    return { status: r.status, stdout: r.stdout, argv: existsSync(log) ? readFileSync(log, 'utf8') : '', rt };
+  }
+  const head = (rt: string): string => `.github/ci/shards.mjs\ntimes\n--out\n${rt}/ci-cache/testtimes.json\n`;
+
+  it('one artifact, extracted straight into the path: shards.mjs is handed times/times.json', () => {
+    const r = merge({ 'times.json': '{}' });
+    expect(r.status, r.stdout).toBe(0);
+    const rt = r.rt;
+    expect(r.argv).toBe(`${head(rt)}${rt}/times/times.json\n`);
+  });
+
+  it('two artifacts, one directory each: shards.mjs is handed both, and nothing else', () => {
+    const r = merge({ 'times-1/times.json': '{}', 'times-2/times.json': '{}' });
+    expect(r.status, r.stdout).toBe(0);
+    const rt = r.rt;
+    expect(r.argv).toBe(`${head(rt)}${rt}/times/times-1/times.json\n${rt}/times/times-2/times.json\n`);
+  });
+
+  it('a times.json in the path beside per-artifact directories is not handed a second time', () => {
+    const r = merge({ 'times.json': '{}', 'times-1/times.json': '{}', 'times-2/times.json': '{}' });
+    expect(r.status, r.stdout).toBe(0);
+    expect(r.argv).toBe(`${head(r.rt)}${r.rt}/times/times-1/times.json\n${r.rt}/times/times-2/times.json\n`);
+  });
+
+  it('no times.json in either layout fails the step, and shards.mjs is never handed an unmatched glob', () => {
+    const r = merge({ 'times-1/other.json': '{}' });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('::error::no shard left a times.json');
+    expect(r.argv, 'shards.mjs never ran').toBe('');
   });
 });
 
@@ -709,7 +760,13 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
   // testmap.mjs exits 3 (a traced test newly fails under trace) or 4 (a floor test written unknown) only AFTER it
   // has written the map. The Build step records the code and carries on, so the map is published; the job's last
   // step turns it red. Any other exit (a crash: no map) stops the step there.
-  function buildRepo(): { ws: string, rt: string } {
+  /** The records download as the runner leaves it: `records-<n>/records.json` per artifact, or, for ONE artifact
+   *  under download-artifact v5 and later, `records.json` straight in the path (D-6740). Each file is a real
+   *  records file holding one test of its own, so what testmap.mjs reads from the flat directory can be checked. */
+  const emptyDep = { read: [], probed: [], listed: [], subtree: [], git: false };
+  const recordsFile = (test: string): string => JSON.stringify({ format: RECORDS_FORMAT,
+    baseline: { root: emptyDep, rest: emptyDep }, tests: { [test]: { root: emptyDep, rest: emptyDep, unknown: false } } });
+  function buildRepo(records: string[] = ['records-1/records.json']): { ws: string, rt: string } {
     const ws = mkTmp('ccrc-ci-mapbuild-');
     const g = (...a: string[]) => execFileSync('git', a, { cwd: ws, env: { ...process.env,
       GIT_AUTHOR_NAME: 'ccrc fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
@@ -724,17 +781,20 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     writeFileSync(join(ws, '.github', 'ci', 'select-tests.mjs'), read('.github/ci/select-tests.mjs'));
     g('add', '-A'); g('commit', '-qm', 'fixture');
     const rt = join(ws, 'rt');
-    mkdirSync(join(rt, 'records', 'records-1'), { recursive: true });
-    writeFileSync(join(rt, 'records', 'records-1', 'records.json'), '{}');
+    for (const rel of records) {
+      mkdirSync(path.dirname(join(rt, 'records', rel)), { recursive: true });
+      writeFileSync(join(rt, 'records', rel), recordsFile(`server/test/${rel}`));
+    }
+    mkdirSync(join(rt, 'records'), { recursive: true });
     return { ws, rt };
   }
   // node: `-e` answers the matrix length (1); the live list runs the REAL node on the copied select-tests.mjs; the
   // testmap call logs its arguments and exits $FAKE_RC.
-  const fakeNode = () => fakeBin({ node: 'if [ "$1" = "-e" ]; then echo 1; exit 0; fi\n'
+  const fakeNode = () => fakeBin({ node: 'if [ "$1" = "-e" ]; then echo "$WANT"; exit 0; fi\n'
     + 'if [ "$1" = .github/ci/select-tests.mjs ] && [ "$2" = live-tests ]; then exec "$REAL_NODE" "$@"; fi\n'
     + 'echo "$*" >> "$NODE_LOG"\nexit "$FAKE_RC"' });
-  function build(rc: number, opts: { trace?: string, mapSha?: string, handedMap?: boolean } = {}) {
-    const { ws, rt } = buildRepo();
+  function build(rc: number, opts: { trace?: string, mapSha?: string, handedMap?: boolean, records?: string[], want?: number } = {}) {
+    const { ws, rt } = buildRepo(opts.records);
     if (opts.handedMap) {
       mkdirSync(join(rt, 'select-inputs'), { recursive: true });
       writeFileSync(join(rt, 'select-inputs', 'testmap.json'), '{}');
@@ -742,10 +802,13 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     const r = runStep(step(job('map-build'), 'Build the map'), ws, {
       PATH: `${fakeNode()}:${process.env.PATH}`, RUNNER_TEMP: rt, TRACE: opts.trace ?? 'rebuild', MAP_SHA: opts.mapSha ?? '',
       TRACE_MATRIX: '{"include":[{}]}', GITHUB_SHA: 'f'.repeat(40), FAKE_RC: String(rc), NODE_LOG: join(ws, 'node.log'),
-      GITHUB_WORKSPACE: ws, REAL_NODE: process.execPath,
+      GITHUB_WORKSPACE: ws, REAL_NODE: process.execPath, WANT: String(opts.want ?? 1),
     });
+    const flatDir = join(rt, 'flat');
     return {
       ...r,
+      flat: existsSync(flatDir) ? readdirSync(flatDir).sort() : [],
+      read: () => Object.keys(readRecordsDir(flatDir).tests).sort(),
       log: existsSync(join(ws, 'node.log')) ? readFileSync(join(ws, 'node.log'), 'utf8') : '',
       live: existsSync(join(rt, 'live.txt')) ? readFileSync(join(rt, 'live.txt'), 'utf8') : null,
     };
@@ -761,6 +824,37 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     expect(r.log).toMatch(/ --live \S+\/live\.txt /);
   });
 
+  // D-6740: both layouts, counted exactly against the matrix, never twice.
+  it('one artifact, extracted straight into the path: its records.json is collected and counts as the one shard', () => {
+    const r = build(0, { records: ['records.json'], want: 1 });
+    expect(r).toMatchObject({ status: 0, output: 'rc=0\n' });
+    expect(r.flat).toEqual(['records.json']);
+    expect(r.read(), 'testmap.mjs reads the collected file').toEqual(['server/test/records.json']);
+  });
+
+  it('two artifacts, one directory each: both are collected under their shard names and count as two', () => {
+    const r = build(0, { records: ['records-1/records.json', 'records-2/records.json'], want: 2 });
+    expect(r).toMatchObject({ status: 0, output: 'rc=0\n' });
+    expect(r.flat).toEqual(['records-1.json', 'records-2.json']);
+    expect(r.read()).toEqual(['server/test/records-1/records.json', 'server/test/records-2/records.json']);
+  });
+
+  it('a records.json in the path beside per-artifact directories is not counted a second time', () => {
+    const r = build(0, { records: ['records.json', 'records-1/records.json', 'records-2/records.json'], want: 2 });
+    expect(r).toMatchObject({ status: 0, output: 'rc=0\n' });
+    expect(r.flat).toEqual(['records-1.json', 'records-2.json']);
+  });
+
+  it('the count is still exact in either layout: fewer records than the matrix fails the step, and writes no map', () => {
+    const one = build(0, { records: ['records.json'], want: 2 });
+    expect(one.status).toBe(1);
+    expect(one.stdout).toContain('::error::1 of 2 trace shards left records');
+    expect(one.log, 'testmap.mjs never ran').toBe('');
+    const none = build(0, { records: [], want: 1 });
+    expect(none.status).toBe(1);
+    expect(none.stdout).toContain('::error::0 of 1 trace shards left records');
+  });
+
   it('exit 0, 3 or 4 from testmap.mjs: the step succeeds and says which; any other exit fails it', () => {
     expect(build(0)).toMatchObject({ status: 0, output: 'rc=0\n' });
     expect(build(3)).toMatchObject({ status: 0, output: 'rc=3\n' });
@@ -774,20 +868,32 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     expect(build(0, { trace: 'refresh', mapSha: 'a'.repeat(40), handedMap: true }).log).toMatch(/^\.github\/ci\/testmap\.mjs refresh --sha f{40} --old \S+\/select-inputs\/testmap\.json /m);
   });
 
-  it('the map is uploaded whatever the build said, and a last step turns the job red when it said 3 or 4', () => {
+  it('the map is uploaded whatever the build said, and a last step REPORTS a 3 or a 4 without failing the job (D-6769)', () => {
     const b = job('map-build');
     const names = steps(b).map((st) => /^ {6}- (?:name: (.*)|uses: .*)$/m.exec(st)?.[1] ?? '');
     const upload = names.indexOf('Keep the map as an artifact');
-    const red = names.indexOf('Red if the map build reported news');
+    const report = names.indexOf('Report what the map build found');
     expect(upload).toBeGreaterThan(-1);
-    expect(red).toBe(names.length - 1);
-    expect(red).toBeGreaterThan(upload);
+    expect(report).toBe(names.length - 1);
+    expect(report).toBeGreaterThan(upload);
     expect(step(b, 'Build the map')).toMatch(/^ {8}id: build$/m);
-    const last = step(b, 'Red if the map build reported news');
+    const last = step(b, 'Report what the map build found');
     expect(last).toMatch(/^ {8}if: steps\.build\.outputs\.rc != '0'$/m);
-    expect(runScript(last)).toMatch(/\nexit 1\n$/);
+    const script = runScript(last);
+    expect(script, 'the news is an annotation').toContain('::warning::');
+    expect(script, 'and a job summary').toContain('>> "$GITHUB_STEP_SUMMARY"');
+    expect(script, 'and it never fails the job').not.toMatch(/^\s*exit\b|::error::/m);
     // The upload is gated by the pre-upload check only — never by the build's code.
     expect(step(b, 'Keep the map as an artifact')).not.toContain('steps.build');
+  });
+
+  it('the refresh is hourly and coalesced: its own group, never cancelled, and every refresh predicate names the hourly cron (D-6769)', () => {
+    const src = read(CI);
+    const g = /^ {2}group: (.*)$/m.exec(section(src, 'concurrency'))?.[1] ?? '';
+    expect(g).toContain("(github.event.schedule == '23 * * * *' || inputs.mode == 'refresh') && 'refresh'");
+    expect(section(src, 'concurrency')).toMatch(/cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
+    expect(step(job('select'), 'Select')).toContain("INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 * * * *' && 'refresh') || '' }}");
+    expect(src).not.toMatch(/github\.event_name == 'push'/);
   });
 });
 
@@ -882,7 +988,7 @@ describe('ci.yml: the daily run\'s "already green?" question fails SAFE (design 
 
   it('asks main-artifact.mjs green-full-suite, on the schedule only, with the token the module reads', () => {
     const st = step(job('select'), 'Does this commit already carry a green full-suite?');
-    expect(st).toMatch(/^ {8}if: github\.event_name == 'schedule'$/m);
+    expect(st).toMatch(/^ {8}if: github\.event_name == 'schedule' && github\.event\.schedule != '23 \* \* \* \*'$/m);
     expect(st).toMatch(/^ {8}env:\n {10}GITHUB_TOKEN: \$\{\{ github\.token \}\}\n {10}REPO: \$\{\{ github\.repository \}\}\n {10}REPO_ID: \$\{\{ github\.repository_id \}\}\n {10}SHA: \$\{\{ github\.sha \}\}\n {8}run: \|$/m);
     expect(ask('echo found=true').log).toBe(`.github/ci/main-artifact.mjs green-full-suite --repo o/r --repo-id 1001 --sha ${'f'.repeat(40)}\n`);
   });
@@ -1002,7 +1108,7 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
   });
 
   it('skips by STEP, only on a refresh or a rebuild, like the required legs', () => {
-    const leg = "${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
+    const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
     const b = job('node-floor');
     expect(b, 'the job-level leg switch').toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
     const s = steps(b);
@@ -1069,8 +1175,10 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
   it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {
     const s = steps(job('browser-pwa'));
     expect(s, 'the browser leg has exactly five steps').toHaveLength(5);
-    expect(s[0]).toMatch(/^ {6}- uses: actions\/checkout@v4\n/);
-    expect(s[1]).toMatch(/^ {6}- uses: actions\/setup-node@v4\n/);
+    // A version pin is a deliberate edit, so a future bump reds it again
+    // (D-6739: the pins name the majors #364 moved to).
+    expect(s[0]).toMatch(/^ {6}- uses: actions\/checkout@v7\n/);
+    expect(s[1]).toMatch(/^ {6}- uses: actions\/setup-node@v7\n/);
     expect(s[1]).toMatch(/^ {10}node-version: '22'$/m);
     expect(s[1]).toMatch(/^ {10}cache-dependency-path: pwa\/package-lock\.json$/m);
     expect(step(job('browser-pwa'), 'Install')).toMatch(/^ {8}working-directory: pwa\n {8}run: npm ci\n/m);

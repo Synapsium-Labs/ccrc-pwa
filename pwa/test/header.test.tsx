@@ -1247,7 +1247,7 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
     render(<SessionScreen id="project-a-quiet-basin" store={store} fleet={fleet} />);
     act(() => {
       store.setState({
-        uuid: 'u1', status: 'idle',
+        uuid: 'u1', status: 'idle', askFrameSeen: true,
         dialog: {
           id: 'd-1', title: 'Which branch?',
           options: [{ index: 1, label: 'main' }, { index: 2, label: 'release' }],

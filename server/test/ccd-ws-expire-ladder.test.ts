@@ -350,8 +350,10 @@ describe('rung 5, a process whose working directory is the worktree — `in-use`
     ].join(' ');
     const eacces = path.join(h.home, 'fp', '4304');
     try {
-      const alone = expireEvalOf(h, { pre: `${FAKE(wt)} rm -rf "$HOME/fp/4242"; ${skipped}` });
-      expect(alone.verdict, alone.detail).toBe('expirable');
+      if (process.platform === 'linux') {
+        const alone = expireEvalOf(h, { pre: `${FAKE(wt)} rm -rf "$HOME/fp/4242"; ${skipped}` });
+        expect(alone.verdict, alone.detail).toBe('expirable');
+      }
       const withStranger = expireEvalOf(h, { pre: `${FAKE(wt)} ${skipped}` });
       expect(withStranger.verdict, withStranger.detail).toBe('in-use');
       expect(withStranger.detail).toContain('process 4242 ');
@@ -363,7 +365,7 @@ describe('rung 5, a process whose working directory is the worktree — `in-use`
 
   it('`$BASHPID` is skipped apart from `$$`: a process whose parent is the scanning subshell is not a user', () => {
     const { wt } = makeArchived(h);
-    const asked = (child: string): string => h.sh(`${EXP_STUBS} ${FAKE(wt)} rm -rf "$HOME/fp/4242"; _ws_reclaim_reset;`
+    const asked = (child: string): string => h.sh(`${EXP_STUBS} rm -rf "$HOME/fp"; ${FAKE(wt)} rm -rf "$HOME/fp/4242"; _ws_reclaim_reset;`
       + ` ( ${child} _ws_expire_cwd_users ${EXP_ID} "${wt}"; printf '%s' "$REAP_VERDICT" )`);
     expect(asked('_fp 4310 "' + real(wt) + '" $BASHPID;'), 'a child of the subshell that scans (BASHPID != $$ here)').toBe('');
     expect(asked('_fp 4310 "' + real(wt) + '" 1;'), 'the CONTROL: the same process under another parent').toBe('in-use');

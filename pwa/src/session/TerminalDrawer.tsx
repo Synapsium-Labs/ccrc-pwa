@@ -51,7 +51,7 @@ import {
   type DrawerViewKind, type StorageLike,
 } from './drawerView';
 import { KeyBar, useKeyInput } from './KeyBarView';
-import { insertedFrame, inputLetter, keyLetter, typedFrame } from './typedFrame';
+import { insertedFrame, inputLetter, keyLetter, reattachVerdict, typedFrame } from './typedFrame';
 import { WrappedView } from './WrappedView';
 import './chat.css';
 
@@ -93,6 +93,10 @@ export function TerminalDrawer({
   const [conn, setConn] = useState<Conn>('connecting');
   // Bumped by Reconnect — re-runs the attach effect for a fresh fit + dial.
   const [attempt, setAttempt] = useState(0);
+  // When the drawer last re-attached by itself on a pty-exit close (D-6368). A
+  // ref, because the re-attach re-runs the attach effect and the bound has to
+  // outlive that run.
+  const lastReattachRef = useRef<number | null>(null);
   // The xterm host, held as STATE via callback ref: the sheet portals its
   // content in a later commit than this component's effects, so a plain ref
   // would still be null when the attach effect first runs. Keying the effect
@@ -432,7 +436,22 @@ export function TerminalDrawer({
     ws.onmessage = (ev: MessageEvent) => {
       if (typeof ev.data === 'string') term.write(ev.data); // raw utf8 frames
     };
-    ws.onclose = down;
+    // A pty-exit close re-attaches (D-6368) through the same `attempt` bump the
+    // Reconnect button uses, so the effect re-run sets 'connecting' before
+    // anything renders: no 'connection lost' flashes first. Inside the bound, or
+    // for any other close (a missing event or code included), it is today's
+    // connection-lost state and its Reconnect. Browsers fire `onerror` before
+    // `onclose` for a dead socket, never for a clean server close, so a 4000
+    // reaches here alone.
+    ws.onclose = (ev?: CloseEvent) => {
+      const now = Date.now();
+      if (reattachVerdict(ev?.code, lastReattachRef.current, now)) {
+        lastReattachRef.current = now;
+        setAttempt((a) => a + 1);
+        return;
+      }
+      down();
+    };
     ws.onerror = down;
     // ONLY when this socket is not already carrying the session (review F2).
     // The gate runs at UPGRADE time, so an open pty survives an auth-lost

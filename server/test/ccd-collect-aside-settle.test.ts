@@ -31,6 +31,7 @@ import {
 } from './collectRaceFixture.js';
 import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
 import { EXP_ID, expireEvalOf, expireVerb, makeArchived } from './wsExpireFixture.js';
+import { DARWIN_IDENT_SHIMS, DARWIN_LSOF_STUB } from './worktreeIdentityFixture.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-collect-aside-settle-'); });
@@ -92,10 +93,11 @@ const MOVE_BACK_DENIED = `mv() { if [[ "\${@: -1}" == "$REG/tmproots/${COL_ID}" 
  *  the move back is tried, and the NOREPLACE rename refuses to replace it. */
 const MOVE_BACK_LOSES = `mv() { if [[ "\${@: -1}" == "$REG/tmproots/${COL_ID}" ]]; then`
   + ` sed 's/ run=8 / run=9 /' "\${@: -2:1}" > "\${@: -1}"; fi; command mv "$@"; };`;
-const DARWIN = 'CCD_OS=darwin; CCD_RECLAIM_TMPROOT_WAIT_S=0;';
+const DARWIN = `CCD_OS=darwin; CCD_RECLAIM_TMPROOT_WAIT_S=0; ${DARWIN_LSOF_STUB}`;
 /** On a Linux host the Darwin arm's `stat -f` reads the filesystem, not the file, so `_plat_devino` takes GNU's
- *  spelling there; on a Darwin host nothing is shimmed. */
-const DEVINO_SHIM = process.platform === 'darwin' ? '' : '_plat_devino() { stat -c \'%d:%i\' "$@"; };';
+ *  spelling there, and since path-identity W3 `_plat_btime` too (the tail's owned check measures identities): the
+ *  fixture's one host-conditional pair, `DARWIN_IDENT_SHIMS`. On a Darwin host nothing is shimmed. */
+const DEVINO_SHIM = DARWIN_IDENT_SHIMS;
 
 const childWitness = (): string => path.join(tmproots(), CHILD_ID);
 const childLeaf = (): string => path.join(h.home, '.cc-tmp', CHILD_ID);

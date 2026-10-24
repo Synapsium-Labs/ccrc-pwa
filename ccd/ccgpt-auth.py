@@ -1597,6 +1597,17 @@ def half_life_s(r: Reading) -> float:
     return float(EXPIRY_SKEW_S)
 
 
+def tier_access_token(auth_dir: str, lane: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """The LiteLLM tier's door (codex-bridge Stage 1, Task 6; D-6372): `ensure_fresh`, answered as the access token
+    and the account id. ccrc's LiteLLM patch calls this from the tier's `Authenticator.get_access_token`, so the
+    tier, the one refresher in litellm mode, refreshes under this library's lock, re-read and atomic commit, and
+    LiteLLM's own refresh, write and device flow are never reached. Raises AuthError, never a sign-in."""
+    r = ensure_fresh(auth_dir, lane=lane)
+    if not r.access_token:
+        raise Unreadable(r.detail)  # unreachable for a present reading (D-6541); never an empty bearer token
+    return (r.access_token, r.account_id)
+
+
 # ── the device-code sign-in ──────────────────────────────────────────────────────────────────────────────────────
 def _again(lane: str) -> str:
     return "nothing was saved; sign in again with ccrc codex login " + lane

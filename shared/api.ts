@@ -1204,7 +1204,7 @@ export interface WsAudit {
    *  It used to imply a refusal (drift was one); it no longer does, so a
    *  `reapable` verdict can carry `false` here. */
   headMatchesRegistry: boolean;
-  reaping: string | null;
+  reaping: ReapCrumb | null;   // ccd's `.reaping` breadcrumb, parsed once at the wire (`optReapCrumb`, at the foot); null when none stands
   /* ── THE SESSION BEHIND THE WORKSPACE ──────────────────────────────────────
    * Computed by ccd BEFORE `_ws_reap_eval`'s early refusal, unlike everything
    * in the `null MEANS NOBODY LOOKED` block below — a `not-archived` verdict
@@ -3526,7 +3526,7 @@ export function reviveWsAudit(v: unknown, sentence: string): WsAudit {
     repo: reqStr(o, 'repo'),
     exists: reqBool(o, 'exists'),
     headMatchesRegistry: reqBool(o, 'headMatchesRegistry'),
-    reaping: optStr(o, 'reaping'),
+    reaping: optReapCrumb(o, 'reaping'),
     // optBool/optStr, NOT reqBool — DELIBERATE, and decided beside the writer.
     // An older ccd on the fleet host omits all three; reqBool would throw and
     // the whole sheet would render nothing, against a rolled-back ccd or a
@@ -8225,7 +8225,7 @@ export interface LifecycleMeas {
   /** The prompt's exit status on a re-spawn (`cmd_ensure`, `ccd:11240`).
    *  Carried unconverted, like `archivedAt`. */
   readonly rc: number | null;
-  /** The start mode `cmd_start` resolved before spawning. */
+  /** The start mode `cmd_start` resolved; `ws-orphan` reuses it for its orphan class. */
   readonly mode: string | null;
   /** `${CCD_IN_UNIT:-0}` — whether `cmd_ensure` ran inside the supervising
    *  unit or as an outside request for one (`ccd:12035`). */
@@ -8244,8 +8244,8 @@ export interface LifecycleMeas {
   /** `_ws_wt_branch`'s exit status for the worktree being removed — decides
    *  whether there is a git-side record to clean up (`cmd_ws_rm`'s intent). */
   readonly registered: number | null;
-  /** A `ws-gc` sweep's classification of the row it is about to reclaim —
-   *  `dead-reg` or `orphan`, never anything else the encoder has seen. */
+  /** A `ws-gc` sweep's classification of the row it will reclaim — `dead-reg` or
+   *  `orphan`; `ws-orphan` reuses the key for `rescue` or `plain`. */
   readonly state: string | null;
   /** How many bytes `ws-reap` measured before destroying the worktree, or
    *  `null` when `_ws_gc_bytes` did not return a plain integer. */
@@ -9188,6 +9188,13 @@ export const PINNED_WINDOW_COLS = 220;
 export const PINNED_WINDOW_ROWS = 50;
 
 /**
+ * The close code the pty bridge (`/ws/pty/:id`) ends the drawer's socket with when its pty exits (D-6368): the pty's
+ * own exit, the agent link's synthesized exit on a drop, and a failed open alike. The drawer re-attaches once on it
+ * (`TerminalDrawer.tsx`); any other close keeps the connection-lost state and its Reconnect.
+ */
+export const PTY_EXIT_CLOSE = 4000;
+
+/**
  * The rows tmux takes from every attached client for its status line. A client
  * of R rows views a window of R − TMUX_STATUS_ROWS rows exactly (spec 2026-10-14
  * W8), so a drawer that attaches at PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS is the
@@ -9339,7 +9346,7 @@ export const READER_MIN_COLS = 120;
  * hand-typed SQL tuple of any of these words.
  * ------------------------------------------------------------------------- */
 
-/** A release channel (decision 2): `dev` is every merge, `stable` a promotion
+/** A release channel (decision 2): `dev` is every merge that changes what ships, `stable` a promotion
  *  of an existing release. No we-do-not-know member, on purpose: a channel
  *  token this build cannot name reads `null` (the ClaimState stance, §6) and
  *  the resolver resolves NOTHING for that node — never the fleet default,
@@ -10437,6 +10444,12 @@ declare const collectTokenBrand: unique symbol;
  *    string parameter. */
 export type CollectToken = string & { readonly [collectTokenBrand]: true };
 
+declare const orphanTokenBrand: unique symbol;
+/** The consent `ws-orphan` spends (fleet disk retention spec 2026-10-23 §2.3, D-6630): the `token` or the `rescueToken` of a
+ *  `ws-audit --orphan-hex` answer, 64 lowercase hex characters. Phantom brand, like `CollectToken`; the lane's audit reader
+ *  is the one place that casts to it, and `CCD_ARGV.wsOrphan` takes nothing else. */
+export type OrphanToken = string & { readonly [orphanTokenBrand]: true };
+
 /** One arm of `ChildReclaimAttention` (spec §5.9, §5.10): an item of the temp-root collector's.
  *  - `sessionId` is the temp-root id on a per-id item. On a box-wide line it is a `COLLECT_BOX_LABELS` label, which no
  *    session id can equal.
@@ -11336,7 +11349,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
@@ -12018,3 +12031,26 @@ export const ACCOUNT_DENY_RULES: readonly string[] = [
   ...ACCOUNT_SECRET_PATHS.map((p) => `Read(${p})`),
   ...ACCOUNT_WRITE_DIRS.map((p) => `Edit(${p})`),
 ];
+
+/** `FleetHealth`'s disk block (D-6615), declared HERE at the foot as an interface merge, with its type import beside it,
+ *  so no line above moves and every line citation into this file (the README's, the specs', the compaction card's)
+ *  still holds. TypeScript merges it into `FleetHealth` above: it is one member of that interface. */
+import type { DiskHealth } from './disk.js';
+export interface FleetHealth {
+  /**
+   * The fleet's disk alarm (`DiskHealth`): the level of the worst work filesystem, each filesystem's own level,
+   * the expected mounts and the pressure flag, held by the watcher's `sweepDisk` once a minute. Optional for the same
+   * absence-permits reason as the blocks above: absent until the first sweep. Read it through `readDiskHealth` alone;
+   * absent reads as UNKNOWN, never as a healthy disk.
+   */
+  disk?: DiskHealth;
+}
+
+// ── THE REAPING BREADCRUMB (ARCH-25, #531) ── at the foot, like the lane block above, so no line cited above it
+// moves. The one runtime import here, and from an L0 sibling that itself imports nothing (`reapcrumb.test.ts`).
+import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';
+/** An absent, null or empty crumb is none; any other string goes through `parseReapCrumb`. */
+const optReapCrumb = (o: RawObj, k: string): ReapCrumb | null => {
+  const raw = optStr(o, k);
+  return raw === null || raw === '' ? null : parseReapCrumb(raw);
+};
