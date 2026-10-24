@@ -89,6 +89,15 @@ describe('routing-matrix.md — spec §3, pinned to the vocabularies the mechani
     expect(worker).toContain('`compact 40`');
   });
 
+  it('the worker row puts the per-task reviewer on Sonnet high, not Opus (D-6797)', () => {
+    // The held-out panel is the gate, so the per-task reviewer inside a wave
+    // is the cheaper rung; the panel's judgement lenses stay on Opus high.
+    const worker = rows.find((r) => r.startsWith("| Worker executing a spec'd plan"))!;
+    expect(worker).toContain('Sonnet · high per-task reviewer');
+    expect(worker).not.toContain('Opus · high per-task reviewer');
+    expect(matrix).toContain('Opus · high review lenses');
+  });
+
   it('states the floors the mechanism relies on, in the spec\'s words', () => {
     expect(matrix).toContain('Fable is never a fan-out worker');
     expect(matrix).toContain('`max` is never a default');
@@ -139,6 +148,24 @@ describe('review-panel.md — the held-out panel, model and effort LITERAL on ev
     // never a computed model — the mutation that would route the panel through the fields
     expect(script).not.toMatch(/model: (?!')/);
     expect(script).not.toMatch(/effort: (?!')/);
+  });
+
+  it('caps each lens at its 8 most severe findings, in the schema and in the prompt (D-6796)', () => {
+    const script = blocks[0]!;
+    expect(script).toMatch(/findings: \{ type: 'array', maxItems: 8,/);
+    expect(script).toMatch(/8 most severe/);
+    expect(panel).toContain('8 most severe');
+  });
+
+  it('keeps 3 refuters for critical and important, gives a minor 1, and returns a minor as advisory (D-6796)', () => {
+    const script = blocks[0]!;
+    expect(script).toMatch(/f\.severity === 'minor' \? 1 : 3/);
+    expect(script).toMatch(/return \{ confirmed, advisory, refuted, unexamined, unverifiedLenses \}/);
+    // the advisory bucket is the minor survivors; confirmed never holds a minor
+    expect(script).toMatch(/const advisory = [^\n]*'minor'/);
+    expect(script).toMatch(/const confirmed = [^\n]*!== 'minor'/);
+    expect(panel).toContain('advisory');
+    expect(panel.replace(/\s+/g, ' ')).toContain('never fails a wave alone');
   });
 
   it('never names Fable, and never inherits: the prose says so and the script obeys', () => {

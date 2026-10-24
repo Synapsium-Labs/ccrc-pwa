@@ -19,11 +19,17 @@ never accepted on the coordinator's own reading alone.
   mutation red), can it be reproduced from the tree as committed; a claim that cannot is a
   finding, whatever the commit message says.
 
-**The refute pass.** Every finding goes to three fresh `sonnet` `high` refuters, each told to
-refute it and to default to refuted when uncertain; the **majority** decides. A finding two or
-three refuters kill is dropped, with the refutations kept. A finding that survives is a finding;
-its refuters' proposed remedy is advice, never a mandate (a survived finding is not a mandate for
-its own remedy).
+**The findings cap.** Each lens returns at most its 8 most severe findings: the schema says
+`maxItems: 8` and the lens prompt says to keep the most severe, so a lens with more to say ranks
+and cuts rather than flooding the refute pass.
+
+**The refute pass.** Every critical or important finding goes to three fresh `sonnet` `high`
+refuters, each told to refute it and to default to refuted when uncertain; the **majority**
+decides. A finding two or three refuters kill is dropped, with the refutations kept. A finding
+that survives is a finding; its refuters' proposed remedy is advice, never a mandate (a survived
+finding is not a mandate for its own remedy). A minor finding goes to one refuter and, if it
+survives, is returned as `advisory`: it is reported beside the confirmed findings and never fails
+a wave alone.
 
 **Unverified is never approval.** A lens that dies, times out or returns nothing counts as
 unverified, never as approval, and is recorded as
@@ -46,7 +52,7 @@ globals.
 ```js
 export const meta = {
   name: 'ccrc-review-panel',
-  description: 'Held-out handoff review: three Opus lenses, three Sonnet refuters per finding, majority deciding',
+  description: 'Held-out handoff review: three Opus lenses, three Sonnet refuters per critical or important finding, majority deciding',
   phases: [{ title: 'Lenses' }, { title: 'Refute' }],
 }
 // args: { repo, base, tip, plan, spec, wave } — repo is the REVIEWER's own worktree, checked out
@@ -57,13 +63,13 @@ const A = args
 const RANGE = `${A.base}..${A.tip}`
 const READ_ONLY = `Work in ${A.repo}. Read only: never edit, commit, stash, checkout or run a build there. Cite every claim as file:line at ${A.tip}.`
 const LENSES = [
-  { key: 'correctness', prompt: `${READ_ONLY}\nReview the diff ${RANGE} (git -C ${A.repo} diff ${RANGE}) for CORRECTNESS: does the code do what its own comments and tests say at every seam the diff touches? A guard that cannot red for the thing it claims to guard is a finding. Return only findings you can point at.` },
-  { key: 'spec', prompt: `${READ_ONLY}\nReview the diff ${RANGE} for SPEC CONFORMANCE against the plan at ${A.plan} (its tasks for wave ${A.wave}) and the spec at ${A.spec}: a plan step skipped, a constraint weakened, a deviation not ledgered in the plan's Deviations section is a finding. Return only findings you can point at.` },
+  { key: 'correctness', prompt: `${READ_ONLY}\nReview the diff ${RANGE} (git -C ${A.repo} diff ${RANGE}) for CORRECTNESS: does the code do what its own comments and tests say at every seam the diff touches? A guard that cannot red for the thing it claims to guard is a finding. Return only findings you can point at, and at most your 8 most severe.` },
+  { key: 'spec', prompt: `${READ_ONLY}\nReview the diff ${RANGE} for SPEC CONFORMANCE against the plan at ${A.plan} (its tasks for wave ${A.wave}) and the spec at ${A.spec}: a plan step skipped, a constraint weakened, a deviation not ledgered in the plan's Deviations section is a finding. Return only findings you can point at, and at most your 8 most severe.` },
   { key: 'reproduce', prompt: `${READ_ONLY}\nFor every claim the commits in ${RANGE} make (git -C ${A.repo} log ${RANGE}): a suite green, a measurement, a mutation red — attempt to REPRODUCE it from the tree at ${A.tip} without modifying it (read the test files and the commands the messages name; you may run read-only commands and the named vitest suites from inside their package with ./node_modules/.bin/vitest run, foreground). A claim that does not reproduce is a finding, whatever the message says.` },
 ]
 const FINDINGS = {
   type: 'object',
-  properties: { findings: { type: 'array', items: { type: 'object',
+  properties: { findings: { type: 'array', maxItems: 8, items: { type: 'object',
     properties: { file: { type: 'string' }, line: { type: 'integer' }, claim: { type: 'string' },
       severity: { type: 'string', enum: ['critical', 'important', 'minor'] } },
     required: ['file', 'claim', 'severity'] } } },
@@ -80,19 +86,22 @@ const results = await pipeline(
   (l) => agent(l.prompt, { label: `lens:${l.key}`, phase: 'Lenses', model: 'opus', effort: 'high', schema: FINDINGS })
     .then((r) => { if (r === null) unverifiedLenses.push(l.key); return r }),
   (found, l) => found === null ? [] : parallel((found.findings ?? []).map((f) => () =>
-    parallel([0, 1, 2].map((i) => () =>
+    parallel(Array.from({ length: f.severity === 'minor' ? 1 : 3 }, (_, i) => () =>
       agent(`${READ_ONLY}\nA ${l.key} reviewer of ${RANGE} claims: ${JSON.stringify(f)}. Try to REFUTE it from the tree at ${A.tip}. Default to refuted=true when uncertain. Answer with why either way.`,
         { label: `refute:${l.key}:${i}`, phase: 'Refute', model: 'sonnet', effort: 'high', schema: VERDICT })))
       .then((votes) => ({ lens: l.key, finding: f, votes: votes.filter(Boolean) })))),
 )
 const judged = results.filter(Boolean).flat()
-const confirmed = judged.filter((j) => j.votes.length > 0 && j.votes.filter((v) => v.refuted).length < 2)
-const refuted = judged.filter((j) => j.votes.length > 0 && j.votes.filter((v) => v.refuted).length >= 2)
+const killed = (j) => j.votes.filter((v) => v.refuted).length * 2 > j.votes.length
+const survived = judged.filter((j) => j.votes.length > 0 && !killed(j))
+const confirmed = survived.filter((j) => j.finding.severity !== 'minor')
+const advisory = survived.filter((j) => j.finding.severity === 'minor')
+const refuted = judged.filter((j) => j.votes.length > 0 && killed(j))
 const unexamined = judged.filter((j) => j.votes.length === 0)
-log(`${confirmed.length} confirmed, ${refuted.length} refuted, ${unexamined.length} unexamined, lenses unverified: ${unverifiedLenses.join(', ') || 'none'}`)
-return { confirmed, refuted, unexamined, unverifiedLenses }
+log(`${confirmed.length} confirmed, ${advisory.length} advisory, ${refuted.length} refuted, ${unexamined.length} unexamined, lenses unverified: ${unverifiedLenses.join(', ') || 'none'}`)
+return { confirmed, advisory, refuted, unexamined, unverifiedLenses }
 ```
 
 A refuter that dies is not a vote (`filter(Boolean)`); a finding with no surviving vote is
-`unexamined`, never `refuted` — the `votes.length > 0` guard on both buckets is what keeps a
+`unexamined`, never `refuted` — the `votes.length > 0` guard on every bucket is what keeps a
 dead refuter from counting as a kill.
