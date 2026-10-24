@@ -24,6 +24,10 @@ export interface DiskVerdict {
   readonly expectedMounts: readonly DiskExpectedMount[];
   /** Expected mounts missing in this pass: one missing pass is a bad read, two in a row is critical. */
   readonly mountsDown: readonly string[];
+  /** The instant the standing `warn`/`critical` run began (D-6616): a rise to `warn`/`critical` with no episode open
+   *  starts one, `unmeasured` carries an open one, and `ok` closes it. Absent while none is open, and on a verdict
+   *  built before the field existed. */
+  readonly episode?: number;
 }
 
 /** Whether `used` of `total` is at least `pct` percent, by integer cross-multiplication: 85.0% is exactly 85. */
@@ -56,6 +60,20 @@ function targetLevel(fs: DiskFilesystem, held: DiskLevel): DiskLevel {
   if (usedAtLeast(fs, DISK_WARN_PCT)) return 'warn';
   if ((held === 'warn' || held === 'critical') && usedAtLeast(fs, DISK_WARN_PCT - DISK_CLEAR_MARGIN_PCT)) return 'warn';
   return 'ok';
+}
+
+/** What a process with no episode of its own does with the durable mark, judged by the filesystem(s) that pushed it and
+ *  by no other: `resume` when one of them stands at warn/critical now; `forget` when every one reads below its clear band
+ *  or is absent (a mark with no filesystem is stale); else `keep`. A read that tells nothing keeps, never forgets. */
+export function diskMarkFate(devs: readonly string[], v: DiskVerdict, measured: DiskMeasured): 'resume' | 'forget' | 'keep' {
+  const standing = (d: string): boolean => (d === 'mount' ? v.mountsDown.length > 0 : ['warn', 'critical'].includes(v.filesystems.find((f) => f.dev === d)?.level ?? ''));
+  if (devs.some(standing)) return 'resume';
+  const anyReadable = measured.filesystems.some(measurable);
+  const clear = (d: string): boolean => {
+    const fs = measured.filesystems.find((f) => f.dev === d);
+    return d === 'mount' ? anyReadable : fs === undefined ? anyReadable : measurable(fs) && !usedAtLeast(fs, DISK_WARN_PCT - DISK_CLEAR_MARGIN_PCT);
+  };
+  return devs.every(clear) ? 'forget' : 'keep';
 }
 
 /** The fleet fold's order: `unmeasured` outranks `ok`, so a filesystem that cannot be read is never hidden by one that
@@ -116,5 +134,73 @@ export function diskVerdict(prev: DiskVerdict | null, measured: DiskMeasured, no
   const unknown = unreadable.size > 0 || carried.length > 0 || drifted > 0 || mountsDown.length > 0 || measured.filesystems.length === 0;
   if (unknown && RANK[level] < RANK.unmeasured) level = 'unmeasured';
   if (confirmed) level = 'critical';
-  return { at: nowMs, level, filesystems, expectedMounts: measured.expectedMounts, mountsDown };
+  // An episode starts at a rise to `warn`/`critical` with none open, is carried through `unmeasured`, and `ok` closes it.
+  const standing = prev !== null && (prev.level === 'warn' || prev.level === 'critical');
+  const open = prev === null ? undefined : (prev.episode ?? (standing ? prev.at : undefined));
+  const episode = level === 'ok' ? undefined : level === 'unmeasured' ? open : (open ?? nowMs);
+  return { at: nowMs, level, filesystems, expectedMounts: measured.expectedMounts, mountsDown, episode };
+}
+
+/** What the disk alarm says when the fleet level moves (D-6616, spec §2.5). `push` goes out through the notice funnel,
+ *  `record-only` is the feed's alone. `dedupeKey` is `disk:<dev>:<level>:<episode>`; the watcher reads it before it
+ *  writes, so a restart inside one episode says nothing twice. */
+export interface DiskNotice {
+  readonly mode: 'push' | 'record-only';
+  readonly title: string;
+  readonly body: string;
+  readonly dedupeKey: string;
+  /** The filesystem the key names (`mount` for a missing work mount): the episode mark records it. */
+  readonly dev: string;
+}
+
+const GIB = 1024 ** 3;
+
+/** A filesystem's used percent the way `df` reads it, the larger of bytes and inodes, whole points rounded down. */
+function usedPct(fs: DiskFilesystem): number {
+  const used = Math.max(0, fs.sizeBytes - fs.freeBytes);
+  const bytes = used + fs.availBytes > 0 ? (used * 100) / (used + fs.availBytes) : 0;
+  const inodes = fs.files > 0 ? ((fs.files - fs.filesFree) * 100) / fs.files : 0;
+  return Math.floor(Math.max(bytes, inodes) + 1e-9);
+}
+
+const gib = (bytes: number): string => {
+  const v = bytes / GIB;
+  return v >= 1 ? `${Math.round(v)} GiB` : `${v.toFixed(1)} GiB`;
+};
+
+/** Decide the notice for one level change, from the verdict before it and the verdict after it. Only a RISE to `warn`
+ *  or `critical` pushes (a rise to `critical` pushes even when `warn` already did); a fall between the two is silent; a
+ *  clear to `ok` is recorded and never pushed; `unmeasured` says nothing. The body names the filesystem's labels and
+ *  never a path. */
+export function diskNotice(prev: DiskVerdict | null, next: DiskVerdict): DiskNotice | null {
+  const heldRank = prev !== null && (prev.level === 'warn' || prev.level === 'critical') ? RANK[prev.level] : 0;
+  if (next.level === 'ok') {
+    if (heldRank === 0 || prev === null) return null;
+    return {
+      mode: 'record-only', title: 'Fleet disk back to normal',
+      body: 'Every work filesystem is back under its warning level.',
+      dedupeKey: `disk:fleet:clear:${prev.episode ?? prev.at}`, dev: 'fleet',
+    };
+  }
+  if ((next.level !== 'warn' && next.level !== 'critical') || RANK[next.level] <= heldRank) return null;
+  const episode = next.episode ?? next.at;
+  const worst = next.filesystems.filter((f) => f.level === next.level).sort((a, b) => usedPct(b) - usedPct(a))[0];
+  // A missing mount is named by its position in the expected list (1-based), never by its path.
+  const down = next.expectedMounts.flatMap((m, i) => (next.mountsDown.includes(m.path) ? [i + 1] : []));
+  const downText = down.length > 0 ? ` Work mount${down.length === 1 ? '' : 's'} ${down.map((i) => `#${i}`).join(', ')} not mounted.` : '';
+  const limits = `Warns at ${DISK_WARN_PCT}%, critical at ${DISK_CRITICAL_PCT}%.`;
+  if (worst === undefined) {
+    // Critical with no full filesystem: an expected work mount is not mounted.
+    return {
+      mode: 'push', title: 'Fleet disk: a work volume is not mounted',
+      body: `${next.mountsDown.length} expected work mount${next.mountsDown.length === 1 ? ' is' : 's are'} not mounted (${down.map((i) => `#${i}`).join(', ')}). ${limits}`,
+      dedupeKey: `disk:mount:${next.level}:${episode}`, dev: 'mount',
+    };
+  }
+  const others = next.filesystems.filter((f) => f.level === next.level).length - 1;
+  return {
+    mode: 'push', title: `Fleet disk ${usedPct(worst)}% full · ${gib(worst.availBytes)} free`,
+    body: `Holds ${worst.roots.join(', ')}${others > 0 ? `, and ${others} more filesystem${others === 1 ? '' : 's'} at ${next.level}` : ''}.${downText} ${limits}`,
+    dedupeKey: `disk:${worst.dev}:${next.level}:${episode}`, dev: worst.dev,
+  };
 }
