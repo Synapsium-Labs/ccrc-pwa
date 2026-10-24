@@ -702,7 +702,7 @@ ready = os.path.join(unit, "supervisor-ready")
 # never stop the supervisor signalling or reaping its one child.
 def write(path, text):
     # Whole-file replace: a reader polling \`state\` must never see a file that
-    # \`open(path, "w")\` has truncated and not yet filled (D-TBD-flake-codex-l0a).
+    # \`open(path, "w")\` has truncated and not yet filled (D-6788).
     try:
         tmp = path + ".tmp"
         with open(tmp, "w") as stream:
