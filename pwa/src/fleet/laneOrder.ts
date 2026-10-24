@@ -21,3 +21,20 @@ export function bindingWindow(a: AccountUsage): { label: '5h' | '7d'; pct: numbe
   const chosen = a.seven === pct ? seven : five;
   return { label: chosen.label, pct: chosen.pct, resetAt: chosen.resetAt, rolledOver: atBinding.every((w) => w.rolled) };
 }
+
+/** The lanes most free first: by binding use (`bindingPct`), lowest first, ties in the order given (the roster's).
+ *  A lane never read (no percentage) and a lane whose sign-in expired go last, keeping their own relative order: neither
+ *  has a use that says it is free. Returns a new array. */
+export function lanesByFree<T extends AccountUsage>(lanes: readonly T[]): T[] {
+  const last = (a: T): boolean => a.authDead === true || bindingPct(a) === null;
+  return lanes
+    .map((lane, i) => ({ lane, i }))
+    .sort((x, y) => {
+      const lx = last(x.lane);
+      const ly = last(y.lane);
+      if (lx !== ly) return lx ? 1 : -1;
+      if (lx) return x.i - y.i;
+      return (bindingPct(x.lane) ?? 0) - (bindingPct(y.lane) ?? 0) || x.i - y.i;
+    })
+    .map((e) => e.lane);
+}
