@@ -1056,6 +1056,17 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.bound).toContain('child');
     expect(c!.ruling).toBeNull();
   });
+  it('declares a child workspace itself, a workspace class the stale arm collects at seven idle days (D-6639)', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'child-workspaces');
+    expect(c, 'shared/lifecycle.ts declares no child-workspaces class').toBeTruthy();
+    expect(c!.pattern).toBe('W');
+    expect(c!.collector).toContain('ws-reclaim');
+    expect(c!.collector).toContain('stale arm at 7 idle days');
+    expect(c!.collector).toContain('ws-expire');
+    expect(c!.bound).toContain('7 idle days');
+    expect(c!.bound).toContain('never while it coordinated');
+    expect(c!.ruling).toBeNull();
+  });
   it('declares the pane-scope sweep\'s verdict record, a rolling class its own writer rewrites', () => {
     // Session-continuity wave 4: `ccd-scope-sweep` keeps one record in the
     // runtime dir, and `ccrc doctor` reads it. An unassigned artifact class is a

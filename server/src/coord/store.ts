@@ -3374,6 +3374,31 @@ export class CoordStore {
     return { ok: true, siblings };
   }
 
+  /** D-6639: the newest activity the SERVER holds of a child, for the stale arm's idle test. `runAt` is the newest
+   *  `run_events.at` of the minting run or of any run naming the session; `mailAt` the newest mail to or from the
+   *  session and the newest delivery or ack to it. `null`: that kind never happened. Any read that fails answers
+   *  `ok: false`, never a `null` (an unread table is not an idle one). */
+  childStaleActivity(sessionId: string, mintingRunId: number):
+    { readonly ok: true; readonly runAt: number | null; readonly mailAt: number | null }
+    | { readonly ok: false; readonly detail: string } {
+    try {
+      const t = (sql: string, ...args: (string | number)[]): number | null => {
+        const row = this.db.prepare(sql).get(...args) as Record<string, unknown> | undefined;
+        const v = Object.values(row ?? {}).filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
+        return v.length === 0 ? null : Math.max(...v);
+      };
+      const runAt = t('SELECT MAX(at) AS t FROM run_events WHERE runId = ? OR runId IN (SELECT id FROM runs WHERE sessionId = ?)',
+        mintingRunId, sessionId);
+      const mails = [
+        t('SELECT MAX(at) AS t FROM mail WHERE fromId = ? OR toId = ?', sessionId, sessionId),
+        t('SELECT MAX(deliveredAt) AS d, MAX(ackedAt) AS a FROM mail_deliveries WHERE toId = ?', sessionId),
+      ].filter((x): x is number => x !== null);
+      return { ok: true, runAt, mailAt: mails.length === 0 ? null : Math.max(...mails) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   /** `openRunsForSession`'s shape, with its `state NOT IN …` filter REMOVED
    *  (child-reclamation wave 4, spec §5.7's "no hold" conjunct): every run
    *  naming `sessionId`, in ANY state, TERMINAL included. `openRunsForSession`

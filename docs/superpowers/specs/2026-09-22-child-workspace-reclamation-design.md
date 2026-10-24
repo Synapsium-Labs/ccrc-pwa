@@ -1021,7 +1021,7 @@ that pace buys repeated attempts and journal lines and nothing else. So a child 
   that answer on. A lost memory therefore costs a tier child one extra ask, never a fresh four-hour wait, and never a fall
   back to the ordinary ramp unless the seed cannot read it (no placed birth, a reclaim done/unknown line, or a slice
   windowed short).
-- **A held stuck child.** A child under a hold is never asked, and its memory is dropped. When the hold lifts it is sighted
+- **A held stuck child.** A child under a hold is never asked (D-6639 amends this: once it has been idle for seven days the stale arm asks it, with the hold's digest), and its memory is dropped. When the hold lifts it is sighted
   afresh and seeded like a restart's, so the sweep sights it on the first pass after the hold lifts and asks it once on the
   next, before the tier's pace resumes from that answer.
 - **What the pace costs, stated.** A cure that is not the child's own, a fleet update for one, is noticed only at the tier's

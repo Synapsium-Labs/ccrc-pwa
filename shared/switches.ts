@@ -34,6 +34,9 @@ export const EXPIRE_LANE_LIVE_MARKER = 'expire-lane-live';
 export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
 /** `$REG/dead-coordinator-lane-live`: arms the dead-coordinator lane's act. */
 export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
+/** `$REG/child-stale-reclaim-live`: arms the child reclaim's stale arm (D-6639): a kept child idle for seven days is
+ *  reclaimed. Absent, the lane records "child would be reclaimed (stale)" and acts on nothing. */
+export const CHILD_STALE_RECLAIM_LIVE_MARKER = 'child-stale-reclaim-live';
 /** `$REG/idle-compact-nudge-disabled`: the idle-compaction nudge's kill switch. */
 export const IDLE_NUDGE_DISABLED_MARKER = 'idle-compact-nudge-disabled';
 /** `$REG/mail-gate-strict`: the mail gate's pre-wave-1 rule. */
@@ -117,6 +120,11 @@ export const SWITCHES = {
   [DEAD_COORDINATOR_LANE_LIVE_MARKER]: {
     storage: { marker: DEAD_COORDINATOR_LANE_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would end',
     owner: 'C5', meaning: 'The dead-coordinator lane acts: a programme whose coordinator is gone is ended.',
+    writer: 'hand-only',
+  },
+  [CHILD_STALE_RECLAIM_LIVE_MARKER]: {
+    storage: { marker: CHILD_STALE_RECLAIM_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would reclaim',
+    owner: 'C4', meaning: 'The stale arm acts: a kept child idle for seven days is reclaimed, its work pinned to the attic.',
     writer: 'hand-only',
   },
   [IDLE_NUDGE_DISABLED_MARKER]: {

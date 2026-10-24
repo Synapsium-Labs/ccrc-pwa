@@ -156,8 +156,9 @@ import {
   type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead, type ChildReclaimSweepEntry,
   type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
   childReclaimAttentionWithLeaves, childReclaimLeafKept, childReclaimLeafKeptSince, type ChildReclaimLeafKept,
-  CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed,
+  CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed, type ChildReclaimSweepInput, type ChildStaleAsk,
 } from './childReclaimSweep.js';
+import { ChildStaleArm } from './coord/childReclaimStale.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
   EXPIRE_AUDITS_PER_PASS, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
@@ -1138,6 +1139,8 @@ export class FleetWatcher {
    *  dispatch that has run past `CHILD_RECLAIM_STALL_MS` — `childReclaimInFlightSince`
    *  is what tells the two apart. */
   private childReclaimInFlight = new Set<string>();
+  /** D-6639: the stale arm's memory (what its shadow said, when a terminal child was last asked). */
+  private readonly childStale = new ChildStaleArm();
   /** When each in-flight dispatch was sent — `CHILD_RECLAIM_STALL_MS`'s own
    *  clock, and the reason a request that never settles stops holding the
    *  lane's one slot forever. MONOTONIC: a forward wall-clock step must never
@@ -4411,7 +4414,7 @@ export class FleetWatcher {
       .filter((row) => childReclaimTerminalRefusal(row, childReclaimTokenKind)).map((row) => row.sessionId));
     const seen = new Set<string>();
     const judged = new Map<string, ChildReclaimSweepVerdict>();
-    const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number; id: string }[] = [];
+    const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number; id: string; stale: ChildStaleAsk | null }[] = [];
     // Declared here, not at section FOUR below, so the hold-release job (a
     // SEPARATE dispatch from the ordinary reclaim gathered into `due`) can be
     // pushed onto it from inside this same per-child loop, the instant its
@@ -4514,13 +4517,18 @@ export class FleetWatcher {
       // row the gather holds no answer for reads `unreadable`, the unmeasured
       // default, never an optimistic `absent`.
       const regGeneration: ChildReclaimGeneration = regGenerations.get(r.id) ?? { kind: 'unreadable' };
-      const v = childReclaimSweepVerdict({
+      const sweepIn: ChildReclaimSweepInput = {
         sessionId: r.id, child: r.child, identityMeasured: r.unmeasured.length === 0, generation: regGeneration,
         workspace: r.workspace, held, terminal: terminal.has(r.id), mintingRun, reviewedRun, siblings,
         coordinatorClaim: claims.get(r.id), childBornAt, skewMs: CHILD_BIRTH_SKEW_MS, nowMs: now,
-      });
+        idle: 'unmeasured', holdDigest: null,   // the verdict reads neither; the stale arm gathers its own (D-6639)
+      };
+      const v = childReclaimSweepVerdict(sweepIn);
       judged.set(r.id, v);
-      if (!v.eligible) {
+      // D-6639: the stale arm judges BESIDE the verdict. An ask only when armed, on a box that proves the flag.
+      const stale = this.childStale.judge({ coord, record: r, input: sweepIn, verdict: v, names,
+        fleetState: this.deps.fleetState, notifyLog: this.deps.notifyLog, nowMs: now });
+      if (!v.eligible && stale === null) {
         this.childReclaimSweepState.delete(r.id);
         // A hold this build proved belongs to one of this child's own runs,
         // whose accounting has since retired (spec §5.7's "no hold"
@@ -4588,6 +4596,9 @@ export class FleetWatcher {
         }
         continue;
       }
+      // Here the verdict is eligible, or the stale arm asks for the child (`stale` is then non-null).
+      const actRunId = v.eligible ? v.runId : stale?.runId;
+      if (actRunId === undefined) continue;
       this.childReclaimHoldRetiredSeen.delete(r.id);
       // The first eligible verdict after a release ANSWERED seeds nothing: its
       // listing may predate the answer (`childReclaimReleaseAnswered`).
@@ -4604,12 +4615,12 @@ export class FleetWatcher {
       // and the generation change first: ws-add mints the generation and writes
       // the new marker before the mirror can place the new birth.
       // `v.runId` is the marker's own (`childReclaimSweepVerdict`).
-      if (entry === undefined || !childReclaimSameGeneration(entry, childBornAt, v.runId, regGeneration)) {
+      if (entry === undefined || !childReclaimSameGeneration(entry, childBornAt, actRunId, regGeneration)) {
         // A LOST MEMORY NEVER RESETS THE PERSISTENT TIER (spec §5.7): the sighting is seeded from the mirror's
         // current generation, with `lastFailedAt` left null, so a tier child is asked once on its next due pass
         // and then waits its tier pace. It never waits a fresh tier pace, and never falls back to the 15-minute ramp
         // unless the seed cannot read it (no placed birth, a reclaim done/unknown line, or a slice windowed short).
-        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(mono, childBornAt, v.runId, regGeneration,
+        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(mono, childBornAt, actRunId, regGeneration,
           childReclaimTierSeed(tierGenerations.get(r.id) ?? [], childBornAt, isChildReclaimStuckToken, childReclaimTokenKind)));
         continue;
       }
@@ -4618,7 +4629,7 @@ export class FleetWatcher {
       // failure backoff (spec §5.9: "retries back off in between") AND the
       // terminal-refusal pacing — L4 decides no pacing of its own.
       if (!childReclaimDue(entry, mono, CHILD_RECLAIM_SWEEP_MS)) continue;
-      due.push({ r, entry, runId: v.runId, id: r.id });
+      due.push({ r, entry, runId: actRunId, id: r.id, stale });
     }
     this.childReclaimJudged = judged;
     // The list's second publish, and the kept feed row: judging passes only, so a paused or capability-less
@@ -4659,7 +4670,7 @@ export class FleetWatcher {
     }
     const freeSlots = Math.max(0, CHILD_RECLAIM_MAX_IN_FLIGHT - activeInFlight);
     const { order, holderId } = childReclaimAskOrder(due);
-    for (const { r, entry, runId, id } of order.slice(0, freeSlots)) {
+    for (const { r, entry, runId, id, stale } of order.slice(0, freeSlots)) {
       const ask: ChildReclaimAsk = {
         at: asked, licensed: childReclaimDeferExpired(entry, asked, CHILD_RECLAIM_SWEEP_MS), asHolder: id === holderId,
       };
@@ -4688,7 +4699,9 @@ export class FleetWatcher {
         // entry's own key, which this pass's read matched. Every sweep request
         // carries it, licensed or not, and the executor re-proves it.
         licenceGeneration: entry.generation,
+        ...(stale === null ? {} : { stale: { word: stale.word, holdDigest: stale.holdDigest, holdText: stale.holdText } }),
       };
+      if (stale !== null) this.childStale.asked(r.id, runId, stale, now);
       this.childReclaimInFlight.add(r.id);
       this.childReclaimInFlightSince.set(r.id, mono);
       acts.push(this.execChildReclaim(coord, req).then(

@@ -5,7 +5,8 @@ import type { FleetState } from '../fleetstate.js';
 import type { RunCcd } from './ports.js';
 import type { Presence } from '../presence.js';
 import type { NotifyLog } from '../notifylog.js';
-import { CCD_ARGV, RECLAIM_CAP, ccdCan, sweepDec } from '../ccdargv.js';
+import { CCD_ARGV, RECLAIM_CAP, RECLAIM_STALE_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
+import { childReclaimStaleTold } from './childReclaimStale.js';
 import { readSessionRecord, type SessionRecord } from '../registry.js';
 import { refusalSentence } from '../wsaudit.js';
 import { CHILD_BIRTH_SKEW_MS, type ChildSpentVerdict } from './childSpent.js';
@@ -16,7 +17,7 @@ import {
   type ChildReclaimPreLockToken, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
   childReclaimDetailText, type ChildReclaimLeafKept,
   CHILD_RECLAIM_STUCK_RETRY, childReclaimStuckHeld, childReclaimStuckRow, childReclaimStuckSentence,
-  type ChildReclaimSweepOutcome,
+  type ChildReclaimSweepOutcome, type ChildStaleAsk,
 } from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
@@ -494,6 +495,9 @@ export interface ChildReclaimRequest {
   readonly deferredSinceMs: number | null;
   readonly feedQuiet: ChildReclaimFeedQuiet;
   readonly licenceGeneration: ChildReclaimGenerationKey | { readonly kind: 'none' };
+  /** D-6639: present only on a request the STALE arm composed (`childReclaimStaleVerdict`). It rides both ccd calls
+   *  as `--stale <word> [--hold-digest <sha256>]`, and ends in the coordinator's mail. Absent: an ordinary reclaim. */
+  readonly stale?: ChildStaleAsk;
 }
 
 /** Close's generation (spec §5.5): it judged no generation, and none is compared. */
@@ -1181,6 +1185,10 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   if (!ccdCan(deps.fleetState, 'wsReclaim')) {
     return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`);
   }
+  // 4a — the stale arm's flags are sent only to a box that proves it takes them (D-6639).
+  if (req.stale !== undefined && !capSupported(deps.fleetState, RECLAIM_STALE_CAP)) {
+    return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_STALE_CAP}`);
+  }
   // 5 — the token, minted by the ladder on the box.
   const audit = await childReclaimAudit(deps, req);
   if (audit.kind === 'unreadable') {
@@ -1224,6 +1232,7 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   // 7 — the child is gone: nothing may still be waiting to be typed into it,
   // or into a stranger that inherits its recycled slug.
   childReclaimCancelMail(deps, sessionId, 'reclaimed');
+  await childReclaimStaleTold(deps, req);
   return { kind: 'reclaimed', sessionId, runId, wip: act.wip, secretsDropped: act.secretsDropped };
 }
 
@@ -1316,7 +1325,7 @@ function childReclaimRefusal(req: ChildReclaimRequest, token: ChildReclaimToken,
 async function childReclaimAudit(
   deps: ChildReclaimDeps, req: ChildReclaimRequest,
 ): Promise<ChildReclaimAuditRead | ChildReclaimAuditUnmeasured> {
-  const argv = CCD_ARGV.wsReclaimAudit(req.sessionId, req.deferExpired);
+  const argv = CCD_ARGV.wsReclaimAudit(req.sessionId, req.deferExpired, req.stale);
   if (!ccdCan(deps.fleetState, 'wsReclaimAudit')) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
   const res = await deps.runCcd(argv);
   if (!res.ok) return parseChildReclaimAuditFailed(req.sessionId, res.stdout, res.stderr);
@@ -1331,7 +1340,7 @@ async function childReclaimAct(
 ): Promise<ChildReclaimVerbRead | 'unsupported'> {
   if (!ccdCan(deps.fleetState, 'wsReclaim')) return 'unsupported';
   const argv = CCD_ARGV.wsReclaim(token, req.runId, req.sessionId, req.deferExpired,
-    sweepDec(deps.fleetState, `run:${req.runId} reclaim ${req.trigger}`));
+    sweepDec(deps.fleetState, `run:${req.runId} reclaim ${req.trigger}`), req.stale);
   const res = await deps.runCcd(argv);
   return parseChildReclaimResult(req.sessionId, res.stdout, res.stderr);
 }

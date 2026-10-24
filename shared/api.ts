@@ -4069,7 +4069,9 @@ export function isMarkerState(v: unknown): v is MarkerState {
 
 /** The sweep's words for a marked child it keeps for a person (child-reclamation
  *  spec §5.9): standing answers, read from records rather than a failed read, that
- *  automatic reclamation never acts on while they stand. Spelled ONCE, as the keys
+ *  automatic reclamation never acts on while they stand. D-6639: `minting-run-absent` and
+ *  `review-report-stale` (and the hold, which is no kept word) now LAPSE: the stale arm reclaims such a child once
+ *  nothing has touched it for seven days and the operator has armed it. No word is removed; their sentences say when. Spelled ONCE, as the keys
  *  of a total table, and the runtime list is derived. The SERVER's sweep answers
  *  them and composes their sentences (`server/src/childReclaimSweep.ts`, which
  *  says what ends each). The PWA renders sentences and never switches on a word. */

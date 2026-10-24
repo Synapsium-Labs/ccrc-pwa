@@ -18,7 +18,7 @@ import { IDLE_NUDGE_DISABLED_MARKER } from '../src/idlenudge.js';
 import { STOP_DONE_DISABLED_MARKER } from '../src/stopDone.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
 import { isMarkerState } from '../../shared/api.js';
-import { ASKS_DISABLED_MARKER, SWITCHES, markerSwitchNames, readSwitches } from '../../shared/switches.js';
+import { ASKS_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, SWITCHES, markerSwitchNames, readSwitches } from '../../shared/switches.js';
 
 /** Today's marker values, typed once here as the table the switchboard must equal. `asks-disabled` is `watch.ts`'s
  *  private constant on the base, so it has no export to read; the switchboard rows below hold it. */
@@ -32,6 +32,7 @@ const TODAY: Record<string, string> = {
   EXPIRE_LANE_LIVE_MARKER: 'expire-lane-live',
   COLLECT_LANE_LIVE_MARKER: 'collect-lane-live',
   DEAD_COORDINATOR_LANE_LIVE_MARKER: 'dead-coordinator-lane-live',
+  CHILD_STALE_RECLAIM_LIVE_MARKER: 'child-stale-reclaim-live',
   IDLE_NUDGE_DISABLED_MARKER: 'idle-compact-nudge-disabled',
   MAIL_GATE_STRICT_MARKER: 'mail-gate-strict',
   MAIL_GATE_BUSY_MARKER: 'mail-gate-busy',
@@ -42,7 +43,7 @@ describe('characterization: every exported marker constant keeps its value (D-58
   const EXPORTED: Record<string, string> = {
     MAIL_DISABLED_MARKER, COORDINATOR_PAUSE_MARKER, RECLAIM_PAUSE_MARKER, STOP_DONE_DISABLED_MARKER,
     HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, EXPIRE_LANE_LIVE_MARKER, COLLECT_LANE_LIVE_MARKER,
-    DEAD_COORDINATOR_LANE_LIVE_MARKER, IDLE_NUDGE_DISABLED_MARKER, MAIL_GATE_STRICT_MARKER, MAIL_GATE_BUSY_MARKER,
+    DEAD_COORDINATOR_LANE_LIVE_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, IDLE_NUDGE_DISABLED_MARKER, MAIL_GATE_STRICT_MARKER, MAIL_GATE_BUSY_MARKER,
     MAIL_GATE_BUSY_SHADOW_MARKER,
   };
 
