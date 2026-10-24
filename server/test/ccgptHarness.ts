@@ -129,6 +129,9 @@ function containedSpawnOptions(
       // else a loopback port nothing answers. Unset or EMPTY, the library reads the live endpoint, so an empty
       // caller value names none (`runAuthDriver`'s rule; `ghContainedEnv`'s `containedAuthBase` is the same).
       CCRC_CODEX_AUTH_BASE: callerEnv?.['CCRC_CODEX_AUTH_BASE'] ? callerEnv['CCRC_CODEX_AUTH_BASE'] : CLOSED_AUTH_BASE,
+      // The codex bridge's upstream (codex-bridge Stage 2, Task 7), by the same rule: only the bridge's backend
+      // adapter reads it, and unset or EMPTY it names the live endpoint.
+      CCGPT_BRIDGE_UPSTREAM_BASE: callerEnv?.['CCGPT_BRIDGE_UPSTREAM_BASE'] ? callerEnv['CCGPT_BRIDGE_UPSTREAM_BASE'] : CLOSED_AUTH_BASE,
       // Applied LAST, deliberately (C1): these are the containment, not a
       // default the spread above may override. A caller writing the natural
       // `env: { ...process.env, PYTHONPATH: PYSTUB_DIR }` still gets the
