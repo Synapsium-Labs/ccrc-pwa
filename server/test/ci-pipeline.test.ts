@@ -1225,6 +1225,38 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
   });
 });
 
+describe('the node-floor leg is skipped on a pull request only when nothing it loads moved (D-6771)', () => {
+  const pathspecs = (): string[] => {
+    const script = runScript(step(job('select'), 'Does this pull request touch the node floor\'s inputs?'));
+    const body = script.slice(script.indexOf('git diff --name-only'), script.indexOf('); then'));
+    return [...body.matchAll(/'([^']+)'|(\S+\.(?:ts|mjs))/g)].map((m) => m[1] ?? m[2]!).filter((x) => !x.startsWith('--'));
+  };
+  const covers = (spec: string, file: string): boolean => {
+    const g = spec.replace(/^:\(glob\)/, '');
+    if (g === file) return true;
+    const re = new RegExp('^' + g.split(/(\*\*\/|\*\*|\*)/).map((t) => (t === '**/' ? '(?:.*/)?' : t === '**' ? '.*' : t === '*' ? '[^/]*' : t.replace(/[.+^${}()|[\]\\]/g, '\\$&'))).join('') + '$');
+    return re.test(file);
+  };
+
+  it('the static pathspec covers every file vitest.config.ts loads for every run, and the manifests', () => {
+    const cfg = read('server/vitest.config.ts');
+    const loaded = [...new Set([...cfg.matchAll(/(?:globalSetup|setupFiles):\s*\[([^\]]*)\]/g)]
+      .flatMap((m) => [...m[1]!.matchAll(/'([^']+)'/g)].map((x) => `server/${x[1]}`)))];
+    expect(loaded.length, 'vitest.config.ts names no setup file — the derivation saw nothing').toBeGreaterThan(1);
+    const specs = pathspecs();
+    for (const f of [...loaded, 'server/package.json', 'agent/package-lock.json', 'ccd/history/x.mjs', '.github/workflows/ci.yml', 'server/vitest.config.ts', 'server/vitest.select.config.ts', 'server/.nvmrc']) {
+      expect(specs.some((sp) => covers(sp, f)), `${f} moves the floor's result but no pathspec covers it`).toBe(true);
+    }
+  });
+
+  it('the Select step hands select.mjs the floor job\'s own test list and the static answer', () => {
+    const script = runScript(step(job('select'), 'Select'));
+    expect(script).toContain('/^  node-floor:$/,/^  [a-z-]*:$/p');
+    expect(script).toContain('--floor-list "$RUNNER_TEMP/floor-list.txt" --floor-static "${FLOOR:-true}"');
+    expect(script, 'floor is select.mjs\'s output now, not re-emitted here').not.toContain('echo "floor=');
+  });
+});
+
 describe('the node-floor leg runs every history test file on the floor interpreter (spec 2026-10-05 §9.9)', () => {
   // The 22.16.0 leg exists because history needs FTS5 and a GC-safe `.iterate()` that 22.15 lacks; a history
   // test that never runs on the floor proves nothing about it. So the leg's list is DERIVED from the directory:

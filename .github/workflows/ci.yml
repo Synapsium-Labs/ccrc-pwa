@@ -183,11 +183,16 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
       # D-6771: does this pull request change what `node floor` runs or runs
-      # on? Answered here, where the diff is, and read by that job's leg
-      # switch — a path filter on the trigger would skip a required check;
-      # this skips only the one job that is not required. Every event but a
-      # pull request answers true (a merge-queue group and the daily run check
-      # every merge against the floor), and so does a base it cannot diff.
+      # on, other than through a file a test reads? Answered here, where the
+      # diff is: the manifests and lockfiles, the Node version files, the
+      # history library and the workflow, the floor's own tests and the
+      # vitest config with its setup files. The Select step adds the other
+      # half: the floor's tests the dependency map selects, which covers
+      # every module and helper they import. Read by that job's leg switch —
+      # a path filter on the trigger would skip a required check; this skips
+      # only the one job that is not required. Every event but a pull request
+      # answers true (a merge-queue group and the daily run check every merge
+      # against the floor), and so does a base it cannot diff.
       - name: Does this pull request touch the node floor's inputs?
         id: floor
         env:
@@ -200,7 +205,8 @@ jobs:
               ':(glob)**/package.json' ':(glob)**/package-lock.json' ':(glob)**/.nvmrc' \
               ':(glob)ccd/history/**' ':(glob).github/**' \
               server/test/node-floor.test.ts ':(glob)server/test/history-*.test.ts' server/test/measure-history.test.ts \
-              server/vitest.config.ts server/vitest.select.config.ts); then
+              server/vitest.config.ts server/vitest.select.config.ts \
+              ':(glob)server/test/*.setup.mjs' ':(glob)server/test/*.globalsetup.mjs'); then
             if [ -n "$changed" ]; then
               echo "run=true" >> "$GITHUB_OUTPUT"
               printf 'the node floor runs; its inputs changed:\n%s\n' "$changed"
@@ -278,9 +284,11 @@ jobs:
           args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
           if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi
           if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
+          # D-6771: the files the node floor runs, read from its own job so the list has one source; select.mjs
+          # answers `floor` true when its selection holds one of them, or when FLOOR (the static inputs) is true.
+          sed -n '/^  node-floor:$/,/^  [a-z-]*:$/p' .github/workflows/ci.yml | sed -n 's/^ *\(test\/[A-Za-z0-9._-]*\.test\.ts\)$/\1/p' > "$RUNNER_TEMP/floor-list.txt"
+          args+=(--floor-list "$RUNNER_TEMP/floor-list.txt" --floor-static "${FLOOR:-true}")
           node .github/ci/select.mjs "${args[@]}"
-          # D-6771: re-emitted here so every select output keeps one source.
-          echo "floor=${FLOOR:-true}" >> "$GITHUB_OUTPUT"
       # map-build refreshes against EXACTLY the map this job diffed from, not
       # whatever is newest by the time it runs, and is told which tests this
       # job MEANT to trace — a test whose trace never arrived is written
