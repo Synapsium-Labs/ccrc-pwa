@@ -248,8 +248,8 @@ const REGISTERED: Record<string, string> = {
   'fleet.css .proj-card-last + shell.css .shell-accounts .account-gauge-label':
     'DIFFERENT THINGS. The same `truncate` idiom as a shrinking flex item '
     + '(`flex: 0 1 auto` beside the four) and the meta type size. One is a '
-    + 'project card\'s last-activity line, which yields to the counts on its '
-    + 'row; the other is a lane card\'s name in the lanes row, which yields '
+    + 'project card\'s last-activity line, which yields before the project '
+    + 'name does; the other is a lane card\'s name in the lanes row, which yields '
     + 'so the windows after it keep their countdowns inside the card. Their '
     + 'shared part is the yield, and each row\'s yield order is its own.',
   'ui/tool-card.css .tool-dot + ui/workbench-status-bar.css .wb-status-dot + ui/workbench-terminal.css .wb-term-dot':
