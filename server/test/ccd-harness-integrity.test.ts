@@ -102,6 +102,8 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccd-leaf-root-newline.test.ts': ['_fp', '_fpp'],
   'ccd-lifecycle-emit.test.ts': ['_lc_obs_probe'],
   'ccd-limit-banner.test.ts': ['_leaky'],
+  // `_disk_pressure` stands in for a pressure probe no ccd ships yet (the floor's 3-day arm is inert until one does).
+  'ccd-orphan-audit.test.ts': ['_disk_pressure', '_fpp'],
   'ccd-path-users-esrch.test.ts': ['_fpp'],
   'ccd-path-users-many.test.ts': ['_fpp'],
   'ccd-path-users.test.ts': ['_fpp'],

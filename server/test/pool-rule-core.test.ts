@@ -244,7 +244,7 @@ describe('shared/poolrule.ts is the pure L0 module its ring requires', () => {
     expect(code().replace(/\s/g, '').length).toBeGreaterThan(200);
   });
 
-  it('takes TYPE imports only — L0 imports nothing, not even node:*', () => {
+  it('takes TYPE imports only (the no-node:* rule is rings/shared-imports.test.ts, D-6045)', () => {
     // The PWA bundles every `shared/*.ts`, so a `node:` import here does not
     // degrade anything — it breaks the client bundle. And a VALUE import is what
     // would let a decision start depending on something that has to be
@@ -254,8 +254,6 @@ describe('shared/poolrule.ts is the pure L0 module its ring requires', () => {
     for (const line of imports) {
       expect(line, `poolrule.ts takes a VALUE import: ${line.trim()}`).toMatch(/^\s*import\s+type\b/);
     }
-    expect(code(), 'poolrule.ts imports a node builtin — the PWA bundles this file')
-      .not.toMatch(/from\s+['"]node:/);
   });
 
   it('has no clock, no filesystem, no reply', () => {

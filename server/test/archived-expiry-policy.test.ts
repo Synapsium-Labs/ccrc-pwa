@@ -257,8 +257,8 @@ describe('the verb’s answer — box words told apart from composition errors (
     expect(collectEnd, 'its end marker').toBeGreaterThan(collectBegin);
     const inCollect = (at: number): boolean => at > collectBegin && at < collectEnd;
     const shape = (w: string, pre: string, collect: boolean): string =>
-      new RegExp(`(?:_ws_reclaim_fail "[^"\\n]*" "[^"\\n]*" |_ws_reclaim_failed_json )${w}$`).test(pre) ? 'failed'
-        : new RegExp(`(?:_reap_refuse |\\{"refused":")${w}$`).test(pre) ? 'refused'
+      new RegExp(`(?:_ws_reclaim_fail "[^"\\n]*" "[^"\\n]*" |_ws_orphan_failed "[^"\\n]*" "[^"\\n]*" |_ws_reclaim_failed_json )${w}$`).test(pre) ? 'failed'
+        : new RegExp(`(?:_reap_refuse |_ws_orphan_refused "[^"\\n]*" "[^"\\n]*" |\\{"refused":")${w}$`).test(pre) ? 'refused'
           : new RegExp(`_lc_fail reclaim "[^"\\n]*" "[^"\\n]*" ${w}$`).test(pre) ? 'journal'
             : collect && new RegExp(`_ws_collect_refused "[^"\\n]*" "[^"\\n]*" ${w}$`).test(pre) ? 'refused'
               : collect && new RegExp(`^\\s*REAP_VERDICT=${w}$`).test(pre) ? 'verdict' : 'unplaced';
@@ -287,6 +287,10 @@ describe('the verb’s answer — box words told apart from composition errors (
       '_ws_reap_locked refused state-changed',
       '_ws_reap_locked refused state-changed',
       '_ws_reap_tail refused state-changed',
+      '_ws_orphan_locked failed probe-unmeasured',
+      '_ws_orphan_locked refused state-changed',
+      '_ws_orphan_locked refused state-changed',
+      '_ws_orphan_locked failed probe-unmeasured',
       '_ws_reclaim_locked refused state-changed',
       '_ws_reclaim_locked failed probe-unmeasured',
       '_ws_reclaim_locked failed state-changed',

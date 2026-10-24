@@ -10,6 +10,7 @@ import {
 } from '../registry.js';
 import { fleetCarriesRunsAttribution } from '../fleetstate.js';
 import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
+import { clearSender } from '../inject/send.js';
 import { assembleFleet } from '../fleet.js';
 import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
@@ -1561,7 +1562,7 @@ export function registerCoordRoutes(
 
     const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue,
+      fleetState: deps.fleetState, sendClear: clearSender({ tmux: deps.tmux, queue: deps.queue }),
       // The one place a wrapper becomes a directory, called from L4 where the
       // config already lives. `dispatch.ts` declares the port instead of
       // importing `configDirFor` itself, because `config.ts` imports

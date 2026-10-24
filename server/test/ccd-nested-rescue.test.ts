@@ -319,6 +319,19 @@ describe('scratch-rescue keeps a session\'s scratch repository in the project at
     expect(h.git(c.main, 'ls-tree', '-r', '--name-only', String(entry['wip'])).split('\n')).toContain('loose.txt');
   }, 90_000);
 
+  it('a failed re-prove unlands only its own refs: a concurrent rescue\'s again-* ref under the same base survives', () => {
+    const c = makeChild(h);
+    const n = plantNested(c.wt);
+    arm();
+    const tok = evalOf(h).token;
+    const planted = `${base(CHILD_ID)}/again-other/refs/heads/main`;
+    const pre = `git() { case "$*" in *fetch.unpackLimit*) command git -C "${c.main}" update-ref "${planted}" HEAD; return 0 ;; esac; command git "$@"; };`;
+    const r = childReclaimVerb(h, tok, { pre });
+    expect(doc(r)['failed']).toBe('nested-rescue-failed');
+    intact(c, n.dir);
+    expect(h.git(c.main, 'for-each-ref', '--format=%(refname)', `${base(CHILD_ID)}/`), 'only the other rescue\'s ref remains; our claim is gone').toBe(planted);
+  }, 120_000);
+
   it('a second same-named scratch repository never orphans the first: every earlier tip still resolves', () => {
     const c = makeChild(h);
     const tips: string[] = [];

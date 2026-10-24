@@ -122,9 +122,9 @@ const where = (s: Site): string => `${s.file}:${s.line}`;
 
 /** The classified set, as the tree stands. No site is `unplaced`. */
 const EXPECTED_SITES: readonly string[] = [
-  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
-  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
-  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | gated',
+  'coord/dispatch.ts | spawnFresh | readRegistryMeasured | refuses',
+  'coord/dispatch.ts | spawnFresh | readRegistryMeasured | refuses',
+  'coord/dispatch.ts | resumeBound | readRegistryMeasured | gated',
   'coord/fingerprint.ts | resolveDoneBranch | readRegistryMeasured | holds',
   'coord/routes.ts | GET /api/peers | readRegistryMeasured | reports',
   'coord/routes.ts | POST /api/claims | readRegistryMeasured | reports',

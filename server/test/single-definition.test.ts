@@ -2314,7 +2314,8 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // that pretended they were copies would be describing the tree wrongly.
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'mail-disabled'")).map(rel).sort();
     expect(holders).toEqual([
-      'server/src/coord/dispatch.ts',   // the refusal CODE
+      'server/src/coord/dispatch.ts',   // the refusal CODE (the outcome union's member)
+      'server/src/coord/dispatchDecide.ts', // the refusal CODE, decided (ARCH-22, #553)
       'server/src/coord/stall.ts',      // the hold named for the marker it honours
       'shared/api.ts',                  // the refusal-code vocabulary
       'shared/switches.ts',             // the marker literal (its one definition, D-5855)
@@ -4708,10 +4709,14 @@ describe('docs failure vocabulary, redactor and ccd wire types are declared once
     for (const name of FUNCTIONS) expect(holdersOf(FUNCTION_DEF(name)), name).toEqual(['shared/docs.ts']);
   });
 
-  it('spells the redactor patterns in one TS file: no second copy of a rule', () => {
-    // Fragments every copy of rules 2 and 3 must contain however it is escaped or quoted.
+  it('spells the redactor patterns in one file, shared/redact.mjs: no second copy of a rule', () => {
+    // Fragments every copy of rules 2 and 3 must contain however it is escaped or quoted. D-5867 (Task C1l; ARCH-66
+    // (#801)): the rows' one home moved from shared/docs.ts to shared/redact.mjs, which `ALL` (`.ts` and `.tsx`) does
+    // not walk, so it is read by path.
+    const home = readFileSync(path.join(ccrcRoot, 'shared', 'redact.mjs'), 'utf8');
     for (const fragment of ['(?:access_token|token)=', 'gh[opsu]_']) {
-      expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(fragment)).map(rel), fragment).toEqual(['shared/docs.ts']);
+      expect(home.includes(fragment), `${fragment} in shared/redact.mjs`).toBe(true);
+      expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(fragment)).map(rel), fragment).toEqual([]);
     }
   });
 
@@ -6634,7 +6639,7 @@ describe('the turn verdict\'s reads and rule each have one home (D-5238)', () =>
 
   it('dispatch.ts reads no live file of its own: it asks the turnVerdict port', () => {
     const dispatch = stallCode(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'));
-    expect(dispatch).toMatch(/deps\.turnVerdict\(/);
+    expect(dispatch).toMatch(/turnVerdict: deps\.turnVerdict\b/);
     expect(dispatch).not.toMatch(/readLiveStateMeasured|readLiveState\b|panePid\(/);
   });
 });
@@ -6666,6 +6671,18 @@ describe('the approval classifier, its class map and the redactor each have one 
 
   it('redactCommand is defined once, in coord/redact.ts', () => {
     expect(holders(/\bfunction redactCommand\b|\bconst redactCommand\s*=/)).toEqual(['server/src/coord/redact.ts']);
+  });
+
+  // D-5867 (Task C1l, ARCH-66 (#801)): the egress rule patterns' one home is `shared/redact.mjs`. `.mjs` is not in
+  // `ALL`, so the home is read by path; the TypeScript holders are `ALL`'s.
+  it('the egress rule patterns have one home, shared/redact.mjs: no TypeScript file spells one', () => {
+    const FRAGMENTS = [/hooks\\\.slack\\\.com/, /gh\[pousr\]_/, /\bSECRET_NAME_TEST\b/, /\(\?:Proxy-\)\?Authorization/];
+    const home = readFileSync(path.join(ccrcRoot, 'shared', 'redact.mjs'), 'utf8');
+    for (const f of FRAGMENTS) {
+      expect(f.test(home), `${f} in shared/redact.mjs`).toBe(true);
+      expect(holders(f), `${f} in a .ts file`).toEqual([]);
+    }
+    expect(FRAGMENTS[0]!.test('const SLACK = /(hooks\\.slack\\.com\\/)/;'), 'CONTROL: the pattern sees a spelling').toBe(true);
   });
 });
 
@@ -7981,7 +7998,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(lock.packages[`node_modules/${SCAN_PARSER}`]).toMatchObject({ version: spec.split('@').pop(), dev: true });
   });
 
-  // D-5854 (Task C0g; ARCH-06 (#554), the W1a slice). The ratchet on literal source-text pins over W1a's files, by the
+  // D-5854 (Task C0g; ARCH-06 (#554), the W1a slice). The ratchet on literal source-text pins over W1a's files (ARCH-06's
+  // whole-tree slice widened the rule to every server/src .ts file: `namesSrcFile`, `SRC_FILES`, and the last ratchet below), by the
   // ticket's written counting rule, `literalSourcePins`: a test file counts when it reads one of W1A_FILES with
   // `readFileSync` (directly, through a path constant one hop away, or through a function whose body reads it), and a
   // pin counts when `indexOf`, `match`, `toContain` or `toMatch` (the `expect` spelling of `match`) is called with a
@@ -8000,30 +8018,49 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   // `coord/routes.ts` (shared with W1a), and the three only W1b moves.
   const W1B_FILES = ['server/src/watch.ts', 'server/src/coord/routes.ts', 'server/src/ccdargv.ts',
     'server/src/registry.ts', 'server/src/coord/redact.ts'];
-  const RATCHET_FILES = [...new Set([...W1A_FILES, ...W1B_FILES])];
-  /** The ratcheted files a read's source text names: its basename quoted or after a `/`; `routes.ts` and `redact.ts`
-   *  only beside `coord`; nothing when the text (or the reading function's, `context`) names another package. */
-  const namesW1aFile = (text: string, context = ''): string[] => {
+  // ARCH-06 (#554), the whole-tree slice: the rule counts a read of ANY server/src .ts file, not only W1a's and W1b's.
+  // `SRC_FILES` is what git lists under server/src; W1A_FILES and W1B_FILES keep their own rows (and ceilings) above.
+  const SRC_FILES: string[] = (() => {
+    const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'server/src/*.ts'],
+      { cwd: ccrcRoot, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    return r.stdout.split('\0').filter((x) => x && existsSync(path.join(ccrcRoot, x))).sort();
+  })();
+  const RATCHET_FILES = SRC_FILES;
+  const SRC_BASENAMES = new Set(SRC_FILES.map((f) => path.basename(f)));
+  /** Does `text` quote a server/src basename at all? The cheap test that decides whether a test file is parsed. */
+  const spellsSrcBasename = (text: string): boolean =>
+    [...text.matchAll(/['"`/]([\w.-]+\.ts)['"`]/g)].some((m) => SRC_BASENAMES.has(m[1]!));
+  /** The server/src files a read's source text names: the basename quoted or after a `/`; a basename that two
+   *  directories share (`routes.ts`, `redact.ts`, `io.ts`) resolves to the directory the text (or the reading function's,
+   *  `context`) also quotes, else to the one at server/src's root, else to nothing; a basename only ONE file has resolves
+   *  to that file whatever directory the text spells (`path.join(dirVar, 'delegation-ingest.ts')`); nothing when the text names
+   *  another package. */
+  const namesSrcFile = (text: string, context = ''): string[] => {
     const all = `${text}\n${context}`;
     if (/['"`/](?:agent|pwa|ui|ccd|shared)['"`/]/.test(all)) return [];
-    return RATCHET_FILES.filter((f) => {
-      const base = path.basename(f);
-      if (!new RegExp(`['"\`/]${esc(base)}['"\`]`).test(text)) return false;
-      return (base !== 'routes.ts' && base !== 'redact.ts') || /['"`/]coord['"`/]/.test(all);
-    });
+    const out: string[] = [];
+    for (const base of SRC_BASENAMES) {
+      if (!new RegExp(`['"\`/]${esc(base)}['"\`]`).test(text)) continue;
+      const same = SRC_FILES.filter((f) => path.basename(f) === base);
+      const dir = (f: string): string => path.basename(path.dirname(f));
+      const beside = same.filter((f) => dir(f) !== 'src' && new RegExp(`['"\`/]${esc(dir(f))}['"\`/]`).test(all));
+      out.push(...(beside.length ? beside : same.length === 1 ? same : same.filter((f) => dir(f) === 'src')));
+    }
+    return out;
   };
   interface SourcePin { line: number; target: string; method: string; literal: string }
   /** How many texts `literalSourcePins` has parsed (D-6111's guard reads it). */
   let pinParses = 0;
   /** ARCH-06's counting rule over one test file's text (D-5854). */
   const literalSourcePins = (text: string, file = 'probe.ts'): SourcePin[] => {
-    // D-6111: every target below comes from `namesW1aFile` over a substring of `text`, and it answers nothing unless
+    // D-6111: every target below comes from `namesSrcFile` over a substring of `text`, and it answers nothing unless
     // that substring spells a W1a basename, so a text that spells none has no pin and is not parsed. Parsing all of
     // server/test took 9.9 s of the 20 s Linux budget untraced, and timed out under the map's trace. KNOWN WIDTH: a
-    // template that splits a basename across lines is joined by `flat` before `namesW1aFile` reads it, so this raw-text
+    // template that splits a basename across lines is joined by `flat` before `namesSrcFile` reads it, so this raw-text
     // check would miss it; no such pin exists (the counts with and without this check were measured equal).
     // D-6114: every ratcheted file's basename, W1b's too, or a pin over `ccdargv.ts` alone would never be parsed.
-    if (!RATCHET_FILES.some((f) => text.includes(path.basename(f)))) return [];
+    if (!text.includes('readFileSync') || !spellsSrcBasename(text)) return [];
     pinParses += 1;
     const p = parseSource(text, file);
     const raw = (c: { start: number; end: number }): string => text.slice(c.start, c.end);
@@ -8050,7 +8087,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     const readNames = (callText: string, at: number): string[] => {
       const id = /^readFileSync\s*\(\s*([A-Za-z_$][\w$]*)\s*[,)]/.exec(callText)?.[1];
       const j = id === undefined ? -1 : resolve(id, at);
-      return [...new Set([...namesW1aFile(callText), ...(j < 0 ? [] : namesW1aFile(p.bindings[j]!.init, callText))])];
+      return [...new Set([...namesSrcFile(callText), ...(j < 0 ? [] : namesSrcFile(p.bindings[j]!.init, callText))])];
     };
     const readers = new Map<string, { fixed: string[]; context: string }>();
     for (const r of p.calls.filter((c) => c.name === 'readFileSync')) {
@@ -8065,7 +8102,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       const m = /^([A-Za-z_$][\w$]*)\s*\(/.exec(expr);
       const rd = m ? readers.get(m[1]!) : undefined;
       return !m ? [] : m[1] === 'readFileSync' ? readNames(expr, at)
-        : !rd ? [] : rd.fixed.length ? rd.fixed : namesW1aFile(expr, rd.context);
+        : !rd ? [] : rd.fixed.length ? rd.fixed : namesSrcFile(expr, rd.context);
     };
     for (const c of p.calls) if (c.boundTo !== null && c.name !== null && c.callee === c.name && readers.has(c.name)) {
       track(resolve(c.boundTo, c.start), inlineRead(raw(c), c.start));
@@ -8098,19 +8135,28 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   };
   /** Every tracked or new untracked .ts file under server/test, its pins' count per ratcheted file (W1a's and W1b's,
    *  D-6114), and how many files were listed and parsed. Scanned once and shared by both ratchets and D-6111's guard. */
-  let pinScan: { counts: Record<string, number>; listed: number; parsed: number } | undefined;
+  /** The security censuses' test files (#554: they are exempt from the ratchet and migrate one at a time, each in its own
+   *  PR). Their pins are tallied in `exempt` for information and carry no ceiling, so a security PR that adds a route
+   *  or a pin never goes red here. */
+  const SECURITY_CENSUS_TESTS: readonly string[] = ['server/test/auth-gate.test.ts', 'server/test/box-token-census.test.ts',
+    'server/test/token-policy.test.ts', 'server/test/token-claim-route.test.ts', 'server/test/notify-token.test.ts'];
+  let pinScan: { counts: Record<string, number>; exempt: Record<string, number>; listed: number; parsed: number } | undefined;
   const literalSourcePinScan = (): NonNullable<typeof pinScan> => {
     if (pinScan) return pinScan;
     const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'server/test/*.ts'],
       { cwd: ccrcRoot, encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
     const counts: Record<string, number> = Object.fromEntries(RATCHET_FILES.map((f) => [f, 0]));
+    const exempt: Record<string, number> = {};
     const files = new Set(r.stdout.split('\0').filter((x) => x && existsSync(path.join(ccrcRoot, x))));
     const before = pinParses;
     for (const f of files) {
-      for (const pin of literalSourcePins(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)) counts[pin.target]! += 1;
+      for (const pin of literalSourcePins(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)) {
+        if (SECURITY_CENSUS_TESTS.includes(f)) exempt[pin.target] = (exempt[pin.target] ?? 0) + 1;
+        else counts[pin.target]! += 1;
+      }
     }
-    pinScan = { counts, listed: files.size, parsed: pinParses - before };
+    pinScan = { counts, exempt, listed: files.size, parsed: pinParses - before };
     return pinScan;
   };
   /** The shared scan's counts for `files` alone, in their order (D-6114: one scan serves both ratchets). */
@@ -8150,13 +8196,23 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       "expect(update).toContain('app.get(');",
       "const agent = readFileSync(path.join(root, 'agent', 'src', 'server.ts'), 'utf8');",
       "expect(agent.indexOf('listen(')).toBeGreaterThan(0);",
-    ))).toEqual(['3 coord/routes.ts toContain app.post(', '4 coord/childReclaim.ts toMatch /x/']);
+    ))).toEqual(['3 coord/routes.ts toContain app.post(', '4 coord/childReclaim.ts toMatch /x/',
+      '6 update/routes.ts toContain app.get(']);   // the counting rule sees it; whether it is ratcheted depends on the reading test file
     expect(pins(L(
       "describe('a', () => { const src = readFileSync(join(dir, 'server.ts'), 'utf8'); expect(src).toContain('a'); });",
       "describe('b', () => { const src = readFileSync(join(dir, 'other.ts'), 'utf8'); expect(src).toContain('b'); });",
       "const watchSrc = (): string => readFileSync(join(dir, 'watch.ts'), 'utf8');",
       "it('c', () => { const w = watchSrc(); expect(w.indexOf('c')).toBe(1); });",
     ))).toEqual(['1 server.ts toContain a', '4 watch.ts indexOf c']);
+    // A basename one file owns counts when the directory is built elsewhere; a shared one still needs its directory.
+    expect(pins(L(
+      "const a = readFileSync(path.join(dirVar, 'childReclaim.ts'), 'utf8');",
+      "expect(a.indexOf('x')).toBe(1);",
+      "const b = readFileSync(path.join(dirVar, 'delegation-ingest.ts'), 'utf8');",
+      "expect(b).toContain('y');",
+      "const c = readFileSync(path.join(dirVar, 'routes.ts'), 'utf8');",
+      "expect(c).toContain('z');",
+    ))).toEqual(['2 coord/childReclaim.ts indexOf x', '4 coord/delegation-ingest.ts toContain y']);
     // A read whose path sits in a constant resolves one hop through that constant's binding.
     expect(pins(L(
       "const W = path.resolve(dir, '../src/watch.ts');",
@@ -8172,10 +8228,10 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('literal source pins over W1a\'s files may only shrink (D-5854; ARCH-06\'s counting rule)', () => {
     // Measured on merge day. Lower a row when a pin moves onto scan/symbols.ts; never raise one.
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 113,
-      'server/src/server.ts': 31,
+      'server/src/watch.ts': 81,
+      'server/src/server.ts': 23,
       'server/src/interruptlog.ts': 0,
-      'server/src/coord/routes.ts': 40,
+      'server/src/coord/routes.ts': 38,
       'server/src/coord/childReclaim.ts': 6,
       'server/src/coord/expireArchived.ts': 0,
       'server/src/coord/collectTempRoot.ts': 0,
@@ -8186,12 +8242,12 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(Object.keys(counts)).toEqual(Object.keys(CEILING));
     for (const f of W1A_FILES) {
       expect(counts[f], `${f}: a new literal source pin — key it on scan/symbols.ts (sourceOfSymbol) `
-        + 'or a parse.ts-based census instead')
-        .toBeLessThanOrEqual(CEILING[f]!);
+        + 'or a parse.ts-based census instead (and lower the row to the new count: the ratchet is exact)')
+        .toBe(CEILING[f]!);
     }
   });
 
-  it('CONTROL (fixture, D-6114): W1b\'s three files are counted the same way, and `redact.ts` only beside `coord`', () => {
+  it('CONTROL (fixture, D-6114): W1b\'s three files are counted the same way, `redact.ts` whatever directory is spelled, a package\'s own `registry.ts` not', () => {
     const pins = (code: string): string[] =>
       literalSourcePins(code).map((x) => `${x.line} ${x.target.replace('server/src/', '')} ${x.method} ${x.literal}`);
     expect(pins([
@@ -8205,15 +8261,16 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       "expect(d).toContain('w');",
       "const e = readFileSync(path.join(root, 'pwa', 'src', 'command', 'registry.ts'), 'utf8');",
       "expect(e).toContain('v');",
-    ].join('\n'))).toEqual(['2 ccdargv.ts toContain x', '4 registry.ts indexOf y', '6 coord/redact.ts toMatch /z/']);
+    ].join('\n'))).toEqual(['2 ccdargv.ts toContain x', '4 registry.ts indexOf y', '6 coord/redact.ts toMatch /z/',
+      '8 coord/redact.ts toContain w']);   // ARCH-06: a basename one file owns resolves to it whatever directory the text spells
   });
 
   // D-6114 (Task C0o; ARCH-06 (#554), the W1b slice). The same rule over W1b's files, its own ceiling, so a slice moved
   // onto scan/symbols.ts ahead of W1b lowers a row here. Measured on this slice's tip; may only shrink.
   it('literal source pins over W1b\'s files may only shrink (D-6114; ARCH-06\'s counting rule)', () => {
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 85,
-      'server/src/coord/routes.ts': 40,
+      'server/src/watch.ts': 81,
+      'server/src/coord/routes.ts': 38,
       'server/src/ccdargv.ts': 6,
       'server/src/registry.ts': 2,
       'server/src/coord/redact.ts': 0,
@@ -8222,9 +8279,116 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(Object.keys(counts)).toEqual(Object.keys(CEILING));
     for (const f of W1B_FILES) {
       expect(counts[f], `${f}: a new literal source pin — key it on scan/symbols.ts (sourceOfSymbol) `
-        + 'or a parse.ts-based census instead')
-        .toBeLessThanOrEqual(CEILING[f]!);
+        + 'or a parse.ts-based census instead (and lower the row to the new count: the ratchet is exact)')
+        .toBe(CEILING[f]!);
     }
+  });
+
+  // ARCH-06 (#554), the whole-tree slice. W1a's and W1b's rows above keep their own ceilings; this is every OTHER
+  // server/src file, measured on merge day. A file absent from the table has a ceiling of 0, so the first literal pin
+  // over a file nobody pinned before is red. Lower a row when a pin moves onto `scan/symbols.ts`; never raise one.
+  // The security censuses' test files (SECURITY_CENSUS_TESTS) are exempt, as the ticket says: their pins are not counted
+  // here and have no row, so each migrates in its own PR. Another test's pin over those src files still counts.
+  /** The files whose pin count exceeds their ceiling (absent = 0), in `files`' order. A named function so a fixture can
+   *  prove the check is red on a new pin. */
+  const overCeiling = (counts: Record<string, number>, ceiling: Record<string, number>, files: readonly string[]): string[] =>
+    files.filter((f) => (counts[f] ?? 0) > (ceiling[f] ?? 0));
+
+  it('CONTROL (fixture, ARCH-06): a new pin in a security census test file is exempt, in any other test file it counts', () => {
+    const { exempt } = literalSourcePinScan();
+    expect(Object.keys(exempt).length, 'the exempt tally saw no security census pin').toBeGreaterThan(0);
+    expect(SECURITY_CENSUS_TESTS.every((f) => existsSync(path.join(ccrcRoot, f))), 'an exempt file is gone').toBe(true);
+    const gate = 'server/src/auth/gate.ts';
+    const extra = literalSourcePins("expect(readFileSync(path.join(srcRoot, 'auth', 'gate.ts'), 'utf8')).toContain('x');", 'probe.ts');
+    expect(extra.map((x) => x.target)).toEqual([gate]);
+    // The scan's rule: a pin read from an exempt file never reaches `counts`, so a new one cannot be over a ceiling.
+    expect(SECURITY_CENSUS_TESTS.includes('server/test/auth-gate.test.ts')).toBe(true);
+    expect(SECURITY_CENSUS_TESTS.includes('server/test/other.test.ts')).toBe(false);
+    expect(literalSourcePinScan().counts[gate] ?? 0, 'auth/gate.ts has no row: only a non-census test may pin it').toBe(0);
+    expect(overCeiling({ [gate]: 1 }, {}, [gate])).toEqual([gate]);
+  });
+
+  it('CONTROL (fixture, ARCH-06): one new indexOf source pin over an unpinned file is counted, and over its ceiling', () => {
+    const code = "const src = readFileSync(path.join(srcDir, 'coord', 'rundefs.ts'), 'utf8');\nexpect(src.indexOf('x')).toBe(1);";
+    expect(literalSourcePins(code).map((x) => `${x.target} ${x.method}`)).toEqual(['server/src/coord/rundefs.ts indexOf']);
+    expect(overCeiling({ 'server/src/coord/rundefs.ts': 1 }, {}, ['server/src/coord/rundefs.ts'])).toEqual(['server/src/coord/rundefs.ts']);
+    expect(overCeiling({ 'server/src/coord/store.ts': 56 }, { 'server/src/coord/store.ts': 56 }, ['server/src/coord/store.ts'])).toEqual([]);
+  });
+
+  it('literal source pins over every other server/src file may only shrink (ARCH-06; the counting rule)', () => {
+    const CEILING: Record<string, number> = {
+      'server/src/accounts/mask.ts': 1,
+      'server/src/askbody.ts': 1,
+      'server/src/askkey.ts': 1,
+      'server/src/askwindow.ts': 1,
+      'server/src/auth/sessions.ts': 3,
+      'server/src/auth/webauthn.ts': 2,
+      'server/src/childReclaimSweep.ts': 7,
+      'server/src/collectLane.ts': 7,
+      'server/src/config.ts': 3,
+      'server/src/coord/caps.ts': 6,
+      'server/src/coord/close.ts': 8,
+      'server/src/coord/collectLaneJournal.ts': 5,
+      'server/src/coord/db.ts': 4,
+      'server/src/coord/delegation-checkpoint.ts': 33,
+      'server/src/coord/delegation-correlation.ts': 4,
+      'server/src/coord/delegation-ingest.ts': 5,
+      'server/src/coord/delegation-journal.ts': 14,
+      'server/src/coord/delegation-model.ts': 5,
+      'server/src/coord/delegation-policy.ts': 6,
+      'server/src/coord/digest.ts': 2,
+      'server/src/coord/dispatch.ts': 5,
+      'server/src/coord/dispatchDecide.ts': 3,
+      'server/src/coord/drift.ts': 1,
+      'server/src/coord/envelope.ts': 3,
+      'server/src/coord/heldFor.ts': 2,
+      'server/src/coord/items.ts': 5,
+      'server/src/coord/kickoff.ts': 4,
+      'server/src/coord/landing.ts': 6,
+      'server/src/coord/placement.ts': 7,
+      'server/src/coord/reclaim.ts': 4,
+      'server/src/coord/released.ts': 5,
+      'server/src/coord/schema.ts': 3,
+      'server/src/coord/stall.ts': 6,
+      'server/src/coord/stallsettings.ts': 5,
+      'server/src/coord/store.ts': 56,
+      'server/src/coord/token.ts': 1,
+      'server/src/deps.ts': 2,
+      'server/src/docs/policy.ts': 10,
+      'server/src/exec.ts': 1,
+      'server/src/fleet.ts': 3,
+      'server/src/hibernateSweep.ts': 2,
+      'server/src/hookstate.ts': 3,
+      'server/src/index.ts': 38,
+      'server/src/inject/ask.ts': 4,
+      'server/src/inject/send.ts': 3,
+      'server/src/io.ts': 8,
+      'server/src/limits.ts': 1,
+      'server/src/linear/client.ts': 2,
+      'server/src/livestate.ts': 2,
+      'server/src/localcaps.ts': 3,
+      'server/src/pane/dialog.ts': 4,
+      'server/src/poolrule.ts': 6,
+      'server/src/pools.ts': 2,
+      'server/src/prstate.ts': 2,
+      'server/src/remote/io.ts': 1,
+      'server/src/remote/runner.ts': 1,
+      'server/src/stopDoneSweep.ts': 5,
+      'server/src/turnidle.ts': 9,
+      'server/src/update/converge.ts': 12,
+      'server/src/update/dispatch.ts': 8,
+      'server/src/update/resolve.ts': 2,
+      'server/src/update/routes.ts': 1,
+    };
+    const { counts } = literalSourcePinScan();
+    const taken = new Set([...W1A_FILES, ...W1B_FILES]);
+    const rest = SRC_FILES.filter((f) => !taken.has(f));
+    expect(Object.keys(CEILING).filter((f) => !rest.includes(f)), 'a ceiling row names a file that is gone or has its own table').toEqual([]);
+    for (const f of Object.keys(CEILING)) {
+      expect(counts[f] ?? 0, `${f}: the row is not what the scan measures — lower it when a pin moves (exact, so no slack hides a new pin)`).toBe(CEILING[f]!);
+    }
+    expect(overCeiling(counts, CEILING, rest), 'a new literal source pin over these files — key it on scan/symbols.ts '
+      + '(sourceOfSymbol, callsIn, sqlStatementsIn) or a parse.ts-based census instead').toEqual([]);
   });
 });
 
@@ -8634,5 +8798,21 @@ describe('ccrc history: the headless marker and the arm words are defined once, 
     const named = HISTORY_MJS.flatMap((f) => stallCode(f).split('\n').filter((l) => NAMES_MARKER.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
     expect(named, 'CONTROL: historyPaths names it').toContain(`ccd/history/lib.mjs: ${PATHS_FIELD}`);
     expect(named.filter((x) => !allowed(x.slice(x.indexOf(': ') + 2)))).toEqual([]);
+  });
+});
+
+// D-5867 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1l, Step 4;
+// ARCH-66 (#801); spec §5.1 rule 3). The redactor ratchet, appended after the capability ratchet so no cited line above
+// it moves. The JS/TS modules that spell redaction rule patterns of their own (`consolidationCensus.ts`'s
+// `redactRuleTables`, `shared/redact.mjs` counted) were three: `coord/redact.ts`, `shared/docs.ts` and
+// `ccd/history/lib.mjs`. PR 1 moved the first two into `shared/redact.mjs`; PR 2 moves the third, and then the bound
+// is one. The set may only shrink. The census is loaded inside the row, so this block adds no import line.
+describe('one redaction rule table (ARCH-66): shared/redact.mjs (D-5867)', () => {
+  it('at most two modules spell redaction rule patterns, and no TypeScript module is one', async () => {
+    const { redactRuleTables } = await import('./consolidationCensus.js');
+    const tables = redactRuleTables();
+    expect(tables.length, `a new redaction rule table: ${tables.join(', ')}; add the rules to shared/redact.mjs`).toBeLessThanOrEqual(2);
+    expect(tables.filter((f) => /\.tsx?$/.test(f)), 'a TypeScript redaction table').toEqual([]);
+    expect(tables).toContain('shared/redact.mjs');
   });
 });

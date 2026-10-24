@@ -1,0 +1,106 @@
+{
+ "docs": [
+  [
+   "URL userinfo",
+   "clone https://user:pw@example.com/o/r.git failed",
+   "clone https://***@example.com/o/r.git failed"
+  ],
+  [
+   "URL userinfo with an @ in the password: docs stops at the first @",
+   "https://user:p@ss@host/x",
+   "https://***@ss@host/x"
+  ],
+  [
+   "access_token query",
+   "GET /x?access_token=abc123&y=1",
+   "GET /x?access_token=***&y=1"
+  ],
+  [
+   "token query after &",
+   "GET /x?a=1&token=abc123 done",
+   "GET /x?a=1&token=*** done"
+  ],
+  [
+   "ghp token",
+   "token ghp_abcdefghijklmnopqrstuvwxyz0123456789 end",
+   "token ghp_*** end"
+  ],
+  [
+   "gho token",
+   "x gho_abcdefghijklmnopqrstuvwxyz0123 y",
+   "x gho_*** y"
+  ],
+  [
+   "a short ghs word stays",
+   "ghs_short",
+   "ghs_short"
+  ],
+  [
+   "Authorization line",
+   "before\nAuthorization: Bearer abc.def\nafter",
+   "before\nAuthorization: ***\nafter"
+  ],
+  [
+   "a URL with no userinfo survives",
+   "see https://github.com/o/r/blob/main/a.md?x=1",
+   "see https://github.com/o/r/blob/main/a.md?x=1"
+  ],
+  [
+   "an email address survives",
+   "mail me at dev@example.com please",
+   "mail me at dev@example.com please"
+  ],
+  [
+   "PATH= survives",
+   "PATH=/usr/bin:/bin",
+   "PATH=/usr/bin:/bin"
+  ],
+  [
+   "a word ending in -key survives",
+   "the monkey-key word",
+   "the monkey-key word"
+  ],
+  [
+   "--api-key in docs prose is kept",
+   "use --api-key sk-abcdefghij1234 here",
+   "use --api-key sk-abcdefghij1234 here"
+  ],
+  [
+   "password= survives",
+   "password=hunter2",
+   "password=hunter2"
+  ]
+ ],
+ "cross": [
+  [
+   "https://user:p@ss@host/x",
+   "https://[REDACTED]@host/x",
+   "https://***@ss@host/x"
+  ],
+  [
+   "https://token@host/x",
+   "https://[REDACTED]@host/x",
+   "https://***@host/x"
+  ],
+  [
+   "curl -H \"Authorization: Bearer abc.def\" https://h/x",
+   "curl -H \"Authorization: [REDACTED]\" https://h/x",
+   "Authorization: ***"
+  ],
+  [
+   "GET /x?access_token=abc123&token=zzz",
+   "GET /x?access_token=[REDACTED]&token=[REDACTED]",
+   "GET /x?access_token=***&token=***"
+  ],
+  [
+   "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+   "[REDACTED]",
+   "ghp_***"
+  ],
+  [
+   "Authorization: Basic Zm9v\nnext",
+   "Authorization: [REDACTED]\nnext",
+   "Authorization: ***\nnext"
+  ]
+ ]
+}

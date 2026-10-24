@@ -35,6 +35,7 @@
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { killGroup } from './spawnGroup.js';
+import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { createHash } from 'node:crypto';
 import { createServer as createNetServer, type AddressInfo } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
@@ -299,6 +300,7 @@ function healthyBox(home: string): void {
 
   stub('df', [
     'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
+    ...FIXTURE_DF_INODES_LINES,
     '[ "$1" = "-Pk" ] && [ -n "$2" ] || { echo "fixture df: unexpected argv: $*" >&2; exit 90; }',
     'echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
     'echo "/dev/fixture0    104857600  20971520 42991616      21% /"',
@@ -1494,6 +1496,9 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     const child = spawn(process.execPath, ['-e', HOST_JS, String(bytes), String(everyMs)], { stdio: ['ignore', 'pipe', 'ignore'] });
     let out = '';
     child.stdout!.on('data', (d: Buffer) => { out += d.toString(); });
+    // `close`, not `exit`: the host prints its count as it exits, and `exit` can fire before that last chunk is
+    // read, which reads as "sent 0".
+    const closed = new Promise<void>((resolve) => { child.once('close', () => resolve()); });
     const port = await new Promise<number>((resolve, reject) => {
       const t0 = Date.now();
       const iv = setInterval(() => {
@@ -1503,9 +1508,8 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       }, 20);
     });
     const stop = async (): Promise<number> => {
-      if (child.exitCode === null && child.signalCode === null) {
-        await new Promise<void>((resolve) => { child.once('exit', () => resolve()); child.kill('SIGTERM'); });
-      }
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      await closed;
       const m = /sent (\d+)/.exec(out);
       return m ? Number(m[1]) : 0;
     };
@@ -1546,7 +1550,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       expect(elapsedMs, `took ${elapsedMs}ms; stderr: ${r.stderr}`).toBeGreaterThanOrEqual(1800);
       expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(10_000);
       // The host really was above the floor the whole time.
-      expect(sent / (elapsedMs / 1000), `sent ${sent} bytes in ${elapsedMs}ms`).toBeGreaterThan(1500);
+      expect(sent / (elapsedMs / 1000), `sent ${sent} bytes in ${elapsedMs}ms; stderr: ${r.stderr}`).toBeGreaterThan(1500);
       expect(r.stderr).toMatch(/curl: \(28\) Operation timed out after 2\d{3} milliseconds/);
       expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS \(is there a release, or did the connection stall.*or did it time out after 2s \/ exceed 1048576 bytes\)/);
     } finally {

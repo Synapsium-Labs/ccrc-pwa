@@ -304,10 +304,11 @@ const GATES = {
     file: 'coord/routes.ts', scope: 'POST /api/runs/:id/advance',
     re: /if \(to === 'awaiting-review' \|\| to === 'merging'\) \{\s*if \(!isRegistryId\(run\.sessionId\)\) return reply\.code\(409\)\.send\(\{ ok: false, reject: \{ code: 'bad-session' \} \}\);/,
   },
-  /** Dispatch re-checks the stored id straight after the hold verdict, before any read. */
+  /** Dispatch re-checks the stored id straight after the hold verdict, before any read: the decider's request step
+   *  (ARCH-22), which `dispatchRun` runs first and which stops it on any refusal. */
   'dispatch-gate': {
-    file: 'coord/dispatch.ts', scope: 'dispatchRun',
-    re: /if \(!hold\.ok\) return hold;\s*if \(run\.sessionId !== null && !isRegistryId\(run\.sessionId\)\) return \{ ok: false, kind: 'bad-session' \};/,
+    file: 'coord/dispatchDecide.ts', scope: 'decideRequest',
+    re: /if \(!hold\.ok\) return refused\(hold\);\s*if \(run\.sessionId !== null && !isRegistryId\(run\.sessionId\)\) return refused\(\{ ok: false, kind: 'bad-session' \}\);/,
   },
   /** The abandon arm closes a bad stored id `failed` with no fleet act, and records its one event. */
   'close-abandon-branch': {
@@ -359,6 +360,10 @@ type Gate = keyof typeof GATES;
 
 type Origin = 'request' | 'stored' | 'registry' | 'collector' | 'literal';
 
+/** `dispatchRun` asks the decider's request step first and returns its refusal, so every id-taking call below runs
+ *  on a stored id the step vetted (ARCH-22). */
+const DISPATCH_DECIDED = /\bdecideDispatch\(\{ step: 'request'[\s\S]*?if \(req\.kind !== 'go'\) return stopped\(coord, id, req\);/;
+
 interface CensusRow {
   readonly file: string;
   readonly scope: string;
@@ -403,9 +408,9 @@ const CENSUS: readonly CensusRow[] = [
   // coord/dispatch.ts: refuseSpentChild's only caller is dispatchRun, below its gate; the fresh winner is a listed, valid row.
   { file: 'coord/dispatch.ts', scope: 'refuseSpentChild', builder: 'wsHold', id: 'run.sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
   { file: 'coord/dispatch.ts', scope: 'refuseSpentChild', builder: 'wsRelease', id: 'run.sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
-  { file: 'coord/dispatch.ts', scope: 'dispatchRun', builder: 'ensure', id: 'sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
-  { file: 'coord/dispatch.ts', scope: 'dispatchRun', builder: 'wsHold', id: 'sessionId', origin: ['stored', 'registry'], gate: ['dispatch-gate', 'registry-refused'] },
-  { file: 'coord/dispatch.ts', scope: 'dispatchRun', builder: 'routeSet', id: 'sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
+  { file: 'coord/dispatch.ts', scope: 'resumeBound', builder: 'ensure', id: 'sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
+  { file: 'coord/dispatch.ts', scope: 'dispatchRun', builder: 'wsHold', id: 'sessionId', origin: ['stored', 'registry'], gate: ['dispatch-gate', 'registry-refused'], entry: DISPATCH_DECIDED },
+  { file: 'coord/dispatch.ts', scope: 'dispatchRun', builder: 'routeSet', id: 'sessionId', origin: ['stored'], gate: ['dispatch-gate'], entry: DISPATCH_DECIDED },
   // coord/expireArchived.ts: the audit serves both the executor and the learning read.
   { file: 'coord/expireArchived.ts', scope: 'expireAudit', builder: 'wsExpireAudit', id: 'sessionId', origin: ['registry'], gate: ['expiry-step-0', 'learn-expiry-step-0'] },
   { file: 'coord/expireArchived.ts', scope: 'expireAct', builder: 'wsExpire', id: 'sessionId', origin: ['registry'], gate: ['expiry-step-0'] },
@@ -457,7 +462,7 @@ const CENSUS: readonly CensusRow[] = [
 /** The files whose gates ask the predicate themselves. */
 const GATE_FILES = [
   'server.ts', 'registry.ts', 'watch.ts',
-  'coord/routes.ts', 'coord/openRun.ts', 'coord/dispatch.ts', 'coord/close.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
+  'coord/routes.ts', 'coord/openRun.ts', 'coord/dispatchDecide.ts', 'coord/close.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
   'coord/expireArchived.ts',
 ] as const;
 
@@ -528,7 +533,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     expect(Object.keys(GATES).filter((g) => !used.has(g)), 'a gate no call names').toEqual([]);
   });
 
-  it("stopArgvFor's three call sites each stand below their id gate and the pair-part refusal", () => {
+  it("stopArgvFor's two call sites each stand below their id gate and the pair-part refusal", () => {
     const lines = codeOnly(readFileSync(path.join(srcRoot, 'server.ts'), 'utf8')).split('\n');
     const heads = headsOf(lines);
     const callers = lines.flatMap((l, i) => (/\bstopArgvFor\(/.test(l) && !/\bfunction stopArgvFor\(/.test(l)
@@ -537,14 +542,16 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     expect(callers.map((c) => c.head?.name ?? null)).toEqual([
       'POST /api/sessions/:id/stop',
       'POST /api/sessions/:id/archive',
-      'POST /api/sessions/:id/archive',
     ]);
     // The identity arm, which both routes share: `stopPairRefused` (the `stopPair` row's gate) answers 502 (D-5971) with no argv
     // composed. It vets the row's `.project` and refuses the `.wrapper` fallback, so the wrapper is the vetted id's prefix.
     const IDENTITY_ARM = /if \(identity === null \|\| stopPairRefused\(id, read\.record, identity\)\) \{\s*return refuseRoute\(reply, 'registry-unmeasurable'\);/;
+    // ARCH-36: the archive door asks the same refusal as `admitArchive`'s last gate (`coord/archiveAdmission.ts`), and
+    // its one `stopArgvFor(` stands below the admission's refused arm, so a refused part composes no argv.
+    const ARCHIVE_IDENTITY_ARM = /\bawait admitArchive<[\s\S]*\bpairRefused: \(rec, identity\) => stopPairRefused\(id, rec, identity\),[\s\S]*if \(!admitted\.ok\) return refuseRoute\(reply, admitted\.word\);/;
     const GATES_OF: Readonly<Record<string, readonly (readonly [string, RegExp])[]>> = {
       'POST /api/sessions/:id/stop': [['its id gate', /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/], ['stopPairRefused', IDENTITY_ARM]],
-      'POST /api/sessions/:id/archive': [['its id gate', KNOWN_ID], ['stopPairRefused', IDENTITY_ARM]],
+      'POST /api/sessions/:id/archive': [['its id gate', KNOWN_ID], ['stopPairRefused', ARCHIVE_IDENTITY_ARM]],
     };
     for (const c of callers) {
       const before = lines.slice(c.head!.line, c.line + 1).join('\n');
@@ -576,7 +583,8 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     // own parameter on to `childSpentLive` adds no gate of its own: its callers vet it.
     const CALLERS: Readonly<Record<string, readonly string[]>> = {
       closeReviewRun: ['coord/close.ts | closeRun'],
-      refuseSpentChild: ['coord/dispatch.ts | dispatchRun'],
+      refuseSpentChild: ['coord/dispatch.ts | resumeBound'],
+      resumeBound: ['coord/dispatch.ts | dispatchRun'],
       expireAudit: ['coord/expireArchived.ts | expireArchived', 'coord/expireArchived.ts | learnExpiry'],
       expireAct: ['coord/expireArchived.ts | expireArchived'],
       childReclaimAudit: ['coord/childReclaim.ts | childReclaimOutcome'],
@@ -588,6 +596,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     };
     /** `<callee> <- <file> | <scope>`: the caller's decider refuses first, and the call runs only on its admitted open. */
     const DECIDED_ABOVE: Readonly<Record<string, RegExp>> = {
+      'resumeBound <- coord/dispatch.ts | dispatchRun': DISPATCH_DECIDED,
       'holdAndBindSession <- coord/routes.ts | POST /api/runs':
         /\bconst pre = await openRunPreconditions\(\{[\s\S]*?if \(!pre\.ok\) return sendOpenRunRefusal\(reply, pre\.refusal\);[\s\S]*\bholdAndBindSession\(coord, reply, opened, sessionId\)/,
     };

@@ -2276,70 +2276,210 @@ _check_name() {
   _dr_pass name "$domain resolves (${resolved[0]}); this box's own public address is not discoverable from inside (NAT, or no global address on an interface), so where the record points was not compared"
 }
 
-# ── room on the filesystem $HOME is on ────────────────────────────────────
-# Spec §5's "disk headroom (including the backup dir)". THREE things this
-# project writes land on one filesystem and all three fail unhelpfully when it
-# is full: a ccd workspace is a full clone per session, every deploy leaves
-# another `~/ccrc-backups/<ts>/` (each deploy.sh arm's `mkdir -p ~/ccrc-backups/$TS`), and `~/.ccrc/coord.db` is a
-# WAL database that `server/src/coord/db.ts:144-145` says outright has NO backup
-# to fall back on — a truncated write there is not recoverable from that
-# directory.
+# ── room on every filesystem the fleet's work lives on ────────────────────
+# Spec §5's "disk headroom (including the backup dir)", widened by D-6618 (spec
+# 2026-10-23 §2.5.2): a ccd workspace is a full clone per session, every deploy
+# leaves another `~/ccrc-backups/<ts>/` (each deploy.sh arm's `mkdir -p ~/ccrc-backups/$TS`), and `~/.ccrc/coord.db` is a WAL
+# database that `server/src/coord/db.ts#openCoordDb` says outright has NO backup to
+# fall back on. On a box whose work volume is a second filesystem, `$HOME`'s
+# free space says nothing about the one that fills, so this resolves the SAME
+# roots the server and the agent measure and prints one line per filesystem.
 #
+# THE TWINS. These four constants are the bash spelling of `shared/disk.ts`'s
+# `DISK_WARN_PCT`, `DISK_CRITICAL_PCT` and `DISK_WORK_ROOTS` (one
+# `label|template|template` string per row). `server/test/disk-twins.test.ts`
+# READS this text and requires each equal to L0's, so edit them together.
+_DR_DISK_WARN_PCT=85
+_DR_DISK_CRITICAL_PCT=92
+_DR_DISK_WORK_ROOTS=(
+  'home|${HOME}'
+  'projects|${HOME}/projects'
+  'worktrees|${HOME}/worktrees'
+  'cc-tmp|${HOME}/.cc-tmp'
+  'claude-tmp|${TMPDIR:-/tmp}|/tmp'
+  'config-dirs|${CONFIG_DIR}'
+  'ccrc|${HOME}/.ccrc'
+  'registry|${HOME}/.cc-sessions'
+)
+
 # TWO FLOORS BECAUSE THERE ARE TWO SITUATIONS: under 2 GiB the next spawn or
 # deploy fails, which is a defect to fix now; under 10 GiB it is a morning's
-# warning that it will. Above both, the PASS names the room it found, so
-# "PASS disk" cannot be a check that measured nothing.
+# warning that it will. The percents are the server's: 92 FAIL, 85 WARN, of
+# bytes OR inodes (a million small files fills a volume that has bytes to
+# spare). Above all of them, the PASS names the room it found, so "PASS disk"
+# cannot be a check that measured nothing.
 #
 # PARSED WITH `read`, NOT `awk`/`cut`: nothing in this file resolves an external
 # binary that is not the subject it is measuring (`_dr_pkg_candidates`'s reason,
 # and `ccrc-wrapper-shape:49-57`'s), because doctor has to answer on a box whose
 # PATH is the broken thing. `df` itself is the measured subject here, and its
 # absence is its own verdict.
+#
+# A root that does not exist holds no bytes and is skipped. A root `df` cannot
+# stat (a stale mount) is UNKNOWN, not fine: one WARN line names every such
+# root, and never a PASS. The percent is computed the way `df` does it, used
+# over used-plus-available, in integers and without rounding up, so 91.2% does
+# not read as the FAIL line.
+# Known absent: some ancestor is a readable, searchable directory whose readdir
+# listing (no stat of the name) lacks the next component. A plain file counts
+# as absent too (it holds no filesystem to measure). Anything else is unknown.
+_dr_root_absent() {
+  local p="$1" parent name e
+  [ "$p" = "/" ] && return 1
+  parent="${p%/*}"; [ -n "$parent" ] || parent="/"
+  name="${p##*/}"
+  if [ -d "$parent" ]; then
+    [ -r "$parent" ] && [ -x "$parent" ] || return 1
+    ( shopt -s dotglob nullglob
+      for e in "$parent"/*; do [ "${e##*/}" = "$name" ] && exit 1; done
+      exit 0 ) && return 0
+    # Listed, yet not a directory: a plain file is absent; a failed stat is not.
+    [ -e "$p" ] && return 0
+    return 1
+  fi
+  [ -e "$parent" ] && return 0
+  _dr_root_absent "$parent"
+}
+
 _check_disk() {
   if ! command -v df >/dev/null 2>&1; then
-    _dr_warn disk "df is not on PATH, so this check cannot measure free space on \$HOME's filesystem" \
+    _dr_warn disk "df is not on PATH, so this check cannot measure free space on the work filesystems" \
       "install it (coreutils on a GNU box, util-linux on some minimal images) — until then nothing here can tell you a full disk from an empty one"
     return 2
   fi
 
-  # `-P` because POSIX output keeps every mount on ONE line: the default format
-  # wraps a long device name onto its own line, and this reads the LAST line.
-  # `-k` because both floors below are in KiB — `df -h` would answer "41G" and
-  # the arithmetic would be nonsense.
-  local out line last="" avail=""
-  out="$(df -Pk "$HOME" 2>/dev/null)"
-  while IFS= read -r line; do
-    [ -z "$line" ] || last="$line"
-  done <<< "$out"
-  # shellcheck disable=SC2034  # the three leading fields are read to be dropped
-  [ -z "$last" ] || read -r _dr_df_fs _dr_df_size _dr_df_used avail _dr_df_rest <<< "$last"
+  # The roster's config dirs: the one input that is runtime data. Sourced in a
+  # subshell so the roster's functions and variables stay out of this shell.
+  # A projection that is there but cannot be read (unreadable, fails to source,
+  # no `_ccrc_cfg_dir`) leaves the config-dirs root UNMEASURED, said out loud
+  # below; one that is absent only means no account has been projected yet.
+  local cfgdirs="" a cfg_unreadable=0
+  if [ -e "$HOME/.ccrc/accounts.sh" ]; then
+    if [ -r "$HOME/.ccrc/accounts.sh" ]; then
+      cfgdirs="$( . "$HOME/.ccrc/accounts.sh" 2>/dev/null \
+        && declare -F _ccrc_cfg_dir >/dev/null 2>&1 \
+        && for a in "${CCRC_ACCOUNTS[@]}"; do _ccrc_cfg_dir "$a" 2>/dev/null || :; done )" || cfgdirs=""
+      ( . "$HOME/.ccrc/accounts.sh" 2>/dev/null && declare -F _ccrc_cfg_dir >/dev/null 2>&1 ) || cfg_unreadable=1
+    else
+      cfg_unreadable=1
+    fi
+  fi
 
-  case "$avail" in
-    ''|*[!0-9]*)
-      # A df that could not stat the filesystem (a stale mount, a dead
-      # automount) exits nonzero having printed nothing, and an empty field in
-      # `$(( ))` is a bash arithmetic error rather than a number. Neither may
-      # become "0 GiB free", which is a FAIL about a measurement nobody made.
-      _dr_warn disk "df printed nothing this check could read where the available blocks belong, so free space was never measured" \
-        "check by hand: df -Pk \$HOME — a filesystem df cannot stat answers exactly this way"
-      return 2 ;;
-  esac
+  # Resolve every template to (label, path) pairs, in table order.
+  local row label tmpl path tmpdir="${TMPDIR:-/tmp}"
+  local -a pairs=()
+  local -a fields
+  for row in "${_DR_DISK_WORK_ROOTS[@]}"; do
+    IFS='|' read -r -a fields <<< "$row"
+    label="${fields[0]}"
+    for tmpl in "${fields[@]:1}"; do
+      if [ "$tmpl" = '${CONFIG_DIR}' ]; then
+        while IFS= read -r path; do
+          [ -z "$path" ] || pairs+=("$label|$path")
+        done <<< "$cfgdirs"
+        continue
+      fi
+      path="${tmpl//'${TMPDIR:-/tmp}'/$tmpdir}"
+      path="${path//'${HOME}'/$HOME}"
+      pairs+=("$label|$path")
+    done
+  done
+
+  # One df pair per root, grouped by mount point. A mount point is the sixth
+  # field onward (it may hold spaces); the figures are the second to fourth.
+  local -a mounts=() unmeasured=()
+  [ "$cfg_unreadable" -eq 0 ] || unmeasured+=("config-dirs (roster projection unreadable)")
+  local -A m_labels=() m_size=() m_avail=() m_bpct=() m_ipct=() m_seen=() m_root=()
+  local pair out line last f1 size used avail f5 mnt i1 ino iused ifree i5 imnt
+  local total ipct
+  for pair in "${pairs[@]}"; do
+    label="${pair%%|*}"; path="${pair#*|}"
+    if [ ! -d "$path" ]; then
+      # Skipped only when KNOWN absent; a root that exists but cannot be
+      # stat'd (stale mount, unsearchable parent) is UNKNOWN, never skipped.
+      if _dr_root_absent "$path"; then continue; fi
+      unmeasured+=("$label ($path)"); continue
+    fi
+    if [ -n "${m_root[$path]:-}" ]; then continue; fi
+    m_root[$path]=1
+    out="$(df -Pk "$path" 2>/dev/null)"; last=""
+    while IFS= read -r line; do [ -z "$line" ] || last="$line"; done <<< "$out"
+    size=""; used=""; avail=""; mnt=""
+    # shellcheck disable=SC2034  # the leading and trailing fields are read to be dropped
+    [ -z "$last" ] || read -r f1 size used avail f5 mnt <<< "$last"
+    case "$size$used$avail" in ''|*[!0-9]*) unmeasured+=("$label ($path)"); continue ;; esac
+    [ -n "$mnt" ] || { unmeasured+=("$label ($path)"); continue; }
+
+    # Inodes: a filesystem that keeps none (`-`, or a zero total) has no inode
+    # pressure to report, which is different from df failing to answer.
+    out="$(df -Pi "$path" 2>/dev/null)"; last=""
+    while IFS= read -r line; do [ -z "$line" ] || last="$line"; done <<< "$out"
+    ino=""; iused=""; ifree=""
+    # shellcheck disable=SC2034
+    [ -z "$last" ] || read -r i1 ino iused ifree i5 imnt <<< "$last"
+    ipct=-1
+    case "$ino$iused$ifree" in
+      ''|*[!0-9-]*) unmeasured+=("$label ($path)"); continue ;;
+    esac
+    if [ "$ino" != "-" ] && [ "$ino" -gt 0 ] 2>/dev/null; then
+      ipct=$(( iused * 100 / ino ))
+    fi
+
+    total=$(( used + avail ))
+    local bpct=0
+    if [ "$total" -gt 0 ]; then
+      bpct=$(( used * 100 / total ))
+    fi
+
+    if [ -z "${m_seen[$mnt]:-}" ]; then
+      m_seen[$mnt]=1; mounts+=("$mnt")
+      m_labels[$mnt]="$label"; m_size[$mnt]="$size"; m_avail[$mnt]="$avail"
+      m_bpct[$mnt]="$bpct"; m_ipct[$mnt]="$ipct"
+    else
+      case ",${m_labels[$mnt]}," in *",$label,"*) ;; *) m_labels[$mnt]+=",$label" ;; esac
+    fi
+  done
+
+  local rc=0 r
+  # An unreadable df answer is UNKNOWN: one WARN names every root it covers.
+  if [ "${#unmeasured[@]}" -gt 0 ]; then
+    local list="" u
+    for u in "${unmeasured[@]}"; do list+="${list:+, }$u"; done
+    _dr_warn disk "df printed nothing this check could read for $list, so free space was never measured there" \
+      "check by hand: df -Pk <path> and df -Pi <path> — a filesystem df cannot stat answers exactly this way" || r=$?
+    [ "$rc" -eq 1 ] || rc=$r
+  fi
 
   local floor=$((2 * 1024 * 1024)) tight=$((10 * 1024 * 1024))
-  local gib=$((avail / 1024 / 1024)) mib=$((avail / 1024))
-  if [ "$avail" -lt "$floor" ]; then
-    # MiB below the floor, because "1 GiB" and "0 GiB" are the whole range there
-    # and an operator deciding what to delete needs the real number.
-    _dr_fail disk "only $mib MiB free on \$HOME's filesystem — under the 2 GiB floor" \
-      "free space on \$HOME's filesystem before running sessions — under 2 GiB a ccd spawn (a full clone per workspace) and the next deploy's ~/ccrc-backups/<ts>/ copy start failing, and ~/.ccrc/coord.db has no backup to fall back on"
-    return 1
-  fi
-  if [ "$avail" -lt "$tight" ]; then
-    _dr_warn disk "$gib GiB free on \$HOME's filesystem — getting tight (a ccd workspace is a full clone, and every deploy leaves another ~/ccrc-backups/<ts>/)" \
-      "clear room while it is still cheap: the oldest ~/ccrc-backups/<timestamp>/ directories first, then workspaces whose PRs have merged"
+  local gib mib names
+  for mnt in "${mounts[@]}"; do
+    avail="${m_avail[$mnt]}"; bpct="${m_bpct[$mnt]}"; ipct="${m_ipct[$mnt]}"
+    gib=$((avail / 1024 / 1024)); mib=$((avail / 1024))
+    names="${m_labels[$mnt]//,/, }"
+    local ifig="no inode limit"; [ "$ipct" -lt 0 ] || ifig="${ipct}% of inodes"
+    local fig="${bpct}% of bytes and ${ifig} used"
+    r=0
+    if [ "$avail" -lt "$floor" ] || [ "$bpct" -ge "$_DR_DISK_CRITICAL_PCT" ] || [ "$ipct" -ge "$_DR_DISK_CRITICAL_PCT" ]; then
+      # MiB below the floor, because "1 GiB" and "0 GiB" are the whole range there
+      # and an operator deciding what to delete needs the real number.
+      _dr_fail disk "$mib MiB free on $mnt ($names), $fig — past the FAIL line (under 2 GiB free, or $_DR_DISK_CRITICAL_PCT% of bytes or inodes used)" \
+        "free space on $mnt before running sessions — a ccd spawn (a full clone per workspace) and the next deploy's ~/ccrc-backups/<ts>/ copy start failing at the floor, and ~/.ccrc/coord.db has no backup to fall back on" || r=$?
+    elif [ "$avail" -lt "$tight" ] || [ "$bpct" -ge "$_DR_DISK_WARN_PCT" ] || [ "$ipct" -ge "$_DR_DISK_WARN_PCT" ]; then
+      _dr_warn disk "$gib GiB free on $mnt ($names), $fig — getting tight (a ccd workspace is a full clone, and every deploy leaves another ~/ccrc-backups/<ts>/)" \
+        "clear room while it is still cheap: the oldest ~/ccrc-backups/<timestamp>/ directories first, then workspaces whose PRs have merged" || r=$?
+    else
+      _dr_pass disk "$gib GiB free on $mnt ($names), $fig" || r=$?
+    fi
+    if [ "$r" -eq 1 ]; then rc=1; elif [ "$r" -eq 2 ] && [ "$rc" -ne 1 ]; then rc=2; fi
+  done
+
+  # Nothing measured at all and nothing said: not a PASS.
+  if [ "${#mounts[@]}" -eq 0 ] && [ "${#unmeasured[@]}" -eq 0 ]; then
+    _dr_warn disk "no work root exists on this box to measure, so free space was never measured" \
+      "check by hand: df -Pk \$HOME"
     return 2
   fi
-  _dr_pass disk "$gib GiB free on \$HOME's filesystem"
+  return "$rc"
 }
 
 # ── the roster against the wrappers on disk ───────────────────────────────
