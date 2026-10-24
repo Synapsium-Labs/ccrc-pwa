@@ -173,6 +173,10 @@ cmd_ws_attic	C4
 _pr_bind_facts	C4
 _pr_state_one	C4
 cmd_pr_state	C4
+_gh_pr_landing_query	C4
+_pr_landing_py	C4
+_pr_landing_rules	C4
+cmd_pr_landing	C4
 cmd_pr_open	C4
 _ws_sensitive_match	C4
 _ws_sensitive_noise	C4

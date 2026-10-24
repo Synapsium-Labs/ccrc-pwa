@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e6a0a43c1b906e402b41a8496d884ee6adcb63b1aa7a0a16f06cdd5ee6940219
+# ccrc:generated 1 sha256=821c80d88ba8c7e5a998db30eece61a93ecf8705fb92505aa048b0bef191c471
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3185,10 +3185,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 205
-# invocations across 174 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 207
+# invocations across 176 non-comment lines.
 #
-# THE LAST MOVE WAS the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it was the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (#166 wave 3, Task 5), `_child_tmpdir`'s and #127's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -5475,6 +5475,11 @@ PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository
 # reader, which is what `single-definition` exists to forbid.
 PR_CHECK_FIELD=statusCheckRollup
 
+# pr-landing's two timeouts (spec 3.3): one GraphQL read always, two plain REST GETs on a rules-cache miss. The worst
+# case is 6 + 4 + 4 = 14 s inside the runner's 25 s `CCD_VERB_TIMEOUT_MS['pr-landing']` (PL-2 pins it), a 44 % reserve.
+PR_LANDING_GQL_TIMEOUT=6
+PR_LANDING_REST_TIMEOUT=4
+
 _gh_repo_slug() {   # main-checkout path -> OWNER/NAME, or non-zero
   # The first two guards are subsumed by what follows them, and the mutation
   # sweep says so: with no origin `git config --get` exits 1 AND prints nothing,
@@ -6442,6 +6447,27 @@ elif mode == 'pick':
             str((chosen.get('mergeCommit') or {}).get('oid') or ''),
             str(chosen.get('headRefOid') or ''),
         ]) + '\n')
+
+elif mode == 'bind':
+    # `pr-landing`'s binding (spec 3.3): `annotate` then `pick` over the ONE row a GraphQL alias answered, in a
+    # `gh pr list` row's shape, through the same `bound()` `state` uses. It WRITES NOTHING: no `put`, no
+    # `.prstate-<id>.lock`, no `.prhistory`. stdin is the list of alias rows (null where GitHub answered no object).
+    # Prints `unreadable-alias` for an alias with no object, nothing for a row that does not bind, and otherwise one JSON
+    # object of the five facts the lane reads.
+    (main, branch, base_short, tip, idx) = sys.argv[2:7]
+    tip = tip or None
+    rows = rows_in()
+    row = rows[int(idx)] if rows is not None and 0 <= int(idx) < len(rows) else None
+    if not isinstance(row, dict):
+        sys.stdout.write('unreadable-alias\n')
+    else:
+        chosen = pick(annotate([row], main, tip, branch, base_short), branch, base_short)
+        if chosen is not None:
+            sys.stdout.write(json.dumps({
+                'number': chosen.get('number'), 'headRefOid': chosen.get('headRefOid'),
+                'baseRefName': chosen.get('baseRefName'), 'state': chosen.get('state'),
+                'isDraft': chosen.get('isDraft'),
+            }) + '\n')
 PY
 }
 
@@ -8712,6 +8738,7 @@ forget
 list
 menu
 pick
+pr-landing
 pr-open
 pr-state
 prefer
@@ -8895,6 +8922,7 @@ EOF
   # word, and PLACES IT BEFORE THE PROJECT. An older ccd binds an unknown `--` token as a positional (D-6164): leading,
   # it lands in the project or slug slot and is refused there; trailing, it would be dropped unread and the workspace
   # created on the least-loaded lane with exit 0 — so the caps gate is the control and the leading position the defence.
+  echo pr-landing-v1   # `ccd pr-landing`: the checks lane's read-only PR read; sent only behind this word
   echo ws-title-v1; echo ws-wrapper-v1; echo ws-title   # the verb itself (S9), which the server offers Rename on; it rides here, not in the list above
   echo refusal-v1   # #560: `_lc_refuse` prints `ccd-refusal: <act> <word>` on stderr before its die; the server reads it first and keeps its prose matchers as the fallback
   echo swap-busy-v1; echo hibernate  # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word; `hibernate` (D-5242) is a verb, sent only behind `verbSupported`
@@ -11239,6 +11267,308 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # rows are the whole repository's, which is what makes the same loop right for
   # both forms.
   { for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt" "$head"; done; } | _pr_queue_stamp "$mode" "$repo"
+}
+
+# ── pr-landing: the checks lane's read (PR-landing stage 1, spec 3.3) ───────────────────────────
+# READ-ONLY, of gh and of $REG. One `gh api graphql` query (a `query`, never a mutation) reads every named PR by
+# NUMBER, so a landing PR older than `gh pr list`'s newest-100 window still binds; two `gh api` GETs read the base's
+# required-check names, cached under `$REG/pr-landing/` (the only registry path this verb writes). The binding is
+# `_pr_bind_facts` and `_pr_py bind`, the same code `pr-state` binds with, and nothing is persisted: `pr-state` stays
+# the one writer of `prphase`, `prnumber` and `prcheckedat`.
+#
+# THE DOCUMENT IS BUILT, NOT INTERPOLATED. `_gh_pr_landing_query K` repeats one fixed per-alias fragment K times, K the
+# integer count of sessions (1 to 16), declaring exactly `$n0` to `$n<K-1>` as `Int!`. A constant 16-alias document
+# would leave the unnamed `Int!` variables unset when fewer sessions are named, and nullable variables are refused by
+# `pullRequest(number:)`: either way every real call would fail. No datum from a session, a PR or GitHub enters the
+# text. The owner and name travel as `$o` and `$r`, the numbers as `-F n<i>=<int>`.
+PR_LANDING_RULES_TTL=600
+PR_LANDING_ALIAS='    p@I@: pullRequest(number: $n@I@) { number state isDraft isCrossRepository headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name status conclusion databaseId app { databaseId } checkSuite { workflowRun { databaseId } } isRequired(pullRequestNumber: $n@I@) } ... on StatusContext { context state isRequired(pullRequestNumber: $n@I@) } } } } } } } }'
+
+_gh_pr_landing_query() {   # K -> the GraphQL document for K aliased pull requests, on stdout
+  local k="$1" i decl='$o: String!, $r: String!' body=""
+  [[ "$k" =~ ^([1-9]|1[0-6])$ ]] || return 1
+  for (( i = 0; i < k; i++ )); do
+    decl+=", \$n$i: Int!"
+    body+="${PR_LANDING_ALIAS//@I@/$i}"$'\n'
+  done
+  printf 'query(%s) {\n  repository(owner: $o, name: $r) {\n%s  }\n}\n' "$decl" "$body"
+}
+
+_pr_landing_py() {   # mode [args…]; the program on fd 3, GitHub's documents on fd 4, 5 and 6, never in an argv
+  python3 /dev/fd/3 "$@" 3<<'PY'
+import json, os, sys, tempfile, time
+
+mode = sys.argv[1]
+NAME_MAX, LIST_MAX = 120, 32
+
+def doc(fd):
+    try:
+        with open('/dev/fd/%d' % fd) as f:
+            raw = f.read().strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+def is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+def bound_name(s):
+    """A GitHub-sourced name, cut to NAME_MAX bytes on a character boundary. Untrusted: it is only ever JSON-encoded."""
+    if not isinstance(s, str) or s == '':
+        return None
+    return s.encode('utf-8')[:NAME_MAX].decode('utf-8', 'ignore') or None
+
+def cut_list(items):
+    seen, out = set(), []
+    for n in items:
+        if n is not None and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return {'names': out[:LIST_MAX], 'cut': len(out) > LIST_MAX}
+
+def rules_doc(rules, protection, base):
+    return {'base': base, 'at': int(time.time()), 'rules': rules, 'protection': protection}
+
+def names_ok(v):
+    return (isinstance(v, dict) and isinstance(v.get('cut'), bool) and isinstance(v.get('names'), list)
+            and all(isinstance(n, str) for n in v['names']))
+
+if mode == 'rows':
+    # The K alias rows, null where GitHub answered no object. Exit 3: the answer is not the shape the query asks for.
+    k = int(sys.argv[2])
+    a = doc(4)
+    repo = a.get('data', {}).get('repository') if isinstance(a, dict) and isinstance(a.get('data'), dict) else None
+    if not isinstance(repo, dict):
+        sys.exit(3)
+    sys.stdout.write(json.dumps([repo.get('p%d' % i) if isinstance(repo.get('p%d' % i), dict) else None
+                                 for i in range(k)]) + '\n')
+
+elif mode == 'names-rules':
+    d = doc(4)
+    if not isinstance(d, list):
+        sys.exit(1)
+    names = []
+    for r in d:
+        if isinstance(r, dict) and r.get('type') == 'required_status_checks':
+            p = r.get('parameters')
+            rs = p.get('required_status_checks') if isinstance(p, dict) else None
+            for c in rs if isinstance(rs, list) else []:
+                if isinstance(c, dict):
+                    names.append(bound_name(c.get('context')))
+    sys.stdout.write(json.dumps(cut_list(names)) + '\n')
+
+elif mode == 'names-protection':
+    d = doc(4)
+    if not isinstance(d, dict):
+        sys.exit(1)
+    prot = d.get('protection')
+    sc = prot.get('required_status_checks') if isinstance(prot, dict) else None
+    names = []
+    if isinstance(sc, dict):
+        for n in sc.get('contexts') if isinstance(sc.get('contexts'), list) else []:
+            names.append(bound_name(n))
+        for c in sc.get('checks') if isinstance(sc.get('checks'), list) else []:
+            if isinstance(c, dict):
+                names.append(bound_name(c.get('context')))
+    sys.stdout.write(json.dumps(cut_list(names)) + '\n')
+
+elif mode == 'cache-get':
+    (path, base, ttl) = sys.argv[2:5]
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        age = time.time() - d['at']
+        ok = (isinstance(d, dict) and d.get('base') == base and is_int(d.get('at'))
+              and 0 <= age <= int(ttl) and names_ok(d.get('rules')) and names_ok(d.get('protection')))
+    except Exception:
+        ok = False
+    if not ok:
+        sys.exit(1)
+    sys.stdout.write(json.dumps(d) + '\n')
+
+elif mode == 'cache-put':
+    # fd 4 and fd 5 are the two names documents (empty when that read failed). The cache is written only when BOTH
+    # answered, atomically, and a failed write is a miss next time: it never fails the read.
+    (path, base) = sys.argv[2:4]
+    r, p = doc(4), doc(5)
+    d = rules_doc(r if names_ok(r) else None, p if names_ok(p) else None, base)
+    if d['rules'] is not None and d['protection'] is not None:
+        tmp = None
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.rules-')
+            with os.fdopen(fd, 'w') as f:
+                json.dump(d, f)
+            os.replace(tmp, path)
+        except Exception:
+            if tmp is not None:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+    sys.stdout.write(json.dumps(d) + '\n')
+
+elif mode == 'final':
+    # fd 4 the GraphQL answer (maybe empty), fd 5 one facts line per session, fd 6 the rules document (maybe empty).
+    k = int(sys.argv[2])
+    a = doc(4)
+    repo = a.get('data', {}).get('repository') if isinstance(a, dict) and isinstance(a.get('data'), dict) else None
+    try:
+        with open('/dev/fd/5') as f:
+            facts = [json.loads(l) for l in f.read().split('\n') if l.strip()]
+    except Exception:
+        facts = []
+    rd = doc(6)
+
+    def contexts_of(row):
+        try:
+            nodes = row['commits']['nodes'][0]['commit']['statusCheckRollup']['contexts']['nodes']
+        except Exception:
+            return []
+        return [n for n in nodes if isinstance(n, dict)] if isinstance(nodes, list) else []
+
+    def required_of(row):
+        out = []
+        for c in contexts_of(row):
+            if c.get('isRequired') is not True:
+                continue
+            if c.get('__typename') == 'CheckRun':
+                name = bound_name(c.get('name'))
+                app = c.get('app') if isinstance(c.get('app'), dict) else {}
+                run = ((c.get('checkSuite') or {}).get('workflowRun') or {}) if isinstance(c.get('checkSuite'), dict) else {}
+                state = c.get('conclusion') or c.get('status')
+                entry = {'name': name, 'appId': app.get('databaseId') if is_int(app.get('databaseId')) else None,
+                         'state': state if isinstance(state, str) else None,
+                         'checkId': c.get('databaseId') if is_int(c.get('databaseId')) else None,
+                         'runId': run.get('databaseId') if isinstance(run, dict) and is_int(run.get('databaseId')) else None}
+            elif c.get('__typename') == 'StatusContext':
+                name = bound_name(c.get('context'))
+                entry = {'name': name, 'appId': None, 'state': c.get('state') if isinstance(c.get('state'), str) else None,
+                         'checkId': None, 'runId': None}
+            else:
+                continue
+            if entry['name'] is not None:
+                out.append(entry)
+        return out
+
+    for i, f in enumerate(facts):
+        line = {'id': f.get('id')}
+        if 'refusal' in f:
+            line['unmeasured'] = [f['refusal']]
+        elif f.get('gql'):
+            line['unmeasured'] = ['graphql']
+        elif f.get('unreadable'):
+            line['unmeasured'] = ['pr-unreadable']
+        elif not isinstance(f.get('bind'), dict):
+            line['bound'] = False
+        else:
+            b = f['bind']
+            row = repo.get('p%d' % i) if isinstance(repo, dict) else None
+            req = required_of(row) if isinstance(row, dict) else []
+            cut = len(req) > LIST_MAX
+            unm = []
+            rules = prot = None
+            if isinstance(rd, dict) and rd.get('base') == f.get('base'):
+                rules, prot = rd.get('rules'), rd.get('protection')
+            if not names_ok(rules):
+                rules = None
+                unm.append('rules')
+            if not names_ok(prot):
+                prot = None
+                unm.append('protection')
+            cut = cut or bool(rules and rules['cut']) or bool(prot and prot['cut'])
+            line.update({'bound': True, 'number': b.get('number'), 'state': b.get('state'),
+                         'isDraft': b.get('isDraft') is True, 'base': b.get('baseRefName'), 'head': b.get('headRefOid'),
+                         'required': req[:LIST_MAX], 'requiredCut': cut,
+                         'rulesNamed': rules['names'] if rules else [],
+                         'protectionNamed': prot['names'] if prot else [], 'unmeasured': unm})
+        sys.stdout.write(json.dumps(line) + '\n')
+PY
+}
+
+_pr_landing_rules() {   # project repo base -> the rules document, ONE JSON line, always
+  # Cache hit: no gh call. Miss: the rules read (`rules/branches/<base>`) and the public branch view
+  # (`branches/<base>`), each under its own timeout, both plain GETs. A read failure is a miss and is never cached.
+  local project="$1" repo="$2" base="$3" cache got r="" p="" enc
+  cache="$REG/pr-landing/$project.rules.json"
+  if got=$(_pr_landing_py cache-get "$cache" "$base" "$PR_LANDING_RULES_TTL" 2>/dev/null) && [[ -n "$got" ]]; then
+    printf '%s\n' "$got"; return 0
+  fi
+  if [[ "$base" =~ ^[A-Za-z0-9._/-]+$ && "$base" != -* ]]; then
+    enc="${base//\//%2F}"
+    r=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/rules/branches/$enc" 2>/dev/null) || r=""
+    p=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/branches/$enc" 2>/dev/null) || p=""
+    r=$(_pr_landing_py names-rules 4<<<"$r" 2>/dev/null) || r=""
+    p=$(_pr_landing_py names-protection 4<<<"$p" 2>/dev/null) || p=""
+  fi
+  _pr_landing_py cache-put "$cache" "$base" 4<<<"$r" 5<<<"$p"
+}
+
+cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<pr>…]
+  # Fixed arity, no getopt loop, no "$@" passthrough. One JSON line per named session, in order, always rc 0 once the
+  # arguments are valid: a read that did not answer is `unmeasured`, never a missing line. A refusal here (rc 1, empty
+  # stdout) is a server bug: only the server's own argv builder writes this shape.
+  [[ $# -eq 4 && $1 == --project && $3 == --sessions ]] \
+    || die "usage: ccd pr-landing --project <project> --sessions <id>:<pr>[,<id>:<pr>…]"
+  local project=$2 spec=$4 pair id pr k=0 main repo
+  [[ $project =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project"
+  local -a ids=() prs=()
+  [[ $spec != ,* && $spec != *, && $spec != *,,* ]] || die "bad session pair"
+  local -a pairs=()
+  IFS=',' read -ra pairs <<< "$spec"
+  for pair in "${pairs[@]}"; do
+    [[ $pair =~ ^([A-Za-z0-9._-]+):([1-9][0-9]{0,8})$ ]] || die "bad session pair"
+    id="${BASH_REMATCH[1]}"; pr="${BASH_REMATCH[2]}"
+    ids+=("$id"); prs+=("$pr")
+  done
+  k=${#ids[@]}
+  (( k >= 1 && k <= 16 )) || die "between 1 and 16 sessions"
+  local i j
+  for (( i = 0; i < k; i++ )); do
+    for (( j = 0; j < i; j++ )); do [[ "${ids[$i]}" != "${ids[$j]}" ]] || die "duplicate session"; done
+    [[ -f "$REG/${ids[$i]}.uuid" ]] || die "no such session: ${ids[$i]}"
+    [[ -n "$(_reg_get "${ids[$i]}" workspace)" ]] || die "not a workspace: ${ids[$i]}"
+    [[ "$(_reg_get "${ids[$i]}" project)" == "$project" ]] || die "session ${ids[$i]} is not of project $project"
+  done
+  main="$PROJECTS_ROOT/$project"
+  repo=$(_gh_repo_slug "$main") || die "no origin remote for $project"
+
+  # THE ONE GRAPHQL CALL. The numbers are -F integers, validated twice (above, and by the server's builder).
+  local doc answer="" rows="[]" gqlok=0
+  doc=$(_gh_pr_landing_query "$k") || die "bad session count"
+  local -a gargs=(-f "query=$doc" -f "o=${repo%%/*}" -f "r=${repo#*/}")
+  for (( i = 0; i < k; i++ )); do gargs+=(-F "n$i=${prs[$i]}"); done
+  answer=$(_plat_timeout "$PR_LANDING_GQL_TIMEOUT" gh api graphql "${gargs[@]}" 2>/dev/null) || answer=""
+  if [[ -n "$answer" ]] && rows=$(_pr_landing_py rows "$k" 4<<<"$answer" 2>/dev/null) && [[ -n "$rows" ]]; then gqlok=1; else rows="[]"; fi
+
+  # THE BINDING, per session, through the code `pr-state` binds with and persisting nothing.
+  local branch base baseShort tip ahead workdir wthead registered BIND_REFUSAL facts="" bind ruleBase=""
+  for (( i = 0; i < k; i++ )); do
+    id="${ids[$i]}"
+    if ! _pr_bind_facts "$id" "$main" ""; then
+      facts+="$(printf '{"id":"%s","refusal":"%s"}' "$id" "$BIND_REFUSAL")"$'\n'
+    elif (( gqlok == 0 )); then
+      facts+="$(printf '{"id":"%s","gql":true}' "$id")"$'\n'
+    else
+      bind=$(printf '%s' "$rows" | _pr_py bind "$main" "$branch" "$baseShort" "$tip" "$i" 2>/dev/null) || bind="unreadable-alias"
+      case "$bind" in
+        unreadable-alias) facts+="$(printf '{"id":"%s","unreadable":true}' "$id")"$'\n' ;;
+        '')            facts+="$(printf '{"id":"%s","bind":null}' "$id")"$'\n' ;;
+        *)             facts+="$(printf '{"id":"%s","bind":%s,"base":%s}' "$id" "$bind" "$(_json_str "$baseShort")")"$'\n'
+                       [[ -n "$ruleBase" ]] || ruleBase="$baseShort" ;;
+      esac
+    fi
+  done
+
+  # THE RULES, only when someone bound (a GraphQL failure or an all-unbound call makes no REST call).
+  local rules=""
+  [[ -z "$ruleBase" ]] || rules=$(_pr_landing_rules "$project" "$repo" "$ruleBase")
+  _pr_landing_py final "$k" 4<<<"$answer" 5<<<"$facts" 6<<<"$rules"
 }
 
 cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --draft <true|false>
@@ -44740,11 +45070,12 @@ case "${1:-}" in
   route)     shift; cmd_route "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
+  pr-landing) shift; cmd_pr_landing "$@" ;;
   docs-index) shift; cmd_docs_index "$@" ;;
   docs-tree)  shift; cmd_docs_tree "$@" ;;
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi
