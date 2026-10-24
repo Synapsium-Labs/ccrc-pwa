@@ -12720,8 +12720,10 @@ _codex_pid_listens() {   # <pid> <port> -> 0 listens; 1 another holds it; 3 cann
 # (`_codex_lane_answer`); LiteLLM is a live process — the unit's MainPID when a
 # user manager answers, else `<tier>.pid` — whose command line is this lane's
 # (`_codex_pid_is_tier`) and which ITSELF listens on `litellmPort`
-# (`_codex_pid_listens`). A handle —
-# either tier's MainPID or pidfile pid — is PROVEN by `_codex_pid_is_tier`
+# (`_codex_pid_listens`); the bridge is a direct-mode answer on the shim's port
+# from a proven pid that itself holds that port (`_codex_tier_measure`'s TIERS
+# THAT SHARE A PORT). A handle —
+# any tier's MainPID or pidfile pid — is PROVEN by `_codex_pid_is_tier`
 # alone, and a proven handle on a port that does not answer is a 4.
 #
 # A STALE PIDFILE IS NO HANDLE. A pidfile is only ever this file's own note,
@@ -12737,7 +12739,7 @@ _codex_pid_listens() {   # <pid> <port> -> 0 listens; 1 another holds it; 3 cann
 # proven by its answer alone has none), CX_TIER_PID (the proven pid, or empty)
 # and CX_TIER_WHY (on rc 2 only: `listener-answers-other-lane`,
 # `listener-unidentified`, `listener-unresponsive`; `listener-other-process`,
-# a proven pid of either tier that does not hold its port; `unit-unproven`, a unit of
+# a proven pid of any tier that does not hold its port; `unit-unproven`, a unit of
 # this tier's name is live and its MainPID is not this lane's; `listener-other-mode`,
 # the shared port answers as this lane's OTHER front tier, a bridge for the shim or
 # a shim for the bridge) for the verb's sentence and `status --json`.
@@ -12911,24 +12913,40 @@ _codex_tier_is_our_handle() {   # <rc of the _codex_tier_ours call just made>
 # unit foreign. Call it DIRECTLY after that `_codex_tier_ours` call, as
 # `_codex_tier_is_our_handle` is: it reads the CX_TIER_WHY that call set.
 # A lane whose mode cannot be read has no "other mode": the walks are then
-# mode-blind, so the counterpart front tier is measured here and now, in a
-# subshell, and a 0 or 4 there is the same reading.
-_codex_tier_is_other_mode() {   # <id> <tier> <rc of the _codex_tier_ours call just made>
-  local id="${1:-}" tier="${2:-}" mode mine mate seen
+# mode-blind, so the counterpart front tier is measured here and now (the
+# `--mate-now` form, below), and a 0 or 4 there is the same reading.
+#
+# `_codex_tier_is_other_mode --mate-now <id> <tier>` — THE ONE MEASURE of
+# <tier>'s MATE, the other front tier on the shared port and unit (`bridge`
+# for `shim`, `shim` for `bridge`; this function holds the only copy of that
+# mapping), asked now, in a command substitution, so none of that call's
+# CX_TIER_* globals reach the caller. rc 0 when the mate reads 0 or 4, with
+# `<mate> <pid>` on stdout (the pid empty when the mate has no proven
+# handle); rc 1 otherwise, or for a tier that has no mate. The mode-blind arm
+# above and `_codex_cmd_start`'s `unit-unproven` arm (fix round 1, F5) both
+# ask it, so a start in progress of the other mode's front tier is read the
+# same way by both.
+_codex_tier_is_other_mode() {   # <id> <tier> <rc of the _codex_tier_ours call just made>  |  --mate-now <id> <tier>
+  local id tier mode mine mate seen mq now=''
+  if [ "${1:-}" = --mate-now ]; then now=1; shift; fi
+  id="${1:-}" tier="${2:-}"
+  case "$tier" in shim) mate=bridge ;; bridge) mate=shim ;; *) return 1 ;; esac
+  if [ -n "$now" ]; then
+    mq="$( _codex_tier_ours "$id" "$mate" >/dev/null 2>&1; printf '%s %s' "$?" "${CX_TIER_PID:-}" )"
+    case "${mq%% *}" in 0|4) printf '%s %s\n' "$mate" "${mq#* }"; return 0 ;; esac
+    return 1
+  fi
   [ "${3:-}" = 2 ] || return 1
   case "${CX_TIER_WHY:-}" in listener-other-mode|unit-unproven) ;; *) return 1 ;; esac
-  case "$tier" in shim) mate=bridge ;; bridge) mate=shim ;; *) return 1 ;; esac
   if mode="$(_codex_lane_mode "$id" 2>/dev/null)"; then
     mine="$(_codex_mode_tiers "$mode")" || return 1
     case " $mine " in *" $tier "*) return 1 ;; esac
     declare -p CX_TIER_SEEN >/dev/null 2>&1 || return 1
     seen="${CX_TIER_SEEN["$id/$mate"]:-}"
-  else
-    seen=0
-    ( _codex_tier_ours "$id" "$mate" >/dev/null 2>&1 ) || seen=$?
+    case "$seen" in 0|4) return 0 ;; esac
+    return 1
   fi
-  case "$seen" in 0|4) return 0 ;; esac
-  return 1
+  _codex_tier_is_other_mode --mate-now "$id" "$tier" >/dev/null
 }
 
 # The record `_codex_start_tier` writes to `<tier>.started`, computed NOW:
@@ -13474,7 +13492,7 @@ _codex_start_tier() {   # <id> <tier> -> rc 0 + "systemd <unit>" | "nohup <pid>"
   # it set (a tier's environment is never the caller's): tests set both to
   # loopback, a live box sets neither.
   if [ "$tier" = bridge ]; then
-    _codex_bridge_spawn "$id" "$d" || return 1
+    _codex_bridge_prepare "$id" "$d" || return 1
   else
     if ! "$(_codex_runtime_cli)" python >/dev/null 2>&1; then
       _codex_say runtime-absent "no LiteLLM runtime is current on this box, so $id's $tier tier has no interpreter to start from. Build one with 'ccgpt-runtime build' (or 'ccrc update', which builds it), then re-run."
@@ -13557,9 +13575,10 @@ _codex_start_tier() {   # <id> <tier> -> rc 0 + "systemd <unit>" | "nohup <pid>"
 # `_codex_start_tier`'s bridge arm (above): <id> <lane dir>. It refuses, with
 # one line and rc 1, what the bridge cannot run without, and otherwise sets
 # the CALLER's `rec` (`_codex_started_json bridge`'s output and nothing
-# else), `envf`, `pairs` and `argv` (bash's dynamic scope), rc 0. It spawns
-# and records nothing: that is `_codex_start_tier`'s one tail.
-_codex_bridge_spawn() {   # <id> <lane dir>
+# else), `envf`, `pairs` and `argv` (bash's dynamic scope), rc 0. It only
+# prepares: it spawns and records nothing, which is `_codex_start_tier`'s one
+# tail.
+_codex_bridge_prepare() {   # <id> <lane dir>
   local id="$1" d="$2" py lib bdir ver
   py="$(_codex_python)" || return 1
   if ! { [ -f "$(_codex_shim_file)" ] && [ -r "$(_codex_shim_file)" ]; }; then
@@ -13746,7 +13765,7 @@ _codex_stop_lane() {   # <id> -> rc 0 + "litellm <word>, shim <word>, bridge <wo
 #   then started from the new runtime.env, under this start's lock, before the
 #   readiness wait.
 _codex_cmd_start() {   # <id>
-  local id d py tier q via pid out h limit t0 rekey=0 w mode up kt mine others waitfor mate mq retired='' rpid=''
+  local id d py tier q via pid out h limit t0 rekey=0 w mode up kt mine others waitfor mq retired='' rpid=''
   local -A tq=() tv=() tp=() th=()
   _codex_row "${1:-}" || exit $?
   id="$CX_ID"
@@ -13857,19 +13876,17 @@ _codex_cmd_start() {   # <id>
   # its MainPID proves the OTHER mode's front tier, and the port is still
   # silent, so the own front tier reads `unit-unproven`, which by itself would
   # be `unit-foreign`. Its mate (shim for the bridge, bridge for the shim) is
-  # then measured on the spot, in a subshell, as `_codex_tier_is_other_mode`'s
-  # mode-blind arm does, and a 0 or 4 there is that retired tier, by name.
+  # then measured on the spot by `_codex_tier_is_other_mode --mate-now`, the
+  # one measure its mode-blind arm asks too, and a 0 or 4 there is that
+  # retired tier, by name. (A `listener-other-mode` own tier keeps its own
+  # sentence, below, worded by `_codex_foreign_what`.)
   for tier in $mine; do
     _codex_tier_ours "$id" "$tier"; q=$?
     case "$q" in
       0|1|4) ;;
       2)
-        if [ "${CX_TIER_WHY:-}" = unit-unproven ]; then
-          case "$tier" in shim) mate=bridge ;; bridge) mate=shim ;; *) mate='' ;; esac
-          if [ -n "$mate" ]; then
-            mq="$( _codex_tier_ours "$id" "$mate" >/dev/null 2>&1; printf '%s %s' "$?" "${CX_TIER_PID:-}" )"
-            case "${mq%% *}" in 0|4) retired="$mate"; rpid="${mq#* }"; break ;; esac
-          fi
+        if [ "${CX_TIER_WHY:-}" = unit-unproven ] && mq="$(_codex_tier_is_other_mode --mate-now "$id" "$tier")"; then
+          retired="${mq%% *}"; rpid="${mq#* }"; break
         fi
         _codex_foreign_what "$id" "$tier"
         if [ "${CX_TIER_WHY:-}" = listener-other-mode ]; then

@@ -4306,12 +4306,16 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
       `--setenv=CCGPT_BRIDGE_UPSTREAM_BASE=${up!}`, `--setenv=CCRC_CODEX_AUTH_BASE=${auth!}`]));
   }, 120_000);
 
+  // `_codex_start_tier`'s platform helper as a recorder that starts nothing: it writes the argv it was handed to
+  // `$HOME/svc-bridge`, so a case reads what would have run (fix round 1, I2; shared since fix round 2).
+  const SVC_BRIDGE = '_svc_run_supervised() { printf \'%s\\n\' "$@" > "$HOME/svc-bridge"; echo "nohup 999999"; }';
+  const startBridgeAlone = (home: string): Result => lib(home, `${SVC_BRIDGE}\n_codex_start_tier codex-a bridge`);
+
   it('with neither base set, neither is forwarded', async () => {
     // `_codex_start_tier` alone, its platform helper a recorder that starts nothing: with neither variable set, no
     // bridge may run at all (it would name the live endpoints), so nothing does.
     const { home } = await bridgeBox({ userManager: false });
-    const rec = '_svc_run_supervised() { printf \'%s\\n\' "$@" > "$HOME/svc-bridge"; echo "nohup 999999"; }';
-    const r = lib(home, `${rec}\nunset CCGPT_BRIDGE_UPSTREAM_BASE CCRC_CODEX_AUTH_BASE\n_codex_start_tier codex-a bridge`);
+    const r = lib(home, `${SVC_BRIDGE}\nunset CCGPT_BRIDGE_UPSTREAM_BASE CCRC_CODEX_AUTH_BASE\n_codex_start_tier codex-a bridge`);
     expect(r.code, r.stderr).toBe(0);
     const argv = fs.readFileSync(join(home, 'svc-bridge'), 'utf8').split('\n');
     const pairs = argv.slice(0, argv.indexOf('--'));
@@ -4321,10 +4325,7 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
   }, 60_000);
 
   // Fix round 1 (review I2): each refusal the bridge arm makes before it spawns, asked of `_codex_start_tier` alone,
-  // with its platform helper a recorder, so a deleted guard spawns (records) and the case goes red.
-  const SVC_BRIDGE = '_svc_run_supervised() { printf \'%s\\n\' "$@" > "$HOME/svc-bridge"; echo "nohup 999999"; }';
-  const startBridgeAlone = (home: string): Result => lib(home, `${SVC_BRIDGE}\n_codex_start_tier codex-a bridge`);
-
+  // with its platform helper a recorder (`SVC_BRIDGE`, above), so a deleted guard spawns (records) and the case goes red.
   it('the bridge arm refuses auth-library-absent with no auth library, and spawns nothing', async () => {
     const { home } = await bridgeBox({ userManager: false });
     fs.rmSync(authLib(home));
@@ -4372,6 +4373,27 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     expect(r.stderr).toMatch(new RegExp(`^ccrc codex: retired-tier-running: codex-a runs in direct mode, and its shim tier \\(the other mode's\\) is running \\(pid ${c.pid}\\): .*Nothing was started\\.$`, 'm'));
     expect(r.stderr).not.toMatch(/unit-foreign/);
     expect(systemdRunArgv(home), 'a bridge was started beside it').toEqual([]);
+    expect(alive(c.pid!), 'start stopped the retired tier').toBe(true);
+  }, 120_000);
+
+  // Fix round 2 (review R1): the mirror of the case above. On a litellm lane the shared unit is live and its MainPID
+  // proves this lane's BRIDGE, whose port is still silent (a direct-mode front tier starting), so the lane's own shim
+  // reads `unit-unproven`. The start names the bridge retired-tier-running, never the generic unit-foreign sentence.
+  itLinux('start on a litellm lane names a starting bridge under the shared unit retired-tier-running', async () => {
+    const { home, shimFile } = await bridgeBox({ userManager: true, mode: 'litellm' });
+    const units = laneJson(home, 'codex-a')['units'] as { litellm: string; shim: string };
+    const c = spawn(PY_ABS, ['-B', '-c', 'import time; time.sleep(60)', shimFile, '--ccrc-bridge=direct', '--ccrc-lane=codex-a'],
+      { stdio: 'ignore' });
+    trackChild(home, c);
+    await eventually(() => psArgs(c.pid!).includes(`${shimFile} --ccrc-bridge=direct --ccrc-lane=codex-a`),
+      'the stand-in bridge to exec');
+    fakeUnit(home, units.shim, { state: 'active', pid: c.pid! });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toMatch(new RegExp(`^ccrc codex: retired-tier-running: codex-a runs in litellm mode, and its bridge tier \\(the other mode's\\) is running \\(pid ${c.pid}\\): .*Nothing was started\\.$`, 'm'));
+    expect(r.stderr).not.toMatch(/unit-foreign/);
+    expect(systemdRunArgv(home), 'a tier was started beside it').toEqual([]);
     expect(alive(c.pid!), 'start stopped the retired tier').toBe(true);
   }, 120_000);
 
