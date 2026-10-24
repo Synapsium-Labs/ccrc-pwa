@@ -452,14 +452,14 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
   });
 
   it('the census\'s cadence has one home, here, and the watcher re-exports it; the three siblings follow it by reference', () => {
-    expect(text('laneSchedule.ts')).toMatch(/export const CHILD_RECLAIM_SWEEP_MS = 60_000;/);
+    expect(initOf('laneSchedule.ts', 'CHILD_RECLAIM_SWEEP_MS')).toBe('60_000');
     // A second declaration in the watcher would clash with its import of this one (tsc), so only the re-export is read here.
     for (const name of ['collect', 'archivedExpiry', 'deadCoordinator']) expect(laneRow(name).derivedFrom?.name, name).toBe('childReclaim');
     expect(laneRow('childReclaim').derivedFrom).toBeNull();
   });
 
   it('the collector\'s observation interval is the census cadence, by reference, in this module', () => {
-    expect(text('laneSchedule.ts')).toContain('export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;');
+    expect(initOf('laneSchedule.ts', 'COLLECT_OBSERVE_INTERVAL_MS')).toBe('CHILD_RECLAIM_SWEEP_MS');
   });
 
   it('the seal and the collector\'s and child reclaim\'s restamp go through the runner (the fields are gone: the ratchet in single-definition counts them)', () => {

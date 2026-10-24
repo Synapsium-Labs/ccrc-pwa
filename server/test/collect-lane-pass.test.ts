@@ -29,7 +29,7 @@ import { COLLECT_BOX_LABELS } from '../../shared/api.js';
 import { collectRig, type CcdAnswer, type CollectRig } from './collectLaneFixture.js';
 import { FULL_CAPS } from './collectTempRootFixture.js';
 import { codeOnly } from './sourceScan.js';
-import { sourceOfSymbol } from './scan/symbols.js';
+import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -48,7 +48,7 @@ describe('the lane’s constants are derived, and the tick dispatches it (spec �
   it('the observation interval IS the sweep interval, spelled from it, never a second literal', () => {
     expect(COLLECT_OBSERVE_INTERVAL_MS).toBe(CHILD_RECLAIM_SWEEP_MS);
     // D-5862: the constant lives in the lane table (`laneSchedule.ts`), which the watcher re-exports.
-    expect(codeOnly(readFileSync(path.join(srcDir, 'laneSchedule.ts'), 'utf8'))).toContain('export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;');
+    expect(parsedFile('server/src/laneSchedule.ts').bindings.filter((b) => b.name === 'COLLECT_OBSERVE_INTERVAL_MS').map((b) => b.init)).toEqual(['CHILD_RECLAIM_SWEEP_MS']);
   });
 
   it('a learning audit’s unsettled bound is twice ws-audit’s remote runner row', () => {

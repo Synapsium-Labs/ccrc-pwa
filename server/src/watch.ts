@@ -1099,12 +1099,12 @@ export class FleetWatcher {
    *  - `collectPassSeq`, `collectPassTally`, `collectPassPublished`, `collectPassAudits`: each pass's audits by class
    *    (Task 5's `collectPassClass`), keyed by the pass that queued them; the latest pass whose calls have all settled is
    *    the one the pass-scoped box lines read. */
-  /** The orphan-worktree lane (D-6631): its pass, built on first use, and its throttle on the monotonic clock. */
-  private orphanTrees: OrphanTreeSweep | null = null;
-  private lastOrphanTreeSweep: number | null = null;
   private readonly collectStartMono: number;
   private collectGen = 0;
   private collectLaneGen = 0;
+  /** The orphan-worktree lane (D-6631): its pass, built on first use, and its throttle on the monotonic clock. */
+  private orphanTrees: OrphanTreeSweep | null = null;
+  private lastOrphanTreeSweep: number | null = null;
   private collectState = new Map<string, CollectEntry>();
   private collectInFlight = new Map<string, CollectFlight>();
   private collectSlot: CollectSlot = { kind: 'free' };
