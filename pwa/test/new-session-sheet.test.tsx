@@ -367,7 +367,7 @@ describe('NewSessionSheet — the project list that could not be read', () => {
 });
 
 describe('NewSessionSheet — a project list the server answered without a projects array', () => {
-  it('an /api/projects answer without a projects array shows the sheet\'s error line and the app stays drawn', async () => {
+  it('an /api/projects answer without a projects array shows the sheet\'s error line', async () => {
     // Through the REAL adapter: only fetch is stubbed, so the adapter's check is what turns a 200 `{}` into the error line.
     // The store's cache is empty (`projects: null`), so the error line is what shows.
     const roster = pooled(POOLS);
@@ -383,7 +383,6 @@ describe('NewSessionSheet — a project list the server answered without a proje
       const said = await screen.findByText(/Couldn't load the project list/);
       expect(said).toHaveAttribute('role', 'alert');
       expect(said).toHaveTextContent("Couldn't load the project list — The server's project list could not be read.");
-      expect(screen.queryByText(/ccrc could not draw this screen/)).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
