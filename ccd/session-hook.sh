@@ -4717,7 +4717,7 @@ fi
 # (`model: 'fable'`, `"model":"fable"`, `claude-fable-*`), is denied, with a reason that points at opus, sonnet or haiku.
 # An accident guard, and it fails open like the arm above: a payload jq cannot parse, or an envelope that cannot be
 # built, says nothing. The prefilter is a builtin glob on the payload, so a call that never names Fable forks nothing.
-FABLE_RE='(^|[^[:alnum:]_])model["'"'"'`]?[[:space:]]*[:=,(][[:space:]]*["'"'"'`]?[[:alnum:]_./-]*[Ff][Aa][Bb][Ll][Ee]|[Cc][Ll][Aa][Uu][Dd][Ee]-[Ff][Aa][Bb][Ll][Ee]'
+FABLE_RE="(^|[^[:alnum:]_])model[\"'\`]?[[:space:]]*[:=,(][[:space:]]*[\"'\`]?[[:alnum:]_./-]*[Ff][Aa][Bb][Ll][Ee]|[Cc][Ll][Aa][Uu][Dd][Ee]-[Ff][Aa][Bb][Ll][Ee]"
 if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
       && ( "${tool:-}" == Agent || "${tool:-}" == Task || "${tool:-}" == Workflow ) && "${payload,,}" == *fable* ]]; then
   fbl=$(jq -r --arg re "$FABLE_RE" '
