@@ -235,6 +235,8 @@ describe('the verb’s answer — box words told apart from composition errors (
     // `_ws_reclaim_fail`, refuses through its ONE `_ws_collect_refused "<id>" "<tx>" <word>`, and sets `REAP_VERDICT`
     // for that refusal when the token it was given is not the one it recomputed (`verdict`). Those two collector
     // shapes are placed INSIDE the region only; anywhere else they read `unplaced`, and so does any other spelling.
+    //   THE LOOSE ARM'S FAMILY (D-6625). The LOOSE region, ws-collect's loose arm, uses the collector's same shapes and
+    // is placed in a third list, held exactly; outside COLLECT and LOOSE those shapes still read `unplaced`.
     const fnStarts = [...ccd.matchAll(/\n([A-Za-z_][A-Za-z0-9_]*)\(\) \{/g)].map((m) => ({ name: m[1]!, at: m.index! }));
     const holder = (at: number): string => fnStarts.filter((f) => f.at < at).at(-1)?.name ?? '';
     const lockedAt = ccd.indexOf('\n_ws_expire_locked() {');
@@ -250,6 +252,11 @@ describe('the verb’s answer — box words told apart from composition errors (
     expect(collectBegin, 'the COLLECT region').toBeGreaterThan(crumbAt);
     expect(collectEnd, 'its end marker').toBeGreaterThan(collectBegin);
     const inCollect = (at: number): boolean => at > collectBegin && at < collectEnd;
+    const looseBegin = ccd.indexOf('LOOSE-BEGIN');
+    const looseEnd = ccd.indexOf('LOOSE-END');
+    expect(looseBegin, 'the LOOSE region, after COLLECT').toBeGreaterThan(collectEnd);
+    expect(looseEnd, 'its end marker').toBeGreaterThan(looseBegin);
+    const inLoose = (at: number): boolean => at > looseBegin && at < looseEnd;
     const shape = (w: string, pre: string, collect: boolean): string =>
       new RegExp(`(?:_ws_reclaim_fail "[^"\\n]*" "[^"\\n]*" |_ws_orphan_failed "[^"\\n]*" "[^"\\n]*" |_ws_reclaim_failed_json )${w}$`).test(pre) ? 'failed'
         : new RegExp(`(?:_reap_refuse |_ws_orphan_refused "[^"\\n]*" "[^"\\n]*" |\\{"refused":")${w}$`).test(pre) ? 'refused'
@@ -259,6 +266,7 @@ describe('the verb’s answer — box words told apart from composition errors (
     const word = new RegExp(`(?<![\\w-])(${EXPIRE_PRE_CRUMB_FAILED.join('|')})(?![\\w-])`, 'g');
     const placed: string[] = [];
     const collected: string[] = [];
+    const loosed: string[] = [];
     let at = 0;
     for (const l of ccd.split('\n')) {
       if (!/^\s*#/.test(l)) {
@@ -266,12 +274,12 @@ describe('the verb’s answer — box words told apart from composition errors (
           const w = m[1]!;
           const where = at + m.index!;
           const fn = holder(where);
-          const kind = shape(w, l.slice(0, m.index! + w.length), inCollect(where));
+          const kind = shape(w, l.slice(0, m.index! + w.length), inCollect(where) || inLoose(where));
           if (fn === '_ws_expire_locked' && kind === 'failed' && w === 'state-changed') {
             expect(where, 'state-changed in _ws_expire_locked is not on its fresh arm').toBeGreaterThan(freshAt);
             expect(where, 'state-changed in _ws_expire_locked prints after the tombstone').toBeLessThan(tombAt);
           }
-          (inCollect(where) ? collected : placed).push(`${fn} ${kind} ${w}`);
+          (inCollect(where) ? collected : inLoose(where) ? loosed : placed).push(`${fn} ${kind} ${w}`);
         }
       }
       at += l.length + 1;
@@ -324,6 +332,28 @@ describe('the verb’s answer — box words told apart from composition errors (
       '_ws_collect_locked failed probe-unmeasured',
       '_ws_collect_locked failed probe-unmeasured',
       '_ws_collect_locked failed probe-unmeasured',
+    ]);
+    expect(loosed).toEqual([
+      '_ws_loose_putback failed probe-unmeasured',
+      '_ws_loose_after_move failed probe-unmeasured',
+      '_ws_loose_after_move failed probe-unmeasured',
+      '_ws_loose_after_move failed probe-unmeasured',
+      '_ws_loose_fresh refused state-changed',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_resume refused state-changed',
+      '_ws_loose_resume failed probe-unmeasured',
+      '_ws_loose_resume refused state-changed',
+      '_ws_loose_resume failed probe-unmeasured',
+      '_ws_loose_locked verdict state-changed',
+      '_ws_loose_locked failed probe-unmeasured',
+      '_ws_loose_locked failed probe-unmeasured',
+      '_ws_loose_locked failed probe-unmeasured',
     ]);
   });
 });
