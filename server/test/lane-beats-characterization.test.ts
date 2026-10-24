@@ -12,7 +12,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import type { CataloguePoller } from '../src/update/catalogue.js';
 import type { NodeRole } from '../../shared/api.js';
-import { seedRoster, testDeps } from './helpers.js';
+import { DEFAULT_TEST_ROSTER, seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const mocks = vi.hoisted(() => ({
@@ -33,13 +33,22 @@ afterEach(() => {
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 
+/** The test roster with `exec.provider` named on every `generated` account (the "anthropic" the roster would assume
+ *  anyway), so the roster's own "names no exec.provider" warning stays out of the console spy and a row asserting a
+ *  lane is silent sees only the lane. */
+const ROSTER = {
+  ...DEFAULT_TEST_ROSTER,
+  accounts: DEFAULT_TEST_ROSTER.accounts.map((a) =>
+    a.exec.kind === 'generated' ? { ...a, exec: { provider: 'anthropic', ...a.exec } } : a),
+};
+
 interface Opts { role?: NodeRole; coord?: boolean; catalogue?: CataloguePoller; refreshCaps?: () => Promise<void> }
 
 function fixture(o: Opts = {}) {
   if (mocks.writeServerCaps.getMockImplementation() === undefined) mocks.writeServerCaps.mockResolvedValue({ ok: true });
   const home = mkTmp('ccrc-lane-beats-');
-  seedRoster(home);
   const base = testDeps(home);
+  seedRoster(home, ROSTER);                                    // after testDeps, which seeds the default; the tick's disk sweep re-reads it
   mkdirSync(base.cfg.registryDir, { recursive: true });       // LISTABLE: the tick reaches every lane
   const deps = {
     ...base,
