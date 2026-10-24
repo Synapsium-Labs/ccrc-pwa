@@ -29,7 +29,7 @@ const queued = (s: CoordStore, toId = TO, runId: number | null = null): number =
 
 interface Fixture {
   s: CoordStore;
-  queued: number; parked: number; delivered: number;
+  skewOther: number; queued: number; parked: number; delivered: number;
   ceilingLive: number; ceilingNoRun: number;
   acked: number; runClosedPark: number; parkCeiling: number; ceilingClosedRun: number;
   other: number;
@@ -39,6 +39,12 @@ const fixture = (): Fixture => {
   const s = store();
   const live = openRun(s, 1);
   const dead = openRun(s, 2);
+  // Skew the two id sequences: one mail with two deliveries, so every later
+  // delivery id runs ahead of its mail id (D-41: the client acks by deliveryId).
+  const skew = s.insertMail({ fromId: 'demo-sender', fromUuid: 'u-sender', toId: OTHER, runId: null,
+                              kind: 'status', subject: 'skew', body: 'x', artifacts: [] });
+  const skewOther = s.queueDelivery(skew.id, OTHER, `<mail>${skew.id}</mail>`).id;
+  s.queueDelivery(skew.id, 'demo-third', `<mail>${skew.id}</mail>`);
   const q = queued(s);
   const parked = queued(s);
   s.db.prepare('UPDATE mail_deliveries SET parkedAt = ? WHERE id = ?').run(NOW, parked);
@@ -58,7 +64,7 @@ const fixture = (): Fixture => {
   s.rejectDelivery(ceilingClosedRun, 'undeliverable', MAIL_REPLAY_CEILING_ERROR);
   expect(s.advance(dead, 'failed', 'coordinator')).toMatchObject({ ok: true });
   const other = queued(s, OTHER);
-  return { s, queued: q, parked, delivered, ceilingLive, ceilingNoRun, acked,
+  return { s, skewOther, queued: q, parked, delivered, ceilingLive, ceilingNoRun, acked,
            runClosedPark, parkCeiling, ceilingClosedRun, other };
 };
 
@@ -75,9 +81,20 @@ describe('CoordStore.inboxFor (D-6777)', () => {
   it('a replay-ceiling row whose run is closed is neither printed nor counted', () => {
     const f = fixture();
     expect(ids(f.s.inboxFor(TO))).not.toContain(f.ceilingClosedRun);
-    expect(f.s.outstandingMailFor(TO).map((m) => m.id)).not.toContain(f.ceilingClosedRun);
+    expect(f.s.outstandingMailFor(TO).map((m) => m.deliveryId)).not.toContain(f.ceilingClosedRun);
     // The ack door still accepts it, as today.
     expect(f.s.markAcked(f.ceilingClosedRun, NOW)).toEqual({ ok: true, state: 'acked' });
+  });
+
+  it('keys each row by its mail_deliveries.id, never its mail id', () => {
+    const f = fixture();
+    const rows = f.s.inboxFor(TO);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      const d = f.s.db.prepare('SELECT id, mailId FROM mail_deliveries WHERE id = ?').get(r.deliveryId) as { id: number; mailId: number };
+      expect(d.id).toBe(r.deliveryId);
+      expect(d.mailId).not.toBe(r.deliveryId);
+    }
   });
 
   it('returns each row with its stored envelope', () => {
@@ -89,7 +106,7 @@ describe('CoordStore.inboxFor (D-6777)', () => {
   it('returns only the caller\'s rows (toId)', () => {
     const f = fixture();
     expect(ids(f.s.inboxFor(TO))).not.toContain(f.other);
-    expect(ids(f.s.inboxFor(OTHER))).toEqual([f.other]);
+    expect(ids(f.s.inboxFor(OTHER))).toEqual([f.skewOther, f.other]);
   });
 
   it('returns them oldest first', () => {
@@ -102,7 +119,7 @@ describe('CoordStore.inboxFor (D-6777)', () => {
   it('for every fixture row, inboxFor includes it only if markAcked changes it AND outstandingMailFor lists it, and every row in that intersection is in inboxFor', () => {
     const f = fixture();
     const inbox = new Set(ids(f.s.inboxFor(TO)));
-    const listed = new Set(f.s.outstandingMailFor(TO).map((m) => m.id));
+    const listed = new Set(f.s.outstandingMailFor(TO).map((m) => m.deliveryId));
     const all = f.s.db.prepare('SELECT id FROM mail_deliveries WHERE toId = ? ORDER BY id').all(TO) as { id: number }[];
     // Probe ackability on a copy of the store state: markAcked writes, so read
     // each row's answer from a fresh fixture per row.
@@ -117,7 +134,7 @@ describe('CoordStore.inboxFor (D-6777)', () => {
   it('abandonedCount equals outstandingMailFor\'s count minus inboxFor\'s, and counts the park-ceiling rejection and nothing inboxFor returns', () => {
     const f = fixture();
     const inbox = new Set(ids(f.s.inboxFor(TO)));
-    const outstanding = f.s.outstandingMailFor(TO).map((m) => m.id);
+    const outstanding = f.s.outstandingMailFor(TO).map((m) => m.deliveryId);
     expect(f.s.abandonedCount(TO)).toBe(outstanding.length - inbox.size);
     expect(f.s.abandonedCount(TO)).toBe(1);
     expect(outstanding).toContain(f.parkCeiling);
