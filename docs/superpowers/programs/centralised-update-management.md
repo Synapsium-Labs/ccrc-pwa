@@ -5999,6 +5999,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   anomalies; both boxes on v0.0.608.** Neither touches the delegation lane's paths. #1259 is in the merge queue.
   `STATUS 2026-10-24T10:25:45Z fleet=v0.0.608 server=v0.0.608 health=v0.0.608 newest=v0.0.614 intent=*:dev/auto=off`
   `backups=fleet:237M/server:7680M disk=fleet:97G/server:23G`
+- **2026-10-24 11:30 UTC — monitoring: both boxes moved to v0.0.615 by the operator's console tap; settled, no anomalies.**
+  The fleet half ran 11:21 to 11:22, the server half from 11:22:49 to `done` at 11:29:58, with the service restarted at
+  11:25:44. The 11:25 probe caught the move in flight: the inventory's pending request, standing request and incomplete
+  install were the server half still running, its report then reading `restarting` while it pruned and thinned, with six
+  backups beside a keep of five. It settled with the oldest backup pruned (five kept, 10418M to 7937M) and 23G free. The
+  restart cut four delegation passes at the 45 s budget, the boot shape. v0.0.615 changes `watch.ts` in the disk alarm
+  only. It was released after the 10:25 check and moved onto within the hour, so the broker's soak heard of it after the
+  tap. Its coordinator ruled that it does not restart the clock.
+  `STATUS 2026-10-24T11:30:26Z fleet=v0.0.615 server=v0.0.615 health=v0.0.615 newest=v0.0.617 intent=*:dev/auto=off`
+  `backups=fleet:220M/server:7937M disk=fleet:97G/server:23G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
