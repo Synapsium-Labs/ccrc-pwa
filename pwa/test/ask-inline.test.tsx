@@ -1168,6 +1168,9 @@ describe('the card and the composer are not remounted by the ask\'s own life (R6
       fireEvent.change(box, { target: { value: `draft ${n}` } });
       fireEvent.click(within(section).getByRole('button', { name: 'Open terminal to answer' }));
       expect(card(), `fixture ${n}: the card is the same node`).toBe(section);
+      // Premise: the terminal drawer opened. At the desk the ask is the card, so the one dialog on the page is the drawer's
+      // Sheet (whatever it renders inside).
+      expect(dialogs(), `fixture ${n}: premise: the terminal drawer opened (the one Sheet dialog at the desk)`).toHaveLength(1);
       // The drawer is modal, so the page behind it leaves the accessibility tree: the composer is read with `hidden`.
       const behind = screen.getByRole('textbox', { name: 'Message', hidden: true }) as HTMLTextAreaElement;
       expect(behind, `fixture ${n}: the same composer node after Open terminal`).toBe(box);

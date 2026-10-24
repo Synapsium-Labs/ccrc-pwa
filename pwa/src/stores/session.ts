@@ -120,13 +120,15 @@ export interface SessionState {
   /** R69: the client-side LIFECYCLE generation of the ask: a count, starting at 0, that the reducer raises one frame at a
    *  time (so a clear inside a batch of frames is counted whatever React batches) in exactly two cases:
    *  - an `ask_cleared` frame while the store HOLDS an envelope (`ask` not null): the hook ended its ask. With none held it
-   *    clears nothing: it is a connection's first statement, which the server sends for any ask without an envelope;
+   *    clears nothing: it is a connection's first statement, which the server sends whenever there is no envelope;
    *  - a `dialog_cleared` frame while NO envelope is held: without the hook's envelope the pane's menu is all there is of
    *    the ask, so its vanishing ends it. For a hooked ask the hook is the lifecycle authority, and a poll that sees no
    *    menu for one tick does not end it.
    *  Nothing else moves it: not `ask`, `dialog` or `rotated`, and not the socket leaving `open` (`onState` lowers `dialog`
    *  with no frame). So a reconnect keeps the count, except when the store held an envelope that the new connection's
-   *  first `ask_cleared` then clears (the ask ended while the socket was down). It is a lifecycle count, not a content
+   *  first `ask_cleared` then clears. That frame, with an envelope held, means the server stated no envelope at that
+   *  moment: the ask ended during the drop, OR the server flapped (a failed hook-state read, or an aged-envelope keep
+   *  decision restarting). Either releases the keys, the safe direction. It is a lifecycle count, not a content
    *  identity and not an ask id: the keyboard's engagement (`DialogSheet`'s `askIdentity`) joins it to the envelope's
    *  content, so a clear plus a byte-identical ask is a new ask. In memory only: no snapshot or stored state carries it,
    *  and a new store starts at 0. */

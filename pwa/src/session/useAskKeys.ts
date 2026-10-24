@@ -15,31 +15,34 @@
 // - FOCUS moves into the sheet on open and on each new screen only under a fine pointer, or once a key has been
 //   handled inside the sheet: a phone is never pulled out of its composer by a sheet that slid up. INLINE (D-6326, R64)
 //   the rule is narrower, exactly: focus moves ONLY while the ask's ONE engagement (`useAskEngagement`, held by the
-//   controller and shared by every `useAskKeys` it renders: the question screens', the review's and a menu's) is engaged
-//   for the CURRENT ask AND focus is lost (`body`, `documentElement` or nothing) or already inside the card, and then it
-//   goes to the new screen's highlighted row. That is the next question after a key answered one, the review after the
-//   last question, and a question after ← from the review: the focused row unmounted with its screen, and without this
-//   the keyboard would be dead until a click. The engagement belongs to the ask's identity (`DialogSheet`'s `askIdentity`),
-//   not to a hook instance and not to the card's mount: it ends when the identity changes or goes (even when the card
-//   stays mounted and the clear and the new ask arrive in one batch, and for good: the ask that comes back later with
-//   equal content starts unengaged), and on a deliberate move out of the card (a pointerdown or a focusin outside it: the
-//   composer, the transcript, the fleet column, the body). With it not engaged (an ask arriving beside the composer, a
-//   successor ask, a skin switch) focus moves not at all, and enters the card only through `raise` (`AskSurface`), a Tab
-//   or a click. A reconnect does not disengage by itself: the held gap keeps the same `askIdentity`, and the new
-//   connection's first frames keep it too, except when the store held an envelope that the new connection's first
-//   `ask_cleared` clears (the ask ended while the socket was down); with no envelope held that frame counts nothing. The
-//   engagement of the SAME ask stands; it never takes focus from outside the card, and may move focus from the body, or
-//   from within the card, to a repainted screen's highlighted row. The identity is a lifecycle generation (the store's
-//   `askEpoch`, raised by every `ask_cleared` that clears a held envelope, and every `dialog_cleared` while none is
-//   held; so a clear is seen even in one batch with a byte-identical ask, and a transient `dialog_cleared` under a hooked
-//   ask's envelope is not one) joined to the envelope for a hooked ask, to one word for an ask-backed surface with no
-//   envelope (the transcript's copy of a question, its review, an unreadable ask: the ask frames this controller reads
-//   carry no per-ask id and the pane dialog's id changes per screen), and to the pane dialog's id for a plain menu or
-//   the terminal door (each such screen is its own ask). One known gap, kept plain: two DIFFERENT aged asks back to back with no clear between them cannot be
-//   told from two screens of one aged ask, so they share an identity and the engagement continues into the second (the
-//   transcript's events hold the AskUserQuestion call's `toolId`, which this controller deliberately does not read: the
-//   transcript lags and rotates, and it would add a coupling and a parser); it only ever takes focus that the engaged
-//   control's replacement dropped to the body, never focus that is outside the card.
+//   controller and shared by every `useAskKeys` it renders: the question screens', the review's and a menu's) is
+//   engaged for the CURRENT ask AND focus is lost (`body`, `documentElement` or nothing) or already inside the card,
+//   and then it goes to the new screen's highlighted row. That is the next question after a key answered one, the
+//   review after the last question, and a question after ← from the review: the focused row unmounted with its
+//   screen, and without this the keyboard would be dead until a click. The engagement belongs to the ask's identity
+//   (`DialogSheet`'s `askIdentity`), not to a hook instance and not to the card's mount: it ends when the identity
+//   changes or goes (even when the card stays mounted and the clear and the new ask arrive in one batch, and for
+//   good: the ask that comes back later with equal content starts unengaged), and on a deliberate move out of the
+//   card (a pointerdown or a focusin outside it: the composer, the transcript, the fleet column, the body). With it
+//   not engaged (an ask arriving beside the composer, a successor ask, a skin switch) focus moves not at all, and
+//   enters the card only through `raise` (`AskSurface`), a Tab or a click. A reconnect does not disengage by itself:
+//   the held gap keeps the same `askIdentity`, and the new connection's first frames keep it too, except when the
+//   store holds an envelope that the new connection's first `ask_cleared` clears: the server then stated no envelope
+//   at that moment (the ask ended during the drop, or the server flapped: a failed hook-state read, or an
+//   aged-envelope keep decision restarting), and either releases the keys, the safe direction. If the store holds no
+//   envelope, that frame counts nothing. The engagement of the SAME ask stands; it never takes focus from outside the
+//   card, and may move focus from the body, or from within the card, to a repainted screen's highlighted row. The
+//   identity is a lifecycle generation (the store's `askEpoch`, raised by every `ask_cleared` that clears an envelope
+//   the store holds, and every `dialog_cleared` while it holds none; so a clear is seen even in one batch with a
+//   byte-identical ask, and a transient `dialog_cleared` under a hooked ask's envelope is not one) joined to the
+//   envelope for a hooked ask, to one word for an ask-backed surface with no envelope (the transcript's copy of a
+//   question, its review, an unreadable ask: the ask frames this controller reads carry no per-ask id and the pane
+//   dialog's id changes per screen), and to the pane dialog's id for a plain menu or the terminal door (each such
+//   screen is its own ask). One known gap, kept plain: two DIFFERENT aged asks back to back with no clear between
+//   them cannot be told from two screens of one aged ask, so they share an identity and the engagement continues into
+//   the second (the transcript's events hold the AskUserQuestion call's `toolId`, which this controller deliberately
+//   does not read: the transcript lags and rotates, and it would add a coupling and a parser); it only ever takes
+//   focus that the engaged control's replacement dropped to the body, never focus that is outside the card.
 // - A held-down digit or arrow across tabs is no key at all (`askKeyAction` reads `repeat`), and a send the sheet
 //   already has in flight refuses another at the ONE gate every send passes, its `claim` (a box's toggle reads the
 //   same `sending`), so this hook keeps no second gate of its own.
@@ -74,14 +77,14 @@ export interface AskEngagement {
 }
 
 /**
- * The ONE owner of the inline engagement (D-6326, R64, R69). `identity` is the ask's (`DialogSheet`'s `askIdentity`): the
- * store's lifecycle generation (`askEpoch`, a count of the clears that end an ask) joined to the hook's envelope for every question and the
- * review of it, to one word for an aged ask (no envelope; its pane dialog id changes per screen), or to the pane dialog's
- * id for a plain menu; null when nothing is asked. The owner treats it as an opaque string. It holds the identity engaged
- * and lets go, in one layout effect, as soon as the identity is any other (a replacement, a clear, even
- * in the same batch), so an ask that comes back later with equal content starts unengaged. It also lets go on deliberate
- * movement out of the card. Focus that falls to the body because the focused row unmounted fires neither
- * event, so that case stays engaged: it is the one continuation.
+ * The ONE owner of the inline engagement (D-6326, R64, R69). `identity` is the ask's (`DialogSheet`'s `askIdentity`):
+ * the store's lifecycle generation (`askEpoch`, a count of the clears that end an ask) joined to the hook's envelope
+ * for every question and the review of it, to one word for an aged ask (no envelope; its pane dialog id changes per
+ * screen), or to the pane dialog's id for a plain menu; null when nothing is asked. The owner treats it as an opaque
+ * string. It holds the identity engaged and lets go, in one layout effect, as soon as the identity is any other (a
+ * replacement, a clear, even in the same batch), so an ask that comes back later with equal content starts unengaged.
+ * It also lets go on deliberate movement out of the card. Focus that falls to the body because the focused row
+ * unmounted fires neither event, so that case stays engaged: it is the one continuation.
  */
 export function useAskEngagement(identity: string | null): AskEngagement {
   const held = useRef<string | null>(null);
@@ -184,7 +187,8 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
       // The position test below (`lost || scope.contains(at)`) is defence in depth behind the engagement's `focusin`
       // release, which is the guard today: a realistic move of focus out of the card fires `focusin` first and ends the
       // engagement, so the engagement test has already returned before this position is read. The arm is equivalent to
-      // its absence and no test can observe it without faking an event; it stays for a focus move that skips the listener.
+      // its absence for every realistic focus move, and no test can observe it without faking an event; it stays for a
+      // focus move that skips the listener.
       const scope = surfaceOf(root.current);
       if (scope?.getAttribute('data-ask-surface') === 'inline') {
         const at = document.activeElement;

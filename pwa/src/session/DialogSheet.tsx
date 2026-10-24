@@ -370,12 +370,14 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // to what the surface can say of the ask: `${askEpoch}:${…}`, or null when there is nothing to engage with (a closed hold,
   // or neither an envelope nor a menu).
   //  - `askEpoch` is the store's count of the clears that end an ask (see its doc in `stores/session.ts`), raised one frame
-  //    at a time in the reducer: an `ask_cleared` that clears a held envelope, and a `dialog_cleared` while no envelope is
-  //    held. So a clear is seen even when it, a byte-identical ask and a screen change arrive in ONE batch, which the
-  //    content alone could not tell from one ask. A repeated `ask` or `dialog` frame, a `rotated`, a transient
-  //    `dialog_cleared` under a held envelope and the socket dropping move nothing. A reconnect keeps the identity unless
-  //    the store held an envelope that the new connection's first `ask_cleared` clears (the ask ended while it was down):
-  //    with no envelope held, that first `ask_cleared` is only the connection speaking, and counts nothing.
+  //    at a time in the reducer: an `ask_cleared` that clears an envelope the store holds, and a `dialog_cleared` while the
+  //    store holds none. So a clear is seen even when it, a byte-identical ask and a screen change arrive in ONE batch,
+  //    which the content alone could not tell from one ask. A repeated `ask` or `dialog` frame, a `rotated`, a transient
+  //    `dialog_cleared` under an envelope the store holds and the socket dropping move nothing. A reconnect keeps the
+  //    identity unless the store holds an envelope that the new connection's first `ask_cleared` clears. That frame means
+  //    the server stated no envelope at that moment: the ask ended during the drop, OR the server flapped (a failed
+  //    hook-state read, or an aged-envelope keep decision restarting). Either releases the keys, the safe direction. If the
+  //    store holds no envelope, that first `ask_cleared` is only the connection speaking, and counts nothing.
   //  - A HOOKED ask adds its envelope (`askKey`: the same for every question and the review, so the keys stay engaged
   //    question → review, review ← question and question → question) and a different envelope is a different ask.
   //  - An ask-backed surface with no envelope (the transcript's copy of a question, its review, an unreadable ask: `askLike`,
