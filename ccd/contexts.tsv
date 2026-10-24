@@ -517,6 +517,7 @@ _ws_reclaim_gitdir_own	C4
 _ws_reclaim_foreign_clean	C4
 _ws_nested_rescue_live	C4
 _ws_nested_rescue_shape	C4
+_ws_nested_busy	C4
 _ws_nested_rescuable	C4
 _ws_nested_secrets	C4
 _ws_hex	C4
