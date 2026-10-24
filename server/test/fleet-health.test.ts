@@ -837,14 +837,16 @@ describe('the orphan lane\'s counts in the watcher', () => {
     } finally { /* nothing was built that needs closing */ }
   });
 
-  it('wires the coordinator set from every claim, so a nested tree of a terminal-run claimant is audited', async () => {
+  /** A watcher over a fixture home whose one tree sits inside registry row `lane-a`, seeded by `seed`. */
+  const nested = async (seed: (reg: string) => void, claims: Map<string, string>, io: Deps['io'] = localIO) => {
     const home = mkTmp('ccrc-fh-orphan-');
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home });
     mkdirSync(cfg.registryDir, { recursive: true });
+    seed(cfg.registryDir);
     const real = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const coord = Object.assign(Object.create(real), {
-      childReclaimCoordinatorClaims: () => new Map([['lane-a', 'closed']]), openCoordinatorIds: () => [],
+      childReclaimCoordinatorClaims: () => claims, openCoordinatorIds: () => [],
     }) as CoordStore;
     const calls: string[][] = [];
     const runCcd = async (argv: readonly string[]) => {
@@ -853,12 +855,43 @@ describe('the orphan lane\'s counts in the watcher', () => {
       return ok(JSON.stringify({ mode: 'orphan', pathHex: HEX, verdict: 'refused', refusal: 'dirty', detail: '1 file' }));
     };
     const full = {
-      cfg, runCcd, tmux: new Tmux(deadRunner), io: localIO, queue: new KeyedQueue(), coord,
+      cfg, runCcd, tmux: new Tmux(deadRunner), io, queue: new KeyedQueue(), coord,
       fleetState: { connected: true, downSince: null, ccdVerbs: ['orphan-v1'], rosterFp: null, build: null },
     } as never as Deps;
     const watcher = new FleetWatcher(full, new Bus());
     await watcher.sweepOrphanTrees();
-    expect(calls.some((c) => c[1] === '--orphan-hex')).toBe(true);
+    return { watcher, audited: calls.some((c) => c[1] === '--orphan-hex') };
+  };
+  const row = (reg: string, workspace: string | null) => {
+    for (const [k, v] of Object.entries({ uuid: 'u-1', wrapper: 'claude', workdir: '/p', project: 'p' })) writeFileSync(path.join(reg, `lane-a.${k}`), `${v}\n`);
+    if (workspace !== null) writeFileSync(path.join(reg, 'lane-a.workspace'), `${workspace}\n`);
+  };
+  const unreadableWorkspace: Deps['io'] = {
+    ...localIO,
+    readFileMeasured: async (p, ...rest) => (p.endsWith('lane-a.workspace') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p, ...rest)),
+  };
+
+  it('wires the coordinator set from every claim, so a nested tree of a terminal-run claimant is audited', async () => {
+    const { watcher, audited } = await nested((reg) => row(reg, 'ws-1'), new Map([['lane-a', 'closed']]));
+    expect(audited).toBe(true);
     expect(watcher.orphanTreesHealth()?.byOutcome.left).toBe(1);
+  });
+
+  it('audits a tree inside a plain row (no .workspace): a main checkout is no nesting', async () => {
+    expect((await nested((reg) => row(reg, null), new Map())).audited).toBe(true);
+  });
+
+  it('does not audit a tree inside a non-coordinator workspace row: it goes with its workspace', async () => {
+    const { watcher, audited } = await nested((reg) => row(reg, 'ws-1'), new Map());
+    expect(audited).toBe(false);
+    expect(watcher.orphanTreesHealth()?.byOutcome.left).toBe(0);
+  });
+
+  it('keeps a tree inside an absent row: no audit', async () => {
+    expect((await nested(() => undefined, new Map())).audited).toBe(false);
+  });
+
+  it('keeps a tree whose containing row\'s .workspace is unreadable: no audit', async () => {
+    expect((await nested((reg) => row(reg, 'ws-1'), new Map(), unreadableWorkspace)).audited).toBe(false);
   });
 });
