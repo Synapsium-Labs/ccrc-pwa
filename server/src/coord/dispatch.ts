@@ -485,11 +485,13 @@ export async function dispatchRun(
   const req = decideDispatch({ step: 'request', read: coord.run(id), brief, items, route, slug,
     prefixes: { work: WORKER_KICKOFF_PREFIX, review: REVIEWER_KICKOFF_PREFIX } });
   if (req.kind !== 'go') return stopped(coord, id, req);
-  const { run, body, itemTitles, routeFields, childSlug, hold } = req.plan;
+  const { run, body, itemTitles, routeFields, routeDefaulted, childSlug, hold } = req.plan;
   // PAUSE / KILL-SWITCH FIRST, then the caps, before anything is counted or spawned.
   const admit = decideDispatch({ step: 'admit', names: await deps.io.readdir(deps.cfg.registryDir),
     caps: () => capsMeasured(coord) });
   if (admit.kind !== 'go') return stopped(coord, id, admit);
+  // D-6794: the journal says the route was the table's row, not the coordinator's.
+  if (routeDefaulted) coord.recordRunEvent(id, 'coordinator', `route-defaulted:${run.kind}`);
 
   // ONE MEASUREMENT, SPENT TWICE — the dispatch's own dec, hoisted above the
   // fresh-spawn branch because BOTH of this function's ccd writes are the same

@@ -1772,6 +1772,12 @@ describe('POST /api/runs/:id/dispatch', () => {
     // silently discarded error — `run_events.detail` names which of
     // sendPrompt's typed refusals fired.
     expect(w.coord.runEvents(opened.id)).toEqual([
+      // D-6794: no route passed, so the work row is filled in and journaled; this fixture's fleet has no
+      // `route-v1`, so the resumed run's `ccd route` is omitted and says so.
+      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
+        detail: 'route-defaulted:work' },
+      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
+        detail: 'route-omitted:no-route-v1-cap' },
       { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator',
         detail: 'clear-refused:dialog-open' },
       // wave 2, F2: every successful dispatch also records its skill preflight,
@@ -1873,6 +1879,12 @@ describe('POST /api/runs/:id/dispatch', () => {
     const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     await postDispatch(app, opened.id);
     expect(w.coord.runEvents(opened.id)).toEqual([
+      // D-6794: no route passed, so the work row is filled in and journaled; this fixture's fleet advertises no
+      // `route-argv-v1`, so the fresh spawn omits `--route` and says so.
+      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
+        detail: 'route-defaulted:work' },
+      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
+        detail: 'route-omitted:no-route-argv-cap' },
       // Child-workspace reclamation wave 1: this fixture's fleet advertises no
       // `child-argv-v1`, so the fresh spawn omits `--child` and says so on the
       // run, BEFORE the transition — recorded while the run still rests at
@@ -1908,10 +1920,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     // Nothing ran on the retry — no second `ws-add`/`ensure`/`ws-hold`, and
     // no second `run_events` row (still exactly the first dispatch's).
     expect(calls.length).toBe(callsAfterFirst);
-    // Three rows from the FIRST dispatch (its `child-omitted` row — this
-    // fixture advertises no `child-argv-v1` — its transition, and its skill
-    // preflight, wave 2 F2), and none from the refused second.
-    expect(w.coord.runEvents(opened.id).length).toBe(3);
+    // Five rows from the FIRST dispatch (its `route-defaulted` row, D-6794, and the `route-omitted` row this
+    // fixture's missing `route-argv-v1` earns it; its `child-omitted` row — no `child-argv-v1` either — its
+    // transition, and its skill preflight, wave 2 F2), and none from the refused second.
+    expect(w.coord.runEvents(opened.id).length).toBe(5);
   });
 
   it('refuses to dispatch a run whose kind this build cannot name — before any fleet act (D-2795)', async () => {

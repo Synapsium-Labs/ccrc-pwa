@@ -82,6 +82,7 @@ interface HarnessCfg extends RunnerCfg {
    *  session, the resume arm's own precondition. */
   sessionId?: string;
   ccdVerbs?: string[];
+  kind?: 'work' | 'review';
 }
 
 const harness = async (cfg: HarnessCfg = {}) => {
@@ -90,6 +91,7 @@ const harness = async (cfg: HarnessCfg = {}) => {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const opened = coord.openRun({
     program: 'p', title: 't', project: PROJECT, wave: cfg.wave ?? 1, waveOf: 2, claimedBy: 'c',
+    ...(cfg.kind === undefined ? {} : { kind: cfg.kind }),
   });
   if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
   if (cfg.sessionId !== undefined) {
@@ -294,6 +296,59 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
     const normalise = (argv: readonly string[], id: number): string[] =>
       argv.map((t) => (t === `run:${id} dispatch` ? 'run:<id> dispatch' : t));
     expect(normalise(wsAdd1, h1.runId)).toEqual(normalise(wsAdd2, h2.runId));
-    expect(wsAdd1).not.toContain('--route');
+    // D-6794: "absent" now means the run kind's table row, the same in both spellings.
+    expect(wsAdd1).toContain('--route');
+  });
+});
+
+describe('a dispatch with no route gets its run kind\'s row (D-6794)', () => {
+  const WORK_ROW = ['--route', 'class=opus', '--route', 'effort=high', '--route', 'subagent=sonnet',
+    '--route', 'workflow=off', '--route', 'compact=40'];
+  const REVIEW_ROW = ['--route', 'class=sonnet', '--route', 'effort=high', '--route', 'subagent=sonnet',
+    '--route', 'workflow=on', '--route', 'compact=40'];
+
+  it('a work dispatch with no route gets the work row', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-work-default'] });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    expect(h.calls.find((c) => c[0] === 'ws-add')!.slice(1, 2 + WORK_ROW.length)).toEqual(['--no-rc', ...WORK_ROW]);
+  });
+
+  it('a review dispatch with no route gets the review row', async () => {
+    const h = await harness({ wave: 1, kind: 'review', wsAddCreates: ['demo-review-default'] });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    expect(h.calls.find((c) => c[0] === 'ws-add')!.slice(1, 2 + REVIEW_ROW.length)).toEqual(['--no-rc', ...REVIEW_ROW]);
+  });
+
+  it('a route the coordinator passed is untouched, and nothing is journaled as defaulted', async () => {
+    const h = await harness({ wave: 1, kind: 'review', wsAddCreates: ['demo-passed-route'] });
+    expect(await h.dispatch({ effort: 'low' })).toMatchObject({ ok: true });
+    expect(h.calls.find((c) => c[0] === 'ws-add')).toEqual(
+      ['ws-add', '--no-rc', '--route', 'effort=low', PROJECT, '--surface', 'agent', '--actor', `run:${h.runId} dispatch`]);
+    expect(h.events().filter((e) => e.startsWith('route-defaulted'))).toEqual([]);
+  });
+
+  it('an empty passed route is a passed route: not filled', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-empty-passed'] });
+    expect(await h.dispatch({})).toMatchObject({ ok: true });
+    expect(h.calls.find((c) => c[0] === 'ws-add')).not.toContain('--route');
+    expect(h.events().filter((e) => e.startsWith('route-defaulted'))).toEqual([]);
+  });
+
+  it('the journal row is written, once, naming the kind', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-journal'] });
+    await h.dispatch();
+    expect(h.events().filter((e) => e.startsWith('route-defaulted'))).toEqual(['route-defaulted:work']);
+    expect(h.events()).toContain('arm:class=opus effort=high subagent=sonnet workflow=off compact=40');
+    const r = await harness({ wave: 1, kind: 'review', wsAddCreates: ['demo-journal-review'] });
+    await r.dispatch();
+    expect(r.events().filter((e) => e.startsWith('route-defaulted'))).toEqual(['route-defaulted:review']);
+  });
+
+  it('a resumed wave N>=2 with no route is routed by the verb with the row', async () => {
+    const h = await harness({ wave: 2, sessionId: 'demo-existing-default' });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    expect(h.calls.find((c) => c[0] === 'route')).toEqual(['route', '--session', 'demo-existing-default',
+      '--set', 'class=opus', '--set', 'effort=high', '--set', 'subagent=sonnet', '--set', 'workflow=off',
+      '--set', 'compact=40', '--actor', `run:${h.runId} dispatch`]);
   });
 });
