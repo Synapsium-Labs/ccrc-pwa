@@ -41,8 +41,9 @@ function Gauge({ label, value, rolledOver, off = false }: {
   label: string; value: number | null; rolledOver: boolean; off?: boolean;
 }): ReactNode {
   const pct = rolledOver || value === null ? null : Math.min(100, Math.max(0, value));
-  // The reading takes the clamped, rounded value; a rolled-over window carries no value, only the flag.
-  const { shown, spoken } = windowReading(pct === null ? null : Math.round(pct), rolledOver);
+  // The reading takes the clamped, rounded value; a rolled-over window carries no value for the meter, only the flag,
+  // and the flag reads 0 (a window never measured, `windowReading(null, …)`, is "—" whatever the flag says).
+  const { shown, spoken } = windowReading(rolledOver ? 0 : pct === null ? null : Math.round(pct), rolledOver);
   return (
     <span className="acct-gauge">
       <span>{label}</span>

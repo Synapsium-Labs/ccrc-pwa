@@ -379,6 +379,9 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
     await waitFor(() => expect(row).toHaveTextContent('0%, inferred: the window reset'));
     // The measured half is untouched — the flags are per-window.
     expect(row).toHaveTextContent('44%');
+    // The visible reading node itself is "0%" (not only the row's combined text, which the spoken words also fill).
+    const shown = [...row.querySelectorAll('.acct-gauge-pct [aria-hidden="true"]')].map((n) => n.textContent);
+    expect(shown).toEqual(['0%']);
     // AND THE TRACK IS LEFT EMPTY on the rolled half — exactly one fill in
     // this row, the honest one. A bar drawn beside an inferred 0% would
     // claim a measurement in the same row, and the width would be a number nobody
