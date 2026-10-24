@@ -4734,6 +4734,35 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
   fi
 fi
 
+# A FAN-OUT NAMES ITS MODEL, AND A WORKFLOW AGENT ITS EFFORT TOO (D-6798; operator ruling 2026-10-24): on every session, an
+# Agent or Task call whose `tool_input` names no `model`, and a Workflow call whose script has an `agent(...)` call
+# naming no `model` or no `effort`, is denied, with a reason that sends the agent to the routing matrix. A call that names
+# nothing runs at the lane default, which is the spend this arm bounds. An accident guard, and it fails open like the arm
+# above: a payload jq cannot parse, or an envelope that cannot be built, says nothing. Only an Agent, Task or Workflow
+# call forks a jq, so every other tool pays nothing. A script's `agent(` call is read up to the next `agent(` (or the
+# end), so an option set built elsewhere and spread in is not seen: a miss there allows, never denies.
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
+      && ( "${tool:-}" == Agent || "${tool:-}" == Task || "${tool:-}" == Workflow ) ]]; then
+  fo=$(jq -r '
+    .tool_input as $i
+    | if .tool_name == "Agent" or .tool_name == "Task" then
+        (if ($i | type) == "object" and (($i.model | type) != "string" or $i.model == "") then "agent" else "" end)
+      elif .tool_name == "Workflow" and ($i.script | type) == "string" then
+        $i.script as $s
+        | ([$s | match("(^|[^A-Za-z0-9_.$])agent[[:space:]]*\\("; "g")] | map(.offset + .length)) as $starts
+        | ([range(0; $starts | length)]
+           | map($s[$starts[.]:(if . + 1 < ($starts | length) then $starts[. + 1] else ($s | length) end)])
+           | map(select((test("model") | not) or (test("effort") | not)))
+           | length) as $bad
+        | if $bad > 0 then "workflow" else "" end
+      else "" end' <<<"$payload" 2>/dev/null) || fo=""
+  if [[ "$fo" == agent || "$fo" == workflow ]]; then
+    if [[ "$fo" == agent ]]; then foname="names no model"; else foname="has an agent() call that names no model or no effort"; fi
+    foreason="ccrc: this ${tool} call ${foname}, so it would run at the lane default (operator ruling 2026-10-24; D-6798). Name them from the routing matrix: pass model (opus, sonnet or haiku) on an Agent or Task call, and model and effort on every agent() call in a Workflow script. Take the row for the work: a mechanical task is haiku or sonnet, judgement is opus."
+    if fojson=$(_hook_deny_json "$foreason"); then pre_json=$fojson; fi
+  fi
+fi
+
 # `carry-only-a-main-thread-wait` (D-4039, task review): who raised the wait. `waitby` is "subagent" only when THIS event
 # freshly set `waiting` and carries an `agent_id` (`$paid`); it is stored as the additive key `waitBy`, preserved with
 # the carried state below, and absent everywhere else, so every other write keeps today's shape byte for byte.

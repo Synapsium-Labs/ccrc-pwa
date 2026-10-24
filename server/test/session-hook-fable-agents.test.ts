@@ -75,10 +75,10 @@ describe('the Fable arm denies a Workflow that names Fable (D-6792)', () => {
     expect(fire('Workflow', { name: 'w', args: { agents: [{ model: 'fable' }] } })).not.toBeNull();
   });
   it('a script that names opus and only says "fable" in prose is allowed', () => {
-    expect(fire('Workflow', { script: "agent({ prompt: 'a fable about a fox', model: 'opus' })" })).toBeNull();
+    expect(fire('Workflow', { script: "agent({ prompt: 'a fable about a fox', model: 'opus', effort: 'high' })" })).toBeNull();
   });
   it('a Workflow without fable is allowed', () => {
-    expect(fire('Workflow', { script: "agent({ prompt: 'x', model: 'sonnet' })" })).toBeNull();
+    expect(fire('Workflow', { script: "agent({ prompt: 'x', model: 'sonnet', effort: 'low' })" })).toBeNull();
   });
 });
 
@@ -87,7 +87,7 @@ describe('the Fable arm fails open (D-6792)', () => {
     expect(run('{"hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"model":"fable"')).toBe('');
   });
   it('a non-string model is allowed', () => {
-    expect(fire('Agent', { prompt: 'p', model: { fable: 1 } })).toBeNull();
+    expect(fire('Agent', { prompt: 'p', model: { fable: 1 } })).not.toMatch(/Fable runs only/);
   });
   it('another tool naming fable is not this arm\'s business', () => {
     expect(fire('Bash', { command: 'echo model: fable' })).toBeNull();
