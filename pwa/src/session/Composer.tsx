@@ -11,7 +11,7 @@ import { AttachButton, AttachTray, Button, Icon, KeyHint, Sheet, Well } from '@c
 import { PALETTE_KEYS } from '../command/CommandLayer';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { ATTACH_ACCEPT, clipboardFiles, isAttachable, useStagedImages } from './useAttachImage';
-import { api } from '../lib/api';
+import { api, sendErrorText } from '../lib/api';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import type { SlashCommand } from '../../../shared/api';
 import { slashQuery, filterCommands } from './slashComplete';
@@ -36,6 +36,10 @@ export interface ComposerProps {
   /** Stop in the send slot. It reports `keycap`, the word the server already records for the on-screen control:
    *  W2 changes no wire (D-5471), so the type admits no new source. */
   onInterrupt?: (source: 'keycap') => void;
+  /** D-6326: an inline ask surface is up, so the server would refuse a send with `dialog-open`. Send (and Enter) then
+   *  keeps the text, makes no request and says that refusal's own sentence under the field, until the question is
+   *  answered. Stop is unaffected. */
+  askUp?: boolean;
 }
 
 /** After a send empties the draft during a busy turn, the danger Stop takes Send's spot at once; it ignores taps for
@@ -72,6 +76,7 @@ export function Composer({
   onResolve,
   busy = false,
   onInterrupt,
+  askUp = false,
 }: ComposerProps): ReactNode {
   const [value, setValue] = useState('');
   const [conflict, setConflict] = useState<DraftConflict | null>(null);
@@ -157,8 +162,19 @@ export function Composer({
     onInterrupt?.('keycap');
   };
 
+  // D-6326: the refusal's line shows once a send was tried with a question up, and ends with the question.
+  const [refused, setRefused] = useState(false);
+  useEffect(() => {
+    if (!askUp) setRefused(false);
+  }, [askUp]);
+
   const send = (): void => {
     if (!canSend) return;
+    // The question is on the page, so the round trip that ends in `dialog-open` is not made: the text stays in the field.
+    if (askUp) {
+      setRefused(true);
+      return;
+    }
     const text = value.trim();
     // An explicit `undefined` second argument still counts as a 2-arg call to
     // a caller matching on arity — only pass opts when there is one.
@@ -352,6 +368,10 @@ export function Composer({
           </>
         )}
       </div>
+
+      {askUp && refused && (
+        <p className="composer-refusal" role="status">{sendErrorText('dialog-open')}</p>
+      )}
 
       {keyHints && (
         <>

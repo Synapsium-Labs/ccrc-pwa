@@ -20,13 +20,15 @@
 // `DialogSheet` for the same reason.
 //
 // D-6325: every surface here renders from `askSource`, so no part draws a string the pane painted. One container
-// (`AskSheet`) holds every kind of surface, so moving between kinds never remounts the drawer, and it is the one site T1c
-// swaps. The header names who asks (`AskHeader`, one for every kind of surface), the review is one render for every
-// source of copy (`AskReview`, fixed words over the structured headers), the tab strip's chips carry the structured
-// headers (`AskTabs`), and the option preview (`OptionPreview`) lives here beside the rows it opens under.
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+// (`AskSurface`, `AskSurface.tsx`) holds every kind of surface, so moving between kinds never remounts it; D-6326 (T1c)
+// made it the Sheet below 900 and an inline card at the desk, which is done (this file keeps the Escape rule of each,
+// `escapeHidesOnly` and `escapeStaysInCard`). The header names who asks (`AskHeader`, one for every kind of surface),
+// the review is one render for every source of copy (`AskReview`, fixed words over the structured headers), the tab
+// strip's chips carry the structured headers (`AskTabs`), and the option preview (`OptionPreview`) lives here beside the
+// rows it opens under.
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import type { Dialog, DialogMulti } from '../../../shared/api';
-import { Button, Chip, EYEBROW, FOCUS_RING, OptionRow, RESET_LIST, Sheet, Well } from '@ccrc/ui';
+import { Button, Chip, EYEBROW, FOCUS_RING, OptionRow, RESET_LIST, Well } from '@ccrc/ui';
 import type { ReviewRows } from '../../../shared/ask-menu';
 import { rowKey } from './askKeys';
 import type { AskKeys } from './useAskKeys';
@@ -136,33 +138,14 @@ export function AskHeader({
 export const escapeHidesOnly = (e: KeyboardEvent): void => e.stopPropagation();
 
 /**
- * THE ONE CONTAINER of every ask surface (D-6325): the single `Sheet` the approval, a question, the review, an unreadable
- * ask, a menu and the terminal-only surface all draw inside, with the header in its `eyebrow`, the title, and the
- * surface as `children`. `DialogSheet` renders it ONCE, at one place in its tree, for every kind but `none`, so moving
- * between kinds (the last question to the review, a question to an approval) changes what is inside the drawer and never
- * the drawer: no remount, so no fresh entrance, no scroll reset and no focus taken again. It is also the single site
- * where T1c swaps the drawer for an inline panel at the desk. Dismissal gating stays with the caller (`onClose`), and
- * Escape only hides (`escapeHidesOnly`).
+ * D-6326: INLINE (at the desk, `AskSurface.tsx`), Escape does nothing at all. The card covers nothing, so there is
+ * nothing for Escape to hide, and a question must never be declined by accident. `preventDefault` is what the session
+ * screen's interrupt skips (`useEscapeInterrupt`, D-5235); the interrupt also stands down while the card is mounted, so
+ * either half alone holds it. The card's own React `onKeyDown`, so it covers a key whose target is anywhere inside it.
  */
-export function AskSheet({
-  open,
-  onClose,
-  eyebrow,
-  title,
-  children,
-}: {
-  open: boolean;
-  onClose: () => void;
-  eyebrow: ReactNode;
-  title: string;
-  children: ReactNode;
-}): ReactNode {
-  return (
-    <Sheet open={open} onClose={onClose} onEscapeKeyDown={escapeHidesOnly} eyebrow={eyebrow} title={title} titleScroll={false}>
-      {children}
-    </Sheet>
-  );
-}
+export const escapeStaysInCard = (e: ReactKeyboardEvent): void => {
+  if (e.key === 'Escape') e.preventDefault();
+};
 
 /** A row's keyboard wiring (decision `ask-sheet-keyboard-model`): its element and roving tab stop when the sheet's keys
  *  are on, and the digit that answers it. */

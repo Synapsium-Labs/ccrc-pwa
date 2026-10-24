@@ -5,19 +5,20 @@
 // D-6325: this is the ONE renderer of Claude's own question. `askSource` hands it the questions from the hook's envelope
 // (`from: 'hook'`) or, once that has aged out, the transcript's copy (`from: 'transcript'`), which carries an option's
 // `preview` too; a question the app cannot read says so and offers the terminal (`DialogSheet`'s `ask-unreadable`), and
-// the scraped sheet that used to take over is gone. It draws no drawer of its own: `DialogSheet` renders `AskSheet`
-// (`AskParts.tsx`) once for every kind of surface, with the header and the title worked out there (`shownQuestion`), and
-// this is what goes inside it. The review screen is rendered by `DialogSheet` for every source of copy, so it is not here.
+// the scraped sheet that used to take over is gone. It draws no drawer of its own: `DialogSheet` renders `AskSurface`
+// (`AskSurface.tsx`: the Sheet below 900, an inline card at the desk, D-6326) once for every kind of surface, with the
+// header and the title worked out there (`shownQuestion`), and this is what goes inside it. The review screen is rendered by `DialogSheet` for every source of copy, so it is not here.
 //
 // `TerminalCta` is written once, here, and `DialogSheet` imports it for its `ask-unreadable` and `terminal-only` surfaces:
 // copy written twice drifts in a way no type catches.
 //
 // The classes stay `dlg-*`: chat.css grounds them and these are their only consumers. The shape moves, the ground stays.
-import { Fragment } from 'react';
+import { Fragment, useContext } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, DialogTabTarget } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
 import { Button, OptionRow } from '@ccrc/ui';
+import { AskContainer } from './AskSurface';
 // C1's correspondence check lives in `askLive.ts` (D-5089), beside the rules that choose which question is live:
 // `liveQuestion` applies it to EVERY question of the envelope, and the title only breaks a tie.
 import { chatRow, freeTextSlot, headerTab, optionCopy, tabChips, type AskQuestions, type ShownQuestion } from './askLive';
@@ -38,14 +39,18 @@ import './chat.css';
  *  callers': this content gates the whole of its handler on a send in flight (see `openTerminal` below), while the
  *  controller's two surfaces hide the sheet and go, and those are different things on purpose. */
 export function TerminalCta({ onOpen, onLater }: { onOpen: () => void; onLater: () => void }): ReactNode {
+  // D-6326: the inline card covers nothing, so it has nothing to put off: "Not now" is the sheet's dismissal alone.
+  const inline = useContext(AskContainer) === 'inline';
   return (
     <div className="dlg-actions">
       <Button variant="primary" onClick={onOpen}>
         Open terminal to answer
       </Button>
-      <button type="button" className="dlg-later" onClick={onLater}>
-        Not now
-      </button>
+      {!inline && (
+        <button type="button" className="dlg-later" onClick={onLater}>
+          Not now
+        </button>
+      )}
     </div>
   );
 }

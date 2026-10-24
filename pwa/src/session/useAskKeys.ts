@@ -8,8 +8,14 @@
 //   the page itself with nothing focused (a hardware keyboard on a phone, where the sheet never took focus). A key in
 //   any text field outside the sheet (the composer, the terminal) is never read. Every key it handles is stopped there
 //   (`stopPropagation`), so the header's Escape binding, the composer and any page shortcut never see it.
+//   D-6326: the scope is the nearest `[data-ask-surface]` (the desk's inline card), else the nearest dialog (the phone's
+//   `Sheet` cannot carry a data attribute: it forwards none). INLINE the page-body arm does not apply: the card blocks
+//   nothing and is no modal, so a digit, an arrow or Enter with nothing focused, or focused on the transcript, is the
+//   page's own and never answers; a key acts only when its target is inside the card.
 // - FOCUS moves into the sheet on open and on each new screen only under a fine pointer, or once a key has been
-//   handled inside the sheet: a phone is never pulled out of its composer by a sheet that slid up.
+//   handled inside the sheet: a phone is never pulled out of its composer by a sheet that slid up. INLINE it does not
+//   move at all on open: an ask arriving beside the composer takes nothing from it, and focus enters the card only
+//   through `raise` (`AskSurface`), a Tab or a click (`engaged` still turns on with the first key handled inside it).
 // - A held-down digit or arrow across tabs is no key at all (`askKeyAction` reads `repeat`), and a send the sheet
 //   already has in flight refuses another at the ONE gate every send passes, its `claim` (a box's toggle reads the
 //   same `sending`), so this hook keeps no second gate of its own.
@@ -51,6 +57,10 @@ function typingInto(el: Element): boolean {
 /** How long after a screen renders its row takes focus: about a frame, so the sheet's portal and rows are mounted. */
 const FOCUS_DELAY_MS = 16;
 
+/** The surface the keys are scoped to: the desk's inline card, else the phone's dialog (D-6326). */
+const surfaceOf = (el: Element | null): Element | null =>
+  el?.closest('[data-ask-surface]') ?? el?.closest('[role="dialog"]') ?? null;
+
 const finePointer = (): boolean =>
   typeof window !== 'undefined' && typeof window.matchMedia === 'function'
   && window.matchMedia('(pointer: fine)').matches;
@@ -86,7 +96,11 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
     if (!open || screen === null || hl === null) return undefined;
     if (!finePointer() && !engaged.current) return undefined;
     const key = hl;
-    const t = setTimeout(() => els.current.get(key)?.focus({ preventScroll: true }), FOCUS_DELAY_MS);
+    const t = setTimeout(() => {
+      // Read here, where the ref is attached (the card mounts with its screen): inline takes no focus on open (D-6326).
+      if (surfaceOf(root.current)?.getAttribute('data-ask-surface') === 'inline') return;
+      els.current.get(key)?.focus({ preventScroll: true });
+    }, FOCUS_DELAY_MS);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, screenId, screen === null]);
@@ -95,10 +109,12 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
     const onKey = (e: KeyboardEvent): void => {
       const { opts: o, hl: at } = latest.current;
       if (e.defaultPrevented || !o.open || o.screen === null) return;
-      const dialog = root.current?.closest('[role="dialog"]') ?? null;
+      const scope = surfaceOf(root.current);
+      const inline = scope?.getAttribute('data-ask-surface') === 'inline';
       const target = e.target instanceof Element ? e.target : null;
-      const onPage = target === null || target === document.body || target === document.documentElement;
-      if (!onPage && (dialog === null || !dialog.contains(target))) return;
+      // The page-body arm is the modal's alone (D-6326): inline, only a key inside the card acts.
+      const onPage = !inline && (target === null || target === document.body || target === document.documentElement);
+      if (!onPage && (scope === null || !scope.contains(target))) return;
       // `words` is the `Other` row while the field is closed and the field once it is open (D-6325, R5): only the field is
       // text, so only the field keeps the keys a caret and a digit need.
       const wordsEl = els.current.get('words');

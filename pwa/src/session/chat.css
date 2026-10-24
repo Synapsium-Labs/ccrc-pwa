@@ -1904,6 +1904,7 @@ button.metachip:active {
 @media (min-width: 900px) {
   .chat-item,
   .chat-strips,
+  .ask-inline,
   .composer {
     box-sizing: border-box;
     width: 100%;
@@ -1936,4 +1937,62 @@ button.metachip:active {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
+}
+
+/* ------------------------------------------------------------------ *
+ *  The inline ask (AskSurface.tsx, D-6326): at the desk the question  *
+ *  is answered in the pane, a card between the transcript and the     *
+ *  strips. It joins the reading column above; it covers nothing, so   *
+ *  it has no scrim and no ✕.                                          *
+ * ------------------------------------------------------------------ */
+/* ONE bordered surface on --bg-surface, which also grounds every `.dlg-*` and `.opts` rule inside it (the audit's
+   GROUNDS name it where a selector names no painted ancestor). It shrinks before the transcript does (`flex: 0 1 auto`,
+   `min-height: 0`): the header never shrinks and the one scroller below takes the loss, so a short question has no
+   scrollbar and a 40-line one scrolls inside the card. */
+.ask-inline {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-block: var(--sp-2);
+  padding: var(--pad-card);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-lg);
+  color: var(--ink-primary);
+  outline: none;
+}
+/* The transcript keeps at least a third of the pane while a card is up: the card yields to it, never the other way. */
+.chat[data-ask-inline] > .chat-body {
+  min-height: calc(100% / 3);
+}
+.ask-inline .ask-inline-eyebrow {
+  flex: none;
+  margin: 0 0 var(--sp-2);
+  color: var(--ink-tertiary);
+  overflow-wrap: anywhere;
+}
+/* The ONE scroller: the title and the surface scroll as one (as the sheet's body does). The side inset gives the focus
+   ring its room (a box that scrolls on one axis clips on both; the ring draws 4px outside its control). */
+.ask-inline-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-inline: calc(-1 * var(--sp-1));
+  padding-inline: var(--sp-1);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ask-inline .ask-inline-title {
+  margin: 0 0 var(--sp-4);
+  font: var(--weight-semibold) var(--fs-lg) / var(--lh-tight) var(--family-ui);
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
+}
+/* Send held while a question is up (Composer's `askUp`): the refusal's own sentence, under the field. The page ground the
+   composer sits on is restated, as `.composer-hints` does, so the contrast gate measures the pair. */
+.composer-refusal {
+  margin: var(--sp-2) 0 0;
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
+  color: var(--ink-secondary);
+  background: var(--bg-page);
 }
