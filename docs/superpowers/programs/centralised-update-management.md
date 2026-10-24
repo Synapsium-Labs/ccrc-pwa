@@ -5995,6 +5995,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   the broker's soak first.
   `STATUS 2026-10-24T08:25:38Z fleet=v0.0.608 server=v0.0.608 health=v0.0.608 newest=v0.0.612 intent=*:dev/auto=off`
   `backups=fleet:237M/server:7680M disk=fleet:99G/server:23G`
+- **2026-10-24 10:25 UTC — monitoring: v0.0.613 and v0.0.614 released (two code merges, `7a3104abd` and `4910f4cff`), no
+  anomalies; both boxes on v0.0.608.** Neither touches the delegation lane's paths. #1259 is in the merge queue.
+  `STATUS 2026-10-24T10:25:45Z fleet=v0.0.608 server=v0.0.608 health=v0.0.608 newest=v0.0.614 intent=*:dev/auto=off`
+  `backups=fleet:237M/server:7680M disk=fleet:97G/server:23G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
