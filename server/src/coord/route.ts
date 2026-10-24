@@ -265,7 +265,15 @@ export async function decideRoute(facts: RouteFacts): Promise<RouteDecision> {
   const { current, rawClass, degraded } = rung;
 
   const kind = how.by === 'kind' ? how.kind : null;
-  const { lastDemotion, priorSameKind } = foldRouteTrail(facts.trail(sid), sid, kind);
+  const folded = foldRouteTrail(facts.trail(sid), sid, kind);
+  const { priorSameKind } = folded;
+  // Ruling S5-R17, applied before the ladder: a demotion whose `to` is no longer the measured value was cleared out
+  // of band. D-6790: a live class demotion whose origin is above the main ceiling (fable) is never restored by an
+  // automatic step, but it must not freeze the ladder either, so it falls through to the plain ladder.
+  const dem = folded.lastDemotion;
+  const demLive = dem !== null && dem.to === (dem.field === 'class' ? current.class : current.effort);
+  const fableOrigin = dem !== null && dem.field === 'class' && routeNamesFable({ class: dem.from });
+  const lastDemotion = demLive && !fableOrigin ? dem : null;
   let target: RungTarget | { kind: 'floor'; why: string } = how.by === 'kind'
     ? escalate(how.kind, current, 'main', priorSameKind, lastDemotion)
     : demote(current, how.field);
