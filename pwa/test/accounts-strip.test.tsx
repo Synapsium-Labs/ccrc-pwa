@@ -87,7 +87,7 @@ describe('AccountsStrip', () => {
   const nameOf = (card: HTMLElement): string => card.querySelector('.account-gauge-label')?.textContent ?? '';
   const threeLanes = (): AccountUsage[] => [
     acct({ wrapper: 'lane-a', five: 60, seven: 80, fiveResetAt: nowSec + 3600, sevenResetAt: nowSec + 86400 }),
-    acct({ wrapper: 'lane-b', five: 10, seven: null, fiveResetAt: nowSec + 7200 }),
+    acct({ wrapper: 'lane-b', five: 10, seven: null, fiveResetAt: nowSec + 7200 + 1800 }),
     acct({ wrapper: 'lane-c', five: 30, seven: 20, fiveResetAt: nowSec + 600, sevenResetAt: nowSec + 2 * 86400 }),
   ];
 
@@ -124,7 +124,7 @@ describe('AccountsStrip', () => {
     const { container } = render(<AccountsStrip />);
     await screen.findByText('lane-a');
     const b = cardsOf(container).find((x) => nameOf(x) === 'lane-b')!;
-    expect(b).toHaveAccessibleName(/^lane-b: 5h 10%, resets in 2h.* — opens lane-b on the Accounts screen$/);
+    expect(b).toHaveAccessibleName(/^lane-b: 5h 10%, resets in 2h (29|30)m — opens lane-b on the Accounts screen$/);
     expect(b.querySelector('a, button, input, select, textarea, [tabindex], [role="button"], [role="link"]')).toBeNull();
   });
 
