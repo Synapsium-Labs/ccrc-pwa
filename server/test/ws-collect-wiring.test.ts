@@ -28,8 +28,12 @@ describe('the agent grant — ws-collect on its confirmation token, the audit on
     expect(UNGRANTABLE_VERBS as readonly string[], 'it has a lawful grantable form').not.toContain('ws-collect');
   });
 
-  it('ws-audit --collect needs NO grant of its own: the one ws-audit grant is the one it always was', () => {
-    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-audit')).toEqual([['ws-audit', '--session']]);
+  it('ws-audit --collect needs NO grant of its own: it rides the existing --session prefix', () => {
+    // The orphan lane (D-6630) adds `--orphans` and `--orphan-hex`; the collector adds none — `--collect` rides `--session`.
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-audit')).toEqual([
+      ['ws-audit', '--session'], ['ws-audit', '--orphans'], ['ws-audit', '--orphan-hex'],
+    ]);
+    expect(EXEC_WHITELIST.ccd.some((p) => p[0] === 'ws-audit' && p.includes('--collect'))).toBe(false);
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsCollectAudit(ID)])).toBe(true);
   });
 });
