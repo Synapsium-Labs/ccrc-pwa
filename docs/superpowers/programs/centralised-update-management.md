@@ -6073,6 +6073,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   guarded verb); neither touches the delegation lane, and the broker's soak was told before any tap.
   `STATUS 2026-10-24T22:25:40Z fleet=v0.0.646 server=v0.0.646 health=v0.0.646 newest=v0.0.651 intent=*:dev/auto=off`
   `backups=fleet:206M/server:11419M disk=fleet:101G/server:19G`
+- **2026-10-24 23:25 UTC — monitoring: v0.0.652 released; boxes stay on v0.0.646, no anomalies.** v0.0.652 changes `watch.ts`
+  (#1221, the lane runner's third step: the coordination beats; the divergences row unchanged), and the broker's soak was told
+  before any tap. Its census check after the v0.0.646 move is complete: the move's three hours measured 41, 38 and 41
+  session-hours with none unmeasured, and no census or incarnation line was logged.
+  `STATUS 2026-10-24T23:25:46Z fleet=v0.0.646 server=v0.0.646 health=v0.0.646 newest=v0.0.652 intent=*:dev/auto=off`
+  `backups=fleet:206M/server:11419M disk=fleet:101G/server:19G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
