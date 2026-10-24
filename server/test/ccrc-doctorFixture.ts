@@ -89,6 +89,8 @@ export function installCcrc(home: string): void {
   symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
   symlinkSync(CHECKS_SRC, join(ccd, 'ccrc-doctor-checks'));
   symlinkSync(LIB_SRC, join(ccd, 'ccrc-wrapper-shape'));
+  // The jq module the transcripts check loads (ARCH-65), beside the checks file as in a shipped tree.
+  symlinkSync(join(REPO, 'ccd', 'lib'), join(ccd, 'lib'));
   // The four shipped skill trees (release/rollout design §6): `_check_skills`
   // compares every home's installed copy against THESE, the tree the stamp
   // names — not against the `.cc-sessions` placed copy, which was stale too
