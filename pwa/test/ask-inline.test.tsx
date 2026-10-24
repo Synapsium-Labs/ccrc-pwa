@@ -615,6 +615,32 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(card().contains(document.activeElement), 'the new ask took focus from the body').toBe(false);
   });
 
+  it('an aged ask engaged by a key, then a drop and a reconnect whose first frames are the screen and ask_cleared, keeps the keys', async () => {
+    // Premises (R1): fixture 2 (no envelope) engaged by a key, the answer in flight; the socket drops (`onState`'s own
+    // writes: the connection has not spoken, the pane's menu is lowered); the new connection speaks with the next question
+    // and, as the server's per-connection ask record always makes it for an ask with no envelope, `ask_cleared`: all in one
+    // batch. The store held no envelope for that frame to clear, so it is the same ask.
+    media(true);
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(2);
+    expect(store.getState().ask, 'premise: no envelope is held').toBeNull();
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, '1');
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    act(() => store.setState({ conn: 'down', askFrameSeen: false, dialog: null }));
+    act(() => store.setState({ conn: 'open' }));
+    act(() => {
+      store.getState().apply({ type: 'dialog', dialog: agedQuestion2() });
+      store.getState().apply({ type: 'ask_cleared' });
+    });
+    await frame();
+    expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
+    expect(card().contains(document.activeElement), 'R1: focus is inside the card after the reconnect').toBe(true);
+  });
+
   it('a menu that vanishes and returns in ONE batch (dialog_cleared, then a screen) is a new ask and takes no focus from the body', async () => {
     // Premises: fixture 1's envelope up and engaged by a key; focus falls to the body; ONE batch clears the pane's menu and
     // paints the next question. The envelope never changed, so only the generation (`dialog_cleared` counts) can tell.
