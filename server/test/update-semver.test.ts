@@ -32,7 +32,7 @@ const sortV = (list: readonly string[]): string[] =>
     { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, ...SPAWN_OPTS }).stdout.trim().split('\n');
 
 /** `_ver_newer`, extracted from the shipped `ccd/ccrc` by regex — the W1 Task
- *  10 shape (`ccrc-install.test.ts`, "_ver_newer agrees with sort -V") — so a
+ *  10 shape (`ccrc-install-*.test.ts`, "_ver_newer agrees with sort -V") — so a
  *  change to the bash function is a change to what this pins. */
 const verNewerSrc = (): string => {
   const src = readFileSync(path.join(REPO, 'ccd', 'ccrc'), 'utf8');

@@ -1468,7 +1468,7 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
     // until then reported "unstamped" for ever. It does not widen either list,
     // because it writes through `BOX_STAMP_FILE` — the one line this file
     // already pins — and that is exactly the property these assertions are
-    // for. `server/test/ccrc-install.test.ts` ("writes the stamp through
+    // for. `server/test/ccrc-install-units.test.ts` ("writes the stamp through
     // BOX_STAMP_FILE") holds the other half: that the new writer really goes
     // through that variable rather than merely not duplicating the literal.
     expect(holdersOf('.ccrc/build.json')).toEqual([
@@ -3356,7 +3356,7 @@ describe('the Codex runtime — one LiteLLM requirement, in one file', () => {
 describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTree', () => {
   // The same shape as "extraction finding — one path to the ccd script"
   // above, applied to a copy that was made for a stated reason and copied
-  // anyway: `ccrc-install.test.ts` and `ccrc-install-graphify.test.ts` each
+  // anyway: the `ccrc-install-*.test.ts` family (one fixture module since D-6767) and `ccrc-install-graphify.test.ts` each
   // carried their own `TREE_FILES` / `TREE_STUBS` / `installFixtureTree`,
   // both headers citing the same excuse (importing a sibling `.test.ts` module
   // for its helpers double-registers that file's `describe` blocks). The
@@ -3396,7 +3396,7 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
     for (const d of testDirs) expect(sources(d).length, rel(d)).toBeGreaterThan(0);
     expect(testFiles.length).toBeGreaterThan(40);
     expect(testFiles.map(rel)).toContain('server/test/installTreeFixture.ts');
-    expect(testFiles.map(rel)).toContain('server/test/ccrc-install.test.ts');
+    expect(testFiles.map(rel)).toContain('server/test/ccrc-installFixture.ts');
     expect(testFiles.map(rel)).toContain('server/test/ccrc-install-graphify.test.ts');
     expect(testFiles.map(rel)).toContain('server/test-e2e/helpers.ts');
   });
@@ -3428,7 +3428,7 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
   it('is what the two former copy sites now import', () => {
     // Not just "the copies are gone" — that is satisfied by deleting the
     // fixture. Each former copy site must still reach the shared module.
-    for (const f of ['ccrc-install.test.ts', 'ccrc-install-graphify.test.ts']) {
+    for (const f of ['ccrc-installFixture.ts', 'ccrc-install-graphify.test.ts']) {
       const src = readFileSync(path.join(testDir, f), 'utf8');
       expect(src, f).toMatch(
         /import\s*\{[^}]*\binstallFixtureTree\b[^}]*\}\s*from\s*'\.\/installTreeFixture\.js'/);
