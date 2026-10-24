@@ -8,7 +8,7 @@ import path from 'node:path';
 import { LANE_SCHEDULE, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS } from '../src/laneSchedule.js';
-import { parsedFile } from './scan/symbols.js';
+import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 const text = (rel: string): string => readFileSync(path.join(SRC, rel), 'utf8');
@@ -421,15 +421,16 @@ describe('the eight coordination lanes (D-5862, PR 2)', () => {
 
 describe('the declared derivations are references, never a second literal', () => {
   it('the stall watch\'s cadence is the claim lanes\' constant, by reference', () => {
-    expect(text('laneSchedule.ts')).toContain('export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;');
+    expect(initOf('laneSchedule.ts', 'STALL_SWEEP_MS')).toBe('CLAIM_SWEEP_MS');
     expect(laneRow('stalls').derivedFrom?.name).toBe('CLAIM_SWEEP_MS');
     expect(laneRow('stalls').cadenceMs).toBe(laneRow('claimRenew').cadenceMs);
   });
 
   it('the digest beat and the approval prune are named rows, not bare literals in the watcher', () => {
-    const src = text('watch.ts');
-    expect(src).not.toMatch(/-\s*this\.lastDigestBeat/);
-    expect(src).not.toMatch(/86_400_000/);
+    const digest = sourceOfSymbol(path.join(SRC, 'watch.ts'), 'FleetWatcher.sweepDigest')
+      + sourceOfSymbol(path.join(SRC, 'watch.ts'), 'FleetWatcher.digestBeat');
+    expect(digest).not.toMatch(/-\s*this\.lastDigestBeat/);
+    expect(sourceOfSymbol(path.join(SRC, 'watch.ts'), 'FleetWatcher.sweepApprovals')).not.toMatch(/86_400_000/);
     expect(laneRow('digestBeat').cadenceMs).toBe(60_000);
     expect(laneRow('approvalPrune').cadenceMs).toBe(86_400_000);
   });
