@@ -91,9 +91,12 @@ describe('CoordStore.inboxFor (D-6777)', () => {
     const rows = f.s.inboxFor(TO);
     expect(rows.length).toBeGreaterThan(0);
     for (const r of rows) {
-      const d = f.s.db.prepare('SELECT id, mailId FROM mail_deliveries WHERE id = ?').get(r.deliveryId) as { id: number; mailId: number };
-      expect(d.id).toBe(r.deliveryId);
-      expect(d.mailId).not.toBe(r.deliveryId);
+      // The row's own mail (the fixture's envelope carries its mail id), then
+      // THAT mail's delivery to the caller: the key must be the delivery's id.
+      const mailId = Number(/^<mail>(\d+)<\/mail>$/.exec(r.envelope)![1]);
+      const d = f.s.db.prepare('SELECT id FROM mail_deliveries WHERE mailId = ? AND toId = ?').get(mailId, TO) as { id: number };
+      expect(r.deliveryId).toBe(d.id);
+      expect(r.deliveryId).not.toBe(mailId);
     }
   });
 
