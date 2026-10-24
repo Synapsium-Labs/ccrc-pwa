@@ -114,9 +114,11 @@ THE BACKEND ADAPTER (Task 7). A request is built from an Anthropic body through 
                    "bytes" (the stream's length), "types" (each parsed SSE event's type), "headAt" and "elapsed"
                    (seconds from the call), "timeout" (UpstreamTimeout's phase, or None), "error" (a non-2xx answer
                    through backend.error_of, as a BridgeError prints, or None)}: one backend.post to
-                   upstream_base(os.environ), every chunk read; with `closeAfter: n`, Upstream.close() is called once
-                   n chunks are read and nothing more is read (a later `sleep` op keeps the process, and so the
-                   socket, alive unless close dropped it)
+                   upstream_base(os.environ), every chunk read; `idle_s` is passed only when the op names it, so
+                   without it post runs its own default; with `closeAfter: n`, Upstream.close() is called once n
+                   chunks are read, nothing more is read, and the Upstream is kept referenced for the rest of the
+                   process (`_KEPT`), so a later `sleep` op holds the socket open unless close itself dropped it
+                   (garbage collection of the Upstream would drop it too, and hide a close that does nothing)
   backend-tls      {token} -> {"constructed": [{"cls", "host", "port", "timeout", "verifyMode", "checkHostname"}],
                    "postRaised"}: one backend.post to backend.DEFAULT_BASE with http.client's HTTPSConnection and
                    HTTPConnection and socket.create_connection each replaced by a recorder that raises before any I/O
@@ -693,7 +695,8 @@ def _backend_op(name, op, cb):
     t0 = time.monotonic()
     up = None
     try:
-        up = backend.post(backend.upstream_base(os.environ), wire, headers, idle_s=op.get("idle_s"))
+        kwargs = {"idle_s": op["idle_s"]} if "idle_s" in op else {}
+        up = backend.post(backend.upstream_base(os.environ), wire, headers, **kwargs)
         out["headAt"] = time.monotonic() - t0
         out["status"], out["headers"] = up.status, dict(up.headers)
         if 200 <= up.status < 300:
@@ -704,6 +707,7 @@ def _backend_op(name, op, cb):
                 out["types"].extend(ev.type for ev in parser.feed(chunk))
                 read += 1
                 if op.get("closeAfter") is not None and read >= op["closeAfter"]:
+                    _KEPT.append(up)
                     up.close()
                     break
             out["types"].extend(ev.type for ev in parser.close())
@@ -716,6 +720,10 @@ def _backend_op(name, op, cb):
             up.close()
     out["elapsed"] = time.monotonic() - t0
     return out
+
+
+# backend-post's closed Upstreams, referenced until the process exits (above).
+_KEPT = []
 
 
 class _NoNetwork(Exception):
