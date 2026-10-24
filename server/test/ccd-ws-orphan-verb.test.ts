@@ -379,9 +379,46 @@ describe('the nested-checkout rescue (DR-22)', () => {
     expect(r.code, JSON.stringify(r.doc)).toBe(0);
     expect(fs.existsSync(t)).toBe(false);
     const b = base(t, 'inner-wt');
-    expect(h.git(main(), 'rev-parse', `${b}/head`)).toBe(dhead);
-    expect(h.git(main(), 'ls-tree', '-r', '--name-only', h.git(main(), 'rev-parse', `${b}/wip`)).split('\n')).toContain('loose.txt');
+    expect(h.git(main(), 'rev-parse', `${b}/heads/${dhead}`)).toBe(dhead);
+    const wips = h.git(main(), 'for-each-ref', '--format=%(objectname)', `${b}/wips/`).split('\n').filter(Boolean);
+    expect(wips).toHaveLength(1);
+    expect(h.git(main(), 'ls-tree', '-r', '--name-only', wips[0]!).split('\n')).toContain('loose.txt');
     expect(h.git(main(), 'rev-parse', `${b}/reflog/${dhead}`)).toBe(dhead);
+  }, 90_000);
+
+  it('a second rescue at the same path keeps the first one\'s uncommitted work reachable (the pin is append-only)', () => {
+    const t = claudeTree(); arm(); const d = sameRepo(t);
+    const r1 = orphan(t, rescueOf(t), '--rescue');
+    expect(r1.code, JSON.stringify(r1.doc)).toBe(0);
+    const b = base(t, 'inner-wt');
+    const wip1 = h.git(main(), 'for-each-ref', '--format=%(objectname)', `${b}/wips/`);
+    expect(wip1).toMatch(/^[0-9a-f]{40}$/);
+    h.git(main(), 'worktree', 'prune'); h.git(main(), 'branch', '-D', 'claude/agent-a', 'inner/x');
+    const t2 = claudeTree(); expect(t2).toBe(t);
+    const d2 = sameRepo(t2); expect(d2).toBe(d);
+    fs.writeFileSync(path.join(d2, 'loose.txt'), 'second\n');
+    const r2 = orphan(t2, rescueOf(t2), '--rescue');
+    expect(r2.code, JSON.stringify(r2.doc)).toBe(0);
+    expect(h.git(main(), 'for-each-ref', '--contains', wip1, 'refs/ccrc')).not.toBe('');
+    expect(h.git(main(), 'for-each-ref', '--format=%(objectname)', `${b}/wips/`).split('\n')).toHaveLength(2);
+  }, 120_000);
+
+  it('a nested checkout the outer tree tracks as a gitlink gets no rescue token', () => {
+    const t = claudeTree(); arm(); const n = foreign(t);
+    fs.rmSync(path.join(n, 'loose.txt'));
+    h.git(t, 'add', '-f', 'nested'); h.git(t, 'commit', '-q', '-m', 'embed'); h.git(t, 'push', '-q', 'origin', 'HEAD:refs/heads/elsewhere');
+    const a = audit(t);
+    expect(a.refusal).toBe('nested-checkout');
+    expect(a.rescueToken, a.detail).toBeNull();
+    expect(fs.existsSync(n)).toBe(true);
+  }, 90_000);
+
+  it('an initialised submodule (a .git file with no back-link) gets no rescue token', () => {
+    const t = claudeTree(); arm(); const n = foreign(t);
+    h.git(t, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-f', n, 'sub'); h.git(t, 'commit', '-q', '-m', 'sub'); h.git(t, 'push', '-q', 'origin', 'HEAD:refs/heads/elsewhere');
+    const a = audit(t);
+    expect(a.refusal).toBe('nested-checkout');
+    expect(a.rescueToken, a.detail).toBeNull();
   }, 90_000);
 
   it('the read-only audit runs no program of a foreign nested repository (its core.fsmonitor is contained)', () => {
