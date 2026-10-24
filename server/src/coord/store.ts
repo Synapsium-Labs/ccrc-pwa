@@ -2302,7 +2302,7 @@ export class CoordStore {
    * the narrow side (`dueDeliveries`) that does not use the constant at all, and
    * omitted `runHealth`, which is the single reader whose OUTPUT this arm moves.
    *
-   * On the composed `OUTSTANDING_OR_ABANDONED_SQL` — five readers, plus the mail inbox's two (D-6777):
+   * On the composed `OUTSTANDING_OR_ABANDONED_SQL` — four readers, plus the mail inbox's two (D-6777):
    *   `outstandingMailFor(<heir>)` — the point. Reached from `GET /api/mail?to=`
    *     and from `sessionws.ts`'s `checkMail`, so the heir's live socket shows
    *     it with no wire change.
