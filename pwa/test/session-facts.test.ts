@@ -109,7 +109,8 @@ describe('coordinatorRole and COORDINATOR_WORD (D-6714)', () => {
     walk(parseTs(file));
     return out;
   };
-  const isCoordinatorLiteral = (n: ts.Node): boolean => ts.isStringLiteral(n) && n.text === 'coordinator';
+  const isCoordinatorLiteral = (n: ts.Node): boolean =>
+    (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) && n.text === 'coordinator';
   /** `x === 'coordinator'` (or `==`, `!==`, `!=`) where `x` is `role` or a `.role` read. */
   const roleComparison = (n: ts.Node): boolean => {
     if (!ts.isBinaryExpression(n)) return false;

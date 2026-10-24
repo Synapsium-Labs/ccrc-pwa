@@ -183,11 +183,11 @@ describe("the palette's words and the session builder each have one home (D-6714
   const SRC = path.join(import.meta.dirname, '..', 'src');
   const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
     d.isDirectory() ? files(path.join(dir, d.name)) : /\.tsx?$/.test(d.name) ? [path.join(dir, d.name)] : []);
-  /** Every string a file's CODE holds (never a comment): string literals, and each template's literal parts. */
+  /** Every string a file's CODE holds (never a comment): string literals, each template's literal parts, and JSX text. */
   const strings = (file: string): string[] => {
     const out: string[] = [];
     const walk = (n: ts.Node): void => {
-      if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) out.push(n.text);
+      if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isJsxText(n)) out.push(n.text);
       else if (ts.isTemplateExpression(n)) out.push(n.head.text, ...n.templateSpans.map((s) => s.literal.text));
       ts.forEachChild(n, walk);
     };

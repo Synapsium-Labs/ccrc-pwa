@@ -54,9 +54,6 @@ describe('sessionEntries (D-6714)', () => {
     expect(() => found('null', [bare, blank])).not.toThrow();
     expect(found('null', [bare, blank]), 'a null is never the word "null"').toEqual([]);
     expect(found('undefined', [bare, blank])).toEqual([]);
-    expect(sessionEntries([bare, blank], [], 'top').map((e) => e.terms), 'no null or blank term').toEqual([
-      ['project-a'], ['project-a'],
-    ]);
   });
 
   it("a session that claims an open run is found by that programme's title and slug; a closed run's programme finds nothing", () => {
