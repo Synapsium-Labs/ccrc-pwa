@@ -17,6 +17,7 @@ import { useFleetChrome } from '../../fleet/FleetChrome';
 import { fleetSummary } from '../../fleet/fleetSummary';
 import { useNavBadges } from '../../fleet/navBadges';
 import { PoolLag, poolLagText } from '../../fleet/poolLag';
+import { UpdateIndicator } from '../../fleet/UpdateIndicator';
 
 /** A badge's printed cap; the accessible name carries the real number (the app bar's rule). */
 const PRINT_CAP = 99;
@@ -66,6 +67,7 @@ export function PhoneHeader(): ReactNode {
         </p>
       )}
       <AccountsStrip />
+      <UpdateIndicator form="row" />
     </header>
   );
 }

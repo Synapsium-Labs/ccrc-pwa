@@ -94,6 +94,10 @@ export default defineConfig({
     // test/run-tmp.globalsetup.mjs. Runs in vitest's MAIN process; workers inherit its TMPDIR at fork.
     // #172 (D-5894): a process a test started that is still alive at teardown fails the run — see the header of
     // test/proc-leak.globalsetup.mjs.
-    globalSetup: ['test/run-tmp.globalsetup.mjs', 'test/proc-leak.globalsetup.mjs'],
+    // Git's repository-redirecting variables (GIT_DIR and friends) are removed from the runner's own environment
+    // FIRST, in the main process and again in every worker, so a fixture `git init` can never reach the checkout the
+    // runner was started from; see test/scrub-git-env.mjs. Pinned by test/git-env-scrub.test.ts.
+    globalSetup: ['test/git-env.setup.mjs', 'test/run-tmp.globalsetup.mjs', 'test/proc-leak.globalsetup.mjs'],
+    setupFiles: ['test/git-env.setup.mjs'],
   },
 });

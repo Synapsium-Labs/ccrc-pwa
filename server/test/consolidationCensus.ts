@@ -12,6 +12,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD } from './ccdWsHelpers.js';
+import { parsedFile } from './scan/symbols.js';
 
 /** The repository root: every query's default tree. A fixture tree passes its own root in its place. */
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -340,4 +341,92 @@ export async function capabilityChoiceSites(root: string = REPO): Promise<Capabi
     });
   }
   return out;
+}
+
+/**
+ * D-5861 (Task C1g; ARCH-76 #811; spec §2.3's change-latch row): the hand-rolled "warn once until it changes" latches of
+ * class `cls` in `server/src/watch.ts`. A site is one `last*` field of the class, in one method, that the method (1) compares with
+ * `!==` or `===` against a key (not a literal), at most two lines before a `console.warn` (or, for a check-and-set that returns early, on the line before the assignment) and (2) assigns (`this.lastX = …` or
+ * `this.lastX.set(…)`) somewhere in the same method. Read from the parsed methods and their `console.warn` calls
+ * (`scan/symbols.ts`), one site per field and method, anchored on the comparing line. Exit target (C1g): 0 on
+ * `FleetWatcher`; `changeLatchReported` is the same query over `DelegationLane`, held by another series, reported by name.
+ * KNOWN WIDTH: a warn written on a `catch` line is not a latch's sentence; a latch whose comparison and assignment sit on different lines of one statement is seen on its comparing
+ * line; a set latch (`lastInventoryIssues`, a `.has(`), a flag re-armed on success and a field not named `last*` are
+ * other shapes and are not seen.
+ */
+/** How many lines after the comparison its `console.warn` may sit. */
+const LATCH_WARN_WINDOW = 2;
+
+function changeLatchSitesOf(cls: string, root: string): CensusSite[] {
+  const file = path.join(root, 'server/src/watch.ts');
+  if (!existsSync(file)) return [];
+  const parsed = parsedFile(file);
+  const lines = parsed.text.split('\n');
+  const out: CensusSite[] = [];
+  for (const m of parsed.symbols) {
+    if (m.kind !== 'method' || !m.name.startsWith(`${cls}.`)) continue;
+    const warns = parsed.calls.filter((c) => c.head === 'console' && c.name === 'warn' && c.start >= m.start && c.end <= m.end)
+      .map((c) => c.line)
+      // A warn on a `catch` line reports a failure, not a standing cause: an hourly retry beside it is a throttle.
+      .filter((ln) => !/\bcatch\b/.test(lines[ln - 1] ?? ''));
+    if (warns.length === 0) continue;
+    const LITERAL = /^(?:null|undefined|true|false)$/;
+    const compared = new Map<string, number>();
+    const assigned = new Set<string>();
+    for (let ln = m.line; ln <= m.endLine; ln++) {
+      const code = codeOf(lines[ln - 1] ?? '');
+      const hits: string[] = [];
+      // A key against the field, either way round; a literal operand (`!== 0`, `=== null`, `!== 'busy'`) is a throttle
+      // or a state test, never a key.
+      for (const c of code.matchAll(/([A-Za-z_$][\w$.]*)\s*(?:!==|===)\s*this\.(last\w+)\b/g)) if (!LITERAL.test(c[1]!)) hits.push(c[2]!);
+      for (const c of code.matchAll(/this\.(last\w+)(?:\.get\([^)]*\))?\s*(?:!==|===)\s*([A-Za-z_$][\w$.]*)/g)) if (!LITERAL.test(c[2]!)) hits.push(c[1]!);
+      // The sentence follows the comparison within a line or two, or the comparison's very next line records the key (a
+      // check-and-set that returns early) and the sentence comes later in the method. A day or hour throttle that has a
+      // warn somewhere else in its body is neither.
+      const next = codeOf(lines[ln] ?? '');
+      const near = warns.some((w) => w >= ln && w <= ln + LATCH_WARN_WINDOW);
+      const checkAndSet = (f: string): boolean => new RegExp(`this\\.${f}\\s*=(?!=)`).test(next) && warns.some((w) => w > ln);
+      for (const f of hits) if (!compared.has(f) && (near || checkAndSet(f))) compared.set(f, ln);
+      for (const a of code.matchAll(/this\.(last\w+)(?:\s*=(?!=)|\.set\()/g)) assigned.add(a[1]!);
+    }
+    for (const [f, ln] of compared) {
+      if (assigned.has(f)) out.push({ file: 'server/src/watch.ts', line: ln, text: lines[ln - 1]! });
+    }
+  }
+  return out;
+}
+
+/** `FleetWatcher`'s hand-rolled change latches (D-5861): 6 on `60866e4ed`, 0 once C1g has moved them. */
+export function changeLatchSites(root: string = REPO): CensusSite[] {
+  return changeLatchSitesOf('FleetWatcher', root);
+}
+
+/** The same query over `DelegationLane` (`#lastMarkWarnHour`), reported by name and never ratcheted while another
+ *  series holds that class; it becomes a latch in the first PR after that series has merged or closed (D-5861). */
+export function changeLatchReported(root: string = REPO): CensusSite[] {
+  return changeLatchSitesOf('DelegationLane', root);
+}
+
+/**
+ * D-5867 (Task C1l; ARCH-66 (#801); spec K7, §2.3's redaction row): the JS/TS modules that spell redaction rule
+ * patterns of their own, as repo-relative file names, sorted. `shared/redact.mjs`, the one rule table, is counted: the
+ * exit is that it is the only one (3 before this series, 2 after PR 1, 1 after PR 2). A file is a rule table when its
+ * code lines hold a mask word (`[REDACTED]`, `[redacted]`, `REDACTED_MARK` or the docs `***`) and at least two of the
+ * three shapes every table spells: a `Bearer` pattern, an `Authorization` header pattern and a `token=` query pattern (also as the alternation
+ * `(?:access_token|token)=`).
+ * Code lines only (`codeOf`), so a comment that names a shape does not count. KNOWN WIDTH: a table that spells none of
+ * the three shapes is not seen; the session masker (`accounts/mask.ts`) masks known keys by their exact bytes and is
+ * not a table.
+ */
+export function redactRuleTables(root: string = REPO): string[] {
+  const out: string[] = [];
+  for (const dir of ['shared', 'server/src', 'agent/src', 'pwa/src', 'ccd/history']) {
+    for (const f of sourceFiles(root, dir)) {
+      const code = readFileSync(f, 'utf8').split('\n').map(codeOf).join('\n');
+      const mask = /\[REDACTED\]|\[redacted\]|\bREDACTED_MARK\b|'\*\*\*'|\*\*\*@/.test(code);
+      const shapes = [/\bBearer\b/, /\bAuthorization\b/, /token\)?=/i].filter((re) => re.test(code)).length;
+      if (mask && shapes >= 2) out.push(path.relative(root, f).split(path.sep).join('/'));
+    }
+  }
+  return out.sort();
 }

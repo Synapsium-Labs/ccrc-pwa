@@ -15,6 +15,7 @@ import {
   runCcdOldFoldSites, RAN_NARROW_WINDOW, type CensusSite,
 } from './consolidationCensus.js';
 import { capabilityChoiceSites, W4_HELD_FILES } from './consolidationCensus.js';
+import { changeLatchSites, changeLatchReported } from './consolidationCensus.js';
 
 const show = (name: string, sites: readonly CensusSite[]): void => {
   console.log(`census ${name}: ${sites.length}\n${sites.map((s) => `  ${s.file}:${s.line}  ${s.text.trim()}`).join('\n')}`);
@@ -248,5 +249,106 @@ describe('capabilityChoiceSites: verbSupported(, capSupported( and ccdCan( calls
     }
     expect(sites.filter((x) => x.tag === 'w4-held').every((x) => W4_HELD_FILES.includes(x.file))).toBe(true);
     expect(sites.some((x) => x.form === 'ccdCan'), 'no ccdCan( site found').toBe(true);
+  });
+});
+
+// D-5861 (Task C1g; ARCH-76 #811). The change-latch census: a `last*` field of a class compared with a key before a
+// `console.warn` and assigned in the same method.
+describe('changeLatchSites: FleetWatcher\'s hand-rolled "warn once until it changes" latches (D-5861)', () => {
+  let tree = '';
+  beforeAll(() => {
+    tree = mkdtempSync(path.join(tmpdir(), 'consolidation-census-latch-'));
+    const p = path.join(tree, 'server/src/watch.ts');
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, [
+      'export class FleetWatcher {',
+      '  private lastWhy: string | null = null;',
+      '  private readonly lastByProject = new Map<string, string>();',
+      '  a(key: string): void {',
+      '    if (key !== this.lastWhy) {',                                           // 5: a latch
+      '      console.warn(`why ${key}`);',
+      '    }',
+      '    this.lastWhy = key;',
+      '  }',
+      '  b(project: string, json: string): void {',
+      '    if (json !== this.lastByProject.get(project)) {',                       // 11: a keyed latch
+      '      this.lastByProject.set(project, json);',
+      '      console.warn(`p ${project}`);',
+      '    }',
+      '  }',
+      '  c(now: number): void {',
+      '    if (this.lastSweep !== 0 && now - this.lastSweep < 5) return;',          // 17: a throttle, a literal operand
+      '    this.lastSweep = now;',
+      '    console.warn("swept");',
+      '  }',
+      '  d(hour: number): void {',
+      '    if (hour === this.lastHour) return;',                                    // 22: an hourly retry beside a catch
+      '    this.lastHour = hour;',
+      '    try { run(); } catch (e) { console.warn("failed"); }',
+      '  }',
+      '  e(key: string): void {',
+      '    // key !== this.lastNote is named in a comment',
+      '    this.lastNote = key;',
+      '    console.warn("e");',
+      '  }',
+      '}',
+      'class DelegationLane {',
+      '  private lastMarkHour = -1;',
+      '  m(hour: number): void {',
+      '    if (hour === this.lastMarkHour) return;',                                // 35: a check-and-set, reported
+      '    this.lastMarkHour = hour;',
+      '    console.warn("marks");',
+      '  }',
+      '}',
+    ].join('\n'));
+  });
+  afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
+
+  it('FIXTURE: a key against a field, plain or keyed, and never a throttle, a catch-line retry, a comment or another class', () => {
+    expect(changeLatchSites(tree).map((x) => x.line)).toEqual([5, 11]);
+    expect(changeLatchReported(tree).map((x) => x.line)).toEqual([35]);
+  });
+
+  it('REAL: `DelegationLane#lastMarkWarnHour` is reported, not counted', () => {
+    const reported = changeLatchReported();
+    show('changeLatchReported', reported);
+    expect(reported.map((x) => x.text.trim()).join('\n')).toContain('lastMarkWarnHour');
+    expect(changeLatchSites().map((x) => x.text.trim()).join('\n'), 'a DelegationLane latch was counted').not.toContain('lastMarkWarnHour');
+  });
+});
+
+// D-5867 (Task C1l; ARCH-66 (#801)). The redaction census: the JS/TS modules that spell redaction rule patterns of their
+// own. A table is a file whose code lines hold a mask word and two of the three shapes (Bearer, Authorization, token=).
+describe('redactRuleTables: modules that spell redaction rule patterns of their own (D-5867)', () => {
+  let tree = '';
+  beforeAll(() => {
+    tree = mkdtempSync(path.join(tmpdir(), 'consolidation-census-redact-'));
+    const at = (rel: string, body: string): void => {
+      const p = path.join(tree, rel);
+      mkdirSync(path.dirname(p), { recursive: true });
+      writeFileSync(p, body);
+    };
+    at('shared/one.mjs', "const B = /\\b(Bearer)\\s+x/g; const A = /Authorization:/; const R = '[REDACTED]';\n");
+    at('server/src/two.ts', "const H = /Authorization/; const Q = /[?&](?:access_token|token)=/; const M = '***';\n");
+    at('ccd/history/three.mjs', "const REDACTED_MARK = '[redacted]'; const T = /token=/; const B = /Bearer /;\n");
+    at('server/src/prose.ts', "// Bearer and Authorization and token= named in a comment\nconst M = '[REDACTED]';\n");
+    at('server/src/one-shape.ts', "const B = /Bearer /; const M = '[REDACTED]';\n");
+    at('server/src/no-mask.ts', 'const B = /Bearer /; const A = /Authorization/;\n');
+    at('server/src/decl.d.mts', "const B = /Bearer /; const A = /Authorization/; const M = '[REDACTED]';\n");
+  });
+  afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
+
+  it('FIXTURE: a mask word and two shapes make a table; a comment, one shape, no mask and a declaration file do not', async () => {
+    const { redactRuleTables } = await import('./consolidationCensus.js');
+    expect(redactRuleTables(tree)).toEqual(['ccd/history/three.mjs', 'server/src/two.ts', 'shared/one.mjs']);
+  });
+
+  it('REAL: finds shared/redact.mjs and the history redactor, and no TypeScript table', async () => {
+    const { redactRuleTables } = await import('./consolidationCensus.js');
+    const tables = redactRuleTables();
+    console.log(`census redactRuleTables: ${tables.length}\n${tables.map((t) => `  ${t}`).join('\n')}`);
+    expect(tables).toContain('shared/redact.mjs');
+    expect(tables).toContain('ccd/history/lib.mjs');
+    expect(tables.filter((t) => /\.tsx?$/.test(t))).toEqual([]);
   });
 });

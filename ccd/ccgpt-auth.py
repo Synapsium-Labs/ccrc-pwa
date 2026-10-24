@@ -958,6 +958,15 @@ def _bars(status: Optional[dict]) -> bool:
     return state == KIND_CONFIG_ERROR and status.get("configHash") == config_hash()
 
 
+def bars(status: Optional[dict]) -> bool:
+    """The barring rule, for a reader outside this library (D-6692): True when `status`, a lane's current status as
+    `read_status` answers it, bars using the credential — its state is needs-signin, or config-error measured under
+    this library's current OAuth configuration. A config-error under another `configHash` is stale and bars nothing,
+    and `None` (no current status) bars nothing. `_bars` is the one definition and this returns its answer, so a new
+    barring state changes that one function and every reader with it."""
+    return _bars(status)
+
+
 def write_status(auth_dir: str, **fields: object) -> bool:
     """Write the lane's non-secret status file. Under `held(auth_dir)` only (a RuntimeError otherwise: the status has
     one writer at a time, as the credential does).
@@ -1391,6 +1400,17 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
             out = out._replace(detail="an unsaved credential for " + p.credential + " is held in memory; the next "
                                "refresh writes it")
         return out
+
+
+def tier_access_token(auth_dir: str, lane: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """The LiteLLM tier's door (codex-bridge Stage 1, Task 6; D-6372): `ensure_fresh`, answered as the access token
+    and the account id. ccrc's LiteLLM patch calls this from the tier's `Authenticator.get_access_token`, so the
+    tier, the one refresher in litellm mode, refreshes under this library's lock, re-read and atomic commit, and
+    LiteLLM's own refresh, write and device flow are never reached. Raises AuthError, never a sign-in."""
+    r = ensure_fresh(auth_dir, lane=lane)
+    if not r.access_token:
+        raise Unreadable(r.detail)  # unreachable for a present reading (D-6541); never an empty bearer token
+    return (r.access_token, r.account_id)
 
 
 # ── the device-code sign-in ──────────────────────────────────────────────────────────────────────────────────────

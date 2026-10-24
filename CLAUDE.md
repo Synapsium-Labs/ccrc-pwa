@@ -100,6 +100,9 @@ real values: `deploy/reference-fleet.md` (gitignored).
   that archive and is re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
   **`ws-collect` is forbidden to every session too**: it is the SERVER's act on an ORPHANED, WITNESSED temp root only,
   behind a token re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
+  **`ws-orphan` is forbidden to every session too** (D-6629): it is the SERVER's act on an ORPHANED worktree only (a linked
+  worktree no registry row names, under the ccd worktree root or a `.claude`/`.superpowers` worktrees directory), behind a
+  token re-proved on the box, never `--force` — never a session's verb, and never run against the live host from a shell or a test.
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
   or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
@@ -289,8 +292,12 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   build's tarball matches the newest contained release's entry for entry (`release-main.sh compare`; only
   `build.json`'s `sha`, `builtAt` and `version` and MANIFEST's `build.json` line are set aside) cuts none, so
   `stable` promotes a release's own commit, never such an untagged head; a hand-pushed `vX.Y.0` tag for a minor rides
-  `release.yml`; both attest the tarball keylessly and
-  publish the bundle beside it). A prerelease is the `dev` channel; **`stable` is a promotion, never a rebuild**: a
+  `release.yml`; both attest the tarball keylessly and publish the bundle beside it, each as two jobs: a `build` job
+  with a read-only token and no persisted checkout credential runs every install and build, and a `publish` job that
+  installs nothing and never opens the tarball checks the handed-over tarball's digest — re-deriving the tag in
+  `release-main.yml`, taking its trigger ref in `release.yml` — and alone holds the write token and the signing
+  identity, which `release-job-boundary.test.ts` holds). A prerelease is the `dev` channel; **`stable` is a promotion,
+  never a rebuild**: a
   fast-forward push of a released commit to the `stable` branch runs `release-stable.yml` → `deploy/release-stable.sh`
   (only once the commit has a green `full-suite`, above), which flips the existing release's flag and makes it
   latest (design `2026-09-20-centralised-update-management-design.md` §4). Demotion is `gh release edit <tag>

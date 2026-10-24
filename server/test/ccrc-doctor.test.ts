@@ -779,6 +779,11 @@ function stubDf(home: string, availKiB = 42_991_616): void {
   stub(home, 'df', [
     'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
     'if [ -f "$HOME/fixture-df-exit" ]; then read -r c < "$HOME/fixture-df-exit"; exit "$c"; fi',
+    'if [ "$1" = "-Pi" ] && [ -n "$2" ]; then',
+    '  echo "Filesystem      Inodes IUsed   IFree IUse% Mounted on"',
+    '  echo "/dev/fixture0  1000000 10000  990000    1% /"',
+    '  exit 0',
+    'fi',
     'if [ "$1" = "-Pk" ] && [ -n "$2" ]; then',
     '  avail=0',
     '  [ -f "$HOME/fixture-df-avail" ] && read -r avail < "$HOME/fixture-df-avail"',
@@ -790,6 +795,37 @@ function stubDf(home: string, availKiB = 42_991_616): void {
   ].join('\n'));
   writeFileSync(join(home, 'fixture-df-avail'), `${availKiB}\n`);
   rmSync(join(home, 'fixture-df-exit'), { force: true });
+}
+
+/** A `df` that answers per PATH, so a work root can sit on a second filesystem. One row per line of
+ *  `<home>/fixture-df-map`: `<path prefix>|<mount>|<size KiB>|<used KiB>|<avail KiB>|<inodes>|<iused>|<ifree>`; the
+ *  first row whose prefix is the asked path, or a parent of it, answers. A path no row matches exits 1 printing
+ *  nothing (a mount df cannot stat). A mount spelled `garbled` answers a line with no numbers. Shell builtins only. */
+interface DfRow { prefix: string; mount: string; sizeKiB: number; usedKiB: number; availKiB: number; inodes?: number; iused?: number }
+function stubDfMap(home: string, rows: DfRow[]): void {
+  stub(home, 'df', [
+    'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
+    'mode="$1"; path="$2"',
+    'while IFS="|" read -r pre mnt size used avail ino iu ifr; do',
+    '  hit=0',
+    '  case "$path" in "$pre"|"$pre"/*) hit=1 ;; esac',
+    '  [ "$pre" = "*" ] && hit=1',
+    '  if [ "$hit" = 1 ]; then',
+    '    if [ "$mnt" = garbled ]; then echo "Filesystem 1024-blocks Used Available Capacity Mounted on"; echo "dev - - - - /garbled"; exit 0; fi',
+    '    if [ "$mode" = "-Pk" ]; then',
+    '      echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
+    '      echo "/dev/fx $size $used $avail 1% $mnt"; exit 0',
+    '    fi',
+    '    echo "Filesystem Inodes IUsed IFree IUse% Mounted on"',
+    '    echo "/dev/fx $ino $iu $ifr 1% $mnt"; exit 0',
+    '  fi',
+    'done < "$HOME/fixture-df-map"',
+    'exit 1',
+  ].join('\n'));
+  writeFileSync(join(home, 'fixture-df-map'), rows.map((r) => {
+    const inodes = r.inodes ?? 1_000_000, iused = r.iused ?? 10_000;
+    return [r.prefix, r.mount, r.sizeKiB, r.usedKiB, r.availKiB, inodes, iused, inodes - iused].join('|');
+  }).join('\n') + '\n');
 }
 
 // ── stage 3b: the exposure quartet's fixtures ─────────────────────────────
@@ -971,6 +1007,9 @@ function doctorEnv(home: string): NodeJS.ProcessEnv {
     // `_check_scope-sweep` reads the sweep's verdict record from the runtime dir;
     // a test must never read a real box's, so the record is a fixture file.
     CCRC_SCOPE_SWEEP_STATE: join(home, 'fixture-scope-sweep.state'),
+    // codex-bridge Stage 1 (Global Constraints): every spawn that can run the auth library names a loopback endpoint
+    // nothing answers. The doctor's `codex` check only asks `status` and `paths`, which make no request.
+    CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE,
   };
 }
 
@@ -1147,7 +1186,10 @@ function plantSpoolDir(home: string, id: string): string {
 
 /** `python3 -I -c <program>` for the two programs `_check_box-token` runs (`_BT_PY_STATE`, `_BT_PY_FLEET` in
  *  `ccd/ccrc-doctor-checks`), handed to the real interpreter; the text is read from the shipped file so a third or an
- *  edited program still reaches the stub's bare `exit 0`. Empty when this box has no python3 (the check then says so). */
+ *  edited program still reaches the stub's bare `exit 0`. Empty when this box has no python3 (the check then says so).
+ *  Its second arm (codex-bridge Stage 1, Task 9) hands `python3 -IS $HOME/.local/bin/ccgpt-auth.py …` to the real
+ *  interpreter too: `_codex_auth`'s exact argv, so the doctor's `codex` check reads the placed library's own `status`
+ *  (or a case's stand-in at that path) instead of the stub's empty answer, which `_codex_auth_status` refuses. */
 const BT_PY_ARM = ((): string => {
   const real = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
   if (real === '') return '';
@@ -1157,7 +1199,8 @@ const BT_PY_ARM = ((): string => {
     if (!m) throw new Error(`ccd/ccrc-doctor-checks no longer holds ${n}='…' in the shape this stub reads`);
     return `'${m[1]}'`;
   });
-  return `if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then case "$3" in ${progs.join('|')}) exec '${real}' "$@" ;; esac; fi\n`;
+  return `if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then case "$3" in ${progs.join('|')}) exec '${real}' "$@" ;; esac; fi\n`
+    + `if [ "$1" = "-IS" ] && [ "$2" = "$HOME/.local/bin/ccgpt-auth.py" ]; then exec '${real}' "$@"; fi\n`;
 })();
 
 /** A box where every check passes. Each per-check test starts here and breaks
@@ -1387,6 +1430,9 @@ import {
   type LanePorts, type Listener, type ListenerAnswer,
 } from './codexLaneFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
+import {
+  AUTH_ROUTES, CLOSED_AUTH_BASE, driverLines, fakeAuthServer, plantBackendCredential, runAuthDriver, type AuthAnswer,
+} from './codexAuthFixture.js';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
 import { markGenerated } from '../../shared/mark.mjs';
 import { createServer, type Socket } from 'node:net';
@@ -5830,7 +5876,7 @@ describe('ccrc doctor: disk', () => {
     const i = lines.findIndex((l) => l.startsWith('FAIL disk: '));
     expect(i, lines.join('\n')).toBeGreaterThan(-1);
     expect(lines[i]).toContain('1024 MiB free');     // MiB, because "1 GiB" and "0 GiB" are the whole range below the floor
-    expect(lines[i + 1]).toMatch(/^ {2}remedy: free space on \$HOME's filesystem/);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: free space on \//);
     expect(runDoctor(home).code).toBe(1);
   });
 
@@ -5849,10 +5895,10 @@ describe('ccrc doctor: disk', () => {
   it('passes naming the room it measured', () => {
     const home = healthy('ccrc-doctor-disk-ok-');
     expect(lineFor(runDoctor(home).stdout, 'disk'))
-      .toMatch(/^PASS disk: 41 GiB free on \$HOME's filesystem$/);
+      .toMatch(/^PASS disk: 41 GiB free on \/ \(.*home.*\), /);
   });
 
-  it('asks df for KiB and about $HOME, and asks once', () => {
+  it('asks df for KiB and for inodes, about $HOME among the roots, and never with -h', () => {
     // `-P` because the default output wraps a long device name onto its own
     // line (and the parse takes the LAST line); `-k` because every threshold
     // here is in KiB. `df -h` would answer "41G" and the arithmetic below would
@@ -5860,7 +5906,9 @@ describe('ccrc doctor: disk', () => {
     const home = healthy('ccrc-doctor-disk-argv-');
     runDoctor(home);
     const calls = readFileSync(join(home, 'df-calls'), 'utf8').split('\n').filter(Boolean);
-    expect(calls).toEqual([`-Pk ${home}`]);
+    expect(calls).toContain(`-Pk ${home}`);
+    expect(calls).toContain(`-Pi ${home}`);
+    for (const c of calls) expect(c).toMatch(/^-P[ki] \//);
   });
 
   it('warns, rather than measuring nothing silently, when df is not installed', () => {
@@ -5890,6 +5938,159 @@ describe('ccrc doctor: disk', () => {
     expect(r.stdout).not.toMatch(/0 GiB|0 MiB/);
     expect(r.stderr).toBe('');
     expect(r.code).toBe(0);
+  });
+});
+
+// D-6618 (plan Task DR-6; spec §2.5.2): doctor measures EVERY work filesystem, one line each, not only $HOME's.
+describe('ccrc doctor: disk, every work filesystem', () => {
+  const GIB = 1024 * 1024;                          // in the KiB `df -Pk` reports
+  const diskLines = (out: string): string[] => out.split('\n').filter((l) => /^(PASS|WARN|FAIL) disk: /.test(l));
+  /** $HOME on the root filesystem, `projects` and `worktrees` on a second one. */
+  const twoFs = (home: string, work: Partial<DfRow>, root: Partial<DfRow> = {}): void => {
+    mkdirSync(join(home, 'projects'), { recursive: true });
+    mkdirSync(join(home, 'worktrees'), { recursive: true });
+    stubDfMap(home, [
+      { prefix: join(home, 'projects'), mount: '/mnt/work', sizeKiB: 100 * GIB, usedKiB: 50 * GIB, availKiB: 50 * GIB, ...work },
+      { prefix: join(home, 'worktrees'), mount: '/mnt/work', sizeKiB: 100 * GIB, usedKiB: 50 * GIB, availKiB: 50 * GIB, ...work },
+      { prefix: '*', mount: '/', sizeKiB: 100 * GIB, usedKiB: 10 * GIB, availKiB: 90 * GIB, ...root },
+    ]);
+  };
+
+  it('two roots on one filesystem print one line naming both', () => {
+    const home = healthy('ccrc-doctor-disk-one-line-');
+    twoFs(home, {});
+    const lines = diskLines(runDoctor(home).stdout);
+    const work = lines.filter((l) => l.includes('/mnt/work'));
+    expect(work, lines.join('\n')).toHaveLength(1);
+    expect(work[0]).toContain('projects');
+    expect(work[0]).toContain('worktrees');
+    expect(lines.filter((l) => l.includes(' on / '))).toHaveLength(1);
+  });
+
+  it('a work root on a second filesystem at 93% is FAIL even when $HOME is at 10%', () => {
+    const home = healthy('ccrc-doctor-disk-second-fs-');
+    twoFs(home, { usedKiB: 93 * GIB, availKiB: 7 * GIB });
+    const r = runDoctor(home);
+    const lines = diskLines(r.stdout);
+    expect(lines.find((l) => l.includes('/mnt/work')), lines.join('\n')).toMatch(/^FAIL disk: /);
+    expect(lines.find((l) => l.includes(' on / '))).toMatch(/^PASS disk: /);
+    expect(r.code).toBe(1);
+  });
+
+  it('92% of bytes is FAIL and 85% is WARN, at the edges', () => {
+    const at = (usedPct: number): string => {
+      const home = healthy('ccrc-doctor-disk-pct-');
+      twoFs(home, { sizeKiB: 1000 * GIB, usedKiB: usedPct * 10 * GIB, availKiB: (100 - usedPct) * 10 * GIB });
+      return diskLines(runDoctor(home).stdout).find((l) => l.includes('/mnt/work')) ?? '';
+    };
+    expect(at(91)).toMatch(/^WARN disk: /);
+    expect(at(92)).toMatch(/^FAIL disk: /);
+    expect(at(84)).toMatch(/^PASS disk: /);
+    expect(at(85)).toMatch(/^WARN disk: /);
+  });
+
+  it('inodes at 90% are WARN, and at 92% FAIL, while bytes are at 10%', () => {
+    const home = healthy('ccrc-doctor-disk-inodes-');
+    twoFs(home, { usedKiB: 10 * GIB, availKiB: 90 * GIB, inodes: 1_000_000, iused: 900_000 });
+    const line = diskLines(runDoctor(home).stdout).find((l) => l.includes('/mnt/work')) ?? '';
+    expect(line).toMatch(/^WARN disk: /);
+    expect(line).toContain('inodes');
+    const home2 = healthy('ccrc-doctor-disk-inodes-fail-');
+    twoFs(home2, { usedKiB: 10 * GIB, availKiB: 90 * GIB, inodes: 1_000_000, iused: 920_000 });
+    expect(diskLines(runDoctor(home2).stdout).find((l) => l.includes('/mnt/work'))).toMatch(/^FAIL disk: /);
+  });
+
+  it('under 2 GiB free on a second filesystem is FAIL and under 10 GiB is WARN, whatever the percent', () => {
+    const home = healthy('ccrc-doctor-disk-floor-');
+    twoFs(home, { sizeKiB: 100 * GIB, usedKiB: 10 * GIB, availKiB: 1 * GIB });
+    expect(diskLines(runDoctor(home).stdout).find((l) => l.includes('/mnt/work'))).toMatch(/^FAIL disk: .*1024 MiB free/);
+    const home2 = healthy('ccrc-doctor-disk-floor-warn-');
+    twoFs(home2, { sizeKiB: 100 * GIB, usedKiB: 10 * GIB, availKiB: 5 * GIB });
+    expect(diskLines(runDoctor(home2).stdout).find((l) => l.includes('/mnt/work'))).toMatch(/^WARN disk: .*5 GiB free/);
+  });
+
+  it('an unreadable df line is WARN, never PASS', () => {
+    const home = healthy('ccrc-doctor-disk-garbled-');
+    twoFs(home, { mount: 'garbled' });
+    const r = runDoctor(home);
+    const lines = diskLines(r.stdout);
+    const bad = lines.find((l) => l.includes('projects')) ?? '';
+    expect(bad, lines.join('\n')).toMatch(/^WARN disk: .*never measured/);
+    expect(r.stdout).not.toMatch(/^PASS disk: .*projects/m);
+    expect(r.code).toBe(0);
+  });
+
+  it('prints the measured percent past the FAIL line, never the threshold', () => {
+    const home = healthy('ccrc-doctor-disk-99pct-');
+    twoFs(home, { sizeKiB: 100 * GIB, usedKiB: 99 * GIB, availKiB: 1 * GIB, inodes: 1_000_000, iused: 980_000 });
+    const line = diskLines(runDoctor(home).stdout).find((l) => l.includes('/mnt/work')) ?? '';
+    expect(line).toMatch(/^FAIL disk: /);
+    expect(line).toContain('99% of bytes');
+    expect(line).toContain('98% of inodes');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a root under an unsearchable parent is WARN naming it, never an all-PASS', () => {
+    const home = healthy('ccrc-doctor-disk-unstatable-');
+    const locked = join(home, 'locked');
+    mkdirSync(join(locked, 'cfg'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), `CCRC_ACCOUNTS=(lane-a)\n_ccrc_cfg_dir() { echo "${locked}/cfg"; }\n`);
+    chmodSync(locked, 0o000);
+    try {
+      const r = runDoctor(home);
+      const lines = diskLines(r.stdout);
+      const warn = lines.find((l) => l.startsWith('WARN disk: ')) ?? '';
+      expect(warn, lines.join('\n')).toContain('config-dirs');
+      expect(warn).toContain(`${locked}/cfg`);
+      expect(warn).toContain('never measured');
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+
+  it('a config dir from the roster is measured with its own filesystem', () => {
+    const home = healthy('ccrc-doctor-disk-config-dir-');
+    mkdirSync(join(home, '.claude-a'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ACCOUNTS=(lane-a)\n_ccrc_cfg_dir() { echo "$HOME/.claude-a"; }\n');
+    stubDfMap(home, [
+      { prefix: join(home, '.claude-a'), mount: '/mnt/cfg', sizeKiB: 100 * GIB, usedKiB: 95 * GIB, availKiB: 5 * GIB },
+      { prefix: '*', mount: '/', sizeKiB: 100 * GIB, usedKiB: 10 * GIB, availKiB: 90 * GIB },
+    ]);
+    const line = diskLines(runDoctor(home).stdout).find((l) => l.includes('/mnt/cfg')) ?? '';
+    expect(line).toMatch(/^FAIL disk: /);
+    expect(line).toContain('config-dirs');
+  });
+
+  it.each([
+    ['fails to source', 'return 1\n'],
+    ['lacks _ccrc_cfg_dir', 'CCRC_ACCOUNTS=(lane-a)\n'],
+  ])('a roster projection that %s is a WARN naming config-dirs, never a silent PASS', (_n, body) => {
+    const home = healthy('ccrc-doctor-disk-config-broken-');
+    mkdirSync(join(home, '.claude-a'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), body);
+    stubDfMap(home, [
+      { prefix: join(home, '.claude-a'), mount: '/mnt/cfg', sizeKiB: 100 * GIB, usedKiB: 99 * GIB, availKiB: 1 * GIB },
+      { prefix: '*', mount: '/', sizeKiB: 100 * GIB, usedKiB: 10 * GIB, availKiB: 90 * GIB },
+    ]);
+    const lines = diskLines(runDoctor(home).stdout);
+    expect(lines.find((l) => l.includes('config-dirs')), lines.join('\n')).toMatch(/^WARN disk: .*roster projection unreadable/);
+  });
+});
+
+// D-6618 (plan Task DR-6) characterization: the three verdicts on $HOME's filesystem at their edges, green on the
+// check as it stood before it measured every work filesystem. They stay true after: the floors did not move.
+describe('ccrc doctor: disk, the $HOME verdicts at their edges', () => {
+  const GIB = 1024 * 1024;
+
+  it('exactly 2 GiB free is a WARN, not a FAIL', () => {
+    const home = healthy('ccrc-doctor-disk-edge2-');
+    stubDf(home, 2 * GIB);
+    expect(lineFor(runDoctor(home).stdout, 'disk')).toMatch(/^WARN disk: 2 GiB free/);
+  });
+
+  it('exactly 10 GiB free is a PASS', () => {
+    const home = healthy('ccrc-doctor-disk-edge10-');
+    stubDf(home, 10 * GIB);
+    expect(lineFor(runDoctor(home).stdout, 'disk')).toMatch(/^PASS disk: 10 GiB free/);
   });
 });
 
@@ -11886,6 +12087,60 @@ describe('ccrc-doctor-checks cites deploy.sh by anchor, never by line (Plan 3a T
   });
 });
 
+// ── codex-bridge Stage 1, Task 9: the credential rows' fixtures ─────────
+/** `s` as a RegExp source that matches it literally (a fixture path carries `.` and `-`). */
+const reEsc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The credential rows are FAIL lines inside the existing `codex` check: never a WARN (a soak gate allow-lists WARNs
+ *  by name), so a case's run carries no `WARN codex:` line at all. */
+const expectNoCodexWarn = (out: string): void => {
+  expect(out.split('\n').filter((l) => /^WARN codex: /.test(l)), out).toEqual([]);
+};
+
+/** A real status file, written by the library's own refresher against a fake token endpoint (ccrc-codex.test.ts's
+ *  `refusedRefresh`): the lane's credential is planted expired, one `ensure_fresh` runs, and `word` is the state it
+ *  recorded. The only spawn here that names a live fake; the doctor itself runs under CLOSED_AUTH_BASE. */
+async function refreshRefusedAs(home: string, id: string, answer: AuthAnswer, word: string): Promise<void> {
+  const dir = authDirOf(home, id);
+  plantBackendCredential(dir, { expiresIn: -120 });
+  const srv = await fakeAuthServer({ token: [answer] });
+  try {
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'ensure_fresh', lane: id }] },
+      { CCRC_CODEX_AUTH_BASE: srv.base });
+    expect(r.timedOut, r.stderr).toBe(false);
+    expect(driverLines(r.stdout)[0]?.['error'], r.stdout + r.stderr).toBe(word);
+    expect(srv.requests.map((q) => q.path)).toEqual([AUTH_ROUTES.token]);
+  } finally {
+    await srv.close();
+  }
+  expect(JSON.parse(readFileSync(join(dir, 'auth.status.json'), 'utf8'))['state']).toBe(word);
+}
+
+/** A stand-in at the placed library's path (`~/.local/bin/ccgpt-auth.py`), for the two answers a real library on a
+ *  non-root test box cannot give: `status` prints `report` over a present, current-looking default (or NOTHING, rc 0,
+ *  when `report` is null), and `paths` answers as the library does. It is Python, run by the real interpreter through
+ *  BT_PY_ARM's second arm. It differs from the shipped tree's copy, so the executables row FAILs it too. */
+function plantAuthLibStandIn(home: string, report: Record<string, unknown> | null): void {
+  const full = report === null ? null : {
+    source: 'file', family: 'chatgpt-backend', state: 'ok', expiresAt: null, lastRefreshAt: null, lastErrorCode: null,
+    lastRequestId: null, unsaved: false, updatedAt: null, credential: 'present', mode: '0600', modeOk: true,
+    ownerOk: true, authBase: 'override', ...report,
+  };
+  writeFileSync(join(binDir(home), 'ccgpt-auth.py'), [
+    'import json, sys',
+    `REPORT = json.loads(${JSON.stringify(JSON.stringify(full))})`,
+    'argv = sys.argv[1:]',
+    'if argv[:1] == ["status"] and REPORT is not None:',
+    '    print(json.dumps(REPORT))',
+    'elif argv[:1] == ["paths"]:',
+    '    d = argv[argv.index("--auth-dir") + 1]',
+    '    print(json.dumps({"credential": d + "/auth.json", "pending": d + "/auth.pending.json",',
+    '                      "lock": d + "/auth.json.lock", "status": d + "/auth.status.json", "lockWaitS": 60.0}))',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  chmodSync(join(binDir(home), 'ccgpt-auth.py'), 0o755);
+}
+
 describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, authDir, ports and lane state (Plan 3a Task 4, spec §12)', () => {
   it('is in the table directly after models', () => {
     const names = tableNames();
@@ -12083,7 +12338,7 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     noRunnerBugLine(r.stdout, 'codex');
   });
 
-  // ── authDir: existence and mode only ────────────────────────────────────
+  // ── authDir and its credential: the auth library's status and the file's mode (codex-bridge Stage 1, Task 9) ──
   it('FAILs an authDir that does not exist, and one that is not a directory', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-auth-absent-');
     const dir = authDirOf(home, 'codex-a');
@@ -12098,21 +12353,199 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
 
   it('FAILs an authDir with no auth.json in the words `ccrc codex start` refuses with', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-auth-nologin-');
-    rmSync(join(authDirOf(home, 'codex-a'), 'auth.json'));
+    const cred = join(authDirOf(home, 'codex-a'), 'auth.json');
+    rmSync(cred);
     const r = runDoctor(home);
-    const re = /^FAIL codex: codex-a has no OAuth login: ~\/\S+ holds no auth\.json \(existence is all ccrc checks; it never reads one\)/m;
-    expect(r.stdout).toMatch(re);
+    // start's own words (`_codex_cmd_start`'s not-logged-in): the library reads the credential, so the sentence says
+    // which word it read, and no longer that existence is all ccrc checks.
+    const re = /^FAIL codex: codex-a is not signed in: the auth library reads its credential in ~\/\S+ as absent, so 'ccrc codex start codex-a' refuses$/m;
+    expect(r.stdout, r.stdout).toMatch(re);
     expect(remedyAfter(r.stdout, re)).toBe('  remedy: sign the lane in: ccrc codex login codex-a');
+    expect(r.stdout).not.toContain('existence is all ccrc checks');
+    // The marker an abandoned LiteLLM device flow leaves reads `incomplete`: not signed in, the same remedy.
+    writeFileSync(cred, JSON.stringify({ device_code_requested_at: 1 }), { mode: 0o600 });
+    const m = runDoctor(home);
+    const rm = /^FAIL codex: codex-a is not signed in: the auth library reads its credential in ~\/\S+ as incomplete, so 'ccrc codex start codex-a' refuses$/m;
+    expect(m.stdout, m.stdout).toMatch(rm);
+    expect(remedyAfter(m.stdout, rm)).toBe('  remedy: sign the lane in: ccrc codex login codex-a');
+    expectNoCodexWarn(m.stdout);
   });
 
   // Root reads a 0000 file anyway, so the discriminator proves nothing there — a
   // visible skip, not a false green.
   it.skipIf(PY === null || (typeof process.getuid === 'function' && process.getuid() === 0))(
-    'PASSes a 0000-mode auth.json — existence and mode are all it asks; nothing under authDir is opened', async () => {
-      const home = await healthyCodexBox('ccrc-doctor-codex-auth-0000-');
-      chmodSync(join(authDirOf(home, 'codex-a'), 'auth.json'), 0o000);
-      expect(lineFor(runDoctor(home).stdout, 'codex')).toMatch(/^PASS codex: 1 Codex lane\(s\): codex-a \(ports \d+\/\d+, signed in, /);
+    'FAILs a 0000-mode and a 0644-mode auth.json, naming chmod 600 and the credential\'s path', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-auth-mode-');
+      const cred = join(authDirOf(home, 'codex-a'), 'auth.json');
+      for (const [mode, word] of [[0o000, '0000'], [0o644, '0644']] as const) {
+        chmodSync(cred, mode);
+        const r = runDoctor(home);
+        const re = new RegExp(`^FAIL codex: codex-a's credential ${reEsc(cred)} has mode ${word}, `, 'm');
+        expect(r.stdout, `${word}: ${r.stdout}`).toMatch(re);
+        expect(remedyAfter(r.stdout, re), word).toBe(`  remedy: chmod 600 ${cred}`);
+        // THE ONLY CREDENTIAL LINE: a 0000 file also reads `unreadable` (the library's open is refused), and the
+        // move-it-aside remedy would discard a credential the chmod cures.
+        expect(r.stdout, `${word}: a move-it-aside line beside the mode line`).not.toContain('move it aside');
+        expect(r.stdout, word).not.toMatch(/^FAIL codex: codex-a is not signed in/m);
+        expectNoCodexWarn(r.stdout);
+      }
+      chmodSync(cred, 0o600);
     });
+
+  it('FAILs needs-signin', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-needs-signin-');
+    await refreshRefusedAs(home, 'codex-a', { status: 400, body: { error: 'invalid_grant' } }, 'needs-signin');
+    const r = runDoctor(home);
+    const re = /^FAIL codex: the token endpoint refused codex-a's refresh token \(the auth library's status reads needs-signin\), so 'ccrc codex start codex-a' refuses and its tier can serve no request$/m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: sign the lane in again: ccrc codex login codex-a');
+    expect(lineFor(r.stdout, 'codex')).toMatch(/^FAIL codex: /);
+    expectNoCodexWarn(r.stdout);
+  });
+
+  it('FAILs a foreign-family credential', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-foreign-');
+    const cred = join(authDirOf(home, 'codex-a'), 'auth.json');
+    // The Codex CLI's own file at the backend path: another program's, never written over.
+    const bytes = JSON.stringify({ OPENAI_API_KEY: null, tokens: { id_token: 'x', access_token: 'y', refresh_token: 'z' } });
+    writeFileSync(cred, bytes, { mode: 0o600 });
+    const before = statSync(cred, { bigint: true });
+    const r = runDoctor(home);
+    const re = new RegExp(`^FAIL codex: the auth library reads codex-a's credential ${reEsc(cred)} as foreign-family, so 'ccrc codex start codex-a' refuses it and ccrc never writes over it$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: move it aside, then ccrc codex login codex-a');
+    expect(readFileSync(cred, 'utf8')).toBe(bytes);
+    const after = statSync(cred, { bigint: true });
+    expect([after.ino, after.mtimeNs, after.mode]).toEqual([before.ino, before.mtimeNs, before.mode]);
+    expect(r.stdout).not.toContain('chmod 600');
+    // A torn file is `unreadable`: the same arm, the same remedy.
+    writeFileSync(cred, '{"access_token": ', { mode: 0o600 });
+    const t = runDoctor(home);
+    const rt = new RegExp(`^FAIL codex: the auth library reads codex-a's credential ${reEsc(cred)} as unreadable, `, 'm');
+    expect(t.stdout, t.stdout).toMatch(rt);
+    expect(remedyAfter(t.stdout, rt)).toBe('  remedy: move it aside, then ccrc codex login codex-a');
+    expectNoCodexWarn(t.stdout);
+  });
+
+  it('FAILs config-error naming ccrc update then ccrc codex login', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-config-error-');
+    await refreshRefusedAs(home, 'codex-a', { status: 401, body: { error: 'invalid_client' } }, 'config-error');
+    const r = runDoctor(home);
+    const re = /^FAIL codex: the token endpoint refused the client this ccrc signs codex-a in with \(the auth library's status reads config-error\), so 'ccrc codex start codex-a' refuses$/m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: run \'ccrc update\' first, then \'ccrc codex login codex-a\' if the lane is still refused');
+    expectNoCodexWarn(r.stdout);
+  });
+
+  it('FAILs auth-library-absent', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-lib-absent-');
+    rmSync(join(binDir(home), 'ccgpt-auth.py'));
+    const r = runDoctor(home);
+    const re = /^FAIL codex: the auth library or python3 is missing \(auth-library-absent\), so whether codex-a is signed in cannot be told$/m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: run \'ccrc update\', which places the library, then re-run doctor');
+    expect(r.stdout).not.toMatch(/^FAIL codex: codex-a is not signed in/m);
+    expectNoCodexWarn(r.stdout);
+  });
+
+  it('FAILs a credential this user does not own', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-owner-');
+    const cred = join(authDirOf(home, 'codex-a'), 'auth.json');
+    // A non-root test cannot chown a file, so a stand-in at the placed library's path answers `status` with a canned
+    // report (`ownerOk: false`) and `paths` as the library does; the python3 stub hands it to the real interpreter.
+    plantAuthLibStandIn(home, { credential: 'present', state: 'ok', mode: '0600', modeOk: true, ownerOk: false });
+    const r = runDoctor(home);
+    const re = new RegExp(`^FAIL codex: codex-a's credential ${reEsc(cred)} is not owned by this user, `, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe(`  remedy: make this user its owner (chown, as root), then chmod 600 ${cred}`);
+    expect(r.stdout).not.toMatch(/^FAIL codex: .*has mode /m);
+    expectNoCodexWarn(r.stdout);
+  });
+
+  it('FAILs a credential neither owned by this user nor at mode 0600 on the owner line, with no bare chmod line', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-owner-mode-');
+    const cred = join(authDirOf(home, 'codex-a'), 'auth.json');
+    // A non-owner cannot chmod the file (EPERM), so the owner line, whose remedy ends in the chmod, is the one line.
+    plantAuthLibStandIn(home, { credential: 'present', state: 'ok', mode: '0644', modeOk: false, ownerOk: false });
+    const r = runDoctor(home);
+    const re = new RegExp(`^FAIL codex: codex-a's credential ${reEsc(cred)} is not owned by this user, `, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe(`  remedy: make this user its owner (chown, as root), then chmod 600 ${cred}`);
+    expect(r.stdout).not.toMatch(/^FAIL codex: .*has mode /m);
+    expect(r.stdout).not.toMatch(/^ {2}remedy: chmod 600 /m);
+    expectNoCodexWarn(r.stdout);
+  });
+
+  it('FAILs an empty status answer: auth-status-unreadable', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-status-empty-');
+    plantAuthLibStandIn(home, null);
+    const r = runDoctor(home);
+    const re = /^FAIL codex: the auth library answered no status ccrc can read for codex-a \(auth-status-unreadable\), so whether it is signed in cannot be told$/m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: run \'ccrc update\', which places the library again, then re-run doctor');
+    expect(r.stdout).not.toMatch(/^FAIL codex: codex-a is not signed in/m);
+    expectNoCodexWarn(r.stdout);
+  });
+
+  it('PASS still reads signed in, for a present credential whether or not its token expired', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-pass-');
+    const pass = /^PASS codex: 1 Codex lane\(s\): codex-a \(ports \d+\/\d+, signed in, /;
+    expect(lineFor(runDoctor(home).stdout, 'codex')).toMatch(pass);
+    // Expired, with no status file: the computed status reads `ok`, and only the tier refreshes (litellm mode).
+    plantBackendCredential(authDirOf(home, 'codex-a'), { expiresIn: -120 });
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'codex'), r.stdout).toMatch(pass);
+    expect(existsSync(join(authDirOf(home, 'codex-a'), 'auth.status.json')), 'the doctor wrote a status').toBe(false);
+  });
+
+  it('no new WARN line and no new check name', async () => {
+    // Three lanes, three credential arms at once: absent, foreign-family and a 0644 mode.
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-census-', ['codex-a', 'codex-b', 'codex-c']);
+    rmSync(join(authDirOf(home, 'codex-a'), 'auth.json'));
+    writeFileSync(join(authDirOf(home, 'codex-b'), 'auth.json'), JSON.stringify({ family: 'siwc' }), { mode: 0o600 });
+    chmodSync(join(authDirOf(home, 'codex-c'), 'auth.json'), 0o644);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: codex-a is not signed in/m);
+    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: the auth library reads codex-b's credential \S+ as foreign-family/m);
+    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: codex-c's credential \S+ has mode 0644/m);
+    expectNoCodexWarn(r.stdout);
+    const names = new Set(tableNames());
+    const seen = r.stdout.split('\n').map((l) => /^(PASS|WARN|FAIL|SKIP) (\S+): /.exec(l)?.[2]).filter((n): n is string => n !== undefined);
+    expect(seen.filter((n) => !names.has(n)), 'a verdict line names a check the table does not').toEqual([]);
+  });
+
+  it('a check table sourced without ccrc names the missing _codex_auth_status', () => {
+    const r = usageRows(usageBox('ccrc-doctor-codex-auth-guard-'), false, 'unset -f _codex_auth_status\n_check_codex; echo "rc=$?"');
+    expect(r.stdout.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) codex: /.test(l)), r.stdout).toEqual([
+      'FAIL codex: ccrc\'s own Codex lane library is not loaded (_codex_auth_status, BOX_TREE_DIR or CODEX_TIERS is missing), so no lane on this box was measured']);
+    expect(r.stdout).toMatch(/^rc=1$/m);
+  });
+
+  // D-6559: `modeOk`/`ownerOk` null (nothing there, or not a regular file) is not false. A symlink's lstat reads 0777,
+  // and a `chmod 600` through it would change its TARGET.
+  it('a symlink at auth.json FAILs move it aside, prints no chmod line, and leaves its target untouched', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-symlink-');
+    const cred = join(authDirOf(home, 'codex-a'), 'auth.json');
+    const target = join(home, 'elsewhere', 'target.json');
+    mkdirSync(path.dirname(target), { recursive: true });
+    plantBackendCredential(path.dirname(target), { mode: 0o644 });
+    renameSync(join(path.dirname(target), 'auth.json'), target);
+    const bytes = readFileSync(target, 'utf8');
+    const before = statSync(target, { bigint: true });
+    rmSync(cred);
+    symlinkSync(target, cred);
+    const r = runDoctor(home);
+    const re = new RegExp(`^FAIL codex: the auth library reads codex-a's credential ${reEsc(cred)} as unreadable, `, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: move it aside, then ccrc codex login codex-a');
+    expect(r.stdout, 'a chmod remedy for a symlink').not.toContain('chmod 600');
+    expect(r.stdout).not.toMatch(/has mode /);
+    expect(lstatSync(cred).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe(bytes);
+    const after = statSync(target, { bigint: true });
+    expect([after.ino, after.mtimeNs, after.mode]).toEqual([before.ino, before.mtimeNs, before.mode]);
+    expectNoCodexWarn(r.stdout);
+  });
 
   it.skipIf(PY === null || (typeof process.getuid === 'function' && process.getuid() === 0))(
     'FAILs an authDir this user cannot search', async () => {
@@ -12408,7 +12841,7 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     const r = runDoctor(home);
     const lines = r.stdout.split('\n');
     const at = (re: RegExp): number => lines.findIndex((l) => re.test(l));
-    const f = at(/^FAIL codex: codex-a has no OAuth login/);
+    const f = at(/^FAIL codex: codex-a is not signed in: /);
     const w = at(/^WARN codex: codex-b routes haiku to nothing/);
     expect(f, r.stdout).toBeGreaterThan(-1);
     expect(w).toBeGreaterThan(f);
@@ -12764,7 +13197,7 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     // Plan 3b Task A2: this fixture is BOTH armed (`usageBox` enables ccrc's own
     // timer), so the WARN says so and names ccrc's withdrawal first. The title is
     // §20.10's row of record, kept verbatim; the withheld-only case is the next one.
-    expect(warns(r.stdout)).toEqual([`WARN codex: codex-a: another repository's ccgpt-usage@codex-a.timer is enabled, and ccrc's own ${T} is enabled too, so two publishers race this lane's ~/.cc-limits row and two token refreshes its OAuth directory`]);
+    expect(warns(r.stdout)).toEqual([`WARN codex: codex-a: another repository's ccgpt-usage@codex-a.timer is enabled, and ccrc's own ${T} is enabled too, so two publishers race this lane's ~/.cc-limits row, and ccgpt-usage@codex-a.timer refreshes the credential outside the auth library's lock, so it can race the tier's refresh (ccrc's own poll only reads it)`]);
     expect(r.stdout).toMatch(new RegExp(`^ {2}remedy: systemctl --user disable --now ${esc(T)} \\(ccrc's own unit; no ccrc fixer withdraws it\\), or leave it to the next update, whose converge withdraws ${esc(T)} while ccgpt-usage@codex-a\\.timer stands and re-measures the link\\. Once this lane's cutover no longer needs ccgpt-usage@codex-a\\.timer, disable it yourself: systemctl --user disable --now ccgpt-usage@codex-a\\.timer — ccrc never disables another tool's unit$`, 'm'));
     expect(r.asked).toEqual([]);
   });
@@ -12773,7 +13206,7 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     const home = usageBox('ccrc-doctor-usage-second-writer-withheld-', { enabled: false });
     plantForeignUsage(home, 'codex-a');
     const r = usageRows(home);
-    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: another repository's ccgpt-usage@codex-a\.timer is enabled, so two publishers would race this lane's ~\/\.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own ccrc-codex-usage@codex-a\.timer while it stands$/)]);
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: another repository's ccgpt-usage@codex-a\.timer is enabled, so two publishers would race this lane's ~\/\.cc-limits row, and ccgpt-usage@codex-a\.timer refreshes the credential outside the auth library's lock, so it can race the tier's refresh — ccrc withholds its own ccrc-codex-usage@codex-a\.timer while it stands$/)]);
     expect(r.stdout).toMatch(/^ {2}remedy: once this lane's cutover no longer needs it, disable it yourself: systemctl --user disable --now ccgpt-usage@codex-a\.timer, then run: ccrc install — ccrc never disables another tool's unit$/m);
     expect(r.asked).toEqual([]);
   });
@@ -13169,6 +13602,8 @@ function runFixCodex(c: FixCodexCase = {}): {
     _codex_runtime_cli: '_codex_runtime_cli() { printf \'%s\' "$HOME/.local/bin/ccgpt-runtime"; }',
     // The lane library's own one-liner: which placed file a shim tier runs.
     _codex_shim_file: ccrcLine(/^_codex_shim_file\(\) .*$/m, '_codex_shim_file'),
+    // And the one the litellm tier loads its credential through (codex-bridge Stage 1, Task 6).
+    _codex_auth_lib: ccrcLine(/^_codex_auth_lib\(\) .*$/m, '_codex_auth_lib'),
     _models_roster_path: '_models_roster_path() { printf \'%s\' "$HOME/.ccrc/accounts.json"; }',
     _models_node: [
       '_models_node() {',
@@ -13288,7 +13723,7 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
   const commit = (home: string, id: string): string => `_models_node materialise --file ${home}/.ccrc/accounts.json --id ${id}`;
   const check = (home: string, id: string): string => `${commit(home, id)} --check true`;
   const held = (id: string): string => `_models_litellm_lane_held ${id} lock=${id}`;
-  const TIERS_LINE = "FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, which restarts every running ccrc-owned tier that measures stale, on any lane (its lines above)";
+  const TIERS_LINE = "FIX codex: tiers: this fix replaced code a running tier runs (the shim, the runtime or the auth library), so it re-ran the install step 'ccrc update' runs, which restarts every running ccrc-owned tier that measures stale, on any lane (its lines above)";
   const tiersAsked = (r: { calls: string[] }): string[] => r.calls.filter((l) => l.startsWith('_inst_codex_tiers'));
 
   it('a converged lane: every measurement is asked, and nothing is placed, rebuilt, rendered or restarted', () => {
@@ -13374,6 +13809,15 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
       expect(r.calls[r.calls.length - 1], n).toBe('_inst_codex_tiers role=fleet');
       expect(tiersAsked(r), n).toHaveLength(1);
     }
+  });
+
+  it('--fix restoring a drifted ccgpt-auth.py asks _inst_codex_tiers, like the shim', () => {
+    // The litellm tier loads the library, and its `.started` code hashes it (codex-bridge Stage 1, Task 6).
+    const r = runFixCodex({ role: 'fleet', bins: { 'ccgpt-auth.py': 'drift' } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.fix).toEqual(['FIX codex: restored $HOME/.local/bin/ccgpt-auth.py from the shipped tree', TIERS_LINE, DONE(1)]);
+    expect(r.calls[r.calls.length - 1]).toBe('_inst_codex_tiers role=fleet');
+    expect(tiersAsked(r)).toHaveLength(1);
   });
 
   it('with no cmp on PATH, only a missing or non-executable file is placed, every other is named "not compared", and no tier is asked', () => {
@@ -13533,7 +13977,7 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
 
   it('a tier restart that cannot finish is said', () => {
     const r = runFixCodex({ bins: { 'ccgpt-proxy.py': 'drift' }, tiersDegraded: true });
-    expect(r.fix).toContain("FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, and that step could not restart every stale tier (its lines above say which)");
+    expect(r.fix).toContain("FIX codex: tiers: this fix replaced code a running tier runs (the shim, the runtime or the auth library), so it re-ran the install step 'ccrc update' runs, and that step could not restart every stale tier (its lines above say which)");
   });
 
   it('a roster two lanes share a port in is refused by both writers: each lane is named NOT rendered with models-op\'s own code, and nothing is written', () => {

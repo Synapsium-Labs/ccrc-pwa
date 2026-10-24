@@ -19,7 +19,6 @@ export const PWA_L1_EXEMPTIONS: EntrySet = {
   'pwa/src/fleet/sessionFacts.ts -> pwa/src/fleet/chips.tsx': { reason: "the session facts take the chip component file's unmeasuredTitle word", since: '2026-10-20' },
   'pwa/src/fleet/startProgramPolicy.ts -> pwa/src/lib/api.ts': { reason: "the start policy matches the fetch adapter's ApiError class and its error words", since: '2026-10-20' },
   'pwa/src/lib/notAvailable.ts -> pwa/src/lib/api.ts': { reason: "the not-available reader matches the fetch adapter's ApiError class", since: '2026-10-20' },
-  'pwa/src/screens/settings/sectionStatus.ts -> pwa/src/fleet/UpdateBanner.tsx': { reason: "the section status reads the update banner's bannerRelease decision", since: '2026-10-20' },
   'pwa/src/screens/settings/sectionStatus.ts -> pwa/src/lib/api.ts': { reason: "the section status reads the box-token view through the fetch adapter's readBoxTokenView", since: '2026-10-20' },
   'pwa/src/screens/settings/sectionStatus.ts -> pwa/src/screens/settings/SecuritySection.tsx': { reason: "the section status reads the security section's token summary and exposure words", since: '2026-10-20' },
   'pwa/src/screens/settings/sectionStatus.ts -> pwa/src/screens/settings/UpdatesSection.tsx': { reason: "the section status reads the updates section's label and sentence tables", since: '2026-10-20' },

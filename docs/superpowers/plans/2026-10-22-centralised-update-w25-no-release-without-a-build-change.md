@@ -165,9 +165,11 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 - `release-stable.test.ts`: the S and Y rows at `a4ab632fa`.
 - `settings-screen.test.tsx`: P1 at `a5498cb54`.
 - Review 846's rows (X13 to X15, Y12, Y13, V1 and V2) at `0317c47e0`, in a scratch clone, each vitest call under `timeout -k 10 600` and a cap on new processes. X2 and X7 were re-measured there against the reshaped C30 and C35: each reds both cases (2 of 90).
-- Neither the targets nor the rows of an earlier measurement changed after it was taken.
+- Rows were re-measured where a later round changed their targets or their rows: X2 and X7 at `0317c47e0` (2 of 90 each), and X2, X7, X15 and X15rc in wave 26 Task 1 at `c6e59fc5b` (counts in their rows). Every other row's count is the case count of its own measurement, named in its group above.
+- Wave 26 then changed the targets of three rows after their measurement. It removed the attest step's `if:`, the whole target of W1 and A1; their successors are B1 and B2 in the wave-26 plan's Mutation table, measured there at `aa4d47280`. It reshaped `set_output`, M16's target, which was re-measured in wave 26 Task 3 at `54d8dda61` (count in the wave-26 table).
 
-**The count.** This table has 82 rows, and none survived: 75 after fix round 3, and review 846's seven.
+**The count.** This table has 83 rows, and none survived: 75 after fix round 3, and review 846's seven.
+- Review 854 added one more, X15rc, measured in wave 26 Task 1 at `c6e59fc5b`.
 - The fix-round-2 table had 46 rows, not the 50 its wave-done gave.
 - "No survivors" speaks for the listed rows only. Two guards still have no row, below.
 
@@ -198,7 +200,7 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 | `release-main.test.ts` | M13 publish accepts an undecided build | W25-C17 |
 | `release-main.test.ts` | M14 the attest tripwire removed | W25-C18 |
 | `release-main.test.ts` | M15 say's guard removed | W25-C19 |
-| `release-main.test.ts` | M16 set_output's guard removed | W25-C19 |
+| `release-main.test.ts` | M16 set_output's guard removed | W25-C19 (re-measured at `54d8dda61` in wave 26) |
 | `release-main.test.ts` | M17 a skip leaves the candidate in the attest glob | W25-C1 |
 | `release-main.test.ts` | M18 the first-path rule reverted | W25-C2, W25-C5, W25-C6, W25-C13, W25-C23, W25-C25 |
 | `release-main.test.ts` | M19 compare's head check removed | W25-C16 |
@@ -211,12 +213,12 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 | `release-main.test.ts` | M26 D-6502 never fires (`contained=""`) | W25-C28 |
 | `release-main.test.ts` | M27 publish's contained branch without its head check | W25-C28 |
 | `release-main.test.ts` | X1 (F2): `fs.lstatSync(full)` to `fs.statSync(full)` | W25-C29 (1 of 87) |
-| `release-main.test.ts` | X2 (F3): `st.mode & 0o7777` to `st.mode & 0o777` | W25-C30 setuid file, W25-C30 sticky directory (2 of 87) |
+| `release-main.test.ts` | X2 (F3): `st.mode & 0o7777` to `st.mode & 0o777` | W25-C30 setuid file, W25-C30 sticky directory (2 of 91); re-measured in wave 26, Task 1, at `c6e59fc5b` |
 | `release-main.test.ts` | X3 (F4): skip names starting with `.` in the walk | W25-C31 (1 of 87) |
 | `release-main.test.ts` | X4 (F5): delete the `git diff against $base failed` line | W25-C32 (1 of 87) |
 | `release-main.test.ts` | X5 (F5): guard diff `"$base" HEAD --` to `HEAD~1 HEAD --` | W25-C33, W25-P1 (2 of 87) |
 | `release-main.test.ts` | X6 (F6): `tag --contains HEAD \| newest` to `\| tail -n1` | W25-C34 x4 (vnext and v1.2.3-rc1, each on HEAD and on a descendant) (4 of 87) |
-| `release-main.test.ts` | X7 (F8 i): delete the listing-failure block after comm/awk | W25-C35 (1 of 87) |
+| `release-main.test.ts` | X7 (F8 i): delete the listing-failure block after comm/awk | W25-C35, comm exits 1, W25-C35, comm exits 0 and prints nothing, W25-C35, comm prints one well-formed line and exits 1 (3 of 91); re-measured in wave 26, Task 1, at `c6e59fc5b` |
 | `release-main.test.ts` | X8 (F8 iii): `!= false` to `= true` | W25-C36 x3 (empty, null, garbage) (3 of 87) |
 | `release-main.test.ts` | X9: delete the gh release download exit check | W25-C12 (the failed-download case) (1 of 87) |
 | `release-main.test.ts` | X10: delete the `-z "$BASE"` check | W25-C9, W25-C11 (2 of 87) |
@@ -224,12 +226,13 @@ Each guard, the mutation that removes or weakens it, and the rows that went red.
 | `release-main.test.ts` | X12: delete publish's `merge-base --is-ancestor` check on `built unchanged` | W25-C16b (1 of 87) |
 | `release-main.test.ts` | X13 (review 846 F1): delete the base's extraction arm | W25-C37, the base case (1 of 90); its line becomes `differs from v0.0.1: 1 entries, first "ccd/ccrc"` |
 | `release-main.test.ts` | X14 (review 846 F1): delete the candidate's extraction arm | W25-C37, the candidate case (1 of 90) |
-| `release-main.test.ts` | X15 (review 846 F3): delete the listing check's shape half | W25-C35, comm exits 0 and prints nothing (1 of 90) |
-| `build-release.test.ts` | W1 attest `if:` deleted | "runs prepare, compare, attests, then publish ... (D-3122, D-6499)" (no W25 id) |
+| `release-main.test.ts` | X15 (review 846 F3): delete the listing check's shape half | W25-C35, comm exits 0 and prints nothing (1 of 91); re-measured in wave 26, Task 1, at `c6e59fc5b` |
+| `release-main.test.ts` | X15rc (review 854): delete the listing check's rc half | W25-C35, comm prints one well-formed line and exits 1 (1 of 91) |
+| `build-release.test.ts` | W1 attest `if:` deleted | "runs prepare, compare, attests, then publish ... (D-3122, D-6499)" (no W25 id) (target removed in wave 26; see B1/B2 there) |
 | `build-release.test.ts` | W2 GH_TOKEN env on prepare | W25-Y4 |
 | `build-release.test.ts` | W3 setup-node gated by an `if:` | W25-Y3 |
 | `build-release.test.ts` | W4 `continue-on-error: true` on compare | W25-Y2, W25-Y4 |
-| `build-release.test.ts` | A1 attest `if:` gets `\|\| always()` | "runs prepare, compare, attests, then publish ... (D-3122, D-6499)" (no W25 id) |
+| `build-release.test.ts` | A1 attest `if:` gets `\|\| always()` | "runs prepare, compare, attests, then publish ... (D-3122, D-6499)" (no W25 id) (target removed in wave 26; see B1/B2 there) |
 | `build-release.test.ts` | F1a paths-ignore line dropped | W25-F1 |
 | `build-release.test.ts` | F1b `'*.md'` to `'**/*.md'` (on the paths-ignore line) | W25-F1 |
 | `build-release.test.ts` | F1c `'docs/**'` to `'**/docs/**'` (on the paths-ignore line) | W25-F1 |
@@ -366,6 +369,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
     - `publish` holds `GH_TOKEN`, as before.
   - **The token.** `GH_TOKEN` goes only to `compare` and `publish`, never to `prepare`, whose step runs `npm ci`. W25-Y4 pins it, with its mutation row.
   - **Not a boundary.** `compare` runs after `npm ci` in the same job, so it does not stop a hostile dependency. An install script can already reach the checkout credential and the OIDC request token (D-6405), and it could rewrite the files `compare` later runs. The build/release job split is the operator's open follow-up.
+    - **Closed by wave 26 (D-6647, D-6648):** the install now runs in a job whose token can only read and which cannot mint an OIDC token; the publish job installs nothing.
   - **No `continue-on-error`.** A `compare` that crashes fails the job before the attest step, and nothing was pushed (D-6499).
   - **The trigger filter** is D-6511's two root-anchored patterns. D-6397 is superseded.
   - Rewritten in fix round 2 (review 818). The first text is in git history at `4ca88f61e`.
@@ -391,6 +395,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - **Fix round 2 adds a reason to split:** the `compare` step that decides whether to attest runs in the same job after `npm ci`, from files an install script could rewrite (D-6401).
   - **The follow-up** is the operator's open call (the coordinator's ruling on review 818, item 6): a build job with `contents: read`, no `id-token` and `persist-credentials: false` that uploads `release-out/`, then a release job that compares, attests and publishes. `release.yml` shares the shape and the question.
   - Rewritten in fix round 2 (review 818). The first text is in git history at `4ca88f61e`.
+  - **Closed by wave 26 (D-6647, D-6648):** the install now runs in a job whose token can only read and which cannot mint an OIDC token; the publish job installs nothing.
 
 - **D-6406.** Three texts this plan dictated word for word are amended to what landed (review 812, F15). Each landed text was chosen in a reviewed fix round, and the plan now says what the tree says:
   - **Superseded by fix round 2 (review 818):** the README copy, the decide comment and W25-Y2's regex it amended are replaced by fix round 2's texts and rows.

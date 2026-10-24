@@ -18,6 +18,14 @@
   gap: var(--sp-3);
 }
 
+/* The fleet column's section takes focus from script only (`tabIndex=-1`): the update line's dismiss on a phone, where
+ * the main landmark is hidden (`focusShownLandmark`). It is not a control, so base.css's page-wide ring stays off it,
+ * as off the main landmark (shell.css): Chrome marks a script focus that follows a keyboard action as `:focus-visible`,
+ * and the ring would draw along the whole column. */
+.fleet:focus-visible {
+  outline: none;
+}
+
 .fleet-head {
   display: flex;
   align-items: baseline;
@@ -3091,11 +3099,10 @@ button.proj-card-pool::before {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-/* The three wrapping action rows this screen draws — a release row's, a node
-   row's and the update banner's — are one row, written once. */
+/* The two wrapping action rows this screen draws — a release row's and a node
+   row's — are one row, written once. */
 .settings-release-actions,
-.settings-node-actions,
-.update-banner-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.settings-node-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 /* Wave 8 item F2 (D-3591): the running row's words, in place of a button — quiet, not a badge or a warning. */
 .settings-release-running { font-size: var(--fs-meta); color: var(--ink-tertiary); }
 /* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
@@ -3185,32 +3192,73 @@ button.proj-card-pool::before {
   min-height: var(--tap-min);
 }
 
-/* ── UpdateBanner (centralised-update design 2026-09-20 §13) ─────────────
-   "vX is out on <channel>": news, not a fault, so it is neither the dead red
-   nor the attention amber the fleet-host banner above uses for its three warn
-   arms. Self-grounded on the preselected-row pair — --ink-primary on
-   --accent-tint, 13.43:1 dark / 14.19:1 light (tokens.css) — so
-   design/contrast-check.mjs measures it as a rule of its own and the children
-   below set no colour of their own. No margin: it is a child of the .fleet
-   column, whose padding is the gutter and whose gap is the spacing. Not
-   sticky: the fleet-host banner owns the sticky slot, and two sticky banners
-   would stack over the list. */
-.update-banner {
-  display: flex;
-  flex-wrap: wrap;
+/* ── UpdateIndicator (D-6327; centralised-update design 2026-09-20 §13) ──────
+   "↑ vX available": a quiet line in the accent at the meta size, a door to Settings › Updates, placed once per width
+   (Refined's row under the bar at a desk, Instrument's status bar, one row under Refined's phone header and in
+   Instrument's fleet column). News, not a fault, and not a band: it takes the room of a word. In the bar form
+   (`status`) `flex: none` and `nowrap` keep the line on one line, never shrunk or clipped, whatever sits beside it;
+   the `row` form below spans its column and lets its stale words wrap on a phone. The empty glyph
+   span `Door` always draws is hidden, the idiom of `.ref-tab` (refined.css). */
+.update-indicator {
+  display: inline-flex;
+  flex: none;
   align-items: center;
-  gap: var(--sp-2) var(--sp-3);
-  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
-  border: 1px solid var(--accent);
-  border-radius: var(--r-md);
-  background: var(--accent-tint);
-  color: var(--ink-primary);
-  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
+  gap: var(--sp-3);
+  white-space: nowrap;
 }
-.update-banner-msg {
-  flex-basis: 100%;
+.update-indicator-door {
+  color: var(--accent);
+  font-size: var(--fs-meta);
+}
+.update-indicator-door > [aria-hidden='true']:empty {
+  display: none;
+}
+/* The stale words (wave 19, R24(b)) follow the version in the tertiary ink the fleet's other quiet text wears. */
+.update-indicator-stale {
+  color: var(--ink-tertiary);
+  font-size: var(--fs-meta);
+}
+/* The dismiss × (part b) is the design system's `CloseButton`: the tap floor, borderless, transparent, with its focus
+   ring. This sheet adds layout only, the compact 24px square under a fine pointer (the status bar is 24px there). */
+@media (pointer: fine) {
+  .update-indicator-dismiss {
+    min-width: 24px;
+    min-height: 24px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+  }
+}
+/* The row is one tap tall and spans the column it sits in. Where the stale words do not fit beside the door and the ×
+   (a phone), they wrap onto further lines inside their own share of the row: the door and the × keep their size and
+   stay side by side, and the row never widens the column. Where they fit (a desk), the row is one line
+   as before; the order of the parts is unchanged. */
+.update-indicator[data-form='row'] {
+  display: flex;
   min-width: 0;
-  overflow-wrap: anywhere;
+  min-height: var(--tap-min);
+  white-space: normal;
+}
+.update-indicator[data-form='row'] .update-indicator-door,
+.update-indicator[data-form='row'] .update-indicator-dismiss {
+  flex: none;
+}
+.update-indicator[data-form='row'] .update-indicator-door {
+  white-space: nowrap;
+}
+.update-indicator[data-form='row'] .update-indicator-stale {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+/* The status bar is 24px under a fine pointer (instrument.css), so the door is compact there; under any other
+   pointer it keeps `Door`'s own tap floor. The door reaches the 24px floor a fine pointer asks of a target. The bar is
+   24px under a fine pointer with a 1px top border, so its content box is 23px and the door is centred in it. */
+@media (pointer: fine) {
+  .update-indicator[data-form='status'] .update-indicator-door {
+    min-height: 24px;
+    height: 24px;
+    padding: 0 var(--sp-1);
+  }
 }
 
 /* — centralised update management, programme wave 5 Task 8: the move sheet —
@@ -3238,7 +3286,7 @@ button.proj-card-pool::before {
   color: var(--status-dead-text);
 }
 
-/* — What's new (D-5549): the update banner's sheet (WhatsNewSheet.tsx) —
+/* — What's new (D-5549): Settings › Updates' sheet (WhatsNewSheet.tsx) —
    LAYOUT ONLY, NO COLOUR. The notes inside wear `.settings-release-notes`, the
    self-grounded block the Settings rows already use, so every pair is one the
    contrast gate already measures; the tag and date lines take the sheet's own
@@ -3251,7 +3299,7 @@ button.proj-card-pool::before {
    in place. Self-grounded on the attention pair the fleet-host banner's warn arms and .substrate-banner already use
    (--status-attention-text on --status-attention-tint, both solid, floored at 4.5 by design/contrast-check.mjs), so
    no new colour pairing and no inherited ground; the children set no colour of their own. The Ack is the shared
-   .btn-primary, which paints itself; the override below is layout only, as .update-banner-actions' is. No margin:
+   .btn-primary, which paints itself; the override below is layout only. No margin:
    it is a child of the .fleet column, whose padding is the gutter and whose gap is the spacing. Not sticky: the
    fleet-host banner owns the sticky slot. */
 .halt-banner {

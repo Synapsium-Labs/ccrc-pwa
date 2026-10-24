@@ -11,6 +11,7 @@
 // `shared/update-move.ts` (UPDATE_OP; D-4266), so the rule is now also a fact
 // about a bundled file — this repo reads its comments as history.
 import type { BuildInfo } from './buildinfo.js';
+import type { DiskMeasured } from './disk.js';
 import {
   ACCOUNT_OP_KILL_GRACE_MS, ACCOUNT_SUB_TIMEOUT_MS, isReleaseTag, isRequestKind, type AccountSub, type InFlightReport,
   type RequestKind,
@@ -387,7 +388,12 @@ export interface PtyClose    { t: 'pty'; ptyId: number; ev: 'close' }
 export interface AccountOpReq {
   t: 'req'; id: number; op: 'account'; sub: AccountSub; laneId: string | null; fields: Readonly<Record<string, string>>; stdinB64?: string;
 }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq;
+/** Fleet disk retention spec §2.5 (D-6614): ONE member of the `req` envelope, the agent's `disk` op. It carries NO
+ *  field: the agent measures its own work roots (`DISK_WORK_ROOTS`), so no path ever crosses the link in a request.
+ *  A frame with any extra field is a malformed frame (`bad-request`), the same word an agent that predates the op
+ *  answers. */
+export interface DiskReq { t: 'req'; id: number; op: 'disk' }
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -410,6 +416,7 @@ export interface ResErr { t: 'res'; id: number; ok: false; err: string; detail?:
 // writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}; update → {accepted: true, detail?: string} (D-3413: `detail` only from the bound's arms B and D)
 // token-sync → {synced: <16 hex>, transport?: 'http'|'https'} (transport ADDITIVE; its one reader is readTokenTransport)
 // account → AccountOpAnswer: {fleetIdentity, kind, …} for every outcome, a refusal included (its one reader is readAccountOpAnswer)
+// disk → DiskOpReply = DiskMeasured: {filesystems, expectedMounts, missing} (its one decider is server/src/disk.ts's diskVerdict)
 
 // ── the `update` op (design 2026-09-20 §10) ─────────────────────────────────
 // Everything both ends of the op must agree on is declared here, once. The
@@ -871,3 +878,20 @@ export function readAccountOpAnswer(raw: unknown): AccountOpAnswer | null {
       return null;
   }
 }
+
+// ── the `disk` op (fleet disk retention spec 2026-10-23 §2.5, D-6614) ──────────
+// The agent measures the filesystems the fleet's work roots live on and answers what it read; the server's decider
+// (`server/src/disk.ts`) turns that into a level. The op takes NO argument, so there is nothing to validate and no
+// path to contain. ADDITIVE: no `FLEET_PROTO` bump; an agent that predates it answers `bad-request` and is never
+// sent the op (the server reads `ready.ops` first).
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const DISK_OP = 'disk';
+
+/** The deadline for ONE `statfs`/`stat` of a work root on the agent. A root that does not answer in this time is
+ *  reported `missing` with `why: 'timeout'` (unknown, never zero): a full or stalled volume is exactly when its
+ *  `statfs` hangs. The server's request deadline (the client's default is 15 s) stays above it. */
+export const DISK_STATFS_DEADLINE_MS = 5_000;
+
+/** The `disk` op's reply: exactly what the decider takes (`DiskMeasured`), in this one type. */
+export type DiskOpReply = DiskMeasured;

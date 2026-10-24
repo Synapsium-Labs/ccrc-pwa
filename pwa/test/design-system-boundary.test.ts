@@ -18,9 +18,8 @@
 // cannot outlive it.
 //
 // The classes themselves STAY on the rendered element on purpose — several
-// scoped descendant rules (`.block-screen .btn-primary`, `.update-banner-actions
-// .btn-ghost`, `.btn-ghost.settings-move`) select on them from this package's
-// own stylesheets, and those sheets are imported unlayered so they still beat
+// scoped descendant rules (`.block-screen .btn-primary`, `.btn-ghost.settings-move`) select on them from this
+// package's own stylesheets, and those sheets are imported unlayered so they still beat
 // the utilities. Structural hooks, not styling.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -60,8 +59,8 @@ const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
  *      not even always on a row: the approval sheet's Allow/Deny buttons
  *      wear it too. Word-bounded matching is what keeps `opts` from reading
  *      as `opt`.
- *    - `substrate-banner`, `offline-banner`, `chat-banner*`, `coord-banner`,
- *      `update-banner`: the app's. `banner` IS owned (Banner's base), and the
+ *    - `substrate-banner`, `offline-banner`, `chat-banner*`, `coord-banner`:
+ *      the app's. `banner` IS owned (Banner's base), and the
  *      boundary between it and these is the same whitespace one that keeps
  *      `opts` out: `substrate-banner` has a hyphen where the matcher needs a
  *      space, so it reads as a hook class the call site passes through

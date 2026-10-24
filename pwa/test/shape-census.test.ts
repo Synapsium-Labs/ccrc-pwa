@@ -26,7 +26,7 @@
 // 72% IS MEASURED, NOT CHOSEN. At 0.80 the four quiet-control rules still
 // cluster but `.program-start-door` (one font size apart) splits off, which is
 // precisely the copy a reader would miss. At 0.65 it starts pairing rules that
-// merely share a flex idiom — `.chat-meta` with `.update-banner-actions` — and
+// merely share a flex idiom — `.chat-meta` with a row of action buttons — and
 // the registry fills with noise that teaches nobody anything. 0.72 is the
 // window where a cluster means "one shape, written twice".
 //
@@ -217,8 +217,7 @@ const REGISTERED: Record<string, string> = {
   // blocks — see design/audit.mjs's `ruleKey`) or has a reason of its own.
 
   // ── DIFFERENT THINGS: these rules agree and will keep agreeing ──────────
-  ['chat.css .chat-meta + fleet.css .settings-release-actions, .settings-node-actions, '
-    + '.update-banner-actions']:
+  ['chat.css .chat-meta + fleet.css .settings-release-actions, .settings-node-actions']:
     'DIFFERENT THINGS. Five declarations — flex, centred, wrapping, one gap '
     + 'token, one row-gap — which is the most common five in the tree. This is '
     + 'a utility that these elements write as a rule because they already have '

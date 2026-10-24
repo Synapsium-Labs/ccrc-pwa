@@ -8,7 +8,8 @@ import type { ReactNode } from 'react';
 import type { UpdatesView } from '../../../../shared/api';
 import { Button, Section, Skeleton, elapsedShort, useNow } from '@ccrc/ui';
 import { BOX_TOKEN_CARD, ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_WHEN, useResultLine } from '../../fleet/settingsText';
-import { isPlaceableInstant, type UpdatesPoll } from '../../fleet/useUpdatesView';
+import type { UpdatesPoll } from '../../fleet/useUpdatesView';
+import { isPlaceableInstant } from '../../fleet/updatesRead';
 import { armedMode } from '../../lib/auth';
 import { ApiError, api, apiErrorText, readBoxTokenView } from '../../lib/api';
 // `dayClock` and `elapsedWords` come THROUGH the update plane's reading

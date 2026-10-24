@@ -39,9 +39,8 @@ import { stallDurationText } from '../../../shared/stall-watch';
 import {
   QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Section, Select, Skeleton,
 } from '@ccrc/ui';
-import {
-  asStallWatchView, stallWriteRefusal, type StallWatchPoll,
-} from '../fleet/useStallWatchView';
+import { stallWriteRefusal, type StallWatchPoll } from '../fleet/useStallWatchView';
+import { asStallWatchView } from '../fleet/stallWatchRead';
 import { api } from '../lib/api';
 import {
   ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_NOW_CLASS, STALL_LEVEL_NOTE, STALL_WORDS, UNCONFIRMED_TEXT,
