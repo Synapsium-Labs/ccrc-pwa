@@ -2,7 +2,7 @@ import { IDLE_RUN_STATES, isRegistryId, isRunState, transitionsFor } from '../..
 import type { RunKind, RunState } from '../../../shared/api.js';
 
 /**
- * `POST /api/runs/:id/advance`'s ordered gates, decided (D-TBD-arch33-advance-gate, audit ticket ARCH-33, GitHub
+ * `POST /api/runs/:id/advance`'s ordered gates, decided (D-6733, audit ticket ARCH-33, GitHub
  * #550; the pattern of `openRunPreconditions`, ARCH-21). L1: no `fs`, no fastify, no `reply`, no clock; its value
  * imports are L0, `shared/api.ts`. The route (`coord/routes.ts`, L4) gathers the facts, calls `advanceGate` inside
  * `coordMutex`, answers a refusal through `refuse.ts`'s `refuseAdvance`, and acts: the re-measurement

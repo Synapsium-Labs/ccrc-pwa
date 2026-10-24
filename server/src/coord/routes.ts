@@ -1829,7 +1829,7 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     // The body shape and the target scope are `advanceRequest`'s, the run-dependent gates `advanceGate`'s (ARCH-33,
-    // D-TBD-arch33-advance-gate); this handler gathers their facts and acts.
+    // D-6733); this handler gathers their facts and acts.
     const parsed = advanceRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), (req.body ?? {}) as AdvanceBody);
     if (!parsed.ok) return refuseAdvance(reply, parsed.refusal);
     const { id, to, fingerprint: fp } = parsed.req;

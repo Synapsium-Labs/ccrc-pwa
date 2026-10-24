@@ -207,7 +207,7 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
   'attribution-required': 409, 'not-a-child': 409,
 };
 
-/** The `reject.code` words `POST /api/runs/:id/advance` answers (D-TBD-arch33-advance-gate, audit ticket ARCH-33,
+/** The `reject.code` words `POST /api/runs/:id/advance` answers (D-6733, audit ticket ARCH-33,
  *  GitHub #550). They travel in a `reject` object, never an `error` key, so they are neither `RouteRefusal`s nor
  *  `OpenRunConflict`s. `unknown-run` and `bad-session` are not `RunRefuseCode`s: the route sent them as bare literals. */
 export type AdvanceRejectCode = 'unknown-run' | 'bad-session'

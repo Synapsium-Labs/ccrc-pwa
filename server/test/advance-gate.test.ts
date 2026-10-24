@@ -1,4 +1,4 @@
-// D-TBD-arch33-advance-gate (audit ticket ARCH-33, GitHub #550): `POST /api/runs/:id/advance`'s ordered gates,
+// D-6733 (audit ticket ARCH-33, GitHub #550): `POST /api/runs/:id/advance`'s ordered gates,
 // decided by one pure L1 decider, `coord/advance.ts`'s `advanceGate`, with `advanceRequest` ahead of it.
 //
 // THE GATE-ORDER TABLE. Every gate has a row that trips it alone, and every adjacent pair of gates that one input

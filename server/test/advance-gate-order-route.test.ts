@@ -1,4 +1,4 @@
-// D-TBD-arch33-advance-gate (audit ticket ARCH-33, GitHub #550): characterization of `POST /api/runs/:id/advance`'s gate ORDER over
+// D-6733 (audit ticket ARCH-33, GitHub #550): characterization of `POST /api/runs/:id/advance`'s gate ORDER over
 // the wire, written green on the inline handler BEFORE its gates moved to `coord/advance.ts`'s `advanceGate`, and
 // still green after. Each row sends a body that trips two adjacent gates at once and names the earlier one as the
 // answer. The decider's own table (`advance-gate.test.ts`) pins the same order without a server; this file holds

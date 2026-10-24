@@ -33,7 +33,7 @@ export const refuseRun = (
 ): FastifyReply => reply.code(RUN_REFUSAL_STATUS[refused]).send({ ok: false, refused, ...extra });
 
 /**
- * The advance route's refusals (D-TBD-arch33-advance-gate, audit ticket ARCH-33): one answer per
+ * The advance route's refusals (D-6733, audit ticket ARCH-33): one answer per
  * `coord/advance.ts` `AdvanceRefusal`. An `error` word goes through `refuseRoute`, with `detail` only where the
  * decider carried one (the bare shape refusal has none); a `reject` is `{ ok: false, reject: { code, ... } }` at
  * the one status `ADVANCE_REJECT_STATUS` gives its code — the wire the inline sends wrote. L4: it owns the reply
