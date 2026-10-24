@@ -21,8 +21,9 @@ import {
   ccdHeredocBraces,
 } from './consolidationCensus.js';
 
-/** The cross-context reference count on the day this ratchet landed. May only go DOWN, except a new destructive verb: ws-orphan (D-6629) adds the same eight lifecycle-journal calls into C1 that ws-collect makes. */
-const BASELINE = 529;
+/** The cross-context reference count on the day this ratchet landed. May only go DOWN, except a new destructive verb: ws-orphan (D-6629) adds the same eight lifecycle-journal calls into C1 that ws-collect makes.
+ *  Raised 529 -> 531 by D-6642: `ws-archive --if-no-pane` reads the pane through `_session_probe` and the unit through `_svc_is_active`. */
+const BASELINE = 531;
 
 const nameOf = (text: string): string => /^([A-Za-z_][A-Za-z0-9_]*)\(/.exec(text)![1]!;
 
