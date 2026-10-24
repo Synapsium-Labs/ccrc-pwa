@@ -64,6 +64,11 @@ describe('the verdict table is ccd\'s collector refusal words, and agrees with t
     expect([...COLLECT_VERDICT_WORDS].sort()).toEqual(words);
   });
 
+  it('`not-loose` keeps ccd\'s spelling and is a deferral its own continuity never lists (D-6625)', () => {
+    expect(COLLECT_VERDICT_TABLE['not-loose']).toEqual({ pace: 'defer', listedAfterMs: null });
+    expect(collectRefusalClass('not-loose')).toBe('retry');
+  });
+
   it('a word is terminal here exactly when the verb\'s refusal table reads it terminal', () => {
     expect(TERMINAL_WORDS).toEqual(['witness-mismatch', 'quarantine-kept', 'containment-unproven']);
     for (const w of COLLECT_VERDICT_WORDS) {

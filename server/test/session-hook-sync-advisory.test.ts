@@ -130,7 +130,7 @@ describe('session-hook: the landing-order advisory on a sync of main', () => {
     // whatever the tool, so this payload reaches the regex unless the name
     // stops it first.
     expect(hook({ hook_event_name: 'PreToolUse', tool_name: 'Task',
-      tool_input: { prompt: 'sync the branch', command: 'git merge origin/main' }, cwd: home }).stdout).toBe('');
+      tool_input: { prompt: 'sync the branch', model: 'sonnet', command: 'git merge origin/main' }, cwd: home }).stdout).toBe('');
   });
 
   // PermissionRequest is the one that bites: its arm reads `tool` exactly as

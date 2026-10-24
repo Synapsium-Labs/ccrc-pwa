@@ -658,7 +658,9 @@ citations are to `334fb722a`. They are hints, so locate code by content.
       branch exists".
     - **The gone-directory alternate-row recovery,** for the hold that R31's stated cost describes.
   - Wave 6 ships a second destructive verb, so §3's "the only destructive wave" no longer holds.
-  - No collector in this programme touches the foreign entries in `~/.cc-tmp`. That live residue, and a child whose
+  - No collector in this programme touches the foreign entries in `~/.cc-tmp`, save the loose arm of `ws-collect` (fleet disk
+    retention D-6625, spec 2026-10-23 §2.4): a regular file or directory no witness and no row names, 48 hours quiet (24 under
+    pressure), unheld, bound by a token and gone only behind its own switch. Links and special files stay the operator's. That live residue, and a child whose
     registry branch is already gone, are offered to the operator and never acted on by a session.
   - The path-identity follow-up (R31's re-pointed-alias and bind-mount residuals) opens after wave 6, not after wave
     5.
@@ -1476,7 +1478,8 @@ Code citations are to `77c11245`. They are hints, so locate code by content.
   - It honours `reclaim-pause`, R39's pacing class and the attached-session defer.
   - Its SAFETY and SECURITY lenses are mandatory.
 
-- **R59 — live residue stays the operator's.** No session acts on any of it.
+- **R59 — live residue stays the operator's.** No session acts on any of it. The one exception is the loose arm of
+  `ws-collect` (D-6625): the server alone, behind `$REG/collect-loose-live`, may collect a quiet loose entry under `~/.cc-tmp`.
   - **The leftovers in `~/.cc-tmp`:**
     - `ccrc-pwa-swift-hollow`'s empty, unwitnessed leaf;
     - the foreign entries in `~/.cc-tmp`, measured 2026-10-06 at 18 directories and 105 loose files, about 6.66 GiB.
