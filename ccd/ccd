@@ -21692,6 +21692,11 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   done
   rows=$(_route_picker_rows "$picker")
   if [[ "$cls" == default || -z "$cls" ]]; then want="Default"; else want="${cls^}"; fi
+  # D-6793: the picker's Default row follows the lane's saved default, so on an Anthropic lane whose settings.json
+  # defaults to Fable it would switch the live pane to Fable. Operator-only: type the Opus row instead. A named
+  # class (the operator's own fable included) is never touched. Not measured on a live pane here (no ssh); the guard
+  # only ever picks Opus over a possible Fable.
+  [[ "$want" == Default ]] && _is_anthropic_backend "$w" && _lane_default_is_fable "$w" && want="Opus"
   while IFS=$'\t' read -r n cur label desc; do
     [[ -n "$n" ]] || continue
     [[ "$cur" == 1 ]] && curs="$n"
