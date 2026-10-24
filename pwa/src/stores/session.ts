@@ -117,7 +117,8 @@ export interface SessionState {
    *  showing stays up, read-only, and sends nothing (`the-ask-holds-through-a-reconnect`). Per connection, never
    *  persisted. */
   askFrameSeen: boolean;
-  /** R69: the client-side LIFECYCLE generation of the ask: a count, starting at 0, that every `ask_cleared` frame and every
+  /** R69: the client-side LIFECYCLE generation of the ask: a count, starting at 0, that every `ask_cleared` frame raises by one
+   *  when it clears an envelope the store holds (with none held it is only a connection's first statement), and every
    *  `dialog_cleared` frame raises by one, in the reducer, one frame at a time, so a clear inside a batch of frames is
    *  counted whatever React batches. It is not a content identity and says nothing about WHICH ask: the keyboard's
    *  engagement (`DialogSheet`'s `askIdentity`) joins it to the envelope's content, so a clear plus a byte-identical ask
@@ -321,7 +322,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     case 'ask':
       return { ...s, ask: msg.ask, askFrameSeen: true };
     case 'ask_cleared':
-      return { ...s, ask: null, askFrameSeen: true, askEpoch: (s.askEpoch ?? 0) + 1 };
+      return { ...s, ask: null, askFrameSeen: true, askEpoch: (s.askEpoch ?? 0) + (s.ask === null ? 0 : 1) };
     case 'rotated':
       // FIVE transcript facts die with the transcript (final review, Minor 6;
       // `fileMeasured` joined them with the measured-read completion) — only
