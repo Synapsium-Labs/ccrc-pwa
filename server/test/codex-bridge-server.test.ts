@@ -914,16 +914,19 @@ describe.skipIf(!PY)('a lane.json nested too deep to decode refuses the start', 
 });
 
 describe.skipIf(!PY)('the stats file\'s request id is bounded as the status file\'s (plan Global Constraints)', () => {
-  it('an upstream x-request-id equal to the lane\'s access token or account id is never written to the stats file', async () => {
+  it('an upstream x-request-id equal to the lane\'s access token, refresh token or account id is never written to the stats file', async () => {
     const fail = (rid: string): ResponsesAnswer => ({ status: 500, body: { error: { code: 'server_error', message: 'no' } }, headers: { 'x-request-id': rid } });
-    // the access token is planted with the lane, so its answer's header is set once the lane exists (the fake's queue
-    // holds these same objects)
-    const answers = [fail('req-fx-control'), fail(FIXTURE_ACCOUNT_ID), fail('req-fx-placeholder')];
+    // the tokens are planted with the lane, so their answers' headers are set once the lane exists (the fake's queue
+    // holds these same objects). The access token is longer than the id's shape allows, so the shape check drops it
+    // first; the refresh token fits that shape, so only the echo check keeps it out
+    const answers = [fail('req-fx-control'), fail(FIXTURE_ACCOUNT_ID), fail('req-fx-placeholder'), fail('req-fx-placeholder')];
     await withBridge(answers, async ({ bridge, lane, up }) => {
       const token = lane.cred!.access;
+      const refresh = lane.cred!.refresh;
       answers[2].headers = { 'x-request-id': token };
+      answers[3].headers = { 'x-request-id': refresh };
       let n = 0;
-      for (const rid of ['req-fx-control', FIXTURE_ACCOUNT_ID, token]) {
+      for (const rid of ['req-fx-control', FIXTURE_ACCOUNT_ID, token, refresh]) {
         const a = await call(bridge, '/v1/messages', { body: messages() });
         expect(a.status, rid).toBeGreaterThanOrEqual(500);
         n += 1;
@@ -934,8 +937,9 @@ describe.skipIf(!PY)('the stats file\'s request id is bounded as the status file
         const text = readFileSync(lane.stats, 'utf8');
         expect(text, rid).not.toContain(FIXTURE_ACCOUNT_ID);
         expect(text, rid).not.toContain(token);
+        expect(text, rid).not.toContain(refresh);
       }
-      expect(up.requests).toHaveLength(3);
+      expect(up.requests).toHaveLength(4);
     });
   });
 });

@@ -83,9 +83,9 @@ READ_MAX = 16 * 2**20  # a stats file larger than this is unreadable, so the sta
 FLUSH_FAILED = "stats:flush-failed"
 RESET = "stats:reset"
 UNKNOWN_FAMILY = "stats:unknown-family"
-# D-6835: a third outside that list. A message whose client went away before its answer was written is counted
-# CLIENT_GONE, never `5xx` (the 7-day watch's upstream failure rate); one the drain cut is counted `drain-cut` alone,
-# by the drain, and nothing else.
+# D-6835: another outside that list (beside D-6820's two and D-6833's catalogue-unreadable). A message whose client
+# went away before its answer was written is counted CLIENT_GONE, never `5xx` (the 7-day watch's upstream failure
+# rate); one the drain cut is counted `drain-cut` alone, by the drain, and nothing else.
 CLIENT_GONE = "client-gone"
 
 

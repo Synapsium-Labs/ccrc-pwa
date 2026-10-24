@@ -1554,7 +1554,8 @@ def record_upstream(auth_dir: str, *, state: Optional[str], code: Optional[str],
     only among `ok`, `limit-paused` and `ineligible`: an upstream state is written over `ok` or the other upstream
     state, and `ok` clears either and is written over nothing else (over `ok` it writes nothing, so the codes standing
     there are kept); a current state the refresher writes (needs-signin, config-error), and plan-disabled, which no
-    upstream answer sets or clears, are left as they are, code and request id included, and the answer is False.
+    upstream answer sets or clears, are left as they are, code and request id included (the answer is still the bounded
+    request id, below).
 
     Nothing is written when: the lock is still held after `wait_s` (LockTimeout) or cannot be taken (any other
     AuthError); the credential is not present (nothing to bind a status to; then no lock is taken and no directory
