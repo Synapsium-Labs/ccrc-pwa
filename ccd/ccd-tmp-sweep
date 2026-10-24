@@ -868,6 +868,7 @@ if due:
                        'scratchBytes': sum(c['bytes'] for c in cs if c['sub'] == 'scratchpad' and not c.get('gone')),
                        'tasksBytes': sum(c['bytes'] for c in cs if c['sub'] == 'tasks' and not c.get('gone')),
                        'entries': sum(1 for c in cs if not c.get('gone')),
+                       'top': [{'name': c['name'], 'bytes': c['bytes']} for c in sorted((x for x in cs if not x.get('gone')), key=lambda x: (-x['bytes'], x['name']))[:5]],
                        'budget': {'state': state, 'overSince': over_since, 'enforceAt': enforce_at,
                                   'removedBytes': removed, 'kept': kept}}
     bump('candidates', len(cands))

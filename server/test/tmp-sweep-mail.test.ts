@@ -37,7 +37,7 @@ const overBudget = (over: Partial<TmpSweepSession['budget']> = {}, top: TmpSweep
 const json = (c: unknown): string => JSON.stringify(c);
 
 describe('parseTmpSweepCensus — the one reader', () => {
-  it('reads what ccd-tmp-sweep writes', () => {
+  it('round-trips a census of the reader\'s own shape', () => {
     const c = census({ seq: 2, sessions: [overBudget()], moved: [moved(1), moved(2)] });
     expect(parseTmpSweepCensus(json(c))).toEqual(c);
   });
@@ -324,7 +324,7 @@ describe('runTmpSweepCensusLane', () => {
     workerOfCoordinator(r.coord);
     await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
     expect(r.mailTo(WORKER)).toHaveLength(1);
-    expect(r.mailTo(WORKER)[0]!.subject).toMatch(/^tmp-sweep: over budget/);
+    expect(r.mailTo(WORKER)[0]!.subject).toMatch(/^tmp-sweep: project-a-quiet-basin over budget/);
     expect(r.mailTo(WORKER)[0]!.body).toContain(new Date(T0 + 24 * HOUR).toISOString());
     expect(r.mailTo(COORD)).toHaveLength(1);
     expect(r.mailTo(COORD)[0]!.body).toContain(WORKER);
@@ -368,6 +368,26 @@ describe('runTmpSweepCensusLane', () => {
     r.body.current = json({ ...asCoord, sessions: [{ ...asCoord.sessions[0]!, id: COORD, uuid: 'c'.repeat(36) }] });
     await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
     expect(r.mailTo(COORD)).toHaveLength(1);
+  });
+
+  it('two workers of one coordinator over budget in the same pass: the coordinator gets one copy per worker', async () => {
+    const W2 = 'project-a-other-worker';
+    const r = laneRig(json(census({ sessions: [overBudget(), { ...overBudget(), id: W2, uuid: 'd'.repeat(36) }] })));
+    workerOfCoordinator(r.coord);
+    const opened = r.coord.openRun({ program: 'prog-b', title: 'prog-b', project: 'project-a', wave: 2, waveOf: 2, claimedBy: COORD });
+    if (!('id' in opened)) throw new Error('openRun refused');
+    r.coord.markDispatched(opened.id, W2, `${W2}-ws`, `ws/${W2}`, false, Date.now());
+    await runTmpSweepCensusLane(r.deps, r.state, new Set([WORKER, COORD, W2]));
+    expect(r.mailTo(COORD)).toHaveLength(2);
+    expect(r.mailTo(COORD).map((m) => m.body).join('\n')).toContain(W2);
+    expect(r.mailTo(COORD).map((m) => m.body).join('\n')).toContain(`Session ${WORKER}:`);
+  });
+
+  it('a coordinator and its worker both over budget in the same pass: the coordinator gets its own notice and the worker\'s copy', async () => {
+    const r = laneRig(json(census({ sessions: [overBudget(), { ...overBudget(), id: COORD, uuid: 'c'.repeat(36) }] })));
+    workerOfCoordinator(r.coord);
+    await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+    expect(r.mailTo(COORD)).toHaveLength(2);
   });
 
   it('a malformed census is unmeasured: no mail, no holders', async () => {

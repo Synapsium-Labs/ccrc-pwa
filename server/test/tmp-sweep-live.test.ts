@@ -20,6 +20,7 @@ import { randomBytes } from 'node:crypto';
 import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
 import { holdProc, type Held } from './pathUsersFixture.js';
 import { fakeDf } from './tmpSweepHelpers.js';
+import { parseTmpSweepCensus } from '../src/tmpSweep.js';
 
 beforeEach((ctx) => { if (process.platform !== 'linux') ctx.skip(); });
 
@@ -161,6 +162,18 @@ describe('the live arm, in shadow and armed', () => {
     expect(c.moved[0]!.from).toBe(`${PROJ}/${U.live}/scratchpad/old`);
     expect(r.out).toMatch(/live arm \(shadow\): .*wouldMove 1/);
     expect(quarantined()).toEqual([]);
+  }, 120_000);
+
+  it('the census the real sweep writes is read by parseTmpSweepCensus, with each session\'s five largest entries in `top`', () => {
+    liveSession();
+    for (let i = 1; i <= 6; i++) mk(`e${i}`, { ageS: 1 * DAY, kb: i });
+    const r = sweep();
+    expect(r.code, r.err).toBe(0);
+    const got = parseTmpSweepCensus(fs.readFileSync(censusPath(), 'utf8'));
+    expect(got).not.toBeNull();
+    const top = got!.sessions[0]!.top;
+    expect(top.map((t) => t.name)).toEqual(['e6', 'e5', 'e4', 'e3', 'e2']);
+    expect(top[0]!.bytes).toBeGreaterThanOrEqual(top[1]!.bytes);
   }, 120_000);
 
   it('armed, it moves to the quarantine; a pass 24 h later deletes it', () => {
