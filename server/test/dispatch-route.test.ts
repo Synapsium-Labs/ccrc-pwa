@@ -16,7 +16,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import { clearSender } from '../src/inject/send.js';
 import type { Runner } from '../src/exec.js';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, ROUTE_ARGV_CAP, ROUTE_CAP } from '../src/ccdargv.js';
+import { ACTOR_FLAGS_CAP, CCD_ARGV, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP } from '../src/ccdargv.js';
 import { configDirFor } from '../src/config.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -74,7 +74,7 @@ function makeRunner(home: string, cfg: RunnerCfg = {}): { run: Runner; calls: st
   return { run, calls };
 }
 
-const DEFAULT_VERBS = ['ws-add', 'ensure', 'ws-hold', ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_CAP];
+const DEFAULT_VERBS = ['ws-add', 'ensure', 'ws-hold', ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_DEFAULT_CAP, ROUTE_CAP];
 
 interface HarnessCfg extends RunnerCfg {
   wave?: 1 | 2;
@@ -317,6 +317,34 @@ describe('a dispatch with no route gets its run kind\'s row (D-6794)', () => {
     const h = await harness({ wave: 1, kind: 'review', wsAddCreates: ['demo-review-default'] });
     expect(await h.dispatch()).toMatchObject({ ok: true });
     expect(h.calls.find((c) => c[0] === 'ws-add')!.slice(1, 2 + REVIEW_ROW.length)).toEqual(['--no-rc', ...REVIEW_ROW]);
+  });
+
+  it('the default row rides --route-default so ccd places by its class as a preference, never a refusal (seven-day ceiling)', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-ceiling'] });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    const argv = h.calls.find((c) => c[0] === 'ws-add')!;
+    expect(argv).toContain('--route-default');
+    expect(argv.indexOf('--route-default')).toBeLessThan(argv.indexOf(PROJECT));
+    const r = await harness({ wave: 1, kind: 'review', wsAddCreates: ['demo-ceiling-review'] });
+    expect(await r.dispatch()).toMatchObject({ ok: true });
+    expect(r.calls.find((c) => c[0] === 'ws-add')).toContain('--route-default');
+  });
+
+  it('a route the coordinator passed never carries --route-default: an explicit class is strict', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-typed'] });
+    expect(await h.dispatch({ class: 'opus' })).toMatchObject({ ok: true });
+    expect(h.calls.find((c) => c[0] === 'ws-add')).not.toContain('--route-default');
+  });
+
+  it('a ccd without route-default-v1 gets NO default route at all (the pre-D-6794 argv), journalled', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-old-ccd'],
+      ccdVerbs: ['ws-add', 'ensure', 'ws-hold', ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_CAP] });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    const argv = h.calls.find((c) => c[0] === 'ws-add')!;
+    expect(argv).not.toContain('--route');
+    expect(argv).not.toContain('--route-default');
+    expect(h.events()).toContain('route-omitted:no-route-default-cap');
+    expect(h.events().filter((e) => e.startsWith('route-defaulted') || e.startsWith('arm:'))).toEqual([]);
   });
 
   it('a route the coordinator passed is untouched, and nothing is journaled as defaulted', async () => {
