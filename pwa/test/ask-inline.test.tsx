@@ -325,6 +325,33 @@ describe('the keys survive a screen change inside the card (D-6326)', () => {
   });
 });
 
+describe('a keyboard engagement ends with its ask (D-6326)', () => {
+  it('a later inline ask takes no focus from the page body because the keys were used on an earlier one', async () => {
+    media(true);
+    const { arrive, store } = mount();
+    await frame();
+    // The review (the controller's own keys): an arrow inside the card engages the keyboard and sends nothing.
+    arrive(8);
+    const submit = opt(card(), /^Submit answers/);
+    act(() => submit.focus());
+    key(submit, 'ArrowDown');
+    expect(card().contains(document.activeElement), 'the arrow moved focus inside the card').toBe(true);
+    // That ask ends: the card leaves, and focus with it.
+    act(() => {
+      store.getState().apply({ type: 'ask_cleared' });
+      store.getState().apply({ type: 'dialog_cleared' });
+    });
+    await frame();
+    expect(cards()).toHaveLength(0);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    // A new menu arrives with focus on the page body: it is a new ask, and an arriving ask takes no focus.
+    arrive(4);
+    await frame();
+    expect(cards()).toHaveLength(1);
+    expect(card().contains(document.activeElement), 'the new card took no focus').toBe(false);
+  });
+});
+
 describe('the transcript stops repeating the ask the card already shows', () => {
   it('the transcript\'s live ask card shows \'Waiting for you, below\' and no Answer while the inline card is mounted, and Answer below 900', () => {
     const live = (): HTMLElement => document.querySelector<HTMLElement>('.tool-ask .ask-state')!;

@@ -82,6 +82,17 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
   const root = useRef<HTMLDivElement | null>(null);
   const els = useRef(new Map<string, HTMLElement>());
   const engaged = useRef(false);
+  // Was the keyboard engaged inside the desk's inline card (D-6326)? An inline engagement ends with its ask: this hook
+  // outlives the card (`DialogSheet` keeps it across asks), and a later ask arriving at the desk takes no focus. A phone's
+  // engagement is left as it always was. The ask has ended when the keys go off or the surface closes (`DialogSheet`'s
+  // closed hold keeps the last screen's keys while its content is inert, so `open` is the one that falls then).
+  const engagedInline = useRef(false);
+  const ended = !open || screen === null;
+  useEffect(() => {
+    if (!ended || !engagedInline.current) return;
+    engaged.current = false;
+    engagedInline.current = false;
+  }, [ended]);
   const latest = useRef({ opts, hl });
   useLayoutEffect(() => {
     latest.current = { opts, hl };
@@ -142,6 +153,7 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
       e.preventDefault();
       e.stopPropagation();
       engaged.current = true;
+      engagedInline.current = inline;
       if (action.type === 'move') {
         focusRow(action.to);
         return;
