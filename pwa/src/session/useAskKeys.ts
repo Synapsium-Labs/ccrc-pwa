@@ -144,7 +144,8 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
   const engaged = useRef(false);
   // INLINE (D-6326, R64) the engagement is not this hook's: it is the ask's, shared (`opts.engagement`), so it survives
   // the screen change to the review and back, and ends with the ask. This `engaged` is the phone's alone: only a key handled
-  // outside the inline card sets it, so this hook, which outlives an ask and a crossing below 900, carries nothing from one.
+  // outside the inline card sets it, so this hook, which outlives an ask and a crossing below 900, carries nothing from an
+  // inline key. A phone's own engagement still carries across asks, as it always has.
   const latest = useRef({ opts, hl });
   useLayoutEffect(() => {
     latest.current = { opts, hl };
