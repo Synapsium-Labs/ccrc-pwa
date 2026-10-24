@@ -34,6 +34,7 @@ import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { advanceGate, advanceRequest, type AdvanceBody } from './advance.js';
+import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
@@ -1490,6 +1491,23 @@ export function registerCoordRoutes(
         detail: opened.detail,
       });
     }
+    if ('refused' in opened && opened.refused === 'cap-review-rounds') {
+      // D-6795: the refusal carries the structured ask, and the operator is told ONCE per work run: the store's insert
+      // is the once-only writer (`raiseReviewCapAsk`), so a repeated refusal or a restart raises nothing more.
+      const work = open.reviews!;
+      // The operator rules with the open findings in front of them, so the last review's report is read here (L4, the
+      // agent's read allowlist covers its folder); absent and unreadable stay two values and the notice falls back
+      // to the summary for both.
+      const last = coord.lastReviewReport(work);
+      const read = last.report === null ? null : await deps.io.readFileMeasured(last.report, 5000);
+      const ask = reviewCapAsk(work, Number(opened.by), last, reviewFindingsOf(read));
+      if (coord.raiseReviewCapAsk(work, Date.now())) {
+        const n = reviewCapNotice(ask);
+        notice({ kind: 'run', sessionId: '', title: n.title, body: n.body, runId: work }, 'push',
+          { tag: `review-cap-${work}`, degraded: 'ask recorded, feed archive degraded' });
+      }
+      return refuseRun(reply, 'cap-review-rounds', { by: opened.by, ask });
+    }
     if ('refused' in opened) return refuseRun(reply, opened.refused, { by: opened.by });
 
     recordHomeVerdict(coord, homeVerdict, open.program, opened.id);
@@ -2082,6 +2100,25 @@ export function registerCoordRoutes(
    *  saying something the other does not. */
   const capsView = (store: NonNullable<Deps['coord']>): CoordCapsView =>
     ({ caps: store.caps(), usage: store.capsUsage(), updatedAt: store.capsUpdatedAt() });
+
+  /**
+   * `POST /api/coord/review-cap` (D-6795): the operator lifts the review-round cap for ONE work run, `{ run: <id> }`.
+   * Caps-style: session-gated like `/api/coord/caps`, no box token, because no machine lane may lift a cap on its own
+   * work. After it the run's next review opens as before. Idempotent; 404 for an id that is not a work run.
+   */
+  app.post('/api/coord/review-cap', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const run = (req.body as { run?: unknown } | null | undefined)?.run;
+    if (!isPositiveDecimalSafeInteger(run)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'run must be a positive work run id' });
+    }
+    const lifted = await coordMutex.run(async () => coord.liftReviewCap(run, Date.now()));
+    if (!lifted) return refuseRoute(reply, 'not-found', { detail: `run ${run} is not a work run` });
+    notice({ kind: 'coord', sessionId: '', title: 'review cap lifted', body: `run ${run}`, runId: run },
+      'record-only', { degraded: 'cap lifted, feed archive degraded' });
+    return reply.code(200).send({ ok: true, run, rounds: coord.reviewRounds(run), cap: REVIEW_ROUND_CAP, lifted: true });
+  });
 
   app.get('/api/coord/caps', async (_req, reply) => {
     if (!deps.coord) return notConfigured(reply);

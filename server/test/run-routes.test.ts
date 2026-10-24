@@ -20,6 +20,7 @@ import { degradedReadIO, unreadableField } from './ioDoubles.js';
 import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
 import { HOLD_REASON_MAX_CHARS, holdReason, holdReasonVerdict } from '../src/coord/rundefs.js';
 import { REVIEWER_KICKOFF_PREFIX, WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import { REVIEW_ROUND_CAP } from '../src/coord/reviewcap.js';
 import {
   MAIL_BODY_MAX_BYTES,
   PROGRAM_SLUG_MAX_CHARS,
@@ -4168,6 +4169,108 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     const first = (await postOpen(app, REVIEW(workId))).json() as { id: number };
     expect(w.coord.advance(first.id, 'failed', 'test').ok).toBe(true);
     expect((await postOpen(app, REVIEW(workId, { title: 'R2' }))).statusCode).toBe(200);
+  });
+
+  // D-6795: the review-round cap. A round is a review run that names the work run; the 4th open is refused.
+  describe('review-round cap (D-6795)', () => {
+    const capApp = async (home: string) => {
+      const { run } = makeRunner(home, { wsAddCreatesPerCall: [['demo-w1'], ['demo-r1']] });
+      const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+      await notifyLog.load();
+      const w = await openApp(home, run, { notifyLog }); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      await postDispatch(app, opened.id);
+      expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+      expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+      return { w, workId: opened.id, notifyLog };
+    };
+    /** Open one round and finish it (failed), so the next is not review-in-flight. */
+    const round = async (w: { coord: CoordStore }, workId: number, n: number) => {
+      const res = await postOpen(app, REVIEW(workId, { title: `R${n}` }));
+      expect(res.statusCode, `round ${n} opens`).toBe(200);
+      const id = (res.json() as { id: number }).id;
+      expect(w.coord.advance(id, 'failed', 'test').ok).toBe(true);
+      return id;
+    };
+    const capNotices = (nl: NotifyLog) => nl.catchUp(nl.epoch, 0).events.filter((e) => e.title.startsWith('Review cap reached'));
+
+    it('opens rounds 1 to 3; the 4th is refused cap-review-rounds with the structured ask, raised exactly once', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId, notifyLog } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      expect(w.coord.reviewRounds(workId)).toBe(REVIEW_ROUND_CAP);
+      // The last review reported: its summary and report path ride the ask.
+      const reportPath = path.join(home, 'review-3.md');
+      writeFileSync(reportPath, '# Review\n\n## Findings\n- **F1 (security, important)** `a.ts#leak` — leaks. needs a ruling: keep or drop?\n'
+        + '- **F2 (tests, minor)** `b.ts#case` — no case.\n\n## Whole-branch pass\n- not a finding\n');
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\n2 findings, 1 needs a ruling',
+        artifacts: [reportPath] });
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toEqual({ ok: false, refused: 'cap-review-rounds', by: '3', ask: {
+        run: workId, rounds: 3, cap: 3,
+        lastReview: { reviewRunId: ids[2], summary: '2 findings, 1 needs a ruling', report: reportPath,
+          findings: { state: 'read', lines: [
+            '**F1 (security, important)** `a.ts#leak` — leaks. needs a ruling: keep or drop?',
+            '**F2 (tests, minor)** `b.ts#case` — no case.'] } } } });
+      expect(w.coord.reviewRounds(workId)).toBe(3);
+      expect(capNotices(notifyLog)).toHaveLength(1);
+      expect(capNotices(notifyLog)[0]).toMatchObject({ kind: 'run', runId: workId });
+      expect(capNotices(notifyLog)[0]!.body).toContain('2 findings, 1 needs a ruling');
+      // The fixture report's findings reach the notice too, not only the count.
+      expect(capNotices(notifyLog)[0]!.body).toContain('needs a ruling: keep or drop?');
+      expect(capNotices(notifyLog)[0]!.body).toContain('`b.ts#case` — no case.');
+      // A second refusal answers the same and raises nothing more.
+      expect((await postOpen(app, REVIEW(workId, { title: 'R4 again' }))).statusCode).toBe(409);
+      expect(capNotices(notifyLog)).toHaveLength(1);
+    });
+
+    it('keeps an absent report and an unreadable one apart, and falls back to the summary for both', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId, notifyLog } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const gone = path.join(home, 'gone.md');
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\n3 findings', artifacts: [gone] });
+      const absent = (await postOpen(app, REVIEW(workId, { title: 'R4' }))).json() as { ask: { lastReview: { findings: unknown } } };
+      expect(absent.ask.lastReview.findings).toEqual({ state: 'absent' });
+      mkdirSync(gone); // a directory is not a readable file
+      const unreadable = (await postOpen(app, REVIEW(workId, { title: 'R4' }))).json() as { ask: { lastReview: { findings: unknown } } };
+      expect(unreadable.ask.lastReview.findings).toEqual({ state: 'unreadable' });
+      expect(capNotices(notifyLog)[0]!.body).toContain('3 findings');
+    });
+
+    it('opens the 4th once the operator lifts the cap for that run, and only for that run', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      await round(w, workId, 1); await round(w, workId, 2); await round(w, workId, 3);
+      expect((await postOpen(app, REVIEW(workId, { title: 'R4' }))).statusCode).toBe(409);
+      const lift = await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: workId } });
+      expect(lift.statusCode).toBe(200);
+      expect(lift.json()).toEqual({ ok: true, run: workId, rounds: 3, cap: 3, lifted: true });
+      expect(w.coord.reviewCapLifted(workId)).toBe(true);
+      expect((await postOpen(app, REVIEW(workId, { title: 'R4' }))).statusCode).toBe(200);
+      expect(w.coord.reviewRounds(workId)).toBe(4);
+    });
+
+    it('the lift refuses a body with no run, and an id that is not a work run', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const r1 = await round(w, workId, 1);
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: {} })).statusCode).toBe(400);
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: r1 } })).statusCode).toBe(404);
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: 9999 } })).statusCode).toBe(404);
+    });
+
+    it('counts every state: a failed or abandoned round still spent one', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const a = await round(w, workId, 1);
+      expect(w.coord.reviewRounds(workId)).toBe(1);
+      expect(a).toBeGreaterThan(workId);
+      expect(w.coord.reviewRounds(a)).toBe(0);
+    });
   });
 
   it.each([

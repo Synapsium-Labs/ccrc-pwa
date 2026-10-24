@@ -321,7 +321,10 @@ not after.
    — `project`, `wave` and `waveOf` are the reviewed run's and are derived
    server-side; do not send them. `review-in-flight` means a review run is
    already open for that wave: close it first (`{"state":"failed"}` if the
-   reviewer died), then retry. A bare `400 bad-request` with no `detail` on
+   reviewer died), then retry. `cap-review-rounds` means the work run has had
+   its three review rounds: do not retry. The server has told the operator
+   (one ask, with the last review's open findings), and the cap is theirs to
+   lift; rule on the findings you hold, or wait. A bare `400 bad-request` with no `detail` on
    this open means the SERVER lane has not landed yet (this branch deploys
    server first; the plan's Task 14 says why) — wait for the next wake and
    do NOT add `project`/`wave` to satisfy it: an older server would open a
