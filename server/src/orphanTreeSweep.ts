@@ -33,7 +33,7 @@ export interface OrphanSweepDeps {
   readonly pressure: () => boolean;
   /** One feed row, `kind:'coord'`, record-only. Never throws. */
   readonly record: (title: string, body: string) => void;
-  /** The ids some open run is claimed by (DR-23). Throws when the store cannot be read, which keeps every nested tree. */
+  /** Every id any run was ever claimed by, in any state or generation (orphanCoordinatorSet). Throws when the store cannot be read, which keeps every nested tree. */
   readonly coordinators: () => ReadonlySet<string>;
 }
 
@@ -45,6 +45,7 @@ export class OrphanTreeSweep {
   private removed = 0;
   private measured = false;
   private reported = new Set<string>();
+  private unreadableSaid = false;
 
   constructor(private readonly deps: OrphanSweepDeps) {}
 
@@ -107,6 +108,16 @@ export class OrphanTreeSweep {
       this.rows = c.rows;
       const coords = this.coordinators();
       this.memory = orphanPopulate(this.memory, c, now, coords);
+      // An unmeasured answer keeps the candidate and names why: one row per episode, not one per pass.
+      if (coords === null) {
+        if (!this.unreadableSaid && c.rows.some((r) => isAuditedClass(r.cls) && r.inside !== null)) {
+          this.unreadableSaid = true;
+          d.record('orphan worktree left', 'a nested worktree was left: the coordinator list could not be read');
+        }
+      } else this.unreadableSaid = false;
+      // Forget the reports of trees the whole census no longer lists.
+      const listed = new Set(c.rows.map((r) => r.hex));
+      this.reported = new Set([...this.reported].filter((h) => listed.has(h)));
       for (const r of c.rows) {
         if (!isAuditedClass(r.cls) || orphanInsideVerdict(r.inside, coords) !== 'goes-with-workspace' || this.reported.has(r.hex)) continue;
         this.reported.add(r.hex);
