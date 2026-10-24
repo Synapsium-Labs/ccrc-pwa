@@ -347,3 +347,17 @@ describe('an instant Date cannot render does not throw out of the feed row (D-58
     expect(expireFeedBody(out), 'the CONTROL: a renderable instant keeps its UTC words').toMatch(/archived \d{4}-\d\d-\d\d \d\d:\d\d UTC/);
   });
 });
+
+describe('the not-ran sentence has one definition', () => {
+  it('only unmeasured.ts spells "was not answered ("', async () => {
+    const { readdirSync, readFileSync, statSync } = await import('node:fs');
+    const walk = (d: string): string[] =>
+      readdirSync(d).flatMap((n) => {
+        const p = path.join(d, n);
+        return statSync(p).isDirectory() ? walk(p) : p.endsWith('.ts') ? [p] : [];
+      });
+    const src = path.resolve(__dirname, '../src');
+    const hits = walk(src).filter((f) => readFileSync(f, 'utf8').includes('was not answered ('));
+    expect(hits.map((f) => path.relative(src, f))).toEqual(['unmeasured.ts']);
+  });
+});
