@@ -1,6 +1,6 @@
 # Mail inbox and clean client output
 
-**Spec** · 2026-10-24 · Status: draft for review, rev 0 · Owner: the ccrc coordinator · Deviation: D-6772 (issued by the ledger) · Plan: `docs/superpowers/plans/2026-10-24-mail-inbox.md`
+**Spec** · 2026-10-24 · Status: draft for review, rev 1 · Owner: the ccrc coordinator · Deviation: D-6772 (issued by the ledger) · Plan: `docs/superpowers/plans/2026-10-24-mail-inbox.md`
 
 **Related:** `2026-08-26` closed client (`docs/superpowers/plans/2026-08-26-ccrc-api.md`), the robust-mail-delivery reference nudge (`server/src/coord/envelope.ts#renderMailNudge`, D-738, D-791), D-41 (delivery id against mail id), D-5242 (hibernation and the wake budget), D-5298 (coordinator-first routing: approval nudges ride mail), D-5513 (masking before text leaves the server), D-5838 (the parked state), D-5997 (one writer of `mail_deliveries`), `2026-09-29-worker-stall-watch-design.md` (the mail gate and the deaf arms).
 
@@ -11,7 +11,7 @@ Reading mail costs a session three client calls per message and a hand-written p
 1. **Clean output.** `ccrc-api` prints the response body on stdout and nothing else, always ending in a newline. The `http <code>` line it prints on stderr today becomes opt-in (`CCRC_API_STATUS=line`), and the two in-tree scripts that parse it opt in. Exit codes do not change.
 2. **`ccrc-api mail inbox`.** One call prints every unread mail addressed to the calling session as plain text (from, kind, subject, run, artifacts, body), then acks each delivery it printed, one at a time, through the existing ack route. A delivery whose print or ack fails stays unacked. The server selects and renders, and the client prints and acks (§3.2 gives the reasons).
 3. **The nudge and the skills point at `mail inbox`.** The nudge switches only once the fleet's client is known to have the verb (a release-tag floor, the same shape as `RUNS_ATTRIBUTION_SINCE`).
-4. **A fetched delivery stops replaying.** A `mail fetch` that the client attributes to the recipient stamps `fetchedAt`, and the 10-minute replay skips a stamped row. A printed delivery is acked, and an acked row never replays.
+4. **A fetched delivery stops replaying.** A `mail fetch` that the client attributes to the recipient stamps `fetchedAt`, and the 10-minute replay skips a stamped row. A stamped row that is never acked still parks when today's replay ceiling would have parked it, without another nudge, so nothing outstanding lives longer than it does today. A printed delivery is acked, and an acked row never replays.
 
 Every safety property of today's mail path holds (§4): who the caller is, the delivery id against the mail id, the hibernated wake budget, coordinator-first routing, the terminal-state guards, the kill switches and the closed client.
 
@@ -80,9 +80,10 @@ Everything the reader assembles by hand is in `coord.db`:
 
 - the recipient's resolved session (`mail_deliveries.toId`, resolved at queue time, so coordinator mail is already routed);
 - the stored envelope (`mail_deliveries.envelope`, rendered once by `renderEnvelope`, ≈:60-97), which L0 can parse back (`shared/api.ts#parseMailEnvelope`, ≈:5452, into `MailEnvelope`, ≈:5400);
-- the ack door's own guard (`store.ts#writeDelivery`, ≈:5373-5376): a row is ackable when its state is not terminal, or when it is exactly the replay-ceiling park (orchestrator ruling I2(b)).
+- the ack door's own guard (`store.ts#writeDeliveries`, ≈:5373-5375): a row is ackable when its state is not terminal, or when it is exactly the replay-ceiling park (orchestrator ruling I2(b)). The guard reads no run, so it admits a replay-ceiling park whatever its run's state;
+- the mailbox's read predicate (`OUTSTANDING_OR_ABANDONED_SQL`, ≈:1452-1453, over `ABANDONED_PARK_SQL`, ≈:1353-1356), which hides that same park once its run is terminal (ruling I2(a): the run closing makes it moot). `outstandingMailFor` (≈:5152-5160) reaches it through `LEFT JOIN runs rr`.
 
-The client only needs a list it can print and a delivery id for each entry, given by the server and never parsed out of text.
+The two sets differ, and the inbox needs both (§3.3 step 3). The client only needs a list it can print and a delivery id for each entry, given by the server and never parsed out of text.
 
 ## 2. Goals and non-goals
 
@@ -108,7 +109,7 @@ The client only needs a list it can print and a delivery id for each entry, give
 
 | Situation | stdout | stderr | Exit |
 |---|---|---|---|
-| 2xx answer | body + `\n` | nothing | 0 |
+| 2xx answer | body + `\n` | nothing (the one exception is `mail fetch`'s local note, §3.5) | 0 |
 | non-2xx answer | body + `\n` | `ccrc-api: the server answered <code>` | 0 |
 | any answer, `CCRC_API_STATUS=line` | body + `\n` | `http <code>`, the last line, exactly as today | 0 |
 | local refusal (`refuse`) | the JSON refusal envelope | the human sentence, as today | 2 |
@@ -143,11 +144,15 @@ So the server decides what is shown and how. The client acts: it prints, and it 
 
 1. `requireMailToken` (box token; 401 `unauthenticated` without it).
 2. `attributionVerdict(fromId, fromUuid, 'fromUuid')` (`routes.ts` ≈:643-672), the check the ack route and `POST /api/runs` already share. A refusal is `registry-unmeasurable`, `unknown-sender` or `stale-uuid`, with the same statuses, and is recorded like any mail refusal.
-3. Select the caller's ackable deliveries, **oldest first**: `toId = fromId` and the ack door's guard (§1.5). The guard is hoisted into one named SQL fragment that both `writeDelivery`'s `'ack'` arm and this select use, so the set printed is the set the ack accepts, by construction.
+3. Select the caller's **inbox set**, **oldest first**: `toId = fromId`, the ack door's guard, AND the mailbox's read predicate (§1.5), joining `runs rr` on `m.runId` with a `LEFT JOIN` exactly as `outstandingMailFor` does. In words: the ackable rows a human still owes attention. The guard is hoisted into one named SQL fragment that both `writeDeliveries`' `'ack'` arm and this select use, and the read predicate is the existing `OUTSTANDING_OR_ABANDONED_SQL`, so neither is copied.
+
+   **The rule, stated once.** A delivery is printed and acked only when the ack would change it AND the mailbox still shows it. Every printed row is therefore one `markAcked` accepts and one `mail list --to` lists. The intersection is the outstanding rows, plus the replay-ceiling park while its run is live or the mail has no run.
+
+   **Why the ack guard alone is wrong.** The guard admits a replay-ceiling park whatever its run's state, while `ABANDONED_PARK_SQL` hides that park once its run is terminal (`TERMINAL_RUN_STATES`, `done` and `failed`, `shared/api.ts` ≈:4914). Selected by the guard alone, the inbox would print and ack briefs and wave mail of runs that have already closed, rows that `MailStrip` and `mail list` no longer show. `markAcked` would answer `ok`, and the client would print `inbox: acked delivery N`, which reads as a live instruction. That is the abandoned-brief hazard the ack route's `parked` answer exists to prevent, and a reused session name makes it worse: the new session would be handed its predecessor's closed briefs as fresh mail. Such a row is neither printed nor counted. The ack route keeps accepting it, as today, for a reader who acks it by hand.
 4. Render each one (§3.4), mask it (D-5513, the same `maskDeep` the fetch route uses), and add entries in order until the page budget is reached. The budget is `MAIL_INBOX_PAGE_MAX_BYTES`, 20 KiB of rendered text (L0), and a page always holds at least one entry, so one oversized entry still goes out.
 5. Answer `200 {ok: true, deliveries: [{deliveryId, text}], remaining, abandoned}`:
    - `remaining` is the number of ackable deliveries the budget left out;
-   - `abandoned` is the number of outstanding rows that are not ackable (in `outstandingMailFor` but not in the ackable set), so the reader learns they exist without being shown them on every call.
+   - `abandoned` is the number of rows `outstandingMailFor` shows that the inbox set leaves out (the abandoned parks an ack refuses: the attempt ceiling, a registry-absent recipient, the park ceiling), so the reader learns they exist without being shown them on every call. Because the inbox set is a subset of `outstandingMailFor`'s by construction, this is a plain difference. A replay-ceiling park of a closed run is in neither set, so it is not counted either.
 
 Reasons for the details:
 - **Oldest first,** so that a session reads a wave's mail in the order it was sent. `mail list` is newest first because it is a status view.
@@ -198,7 +203,12 @@ Wave 2 is on the branch. Handoff commit is the ledger update; the PR is green.
 
 **`jq` is required by this verb only.** The client parses the inbox answer with `jq`. Every fleet box already has it: the session hook does nothing without it (`ccd/session-hook.sh` ≈:2877), and `ccrc version` refuses to run without it (`ccd/ccrc` ≈:2950). Without it the verb refuses `no-jq` before any request. The other rows stay `jq`-free.
 
-**`mail fetch` sends identity too.** Inside a pane, the client fills `fromId` and `fromUuid` from it on `mail fetch`, so a fetch by the recipient stamps the row (§3.6). A pane whose identity cannot be derived refuses, as `whoami` does. A caller with no pane at all fetches unattributed, as today.
+**`mail fetch` sends identity when it can, and never refuses for lack of it.** Inside a pane, the client fills `fromId` and `fromUuid` on `mail fetch`, so a fetch by the recipient stamps the row (§3.6). It derives them with a new **non-refusing** derive, `try_derive_identity`: the same checks as `derive_identity` (`ccd/ccrc-api` ≈:282-302: the `TMUX_PANE` gate, the pane-id shape, tmux's answer, `SAFE_RE`, `$REG/<id>.uuid`), which sets `DERIVED_ID` and `DERIVED_UUID` or leaves both empty and names the failed check in `DERIVE_WHY`. It never calls `refuse`. `derive_identity` becomes `try_derive_identity || refuse "$DERIVE_WHY" …`, so there is still one derivation and every existing caller refuses exactly as today.
+
+- **No pane at all** (`TMUX_PANE` unset): the fetch is unattributed and silent, as today.
+- **A pane whose identity cannot be derived** (an operator's own tmux shell, a session name outside `SAFE_RE`, a `.uuid` that is briefly missing or empty, tmux not answering): the fetch is unattributed, exactly as today, and the client writes one line to stderr, `ccrc-api: mail fetch sent no identity (<DERIVE_WHY>); this fetch does not stop the replay`. That line is a local note, not the status line, and §3.1's "stderr is quiet on a 2xx" rule names it as its one exception.
+
+This keeps the non-goal in §2: who may read whose mail through `mail fetch` does not change, on the client or on the server.
 
 ### 3.6 A fetched or printed delivery stops replaying
 
@@ -208,17 +218,45 @@ Wave 2 is on the branch. Handoff commit is the ledger update; the PR is green.
 
 **The replay arm skips a stamped row.** `dueDeliveries`'s `delivered` arm gains `AND fetchedAt IS NULL`. The `queued` arm (first delivery, park retries) is unchanged.
 
+**A stamped row keeps today's lifetime bound.** Today a `delivered` row that is never acked leaves the outstanding states at the replay ceiling: each successful replay bumps `replayCount`, and the twentieth parks the row `rejected` / `undeliverable` with `MAIL_REPLAY_CEILING_ERROR` (`watch.ts#sweepMail` ≈:8070-8083). Skipping the replay alone would remove that park, and a stamped row would then stay `delivered` until it is acked, or until `cancelOutstandingDeliveries` parks it when its run closes (≈:2816-2820). Run-less mail (peer mail, the program kickoff, digest corrections, run-less notices) has no run to close, so a fetched-but-unacked run-less row would stay outstanding forever, and every `OUTSTANDING_STATES_SQL` holder below would carry it forever. Fetching without acking is exactly what the audit says is common.
+
+So `sweepMail` gains one pass, beside the parked-row ceiling (≈:7545-7560): every `delivered`, unacked row with `fetchedAt` set whose **replay bound** has passed is parked through `rejectDelivery(id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR)`, with nothing typed and no sender told (the replay ceiling tells nobody today either). The bound is
+
+    MAX(COALESCE(ingestedAt, 0), COALESCE(deliveredAt, 0)) + (MAIL_REPLAY_MAX_ATTEMPTS − replayCount) × MAIL_REPLAY_MS <= now
+
+which is the earliest moment today's replays could have reached the ceiling from where the row stands: one `MAIL_REPLAY_MS` per replay still owed, from the same clock `dueDeliveries` uses. For a row stamped before any replay it is `MAIL_REPLAY_MAX_ATTEMPTS × MAIL_REPLAY_MS`, about 3 h 20 min after its last delivery. Subtracting `replayCount` is what keeps the lifetime today's and not longer: a row fetched after its nineteenth replay parks ten minutes later, as it would have today. The store read is `CoordStore.fetchedPastReplayBound(now, replayMs, maxReplays)`, with the two constants passed in from `watch.ts`, where `MAIL_REPLAY_MAX_ATTEMPTS` is private.
+
+The park is the existing one, byte for byte: the same writer, the same `rejectCode`, the same `lastError`. So its I2(b) ackability, its I2(a) visibility (shown while its run is live, hidden once it closes) and `requeueAbandonedMail`'s reach over it are all exactly today's. Only the nudges between the fetch and the park are gone.
+
+**A repoint clears the stamp.** `repointCoordinatorMail` (≈:2210-2216) is the one writer that changes a delivery's `toId` in place: a program reclaim moves outstanding coordinator mail to the heir. A stamp is a fact about the old recipient, so the repoint sets `fetchedAt = NULL` in the same statement, and the heir is nudged and replayed like any fresh recipient. Without it, a brief the outgoing coordinator fetched would reach the heir silently.
+
 **A printed delivery is acked,** and an acked row is terminal, so it never replays. A delivery printed but not acked (the ack failed) is **not** stamped. It replays, and the next `mail inbox` prints it again. That is deliberate: a repeated nudge costs one turn, while a silenced one can lose a brief.
 
-Consequences, checked against every reader:
+Consequences, checked against every reader of the row's state:
 
 | Reader | Effect of a stamped, unacked row |
 |---|---|
-| `MAIL_REPLAY_MAX_ATTEMPTS` (`watch.ts` ≈:8070-8083) | It stops counting, so the row never parks as `undeliverable`. It stays `delivered` and outstanding until it is acked, or until `cancelOutstandingDeliveries` parks it when its run closes. Q2 asks whether one late reminder is wanted. |
-| The stall watch's coord-deaf arm (`server/src/coord/stall.ts#stallDeafMail`, ≈:929-958) | `deafSince` is `deliveredAt − replayCount × MAIL_REPLAY_MS`. With no further replays, both terms stop moving, so the estimate stays at or after the first delivery, as its docstring requires. A coordinator that fetched a `wave-done` and never acked it is still reported deaf at `COORD_DEAF_MS`. |
-| The `ingestedAt` edge (`sweepMail`, ≈:7503-7532) | Unchanged. It still samples every `delivered` row. |
+| The replay ceiling (`watch.ts` ≈:8070-8083) | Not reached, because a stamped row is not replayed. The bound pass above parks it at the moment the ceiling could first have, with the same `rejectDelivery` call. |
+| The stall watch's coord-deaf arm (`server/src/coord/stall.ts#stallDeafMail`, ≈:925-958) | `deafSince` is `deliveredAt − replayCount × MAIL_REPLAY_MS`. With no further replays, both terms stop moving, so the estimate stays at or after the first delivery, as its docstring requires. A coordinator that fetched a `wave-done` and never acked it is still reported deaf at `COORD_DEAF_MS`, before and after the bound park (the arm reads `ackedAt`, not the state). |
+| The `ingestedAt` edge (`sweepMail`, ≈:7509-7532) | Unchanged. It still samples every `delivered` row. |
 | The hibernated wake (D-5242) | A stamped row no longer wakes a sleeping recipient. `wakeAdmit` is untouched. |
-| `MailStrip`, `unreadMail`, `mail list` | Unchanged. The row is still unacked, so it is still shown. |
+| `MailStrip`, `unreadMail`, `mail list` | Unchanged. The row is still unacked, so it is still shown, and after the bound park it is shown as abandoned while its run is live, as a ceiling park is today. |
+
+**Every `OUTSTANDING_STATES_SQL` holder, walked.** The store lists them itself (`store.ts` ≈:2311ff). Each reads the row's `state`, so each sees a stamped row as outstanding until it is acked or the bound parks it, and never longer than today's ceiling would have allowed.
+
+| Holder (file order) | What a stamped, unacked row does to it | After the bound |
+|---|---|---|
+| `OUTSTANDING_OR_ABANDONED_SQL` (≈:1452) and its readers `outstandingMailFor`, `unreadMailCount`, `runHealth`'s kickoff-wedge query, `mailForProgram` | Shown as outstanding. | Shown as an abandoned park while its run is live, hidden once it closes: today's ceiling park. |
+| `writeDeliveries`' `'outstanding'` guard (≈:5373) and its writers `cancelKickoffsTo`, `repointCoordinatorMail`, `parkSupersededDeliveries`, `cancelOutstandingDeliveries`, `cancelDeliveriesTo`, `parkDelivery`, `holdParked`, `wakeParked`, `markParkEscalated`, `absorbParkEscalation`, `baselineParkBox` | Each still matches it. The cancels and parks end it as today. `repointCoordinatorMail` moves it and clears the stamp (above). The `parkDelivery` family is `deliveredAt IS NULL`-scoped and never selects a delivered row. | Terminal; none matches it, as today. |
+| `requeueAbandonedMail` (≈:2449, ≈:2461) | Its dedupe counts the row as the heir's outstanding copy, as today. | The coordinator arm's `ABANDONED_PARK_SQL` source selects the park and re-queues a fresh, unstamped row to the heir, as today. |
+| `runHealth`'s outstanding and parked counts (≈:4405-4410) | Counted in `mailOutstanding`. | Moves to `mailParked`, as a ceiling park does. |
+| `hasOutstandingMail` (≈:5271-5277) | `queueSystemMail` (`rundefsTx.ts` ≈:78) drops a repeat of the same `(fromId, runId, toId, subject)`, and `digest.ts` ≈:209 answers `duplicate` for a correction the coordinator fetched and did not ack. | The slot frees, so the system mail or correction can be queued again, as today after the ceiling. |
+| `hasOutstandingPeerDuplicate` (≈:5315-5323, `routes.ts` ≈:995) | A peer mail with the same subject is refused `duplicate`. | Frees. |
+| `outstandingPeerCount` (≈:5330-5336, against `PEER_MAIL_MAX_OUTSTANDING` = 3, `shared/api.ts` ≈:5386; `routes.ts` ≈:999-1001) | The row holds one of the three peer-quota slots from its sender to this recipient. | Frees the slot. Without the bound, three fetched-but-unacked peer mails from A to B would refuse every later A-to-B peer mail `peer-quota`, permanently. |
+| `autoContinueHeldUntil` (≈:5737-5745) | Reads only rows whose `lastError` is the auto-continue hold. `markDelivered` does not clear `lastError`, so a row held once and then delivered can still match, with a `nextAttemptAt` already in the past. That is any delivered row today, for the same lifetime. | Terminal; no longer matches, as today. |
+| `parkedDeliveries` (≈:5857-5861) | `deliveredAt IS NULL`-scoped: never selects a delivered row. | No effect. |
+
+The bound read selects `state = 'delivered'` directly, a single state, so it is not a holder of the fragment. If the implementation spells it through `OUTSTANDING_STATES_SQL` instead, it becomes one and joins the store's own walk (≈:2311ff) in the same PR.
 
 ### 3.7 The nudge and the skills
 
@@ -247,21 +285,21 @@ The pinned clauses change in the same PR as their tests. A clause is a mechanism
 
 ## 4. Safety: what is kept, and how
 
-- **The caller's identity.** The inbox and the ack it drives use the pane-derived pair only: `TMUX_PANE` validated as a pane id, the session name held to `SAFE_RE`, the uuid read from `$REG/<id>.uuid`. No flag selects another session. The server re-measures the pair against the registry (`attributionVerdict`) and selects only rows whose resolved `toId` is the caller. Identity on this fleet is attribution, not authentication, and this is as strong as the ack route, no stronger (CLAUDE.md, SAFETY).
+- **The caller's identity.** The inbox and the ack it drives use the pane-derived pair only: `TMUX_PANE` validated as a pane id, the session name held to `SAFE_RE`, the uuid read from `$REG/<id>.uuid`. No flag selects another session. The server re-measures the pair against the registry (`attributionVerdict`) and selects only rows whose resolved `toId` is the caller. Identity on this fleet is attribution, not authentication, and this is as strong as the ack route, no stronger (CLAUDE.md, SAFETY). `mail fetch` gains attribution without gaining a refusal: `try_derive_identity` never refuses, so a pane that cannot be derived fetches unattributed as today (§3.5), and the server serves the envelope whatever the verdict (§3.6).
 - **Delivery id, never mail id.** The server hands the client each `deliveryId` as a JSON number. The client never parses an id out of rendered text, and the entry prints only the delivery id.
 - **The hibernated wake budget.** No new wake source. The inbox runs only in a session that is awake. Its acks, and a recipient's stamped fetch, can only remove automatic wakes. `wakeAdmit`, `WAKE_BURST` and `MAIL_WAKE_FLOOR_MS` are unchanged.
 - **Coordinator-first routing (D-5298).** Coordinator mail is resolved to a session when it is queued, so the inbox reads it like any other. Approval nudges (`approval:<id>`) and ask nudges (`ask:<n>`) are ordinary rows. Acking one changes no approval or ask state: no approvals-lane or asks-lane code reads `ackedAt`, measured with `grep -rln ackedAt server/src` (the only readers are `watch.ts`, `stall.ts`, `store.ts` and `schema.ts`). The coordinator still rules through `approvals rule`. The 180-second late-answer window is a property of the approvals lane, which this spec does not touch.
-- **Terminal states.** The ack goes through `markAcked` and its single `WHERE` (D-1410, I2(b)). The stamp goes through `writeDelivery` with the `'non-terminal'` guard. `writeDeliveries` stays the one writer (D-5997), and the census gains the new method by name. An out-of-vocabulary state token is treated exactly as `markAcked` treats it today. That question stays open (D-1406), and this spec does not decide it.
+- **Terminal states.** The ack goes through `markAcked` and its single `WHERE` (D-1410, I2(b)). The stamp goes through `writeDelivery` with the `'non-terminal'` guard. A stamped row's lifetime is bounded by the same park the replay ceiling writes today, through the same `rejectDelivery` call (§3.6), so no row outlives today's ceiling and every `OUTSTANDING_STATES_SQL` holder frees when it does today. A repoint clears the stamp, so a reclaim's heir is replayed like any fresh recipient. `writeDeliveries` stays the one writer (D-5997), and the census gains the new method by name. An out-of-vocabulary state token is treated exactly as `markAcked` treats it today. That question stays open (D-1406), and this spec does not decide it.
 - **Kill switches.** `mail-disabled`, `mail-gate-strict` and the stall-watch markers keep their meanings. None gains a writer.
 - **The closed client.** One new row (`mail.inbox`, a fixed path, no caller text in the URL beyond the `SAFE_RE`-checked pair the client derives itself). The token rides curl's stdin on every request, the read and each ack. The row count in the header and at `ROUTES` becomes thirty-two, and `ccrc-api-closed.test.ts`'s body-fill census names the synthesized ack body.
 - **Masking.** Every rendered entry goes through the same masker as `GET /api/mail/:id` (D-5513) before it leaves the server.
-- **Fail toward showing, never toward acking.** A failed print stops the loop with nothing acked after it. A failed ack leaves the row unacked and unstamped. An envelope that does not parse is printed verbatim. A registry that cannot be read refuses the read, and nothing is acked.
+- **Fail toward showing, never toward acking.** A failed print stops the loop with nothing acked after it. A failed ack leaves the row unacked and unstamped. An envelope that does not parse is printed verbatim. A registry that cannot be read refuses the read, and nothing is acked. A row the mailbox no longer shows (a replay-ceiling park of a closed run) is never printed, so the inbox cannot present a closed run's brief as live (§3.3 step 3).
 
 ## 5. Rings and contexts
 
 - **L0 (`shared/api.ts`):** `MAIL_INBOX_PAGE_MAX_BYTES`, `MAIL_INBOX_SINCE`, the wire types `MailInboxEntry` and `MailInboxAnswer`, and the fetch marker words. Nothing is imported.
 - **L1:** `renderInboxEntry` beside `renderEnvelope` (`server/src/coord/envelope.ts`, pure). The page cut, `pageInbox(entries, budget)`, is pure too. `fleetCarriesMailInbox` sits beside `fleetCarriesRunsAttribution`.
-- **L3 (`CoordStore`):** `inboxFor(toId)`, `markFetched(id, at)` and the hoisted ackable guard. All synchronous, with no repository layer (CLAUDE.md, Coordination).
+- **L3 (`CoordStore`):** `inboxFor(toId)`, `abandonedCount(toId)`, `markFetched(id, at)`, `fetchedPastReplayBound(now, replayMs, maxReplays)` and the hoisted ackable guard. All synchronous, with no repository layer (CLAUDE.md, Coordination).
 - **L4 (`routes.ts`, `watch.ts`):** the inbox route, the fetch stamp, and the nudge choice at send time. Delivery code composes and decides nothing.
 - **Context:** Coordination (mail). Nothing crosses into another context.
 - **Consolidation:** no second mechanism. One renderer family (`envelope.ts`), one ack door, one attribution check, one writer, one replay predicate, and one fleet-capability shape. The ackable predicate is hoisted and shared, not copied.
@@ -289,7 +327,7 @@ The pinned clauses change in the same PR as their tests. A clause is a mechanism
 ## 8. Questions for the operator
 
 1. **Exit codes.** Keep "exit 0 whenever a response arrived" (recommended: three skills, two measurers and the hook depend on it, and a non-zero exit invites retries), or move a 4xx to exit 4 and a 5xx to exit 5, keeping the body on stdout?
-2. **A fetched delivery that is never acked.** No replay at all (recommended: the stall watch still reports a deaf coordinator, and `MailStrip` still shows the row), or one reminder after a longer interval, for example 60 minutes?
+2. **A fetched delivery that is never acked.** No replay, and the ceiling park at the moment today's replays would first have reached it (recommended, §3.6: the stall watch still reports a deaf coordinator, `MailStrip` still shows the row, and every outstanding-state holder frees on today's schedule), or one reminder in between, for example 60 minutes after the fetch?
 3. **The old verbs in the skills.** Keep `list`, `fetch` and `ack` documented as the fallback for a server without the route (recommended), or drop them from the skills once every box carries the verb?
 4. **The non-2xx stderr line.** Keep `ccrc-api: the server answered <code>` by default (recommended), or make stderr silent on every answer unless `CCRC_API_STATUS=line` is set?
 5. **The page budget.** Twenty KiB assumes the shell tool shows at least that much before it truncates. Is any account on the fleet configured with a lower output limit? If so, the budget should be lower.
@@ -305,3 +343,9 @@ The pinned clauses change in the same PR as their tests. A clause is a mechanism
 ## 10. Review log
 
 **rev 0 (2026-10-24).** Written against `origin/main` `10813b401`. The task said the client prints `http NNN` on stdout. The code shows stderr since its first commit (§1.2), and §3.1 is written for what the code does.
+
+**rev 1 (2026-10-24), review round 1.** Four findings, all taken.
+- The plan's further decisions carried placeholder numbers, which `dtbd.test.ts` refuses on any tracked file. The plan defines them from one contiguous ledger block, substituted in this PR before it merges.
+- §3.6 removed the replay-ceiling park for a fetched row without walking the `OUTSTANDING_STATES_SQL` holders. Run-less mail would have stayed outstanding forever, holding peer-quota slots and system-mail dedupe keys. §3.6 now keeps the lifetime bound with a no-nudge park and walks every holder. The walk also found `repointCoordinatorMail`, which moves a row to a new recipient in place, so a repoint now clears the stamp.
+- §3.3 defined the inbox as the ack guard alone, which admits a replay-ceiling park of a closed run that the mailbox hides (I2(a)). The inbox set is now the guard AND `OUTSTANDING_OR_ABANDONED_SQL`, and the rule is stated in step 3.
+- §3.5 made `mail fetch` refuse in a pane whose identity cannot be derived, which narrowed today's read. It now uses a non-refusing derive and fetches unattributed, with a note on stderr.

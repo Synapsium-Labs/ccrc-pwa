@@ -2,9 +2,9 @@
 
 > **For agentic workers:** ten PRs, Tasks MI-1 to MI-10, one task per PR. REQUIRED SUB-SKILL: superpowers:subagent-driven-development, with superpowers:test-driven-development for every red-first step. Routing is per task (**Routing** line). Band 1 is mechanical and may go to `handoff-run`. Band 2 is spec-able and may go to `handoff-run` when the weekly pace says so, with the orchestrator reviewing the diff. Band 3 is written and reviewed natively and never handed off. Workers do not edit §Deviations found.
 
-**Spec:** `docs/superpowers/specs/2026-10-24-mail-inbox-design.md` (rev 0).
+**Spec:** `docs/superpowers/specs/2026-10-24-mail-inbox-design.md` (rev 1).
 
-**Deviation:** D-6772, issued by the ledger for this work. Every further decision is written `D-TBD-<slug>` below, for the orchestrator to allocate before this plan's first task lands.
+**Deviation:** D-6772, issued by the ledger for this work. The ten further decisions are `D-TBD-api-status-optin` to `D-TBD-nudge-inbox` (ten, in task order), one contiguous block the ledger issues for this plan, defined in §Deviations found in the same commit that substitutes them.
 
 **Base:** `origin/main` `10813b401`. Anchors are `≈:` hints into that commit, and each names its function. Re-ground every anchor in Step 0.
 
@@ -12,7 +12,7 @@
 
 ## Gates
 
-- **The allocator.** Every `D-TBD-<slug>` in §Deviations found is replaced by an issued number before the first task's PR merges. `server/test/dtbd.test.ts` is red on this plan until then, by design.
+- **The ledger block (this PR, before merge).** The ten `D-TBD-<slug>` entries in §Deviations found take one contiguous block from `ccrc-api ledger allocate`, substituted in this PR. `server/test/dtbd.test.ts` is red until then; this Gate is deleted in the same commit.
 - **Wave 3 waits for wave 2 on the server.** MI-7 and MI-9 teach a route the server must already serve. Release them only once the server box runs MI-6's release (`ccrc update --check` on the server, or `GET /api/updates`).
 - **Wave 4 waits for wave 3 on the fleet.** MI-10 sets `MAIL_INBOX_SINCE` to the release tag MI-7 merged into. That tag is known only after MI-7's merge cuts its prerelease.
 - **Open PRs.** Measure them in Step 0 of each task (`gh pr list --state open --json number,files`). The files this plan edits that other work also edits often are `ccd/session-hook.sh`, `ccd/ccrc`, `server/src/watch.ts`, `server/src/coord/routes.ts`, `server/src/coord/store.ts`, `server/src/coord/schema.ts` and `shared/api.ts`. Rebase past any open PR that holds them, and take the next free migration number in MI-4 if one lands first.
@@ -33,9 +33,10 @@
 
 1. **Nothing is acked that was not printed.** The ack follows a print that succeeded, delivery by delivery. A failed print stops the loop.
 2. **Nothing printed is hidden from replay unless it was acked.** Only an attributed recipient fetch stamps `fetchedAt`. The inbox read stamps nothing.
-3. **The printed set is the ackable set.** One SQL fragment decides both, so no row can be printed forever and refused forever.
-4. **Identity is the pane's.** No flag or body field selects another session. The server re-measures the pair with `attributionVerdict`.
+3. **The printed set is the ackable set the mailbox still shows.** The inbox selects with the hoisted ack guard AND `OUTSTANDING_OR_ABANDONED_SQL`, so no row is printed forever and refused forever, and no closed run's replay-ceiling park is printed as live.
+4. **Identity is the pane's, and its absence narrows nothing.** No flag or body field selects another session. The server re-measures the pair with `attributionVerdict`. `mail fetch` never refuses for lack of identity: a derive failure fetches unattributed, as today.
 5. **No skew wedges a reader.** The opt-in works with old and new clients. The nudge names `mail inbox` only when the fleet's client carries it.
+6. **No stamped row outlives today's ceiling.** Every `OUTSTANDING_STATES_SQL` holder frees a fetched-but-unacked row when it frees today (spec §3.6's walk), and a repoint clears the stamp.
 
 ## Tasks
 
@@ -50,7 +51,7 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
 | MI-5 attributed fetch stamps | 2 | SERVER | MI-4 |
 | MI-6 inbox renderer, page and route | 3 | SERVER | MI-3 |
 | MI-7 `ccrc-api mail inbox` | 3 | FLEET | MI-6 on the server box |
-| MI-8 `mail fetch` sends identity | 1 | FLEET | MI-5 |
+| MI-8 `mail fetch` sends identity | 2 | FLEET | MI-5 |
 | MI-9 skills, references, README | 3 | FLEET (skills) | MI-7 |
 | MI-10 the nudge switch | 3 | SERVER | MI-7's release tag |
 
@@ -128,25 +129,30 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
 **Routing:** band 2. **Lane:** SERVER (L3).
 
 **Files:**
-- Modify `server/src/coord/store.ts`: hoist `writeDelivery`'s `'ack'` arm (≈:5373-5376, the negative form plus the replay-ceiling exception and its `MAIL_REPLAY_CEILING_ERROR` argument) into one named fragment, `ACKABLE_DELIVERY_SQL` with its argument list, next to `OUTSTANDING_STATES_SQL`. `writeDelivery` uses it unchanged.
-- Add `CoordStore.inboxFor(toId)`: `SELECT id AS deliveryId, envelope FROM mail_deliveries WHERE toId = ? AND <ACKABLE_DELIVERY_SQL> ORDER BY id ASC`, plus `abandonedCount(toId)`: the rows `outstandingMailFor`'s predicate admits that `ACKABLE_DELIVERY_SQL` does not.
+- Modify `server/src/coord/store.ts`: hoist `writeDeliveries`' `'ack'` arm (≈:5373-5376, the negative form plus the replay-ceiling exception and its `MAIL_REPLAY_CEILING_ERROR` argument) into one named fragment, `ACKABLE_DELIVERY_SQL` with its argument list, next to `OUTSTANDING_STATES_SQL`. `writeDeliveries` uses it unchanged. The write has no table alias and the read has `d`, so the fragment is one builder, `ackableDeliverySql(prefix)` (`''` for the write, `'d.'` for the read), and there is still one spelling.
+- Add `CoordStore.inboxFor(toId)`: `SELECT d.id AS deliveryId, d.envelope FROM mail_deliveries d JOIN mail m ON m.id = d.mailId LEFT JOIN runs rr ON rr.id = m.runId WHERE d.toId = ? AND <ACKABLE_DELIVERY_SQL> AND ${OUTSTANDING_OR_ABANDONED_SQL} ORDER BY d.id ASC`. The join is `outstandingMailFor`'s (≈:5152-5160), so `ABANDONED_PARK_SQL`'s `COALESCE(rr.state, '')` reads the same run.
+- Add `abandonedCount(toId)`: the rows `outstandingMailFor`'s predicate admits that `inboxFor` does not. Since `inboxFor` ⊆ `outstandingMailFor` by construction, this is a plain difference.
+- Docstring on `inboxFor`: the rule (spec §3.3 step 3), and why the ack guard alone would print a closed run's replay-ceiling park as live.
 - Create `server/test/mail-inbox-store.test.ts`.
 - Modify `server/test/single-definition.test.ts`: the fragment's SQL text appears once in `server/src`.
 
 - [ ] **Step 0: Re-ground.** Read `markAcked` (≈:5678-5690) and its I2(b) docstring, and `OUTSTANDING_OR_ABANDONED_SQL`.
 - [ ] **Step 1: Characterize (green on the old code, its own commit).** `mail-deliveries-writer.test.ts` already pins the ack guard's answers. Add any case it lacks for a `queued` row, a parked `queued` row, the replay-ceiling `rejected` row, a `run closed` park and an `acked` row, and run it green on `main` before hoisting.
 - [ ] **Step 2: Red.**
-  - "`inboxFor` returns a `queued`, a parked, a `delivered` and a replay-ceiling row, and not an `acked`, a `run closed` park or a park-ceiling rejection";
+  - "`inboxFor` returns a `queued`, a parked, a `delivered`, a replay-ceiling row of a live run and a replay-ceiling row with no run, and not an `acked`, a `run closed` park or a park-ceiling rejection";
+  - "a replay-ceiling row whose run is closed is neither printed nor counted" (`inboxFor` omits it, `abandonedCount` does not count it, and `markAcked` still accepts it, as today);
   - "it returns only the caller's rows (`toId`)";
   - "it returns them oldest first";
-  - "for every fixture row, `inboxFor` includes it if and only if `markAcked` changes it" (the property that ties the two);
-  - "`abandonedCount` counts the park-ceiling rejection and nothing `inboxFor` returns".
+  - "for every fixture row, `inboxFor` includes it only if `markAcked` changes it AND `outstandingMailFor` lists it" (the property: `inboxFor` ⊆ markAcked-changeable ∩ `outstandingMailFor`), and "every row in that intersection is in `inboxFor`" (equality, so nothing ackable and shown is left behind);
+  - "`abandonedCount` equals `outstandingMailFor`'s count minus `inboxFor`'s, and counts the park-ceiling rejection and nothing `inboxFor` returns".
 - [ ] **Step 3: Green.**
 - [ ] **Step 4: Mutation table, RUN.**
 
   | Mutant | Expected red |
   |---|---|
-  | `inboxFor` uses `OUTSTANDING_OR_ABANDONED_SQL` | "if and only if `markAcked` changes it" |
+  | `inboxFor` uses `OUTSTANDING_OR_ABANDONED_SQL` alone (no ack guard) | "only if `markAcked` changes it" and "not … a park-ceiling rejection" |
+  | `inboxFor` uses the ack guard alone (no read predicate) | "a replay-ceiling row whose run is closed is neither printed nor counted" |
+  | `LEFT JOIN runs` made an inner join | "a replay-ceiling row with no run" |
   | the I2(b) exception dropped from the fragment | "a replay-ceiling row" and the characterization |
   | `ORDER BY id DESC` | "oldest first" |
   | the `toId` filter dropped | "only the caller's rows" |
@@ -159,19 +165,31 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
       cd server && ./node_modules/.bin/vitest run test/mail-hardening.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts --maxWorkers=2
 
-### Task MI-4: `fetchedAt`, and the replay skips a fetched row (spec §3.6)
+### Task MI-4: `fetchedAt`, the replay skips a fetched row, and its lifetime stays bounded (spec §3.6)
 
 **Routing:** band 3. **Lane:** SERVER (L3, migration).
 
 **Files:**
 - Modify `server/src/coord/schema.ts`: migration 30, `ALTER TABLE mail_deliveries ADD COLUMN fetchedAt INTEGER` (≈:1765 is 29, the last today). Take the next free number if another migration lands first.
 - Modify `server/src/coord/store.ts`: `markFetched(id, at): DeliveryWrite`, through `writeDelivery` with `'non-terminal'` and `fetchedAt = COALESCE(fetchedAt, ?)`. `dueDeliveries`' `delivered` arm (≈:5488-5510) gains `AND fetchedAt IS NULL`; the `queued` arm is unchanged.
+- Add `CoordStore.fetchedPastReplayBound(now, replayMs, maxReplays): {id: number; mailId: number; toId: string}[]`: `state = 'delivered' AND fetchedAt IS NOT NULL AND MAX(COALESCE(ingestedAt, 0), COALESCE(deliveredAt, 0)) + (? - replayCount) * ? <= ?`, ordered by id. It selects `state = 'delivered'` directly, not through `OUTSTANDING_STATES_SQL`, so it is not a new holder (spec §3.6).
+- Modify `repointCoordinatorMail` (≈:2210-2216): its SET becomes `toId = ?, fetchedAt = NULL`. Its docstring says why: a stamp is a fact about the old recipient.
+- Modify `server/src/watch.ts#sweepMail`: one pass after the parked-row ceiling (≈:7545-7560) parks each row `fetchedPastReplayBound(now, MAIL_REPLAY_MS, MAIL_REPLAY_MAX_ATTEMPTS)` returns, through `store.rejectDelivery(id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR)` and `this.landed(…)`. Nothing is typed, and no sender is told (the ceiling at ≈:8083 tells nobody either). Set `ceilinged` when any row parks, so `due` is re-read.
 - Modify `server/test/mail-hardening.test.ts` (the writer census names `markFetched`), `server/test/coord-db.test.ts` (the migration), and `server/test/mail-sweep.test.ts` (the replay cases near ≈:1027-1111).
-- Modify `server/src/watch.ts`'s `MAIL_REPLAY_MS` docstring (≈:606-610) and `MAIL_REPLAY_MAX_ATTEMPTS`' (≈:668-677): a fetched row neither replays nor counts toward the ceiling.
+- Modify `server/src/watch.ts`'s `MAIL_REPLAY_MS` docstring (≈:606-610) and `MAIL_REPLAY_MAX_ATTEMPTS`' (≈:668-677): a fetched row is not replayed, and parks at the moment its owed replays would have reached the ceiling.
+- Modify the store's `OUTSTANDING_STATES_SQL` holder walk (≈:2311ff) only if the scan finds a new holder; the walk in spec §3.6 is the reasoning, and its rows go into `fetchedPastReplayBound`'s docstring.
+- Modify `server/test/mail-peer-quota.test.ts` (the `peer-quota` and `duplicate` bound cases), `server/test/coord-kickoff.test.ts` (`queueSystemMail`'s dedupe on a run-less kickoff) and `server/test/digest.test.ts` (the correction's `duplicate`) for the bound cases.
 
-- [ ] **Step 0: Re-ground.** Read `db.ts`'s migration loop and its rule for a higher `user_version`, `bumpReplayCount`, and `stallDeafMail` (`stall.ts` ≈:929-958).
+- [ ] **Step 0: Re-ground.** Read `db.ts`'s migration loop and its rule for a higher `user_version`, `bumpReplayCount`, the replay ceiling in `sweepMail` (≈:8070-8083), `repointCoordinatorMail`, the store's `OUTSTANDING_STATES_SQL` holder walk (≈:2311ff), and `stallDeafMail` (`stall.ts` ≈:925-958). Re-run spec §3.6's holder walk against the code: a holder added since the spec joins the walk and gets a bound case.
 - [ ] **Step 1: Red.**
   - "a `delivered`, unacked, stamped row is not due at `deliveredAt + MAIL_REPLAY_MS + 1`";
+  - "a stamped row parks without a nudge": at `deliveredAt + MAIL_REPLAY_MAX_ATTEMPTS × MAIL_REPLAY_MS` the sweep leaves it `rejected` / `undeliverable` with `MAIL_REPLAY_CEILING_ERROR`, the fake tmux saw no keys for it, and no sender mail was queued; one millisecond earlier it is still `delivered`;
+  - "a stamped row with `replayCount` 19 parks one `MAIL_REPLAY_MS` after its last delivery" (the bound subtracts the replays already made);
+  - "a parked stamped row is still ackable (I2(b)) and still listed by `outstandingMailFor` while its run is live";
+  - "a stamped peer mail does not hold a peer-quota slot past the bound": three stamped, unacked A-to-B peer mails refuse a fourth `peer-quota` before the bound, and after the sweep parks them a fourth is accepted;
+  - "a stamped peer mail does not hold its subject past the bound" (`duplicate` before, accepted after);
+  - "`queueSystemMail`'s dedupe frees after the bound": a run-less system mail stamped and unacked makes a repeat answer `queued: false` before the bound and `queued: true` after it; the same for a digest correction's `duplicate`;
+  - "`repointCoordinatorMail` clears the stamp": a stamped coordinator brief repointed to the heir has `fetchedAt` NULL and is due for replay to the heir;
   - "the same row unstamped is due" (today's behaviour);
   - "a stamped `queued` row is still due for its first delivery";
   - "`markFetched` keeps the first stamp" (two calls, the first time stands);
@@ -185,6 +203,12 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
   | Mutant | Expected red |
   |---|---|
   | `AND fetchedAt IS NULL` dropped | "not due at `deliveredAt + MAIL_REPLAY_MS + 1`" |
+  | the bound pass removed | "parks without a nudge", "does not hold a peer-quota slot", "dedupe frees after the bound" |
+  | the bound pass types the nudge before it parks | "the fake tmux saw no keys for it" |
+  | the bound without `− replayCount` | "with `replayCount` 19 parks one `MAIL_REPLAY_MS` after" |
+  | the bound parks with another `lastError` | "still ackable (I2(b))" |
+  | the bound pass tells the sender | "no sender mail was queued" |
+  | the repoint keeps `fetchedAt` | "`repointCoordinatorMail` clears the stamp" |
   | the predicate added to the `queued` arm too | "still due for its first delivery" |
   | `COALESCE` dropped | "keeps the first stamp" |
   | `'non-terminal'` replaced by no guard | "on an `acked` or `rejected` row changes nothing" |
@@ -197,6 +221,11 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
       cd server && ./node_modules/.bin/vitest run test/mail-deliveries-writer.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/coord-db.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/stall-verdict.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/coord-store.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/mail-peer-quota.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/coord-kickoff.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/digest.test.ts --maxWorkers=2
 
 ### Task MI-5: an attributed fetch by the recipient stamps the row (spec §3.6)
 
@@ -260,6 +289,7 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
   - "the caller's two ackable deliveries come back oldest first, each with its `deliveryId`";
   - "another session's mail is never in the answer";
   - "a park-ceiling rejection is counted in `abandoned` and not returned";
+  - "a replay-ceiling park whose run is closed is neither returned nor counted in `abandoned`";
   - "the text is masked" (a fixture secret shape in a body);
   - "the read changes no row" (`state`, `fetchedAt`, `attempts` and `replayCount` before and after);
   - "`GET /api/mail/inbox` is not answered by the `:id` route" (a 200 with the inbox shape, never a 400 `bad-request`).
@@ -340,13 +370,18 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
 
 ### Task MI-8: `mail fetch` sends the pane's identity (spec §3.5, §3.6)
 
-**Routing:** band 1. **Lane:** FLEET.
+**Routing:** band 2 (it refactors `derive_identity`; the orchestrator reviews the diff). **Lane:** FLEET.
 
 **Files:**
-- Modify `ccd/ccrc-api`: on `mail.fetch`, when `TMUX_PANE` is set, `derive_identity` and add `fromId` and `fromUuid` to the query. Without a pane, fetch unattributed, as today. A pane whose identity cannot be derived refuses, as `whoami` does: a caller inside a pane expects its fetch to count.
+- Modify `ccd/ccrc-api`: add `try_derive_identity`, the non-refusing derive. It runs `derive_identity`'s checks in the same order, sets `DERIVED_ID` and `DERIVED_UUID` on success, and on any failure leaves both empty, sets `DERIVE_WHY` to the code `derive_identity` would have refused with (`no-pane`, `bad-pane`, `no-tmux`, `bad-session`, `no-uuid`, `bad-uuid`) and returns 1. It never calls `refuse` and never prints. `derive_identity` becomes `try_derive_identity || refuse "$DERIVE_WHY" "<the same detail as today>"`, so every existing caller refuses with today's code and detail.
+- On `mail.fetch`: when `TMUX_PANE` is set, `try_derive_identity`. On success add `fromId` and `fromUuid` to the query. On failure fetch unattributed, exactly as today, and write `ccrc-api: mail fetch sent no identity (<DERIVE_WHY>); this fetch does not stop the replay` to stderr. With no `TMUX_PANE`, fetch unattributed and silent, as today.
 - Modify `server/test/ccrc-api.test.ts`.
 
-- [ ] **Step 1: Red.** "inside a pane, `mail fetch 7` sends `fromId` and `fromUuid` from the pane"; "with no pane, it sends neither and still fetches"; "a bad `TMUX_PANE` refuses `bad-pane`".
+- [ ] **Step 1: Red.**
+  - "inside a pane, `mail fetch 7` sends `fromId` and `fromUuid` from the pane";
+  - "with no pane, it sends neither, still fetches, and writes nothing to stderr";
+  - "a pane whose identity cannot be derived still fetches, unattributed": one case each for a bad `TMUX_PANE`, a tmux session name outside `SAFE_RE`, a missing `.uuid` and an empty `.uuid`; each prints the envelope on stdout, exits 0, sends no pair, and writes the `sent no identity (<code>)` line naming its code;
+  - "every existing `derive_identity` caller still refuses with today's code and detail" (`whoami`, `asks list`, `approvals show`, `ledger allocate` without `--by`; the existing cases, re-run).
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -354,6 +389,10 @@ Waves: **1** MI-1 and MI-2 (clean output, fleet), **2** MI-3 to MI-6 (the server
   |---|---|
   | identity never sent | "sends `fromId` and `fromUuid`" |
   | a missing pane refuses | "with no pane … still fetches" |
+  | derive failure refuses (`mail fetch` calls `derive_identity`) | "a pane whose identity cannot be derived still fetches, unattributed" |
+  | `try_derive_identity` calls `refuse` on one check | that check's "still fetches" case |
+  | the stderr note dropped | "writes the `sent no identity (<code>)` line" |
+  | `derive_identity` no longer refuses (its `refuse` fallback dropped) | "every existing `derive_identity` caller still refuses" |
 
 - [ ] **Step 4: Verify.**
 
@@ -445,13 +484,13 @@ None is needed to build or land a task. Each of these is the operator's:
 
 - **D-6772** — Mail inbox and clean client output (this plan, spec 2026-10-24). One finding against the brief: it says the client prints `http NNN` on stdout. It does not. `ccd/ccrc-api` has printed it on stderr since its first commit (`main`'s tail, ≈:585). The defect is that the body ends with no newline and a session's shell tool shows both streams together, so the reader sees `}http 200` on one line. The design (spec §3.1) is written for what the code does.
 - **D-TBD-api-status-optin** — (MI-1) The two in-tree status parsers, `_apr_call` and `_inst_approval_key`, run the client with `CCRC_API_STATUS=line`. They land one release before the default changes.
-- **D-TBD-api-clean-stdout** — (MI-2) stdout is the body plus exactly one newline. stderr is silent on a 2xx, says `ccrc-api: the server answered <code>` otherwise, and carries the bare `http <code>` line only under `CCRC_API_STATUS=line`. Exit codes are unchanged.
-- **D-TBD-ackable-guard** — (MI-3) The ack door's guard is one named SQL fragment, and `inboxFor` selects with it, so the inbox prints exactly the rows an ack can change. Abandoned rows the ack refuses are counted, not shown.
-- **D-TBD-fetched-at** — (MI-4) `mail_deliveries.fetchedAt` (migration 30), first stamp wins, through `writeDelivery`'s `'non-terminal'` guard. The replay arm skips a stamped row, and a stamped row no longer counts toward `MAIL_REPLAY_MAX_ATTEMPTS`. A printed delivery whose ack failed is not stamped, so it replays.
+- **D-TBD-api-clean-stdout** — (MI-2) stdout is the body plus exactly one newline. stderr is silent on a 2xx, says `ccrc-api: the server answered <code>` otherwise, and carries the bare `http <code>` line only under `CCRC_API_STATUS=line`. Exit codes are unchanged. The one stderr line on a 2xx is `mail fetch`'s local note (D-TBD-fetch-identity).
+- **D-TBD-ackable-guard** — (MI-3) The ack door's guard is one named SQL fragment. `inboxFor` selects with it AND `OUTSTANDING_OR_ABANDONED_SQL` (joining `runs rr` as `outstandingMailFor` does), so the inbox prints only rows an ack can change and the mailbox still shows. A replay-ceiling park of a closed run is neither printed nor counted: the ack guard alone would print it as live mail (ruling I2(a)). `abandonedCount` is `outstandingMailFor`'s rows minus the inbox set.
+- **D-TBD-fetched-at** — (MI-4) `mail_deliveries.fetchedAt` (migration 30), first stamp wins, through `writeDelivery`'s `'non-terminal'` guard. The replay arm skips a stamped row. A stamped `delivered` row parks, with no nudge and no sender told, through the replay ceiling's own `rejectDelivery(…, MAIL_REPLAY_CEILING_ERROR)` once `MAX(ingestedAt, deliveredAt) + (MAIL_REPLAY_MAX_ATTEMPTS − replayCount) × MAIL_REPLAY_MS` has passed, so every `OUTSTANDING_STATES_SQL` holder (the peer quota and duplicate probes, `queueSystemMail`'s dedupe, the digest correction, `runHealth`) frees it when it frees today. `repointCoordinatorMail` clears the stamp. A printed delivery whose ack failed is not stamped, so it replays.
 - **D-TBD-attributed-fetch** — (MI-5) `GET /api/mail/:id` stamps only when the query's pair passes `attributionVerdict` and names the recipient. The envelope is served in every case, and the answer carries the positive `fetch` marker.
-- **D-TBD-inbox-route** — (MI-6) `GET /api/mail/inbox`: box token, attribution, the caller's ackable rows oldest first, rendered from the stored envelope with no `ack:` lines, in a `fenceFor` fence with the `ccrc-inbox` info string, masked, cut at `MAIL_INBOX_PAGE_MAX_BYTES` (20 KiB, at least one entry). The read writes nothing. Rejected: an ack on read in the server, and a client loop over list and fetch (spec §3.2, §7).
+- **D-TBD-inbox-route** — (MI-6) `GET /api/mail/inbox`: box token, attribution, the caller's inbox set (D-TBD-ackable-guard) oldest first, rendered from the stored envelope with no `ack:` lines, in a `fenceFor` fence with the `ccrc-inbox` info string, masked, cut at `MAIL_INBOX_PAGE_MAX_BYTES` (20 KiB, at least one entry). The read writes nothing. Rejected: an ack on read in the server, and a client loop over list and fetch (spec §3.2, §7).
 - **D-TBD-inbox-verb** — (MI-7) `ccrc-api mail inbox` derives identity from the pane and takes no argument. It prints each entry, and acks it only after the write succeeded, through the existing ack route. It reports each outcome on stdout, exits 0 when the read answered, and needs `jq` for this verb alone.
-- **D-TBD-fetch-identity** — (MI-8) `mail fetch` inside a pane sends the pane's `fromId` and `fromUuid`, so a recipient's fetch stamps. Without a pane it fetches unattributed, as before.
+- **D-TBD-fetch-identity** — (MI-8) `mail fetch` inside a pane sends the pane's `fromId` and `fromUuid` through `try_derive_identity`, a derive that never refuses, so a recipient's fetch stamps. When the pane's identity cannot be derived it fetches unattributed, exactly as today, with one note on stderr. With no pane it fetches unattributed and silent. `derive_identity` is `try_derive_identity` plus today's refusal, so its callers do not change.
 - **D-TBD-skills-inbox** — (MI-9) The worker, coordinator and reviewer skills, both references and the README teach `mail inbox` first, and keep list, fetch and ack as the fallback. The envelope's `ack:` lines and the hold card's `mail list` pointer are unchanged.
 - **D-TBD-nudge-inbox** — (MI-10) The nudge names `mail inbox` only when `fleetCarriesMailInbox` is true (`MAIL_INBOX_SINCE`, in `fleetCarriesRunsAttribution`'s shape). The 24-character head is unchanged, and the park's own-nudge check accepts either form.
 
@@ -471,3 +510,5 @@ None is needed to build or land a task. Each of these is the operator's:
 ## Review log
 
 **rev 0 (2026-10-24).** Written against `origin/main` `10813b401`.
+
+**rev 1 (2026-10-24), review round 1.** The ten decisions are to be issued as one contiguous ledger block and defined above in the same commit that substitutes them; until then they read `D-TBD-<slug>` and `dtbd.test.ts` is red (§Gates). MI-3's inbox set is the ack guard AND the mailbox's read predicate, with a red case for a closed run's replay-ceiling park. MI-4 keeps the replay ceiling's lifetime for a stamped row (a no-nudge park), clears the stamp on a repoint, and gains red cases for the peer quota, the duplicate probe, `queueSystemMail`'s dedupe and the digest correction. MI-8 uses a non-refusing derive, so `mail fetch` never loses today's read, and its band moves from 1 to 2 because it now refactors the identity derivation.
