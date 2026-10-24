@@ -18,9 +18,10 @@
 // the composer's Send while a question is up, all from one fact. `raise` is a nonce (0 inert, as `DialogSheet`'s own):
 // at the desk a change to a non-zero value scrolls the card into view and focuses its first option. PLAINLY: at the desk
 // the one caller of that raise is the transcript card's "Go to question" (R64 F5, review 917 F5), which `SessionScreen`
-// threads through `ChatList` to the same `setRaise` that the phone's Answer bumps. A nonce standing when the card mounts
-// (a raise made before a crossing to the desk included) is still absorbed by `seen`, so an arriving card takes no focus;
-// only a click made while the card is up raises it. The phone is where Answer raises the sheet.
+// threads through `ChatList` to the same `setRaise` that the phone's Answer bumps. The raise leaves the focused option
+// visible inside the card's scroller (R69 F3) and, with an answer in flight, focuses the card section (R69 F7). A nonce
+// standing when the card mounts (a raise made before a crossing to the desk included) is still absorbed by `seen`, so an
+// arriving card takes no focus; only a click made while the card is up raises it. The phone is where Answer raises the sheet.
 import { createContext, useEffect, useId, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { EYEBROW, Sheet, useDesk } from '@ccrc/ui';
 import { escapeHidesOnly, escapeStaysInCard } from './AskParts';
@@ -87,10 +88,22 @@ function InlineCard({ eyebrow, title, raise, onInline, children }: Omit<AskSurfa
     if (card === null) return;
     // jsdom has no `scrollIntoView`; a browser always has.
     card.scrollIntoView?.({ block: 'nearest' });
-    const first = card.querySelector<HTMLElement>('.opt[tabindex="0"]')
-      ?? card.querySelector<HTMLElement>('.opt:not(:disabled):not([aria-disabled="true"])')
+    // What takes focus (R69 F7): the highlighted row (the roving tab stop) when it is enabled, else the first enabled
+    // option, else the card section itself (`tabIndex={-1}`). With an answer in flight every row is a DISABLED button,
+    // the tab stop included, and a disabled button takes no focus: the old pick of the tab stop focused nothing, and
+    // focus stayed where the click left it, outside the card. This only chooses where focus goes: nothing is enabled and
+    // nothing is sent, so an in-flight card stays read-only.
+    const enabled = ':not(:disabled):not([aria-disabled="true"])';
+    const first = card.querySelector<HTMLElement>(`.opt[tabindex="0"]${enabled}`)
+      ?? card.querySelector<HTMLElement>(`.opt${enabled}`)
       ?? card;
     first.focus({ preventScroll: true });
+    // Then REVEAL it (R69 F3). `preventScroll` keeps the focus from jumping the page, but on a long question the first
+    // option sits below the card's one scroller (`.ask-inline-body`, scrollTop 0) and below the window, so it was
+    // focused and unseen, and a digit answered by number with nothing on screen. `nearest` scrolls the card's body to
+    // the option and, if the option is still off the window, the page, and moves nothing when it is already in view.
+    // The card section needs no reveal: the card-into-view step above already placed it.
+    if (first !== card) first.scrollIntoView?.({ block: 'nearest' });
   }, [raise]);
 
   return (
