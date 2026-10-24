@@ -421,12 +421,16 @@ describe('keepDigest\'s env (wave 9 R9-F8, 3b)', () => {
 // `{ ...process.env, HOME: dir }` is invisible to both scans below; `raw-spawn-census.test.ts` is that scan (wave 18).
 describe('the census — two shapes of a bare parent env: a `ghContainedEnv({ ...process.env` builder, and the `...process.env, HOME: home` literal (wave 9 R10d, 3c)', () => {
   // The `ccrc update` suite is a family of files (D-6767): the shared fixture and the four parts.
+  // D-6767: `ccrc-install-*.test.ts` is the family below (the fixture holds the runners, the parts the describes).
+  const INSTALL_FAMILY = ['ccrc-installFixture.ts', 'ccrc-install-tree.test.ts', 'ccrc-install-versioned.test.ts',
+    'ccrc-install-units.test.ts', 'ccrc-install-landing.test.ts', 'ccrc-install-role.test.ts',
+    'ccrc-install-codex.test.ts'] as const;
   const FILES = ['ccrc-updateFixture.ts', 'ccrc-update-fetch.test.ts', 'ccrc-update-phases.test.ts', 'ccrc-update-kept.test.ts',
-    'ccrc-update-flip-backups.test.ts', 'ccrc-install.test.ts', 'ccrc-cli.test.ts', 'ccrc-install-graphify.test.ts',
+    'ccrc-update-flip-backups.test.ts', ...INSTALL_FAMILY, 'ccrc-cli.test.ts', 'ccrc-install-graphify.test.ts',
     'installTreeFixture.ts'] as const;
   const lineOf = (src: string, at: number): number => src.slice(0, at).split('\n').length;
 
-  it('no `ghContainedEnv(` call in these files is handed `{ ...process.env` — every builder starts from ccrcContainedEnv', () => {
+  it('no `ghContainedEnv(` call in the files is handed `{ ...process.env` — every builder starts from ccrcContainedEnv', () => {
     const offenders: string[] = [];
     for (const f of FILES) {
       const src = read(f);
@@ -438,7 +442,7 @@ describe('the census — two shapes of a bare parent env: a `ghContainedEnv({ ..
     expect(offenders, `ghContainedEnv called with the parent's env bare at ${offenders.join(', ')}`).toEqual([]);
   });
 
-  it('`...process.env, HOME: home` appears only at the three ccd/ccgpt-runtime spawns of ccrc-install.test.ts', () => {
+  it('`...process.env, HOME: home` appears only at the three ccd/ccgpt-runtime spawns of the ccrc-install-*.test.ts family', () => {
     const counts: Record<string, string[]> = {};
     for (const f of FILES) {
       const src = read(f);
@@ -447,14 +451,16 @@ describe('the census — two shapes of a bare parent env: a `ghContainedEnv({ ..
       counts[f] = at;
     }
     for (const f of FILES) {
-      const want = f === 'ccrc-install.test.ts' ? 3 : 0;
-      expect(counts[f]!.length, `${f}: ${counts[f]!.join(', ')}`).toBe(want);
+      if ((INSTALL_FAMILY as readonly string[]).includes(f)) continue;
+      expect(counts[f]!.length, `${f}: ${counts[f]!.join(', ')}`).toBe(0);
     }
+    const familyAt = INSTALL_FAMILY.flatMap((f) => counts[f]!);
+    expect(familyAt.length, familyAt.join(', ')).toBe(3);
     // The three survivors run the GPT lane's binary, never ccd/ccrc.
-    const src = read('ccrc-install.test.ts');
-    for (const loc of counts['ccrc-install.test.ts']!) {
-      const line = Number(loc.split(':')[1]);
-      const window = src.split('\n').slice(Math.max(0, line - 12), line + 1).join('\n');
+    for (const loc of familyAt) {
+      const [f, lineText] = loc.split(':');
+      const line = Number(lineText);
+      const window = read(f!).split('\n').slice(Math.max(0, line - 12), line + 1).join('\n');
       expect(window, `${loc} must be a ccgpt-runtime spawn`).toMatch(/ccgpt-runtime/);
     }
   });
@@ -471,7 +477,7 @@ describe('the census — two shapes of a bare parent env: a `ghContainedEnv({ ..
   });
 
   it('runInstall and runUpdate each call assertNoRealTool(env, home) AFTER assertSpineFrontContained(env, home', () => {
-    for (const [f, fn] of [['ccrc-install.test.ts', 'runInstall'], ['ccrc-updateFixture.ts', 'runUpdate']] as const) {
+    for (const [f, fn] of [['ccrc-installFixture.ts', 'runInstall'], ['ccrc-updateFixture.ts', 'runUpdate']] as const) {
       const src = read(f);
       const start = src.indexOf(`function ${fn}(`);
       expect(start, `${f}: ${fn} not found`).toBeGreaterThan(-1);
