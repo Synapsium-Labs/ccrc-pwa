@@ -2014,6 +2014,6 @@ The branch's 27 hunks against the old file went into the split files by the rule
 
 #### Consent given in this round
 
-Mail 9266, a yes-except to the codex bridge Stage 2 wave 2 worker, on claims 2410, 2411 and 2403: yes to editing beside this wave's claims, except for three places held back, `_models_advance_budget_secs`, the `MODELS_HOOK_S` line, and the tail of the models-advance describe "the advance step in the hourly refresh".
+Mail 9266 answered the worker of the codex bridge Stage 2 plan's wave 2 (`2026-10-22-codex-bridge-stage-2-bridge.md`), who asked to edit codex-lane and models code beside claims 2410, 2411 and 2403: yes, except four places held back: `_models_advance_budget_secs` and the `MODELS_HOOK_S` line in `ccd/ccrc`, and in `ccrc-models-advance.test.ts` the `env()` helper's line and the tail of the describe "the advance step in the hourly refresh". Each edits only its own branch; the first PR ready lands first, and the other absorbs main by an ordinary merge only on a measured conflict.
 
 Gates at the push: see the wave-done.
