@@ -275,10 +275,10 @@ describe('the PR sweep: single flight that abandons a stuck run', () => {
       ['workspace', 'quiet-basin'], ['branch', 'ws/demo-quiet-basin'], ['base', 'origin/main']]) {
       writeFileSync(path.join(reg, `demo-quiet-basin.${f}`), v!);
     }
-    const settle: Array<(out: { code: number; stdout: string; stderr: string }) => void> = [];
+    const settle: Array<(out: { ran: true; code: number; stdout: string; stderr: string }) => void> = [];
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'pr-state') return new Promise((res) => { settle.push(res); });
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
     const sweep = (): Promise<void> => (w as unknown as Any)['sweepPr']!();
@@ -306,7 +306,7 @@ describe('the PR sweep: single flight that abandons a stuck run', () => {
     at(NOW + STUCK);
     void r.sweep(); await flush();
     expect(r.settle).toHaveLength(2);
-    r.settle[0]!({ code: 0, stdout: '', stderr: '' }); await flush();      // the abandoned run settles late
+    r.settle[0]!({ ran: true, code: 0, stdout: '', stderr: '' }); await flush();      // the abandoned run settles late
     at(NOW + STUCK + 150_000);                                             // past the cadence, short of the newer run's ceiling
     void r.sweep(); await flush();
     expect(r.settle, 'the late run cleared the newer run\'s flight').toHaveLength(2);
