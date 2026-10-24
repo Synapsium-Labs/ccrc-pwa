@@ -167,7 +167,7 @@ import {
 } from './askLive';
 import { keyTabs, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
-import { useAskKeys } from './useAskKeys';
+import { useAskEngagement, useAskKeys } from './useAskKeys';
 import { api, ApiError, failedTo } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
@@ -366,6 +366,14 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const hooked = envelope !== null
     && (source.kind === 'approval' || (source.kind === 'structured' && source.from === 'hook') || source.kind === 'review');
   const askKey = hooked ? JSON.stringify(envelope) : null;
+  // D-6326, R64: the ask's IDENTITY for the keyboard's engagement (`useAskEngagement`) is exactly the dismissal's: the
+  // hooked envelope (the same for every question and the review of it, so the keys stay engaged question → review,
+  // review ← question and question → question), else the pane dialog's id (a menu, the transcript's copy, an unreadable
+  // ask, the terminal), else null. Two known gaps: the pane dialog's id changes per screen (`sha1(options + title)`), so a
+  // transcript-copy question → its review crosses identities and the engagement does not continue there; and a clear
+  // followed by a byte-identical envelope in one batch keeps one identity. A CLOSED hold (the ask ended, the held surface
+  // exiting) is no ask: its identity is null, so the engagement ends there and a later ask with equal content starts clean.
+  const askIdentity = closed ? null : (askKey ?? dialog?.id ?? null);
   // An approval is one screen; a question ask is one per question plus its review (`askScreen`).
   const screenNow = !hooked ? null : 'approval' in envelope ? (dialog === null ? null : 'approval') : askScreen(envelope, dialog);
   // D-6326: INLINE there is no dismissal (the card covers nothing, and has no ✕, scrim or "Not now"), so at the desk a hide
@@ -542,6 +550,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const keyScreen: KeyScreen | null = source.kind === 'review'
     ? reviewKeys(source.rows.submit, source.rows.cancel, keyTabs(tabCount, null, true, picksHeld))
     : source.kind === 'menu' ? questionKeys(source.options.map((o) => o.index), null, null, null) : null;
+  // ONE engagement for the ask, handed to this hook and, below, to the structured sheet's: not a fact per hook instance.
+  const engagement = useAskEngagement(askIdentity);
   const keys = useAskKeys({
     screenId: dialog?.id ?? null,
     screen: keyScreen,
@@ -550,6 +560,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     onAnswer: (k) => void answer(k),
     onToggle: toggle,
     onTab: (to) => void moveTab(to),
+    engagement,
   });
 
   if (source.kind === 'none') return null;
@@ -588,6 +599,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
         tabbing={tabbing}
         picksHeld={picksHeld}
         onTab={(to, from) => void moveTab(to, from)}
+        engagement={engagement}
       />
     );
   } else if (source.kind === 'review') {

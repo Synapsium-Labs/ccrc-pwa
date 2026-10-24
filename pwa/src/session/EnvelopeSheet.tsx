@@ -28,7 +28,7 @@ import {
   type Picks, type Words,
 } from './AskParts';
 import { keyTabs, multiKeys, questionKeys, rowKey, type KeyScreen } from './askKeys';
-import { useAskKeys } from './useAskKeys';
+import { useAskKeys, type AskEngagement } from './useAskKeys';
 import './chat.css';
 
 /** The way out of a question this app cannot answer: open the terminal, or "Not now". "Not now" is the SHEET's only: the inline card
@@ -90,6 +90,7 @@ export function EnvelopeSheet({
   tabbing = false,
   picksHeld = false,
   onTab,
+  engagement,
 }: {
   /** What `askSource` says to show: a permission request, or Claude's own questions (D-6325). */
   ask: { approval: { tool: string; summary: string } } | AskQuestions;
@@ -129,6 +130,9 @@ export function EnvelopeSheet({
   picksHeld?: boolean;
   /** Move the pane to another tab: `prev`/`next`, `submit`, or question tab k with `from` the tab showing (1-based). */
   onTab?: (to: DialogTabTarget, from?: number) => void;
+  /** The ask's one keyboard engagement (R64), held by the controller and shared with its own keys (the review's, a menu's),
+   *  so the keys stay engaged from this question to the review and back. Absent, the inline focus rule never moves focus. */
+  engagement?: AskEngagement;
 }): ReactNode {
   // Every send disables the same buttons and gates the dismissal: an option's answer, Deny (held by the controller, which
   // sends it), an own-words send and a multiSelect commit, and a tab move. The open sheet is the only honest record that
@@ -242,6 +246,7 @@ export function EnvelopeSheet({
     onTab: (to) => onTab?.(to),
     // The free-text row's digit chooses `Other` (D-6325, R5): the field opens under it.
     onWords: () => words.onOpen(questions === null ? '' : questions.questions[shown]!.question),
+    engagement,
   });
   // D-6325, R3: the chips carry Claude's own headers, the pane's tab row only the count and the marks; no strip unless
   // the pane paints one tab per question (a transcript copy of one question therefore draws one only on a one-tab row).

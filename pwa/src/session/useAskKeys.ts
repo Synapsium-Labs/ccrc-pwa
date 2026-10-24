@@ -13,13 +13,21 @@
 //   nothing and is no modal, so a digit, an arrow or Enter with nothing focused, or focused on the transcript, is the
 //   page's own and never answers; a key acts only when its target is inside the card.
 // - FOCUS moves into the sheet on open and on each new screen only under a fine pointer, or once a key has been
-//   handled inside the sheet: a phone is never pulled out of its composer by a sheet that slid up. INLINE the rule is
-//   narrower, exactly: focus moves ONLY when `engaged` is true (a key has been handled inside the card) AND focus is
-//   lost (`body`, `documentElement` or nothing) or already inside the card, and then it goes to the new screen's
-//   highlighted row. That is the next question after a key answered one: the focused row unmounted with its screen,
-//   and without this the keyboard would be dead until a click. With `engaged` false (an ask arriving beside the
-//   composer) it moves not at all, and focus enters the card only through `raise` (`AskSurface`), a Tab or a click;
-//   with focus anywhere outside the card (the composer, the transcript, another field) it is never taken.
+//   handled inside the sheet: a phone is never pulled out of its composer by a sheet that slid up. INLINE (D-6326, R64)
+//   the rule is narrower, exactly: focus moves ONLY while the ask's ONE engagement (`useAskEngagement`, held by the
+//   controller and shared by every `useAskKeys` it renders: the question screens', the review's and a menu's) is engaged
+//   for the CURRENT ask AND focus is lost (`body`, `documentElement` or nothing) or already inside the card, and then it
+//   goes to the new screen's highlighted row. That is the next question after a key answered one, the review after the
+//   last question, and a question after ← from the review: the focused row unmounted with its screen, and without this
+//   the keyboard would be dead until a click. The engagement belongs to the ask's identity (`DialogSheet`'s `askIdentity`),
+//   not to a hook instance and not to the card's mount: it ends when the identity changes or goes (even when the card
+//   stays mounted and the clear and the new ask arrive in one batch), and on a deliberate move out of the card (a
+//   pointerdown or a focusin outside it: the composer, the transcript, the fleet column, the body). With it not engaged
+//   (an ask arriving beside the composer, a successor ask, a skin switch, a reconnect) focus moves not at all, and enters
+//   the card only through `raise` (`AskSurface`), a Tab or a click. Two known gaps, kept plain: a surface that is not the
+//   hook's envelope (a menu, the transcript's copy, an unreadable ask, the terminal) has the pane dialog's id for its
+//   identity, which changes per screen, so a transcript-copy question's own review is a new identity and does not keep
+//   the engagement; and a clear followed by a byte-identical envelope in ONE batch keeps one identity.
 // - A held-down digit or arrow across tabs is no key at all (`askKeyAction` reads `repeat`), and a send the sheet
 //   already has in flight refuses another at the ONE gate every send passes, its `claim` (a box's toggle reads the
 //   same `sending`), so this hook keeps no second gate of its own.
@@ -41,6 +49,54 @@ export interface AskKeysOptions {
   /** The free-text row's digit was pressed (D-6325, R5): the sheet chooses `Other`, which opens the field. The row (or the
    *  field, once open) is focused first; the sheet puts the cursor in the field when it opens. */
   readonly onWords?: () => void;
+  /** The ask's shared engagement (`useAskEngagement`). Absent, the INLINE focus rule behaves as never engaged. */
+  readonly engagement?: AskEngagement;
+}
+
+/** The keyboard's engagement with ONE logical ask, shared by every `useAskKeys` the controller renders (R64). */
+export interface AskEngagement {
+  /** Is the keyboard engaged with the ask showing now? Read at the moment of asking, against the identity of THIS render. */
+  readonly engaged: () => boolean;
+  /** A key was handled inside the inline card: engage with the ask showing now. */
+  readonly engage: () => void;
+}
+
+/**
+ * The ONE owner of the inline engagement (D-6326, R64). `identity` is the ask's (`DialogSheet`'s `askIdentity`): the hook's
+ * envelope for every question and the review of it, else the pane dialog's id; null when nothing is asked. It holds the
+ * identity engaged, compared at read time, so a different identity (even one that arrives in the same batch as the
+ * clear) is simply not engaged. It lets go when the identity goes (a later ask with equal content starts unengaged) and
+ * on deliberate movement out of the card. Focus that falls to the body because the focused row unmounted fires neither
+ * event, so that case stays engaged: it is the one continuation.
+ */
+export function useAskEngagement(identity: string | null): AskEngagement {
+  const held = useRef<string | null>(null);
+  const now = useRef<string | null>(identity);
+  useLayoutEffect(() => {
+    now.current = identity;
+  });
+  useEffect(() => {
+    if (identity === null) held.current = null;
+  }, [identity]);
+  useEffect(() => {
+    const away = (e: Event): void => {
+      const t = e.target instanceof Element ? e.target : null;
+      if (t === null || t.closest('[data-ask-surface="inline"]') === null) held.current = null;
+    };
+    document.addEventListener('pointerdown', away, true);
+    document.addEventListener('focusin', away, true);
+    return () => {
+      document.removeEventListener('pointerdown', away, true);
+      document.removeEventListener('focusin', away, true);
+    };
+  }, []);
+  const [owner] = useState<AskEngagement>(() => ({
+    engaged: () => held.current !== null && held.current === now.current,
+    engage: () => {
+      held.current = now.current;
+    },
+  }));
+  return owner;
 }
 
 export interface AskKeys {
@@ -82,17 +138,8 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
   const root = useRef<HTMLDivElement | null>(null);
   const els = useRef(new Map<string, HTMLElement>());
   const engaged = useRef(false);
-  // Was the keyboard engaged inside the desk's inline card (D-6326)? An inline engagement ends with its ask: this hook
-  // outlives the card (`DialogSheet` keeps it across asks), and a later ask arriving at the desk takes no focus. A phone's
-  // engagement is left as it always was. The ask has ended when the keys go off or the surface closes (`DialogSheet`'s
-  // closed hold keeps the last screen's keys while its content is inert, so `open` is the one that falls then).
-  const engagedInline = useRef(false);
-  const ended = !open || screen === null;
-  useEffect(() => {
-    if (!ended || !engagedInline.current) return;
-    engaged.current = false;
-    engagedInline.current = false;
-  }, [ended]);
+  // INLINE (D-6326, R64) the engagement is not this hook's: it is the ask's, shared (`opts.engagement`), so it survives
+  // the screen change to the review and back, and ends with the ask. This `engaged` is the phone's, as it always was.
   const latest = useRef({ opts, hl });
   useLayoutEffect(() => {
     latest.current = { opts, hl };
@@ -109,18 +156,19 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
   // question above the options is not to be scrolled away on open. An arrow key's `focusRow` keeps the normal scroll.
   useEffect(() => {
     if (!open || screen === null || hl === null) return undefined;
-    if (!finePointer() && !engaged.current) return undefined;
+    if (!finePointer() && !engaged.current && !latest.current.opts.engagement?.engaged()) return undefined;
     const key = hl;
     const t = setTimeout(() => {
-      // Read here, where the ref is attached (the card mounts with its screen). INLINE (D-6326) focus is moved only on
-      // a screen change inside a card the keyboard is already in: a key answered question 1, its focused row left the
-      // DOM with it, and focus fell to the page body, where no key acts. Then (and only then) the new screen's
-      // highlighted row takes it back, never from anything outside the card: the composer, the transcript, a field.
+      // Read here, where the ref is attached (the card mounts with its screen). INLINE (D-6326, R64) focus is moved only
+      // on a screen change inside a card the keyboard is already in, for THIS ask: a key answered a question, its
+      // focused row left the DOM with it, and focus fell to the page body, where no key acts. Then (and only then) the
+      // new screen's highlighted row takes it back, never from anything outside the card: the composer, the transcript,
+      // a field. Without the shared engagement (absent, or not engaged for the ask showing now) it moves not at all.
       const scope = surfaceOf(root.current);
       if (scope?.getAttribute('data-ask-surface') === 'inline') {
         const at = document.activeElement;
         const lost = at === null || at === document.body || at === document.documentElement;
-        if (!engaged.current || !(lost || scope.contains(at))) return;
+        if (!latest.current.opts.engagement?.engaged() || !(lost || scope.contains(at))) return;
       }
       els.current.get(key)?.focus({ preventScroll: true });
     }, FOCUS_DELAY_MS);
@@ -153,7 +201,7 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
       e.preventDefault();
       e.stopPropagation();
       engaged.current = true;
-      engagedInline.current = inline;
+      if (inline) o.engagement?.engage();
       if (action.type === 'move') {
         focusRow(action.to);
         return;
