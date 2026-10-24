@@ -6354,8 +6354,8 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
     the table. The other rows the sentence covers are controls or self-tests: narrow the sentence or name them.
   - The two comment-only edits made under the later claims sit in no Task's Files list and have no D entry. They
     were accepted as Task 3's own comment amendments. The as-built should say so.
-  - Wave 26's plan still names the old majors in D-6726's headline and the Architecture table. Amend them, or
-    list them with the other history the wave 31 plan leaves stale.
+  - Wave 26's plan still names the old majors in the headline of the deviation that moved download to v7, and in its
+    Architecture table. Amend them, or list them with the other history the wave 31 plan leaves stale.
   - The wave 31 plan says a failed credential removal under `persist-credentials: false` only warns. The shipped
     comment is right that the action may also say nothing: checkout logs a failed include cleanup at debug only.
   - Verify's name-set check joins names with spaces, so one file named with a space or a newline between the two
