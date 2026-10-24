@@ -7,6 +7,8 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { RUN_SPEND_RATE_LIMIT } from '../src/coord/routes.js';
+import { clearSessionSpendCache } from '../src/shares.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -61,5 +63,25 @@ describe('GET /api/runs/:id', () => {
     const { app } = await setup({ sweep: {} });
     expect((await get(app, 999999)).statusCode).toBe(404);
     expect((await get(app, 'x')).statusCode).toBe(400);
+  });
+  it('is rate-limited per client, and a neighbouring route is not affected', async () => {
+    const { app, id } = await setup({ sweep: {} });
+    for (let i = 0; i < RUN_SPEND_RATE_LIMIT.max; i += 1) expect((await get(app, id)).statusCode).toBe(200);
+    expect((await get(app, id)).statusCode).toBe(429);
+    expect((await app.inject({ method: 'GET', url: '/api/runs', headers: H })).statusCode).toBe(200);
+  });
+  it('a session id named like an Object.prototype member reads as not swept, never a 500', async () => {
+    const home = mkTmp('ccrc-run-spend-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const opened = coord.openRun({ program: 'demo', title: 'demo', project: 'demo', wave: 1, waveOf: null, claimedBy: 'coord-a' });
+    if (!('id' in opened)) throw new Error('openRun refused');
+    coord.markDispatched(opened.id, 'constructor', 'w', 'ws/w', false);
+    writeSweep(home, { other: SPEND(1), ['__proto__']: SPEND(2) });
+    clearSessionSpendCache();
+    const app = await buildServer({ ...testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' })), mailToken: TOKEN, coord });
+    const r = await get(app, opened.id);
+    expect(r.statusCode).toBe(200);
+    expect(r.json().spend).toEqual({ measured: false, reason: 'not-swept' });
   });
 });

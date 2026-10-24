@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
+import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import { pwaStaticOptions } from './pwaStatic.js';
 import { configDirFor } from './config.js';
@@ -325,6 +326,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const app = Fastify({ logger: false });
   await app.register(fastifyWebsocket);
   await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
+  // `global: false`: only a route that opts in with `config.rateLimit` is limited (coord/routes.ts).
+  await app.register(fastifyRateLimit, { global: false });
   // D-5857: the one notice sink this server's writers outside `watch.ts` raise their feed rows through (`notice.ts`).
   const notice = noticeSink(deps);
 

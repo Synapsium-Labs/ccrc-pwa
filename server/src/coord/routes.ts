@@ -481,6 +481,10 @@ export interface CoordRoutesHandle {
  * (architecture doc increment 4); this file keeps the token gate, the
  * `CoordMutex` and the union->status maps.
  */
+/** Per-client budget for `GET /api/runs/:id`: far above a board open (every open run plus a
+ *  fold of finished ones), far below a loop. */
+export const RUN_SPEND_RATE_LIMIT = { max: 600, timeWindow: '1 minute' } as const;
+
 export function registerCoordRoutes(
   app: FastifyInstance, deps: Deps,
   // Unused by the mail routes below; kept in the signature because Task 9's
@@ -2675,7 +2679,9 @@ export function registerCoordRoutes(
    *  sessions). ADDITIVE and MEASURING ONLY: `run` is the row `GET /api/runs`
    *  lists, `spend` is the only new thing, and no route refuses on it. Gated like
    *  its siblings (a session cookie OR the box token). */
-  app.get('/api/runs/:id', async (req, reply) => {
+  // Rate-limited (CodeQL js/missing-rate-limiting): the one run route that fans out to the agent
+  // link per call carries its own budget. `global: false` keeps the limiter off every other route.
+  app.get('/api/runs/:id', { config: { rateLimit: RUN_SPEND_RATE_LIMIT } }, async (req, reply) => {
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {

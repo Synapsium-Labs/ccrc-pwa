@@ -92,7 +92,8 @@ export function parseSweepSessionSpend(content: string): Extract<SessionSpendRea
   const per = o['perCcdSession'];
   if (per === undefined) return { kind: 'reading', measuredAt: fin, bySession: {} };
   if (typeof per !== 'object' || per === null || Array.isArray(per)) return { kind: 'malformed' };
-  const bySession: Record<string, SessionSpend> = {};
+  // Null prototype: the keys are untrusted JSON, and `__proto__` / `constructor` must stay plain data.
+  const bySession: Record<string, SessionSpend> = Object.create(null) as Record<string, SessionSpend>;
   for (const [id, r] of Object.entries(per as Record<string, unknown>)) {
     if (typeof r !== 'object' || r === null) continue;
     const row = r as Record<string, unknown>;
@@ -105,8 +106,21 @@ export function parseSweepSessionSpend(content: string): Extract<SessionSpendRea
   return { kind: 'reading', measuredAt: fin, bySession };
 }
 
-export async function readSessionSpendMeasured(io: FleetIO, registryDir: string): Promise<SessionSpendRead> {
-  const r = await io.readFileMeasured(sweepLatestPath(registryDir));
-  if (!r.ok) return r.reason === 'absent' ? { kind: 'absent' } : { kind: 'unreadable' };
-  return parseSweepSessionSpend(r.content);
+/** The sweep rewrites its file once per pass (hours apart), but a board open sends one request
+ *  per run row, and each read crosses the agent link. So one parsed read is shared for a short
+ *  window per registry, and concurrent callers share the same in-flight read. */
+export const SESSION_SPEND_TTL_MS = 30_000;
+const spendCache = new Map<string, { at: number; read: Promise<SessionSpendRead> }>();
+export function clearSessionSpendCache(): void { spendCache.clear(); }
+
+export function readSessionSpendMeasured(io: FleetIO, registryDir: string, now: number = Date.now()): Promise<SessionSpendRead> {
+  const hit = spendCache.get(registryDir);
+  if (hit !== undefined && now - hit.at < SESSION_SPEND_TTL_MS) return hit.read;
+  const read = (async (): Promise<SessionSpendRead> => {
+    const r = await io.readFileMeasured(sweepLatestPath(registryDir));
+    if (!r.ok) return r.reason === 'absent' ? { kind: 'absent' } : { kind: 'unreadable' };
+    return parseSweepSessionSpend(r.content);
+  })();
+  spendCache.set(registryDir, { at: now, read });
+  return read;
 }

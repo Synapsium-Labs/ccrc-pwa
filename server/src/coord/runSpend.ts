@@ -42,8 +42,8 @@ export function joinRunSpend(sessionIds: readonly string[], read: SessionSpendRe
   const tokens = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
   let proxyUsd = 0; let seen = 0;
   for (const id of sessionIds) {
-    const s = read.bySession[id];
-    if (s === undefined) continue;
+    if (!Object.hasOwn(read.bySession, id)) continue;
+    const s = read.bySession[id]!;
     seen += 1;
     tokens.input += s.tokens.input; tokens.cacheWrite += s.tokens.cacheWrite;
     tokens.cacheRead += s.tokens.cacheRead; tokens.output += s.tokens.output;

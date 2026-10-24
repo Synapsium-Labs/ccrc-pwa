@@ -1,7 +1,8 @@
 // D-6799: per-run token attribution, the server's half — the sweep's per-session
 // block read (shares.ts), the run -> sessions join (coord/runSpend.ts).
-import { describe, it, expect } from 'vitest';
-import { parseSweepSessionSpend } from '../src/shares.js';
+import { describe, it, expect, beforeEach } from 'vitest';
+import type { FleetIO } from '../src/io.js';
+import { parseSweepSessionSpend, readSessionSpendMeasured, clearSessionSpendCache, SESSION_SPEND_TTL_MS } from '../src/shares.js';
 import { boundSessionsOf, joinRunSpend } from '../src/coord/runSpend.js';
 
 const ISO = '2026-10-24T12:00:00Z';
@@ -61,5 +62,28 @@ describe('joinRunSpend', () => {
     expect(joinRunSpend(['p-a'], { kind: 'absent' })).toEqual({ measured: false, reason: 'no-sweep' });
     expect(joinRunSpend(['p-a'], { kind: 'unreadable' })).toEqual({ measured: false, reason: 'unreadable' });
     expect(joinRunSpend(['p-a'], { kind: 'malformed' })).toEqual({ measured: false, reason: 'malformed' });
+  });
+});
+
+describe('readSessionSpendMeasured cache', () => {
+  beforeEach(clearSessionSpendCache);
+  const io = (calls: { n: number }): FleetIO =>
+    ({ readFileMeasured: async () => { calls.n += 1; return { ok: true, content: sweep({ a: row(1, 1, 1, 1, 0) }) }; } }) as unknown as FleetIO;
+  it('one remote read serves concurrent and later callers inside the window, and re-reads after it', async () => {
+    const calls = { n: 0 };
+    const [a, b] = await Promise.all([readSessionSpendMeasured(io(calls), '/r', 1000), readSessionSpendMeasured(io(calls), '/r', 1001)]);
+    expect(a).toBe(b);
+    await readSessionSpendMeasured(io(calls), '/r', 1000 + SESSION_SPEND_TTL_MS - 1);
+    expect(calls.n).toBe(1);
+    await readSessionSpendMeasured(io(calls), '/r', 1000 + SESSION_SPEND_TTL_MS);
+    expect(calls.n).toBe(2);
+  });
+});
+describe('prototype-named keys', () => {
+  it('a __proto__ key stays plain data and constructor never joins to a function', () => {
+    const r = parseSweepSessionSpend('{"finishedAt":"' + ISO + '","perCcdSession":{"__proto__":{"input":1,"output":1,"cacheWrite":1,"cacheRead":1,"apiUsd":1}}}');
+    if (r.kind !== 'reading') throw new Error('malformed');
+    expect(Object.getPrototypeOf(r.bySession)).toBeNull();
+    expect(joinRunSpend(['constructor'], r)).toEqual({ measured: false, reason: 'not-swept' });
   });
 });
