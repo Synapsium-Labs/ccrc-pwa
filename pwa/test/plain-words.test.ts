@@ -203,11 +203,22 @@ export function offences(file: string, strings: readonly Visible[]): string[] {
 }
 
 const OWNED = ['AskParts.tsx', 'askWords.ts', 'EnvelopeSheet.tsx', 'DialogSheet.tsx', 'askLive.ts'].map((f) => path.join(SESSION, f));
+const PALETTE = ['registry.ts', 'sessionEntries.ts'].map((f) => path.join(import.meta.dirname, '..', 'src', 'command', f));
 
 describe('the ask surfaces speak plainly (D-6325)', () => {
   it.each(OWNED.map((f) => [path.basename(f), f] as const))('%s says none of the forbidden words where an operator reads', (_name, file) => {
     expect(offences(file, visibleStrings(file)), 'rewrite the sentence; the table above says what to say').toEqual([]);
   });
+
+  // The top search's words (D-6714, T5a): the palette's word home and the session entries' labels and groups.
+  it.each(PALETTE.map((f) => [path.relative(path.join(import.meta.dirname, '..', 'src'), f), f] as const))(
+    '%s (the top search) says none of the forbidden words where an operator reads',
+    (_name, file) => {
+      const strings = visibleStrings(file);
+      expect(strings.length, 'the scan reads its sentences').toBeGreaterThan(0);
+      expect(offences(file, strings), 'rewrite the sentence; the table above says what to say').toEqual([]);
+    },
+  );
 
   it("api.ts's two dialog-open sentences, which the composer says while an ask is up, pass too", () => {
     const strings = visibleStrings(API, undefined, ['dialog-open']);

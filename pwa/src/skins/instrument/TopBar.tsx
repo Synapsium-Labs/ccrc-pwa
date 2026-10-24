@@ -13,13 +13,11 @@
 import type { ReactNode } from 'react';
 import { BareRow, Button, COMMAND_KEY, Icon, KeyHint, Wordmark } from '@ccrc/ui';
 import { commandDoor } from '../../command/door';
+import { COMMAND_FIELD_WORDS } from '../../command/registry';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { breadcrumb } from '../../fleet/breadcrumb';
 import { useLocation } from '../../lib/router';
 import { useFleetStore } from '../../stores/fleet';
-
-/** The command field's words, and its accessible name. */
-export const COMMAND_FIELD_WORDS = 'Search or run a command';
 
 export function TopBar(): ReactNode {
   const { path } = useLocation();
