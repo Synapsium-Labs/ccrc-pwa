@@ -7914,6 +7914,15 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(writersOf('mail-disabled')).toEqual([]);
   });
 
+  // D-6785 (PR landing in ccrc, stage 1): the checks lane's two markers are rows of the switchboard with writer
+  // `hand-only`. Nothing in the tree writes `landing-disabled` or `landing-checks-live` (the operator arms the lane
+  // by hand, after a week of agreeing shadow rows).
+  it.each(['landing-disabled', 'landing-checks-live'])('%s: hand-only, no writer in the tree', (name) => {
+    expect(SWITCHES[name as 'landing-disabled' | 'landing-checks-live'].writer).toBe('hand-only');
+    expect(constsOf(name), 'CONTROL: the switchboard defines it').toHaveLength(1);
+    expect(writersOf(name)).toEqual([]);
+  });
+
   // D-5855 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1a; ARCH-70 (#805)).
   // The switchboard's exit: `mail-disabled` is defined once (2 -> 1 on C1a's tip; the count may only shrink), and so
   // is every other marker row; and every marker literal a `const *_MARKER` defines under `server/src` or `shared/` is
