@@ -34,9 +34,8 @@ const TOKEN = /^[0-9a-f]{64}$/;
 // ── what ccd answers ─────────────────────────────────────────────────────────
 
 /** `inside` is the registry id of the workspace whose workdir CONTAINS the tree (DR-22, G4), else null. A ccd that does not
- *  print it reads as null: such a tree is never inside anything this lane knows. A containing row whose workdir is the MAIN
- *  checkout (`insideMain: true`) is no nesting at all: a main checkout has no reclaim or expiry exit, so its agent worktrees
- *  are the lane's own population and read as `inside: null`. */
+ *  print it reads as null: such a tree is never inside anything this lane knows. Whether that row is a workspace at all is
+ *  decided by the server (`isWorkspace`, below): a plain session or main checkout has no reclaim or expiry exit. */
 export interface OrphanRow { readonly hex: string; readonly cls: OrphanClass; readonly inside: string | null }
 export type OrphanCensus =
   | { readonly kind: 'census'; readonly rows: readonly OrphanRow[]; readonly truncated: boolean }
@@ -54,9 +53,7 @@ export function parseOrphanCensus(stdout: string): OrphanCensus {
     if (!(ORPHAN_CLASSES as readonly string[]).includes(r['class'])) return { kind: 'unreadable' };
     const ins = r['inside'];
     if (ins !== undefined && ins !== null && !isRegistryId(ins)) return { kind: 'unreadable' };
-    const main = r['insideMain'];
-    if (main !== undefined && typeof main !== 'boolean') return { kind: 'unreadable' };
-    rows.push({ hex: r['pathHex'], cls: r['class'] as OrphanClass, inside: typeof ins === 'string' && main !== true ? ins : null });
+    rows.push({ hex: r['pathHex'], cls: r['class'] as OrphanClass, inside: typeof ins === 'string' ? ins : null });
   }
   return { kind: 'census', rows, truncated: doc['truncated'] };
 }
@@ -220,12 +217,12 @@ export const orphanCensusDue = (lastMono: number | null, nowMono: number, pressu
 /** The population after a census. A truncated one adds nothing and drops nothing ("the lane audits nothing new that
  *  pass"); a whole one keeps the memory of every tree it still lists and forgets the rest. */
 export function orphanPopulate(
-  prev: OrphanMemory, census: Extract<OrphanCensus, { kind: 'census' }>, nowMono: number, coordinators: ReadonlySet<string> | null,
+  prev: OrphanMemory, census: Extract<OrphanCensus, { kind: 'census' }>, nowMono: number, coordinators: ReadonlySet<string> | null, isWorkspace: OrphanIsWorkspace,
 ): OrphanMemory {
   if (census.truncated) return prev;
   const next = new Map<string, OrphanTreeMemory>();
   for (const r of census.rows) {
-    if (!isAuditedClass(r.cls) || orphanInsideVerdict(r.inside, coordinators) !== 'candidate') continue;
+    if (!isAuditedClass(r.cls) || orphanInsideVerdict(r.inside, coordinators, isWorkspace) !== 'candidate') continue;
     next.set(r.hex, { ...(prev.get(r.hex) ?? { cls: r.cls, obs: null, nextMono: nowMono, outcome: null }), inside: r.inside });
   }
   return next;
@@ -239,17 +236,27 @@ export function orphanCoordinatorSet(coord: { childReclaimCoordinatorClaims(): R
   } catch { return null; }
 }
 
-/** A tree nested inside a workspace (DR-23): a candidate only when that workspace is a coordinator (any run's claimedBy, in any state). A worker's tree goes with its workspace, and a coordinator list that could not be read keeps everything. */
-export function orphanInsideVerdict(inside: string | null, coordinators: ReadonlySet<string> | null): 'candidate' | 'goes-with-workspace' | 'unmeasured' {
+/** Whether a registry row is a workspace: true when its `workspace` field is set, false for a plain session or a main checkout
+ *  (the same `workspace !== null` test the child-reclaim lane uses), null when the row cannot be read. */
+export type OrphanIsWorkspace = (id: string) => boolean | null;
+
+/** A tree nested inside a registry row (DR-23). Inside nothing, or inside a row that is no workspace (a main checkout has no
+ *  reclaim or expiry exit, so its agent worktrees are this lane's own population): a candidate. Inside a workspace: a candidate
+ *  only when that workspace is a coordinator (any run's claimedBy, in any state); a worker's tree goes with its workspace.
+ *  A coordinator list or a row that could not be read keeps the tree. */
+export function orphanInsideVerdict(inside: string | null, coordinators: ReadonlySet<string> | null, isWorkspace: OrphanIsWorkspace): 'candidate' | 'goes-with-workspace' | 'unmeasured' {
   if (inside === null) return 'candidate';
+  const ws = isWorkspace(inside);
+  if (ws === null) return 'unmeasured';
+  if (!ws) return 'candidate';
   if (coordinators === null) return 'unmeasured';
   return coordinators.has(inside) ? 'candidate' : 'goes-with-workspace';
 }
 
 /** The trees held back this pass: nested in a workspace that is no longer a known coordinator (or whose list is unreadable). */
-export function orphanHeldBack(memory: OrphanMemory, coordinators: ReadonlySet<string> | null): ReadonlySet<string> {
+export function orphanHeldBack(memory: OrphanMemory, coordinators: ReadonlySet<string> | null, isWorkspace: OrphanIsWorkspace): ReadonlySet<string> {
   const held = new Set<string>();
-  for (const [hex, m] of memory) if (orphanInsideVerdict(m.inside, coordinators) !== 'candidate') held.add(hex);
+  for (const [hex, m] of memory) if (orphanInsideVerdict(m.inside, coordinators, isWorkspace) !== 'candidate') held.add(hex);
   return held;
 }
 
