@@ -161,8 +161,8 @@ describe('AccountsScreen — every account, never hidden', () => {
   });
 });
 
-describe('AccountsScreen — the %/reset/— three-way (accounts-strip.test.tsx\'s own fixtures)', () => {
-  it('shows an inferred zero as "reset", a measured zero as 0%, and an unmeasured window as —', async () => {
+describe('AccountsScreen — the 0%/0% inferred/— three-way (accounts-strip.test.tsx\'s own fixtures)', () => {
+  it('shows an inferred zero as 0% named as reset and inferred, a measured zero as 0%, and an unmeasured window as —', async () => {
     stubAccounts([
       acct({
         wrapper: 'claude', five: 0, fiveResetAt: nowSec - 60, fiveRolledOver: true,
@@ -180,12 +180,16 @@ describe('AccountsScreen — the %/reset/— three-way (accounts-strip.test.tsx\
     // construction here. That is exactly the "never hides it" behaviour under
     // test elsewhere in this file; this block only asserts the three-way.
     const claudeRow = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
-    expect(within(claudeRow).getByText('reset')).toBeInTheDocument();  // rolled-over 5h
+    // rolled-over 5h: prints 0% (R48), and its spoken words say the window reset and the 0% is inferred
+    expect(within(claudeRow).getByText(/inferred: the window reset/)).toBeInTheDocument();
+    expect(within(claudeRow).getByText('0%', { selector: '[aria-hidden="true"]' })).toBeInTheDocument();
     expect(within(claudeRow).getByText('57%')).toBeInTheDocument();    // measured 7d
 
     const claude9Row = screen.getByText('team·alt').closest('[data-disabled]') as HTMLElement;
-    expect(within(claude9Row).getByText('0%')).toBeInTheDocument();   // really-measured-at-zero 5h
-    expect(within(claude9Row).getByText('—')).toBeInTheDocument();    // never-measured 7d
+    expect(within(claude9Row).getByText('0%')).toBeInTheDocument();   // really-measured-at-zero 5h: one node, nothing inferred
+    expect(within(claude9Row).queryByText(/inferred/)).toBeNull();
+    expect(within(claude9Row).getByText('—', { selector: '[aria-hidden="true"]' })).toBeInTheDocument();    // never-measured 7d
+    expect(within(claude9Row).getByText('not measured')).toBeInTheDocument();
   });
 });
 
