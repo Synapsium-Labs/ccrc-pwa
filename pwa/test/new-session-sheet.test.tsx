@@ -891,6 +891,44 @@ describe('NewSessionSheet — step 2 shows the cached project list at once', () 
     expect(screen.getByRole('button', { name: 'Choose a project' })).toBeDisabled();
   });
 
+  /** Pick `quiet-basin` (tagged for another pool than claude's) from the cached list, through the disclosure: a deliberate crossing. */
+  const pickCrossingFromCache = async (answerWith: Promise<{ roots: string[]; projects: ProjectRow[] }>): Promise<ReturnType<typeof vi.fn>> => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(api, 'createSession').mockImplementation(create);
+    open([proj('quiet-basin', { state: 'tagged', name: 'pool-b' })], answerWith);
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'show other pools (1)' }));
+    fireEvent.click(screen.getByText('quiet-basin'));
+    expect(screen.getByRole('button', { name: /^Start quiet-basin/ })).toBeEnabled();
+    return create;
+  };
+
+  it('a deliberate crossing pick from the cache survives a fetch whose changed row is still crossing, and Start sends crossPool', async () => {
+    let answer!: (r: { roots: string[]; projects: ProjectRow[] }) => void;
+    const create = await pickCrossingFromCache(new Promise((resolve) => { answer = resolve; }));
+    // A NEW row object for the same workdir, with another placement: the reconcile really replaces the pick's row.
+    const changed = proj('quiet-basin', { state: 'tagged', name: 'pool-b' }, { kind: 'unmeasurable' });
+    await act(async () => { answer({ roots: ['/w'], projects: [changed] }); });
+    expect(await screen.findByRole('button', { name: /^Start quiet-basin/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /^Start quiet-basin/ }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0]).toEqual({
+      wrapper: 'claude', project: 'quiet-basin', workdir: '/w/quiet-basin', crossPool: true,
+    });
+  });
+
+  it('a deliberate crossing pick from the cache survives a fetch that makes the row eligible, and Start sends no crossPool', async () => {
+    let answer!: (r: { roots: string[]; projects: ProjectRow[] }) => void;
+    const create = await pickCrossingFromCache(new Promise((resolve) => { answer = resolve; }));
+    // The fresh read tags the project for the picked account's own pool: the current row is no longer a crossing one.
+    await act(async () => { answer({ roots: ['/w'], projects: [proj('quiet-basin', { state: 'tagged', name: 'pool-a' })] }); });
+    expect(await screen.findByRole('button', { name: /^Start quiet-basin/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /^Start quiet-basin/ }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0]).toEqual({ wrapper: 'claude', project: 'quiet-basin', workdir: '/w/quiet-basin' });
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('crossPool');
+  });
+
   it('a failed fetch shows the error line only when there is no cached list to show', async () => {
     open([proj('cached-a')], Promise.reject(new Error('agent link is down')));
     fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
