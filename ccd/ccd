@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=08bbb956ce58665c159be3a08bc48101594c141fe7123d0369f3effca47237b8
+# ccrc:generated 1 sha256=6df9835f581c0ca39a2db06c8c0593d4d8df25304e53bf5b22c4472ed3d4e0e1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13150,6 +13150,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # against a default the remote had deleted (measured, git 2.43).
   # `--reclaim` is the one exception to that: see "WS-AUDIT --RECLAIM" in the RECLAIM region.
   local mode=reap defer=0
+  case "${1-}" in --orphans) shift; _ws_orphan_census "$@"; return ;; --orphan-hex) shift; _ws_orphan_audit "$@"; return ;; esac   # DR-16 (D-6628): the orphan census and ladder, read-only
   [[ ( $# -eq 2 || $# -eq 3 || $# -eq 4 ) && $1 == --session ]] \
     || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]"
   if (( $# >= 3 )); then [[ $3 != --expire || $# -ne 3 ]] || { _ws_expire_audit "$2"; return; }; [[ $3 != --collect || $# -ne 3 ]] || { _ws_collect_audit "$2"; return; }   # "WS-AUDIT --EXPIRE" and "WS-AUDIT --COLLECT", in their regions
@@ -15910,7 +15911,7 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       # disagreeing fields is right — F4.
       _gc_declined "$project's registry entry disagrees with itself: its project and workspace fields do not compose to its id, so ccd will not guess which session it belongs to — inspect $REG/$project.* by hand" ;;
     orphan)
-      if _ws_gc_dirty "$p"; then
+      if ! _ws_orphan_rung dirty "$p"; then   # the rungs this verb shares with the orphan ladder: one definition (DR-16, D-6628)
         # Two refusals, one exit code — round-3 P2. `has uncommitted changes` is
         # a statement about files; only say it when files were actually seen.
         if [[ "$GC_DIRTY_STATE" == dirty ]]; then
@@ -15944,7 +15945,7 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       # origin/HEAD, but this arm cannot tell that from a lost hour's work
       # without the branch that names it — and "I cannot tell" resolves to doing
       # nothing everywhere else in this command.
-      local branch; branch=$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      local branch; _ws_orphan_rung head "$p"; branch="$_WS_ORPHAN_BRANCH"
       if [[ -z "$branch" ]]; then
         # Rung 3 — HEAD did not read at all (unborn, unreadable, not a
         # worktree). `_ws_gc_dirty` above answers for the FILES; this answers
@@ -16002,11 +16003,11 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       # worktree or `git init` still lives under it, and `git worktree remove`
       # recurses through the whole tree with no notion that part of it is a
       # second repository ccd never created.
-      local nested
-      if ! nested=$(_ws_nested_checkouts "$p"); then
+      local _pr_nrc=0; _ws_orphan_rung nested "$p" || _pr_nrc=$?
+      if (( _pr_nrc == 2 )); then
         _gc_declined "$p could not be scanned for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)}"; return 0
       fi
-      if [[ -n "$nested" ]]; then
+      if (( _pr_nrc == 1 )); then
         _gc_declined "$p holds nested checkouts — ccd removes only what it created"; return 0
       fi
       local lctx; lctx=$(_lc_tx)
@@ -16071,6 +16072,275 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
     tracked)
       : ;;   # a live workspace: not a finding to act on
   esac
+}
+
+# ── orphan trees: the census, and the ONE ladder (DR-16, D-6628, fleet-disk-retention spec §2.3) ──
+# READ-ONLY. `ws-audit --orphans` lists every linked worktree no registry row names, by location class; `ws-audit
+# --orphan-hex <hex>` answers the first refusal of the fourteen-rung ladder, or a token the server's act re-proves. The
+# rungs the operator's `ws-gc --prune` shares (dirty, HEAD, nested checkouts) are `_ws_orphan_rung`, called by both, so the
+# verb and the lane cannot drift. Nothing here removes, moves or writes anything.
+WS_ORPHAN_FLOOR_S=604800        # 7 days: the newest ctime under the tree must be older (spec §2.3 rung 13)
+WS_ORPHAN_FLOOR_PRESSURE_S=259200   # 3 days under `_disk_pressure` (spec §2.5.3); inert until that function exists on this ccd
+WS_ORPHAN_CENSUS_ROWS=4096; WS_ORPHAN_CENSUS_S=60
+_WS_ORPHAN_WORD=''; _WS_ORPHAN_WHY=''; _WS_ORPHAN_BRANCH=''; _WS_ORPHAN_HEAD=''; _WS_ORPHAN_VERDICT=''
+_WS_ORPHAN_CLASS=''; _WS_ORPHAN_MAIN=''; _WS_ORPHAN_TOKEN=''; _WS_ORPHAN_RESCUE=''
+_WS_ORPHAN_NEWEST=''; _WS_ORPHAN_ENTRIES=''; _WS_ORPHAN_FLOOR=''
+
+_ws_orphan_hex() { LC_ALL=C od -An -v -tx1 | tr -d ' \n'; }   # stdin -> lowercase hex
+_ws_orphan_unhex() {   # hex -> the path on stdout; rc 1 when it is not an even run of hex, or holds a NUL or a newline
+  [[ "${1-}" =~ ^[0-9a-f]+$ ]] && (( ${#1} % 2 == 0 && ${#1} <= 8192 )) || return 1
+  python3 -c 'import sys
+b = bytes.fromhex(sys.argv[1])
+sys.exit(1) if (b"\0" in b or b"\n" in b) else sys.stdout.buffer.write(b)' "$1"
+}
+
+_ws_orphan_stanzas() {   # main -> one line per worktree git lists: path<TAB>head<TAB>branch|detached<TAB>locked<TAB>prunable<TAB>ismain
+  local line wt='' hd='' br=detached lk=0 pr=0 n=0
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) wt="${line#worktree }"; hd=''; br=detached; lk=0; pr=0 ;;
+      "HEAD "*)     hd="${line#HEAD }" ;;
+      "branch "*)   br="${line#branch refs/heads/}" ;;
+      locked*)      lk=1 ;;
+      prunable*)    pr=1 ;;
+      "")           [[ -n "$wt" ]] || continue
+                    # a quoted path (git C-quotes a newline) or one with a tab cannot ride a hex field: left unlisted, so it is never removed
+                    [[ "$wt" != \"* && "$wt" != *$'\t'* ]] && printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$wt" "$hd" "$br" "$lk" "$pr" "$(( n == 0 ))"
+                    n=$(( n + 1 )); wt='' ;;
+    esac
+  done < <(git -C "$1" worktree list --porcelain 2>/dev/null; echo)
+}
+
+_ws_orphan_class() {   # tree mainreal wsroot project -> echoes ccd-root | claude | superpowers | other (LOCATION only)
+  local t="$1" m="$2" w="$3" pj="$4" rel
+  rel="${t#$w/$pj/}";            [[ "$t" == "$w/$pj/"* && -n "$rel" && "$rel" != */* ]] && { echo ccd-root; return 0; }
+  rel="${t#$m/.claude/worktrees/}";      [[ "$t" == "$m/.claude/worktrees/"* && -n "$rel" && "$rel" != */* ]] && { echo claude; return 0; }
+  rel="${t#$m/.superpowers/worktrees/}"; [[ "$t" == "$m/.superpowers/worktrees/"* && -n "$rel" && "$rel" != */* ]] && { echo superpowers; return 0; }
+  echo other
+}
+
+_ws_orphan_rung() {   # dirty|head|secrets|nested path -> 0 passes; 1 refuses (_WS_ORPHAN_WORD, _WS_ORPHAN_WHY); 2 unmeasured
+  local r="$1" p="$2" n
+  _WS_ORPHAN_WORD=''; _WS_ORPHAN_WHY=''
+  case "$r" in
+    dirty)   # `ws-gc --prune`'s own first gate, one definition
+      if _ws_gc_dirty "$p"; then _WS_ORPHAN_WORD="$GC_DIRTY_STATE"; _WS_ORPHAN_WHY="${GC_DIRTY_WHY}"; return 1; fi ;;
+    head)
+      _WS_ORPHAN_BRANCH=$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null) || _WS_ORPHAN_BRANCH=''
+      _WS_ORPHAN_HEAD=$(git -C "$p" rev-parse --verify --quiet HEAD 2>/dev/null) || _WS_ORPHAN_HEAD=''
+      [[ -n "$_WS_ORPHAN_BRANCH" && "$_WS_ORPHAN_HEAD" =~ ^[0-9a-f]{40,64}$ ]] \
+        || { _WS_ORPHAN_WORD=head-unreadable; _WS_ORPHAN_WHY="HEAD of $p could not be read"; return 1; } ;;
+    secrets)   # the same ignored-set rule `ws-gc --prune` asks, output discarded: the word is the answer here
+      _ws_gc_reclaimable "$p" >/dev/null && return 0
+      if (( ${#REAP_SENSITIVE[@]} != 0 )); then _WS_ORPHAN_WORD=secrets-ignored; _WS_ORPHAN_WHY="$p holds ${#REAP_SENSITIVE[@]} secret-shaped ignored file(s)"; return 1; fi
+      _WS_ORPHAN_WORD=unmeasured; _WS_ORPHAN_WHY="the ignored set of $p could not be read${REAP_IGNREASON:+: $REAP_IGNREASON}"; return 2 ;;
+    nested)
+      if ! n=$(_ws_nested_checkouts "$p"); then
+        _WS_ORPHAN_WORD=unmeasured; _WS_ORPHAN_WHY="$p could not be scanned for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)}"; return 2
+      fi
+      if [[ -n "$n" ]]; then _WS_ORPHAN_WORD=nested-checkout; _WS_ORPHAN_WHY="$p holds nested checkouts"; return 1; fi ;;
+  esac
+  return 0
+}
+
+_ws_orphan_refuse() {   # word why -> rc 1, the ladder's answer
+  _WS_ORPHAN_WORD="$1"; _WS_ORPHAN_WHY="$2"
+  if [[ "$1" == unmeasured ]]; then _WS_ORPHAN_VERDICT=unmeasured; else _WS_ORPHAN_VERDICT=refused; fi
+  return 1
+}
+
+_ws_orphan_registered() {   # tree sp class project slug -> 0 no registry row names it; 1 one does (_WS_ORPHAN_WHY); 2 unmeasured
+  local p="$1" sp="$2" cls="$3" pj="$4" slug="$5" f id wd q hit
+  _WS_ORPHAN_WHY=''
+  if [[ "$cls" == ccd-root && -f "$REG/$pj-$slug.uuid" ]]; then _WS_ORPHAN_WHY="registry row $pj-$slug names this slug"; return 1; fi
+  for f in "$REG"/*.workdir; do   # every row that names a workdir, workspace or plain session alike
+    [[ -e "$f" || -L "$f" ]] || continue
+    id=$(basename "$f" .workdir)
+    [[ -f "$f" && ! -L "$f" && -r "$f" ]] || { _WS_ORPHAN_WHY="the workdir field of registry row $id is not a readable regular file"; return 2; }   # read in place, as `_ws_gc_manifest_bytes` does: a call into the registry's reader would be one more cross-context reference
+    wd=$(<"$REG/$id.workdir"); [[ -n "$wd" ]] || continue
+    hit=0
+    for q in "$p" "$sp"; do [[ "$wd" == "$q" || "$wd" == "$q"/* ]] && hit=1; done
+    if (( ! hit )) && [[ -d "$wd" ]]; then   # through a link or an alias: the directory the row names, and every ancestor, by identity
+      _ws_dir_physical "$wd" || { _WS_ORPHAN_WHY="the workdir of $id could not be resolved ($_WS_PHYS_WHY)"; return 2; }
+      q="$_WS_PHYS"
+      while :; do
+        [[ "$q" -ef "$sp" ]] && { hit=1; break; }
+        [[ "$q" == / || -z "$q" ]] && break
+        q="${q%/*}"; [[ -n "$q" ]] || q=/
+      done
+    fi
+    (( ! hit )) || { _WS_ORPHAN_WHY="registry row $id has its workdir at, inside or through this tree"; return 1; }
+  done
+  return 0
+}
+
+_ws_orphan_tail() {   # tree sp -> rungs 10 to 14, in order; 0 all pass, else _ws_orphan_refuse's word and rc 1
+  local p="$1" sp="$2" rc=0 i now secs floor="$WS_ORPHAN_FLOOR_S"
+  local -a say=("$p")
+  _ws_orphan_rung secrets "$p" || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; }
+  _ws_orphan_rung nested "$p"  || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; }
+  # rung 12: the holder probe, both spellings; and #1132's working-directory question, which this probe does not repeat
+  [[ "$sp" == "$p" ]] || say+=("$sp")
+  _ws_path_users_many "${say[@]}"
+  for i in "${!say[@]}"; do
+    case "${_WS_PATH_USERS_RCS[i]}" in
+      0) : ;;
+      1) _ws_orphan_refuse in-use "${_WS_PATH_USERS_WHY_OF[i]}"; return 1 ;;
+      *) _ws_orphan_refuse unmeasured "${_WS_PATH_USERS_WHY_OF[i]:-who uses ${say[i]} was never asked}"; return 1 ;;
+    esac
+  done
+  _ws_cwd_users "$sp"; rc=$?
+  case "$rc" in
+    0) : ;;
+    1) _ws_orphan_refuse in-use "$_WS_CWD_USERS_WHY"; return 1 ;;
+    *) _ws_orphan_refuse unmeasured "$_WS_CWD_USERS_WHY"; return 1 ;;
+  esac
+  # rung 13: the newest ctime of every entry, the `.git` file included
+  if declare -F _disk_pressure >/dev/null 2>&1 && _disk_pressure "$sp"; then floor="$WS_ORPHAN_FLOOR_PRESSURE_S"; fi
+  _ws_collect_idle "$sp" || { _ws_orphan_refuse unmeasured "$_WS_IDLE_DETAIL"; return 1; }
+  _WS_ORPHAN_NEWEST="$_WS_IDLE_NEWEST_NS"; _WS_ORPHAN_ENTRIES="$_WS_IDLE_COUNT"; _WS_ORPHAN_FLOOR="$floor"
+  now=$(date +%s); secs="${_WS_IDLE_NEWEST_NS%?????????}"; : "${secs:=0}"
+  (( now - secs >= floor )) || { _ws_orphan_refuse changed-recently "the newest change under $sp is $(( (now - secs) / 3600 )) h old; the floor is $(( floor / 3600 )) h"; return 1; }
+  # rung 14: pause, asked last
+  [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
+    || { _ws_orphan_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
+  return 0
+}
+
+_ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDICT=token); 1 with _WS_ORPHAN_WORD, _WS_ORPHAN_WHY
+  #   and _WS_ORPHAN_VERDICT refused|unmeasured. A tree whose ONLY refusal is rung 9 also gets _WS_ORPHAN_RESCUE.
+  local p="${1-}" m mr wsroot pj sp='' sh sb sl spr smain line n slug cls ahead errf err rc r9=0 r9why='' tail_rc=0
+  local tid mid aid gd stat_sha ign
+  _WS_ORPHAN_WORD=''; _WS_ORPHAN_WHY=''; _WS_ORPHAN_VERDICT=''; _WS_ORPHAN_TOKEN=''; _WS_ORPHAN_RESCUE=''
+  _WS_ORPHAN_CLASS=''; _WS_ORPHAN_MAIN=''; _WS_ORPHAN_BRANCH=''; _WS_ORPHAN_HEAD=''
+  _WS_ORPHAN_NEWEST=''; _WS_ORPHAN_ENTRIES=''; _WS_ORPHAN_FLOOR=''
+  wsroot=$(cd "$WORKTREES_ROOT" >/dev/null 2>&1 && pwd -P) || wsroot="$WORKTREES_ROOT"
+  # 1: a linked worktree of a main checkout under PROJECTS_ROOT, by identity (its stanza -ef the path)
+  _ws_reclaim_plain_path "$p" && [[ -d "$p" && ! -L "$p" ]] \
+    || { _ws_orphan_refuse not-a-worktree "$p is not one plain real directory"; return 1; }
+  for m in "$PROJECTS_ROOT"/*; do
+    [[ -e "$m/.git" ]] || continue
+    mr=$(cd "$m" >/dev/null 2>&1 && pwd -P) || continue
+    while IFS=$'\t' read -r line sh sb sl spr smain; do
+      [[ "$line" -ef "$p" ]] || continue
+      sp="$line"; _WS_ORPHAN_MAIN="$mr"; pj=$(basename "$m"); break 2
+    done < <(_ws_orphan_stanzas "$m")
+  done
+  [[ -n "$sp" ]] || { _ws_orphan_refuse not-a-worktree "no worktree list of a project names $p"; return 1; }
+  slug=$(basename "$sp")
+  # 2: scope
+  cls=$(_ws_orphan_class "$sp" "$_WS_ORPHAN_MAIN" "$wsroot" "$pj"); _WS_ORPHAN_CLASS="$cls"
+  [[ "$cls" != other ]] || { _ws_orphan_refuse out-of-scope "$sp is neither under the ccd worktree root nor a claude or superpowers worktree"; return 1; }
+  # 3: not the main checkout under any spelling
+  if [[ "$smain" == 1 ]]; then _ws_orphan_refuse not-a-workspace "$sp is a main checkout"; return 1; fi
+  for m in "$PROJECTS_ROOT"/*; do
+    [[ -e "$m/.git" ]] || continue
+    [[ "$p" -ef "$m" ]] && { _ws_orphan_refuse not-a-workspace "$p is the main checkout $m"; return 1; }
+  done
+  # 4: no registry row names it
+  _ws_orphan_registered "$p" "$sp" "$cls" "$pj" "$slug"; rc=$?
+  (( rc == 0 )) || { if (( rc == 1 )); then _ws_orphan_refuse registered "$_WS_ORPHAN_WHY"; else _ws_orphan_refuse unmeasured "$_WS_ORPHAN_WHY"; fi; return 1; }
+  # 5: not locked in git
+  [[ "$sl" != 1 ]] || { _ws_orphan_refuse locked "$sp is locked in git"; return 1; }
+  # 6: clean and readable
+  _ws_orphan_rung dirty "$p" || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "${_WS_ORPHAN_WHY:-$p is not clean}"; return 1; }
+  stat_sha=$(git -C "$p" status --porcelain --untracked-files=all 2>/dev/null | _plat_sha256 | cut -d' ' -f1)
+  # 7: no operation in progress, no index.lock
+  n=$(_ws_child_op "$p") || { _ws_orphan_refuse unmeasured "whether $p is mid-operation could not be read"; return 1; }
+  [[ -z "$n" ]] || { _ws_orphan_refuse tree-busy "$p is mid-$n"; return 1; }
+  gd=$(git -C "$p" rev-parse --absolute-git-dir 2>/dev/null) && [[ -n "$gd" ]] \
+    || { _ws_orphan_refuse unmeasured "the git directory of $p could not be located"; return 1; }
+  [[ ! -e "$gd/index.lock" && ! -L "$gd/index.lock" ]] || { _ws_orphan_refuse tree-busy "$gd/index.lock stands"; return 1; }
+  # 8: HEAD reads
+  _ws_orphan_rung head "$p" || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; }
+  [[ "$_WS_ORPHAN_BRANCH" != HEAD ]] || _WS_ORPHAN_BRANCH=detached
+  # 9: nothing on HEAD that no remote has. Hook-free (rev-list runs none); a count it cannot give is unmeasured, never a number
+  errf=$(_plat_mktemp) || { _ws_orphan_refuse unmeasured "no scratch file to count the commits of $p"; return 1; }
+  ahead=$(LC_ALL=C git -C "$p" rev-list --count HEAD --not --remotes 2>"$errf"); rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  { (( rc == 0 )) && [[ -z "$err" && "$ahead" =~ ^[0-9]+$ ]]; } \
+    || { _ws_orphan_refuse unmeasured "the commits of $p on no remote could not be counted${err:+: ${err%%$'\n'*}}"; return 1; }
+  if (( ahead != 0 )); then r9=1; r9why="$ahead commit(s) of $p are on no remote"; fi
+  # 10 to 14
+  _ws_orphan_tail "$p" "$sp" || tail_rc=$?
+  if (( r9 )); then
+    _ws_orphan_refuse head-not-on-remote "$r9why"
+    (( tail_rc == 0 )) || return 1
+  elif (( tail_rc != 0 )); then
+    return 1
+  fi
+  # the token: every input named, the tree's and its main checkout's and its admin directory's identities, the content digests
+  _ws_path_ident "$sp" && tid="$_WS_IDENT" || { _ws_orphan_refuse unmeasured "${_WS_IDENT_WHY:-the identity of $sp was never read}"; return 1; }
+  _ws_path_ident "$_WS_ORPHAN_MAIN" follow && mid="$_WS_IDENT" || { _ws_orphan_refuse unmeasured "${_WS_IDENT_WHY:-the identity of $_WS_ORPHAN_MAIN was never read}"; return 1; }
+  _ws_path_ident "$gd" follow && aid="$_WS_IDENT" || { _ws_orphan_refuse unmeasured "${_WS_IDENT_WHY:-the identity of $gd was never read}"; return 1; }
+  ign="$REAP_IGNDIGEST"
+  local -a inp=("pathhex=$(printf '%s' "$p" | _ws_orphan_hex)" "tree=$tid" "main=$mid" "admin=$aid" "head=$_WS_ORPHAN_HEAD"
+                "branch=$_WS_ORPHAN_BRANCH" "status=$stat_sha" "ignored=$ign" "newestctimens=$_WS_ORPHAN_NEWEST"
+                "entries=$_WS_ORPHAN_ENTRIES" "floor=$_WS_ORPHAN_FLOOR")
+  if (( r9 )); then
+    _WS_ORPHAN_RESCUE=$(_ws_reclaim_fingerprint mode=orphan-rescue "${inp[@]}")
+    return 1   # _ws_orphan_refuse above already named head-not-on-remote
+  fi
+  _WS_ORPHAN_TOKEN=$(_ws_reclaim_fingerprint mode=orphan "${inp[@]}"); _WS_ORPHAN_VERDICT=token
+  return 0
+}
+
+_ws_orphan_census() {   # ccd ws-audit --orphans -> ONE JSON document: every linked worktree by location class
+  _json_str probe >/dev/null 2>&1 || die "python3 unavailable — cannot quote the census safely"
+  local wsroot m mr pj line sh sb sl spr smain cls slug rows=0 trunc=false first=1 t0=$SECONDS d age ph out='['
+  local -a seen
+  wsroot=$(cd "$WORKTREES_ROOT" >/dev/null 2>&1 && pwd -P) || wsroot="$WORKTREES_ROOT"
+  for m in "$PROJECTS_ROOT"/*; do
+    [[ -e "$m/.git" ]] || continue
+    mr=$(cd "$m" >/dev/null 2>&1 && pwd -P) || continue
+    pj=$(basename "$m"); seen=()
+    while IFS=$'\t' read -r line sh sb sl spr smain; do
+      seen+=("$line")
+      [[ "$smain" != 1 ]] || continue
+      cls=$(_ws_orphan_class "$line" "$mr" "$wsroot" "$pj"); slug=$(basename "$line")
+      [[ "$cls" == ccd-root && -f "$REG/$pj-$slug.uuid" ]] && continue   # a registered workspace is not an orphan
+      if (( rows >= WS_ORPHAN_CENSUS_ROWS || SECONDS - t0 >= WS_ORPHAN_CENSUS_S )); then trunc=true; break 2; fi
+      age=$(_ws_gc_age "$line"); [[ "$age" == - ]] && age=null
+      ph=$(printf '%s' "$line" | _ws_orphan_hex)
+      (( first )) || out+=','; first=0; rows=$(( rows + 1 ))
+      out+=$(printf '{"pathHex":"%s","class":"%s","project":%s,"main":%s,"branch":%s,"head":%s,"locked":%s,"prunable":%s,"ageDays":%s}' \
+        "$ph" "$cls" "$(_json_str "$pj")" "$(_json_str "$mr")" "$( [[ "$sb" == detached ]] && echo null || _json_str "$sb")" \
+        "$(_json_str "$sh")" "$( (( sl )) && echo true || echo false)" "$( (( spr )) && echo true || echo false)" "$age")
+    done < <(_ws_orphan_stanzas "$m")
+    # a directory under a scanned root that no list names is not a worktree, and is the operator's
+    for d in "$wsroot/$pj"/* "$mr/.claude/worktrees"/* "$mr/.superpowers/worktrees"/*; do
+      [[ -d "$d" && ! -L "$d" ]] || continue
+      line=0; for ph in ${seen[@]+"${seen[@]}"}; do [[ "$ph" == "$d" || "$ph" -ef "$d" ]] && { line=1; break; }; done
+      (( ! line )) || continue
+      [[ "$d" != "$wsroot/$pj/"* || ! -f "$REG/$pj-$(basename "$d").uuid" ]] || continue
+      if (( rows >= WS_ORPHAN_CENSUS_ROWS || SECONDS - t0 >= WS_ORPHAN_CENSUS_S )); then trunc=true; break 2; fi
+      (( first )) || out+=','; first=0; rows=$(( rows + 1 ))
+      out+=$(printf '{"pathHex":"%s","class":"not-a-worktree","project":%s,"main":%s,"branch":null,"head":"","locked":false,"prunable":false,"ageDays":null}' \
+        "$(printf '%s' "$d" | _ws_orphan_hex)" "$(_json_str "$pj")" "$(_json_str "$mr")")
+    done
+  done
+  printf '{"mode":"orphans","truncated":%s,"rows":%s]}\n' "$trunc" "$out"
+}
+
+_ws_orphan_audit() {   # ccd ws-audit --orphan-hex <hex> -> ONE JSON document; exit 1 when the answer is unmeasured (retry)
+  local hex="${1-}" p rc=0
+  [[ $# -eq 1 ]] || die "usage: ccd ws-audit --orphan-hex <hex>"
+  _json_str probe >/dev/null 2>&1 || die "python3 unavailable — cannot quote the audit record safely"
+  p=$(_ws_orphan_unhex "$hex") || die "bad path hex"
+  _ws_orphan_ladder "$p" || rc=$?
+  printf '{"mode":"orphan","pathHex":%s,"class":%s,"main":%s,"branch":%s,"head":%s,"verdict":%s,"refusal":%s,"detail":%s,"token":%s,"rescueToken":%s,"newestCtimeNs":%s,"entries":%s,"floorS":%s}\n' \
+    "$(_json_str "$hex")" "$(_json_str "$_WS_ORPHAN_CLASS")" "$(_json_str "$_WS_ORPHAN_MAIN")" "$(_json_str "$_WS_ORPHAN_BRANCH")" \
+    "$(_json_str "$_WS_ORPHAN_HEAD")" "$(_json_str "$_WS_ORPHAN_VERDICT")" \
+    "$( [[ -n "$_WS_ORPHAN_WORD" ]] && _json_str "$_WS_ORPHAN_WORD" || echo null)" "$(_json_str "$_WS_ORPHAN_WHY")" \
+    "$( [[ -n "$_WS_ORPHAN_TOKEN" ]] && _json_str "$_WS_ORPHAN_TOKEN" || echo null)" \
+    "$( [[ -n "$_WS_ORPHAN_RESCUE" ]] && _json_str "$_WS_ORPHAN_RESCUE" || echo null)" \
+    "$( [[ -n "$_WS_ORPHAN_NEWEST" ]] && _json_str "$_WS_ORPHAN_NEWEST" || echo null)" \
+    "${_WS_ORPHAN_ENTRIES:-null}" "${_WS_ORPHAN_FLOOR:-null}"
+  if [[ "$_WS_ORPHAN_VERDICT" == unmeasured ]]; then
+    echo "ccd: ws-audit --orphan-hex measured nothing: $_WS_ORPHAN_WHY — retry" >&2
+    return 1
+  fi
+  return 0
 }
 
 cmd_ws_gc() {   # [--prune | --fast]
