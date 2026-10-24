@@ -2661,8 +2661,8 @@ EOF
 # `$gate_fail` (`cmd_update`, redacted once at its own local definition, so
 # `_upd_rollback_no_restore` and `_upd_restore` inherit it as `$reason`);
 # `$UPD_GATE_WHY` directly (`_upd_gate`'s two echoes, `cmd_update`'s exit-4
-# echo). `ccd/ccd-update-sync` is a different executable and carries its own
-# copy of the same two rules, at its own choke point (`say`).
+# echo). `ccd/ccd-update-sync`, another executable, redacts at its own `say`
+# with the home rule and the `://` scheme rule alone: it prints no release base.
 _upd_redact() {
   local s="${1:-}" had_extglob=0 LC_ALL=C
   shopt -q extglob && had_extglob=1

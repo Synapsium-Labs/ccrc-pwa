@@ -20,23 +20,24 @@
 // may source the box env file, for the server, how often, and only inside the
 // launchd command string it emits). A new name reds a row until it is classed.
 //
-// WHAT IT GUARDS: THE SPELLINGS IT NAMES (D-6746). It is not a proof that
-// no other reader exists. It sees a `${NAME…}` or `$NAME` expansion of a
-// setting (C3), a `${NAME…}` with a default or assignment operator and the two
-// bounded readers' literal arguments (C5), the box-env readers' keys and the
-// reader's own indirection and awk program elsewhere (C8), a nameref to a
-// setting (C9), a `-v` test of a CCRC_ name (C10), and `.` or `source` of the
-// box env file in any body SOURCING_BODIES does not list, or outside the
-// launchd command string of the one it lists, a `$(` or backtick on that line
-// counting as outside since it runs as the line assigns (C11): in command
-// position (after `if`, `elif`, `while`, `until`, `!`, `builtin`, `command` or
-// a backtick too, a `--` before the operand skipped), of `$BOX_ENV_FILE`, a
-// `ccrc.env` path (a quote inside it included), a name bound to either, `<(…)`
-// naming one, or `/dev/stdin <` one. A name bound in a body that declares it
-// `local` is followed in that body alone; any other binding, and BOX_ENV_FILE,
-// everywhere. `set -u` (C7) makes a bare `$NAME` of an unset name abort, so an
-// unguarded read must spell a default C5 sees; a `-v` test is one guard that
-// needs none, which is why C10 is a row of its own.
+// WHAT IT GUARDS: THE SPELLINGS IT NAMES (D-6746). It is not a proof that no
+// other reader exists. It sees a `${NAME…}` or `$NAME` expansion of a setting
+// (C3), a `${NAME…}` with a default or assignment operator and the two bounded
+// readers' literal arguments (C5), the box-env readers' keys and the reader's
+// own indirection and awk program elsewhere (C8), a nameref to a setting (C9),
+// a `-v` test of a CCRC_ name (C10), and `.` or `source` of the box env file
+// in any body SOURCING_BODIES does not list, or outside the launchd command
+// string of the one it lists, a `$(`, a backtick or bash 5.3's `${ ` or `${|`
+// on that line counting as outside since it runs as the line assigns (C11): in
+// command position (after `if`, `elif`, `while`, `until`, `!`, `builtin`,
+// `command` or a backtick too, a `--` before the operand skipped), of
+// `$BOX_ENV_FILE`, a `ccrc.env` path (a quote inside it included), a name
+// bound to either, `<(…)` naming one, or `/dev/stdin <` one. A name bound in a
+// body that declares it `local` is followed in that body alone; any other
+// binding, and BOX_ENV_FILE, everywhere. `set -u` (C7) makes a bare `$NAME` of
+// an unset name abort, so an unguarded read must spell a default C5 sees; a
+// `-v` test is one guard that needs none, which is why C10 is a row of its
+// own.
 //
 // WHAT IT DOES NOT CATCH, measured by review 891's mutants and named so no
 // reader takes this file for more: `${#NAME}`; an expansion split by a
@@ -53,7 +54,10 @@
 // surviving C11 and the coordinator ruled named, not caught (R29): a `case`
 // arm (`x) . "$BOX_ENV_FILE" ;;`), `time . …`, a sourcing in a callee that
 // reads a name its caller declared `local` (dynamic scope), and a `.` and its
-// operand split across a backslash-newline; and C6's spacing and export
+// operand split across a backslash-newline; the launchd command string run a
+// second time through a nameref to it (`local -n`/`declare -n`) or a `${!…}`
+// indirect name, which C11's count of `$cmd` and `${cmd` does not see (review
+// 902, F4: named, not caught); and C6's spacing and export
 // variants of an environment-only example line (`#CCRC_X=`, `#  CCRC_X=`,
 // leading spaces, `export CCRC_X=`, `# export CCRC_X=`).
 import { describe, it, expect } from 'vitest';
@@ -177,9 +181,11 @@ const VAR_KEY_BODIES: Record<string, string> = {
 };
 
 /** The bodies that may source the box env file, each with how many times, where and why. Counted per body, so a second sourcing
- *  reds; and each sourcing must sit inside the string `cmd` names (one `local cmd="…"` line, with no `$(` or backtick, which would
- *  run in ccrc's own shell as the line assigns), which the body expands once, as the launchd job's `-c` argument, so a sourcing
- *  moved out of that string onto a line the body executes reds too. */
+ *  reds; and each sourcing must sit inside the string `cmd` names (one `local cmd="…"` line, with no `$(`, backtick, or bash 5.3's
+ *  current-shell `${ ` or `${|`, each of which would run in ccrc's own shell as the line assigns). C11 counts the body's expansions
+ *  of that string in the spellings `$cmd` and `${cmd` alone, and wants exactly one, as the launchd job's `-c` argument, so a
+ *  sourcing moved out of that string onto a line the body executes reds, and so does the string run a second time under either
+ *  spelling. A nameref to it or a `${!…}` indirect name is not counted (the header names both as residuals). */
 const SOURCING_BODIES: Record<string, { count: number; cmd: string; reason: string }> = {
   _inst_plist_server: { count: 1, cmd: 'cmd', reason: 'the macOS server job\'s launch line: the launchd job\'s parse of ccrc.env becomes the server\'s environment, and so reaches a ccrc the server spawns as its environment, as on Linux through ccrc.service\'s EnvironmentFile; it is the server\'s reading, the same one EnvironmentFile gives on Linux' },
 };
@@ -478,7 +484,7 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
           const o = span === null ? '(top level)' : span.owner;
           counts.set(o, (counts.get(o) ?? 0) + 1);
           if (!(o in SOURCING_BODIES)) faults.push(`${f}: ${o} sources the box env file: ${m[0].trim()}`);
-          else if (!new RegExp('^\\s*local ' + SOURCING_BODIES[o].cmd + '="[^"]*"$').test(l) || /\$\(|`/.test(l))
+          else if (!new RegExp('^\\s*local ' + SOURCING_BODIES[o].cmd + '="[^"]*"$').test(l) || /\$\(|`|\$\{[\s|]/.test(l))
             faults.push(`${f}: ${o} sources the box env file outside its launchd command string: ${l.trim()}`);
         }
       }
