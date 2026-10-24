@@ -9,7 +9,7 @@ import { gzipSync, gunzipSync, deflateSync, inflateSync } from 'node:zlib';
 import { pythonOrSkip, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
 // Task 9 of the codex bridge Stage 2 plan (2026-10-22): the shim's direct entry, served from the package.
-import { cpSync, existsSync, readdirSync } from 'node:fs';
+import { cpSync, existsSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import { createServer as createNetServer, type Server as NetServer } from 'node:net';
 import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
 import { BRIDGE_AUTH_LIB, BRIDGE_DIR, BRIDGE_MODELS, fakeResponses, plantBridgeLane } from './codexBridgeFixture.js';
@@ -3030,17 +3030,18 @@ describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 
     const fake = await fakeResponses([{ status: 200, sse: directTextReply('hello from the package') }]);
     try {
       const d = await startDirect(home, fake.base);
-      expect(d.laneAnswer).toEqual({ lane: d.lane, mode: 'direct' });
       const r = await postDirect(d.key, {
         model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
       });
+      // Judged first (fix round 1, T9-SPEC-2), so a shim that relays is red here, on the port the title names.
+      expect(litellm.count()).toBe(0);
+      expect(d.laneAnswer).toEqual({ lane: d.lane, mode: 'direct' });
       expect(r.status).toBe(200);
       expect(r.type).toMatch(/^text\/event-stream/);
       expect(r.text).toContain('event: message_start');
       expect(r.text).toContain('hello from the package');
       expect(r.text).toContain('event: message_stop');
       expect(fake.requests.map((q) => `${q.method} ${q.path}`)).toEqual(['POST /responses']);
-      expect(litellm.count()).toBe(0);
     } finally {
       await fake.close();
       await litellm.close();
@@ -3072,10 +3073,16 @@ describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 
     expect(stderr.trim()).toBe(line);
   });
 
+  // Fix round 1 (T9-SPEC-1, T9-CQ-1): the directory is checked before the import, so `absent`, `another directory`
+  // and `an empty package directory` (which Python would import as a namespace package, `__file__` None) each get
+  // the pre-import line, and no sibling package runs first. The post-import check is reached by an `__init__.py`
+  // that links out of the named directory.
   it.each([
     ['unset', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not set$/],
-    ['absent', /^ccgpt-proxy: direct: the codexbridge package did not import from CCGPT_BRIDGE_DIR \(ModuleNotFoundError\); run 'ccrc update'$/],
-    ['another directory', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not the directory the codexbridge package imported from; run 'ccrc update'$/],
+    ['absent', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
+    ['another directory', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
+    ['an empty package directory', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
+    ['a package whose __init__.py links elsewhere', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not the directory the codexbridge package imported from; run 'ccrc update'$/],
     ['a broken package', /^ccgpt-proxy: direct: the codexbridge package did not import from CCGPT_BRIDGE_DIR \(RuntimeError\); run 'ccrc update'$/],
   ] as const)('a missing package dir exits with one direct: line (%s)', async (shape, line) => {
     const home = mkTmp('ccgpt-proxy-direct-nopkg-');
@@ -3085,8 +3092,15 @@ describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 
     if (shape === 'unset') dir = null;
     else if (shape === 'absent') dir = join(home, 'nowhere', 'ccd', 'codexbridge');
     else if (shape === 'another directory') dir = join(home, 'ccrc', 'ccd', 'not-the-bridge');
-    else writeFileSync(join(bridgeDir, '__init__.py'), `raise RuntimeError(${JSON.stringify(sentinel)})\n`);
-    if (shape === 'another directory') mkdirSync(dir!, { recursive: true });
+    else if (shape === 'an empty package directory') dir = join(home, 'empty', 'ccd', 'codexbridge');
+    else if (shape === 'a package whose __init__.py links elsewhere') {
+      const elsewhere = join(home, 'elsewhere');
+      mkdirSync(elsewhere, { recursive: true });
+      cpSync(join(bridgeDir, '__init__.py'), join(elsewhere, '__init__.py'));
+      rmSync(join(bridgeDir, '__init__.py'));
+      symlinkSync(join(elsewhere, '__init__.py'), join(bridgeDir, '__init__.py'));
+    } else writeFileSync(join(bridgeDir, '__init__.py'), `raise RuntimeError(${JSON.stringify(sentinel)})\n`);
+    if (shape === 'another directory' || shape === 'an empty package directory') mkdirSync(dir!, { recursive: true });
     const env: Record<string, string> = {
       CCGPT_BRIDGE: 'direct',
       CCGPT_ACCOUNT_ID: mintLane(),
@@ -3117,14 +3131,36 @@ describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 
       const d = await startDirect(home, fake.base);
       const r = await postDirect(d.key, {
         model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
-        output_config: { format: { type: 'json_schema', schema } },
+        output_config: { effort: 'low', format: { type: 'json_schema', schema } },
       });
       expect(r.status).toBe(200);
       expect(fake.requests).toHaveLength(1);
       const sent = fake.requests[0]!.body!;
-      expect(sent.output_config).toBeUndefined();
+      // `_apply_effort` ran on the very body the format was read from (fix round 1, T9-CQ-3: the body is built field by
+      // field, so an `output_config` key could never reach it and asserting its absence decided nothing).
+      expect(sent.reasoning).toEqual({ effort: 'low' });
       expect(sent.text?.format?.type).toBe('json_schema');
       expect(sent.text?.format?.schema).toEqual(schema);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('the direct entry decodes a gzip body through the shim\'s own hook', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-gzip-');
+    const fake = await fakeResponses([{ status: 200, sse: directTextReply('decoded') }]);
+    try {
+      const d = await startDirect(home, fake.base);
+      const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages?beta=true`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-encoding': 'gzip', 'x-api-key': d.key },
+        body: gzipSync(Buffer.from(JSON.stringify({
+          model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
+        }))),
+      });
+      expect(r.status).toBe(200);
+      expect(await r.text()).toContain('decoded');
+      expect(fake.requests.map((q) => `${q.method} ${q.path}`)).toEqual(['POST /responses']);
     } finally {
       await fake.close();
     }

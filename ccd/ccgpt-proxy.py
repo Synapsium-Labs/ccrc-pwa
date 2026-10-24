@@ -1564,7 +1564,13 @@ def _run_direct() -> int:
     `__pycache__` into the installed tree. The package is imported from
     CCGPT_BRIDGE_DIR's parent, put first on `sys.path` (with `-I`, nothing
     else of the caller's is on it), and must be the very directory that
-    variable names. The shim's own request hooks are passed in, so none is
+    variable names. That directory is checked BEFORE the import (fix round 1,
+    T9-CQ-1): it must be named `codexbridge` and hold an `__init__.py` file,
+    so a directory with none (empty, or half-written by a push) is never
+    imported as a namespace package (whose `__file__` is None), and no
+    sibling package's code runs before the refusal. After the import, the
+    package's `__file__` must be a string in that same directory (an
+    `__init__.py` that links out of it fails here). The shim's own request hooks are passed in, so none is
     copied into the package: an encoding this shim does not implement is its
     415 there too. `_effort_and_output_config` reads `output_config` before
     `_apply_effort` pops it, and `_apply_effort` itself is unchanged, so
@@ -1576,13 +1582,16 @@ def _run_direct() -> int:
     if not bridge_dir:
         sys.exit("ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not set")
     bridge_dir = os.path.realpath(bridge_dir)
+    if os.path.basename(bridge_dir) != "codexbridge" or not os.path.isfile(os.path.join(bridge_dir, "__init__.py")):
+        sys.exit("ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'")
     sys.path.insert(0, os.path.dirname(bridge_dir))
     try:
         import codexbridge
     except Exception as e:  # its text can carry a path or a line of the package; the class is enough
         sys.exit("ccgpt-proxy: direct: the codexbridge package did not import from CCGPT_BRIDGE_DIR "
                  f"({type(e).__name__}); run 'ccrc update'")
-    if os.path.dirname(os.path.realpath(codexbridge.__file__)) != bridge_dir:
+    origin = getattr(codexbridge, "__file__", None)
+    if not isinstance(origin, str) or os.path.dirname(os.path.realpath(origin)) != bridge_dir:
         sys.exit("ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not the directory the codexbridge package "
                  "imported from; run 'ccrc update'")
     codexbridge.load_all()
