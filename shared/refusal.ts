@@ -197,7 +197,7 @@ export const ROUTE_REFUSALS = Object.keys(REFUSAL_STATUS) as RouteRefusal[];
  *  so they are not `RouteRefusal`s (D-5384, audit ticket ARCH-21). */
 export type OpenRunConflict = Extract<RunRefuseCode,
   'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
-  | 'claimed-by-another' | 'review-in-flight' | 'attribution-required' | 'not-a-child'>;
+  | 'claimed-by-another' | 'review-in-flight' | 'attribution-required' | 'not-a-child' | 'cap-review-rounds'>;
 
 /** Each one's status (D-5384). Measured from the open route's inline sends on
  *  landing day — every one answered 409 — never chosen. */
@@ -207,6 +207,8 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
   // D-5298 (coordinator-first Task 11b, spec §6.4): chosen, not measured — new
   // words, both 409 as the spec names them, the family's conflict status.
   'attribution-required': 409, 'not-a-child': 409,
+  // D-6795: chosen, not measured — a new word, 409 like its family.
+  'cap-review-rounds': 409,
 };
 
 /** The `reject.code` words `POST /api/runs/:id/advance` answers (D-6733, audit ticket ARCH-33,

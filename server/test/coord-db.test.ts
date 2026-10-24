@@ -685,9 +685,9 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // (account_events, D-5516, accounts plan Task A7), MIGRATIONS[26]
     // (the mail_deliveries park columns, D-5838), MIGRATIONS[27]
     // (secret_fingerprints, D-5513, accounts plan Task A10) and MIGRATIONS[28]
-    // (feed_events.dedupe_key, D-5860, consolidation W1a Task C1f).
-    expect(COORD_SCHEMA_VERSION).toBe(29);
-    expect(MIGRATIONS.length).toBe(29);
+    // (feed_events.dedupe_key, D-5860, consolidation W1a Task C1f) and MIGRATIONS[29] (review_cap, D-6795).
+    expect(COORD_SCHEMA_VERSION).toBe(30);
+    expect(MIGRATIONS.length).toBe(30);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -752,7 +752,7 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // (runs.unattributed), MIGRATIONS[23] (approvals), MIGRATIONS[24] (digests, asks.corrected), MIGRATIONS[25]
     // (account_events), MIGRATIONS[26] (the mail_deliveries park columns), MIGRATIONS[27] (secret_fingerprints) and
     // MIGRATIONS[28] (feed_events.dedupe_key); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(29);
+    expect(COORD_SCHEMA_VERSION).toBe(30);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

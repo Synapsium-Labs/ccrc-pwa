@@ -6122,6 +6122,9 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * `reviews`, or a send-back while one is open (design 2026-09-14 §5.1, §9
  * invariant 3).
  *
+ * `cap-review-rounds` (D-6795) — the work run already has `REVIEW_ROUND_CAP` review runs, and the operator has
+ * not lifted the cap for it; the open is refused, an ask is raised once, and `by` carries the round count.
+ *
  * `workspace-spent` and `spent-unmeasured` are rule 3 of the child-reclamation
  * programme (spec 2026-09-22 §5.3-§5.4): a CHILD — a workspace the server
  * minted for a run and marked `$REG/<id>.child` at creation — carries at most
@@ -6154,7 +6157,8 @@ export type RunRefuseCode =
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
   | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight'
   | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
-  | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child';   // the last two: D-5298
+  | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child'   // the last two: D-5298
+  | 'cap-review-rounds';   // D-6795: a fourth review run for one work run
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6165,6 +6169,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'review-in-flight': true, 'claimant-is-a-worker': true,
   'workspace-spent': true, 'spent-unmeasured': true,
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
+  'cap-review-rounds': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
