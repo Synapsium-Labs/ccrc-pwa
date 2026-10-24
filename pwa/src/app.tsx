@@ -49,6 +49,12 @@ function ShellCommands(): ReactNode {
   return <CommandLayer openNewSession={useFleetFlows().openNewSession} />;
 }
 
+/** `/archive`: the one arm of the ladder that reads the fleet's rows, so it is the one that subscribes to them (C6). */
+function ArchiveRoute(): ReactNode {
+  const sessions = useFleetStore((s) => s.sessions);
+  return <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(`/s/${id}`)} />;
+}
+
 export function App(): ReactNode {
   const { path, search } = useLocation();
   useEffect(() => {
@@ -57,7 +63,8 @@ export function App(): ReactNode {
     // dialog badges. connect() is idempotent; the socket survives navigation.
     useFleetStore.getState().connect();
   }, []);
-  const sessions = useFleetStore((s) => s.sessions);
+  // The shell holds no subscription to `sessions` (C6, D-6438): a fleet frame that changes one row re-renders the
+  // readers of that row, not the frame, the ladder and every sibling mounted here. `/archive` subscribes locally.
   // T9-R2's pools wiring (the epoch and observedEpoch FleetScreen shows) moved
   // with the fleet column into `screens/FleetColumn.tsx`.
   // The dormant handshake (shared/api.ts's FLEET_PROTO_MIN): set by the fleet
@@ -136,7 +143,7 @@ export function App(): ReactNode {
     // pickers) never leaks across a sidebar switch.
     <SessionScreen key={sessionId} id={sessionId} />
   ) : route === 'archive' ? (
-    <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(`/s/${id}`)} />
+    <ArchiveRoute />
   ) : route === 'accounts' ? (
     <AccountsScreen />
   ) : route === 'inbox' ? (
