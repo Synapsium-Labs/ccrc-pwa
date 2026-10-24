@@ -15206,21 +15206,28 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(body.slice(0, gc - 1).some((l) => /^\s+_upd_sweep$/.test(l)), 'after the sweep').toBe(true);
     });
 
-    it('W24-K6: the hard-cap term\'s literals are the control plane\'s', () => {
+    it('W24-K6: the hard-cap term is the sum of the start chain\'s own ceilings, derived from their sources (D-6744)', () => {
       const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
       const fn = (name: string): string => new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src)?.[0] ?? '';
       const until = fn('_bak_gc').split('\n').filter((l) => /^\s+until=\$\(\(/.test(l));
       expect(until, 'one until line in _bak_gc').toHaveLength(1);
-      expect(until[0]).toContain('4 *');
-      expect(until[0]).toContain('- 40');
+      const term = Number(/hc=\$\(\( 4 \* dl \/ 1000 - ([0-9]+) - margin \)\)/.exec(until[0])?.[1] ?? 'NaN');
       const dispatch = readFileSync(join(REPO, 'server', 'src', 'update', 'dispatch.ts'), 'utf8');
       expect(dispatch).toMatch(/^export const UPDATE_DEADLINE_HARD_CAP_FACTOR = 4;$/m);
       const proto = readFileSync(join(REPO, 'shared', 'agent-protocol.ts'), 'utf8');
       const ms = (name: string): number => Number((new RegExp(`^export const ${name} = ([0-9_]+);$`, 'm').exec(proto)?.[1] ?? 'NaN').replace(/_/g, ''));
-      // The re-install rollback's probe of the release host, before its first report: its validated ceiling, by its name.
+      // The four sources: the spawn's bound; the release-host probe's validated ceiling, by its name, counted twice (a re-install
+      // rollback's parent probes before it detaches and its child repeats the probe); and the fleet-health call `_upd_fleet_warn`
+      // makes before the first `_upd_phase`, which `_box_health` bounds by CCRC_HEALTH_TIMEOUT, at its default.
+      const spawn = (ms('UPDATE_SPAWN_TIMEOUT_MS') + ms('UPDATE_SPAWN_DRAIN_MS')) / 1000;
       const ceiling = Number(/_upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME [\s\S]*?" ([0-9]+)\n/.exec(fn('_upd_asset_listed'))?.[1] ?? 'NaN');
-      expect(ceiling, 'the probe\'s ceiling').toBeGreaterThan(0);
-      expect((ms('UPDATE_SPAWN_TIMEOUT_MS') + ms('UPDATE_SPAWN_DRAIN_MS')) / 1000 + ceiling).toBe(40);
+      const health = Number(/^: "\$\{CCRC_HEALTH_TIMEOUT:=([0-9]+)\}"$/m.exec(src)?.[1] ?? 'NaN');
+      expect(fn('_upd_fleet_warn'), 'the fleet-health call').toMatch(/^\s+_box_health "\$addr" \|\| return 0$/m);
+      expect(fn('_box_health'), 'its bound').toContain('curl -s --max-time "$CCRC_HEALTH_TIMEOUT" ');
+      for (const [what, v] of [['spawn', spawn], ['probe ceiling', ceiling], ['health default', health]] as const) {
+        expect(v, what).toBeGreaterThan(0);
+      }
+      expect(term, `the until line: ${until[0]}`).toBe(spawn + 2 * ceiling + health);
     });
 
     it('W24-H1: the gate window is read from ccrc.env, the environment wins, and an unreadable line waits 90', () => {

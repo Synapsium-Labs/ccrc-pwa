@@ -23953,13 +23953,16 @@ _bak_gc() {   # <lead word: update|rollback>
   # The time bound (D-6591, D-6601), for both leads whenever the caller re-stamped (`_bak_restamp`): the smaller of the re-stamp's
   # term and the hard cap's, each less the margin. The hard cap is the control plane's D-3407 (`deadlineExpired`: the lease ends at
   # UPDATE_DEADLINE_HARD_CAP_FACTOR deadlines past its start, which no re-stamp pushes out). The bash knows no lease start, but its
-  # own report's startedAt (UPD_REPORT_STARTED) follows it by at most UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS, plus the
-  # release-host probe a re-install rollback child makes before its first report (`cmd_rollback`'s `_upd_asset_listed`, its
-  # CCRC_RELEASE_PROBE_MAX_TIME at the ceiling `_upd_asset_listed` validates) — D-6603; W24-K6 pins these literals against those
-  # names. An undecided reading (`_upd_deadline_ms min` rc 1) leaves no deadline to cap: the bound is the re-stamp less the margin.
+  # own report's startedAt (UPD_REPORT_STARTED) follows it by at most the sum of the start chain's own ceilings, 63 s (D-6744; D-6603's
+  # 40 left out the health call): the spawn's UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS; the release-host probe of a re-install
+  # rollback, twice (the parent's `_upd_asset_listed` before it detaches, and the detached child's repeat), each at the
+  # CCRC_RELEASE_PROBE_MAX_TIME ceiling `_upd_asset_listed` validates; and `_upd_fleet_warn`'s `_box_health` call before the first
+  # `_upd_phase`, at CCRC_HEALTH_TIMEOUT's default. W24-K6 derives the literal from those four and pins it. No literal bounds D-6744's
+  # residuals: the transient unit's start under the service manager, and a lease stamped before its dispatch.
+  # An undecided reading (`_upd_deadline_ms min` rc 1) leaves no deadline to cap: the bound is the re-stamp less the margin.
   if [[ "${UPD_THIN_AT:-}" =~ ^[1-9][0-9]{0,10}$ ]]; then
     dl="$(_upd_deadline_ms min)" || { rc=1; echo "$lead: backups: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the server may take it from (the environment, the box's ccrc.env, the exposure file), so no verification starts this run past the keep-set's first full one — the next update continues"; }
-    until=$(( 10#$UPD_THIN_AT + dl / 1000 - margin )); hc=$(( 4 * dl / 1000 - 40 - margin ))
+    until=$(( 10#$UPD_THIN_AT + dl / 1000 - margin )); hc=$(( 4 * dl / 1000 - 63 - margin ))
     [ "$dl" -eq 0 ] || [[ ! "${UPD_REPORT_STARTED:-}" =~ ^[1-9][0-9]{0,10}$ ]] || [ $(( hc += 10#$UPD_REPORT_STARTED )) -ge "$until" ] || until="$hc"
   fi
   _bak_keepset "$until" || krc=$?   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
