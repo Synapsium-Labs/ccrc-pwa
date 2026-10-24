@@ -72,7 +72,10 @@ export type SendResult =
         // in the stash behind the empty box, with a warn line, and the next send's submit is then gated on the
         // indicator (D-6011). Not `enter-ignored`: that word says our text is still in the box, which the mail lane's
         // park hold and dispatch's stranded-`/clear` proof both read. Nothing of ours is left, so a retry types afresh.
-        | 'enter-ignored-restored';
+        | 'enter-ignored-restored'
+        // D-6367, `resumeIfOwn: 'whole'` only. The box is empty, so there is nothing to resume and nothing was typed
+        // (the earlier send may have landed). `submitEnter`'s word for the same fact.
+        | 'nothing-to-submit';
       draft?: string;
       pane?: string;
       /**
@@ -343,11 +346,12 @@ async function watchSubmit(
     await sleep(SUBMIT_POLL_MS);
     const askedAt = now();
     const pane = await d.tmux.captureAnsi(id);
-    // D-6366: a failed capture is a blind poll, exactly like an absent box. One dropped read (a link drop) used to end
-    // the whole watch with the box unread; the poll count (`SUBMIT_TRIES`) bounds it, and `SUBMIT_BLIND_MS` the time
-    // of one blind run: the run's failed captures and the sleeps between them, from the ask of its first failed
-    // capture (that capture's own time included, so a hung tmux ends at its first). A run of 3 failures at 200 ms per
-    // capture, or 2 at 400 ms, keeps the watch's polls.
+    // D-6366: a failed capture is a blind poll, as an absent box is (neither reads the box); unlike an absent box, it
+    // counts against the blind deadline. One dropped read (a link drop) used to end the whole watch with the box
+    // unread; the poll count (`SUBMIT_TRIES`) bounds it, and `SUBMIT_BLIND_MS` the time of one blind run: the run's
+    // failed captures and the sleeps between them, from the ask of its first failed capture (that capture's own time
+    // included, so a hung tmux ends at its first). A run of 3 failures at 200 ms per capture, or 2 at 400 ms, keeps the
+    // watch's polls.
     if (pane === null) {
       failedSinceRead = true;
       if (runStart === null) runStart = askedAt;
@@ -907,6 +911,27 @@ function boxRows(ansiPane: string): string[] | null {
  */
 export function ownRenderedBox(ansiPane: string, parts: readonly string[], provenance: TypeProvenance): string | null {
   if (provenance === 'unproven') return null;
+  return renderedAsTyped(ansiPane, parts, 'tail');
+}
+
+/**
+ * D-6367. The ONE definition of "the box renders what `parts` typed", read whole: guards 2 to 6 of `ownRenderedBox`
+ * (the provenance guard, 1, stays with its caller) and the tail it answers (or `null`). `head` is guard 4's and 5's
+ * only difference: `'tail'` (`ownRenderedBox`) lets the first run be a suffix of ours, which a box at the row cap
+ * shows when its head scrolled out; `'whole'` (`sendPrompt`'s `resumeIfOwn: 'whole'`) needs the first run to EQUAL
+ * ours, so nothing of ours is hidden above the window and no row is added. `'whole'` also refuses a box AT the row
+ * cap (R43 F1): such a box keeps its last rows in view, so rows above the window cannot be seen, and a claim equal to
+ * the visible rows would press Enter over lines never claimed. The cost, a message that renders at exactly the cap
+ * cannot be resumed and answers `draft-present`, is the safe direction (the one the hidden-head case takes). A resume
+ * cannot have this call's provenance (an earlier call typed the text): the ownership claim is the client's `resume`
+ * plus this correspondence.
+ *
+ * WHAT IT PROVES, no more: the box equals our text UP TO WHITESPACE (`squash` erases every space, newline and blank
+ * row, which wrapping moves), so no non-space character is added or removed. That is enough for a resume: one Enter
+ * sends exactly our non-space characters, and no second copy of them exists. It does NOT prove a bare chip row's
+ * content in `'whole'` mode (no provenance: a human would have to paste over 800 characters at exactly that position).
+ */
+function renderedAsTyped(ansiPane: string, parts: readonly string[], head: 'tail' | 'whole'): string | null {
   const rows = boxRows(ansiPane);
   if (rows === null) return null;
   const seen: string[] = [''];
@@ -922,8 +947,11 @@ export function ownRenderedBox(ansiPane: string, parts: readonly string[], prove
   }
   if (seen.length !== typed.length) return null;
   for (let i = 1; i < seen.length; i++) if (seen[i] !== typed[i]) return null;
-  if (!typed[0]!.endsWith(seen[0]!)) return null;
+  if (head === 'whole' ? seen[0] !== typed[0] : !typed[0]!.endsWith(seen[0]!)) return null;
   const paneRows = ansiPane.replace(/\n$/, '').split('\n').length;
+  // R43 F1: a box at the row cap keeps its LAST rows in view, so rows above the window are invisible; `'whole'` refuses
+  // it (nothing of ours may be hidden), whatever the first run says.
+  if (head === 'whole' && rows.length === boxRowCap(paneRows)) return null;
   if (seen[0] !== typed[0] && rows.length !== boxRowCap(paneRows)) return null;
   const inView = squash(rows.join(''));
   if (inView === '') return null;
@@ -1236,7 +1264,18 @@ export type OnDraft = 'refuse' | 'replace' | 'stash';
  * what I am about to send, left there by MY OWN prior attempt whose Enter
  * did not land — if so, finish submitting it rather than refusing it as a
  * foreign draft." See the `draft` branch below for the discrimination this
- * buys, and its own limit.
+ * buys, and its own limit. `true` is that PREFIX mode.
+ *
+ * `resumeIfOwn: 'whole'` (D-6367): Retry's resume of text a refused send left in
+ * the box (`verify-failed`, `enter-ignored`). A mode of the same option, with the
+ * caller's claim "that text is mine": the box is read WHOLE and Enter is pressed
+ * only when it renders the composed text up to whitespace, wrapped lines and blank
+ * rows read as the rows they are (`renderedAsTyped`, the correspondence
+ * `ownRenderedBox` proves: no non-space character added or removed). Any
+ * other box is `draft-present`, a box at the row cap included (rows above the window cannot be seen, R43 F1; a message
+ * that renders at exactly the cap cannot be resumed, the safe direction); an EMPTY box is `nothing-to-submit`,
+ * because the earlier send may have landed and nothing is ever retyped. It types, clears and
+ * stashes nothing (`onDraft` is not consulted).
  *
  * `clearMailResidue` (robust-mail-delivery spec §2.2): a caller that sets
  * this is stating "if the box holds MACHINE residue this system's own old
@@ -1289,7 +1328,7 @@ export function sendPrompt(
   d: SendDeps,
   id: string,
   text: string,
-  opts: { onDraft?: OnDraft; attachments?: readonly string[]; resumeIfOwn?: boolean;
+  opts: { onDraft?: OnDraft; attachments?: readonly string[]; resumeIfOwn?: boolean | 'whole';
           clearMailResidue?: boolean; ownStrandedClear?: boolean; holdIfAutoContinueArmed?: boolean;
           refuseIfTurnRunning?: boolean } = {},
 ): Promise<SendResult> {
@@ -1383,6 +1422,16 @@ export function sendPrompt(
           ? submitOverHeldStash(d, id, sleep, still, turnBefore)
           : pressEnterAndConfirm(d, id, sleep, still);
     if (draft || hasContentBelowMarker(pane)) {
+      // D-6367, `resumeIfOwn: 'whole'`: Retry's resume of text a refused send left in the box. A MODE of the resume
+      // above, not a third path to Enter: it compares the box READ WHOLE (every visual row, `renderedAsTyped`, the
+      // first run equal to ours) and goes through the same `submit`, so a stash held when the call began still gets
+      // `submitOverHeldStash`'s gate. Anything else in the box is the ordinary refusal, shape and all. It never
+      // types, clears or stashes (`onDraft` is not consulted): the text is already there.
+      if (opts.resumeIfOwn === 'whole') {
+        const tail = renderedAsTyped(pane, parts, 'whole');
+        if (tail !== null) return submit(stillContains(tail));
+        return { ok: false, error: 'draft-present', draft: boxText(pane) };
+      }
       // `resumeIfOwn`'s discrimination: `needle` is derived from THIS call's
       // OWN `text`, and `submitEnter`'s own correspondence gate already
       // established the doctrine this reuses — "the box's MARKER ROW... is
@@ -1415,7 +1464,7 @@ export function sendPrompt(
       // straight through to the ordinary `draft-present` refusal below,
       // untouched: F2 (never type over a human mid-sentence) is unaffected,
       // because this branch only ever PRESSES ENTER, never clears or types.
-      if (opts.resumeIfOwn && needle !== '' && draft.startsWith(needle) && matchesOwnDraft(pane, parts)) {
+      if (opts.resumeIfOwn === true && needle !== '' && draft.startsWith(needle) && matchesOwnDraft(pane, parts)) {
         // D-6011: the resume goes through the same `submit`, so a held stash gates its retry Enter too.
         return submit(stillStartsWith(needle));
       }
@@ -1480,6 +1529,9 @@ export function sendPrompt(
         provenance = 'cleared-by-us';
       }
     } else {
+      // D-6367: an empty box under a whole-box resume is a send that may have LANDED (its final read was blind), so
+      // nothing is typed: `submitEnter`'s word for the same fact, whose sentence tells the operator to check.
+      if (opts.resumeIfOwn === 'whole') return { ok: false, error: 'nothing-to-submit' };
       provenance = 'proven-empty';
     }
     // D-5046: every line's send is CHECKED, and the first refusal stops the
