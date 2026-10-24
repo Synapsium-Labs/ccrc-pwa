@@ -117,6 +117,14 @@ export interface SessionState {
    *  showing stays up, read-only, and sends nothing (`the-ask-holds-through-a-reconnect`). Per connection, never
    *  persisted. */
   askFrameSeen: boolean;
+  /** R69: the client-side LIFECYCLE generation of the ask: a count, starting at 0, that every `ask_cleared` frame and every
+   *  `dialog_cleared` frame raises by one, in the reducer, one frame at a time, so a clear inside a batch of frames is
+   *  counted whatever React batches. It is not a content identity and says nothing about WHICH ask: the keyboard's
+   *  engagement (`DialogSheet`'s `askIdentity`) joins it to the envelope's content, so a clear plus a byte-identical ask
+   *  is a new ask. Nothing else moves it: not `ask`, `dialog` or `rotated`, and not the socket leaving `open` (`onState`
+   *  lowers `dialog` with no frame, and a reconnect is the same ask). In memory only: no snapshot or stored state carries
+   *  it, and a new store starts at 0. */
+  askEpoch: number;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
   /** D-5372: the tasks frame's `touchedAt` (newest task file mtime, epoch ms);
    *  absent when the frame carried none. Replaced with every tasks frame. */
@@ -189,6 +197,8 @@ export type SessionSnapshot = Pick<
   /** D-6325. Optional HERE only, like `workflows`: `snapshotOf` always carries it, and a snapshot built without it (the
    *  reducer's own suites) reads as false. */
   askFrameSeen?: boolean;
+  /** R69. Optional HERE only, as `askFrameSeen`: `snapshotOf` always carries it, and a snapshot built without it reads 0. */
+  askEpoch?: number;
   /** D-5560. Optional HERE only: `snapshotOf` always carries both, and a
    *  snapshot built without them (the reducer's own suites) reads as no rows. */
   workflows?: WorkflowView[];
@@ -289,7 +299,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     case 'dialog':
       return { ...s, dialog: msg.dialog };
     case 'dialog_cleared':
-      return { ...s, dialog: null };
+      return { ...s, dialog: null, askEpoch: (s.askEpoch ?? 0) + 1 };
     case 'tasks':
       return { ...s, tasks: msg.tasks, tasksTouchedAt: msg.touchedAt };
     case 'workflows':
@@ -311,7 +321,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     case 'ask':
       return { ...s, ask: msg.ask, askFrameSeen: true };
     case 'ask_cleared':
-      return { ...s, ask: null, askFrameSeen: true };
+      return { ...s, ask: null, askFrameSeen: true, askEpoch: (s.askEpoch ?? 0) + 1 };
     case 'rotated':
       // FIVE transcript facts die with the transcript (final review, Minor 6;
       // `fileMeasured` joined them with the measured-read completion) — only
@@ -363,6 +373,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   dialog: s.dialog,
   ask: s.ask,
   askFrameSeen: s.askFrameSeen,
+  askEpoch: s.askEpoch,
   tasks: s.tasks,
   tasksTouchedAt: s.tasksTouchedAt,
   workflows: s.workflows,
@@ -781,6 +792,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       dialog: null,
       ask: null,
       askFrameSeen: false,
+      askEpoch: 0,
       tasks: [],
       workflows: [],
       workflowsUnreadable: false,

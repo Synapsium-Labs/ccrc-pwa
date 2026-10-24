@@ -366,14 +366,25 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const hooked = envelope !== null
     && (source.kind === 'approval' || (source.kind === 'structured' && source.from === 'hook') || source.kind === 'review');
   const askKey = hooked ? JSON.stringify(envelope) : null;
-  // D-6326, R64: the ask's IDENTITY for the keyboard's engagement (`useAskEngagement`) is exactly the dismissal's: the
-  // hooked envelope (the same for every question and the review of it, so the keys stay engaged question → review,
-  // review ← question and question → question), else the pane dialog's id (a menu, the transcript's copy, an unreadable
-  // ask, the terminal), else null. Two known gaps: the pane dialog's id changes per screen (`sha1(options + title)`), so a
-  // transcript-copy question → its review crosses identities and the engagement does not continue there; and a clear
-  // followed by a byte-identical envelope in one batch keeps one identity. A CLOSED hold (the ask ended, the held surface
-  // exiting) is no ask: its identity is null, so the engagement ends there and a later ask with equal content starts clean.
-  const askIdentity = closed ? null : (askKey ?? dialog?.id ?? null);
+  // D-6326, R64, R69: the ask's IDENTITY for the keyboard's engagement (`useAskEngagement`) is a LIFECYCLE GENERATION joined
+  // to what the surface can say of the ask: `${askEpoch}:${…}`, or null when there is nothing to engage with (a closed hold,
+  // or neither an envelope nor a menu).
+  //  - `askEpoch` is the store's count of `ask_cleared` and `dialog_cleared` frames, raised one frame at a time in the
+  //    reducer. So a clear is seen even when it, a byte-identical ask and a screen change arrive in ONE batch: the content
+  //    alone could not tell that from one ask. A reconnect, a repeated `ask` or `dialog` frame and a `rotated` move nothing.
+  //  - A HOOKED ask adds its envelope (`askKey`: the same for every question and the review, so the keys stay engaged
+  //    question → review, review ← question and question → question) and a different envelope is a different ask.
+  //  - An ask-backed surface with no envelope (the transcript's copy of a question, its review, an unreadable ask: `askLike`,
+  //    decided from `source`, the held source when the surface is held) adds the word `ask`: the wire has no per-ask id and
+  //    the pane dialog's id (`sha1(options + title)`) changes on EVERY screen, so the generation alone is the ask.
+  //  - A plain menu or the terminal door adds its pane dialog's id: each such screen is its own ask, as it always was.
+  // KNOWN GAP, kept plain: two DIFFERENT aged asks back to back with no clear between them cannot be told from two screens
+  // of one aged ask, so they share an identity and the engagement continues into the second. It only ever takes focus that
+  // the engaged control's replacement dropped to the body (or that is already inside the card), never external focus.
+  const askEpoch = useStore((s) => s.askEpoch);
+  const askLike = source.kind === 'structured' || source.kind === 'review' || source.kind === 'ask-unreadable';
+  const askIdentity = closed || (askKey === null && dialog === null) ? null
+    : `${askEpoch}:${askKey ?? (askLike ? 'ask' : `menu:${dialog?.id}`)}`;
   // An approval is one screen; a question ask is one per question plus its review (`askScreen`).
   const screenNow = !hooked ? null : 'approval' in envelope ? (dialog === null ? null : 'approval') : askScreen(envelope, dialog);
   // D-6326: INLINE there is no dismissal (the card covers nothing, and has no ✕, scrim or "Not now"), so at the desk a hide
