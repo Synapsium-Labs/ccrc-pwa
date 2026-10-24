@@ -38,7 +38,8 @@ export interface ComposerProps {
   onInterrupt?: (source: 'keycap') => void;
   /** D-6326: an inline ask surface is up, so the server would refuse a send with `dialog-open`. Send (and Enter) then
    *  keeps the text, makes no request and says that refusal's own sentence under the field, until the question is
-   *  answered. Stop is unaffected. */
+   *  answered. It also holds through the reconnect gap, while `DialogSheet`'s held, read-only card is up (`askInline`
+   *  stays true then), so Send is held and Escape does not interrupt until the new connection decides. Stop is unaffected. */
   askUp?: boolean;
 }
 
