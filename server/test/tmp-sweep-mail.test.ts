@@ -13,7 +13,7 @@ import {
   parseTmpSweepCensus, tmpSweepBudget, tmpSweepHolders, tmpSweepReceipts,
   type TmpSweepCensus, type TmpSweepMoved, type TmpSweepSession,
 } from '../src/tmpSweep.js';
-import { MAIL_SUBJECT_MAX_BYTES } from '../../shared/api.js';
+import { MAIL_BODY_MAX_BYTES, MAIL_SUBJECT_MAX_BYTES } from '../../shared/api.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -66,12 +66,12 @@ describe('tmpSweepReceipts — one mail per session per pass, never for shadow',
     const pass1 = census({ seq: 2, moved: [moved(1), moved(2)] });
     const first = tmpSweepReceipts(pass1, 0);
     expect(first.mails).toHaveLength(1);
-    expect(first.mails[0]!.subject).toBe('tmp-sweep: moved 2 entries (seq 1-2)');
-    expect(tmpSweepReceipts(pass1, first.mailed).mails, 'a re-read of the same census').toEqual([]);
-    const pass2 = census({ seq: 4, moved: [moved(1), moved(2), moved(3), moved(4)] });
+    expect(first.mails[0]!.subject).toBe(`tmp-sweep: moved 2 entries (seq 1-2, pass ${T0})`);
+    expect(tmpSweepReceipts(pass1, first.mailed).mails.map((m) => m.subject), 'a re-read rebuilds the same subject').toEqual(first.mails.map((m) => m.subject));
+    const pass2 = census({ seq: 4, at: T0 + HOUR, moved: [moved(1), moved(2), moved(3, { at: T0 + HOUR }), moved(4, { at: T0 + HOUR })] });
     const second = tmpSweepReceipts(pass2, first.mailed);
-    expect(second.mails.map((m) => m.subject)).toEqual(['tmp-sweep: moved 2 entries (seq 3-4)']);
-    expect(tmpSweepReceipts(pass2, second.mailed).mails).toEqual([]);
+    expect(second.mails.map((m) => m.subject)).toEqual([`tmp-sweep: moved 2 entries (seq 1-2, pass ${T0})`, `tmp-sweep: moved 2 entries (seq 3-4, pass ${T0 + HOUR})`]);
+    expect(tmpSweepReceipts(pass2, second.mailed).mails).toHaveLength(2);
   });
 
   it('shadow rows send no mail, and the high-water still passes them', () => {
@@ -85,8 +85,8 @@ describe('tmpSweepReceipts — one mail per session per pass, never for shadow',
     const c = census({ seq: 3, moved: [moved(1), moved(2, { id: 'project-b-calm-mesa', uuid: 'b'.repeat(36) }), moved(3)] });
     const r = tmpSweepReceipts(c, 0);
     expect(r.mails.map((m) => [m.toId, m.subject])).toEqual([
-      ['project-a-quiet-basin', 'tmp-sweep: moved 2 entries (seq 1-3)'],
-      ['project-b-calm-mesa', 'tmp-sweep: moved 1 entries (seq 2-2)'],
+      ['project-a-quiet-basin', `tmp-sweep: moved 2 entries (seq 1-3, pass ${T0})`],
+      ['project-b-calm-mesa', `tmp-sweep: moved 1 entries (seq 2-2, pass ${T0})`],
     ]);
   });
 
@@ -122,6 +122,21 @@ describe('tmpSweepReceipts — one mail per session per pass, never for shadow',
     expect(body).toContain('held');
     expect(body).toContain('fresh-dir');
     expect(body).toContain('touched-within-48h');
+  });
+
+  it('a body of about 200 rows stays inside the mail body bound and points at the census', () => {
+    const rows = Array.from({ length: 200 }, (_, i) => moved(i + 1, { name: `a-fairly-long-entry-name-${i}` }));
+    const kept = Array.from({ length: 200 }, (_, i) => ({ name: `kept-entry-with-a-long-name-${i}`, why: 'touched-within-48h' }));
+    const c = census({ seq: 200, moved: rows, sessions: [session({ budget: { state: 'enforced', overSince: T0, enforceAt: T0, removedBytes: 0, kept } })] });
+    const body = tmpSweepReceipts(c, 0).mails[0]!.body;
+    expect(Buffer.byteLength(body)).toBeLessThanOrEqual(MAIL_BODY_MAX_BYTES);
+    expect(body).toMatch(/and \d+ more entries; the census ~\/\.ccrc\/tmp-sweep\.json lists them/);
+    expect(body.match(/more entries/g)).toHaveLength(2);
+  });
+
+  it('rows whose quarantine time has passed are not mailed', () => {
+    const c = census({ seq: 2, at: T0 + 30 * HOUR, moved: [moved(1), moved(2, { at: T0 + 29 * HOUR })] });
+    expect(tmpSweepReceipts(c, 0).mails.map((m) => m.subject)).toEqual([`tmp-sweep: moved 1 entries (seq 2-2, pass ${T0 + 29 * HOUR})`]);
   });
 
   it('a subject stays inside the mail subject bound', () => {
@@ -251,10 +266,10 @@ describe('runTmpSweepCensusLane', () => {
     const r = laneRig(json(census({ seq: 2, moved: [moved(1), moved(2)] })));
     await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
     await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
-    expect(r.mailTo(WORKER).map((m) => m.subject)).toEqual(['tmp-sweep: moved 2 entries (seq 1-2)']);
-    r.body.current = json(census({ seq: 3, moved: [moved(1), moved(2), moved(3)] }));
+    expect(r.mailTo(WORKER).map((m) => m.subject)).toEqual([`tmp-sweep: moved 2 entries (seq 1-2, pass ${T0})`]);
+    r.body.current = json(census({ seq: 3, at: T0 + HOUR, moved: [moved(1), moved(2), moved(3, { at: T0 + HOUR })] }));
     await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
-    expect(r.mailTo(WORKER).map((m) => m.subject)).toEqual(['tmp-sweep: moved 2 entries (seq 1-2)', 'tmp-sweep: moved 1 entries (seq 3-3)']);
+    expect(r.mailTo(WORKER).map((m) => m.subject)).toEqual([`tmp-sweep: moved 2 entries (seq 1-2, pass ${T0})`, `tmp-sweep: moved 1 entries (seq 3-3, pass ${T0 + HOUR})`]);
   });
 
   it('a restart (fresh lane state) does not re-send a receipt the coord store already holds', async () => {
@@ -265,6 +280,25 @@ describe('runTmpSweepCensusLane', () => {
     r.coord.db.prepare("UPDATE mail_deliveries SET state = 'acked'").run();
     await runTmpSweepCensusLane(r.deps, newTmpSweepLaneState(), KNOWN);
     expect(r.mailTo(WORKER)).toHaveLength(1);
+  });
+
+  it('a restart after two passes sends nothing new (the cold read rebuilds the subjects already sent)', async () => {
+    const r = laneRig(json(census({ seq: 2, moved: [moved(1), moved(2)] })));
+    await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+    r.body.current = json(census({ seq: 3, at: T0 + HOUR, moved: [moved(1), moved(2), moved(3, { at: T0 + HOUR })] }));
+    await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+    r.coord.db.prepare("UPDATE mail_deliveries SET state = 'acked'").run();
+    await runTmpSweepCensusLane(r.deps, newTmpSweepLaneState(), KNOWN);
+    expect(r.mailTo(WORKER)).toHaveLength(2);
+  });
+
+  it('a recreated census whose seq range collides with an old pass still mails the new pass', async () => {
+    const r = laneRig(json(census({ seq: 2, moved: [moved(1), moved(2)] })));
+    await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+    r.body.current = json(census({ seq: 2, at: T0 + 2 * HOUR, moved: [moved(1, { at: T0 + 2 * HOUR }), moved(2, { at: T0 + 2 * HOUR })] }));
+    await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+    expect(r.mailTo(WORKER).map((m) => m.subject)).toEqual([
+      `tmp-sweep: moved 2 entries (seq 1-2, pass ${T0})`, `tmp-sweep: moved 2 entries (seq 1-2, pass ${T0 + 2 * HOUR})`]);
   });
 
   it('shadow rows send no mail', async () => {
