@@ -466,6 +466,8 @@ describe('the rules cache', () => {
     put('rules-release.json', [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'e2e' }] } }]);
     put('branch.json', { protected: false });
     const first = landing('demo', 'demo-quiet-basin:41,demo-tall-fern:42').lines;
+    // the budget pin's worst path: one GraphQL call and two REST reads however many bases are unread
+    expect(calls().length).toBeLessThanOrEqual(3);
     expect(restCalls().map((c) => c[1]).sort()).toEqual(['repos/o/r/branches/main', 'repos/o/r/rules/branches/main']);
     expect(first.map((l) => l.rulesNamed)).toEqual([['lint'], []]);
     expect(first.map((l) => l.unmeasured)).toEqual([[], ['rules', 'protection']]);
