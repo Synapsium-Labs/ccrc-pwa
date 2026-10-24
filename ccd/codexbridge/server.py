@@ -18,12 +18,15 @@ a ping follows PING_S of downstream silence; IDLE_TIMEOUT_S with no PARSED event
 reply with `api_error`; and reading stops the moment the reducer's terminal is set. A reply that asks to be continued
 (`end_turn:false`, `interrupted`) is sent again with its output items appended, at most CONTINUE_MAX times, its block
 indexes running on; while a continued message waits for its next upstream head (or a 401's refresh), the request's
-thread still pings (`_waiting`). Then the reasoning store, the stats file and, when the status file read an upstream
-state, `ok`. An upstream failure the bridge meets itself (the idle bound, a timeout or transport failure of the post)
+thread still pings (`_waiting`), and it stops waiting once the stream is closed (the client went away, or the drain
+cut it): the helper's answer, when it comes, is dropped and its connection closed. A stream that is closed is never
+posted upstream again (`_one_response` checks before each post, the one after a refresh included). Then the reasoning
+store, the stats file and, when the status file read an upstream state, `ok`. An upstream failure the bridge meets itself (the idle bound, a timeout or transport failure of the post)
 is recorded in the status file with a bounded code too, like every classified one.
 
 THE CATALOGUE. A model outside it is the client's: 404 `not_found_error`, counted `modelSubstitution:<model>`. A
-catalogue that is absent, unreadable or not in its shape is the bridge's: 503 `api_error` (retryable), counted
+catalogue that is absent, unreadable or not in its shape (a row that is not an object with a string `id` among them)
+is the bridge's: 503 `api_error` (retryable) on `/v1/messages` and on `/v1/models` alike, counted
 `catalogue-unreadable`, never a substitution.
 
 THE OVERFLOW. Task 1's table answers the overflow row with the bare `prompt is too long` (the backend's message holds
@@ -40,10 +43,14 @@ handler) logs the same line. No body, token or header value is logged or counted
 THE DRAIN (SIGTERM, D-6429). The signal handler only sets `stopping` and starts a thread that calls
 `httpd.shutdown()`; when `serve_forever` returns on the main thread the listener is closed (new connections are
 refused from then on), the in-flight requests get DRAIN_S to finish, every one still open is cut with `api_error`
-(counted `drain-cut`; `AnthropicStream.cut` answers a 503 for one not yet committed), those writes get one second,
-and the credential calls still in flight (a refresher tick, a request's `ensure_fresh` or `refresh_rejected`, counted
-in `auth`) get up to STOP_MARGIN_S - DRAIN_WRITE_S - EXIT_MARGIN_S to finish, so a refresh the token endpoint has
-answered reaches the disk before the process ends; then the stats file is flushed. The return is 0.
+(counted `drain-cut`; `AnthropicStream.cut` answers a 503 for one not yet committed), the credential flight (`auth`)
+is closed, so no credential call starts from then on (a cut request's 401 refresh, a refresher tick: each is
+answered `the bridge stopped` without calling the library), those writes get DRAIN_WRITE_S, and the credential calls
+already in flight (a refresher tick, a request's `ensure_fresh` or `refresh_rejected`) get what is left of the stop
+bound, until DRAIN_S + STOP_MARGIN_S - EXIT_MARGIN_S after the signal (the KILL comes at DRAIN_S + STOP_MARGIN_S,
+Task 11), so a refresh the token endpoint has answered reaches the disk before the process ends; then the stats file
+is flushed. The return is 0. The credential wait is a step the plan's drain text does not have
+(D-TBD-drain-waits-for-credentials).
 
 Every constant is read when it is used, so the test driver's `consts` reach it.
 """
@@ -227,7 +234,8 @@ def load_auth_lib(path: str) -> object:
 # ── small readers ────────────────────────────────────────────────────────────────────────────────────────────────
 def catalogue_ids(path: str) -> Optional[List[str]]:
     """The lane catalogue's model ids (`{"models": [{"id": ...}, ...]}`), read at each call. None when the file is
-    absent or unreadable, is not JSON, or has no `models` list: an undecidable catalogue, never an empty one."""
+    absent or unreadable, is not JSON, has no `models` list, or has a row that is not an object with a non-empty
+    string `id`: an undecidable catalogue, never an empty one. [] only for a literal empty list."""
     try:
         with open(path, "rb") as f:
             doc = json.loads(f.read().decode("utf-8"))
@@ -239,7 +247,9 @@ def catalogue_ids(path: str) -> Optional[List[str]]:
     out = []  # type: List[str]
     for row in rows:
         mid = row.get("id") if isinstance(row, dict) else None
-        if isinstance(mid, str) and mid and mid not in out:
+        if not (isinstance(mid, str) and mid):
+            return None
+        if mid not in out:
             out.append(mid)
     return out
 
@@ -391,12 +401,21 @@ class _Flight:
         self._done = threading.Condition(self._lock)
         self.streams = set()  # type: set
         self.count = 0
+        self.closed = False  # set by the drain (`close`): nothing enters from then on
 
-    def enter(self, s: Optional[stream.AnthropicStream] = None) -> None:
+    def enter(self, s: Optional[stream.AnthropicStream] = None) -> bool:
+        """Count one call in; False (and nothing counted) once the flight is closed."""
         with self._lock:
+            if self.closed:
+                return False
             self.count += 1
             if s is not None:
                 self.streams.add(s)
+            return True
+
+    def close(self) -> None:
+        with self._lock:
+            self.closed = True
 
     def leave(self, s: Optional[stream.AnthropicStream] = None) -> None:
         with self._lock:
@@ -489,8 +508,11 @@ class _Request:
         return self.lib
 
     def _auth_call(self, fn: Callable, *args: object, **kwargs: object) -> object:
+        """`fn`, a library call that may refresh, counted in the credential flight; once the drain has closed it, the
+        bridge stopped and the library is not called."""
         lib = self.library()
-        self.state.auth.enter()
+        if not self.state.auth.enter():
+            raise errors.unavailable("the bridge stopped")
         try:
             return fn(*args, **kwargs)
         except lib.AuthError as e:
@@ -624,23 +646,44 @@ class _Request:
     def _waiting(self, out: stream.AnthropicStream, fn: Callable, *args: object, **kwargs: object) -> object:
         """`fn(*args, **kwargs)`; once the stream is committed and streaming (a continued message), on a helper thread
         while this one pings after PING_S of downstream silence (spec §2.4), so a slow head or a refresh between two
-        responses is not silence. Its exception is raised here; the wait ends only when `fn` returns, which its own
-        bounds limit (CONNECT_TIMEOUT_S, IDLE_TIMEOUT_S, the library's)."""
+        responses is not silence. Its exception is raised here; the wait ends when `fn` returns, which its own
+        bounds limit (CONNECT_TIMEOUT_S, IDLE_TIMEOUT_S, the library's), or when the stream is closed (the client went
+        away, or the drain cut it): then `the bridge stopped` is raised at once, and the helper drops its answer when
+        it comes, closing an upstream connection."""
         if not out.committed or out.buffered:
             return fn(*args, **kwargs)
         box = {}  # type: Dict[str, object]
+        lock = threading.Lock()
 
         def run() -> None:
             try:
-                box["value"] = fn(*args, **kwargs)
+                value = fn(*args, **kwargs)
             except BaseException as e:  # handed to the request's thread below
-                box["error"] = e
+                with lock:
+                    box["error"] = e
+                return
+            with lock:
+                if "abandoned" not in box:
+                    box["value"] = value
+                    return
+            if isinstance(value, backend.Upstream):  # nobody reads it: drop the connection
+                try:
+                    value.close()
+                except Exception as x:
+                    log_exception(x)
 
         helper = threading.Thread(target=run, name="codexbridge-wait", daemon=True)
         helper.start()
         while True:
             helper.join(max(0.0, min(WAIT_TICK_S, out.last_write_at + PING_S - time.monotonic())))
             if not helper.is_alive():
+                break
+            if out.closed:  # nothing more is written, so no ping is due: stop waiting rather than spin
+                with lock:
+                    if "value" not in box and "error" not in box:
+                        box["abandoned"] = True
+                        raise errors.unavailable("the bridge stopped")
+                helper.join()  # it has answered: only its return is left
                 break
             if time.monotonic() - out.last_write_at >= PING_S:
                 out.ping()
@@ -654,6 +697,8 @@ class _Request:
         st = self.state
         lib = self.lib
         while True:
+            if out.closed:  # cut by the drain or the client gone (a refresh may have run since): never post for it
+                return errors.unavailable("the bridge stopped")
             up = self._waiting(out, self._post, turn, reading)
             st.stats.header_names(up.headers)
             st.stats.name("responseHeader", _media_type(up.headers))
@@ -851,12 +896,11 @@ def _make_server_class(base: type) -> type:
 def _refresher(cfg: BridgeConfig, stop: threading.Event, auth: _Flight) -> None:
     """The designated refresher (spec §2.6): every REFRESH_TICK_S, `ensure_fresh` at half the token's lifetime, so an
     idle lane's token is refreshed too. Never raises; a failure is logged by its class and tried at the next tick. A
-    tick is counted in `auth`, so the drain waits for it, and starts nothing once `stop` is set."""
+    tick is counted in `auth`, so the drain waits for it, and none starts once the drain has closed `auth`."""
     while not stop.wait(REFRESH_TICK_S):
-        auth.enter()
+        if not auth.enter():
+            return
         try:
-            if stop.is_set():
-                return
             lib = load_auth_lib(cfg.auth_lib)
             r = lib.read(cfg.auth_dir)
             if r.credential != "present":
@@ -881,10 +925,12 @@ def serve(cfg: BridgeConfig, hooks: Hooks) -> int:
     except OSError as e:
         raise SystemExit(LOG_PREFIX + "failed to bind 127.0.0.1:%d (%s)" % (cfg.port, _code_of(e)))
     stopping = threading.Event()
+    term_at = []  # type: List[float]  (the signal's time, the stop bound's start)
 
     def on_term(signum: int, frame: object) -> None:
         if stopping.is_set():
             return
+        term_at.append(time.monotonic())
         stopping.set()
         threading.Thread(target=httpd.shutdown, name="codexbridge-shutdown", daemon=True).start()
 
@@ -901,8 +947,10 @@ def serve(cfg: BridgeConfig, hooks: Hooks) -> int:
         if s.cut(errors.unavailable("the bridge is restarting")):
             cut += 1
             st.outcome("drain-cut")
+    auth.close()
     if cut:
         flight.wait_idle(DRAIN_WRITE_S)
-    auth.wait_idle(max(0.0, STOP_MARGIN_S - DRAIN_WRITE_S - EXIT_MARGIN_S))
+    start = term_at[0] if term_at else time.monotonic()
+    auth.wait_idle(max(0.0, start + DRAIN_S + STOP_MARGIN_S - EXIT_MARGIN_S - time.monotonic()))
     st.flush(force=True)
     return 0

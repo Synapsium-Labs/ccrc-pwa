@@ -137,6 +137,9 @@ THE DIRECT-MODE SERVER (Task 8).
                    `server.serve(server.config_from_env(os.environ), hooks)`, and the driver exits with its return.
                    `fault: "post-raises"` replaces backend.post with one that raises an exception whose text holds
                    the request body and the headers (the bearer token among them), for the log case.
+                   `fault: "eof-is-timeout"` wraps backend.post so the upstream body's end raises
+                   backend.UpstreamTimeout("read") in place of ending: the socket's own idle bound, firing before the
+                   parsed-event bound whatever the scheduling, for the idle case.
 A BridgeError prints as {"error": {status, etype, message, headers, state, code, requestId, kind}, "answer":
 {"status", "headers", "body": parsed JSON}, "event": errors.event(e) as text}. An op that raised prints
 {"raised": <class name>}. Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the package failed to import.
@@ -799,6 +802,20 @@ def _serve(op, pkg, cb, auth_consts):
     if op.get("fault") == "post-raises":
         def post(base, body, headers, **kwargs):
             raise RuntimeError("upstream refused " + body.decode("utf-8", "replace") + " " + repr(headers))
+
+        cb.backend.post = post
+    elif op.get("fault") == "eof-is-timeout":
+        real_post = cb.backend.post
+
+        def post(base, body, headers, **kwargs):
+            up = real_post(base, body, headers, **kwargs)
+
+            def chunks():
+                for chunk in up.chunks:
+                    yield chunk
+                raise cb.backend.UpstreamTimeout("read")
+
+            return up._replace(chunks=chunks())
 
         cb.backend.post = post
     elif op.get("fault") is not None:

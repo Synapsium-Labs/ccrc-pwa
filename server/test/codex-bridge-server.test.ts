@@ -14,6 +14,7 @@ import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
 import path, { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -222,6 +223,17 @@ async function withBridge(
   }
 }
 
+/** A process's CPU time so far, user and system, in seconds (`/proc/<pid>/stat` fields 14 and 15; Linux only). */
+const HAS_PROC = existsSync('/proc/self/stat');
+const CLK_TCK = HAS_PROC ? Number(execFileSync('getconf', ['CLK_TCK'], { encoding: 'utf8' }).trim()) || 100 : 100;
+function cpuSeconds(pid: number): number {
+  const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+  return (Number(fields[11]) + Number(fields[12])) / CLK_TCK;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 const events = (a: Answer): string[] => a.frames.map((f) => f.event);
 const textOf = (a: Answer): string => a.frames
   .filter((f) => f.event === 'content_block_delta' && f.data.delta.type === 'text_delta').map((f) => f.data.delta.text).join('');
@@ -421,6 +433,19 @@ describe.skipIf(!PY)('the timers: ping, the commit point and the idle bound (Rev
     }, { consts: { 'backend.IDLE_TIMEOUT_S': 0.5 } });
   });
 
+  it('the socket\'s own idle bound is the idle bound too, never a truncation', async () => {
+    // the driver's fault turns the body's end into the socket's UpstreamTimeout, with the parsed-event bound at its
+    // 300 s default: only the socket's bound can end this stream, whatever the scheduling
+    const answer: ResponsesAnswer = { status: 200, sse: created() + added(0, 'msg_fx1') + delta(0, 'msg_fx1', 'x') };
+    await withBridge([answer], async ({ bridge, lane }) => {
+      const a = await call(bridge, '/v1/messages', { body: messages() });
+      expect(a.status).toBe(200);
+      expect(events(a).slice(-2)).toEqual(['content_block_stop', 'error']);
+      expect(a.frames.at(-1)!.data.error.type).toBe('api_error');
+      expect((JSON.parse(readFileSync(lane.status, 'utf8')) as Json).lastErrorCode).toBe('idle-timeout');
+    }, { serve: { fault: 'eof-is-timeout' } });
+  });
+
   it('an upstream that cannot be reached is 503 api_error, its code in the status file', async () => {
     await withBridge([], async ({ bridge, lane }) => {
       const a = await call(bridge, '/v1/messages', { body: messages() });
@@ -499,10 +524,61 @@ describe.skipIf(!PY)('the drain (Review Focus 3, D-6429)', () => {
       expect(Date.now() - t1).toBeLessThan(4000);
       expect(readFileSync(join(lane.authDir, 'auth.json'), 'utf8')).toContain(issued.refresh_token as string);
     }, {
-      // the token endpoint holds its answer 1.5 s, past the drain's DRAIN_S, inside its credential wait
+      // the token endpoint holds its answer 1.5 s, past the drain's DRAIN_S, inside its credential wait. DRAIN_WRITE_S
+      // is large and never spent (no stream is cut): the wait is what is left of the stop bound since the signal
+      // (0.2 + 5 - 1 s), never a fixed share of STOP_MARGIN_S that would leave 0.1 s here
       auth: { token: [{ status: 200, body: issued, delayMs: 1500 }] },
-      consts: { 'server.REFRESH_TICK_S': 0.2, 'server.DRAIN_S': 0.2 },
+      consts: { 'server.REFRESH_TICK_S': 0.2, 'server.DRAIN_S': 0.2, 'server.DRAIN_WRITE_S': 3.9 },
       plant: { credential: { expiresIn: 1000, accessClaims: { iat: now - 3000 } } },
+    });
+  });
+
+  it('SIGTERM during a request\'s refresh waits for it, and the cut request is never posted', async () => {
+    const issued = issuedAnswer();
+    await withBridge([{ status: 200, sse: textReply('too late') }], async ({ bridge, auth, up, lane }) => {
+      const aP = call(bridge, '/v1/messages', { body: messages() });
+      const t0 = Date.now();
+      while (auth!.requests.length === 0 && Date.now() - t0 < 4000) await sleep(25);
+      expect(auth!.requests).toHaveLength(1);
+      bridge.proc.kill('SIGTERM');
+      const a = await aP;
+      const exit = await bridge.wait();
+      expect(a.status).toBe(503);
+      expect(a.json?.error.type).toBe('api_error');
+      expect(exit).toEqual({ code: 0, signal: null });
+      expect(readFileSync(join(lane.authDir, 'auth.json'), 'utf8')).toContain(issued.refresh_token as string);
+      expect(up.requests).toHaveLength(0);
+    }, {
+      // an expired credential: the request's ensure_fresh holds the token endpoint 1.5 s, past DRAIN_S and the cut
+      // stream's DRAIN_WRITE_S, so only the credential wait keeps the process alive until the rotation is on disk
+      auth: { token: [{ status: 200, body: issued, delayMs: 1500 }] },
+      consts: { 'server.DRAIN_S': 0.2, 'server.DRAIN_WRITE_S': 0.1 },
+      plant: { credential: { expiresIn: -120 } },
+    });
+  });
+
+  it('a request cut by the drain whose upstream then answers 401 starts no refresh', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const no: ResponsesAnswer = { status: 401, body: { error: { code: 'token_expired', message: 'expired' } }, holdHeadMs: 1500 };
+    await withBridge([no], async ({ bridge, auth, up }) => {
+      const aP = call(bridge, '/v1/messages', { body: messages() });
+      const t0 = Date.now();
+      while (up.requests.length === 0 && Date.now() - t0 < 4000) await sleep(25);
+      expect(up.requests).toHaveLength(1);
+      bridge.proc.kill('SIGTERM');
+      const a = await aP;
+      const exit = await bridge.wait();
+      expect(a.status).toBe(503);
+      expect(a.json?.error.type).toBe('api_error');
+      expect(exit).toEqual({ code: 0, signal: null });
+      expect(up.requests).toHaveLength(1);
+      expect(auth!.requests).toHaveLength(0);
+    }, {
+      // the 401 lands about 1.5 s after the signal: after the cut (at most 0.5 + 0.2 s), inside the cut stream's
+      // DRAIN_WRITE_S (2.5 s), so the credential flight is already closed when the request would refresh
+      auth: { token: [{ status: 200, body: issuedAnswer({ iatAgo: 600 }) }] },
+      consts: { 'server.DRAIN_S': 0.2, 'server.DRAIN_WRITE_S': 2.5 },
+      plant: { credential: { accessClaims: { iat: now - 600 } } },
     });
   });
 });
@@ -548,6 +624,54 @@ describe.skipIf(!PY)('the continuation and the fold (D-6410, D-6431, Review Focu
       expect(textOf(a)).toBe('part 1part 2');
       expect(ev.at(-1)).toBe('message_stop');
     }, { consts: { 'server.PING_S': 0.2 } });
+  });
+
+  it.skipIf(!HAS_PROC)('a continued message whose client goes away stops waiting, and spins no CPU on the held head', async () => {
+    const first: ResponsesAnswer = { status: 200, sse: created(1) + done(0, msgItem('msg_fx1', 'part 1')) + completed({}, { end_turn: false }) };
+    const second: ResponsesAnswer = { status: 200, sse: textReply('part 2'), holdHeadMs: 2000 };
+    await withBridge([first, second], async ({ bridge, up }) => {
+      const pid = bridge.proc.pid!;
+      const body = Buffer.from(JSON.stringify(messages()));
+      // the client reads the first response's block, then goes away while the second head is held
+      await new Promise<void>((resolve) => {
+        const req = httpRequest({
+          host: '127.0.0.1', port: bridge.port, path: '/v1/messages', method: 'POST', agent: false,
+          headers: { 'content-type': 'application/json', 'x-api-key': bridge.key, 'content-length': String(body.length) },
+        }, (res) => {
+          let text = '';
+          res.setEncoding('utf8');
+          res.on('data', (c: string) => {
+            text += c;
+            if (text.includes('content_block_stop')) { req.destroy(); resolve(); }
+          });
+        });
+        req.once('error', () => undefined);
+        req.write(body);
+        req.end();
+      });
+      const cpu0 = cpuSeconds(pid);
+      await sleep(1800);
+      const spent = cpuSeconds(pid) - cpu0;
+      expect(up.requests).toHaveLength(2);
+      // a ping finds the client gone within a few PING_S; a loop that kept joining the helper with no ping due would
+      // spin a whole core until the held head (about 1.5 s of this window)
+      expect(spent).toBeLessThan(0.4);
+    }, { consts: { 'server.PING_S': 0.2 } });
+  });
+
+  it('a reply to a request with an image never trains the ratio (D-6427)', async () => {
+    const body = messages();
+    body.messages[0].content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } });
+    await withBridge([{ status: 200, sse: textReply('a picture', { input: 2000 }) }], async ({ bridge, up, lane }) => {
+      const a = await call(bridge, '/v1/messages', { body });
+      expect(a.status, a.text).toBe(200);
+      expect(JSON.stringify(up.requests[0].body!.input)).toContain('input_image');
+      const stats = await statsWhen(lane, (d) => d.outcomes['2xx'] === 1);
+      // its input (2000) is past CALIBRATE_MIN_TOKENS and the message was not continued: only the image keeps the
+      // route at its seed
+      expect(stats.routes[`backend/${MODEL}`].promptTokensLast).toBe(2000);
+      expect(stats.routes[`backend/${MODEL}`].bytesPerToken).toBe(3.5);
+    });
   });
 
   it('a compaction request is counted only when it succeeds', async () => {
@@ -668,6 +792,9 @@ describe.skipIf(!PY)('an undecidable catalogue is the bridge\'s fault, not the c
   for (const [what, spoil] of [
     ['absent', (file: string) => rmSync(file)],
     ['not in its shape', (file: string) => writeFileSync(file, JSON.stringify({ models: 5 }))],
+    ['a list of rows that are not objects', (file: string) => writeFileSync(file, JSON.stringify({ models: [5] }))],
+    ['a list of rows with no id', (file: string) => writeFileSync(file, JSON.stringify({ models: [{ name: 'x' }] }))],
+    ['a list with one row out of shape', (file: string) => writeFileSync(file, JSON.stringify({ models: [{ id: BRIDGE_MODELS[0] }, { id: '' }] }))],
   ] as const) {
     it(`a catalogue that is ${what} is 503 api_error, retryable, and never a substitution`, async () => {
       await withBridge([], async ({ bridge, up, lane }) => {
