@@ -4,7 +4,10 @@
 // (preventDefault, the pick, the focus) stays with each caller.
 const STEP: Readonly<Record<string, number>> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
-export function rovingStep(key: string, at: number, n: number, _opts: { wrap: boolean }): number | null {
-  return key === 'Home' ? 0 : key === 'End' ? n - 1
-    : STEP[key] === undefined ? null : (at + STEP[key]! + n) % n;
+export function rovingStep(key: string, at: number, n: number, { wrap }: { wrap: boolean }): number | null {
+  if (key === 'Home') return 0;
+  if (key === 'End') return n - 1;
+  const by = STEP[key];
+  if (by === undefined) return null;
+  return wrap ? (at + by + n) % n : Math.min(n - 1, Math.max(0, at + by));
 }
