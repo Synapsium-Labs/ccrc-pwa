@@ -290,6 +290,33 @@ describe('the required contexts', () => {
     expect(l.unmeasured).toEqual([]);
   });
 
+  it('a protection check with app_id lists its name in pinnedNames', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [run('lint', 'SUCCESS')])]));
+    put('rules.json', [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'lint', integration_id: 15368 }, { context: 'e2e' }] } }]);
+    put('branch.json', { protected: true, protection: { required_status_checks: { contexts: ['unit'], checks: [{ context: 'sec', app_id: 15368 }, { context: 'any', app_id: -1 }] } } });
+    const l = landing('demo', 'demo-quiet-basin:41').lines[0]!;
+    expect([...l.pinnedNames].sort()).toEqual(['lint', 'sec']);
+  });
+
+  it('a line with no pinned name carries an empty pinnedNames', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [run('lint', 'SUCCESS')])]));
+    put('rules.json', [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'lint' }] } }]);
+    put('branch.json', { protected: true, protection: { required_status_checks: { contexts: ['unit'] } } });
+    expect(landing('demo', 'demo-quiet-basin:41').lines[0]!.pinnedNames).toEqual([]);
+  });
+
+  it('a status under a pinned name is carried although GitHub does not mark it required', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [status('deploy', 'SUCCESS', { isRequired: false }), run('other', 'SUCCESS', { isRequired: false })])]));
+    put('rules.json', [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'deploy', integration_id: 7 }] } }]);
+    put('branch.json', { protected: true, protection: { required_status_checks: { contexts: [] } } });
+    const l = landing('demo', 'demo-quiet-basin:41').lines[0]!;
+    expect(l.required.map((c: Ctx) => c.name)).toEqual(['deploy']);
+    expect(l.pinnedNames).toEqual(['deploy']);
+  });
+
   it('a check run with an empty conclusion and IN_PROGRESS keeps its status', () => {
     const l = one([run('build', null)]);
     expect(l.required[0]).toMatchObject({ name: 'build', state: 'IN_PROGRESS', appId: 15368, checkId: 1000, runId: 77 });
