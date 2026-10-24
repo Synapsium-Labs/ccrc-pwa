@@ -32042,7 +32042,7 @@ _ws_nested_same() {   # main nested base wip -> 0 when `$base/` already holds TH
   else ! git -C "$1" rev-parse --verify --quiet "$3/wip" >/dev/null 2>&1 || return 1; fi
   ! git -C "$1" for-each-ref --format='%(objectname) %(refname)' "$3/refs/" | sed "s# $3/# #" | grep -vxFf <(git -C "$2" for-each-ref --format='%(objectname) %(refname)') | grep -q .
 }
-_ws_nested_unland() { git -C "$1" for-each-ref --format='delete %(refname)' "$2/" | git -C "$1" update-ref --stdin 2>/dev/null; return 0; }   # a fresh base this pass claimed, its re-prove failed: leave no claim or partial refs for a retry to outgrow
+_ws_nested_unland() { git -C "$1" for-each-ref --format='%(refname)' "$2/" | { grep -v "^$2/again-" || true; } | sed 's/^/delete /' | git -C "$1" update-ref --stdin 2>/dev/null; return 0; }   # a fresh base this pass claimed, its re-prove failed: leave no claim or partial refs for a retry to outgrow
 _ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_RESCUE_ENTRY (one JSON object); 1 with
   #                         RECLAIM_PIN_WORD (nested-rescue-too-large | nested-rescue-failed) and RECLAIM_PIN_WHY.
   # Run under `_ws_reclaim_contained`. Moves no ref in the nested repository; adds refs only under `$base`.
