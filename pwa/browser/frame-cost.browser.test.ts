@@ -48,7 +48,8 @@ const changing = (): object[] => Array.from({ length: FRAMES }, (_, i) => fleetF
 
 const RENDERS = process.env['CCRC_RENDERS'] ?? '';
 /** Chrome flags for the render captures only (never for a cost measure): one raster thread, no GPU raster, sRGB output
- *  and grey-scale text, so two captures of one build agree to the byte. */
+ *  and grey-scale text, so two captures of one build agree to the byte. The render block launches its OWN browser with
+ *  them; the one above, which every cost case uses, never gets them. */
 const RENDER_ARGS = ['--disable-gpu', '--disable-gpu-rasterization', '--num-raster-threads=1', '--force-color-profile=srgb', '--disable-lcd-text', '--font-render-hinting=none'];
 
 let dist: string | undefined;
@@ -59,7 +60,7 @@ beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
   dist = buildDist();
   server = await serveDist(dist);
-  browser = await chromium.launch({ executablePath, headless: true, args: RENDERS === '' ? [] : RENDER_ARGS });
+  browser = await chromium.launch({ executablePath, headless: true }); // never with RENDER_ARGS: the cost cases run on a stock Chrome
 }, 180_000);
 
 afterAll(async () => {
@@ -71,14 +72,16 @@ afterAll(async () => {
 // ---- readiness -----------------------------------------------------------------------------------------------------
 // Both skins draw a session as `.sess-line` (Refined inside its project cards, Instrument in its status table; folded
 // groups draw none, so the count is a fraction of 80). Three rows that no fold hides in either skin (a working row, an
-// asking row, another working row) must be in the DOM, the count must then hold still for half a second, and a session
-// route must also have drawn its transcript (`.chat-item`). Drawn, not hidden: at 390 a session route hides the list.
+// asking row, another working row) must be in the DOM, each found by the EXACT text of its name button (`.sess-open`),
+// so 'task 5' is not satisfied by 'task 50'; the count must then hold still for half a second, and a session route
+// must also have drawn its transcript (`.chat-item`). DOM presence, not visibility: at 390 a session route hides the
+// list with CSS, and its rows must still count.
 const READY_NAMES = ['task 0', 'task 5', 'task 78'] as const;
 
 async function ready(page: Page, session: boolean): Promise<number> {
   await page.waitForFunction(([names, chat]) => {
     const lines = [...document.querySelectorAll('.sess-line')];
-    const named = names.every((n) => lines.some((l) => (l.textContent ?? '').includes(n)));
+    const named = names.every((n) => lines.some((l) => (l.querySelector('.sess-open')?.textContent ?? '').trim() === n));
     return named && (!chat || document.querySelectorAll('.chat-item').length > 0);
   }, [READY_NAMES, session] as const, { timeout: 30_000 });
   const count = (): Promise<number> => page.evaluate(() => document.querySelectorAll('.sess-line').length);
@@ -154,6 +157,17 @@ describe('measurement — C6 Step 0/4', () => {
     }
   }
 
+  // The renders have a browser of their own, launched with RENDER_ARGS and closed here (only when CCRC_RENDERS is set),
+  // so a run that measures cost and takes the captures together still measures cost on a stock Chrome.
+  let renderBrowser: Browser | undefined;
+  beforeAll(async () => {
+    if (RENDERS === '') return;
+    renderBrowser = await chromium.launch({ executablePath: resolveChrome(), headless: true, args: RENDER_ARGS });
+  }, 60_000);
+  afterAll(async () => {
+    await renderBrowser?.close();
+  });
+
   // The renders: viewport only, the clock fixed (Date, not the timers) at the fixture's own "now", fonts loaded, reduced
   // motion, and no caret or animation, so two captures of one build are the same bytes.
   for (const pg of PAGES) {
@@ -161,7 +175,7 @@ describe('measurement — C6 Step 0/4', () => {
       for (const theme of [PHOSPHOR, 'light']) {
         for (const width of [360, 390, 1280, 1920]) {
           it.runIf(RENDERS !== '')(`render ${pg.name}-${skin}-${theme}-${width}`, async () => {
-            const app = await openApp(browser!, { skin, theme, width }, fixture());
+            const app = await openApp(renderBrowser!, { skin, theme, width }, fixture());
             try {
               await app.page.emulateMedia({ reducedMotion: 'reduce' });
               await app.page.clock.setFixedTime(FIXTURE_NOW_MS);
