@@ -25,16 +25,21 @@
 //   equal content starts unengaged), and on a deliberate move out of the card (a pointerdown or a focusin outside it: the
 //   composer, the transcript, the fleet column, the body). With it not engaged (an ask arriving beside the composer, a
 //   successor ask, a skin switch) focus moves not at all, and enters the card only through `raise` (`AskSurface`), a Tab
-//   or a click. A reconnect does not disengage: the held gap keeps the same `askIdentity`, so the engagement of the SAME
-//   ask stands; it never takes focus from outside the card, and may move focus from the body, or from within the card, to
-//   a repainted screen's highlighted row. The identity is a lifecycle generation (the store's `askEpoch`, raised by every
-//   `ask_cleared` and `dialog_cleared` frame, so a clear is seen even in one batch with a byte-identical ask) joined to
-//   the envelope for a hooked ask, to one word for an ask-backed surface with no envelope (the transcript's copy of a
-//   question, its review, an unreadable ask: the wire has no per-ask id and the pane dialog's id changes per screen), and
-//   to the pane dialog's id for a plain menu or the terminal door (each such screen is its own ask). One known gap, kept
-//   plain: two DIFFERENT aged asks back to back with no clear between them cannot be told from two screens of one aged
-//   ask, so they share an identity and the engagement continues into the second; it only ever takes focus that the
-//   engaged control's replacement dropped to the body, never focus that is outside the card.
+//   or a click. A reconnect does not disengage by itself: the held gap keeps the same `askIdentity`, and the new
+//   connection's first frames keep it too, except when the store held an envelope that the new connection's first
+//   `ask_cleared` clears (the ask ended while the socket was down); with no envelope held that frame counts nothing. The
+//   engagement of the SAME ask stands; it never takes focus from outside the card, and may move focus from the body, or
+//   from within the card, to a repainted screen's highlighted row. The identity is a lifecycle generation (the store's
+//   `askEpoch`, raised by every `ask_cleared` that clears a held envelope, and every `dialog_cleared` while none is
+//   held; so a clear is seen even in one batch with a byte-identical ask, and a transient `dialog_cleared` under a hooked
+//   ask's envelope is not one) joined to the envelope for a hooked ask, to one word for an ask-backed surface with no
+//   envelope (the transcript's copy of a question, its review, an unreadable ask: the ask frames this controller reads
+//   carry no per-ask id and the pane dialog's id changes per screen), and to the pane dialog's id for a plain menu or
+//   the terminal door (each such screen is its own ask). One known gap, kept plain: two DIFFERENT aged asks back to back with no clear between them cannot be
+//   told from two screens of one aged ask, so they share an identity and the engagement continues into the second (the
+//   transcript's events hold the AskUserQuestion call's `toolId`, which this controller deliberately does not read: the
+//   transcript lags and rotates, and it would add a coupling and a parser); it only ever takes focus that the engaged
+//   control's replacement dropped to the body, never focus that is outside the card.
 // - A held-down digit or arrow across tabs is no key at all (`askKeyAction` reads `repeat`), and a send the sheet
 //   already has in flight refuses another at the ONE gate every send passes, its `claim` (a box's toggle reads the
 //   same `sending`), so this hook keeps no second gate of its own.
@@ -70,7 +75,7 @@ export interface AskEngagement {
 
 /**
  * The ONE owner of the inline engagement (D-6326, R64, R69). `identity` is the ask's (`DialogSheet`'s `askIdentity`): the
- * store's lifecycle generation (`askEpoch`, a count of clears) joined to the hook's envelope for every question and the
+ * store's lifecycle generation (`askEpoch`, a count of the clears that end an ask) joined to the hook's envelope for every question and the
  * review of it, to one word for an aged ask (no envelope; its pane dialog id changes per screen), or to the pane dialog's
  * id for a plain menu; null when nothing is asked. The owner treats it as an opaque string. It holds the identity engaged
  * and lets go, in one layout effect, as soon as the identity is any other (a replacement, a clear, even

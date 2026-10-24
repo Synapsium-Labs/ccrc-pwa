@@ -369,18 +369,25 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // D-6326, R64, R69: the ask's IDENTITY for the keyboard's engagement (`useAskEngagement`) is a LIFECYCLE GENERATION joined
   // to what the surface can say of the ask: `${askEpoch}:${…}`, or null when there is nothing to engage with (a closed hold,
   // or neither an envelope nor a menu).
-  //  - `askEpoch` is the store's count of `ask_cleared` and `dialog_cleared` frames, raised one frame at a time in the
-  //    reducer. So a clear is seen even when it, a byte-identical ask and a screen change arrive in ONE batch: the content
-  //    alone could not tell that from one ask. A reconnect, a repeated `ask` or `dialog` frame and a `rotated` move nothing.
+  //  - `askEpoch` is the store's count of the clears that end an ask (see its doc in `stores/session.ts`), raised one frame
+  //    at a time in the reducer: an `ask_cleared` that clears a held envelope, and a `dialog_cleared` while no envelope is
+  //    held. So a clear is seen even when it, a byte-identical ask and a screen change arrive in ONE batch, which the
+  //    content alone could not tell from one ask. A repeated `ask` or `dialog` frame, a `rotated`, a transient
+  //    `dialog_cleared` under a held envelope and the socket dropping move nothing. A reconnect keeps the identity unless
+  //    the store held an envelope that the new connection's first `ask_cleared` clears (the ask ended while it was down):
+  //    with no envelope held, that first `ask_cleared` is only the connection speaking, and counts nothing.
   //  - A HOOKED ask adds its envelope (`askKey`: the same for every question and the review, so the keys stay engaged
   //    question → review, review ← question and question → question) and a different envelope is a different ask.
   //  - An ask-backed surface with no envelope (the transcript's copy of a question, its review, an unreadable ask: `askLike`,
-  //    decided from `source`, the held source when the surface is held) adds the word `ask`: the wire has no per-ask id and
-  //    the pane dialog's id (`sha1(options + title)`) changes on EVERY screen, so the generation alone is the ask.
+  //    decided from `source`, the held source when the surface is held) adds the word `ask`: the ask frames this controller
+  //    reads carry no per-ask id, and the pane dialog's id (`sha1(options + title)`) changes on EVERY screen, so the
+  //    generation alone is the ask.
   //  - A plain menu or the terminal door adds its pane dialog's id: each such screen is its own ask, as it always was.
   // KNOWN GAP, kept plain: two DIFFERENT aged asks back to back with no clear between them cannot be told from two screens
-  // of one aged ask, so they share an identity and the engagement continues into the second. It only ever takes focus that
-  // the engaged control's replacement dropped to the body (or that is already inside the card), never external focus.
+  // of one aged ask, so they share an identity and the engagement continues into the second. The transcript's events do hold
+  // the AskUserQuestion call's `toolId`, which would tell them apart; this controller deliberately does not read it (the
+  // transcript lags the pane and rotates, and reading it would add a coupling and a parser). The continuation only ever takes
+  // focus that the engaged control's replacement dropped to the body (or that is already inside the card), never external focus.
   const askEpoch = useStore((s) => s.askEpoch);
   const askLike = source.kind === 'structured' || source.kind === 'review' || source.kind === 'ask-unreadable';
   const askIdentity = closed || (askKey === null && dialog === null) ? null

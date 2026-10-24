@@ -117,14 +117,19 @@ export interface SessionState {
    *  showing stays up, read-only, and sends nothing (`the-ask-holds-through-a-reconnect`). Per connection, never
    *  persisted. */
   askFrameSeen: boolean;
-  /** R69: the client-side LIFECYCLE generation of the ask: a count, starting at 0, that every `ask_cleared` frame raises by one
-   *  when it clears an envelope the store holds (with none held it is only a connection's first statement), and every
-   *  `dialog_cleared` frame raises by one, in the reducer, one frame at a time, so a clear inside a batch of frames is
-   *  counted whatever React batches. It is not a content identity and says nothing about WHICH ask: the keyboard's
-   *  engagement (`DialogSheet`'s `askIdentity`) joins it to the envelope's content, so a clear plus a byte-identical ask
-   *  is a new ask. Nothing else moves it: not `ask`, `dialog` or `rotated`, and not the socket leaving `open` (`onState`
-   *  lowers `dialog` with no frame, and a reconnect is the same ask). In memory only: no snapshot or stored state carries
-   *  it, and a new store starts at 0. */
+  /** R69: the client-side LIFECYCLE generation of the ask: a count, starting at 0, that the reducer raises one frame at a
+   *  time (so a clear inside a batch of frames is counted whatever React batches) in exactly two cases:
+   *  - an `ask_cleared` frame while the store HOLDS an envelope (`ask` not null): the hook ended its ask. With none held it
+   *    clears nothing: it is a connection's first statement, which the server sends for any ask without an envelope;
+   *  - a `dialog_cleared` frame while NO envelope is held: without the hook's envelope the pane's menu is all there is of
+   *    the ask, so its vanishing ends it. For a hooked ask the hook is the lifecycle authority, and a poll that sees no
+   *    menu for one tick does not end it.
+   *  Nothing else moves it: not `ask`, `dialog` or `rotated`, and not the socket leaving `open` (`onState` lowers `dialog`
+   *  with no frame). So a reconnect keeps the count, except when the store held an envelope that the new connection's
+   *  first `ask_cleared` then clears (the ask ended while the socket was down). It is a lifecycle count, not a content
+   *  identity and not an ask id: the keyboard's engagement (`DialogSheet`'s `askIdentity`) joins it to the envelope's
+   *  content, so a clear plus a byte-identical ask is a new ask. In memory only: no snapshot or stored state carries it,
+   *  and a new store starts at 0. */
   askEpoch: number;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
   /** D-5372: the tasks frame's `touchedAt` (newest task file mtime, epoch ms);
@@ -300,7 +305,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     case 'dialog':
       return { ...s, dialog: msg.dialog };
     case 'dialog_cleared':
-      return { ...s, dialog: null, askEpoch: (s.askEpoch ?? 0) + 1 };
+      return { ...s, dialog: null, askEpoch: (s.askEpoch ?? 0) + (s.ask === null ? 1 : 0) };
     case 'tasks':
       return { ...s, tasks: msg.tasks, tasksTouchedAt: msg.touchedAt };
     case 'workflows':
