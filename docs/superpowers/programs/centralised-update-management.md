@@ -6046,6 +6046,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   and the hourly probe now reports either one.
   `STATUS 2026-10-24T18:29:39Z fleet=v0.0.636 server=v0.0.636 health=v0.0.636 newest=v0.0.638 intent=*:dev/auto=off`
   `backups=fleet:204M/server:8426M disk=fleet:93G/server:22G`
+- **2026-10-24 19:25 UTC — monitoring: both boxes moved to v0.0.638 by the operator's console tap; settled, no anomalies, a fourth
+  data backup kept by rule.** The fleet half ran 18:35:49 to `done` at 18:37:06, the server half from 18:37:23 to `done` at 18:47:20,
+  with the service restarted at 18:40:20. v0.0.636 carried the review-round cap (#1331), whose migration took `coord.db` from
+  user version 29 to 30, so this run's thinning kept a fourth data set by wave 23's pre-migration keep ("kept 20261024-122217: its
+  coord.db predates a schema migration"). Backups 11267M, four with data; 19G free. The probe's lines read the count and the size
+  only, so none fired. The broker's soak was told of the disk projection (the 10 GB line now about 10-30 at today's six taps) and,
+  before any tap, of v0.0.640's change to `watch.ts` (#1209, the lane runner's second step; no delegation hunk). The extra set goes
+  once about four more taps prune every backup from before the migration. See R46.
+  `STATUS 2026-10-24T19:25:47Z fleet=v0.0.638 server=v0.0.638 health=v0.0.638 newest=v0.0.642 intent=*:dev/auto=off`
+  `backups=fleet:205M/server:11267M disk=fleet:93G/server:19G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
@@ -6420,6 +6430,11 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   `CCRC_SERVER_URL` spelled with one slash (`http:/u:p@h`) prints whole in its `say` lines (measured on an extracted copy).
   The address is the operator's own, and the script prints no release base. Fix the mask and the header together in a later
   wave, with a row for each spelling.
+- **R46 (the 19:25 UTC monitoring of 2026-10-24; wave 23's pre-migration keep).** The keep runs past the count only, so it keeps
+  a fourth data set even when the counted three already hold one from before the migration. On 2026-10-24 the counted sets
+  `20261024-150005` and `-181918` both predate migration 30, and `20261024-122217` was kept as well, about 2.75 GB on a box
+  whose soak has a 10 GB stop line. Credit a counted set that predates the migration, and keep the extra one only when none
+  does, with a row for each case.
 
 ## Next-wave brief
 
