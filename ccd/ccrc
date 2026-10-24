@@ -19085,7 +19085,7 @@ cmd_rollback() {
          [ "$UPD_REPORTING" = 1 ] \
            && _upd_phase failed "rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed"
          exit 2 ;;
-      3) _ccrc_die "rollback: CCRC_RELEASE_BASE_URL could not be read (the line above says why) — nothing on this box was changed" ;;
+      3) _ccrc_die "rollback: $KNOB_WHY — nothing on this box was changed" ;;
       *) _ccrc_die "rollback: could not ask the release host whether $to exists within ${CCRC_RELEASE_PROBE_MAX_TIME}s (curl failed, timed out, or the host answered neither 200 nor 404) — nothing on this box was changed" ;;
     esac
   fi
@@ -20606,7 +20606,8 @@ _upd_marker_unsigned() {
 # from the host the operator named. rc 0 prints the base; rc 1, a ccrc.env that cannot be read for it, prints
 # nothing on stdout and one `$PROG:` line on stderr (never `update:`: a rollback and a rollout reach it too), and the
 # caller refuses before anything on the box changes, since fetching from the default host then would read unmeasured as
-# unset. The line names the file, never the value, which can carry `user:pass@`.
+# unset. The line names the file, never the value, which can carry `user:pass@`. A caller that reports the cause calls it
+# in its own shell, not `$(…)`, and reads KNOB and KNOB_WHY (`_ccrc_knob`'s), which a subshell would keep (F8).
 _upd_release_base() {
   _ccrc_knob CCRC_RELEASE_BASE_URL "https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases" || { echo "$PROG: $KNOB_WHY" >&2; return 1; }
   printf '%s' "$KNOB"
@@ -20679,7 +20680,9 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   _upd_validate_timeout CCRC_RELEASE_SUMS_MAX_TIME 20
   _upd_validate_timeout CCRC_RELEASE_SUMS_MAX_FILESIZE 4096 \
     'a whole number of bytes from 1 to 1048576' 1048576
-  base="$(_upd_release_base)" || _ccrc_die "CCRC_RELEASE_BASE_URL could not be read (the line above says why) — nothing on this box was changed"
+  # Called in this shell, never `$(…)`, so KNOB_WHY reaches the die: the report's detail then says why (the file, the key, the
+  # line, never a value), and its own line is silenced, the die's saying it once. A node fault, never `provenance: ` (F8, F9).
+  _upd_release_base >/dev/null 2>&1 && base="$KNOB" || _ccrc_die "$KNOB_WHY — nothing on this box was changed"
   if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
   UPD_URL_DIR_SAFE="$(_upd_redact "$UPD_URL_DIR")"
   UPD_STAGE="$(_plat_mktemp_d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
@@ -21677,8 +21680,8 @@ _upd_restore_copy() {
 
 # `_upd_asset_listed <tag> <asset>` — 0 the release carries it; 1 it does not,
 # MEASURED: the host answered 404; 2 unmeasured — anything else; 3 the release
-# base could not be read (`_upd_release_base`'s own stderr line says why, and
-# no host was asked: a word of its own, since a caller's rc-2 sentence blames
+# base could not be read (`_upd_release_base`'s own stderr line says why, KNOB_WHY
+# holds it for the caller's report, F8, and no host was asked: a word of its own, since a caller's rc-2 sentence blames
 # curl and the host, wave 24, D-6594). Two callers:
 # arm 2 asks for the previous release's bundle, `rollback` (Task 7) for
 # SHA256SUMS. D-3261: curl -f's exit 22 is ANY status
@@ -21721,7 +21724,7 @@ _upd_asset_listed() {
   _upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME 15 \
     "a whole number of seconds from 1 to 18 (the pre-detach check must answer inside W5's 20-second spawn deadline)" 18
   # Read before the curl, outside its `2>/dev/null`, so the reader's line reaches the operator.
-  local b; b="$(_upd_release_base)" || return 3
+  local b; _upd_release_base >/dev/null && b="$KNOB" || return 3   # in this shell, so the caller has KNOB_WHY
   code="$(curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_PROBE_MAX_TIME" \
     -o /dev/null -w '%{http_code}' "$b/download/$1/$2" 2>/dev/null)" || rc=$?

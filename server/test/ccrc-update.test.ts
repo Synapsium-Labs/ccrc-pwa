@@ -15362,9 +15362,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       const tree = treeDigest(join(home, 'ccrc'));
       const r = runUpdate(home, ['--to', 'v9.9.9'], { CCRC_RELEASE_BASE_URL: '' });
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
-      const err = r.stderr.split('\n');
-      expect(err).toContain(BASE_WHY);
-      expect(err).toContain('ccrc: CCRC_RELEASE_BASE_URL could not be read (the line above says why) — nothing on this box was changed');
+      expect(r.stderr.split('\n')).toContain(`${BASE_WHY} — nothing on this box was changed`);
       expect(curlUrls(home).filter((u) => !u.endsWith('/api/fleet/health')), 'a release URL was fetched').toEqual([]);
       expect(treeDigest(join(home, 'ccrc')), '~/ccrc').toEqual(tree);
     });
@@ -15378,9 +15376,25 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       const r = rollbackRun(home, ['--to', 'v9.9.9'], { CCRC_RELEASE_BASE_URL: '' });
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
       expect(r.stderr.split('\n')).toContain(BASE_WHY);
-      expect(r.stderr).toContain('rollback: CCRC_RELEASE_BASE_URL could not be read (the line above says why) — nothing on this box was changed');
+      expect(r.stderr).toContain(`rollback: ${BASE_WHY.slice('ccrc: '.length)} — nothing on this box was changed`);
       expect(r.stderr).not.toContain('curl failed');
       expect(curlUrls(home), 'the host was asked').toEqual([]);
+    });
+
+    // F8, F9 (fix round 1): the failed report's detail, which is all the console reads, carries the reader's value-free cause,
+    // and stays a node fault: a `provenance: ` lead would make it a verdict on a release nobody judged.
+    it('W24-U5: a refused base\'s failed report says why, as a node fault, for update and rollback alike (F8, F9)', () => {
+      const why = `${BASE_WHY.slice('ccrc: '.length)} - nothing on this box was changed`;   // the report's writer spells the dash ASCII
+      const home = freshUpdateBox('ccrc-fx-w24-u5-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      appendFileSync(envFile(home), `export CCRC_RELEASE_BASE_URL=${MIRROR}\n`);
+      const u = runUpdate(home, ['--to', 'v9.9.9', '--from', 'pwa'], { CCRC_RELEASE_BASE_URL: '' });
+      expect(u.code, `stderr: ${u.stderr}`).toBe(1);
+      expect([lastReport(home)['phase'], lastReport(home)['detail']], 'update').toEqual(['failed', why]);
+      const r = rollbackRun(home, ['--to', 'v9.9.9', '--from', 'pwa'], { CCRC_RELEASE_BASE_URL: '' });
+      expect(r.code, `stderr: ${r.stderr}`).toBe(1);
+      expect([lastReport(home)['phase'], lastReport(home)['detail']], 'rollback').toEqual(['failed', `rollback: ${why}`]);
     });
 
     it('W24-U4: on macOS a knob-less line the Darwin model rejects leaves the release base at its default, and a named base beside it refuses', () => {
