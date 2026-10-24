@@ -28,6 +28,7 @@ import contextlib
 import errno
 import fcntl
 import hashlib
+import hmac
 import http.client
 import json
 import math
@@ -1351,7 +1352,8 @@ def _refresh_locked(auth_dir: str, r: Reading, old: object, lane: Optional[str])
     """The refresh `ensure_fresh` runs under the lock, once it has settled a checkpoint and an unsaved record and
     re-read the credential: `r` and `old` are that re-read (`_read_raw`'s pair), `r` present. Checks the bar, makes the
     one token request, writes the status and commits, exactly as `ensure_fresh`'s docstring describes. The caller holds
-    `held(auth_dir)`. Extracted unchanged so that `refresh_rejected` runs the same body (codex-bridge Stage 2, Task 6)."""
+    `held(auth_dir)`. Extracted unchanged so that `refresh_rejected` runs the same body (codex-bridge Stage 2,
+    Task 6)."""
     key = _key(auth_dir)
     p = paths_for(auth_dir)
     from_unsaved = _from_unsaved(auth_dir, old)
@@ -1421,6 +1423,132 @@ def tier_access_token(auth_dir: str, lane: Optional[str] = None) -> Tuple[str, O
     if not r.access_token:
         raise Unreadable(r.detail)  # unreachable for a present reading (D-6541); never an empty bearer token
     return (r.access_token, r.account_id)
+
+
+# ── a direct lane: the bridge's three doors (codex-bridge Stage 2, Task 6) ───────────────────────────────────────────
+# The two states an upstream answer sets (spec §2.4's error table): both are in STATES. `record_upstream` writes them,
+# and `ok`, only over each other and over `ok`; a state the refresher owns (needs-signin, config-error, plan-disabled)
+# is never written over by an upstream answer.
+UPSTREAM_STATES = ("limit-paused", "ineligible")
+_RECORDABLE = frozenset(("ok",) + UPSTREAM_STATES)
+
+
+def _same_token(held_token: Optional[str], rejected: object) -> bool:
+    """True when the reading's access token is the one the upstream rejected, compared in memory by
+    `hmac.compare_digest` over the UTF-8 bytes; the rejected token is never stored or logged."""
+    if not isinstance(held_token, str) or not isinstance(rejected, str):
+        return False
+    return hmac.compare_digest(held_token.encode("utf-8"), rejected.encode("utf-8"))
+
+
+def refresh_rejected(auth_dir: str, rejected_access_token: str, *, lane: Optional[str] = None) -> Reading:
+    """The bridge's door after the upstream answered 401 to a token `ensure_fresh` called valid: refresh it once, even
+    though it is not expiring, unless another call already has.
+
+    As `ensure_fresh` does before its lock: a reading the refresher cannot use raises (`_raise_for`), and a status that
+    bars the credential is raised at once, never waiting on the lock (a reading served from the unsaved record is
+    barred only under the lock). Then, under `held`: settle a checkpoint (`recover_pending`), write an unsaved record
+    (`retry_unsaved`) and re-read; when the credential's access token is no longer `rejected_access_token`, another
+    call refreshed it since, and that reading is answered with no request; otherwise the same refresh `ensure_fresh`
+    runs (`_refresh_locked`): the bar, the one token request, the status, the commit. So two callers rejected on one
+    token make one request, and a dead refresh token lands in needs-signin exactly as `ensure_fresh` lands it."""
+    r, old = _read_raw(auth_dir)
+    _raise_for(r)
+    if not _from_unsaved(auth_dir, old):
+        _raise_if_barred(auth_dir, lane)
+    with held(auth_dir):
+        recover_pending(auth_dir)
+        retry_unsaved(auth_dir)
+        r, old = _read_raw(auth_dir)
+        _raise_for(r)
+        if not _same_token(r.access_token, rejected_access_token):
+            return r
+        return _refresh_locked(auth_dir, r, old, lane)
+
+
+def _secrets_of(auth_dir: str) -> List[str]:
+    """Every token and the account id the lane's credential holds, in the unsaved record and in the file alike: what a
+    code or a request id recorded from an upstream answer must not echo."""
+    found = []  # type: List[str]
+    for r, obj in (_read_raw(auth_dir), _read_file_raw(auth_dir)):
+        found.extend(v for v in (r.access_token, r.refresh_token, r.account_id) if isinstance(v, str) and v)
+        if isinstance(obj, dict):
+            id_token = _nonempty_str(obj.get("id_token"))
+            if id_token is not None:
+                found.append(id_token)
+    return found
+
+
+def _bounded_upstream(code: Optional[str], request_id: Optional[str],
+                      secrets: List[str]) -> Tuple[Optional[str], Optional[str]]:
+    """A code and a request id bounded as Stage 1 bounds the refresher's: the code lower-cased and kept when it matches
+    CODE_RE, else UNRECOGNISED_CODE (None for none, or an empty one); the request id kept when it matches
+    REQUEST_ID_RE, else None. Either one that echoes a token or the account id (`_echoes`, case-folded) is replaced
+    the same way, so neither field can carry a secret even when it fits its pattern."""
+    bounded_code = None  # type: Optional[str]
+    if isinstance(code, str) and code:
+        lowered = code.lower()
+        bounded_code = lowered if CODE_RE.fullmatch(lowered) else UNRECOGNISED_CODE
+        if any(_echoes(bounded_code, s) for s in secrets):
+            bounded_code = UNRECOGNISED_CODE
+    rid = request_id if isinstance(request_id, str) and REQUEST_ID_RE.fullmatch(request_id) else None
+    if rid is not None and any(_echoes(rid.lower(), s) for s in secrets):
+        rid = None
+    return bounded_code, rid
+
+
+def record_upstream(auth_dir: str, *, state: Optional[str], code: Optional[str], request_id: Optional[str],
+                    wait_s: float = 2.0) -> bool:
+    """Record what an upstream answer says about the lane in its status file. Best effort; never touches the network.
+
+    `state` is `ok`, `limit-paused`, `ineligible` or None (any other value is a ValueError, raised before anything is
+    read: a programming error). Under `held(auth_dir, wait_s)`, the current status (`read_status`), or, with none
+    current, the one a reading of the credential computes (state `ok`, its expiry, no refresh yet), is merged with:
+    `state` (None keeps the current one), `lastErrorCode` and `lastRequestId`, each bounded by `_bounded_upstream`.
+    Every refresher field (`expiresAt`, `lastRefreshAt`, `identity`, `unsaved`) is kept as it stands. The state moves
+    only among `ok`, `limit-paused` and `ineligible`: an upstream state is written over `ok` or the other upstream
+    state, and `ok` clears either; a current state the refresher owns (needs-signin, config-error, plan-disabled) is
+    left as it is, code and request id included, and the answer is False.
+
+    True when the status was written. False, with nothing written, when: the lock is still held after `wait_s`
+    (LockTimeout) or cannot be taken (any other AuthError); the credential is not present (nothing to bind a status
+    to; then no lock is taken and no directory made); the current state is the refresher's; or the write failed."""
+    if state is not None and state not in _RECORDABLE:
+        raise ValueError("ccgpt-auth: record_upstream records ok, limit-paused, ineligible or None")
+    if read(auth_dir).credential != "present":
+        return False
+    try:
+        with held(auth_dir, wait_s):
+            r, old = _read_raw(auth_dir)
+            if r.credential != "present":
+                return False
+            prev = read_status(auth_dir)
+            if prev is None:
+                current = "ok"  # type: object
+                kept = dict(expiresAt=r.expires_at, lastRefreshAt=None, identity=r.identity,
+                            unsaved=_from_unsaved(auth_dir, old))  # type: Dict[str, object]
+            else:
+                current = prev.get("state")
+                kept = dict(expiresAt=prev.get("expiresAt"), lastRefreshAt=prev.get("lastRefreshAt"),
+                            identity=_identity_from_json(prev.get("identity")), unsaved=prev.get("unsaved") is True)
+            if current not in _RECORDABLE:
+                return False
+            bounded_code, rid = _bounded_upstream(code, request_id, _secrets_of(auth_dir))
+            return write_status(auth_dir, state=current if state is None else state, lastErrorCode=bounded_code,
+                                lastRequestId=rid, **kept)
+    except AuthError:
+        return False
+
+
+def half_life_s(r: Reading) -> float:
+    """Half the access token's lifetime, `(exp - iat) / 2` from its claims when both are integers (never a bool) and
+    `exp > iat`; else EXPIRY_SKEW_S, read when called. The designated refresher, a direct lane's bridge, passes it to
+    `ensure_fresh` as `within_s`, so it refreshes at about half the token lifetime (spec §2.6)."""
+    claims = claims_of(r.access_token) if isinstance(r.access_token, str) else {}
+    exp, iat = claims.get("exp"), claims.get("iat")
+    if type(exp) is int and type(iat) is int and exp > iat:
+        return (exp - iat) / 2.0
+    return float(EXPIRY_SKEW_S)
 
 
 # ── the device-code sign-in ──────────────────────────────────────────────────────────────────────────────────────
