@@ -36,9 +36,11 @@ export interface ComposerProps {
   /** Stop in the send slot. It reports `keycap`, the word the server already records for the on-screen control:
    *  W2 changes no wire (D-5471), so the type admits no new source. */
   onInterrupt?: (source: 'keycap') => void;
-  /** D-6326: an inline ask surface is up, so the server would refuse a send with `dialog-open`. Send (and Enter) then
-   *  keeps the text, makes no request and says that refusal's own sentence under the field, until the question is
-   *  answered. It also holds through the reconnect gap, while `DialogSheet`'s held, read-only card is up (`askInline`
+  /** D-6326: an inline ask card is mounted, so Send (and Enter) is deferred LOCALLY: it keeps the text, makes no request
+   *  and shows the `dialog-open` sentence under the field until the question is answered. This is the client's own rule,
+   *  not the server's predicate: the server refuses with `dialog-open` only while the pane has a menu, so an approval
+   *  with no pane menu (fixture 7) would not be refused there, yet the card still holds the send while it is mounted.
+   *  It also holds through the reconnect gap, while `DialogSheet`'s held, read-only card is up (`askInline`
    *  stays true then), so Send is held and Escape does not interrupt until the new connection decides. Stop is unaffected. */
   askUp?: boolean;
 }
@@ -171,7 +173,8 @@ export function Composer({
 
   const send = (): void => {
     if (!canSend) return;
-    // The question is on the page, so the round trip that ends in `dialog-open` is not made: the text stays in the field.
+    // A local deferral while the inline card is mounted, whatever the server would say about the pane: no request is made
+    // and the text stays in the field. The sentence reuses the server's `dialog-open` wording for the local line.
     if (askUp) {
       setRefused(true);
       return;

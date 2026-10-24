@@ -181,6 +181,10 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
       // focused row left the DOM with it, and focus fell to the page body, where no key acts. Then (and only then) the
       // new screen's highlighted row takes it back, never from anything outside the card: the composer, the transcript,
       // a field. Without the shared engagement (absent, or not engaged for the ask showing now) it moves not at all.
+      // The position test below (`lost || scope.contains(at)`) is defence in depth behind the engagement's `focusin`
+      // release, which is the guard today: a realistic move of focus out of the card fires `focusin` first and ends the
+      // engagement, so the engagement test has already returned before this position is read. The arm is equivalent to
+      // its absence and no test can observe it without faking an event; it stays for a focus move that skips the listener.
       const scope = surfaceOf(root.current);
       if (scope?.getAttribute('data-ask-surface') === 'inline') {
         const at = document.activeElement;
