@@ -99,6 +99,22 @@ THE COUNT ESTIMATOR, THE KNOWN NAMES AND THE STATS FILE (Task 5): one Stats per 
                    original is restored (a full disk at fsync, for example)
   stats-file       {path} -> {"exists", "mode", "ino", "dir": the sorted listing of its directory}: never its content
   sleep            {s} -> {}: time.sleep(s)
+THE BACKEND ADAPTER (Task 7). A request is built from an Anthropic body through inbound.from_anthropic (a ListSink,
+  no store), never spelled as a neutral request here.
+  backend-consts   -> {"DEFAULT_BASE", "RESPONSES_PATH", "ORIGINATOR", "IDLE_TIMEOUT_S", "CONNECT_TIMEOUT_S",
+                   "INSTRUCTIONS_MARKER"}
+  backend-base     {environ?} -> {"base"}: backend.upstream_base over `environ` (a plain dict), else over os.environ
+  backend-body     {body, headers?, output_config?, laneDir?} -> {"body", "keys": the body's keys in order, "wire":
+                   encode_body's bytes as text}: build_body with instructions_form read from `laneDir`'s marker
+                   (backend.instructions_form), False with no laneDir
+  backend-ua       {version} -> {"ua", "platform": [system, release, machine]}
+  backend-post     {body, headers?, output_config?, laneDir?, version?, idle_s?, now?, and either authDir + lib (Stage
+                   1's library loaded by path; the headers from backend.headers_for over its ensure_fresh reading) or
+                   token + accountId? (backend.build_headers)} -> {"status", "headers" (the upstream's, lower-cased),
+                   "bytes" (the stream's length), "types" (each parsed SSE event's type), "headAt" and "elapsed"
+                   (seconds from the call), "timeout" (UpstreamTimeout's phase, or None), "error" (a non-2xx answer
+                   through backend.error_of, as a BridgeError prints, or None)}: one backend.post to
+                   upstream_base(os.environ), every chunk read
 A BridgeError prints as {"error": {status, etype, message, headers, state, code, requestId, kind}, "answer":
 {"status", "headers", "body": parsed JSON}, "event": errors.event(e) as text}. An op that raised prints
 {"raised": <class name>}. Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the package failed to import.
@@ -112,6 +128,7 @@ import importlib
 import importlib.util
 import json
 import os
+import platform
 import sqlite3
 import sys
 import threading
@@ -612,8 +629,77 @@ def _run(op, pkg, cb):
     if name == "sleep":
         time.sleep(float(op["s"]))
         return {}
+    if name.startswith("backend-"):
+        return _backend_op(name, op, cb)
     _usage("unknown op " + json.dumps(name))
     return None
+
+
+def _load_auth_lib(path):
+    """Stage 1's library loaded by path, as the bridge loads it; one module per driver process."""
+    lib = sys.modules.get("ccgpt_auth")
+    if lib is None:
+        spec = importlib.util.spec_from_file_location("ccgpt_auth", path)
+        lib = importlib.util.module_from_spec(spec)
+        sys.modules["ccgpt_auth"] = lib
+        spec.loader.exec_module(lib)
+    return lib
+
+
+def _neutral(op, cb):
+    kwargs = {"names": cb.ListSink()}
+    if "output_config" in op:
+        kwargs["output_config"] = op["output_config"]
+    return cb.inbound.from_anthropic(op["body"], op.get("headers") or {}, **kwargs)
+
+
+def _backend_op(name, op, cb):
+    backend = cb.backend
+    if name == "backend-consts":
+        return {k: getattr(backend, k) for k in ("DEFAULT_BASE", "RESPONSES_PATH", "ORIGINATOR", "IDLE_TIMEOUT_S",
+                                                  "CONNECT_TIMEOUT_S", "INSTRUCTIONS_MARKER")}
+    if name == "backend-base":
+        return {"base": backend.upstream_base(op["environ"] if "environ" in op else os.environ)}
+    if name == "backend-ua":
+        return {"ua": backend.user_agent(op["version"]),
+                "platform": [platform.system(), platform.release(), platform.machine()]}
+    req = _neutral(op, cb)
+    form = backend.instructions_form(op["laneDir"]) if op.get("laneDir") else False
+    body = backend.build_body(req, instructions_form=form)
+    wire = backend.encode_body(body)
+    if name == "backend-body":
+        return {"body": body, "keys": list(body), "wire": wire.decode("utf-8")}
+    if name != "backend-post":
+        _usage("unknown op " + json.dumps(name))
+    ua = backend.user_agent(op.get("version", "dev"))
+    if "authDir" in op:
+        reading = _load_auth_lib(op["lib"]).ensure_fresh(op["authDir"])
+        headers = backend.headers_for(reading, req.session_id, ua)
+    else:
+        headers = backend.build_headers(op["token"], op.get("accountId"), req.session_id, ua)
+    out = {"status": None, "headers": None, "bytes": 0, "types": [], "headAt": None, "elapsed": None,
+           "timeout": None, "error": None}
+    t0 = time.monotonic()
+    up = None
+    try:
+        up = backend.post(backend.upstream_base(os.environ), wire, headers, idle_s=op.get("idle_s"))
+        out["headAt"] = time.monotonic() - t0
+        out["status"], out["headers"] = up.status, dict(up.headers)
+        if 200 <= up.status < 300:
+            parser = cb.sse.SseParser()
+            for chunk in up.chunks:
+                out["bytes"] += len(chunk)
+                out["types"].extend(ev.type for ev in parser.feed(chunk))
+            out["types"].extend(ev.type for ev in parser.close())
+        else:
+            out["error"] = _bridge_error(cb.errors, backend.error_of(up, now=op.get("now", time.time())))
+    except backend.UpstreamTimeout as e:
+        out["timeout"] = e.phase
+    finally:
+        if up is not None:
+            up.close()
+    out["elapsed"] = time.monotonic() - t0
+    return out
 
 
 def main():
