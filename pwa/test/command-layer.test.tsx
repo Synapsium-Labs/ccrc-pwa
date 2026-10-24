@@ -13,7 +13,7 @@ import { clearAuthLost, raiseAuthLost, useAuthLost } from '../src/lib/auth';
 import { useLocation } from '../src/lib/router';
 import { setSkin } from '../src/lib/skin';
 import { Composer } from '../src/session/Composer';
-import { CONTENT_ID, FLEET_ID } from '../src/skins/frame';
+import { CONTENT_ID, FLEET_ID, focusShownLandmark } from '../src/skins/frame';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { useFleetStore } from '../src/stores/fleet';
 import { PALETTE_MOTION_VARS, VAUL_MOTION } from '../../ui/src/lib/motion';
@@ -628,6 +628,17 @@ describe('the palette hands focus back where it came from (D-5679)', () => {
     await wait(30);
     expect(refused, 'main was asked first').toHaveBeenCalled();
     expect(document.activeElement, 'not the body').toBe(screen.getByRole('region', { name: 'Fleet' }));
+  });
+
+  it('focusShownLandmark focuses each landmark without a scroll (preventScroll)', () => {
+    // A landmark is a page region, not a control to bring into view: both focus() calls pass preventScroll, the main
+    // one that is tried first and the fleet column's that takes the focus when main refuses it.
+    render(<><main id={CONTENT_ID} tabIndex={-1} /><section id={FLEET_ID} aria-label="Fleet" tabIndex={-1} /></>);
+    const main = vi.spyOn(document.getElementById(CONTENT_ID)!, 'focus').mockImplementation(() => {});
+    const fleet = vi.spyOn(document.getElementById(FLEET_ID)!, 'focus');
+    act(() => focusShownLandmark());
+    expect(main.mock.calls).toEqual([[{ preventScroll: true }]]);
+    expect(fleet.mock.calls).toEqual([[{ preventScroll: true }]]);
   });
 
   it('to the main landmark when the element that opened it is gone', async () => {
