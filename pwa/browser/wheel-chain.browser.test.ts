@@ -7,7 +7,10 @@
 // `page.mouse.wheel`: at 1280 and 1920 in both skins and both palettes, with the pointer over the element —
 //   - a block, and a tool card's result well, whose content fits: the wheel moves the transcript and not the box;
 //   - a block taller than `--well-max`: the wheel scrolls the block first, then, with the block at its end, the
-//     transcript, and the block stays at its end;
+//     transcript, and the block stays at its end. That second half is swept over eight sub-pixel offsets (k/8 px) of the
+//     block's wrapper: with a fractional scroll range Chrome latches the first wheel at a block's end to the block, which
+//     cannot move, at some page offsets, so a single resting offset can pass by luck (`.msg-assist pre` therefore has a
+//     whole-pixel line height). The FIRST wheel must move the transcript at every offset, and a failure names its offset;
 //   - a block with a 300-character line: a sideways wheel moves the block's `scrollLeft` and not the transcript's
 //     `scrollTop` (a regression pin: the x-axis containment is kept);
 //   - control: a wheel over prose moves the transcript, which proves this harness can see a chain at all.
@@ -297,16 +300,28 @@ describe('a wheel over a code block taller than --well-max scrolls the block fir
       expect(first.boxTop, `the block moved by ${first.boxTop}px (wanted more than 50)`).toBeGreaterThan(50);
       expect(Math.abs(first.scroller), `the transcript moved by ${first.scroller}px while the block had room`).toBeLessThan(2);
 
-      // Second half: the block at its end, the same wheel reaches the transcript and the block stays at its end.
-      await page.evaluate(() => {
-        const el = (window as unknown as { __c5: { find: (kind: string) => HTMLElement } }).__c5.find('tall');
-        el.scrollTop = el.scrollHeight;
-      });
-      const atEnd = await settle(page, 'tall');
-      expect(atEnd.room.down, 'the transcript still has room below the block').toBeGreaterThan(400);
-      const second = await wheelOver(page, 'tall', 0, 300);
-      expect(Math.abs(second.boxTop), 'the block stays at its end').toBeLessThan(2);
-      expect(second.scroller, `the transcript moved by ${second.scroller}px (wanted more than 50)`).toBeGreaterThan(50);
+      // Second half: the block at its end, the FIRST wheel reaches the transcript and the block stays at its end. Run at
+      // eight sub-pixel offsets of the block's wrapper (`position: relative; top: k/8 px`, test-only): a block whose
+      // scroll range is fractional is latched by Chrome at its end for the wheel at some page offsets (about .06-.44 of a
+      // pixel), swallowing it, so one resting offset proves nothing about the others. Each offset is its own settle.
+      for (let k = 0; k < 8; k += 1) {
+        const at = `at a ${k}/8 px offset of the block's wrapper`;
+        await page.evaluate((top) => {
+          let st = document.getElementById('c5-nudge') as HTMLStyleElement | null;
+          if (!st) { st = document.createElement('style'); st.id = 'c5-nudge'; document.head.append(st); }
+          st.textContent = `.msg-assist .code-block { position: relative; top: ${top}px; }`;
+        }, k / 8);
+        await reveal(page, 'tall');
+        await page.evaluate(() => {
+          const el = (window as unknown as { __c5: { find: (kind: string) => HTMLElement } }).__c5.find('tall');
+          el.scrollTop = el.scrollHeight;
+        });
+        const atEnd = await settle(page, 'tall');
+        expect(atEnd.room.down, `the transcript still has room below the block ${at}`).toBeGreaterThan(400);
+        const second = await wheelOver(page, 'tall', 0, 300);
+        expect(Math.abs(second.boxTop), `the block stays at its end ${at}`).toBeLessThan(2);
+        expect(second.scroller, `the first wheel moved the transcript by ${second.scroller}px (wanted more than 50) ${at}`).toBeGreaterThan(50);
+      }
     }), 120_000);
   }
 });

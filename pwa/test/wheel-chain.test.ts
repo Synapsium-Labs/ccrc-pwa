@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WELL } from '@ccrc/ui';
-import { declValue, ruleIn, stripComments } from './cssRule';
+import { declValue, norm, ruleIn, stripComments } from './cssRule';
 
 const UI = path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components');
 const prose = readFileSync(path.join(UI, 'prose.css'), 'utf8');
@@ -28,6 +28,17 @@ describe('a wheel over a transcript box chains to the transcript (D-6437)', () =
     expect(declValue(pre, 'overscroll-behavior-x'), 'a block scrolls sideways, so it contains that axis').toBe('contain');
     expect(declValue(pre, 'overscroll-behavior'), 'the shorthand would contain y as well').toBeNull();
     expect(declValue(pre, 'overscroll-behavior-y'), 'no y-axis containment inside the transcript').toBeNull();
+
+    // A WHOLE-PIXEL line height, declared AFTER the `font` shorthand (which resets it): 13px x 1.55 = 20.15px made a
+    // 60-line block's scroll range fractional, and at some page offsets Chrome then swallowed the first wheel at the
+    // block's end (the browser leg's sweep measures that). Either the round() form over the two tokens or an integer px.
+    const names = stripComments(pre).split(';').map((d) => norm(d.slice(0, Math.max(d.indexOf(':'), 0))));
+    const fontAt = names.indexOf('font');
+    const lineAt = names.lastIndexOf('line-height');
+    expect(fontAt, 'the block sets its font through the shorthand').toBeGreaterThanOrEqual(0);
+    expect(lineAt, 'the block declares a line-height after the font shorthand').toBeGreaterThan(fontAt);
+    const line = (declValue(pre, 'line-height') ?? '').replace(/\s+/g, '');
+    expect(line, 'a whole-pixel line height').toMatch(/^(round\(down,calc\(var\(--fs-sm\)\*var\(--lh-mono\)\),1px\)|\d+px)$/);
 
     // `WELL` wraps its lines, so it never scrolls sideways: no token of its own begins `overscroll`
     // (neither `overscroll-contain` nor `overscroll-x-contain`).
