@@ -117,8 +117,9 @@ describe('the meter is on the palette', () => {
   });
 
   it('an empty meter stays visible at 3:1: the track carries a 1px inset ring in --ink-tertiary (D-6329)', () => {
-    // The track fill is 1.07 to 1.16 on a card, so a 0% meter is a blank without the ring; the
-    // pair `meter track outline / raised|surface` in contrast-check.mjs gates the ring's colour.
+    // The track fill measures 1.07 to 1.56 on a card over the twelve palettes, and no edge token
+    // clears 3:1 everywhere, so a 0% meter can be a blank without the ring; the pair
+    // `meter track outline / raised|surface` in contrast-check.mjs gates the ring's colour.
     const { container } = render(<Meter pct={0} band="ok" />);
     expect(container.querySelector('.meter')).toHaveClass('ring-1', 'ring-inset', 'ring-ink-tertiary');
   });
