@@ -48,6 +48,32 @@ describe('sessionEntries (D-6714)', () => {
     expect(found('first', [s, other]), 'and by its title, as the page always was').toEqual(['open-session-x-1']);
   });
 
+  it('a session with a custom title is found by that title, and shows it', () => {
+    const titled = fleetSession({ id: 'project-a-titled', project: 'project-a', name: 'zeta-name', title: 'Alpha task' });
+    expect(found('Alpha task', [titled, worker])).toEqual(['open-session-project-a-titled']);
+    expect(found('Alpha', [titled, worker])).toEqual(['open-session-project-a-titled']);
+    const [e] = sessionEntries([titled], [], 'top');
+    expect(e!.title).toBe('Alpha task');
+    expect(e!.label).toBe('Alpha task, project-a');
+  });
+
+  it('a session is found by its underlying name when a custom title hides it, and still shows the title', () => {
+    const titled = fleetSession({ id: 'project-a-titled', project: 'project-a', name: 'zeta-name', title: 'Alpha task' });
+    expect(found('zeta-name', [titled, worker]), 'the hidden name').toEqual(['open-session-project-a-titled']);
+    expect(found('zeta', [titled, worker]), 'the hidden name, a part of it').toEqual(['open-session-project-a-titled']);
+    expect(found('Alpha task', [titled, worker]), 'the same entry the title finds').toEqual(['open-session-project-a-titled']);
+    const [e] = sessionEntries([titled], [], 'top');
+    expect(e!.title).toBe('Alpha task');
+    expect(e!.label).toBe('Alpha task, project-a');
+  });
+
+  it('a null name under a custom title is not a term, and ranking such a session never throws', () => {
+    const nameless = fleetSession({ id: 'n', project: 'project-a', name: null, title: 'Beta' });
+    expect(() => found('null', [nameless])).not.toThrow();
+    expect(found('null', [nameless]), 'a null is never the word "null"').toEqual([]);
+    expect(found('Beta', [nameless])).toEqual(['open-session-n']);
+  });
+
   it('a null workspace and branch are not terms, and ranking such a session never throws', () => {
     const bare = fleetSession({ id: 'bare', project: 'project-a', name: 'bare', workspace: null, branch: null });
     const blank = fleetSession({ id: 'blank', project: 'project-a', name: 'blank', workspace: '  ', branch: '' });

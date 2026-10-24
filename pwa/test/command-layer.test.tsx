@@ -783,4 +783,27 @@ describe('the top search finds sessions (D-6714)', () => {
       expect(optionNames(), q).toEqual(top[q]);
     }
   });
+
+  // R64: a custom title wins sessionLabel, so the option shows the title; the underlying name is still searched.
+  it('a custom title hides the name: the top search and Open session… find it by either, show the title, and Enter opens it', () => {
+    const TITLED = fleetSession({ id: 'project-c/titled one', project: 'project-c', name: 'zeta-name', title: 'Alpha task', bucket: 'idle' });
+    const SHOWN = 'Alpha task, project-c';
+    useFleetStore.setState({ sessions: [FIRST, LEAD, THIRD, TITLED], runs: [], blocked: false });
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    type('zeta-name');
+    expect(screen.getByRole('option', { name: SHOWN }), 'found by the hidden name').toBeTruthy();
+    type('Alpha task');
+    expect(screen.getByRole('option', { name: SHOWN }), 'found by the shown title').toBeTruthy();
+    const input = type('zeta-name');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(window.location.pathname).toBe(`/s/${encodeURIComponent(TITLED.id)}`);
+    expect(palette()).toBeNull();
+    openPalette();
+    openSessionPage();
+    type('zeta-name');
+    expect(optionNames(), 'the page, by the hidden name').toEqual([SHOWN]);
+    type('Alpha task');
+    expect(optionNames(), 'the page, by the shown title').toEqual([SHOWN]);
+  });
 });

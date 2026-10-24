@@ -23,7 +23,10 @@ const LEAD = fleetSession({
   id: 'project-a-lead', project: 'project-a', workdir: '/w/project-a', name: 'lead', role: 'coordinator', bucket: 'idle',
   statusUpdatedAt: 2,
 });
-const OTHER = fleetSession({ id: 'project-b-one', project: 'project-b', workdir: '/w/project-b', name: 'other', bucket: 'idle' });
+// A custom title wins the session's label ('Release notes, project-b'), so its underlying name is distinctive.
+const OTHER = fleetSession({
+  id: 'project-b-one', project: 'project-b', workdir: '/w/project-b', name: 'other-name', title: 'Release notes', bucket: 'idle',
+});
 
 const FIXTURE: AppFixture = {
   api: { '/api/projects': { roots: ['/w'], projects: [
@@ -86,6 +89,43 @@ describe('the top search lists a project\'s sessions after the commands, the coo
         // The palette closes (its exit animation runs first, so wait for it to go).
         await input.waitFor({ state: 'detached', timeout: 5_000 });
         expect(await sideways(page)).toBe(false);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+describe('a custom title hides the name: the top search finds the session by either (R64)', () => {
+  for (const skin of [REFINED, INSTRUMENT]) for (const width of [390, 1280]) {
+    it(`${skin} at ${width}`, async () => {
+      const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width }, FIXTURE);
+      try {
+        await openFleet(page);
+        await page.keyboard.press('Control+k');
+        const input = page.getByRole('combobox', { name: 'Command palette' });
+        await input.waitFor({ timeout: 10_000 });
+        const shown = page.getByRole('option', { name: 'Release notes, project-b', exact: true });
+        const sessionNames = (): Promise<string[]> => page.getByRole('option').evaluateAll(
+          (els) => els.map((e) => e.getAttribute('aria-label')).filter((n): n is string => n !== null));
+        // By the hidden name.
+        await input.fill('other-name');
+        await shown.waitFor({ timeout: 5_000 });
+        expect(await shown.count()).toBe(1);
+        expect(await sessionNames(), 'the hidden name finds the one session, shown by its title').toEqual(['Release notes, project-b']);
+        // By the shown title.
+        await input.fill('Release notes');
+        await shown.waitFor({ timeout: 5_000 });
+        expect(await shown.count()).toBe(1);
+        expect(await sessionNames(), 'the shown title finds the same session').toEqual(['Release notes, project-b']);
+        // Enter on the hidden name opens it.
+        await input.fill('other-name');
+        await shown.waitFor({ timeout: 5_000 });
+        await page.keyboard.press('Enter');
+        await page.waitForURL(/\/s\/project-b-one$/, { timeout: 10_000 });
+        await input.waitFor({ state: 'detached', timeout: 5_000 });
+        expect(await sideways(page), 'nothing scrolls sideways').toBe(false);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
