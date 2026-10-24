@@ -704,7 +704,8 @@ Partial success on a ledger write is how tallies drift.
 
 **The handoff review is a REVIEW RUN, and the held-out panel is its shape** (clause 14,
 `references/review-panel.md`): three Opus lenses over the wave's commit range, three Sonnet
-refuters per finding, majority deciding, model and effort literal in the script. The REVIEWER
+refuters per critical or important finding (one per minor, returned as advisory), at most 8 findings per lens,
+majority deciding, model and effort literal in the script. The REVIEWER
 runs it — this session dispatches the review run and rules on the report it returns (step 1
 below, clause 12); a lens that returned nothing is a review not yet done, never an approval.
 
