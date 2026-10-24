@@ -259,6 +259,18 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     expect(h.calls().filter((c) => c.startsWith('tmux new-session')).join('\n')).toContain(' --model fable ');
   });
 
+  it('D-6793: a class=default live apply on a Fable-default lane (journal: model default + model opus) keeps default, writes no route line', () => {
+    seed(); record({ class: 'default' }); const t = now() - 600;
+    h.sh(`_typed_note ${ID} model default; _typed_note ${ID} model opus`);
+    // the journal rows are stamped now; the transcript command is the acknowledgement of that very keystroke
+    const tt = now();
+    writeTranscript([cmd(tt, 'model'), ack(tt, MODEL_ACK('Opus 5'))]);
+    expect(t).toBeLessThan(tt);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('default');
+    expect(routeLines()).toHaveLength(0);
+  });
+
   it('the picker takes no argument: its acknowledgement names the value, in either shape Claude Code writes it', () => {
     seed(); record({ class: 'fable' }); const t = now() - 600;
     writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK('Opus 5.5 (1M context)'))]);
