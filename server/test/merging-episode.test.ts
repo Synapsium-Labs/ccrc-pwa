@@ -202,6 +202,24 @@ describe('the mode and the token', () => {
     expect(res.json()).not.toHaveProperty('checksMail');
     expect(mergingRows(s.details())[0]!.detail).toBe(`merging-at:${TIP}:7:off`);
   });
+
+  it('the mode reads the measured PR, not the claim: a stale claim of no PR against a measured open #7 still records 7:live and carries checksMail', async () => {
+    const s = await scenario({ markers: LIVE }); app = s.app;
+    expect((await s.post('awaiting-review', TIP, null, 'none')).statusCode).toBe(200);
+    const res = await s.post('merging', TIP, null, 'none');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ checksMail: CHECKS_MAIL_TOKEN });
+    expect(mergingRows(s.details())[0]!.detail).toBe(`merging-at:${TIP}:7:live`);
+  });
+
+  it('the mode reads the measured PR, not the claim: a claim of open against a measured draft #7 records 7:off and carries no checksMail', async () => {
+    const s = await scenario({ markers: LIVE, pr: { number: 7, isDraft: true } }); app = s.app;
+    expect((await s.post('awaiting-review', TIP, 7, 'open')).statusCode).toBe(200);
+    const res = await s.post('merging', TIP, 7, 'open');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).not.toHaveProperty('checksMail');
+    expect(mergingRows(s.details())[0]!.detail).toBe(`merging-at:${TIP}:7:off`);
+  });
 });
 
 describe('handoffCommit keeps its one writer', () => {
