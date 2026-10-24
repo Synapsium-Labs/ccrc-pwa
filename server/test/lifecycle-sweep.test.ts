@@ -11,7 +11,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
 import { genFile } from './lifecycleHelpers.js';
 import { sourceOfSymbol } from './scan/symbols.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import {
@@ -36,9 +36,8 @@ const rig = () => {
   const dir = path.join(deps.cfg.registryDir, LC_DIR_NAME);
   fs.mkdirSync(dir, { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const w = new FleetWatcher(
-    { ...deps, coord,
-      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-rm', LC_CAP_TOKEN] } } as never,
+  const w = new FleetWatcher(withFakeClock({ ...deps, coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-rm', LC_CAP_TOKEN] } } as never),
     new Bus(),
   );
   return { w, dir, coord };
@@ -77,7 +76,7 @@ describe('FleetWatcher.sweepLifecycle', () => {
   });
 
   it('answers null with no coordination database', () => {
-    const bare = new FleetWatcher(testDeps(mkTmp('ccrc-lcsweep-')), new Bus());
+    const bare = new FleetWatcher(withFakeClock(testDeps(mkTmp('ccrc-lcsweep-'))), new Bus());
     expect(bare.lifecycleHealth()).toBeNull();
   });
 

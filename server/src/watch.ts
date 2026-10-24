@@ -9153,7 +9153,7 @@ export class FleetWatcher {
       this.runLaneSync('approvalPrune', () => {
         coord.pruneApprovalInputs(now);
         coord.pruneAskQuestions(now);
-      }, now);
+      });
     } catch (err) {
       console.warn(`ccrc-server: sweepApprovals failed (${err instanceof Error ? err.message : String(err)}) — the next sweep retries`);
     }
@@ -9171,7 +9171,7 @@ export class FleetWatcher {
   sweepDigest(now: number = Date.now()): void {
     const coord = this.deps.coord;
     if (!coord) return;
-    this.runLaneSync('digestBeat', () => this.digestBeat(coord, now), now);
+    this.runLaneSync('digestBeat', () => this.digestBeat(coord, now));
   }
 
   private digestBeat(coord: CoordStore, now: number): void {

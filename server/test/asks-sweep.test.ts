@@ -27,7 +27,7 @@ import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { PushPayload } from '../src/push.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -147,7 +147,7 @@ function fixture(opts: {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const io: FleetIO = opts.overIo ? opts.overIo(localIO) : localIO;
   const deps = { ...testDeps(home, runner), push: opts.push as never, coord, io };
-  const w = new FleetWatcher(deps, new Bus(), 10_000);
+  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
   return {
     coord, home, reg, w,
     tick: () => w.tick(),

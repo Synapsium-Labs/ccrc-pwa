@@ -27,7 +27,7 @@ import {
 } from '../src/update/catalogue.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
   RELEASE_TAG_COMPONENT_MAX_DIGITS, resolveNodeIntent, type EligibilityRow, type ResolveInput,
@@ -3079,7 +3079,7 @@ describe('the catalogue lane — FleetWatcher.tick() (design §7: the CAPS_REFRE
   // (the real `~/.ccrc`): a listable empty registry reaches `saveSnapshot`.
   function watcher(home: string, poller?: CataloguePoller): { w: FleetWatcher; registryDir: string } {
     const deps = { ...testDeps(home), ...(poller ? { catalogue: poller } : {}) };
-    return { w: new FleetWatcher(deps, new Bus(), 2000, path.join(home, 'state-cache.json')), registryDir: deps.cfg.registryDir };
+    return { w: new FleetWatcher(withFakeClock(deps), new Bus(), 2000, path.join(home, 'state-cache.json')), registryDir: deps.cfg.registryDir };
   }
 
   it('polls on the FIRST tick after start, then once per 30 minutes — never once a tick', async () => {

@@ -16,7 +16,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { loadConfig } from '../src/config.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { seedRoster, testDeps } from './helpers.js';
+import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { parseJournalLine } from '../src/coord/journalparse.js';
 import { ACTOR_CLASSES, corroboration, LC_ACT_UNKNOWN, LIFECYCLE_ACTS } from '../../shared/api.js';
@@ -120,7 +120,7 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
     : new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const bus = new Bus();
   const deps = { ...testDeps(home, run), cfg: cfgObj, io, ...(coord === undefined ? {} : { coord }) };
-  const watcher = new FleetWatcher(deps as never, bus, 10_000);
+  const watcher = new FleetWatcher(withFakeClock(deps as never), bus, 10_000);
 
   return {
     home, bus, watcher, coord, projectsRoot, hooks, cfgObj, deps: deps as never as ServerDeps,

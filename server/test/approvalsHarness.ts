@@ -128,6 +128,8 @@ export async function approvalsFixture(over: ApprovalsFixtureOpts = {}): Promise
     // A two-box server is `server` over CCRC_FLEET=remote; `both` is the single box, CCRC_FLEET=local.
     ...base, cfg: { ...base.cfg, role: over.role ?? 'server', fleetMode: (over.role ?? 'server') === 'both' ? 'local' as const : 'remote' as const },
     mailToken: TOKEN, coord, notifyLog: log,
+    // The suites move time with `vi.setSystemTime`; every lane throttles on the monotonic clock (OA-C4, #803), so it moves too.
+    monotonicMs: () => Date.now(),
     ...(over.masker ? { masker: over.masker(coord.db) } : {}),
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
   };

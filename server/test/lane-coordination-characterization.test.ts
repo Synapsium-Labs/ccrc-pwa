@@ -1,9 +1,10 @@
-// Characterization (D-5862; ARCH-68 #803; spec K11): the eight lanes the watcher throttles on a wall-clock `last*` field
-// around coordination: the claim pair (renew, lapse), the stall watch, the idle-compact nudge, the mail and ask sweeps,
+// Characterization (D-5862; ARCH-68 #803; spec K11): the eight lanes the watcher throttled on a wall-clock `last*` field
+// and now throttles on the monotonic clock (OA-C4, ruled (a) on #803), around coordination: the claim pair (renew, lapse), the stall watch, the idle-compact nudge, the mail and ask sweeps,
 // the approvals lane's daily prune and the digest's beat. Each is driven through the entry `tick` calls (the nudge, whose
 // throttle sits in `tick` itself, through `tick`) on a fake wall clock, and what a lane did is read off an effect it
-// cannot do without. Pinned per lane: the first call runs, a call inside the cadence skips, a wall clock stepped back
-// holds the lane and stepped forward runs it, a throw spends the slot and leaves the next due call running; per flight
+// cannot do without. Each rig injects `Deps.monotonicMs` (`mono`); `at` moves both clocks together (real time passing) and
+// `wallAt` the wall clock alone (a step). Pinned per lane: the first call runs, a call inside the cadence skips, a wall clock
+// stepped back no longer holds the lane (after, it runs at its cadence) and stepped forward never runs it early, a throw spends the slot and leaves the next due call running; per flight
 // mode: the stall watch and the nudge skip a second run, the mail and ask sweeps overlap once their cadence has
 // elapsed. `sweepApprovals` itself has no throttle: a held approval past its `notifyAt` lapses on the tick straight after
 // a prune, and the prune runs once a day. The digest beat is due at any injected reading of the clock, `0` included.
@@ -27,7 +28,13 @@ const DAY = 86_400_000;
 let warn: ReturnType<typeof vi.spyOn>;
 beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
-const at = (ms: number): void => { vi.spyOn(Date, 'now').mockReturnValue(ms); };
+/** The injected monotonic clock (`Deps.monotonicMs`), on the same epoch as the fake wall clock. */
+let mono = NOW;
+const monotonicMs = (): number => mono;
+/** Real time passing: both clocks read `ms`. */
+const at = (ms: number): void => { mono = ms; vi.spyOn(Date, 'now').mockReturnValue(ms); };
+/** A wall-clock step with no real time passing: only the wall clock moves. */
+const wallAt = (ms: number): void => { vi.spyOn(Date, 'now').mockReturnValue(ms); };
 const warned = (text: string): number => warn.mock.calls.filter((c: unknown[]) => String(c[0]).includes(text)).length;
 const settleTurns = async (): Promise<void> => { for (let i = 0; i < 20; i++) await new Promise((res) => setImmediate(res)); };
 
@@ -47,7 +54,7 @@ function rig(h: Hooks = {}) {
     },
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const w = new FleetWatcher({ ...testDeps(home), cfg, io, coord } as never, new Bus(), 10_000);
+  const w = new FleetWatcher({ ...testDeps(home), monotonicMs, cfg, io, coord } as never, new Bus(), 10_000);
   return { home, cfg, coord, w, registryListings };
 }
 type Rig = ReturnType<typeof rig>;
@@ -91,7 +98,7 @@ const LANES: Lane[] = [
     throwing: (r) => { vi.spyOn(r.coord, 'claimDigestDay').mockImplementation(() => { throw new Error('db gone'); }); } },
 ];
 
-describe.each(LANES)('the $key lane (wall clock)', (lane) => {
+describe.each(LANES)('the $key lane (monotonic clock)', (lane) => {
   it('runs on the first call, skips inside its cadence, runs once the cadence has elapsed', async () => {
     const r = rig(); const ran = lane.watch(r);
     at(NOW);
@@ -108,17 +115,22 @@ describe.each(LANES)('the $key lane (wall clock)', (lane) => {
     expect(ran(), 'did not run at its cadence').toBeGreaterThan(first);
   });
 
-  it('a wall clock stepped back one hour holds the lane; stepped forward a cadence (at least an hour) it runs at once', async () => {
+  // The AFTER row of OA-C4 (#803). BEFORE, the lane throttled on `Date.now()`: a wall clock stepped back one hour held it for
+  // the hour (a whole cadence of real time did not run it), and one stepped forward a cadence ran it at once. AFTER, the
+  // cadence is real time: the step back runs it at its cadence and the step forward never runs it early.
+  it('a wall clock stepped back one hour runs the lane at its cadence; stepped forward it never runs early', async () => {
     const r = rig(); const ran = lane.watch(r);
     at(NOW);
     await lane.run(r);
     const first = ran();
-    at(NOW - HOUR);
+    wallAt(NOW - HOUR);
+    mono = NOW + lane.cadenceMs;
     await lane.run(r);
-    expect(ran(), 'a step back no longer holds the lane').toBe(first);
-    at(NOW + Math.max(HOUR, lane.cadenceMs));
+    expect(ran(), 'AFTER: a wall step back, a whole cadence of real time, runs the lane').toBeGreaterThan(first);
+    const second = ran();
+    wallAt(NOW + Math.max(HOUR, lane.cadenceMs));
     await lane.run(r);
-    expect(ran(), 'a step forward did not run the lane').toBeGreaterThan(first);
+    expect(ran(), 'AFTER: a wall step forward ran the lane early').toBe(second);
   });
 });
 
@@ -258,14 +270,17 @@ describe('the idle-compact nudge: the throttle sits in tick, the single flight i
     expect(m.mock.calls.length, 'the tick at the cadence did not run the lane').toBe(2);
   });
 
-  it('a wall clock stepped back one hour holds the lane; stepped forward it runs at once', async () => {
+  // The AFTER row of OA-C4 (#803). BEFORE: a step back held the lane for the hour, a step forward ran it at once.
+  it('a wall clock stepped back one hour runs the lane at its cadence; stepped forward it never runs early', async () => {
     const r = rig();
     const m = vi.spyOn(r.w, 'sweepIdleCompactNudge').mockResolvedValue(undefined);
     await tickAt(r, NOW);
-    await tickAt(r, NOW - HOUR);
-    expect(m.mock.calls.length, 'a step back no longer holds the lane').toBe(1);
-    await tickAt(r, NOW + HOUR);
-    expect(m.mock.calls.length, 'a step forward did not run the lane').toBe(2);
+    wallAt(NOW - HOUR); mono = NOW + IDLE_NUDGE_SWEEP_MS;
+    await r.w.tick(); await settleTurns();
+    expect(m.mock.calls.length, 'AFTER: a wall step back, a whole cadence of real time, runs the lane').toBe(2);
+    wallAt(NOW + HOUR);
+    await r.w.tick(); await settleTurns();
+    expect(m.mock.calls.length, 'AFTER: a wall step forward ran the lane early').toBe(2);
   });
 
   it('the slot is spent before the method runs: a method that rejects is not retried inside the cadence', async () => {
@@ -348,30 +363,34 @@ describe('tick keeps the call shape of the fire-and-forget lanes', () => {
   });
 });
 
-describe('the digest beat is due at any injected reading of the clock', () => {
-  it('a first beat at now = 0 runs (the field started at -Infinity), and the next beat 59.999 s later does not', () => {
+describe('the digest beat is due at any reading of the monotonic clock', () => {
+  const clearDay = (r: Rig): void => { (r.w as unknown as { lastDigestDay: string | null }).lastDigestDay = null; };
+
+  it('a first beat at a monotonic reading of 0 runs (the row starts due), and the next beat 59.999 s later does not', () => {
     const r = rig();
     const s = vi.spyOn(r.coord, 'claimDigestDay');
-    (r.w as unknown as { lastDigestDay: string | null }).lastDigestDay = null;
+    mono = 0; clearDay(r);
     r.w.sweepDigest(0);
-    expect(s.mock.calls.length, 'a first beat at epoch 0 did not run').toBe(1);
-    (r.w as unknown as { lastDigestDay: string | null }).lastDigestDay = null;
+    expect(s.mock.calls.length, 'a first beat at reading 0 did not run').toBe(1);
+    mono = 59_999; clearDay(r);
     r.w.sweepDigest(59_999);
     expect(s.mock.calls.length, 'a beat inside the minute ran').toBe(1);
-    (r.w as unknown as { lastDigestDay: string | null }).lastDigestDay = null;
+    mono = 60_000; clearDay(r);
     r.w.sweepDigest(60_000);
     expect(s.mock.calls.length, 'a beat at the minute did not run').toBe(2);
   });
 
-  it('the beat reads the `now` it is handed, not the wall clock', () => {
+  it('the beat measures its minute on the monotonic clock; the `now` it is handed is the verdict\'s, not the throttle\'s', () => {
     const r = rig();
-    at(NOW);
     const s = vi.spyOn(r.coord, 'claimDigestDay');
-    (r.w as unknown as { lastDigestDay: string | null }).lastDigestDay = null;
+    mono = 0; clearDay(r);
     r.w.sweepDigest(5_000_000_000);
-    (r.w as unknown as { lastDigestDay: string | null }).lastDigestDay = null;
+    clearDay(r); mono = 1_000;
     r.w.sweepDigest(5_000_000_000 + 61_000);
-    expect(s.mock.calls.length, 'the beat measured its minute on the wall clock instead of the injected reading').toBe(2);
+    expect(s.mock.calls.length, 'the beat measured its minute on the `now` it was handed: a minute of wall time is not a minute of real time').toBe(1);
+    clearDay(r); mono = 60_000;
+    r.w.sweepDigest(5_000_000_000 + 61_000);
+    expect(s.mock.calls.length, 'a beat a minute of real time later did not run').toBe(2);
   });
 });
 

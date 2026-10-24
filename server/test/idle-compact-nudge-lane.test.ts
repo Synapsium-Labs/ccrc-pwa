@@ -19,7 +19,7 @@ import { configDirFor } from '../src/config.js';
 import { transcriptPath } from '../src/transcript/resolve.js';
 import { IDLE_NUDGE_DISABLED_MARKER, idleNudgeFeedBody, idleNudgeRefusedBody } from '../src/idlenudge.js';
 import { IDLE_COMPACT_NUDGE_PROMPT, type FleetSession } from '../../shared/api.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { IDLE_TAIL, ROW, T_NOTICE, T_STOP, jsonl } from './idleNudgeFixtures.js';
 
@@ -139,7 +139,7 @@ const rig = async (o: { fixed?: string; notifyLog?: boolean; coord?: CoordStore;
     ...testDeps(h.home, h.run), coord, ...(o.notifyLog === false ? {} : { notifyLog: log }),
     presence: { isVisible: () => false },
   } as unknown as Deps;
-  const w = new FleetWatcher(deps, new Bus(), 2000, path.join(h.home, 'state-cache.json'));
+  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000, path.join(h.home, 'state-cache.json'));
   at(PRIME_AT);
   await w.tick();
   seedRegistry(h.home);

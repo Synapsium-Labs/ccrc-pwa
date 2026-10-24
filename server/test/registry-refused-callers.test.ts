@@ -23,7 +23,7 @@ import { tasksDir } from '../src/tasks/read.js';
 import { FleetWatcher } from '../src/watch.js';
 import { MAIL_MAX_ATTEMPTS } from '../../shared/api.js';
 import { okRun } from './coordReadHelpers.js';
-import { seedRoster, testDeps } from './helpers.js';
+import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const PROJECT = 'demo';
@@ -279,7 +279,7 @@ describe('mail holds a delivery to a refused recipient (spec §2.3)', () => {
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });   // empty but listable: the priming tick needs it
     const calls: string[][] = [];
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    const deps: Deps = { ...testDeps(home, recording(calls, 1)), coord, stateCachePath: path.join(home, 'state-cache.json') };
+    const deps: Deps = withFakeClock({ ...testDeps(home, recording(calls, 1)), coord, stateCachePath: path.join(home, 'state-cache.json') });
     const w = new FleetWatcher(deps, new Bus(), 2000);
     await w.tick();                                                    // primes the watcher
     plant(home, BAD);                                                  // the recipient: listed, refused, never read
@@ -295,8 +295,11 @@ describe('mail holds a delivery to a refused recipient (spec §2.3)', () => {
     expect(row().attempts).toBe(0);
     // Well past the point that parks a genuinely absent recipient.
     for (let i = 1; i < MAIL_MAX_ATTEMPTS + 4; i++) {
-      vi.setSystemTime(row().nextAttemptAt + 1_000);
+      const before = row().nextAttemptAt;
+      vi.setSystemTime(before + 1_000);
       await w.sweepMail();
+      // The mail lane really ran this pass (its throttle opened on the faked monotonic clock): it re-armed the row.
+      expect(row().nextAttemptAt, `pass ${i} re-armed the delivery`).toBeGreaterThan(before);
     }
     expect(row()).toMatchObject({ state: 'queued', rejectCode: null, attempts: 0, lastGate: 'registry-unmeasurable' });
     expect(calls.filter((c) => c[0] === 'send-keys'), 'nothing is typed into any pane').toEqual([]);

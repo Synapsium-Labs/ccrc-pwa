@@ -14,7 +14,7 @@ import { SERVER_CAPS_FILE_MODE, SERVER_CAPS_WRITE_MS, writeServerCaps } from '..
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { mkTmp } from './tmpHelpers.js';
-import { seedRoster, testDeps } from './helpers.js';
+import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { buildServer } from '../src/server.js';
 
 const AT = 1_790_000_000;
@@ -116,7 +116,7 @@ describe('the watcher writes the file on its own minute beat (spec §6.1: never 
     const cfg = { ...base.cfg, role, ...(ccrcDir !== undefined ? { ccrcDir } : {}) };
     expect((base as { coord?: unknown }).coord).toBeUndefined();
     return {
-      w: new FleetWatcher({ ...base, cfg }, new Bus(), 2000, path.join(home, 'state-cache.json')),
+      w: new FleetWatcher(withFakeClock({ ...base, cfg }), new Bus(), 2000, path.join(home, 'state-cache.json')),
       file: path.join(cfg.ccrcDir, SERVER_CAPS_FILE),
     };
   };
@@ -209,7 +209,7 @@ describe('closing the server (landing-order wave 3c)', () => {
     try {
       const deps = testDeps(home);
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = new FleetWatcher(withFakeClock(deps), bus);
       const app = await buildServer(deps, bus, watcher);
       await watcher.tick();
       const closing = app.close().then(() => 'closed' as const);

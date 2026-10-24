@@ -24,7 +24,7 @@ import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import { ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import { configDirFor } from '../src/config.js';
 import type { PushPayload } from '../src/push.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { sourceOfSymbol } from './scan/symbols.js';
 
@@ -102,7 +102,7 @@ const mailRig = async (p: Pane, o: { inertStash?: boolean } = {}) => {
   const sent: PushPayload[] = [];
   const deps: Deps = { ...testDeps(home, paneRunner(p, o)), coord,
     push: { notify: async (x: PushPayload) => { sent.push(x); } } as never };
-  const w = new FleetWatcher(deps, new Bus(), 2000);
+  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
   await w.tick();                 // primed on an empty registry: no pane is captured
   seedRecipient(home);
   const mail = coord.insertMail({ fromId: 'project-a-sender', fromUuid: 'b'.repeat(36), toId: ID, runId: null,

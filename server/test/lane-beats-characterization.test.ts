@@ -1,8 +1,10 @@
 // Characterization (D-5862; ARCH-68 #803; spec K11): the four beats `FleetWatcher.tick` fires above and beside the
 // registry read (the caps refresh, the catalogue poll, the inventory sweep and the server-caps write), driven through
-// `tick` and their own on-demand doors on a fake wall clock. Green on the hand-rolled `last*` clocks and guards; the
-// move onto `runLane` runs these rows unchanged, so a beat that stamped late, stopped joining, lost its one rerun or
-// started to delay the tick shows here and not in a fleet. Fixture homes only.
+// `tick` and their own on-demand doors on a fake clock. Green on the hand-rolled `last*` clocks and guards; the move onto
+// `runLane` ran these rows unchanged, so a beat that stamped late, stopped joining, lost its one rerun or started to delay the
+// tick shows here and not in a fleet. The four beats throttled on the wall clock and now throttle on the monotonic clock
+// (OA-C4, ruled (a) on #803): the fixture injects `Deps.monotonicMs` as the fake clock less every wall step (`step`), so
+// the fake timers move real time and a `step` moves the wall clock alone. Fixture homes only.
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -33,6 +35,13 @@ afterEach(() => {
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 
+/** What every `step` has moved the fake wall clock by, with no real time passing. `Deps.monotonicMs` reads the fake clock less
+ *  this, so the throttle sees real time only. */
+let stepped = 0;
+const monotonicMs = (): number => Date.now() - stepped;
+/** A wall-clock step by `ms` (negative: back): the wall clock moves, the monotonic clock does not. */
+function step(ms: number): void { vi.setSystemTime(Date.now() + ms); stepped += ms; }
+
 interface Opts { role?: NodeRole; coord?: boolean; catalogue?: CataloguePoller; refreshCaps?: () => Promise<void> }
 
 function fixture(o: Opts = {}) {
@@ -40,9 +49,11 @@ function fixture(o: Opts = {}) {
   const home = mkTmp('ccrc-lane-beats-');
   seedRoster(home);
   const base = testDeps(home);
+  stepped = 0;
   mkdirSync(base.cfg.registryDir, { recursive: true });       // LISTABLE: the tick reaches every lane
   const deps = {
     ...base,
+    monotonicMs,
     cfg: { ...base.cfg, role: o.role ?? ('server' as NodeRole) },
     ...(o.coord ? { coord: new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))) } : {}),
     ...(o.catalogue ? { catalogue: o.catalogue } : {}),
@@ -71,7 +82,7 @@ function poller(onPoll: (now: number) => Promise<unknown>): CataloguePoller {
   } as CataloguePoller;
 }
 
-describe('the caps beat (every 60 s, wall clock)', () => {
+describe('the caps beat (every 60 s, monotonic clock)', () => {
   it('runs on the first tick, skips inside the cadence, runs once it has elapsed', async () => {
     let calls = 0;
     const h = fixture({ refreshCaps: async () => { calls += 1; } });
@@ -97,17 +108,19 @@ describe('the caps beat (every 60 s, wall clock)', () => {
     expect(calls).toBe(2);
   });
 
-  it('a wall clock stepped back one hour holds the lane for the hour; stepped forward it runs at once', async () => {
+  // The AFTER row of OA-C4 (#803). BEFORE: a step back held the lane for the hour and a step forward ran it at once.
+  it('a wall clock stepped back one hour runs the lane at its cadence; stepped forward it never runs early', async () => {
     let calls = 0;
     const h = fixture({ refreshCaps: async () => { calls += 1; } });
     vi.useFakeTimers();
     await h.w.tick();
-    vi.setSystemTime(Date.now() - HOUR);
+    step(-HOUR);
+    await vi.advanceTimersByTimeAsync(MIN);
     await h.w.tick();
-    expect(calls, 'a step back no longer holds the lane').toBe(1);
-    vi.setSystemTime(Date.now() + 2 * HOUR);
+    expect(calls, 'AFTER: a wall step back, a whole cadence of real time, runs the lane').toBe(2);
+    step(2 * HOUR);
     await h.w.tick();
-    expect(calls, 'a step forward did not run the lane').toBe(2);
+    expect(calls, 'AFTER: a wall step forward ran the lane early').toBe(2);
   });
 
   it('a refresh that never settles delays neither this tick nor the next', async () => {
@@ -121,7 +134,7 @@ describe('the caps beat (every 60 s, wall clock)', () => {
   });
 });
 
-describe('the catalogue beat (every 30 min, wall clock)', () => {
+describe('the catalogue beat (every 30 min, monotonic clock)', () => {
   it('polls on the first tick, skips inside the cadence, polls once it has elapsed', async () => {
     const polls: number[] = [];
     const h = fixture({ catalogue: poller(async (n) => { polls.push(n); }) });
@@ -150,21 +163,23 @@ describe('the catalogue beat (every 30 min, wall clock)', () => {
     expect(n).toBe(2);
   });
 
-  it('a wall clock stepped back one hour holds the lane; stepped forward it polls at once', async () => {
+  // The AFTER row of OA-C4 (#803). BEFORE: a step back held the lane for the hour and a step forward ran it at once.
+  it('a wall clock stepped back one hour runs the lane at its cadence; stepped forward it never runs early', async () => {
     let n = 0;
     const h = fixture({ catalogue: poller(async () => { n += 1; }) });
     vi.useFakeTimers();
     await h.w.tick();
-    vi.setSystemTime(Date.now() - HOUR);
+    step(-HOUR);
+    await vi.advanceTimersByTimeAsync(30 * MIN);
     await h.w.tick();
-    expect(n).toBe(1);
-    vi.setSystemTime(Date.now() + 2 * HOUR);
+    expect(n, 'AFTER: a wall step back, a whole cadence of real time, runs the lane').toBe(2);
+    step(2 * HOUR);
     await h.w.tick();
-    expect(n).toBe(2);
+    expect(n, 'AFTER: a wall step forward ran the lane early').toBe(2);
   });
 });
 
-describe('the inventory beat (every 60 s, wall clock; one run in flight, one rerun)', () => {
+describe('the inventory beat (every 60 s, monotonic clock; one run in flight, one rerun)', () => {
   const sweeps = () => mocks.sweepInventory.mock.calls.length;
   const arm = () => { mocks.sweepInventory.mockResolvedValue([]); mocks.resolveAndProject.mockResolvedValue({ projection: { ok: true } }); };
 
@@ -236,17 +251,19 @@ describe('the inventory beat (every 60 s, wall clock; one run in flight, one rer
     expect(sweeps()).toBe(2);
   });
 
-  it('a wall clock stepped back one hour holds the lane; stepped forward it runs at once', async () => {
+  // The AFTER row of OA-C4 (#803). BEFORE: a step back held the lane for the hour and a step forward ran it at once.
+  it('a wall clock stepped back one hour runs the lane at its cadence; stepped forward it never runs early', async () => {
     arm();
     const h = fixture({ coord: true });
     vi.useFakeTimers();
     await h.w.tick(); await settle(h.w);
-    vi.setSystemTime(Date.now() - HOUR);
+    step(-HOUR);
+    await vi.advanceTimersByTimeAsync(MIN);
     await h.w.tick(); await settle(h.w);
-    expect(sweeps()).toBe(1);
-    vi.setSystemTime(Date.now() + 2 * HOUR);
+    expect(sweeps(), 'AFTER: a wall step back, a whole cadence of real time, runs the lane').toBe(2);
+    step(2 * HOUR);
     await h.w.tick(); await settle(h.w);
-    expect(sweeps()).toBe(2);
+    expect(sweeps(), 'AFTER: a wall step forward ran the lane early').toBe(2);
   });
 
   it('a sweep that never settles delays neither this tick nor its busy to idle push', async () => {
@@ -258,7 +275,7 @@ describe('the inventory beat (every 60 s, wall clock; one run in flight, one rer
   });
 });
 
-describe('the server-caps beat (every 60 s, wall clock; one write in flight, joined)', () => {
+describe('the server-caps beat (every 60 s, monotonic clock; one write in flight, joined)', () => {
   const writes = () => mocks.writeServerCaps.mock.calls.length;
 
   it('writes on the first tick, skips inside the cadence, writes once it has elapsed', async () => {
@@ -303,16 +320,18 @@ describe('the server-caps beat (every 60 s, wall clock; one write in flight, joi
     expect(writes(), 'a fleet-role node wrote').toBe(1);
   });
 
-  it('a wall clock stepped back one hour holds the lane; stepped forward it writes at once', async () => {
+  // The AFTER row of OA-C4 (#803). BEFORE: a step back held the lane for the hour and a step forward ran it at once.
+  it('a wall clock stepped back one hour runs the lane at its cadence; stepped forward it never runs early', async () => {
     mocks.writeServerCaps.mockResolvedValue({ ok: true });
     const h = fixture({ role: 'both' });
     vi.useFakeTimers();
     await h.w.tick(); await settle(h.w);
-    vi.setSystemTime(Date.now() - HOUR);
+    step(-HOUR);
+    await vi.advanceTimersByTimeAsync(MIN);
     await h.w.tick(); await settle(h.w);
-    expect(writes()).toBe(1);
-    vi.setSystemTime(Date.now() + 2 * HOUR);
+    expect(writes(), 'AFTER: a wall step back, a whole cadence of real time, runs the lane').toBe(2);
+    step(2 * HOUR);
     await h.w.tick(); await settle(h.w);
-    expect(writes()).toBe(2);
+    expect(writes(), 'AFTER: a wall step forward ran the lane early').toBe(2);
   });
 });
