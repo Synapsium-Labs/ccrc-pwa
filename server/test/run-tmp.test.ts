@@ -2,7 +2,7 @@
 // fixture inside it, removed at teardown, on a signal, or by the next run under the same TMPDIR.
 //
 // WHY THIS FILE EXISTS. Before it, only hooks inside the WORKER processes removed fixtures, and nothing that
-// outlives a killed worker owned them. Measured on a Mac: `timeout 25 vitest run test/ccrc-doctor.test.ts` under
+// outlives a killed worker owned them. Measured on a Mac: `timeout 25 vitest run test/ccrc-doctor-codex.test.ts` under
 // a scratch TMPDIR left 11 entries and 15 MB behind (rc 124), and #316 counted 1,551 directories and 5.74 GiB
 // from five timed-out shards in one morning. A killed run is the ordinary case on a box that runs this suite
 // under `timeout`, Ctrl-C, a tmux hangup and the OOM killer.

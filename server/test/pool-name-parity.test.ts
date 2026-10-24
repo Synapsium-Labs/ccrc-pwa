@@ -1,7 +1,7 @@
 // The pool vocabulary is spelled once per LANGUAGE and the spellings are held
 // equal HERE, because they cannot be held equal structurally: `ccd/ccd` sources
 // nothing from this repository, and `ccd/ccrc-doctor-checks` is sourced under
-// `set -u` by things that are not `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`
+// `set -u` by things that are not `ccrc` (`ccrc-doctorFixture.ts`'s `tableNames()`
 // does exactly that), so neither can import a TypeScript constant. This is the
 // `CCRC_RC_FILE` mechanism from `single-definition.test.ts`, applied to the
 // values the pool design puts in more than one language: the NAME GRAMMAR
@@ -10,7 +10,7 @@
 // until the fourth describe below was written; see its own header), the
 // PROJECT-NAME grammar the doctor filters its printed command by, the READ CAP
 // (fix round 7, two spellings of one number, pinned by nothing at all until
-// this file's last describe — `ccrc-doctor.test.ts` can only bound it to a
+// this file's last describe — the `ccrc-doctor-*` test files can only bound it to a
 // range), and — item 17, final fix round — the PROJECTION FILENAME
 // (`pool-epoch`, `POOL_EPOCH_FILE_NAME`), five spellings across three
 // languages and the two TypeScript readers that were the last of them to gain
@@ -42,7 +42,7 @@ const ccdSrc = readFileSync(CCD, 'utf8');
  *  run below hands its child an EMPTY PATH — `_check_pools` forks nothing, and
  *  an empty PATH is the strongest statement of that — and libuv resolves the
  *  executable against the CHILD's environment, so a bare `bash` would be
- *  ENOENT. `ccrc-doctor.test.ts:70` resolves it the same way for the same
+ *  ENOENT. `ccrc-doctorFixture.ts's `BASH`` resolves it the same way for the same
  *  reason. */
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
@@ -169,7 +169,7 @@ describe('the pools directory has a THIRD spelling, and it is pinned too', () =>
   });
 
   it('the doctor check READS the directory POOLS_DIR_NAME names', () => {
-    // Sourced standalone under `set -u`, the way `ccrc-doctor.test.ts`'s own
+    // Sourced standalone under `set -u`, the way `ccrc-doctorFixture.ts`'s own
     // `tableNames()` does it — `_check_pools` forks nothing, so this needs no
     // stub binaries and no PATH beyond bash's own.
     const home = mkTmp('ccrc-pools-doctor-parity-');
@@ -636,7 +636,7 @@ describe('the project-name grammar is one grammar in two files (and both refuse 
 // nobody can otherwise inspect — an over-cap tag would read `malformed` in one
 // and legal in the other.
 //
-// `ccrc-doctor.test.ts` pins the doctor's cap only by BEHAVIOUR, and behaviour
+// the `ccrc-doctor-*` test files pins the doctor's cap only by BEHAVIOUR, and behaviour
 // bounds it to a range and no further: its 106-byte and 56-byte fixtures are
 // satisfied by any cap in [56, 105] (measured — an `-n 80` build keeps both
 // green). Its title used to say "applies the reader's 64-byte cap" and measured

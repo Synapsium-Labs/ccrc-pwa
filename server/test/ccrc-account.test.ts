@@ -72,7 +72,7 @@ const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
  *  `../shared/base-url.mjs` too — `account-op.mjs`'s own header states the
  *  same fact), and node resolves both through the link's realpath — the
  *  fixture never needs a copy of either directory, which is also why a new
- *  sibling import costs this fixture nothing. (`ccrc-doctor.test.ts` COPIES
+ *  sibling import costs this fixture nothing. (`ccrc-doctorFixture.ts` COPIES
  *  instead, and there the closure has to be listed file by file — Task 33.)
  *
  *  IT ALSO MATERIALISES THE CONTAINMENT BINS, and that last line is not
@@ -210,7 +210,7 @@ interface Result { code: number; stdout: string; stderr: string }
  *  purpose: `env()` DELETES every `CCRC_*` this CLI reads so the answer never
  *  depends on the developer's exported shell, so a knob a test wants to set is
  *  a knob that has just been deleted. `runDoctor`'s shape
- *  (`ccrc-doctor.test.ts`'s `runDoctor`). */
+ *  (`ccrc-doctorFixture.ts`'s `runDoctor`). */
 function run(home: string, args: string[], stdin = '',
   extraEnv: NodeJS.ProcessEnv = {}): Result {
   const merged = { ...buildEnv(home), ...extraEnv };
@@ -5107,7 +5107,7 @@ function plantRow(home: string, sid: string, o: { wrapper: string; home?: string
  *  `env()` plants, which is why that one is conditional. Any argv other than
  *  `list-sessions` is a loud failure: a verb that started DRIVING tmux rather
  *  than asking it could not pass unnoticed (stubTmux's rule,
- *  `ccrc-doctor.test.ts`'s `stubTmux`). */
+ *  `ccrc-doctorFixture.ts`'s `stubTmux`). */
 function plantTmux(home: string, sessions: string[]): void {
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   writeFileSync(join(home, '.local', 'bin', 'tmux'), [
@@ -8666,7 +8666,7 @@ describe('ccrc account check: auth status', () => {
 
   it('reports a timed-out auth status as timeout, not as unknown', () => {
     // No `linkReal` is needed and none exists in this file: unlike
-    // `ccrc-doctor.test.ts`, this suite's `env()` KEEPS the real PATH
+    // `ccrc-doctorFixture.ts`, this suite's `env()` KEEPS the real PATH
     // (`ghContainedEnv` PREPENDS the fixture bin rather than replacing PATH,
     // its returned `PATH: ${bin}:…`), so `_plat_timeout` finds the box's own `timeout`
     // and the stub finds `sleep`. `ccrc-cli.test.ts:80-86` says the same thing
@@ -10855,7 +10855,7 @@ describe('ccrc account check: the probe', () => {
     // call site is exactly what rotted, and a count cannot.
     //
     // THE EXISTING NO-COREUTILS CASE CANNOT MAKE THIS ASSERTION, and being
-    // reassured by it is the mistake to avoid: `ccrc-doctor.test.ts` replaces
+    // reassured by it is the mistake to avoid: `ccrc-doctorFixture.ts` replaces
     // PATH with a stub bin that has no `sleep` at all, so the `|| exit 0` guard
     // fires, the watcher exits immediately and no orphan is ever created. It
     // passes in seconds and proves nothing about this arm. The sleep-PRESENT

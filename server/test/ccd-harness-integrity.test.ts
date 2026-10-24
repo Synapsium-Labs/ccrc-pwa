@@ -116,9 +116,9 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   // The tick diet's runner and row builders, which the two per-locale files share.
   'ccdTickDietRunner.ts': ['__diet_caller', '__diet_side', '__hm2', '__lfc', '__lfx', '__lj6', '__rg4', '__rt', '__rt_snap',
     '__seq'],
-  'ccrc-doctor.test.ts': ['_check_alpha', '_check_beta', '_check_boom', '_check_dual', '_check_failed', '_check_gamma',
-    '_check_liar', '_check_mute', '_check_nothing', '_check_omega', '_check_sneak', '_check_warned', '_check_weird',
-    '_fix_failed', '_fix_warned'],
+  'ccrc-doctor-codex.test.ts': ['_check_failed', '_check_warned', '_fix_failed', '_fix_warned'],
+  'ccrc-doctor-fleet.test.ts': ['_check_alpha', '_check_beta', '_check_boom', '_check_dual', '_check_gamma', '_check_liar',
+    '_check_mute', '_check_nothing', '_check_omega', '_check_sneak', '_check_weird'],
   'ccrc-models.test.ts': ['_fk_cfg', '_fk_log', '_fk_probe', '_fk_rc', '_fk_ret'],
   'collectFixture.ts': ['_t'],
   'pool-name-parity.test.ts': ['_doctor_omits'],

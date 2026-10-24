@@ -4,10 +4,10 @@
 // D-997 (skill drift visible).
 //
 // ── WHY THIS IS A SEPARATE FILE, WITH ITS OWN FIXTURE ─────────────────────
-// `server/test/ccrc-doctor.test.ts` already has a `healthy()`/`runDoctor()`/
+// `server/test/ccrc-doctorFixture.ts` already has a `healthy()`/`runDoctor()`/
 // `lineFor()` triad, but nothing in that file is `export`ed — every OTHER
 // doctor-adjacent suite in this tree (`ccrc-install.test.ts`'s own header,
-// "This is ccrc-doctor.test.ts's healthy(), adapted") builds its OWN fixture
+// "This is ccrc-doctorFixture.ts's healthy(), adapted") builds its OWN fixture
 // rather than importing one, and this file follows that precedent rather
 // than exporting from a 5000-line suite to save a second file's worth of
 // setup. What is copied below is copied FAITHFULLY where it is copied at
@@ -20,7 +20,7 @@
 // one line every test here reads (`lineFor(out, 'graphify')`). Concretely,
 // this fixture skips the exposure quartet, the roster's wrapper-shape
 // ceremony, the build stamp, and auth — none of it is graphify's subject —
-// and ADDS one thing `ccrc-doctor.test.ts`'s own roster never has: a SECOND
+// and ADDS one thing `ccrc-doctorFixture.ts`'s own roster never has: a SECOND
 // rostered home (`claude-home` -> `.claude-home`), because the
 // brief's own `graphifyHealthy()` fixture plants a skill stamp under
 // `.claude-home` and the D-997 test needs that home to be ON THE
@@ -34,7 +34,7 @@
 // `df`, `realpath` are the only subject binaries the `graphify` check
 // actually shells out to; `git`, `jq`, `date` and `realpath` are
 // `linkReal`ed (their PARSING is not what this suite is testing) and `df`
-// is a scripted stub, same convention `ccrc-doctor.test.ts`'s own `stubDf`
+// is a scripted stub, same convention `ccrc-doctorFixture.ts`'s own `stubDf`
 // uses.
 import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
@@ -53,7 +53,7 @@ const REPO = path.resolve(here, '..', '..');
 const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
 const CHECKS_SRC = join(REPO, 'ccd', 'ccrc-doctor-checks');
 const LIB_SRC = join(REPO, 'ccd', 'ccrc-wrapper-shape');
-const DOCTOR_TEST_SRC = join(REPO, 'server', 'test', 'ccrc-doctor.test.ts');
+const DOCTOR_TEST_SRC = join(REPO, 'server', 'test', 'ccrc-doctorFixture.ts');
 
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
@@ -68,7 +68,7 @@ interface Result { code: number; stdout: string; stderr: string }
 /** `<home>/ccrc/ccd/{ccrc,ccrc-doctor-checks,ccrc-wrapper-shape}` — symlinks,
  *  the shape a deployed box has (deploy.sh:276 rsyncs `ccd` whole), so a test
  *  always runs the CHECKED-IN scripts and `dirname $0` resolves inside the
- *  fixture. Same idiom as `ccrc-doctor.test.ts`'s `installCcrc`, minus the
+ *  fixture. Same idiom as `ccrc-doctorFixture.ts`'s `installCcrc`, minus the
  *  `auth` check's two extra artifacts — this fixture never plants a passphrase
  *  and does not care what `auth` reports. */
 function installCcrc(home: string): void {
@@ -91,7 +91,7 @@ function stub(home: string, name: string, body: string): void {
   writeFileSync(join(stubBin(home), name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 }
 
-/** Idempotent, same as `ccrc-doctor.test.ts`'s own — a re-link inside a
+/** Idempotent, same as `ccrc-doctorFixture.ts`'s own — a re-link inside a
  *  specific test must not trip over the fixture already having one. */
 const linkReal = (home: string, name: string): void => {
   rmSync(join(stubBin(home), name), { force: true });
@@ -105,7 +105,7 @@ const linkReal = (home: string, name: string): void => {
  *  default (41 GiB) so a check that happens to probe `df` on some other path
  *  (the `disk` check, on `$HOME`) gets a plausible answer rather than an
  *  "unexpected argv" refusal that would print noise this suite does not read.
- *  Same fixture-file convention `ccrc-doctor.test.ts`'s own `stubDf` uses,
+ *  Same fixture-file convention `ccrc-doctorFixture.ts`'s own `stubDf` uses,
  *  extended per the brief: "a second fixture file fixture-df-avail-worktrees
  *  answers df on ~/worktrees". */
 function stubDf(home: string): void {
@@ -137,7 +137,7 @@ function stubDf(home: string): void {
 
 /** `ghContainedEnv` plants the poisoned `gh` once; remembered per home so a
  *  second call (from a second `runDoctor`) does not re-plant over a test's
- *  own overwrite — `ccrc-doctor.test.ts`'s own `containedPath` states the
+ *  own overwrite — `ccrc-doctorFixture.ts`'s own `containedPath` states the
  *  measured bug this avoids. */
 const containedPathFor = new Map<string, string>();
 function containedPath(home: string): string {
@@ -613,7 +613,7 @@ describe('ccrc doctor: graphify-path', () => {
   });
 
   // D-1354: the sibling suite's recorded reason for its `realpath` link is
-  // HISTORY, and history goes stale in silence. `server/test/ccrc-doctor.test.ts`'s
+  // HISTORY, and history goes stale in silence. `server/test/ccrc-doctorFixture.ts`'s
   // `healthy()` links a real `realpath` in, and the paragraph above that line is
   // the whole written reason for it. D-1350 turned the unmeasurable box from a
   // mismatch verdict into a SKIP without touching that paragraph, so the fixture
