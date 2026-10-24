@@ -19346,12 +19346,13 @@ _ccrc_knob() {   # <KEY> <default> [file]
 # `_ccrc_knob`, then `_keep_ok`, then the lowest bound (default 0): rc 0 sets KEEP (decimal, so 0002 is 2) and KEEP_FROM,
 # the phrase a prune line prints; rc 1 clears KEEP and KEEP_FROM and sets KEEP_WHY, `_ccrc_knob`'s sentence when it could not
 # be measured (so an unmeasured file never reaches `_keep_why` with an empty value, naming neither the file nor the
-# line), else `_keep_why`'s. CCRC_BACKUP_KEEP, CCRC_BACKUP_DATA_KEEP and CCRC_VERSIONS_KEEP read through it.
+# line), else `_keep_why`'s followed by `, as set in <the environment | the box's ccrc.env>`, the source that won (D-6605: the
+# value is the one byte run of the file it prints). CCRC_BACKUP_KEEP, CCRC_BACKUP_DATA_KEEP and CCRC_VERSIONS_KEEP read through it.
 _keep_knob() {   # <KEY> <default> [<lowest>]
   _ccrc_knob "$1" "$2" || { KEEP=""; KEEP_FROM=""; KEEP_WHY="$KNOB_WHY"; return 1; }
-  _keep_ok "$KNOB" && [ "$((10#$KNOB))" -ge "${3:-0}" ] || { KEEP=""; KEEP_FROM=""; KEEP_WHY="$(_keep_why "$1" "$KNOB" "${3:-0}")"; return 1; }
-  KEEP=$((10#$KNOB)); KEEP_WHY=""
   case "$KNOB_FROM" in environment) KEEP_FROM="the environment" ;; file) KEEP_FROM="the box's ccrc.env" ;; *) KEEP_FROM="the default" ;; esac
+  _keep_ok "$KNOB" && [ "$((10#$KNOB))" -ge "${3:-0}" ] || { KEEP=""; KEEP_WHY="$(_keep_why "$1" "$KNOB" "${3:-0}"), as set in $KEEP_FROM"; KEEP_FROM=""; return 1; }
+  KEEP=$((10#$KNOB)); KEEP_WHY=""
 }
 
 # ── _upd_deadline_ms [min|max] — the deadline, in every reading the server may hold (W4a Task 9; wave 24, D-6591, D-6602) ──

@@ -1445,7 +1445,7 @@ describe('ccrc backup: update\'s step 2 standalone, with CCRC_BACKUP_KEEP prunin
 
 describe('ccrc backup: CCRC_BACKUP_KEEP is one bounded number, the same validator as CCRC_VERSIONS_KEEP (F6)', () => {
   const PLANTED = ['20250101-000000', '20250102-000000', '20250103-000000'];
-  const WHY = (v: string): string => `CCRC_BACKUP_KEEP='${v}' is not a whole number from 0 to 9999`;
+  const WHY = (v: string): string => `CCRC_BACKUP_KEEP='${v}' is not a whole number from 0 to 9999, as set in the environment`;   // D-6605
   const box = (prefix: string): string => {
     const home = mkTmp(prefix);
     plantInstalledBox(home);
