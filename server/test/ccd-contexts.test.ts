@@ -21,8 +21,10 @@ import {
   ccdHeredocBraces,
 } from './consolidationCensus.js';
 
-/** The cross-context reference count on the day this ratchet landed. May only go DOWN, except a new destructive verb: ws-orphan (D-6629) adds the same eight lifecycle-journal calls into C1 that ws-collect makes; and ws-collect's loose arm (D-6625) adds six lifecycle-journal calls into C1's _lc_* helpers, the same journal the witnessed arm writes. */
-const BASELINE = 535;
+/** The cross-context reference count on the day this ratchet landed. May only go DOWN, except a new destructive verb: ws-orphan (D-6629) adds the same eight lifecycle-journal calls into C1 that ws-collect makes; and ws-collect's loose arm (D-6625) adds six lifecycle-journal calls into C1's _lc_* helpers, the same journal the witnessed arm writes.
+ *  And by an orchestrator ruling: D-6640 (ws-expire's `--child-of`) raised it 535 -> 538 for the three edges its new
+ *  child-of read makes from the EXPIRE verb into the registry and child-run helpers, measured after its rebase. */
+const BASELINE = 538;
 
 const nameOf = (text: string): string => /^([A-Za-z_][A-Za-z0-9_]*)\(/.exec(text)![1]!;
 
