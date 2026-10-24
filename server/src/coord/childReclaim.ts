@@ -1330,7 +1330,7 @@ async function childReclaimAudit(
   if (!ccdCan(deps.fleetState, 'wsReclaimAudit')) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
   const res = await deps.runCcd(argv);
   // D-6840: a call that never ran has no document to read; the runner's forged exit 1 is not an audit's.
-  if (res.ran === false) return { kind: 'unreadable', detail: notRanSentence(argv[0] ?? 'ws-audit', res) };
+  if (res.ran === false) return { kind: 'unreadable', detail: notRanSentence(argv[0] ?? 'ccd', res) };
   if (!res.ok) return parseChildReclaimAuditFailed(req.sessionId, res.stdout, res.stderr);
   return parseChildReclaimAudit(req.sessionId, res.stdout);
 }
@@ -1348,7 +1348,7 @@ async function childReclaimAct(
   // D-6840: read FIRST, before a pre-lock die is matched off the runner's stderr. The verb may have started
   // (a link that dropped after the send, a wait that expired), so this is the reader's own "may have been cut short"
   // answer: resumable, no ccd word, never a refusal or a pre-lock die ("acted nothing").
-  if (res.ran === false) return { kind: 'failed', resume: 'resumable', token: null, detail: notRanSentence(argv[0] ?? 'ws-reclaim', res) };
+  if (res.ran === false) return { kind: 'failed', resume: 'resumable', token: null, detail: notRanSentence(argv[0] ?? 'ccd', res) };
   return parseChildReclaimResult(req.sessionId, res.stdout, res.stderr);
 }
 
