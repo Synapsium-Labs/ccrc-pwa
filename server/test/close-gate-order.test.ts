@@ -193,6 +193,15 @@ describe('closeRun’s work close: the measurement, the hold, the ledger, the ve
     expect(okRun(f.coord.run(id))!.state).toBe('working');
   });
 
+  it('a commit the store refuses answers advanceFailed AFTER the act, with the run left as it was', async () => {
+    const f = fixture();
+    const id = f.working();
+    const refusal = { ok: false as const, error: 'unknown-run' as const };
+    (f.coord as unknown as { closeRun: unknown }).closeRun = () => refusal;
+    expect(await closeRun(f.deps, id, failedBody(), 'coordinator')).toEqual({ ok: false, kind: 'advanceFailed', adv: refusal });
+    expect(f.verbs(), 'the release already ran: the act is ahead of the commit (D-48)').toEqual(['ws-release']);
+  });
+
   it('the acts: a final close releases; a non-final close holds for the next wave; a failed archive close archives', async () => {
     const a = fixture();
     const ida = a.working();
