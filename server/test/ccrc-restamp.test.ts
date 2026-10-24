@@ -17,7 +17,7 @@
 // file's stamp; it never adopts, and it never launders a generator's output.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -161,8 +161,21 @@ describe('ccrc restamp <file>', () => {
     const HOOK = path.resolve(here, '..', '..', 'ccd', 'session-hook.sh');
     const shipped = readFileSync(HOOK, 'utf8');
 
+    const ROOT = path.resolve(here, '..', '..');
+    /** A fixture tree holding the target hook's own ccd/ and shared/. */
+    const tree = (idMax?: number): string => {
+      const t = mkTmp('ccrc-restamp-hook-');
+      mkdirSync(join(t, 'ccd')); mkdirSync(join(t, 'shared'));
+      copyFileSync(join(ROOT, 'ccd', 'ccd'), join(t, 'ccd', 'ccd'));
+      copyFileSync(join(ROOT, 'shared', 'mark.mjs'), join(t, 'shared', 'mark.mjs'));
+      const mod = readFileSync(join(ROOT, 'shared', 'hook-helpers.mjs'), 'utf8');
+      writeFileSync(join(t, 'shared', 'hook-helpers.mjs'),
+        idMax === undefined ? mod : mod.replace('CCRC_ID_MAX: 128', `CCRC_ID_MAX: ${idMax}`));
+      return t;
+    };
+
     it('regenerates a hook whose stamp line is conflicted or whose region was hand-edited', () => {
-      const f = join(mkTmp('ccrc-restamp-hook-'), 'session-hook.sh');
+      const f = join(tree(), 'ccd', 'session-hook.sh');
       writeFileSync(f, shipped.replace(/^# ccrc:generated .*$/m, '# ccrc:generated 1 sha256=0000').replace('CCRC_ID_MAX=128', 'CCRC_ID_MAX=1'));
       const r = run([f]);
       expect(r.code, r.stderr).toBe(0);
@@ -171,11 +184,30 @@ describe('ccrc restamp <file>', () => {
     });
 
     it('leaves a current hook byte-identical and says so', () => {
-      const f = join(mkTmp('ccrc-restamp-hook-'), 'session-hook.sh');
+      const f = join(tree(), 'ccd', 'session-hook.sh');
       writeFileSync(f, shipped);
       const r = run([f]);
       expect(r.code, r.stderr).toBe(0);
       expect(r.stdout).toContain('hook helpers already current');
+      expect(readFileSync(f, 'utf8')).toBe(shipped);
+    });
+
+    it("takes the module and ccd from the TARGET's tree, not the tree the ccrc script lives in", () => {
+      const t = tree(200); // widened in the target tree only; CCRC (this checkout) still says 128
+      const f = join(t, 'ccd', 'session-hook.sh');
+      writeFileSync(f, shipped);
+      const r = run([f]);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain('hook helpers regenerated');
+      expect(readFileSync(f, 'utf8')).toContain('CCRC_ID_MAX=200');
+    });
+
+    it('refuses, writing nothing, a hook whose own tree lacks the module or ccd', () => {
+      const f = join(mkTmp('ccrc-restamp-hook-'), 'session-hook.sh');
+      writeFileSync(f, shipped);
+      const r = run([f]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('Nothing was written');
       expect(readFileSync(f, 'utf8')).toBe(shipped);
     });
 

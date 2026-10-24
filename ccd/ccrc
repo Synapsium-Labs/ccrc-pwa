@@ -25903,7 +25903,7 @@ console.log("regenerated");
 
 # After restamping ccd/ccd, say whether the sibling hook's region has gone stale.
 _restamp_hook_note() {
-  local hook="${1%/*}/session-hook.sh" hooks="$CCRC_HERE/../shared/hook-helpers.mjs" out
+  local hook="${1%/*}/session-hook.sh" hooks="${1%/*}/../shared/hook-helpers.mjs" out
   { [ "${1##*/}" = ccd ] && [ -f "$hook" ] && [ -f "$hooks" ]; } || return 0
   out="$(node --no-warnings "$hooks" --check "$hook" "$1" 2>/dev/null)" && return 0
   echo "restamp: $hook: ${out:-hook helpers unreadable}; run \`$PROG restamp $hook\` to regenerate"
@@ -25958,9 +25958,13 @@ cmd_restamp() {
   done
   [ -f "$mark" ] || _ccrc_die "restamp: the marker module is missing ($mark)"
   # A hook carrying the generated-helpers region (ARCH-74, #809) is regenerated
-  # from THIS tree's ccd by the module that wrote it; there is no second command.
-  hooks="$CCRC_HERE/../shared/hook-helpers.mjs"; ccdsrc="$CCRC_HERE/ccd"
-  if [ -f "$hooks" ] && [ -f "$ccdsrc" ]; then
+  # from the TARGET'S OWN tree: its shared/hook-helpers.mjs and its sibling ccd,
+  # never this script's tree (the installed ccrc would otherwise regenerate a
+  # worktree's hook against the installed constants). Missing either is refused.
+  if grep -qF -- '# ── BEGIN GENERATED HOOK HELPERS' "$f" 2>/dev/null; then
+    hooks="$dir/../shared/hook-helpers.mjs"; ccdsrc="$dir/ccd"
+    { [ -f "$hooks" ] && [ -f "$ccdsrc" ]; } \
+      || _ccrc_die "restamp: $f carries generated hook helpers, but its own tree lacks $hooks or $ccdsrc; restamp it from a full checkout (the tree holding both ccd/ and shared/). Nothing was written."
     verdict="$(_restamp_hook_region "$hooks" "$f" "$ccdsrc")" || _ccrc_die "restamp: $f could not be read or written; restore it from git (git checkout -- $f), re-apply your edit, restamp again"
     case "$verdict" in
       regenerated) echo "restamp: $f: hook helpers regenerated"; return 0 ;;
