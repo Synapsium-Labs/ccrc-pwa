@@ -77,6 +77,20 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    "modes": {"", "-wal", "-shm"}: each file's permission bits, or None when absent, stat'ed BEFORE the
                    dump's own connection opens, so an open store's WAL files are measured while it holds them}:
                    read through a raw sqlite connection of its own
+THE COUNT ESTIMATOR, THE KNOWN NAMES AND THE STATS FILE (Task 5): one Stats per driver process, made by stats-open
+  and used by every later stats-* op.
+  count            {estimate?: [[bytes, ratio, images?], ...], ratio?: [[old, bytes, tokens], ...],
+                   ratioWalk?: [[start, bytes, tokens, n], ...]} -> {"estimate", "ratio", "ratioWalk", "consts"}:
+                   count.estimate / count.updated_ratio over each row (ratioWalk applies the same sample n times),
+                   and the module's constants with inbound.IMAGE_TOKENS
+  known            -> {"families": stats.FAMILIES, "known": {family: sorted names}, "prefixes": {family: [prefix]}}
+  stats-open       {path, lane, umask?} -> {"doc": the Stats' snapshot}: os.umask(umask) first when given
+  stats-call       {method, args?, kwargs?} -> {"result"}: one public Stats method called with them
+  stats-snapshot   -> {"doc"}: the in-memory document, as the next flush would write it (but `updatedAt`)
+  stats-fault      {call, errno, times} -> {}: the next `times` calls of os.<call> raise OSError(<errno>), then the
+                   original is restored (a full disk at fsync, for example)
+  stats-file       {path} -> {"exists", "mode", "ino", "dir": the sorted listing of its directory}: never its content
+  sleep            {s} -> {}: time.sleep(s)
 A BridgeError prints as {"error": {status, etype, message, headers, state, code, requestId, kind}, "answer":
 {"status", "headers", "body": parsed JSON}, "event": errors.event(e) as text}. An op that raised prints
 {"raised": <class name>}. Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the package failed to import.
@@ -84,6 +98,7 @@ A BridgeError prints as {"error": {status, etype, message, headers, state, code,
 
 import ast
 import base64
+import errno
 import http.client
 import importlib
 import importlib.util
@@ -92,11 +107,12 @@ import os
 import sqlite3
 import sys
 import threading
+import time
 
 sys.dont_write_bytecode = True
 
 # The process's one reasoning store and the Reducer the last reduce op built (the store-* ops, above).
-_STATE = {"store": None, "reducer": None}
+_STATE = {"store": None, "reducer": None, "stats": None}
 
 
 def _emit(line):
@@ -328,6 +344,68 @@ def _store_op(name, op, cb):
     return out
 
 
+def _count_op(op, cb):
+    count = cb.count
+    walk = []
+    for start, nbytes, tokens, n in op.get("ratioWalk") or []:
+        r = start
+        for _ in range(int(n)):
+            r = count.updated_ratio(r, nbytes, tokens)
+        walk.append(r)
+    return {
+        "estimate": [count.estimate(*row) for row in op.get("estimate") or []],
+        "ratio": [count.updated_ratio(*row) for row in op.get("ratio") or []],
+        "ratioWalk": walk,
+        "consts": {"SEED_BYTES_PER_TOKEN": count.SEED_BYTES_PER_TOKEN, "ALPHA": count.ALPHA,
+                   "RATIO_MIN": count.RATIO_MIN, "RATIO_MAX": count.RATIO_MAX,
+                   "CALIBRATE_MIN_TOKENS": count.CALIBRATE_MIN_TOKENS, "IMAGE_TOKENS": cb.inbound.IMAGE_TOKENS},
+    }
+
+
+def _fault(op):
+    """The next `times` calls of os.<call> raise OSError(<errno>); then os.<call> is the original again."""
+    name, left = op["call"], [int(op["times"])]
+    original = getattr(os, name)
+    code = getattr(errno, op["errno"])
+
+    def faulty(*args, **kwargs):
+        if left[0] > 0:
+            left[0] -= 1
+            if left[0] == 0:
+                setattr(os, name, original)
+            raise OSError(code, os.strerror(code))
+        return original(*args, **kwargs)
+
+    setattr(os, name, faulty)
+    return {}
+
+
+def _stats_op(name, op, cb):
+    if name == "stats-open":
+        if "umask" in op:
+            os.umask(int(op["umask"]))
+        _STATE["stats"] = cb.stats.Stats(op["path"], op["lane"])
+        return {"doc": _STATE["stats"].snapshot()}
+    if name == "stats-call":
+        method = op["method"]
+        if method.startswith("_") or not hasattr(_STATE["stats"], method):
+            _usage("no Stats method " + json.dumps(method))
+        return {"result": getattr(_STATE["stats"], method)(*(op.get("args") or []), **(op.get("kwargs") or {}))}
+    if name == "stats-snapshot":
+        return {"doc": _STATE["stats"].snapshot()}
+    if name == "stats-fault":
+        return _fault(op)
+    if name == "stats-file":
+        d = os.path.dirname(op["path"])
+        try:
+            st = os.lstat(op["path"])
+        except FileNotFoundError:
+            return {"exists": False, "mode": None, "ino": None, "dir": sorted(os.listdir(d))}
+        return {"exists": True, "mode": st.st_mode & 0o777, "ino": st.st_ino, "dir": sorted(os.listdir(d))}
+    _usage("unknown op " + json.dumps(name))
+    return None
+
+
 def _run(op, pkg, cb):
     name = op.get("op")
     sse = cb.sse
@@ -454,6 +532,17 @@ def _run(op, pkg, cb):
         return {"rows": rows, "failedRaises": raised, "twoArgContinuationRaises": two_arg}
     if name.startswith("store-"):
         return _store_op(name, op, cb)
+    if name == "count":
+        return _count_op(op, cb)
+    if name == "known":
+        known = cb.known
+        return {"families": list(cb.stats.FAMILIES), "known": {f: sorted(v) for f, v in known.KNOWN.items()},
+                "prefixes": {f: list(v) for f, v in known.PREFIXES.items()}}
+    if name.startswith("stats-"):
+        return _stats_op(name, op, cb)
+    if name == "sleep":
+        time.sleep(float(op["s"]))
+        return {}
     _usage("unknown op " + json.dumps(name))
     return None
 
