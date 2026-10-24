@@ -40,7 +40,7 @@ import {
 } from './accountPicker';
 import { useAccountUsage } from './useProjectedHome';
 import { ProjectPicker } from './ProjectPicker';
-import { liveIdsIn, startedSessionFor } from './startProgramPolicy';
+import { liveIdsIn, liveMainCheckoutIn, startedSessionFor } from './startProgramPolicy';
 import { NAME_FIELD_CLASS, WorkspaceNameField } from './WorkspaceNameField';
 import { useNamePreview } from './useNamePreview';
 import { addRefusalText, classifyAddError } from './workspaceAddWords';
@@ -376,6 +376,10 @@ export function NewSessionSheet({
       }
       // The new row can reach the fleet store before this create's HTTP answer, so what was alive is taken BEFORE it.
       const preLive = liveIdsIn(fleet.getState().sessions);
+      // A live main checkout of this project (any lane: a swap keeps the id) is what `ccd start` answers "already running"
+      // for, exit 0: the create succeeds and no new row will ever come, so there is nothing to wait for. Taken BEFORE the
+      // create, from the owner `StartProgramSheet` refuses with.
+      const alreadyLive = liveMainCheckoutIn(fleet.getState().sessions, project.name) !== null;
       const said = `Starting ${project.name} on ${accountLabel(roster, wrapper)}…`;
       const body = {
         wrapper, project: project.name, workdir: project.workdir,
@@ -386,6 +390,12 @@ export function NewSessionSheet({
         : api.createSession(body));
       if (mine !== generation.current) {
         toast(said);
+        return;
+      }
+      if (alreadyLive) {
+        // As before the wait existed: said, and closed, with no navigation.
+        toast(said);
+        onClose();
         return;
       }
       // The create answers no id, so the sheet stays in its starting state until /ws/fleet lists the new main checkout.

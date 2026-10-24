@@ -499,10 +499,29 @@ describe('NewSessionSheet — success opens the new session', () => {
     vi.spyOn(api, 'linearResolve').mockResolvedValue({ title: 'Login cleanup', source: 'linear', note: null });
     const onClose = vi.fn();
     const ui = (open: boolean) => <><ToastHost /><NewSessionSheet open={open} onClose={onClose} fleet={store} /></>;
+    // The live listeners on the store, counted through its public `subscribe` (installed before the first render, so
+    // React's own subscriptions are in every reading and a test compares against its baseline).
+    let liveListeners = 0;
+    const realSubscribe = store.subscribe;
+    vi.spyOn(store, 'subscribe').mockImplementation((listener) => {
+      const release = realSubscribe(listener);
+      let released = false;
+      liveListeners += 1;
+      return () => {
+        if (!released) { released = true; liveListeners -= 1; }
+        release();
+      };
+    });
     const view = render(ui(true));
     const flush = async (): Promise<void> => { await act(async () => {}); };
     await flush();
-    return { store, onClose, flush, close: () => view.rerender(ui(false)), reopen: () => view.rerender(ui(true)) };
+    return {
+      store, onClose, flush,
+      listeners: () => liveListeners,
+      close: () => view.rerender(ui(false)),
+      reopen: () => view.rerender(ui(true)),
+      unmount: () => view.unmount(),
+    };
   };
   const pickDemo = async (flush: () => Promise<void>): Promise<void> => {
     fireEvent.click(screen.getByRole('button', { name: /team·max/ }));
@@ -581,6 +600,44 @@ describe('NewSessionSheet — success opens the new session', () => {
     await flush();
     expect(window.location.pathname).toBe('/');
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('an already-live main checkout on the same wrapper closes at once with today\'s toast, and waits for nothing', async () => {
+    vi.useFakeTimers();
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { store, onClose, flush, listeners } = await mount();
+    showFrame(store, [NEW_ROW]); // alive BEFORE the create: `ccd start` prints "already running" and the create succeeds
+    await pickDemo(flush);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); }); // the sheet's own debounces have fired
+    const listenersBefore = listeners();
+    const timersBefore = vi.getTimerCount(); // only repeating polls remain
+    startUnnamed();
+    await flush();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Starting demo on team·max…')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/');
+    expect(listeners()).toBe(listenersBefore); // no fleet subscription was taken
+    await act(async () => { await vi.advanceTimersByTimeAsync(55_000); }); // the toast has expired; a wait's 60 s clock would not have
+    expect(vi.getTimerCount()).toBe(timersBefore);
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('a live row id-matched to the picked account but reporting another lane (a swap) closes at once the same way', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { store, onClose, flush, listeners } = await mount();
+    // `cmd_swap` rewrites the registry's wrapper and keeps the id: the row's id says claude, its wrapper another lane.
+    showFrame(store, [fleetSession({ id: 'claude-demo', wrapper: 'claude9', project: 'demo', workspace: null })]);
+    await pickDemo(flush);
+    const listenersBefore = listeners();
+    startUnnamed();
+    await flush();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Starting demo on team·max…')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/');
+    expect(listeners()).toBe(listenersBefore);
   });
 
   it('a create answered after the sheet was dismissed navigates nowhere', async () => {
