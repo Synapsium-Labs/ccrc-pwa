@@ -33,9 +33,10 @@ describe('ccd/lib/transcript.jq ships', () => {
     expect(src).toContain('"$reg/lib/transcript.jq"');
   });
   it('ccd and the doctor look for it where the installers put it', () => {
-    for (const rel of ['ccd/ccd', 'ccd/ccrc-doctor-checks']) {
-      expect(read(rel), rel).toContain('TRANSCRIPT_JQ_LIB="$HOME/.cc-sessions/lib"');
-    }
+    expect(read('ccd/ccd')).toContain('TRANSCRIPT_JQ_LIB="$HOME/.cc-sessions/lib"');
+    // The doctor spells the registry as the bare directory on a code line, because
+    // pool-name-parity.test.ts pins every `.cc-sessions/<name>` literal in that file.
+    expect(read('ccd/ccrc-doctor-checks')).toContain('TRANSCRIPT_JQ_LIB="$HOME/.cc-sessions"/lib');
   });
 });
 

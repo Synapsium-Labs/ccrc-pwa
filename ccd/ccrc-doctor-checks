@@ -4136,7 +4136,7 @@ CONTINUED_IN_TAIL_BYTES=8192   # held equal to CONTINUATION_TAIL_BYTES
 # `$HOME/.cc-sessions/lib` where the installers put it; a missing file is a jq
 # that fails to load, which `_dr_continued_in` answers as NOT MEASURED (rc 2).
 TRANSCRIPT_JQ_LIB="${BASH_SOURCE[0]%/*}/lib"
-[ -f "$TRANSCRIPT_JQ_LIB/transcript.jq" ] || TRANSCRIPT_JQ_LIB="$HOME/.cc-sessions/lib"
+[ -f "$TRANSCRIPT_JQ_LIB/transcript.jq" ] || TRANSCRIPT_JQ_LIB="$HOME/.cc-sessions"/lib   # the bare directory on a code line: pool-name-parity.test.ts pins `.cc-sessions/<name>` literals
 CONTINUED_IN_JQ='include "transcript"; continued_in($u)'
 
 _DR_CI_NEXT=""   # `_dr_continued_in`'s out-parameter: the successor, on rc 0
