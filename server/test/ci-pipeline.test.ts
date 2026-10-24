@@ -114,9 +114,11 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     const all = jobs(read(CI));
     // `test (server)` is a NAMED summary job now; the matrix keeps the other two.
     expect(jobKey(job('server'), 'name')).toBe('test (server)');
-    expect(job('test'), 'the matrix must stay exactly [agent, pwa] — a new axis renames both checks')
-      .toMatch(/^ {8}package: \[agent, pwa\]$/m);
-    expect(jobKey(job('test'), 'name'), 'a name: on the matrix renames `test (agent)` and `test (pwa)`').toBeNull();
+    expect(job('test'), 'the matrix must stay exactly [agent] — a new axis renames the check')
+      .toMatch(/^ {8}package: \[agent\]$/m);
+    expect(jobKey(job('test'), 'name'), 'a name: on the matrix renames `test (agent)`').toBeNull();
+    // `test (pwa)` is the aggregate over the pwa shards (D-6768), named, not a matrix leg.
+    expect(jobKey(job('pwa'), 'name')).toBe('test (pwa)');
     expect(all.has('build-pwa')).toBe(true);
     expect(jobKey(job('build-pwa'), 'name'), 'a name: on build-pwa renames the required check').toBeNull();
     // No second producer of a required name — two jobs reporting
@@ -137,11 +139,19 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
       expect(jobKey(job(id), 'if'), `${id} has a job-level if:`).toBeNull();
       expect(needs(job(id)), `${id} needs another job — its failure would skip a required check`).toEqual([]);
     }
+    // The pwa shards and static checks report under the aggregate `test (pwa)`,
+    // and they need the run's one install (D-6770) — but only behind
+    // `!cancelled()`, so a failed `deps` costs them their own install and never
+    // skips them (a skip would read as red in the aggregate).
+    for (const id of ['pwa-shard', 'pwa-static']) {
+      expect(jobKey(job(id), 'if'), `${id}: a failed deps would skip it`).toBe('${{ !cancelled() }}');
+      expect(needs(job(id)), `${id} needs something beyond the run's one install`).toEqual(['deps']);
+    }
   });
 
   it('the required legs and the browser leg skip by STEP, only on a refresh or a rebuild', () => {
     const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
-    for (const id of ['test', 'build-pwa', 'browser-pwa']) {
+    for (const id of ['test', 'pwa-shard', 'pwa-static', 'build-pwa', 'browser-pwa']) {
       expect(job(id), `${id}: the job-level leg switch`).toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
       const s = steps(job(id));
       expect(s.length, `${id} parsed no steps`).toBeGreaterThan(0);
@@ -413,11 +423,12 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   // presence. Installing ui after the suite has already run is what PR #346
   // actually did, and it fails exactly as if the step were absent.
   it('installs ui BEFORE the pwa suite runs, not after it', () => {
-    const b = jobs(read(CI)).get('test') ?? '';
-    const ui = b.indexOf('working-directory: ui');
+    const b = jobs(read(CI)).get('pwa-shard') ?? '';
+    // ui's tree comes with the run's one install (server-deps, D-6770).
+    const ui = b.indexOf('- uses: ./.github/actions/server-deps');
     const test = b.indexOf('./node_modules/.bin/vitest run');
-    expect(ui, 'the test job installs ui').toBeGreaterThan(-1);
-    expect(test, 'the test job runs vitest').toBeGreaterThan(-1);
+    expect(ui, 'the pwa-shard job installs ui').toBeGreaterThan(-1);
+    expect(test, 'the pwa-shard job runs vitest').toBeGreaterThan(-1);
     expect(ui, 'ui is installed after the suite — every pwa file fails at import')
       .toBeLessThan(test);
   });
@@ -1006,10 +1017,34 @@ describe('ci.yml: the daily run\'s "already green?" question fails SAFE (design 
   });
 });
 
+describe('ci.yml: test (pwa) is a summary over the pwa shards (D-6768)', () => {
+  it('the aggregate is always(), needs the shards and the static checks, and refuses any result but success', () => {
+    const b = job('pwa');
+    expect(jobKey(b, 'name')).toBe('test (pwa)');
+    expect(jobKey(b, 'if')).toBe('always()');
+    expect(needs(b)).toEqual(['pwa-shard', 'pwa-static']);
+    // Script-free refusal: success is the only result that passes, so failure, cancelled and skipped all fail it.
+    expect(b).toContain("if: needs.pwa-shard.result != 'success' || needs.pwa-static.result != 'success'");
+    expect(b).not.toContain('merge_group');
+  });
+
+  it('runs the pwa suite as N shards that together cover vitest --shard=1/N..N/N, and typechecks pwa exactly once', () => {
+    const shard = job('pwa-shard');
+    const total = /^ {8}total: \[(\d+)\]$/m.exec(shard)?.[1];
+    const list = /^ {8}shard: \[([\d, ]+)\]$/m.exec(shard)?.[1];
+    expect(total, 'the shard matrix names no total').toBeDefined();
+    expect(list!.split(',').map((x) => Number(x.trim())), 'the shards are not exactly 1..total')
+      .toEqual(Array.from({ length: Number(total) }, (_, i) => i + 1));
+    expect(shard).toMatch(/^ {8}run: \.\/node_modules\/\.bin\/vitest run --shard=\$\{\{ matrix\.shard \}\}\/\$\{\{ matrix\.total \}\}$/m);
+    const tsc = [...jobs(read(CI))].filter(([, bl]) => /working-directory: pwa\n\s+run: \.\/node_modules\/\.bin\/tsc --noEmit/.test(bl)).map(([id]) => id);
+    expect(tsc, 'the pwa typecheck must run in exactly one job').toEqual(['pwa-static']);
+  });
+});
+
 describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23 §7, §8)', () => {
   it('full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS, the Node floor, the browser — and asks verdict.mjs full', () => {
     const b = job('full-suite');
-    expect(needs(b)).toEqual(['browser-pwa', 'build-pwa', 'node-floor', 'select', 'server', 'server-shard', 'server-typecheck', 'test', 'test-macos']);
+    expect(needs(b)).toEqual(['browser-pwa', 'build-pwa', 'node-floor', 'pwa', 'select', 'server', 'server-shard', 'server-typecheck', 'test', 'test-macos']);
     // Never on a merge-queue run (landing-order stage 2): a queue run skips
     // test-macos, and a queue run that fell back to `full` would read that skip
     // as a red leg here (ci-merge-queue.test.ts derives the rule).
@@ -1107,7 +1142,7 @@ describe('ci.yml: dependencies are installed once per run, and handed to the job
     for (const st of saves) expect(st, 'a save that runs without save: true').toMatch(/if: .*inputs\.save == 'true'/);
     expect(a, 'actions/cache itself would save on every caller').not.toMatch(/uses: actions\/cache@/);
     const callers = [...jobs(read(CI))].filter(([, b]) => /^ {6}- uses: \.\/\.github\/actions\/server-deps$/m.test(b));
-    expect(callers.map(([id]) => id).sort()).toEqual(['deps', 'node-floor', 'server-shard', 'test-macos', 'trace-shard']);
+    expect(callers.map(([id]) => id).sort()).toEqual(['deps', 'node-floor', 'pwa-shard', 'pwa-static', 'server-shard', 'test-macos', 'trace-shard']);
     for (const [id, b] of callers) {
       const saves = /save: 'true'/.test(b);
       expect(saves, `${id}: only deps may save`).toBe(id === 'deps');
