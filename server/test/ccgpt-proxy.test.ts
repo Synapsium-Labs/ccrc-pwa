@@ -3091,14 +3091,15 @@ describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 
   // and `an empty package directory` (which Python would import as a namespace package, `__file__` None) each get
   // the pre-import line, and no sibling package runs first. The post-import check is reached by an `__init__.py`
   // that links out of the named directory. Fix round 2 (T9-R2-CQ-1): an `__init__.py` that sets `__file__` to None
-  // leaves the state a namespace package would, had its `__init__.py` gone between the check and the import.
+  // leaves the state a namespace package would, had its `__init__.py` gone between the check and the import. Fix
+  // round 3 (T9-R3-CQ-1): that line states what was measured (`__file__` is not a string), not a cause.
   it.each([
     ['unset', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not set$/],
     ['absent', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
     ['another directory', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
     ['an empty package directory', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
     ['a package whose __init__.py links elsewhere', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not the directory the codexbridge package imported from; run 'ccrc update'$/],
-    ['a package whose __init__.py has no __file__', /^ccgpt-proxy: direct: the codexbridge package imported with no __file__ \(CCGPT_BRIDGE_DIR held no __init__\.py at import\); run 'ccrc update'$/],
+    ['a package whose __init__.py has no __file__', /^ccgpt-proxy: direct: the codexbridge package imported with no file path \(its __file__ is not a string\); run 'ccrc update'$/],
     ['a broken package', /^ccgpt-proxy: direct: the codexbridge package did not import from CCGPT_BRIDGE_DIR \(RuntimeError\); run 'ccrc update'$/],
   ] as const)('a missing package dir exits with one direct: line (%s)', async (shape, line) => {
     const home = mkTmp('ccgpt-proxy-direct-nopkg-');

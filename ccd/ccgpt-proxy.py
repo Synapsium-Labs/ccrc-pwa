@@ -1593,9 +1593,11 @@ def _run_direct() -> int:
         sys.exit("ccgpt-proxy: direct: the codexbridge package did not import from CCGPT_BRIDGE_DIR "
                  f"({type(e).__name__}); run 'ccrc update'")
     origin = getattr(codexbridge, "__file__", None)
-    if not isinstance(origin, str):  # a namespace package: its __init__.py went between the check above and the import
-        sys.exit("ccgpt-proxy: direct: the codexbridge package imported with no __file__ "
-                 "(CCGPT_BRIDGE_DIR held no __init__.py at import); run 'ccrc update'")
+    # The likely cause is a namespace package: its __init__.py went between the check above and the import. The
+    # check reads only the attribute, so the line says what was measured, not why (fix round 3, T9-R3-CQ-1).
+    if not isinstance(origin, str):
+        sys.exit("ccgpt-proxy: direct: the codexbridge package imported with no file path "
+                 "(its __file__ is not a string); run 'ccrc update'")
     if os.path.dirname(os.path.realpath(origin)) != bridge_dir:
         sys.exit("ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not the directory the codexbridge package "
                  "imported from; run 'ccrc update'")
