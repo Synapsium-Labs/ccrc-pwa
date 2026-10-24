@@ -21,6 +21,12 @@ import { archiveFlags, type ArchiveFlags } from './archiveDoor.js';
 export const ARCHIVE_GATES = ['id-shape', 'registry-listing', 'known-id', 'body', 'registry-row', 'identity'] as const;
 export type ArchiveGate = (typeof ARCHIVE_GATES)[number];
 
+const ARCHIVE_GATE_SET: ReadonlySet<string> = new Set(ARCHIVE_GATES);
+/** `mail-routes.test.ts`'s kebab scan admits the gate names through this guard, derived from `ARCHIVE_GATES`. */
+export function isArchiveGateKebab(token: string): boolean {
+  return ARCHIVE_GATE_SET.has(token);
+}
+
 /** What reading the session's registry row answered, keyed by what it could not do (`readSessionRecord`'s arms). */
 export type AdmissionRecordRead<R> =
   | { readonly kind: 'found'; readonly record: R }
