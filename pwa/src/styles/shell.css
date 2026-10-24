@@ -146,7 +146,7 @@
     grid-column: auto;
   }
   /* The lane's name gives first: a long one is cut with an ellipsis (its full name is the label's `title`) so the
-     windows keep their countdowns inside the card. The windows never shrink below their own content. */
+     windows keep their countdowns inside the card. */
   .shell-accounts .account-gauge-label {
     flex: 0 1 auto;
     min-width: 0;
@@ -155,9 +155,11 @@
     white-space: nowrap;
     font-size: var(--fs-meta);
   }
+  /* The windows never shrink below what they draw, so only the name gives. `min-width: min-content` did not hold them:
+     a grid of rows with a 1fr track measures narrower than its rows draw, so a long name's card shrank them and the
+     countdowns spilled out of the card (lanes-row.browser.test.ts). */
   .shell-accounts .acct-rows {
-    flex: 1 1 auto;
-    min-width: min-content;
+    flex: 1 0 auto;
     gap: 1px;
   }
   /* The meter is the only elastic column, so it — never a number — is what gives
