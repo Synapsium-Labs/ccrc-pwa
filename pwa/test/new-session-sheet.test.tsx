@@ -499,8 +499,9 @@ describe('NewSessionSheet — success opens the new session', () => {
     vi.spyOn(api, 'linearResolve').mockResolvedValue({ title: 'Login cleanup', source: 'linear', note: null });
     const onClose = vi.fn();
     const ui = (open: boolean) => <><ToastHost /><NewSessionSheet open={open} onClose={onClose} fleet={store} /></>;
-    // The live listeners on the store, counted through its public `subscribe` (installed before the first render, so
-    // React's own subscriptions are in every reading and a test compares against its baseline).
+    // The live listeners on the store, counted through its public `subscribe`, installed before the first render.
+    // The count holds only the listeners taken through `fleet.subscribe`, which is what the wait uses; React's own store
+    // subscriptions do not pass through it, so a test compares against its baseline of 0).
     let liveListeners = 0;
     const realSubscribe = store.subscribe;
     vi.spyOn(store, 'subscribe').mockImplementation((listener) => {
@@ -731,12 +732,10 @@ describe('NewSessionSheet — success opens the new session', () => {
     expect(screen.queryByText('Starting demo on team·max…')).toBeNull(); // the bound says nothing a second time
   });
 
-  it('a dismissal during the wait ends that wait, so a reopened sheet\'s own start is not cut short by its clock', async () => {
+  it('a dismissal during the wait releases that wait\'s fleet listener and its 60 s clock', async () => {
     vi.useFakeTimers();
-    vi.spyOn(api, 'createSession')
-      .mockResolvedValueOnce(undefined) // the first start: answered, then waiting for its row
-      .mockImplementationOnce(() => new Promise<void>(() => {})); // the reopened sheet's start never answers
-    const { flush, close, reopen, listeners } = await mount();
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { flush, close, listeners } = await mount();
     await pickDemo(flush);
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); }); // the sheet's own debounces have fired
     const listenersBefore = listeners();
@@ -748,13 +747,31 @@ describe('NewSessionSheet — success opens the new session', () => {
     expect(listeners()).toBe(listenersBefore); // the dismissal released the listener...
     await act(async () => { await vi.advanceTimersByTimeAsync(55_000); }); // (the dismissal's toast has expired by now)
     expect(vi.getTimerCount()).toBe(0); // ...and the wait's 60 s clock (a closed sheet polls nothing, and the toast has gone)
+  });
+
+  it('a sheet reopened after a dismissal during the wait gets a wait of its own that the previous clock cannot end', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined); // both starts are answered, then wait for their rows
+    const { flush, close, reopen, listeners } = await mount();
+    await pickDemo(flush);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    const listenersBefore = listeners();
+    startUnnamed(); // the FIRST wait begins at about 2 s
+    await flush();
+    close();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
     reopen();
     await flush();
     await pickDemo(flush);
-    startUnnamed();
+    startUnnamed(); // the reopened sheet's own wait begins at about 12 s
     await flush();
-    await act(async () => { await vi.advanceTimersByTimeAsync(7_000); }); // 62 s after the FIRST wait began
-    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled(); // the old clock did not end the new start
+    expect(listeners()).toBe(listenersBefore + 1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(54_000); }); // 66 s: past the FIRST wait's 60 s, inside the new one's
+    expect(screen.getByRole('button', { name: /^(Starting…|Still starting)/ })).toBeDisabled(); // (past 20 s the label is the slow one)
+    expect(listeners()).toBe(listenersBefore + 1); // the new wait still holds its listener
+    close(); // dismissing it must reach ITS handle: the old clock's late settle must not have orphaned it
+    await flush();
+    expect(listeners()).toBe(listenersBefore);
   });
 
   it('an unmount during the wait ends it: a later row navigates nowhere, and no listener or clock is kept', async () => {
@@ -770,7 +787,7 @@ describe('NewSessionSheet — success opens the new session', () => {
     unmount(); // the route left the fleet: the sheet is gone, not merely closed
     await act(async () => {});
     expect(listeners()).toBe(listenersBefore); // the wait's listener is released: none retained
-    await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(55_000); }); // before the wait's 60 s: a leaked clock is still pending
     expect(vi.getTimerCount()).toBe(0);
     showFrame(store, [NEW_ROW]);
     await flush();
