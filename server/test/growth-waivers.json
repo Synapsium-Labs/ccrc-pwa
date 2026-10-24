@@ -17,6 +17,13 @@
     },
     {
       "file": "ccd/ccd",
+      "maxDelta": 70,
+      "d": "D-6619",
+      "reason": "fleet disk retention DR-7: the read-only path-users verb and its one-walk holder probe in ccd/ccd (measured +65 net code lines against the merge-base)",
+      "added": "2026-10-23"
+    },
+    {
+      "file": "ccd/ccd",
       "maxDelta": 181,
       "d": "D-6632",
       "reason": "disk retention DR-20: rung 9's nested-repository rescue and the box-local scratch-rescue verb are bash that must sit beside the ladder they extend (ccd sources only accounts.sh, so there is no sourced-library path for these helpers), measured +171 net code lines against the merge-base with current main (orchestrator-granted exemption)",

@@ -31692,7 +31692,8 @@ _ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_R
   # THE BOUND IS MEASURED BEFORE ANYTHING LANDS, in a throwaway repository that borrows the project's store as an alternate, so the
   # answer is the same on every attempt: a refused rescue must not leave its objects in the store for the next one to find already paid.
   # An ordinary PACKED fetch (`unpackLimit=1`) keeps delta compression, so `size-pack` is a compressed upper bound on what would land
-  # (it may count objects no ref reaches, which only errs toward keeping). A repository whose own store is far over the bound is
+  # (it may count objects no ref reaches, which only errs toward keeping). The landing fetch below carries the same `unpackLimit=1`,
+  # because git's default would write a rescue of fewer than 100 objects as loose, undeltified objects, many times the measured size. A repository whose own store is far over the bound is
   # refused before any fetch, so a huge clone never writes its objects to temp on a box that is short of disk.
   a=$(_ws_store_kb "$n")
   if (( a > 4 * WS_NESTED_RESCUE_MAX_MB * 1024 )); then
@@ -31723,7 +31724,7 @@ _ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_R
     done
   fi
   specs=("${specs[@]//$base0/$base}")
-  git -C "$main" -c gc.auto=0 -c uploadpack.allowAnySHA1InWant=true fetch -q --no-tags --no-write-fetch-head "$n" "${specs[@]}" >/dev/null 2>"$errf" \
+  git -C "$main" -c gc.auto=0 -c transfer.unpackLimit=1 -c fetch.unpackLimit=1 -c uploadpack.allowAnySHA1InWant=true fetch -q --no-tags --no-write-fetch-head "$n" "${specs[@]}" >/dev/null 2>"$errf" \
     || { RECLAIM_PIN_WHY="could not fetch the nested repository at $n into the attic: $(head -1 "$errf")"; rm -f "$errf"; (( reuse )) || git -C "$main" update-ref -d "$base/claim" 2>/dev/null; return 1; }
   rm -f "$errf"
   # RE-PROVE (spec §2.7.1 step 3): every ref tip, HEAD, the WIP and each reflog-only tip resolve under the attic.

@@ -135,6 +135,25 @@ describe('with the marker a nested repository is rescued, then the tree goes', (
     expect(fs.existsSync(n.dir), 'the tree is gone').toBe(false);
   }, 180_000);
 
+  it('the bound holds on what lands: a packed, delta-heavy nested repository of fewer than 100 objects grows the project store by at most the bound', () => {
+    const c = makeChild(h);
+    const n = plantNested(c.wt);
+    const lines = Array.from({ length: 90000 }, () => randomBytes(16).toString('hex'));
+    for (let i = 0; i < 20; i++) {
+      lines[i] = `edit ${i}`;
+      fs.writeFileSync(path.join(n.dir, 'text.txt'), lines.join('\n') + '\n');
+      h.git(n.dir, 'add', 'text.txt'); h.git(n.dir, 'commit', '-q', '-m', `v${i}`);
+    }
+    h.git(n.dir, 'gc', '-q', '--aggressive');
+    const kb = (): number => h.git(c.main, 'count-objects', '-v').split('\n')
+      .reduce((a, l) => (/^size(-pack)?: /.test(l) ? a + Number(l.split(': ')[1]) : a), 0);
+    const before = kb();
+    arm();
+    const r = childReclaimVerb(h, evalOf(h).token, { pre: 'WS_NESTED_RESCUE_MAX_MB=8;' });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(kb() - before, 'KiB the project store grew').toBeLessThanOrEqual(8 * 1024);
+  }, 240_000);
+
   it('the bound holds on EVERY attempt: a 3 MiB blob over a 1 MiB bound is refused twice and the tree stays', () => {
     const c = makeChild(h);
     const n = plantNested(c.wt);
