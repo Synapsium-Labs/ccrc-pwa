@@ -171,13 +171,13 @@ describe('ccrc: dispatch and usage', () => {
     //
     // `update` joined it in stage 4 Task 6 — fetch + verify a published
     // release, back up, re-run the install spine from the verified staged
-    // tree. Same split again: `server/test/ccrc-update.test.ts` owns what it
+    // tree. Same split again: `server/test/ccrc-update-*.test.ts` owns what it
     // does, this line owns that an operator can find it.
     //
     // `rollback` joined it in the centralised-update programme's wave 4
     // (design 2026-09-20 §11) — a verb, not the recipe `_upd_report` used to
     // print: update's own path, below the floor, under update's lock, then the
-    // gate and the sweep. Same split: `server/test/ccrc-update.test.ts` owns
+    // gate and the sweep. Same split: `server/test/ccrc-update-*.test.ts` owns
     // what it does, this line owns that an operator can find it.
     //
     // `uninstall`, `backup` and `logs` joined it in stage 4 Task 8 (spec §7):
@@ -193,19 +193,19 @@ describe('ccrc: dispatch and usage', () => {
     // `channel` joined it in W4a Task 8 — the READ-ONLY view of this box's
     // update-intent projection: what `ccrc update` with no --to would follow,
     // and the line `ccrc rollout --channel` reads over ssh. It takes no
-    // argument, by decision 15. `server/test/ccrc-update.test.ts` owns what it
+    // argument, by decision 15. `server/test/ccrc-update-*.test.ts` owns what it
     // does.
     //
     // `watchdog` joined it in W4a Task 9 — the verb `ccrc-update-watchdog.timer`
     // runs every minute on a server/both box: it re-measures a self-update
     // whose report went stale and reverts only a box that fails its health
     // probe. A timer's verb is still a verb an operator can type by hand.
-    // `server/test/ccrc-update.test.ts` owns what it does.
+    // `server/test/ccrc-update-*.test.ts` owns what it does.
     //
     // `versions` joined it in W6 Task 5 (design 2026-09-20 §11) — the kept
     // release trees under ~/ccrc-versions and the one hand-run prune, which
     // never removes a version the box needs. Same split:
-    // `server/test/ccrc-update.test.ts` owns what it does, this line owns that
+    // `server/test/ccrc-update-*.test.ts` owns what it does, this line owns that
     // an operator can find it.
     //
     // `codex` joined it in Plan 2b-2 Task 5 — `ccrc codex start|stop|status|login <id>`,

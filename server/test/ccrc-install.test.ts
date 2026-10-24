@@ -3629,7 +3629,7 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
   // PLATFORM-ONLY: the GC's running-unit read on macOS is plutil over the
   // job's plist, which this harness's plutil stub answers with nothing — an
   // unmeasured read, so a macOS install WARNs and prunes nothing (the safe
-  // direction, pinned in ccrc-update.test.ts, where the Darwin read itself is
+  // direction, pinned in ccrc-update-*.test.ts, where the Darwin read itself is
   // measured by forcing CCD_OS in a sourced shell).
   itLinux('after an install whose doctor passed, the GC keeps the newest CCRC_VERSIONS_KEEP beside the pointed-at one and prunes the rest (W6 Task 5)', () => {
     const home = freshBox('ccrc-install-w6-gc-');
@@ -6816,7 +6816,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     // sets one), so CCRC_UPDATE_VERIFIED=1 hand-exported here is stripped —
     // `ccrc version` still reads unsigned, exactly as the unverified case
     // above. The genuine verified case (a real provenance bundle, verified
-    // through `cmd_update`'s own spine) is ccrc-update.test.ts's happy path.
+    // through `cmd_update`'s own spine) is ccrc-update-*.test.ts's happy path.
     const verified = freshBox('ccrc-install-version-verified-');
     gitInit(treeRoot(verified));
     expect(runInstall(verified, ['install'], { CCRC_UPDATE_VERIFIED: '1' }).code).toBe(0);

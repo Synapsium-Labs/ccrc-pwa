@@ -3041,7 +3041,7 @@ describe('the release owner literal — two named assignments, and no third spel
   // deliberate:
   //   - license.test.ts pins the VALUE — both lanes name the ruled owner, and
   //     the previous org survives nowhere in shipping code;
-  //   - ccrc-update.test.ts pins the AGREEMENT — install.sh's owner/repo pair
+  //   - ccrc-update-kept.test.ts pins the AGREEMENT — install.sh's owner/repo pair
   //     and ccd/ccrc's are equal, so the two lanes download the same release;
   //   - THIS pins the COUNT — those two assignments are the only spellings of
   //     the org anywhere in shipped code, so a third copy (a hardcoded release
