@@ -9,7 +9,6 @@
 // THE ACCEPTANCE PINS at the end (#556): `closeRun` is at least 40% smaller in code lines, `decideClose` has the
 // gate-order rows, and the executor's switch over the decision's arms is exhaustive (`satisfies never`).
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, type OpenSiblingsResult } from '../src/coord/store.js';
@@ -18,8 +17,9 @@ import {
 } from '../src/coord/closeDecide.js';
 import type { ChildGate } from '../src/coord/close.js';
 import { codeLines } from './growthCheck.js';
-import { REPO_ROOT, parsedFile, sourceOfSymbol } from './scan/symbols.js';
+import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 import { mkTmp } from './tmpHelpers.js';
+import { okRun } from './coordReadHelpers.js';
 
 const SHA = 'a'.repeat(40);
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-decide-close-'), 'coord.db')));
@@ -166,7 +166,7 @@ const sibs = (c: CoordStore, id: number): OpenSiblingsResult => c.openRunsForSes
 
 describe('decideClose, the close step (the work close’s hold)', () => {
   const act = (c: CoordStore, id: number, over: Partial<Extract<CloseFacts, { step: 'close' }>> = {}, trace: string[] = []) => {
-    const run = (c.run(id) as { run: never }).run;
+    const run = okRun(c.run(id))!;
     return decideClose({ step: 'close', run, siblings: sibs(c, id), final: true, state: 'done', archive: false,
       gate: async () => { trace.push('gate'); return NO_GATE; }, ...over });
   };
@@ -212,7 +212,7 @@ describe('decideClose, the close step (the work close’s hold)', () => {
 
 describe('decideClose, the abandon step', () => {
   const act = (c: CoordStore, id: number, over: Partial<AbandonFacts> = {}, trace: string[] = []) => {
-    const run = (c.run(id) as { run: never }).run;
+    const run = okRun(c.run(id))!;
     return decideClose({ step: 'abandon', run, siblings: sibs(c, id),
       gate: async () => { trace.push('gate'); return NO_GATE; }, ...over });
   };
@@ -288,24 +288,23 @@ describe('decideClose, the sweep, ledger, verb, fleet and re-measure steps', () 
 });
 
 describe('the acceptance pins (ARCH-35)', () => {
-  const read = (rel: string): string => readFileSync(path.join(REPO_ROOT, rel), 'utf8');
   const BASELINE_CLOSE_RUN_CODE_LINES = 183;   // measured on origin/main before this change
 
-  /** `closeRun` is declared three times (two overloads and the body); the body is the longest. */
-  const closeRunSource = (): string => {
-    const p = parsedFile('server/src/coord/close.ts');
-    const s = p.symbols.filter((x) => x.name === 'closeRun').sort((a, b) => (b.end - b.start) - (a.end - a.start))[0]!;
+  /** An overloaded function is declared once per signature and once for the body; the body is the longest. */
+  const bodyOf = (file: string, name: string): string => {
+    const p = parsedFile(file);
+    const s = p.symbols.filter((x) => x.name === name).sort((a, b) => (b.end - b.start) - (a.end - a.start))[0]!;
     return p.text.slice(s.start, s.end);
   };
+  const closeRunSource = (): string => bodyOf('server/src/coord/close.ts', 'closeRun');
 
   it('closeRun lost at least 40% of its code lines', () => {
     expect(codeLines('close.ts', closeRunSource())).toBeLessThanOrEqual(Math.floor(BASELINE_CLOSE_RUN_CODE_LINES * 0.6));
   });
 
   it('the decider has the named stale arm, and both switches over the arms are exhaustive', () => {
-    const decider = read('server/src/coord/closeDecide.ts');
-    expect(decider).toMatch(/kind: 'stale'/);
-    expect(decider).toMatch(/default: return f satisfies never;/);
+    expect(sourceOfSymbol('server/src/coord/closeDecide.ts', 'decideRecheck')).toMatch(/kind: 'stale'/);
+    expect(bodyOf('server/src/coord/closeDecide.ts', 'decideClose')).toMatch(/default: return f satisfies never;/);
     expect(sourceOfSymbol('server/src/coord/close.ts', 'stopped')).toMatch(/case 'stale':/);
     expect(sourceOfSymbol('server/src/coord/close.ts', 'stopped')).toMatch(/return d satisfies never;/);
   });
