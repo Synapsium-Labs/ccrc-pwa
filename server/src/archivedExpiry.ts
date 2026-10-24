@@ -16,6 +16,7 @@ import {
   TERMINAL_RUN_STATES, leafKeptWord, type ArchivedHeld, type ArchivedHeldRow, type ChildMark, type ExpiryAttention,
   type LcRefusalToken, type LeafKeptWord, type RunState,
 } from '../../shared/api.js';
+import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 
 /** THE LANE'S LIVE SWITCH (the coordinator's safety ruling (E), the scope sweep's precedent). Until `$REG/<this>`
  *  exists the lane AUDITS and RECORDS "would expire <id>" — a feed row and an attention entry — and NEVER composes
@@ -74,7 +75,7 @@ const isExpireToken = (v: unknown): v is ExpireToken => typeof v === 'string' &&
  *  line, `bad token`, `bad session id`, a blank `--actor`), which also exits 1 with an empty stdout, by stderr's
  *  exact shape — never by the empty stdout alone, which would retry the first for ever or blame the argv for the
  *  second. */
-export type ExpireBoxWord = 'flock-unavailable' | 'lock-unopenable';
+export type ExpireBoxWord = 'flock-unavailable' | typeof CCD_LOCK_UNOPENABLE;
 
 // ── how long, how often ──────────────────────────────────────────────────────
 
@@ -327,10 +328,17 @@ export function parseExpireResult(sessionId: string, stdout: string, stderr: str
       return v.failed === 'state-changed' ? { kind: 'restart', detail: said } : { kind: 'failed', resumable: false, detail: said };
     }
   }
-  const err = stderr.trim();
+  // The machine token first (`refusal-v1`, #560): ccd's own word for the two box dies, whatever their prose says now.
+  const said = readCcdRefusal(stderr);
+  if (said !== null && said.act === 'expire' && (said.token === 'flock-unavailable' || said.token === CCD_LOCK_UNOPENABLE)) {
+    const last = withoutCcdRefusal(stderr).trim().split('\n').pop() ?? '';
+    return { kind: 'box', word: said.token, detail: last.startsWith('ccd: ') ? last.slice('ccd: '.length) : last };
+  }
+  // The fallback: a ccd without `refusal-v1`, or a word this build does not list.
+  const err = withoutCcdRefusal(stderr).trim();
   if (err === FLOCK_UNAVAILABLE) return { kind: 'box', word: 'flock-unavailable', detail: err.slice('ccd: '.length) };
   const lock = lockUnopenable(err);
-  if (lock !== null) return { kind: 'box', word: 'lock-unopenable', detail: lock };
+  if (lock !== null) return { kind: 'box', word: CCD_LOCK_UNOPENABLE, detail: lock };
   const msg = err.startsWith('ccd: ') ? err.slice('ccd: '.length) : err;
   if (EXPIRE_COMPOSITION_DIES.some((p) => p.test(msg))) return { kind: 'composition', detail: msg };
   return { kind: 'failed', resumable: true,
@@ -629,7 +637,7 @@ const EXPIRY_DEFER_WHYS: Readonly<Record<ArchivedExpiryDeferWhy, true>> = {
   unsupported: true, 'paused-at-server': true, 'store-unreadable': true, 'open-run': true, coordinating: true,
   'review-open': true, presence: true, 'state-changed': true,
 };
-const EXPIRE_BOX_WORDS: Readonly<Record<ExpireBoxWord, true>> = { 'flock-unavailable': true, 'lock-unopenable': true };
+const EXPIRE_BOX_WORDS: Readonly<Record<ExpireBoxWord, true>> = { 'flock-unavailable': true, [CCD_LOCK_UNOPENABLE]: true };
 
 /** Every kebab word this lane spells as a literal — ccd's nineteen, the two box words, the outcome kinds and the defer
  *  reasons — for `mail-routes.test.ts`'s scan of `server/src/coord`, where the executor lives. None is a mail rejection

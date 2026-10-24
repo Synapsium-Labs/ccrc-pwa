@@ -22,6 +22,7 @@ import {
 import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE, rosterKindOf } from '../../shared/roster.js';
 import { workspaceId } from '../../shared/slug.js';
+import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -2767,7 +2768,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   /** ccd failed in a way no route maps to a refusal word: its stderr, at 502. One send for every caller. */
-  const ccd502 = (reply: FastifyReply, res: { stderr: string }) => reply.code(502).send({ ok: false, stderr: res.stderr });
+  const ccd502 = (reply: FastifyReply, res: { stderr: string }) => reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr) });
   const runCcdOr502 = async (reply: FastifyReply, argv: CcdArgv) => {
     const res = await deps.runCcd(argv);
     return res.ok ? { ok: true } : ccd502(reply, res);
@@ -3088,7 +3089,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     const res = await deps.runCcd(argv);
-    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr) });
     const measured = poolFor(await readProjectPools(
       deps.io,
       deps.cfg,
@@ -3758,7 +3759,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     // Through the per-session queue, so it serialises with every other write.
     const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));
-    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: r.stderr });
+    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(r.stderr) });
   });
 
   /**
@@ -3873,7 +3874,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // judgement. Through the per-session queue like the reap, so a purge
     // cannot interleave with another write to the same session.
     const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));
-    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: r.stderr });
+    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(r.stderr) });
   });
 
   app.post('/api/sessions/:id/hold', async (req, reply) => {
@@ -4031,7 +4032,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const res = await deps.runCcd(argv);
     const audit = parseAudit(res.stdout);
-    if (audit === null) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    if (audit === null) return reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr) });
     return audit;
   });
 
