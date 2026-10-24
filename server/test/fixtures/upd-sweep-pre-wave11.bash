@@ -121,7 +121,7 @@ _upd_sweep() {
     fi
   done
   # fix round 1 item 7 (review 196 F8): the argv-order pin is
-  # `ccrc-update-fetch.test.ts`'s "with KillMode=process resolving per unit, the
+  # `ccrc-update.test.ts`'s "with KillMode=process resolving per unit, the
   # sweep runs: preflight, try-restart, the failed warn query, the active
   # verify query — in that argv order" case — cited by title, since its line
   # range moves.
