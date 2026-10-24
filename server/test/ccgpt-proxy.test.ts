@@ -2910,10 +2910,24 @@ function placeDirectTree(home: string): { shim: string; bridgeDir: string; authL
   return { shim, bridgeDir, authLib };
 }
 
-/** `python3 -I <shim>`, through spawnPy's containment: a launcher that re-execs the same interpreter with `-I`. */
-function spawnIsolated(home: string, shim: string, env: Record<string, string>): ChildProcess {
+/** Run as `python3 -I -c` with the shim's path after it: `socket.getfqdn` raises, then the shim runs as `__main__`. A
+ *  server class that binds through `HTTPServer.server_bind` (which calls it) dies before it listens; the shim's own
+ *  `_Server` never calls it (fix round 2, T9-R2-1). */
+const NO_FQDN_PRELUDE = [
+  'import runpy, socket, sys',
+  'def _no_lookup(*a, **k):',
+  '    raise RuntimeError("getfqdn")',
+  'socket.getfqdn = _no_lookup',
+  'sys.argv = sys.argv[1:]',
+  'runpy.run_path(sys.argv[0], run_name="__main__")',
+].join('\n');
+
+/** `python3 -I <shim>`, through spawnPy's containment: a launcher that re-execs the same interpreter with `-I`.
+ *  `noFqdn` runs the shim under NO_FQDN_PRELUDE instead. */
+function spawnIsolated(home: string, shim: string, env: Record<string, string>, noFqdn = false): ChildProcess {
   const launcher = join(home, 'isolated-launcher.py');
-  writeFileSync(launcher, 'import os, sys\nos.execv(sys.executable, [sys.executable, "-I"] + sys.argv[1:])\n');
+  const head = noFqdn ? `[sys.executable, "-I", "-c", ${JSON.stringify(NO_FQDN_PRELUDE)}]` : '[sys.executable, "-I"]';
+  writeFileSync(launcher, `import os, sys\nos.execv(sys.executable, ${head} + sys.argv[1:])\n`);
   const { child } = spawnPy(launcher, { home, args: [shim], env });
   return child;
 }
@@ -2931,7 +2945,7 @@ type DirectShim = { child: ChildProcess; lane: string; key: string; laneAnswer: 
 
 /** Start the shim in direct mode on PROXY_PORT for a lane planted under `home`, and wait until it answers its lane.
  *  The answer is kept (`laneAnswer`), not judged: a case asserts its shape. */
-async function startDirect(home: string, upstreamBase: string): Promise<DirectShim> {
+async function startDirect(home: string, upstreamBase: string, noFqdn = false): Promise<DirectShim> {
   const lane = mintLane();
   const planted = plantBridgeLane(home, lane);
   const { shim, bridgeDir, authLib } = placeDirectTree(home);
@@ -2947,7 +2961,7 @@ async function startDirect(home: string, upstreamBase: string): Promise<DirectSh
     CCGPT_CATALOGUE: planted.catalogue,
     CCGPT_BRIDGE_UPSTREAM_BASE: upstreamBase,
     CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE,
-  });
+  }, noFqdn);
   proc = child;
   let stderr = '';
   child.stderr?.on('data', (c) => { stderr += c.toString(); });
@@ -3076,13 +3090,15 @@ describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 
   // Fix round 1 (T9-SPEC-1, T9-CQ-1): the directory is checked before the import, so `absent`, `another directory`
   // and `an empty package directory` (which Python would import as a namespace package, `__file__` None) each get
   // the pre-import line, and no sibling package runs first. The post-import check is reached by an `__init__.py`
-  // that links out of the named directory.
+  // that links out of the named directory. Fix round 2 (T9-R2-CQ-1): an `__init__.py` that sets `__file__` to None
+  // leaves the state a namespace package would, had its `__init__.py` gone between the check and the import.
   it.each([
     ['unset', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not set$/],
     ['absent', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
     ['another directory', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
     ['an empty package directory', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
     ['a package whose __init__.py links elsewhere', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not the directory the codexbridge package imported from; run 'ccrc update'$/],
+    ['a package whose __init__.py has no __file__', /^ccgpt-proxy: direct: the codexbridge package imported with no __file__ \(CCGPT_BRIDGE_DIR held no __init__\.py at import\); run 'ccrc update'$/],
     ['a broken package', /^ccgpt-proxy: direct: the codexbridge package did not import from CCGPT_BRIDGE_DIR \(RuntimeError\); run 'ccrc update'$/],
   ] as const)('a missing package dir exits with one direct: line (%s)', async (shape, line) => {
     const home = mkTmp('ccgpt-proxy-direct-nopkg-');
@@ -3099,6 +3115,8 @@ describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 
       cpSync(join(bridgeDir, '__init__.py'), join(elsewhere, '__init__.py'));
       rmSync(join(bridgeDir, '__init__.py'));
       symlinkSync(join(elsewhere, '__init__.py'), join(bridgeDir, '__init__.py'));
+    } else if (shape === 'a package whose __init__.py has no __file__') {
+      writeFileSync(join(bridgeDir, '__init__.py'), '__file__ = None\n');
     } else writeFileSync(join(bridgeDir, '__init__.py'), `raise RuntimeError(${JSON.stringify(sentinel)})\n`);
     if (shape === 'another directory' || shape === 'an empty package directory') mkdirSync(dir!, { recursive: true });
     const env: Record<string, string> = {
@@ -3161,6 +3179,23 @@ describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 
       expect(r.status).toBe(200);
       expect(await r.text()).toContain('decoded');
       expect(fake.requests.map((q) => `${q.method} ${q.path}`)).toEqual(['POST /responses']);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('the direct entry binds through the shim\'s own _Server (no reverse lookup of its address)', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-bind-');
+    const fake = await fakeResponses([{ status: 200, sse: directTextReply('bound') }]);
+    try {
+      // With socket.getfqdn raising, a lane answer at all means the package bound with the shim's `_Server`.
+      const d = await startDirect(home, fake.base, true);
+      expect(d.laneAnswer).toEqual({ lane: d.lane, mode: 'direct' });
+      const r = await postDirect(d.key, {
+        model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(r.status).toBe(200);
+      expect(r.text).toContain('bound');
     } finally {
       await fake.close();
     }
