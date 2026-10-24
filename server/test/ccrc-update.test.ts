@@ -4856,6 +4856,30 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       expect(localUrls(home), 'only SHA256SUMS was fetched').toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
     }, 150_000);
   }
+  // R45: the build.json version's excerpt is already free of control bytes (`_box_build_fields` refuses them); the tarball
+  // name has no such check, so its die prints the 40-character excerpt with every non-printable byte as `?`, read byte-wise.
+  it('a 300-character tarball name with an ESC and a CR in its first 40 characters: the die and update.json\'s detail show ? for each, never the byte (D-6751, R45)', () => {
+    const home = freshUpdateBox('ccrc-update-bound-name-ctl-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const relDir = join(home, 'releases', 'latest', 'download');
+    mkdirSync(relDir, { recursive: true });
+    const name = `ccrc-\x1b[31mred\rcover-${'x'.repeat(300 - 27)}.tar.gz`;
+    expect(name.length).toBe(300);
+    writeFileSync(join(relDir, 'SHA256SUMS'), `${'a'.repeat(64)}  ${name}\n`);
+    const { r } = boundedRun(home, []);
+    expect(r.code, r.stderr).toBe(1);
+    const shown = name.slice(0, 40).replace(/[\x1b\r]/g, '?');
+    const report = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+    const detail = String(report['detail']);
+    for (const [where, text] of [['stderr', r.stderr], ['update.json\'s detail', detail]] as const) {
+      expect(text, `${where} carries ESC`).not.toContain('\x1b');
+      expect(text, `${where} carries CR`).not.toContain('\r');
+      expect(text, where).toContain(`is 300 characters, not a ccrc release's (starts: ${shown})`);
+    }
+    const die = r.stderr.split('\n').filter((l) => l.startsWith("ccrc: SHA256SUMS's tarball name is "));
+    expect(die, r.stderr).toHaveLength(1);
+    expect(die[0].length, die[0]).toBeLessThanOrEqual(200);
+  });
   for (const [label, version] of [['100 000 characters', `v${'x'.repeat(100_000 - 1)}`],
     ['the combined worst shape at about 16 000 characters', worstShape(16_000)]] as const) {
     it(`an unsigned release whose build.json names a version of ${label}: the update dies at the read naming its length, every sentence within 200 characters, within 30 s (D-6751, fix round 5)`, () => {
