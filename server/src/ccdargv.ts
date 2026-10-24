@@ -67,6 +67,13 @@ const treeHex = (hex: string): string => {
  *  remote), and never otherwise. */
 const rescueFlag = (rescue: boolean): string[] => (rescue ? ['--rescue'] : []);
 
+/** A loose entry's name as the census prints it: even-length lowercase hex, never empty. Anything else is a programming
+ *  error (the census is the only source), and fails toward not sending. */
+const looseHex = (hex: string): string => {
+  if (!/^(?:[0-9a-f]{2})+$/.test(hex)) throw new Error('a loose entry travels as even-length lowercase hex');
+  return hex;
+};
+
 /** `ccd hibernate --hold-ok <text>` (D-6091): the programme hold the run-done policy passes, verbatim, or nothing. Sent
  *  only behind `HIBERNATE_HOLD_OK_CAP`; ccd refuses a dash-leading value, and a programme hold never begins with one. */
 const holdOkFlags = (text: string | null): string[] => (text === null ? [] : ['--hold-ok', text]);
@@ -585,6 +592,19 @@ export const CCD_ARGV = {
    *  positional. Behind `ORPHAN_CAP`. Never `--force`. `CCD_ARGV` is the one place this argv is composed. */
   wsOrphan: (token: OrphanToken, hex: string, rescue: boolean, dec: ActorFlags | null) =>
     argv(['ws-orphan', '--expect', token, '--tree-hex', treeHex(hex), ...rescueFlag(rescue), ...decFlags(dec)]),
+  /** `ws-audit --collect-census` (fleet disk retention spec 2026-10-23 section 2.4, D-6625/D-6626): the read-only census
+   *  of the entries directly under `~/.cc-tmp`, classed, names as hex. Behind `COLLECT_LOOSE_CAP`. Granted by
+   *  `['ws-audit','--collect-census']`; it destroys nothing. */
+  wsCollectCensus: () => argv(['ws-audit', '--collect-census']),
+  /** `ws-audit --loose-hex <hex> --collect`: one loose entry's audit, which mints the token `wsCollectLoose` spends. The
+   *  name travels as hex and nowhere else, so a name that is a flag or has a space never reaches argv raw; a value that is
+   *  not even-length lowercase hex is refused here, before any argv exists. Granted by `['ws-audit','--loose-hex']`. */
+  wsCollectLooseAudit: (hex: string) => argv(['ws-audit', '--loose-hex', looseHex(hex), '--collect']),
+  /** `ws-collect --expect <token> --loose-hex <hex>`: the loose arm of the collector, on the SAME granted prefix as
+   *  `wsCollect` (`['ws-collect','--expect']`), so it adds no grant. The token LEADS and binds the entry's identity; the
+   *  dec trails and ccd strips it before it binds a positional. Behind `COLLECT_LOOSE_CAP`, never `COLLECT_CAP`. */
+  wsCollectLoose: (token: CollectToken, hex: string, dec: ActorFlags | null) =>
+    argv(['ws-collect', '--expect', token, '--loose-hex', looseHex(hex), ...decFlags(dec)]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
   /** The dec flags ride AFTER `--reason`, and `--reason` is NOT one of them: on
    *  `ws-hold` the hold reason IS the declared reason (ccd's `cmd_ws_hold` says
@@ -1054,6 +1074,12 @@ export const COLLECT_CAP = 'collect-v1';
  *  inode. Spelled ONCE in `server/src`; ccd's `echo orphan-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which
  *  refuse on no evidence: the verb it gates deletes. */
 export const ORPHAN_CAP = 'orphan-v1';
+/** The `ccd caps` token that says this box's ccd has the collector's LOOSE arm (fleet disk retention spec 2026-10-23
+ *  section 2.4, D-6625): `ws-audit --collect-census`, `ws-audit --loose-hex <hex> --collect` and
+ *  `ws-collect --expect <token> --loose-hex <hex>` — one ccd inode. Distinct from `COLLECT_CAP`: a box with
+ *  `collect-v1` alone parses none of the three. Spelled ONCE in `server/src`; ccd's `echo collect-loose-v1` is the other.
+ *  READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence: the verb it gates deletes. */
+export const COLLECT_LOOSE_CAP = 'collect-loose-v1';
 
 /** The `ccd caps` token that says this box's `cmd_swap` re-measures the turn at the act and takes `--interrupt`
  *  (D-5240, Task 11). It gates ONE decision: whether the swap route may send `CCD_ARGV.swapInterrupt` or
@@ -1207,6 +1233,8 @@ export const CCD_CAN = {
   wsCollectAudit: verbRow('ws-audit'), wsCollect: capRow(COLLECT_CAP),
   // The orphan lane's three rows all refuse on no evidence: the census and the audit are new flags an older ccd rejects.
   wsOrphanCensus: capRow(ORPHAN_CAP), wsOrphanAudit: capRow(ORPHAN_CAP), wsOrphan: capRow(ORPHAN_CAP),
+  // The loose arm's three rows all refuse on no evidence: the audit and the census are new flags an older ccd rejects.
+  wsCollectCensus: capRow(COLLECT_LOOSE_CAP), wsCollectLooseAudit: capRow(COLLECT_LOOSE_CAP), wsCollectLoose: capRow(COLLECT_LOOSE_CAP),
   wsAttic: verbRow('ws-attic'),
   wsHold: verbRow('ws-hold'), wsRelease: verbRow('ws-release'), wsRename: verbRow('ws-rename'),
   coordPause: verbRow('coord-pause'), reclaimPause: capRow(RECLAIM_PAUSE_CAP),
