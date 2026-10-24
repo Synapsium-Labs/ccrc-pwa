@@ -390,6 +390,19 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
     // can hold the rule.
     expect(row.querySelectorAll('.limit-fill')).toHaveLength(1);
   });
+
+  it('reads a window nobody measured as "—" even when its rolled-over flag is set (never measured is not zero)', async () => {
+    // `value === null` decides first: a window with nothing read has nothing the server could have zeroed, so a
+    // flag beside it must not turn it into the inferred "0%". The measured half (44) stays untouched.
+    stubAccounts([acct({ wrapper: 'claude9', five: null as never, seven: 44, fiveRolledOver: true })]);
+    renderSwap();
+    const row = await screen.findByRole('button', { name: /team·alt/ });
+    await waitFor(() => expect(row).toHaveTextContent('not measured'));
+    expect(row).not.toHaveTextContent('inferred: the window reset');
+    const shown = [...row.querySelectorAll('.acct-gauge-pct [aria-hidden="true"]')].map((n) => n.textContent);
+    expect(shown).toEqual(['—']);
+    expect(row).toHaveTextContent('44%');
+  });
 });
 
 // THE RULING, AND THE NINE-MUTATION TABLE THIS REPLACES.
