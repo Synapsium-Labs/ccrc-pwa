@@ -9817,7 +9817,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // branch's `cmd_ws_gc` lines above this anchor slide a different `ccd/ccd` line under it,
         // one that happens to carry a token of its row: a coincidental pass, not a repair. Neither
         // corpus document changed, so nothing was re-pointed. S6-R11 covers it, so no D-number.
-        // RE-MEASURED for `ws-archive --if-no-pane` (D-6642), 57 -> 56: ONE LEAVES (`:13567`) and none
+        // RE-MEASURED for `ws-archive --if-no-pane` (D-6642), 57 -> 56: ONE LEAVES (`:11025`, re-measured after the rebase) and none
         // enters. The branch's `cmd_ws_archive` lines above this anchor slide a different `ccd/ccd` line
         // under it, one that happens to carry a token of its row: a coincidental pass, not a repair. Neither
         // corpus document changed, so nothing was re-pointed. S6-R11 covers it, so no D-number.
@@ -9830,11 +9830,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd' + ':3038',
         'ccd/ccd:5797',
         'ccd/ccd:7568',
-        'ccd/ccd:11025',
         'ccd/ccd:11665-11670',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
+        'ccd/ccd:13567',
         'ccd/ccd:13673',
         'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
@@ -10078,7 +10078,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // RE-MEASURED on the merge of `origin/main` at `77c11245` into docs W1, 35 -> 35, FROM THE SAME RUN as
       // the row-pass set above: stated 35, base 35, tree 35, nothing entered or left. S6-R11, no D-number.
       // RE-MEASURED for `ws-archive --if-no-pane` (D-6642), 38 -> 37, FROM THE SAME RUN as the row-pass set
-      // above: its one leaver mirrors here (the `spec:2125` pair of the row-pass leaver above) and nothing enters. S6-R11, no D-number.
+      // above: its one leaver mirrors here (the `spec:2125 ccd/ccd:11025` pair of the row-pass leaver above) and nothing enters. S6-R11, no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
@@ -10086,8 +10086,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2124 ccd/ccd' + ':3038',
         'spec:2125 ccd/ccd:5797',
         'spec:2125 ccd/ccd:7568',
-        'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
+        'spec:2125 ccd/ccd:13567',
         'spec:2125 ccd/ccd:13673',
         'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
