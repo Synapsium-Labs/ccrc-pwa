@@ -47,6 +47,11 @@ export function autoContinueArmed(pane: string): boolean { return AUTO_CONTINUE_
  *  proves nothing. It is a drift tripwire behind the live status file and the
  *  turn marker, never a proof of idleness (worker stall watch §4.1, §5.1). */
 export function turnRunning(pane: string): boolean { return BUSY_RE.test(pane); }
+/** The row starts with Claude Code's prompt glyph (`❯`): the input box's marker row, or a past
+ *  turn in the scrollback, or the cursor resting on a menu option. ONE spelling of the test
+ *  (ARCH-24): `inject/send.ts` reads the box through it rather than with inline literals. The
+ *  caller strips escapes first. */
+export function startsWithPromptGlyph(row: string): boolean { return row.startsWith('❯'); }
 const MENU_RE = /Enter to (confirm|select)/;
 const SGR = /\x1b\[[0-9;]*m/g; // any ANSI colour/attr code — same idiom as inject/send.ts:80
 const MULTISELECT_RE = /Space to select/;
