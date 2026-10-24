@@ -412,7 +412,7 @@ describe('$REG/tmpquarantine is invisible to every registry walker (spec §5.10,
     expect(r.records.map((x) => x.id)).toEqual(['demo-calm-cove']);
   });
 
-  it('`tmpquarantine` is spelled only inside the COLLECT region, and its one walker is depth-1 and name-filtered', () => {
+  it('`tmpquarantine` is spelled only inside the COLLECT and LOOSE regions, and each region\'s one walker is depth-1 and name-filtered', () => {
     // The census of THIS directory. The name-agnostic walker census in
     // `ccd-child-tmproot-witness.test.ts` proves no registry glob or find can
     // see a dotless subdirectory; this proves who may name this one.
@@ -421,17 +421,30 @@ describe('$REG/tmpquarantine is invisible to every registry walker (spec §5.10,
     const e = src.indexOf('COLLECT-END');
     expect(b, 'COLLECT-BEGIN').toBeGreaterThan(-1);
     expect(e, 'COLLECT-END').toBeGreaterThan(b);
+    // The loose arm (D-6625) keeps its own family, `tmpquarantine-loose`, in its own region; no other region may name it.
+    const lb = src.indexOf('LOOSE-BEGIN');
+    const le = src.indexOf('LOOSE-END');
+    expect(lb, 'LOOSE-BEGIN').toBeGreaterThan(e);
+    expect(le, 'LOOSE-END').toBeGreaterThan(lb);
     const outside: string[] = []; const walkers: string[] = []; let at = 0;
     src.split('\n').forEach((line, i) => {
       const off = at; at += line.length + 1;
       if (/^\s*#/.test(line) || !line.includes('tmpquarantine')) return;
-      if (off < b || off > e) outside.push(`ccd:${i + 1}: ${line.trim()}`);
+      if ((off < b || off > e) && (off < lb || off > le)) outside.push(`ccd:${i + 1}: ${line.trim()}`);
       if (/\bfind\b/.test(line)) walkers.push(line.trim());
     });
     expect(outside).toEqual([]);
-    expect(walkers).toHaveLength(1);
+    expect(walkers, 'the COLLECT region\'s one walker names the directory').toHaveLength(1);
     expect(walkers[0]).toMatch(/-maxdepth 1\b/);
     expect(walkers[0]).toMatch(/-name\b/);
+    // The LOOSE region spells its family once, in `_ws_loose_rec_dir`; its one lister reaches it through that and must be
+    // depth-1 and name-filtered too (D-6625).
+    const loose = src.slice(lb, le);
+    expect(loose, 'the loose family is spelled in its own region').toContain('tmpquarantine-loose');
+    const finds = loose.split('\n').filter((l) => !/^\s*#/.test(l) && /\bfind\b[^\n]*"\$d"/.test(l));
+    expect(finds, 'the loose records lister is the one walker of the family').toHaveLength(1);
+    expect(finds[0]).toMatch(/-maxdepth 1\b/);
+    expect(finds[0]).toMatch(/-name\b/);
     for (const other of fs.readdirSync(path.dirname(CCD))) {
       const p = path.join(path.dirname(CCD), other);
       if (other === 'ccd' || !fs.statSync(p).isFile()) continue;

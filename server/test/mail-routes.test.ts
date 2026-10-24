@@ -25,6 +25,7 @@ import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
 import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';
 import { isCollectExecutorKebab } from '../src/coord/collectTempRoot.js';
+import { isLandingKebab } from '../src/coord/landing.js';
 import { isDelegationModelKebab } from '../src/coord/delegation-model.js';
 import { isDelegationJournalKebab } from '../src/coord/delegation-journal.js';
 import { isDelegationCheckpointKebab } from '../src/coord/delegation-checkpoint.js';
@@ -898,6 +899,12 @@ describe('the rejection table is total, in both directions', () => {
         // and the lane's memory. Admitted through the exported guard, derived from that file's tables and L1's
         // `COLLECT_HOLD_WHYS`, never NOT_CODES, for the reason every union above gives.
         || isCollectExecutorKebab(tok)
+        // PR LANDING IN CCRC, STAGE 1 (D-6785): the checks lane's words. `coord/landing.ts` spells the verdict words
+        // (`not-reported`), the unmeasured reasons ccd gives (`pr-unreadable`, `branch-drift`) and its two marker rows
+        // (`landing-disabled`, `landing-checks-live`) as literals. None is a mail rejection or a run refusal: they ride
+        // the verdict, a `run_events.detail` and the registry listing. Admitted through the exported guard, derived from
+        // `shared/landing.ts`'s maps, never NOT_CODES, for the reason every union above gives.
+        || isLandingKebab(tok)
         // DELEGATION BROKER, WAVE 3: the SEVENTEENTH union, checked together and never merged, on the standing rule
         // `enter-ignored` above states. The delegation modules (`delegation-model.ts`, `-journal.ts`, `-checkpoint.ts`,
         // `-ingest.ts`, `-correlation.ts` and `-policy.ts`) spell, as literals, their refusal codes, the journal's entry kinds, the pruning

@@ -1031,6 +1031,17 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       expect(c.ruling, `${c.name} needs a ruling`).toBeTruthy();
     }
   });
+  it('declares the orphan-worktree classes as W rows whose collector is the orphan-tree lane (D-6631)', () => {
+    for (const n of ['ccd-orphan-worktrees', 'agent-worktrees']) {
+      const c = LIFECYCLE.find((x) => x.name === n);
+      expect(c, `shared/lifecycle.ts declares no ${n} class`).toBeTruthy();
+      expect(c!.pattern).toBe('W');
+      expect(c!.collector, `${n} names no collector`).toContain('orphan-tree lane');
+      expect(c!.ruling).toBeNull();
+    }
+    expect(LIFECYCLE.find((x) => x.name === 'agent-worktrees')!.root).toContain('.superpowers/worktrees');
+    expect(LIFECYCLE.find((x) => x.name === 'agent-worktrees')!.collector, 'branches of these trees are left').toContain('branches are left');
+  });
   it('declares the Claude Code temp dir as a session-bound class collected by ccd-tmp-sweep', () => {
     // Policy row #9 named /tmp/claude-<uid> "a root we declare to agents in
     // their own system prompt and then never collect"; it reached 138G on the
@@ -1040,6 +1051,24 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.pattern).toBe('S');
     expect(c!.collector).toContain('ccd-tmp-sweep');
     expect(c!.root).toContain('claude-<uid>');
+  });
+  it('claude-tmp-session-dirs names the live arm, the quarantine and the size budget as its collector\'s second half (DR-8, D-6620)', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'claude-tmp-session-dirs')!;
+    expect(c.collector).toContain('live arm');
+    expect(c.collector).toContain('.ccd-tmp-quarantine');
+    expect(c.collector).toContain('tmp-sweep-live-arm');
+    expect(c.bound).toContain('size budget');
+    expect(c.bound).toContain('20');
+    expect(c.root).toContain('.cc-tmp/<id>/claude-<uid>');
+  });
+  it('declares the tmp-sweep census as a rolling class the sweep alone writes (DR-8, D-6620)', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'tmp-sweep-census');
+    expect(c, 'shared/lifecycle.ts declares no tmp-sweep-census class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.root).toBe('~/.ccrc/tmp-sweep.json');
+    expect(c!.creators).toEqual(['ccd-tmp-sweep']);
+    expect(c!.collector).toContain('ccd-tmp-sweep');
+    expect(c!.collector).toContain('1,000');
   });
   it('declares a child\'s temp root ~/.cc-tmp/<id>, session-bound and collected by the reclaim tail and ws-collect (D-5888, #298)', () => {
     // The policy's ruling 4 first described this root: a `--child` workspace spawns with TMPDIR at
@@ -1260,6 +1289,9 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.root).toContain(RUN_PREFIX);
     expect(c!.collector).toContain('run-tmp.globalsetup.mjs');
     expect(c!.collector).toContain('RUN_QUIET_S');
+    // The sweep's test-run arm (DR-10, D-6622) is the second collector, for a root no later run visits.
+    expect(c!.collector).toContain('ccd/ccd-tmp-sweep');
+    expect(c!.collector).toContain('test-run arm');
     expect(`${c!.collector} ${c!.bound}`, 'the row carries a copy of RUN_QUIET_S\'s number').not.toContain(String(RUN_QUIET_S));
   });
 

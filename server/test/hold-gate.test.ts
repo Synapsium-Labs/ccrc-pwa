@@ -79,14 +79,14 @@ const liveIdle = (home: string, pid = '4242'): void => {
     JSON.stringify({ pid: Number(pid), sessionId: '1'.repeat(36), cwd: '/d', status: 'idle', statusUpdatedAt: 1 }));
 };
 
-/** `prSweepStartedAt` returns to 0 in `sweepPr`'s own `finally` — the one
+/** The PR flight clears when the sweep settles — the one
  *  signal that a whole sweep (`sweepMerged` included) has actually finished,
  *  same reasoning as `pr-sweep.test.ts`'s own waits. */
 const sweepSettled = (w: FleetWatcher): Promise<void> =>
-  vi.waitFor(() => { expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0); });
+  vi.waitFor(() => { expect(w.inFlight('pr')).toBeNull(); });
 
 const forceDue = (w: FleetWatcher): void => {
-  (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+  w.kick('pr');
 };
 
 /** THIS lane's pushes only. A watcher built with a `coord` also raises the run

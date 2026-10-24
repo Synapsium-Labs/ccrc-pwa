@@ -14,7 +14,7 @@
 // role-aware journalctl passthrough.
 //
 // ── THE HARNESS ───────────────────────────────────────────────────────────
-// `ccrc-update.test.ts`'s box idiom, trimmed to this file's needs and COPIED
+// `ccrc-updateFixture.ts`'s box idiom, trimmed to this file's needs and COPIED
 // rather than imported (importing a .test.ts registers its whole suite —
 // build-release.test.ts's stated reason). Everything runs against a throwaway
 // $HOME; systemctl and journalctl are RECORDING stubs (no real systemd, no
@@ -109,8 +109,8 @@ function verbEnv(home: string): NodeJS.ProcessEnv {
     'esac',
   ].join('\n') + '\n');
   // ── Plan 2b-2 Task 11: the transient-unit launcher, contained ──────────
-  // Same reasoning as ccrcEnv's/updateEnv's own comment (ccrc-install.test.ts,
-  // ccrc-update.test.ts): `_uninst_codex` reaches `systemd-run` through the
+  // Same reasoning as ccrcEnv's/updateEnv's own comment (ccrc-installFixture.ts,
+  // ccrc-updateFixture.ts): `_uninst_codex` reaches `systemd-run` through the
   // lane library's identity checks and stops, and this harness planted none
   // until now (m-platform §3.2).
   adoptPlantedSystemd(home);
@@ -1672,11 +1672,14 @@ describe('ccrc uninstall: the codex step, in order and contained (Plan 2b-2 Task
       return src.slice(from, to);
     };
     const uninstallSrc = readFileSync(join(here, 'ccrc-uninstall.test.ts'), 'utf8');
-    const installSrc = readFileSync(join(here, 'ccrc-install.test.ts'), 'utf8');
-    const updateSrc = readFileSync(join(here, 'ccrc-update.test.ts'), 'utf8');
+    // D-6767: the runners live in the family's fixture; the describes (and any spawn in them) in its parts.
+    const installSrc = readFileSync(join(here, 'ccrc-installFixture.ts'), 'utf8');
+    const installFamilySrc = ['tree', 'versioned', 'units', 'landing', 'role', 'codex']
+      .map((p) => readFileSync(join(here, `ccrc-install-${p}.test.ts`), 'utf8')).join('\n') + installSrc;
+    const updateSrc = readFileSync(join(here, 'ccrc-updateFixture.ts'), 'utf8');
     expect(between(uninstallSrc, /^function runVerb\(/m, 'spawnSync(BASH'))
       .toMatch(/assertSpineFrontContained\(env, home\)/);
-    expect(between(updateSrc, /^function runUpdate\(/m, 'spawnSync(BASH'))
+    expect(between(updateSrc, /^export function runUpdate\(/m, 'spawnSync(BASH'))
       .toMatch(/assertSpineFrontContained\(env, home\)/);
 
     // Fix round 3 (C4): "on its FINAL env" is an ORDER, and the order is
@@ -1689,7 +1692,7 @@ describe('ccrc uninstall: the codex step, in order and contained (Plan 2b-2 Task
       expect(i, why).toBeGreaterThan(-1);
       return i;
     };
-    const inst = between(installSrc, /^function runInstall\(/m, 'const ccrc = opts.from');
+    const inst = between(installSrc, /^(?:export )?function runInstall\(/m, 'const ccrc = opts.from');
     const instCall = indexIn(inst, /assertSpineFrontContained\(env, home,/,
       'runInstall does not call assertSpineFrontContained before its spawn');
     const instReplant = indexIn(inst, /replantDoctorStubs\(home\);/,
@@ -1704,7 +1707,7 @@ describe('ccrc uninstall: the codex step, in order and contained (Plan 2b-2 Task
     // Fix round 3 (C4): runInstallTty, sliced up to its pty spawn — the
     // call deleted there was green before this round. Same ORDER rule:
     // after the doctor-stub replant, and after `env` is filled from ccrcEnv.
-    const tty = between(installSrc, /^function runInstallTty\(/m, 'pty.spawn(');
+    const tty = between(installSrc, /^(?:export )?function runInstallTty\(/m, 'pty.spawn(');
     const ttyCall = indexIn(tty, /assertSpineFrontContained\(env, home\)/,
       'runInstallTty does not call assertSpineFrontContained before its pty.spawn');
     const ttyReplant = indexIn(tty, /replantDoctorStubs\(home\);/,
@@ -1721,9 +1724,9 @@ describe('ccrc uninstall: the codex step, in order and contained (Plan 2b-2 Task
     // inline spawn spelled this way again is red; a differently-spelled
     // one is not, and nothing here claims otherwise.
     const launcherSpawn = /spawnSync\(BASH, \[join\(home, '\.local', 'bin', 'ccrc'\)/g;
-    expect([...installSrc.matchAll(launcherSpawn)].length,
+    expect([...installFamilySrc.matchAll(launcherSpawn)].length,
       'the installed launcher is spawned somewhere other than runLauncherVersion').toBe(1);
-    expect(between(installSrc, /^function runLauncherVersion\(/m, 'spawnSync(BASH'))
+    expect(between(installSrc, /^(?:export )?function runLauncherVersion\(/m, 'spawnSync(BASH'))
       .toMatch(/const env = ccrcEnv\(home\);\n\s*assertSpineFrontContained\(env, home\);\n\s*const r = $/);
   });
 
@@ -1914,12 +1917,12 @@ describe('ccrc uninstall: the codex step, in order and contained (Plan 2b-2 Task
     // A TEXT pin, cross-file. The call must sit IMMEDIATELY before the
     // harness's one spawn and name the same `env` object that spawn takes,
     // so nothing can be planted or merged between the check and the run.
-    const installSrc = readFileSync(join(here, 'ccrc-install.test.ts'), 'utf8');
+    const installSrc = readFileSync(join(here, 'ccrc-installFixture.ts'), 'utf8');
     const uninstallSrc = readFileSync(join(here, 'ccrc-uninstall.test.ts'), 'utf8');
     const CHECKED_SPAWN =
       /assertIsolationWallFirst\(env, home\);\n\s*const p = spawnSync\(BASH, \['-c', harness\], \{ env, encoding: 'utf8' \}\);/;
     for (const [src, header] of [
-      [installSrc, /^function runStepHarness\(/m],
+      [installSrc, /^(?:export )?function runStepHarness\(/m],
       [uninstallSrc, /^function runUninstCodex\(/m],
     ] as const) {
       const m = header.exec(src);

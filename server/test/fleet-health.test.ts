@@ -767,3 +767,37 @@ describe('/api/fleet/health: the disk block (D-6615)', () => {
     });
   }
 });
+
+// D-6631 (fleet disk retention DR-19): the orphan-worktree lane's counts, which the `disk` block carries as `orphanTrees`
+// once the block lands (DR-3 spreads it in the route). The watcher is the accessor: null before the lane's first census,
+// then counts by class and outcome.
+describe('the orphan lane\'s counts in the watcher', () => {
+  const HEX = Buffer.from('/p/.claude/worktrees/a').toString('hex');
+  const ok = (stdout: string) => ({ ok: true, stdout, stderr: '', killed: false, signal: null });
+
+  it('is null before the first census, then counts the audited trees by class and outcome', async () => {
+    const home = mkTmp('ccrc-fh-orphan-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    mkdirSync(cfg.registryDir, { recursive: true });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const runCcd = async (argv: readonly string[]) => {
+      if (argv[1] === '--orphans') return ok(JSON.stringify({ mode: 'orphans', truncated: false, rows: [{ pathHex: HEX, class: 'claude' }, { pathHex: '2f78', class: 'other' }] }));
+      return ok(JSON.stringify({ mode: 'orphan', pathHex: HEX, verdict: 'refused', refusal: 'dirty', detail: '1 file' }));
+    };
+    const full = {
+      cfg, runCcd, tmux: new Tmux(deadRunner), io: localIO, queue: new KeyedQueue(), coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['orphan-v1'], rosterFp: null, build: null },
+    } as never as Deps;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    try {
+      expect(watcher.orphanTreesHealth()).toBeNull();
+      await watcher.sweepOrphanTrees();
+      expect(watcher.orphanTreesHealth()).toEqual({
+        byClass: { 'ccd-root': 0, claude: 1, superpowers: 0, other: 1, 'not-a-worktree': 0 },
+        byOutcome: { pending: 0, would: 0, left: 1, removed: 0 },
+      });
+    } finally { /* nothing was built that needs closing */ }
+  });
+});

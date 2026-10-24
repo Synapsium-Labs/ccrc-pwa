@@ -1,0 +1,9 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_fx1","object":"response","status":"in_progress","output":[]},"sequence_number":0}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_fx0","call_id":"call_fx0","name":"mcp__a_long_server_name__a_very_long_tool_name_that_run_c205ff5e","arguments":"{\"q\": \"one\"}","status":"completed"},"sequence_number":1}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_fx1","object":"response","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4}},"sequence_number":2}
+

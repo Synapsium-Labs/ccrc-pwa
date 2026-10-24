@@ -134,6 +134,9 @@ const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
   // An orphaned tree travels as even-length lowercase hex; the builders refuse anything else (D-6630). The probe passes valid hex so the table loads.
   wsOrphanAudit: ['00'],
   wsOrphan: ['x', '00', false, null],
+  // A loose entry travels as even-length lowercase hex; the builders refuse anything else, which is correct production behaviour (D-6626). The probe passes valid hex so the table loads.
+  wsCollectLooseAudit: ['00'],
+  wsCollectLoose: ['x', '00', null],
 };
 
 /** `CCD_ARGV` key -> the verb it emits, taken from the table itself rather

@@ -2975,10 +2975,12 @@ fleet `ccd` that does not advertise `route-apply-v1`); the chip wears `queued` u
 back (on a session whose row carries no routing record yet, a toast says so after 60 s without a read-back). The
 new-session sheet seeds `class`, `effort` and `workflow` at creation. An operator spawn with nothing chosen gets
 the coordinator row, `class=opus effort=ultracode subagent=sonnet workflow=on`; a dispatched worker gets a record
-only when its run names one. **Fable is never reached by a default or an escalation** — both automatic ladders
-(`shared/routing-ladder.ts`) stop at `opus` — only by an explicit class choice: the picker's Fable row,
-`ccd route --set class=fable`, `--route class=fable` at creation, a coordinator's manual `field`/`value` write
-through `POST /api/runs/:id/route`, or the operator's own `/model fable` typed in the session, which the next
+only when its run names one. **Fable runs only when the operator selects it** (D-6790, ruling 2026-10-24). Neither automatic ladder
+(`shared/routing-ladder.ts`) reaches it — both stop at `opus`, and a reversal of a demotion off `fable` answers `ceiling`
+rather than restoring it — and every box-token route write refuses it with `409 fable-operator-only`: a coordinator's
+manual `field`/`value` write or ladder result through `POST /api/runs/:id/route`, and the `route` a dispatch sends. Only
+the operator's own paths remain: the picker's Fable row, the new-session sheet's class and a new workspace's route (all
+behind the cookie session), or the operator's own `/model fable` typed in the session, which the next
 stop or spawn keeps in the record (`[actor=operator-session]`, stage 7 above).
 
 **Placement and swaps route by class.** A lane serves `fable` only on an Anthropic backend whose **Fable share** —
@@ -4363,6 +4365,27 @@ such a snapshot, make sure the legacy file is gone. A restore that rolls both fi
 whole file system, is outside this proof: after one, raise the cleanup pause and make a fresh confirmed change in
 Settings before allowing Live.
 
+**Orphan worktrees (fleet disk retention, D-6631).** A linked worktree that no registry row names, and that no collector
+owns, is the orphan-tree lane's: the registry orphans under the worktree root, and the `.claude/worktrees/*` and
+`.superpowers/worktrees/*` checkouts of any project. `ccd ws-audit --orphans` lists them by location class (a path
+outside those places is reported and never audited), `ws-audit --orphan-hex <hex>` answers the first refusal of a
+fourteen-rung ladder or mints a token, and `ccd ws-orphan --expect <token> --tree-hex <hex>` removes the tree with
+`git worktree remove`, never `--force`. A tree is removed only when it is clean, its HEAD is on a remote, no registry row
+names it or a path inside it, nothing holds it, and nothing in it has changed for 7 days. The server is the only
+composer of `ws-orphan`, and a child's deny list names the verb.
+The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the beat in
+`watch.ts`'s `sweepOrphanTrees`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
+pass (4 under pressure) and acts at most once per pass fleet-wide, only on two audits of one unchanged token at least an
+hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`.
+
+It ships in **shadow**: it records `orphan worktree would be removed` in the feed and runs no verb until the operator
+touches `$REG/orphan-tree-live` by hand. A tree whose HEAD is on no remote is `orphan worktree left` until
+`$REG/orphan-tree-rescue-live` also stands (set it only after the lane has run live for a week); the rescue pins HEAD and
+the tree's own reflog under `refs/ccrc/attic/orphan/` first, and a failed pin stops the act. Neither file has a writer
+in the tree. A `ccd-root` tree's branch is deleted with `branch -d`; the branches of the other two classes are left. The
+feed has one row per change of a tree's outcome and none per repeat, and `FleetHealth.disk.orphanTrees` carries counts by
+class and outcome.
+
 **Reclaim's tail, corrected in wave 7 (it is shared with `ws-expire`).** `containment-refuted` is the failed word the
 tail prints when it proves that what it would remove is not only the child's own (another session's row or tree at,
 inside or through it, a workdir that is the main checkout, a link or non-directory at the workdir); the session was
@@ -5183,7 +5206,7 @@ removal** (below), which takes back what D-1243 wrote into each rostered home's 
 `~/.ccrc/graph-noise/_default.list`; **excludes**, `graphify-out/` and `.graphifyignore` converged
 into each tree's common-dir `info/exclude`; and **legacy hooks off** — the old per-repo graphify git
 hooks are removed if wholly graphify-generated, left in place and reported if they chain other
-content. (`server/test/ccrc-install.test.ts` pins that sequence, and
+content. (`server/test/ccrc-install-*.test.ts` pins that sequence, and
 `ccrc-install-graphify.test.ts` pins this paragraph's count against it — the enumeration went stale
 for two deviations before that guard existed.)
 
@@ -5559,8 +5582,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8501-8503`), each with an operator sentence of its own at `:8553`,
-`:8561` and `:8574`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8506-8508`), each with an operator sentence of its own at `:8558`,
+`:8566` and `:8579`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5741,6 +5764,42 @@ resolve inside `/tmp` or `$TMPDIR` or that another uid owns, and prints one summ
 the journal (`journalctl --user -u ccd-tmp-sweep.service`). `ccd-tmp-sweep --dry-run` prints what a
 pass would remove and removes nothing; `touch ~/.ccrc/tmp-sweep-paused` short-circuits every pass
 until removed. `ccrc doctor`'s `services` check warns when the timer is installed and stopped.
+
+**The live arm and the size budget** (fleet disk retention, D-6620). The rules above spare every unit a
+running or hibernated session owns, however old its contents. After the dead pass, under the same lock and
+pause file, the live arm reaches into those units' `scratchpad/` and `tasks/` (never the two directories, never
+the unit) and takes a top-level entry in two cases. **Age:** every entry under it has an mtime and ctime older
+than 14 days (3 under pressure) and every regular file an atime older too, unless its mount is `noatime`
+(then atime is not read, and the census says so; a directory's own atime never is). **Budget:** a session's
+scratch, summed over every root and unit of its uuid, is over `CCD_TMP_BUDGET_GB` (20); the first pass that
+sees it records `overSince` and gives 24 hours of grace (none under pressure), and after that the sweep takes
+entries oldest first until the total is under `CCD_TMP_BUDGET_TARGET_GB` (15), skipping any entry touched in
+the last 48 hours (a floor pressure never lowers), any entry a process holds, and any entry holding a
+repository with work on no remote (`git-work-unrescued`). Both knobs can only be raised. The roots walked are
+today's, `/tmp/claude-<uid>` when it differs, and each witnessed child leaf's `claude-<uid>`. "Held" is the one
+holder probe, `ccd path-users --json`: a cwd, an open fd, a file mapping or a `TMPDIR` at or under the entry,
+and any doubt (the probe failing, a walk running out of time) keeps the entry.
+
+A taken entry is renamed into `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>`; a pass 24 hours later (1 hour
+under pressure) asks the holder probe again and deletes it, so the session has a working day to move it back.
+**It ships in shadow:** without `~/.ccrc/tmp-sweep-live-arm` it records what it would take and touches
+nothing (no code in the tree creates that file; arming is the operator's). Pressure is the sweep's own
+measure of its filesystem (92% of bytes or inodes used, the same figure `shared/disk.ts` holds; `disk-twins.test.ts`
+pins them equal) and also shortens the dead arm to 2 days. The live arm scans at most every 6 hours, or every
+pass under pressure. Its census, `~/.ccrc/tmp-sweep.json` (`v`, `at`, `liveAt`, `pressure`, `arm`, `seq`,
+`roots`, `sessions` with each one's `budget`, `moved` rows kept 7 days or 1,000, `counts`), is replaced whole
+by a rename at the end of every pass, shadow or live. The sweep is its only writer.
+
+**The test-run arm** (D-6622) rides the same switch and rows. A server test run keeps its fixtures in one
+`ccrc-testrun-XXXXXX` directory under its `TMPDIR`; a later run under the same `TMPDIR` collects one whose
+owner died, but a root no later run visits (a child workspace's own `TMPDIR`, a box nobody tests on any more)
+stays. In the box's `TMPDIR` and in each witnessed child leaf that still has a registry row, the sweep takes a
+top-level directory named exactly `ccrc-testrun-` and six letters or digits (or that name with `.dead`) when no
+socket is bound at its `live.sock` in the kernel's table (the run's own liveness test), nothing under it has
+changed (ctime, not mtime) for 6 hours (1 under pressure), and the holder probe answers nobody. It renames the
+root to its `.dead` twin and then removes it, as the run's own cleanup does, so there is no quarantine and
+the census row (kind `test-run`) carries none. A leaf whose row is gone is not this arm's: `ws-collect` takes
+the whole leaf. Any doubt (a walk that cannot finish, an unreadable socket table, a failing probe) keeps the root.
 
 ### Pane-scope sweep (ccd-scope-sweep)
 
@@ -6578,8 +6637,8 @@ runs the same selection and `probe-macos` a fixed probe; neither blocks a pull r
 `.github/` or `server/scripts/`, to a `package.json` or lockfile, a `vitest.*config.*`, a
 `tsconfig*.json`, `.gitattributes` or `.npmrc`, a symlink, a path the map's own baseline reads, or a
 missing map runs the whole server suite instead. A **merge-queue** run (`merge_group`) runs what a
-pull request runs, minus the macOS legs. A **push to `main`** runs no test legs: it re-traces what the
-merge affected and refreshes the map. The **daily** run runs every leg in full, macOS included, ending
+pull request runs, minus the macOS legs. A **push to `main`** starts no run; an **hourly** refresh runs no test legs: it re-traces what
+every merge since the last one affected and refreshes the map. The **daily** run runs every leg in full, macOS included, ending
 in `full-suite` — skipped when `main`'s head already carries a green one from a trusted run;
 `gh workflow run ci.yml --ref <branch> -f mode=full` asks for a full run by hand. A promotion to
 `stable` needs a green `full-suite` on its commit, and `release-stable.yml` runs one first when none

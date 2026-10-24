@@ -8,13 +8,28 @@
 #
 # setup-node is NOT in here: it stays in each job, beside the comment that
 # says which suite pins its node-version (see ci.yml's `server-shard`).
+#
+# INSTALLED ONCE PER RUN, NOT ONCE PER JOB (D-6770). On Linux the four
+# installed trees (server, agent, pwa, ui) and the apt packages are restored
+# from the Actions cache, read-only, and only a MISS installs them the old
+# way (apt-get, then npm ci in each package). The key names the lockfile
+# hashes, the runner image and the node version and nothing else — never a
+# branch, a ref or a run — so a restored tree is the one `npm ci` gives for
+# that lockfile on that image. ci.yml's `deps` job is the only caller that
+# passes `save: 'true'`: it installs on a miss and writes the cache, and every
+# other job restores what it wrote. macOS installs as before (the trees hold
+# platform binaries, and no Linux job can write them).
 name: server-deps
-description: System packages plus npm ci in server/, agent/ and pwa/ — what any server test file may need.
+description: System packages plus npm ci in server/, agent/, pwa/ and ui/ — what any server test file may need — restored from the run's cache on Linux.
 
 inputs:
   platform:
     description: linux or macos
     required: true
+  save:
+    description: "'true' writes the cache after installing on a miss (only ci.yml's deps job)"
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -41,10 +56,67 @@ runs:
     # real strace, and any shard may be handed that file. python3 is in the
     # image already and named for the same reason as jq — the `ccgpt-*`
     # suites assert it is present whenever `CI` is set.
-    - name: Install system dependencies (linux)
+    # The key. The trees: lockfile hashes, runner OS image name, arch and the
+    # exact node setup-node resolved. The runner pool mixes image versions
+    # (and so node patch versions), and a tree is plain JavaScript plus
+    # prebuilt binaries chosen by OS and arch, so the image VERSION is left
+    # out of the trees' key (the first run of this key, with it, missed on
+    # every second runner) and stays in the packages' key, where the exact
+    # apt state matters. Nothing here varies with a branch.
+    - name: Name the cache entries (linux)
+      id: key
       if: inputs.platform == 'linux'
       shell: bash
-      run: sudo apt-get update && sudo apt-get install -y tmux jq strace python3
+      run: |
+        lock="$(cat server/package-lock.json agent/package-lock.json pwa/package-lock.json ui/package-lock.json | sha256sum | cut -c1-40)"
+        base="$RUNNER_OS-$RUNNER_ARCH-${ImageOS:-none}"
+        echo "trees=ccrc-deps-v1-$base-$(node --version)-$lock" >> "$GITHUB_OUTPUT"
+        echo "apt=ccrc-apt-v1-$base-${ImageVersion:-none}-$(sha256sum .github/actions/server-deps/action.yml | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the installed trees (linux)
+      id: trees
+      if: inputs.platform == 'linux'
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          server/node_modules
+          agent/node_modules
+          pwa/node_modules
+          ui/node_modules
+        key: ${{ steps.key.outputs.trees }}
+
+    - name: Restore the system packages (linux)
+      id: debs
+      if: inputs.platform == 'linux'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/ccrc-debs
+        key: ${{ steps.key.outputs.apt }}
+
+    # The hit arm installs the downloaded packages with dpkg and no
+    # `apt-get update`; if that fails for any reason the miss arm runs, so the
+    # cache can only ever save time.
+    - name: Install system dependencies (linux)
+      id: apt
+      if: inputs.platform == 'linux'
+      shell: bash
+      env:
+        HIT: ${{ steps.debs.outputs.cache-hit }}
+      run: |
+        if [ "$HIT" = true ] && sudo dpkg -i --skip-same-version "$RUNNER_TEMP"/ccrc-debs/*.deb; then
+          exit 0
+        fi
+        sudo apt-get update && sudo apt-get install -y tmux jq strace python3
+        mkdir -p "$RUNNER_TEMP/ccrc-debs"
+        cp /var/cache/apt/archives/*.deb "$RUNNER_TEMP/ccrc-debs/" 2>/dev/null || true
+        if compgen -G "$RUNNER_TEMP/ccrc-debs/*.deb" > /dev/null; then echo "have=true" >> "$GITHUB_OUTPUT"; fi
+
+    - name: Keep the system packages (linux)
+      if: inputs.platform == 'linux' && inputs.save == 'true' && steps.debs.outputs.cache-hit != 'true' && steps.apt.outputs.have == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/ccrc-debs
+        key: ${{ steps.key.outputs.apt }}
 
     # bash ≥ 4.2 (macOS ships 3.2 as /bin/bash; ccd's shebang is `env
     # bash`, so PATH decides and Homebrew's 5.x wins), tmux (the
@@ -65,6 +137,7 @@ runs:
       run: brew install bash tmux flock jq coreutils
 
     - name: Install server
+      if: steps.trees.outputs.cache-hit != 'true'
       shell: bash
       working-directory: server
       run: npm ci
@@ -74,6 +147,7 @@ runs:
     # deliberate cross-package check, so it needs agent/node_modules present
     # even though the job under test is the server's.
     - name: Install agent dependencies (needed by server's cross-package typecheck test)
+      if: steps.trees.outputs.cache-hit != 'true'
       shell: bash
       working-directory: agent
       run: npm ci
@@ -86,6 +160,7 @@ runs:
     # error, not a type error — and the assertion would report pwa "has
     # type errors" for the wrong reason.
     - name: Install pwa dependencies (needed by server's cross-package typecheck test)
+      if: steps.trees.outputs.cache-hit != 'true'
       shell: bash
       working-directory: pwa
       run: npm ci
@@ -102,6 +177,18 @@ runs:
     # developer box stayed green — because `ui/node_modules` already existed
     # there.
     - name: Install ui dependencies (pwa consumes @ccrc/ui as source)
+      if: steps.trees.outputs.cache-hit != 'true'
       shell: bash
       working-directory: ui
       run: npm ci
+
+    - name: Keep the installed trees (linux)
+      if: inputs.platform == 'linux' && inputs.save == 'true' && steps.trees.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          server/node_modules
+          agent/node_modules
+          pwa/node_modules
+          ui/node_modules
+        key: ${{ steps.key.outputs.trees }}

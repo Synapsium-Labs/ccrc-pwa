@@ -34,16 +34,36 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   // then never collect". Session-bound (S), collected by age PLUS the absence of
   // a live owner — the live-session, open-fd and newest-mtime checks the
   // collector's own header states.
-  { name: 'claude-tmp-session-dirs', root: '${TMPDIR:-/tmp}/claude-<uid>/<project>/<session-uuid>/ + loose top-level entries', pattern: 'S',
+  { name: 'claude-tmp-session-dirs', root: '${TMPDIR:-/tmp}/claude-<uid>/<project>/<session-uuid>/ + loose top-level entries; also /tmp/claude-<uid>/ when it differs, and a witnessed child leaf\'s ~/.cc-tmp/<id>/claude-<uid>/ (DR-8)', pattern: 'S',
     creators: ['claude (Claude Code: scratchpad, background-task output)', 'agents writing into the root'],
-    collector: 'ccd-tmp-sweep (hourly; not live, not in use, nothing newer than CCD_TMP_SWEEP_MAX_AGE_DAYS=7)',
-    bound: 'session lifetime + 7 days', tier: '138G uncollected on the fleet host 2026-09-22; single task .output files 1-4G', ruling: null },
+    collector: 'ccd-tmp-sweep (hourly; dead units: not live, not in use, nothing newer than CCD_TMP_SWEEP_MAX_AGE_DAYS=7, 2 days under pressure). Its live arm (DR-8, D-6620, shadow unless ~/.ccrc/tmp-sweep-live-arm exists) takes a live unit\'s scratchpad/tasks entry untouched for 14 days (3 under pressure), or, over the size budget, the oldest entries untouched 48 hours, into <root>/.ccd-tmp-quarantine/<uuid>/ and deletes them a 24-hour grace later after a fresh holder ask',
+    bound: 'session lifetime + 7 days; a live session\'s scratch: each entry 14 days untouched, and a size budget of 20 GiB per session (taken down to 15 GiB, 48-hour floor, 24 hours after the notice)', tier: '138G uncollected on the fleet host 2026-09-22; single task .output files 1-4G; 194 GiB of live scratch under one root (2026-10-23)', ruling: null },
+  // DR-8 (D-6620): the live arm's record, the one reader of which is the server (DR-12). Rolling (R): replaced whole
+  // by a rename at the end of every pass, shadow or live, so it holds the last scan\'s sessions and the moved rows of
+  // the last 7 days or 1,000, whichever is fewer.
+  { name: 'tmp-sweep-census', root: '~/.ccrc/tmp-sweep.json', pattern: 'R',
+    creators: ['ccd-tmp-sweep'], collector: 'ccd-tmp-sweep (replaced whole every pass; moved rows kept 7 days or 1,000)',
+    bound: 'rolling', tier: 'at most 1,000 moved rows plus one row per live session', ruling: null },
   // D-5888 (#298): a `--child` workspace's temp root, the policy's ruling 4. Only the per-id leaf: loose
   // top-level entries in ~/.cc-tmp are a separate class with no owner yet, and this row does not claim them.
   { name: 'child-tmp-roots', root: '~/.cc-tmp/<id>/', pattern: 'S',
     creators: ['ccd (_child_tmpdir: a --child workspace spawns with TMPDIR here)', 'everything that follows TMPDIR in that session, Claude Code\'s scratch included'],
     collector: 'the reclaim tail (_ws_tmproot_remove, kept while in use); ws-collect for a root that outlived its row (server-composed, witness-gated)',
     bound: 'the child\'s lifetime; a root kept in use, until ws-collect takes it on a server-minted audit token (witness-gated)', tier: 'per child; the scratch ccd-tmp-sweep would otherwise hold under claude-<uid>', ruling: null },
+  // Fleet disk retention DR-19 (D-6631; spec 2026-10-23 section 2.3; resolves policy Open Question 6, option (a)): linked
+  // worktrees no registry row names. W: each is a checkout of a project repository. The server's orphan-tree lane is
+  // the collector, in shadow until `orphan-tree-live` stands; it removes only a clean tree whose HEAD is on a remote (or a
+  // rescued one), never with --force.
+  { name: 'ccd-orphan-worktrees', root: '~/worktrees/<project>/<slug> with no registry row (a ws-gc orphan)', pattern: 'W',
+    creators: ['git worktree add outside ccd ws-add', 'a registry row removed by hand'],
+    collector: 'the orphan-tree lane (server; ccd ws-audit --orphans, ws-audit --orphan-hex, ws-orphan): two unchanged audit tokens at least 1 hour apart, shadow unless orphan-tree-live stands; ws-gc --prune stays the operator\'s',
+    bound: 'until the lane removes it: clean, HEAD on a remote (or pinned into the attic under the rescue arm), unregistered, unheld, quiet for 7 days',
+    tier: '5 trees / 5.16G on the fleet host in the 2026-08 audit', ruling: null },
+  { name: 'agent-worktrees', root: '<main>/.claude/worktrees/<name> and <main>/.superpowers/worktrees/<name> of any checkout', pattern: 'W',
+    creators: ['Claude Code (subagent and workflow checkouts)', 'the superpowers worktree skill'],
+    collector: 'the orphan-tree lane (server), the same ladder as ccd-orphan-worktrees; their branches are left, because the owner is Claude Code or the skill',
+    bound: 'until the lane removes it: clean, HEAD on a remote (or rescued), unregistered, unheld, quiet for 7 days',
+    tier: '~28G across ~94 worktrees measured 2026-08 (the policy\'s largest unassigned class)', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
   // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
   // it lives in the runtime dir, so a reboot empties it — the safe direction for
@@ -127,7 +147,7 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.
   { name: 'server-test-run-dirs', root: '${TMPDIR:-/tmp}/ccrc-testrun-<6>/ (+ .dead mid-removal)', pattern: 'E',
     creators: ['server vitest globalSetup (server/test/run-tmp.globalsetup.mjs)'],
-    collector: 'server/test/run-tmp.globalsetup.mjs (teardown; SIGTERM/SIGINT/SIGHUP/exit arm; a later run\'s reap at setup and teardown: owner socket refuses AND ctime-quiet for RUN_QUIET_S)',
-    bound: 'one test run; after a SIGKILL, until a later run under the same TMPDIR finds it quiet',
+    collector: 'server/test/run-tmp.globalsetup.mjs (teardown; SIGTERM/SIGINT/SIGHUP/exit arm; a later run\'s reap at setup and teardown: owner socket refuses AND ctime-quiet for RUN_QUIET_S); ccd/ccd-tmp-sweep\'s test-run arm (DR-10, D-6622) for a root no later run visits: no socket bound at live.sock, ctime-quiet 6 h (1 h under pressure), unheld, in the box\'s TMPDIR and each witnessed child leaf with a row; shadow unless the live arm\'s marker exists',
+    bound: 'one test run; after a SIGKILL, until a later run under the same TMPDIR finds it quiet, or the sweep\'s test-run arm does (6 h quiet)',
     tier: '1,551 dirs / 5.74 GiB from five timed-out shards in one morning (#316, 2026-10-07)', ruling: null },
 ];

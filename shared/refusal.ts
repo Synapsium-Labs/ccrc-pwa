@@ -42,7 +42,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { AccountGateRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountGateRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
 
 /**
@@ -85,7 +85,7 @@ export type CollectLaneRouteRefusal = Exclude<CollectLaneRefusal, 'confirm-requi
 export const GENERIC_REFUSALS = [
   'application-failed', 'ask-mismatch', 'ask-unreadable', 'bad-account-id', 'bad-attachment', 'bad-path',
   'bad-pool-name', 'bad-session', 'bad-session-id', 'bad-transition', 'ceiling', 'child-unmeasurable',
-  'claim-conflict', 'claim-terminal', 'claimant-changed', 'clip-unmeasurable', 'fleetFailed',
+  'claim-conflict', 'claim-terminal', 'claimant-changed', 'clip-unmeasurable', 'fable-operator-only', 'fleetFailed',
   'foreign-origin', 'gone', 'hetzner-error', 'incarnation-changed', 'internal', 'no-record',
   'no-session', 'no-such-passkey', 'not-found', 'not-held', 'not-owner', 'not-parent', 'not-ready',
   'not-remote', 'not-seeded', 'pool-mismatch', 'pool-unreadable', 'registry-unreadable', 'run-closed',
@@ -101,7 +101,9 @@ export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
   | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal
-  | ArchiveRefusal;
+  | ArchiveRefusal
+  // The coordinator's route door (D-6735, ARCH-20): `decideRoute` answers a `RunRouteRefuseCode`, sent through `refuseRoute`.
+  | RunRouteRefuseCode;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -126,8 +128,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'ask-mismatch': 409, 'bad-session': 409, 'bad-transition': 409, 'ceiling': 409, 'child-unmeasurable': 409,
   'claim-conflict': 409, 'claim-terminal': 409, 'claimant-changed': 409, 'no-record': 409, 'no-session': 409,
   'not-held': 409, 'not-remote': 409, 'not-seeded': 409, 'pool-mismatch': 409, 'run-closed': 409,
-  'sweep-stopped': 409, 'unrouteable-record': 409, 'marker-still-controls': 409, 'conflict': 409,
-  'incarnation-changed': 409,
+  'sweep-stopped': 409, 'floor': 409, 'no-effort-rungs': 409, 'unrouteable-record': 409, 'marker-still-controls': 409, 'conflict': 409,
+  'incarnation-changed': 409, 'fable-operator-only': 409,
   [SWAP_REFUSALS.sessionBusy]: 409, [SWAP_REFUSALS.statusUnknown]: 409, [SWAP_REFUSALS.hibernated]: 409,
   // 413, 415, 429
   'oversize': 413, 'too-large': 413,
@@ -195,7 +197,7 @@ export const ROUTE_REFUSALS = Object.keys(REFUSAL_STATUS) as RouteRefusal[];
  *  so they are not `RouteRefusal`s (D-5384, audit ticket ARCH-21). */
 export type OpenRunConflict = Extract<RunRefuseCode,
   'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
-  | 'claimed-by-another' | 'review-in-flight' | 'attribution-required' | 'not-a-child'>;
+  | 'claimed-by-another' | 'review-in-flight' | 'attribution-required' | 'not-a-child' | 'cap-review-rounds'>;
 
 /** Each one's status (D-5384). Measured from the open route's inline sends on
  *  landing day — every one answered 409 — never chosen. */
@@ -205,6 +207,8 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
   // D-5298 (coordinator-first Task 11b, spec §6.4): chosen, not measured — new
   // words, both 409 as the spec names them, the family's conflict status.
   'attribution-required': 409, 'not-a-child': 409,
+  // D-6795: chosen, not measured — a new word, 409 like its family.
+  'cap-review-rounds': 409,
 };
 
 /** The `reject.code` words `POST /api/runs/:id/advance` answers (D-6733, audit ticket ARCH-33,

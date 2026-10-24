@@ -421,7 +421,7 @@ const FORBIDDEN: ForbiddenClass[] = [
     // swept the docs corpus, and dropped the scope — the class now reaches
     // every tracked file, and no class below carries a scope any more.
     // The ONE sanctioned CGNAT literal (D-193): `_dr_ip4_global`'s whole
-    // point is classifying this range, so ccrc-doctor.test.ts's CGNAT-arm
+    // point is classifying this range, so ccrc-doctorFixture.ts's CGNAT-arm
     // fixture cannot speak 203.0.113.x — the class admits exactly one
     // obviously-synthetic placeholder instead. It is nobody's box: CGNAT
     // addresses are not publicly routable, so the leak this class prevents

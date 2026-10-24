@@ -238,7 +238,7 @@ const FAKE_RUNTIME_PYTHON = [
 ].join('\n') + '\n';
 
 /** The install suite's OWN venv python, byte for byte in behaviour: records
- *  its argv, prints nothing, exits 0 for anything (`ccrc-install.test.ts`,
+ *  its argv, prints nothing, exits 0 for anything (`ccrc-install-*.test.ts`,
  *  the `-m venv` arm of its `python3` stub). m-spine H5's vacuous pass. */
 const STOCK_VENV_PYTHON = '#!/bin/sh\necho "$@" >> "$HOME/venv-python-calls"\nexit 0\n';
 

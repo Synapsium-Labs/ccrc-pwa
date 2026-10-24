@@ -185,13 +185,14 @@ import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { changeLatch, changeLatchMap } from './changeLatch.js';
-import { SERVER_CAPS_WRITE_MS, writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
+import { writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { runDispatch, type DispatchRunResult } from './update/converge.js';
 import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
-import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
+import { LaneRunner } from './laneRunner.js';
+import { DIVERGENCE_SWEEP_MS, LC_SWEEP_MS, PR_BACKOFF_MAX_MS, PR_SWEEP_MS, READINESS_SWEEP_MS, type LaneName } from './laneSchedule.js';
 // THE TEMP-ROOT COLLECTOR'S LANE (child reclamation wave 9, spec §5.10). A block of its own, so no import line above
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
 import { COLLECT_CAP } from './ccdargv.js';
@@ -220,37 +221,11 @@ import {
   collectRetireLatch,
 } from './coord/collectTempRoot.js';
 
+import { OrphanTreeSweep } from './orphanTreeSweep.js';
+import type { DiskOrphanTrees } from '../../shared/disk.js';
+
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
 
-/** Task sweeps read every task file of every session, so they run on their own
- *  slower clock than the 2 s pane poll — a plan advances on the scale of
- *  minutes, and the fleet chip is a glance, not a readout. The open session's
- *  own stream reads its list every tick, so the screen you're looking at stays
- *  live regardless. */
-const TASK_SWEEP_MS = 10_000;
-
-/** The usage sidecar lane's own clock (routing slice 0) — same shape as
- *  `TASK_SWEEP_MS`: a sidecar is fresh for `USAGE_FRESH_S` (30 minutes), so
- *  re-reading it every 2 s tick would buy nothing for the cost of one agent
- *  round trip per session in remote mode. */
-const USAGE_SWEEP_MS = 60_000;
-
-/** The sixth lane (the fifth is hook-state sweeping, which rides the 2 s tick).
- *  Naming does NOT ride that tick: a title that appears ten seconds late costs
- *  nothing, and reading transcripts thirty times a minute to learn nothing costs
- *  real work. `claimTitleRead`'s own docstring has the arithmetic for the nine
- *  transcripts on this box that carry no `ai-title` at all, re-read forever at
- *  THIS lane's real 10 s cadence: roughly 7.7 MB/min across the agent WS. The
- *  2 s tick is five times faster, so riding it would cost five times that on
- *  those same nine transcripts to learn nothing — roughly 38.5 MB/min. */
-const NAME_SWEEP_MS = 10_000;
-
-/** The census lane. A disagreement between sources is a HUMAN-timescale event —
- *  a rename, a hand-made worktree, a run left open — and each sweep reads
- *  `<projectsRoot>/<project>/.git/worktrees/` per project. Six times slower than
- *  the name sweep, deliberately: this one touches the filesystem per PROJECT,
- *  not per pane. */
-const DIVERGENCE_SWEEP_MS = 60_000;
 /** The disk alarm's clock (D-6615, spec §2.5): one `statfs` pass a minute. */
 const DISK_SWEEP_MS = 60_000;
 
@@ -327,16 +302,9 @@ export type CollectSlot =
  *  are already suppressed, so what this delays is one frame at boot. */
 export const HEADS_BOOT_WAIT_MS = 2_500;
 
-/** The journal mirror's lane, and it is fast for the one reason the census's is
- *  slow: a sweep is ONE `readdir` plus one `readFileFrom` per live generation,
- *  and a destruction's `intent`/outcome pair should be visible while the
- *  operator is still looking at the screen. DECLARED HERE, beside its five
- *  siblings, and deliberately NOT in `shared/api.ts`: it has no bash twin and
- *  no wire meaning, and one sweep interval in L0 would be a second home for a
- *  class of value that already has one. EXPORTED because `mirror.ts` cannot
- *  import it — that would be L3 importing L4 — so the staleness window is
- *  passed in from the one construction site below. */
-export const LC_SWEEP_MS = 5_000;
+/** The mirror lane's cadence, the census's and the readiness lane's live in `laneSchedule.ts`; the suites and `index.ts`
+ *  import the two exported ones from here. */
+export { LC_SWEEP_MS, READINESS_SWEEP_MS };
 
 /** Build 9 wave 7 (D12): the claim lease's lane. 60 s — a 45-minute lease
  *  does not need the 2 s tick, and `sweepDivergences` already argues this
@@ -417,20 +385,6 @@ function stallHookFactOf(raw: HookStateRawRead): HookRawFact {
     : { ok: false, reason: raw.reason };
 }
 
-/** D13's two ledger lanes. The floor scan reads every plan and spec of every
- *  registry-named project, so it runs HOURLY; reconcile reads only the plans
- *  of projects with open allocations, every 15 MINUTES, because `landed` is
- *  the signal a coordinator watches for. */
-const LEDGER_FLOOR_SWEEP_MS = 3_600_000;
-const LEDGER_RECONCILE_SWEEP_MS = 900_000;
-
-/** F3's lane. Ten minutes: slower than the divergence census because the
- *  answer only changes when someone installs a skill or edits a token, and
- *  faster than the ledger floor's hour because an operator waiting to start a
- *  program is watching this one. EXPORTED so its own suite advances by the
- *  real constant rather than a copy that can drift from it. */
-export const READINESS_SWEEP_MS = 600_000;
-
 /** The name the coord probe asks the store about. `isSafeProjectSegment`
  *  REJECTS it (a leading space), so it can never collide with a real
  *  project's `ledger_floor` row — the probe is a liveness question, not a
@@ -492,26 +446,6 @@ const PERMANENT_REFUSALS: ReadonlySet<string> = new Set([
   'registry-branch-drift',
 ]);
 
-/** The fourth lane. A ccd install is a deliberate act by a human who is
- *  waiting, so a minute is the longest anyone should have to wonder whether
- *  the fleet noticed — and the agent's stat gate means an unchanged ccd costs
- *  a stat, not a bash process. */
-const CAPS_REFRESH_MS = 60_000;
-
-/** The catalogue lane's own cadence (design 2026-09-20 §7) — declared in
- *  `catalogue.ts` (`CATALOGUE_POLL_INTERVAL_MS`), which `routes.ts`'s refresh
- *  door also derives its interval from (fix round 2, C3), never a second
- *  copy of the 30-minute figure here. GitHub's unauthenticated listing
- *  budget is 60 requests an hour per IP and a 304 still spends one, so every
- *  30 minutes is 2 scheduled polls an hour, leaving the rest of the budget
- *  to `POST /api/updates/refresh`. */
-const UPDATE_CATALOGUE_MS = CATALOGUE_POLL_INTERVAL_MS;
-
-/** The inventory lane (design 2026-09-20 §8): seven small ~/.ccrc reads per
- *  node, lstat-gated and budget-bounded, once a minute — and at once after a
- *  `ready` frame (`triggerInventory`, wired in `index.ts`). */
-const UPDATE_INVENTORY_MS = 60_000;
-
 /** A thrown value's fs errno (`EACCES`, `EROFS`, …), or null — same stance as `writeOwnProjection`'s `code`
  *  (fix round 1, finding 1): a caller that wants to dedupe compares this, never the message. */
 function errnoOf(e: unknown): string | null {
@@ -531,22 +465,6 @@ function projectionWarn(p: ProjectionOutcome): { key: string; message: string } 
   const message = p.why === 'unwritable' || p.why === 'no-channel' ? `${p.why}: ${p.detail}` : p.why;
   return { key, message };
 }
-
-/** The third lane. 8 projects x 1 call / 120 s is ~240 GraphQL calls an hour
- *  against a 5000/hr budget with ~4900 free — about 5%. Measured latency
- *  0.51-0.69 s per call. */
-const PR_SWEEP_MS = 120_000;
-const PR_SWEEP_ACTIVE_MS = 30_000;      // any project with an open PR whose checks are pending
-const PR_BACKOFF_MAX_MS = 900_000;
-/** How long one sweep may be in flight before the next is allowed to start
- *  anyway. In local mode `realRunner` passes NO timeout to `execFile`
- *  (`exec.ts:6-12`), so nothing bounds the awaited `ccd` call and a wedged `gh`
- *  would otherwise hold the single-flight latch for the process's lifetime —
- *  the cap would never update again and there would be no error anywhere to say
- *  why. Same 15 minutes as the backoff ceiling: far longer than any real sweep
- *  (measured 0.51-0.69 s per project call), short enough that wedged is not
- *  permanent. */
-const PR_SWEEP_STUCK_MS = PR_BACKOFF_MAX_MS;
 
 /** The SEVENTH lane. (Sixth is naming, fifth is hook-state sweeping.) spec:159
  *  fixes the cadence; the rest of this block is the gate's arithmetic.
@@ -1003,7 +921,6 @@ export class FleetWatcher {
   private episodeBusySince = new Map<string, number>();
   /** Last swept task progress per session id, and when the sweep ran. */
   private taskProgress = new Map<string, TaskProgress>();
-  private lastTaskSweep = 0;
   /** Last-swept PR state per SESSION id. */
   private prStates = new Map<string, PrState>();
   /** Last-measured repo cell per PROJECT — retained, not derived, from what
@@ -1018,33 +935,17 @@ export class FleetWatcher {
   /** The usage sidecar lane (routing slice 0) — rebuilt on its own
    *  `USAGE_SWEEP_MS` clock, not every tick; see `sweepUsage`. */
   private usage = new Map<string, SessionUsage>();
-  private lastUsageSweep = 0;
   /** Per-PROJECT backoff after a failed read: one repo failing must not slow
    *  or silence the other seven. */
   private prBackoff = new Map<string, { until: number; step: number }>();
   /** The reason a project's last failed sweep was logged with, until a sweep succeeds: the latch behind `backoffPr`'s
    *  one line per change and the success arm's `recovered`. */
   private readonly prSweepFailure = new Map<string, PrState['reason']>();
-  private lastPrSweep = 0;
-  /** The fourth lane's clock. Starts at 0 so the first tick after start
-   *  always refreshes — which is what recovers a server that connected to an
-   *  agent whose boot-time caps read had already failed. */
-  private lastCapsAt = 0;
-  /** The catalogue lane's clock. Starts at 0, like `lastCapsAt`, so the first
-   *  tick after a start polls: the catalogue's state is process memory
-   *  (D-3182), and a restarted server should read
-   *  "never checked" for one tick, not for half an hour. */
-  private lastCatalogueAt = 0;
-  /** The inventory lane's clock, and its ONE run in flight. Starts at 0 so
-   *  the first tick after a start sweeps. `inventoryNow()` sets the clock, so
-   *  a `ready`-triggered sweep also defers the minute gate's next one. */
-  private lastInventoryAt = 0;
-  private inventoryRun: Promise<SweepOutcome[]> | null = null;
-  /** The server-caps beat's clock and its ONE write in flight (D-5232's mechanism, Task 9b). Starts at 0 so the first
-   *  tick after a start writes: that tick IS the boot write (`start()` ticks at once). Its own clock, never the
-   *  inventory lane's, so the file is rewritten whether or not this server has a coordination database. */
-  private lastServerCapsAt = 0;
-  private serverCapsRun: Promise<WriteServerCapsResult | null> | null = null;
+  /** The throttle, single flight and catch of the update/caps beats (D-5862): `LANE_SCHEDULE`'s rows read through
+   *  `runLane`. A lane starts due, so the first tick after a start runs every one: that recovers a server that
+   *  connected to an agent whose boot-time caps read had failed, and a restarted server reads "never checked" for one
+   *  tick, not for half an hour (D-3182: the catalogue's state is process memory). */
+  private readonly lanes = new LaneRunner({ wall: () => Date.now(), mono: () => this.deps.monotonicMs?.() ?? performance.now() });
   /** The last server-caps write failure's stable key (`unwritable:<errno>`), so an unwritable ~/.ccrc warns once
    *  per change of reason, not once a minute (`changeLatch`'s idiom); null after a success. */
   private readonly serverCapsWhy = changeLatch<string | null>();
@@ -1057,15 +958,6 @@ export class FleetWatcher {
    *  connection's own try/catch (e.g. inside `resolveAndProject`'s own
    *  queueing, which `sweepThenProject` already handles separately). */
   private readonly inventoryRejectWarn = changeLatch<string>();
-  /** C4 (final fix wave): set when a caller of `triggerInventory()` (the
-   *  `ready` hook) JOINS a sweep already in flight rather than starting one.
-   *  The joiner's own connection state may be exactly what changed since the
-   *  in-flight sweep read it — joining that promise alone would silently
-   *  measure the join as though nothing had happened. ONE rerun, not a
-   *  queue: every joiner while a run is in flight sets this SAME flag, and
-   *  the first settle after it clears the flag and fires exactly one more
-   *  sweep. */
-  private inventoryRerunPending = false;
   /** C3 (final fix wave): the (label,nodeId,why) tuples this lane already
    *  warned about — a `node-id-collision` or a `refused` sweep outcome is
    *  otherwise named nowhere but the discarded `SweepOutcome[]` (D-3211's
@@ -1091,14 +983,8 @@ export class FleetWatcher {
    *  stretch at once. */
   private dispatchRun: Promise<DispatchRunResult> | null = null;
   private dispatchAgain = false;
-  /** The sixth lane's clock. */
-  private lastNameSweep = 0;
-  /** The census lane's clock, and its byte-equality guard. A git-ref read per
-   *  project is far too expensive for the 2 s poll, and a census changes on
-   *  human timescales; `null` (not `'[]'`) so the first sweep always emits, even
-   *  an empty one — mirroring `lastRunsJson`'s own initial value, and the reason
-   *  a HEALTHY fleet is a frame rather than a silence. */
-  private lastDivergenceSweep = 0;
+  /** The census lane's byte-equality guard. `null` (not `'[]'`) so the first sweep always emits, even an empty one —
+   *  mirroring `lastRunsJson`'s own initial value, and the reason a HEALTHY fleet is a frame rather than a silence. */
   private lastDivergenceJson: string | null = null;
   /** The child-reclaim lane's clock (child-reclamation wave 4): the MONOTONIC
    *  time of the last pass, `null` before the first. Two writers stamp it
@@ -1263,6 +1149,9 @@ export class FleetWatcher {
    *    (Task 5's `collectPassClass`), keyed by the pass that queued them; the latest pass whose calls have all settled is
    *    the one the pass-scoped box lines read. */
   private lastCollectSweep: number | null = null;
+  /** The orphan-worktree lane (D-6631): its pass, built on first use, and its throttle on the monotonic clock. */
+  private orphanTrees: OrphanTreeSweep | null = null;
+  private lastOrphanTreeSweep: number | null = null;
   private collectSweeping = false;
   private readonly collectStartMono: number;
   private collectGen = 0;
@@ -1287,10 +1176,6 @@ export class FleetWatcher {
    *  row per source row per process, so a restart writes it once more. Never pruned, because an ended item
    *  never returns. */
   private readonly childReclaimLeafFed = new Set<number>();
-  /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
-   *  carries the lane's own docstring; this is only the clock field, same
-   *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
-  private lastLifecycleSweep = 0;
   /** The claim lanes' clocks (build 9 wave 7, D12). */
   private lastClaimRenew = 0;
   private lastClaimLapse = 0;
@@ -1339,14 +1224,10 @@ export class FleetWatcher {
   private stallSettingsWarned = new Set<string>();
   /** Set by the first settings read that is not unreadable: the boot trace runs once (§8). */
   private stallSettingsTraced = false;
-  /** The ledger lanes' clocks (build 9 wave 7, D13). */
-  private lastLedgerFloor = 0;
-  private lastLedgerReconcile = 0;
-  /** The readiness lane's clock and its cache (program-leverage wave 3, F3).
+  /** The readiness lane's cache (program-leverage wave 3, F3).
    *  `undefined` until the first sweep lands — the same contract every other
    *  `currentX()` on this class already has, and the route turns it into a
    *  `readiness: null` on the wire rather than omitting the key. */
-  private lastReadinessSweep = 0;
   /** The disk alarm's clock, the decider's memory and the block the route serves (D-6615). `diskBlock` is `null` until
    *  the first sweep lands: absence on the wire reads as UNKNOWN. */
   private lastDiskSweep = 0;
@@ -1436,9 +1317,6 @@ export class FleetWatcher {
    *  on. Same gate, for the same reason, as `SessionStream.claimAskRead`
    *  (`sessionws.ts:178-187`). */
   private titleProbe = new Map<string, { file: string; size: number; mtimeMs: number }>();
-  /** Epoch ms the in-flight sweep started, or 0 when none is. A TIMESTAMP, not
-   *  a boolean: see `PR_SWEEP_STUCK_MS`. */
-  private prSweepStartedAt = 0;
   /** The first tick primes dialog/status state WITHOUT firing pushes, so a ccrc
    *  restart doesn't notify for every already-pending dialog / idle session. */
   private primed = false;
@@ -1720,36 +1598,51 @@ export class FleetWatcher {
    * Single-flight: a beat that finds a write in flight joins it. A failure warns once per change of `code`.
    */
   serverCapsNow(): Promise<WriteServerCapsResult | null> {
-    if (this.serverCapsRun !== null) return this.serverCapsRun;
-    this.lastServerCapsAt = Date.now();
+    return this.lanes.runNow('serverCaps', () => this.serverCapsBeat());
+  }
+
+  /** The beat's body, run by `runLane`: a node that is not a `server` or `both` writes nothing (its stamp still
+   *  stands, so the beat does not retry every tick). */
+  private serverCapsBeat(): Promise<WriteServerCapsResult | null> {
     const { role, ccrcDir } = this.deps.cfg;
     if (role !== 'server' && role !== 'both') return Promise.resolve(null);
-    const run = writeServerCaps(ccrcDir, SERVER_CAPS, Math.floor(Date.now() / 1000)).then((r) => {
+    return writeServerCaps(ccrcDir, SERVER_CAPS, Math.floor(Date.now() / 1000)).then((r) => {
       const key = r.ok ? null : `${r.why}:${r.code ?? 'none'}`;
       if (this.serverCapsWhy.changed(key) && !r.ok) {
         console.warn(`ccrc-server: could not write ~/.ccrc/server-caps (the fleet hook's gated arms stay off until it is written): ${r.detail}`);
       }
       return r;
-    }).finally(() => { this.serverCapsRun = null; });
-    this.serverCapsRun = run;
-    return run;
+    });
   }
+
+  /** A lane's beat (D-5862): `LANE_SCHEDULE`'s row for `name` decides whether it is due, the single flight, and the
+   *  catch. Answers the lane's own promise, never awaited here, or null when throttled. */
+  runLane<T>(name: LaneName, fn: () => Promise<T> | T, active = false): Promise<T | undefined> | null { return this.lanes.run(name, fn, active); }
+  /** An on-demand run's stamp, as `inventoryNow` and `serverCapsNow` set it. */
+  stamp(name: LaneName): void { this.lanes.stamp(name); }
+  /** The lane runs on the next tick. */
+  kick(name: LaneName): void { this.lanes.kick(name); }
+  /** The post-gather re-stamp on the decision clock. */
+  restamp(name: LaneName): void { this.lanes.restamp(name); }
+  /** The run in flight, or null. */
+  inFlight(name: LaneName): Promise<unknown> | null { return this.lanes.inFlight(name); }
 
   /** Resolves once no server-caps write is in flight. For a caller that fired the beat and must read its result. */
   async serverCapsSettled(): Promise<void> {
-    if (this.serverCapsRun !== null) await this.serverCapsRun;
+    const run = this.lanes.inFlight('serverCaps');
+    if (run !== null) await run;
   }
 
   /** Resolves once none of the writers `tick()` fires without awaiting is in flight: the server-caps beat, the
    *  inventory run and the dispatch run it ends in (D-6179). Each writes under `<ccrcDir>`, so a caller that removes
    *  that directory (a test's teardown) awaits this after `stop()`. It loops because a run that settles can start the
    *  next (the dispatch run's follow-up). It does not cover an inventory rerun queued by `triggerInventory()`, which
-   *  starts a few microtasks after `inventoryRun` clears. Never rejects: each lane warns on its own. */
+   *  starts a few microtasks after the inventory run clears. Never rejects: each lane warns on its own. */
   async settled(): Promise<void> {
     for (;;) {
-      const inFlight = [this.serverCapsRun, this.inventoryRun, this.dispatchRun].filter((p) => p !== null);
-      if (inFlight.length === 0) return;
-      await Promise.allSettled(inFlight);
+      const running = [this.lanes.inFlight('serverCaps'), this.lanes.inFlight('inventory'), this.dispatchRun].filter((p) => p !== null);
+      if (running.length === 0) return;
+      await Promise.allSettled(running);
     }
   }
 
@@ -1762,11 +1655,7 @@ export class FleetWatcher {
    * nothing. Resolves `[]` on a server with no coord store.
    */
   inventoryNow(): Promise<SweepOutcome[]> {
-    if (this.inventoryRun !== null) return this.inventoryRun;
-    this.lastInventoryAt = Date.now();
-    const run = this.runInventory().finally(() => { this.inventoryRun = null; });
-    this.inventoryRun = run;
-    return run;
+    return this.lanes.runNow('inventory', () => this.runInventory());
   }
 
   /** C2, reworded by re-review finding 1 (final fix wave): C1 gave each
@@ -1820,13 +1709,8 @@ export class FleetWatcher {
    *  The flag is checked and cleared ONCE the run settles, so a run of
    *  joiners produces exactly one rerun, never a queue. */
   triggerInventory(): void {
-    if (this.inventoryRun !== null) this.inventoryRerunPending = true;
-    void this.dispatchInventorySweep().finally(() => {
-      if (this.inventoryRerunPending) {
-        this.inventoryRerunPending = false;
-        this.triggerInventory();
-      }
-    });
+    this.lanes.requestRerun('inventory', () => this.triggerInventory());
+    void this.dispatchInventorySweep();
   }
 
   /**
@@ -2449,15 +2333,12 @@ export class FleetWatcher {
       // `void this.tick()`, but it now logs instead of swallowing silently
       // (D-3209: a silent `.catch(() => {})` here is exactly what let
       // `catalogueState` read "up to date" after a failed poll).
-      if (this.deps.catalogue && Date.now() - this.lastCatalogueAt >= UPDATE_CATALOGUE_MS) {
-        this.lastCatalogueAt = Date.now();
+      const catalogue = this.deps.catalogue;
+      if (catalogue) {
         // Plan W3 Task 3: a poll that listed a new tag is decided on the poll's own answer, not a minute later
         // on the inventory lane — once this process has swept (D-3314).
-        // `pushReleaseAfterPoll` is synchronous and never throws, so the `.catch` still covers the poll alone.
-        void this.deps.catalogue.poll(Date.now()).then(() => { this.pushReleaseAfterPoll(Date.now()); }).catch((err: unknown) => {
-          console.warn('ccrc-server: the catalogue poller rejected — this is a bug, poll() should ' +
-            `never reject: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
-        });
+        // `pushReleaseAfterPoll` is synchronous and never throws, so the catch (the row's warnKey) still covers the poll alone.
+        void this.runLane('catalogue', () => catalogue.poll(Date.now()).then(() => { this.pushReleaseAfterPoll(Date.now()); }));
       }
 
       // The inventory lane (design 2026-09-20 §8) is gated HERE, beside the
@@ -2476,7 +2357,7 @@ export class FleetWatcher {
       // what reaches `dispatchInventorySweep`'s own catch is a throw outside
       // both. Logged, deduped (C2), same idiom as the catalogue lane just
       // above, never swallowed silently either way.
-      if (this.deps.coord && Date.now() - this.lastInventoryAt >= UPDATE_INVENTORY_MS) {
+      if (this.deps.coord && this.lanes.due('inventory')) {
         void this.dispatchInventorySweep();
       }
 
@@ -2490,7 +2371,7 @@ export class FleetWatcher {
       // is `coord`-gated, and a coord-less server must still keep its fleet's file current. Above the registry's
       // fail-shut return for the same reason as both update lanes (it reads nothing from the registry). NEVER
       // awaited; `serverCapsNow` never rejects (`writeServerCaps` never throws, and its warning is its own).
-      if (Date.now() - this.lastServerCapsAt >= SERVER_CAPS_WRITE_MS) {
+      if (this.lanes.due('serverCaps')) {
         void this.serverCapsNow();
       }
 
@@ -2575,7 +2456,7 @@ export class FleetWatcher {
       // moves one tick later. An assignment, never an await: the tick's order
       // and its timing are unchanged. Only on a LISTED tick, below the fail-shut
       // return: an unlistable registry proves no child gone.
-      if (childMarkLeftListing(this.childMarks, childMarks)) this.lastLifecycleSweep = 0;
+      if (childMarkLeftListing(this.childMarks, childMarks)) this.kick('lifecycle');
       this.childMarks = childMarks;
       // hook states FIRST, dialogs second — the order is load-bearing and there
       // is a test on it. `detectDialogs` composes the ask push, and the actions
@@ -2601,14 +2482,14 @@ export class FleetWatcher {
       // --timeout, so awaiting it would stall the dialog detector and the
       // busy->idle push behind GitHub's reachability.
       void this.sweepPr().catch(() => { /* one bad sweep must not kill the poll */ });
-      if (this.deps.refreshCaps && Date.now() - this.lastCapsAt >= CAPS_REFRESH_MS) {
-        this.lastCapsAt = Date.now();
+      const refreshCaps = this.deps.refreshCaps;
+      if (refreshCaps) {
         // NEVER awaited: same reasoning as sweepPr immediately above — caps()
         // swallows its own failures today, but a wedged-yet-connected agent
         // must not stall assembleFleet behind an up-to-15s request timeout,
         // and a future implementation that DOES reject must not become an
         // unhandled rejection via start()'s `void this.tick()`.
-        void this.deps.refreshCaps().catch(() => { /* one bad refresh must not kill the poll */ });
+        void this.runLane('caps', () => refreshCaps.call(this.deps))?.catch(() => { /* one bad refresh must not kill the poll */ });
       }
       // NEVER awaited, same reasoning as sweepPr above and then some: this one
       // joins the per-session KeyedQueue, which `POST /workspace/reap` can hold
@@ -2657,6 +2538,9 @@ export class FleetWatcher {
       // gather; this listing feeds its pre-filter, which is economy and never a permission.
       void this.sweepTempRootCollect(records, registryRead.names)
         .catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the ORPHAN-WORKTREE lane (fleet disk retention, D-6631), a fifth sibling at the
+      // same cadence and under the same pause. It reads no tick listing; its census is its own.
+      void this.sweepOrphanTrees().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
       // is ~4.3 s of sleeps per message plus one round trip per line
@@ -3579,9 +3463,11 @@ export class FleetWatcher {
    *  ruling R5 — `readUsageMeasured` tells unreadable from absent, which
    *  drops the row). */
   private async sweepUsage(records: SessionRecord[]): Promise<void> {
+    await this.runLane('usage', () => this.usagePass(records));
+  }
+
+  private async usagePass(records: SessionRecord[]): Promise<void> {
     const now = Date.now();
-    if (this.lastUsageSweep !== 0 && now - this.lastUsageSweep < USAGE_SWEEP_MS) return;
-    this.lastUsageSweep = now;
     const nowS = Math.floor(now / 1000);
     const next = new Map<string, SessionUsage>();
     await Promise.all(records.map(async (r) => {
@@ -3603,9 +3489,11 @@ export class FleetWatcher {
    * progress can't linger.
    */
   private async sweepTasks(): Promise<void> {
+    await this.runLane('tasks', () => this.tasksPass());
+  }
+
+  private async tasksPass(): Promise<void> {
     const now = Date.now();
-    if (this.lastTaskSweep !== 0 && now - this.lastTaskSweep < TASK_SWEEP_MS) return;
-    this.lastTaskSweep = now;
     // Own read, on its own slower clock — never shared with `tick()`'s
     // (`sweepHookStates` above takes `tick()`'s `records` as a parameter;
     // this method does not). `readRegistryMeasured`, fail shut on
@@ -3616,7 +3504,7 @@ export class FleetWatcher {
     // degraded row, at fleet scale, on a clock throttled to fire once per
     // `TASK_SWEEP_MS` — so a hit here can leave every task tally blank for a
     // whole sweep interval, exactly the cost this method's own comment names
-    // for a single row. `this.lastTaskSweep` is stamped above regardless
+    // for a single row. the lane's stamp is taken before this body runs, regardless
     // (same ordering `sweepMail`'s own fail-shut kill-switch check uses): a
     // failed listing still consumes this sweep's slot rather than retrying
     // every 2 s tick, the same throttle discipline every other sweep here
@@ -3769,9 +3657,11 @@ export class FleetWatcher {
    * same class of reason.
    */
   async sweepNames(): Promise<void> {
+    await this.runLane('names', () => this.namesPass());
+  }
+
+  private async namesPass(): Promise<void> {
     const now = Date.now();
-    if (this.lastNameSweep !== 0 && now - this.lastNameSweep < NAME_SWEEP_MS) return;
-    this.lastNameSweep = now;
     // The REGISTRY's branch, never the assembled `FleetSession.branch`: that one
     // is the pane's branch, else the worktree HEAD's, else this (fleet.ts), so it
     // lags a rename by however long Claude Code takes to re-render its pane.
@@ -3964,13 +3854,11 @@ export class FleetWatcher {
    * non-optional call TypeErrors fourteen `hold-gate` tests plus `pr-sweep`'s.
    */
   async sweepDivergences(records: SessionRecord[], refused: ReadonlySet<string>): Promise<void> {
-    // `Date.now()`, not an injected clock: this class has none, and `sweepNames`
-    // just above reads the same way. `!== 0` is not a style tic — it is what
-    // makes the FIRST sweep run immediately after a restart instead of waiting a
-    // minute, and it is the shape `sweepNames` already ships.
+    await this.runLane('divergences', () => this.divergencesPass(records, refused));
+  }
+
+  private async divergencesPass(records: SessionRecord[], refused: ReadonlySet<string>): Promise<void> {
     const now = Date.now();
-    if (this.lastDivergenceSweep !== 0 && now - this.lastDivergenceSweep < DIVERGENCE_SWEEP_MS) return;
-    this.lastDivergenceSweep = now;
     const projects = [...new Set(records.map((r) => r.project))];
     const worktrees: DivergenceInput['worktrees'][number][] = [];
     const headBranch = new Map<string, string | null>();
@@ -5022,6 +4910,29 @@ export class FleetWatcher {
     } finally {
       this.collectSweeping = false;
     }
+  }
+
+  /** THE ORPHAN-WORKTREE LANE's beat (D-6631; spec 2026-10-23 section 2.3): throttled here, decided in `orphanTreeLane.ts`,
+   *  asked in `coord/collectOrphanTree.ts`, remembered in `orphanTreeSweep.ts`. Shadow until `orphan-tree-live` stands. */
+  async sweepOrphanTrees(): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    const gate = this.childReclaimLaneNow().monoMs;
+    if (this.lastOrphanTreeSweep !== null && gate - this.lastOrphanTreeSweep < CHILD_RECLAIM_SWEEP_MS) return;
+    this.lastOrphanTreeSweep = gate;
+    this.orphanTrees ??= new OrphanTreeSweep({
+      io: this.deps.io, registryDir: this.deps.cfg.registryDir, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
+      queue: this.deps.queue, mono: () => this.childReclaimLaneNow().monoMs,
+      epochNow: () => (this.deps.fleetIdentity ?? NO_FLEET_IDENTITY).epochNow(), pressure: () => false,
+      record: (title, body) => notify({ notifyLog: this.deps.notifyLog, coord },
+        { kind: 'coord', sessionId: '', runId: null, title, body }, 'record-only', { degraded: `orphan-tree lane ${title}, feed archive degraded` }),
+    });
+    await this.orphanTrees.pass();
+  }
+
+  /** The `disk` block's `orphanTrees` (D-6631), or null before the lane's first census. */
+  orphanTreesHealth(): DiskOrphanTrees | null {
+    return this.orphanTrees?.health() ?? null;
   }
 
   /** One pass of the collector's lane, run only while no other pass runs. Its ONE await is the gather. It queues its
@@ -6234,10 +6145,7 @@ export class FleetWatcher {
   async sweepLifecycle(): Promise<void> {
     const store = this.deps.coord;
     if (!store) return;
-    const now = Date.now();
-    if (this.lastLifecycleSweep !== 0 && now - this.lastLifecycleSweep < LC_SWEEP_MS) return;
-    this.lastLifecycleSweep = now;
-    await this.mirrorFor(store).sweep();
+    await this.runLane('lifecycle', () => this.mirrorFor(store).sweep());
   }
 
   /**
@@ -7070,9 +6978,11 @@ export class FleetWatcher {
    * `void`, so a test that awaits `tick()` has not awaited this.
    */
   async sweepLedgerFloor(records: SessionRecord[]): Promise<void> {
+    await this.runLane('ledgerFloor', () => this.ledgerFloorPass(records));
+  }
+
+  private async ledgerFloorPass(records: SessionRecord[]): Promise<void> {
     const now = Date.now();
-    if (this.lastLedgerFloor !== 0 && now - this.lastLedgerFloor < LEDGER_FLOOR_SWEEP_MS) return;
-    this.lastLedgerFloor = now;
     const store = this.deps.coord;
     if (!store) return;
     for (const project of [...new Set(records.map((r) => r.project))]) {
@@ -7184,15 +7094,11 @@ export class FleetWatcher {
    * `void`, so a test that awaits `tick()` has not awaited this.
    */
   async sweepReadiness(): Promise<void> {
+    await this.runLane('readiness', () => this.readinessPass());
+  }
+
+  private async readinessPass(): Promise<void> {
     const now = Date.now();
-    // The `!== 0` half is INERT and is kept only for symmetry with the two
-    // ledger lanes that spell it the same way (D-1031, measured): with
-    // `lastReadinessSweep` at 0 and a real epoch clock, `now - 0` already
-    // dwarfs the interval, so the first call falls through on the arithmetic
-    // alone. Deleting it kills no test in this suite or theirs. What enforces
-    // "measure on the first tick" is the arithmetic, not this conjunct.
-    if (this.lastReadinessSweep !== 0 && now - this.lastReadinessSweep < READINESS_SWEEP_MS) return;
-    this.lastReadinessSweep = now;
     const cfg = this.deps.cfg;
     // `homeAble` only: an account with no HOME on this box cannot have a skill
     // installed in one, so asking would manufacture an `unmeasurable` that
@@ -7247,10 +7153,11 @@ export class FleetWatcher {
    * and NEVER reclaimed.
    */
   async sweepLedgerReconcile(): Promise<void> {
+    await this.runLane('ledgerReconcile', () => this.ledgerReconcilePass());
+  }
+
+  private async ledgerReconcilePass(): Promise<void> {
     const now = Date.now();
-    if (this.lastLedgerReconcile !== 0 &&
-        now - this.lastLedgerReconcile < LEDGER_RECONCILE_SWEEP_MS) return;
-    this.lastLedgerReconcile = now;
     const store = this.deps.coord;
     if (!store) return;
     const open = store.openAllocations();
@@ -8265,116 +8172,106 @@ export class FleetWatcher {
    * ruling, 2026-09-10 — see `sweepMerged`).
    */
   private async sweepPr(): Promise<void> {
-    const now = Date.now();
-    // Single-flight, but never permanently. A sweep still running after
-    // PR_SWEEP_STUCK_MS is abandoned — not cancelled, there is nothing to
-    // cancel; it is simply no longer allowed to hold the lane shut.
-    if (this.prSweepStartedAt !== 0 && now - this.prSweepStartedAt < PR_SWEEP_STUCK_MS) return;
     // The same guard tick() already applies before saveSnapshot: with the
     // agent down there is nothing to read and every state keeps its checkedAt.
     if (this.deps.cfg.fleetMode === 'remote' && !this.deps.fleetState?.connected) return;
     const anyPending = [...this.prStates.values()].some((s) => s.phase === 'open' && s.checks === 'pending');
-    const due = anyPending ? PR_SWEEP_ACTIVE_MS : PR_SWEEP_MS;
-    if (this.lastPrSweep !== 0 && now - this.lastPrSweep < due) return;
-    this.lastPrSweep = now;
-    const mySweep = now;
-    this.prSweepStartedAt = mySweep;
-    try {
-      // [registry-refused:omits] a refused row is never in `records`: no pr-state, no prStates key.
-      const records = await readRegistry(this.deps.io, this.deps.cfg);
-      const projects = [...new Set(records.filter((r) => r.workspace !== null).map((r) => r.project))];
-      for (const project of projects) {
-        const back = this.prBackoff.get(project);
-        if (back && now < back.until) continue;
-        const argv = CCD_ARGV.prStateProject(project);
-        if (!verbSupported(this.deps.fleetState, argv)) {
-          for (const r of records.filter((x) => x.project === project && x.workspace !== null)) {
-            // retryAt: null — an unsupported verb is not a scheduled retry, and a
-            // stale `until` from an earlier backoff must not survive as a promise.
-            this.prStates.set(r.id, { ...(this.prStates.get(r.id) ?? UNCHECKED_PR), phase: 'unknown', reason: 'unsupported', retryAt: null });
-          }
-          continue;
+    // Single-flight, but never permanently: the `pr` row's `skip` flight abandons a sweep still running after
+    // `PR_SWEEP_STUCK_MS` (not cancelled, there is nothing to cancel; it is simply no longer allowed to hold the lane
+    // shut), and only the run that was started last may clear the flight.
+    await this.runLane('pr', () => this.prPass(), anyPending);
+  }
+
+  private async prPass(): Promise<void> {
+    const now = Date.now();
+    // [registry-refused:omits] a refused row is never in `records`: no pr-state, no prStates key.
+    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    const projects = [...new Set(records.filter((r) => r.workspace !== null).map((r) => r.project))];
+    for (const project of projects) {
+      const back = this.prBackoff.get(project);
+      if (back && now < back.until) continue;
+      const argv = CCD_ARGV.prStateProject(project);
+      if (!verbSupported(this.deps.fleetState, argv)) {
+        for (const r of records.filter((x) => x.project === project && x.workspace !== null)) {
+          // retryAt: null — an unsupported verb is not a scheduled retry, and a
+          // stale `until` from an earlier backoff must not survive as a promise.
+          this.prStates.set(r.id, { ...(this.prStates.get(r.id) ?? UNCHECKED_PR), phase: 'unknown', reason: 'unsupported', retryAt: null });
         }
-        const res = await this.deps.runCcd(argv);
-        if (!res.ok) { this.backoffPr(project, now, sweepFailureReason(res), records, failureDetail(res)); continue; }
-        const lines = parsePrLines(res.stdout);
-        // A WHOLE-REPO failure — the id-less shape, emitted by `_gh_repo_slug`,
-        // `_gh_pr_list`, and `_pr_py` for an unparseable rc-0 body — really
-        // does mean every session of this repo is unreadable (each is one gh
-        // answer for the whole repo), so it backs the project off. Note the
-        // unparseable-body case emits one id-less object PER SESSION in a
-        // --project sweep; `find` taking the first is correct because they all
-        // describe the same repo-wide fact. A PER-SESSION failure
-        // carries an `id` and must not: one workspace whose registry lost its
-        // `branch` is one broken session, and §6's "Partial sweep" row promises
-        // its seven siblings keep their own answers.
-        const failure = lines.find((l) => !('id' in l)) as CcdPrFailure | undefined;
-        if (failure !== undefined) {
-          // D-2883: the plan's own snippet here read `failure.project`, which
-          // does not exist on `CcdPrFailure` (`{ phase: 'unknown'; reason }` —
-          // no `project` field; it speaks for the whole repo precisely because
-          // it carries none). The project this failure is ABOUT is the loop's
-          // own `project`, already in scope.
-          //
-          // Coordinator ruling, fix round 1 (Important 1): a failed read never
-          // overwrites a GOOD measurement — the same principle `backoffPr`'s
-          // own docstring states two methods below for `prStates`
-          // ("A failed read never overwrites a good phase — only greys it").
-          // `no-remote` is still a real measurement (`repoCellFor`'s one proof
-          // of `absent`) and is written regardless of what is already there —
-          // a project's remote can genuinely be removed between sweeps. Every
-          // OTHER reason resolves to `unmeasured`, which teaches nothing about
-          // the repo itself, so it is dropped whenever a real cell (`named` or
-          // `absent`) already exists: a repo slug is effectively immutable,
-          // and a `gh` timeout says nothing about it either way.
-          this.retainRepo(project, repoCellFor({ reason: failure.reason }));
-          this.backoffPr(project, now, failure.reason, records);
-          continue;
-        }
-        this.prBackoff.delete(project);
-        if (this.prSweepFailure.delete(project)) console.warn(`ccrc-server: PR sweep of ${project} recovered`);
-        for (const line of lines) {
-          if (!isFullLine(line)) {
-            // Greyed alone, and NEVER passed to phaseFor: it has no `rows`, so
-            // `boundRow(undefined, …)` would throw inside this void-dispatched
-            // sweep and lose every project after this one.
-            //
-            // The id-LESS shape already backed the project off and `continue`d
-            // above, so anything reaching here carries an id — but the union
-            // still admits CcdPrFailure, so NARROW rather than assert: a cast
-            // here would be the same "trust the shape" move that made
-            // discriminating on `id` wrong in the first place.
-            if (!('id' in line)) continue;
-            this.prStates.set(line.id, { ...(this.prStates.get(line.id) ?? UNCHECKED_PR), phase: 'unknown', reason: line.reason, retryAt: null });
-            continue;
-          }
-          this.prStates.set(line.id, phaseFor(line));
-          this.prQueues.set(line.id, queueFor(line));
-          // RETAINED, not derived: `line.repo` is `_gh_repo_slug` of this
-          // project's main checkout, already measured by this same sweep and
-          // until now dropped here — `phaseFor` returns a `PrState`, which has
-          // no repo field. This is the seam; `prstate.ts`'s `prView` KEEPS the
-          // repo for the PR sheet and is NOT where retention belongs.
-          //
-          // D-2922: keyed on the LOOP's `project`, never `line.project`.
-          // `parsePrLines` casts a full line straight through
-          // (`v as unknown as CcdPrLine`, `prstate.ts`), so `line.project` is
-          // whatever ccd wrote and had exactly one reader in the tree — this
-          // statement. The loop's own `project` is what `ccd pr-state
-          // --project` was CALLED with, which is the same argument the failure
-          // arm above already uses for the same reason.
-          this.retainRepo(project, repoCellFor({ slug: line.repo }));
-        }
+        continue;
       }
-      this.sweepMerged(records);
-      this.sweepLanding(records);
-    } finally {
-      // Only the CURRENT sweep may clear the stamp. An abandoned sweep that
-      // finally returns half an hour later must not unlatch the one that
-      // replaced it — `lastPrSweep` gating makes two starts in the same
-      // millisecond impossible, so the timestamp is a sufficient identity.
-      if (this.prSweepStartedAt === mySweep) this.prSweepStartedAt = 0;
+      const res = await this.deps.runCcd(argv);
+      if (!res.ok) { this.backoffPr(project, now, sweepFailureReason(res), records, failureDetail(res)); continue; }
+      const lines = parsePrLines(res.stdout);
+      // A WHOLE-REPO failure — the id-less shape, emitted by `_gh_repo_slug`,
+      // `_gh_pr_list`, and `_pr_py` for an unparseable rc-0 body — really
+      // does mean every session of this repo is unreadable (each is one gh
+      // answer for the whole repo), so it backs the project off. Note the
+      // unparseable-body case emits one id-less object PER SESSION in a
+      // --project sweep; `find` taking the first is correct because they all
+      // describe the same repo-wide fact. A PER-SESSION failure
+      // carries an `id` and must not: one workspace whose registry lost its
+      // `branch` is one broken session, and §6's "Partial sweep" row promises
+      // its seven siblings keep their own answers.
+      const failure = lines.find((l) => !('id' in l)) as CcdPrFailure | undefined;
+      if (failure !== undefined) {
+        // D-2883: the plan's own snippet here read `failure.project`, which
+        // does not exist on `CcdPrFailure` (`{ phase: 'unknown'; reason }` —
+        // no `project` field; it speaks for the whole repo precisely because
+        // it carries none). The project this failure is ABOUT is the loop's
+        // own `project`, already in scope.
+        //
+        // Coordinator ruling, fix round 1 (Important 1): a failed read never
+        // overwrites a GOOD measurement — the same principle `backoffPr`'s
+        // own docstring states two methods below for `prStates`
+        // ("A failed read never overwrites a good phase — only greys it").
+        // `no-remote` is still a real measurement (`repoCellFor`'s one proof
+        // of `absent`) and is written regardless of what is already there —
+        // a project's remote can genuinely be removed between sweeps. Every
+        // OTHER reason resolves to `unmeasured`, which teaches nothing about
+        // the repo itself, so it is dropped whenever a real cell (`named` or
+        // `absent`) already exists: a repo slug is effectively immutable,
+        // and a `gh` timeout says nothing about it either way.
+        this.retainRepo(project, repoCellFor({ reason: failure.reason }));
+        this.backoffPr(project, now, failure.reason, records);
+        continue;
+      }
+      this.prBackoff.delete(project);
+      if (this.prSweepFailure.delete(project)) console.warn(`ccrc-server: PR sweep of ${project} recovered`);
+      for (const line of lines) {
+        if (!isFullLine(line)) {
+          // Greyed alone, and NEVER passed to phaseFor: it has no `rows`, so
+          // `boundRow(undefined, …)` would throw inside this void-dispatched
+          // sweep and lose every project after this one.
+          //
+          // The id-LESS shape already backed the project off and `continue`d
+          // above, so anything reaching here carries an id — but the union
+          // still admits CcdPrFailure, so NARROW rather than assert: a cast
+          // here would be the same "trust the shape" move that made
+          // discriminating on `id` wrong in the first place.
+          if (!('id' in line)) continue;
+          this.prStates.set(line.id, { ...(this.prStates.get(line.id) ?? UNCHECKED_PR), phase: 'unknown', reason: line.reason, retryAt: null });
+          continue;
+        }
+        this.prStates.set(line.id, phaseFor(line));
+        this.prQueues.set(line.id, queueFor(line));
+        // RETAINED, not derived: `line.repo` is `_gh_repo_slug` of this
+        // project's main checkout, already measured by this same sweep and
+        // until now dropped here — `phaseFor` returns a `PrState`, which has
+        // no repo field. This is the seam; `prstate.ts`'s `prView` KEEPS the
+        // repo for the PR sheet and is NOT where retention belongs.
+        //
+        // D-2922: keyed on the LOOP's `project`, never `line.project`.
+        // `parsePrLines` casts a full line straight through
+        // (`v as unknown as CcdPrLine`, `prstate.ts`), so `line.project` is
+        // whatever ccd wrote and had exactly one reader in the tree — this
+        // statement. The loop's own `project` is what `ccd pr-state
+        // --project` was CALLED with, which is the same argument the failure
+        // arm above already uses for the same reason.
+        this.retainRepo(project, repoCellFor({ slug: line.repo }));
+      }
     }
+    this.sweepMerged(records);
+    this.sweepLanding(records);
   }
 
   /**

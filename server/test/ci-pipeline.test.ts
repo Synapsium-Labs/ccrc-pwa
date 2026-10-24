@@ -114,9 +114,11 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     const all = jobs(read(CI));
     // `test (server)` is a NAMED summary job now; the matrix keeps the other two.
     expect(jobKey(job('server'), 'name')).toBe('test (server)');
-    expect(job('test'), 'the matrix must stay exactly [agent, pwa] — a new axis renames both checks')
-      .toMatch(/^ {8}package: \[agent, pwa\]$/m);
-    expect(jobKey(job('test'), 'name'), 'a name: on the matrix renames `test (agent)` and `test (pwa)`').toBeNull();
+    expect(job('test'), 'the matrix must stay exactly [agent] — a new axis renames the check')
+      .toMatch(/^ {8}package: \[agent\]$/m);
+    expect(jobKey(job('test'), 'name'), 'a name: on the matrix renames `test (agent)`').toBeNull();
+    // `test (pwa)` is the aggregate over the pwa shards (D-6768), named, not a matrix leg.
+    expect(jobKey(job('pwa'), 'name')).toBe('test (pwa)');
     expect(all.has('build-pwa')).toBe(true);
     expect(jobKey(job('build-pwa'), 'name'), 'a name: on build-pwa renames the required check').toBeNull();
     // No second producer of a required name — two jobs reporting
@@ -137,11 +139,19 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
       expect(jobKey(job(id), 'if'), `${id} has a job-level if:`).toBeNull();
       expect(needs(job(id)), `${id} needs another job — its failure would skip a required check`).toEqual([]);
     }
+    // The pwa shards and static checks report under the aggregate `test (pwa)`,
+    // and they need the run's one install (D-6770) — but only behind
+    // `!cancelled()`, so a failed `deps` costs them their own install and never
+    // skips them (a skip would read as red in the aggregate).
+    for (const id of ['pwa-shard', 'pwa-static']) {
+      expect(jobKey(job(id), 'if'), `${id}: a failed deps would skip it`).toBe('${{ !cancelled() }}');
+      expect(needs(job(id)), `${id} needs something beyond the run's one install`).toEqual(['deps']);
+    }
   });
 
   it('the required legs and the browser leg skip by STEP, only on a refresh or a rebuild', () => {
-    const leg = "${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
-    for (const id of ['test', 'build-pwa', 'browser-pwa']) {
+    const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
+    for (const id of ['test', 'pwa-shard', 'pwa-static', 'build-pwa', 'browser-pwa']) {
       expect(job(id), `${id}: the job-level leg switch`).toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
       const s = steps(job(id));
       expect(s.length, `${id} parsed no steps`).toBeGreaterThan(0);
@@ -163,7 +173,7 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
 
   // storybook-a11y is advisory, so it skips WHOLE (a job-level `if:`) where
   // the required legs skip step by step — but on the very predicate their
-  // `CCRC_LEG` switch reads, so a push to main runs no test leg of any kind.
+  // `CCRC_LEG` switch reads, so an hourly refresh runs no test leg of any kind.
   // Derived from the `test` leg's own switch: change one predicate without the
   // other and this goes red.
   it('storybook-a11y skips on the required legs\' own refresh/rebuild predicate, and never on a merge-queue run', () => {
@@ -413,11 +423,12 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   // presence. Installing ui after the suite has already run is what PR #346
   // actually did, and it fails exactly as if the step were absent.
   it('installs ui BEFORE the pwa suite runs, not after it', () => {
-    const b = jobs(read(CI)).get('test') ?? '';
-    const ui = b.indexOf('working-directory: ui');
+    const b = jobs(read(CI)).get('pwa-shard') ?? '';
+    // ui's tree comes with the run's one install (server-deps, D-6770).
+    const ui = b.indexOf('- uses: ./.github/actions/server-deps');
     const test = b.indexOf('./node_modules/.bin/vitest run');
-    expect(ui, 'the test job installs ui').toBeGreaterThan(-1);
-    expect(test, 'the test job runs vitest').toBeGreaterThan(-1);
+    expect(ui, 'the pwa-shard job installs ui').toBeGreaterThan(-1);
+    expect(test, 'the pwa-shard job runs vitest').toBeGreaterThan(-1);
     expect(ui, 'ui is installed after the suite — every pwa file fails at import')
       .toBeLessThan(test);
   });
@@ -474,12 +485,12 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
 });
 
 describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23 §3, §4.3)', () => {
-  it('triggers: pull_request, main pushes, a daily schedule, dispatch and call — both with a mode', () => {
+  it('triggers: pull_request, a daily and an hourly schedule, dispatch and call — both with a mode, and no push (D-6769)', () => {
     const on = section(read(CI), 'on');
-    expect(on).toMatch(/^ {2}push:\n {4}branches: \[main\]$/m);
+    expect(on, 'a push to main starts no run: the refresh is hourly').not.toMatch(/^ {2}push:/m);
     expect(on).toMatch(/^ {2}pull_request:$/m);
-    expect(on).toMatch(/^ {2}schedule:\n {4}- cron: '17 3 \* \* \*'$/m);
-    expect(on).toMatch(/^ {2}workflow_dispatch:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: choice\n {8}options: \[full, rebuild\]\n {8}default: full$/m);
+    expect(on).toMatch(/^ {2}schedule:\n {4}- cron: '17 3 \* \* \*'\n {4}- cron: '23 \* \* \* \*'$/m);
+    expect(on).toMatch(/^ {2}workflow_dispatch:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: choice\n {8}options: \[full, rebuild, refresh\]\n {8}default: full$/m);
     expect(on).toMatch(/^ {2}workflow_call:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: string$/m);
     expect(on, 'the stable gate reads this output').toMatch(/^ {8}value: \$\{\{ jobs\.full-suite\.outputs\.verdict \}\}$/m);
   });
@@ -528,7 +539,7 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
   });
 
   it('probe-macos runs on pull requests and the daily schedule only — never gating a called or dispatched full run', () => {
-    expect(jobKey(job('probe-macos'), 'if')).toBe("github.event_name == 'pull_request' || github.event_name == 'schedule'");
+    expect(jobKey(job('probe-macos'), 'if')).toBe("github.event_name == 'pull_request' || (github.event_name == 'schedule' && github.event.schedule != '23 * * * *')");
   });
 
   it('every job declares a deadline between 1 and 60 minutes', () => {
@@ -868,20 +879,32 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     expect(build(0, { trace: 'refresh', mapSha: 'a'.repeat(40), handedMap: true }).log).toMatch(/^\.github\/ci\/testmap\.mjs refresh --sha f{40} --old \S+\/select-inputs\/testmap\.json /m);
   });
 
-  it('the map is uploaded whatever the build said, and a last step turns the job red when it said 3 or 4', () => {
+  it('the map is uploaded whatever the build said, and a last step REPORTS a 3 or a 4 without failing the job (D-6769)', () => {
     const b = job('map-build');
     const names = steps(b).map((st) => /^ {6}- (?:name: (.*)|uses: .*)$/m.exec(st)?.[1] ?? '');
     const upload = names.indexOf('Keep the map as an artifact');
-    const red = names.indexOf('Red if the map build reported news');
+    const report = names.indexOf('Report what the map build found');
     expect(upload).toBeGreaterThan(-1);
-    expect(red).toBe(names.length - 1);
-    expect(red).toBeGreaterThan(upload);
+    expect(report).toBe(names.length - 1);
+    expect(report).toBeGreaterThan(upload);
     expect(step(b, 'Build the map')).toMatch(/^ {8}id: build$/m);
-    const last = step(b, 'Red if the map build reported news');
+    const last = step(b, 'Report what the map build found');
     expect(last).toMatch(/^ {8}if: steps\.build\.outputs\.rc != '0'$/m);
-    expect(runScript(last)).toMatch(/\nexit 1\n$/);
+    const script = runScript(last);
+    expect(script, 'the news is an annotation').toContain('::warning::');
+    expect(script, 'and a job summary').toContain('>> "$GITHUB_STEP_SUMMARY"');
+    expect(script, 'and it never fails the job').not.toMatch(/^\s*exit\b|::error::/m);
     // The upload is gated by the pre-upload check only — never by the build's code.
     expect(step(b, 'Keep the map as an artifact')).not.toContain('steps.build');
+  });
+
+  it('the refresh is hourly and coalesced: its own group, never cancelled, and every refresh predicate names the hourly cron (D-6769)', () => {
+    const src = read(CI);
+    const g = /^ {2}group: (.*)$/m.exec(section(src, 'concurrency'))?.[1] ?? '';
+    expect(g).toContain("(github.event.schedule == '23 * * * *' || inputs.mode == 'refresh') && 'refresh'");
+    expect(section(src, 'concurrency')).toMatch(/cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
+    expect(step(job('select'), 'Select')).toContain("INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 * * * *' && 'refresh') || '' }}");
+    expect(src).not.toMatch(/github\.event_name == 'push'/);
   });
 });
 
@@ -976,7 +999,7 @@ describe('ci.yml: the daily run\'s "already green?" question fails SAFE (design 
 
   it('asks main-artifact.mjs green-full-suite, on the schedule only, with the token the module reads', () => {
     const st = step(job('select'), 'Does this commit already carry a green full-suite?');
-    expect(st).toMatch(/^ {8}if: github\.event_name == 'schedule'$/m);
+    expect(st).toMatch(/^ {8}if: github\.event_name == 'schedule' && github\.event\.schedule != '23 \* \* \* \*'$/m);
     expect(st).toMatch(/^ {8}env:\n {10}GITHUB_TOKEN: \$\{\{ github\.token \}\}\n {10}REPO: \$\{\{ github\.repository \}\}\n {10}REPO_ID: \$\{\{ github\.repository_id \}\}\n {10}SHA: \$\{\{ github\.sha \}\}\n {8}run: \|$/m);
     expect(ask('echo found=true').log).toBe(`.github/ci/main-artifact.mjs green-full-suite --repo o/r --repo-id 1001 --sha ${'f'.repeat(40)}\n`);
   });
@@ -994,10 +1017,34 @@ describe('ci.yml: the daily run\'s "already green?" question fails SAFE (design 
   });
 });
 
+describe('ci.yml: test (pwa) is a summary over the pwa shards (D-6768)', () => {
+  it('the aggregate is always(), needs the shards and the static checks, and refuses any result but success', () => {
+    const b = job('pwa');
+    expect(jobKey(b, 'name')).toBe('test (pwa)');
+    expect(jobKey(b, 'if')).toBe('always()');
+    expect(needs(b)).toEqual(['pwa-shard', 'pwa-static']);
+    // Script-free refusal: success is the only result that passes, so failure, cancelled and skipped all fail it.
+    expect(b).toContain("if: needs.pwa-shard.result != 'success' || needs.pwa-static.result != 'success'");
+    expect(b).not.toContain('merge_group');
+  });
+
+  it('runs the pwa suite as N shards that together cover vitest --shard=1/N..N/N, and typechecks pwa exactly once', () => {
+    const shard = job('pwa-shard');
+    const total = /^ {8}total: \[(\d+)\]$/m.exec(shard)?.[1];
+    const list = /^ {8}shard: \[([\d, ]+)\]$/m.exec(shard)?.[1];
+    expect(total, 'the shard matrix names no total').toBeDefined();
+    expect(list!.split(',').map((x) => Number(x.trim())), 'the shards are not exactly 1..total')
+      .toEqual(Array.from({ length: Number(total) }, (_, i) => i + 1));
+    expect(shard).toMatch(/^ {8}run: \.\/node_modules\/\.bin\/vitest run --shard=\$\{\{ matrix\.shard \}\}\/\$\{\{ matrix\.total \}\}$/m);
+    const tsc = [...jobs(read(CI))].filter(([, bl]) => /working-directory: pwa\n\s+run: \.\/node_modules\/\.bin\/tsc --noEmit/.test(bl)).map(([id]) => id);
+    expect(tsc, 'the pwa typecheck must run in exactly one job').toEqual(['pwa-static']);
+  });
+});
+
 describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23 §7, §8)', () => {
   it('full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS, the Node floor, the browser — and asks verdict.mjs full', () => {
     const b = job('full-suite');
-    expect(needs(b)).toEqual(['browser-pwa', 'build-pwa', 'node-floor', 'select', 'server', 'server-shard', 'server-typecheck', 'test', 'test-macos']);
+    expect(needs(b)).toEqual(['browser-pwa', 'build-pwa', 'node-floor', 'pwa', 'select', 'server', 'server-shard', 'server-typecheck', 'test', 'test-macos']);
     // Never on a merge-queue run (landing-order stage 2): a queue run skips
     // test-macos, and a queue run that fell back to `full` would read that skip
     // as a red leg here (ci-merge-queue.test.ts derives the rule).
@@ -1047,11 +1094,91 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
         .toMatch(new RegExp(`^ {6}- uses: \\./\\.github/actions/server-deps\\n {8}with:\\n {10}platform: ${platform}$`, 'm'));
     }
     const a = read(DEPS);
-    expect(a).toMatch(/^ {4}- name: Install system dependencies \(linux\)\n {6}if: inputs\.platform == 'linux'\n {6}shell: bash\n {6}run: sudo apt-get update && sudo apt-get install -y tmux jq strace python3$/m);
+    // The miss arm of the apt install (D-6770): the hit arm dpkg-installs the cached packages first.
+    expect(a).toMatch(/^ {4}- name: Install system dependencies \(linux\)\n(?: {6}.*\n)*? {8}sudo apt-get update && sudo apt-get install -y tmux jq strace python3$/m);
     expect(a).toMatch(/^ {4}- name: Install system dependencies \(macos\)\n {6}if: inputs\.platform == 'macos'\n {6}shell: bash\n {6}run: brew install bash tmux flock jq coreutils$/m);
     for (const pkg of ['server', 'agent', 'pwa']) {
       expect(a, `server-deps no longer installs ${pkg}/`).toMatch(new RegExp(`^ {6}working-directory: ${pkg}\\n {6}run: npm ci$`, 'm'));
     }
+    // ui too: pwa reads it as source (the census above), and the cache entry holds all four trees.
+    expect(a).toMatch(/^ {6}working-directory: ui\n {6}run: npm ci$/m);
+  });
+});
+
+// ── D-6770: dependencies are installed once per run ─────────────────────────
+describe('ci.yml: dependencies are installed once per run, and handed to the jobs (D-6770)', () => {
+  const NPM_CI_STEPS = ['Install server', 'Install agent dependencies', 'Install pwa dependencies', 'Install ui dependencies'];
+
+  it('the npm ci steps of server-deps run only on a cache miss, and macOS (no restore step) still installs', () => {
+    const a = read(DEPS);
+    const all = a.split(/^(?= {4}- )/m).filter((p) => /^ {4}- /.test(p));
+    for (const name of NPM_CI_STEPS) {
+      const st = all.find((p) => p.startsWith(`    - name: ${name}`));
+      expect(st, `no step "${name}"`).toBeDefined();
+      expect(st, `${name} runs on a hit`).toMatch(/^ {6}if: steps\.trees\.outputs\.cache-hit != 'true'$/m);
+    }
+    // The restore is Linux-only; on macOS the output is empty, so `!= 'true'` holds and the install runs.
+    expect(a).toMatch(/^ {4}- name: Restore the installed trees \(linux\)\n {6}id: trees\n {6}if: inputs\.platform == 'linux'\n {6}uses: actions\/cache\/restore@v4$/m);
+  });
+
+  it('the cache key is the lockfile hashes, the runner image (OS name for the trees, exact version for the packages) and the node version — no branch, ref, run or actor', () => {
+    const a = read(DEPS);
+    const keyStep = /- name: Name the cache entries \(linux\)\n(?: {6}.*\n| *\n)*/.exec(a)?.[0] ?? '';
+    expect(keyStep, 'the key step is gone').not.toBe('');
+    for (const lock of ['server', 'agent', 'pwa', 'ui']) expect(keyStep).toContain(`${lock}/package-lock.json`);
+    expect(keyStep).toContain('ImageOS');
+    expect(keyStep, 'the packages are keyed on the exact image').toContain('ImageVersion');
+    expect(keyStep).toContain('node --version');
+    expect(keyStep, 'a key that varies with the branch defeats the once-per-run install')
+      .not.toMatch(/GITHUB_(?:REF|HEAD_REF|BASE_REF|RUN_ID|RUN_NUMBER|RUN_ATTEMPT|SHA|ACTOR)|github\./);
+    for (const entry of ['trees', 'apt']) expect(keyStep).toMatch(new RegExp(`echo "${entry}=`));
+  });
+
+  it('only the deps job saves the cache; every other caller restores it read-only', () => {
+    const a = read(DEPS);
+    expect(a).toMatch(/^ {2}save:\n(?: {4}.*\n)*? {4}default: 'false'$/m);
+    const saves = a.split(/^(?= {4}- )/m).filter((p) => /uses: actions\/cache\/save@/.test(p));
+    expect(saves, 'one save per cache entry: the trees and the packages').toHaveLength(2);
+    for (const st of saves) expect(st, 'a save that runs without save: true').toMatch(/if: .*inputs\.save == 'true'/);
+    expect(a, 'actions/cache itself would save on every caller').not.toMatch(/uses: actions\/cache@/);
+    const callers = [...jobs(read(CI))].filter(([, b]) => /^ {6}- uses: \.\/\.github\/actions\/server-deps$/m.test(b));
+    expect(callers.map(([id]) => id).sort()).toEqual(['deps', 'node-floor', 'pwa-shard', 'pwa-static', 'server-shard', 'test-macos', 'trace-shard']);
+    for (const [id, b] of callers) {
+      const saves = /save: 'true'/.test(b);
+      expect(saves, `${id}: only deps may save`).toBe(id === 'deps');
+    }
+  });
+
+  it('the deps job installs both node versions the consumers run, and the floor one is engines.node', () => {
+    const b = job('deps');
+    expect(jobKey(b, 'timeout-minutes')).toBe('30');
+    const m = /^ {8}node: \[([^\]]+)\]$/m.exec(b);
+    expect(m, 'the node axis').not.toBeNull();
+    const versions = m![1].split(',').map((v) => v.trim().replace(/['"]/g, ''));
+    const range = (JSON.parse(read('server/package.json')) as { engines: { node: string } }).engines.node;
+    expect(versions).toEqual(['22', range.replace(/^>=/, '')]);
+    expect(b).toMatch(/^ {10}node-version: \$\{\{ matrix\.node \}\}$/m);
+  });
+
+  it('server shards, trace shards and the Node floor need deps but still run when it fails (a fallback install)', () => {
+    for (const id of ['server-shard', 'trace-shard']) {
+      expect(needs(job(id)), id).toEqual(['deps', 'select']);
+      expect(jobKey(job(id), 'if'), id).toMatch(/^\$\{\{ !cancelled\(\) && /);
+    }
+    expect(needs(job('node-floor'))).toEqual(['deps', 'select']); // select lends only its floor output (D-6771)
+    expect(jobKey(job('node-floor'), 'if')).toBe('${{ !cancelled() }}');
+    // The required legs stay needs-free (pinned above): they install themselves.
+    for (const id of ['test', 'build-pwa', 'browser-pwa']) expect(needs(job(id)), id).toEqual([]);
+  });
+
+  it('pwa is typechecked once per run: test (pwa) runs tsc, build-pwa runs vite build alone', () => {
+    const build = job('build-pwa').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(build, 'build-pwa runs tsc a second time through `npm run build`').not.toMatch(/npm run build/);
+    expect(build).toMatch(/^ {8}run: npm ci && \.\/node_modules\/\.bin\/vite build$/m);
+    expect(build).not.toMatch(/\btsc\b[^\n]*--noEmit/);
+    expect(step(job('test'), 'Typecheck')).toMatch(/^ {8}run: \.\/node_modules\/\.bin\/tsc --noEmit$/m);
+    // package.json's build is still `tsc && vite build` for a developer's `npm run build`; the CI step is its second half.
+    expect(JSON.parse(read('pwa/package.json')).scripts.build).toBe('tsc --noEmit && vite build');
   });
 });
 
@@ -1086,17 +1213,21 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
     expect(b).not.toMatch(/node-version-file/);
   });
 
-  it('is named for the version it runs, needs nothing, and carries no job-level if:', () => {
+  it('is named for the version it runs, needs only select and the dependency install, and never skips itself', () => {
     const b = job('node-floor');
     expect(jobKey(b, 'name'), 'the check name must not claim a version the leg does not run').toBe(`node floor (${floor()})`);
     // A job-level `if:` that skips it reads as red in full-suite and as nothing
-    // on a pull request; a failed `needs:` skips it the same way.
-    expect(jobKey(b, 'if')).toBeNull();
-    expect(needs(b)).toEqual([]);
+    // on a pull request; a failed `needs:` skips it the same way. So its
+    // needs are ones it survives losing: `deps` (D-6770: the installed trees)
+    // is an optimisation — `!cancelled()` runs it after a failed or skipped
+    // `deps`, and server-deps then installs for itself — and `select` only
+    // lends its `floor` output (D-6771).
+    expect(jobKey(b, 'if')).toBe('${{ !cancelled() }}');
+    expect(needs(b)).toEqual(['deps', 'select']);
   });
 
-  it('skips by STEP, only on a refresh or a rebuild, like the required legs', () => {
-    const leg = "${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
+  it('skips by STEP, on a refresh, a rebuild or a pull request that left its inputs alone (D-6771)', () => {
+    const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && needs.select.outputs.floor != 'true')) && 'skip' || 'run' }}";
     const b = job('node-floor');
     expect(b, 'the job-level leg switch').toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
     const s = steps(b);
@@ -1126,6 +1257,38 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
     // Exact after the list: nothing appended, nothing commented out.
     expect(lines.slice(end + 1)).toEqual([
       'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts', '']);
+  });
+});
+
+describe('the node-floor leg is skipped on a pull request only when nothing it loads moved (D-6771)', () => {
+  const pathspecs = (): string[] => {
+    const script = runScript(step(job('select'), 'Does this pull request touch the node floor\'s inputs?'));
+    const body = script.slice(script.indexOf('git diff --name-only'), script.indexOf('); then'));
+    return [...body.matchAll(/'([^']+)'|(\S+\.(?:ts|mjs))/g)].map((m) => m[1] ?? m[2]!).filter((x) => !x.startsWith('--'));
+  };
+  const covers = (spec: string, file: string): boolean => {
+    const g = spec.replace(/^:\(glob\)/, '');
+    if (g === file) return true;
+    const re = new RegExp('^' + g.split(/(\*\*\/|\*\*|\*)/).map((t) => (t === '**/' ? '(?:.*/)?' : t === '**' ? '.*' : t === '*' ? '[^/]*' : t.replace(/[.+^${}()|[\]\\]/g, '\\$&'))).join('') + '$');
+    return re.test(file);
+  };
+
+  it('the static pathspec covers every file vitest.config.ts loads for every run, and the manifests', () => {
+    const cfg = read('server/vitest.config.ts');
+    const loaded = [...new Set([...cfg.matchAll(/(?:globalSetup|setupFiles):\s*\[([^\]]*)\]/g)]
+      .flatMap((m) => [...m[1]!.matchAll(/'([^']+)'/g)].map((x) => `server/${x[1]}`)))];
+    expect(loaded.length, 'vitest.config.ts names no setup file — the derivation saw nothing').toBeGreaterThan(1);
+    const specs = pathspecs();
+    for (const f of [...loaded, 'server/package.json', 'agent/package-lock.json', 'ccd/history/x.mjs', '.github/workflows/ci.yml', 'server/vitest.config.ts', 'server/vitest.select.config.ts', 'server/.nvmrc']) {
+      expect(specs.some((sp) => covers(sp, f)), `${f} moves the floor's result but no pathspec covers it`).toBe(true);
+    }
+  });
+
+  it('the Select step hands select.mjs the floor job\'s own test list and the static answer', () => {
+    const script = runScript(step(job('select'), 'Select'));
+    expect(script).toContain('/^  node-floor:$/,/^  [a-z-]*:$/p');
+    expect(script).toContain('--floor-list "$RUNNER_TEMP/floor-list.txt" --floor-static "${FLOOR:-true}"');
+    expect(script, 'floor is select.mjs\'s output now, not re-emitted here').not.toContain('echo "floor=');
   });
 });
 

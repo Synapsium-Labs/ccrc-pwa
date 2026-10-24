@@ -1,5 +1,5 @@
 import type { Tmux } from '../exec.js';
-import { autoContinueArmed, editHintShown, freeTextRow, hasMenu, parseDialog, turnRunning } from '../pane/dialog.js';
+import { autoContinueArmed, editHintShown, freeTextRow, hasMenu, parseDialog, startsWithPromptGlyph, turnRunning } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
 import {
   composePrompt, isDialogMultiIndexes, isDialogTab, isDialogText, MAIL_ENVELOPE_FENCE,
@@ -271,7 +271,7 @@ export type BoxRead =
  * `box-unreadable`.
  */
 export const draftOfMeasured = (ansiPane: string): BoxRead => {
-  const boxLine = ansiPane.split('\n').filter((l) => l.replace(SGR, '').startsWith('❯')).at(-1);
+  const boxLine = ansiPane.split('\n').filter((l) => startsWithPromptGlyph(l.replace(SGR, ''))).at(-1);
   if (boxLine === undefined) return { box: 'absent' };
   return { box: 'present', draft: undim(boxLine).replace(SGR, '').slice(1).trim() };
 };
@@ -857,7 +857,7 @@ const squash = (s: string): string => s.replace(/\s+/g, '');
 function boxRows(ansiPane: string): string[] | null {
   const lines = ansiPane.split('\n');
   let marker = -1;
-  for (let i = 0; i < lines.length; i++) if (lines[i]!.replace(SGR, '').startsWith('❯')) marker = i;
+  for (let i = 0; i < lines.length; i++) if (startsWithPromptGlyph(lines[i]!.replace(SGR, ''))) marker = i;
   if (marker === -1) return null;
   const rows = [undim(lines[marker]!).replace(SGR, '').slice(1).trim()];
   for (let i = marker + 1; i < lines.length; i++) {
@@ -1019,7 +1019,7 @@ const RULE_ROW = /^─+$/;
 function stashHeld(ansiPane: string): boolean {
   const lines = ansiPane.split('\n').map((l) => l.replace(SGR, ''));
   let marker = -1;
-  for (let i = 0; i < lines.length; i++) if (lines[i]!.startsWith('❯')) marker = i;
+  for (let i = 0; i < lines.length; i++) if (startsWithPromptGlyph(lines[i]!)) marker = i;
   if (marker < 2 || !RULE_ROW.test(lines[marker - 1]!.trim())) return false;
   return STASH_HELD_RE.test(lines[marker - 2]!);
 }
@@ -1855,7 +1855,7 @@ function continuationRows(ansiPane: string): string[] {
   const lines = ansiPane.split('\n');
   let markerIdx = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i]!.replace(SGR, '').startsWith('❯')) markerIdx = i;   // last ❯ line, same as draftOf
+    if (startsWithPromptGlyph(lines[i]!.replace(SGR, ''))) markerIdx = i;   // last ❯ line, same as draftOf
   }
   if (markerIdx === -1) return [];
   const rows: string[] = [];

@@ -72,7 +72,7 @@ const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
  *  `../shared/base-url.mjs` too — `account-op.mjs`'s own header states the
  *  same fact), and node resolves both through the link's realpath — the
  *  fixture never needs a copy of either directory, which is also why a new
- *  sibling import costs this fixture nothing. (`ccrc-doctor.test.ts` COPIES
+ *  sibling import costs this fixture nothing. (`ccrc-doctorFixture.ts` COPIES
  *  instead, and there the closure has to be listed file by file — Task 33.)
  *
  *  IT ALSO MATERIALISES THE CONTAINMENT BINS, and that last line is not
@@ -210,7 +210,7 @@ interface Result { code: number; stdout: string; stderr: string }
  *  purpose: `env()` DELETES every `CCRC_*` this CLI reads so the answer never
  *  depends on the developer's exported shell, so a knob a test wants to set is
  *  a knob that has just been deleted. `runDoctor`'s shape
- *  (`ccrc-doctor.test.ts`'s `runDoctor`). */
+ *  (`ccrc-doctorFixture.ts`'s `runDoctor`). */
 function run(home: string, args: string[], stdin = '',
   extraEnv: NodeJS.ProcessEnv = {}): Result {
   const merged = { ...buildEnv(home), ...extraEnv };
@@ -1017,7 +1017,7 @@ function sourceCall(home: string, script: string, stdin = ''): Result {
  *  reason `ccrc-passwd.test.ts:100` states — without a terminal the refusing
  *  branch is the ONLY one a test can reach — and each pins the deletion of its
  *  guard as a mutation (`ccrc-passwd.test.ts:484`, `ccrc-expose.test.ts:262`,
- *  `ccrc-install.test.ts:3222`). This gate INVERTS: it refuses the terminal. It
+ *  `ccrc-install-*.test.ts`). This gate INVERTS: it refuses the terminal. It
  *  is pinned the same way anyway, because the inversion does not change the
  *  fact that a pipe-only test can never reach the branch, and a guard no test
  *  can reach is a guard nothing measures. Task 22's plan carried no test for
@@ -1042,7 +1042,7 @@ function sourceCallTty(home: string, script: string): Promise<Result> {
       clearTimeout(timer);
       resolve({ code, stdout: out, stderr: '' });   // a pty merges the two streams
     };
-    // 19s, NOT 20s — `ccrc-install.test.ts:3247`'s number and its reason.
+    // 19s, NOT 20s — `ccrc-install-*.test.ts`'s number and its reason.
     // `server/vitest.config.ts:87` sets `testTimeout: 20_000` on linux, so a
     // 20s timer here TIES with the runner and loses: measured at review round
     // 1, vitest won at 20012ms, `p.kill()` never ran and the pty `bash` was
@@ -2316,7 +2316,7 @@ describe('ccrc account add: the ordered write', () => {
     // The half `oneObject` alone cannot prove: that the two convergers' lines
     // were REDIRECTED and not discarded. `_inst_accounts_sh` (ccd/ccrc:5575)
     // and `cmd_wrappers` (:2904) both write these on stdout for `ccrc install`.
-    // Only the second is pinned there (ccrc-install.test.ts:2687-2688, the
+    // Only the second is pinned there (ccrc-install-*.test.ts, the
     // `summary:` regex; :2820 is `_inst_wrappers`' own line, ccd/ccrc:7148, and
     // nothing in server/test/ mentions `install: accounts.sh` at all) — so this
     // assertion is also the first one in the tree to measure the accounts.sh
@@ -5107,7 +5107,7 @@ function plantRow(home: string, sid: string, o: { wrapper: string; home?: string
  *  `env()` plants, which is why that one is conditional. Any argv other than
  *  `list-sessions` is a loud failure: a verb that started DRIVING tmux rather
  *  than asking it could not pass unnoticed (stubTmux's rule,
- *  `ccrc-doctor.test.ts`'s `stubTmux`). */
+ *  `ccrc-doctorFixture.ts`'s `stubTmux`). */
 function plantTmux(home: string, sessions: string[]): void {
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   writeFileSync(join(home, '.local', 'bin', 'tmux'), [
@@ -8666,7 +8666,7 @@ describe('ccrc account check: auth status', () => {
 
   it('reports a timed-out auth status as timeout, not as unknown', () => {
     // No `linkReal` is needed and none exists in this file: unlike
-    // `ccrc-doctor.test.ts`, this suite's `env()` KEEPS the real PATH
+    // `ccrc-doctorFixture.ts`, this suite's `env()` KEEPS the real PATH
     // (`ghContainedEnv` PREPENDS the fixture bin rather than replacing PATH,
     // its returned `PATH: ${bin}:…`), so `_plat_timeout` finds the box's own `timeout`
     // and the stub finds `sleep`. `ccrc-cli.test.ts:80-86` says the same thing
@@ -10855,7 +10855,7 @@ describe('ccrc account check: the probe', () => {
     // call site is exactly what rotted, and a count cannot.
     //
     // THE EXISTING NO-COREUTILS CASE CANNOT MAKE THIS ASSERTION, and being
-    // reassured by it is the mistake to avoid: `ccrc-doctor.test.ts` replaces
+    // reassured by it is the mistake to avoid: `ccrc-doctorFixture.ts` replaces
     // PATH with a stub bin that has no `sleep` at all, so the `|| exit 0` guard
     // fires, the watcher exits immediately and no orphan is ever created. It
     // passes in seconds and proves nothing about this arm. The sleep-PRESENT
