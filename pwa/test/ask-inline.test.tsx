@@ -19,7 +19,7 @@
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { ChatEvent, FleetSession } from '../../shared/api';
+import type { ChatEvent, Dialog, FleetSession } from '../../shared/api';
 import { api, sendErrorText } from '../src/lib/api';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { SessionScreen } from '../src/screens/SessionScreen';
@@ -269,6 +269,59 @@ describe('an inline ask takes no focus', () => {
     card();
     expect(document.activeElement, 'a control elsewhere keeps focus').toBe(elsewhere);
     elsewhere.remove();
+  });
+});
+
+/** Question 2 of fixture 1 as the pane paints it after question 1 is answered: another id, other rows (the `repainted`
+ *  screen of `ask-structured.test.tsx`'s gap cases), `☒ Cache` in the tab row. */
+const nextScreen = (): Dialog => ({
+  ...askFixture(1).dialog!, id: 'dlg-a2', selectedIndex: 1,
+  options: [{ index: 1, label: 'Yes' }, { index: 2, label: 'No' }, { index: 3, label: 'Type something.' }, { index: 4, label: 'Chat about this' }],
+  raw: ['╭ pane chrome ╮', '←  ☒ Cache  ☐ Tracing  ☐ Regions  ✔ Submit  →', '  1. Yes', '  2. No', '  3. Type something.',
+    '  4. Chat about this'].join('\n'),
+});
+const QUESTION_2 = 'Should tracing be on from the first deploy?';
+
+describe('the keys survive a screen change inside the card (D-6326)', () => {
+  it('after a key answers a question in the card, the next question takes the keys without a click', async () => {
+    media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
+    const { arrive } = mount();
+    await frame(); // the composer's own session-open focus (a 0 ms timer) has run, as in a real session
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    await act(async () => { key(first, '1'); });
+    await frame();
+    expect(answer).toHaveBeenCalledWith(ID, askFixture(1).dialog!.id, 1);
+    expect(within(card()).getByText(QUESTION_2), 'question 2 is in the card').toBeInTheDocument();
+    // The row that held focus left the DOM with question 1: focus must be in the card again, with no click.
+    const active = document.activeElement as HTMLElement;
+    expect(card().contains(active), 'focus is inside the card').toBe(true);
+    expect(active).toBe(opt(card(), /^Yes/));
+    answer.mockReturnValue(new Promise(() => {}));
+    key(document.activeElement!, '2');
+    expect(answer).toHaveBeenCalledTimes(2);
+    expect(answer).toHaveBeenLastCalledWith(ID, 'dlg-a2', 2);
+  });
+
+  it('a screen change takes no focus back from the composer the operator moved to after the key answer', async () => {
+    media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, '1');
+    expect(answer).toHaveBeenCalledTimes(1);
+    // The operator clicks into the composer before the next screen lands.
+    const box = composer();
+    act(() => box.focus());
+    act(() => store.getState().apply({ type: 'dialog', dialog: nextScreen() }));
+    await frame();
+    expect(within(card()).getByText(QUESTION_2)).toBeInTheDocument();
+    expect(document.activeElement, 'the composer keeps focus').toBe(box);
   });
 });
 

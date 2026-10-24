@@ -13,9 +13,13 @@
 //   nothing and is no modal, so a digit, an arrow or Enter with nothing focused, or focused on the transcript, is the
 //   page's own and never answers; a key acts only when its target is inside the card.
 // - FOCUS moves into the sheet on open and on each new screen only under a fine pointer, or once a key has been
-//   handled inside the sheet: a phone is never pulled out of its composer by a sheet that slid up. INLINE it does not
-//   move at all on open: an ask arriving beside the composer takes nothing from it, and focus enters the card only
-//   through `raise` (`AskSurface`), a Tab or a click (`engaged` still turns on with the first key handled inside it).
+//   handled inside the sheet: a phone is never pulled out of its composer by a sheet that slid up. INLINE the rule is
+//   narrower, exactly: focus moves ONLY when `engaged` is true (a key has been handled inside the card) AND focus is
+//   lost (`body`, `documentElement` or nothing) or already inside the card, and then it goes to the new screen's
+//   highlighted row. That is the next question after a key answered one: the focused row unmounted with its screen,
+//   and without this the keyboard would be dead until a click. With `engaged` false (an ask arriving beside the
+//   composer) it moves not at all, and focus enters the card only through `raise` (`AskSurface`), a Tab or a click;
+//   with focus anywhere outside the card (the composer, the transcript, another field) it is never taken.
 // - A held-down digit or arrow across tabs is no key at all (`askKeyAction` reads `repeat`), and a send the sheet
 //   already has in flight refuses another at the ONE gate every send passes, its `claim` (a box's toggle reads the
 //   same `sending`), so this hook keeps no second gate of its own.
@@ -97,8 +101,16 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
     if (!finePointer() && !engaged.current) return undefined;
     const key = hl;
     const t = setTimeout(() => {
-      // Read here, where the ref is attached (the card mounts with its screen): inline takes no focus on open (D-6326).
-      if (surfaceOf(root.current)?.getAttribute('data-ask-surface') === 'inline') return;
+      // Read here, where the ref is attached (the card mounts with its screen). INLINE (D-6326) focus is moved only on
+      // a screen change inside a card the keyboard is already in: a key answered question 1, its focused row left the
+      // DOM with it, and focus fell to the page body, where no key acts. Then (and only then) the new screen's
+      // highlighted row takes it back, never from anything outside the card: the composer, the transcript, a field.
+      const scope = surfaceOf(root.current);
+      if (scope?.getAttribute('data-ask-surface') === 'inline') {
+        const at = document.activeElement;
+        const lost = at === null || at === document.body || at === document.documentElement;
+        if (!engaged.current || !(lost || scope.contains(at))) return;
+      }
       els.current.get(key)?.focus({ preventScroll: true });
     }, FOCUS_DELAY_MS);
     return () => clearTimeout(t);
