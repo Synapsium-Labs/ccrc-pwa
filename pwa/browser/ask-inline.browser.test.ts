@@ -117,6 +117,9 @@ interface Measure {
   /** The card's left and right edges, and the composer's content edges (its box less its padding). */
   card: { left: number; right: number };
   field: { left: number; right: number };
+  /** What bounds the card's width: the column it sits in (its parent's content width), the reading measure
+   *  (`--measure-chat`) and the card's side inset (`--sp-4`), each resolved to px by Chrome from the token itself. */
+  bound: { column: number; measure: number; inset: number };
 }
 
 /** Open fixture 1 at `view`, let the card settle, and measure it as it stands. */
@@ -155,6 +158,17 @@ async function openAndMeasure(view: AppView): Promise<{ measured: Measure; error
         transcriptHeight: chat.querySelector<HTMLElement>(':scope > .chat-body')!.getBoundingClientRect().height,
         pageSide: doc.scrollWidth - doc.clientWidth,
         card: { left: el.getBoundingClientRect().left, right: el.getBoundingClientRect().right },
+        bound: (() => {
+          const px = (token: string): number => {
+            const probe = document.createElement('div');
+            probe.style.cssText = `position:absolute;visibility:hidden;width:var(${token})`;
+            document.body.appendChild(probe);
+            const w = probe.getBoundingClientRect().width;
+            probe.remove();
+            return w;
+          };
+          return { column: el.parentElement!.clientWidth, measure: px('--measure-chat'), inset: px('--sp-4') };
+        })(),
         field: (() => {
           const composer = chat.querySelector<HTMLElement>('.composer')!;
           const r = composer.getBoundingClientRect();
@@ -213,15 +227,35 @@ describe('the inline ask holds one vertical scroller and leaves the transcript i
 });
 
 // At 1600 Refined draws its inspector rail, so the session pane is narrower than the reading measure: the card yields
-// to it (`max-width: min(var(--measure-chat), 100%)`) and the page gains no sideways scroll.
+// to it (`max-width: min(var(--measure-chat), 100%)`) and the page gains no sideways scroll. The card's own rule takes
+// its two insets off that bound (`.ask-inline`'s `max-width`), which `pageSide <= 0` alone cannot see: a card that was
+// too wide by two insets still fits the page. So the width is measured against what bounds it.
 describe('the inline ask at 1600 with the inspector rail (D-6326)', () => {
   const view: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1600 };
-  it('no horizontal page scroll at 1600 with Refined\'s inspector rail', async () => {
-    const { measured, errors } = await openAndMeasure(view);
-    expect(measured.cardCount).toBe(1);
-    expect(measured.pageSide).toBeLessThanOrEqual(0);
-    expect(errors).toEqual([]);
+  let measured: Measure | undefined;
+  let errors: string[] = [];
+
+  beforeAll(async () => {
+    ({ measured, errors } = await openAndMeasure(view));
   }, 90_000);
+
+  it('no horizontal page scroll at 1600 with Refined\'s inspector rail', () => {
+    expect(measured!.cardCount).toBe(1);
+    expect(measured!.pageSide).toBeLessThanOrEqual(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('the card is no wider than the reading measure or its column less its two insets, and its edges sit on the composer\'s field', () => {
+    const m = measured!;
+    const { column, measure, inset } = m.bound;
+    const width = m.card.right - m.card.left;
+    const room = Math.min(measure, column) - 2 * inset;
+    expect(measure, 'premise: the reading measure and the inset resolved from their tokens').toBeGreaterThan(2 * inset);
+    expect(width, `the card (${width}px) is no wider than min(measure ${measure}px, column ${column}px) less two ${inset}px insets`)
+      .toBeLessThanOrEqual(room + 1);
+    expect(Math.abs(m.card.left - m.field.left), `card left ${m.card.left}, field left ${m.field.left}`).toBeLessThanOrEqual(1);
+    expect(Math.abs(m.card.right - m.field.right), `card right ${m.card.right}, field right ${m.field.right}`).toBeLessThanOrEqual(1);
+  });
 });
 
 // R41's F4. The card is a section, not a dialog, so `useAskKeys` acts only on a key whose target is inside it.
