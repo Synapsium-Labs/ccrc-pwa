@@ -10,6 +10,7 @@ import type { CcrcConfig } from '../config.js';
 import { configDirFor } from '../config.js';
 import { ARCHIVE_IF_NO_PANE_CAP, CCD_ARGV, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
+import { childReclaimEverClaimedIds } from './childReclaim.js';
 import { readSwitches } from '../../../shared/switches.js';
 import {
   STALE_ARCHIVE_LIVE_MARKER, staleArchiveVerdict, type StaleArchiveFacts, type StaleArchiveSkip,
@@ -94,6 +95,22 @@ export type StaleArchiveOutcome =
   | { readonly kind: 'deferred'; readonly id: string; readonly why: StaleArchiveSkip | 'cap' | 'paused' }
   | { readonly kind: 'failed'; readonly id: string; readonly detail: string };
 
+const STALE_ARCHIVE_OUTCOME_KINDS: Readonly<Record<StaleArchiveOutcome['kind'], true>> = {
+  archived: true, 'would-archive': true, 'live-at-act': true, deferred: true, failed: true,
+};
+const STALE_ARCHIVE_DEFER_WHYS: Readonly<Record<StaleArchiveSkip | 'cap' | 'paused', true>> = {
+  'not-a-workspace': true, archived: true, child: true, 'identity-unmeasured': true, held: true, claimant: true,
+  'claims-unreadable': true, pane: true, 'one-sighting': true, viewer: true, 'no-evidence': true, recent: true,
+  cap: true, paused: true,
+};
+/** The arm's outcome kinds and defer reasons, the kebab words this file spells as literals, for `mail-routes.test.ts`'s scan of
+ *  `server/src/coord`. None is a mail rejection or a run refusal: an outcome rides the feed and the log, never a
+ *  `refused` or `reject.code`. Derived from the Record above, never a list. */
+export function isStaleArchiveKebab(v: string): boolean {
+  const own = (o: object): boolean => Object.prototype.hasOwnProperty.call(o, v);
+  return own(STALE_ARCHIVE_OUTCOME_KINDS) || own(STALE_ARCHIVE_DEFER_WHYS);
+}
+
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /** The journal's newest run or pane-end act for one session (ms), or null: no rows, no stamped rows, or a read that failed. */
@@ -139,7 +156,7 @@ async function evidenceFor(
 /** Every id that was ever a claimant or is a coordinator now; null when the claims did not read. */
 function claimedIds(deps: StaleArchiveDeps, coord: NonNullable<StaleArchiveDeps['coord']>): ReadonlySet<string> | null {
   try {
-    return new Set([...coord.childReclaimCoordinatorClaims().keys(), ...coord.openCoordinatorIds()]);
+    return new Set([...childReclaimEverClaimedIds(coord), ...coord.openCoordinatorIds()]);
   } catch (err) {
     deps.log(`ccrc-server: stale-archive: the claims did not read (${errText(err)}) — nothing is archived`);
     return null;

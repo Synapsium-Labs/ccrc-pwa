@@ -255,6 +255,13 @@ export function childReclaimHasCoordinated(
     () => childReclaimBornAt(coord, sessionId, nowMs, rowUuid), CHILD_BIRTH_SKEW_MS);
 }
 
+/** Every session that was EVER a claimant, undated: the store read's one home (spec §1 rule 4), for a consumer whose
+ *  rule is "any past claim keeps" (the stale-archive arm, D-6643) rather than this file's dated fence. Throws when the
+ *  store read throws; the caller keeps its own unreadable answer. */
+export function childReclaimEverClaimedIds(coord: Pick<CoordStore, 'childReclaimCoordinatorClaims'>): Iterable<string> {
+  return coord.childReclaimCoordinatorClaims().keys();
+}
+
 /** Why a reclaim did not happen YET. The server's own reasons first, then the
  *  seven retryable box words — exactly the `retry` rows above, so a deferral
  *  always says which condition it is waiting on. `generation-changed` is the
