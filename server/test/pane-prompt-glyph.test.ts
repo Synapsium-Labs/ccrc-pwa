@@ -3,6 +3,8 @@
  * `inject/send.ts` used to test it with a literal `startsWith('❯')` at several sites, so a change
  * of the glyph meant finding every spelling.
  */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { startsWithPromptGlyph } from '../src/pane/dialog.js';
 import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
@@ -29,5 +31,10 @@ describe('inject/send.ts', () => {
   it('has no inline startsWith of the prompt glyph left (an added fifth site goes red)', () => {
     const inline = parsedFile('server/src/inject/send.ts').calls.filter((c) => c.name === 'startsWith' && c.args[0]?.kind === 'string' && c.args[0].text.includes('❯'));
     expect(inline).toEqual([]);
+  });
+  it('carries the prompt glyph in no code at all, only in comments (any literal, regex or template slips nothing past)', () => {
+    const src = readFileSync(path.resolve(__dirname, '../src/inject/send.ts'), 'utf8');
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    expect(code.split('\n').filter((l) => l.includes('❯'))).toEqual([]);
   });
 });

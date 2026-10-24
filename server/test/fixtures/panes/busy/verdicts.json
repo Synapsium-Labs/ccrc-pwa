@@ -8,7 +8,7 @@
     "ccd-redrive": "ccd/ccd _redrive_after_spawn (both lines): stands down before TYPING the resume prompt when a turn is running. A false busy is the safe error.",
     "ccd-tui-up": "ccd/ccd _accept_first_run_prompts: the READINESS grep (a wider phrase set; a match means the TUI is up). Opposite direction to the others, so it is exempt from the ccd-never-less-busy-than-TS invariant."
   },
-  "busy": "true means the caller treats the pane as a running turn (holds, stands down or refuses). All captures are judged over their last 8 rows, as every caller windows them.",
+  "busy": "true means the caller treats the pane as a running turn (holds, stands down or refuses). TS and every ccd caller but ccd-tui-up judge the last 8 rows of the capture; ccd-tui-up reads the whole pane (its capture has no tail). The captures are hand-written synthetic fixtures, except recorded-busy.txt, a copy of the recorded fixtures/panes/busy.txt.",
   "captures": {
     "spinner-row.txt": { "ts-mail-hold": true, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true, "ccd-hard-block": true, "ccd-redrive": true, "ccd-tui-up": true },
     "spinner-hint-after.txt": { "ts-mail-hold": true, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true, "ccd-hard-block": true, "ccd-redrive": true, "ccd-tui-up": true },
@@ -17,7 +17,11 @@
     "idle-prompt.txt": { "ts-mail-hold": false, "ccd-enter": false, "ccd-swap": false, "ccd-compact": false, "ccd-hard-block": false, "ccd-redrive": false, "ccd-tui-up": false },
     "empty-pane.txt": { "ts-mail-hold": false, "ccd-enter": false, "ccd-swap": false, "ccd-compact": false, "ccd-hard-block": false, "ccd-redrive": false, "ccd-tui-up": false },
     "spinner-wrapped-before-phrase.txt": { "ts-mail-hold": false, "ccd-enter": false, "ccd-swap": false, "ccd-compact": false, "ccd-hard-block": false, "ccd-redrive": false, "ccd-tui-up": false },
-    "stale-spinner-above-window.txt": { "ts-mail-hold": false, "ccd-enter": false, "ccd-swap": false, "ccd-compact": false, "ccd-hard-block": false, "ccd-redrive": false, "ccd-tui-up": false },
+    "stale-spinner-above-window.txt": {
+      "ts-mail-hold": false, "ccd-enter": false, "ccd-swap": false, "ccd-compact": false, "ccd-hard-block": false, "ccd-redrive": false, "ccd-tui-up": true,
+      "divergence": "A spinner row scrolled above the last 8 rows. Every 8-row caller reads idle; the readiness grep reads the whole pane, so it still sees the phrase and answers TUI-up."
+    },
+    "recorded-busy.txt": { "ts-mail-hold": true, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true, "ccd-hard-block": true, "ccd-redrive": true, "ccd-tui-up": true },
     "scrollback-mention-midrow.txt": {
       "ts-mail-hold": false, "ccd-enter": true, "ccd-swap": true, "ccd-compact": true, "ccd-hard-block": true, "ccd-redrive": true, "ccd-tui-up": true,
       "divergence": "The phrase sits mid-row in prose. TS anchors the row end, so mail is not held; ccd's grep matches anywhere, so a keystroke is withheld. Intended: for ccd a false busy only waits a tick."

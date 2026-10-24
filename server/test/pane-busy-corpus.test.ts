@@ -9,7 +9,11 @@
  * here; a divergence is recorded, not forced to agree.
  *
  * The ccd columns run the REAL predicate line, cut out of the named function in `ccd/ccd` and
- * evaluated in bash over the capture's last 8 rows (no source of ccd, no verb, no HOME touched).
+ * evaluated in bash over the window that caller itself captures (`window` on CCD_SITES: 8 rows, or the
+ * full pane for the readiness grep). The window is the HARNESS's reproduction of the caller's capture
+ * (no source of ccd, no tmux stub): the callers' own windows are pinned by send.test.ts and
+ * ccd-reader-standdown.test.ts, not here. The captures are hand-written synthetic fixtures, plus the
+ * recorded busy.txt.
  * A site that moves or changes its grep makes the cut fail loudly.
  */
 import { describe, it, expect } from 'vitest';
@@ -23,13 +27,13 @@ const DIR = path.resolve(__dirname, 'fixtures/panes/busy');
 const SGR = /\x1b\[[0-9;]*m/g;
 /** Every executable `esc to interrupt` grep in ccd/ccd: its function and how many identical lines it carries. */
 const CCD_SITES = {
-  'ccd-enter': { fn: '_auto_stale_check', lines: 1 },
-  'ccd-swap': { fn: '_swap_idle_gate', lines: 1 },
-  'ccd-compact': { fn: '_idle_for_keystroke', lines: 1 },
-  'ccd-hard-block': { fn: '_session_hard_blocked', lines: 1 },
-  'ccd-redrive': { fn: '_redrive_after_spawn', lines: 2 },
+  'ccd-enter': { fn: '_auto_stale_check', lines: 1, window: 8 },
+  'ccd-swap': { fn: '_swap_idle_gate', lines: 1, window: 8 },
+  'ccd-compact': { fn: '_idle_for_keystroke', lines: 1, window: 8 },
+  'ccd-hard-block': { fn: '_session_hard_blocked', lines: 1, window: 8 },
+  'ccd-redrive': { fn: '_redrive_after_spawn', lines: 2, window: 8 },
   /** The readiness grep: a match means the TUI is UP, the opposite direction, so it is exempt from the safety invariant. */
-  'ccd-tui-up': { fn: '_accept_first_run_prompts', lines: 1 },
+  'ccd-tui-up': { fn: '_accept_first_run_prompts', lines: 1, window: 'full' },
 } as const;
 const READINESS: readonly string[] = ['ccd-tui-up'];
 type Caller = 'ts-mail-hold' | keyof typeof CCD_SITES;
@@ -37,8 +41,10 @@ interface Verdicts { captures: Record<string, Partial<Record<Caller, boolean>> &
 const verdicts = JSON.parse(readFileSync(path.join(DIR, 'verdicts.json'), 'utf8')) as Verdicts;
 const ccdSource = readFileSync(CCD, 'utf8');
 
-/** The last 8 rows, the window every caller decides on. */
+/** The last 8 rows, the window the TS caller and most ccd callers capture (`| tail -8`). */
 const tail8 = (plain: string): string => plain.replace(/\n$/, '').split('\n').slice(-8).join('\n');
+/** A ccd caller's own capture window: the readiness grep reads the whole pane (no `| tail -8`). */
+const windowed = (plain: string, window: 8 | 'full'): string => (window === 8 ? tail8(plain) : plain);
 
 /** The executable `esc to interrupt` grep lines inside a ccd function (pipe form or here-string form). */
 const predicateLines = (fn: string, count: number): string[] => {
@@ -73,10 +79,10 @@ describe('pane busy corpus', () => {
 
   it.each(names)('%s: every caller answers its own column', (name) => {
     const col = verdicts.captures[name]!;
-    const plain = tail8(read(name).replace(SGR, ''));
-    expect(turnRunning(plain), `${name} ts-mail-hold`).toBe(col['ts-mail-hold']);
+    const full = read(name).replace(SGR, '');
+    expect(turnRunning(tail8(full)), `${name} ts-mail-hold`).toBe(col['ts-mail-hold']);
     for (const [caller, site] of Object.entries(CCD_SITES)) {
-      expect(ccdBusy(site.fn, site.lines, plain), `${name} ${caller}`).toBe(col[caller as Caller]);
+      expect(ccdBusy(site.fn, site.lines, windowed(full, site.window)), `${name} ${caller}`).toBe(col[caller as Caller]);
     }
   });
 
