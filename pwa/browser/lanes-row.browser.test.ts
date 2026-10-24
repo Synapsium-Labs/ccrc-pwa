@@ -9,8 +9,9 @@
 //     centre its own); the cards are in the order the lanes' binding use gives (lowest first, a lane never read and a
 //     sign-in expired last); All accounts, the go-accounts door, sits in the track after the last card; the long name is
 //     cut, with its full name in its `title`; nothing scrolls sideways.
-//  2. In Refined with a release waiting (fresh and stale), the update line is a row of its own under the header and the
-//     banner stack, and the lanes row sits above it: nothing overlaps, the detail pane starts below the line.
+//  2. In Refined with a release waiting and two banners up (the halt, the fleet-host banner; fresh and stale), the update line
+//     is a row of its own under the header and the banner stack, and the lanes row sits above it: the banners are mounted
+//     and have a height, nothing overlaps, the detail pane starts below the line.
 //  3. Under a coarse pointer (a touch screen, emulated with `openApp`'s `touch`: headless Chrome ignores the DevTools
 //     pointer media feature, measured) every card and All accounts is at least 44 px tall, at a desk and on a phone.
 //  4. New session ends at the bar line's content edge (its right edge less the header's gutter, +-1 px): the lanes row
@@ -105,6 +106,17 @@ const WAITING = {
   catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null }, releases: [],
   nodes: [node('fleet', '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10'), node('server', '5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93')], intent: [],
 };
+
+/** The same nodes with the fleet node's last update failed: the halt banner (and its Ack) stands. */
+const HALTED = {
+  ...WAITING,
+  nodes: [
+    { ...node('fleet', '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10'), update: { state: 'failed', target: 'v0.0.9', startedAt: 1, detail: 'gate: unit not up' } },
+    node('server', '5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93'),
+  ],
+};
+/** A remote fleet whose agent link is down: the fleet-host banner. */
+const HOST_DOWN = { mode: 'remote', connected: false, downSince: Date.now() - 5 * MIN };
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -238,7 +250,7 @@ async function answerViewThenFail(page: Page): Promise<{ fail(): void }> {
   const state = { failing: false };
   await page.context().route('**/api/updates', async (route) => {
     if (state.failing) await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"down"}' });
-    else await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(WAITING) });
+    else await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(HALTED) });
   });
   return { fail: () => { state.failing = true; } };
 }
@@ -263,12 +275,21 @@ function stackFaults(): string[] {
   if (line.bottom > row.top + 0.5) out.push(`the lanes row (top ${row.top}) is not under the bar's line (bottom ${line.bottom})`);
   if (row.bottom > header.bottom + 0.5) out.push('the lanes row runs out of the header');
   if (header.bottom > br.top + 0.5) out.push(`the banner slot (top ${br.top}) overlaps the header (bottom ${header.bottom})`);
-  // After every other child of the banner stack, in the DOM and on the page.
-  for (const c of [...banners.querySelectorAll<HTMLElement>(':scope > *')]) {
-    if (c.contains(indicator)) continue;
-    const cr = c.getBoundingClientRect();
-    if (cr.height > 0 && cr.bottom > ir.top + 0.5) out.push(`a banner (${c.className}) comes below or over the update line`);
+  // The banners really are mounted (the halt and the fleet-host banner, each with a box), in this order, each under the
+  // header, none over its neighbour, and the update line after the last of them, in the DOM and on the page.
+  const banner = [...banners.querySelectorAll<HTMLElement>(':scope > .banner-slot:not([hidden]) > *')];
+  const names = banner.map((e) => e.className.split(' ')[0] ?? e.tagName);
+  if (banner.length < 2) out.push(`${banner.length} banners mounted, not the halt and the fleet-host banner (${names})`);
+  if (banners.querySelector('.halt-banner') === null) out.push('no halt banner');
+  let above = header.bottom;
+  for (const e of banner) {
+    const er = e.getBoundingClientRect();
+    if (er.height < 1) out.push(`a banner (${e.className}) has no height`);
+    if (er.top < above - 0.5) out.push(`a banner (${e.className}, top ${er.top}) overlaps what is above it (bottom ${above})`);
+    if (e.compareDocumentPosition(indicator) !== Node.DOCUMENT_POSITION_FOLLOWING) out.push(`a banner (${e.className}) does not precede the update line in the DOM`);
+    above = Math.max(above, er.bottom);
   }
+  if (ir.top < above - 0.5) out.push(`the update line (top ${ir.top}) is over a banner (bottom ${above})`);
   if (ir.top < header.bottom - 0.5) out.push(`the update line (top ${ir.top}) is over the header (bottom ${header.bottom})`);
   if (ir.top < br.top - 0.5 || ir.bottom > br.bottom + 0.5) out.push('the update line is not whole inside the banner slot');
   if (ir.left < -0.5 || ir.right > window.innerWidth + 0.5) out.push('the update line is outside the viewport');
@@ -282,17 +303,18 @@ const REFINED_DESKS: AppView[] = THEMES.flatMap((theme) => WIDTHS.map((width) =>
 describe('in Refined with a release waiting the update row sits below the banners and under the lanes row, nothing overlapping', () => {
   for (const view of REFINED_DESKS) {
     it(named(view), async () => {
-      const waiting: AppFixture = { ...FIXTURE, api: { ...FIXTURE.api, '/api/updates': WAITING } };
+      const waiting: AppFixture = { ...FIXTURE, api: { ...FIXTURE.api, '/api/updates': HALTED, '/api/fleet/health': HOST_DOWN } };
       const { ctx, page, errors } = await openApp(browser!, view, waiting);
       try {
         const answers = await answerViewThenFail(page);
         await page.goto(server!.origin + '/');
         await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 17
-          && document.querySelector('.shell-banners .update-indicator-dismiss') !== null, undefined, { timeout: 30_000 });
+          && document.querySelector('.shell-banners .update-indicator-dismiss') !== null
+          && document.querySelector('.shell-banners .halt-banner') !== null, undefined, { timeout: 30_000 });
         await page.waitForTimeout(300);
         const fresh = await page.evaluate(stackFaults);
         expect(fresh, 'a fresh view').toEqual([]);
-        const freshTop = await page.evaluate(() => document.querySelector('main.shell-detail')!.getBoundingClientRect().top);
+        const freshHeight = await page.evaluate(() => document.querySelector('.shell-banners .update-indicator')!.getBoundingClientRect().height);
 
         // STALE: the next read fails, and a visibilitychange makes it now.
         answers.fail();
@@ -301,8 +323,9 @@ describe('in Refined with a release waiting the update row sits below the banner
         await page.waitForTimeout(300);
         const stale = await page.evaluate(stackFaults);
         expect(stale, 'a stale view').toEqual([]);
-        const staleTop = await page.evaluate(() => document.querySelector('main.shell-detail')!.getBoundingClientRect().top);
-        expect(staleTop, 'the stale words add no line').toBeCloseTo(freshTop, 0);
+        const staleHeight = await page.evaluate(() => document.querySelector('.shell-banners .update-indicator')!.getBoundingClientRect().height);
+        // The halt banner says the stale words on a line of its own, so the stack grows; the update line keeps its height.
+        expect(staleHeight, 'the stale words leave the update line one row tall').toBeCloseTo(freshHeight, 0);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
