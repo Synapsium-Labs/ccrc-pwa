@@ -29,7 +29,7 @@
 #     orphaned worktree, behind a token the box re-proves)
 #   scratch-rescue <any tail>                     — likewise (disk retention: keeps a session's scratch
 #     repository in its project's attic; called only by the temp sweep)
-#   ws-audit --session <value> --reclaim [--defer-expired] — the token skeleton;
+#   ws-audit --session <value> --reclaim [--defer-expired] [--stale <word>] [--hold-digest <digest>] — the token skeleton;
 #   ws-audit --session <value> --expire           — the expiry's token skeleton;
 #   ws-audit --session <value> --expire --child-of <value> — the same, for an archived child (expire-child-v1);
 #   ws-audit --session <value> --collect          — the collector's token skeleton;
@@ -162,8 +162,20 @@ def is_protected(argv):
     if len(argv) == 6 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
             and folds_to(argv[3], '--expire') and folds_to(argv[4], '--child-of'):
         return True
-    return (len(argv) in (4, 5) and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session')
-            and folds_to(argv[3], '--reclaim') and (len(argv) == 4 or folds_to(argv[4], '--defer-expired')))
+    if not (len(argv) >= 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session')
+            and folds_to(argv[3], '--reclaim')):
+        return False
+    # the tail of the reclaim audit: [--defer-expired] [--stale <word>] [--hold-digest <digest>], any order (DR-26).
+    # Same walk as the body's guard: a flag that wants a value skips one token, even past the end.
+    i = 4
+    while i < len(argv):
+        if folds_to(argv[i], '--defer-expired'):
+            i += 1
+        elif folds_to(argv[i], '--stale') or folds_to(argv[i], '--hold-digest'):
+            i += 2
+        else:
+            return False
+    return True
 
 
 def body_path():

@@ -24,7 +24,15 @@ set -uo pipefail
 # inherited `nocasematch` folds here starts PROTECTED, `-p` drops that option, and
 # this guard and the dispatcher compare exactly again. SOURCE MODE never runs this;
 # the launcher classifies a superset of these shapes; the dispatcher owns every tail.
+__ccd_stale=0   # DR-26: `ws-audit --session <id> --reclaim` with a tail drawn from [--defer-expired] [--stale <w>] [--hold-digest <d>], any order
+if [[ $# -ge 5 && "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --reclaim ]]; then
+  __ccd_stale=1
+  for ((__ccd_i = 5; __ccd_i <= $#; __ccd_i++)); do
+    case "${!__ccd_i}" in --defer-expired) ;; --stale|--hold-digest) __ccd_i=$((__ccd_i + 1)) ;; *) __ccd_stale=0; break ;; esac
+  done
+fi
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue ]] \
+     || (( __ccd_stale )) \
      || { [[ $# -ge 4 && $# -le 6 && "${1-}" == ws-audit && "${2-}" == --session ]] \
           && [[ ( "${4-}" == --reclaim && ( $# -eq 4 || ( $# -eq 5 && "${5-}" == --defer-expired ) ) ) || ( "${4-}" == --expire && ( $# -eq 4 || ( $# -eq 6 && "${5-}" == --child-of ) ) ) || ( $# -eq 4 && "${4-}" == --collect ) ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
   if ! (( BASH_VERSINFO[0] > 4 || ( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4 ) )) || [[ $- != *p* ]]; then
@@ -37,6 +45,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" 
     exit 125
   fi
 fi
+unset __ccd_stale __ccd_i
 
 # ── THE PLATFORM LAYER — one file, two userlands ────────────────────────
 # ccd was written against GNU/Linux and says so out loud: `_reg_set`'s header
@@ -8895,6 +8904,7 @@ EOF
   echo child-argv-v1
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
+  echo reclaim-stale-v1   # `ws-reclaim`/`ws-audit --reclaim` take `--stale <word> [--hold-digest <sha256>]` (DR-26, D-6638); sent only behind this word
   echo nested-rescue-v1; echo scratch-rescue   # D-6632: rung 9's rescue and the box-local `scratch-rescue` entry, one inode; see NESTED-RESCUE-V1
   echo reclaim-pause-v1; echo expire-v1; echo expire-child-v1; echo ws-expire; echo collect-v1; echo ws-collect; echo collect-loose-v1; echo orphan-v1; echo ws-orphan; echo archive-if-no-pane-v1   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
   echo docs-tree
@@ -13195,15 +13205,14 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # unfetched ref, and a symref read from clone-time memory proved containment
   # against a default the remote had deleted (measured, git 2.43).
   # `--reclaim` is the one exception to that: see "WS-AUDIT --RECLAIM" in the RECLAIM region.
-  local mode=reap defer=0
+  local mode=reap defer=0 _WS_STALE_WORD="" _WS_STALE_DIGEST=""
   case "${1-}" in --orphans) shift; _ws_orphan_census "$@"; return ;; --orphan-hex) shift; _ws_orphan_audit "$@"; return ;; esac   # DR-16 (D-6628): the orphan census and ladder, read-only
-  [[ ( $# -ge 2 && $# -le 5 ) && $1 == --session ]] \
+  [[ ( $# -ge 2 && $# -le 8 ) && $1 == --session ]] \
     || { _ws_loose_route "$@"; _WS_LR=$?; (( _WS_LR == 99 )) || return "$_WS_LR"; die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]"; }   # the loose arm's two forms ride this line
   if (( $# >= 3 )); then [[ $3 != --expire || ( $# -ne 3 && ( $# -ne 5 || $4 != --child-of ) ) ]] || { local EXPIRE_CHILDOF=''; (( $# == 3 )) || { _child_runid_valid "$5" || die "bad run id"; EXPIRE_CHILDOF=$5; }; _ws_expire_audit "$2"; return; }; [[ $3 != --collect || $# -ne 3 ]] || { _ws_collect_audit "$2"; return; }   # "WS-AUDIT --EXPIRE" and "WS-AUDIT --COLLECT", in their regions
-    [[ $3 == --reclaim && $# -le 4 && ( $# -eq 3 || $4 == --defer-expired ) ]] \
+    [[ $3 == --reclaim ]] && _ws_stale_argv "${@:4}" \
       || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]"
     [[ $_WS_AUDIT_INNER == 1 ]] || { _ws_reclaim_audit_contained "$@"; return; }; mode=reclaim   # see "THE AUDIT READS THE LIVE CHILD CONTAINED" (RECLAIM region)
-    (( $# == 4 )) && defer=1
   fi
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] && { [[ $mode != reclaim ]] || _ws_tmproot_id_ok "$id"; } || die "bad session id"
@@ -32272,6 +32281,56 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   _ws_reclaim_ladder "$id" "$defer"
 }
 
+# THE STALE ARM (DR-26, D-6638; spec §2.7.3). A kept child is reclaimed after seven idle days, and the server names
+# WHY it was kept: `--stale held|run-absent|review|terminal`. Only `held` moves a rung (rung 4, by the hold's digest);
+# the others change nothing but the token, which binds the word, the digest and the box's idle instant. The words
+# are the CALLER's (`_ws_stale_argv`, from the verb's or the audit's flags), set as locals there, so an exported
+# environment never arms the arm; the expiry ladder, which shares `_ws_reclaim_ladder`, never sets them.
+WS_STALE_IDLE_S=604800   # seven days, spec §2.7.3. The box's half of "idle"; raise-only, nothing lowers it.
+_WS_STALE_WORD=""; _WS_STALE_DIGEST=""
+_ws_stale_argv() {   # [--defer-expired] [--stale <word>] [--hold-digest <sha256>] ... -> sets the caller's `defer`, `_WS_STALE_WORD` and `_WS_STALE_DIGEST`; rc 1 on anything else
+  while (( $# )); do
+    case "$1" in
+      --defer-expired) defer=1; shift ;;
+      --stale)         [[ $# -ge 2 && -z $_WS_STALE_WORD ]] || return 1; _WS_STALE_WORD=$2; shift 2 ;;
+      --hold-digest)   [[ $# -ge 2 && -z $_WS_STALE_DIGEST ]] || return 1; _WS_STALE_DIGEST=$2; shift 2 ;;
+      *)               return 1 ;;
+    esac
+  done
+  case "$_WS_STALE_WORD" in
+    held)                         [[ $_WS_STALE_DIGEST =~ ^[0-9a-f]{64}$ ]] ;;
+    run-absent|review|terminal|'') [[ -z $_WS_STALE_DIGEST ]] ;;
+    *)                            return 1 ;;
+  esac
+}
+_ws_reclaim_hold_released() {   # id -> 0 when `--stale held` was given and the hold's bytes hash to the digest it carries; else 1 (the hold stands)
+  [[ $_WS_STALE_WORD == held && "${_WS_LADDER_BIND[0]-}" != mode=expire && -f "$REG/$1.hold" && -r "$REG/$1.hold" ]] || return 1
+  [[ "$(_plat_sha256 < "$REG/$1.hold" 2>/dev/null | cut -d' ' -f1)" == "$_WS_STALE_DIGEST" ]]
+}
+_ws_reclaim_stale_idle() {   # id transcript probe-verdict pane-activity -> 0 (the token bound to the idle instant), or REAP_VERDICT=not-idle|unmeasured
+  # The ladder asks tmux and `_transcript_path` (it already holds the probe and the pane's name) and hands the answers
+  # here; this decides. The newest of the transcript, `.lastend`, `.spawn`, `.woke`, `.supervised` and a live pane's
+  # `#{window_activity}` must be older than WS_STALE_IDLE_S. Nothing recorded, or anything unreadable: unmeasured.
+  local id="$1" tp="$2" verdict="$3" act="$4" p m newest=0 seen=0
+  for p in "$tp" "$REG/$id.lastend" "$REG/$id.spawn" "$REG/$id.woke" "$REG/$id.supervised"; do
+    [[ -n $p && ( -e $p || -L $p ) ]] || continue
+    m=$(_plat_mtime "$p" 2>/dev/null) && [[ $m =~ ^[0-9]+$ ]] \
+      || { _ws_reclaim_unmeasured "when $p was last written could not be read — $id's idle time is unmeasured"; return 1; }
+    seen=1; (( m > newest )) && newest=$m
+  done
+  case "$verdict" in
+    gone) : ;;
+    live) [[ $act =~ ^[0-9]+$ ]] \
+            || { _ws_reclaim_unmeasured "$id's tmux session is up and would not say when it was last active — its idle time is unmeasured"; return 1; }
+          seen=1; (( act > newest )) && newest=$act ;;
+    *)    _ws_reclaim_unmeasured "whether $id's tmux session is up could not be asked — its idle time is unmeasured"; return 1 ;;
+  esac
+  (( seen )) || { _ws_reclaim_unmeasured "nothing records when $id last worked (no transcript, .lastend, .spawn, .woke, .supervised or pane)"; return 1; }
+  (( $(date +%s) - newest > WS_STALE_IDLE_S )) \
+    || { _reap_refuse not-idle "$id worked at epoch $newest, less than $WS_STALE_IDLE_S seconds ago — a stale reclaim waits for seven idle days"; return 1; }
+  _WS_LADDER_BIND+=("stale=$_WS_STALE_WORD" "holdDigest=$_WS_STALE_DIGEST" "idleAt=$newest")
+}
+
 _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` and `_ws_expire_eval` (the
   #                         EXPIRE region): each asks its own rungs 1-2 first and sets `_WS_LADDER_BIND`, the
   #                         token's leading inputs. 0 with REAP_VERDICT=reclaimable and REAP_TOKEN; else
@@ -32282,7 +32341,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # run the programs of a tree nothing has proved nobody is in — a caller outside it is a defect.
   local id="$1" defer="$2"
   local project workdir regbranch branch wthead main mainreal common
-  local op clients elsewhere elsrc nested p pcommon ptop rc h hs clipsjson hp wdreal wouldwhy=""
+  local op clients elsewhere elsrc nested p pcommon ptop rc h hs clipsjson hp wdreal pane_at wouldwhy=""
   # NO BINDING, NO TOKEN: a ladder entered without its caller's rungs 1-2 would
   # mint a token that names no verb and no population. A defect, measured as
   # nothing — unmeasured, never a refusal word and never a token.
@@ -32292,9 +32351,15 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # not -f, and -L: a directory, an unreadable file or a DANGLING link pauses.
   [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
     || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
-  # 4 — held. -e for the same reason: an unreadable hold is still a hold.
-  if [[ -e "$REG/$id.hold" ]]; then
+  # 4 — held. -e for the same reason: an unreadable hold is still a hold. `--stale held` passes ONE hold: the
+  # one whose bytes hash to the digest it was given (`_ws_reclaim_hold_released`, DR-26).
+  if [[ -e "$REG/$id.hold" ]] && ! _ws_reclaim_hold_released "$id"; then
     _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
+  fi
+  if [[ -n $_WS_STALE_WORD && "${_WS_LADDER_BIND[0]-}" == mode=reclaim ]]; then   # the stale arm's rung after rung 4 (DR-26)
+    _session_probe "$id" anchored; pane_at=''
+    [[ $PROBE_VERDICT != live ]] || pane_at=$(tmux display-message -p -t "$(_tmux_t "$id")" '#{window_activity}' 2>/dev/null)
+    _ws_reclaim_stale_idle "$id" "$(_transcript_path "$id")" "$PROBE_VERDICT" "$pane_at" || return 1
   fi
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir); regbranch=$(_reg_get "$id" branch)
   # A ROW THAT DOES NOT SAY WHAT THE CHILD IS IS UNMEASURED, NOT UNREADABLE:
@@ -32736,7 +32801,7 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
     || { _ws_reclaim_unmeasured "$REG/$id.generation could not be read as this row's generation ($RECLAIM_GENERATION_WHY) — an interrupted reclaim does not finish on a row it cannot identify"; return 1; }
   [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
     || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
-  if [[ -e "$REG/$id.hold" ]]; then
+  if [[ -e "$REG/$id.hold" ]] && ! _ws_reclaim_hold_released "$id"; then
     _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
   fi
   tomb="$REG/.reaped/$id.json"
@@ -32750,7 +32815,8 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
   REAP_BRANCH="$tombbranch"; REAP_TIP="$tombtip"
   REAP_TOKEN=$(_ws_reclaim_fingerprint "mode=reclaim-resume" "id=$id" "childOf=$mark" \
     "generation=$RECLAIM_GENERATION" \
-    "deferExpired=$defer" "phase=$phase" "branch=$tombbranch" "tip=$tombtip")
+    "deferExpired=$defer" "phase=$phase" "branch=$tombbranch" "tip=$tombtip" \
+    ${_WS_STALE_WORD:+"stale=$_WS_STALE_WORD" "holdDigest=$_WS_STALE_DIGEST"})
   REAP_VERDICT=reclaimable
   return 0
 }
@@ -36832,7 +36898,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     "$(case "$tmpkept" in ('') echo null ;; (refused|unmeasured|in-use) echo "\"$tmpkept\"" ;; (*) echo '"unmeasured"' ;; esac)"
 }
 
-cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]
+cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>] [--stale held|run-absent|review|terminal [--hold-digest <sha256>]] (DR-26)
   # THE DESTRUCTIVE VERB FOR A CHILD, composed by the server and by nothing else
   # (CLAUDE.md SAFETY: forbidden to every session). Two authorities must agree —
   # the box's `.child` marker and this `--child-of` — AND the token `ws-audit
@@ -36840,7 +36906,7 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
   # at the instant of deletion (spec §5.1, §5.5). stdout is ONE JSON line:
   # `{"reclaimed":…}`, a refusal document at exit 0 (an answer, not an error), or
   # `{"failed":…}` at exit 1 (the act started and broke; the breadcrumb resumes it).
-  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 defer=0 args=()
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 defer=0 args=() sargs=() _WS_STALE_WORD="" _WS_STALE_DIGEST=""
   while (( $# )); do
     case "$1" in
       # THE IDENTITY PAIRS ARE TAKEN WHOLE (path-identity spec §2.4). A key and its value go to `args` together, so a
@@ -36848,6 +36914,7 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
       # word to bind as the id. A key with no value goes alone, and the exact-arity rule below refuses it, as it did.
       --expect|--child-of|--session) if (( $# >= 2 )); then args+=("$1" "$2"); shift 2; else args+=("$1"); shift; fi ;;
       --defer-expired) defer=1; shift ;;
+      --stale|--hold-digest) sargs+=("$1"); if (( $# >= 2 )); then sargs+=("$2"); shift 2; else shift; fi ;;
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -36870,7 +36937,7 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
     _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
   fi
   set -- ${args[@]+"${args[@]}"}
-  [[ $# -eq 6 && $1 == --expect && $3 == --child-of && $5 == --session ]] \
+  [[ $# -eq 6 && $1 == --expect && $3 == --child-of && $5 == --session ]] && _ws_stale_argv ${sargs[@]+"${sargs[@]}"} \
     || die "usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]"
   local token=$2 childof=$4 id=$6
   # THE SESSION ID IS VALIDATED FIRST (spec §5.9). The two checks after it
