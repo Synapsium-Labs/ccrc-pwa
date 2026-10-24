@@ -1043,9 +1043,21 @@ jobs:
         run: |
           want=$(node -e 'console.log(JSON.parse(process.env.TRACE_MATRIX).include.length)')
           mkdir -p "$RUNNER_TEMP/flat" "$RUNNER_TEMP/ci-cache"
+          # Two layouts (D-6740): several artifacts each land in their own
+          # records-<shard>/ directory, but download-artifact v5 and later
+          # extract a pattern that matches ONE artifact straight into the path,
+          # as records/records.json. The single file counts only when no
+          # directory holds one, so nothing is counted twice; either way each
+          # copy is named records*.json, the names testmap.mjs reads.
+          shopt -s nullglob
+          recs=("$RUNNER_TEMP"/records/records-*/records.json)
+          shopt -u nullglob
+          if [ "${#recs[@]}" -eq 0 ] && [ -f "$RUNNER_TEMP/records/records.json" ]; then recs=("$RUNNER_TEMP/records/records.json"); fi
           got=0
-          for d in "$RUNNER_TEMP"/records/records-*; do
-            if [ -f "$d/records.json" ]; then cp "$d/records.json" "$RUNNER_TEMP/flat/$(basename "$d").json"; got=$((got + 1)); fi
+          for f in "${recs[@]}"; do
+            d=$(dirname "$f")
+            if [ "$d" = "$RUNNER_TEMP/records" ]; then n=records; else n=$(basename "$d"); fi
+            cp "$f" "$RUNNER_TEMP/flat/$n.json"; got=$((got + 1))
           done
           if [ "$got" -ne "$want" ]; then
             echo "::error::$got of $want trace shards left records; no map is written for this commit"
@@ -1131,7 +1143,21 @@ jobs:
       - name: Merge the durations
         run: |
           mkdir -p "$RUNNER_TEMP/ci-cache"
-          node .github/ci/shards.mjs times --out "$RUNNER_TEMP/ci-cache/testtimes.json" "$RUNNER_TEMP"/times/*/times.json
+          # Two layouts (D-6740): several artifacts each land in their own
+          # times-<shard>/ directory, but download-artifact v5 and later
+          # extract a pattern that matches ONE artifact straight into the path,
+          # as times/times.json. The single file counts only when no directory
+          # holds one; shards.mjs is handed only files that exist, never an
+          # unmatched glob, and no file at all fails the step.
+          shopt -s nullglob
+          reports=("$RUNNER_TEMP"/times/*/times.json)
+          shopt -u nullglob
+          if [ "${#reports[@]}" -eq 0 ] && [ -f "$RUNNER_TEMP/times/times.json" ]; then reports=("$RUNNER_TEMP/times/times.json"); fi
+          if [ "${#reports[@]}" -eq 0 ]; then
+            echo "::error::no shard left a times.json; no durations are written"
+            exit 1
+          fi
+          node .github/ci/shards.mjs times --out "$RUNNER_TEMP/ci-cache/testtimes.json" "${reports[@]}"
       - name: Keep the durations as an artifact
         uses: actions/upload-artifact@v7
         with:

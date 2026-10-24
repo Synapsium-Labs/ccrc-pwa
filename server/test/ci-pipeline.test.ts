@@ -22,6 +22,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, 
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { RECORDS_FORMAT, readRecordsDir } from '../../.github/ci/testmap.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
@@ -597,7 +598,55 @@ describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)'
   it('times-build merges the durations from the workspace root — the times CLI makes keys relative to its cwd', () => {
     const st = step(job('times-build'), 'Merge the durations');
     expect(st, 'a working-directory would make every key server-relative').not.toMatch(/working-directory:/);
-    expect(runScript(st)).toContain('node .github/ci/shards.mjs times --out "$RUNNER_TEMP/ci-cache/testtimes.json" "$RUNNER_TEMP"/times/*/times.json');
+    expect(runScript(st)).toContain('node .github/ci/shards.mjs times --out "$RUNNER_TEMP/ci-cache/testtimes.json" "${reports[@]}"');
+  });
+});
+
+// D-6740: download-artifact v5 and later extract a `pattern:` download that
+// matches ONE artifact straight into its path, with no `<name>/` directory;
+// several still land one directory each. Both readers are run here, as the
+// runner runs them, against both layouts.
+describe('ci.yml: times-build reads a single-artifact pattern download too (D-6740)', () => {
+  function merge(layout: Record<string, string>): { status: number | null, stdout: string, argv: string, rt: string } {
+    const ws = mkTmp('ccrc-ci-times-');
+    const rt = join(ws, 'rt');
+    for (const [rel, body] of Object.entries(layout)) {
+      mkdirSync(path.dirname(join(rt, 'times', rel)), { recursive: true });
+      writeFileSync(join(rt, 'times', rel), body);
+    }
+    mkdirSync(join(rt, 'times'), { recursive: true });
+    const bin = fakeBin({ node: 'printf "%s\\n" "$@" > "$NODE_LOG"' });
+    const log = join(ws, 'node.log');
+    const r = runStep(step(job('times-build'), 'Merge the durations'), ws, { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: rt, NODE_LOG: log });
+    return { status: r.status, stdout: r.stdout, argv: existsSync(log) ? readFileSync(log, 'utf8') : '', rt };
+  }
+  const head = (rt: string): string => `.github/ci/shards.mjs\ntimes\n--out\n${rt}/ci-cache/testtimes.json\n`;
+
+  it('one artifact, extracted straight into the path: shards.mjs is handed times/times.json', () => {
+    const r = merge({ 'times.json': '{}' });
+    expect(r.status, r.stdout).toBe(0);
+    const rt = r.rt;
+    expect(r.argv).toBe(`${head(rt)}${rt}/times/times.json\n`);
+  });
+
+  it('two artifacts, one directory each: shards.mjs is handed both, and nothing else', () => {
+    const r = merge({ 'times-1/times.json': '{}', 'times-2/times.json': '{}' });
+    expect(r.status, r.stdout).toBe(0);
+    const rt = r.rt;
+    expect(r.argv).toBe(`${head(rt)}${rt}/times/times-1/times.json\n${rt}/times/times-2/times.json\n`);
+  });
+
+  it('a times.json in the path beside per-artifact directories is not handed a second time', () => {
+    const r = merge({ 'times.json': '{}', 'times-1/times.json': '{}', 'times-2/times.json': '{}' });
+    expect(r.status, r.stdout).toBe(0);
+    expect(r.argv).toBe(`${head(r.rt)}${r.rt}/times/times-1/times.json\n${r.rt}/times/times-2/times.json\n`);
+  });
+
+  it('no times.json in either layout fails the step, and shards.mjs is never handed an unmatched glob', () => {
+    const r = merge({ 'times-1/other.json': '{}' });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('::error::no shard left a times.json');
+    expect(r.argv, 'shards.mjs never ran').toBe('');
   });
 });
 
@@ -711,7 +760,13 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
   // testmap.mjs exits 3 (a traced test newly fails under trace) or 4 (a floor test written unknown) only AFTER it
   // has written the map. The Build step records the code and carries on, so the map is published; the job's last
   // step turns it red. Any other exit (a crash: no map) stops the step there.
-  function buildRepo(): { ws: string, rt: string } {
+  /** The records download as the runner leaves it: `records-<n>/records.json` per artifact, or, for ONE artifact
+   *  under download-artifact v5 and later, `records.json` straight in the path (D-6740). Each file is a real
+   *  records file holding one test of its own, so what testmap.mjs reads from the flat directory can be checked. */
+  const emptyDep = { read: [], probed: [], listed: [], subtree: [], git: false };
+  const recordsFile = (test: string): string => JSON.stringify({ format: RECORDS_FORMAT,
+    baseline: { root: emptyDep, rest: emptyDep }, tests: { [test]: { root: emptyDep, rest: emptyDep, unknown: false } } });
+  function buildRepo(records: string[] = ['records-1/records.json']): { ws: string, rt: string } {
     const ws = mkTmp('ccrc-ci-mapbuild-');
     const g = (...a: string[]) => execFileSync('git', a, { cwd: ws, env: { ...process.env,
       GIT_AUTHOR_NAME: 'ccrc fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
@@ -726,17 +781,20 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     writeFileSync(join(ws, '.github', 'ci', 'select-tests.mjs'), read('.github/ci/select-tests.mjs'));
     g('add', '-A'); g('commit', '-qm', 'fixture');
     const rt = join(ws, 'rt');
-    mkdirSync(join(rt, 'records', 'records-1'), { recursive: true });
-    writeFileSync(join(rt, 'records', 'records-1', 'records.json'), '{}');
+    for (const rel of records) {
+      mkdirSync(path.dirname(join(rt, 'records', rel)), { recursive: true });
+      writeFileSync(join(rt, 'records', rel), recordsFile(`server/test/${rel}`));
+    }
+    mkdirSync(join(rt, 'records'), { recursive: true });
     return { ws, rt };
   }
   // node: `-e` answers the matrix length (1); the live list runs the REAL node on the copied select-tests.mjs; the
   // testmap call logs its arguments and exits $FAKE_RC.
-  const fakeNode = () => fakeBin({ node: 'if [ "$1" = "-e" ]; then echo 1; exit 0; fi\n'
+  const fakeNode = () => fakeBin({ node: 'if [ "$1" = "-e" ]; then echo "$WANT"; exit 0; fi\n'
     + 'if [ "$1" = .github/ci/select-tests.mjs ] && [ "$2" = live-tests ]; then exec "$REAL_NODE" "$@"; fi\n'
     + 'echo "$*" >> "$NODE_LOG"\nexit "$FAKE_RC"' });
-  function build(rc: number, opts: { trace?: string, mapSha?: string, handedMap?: boolean } = {}) {
-    const { ws, rt } = buildRepo();
+  function build(rc: number, opts: { trace?: string, mapSha?: string, handedMap?: boolean, records?: string[], want?: number } = {}) {
+    const { ws, rt } = buildRepo(opts.records);
     if (opts.handedMap) {
       mkdirSync(join(rt, 'select-inputs'), { recursive: true });
       writeFileSync(join(rt, 'select-inputs', 'testmap.json'), '{}');
@@ -744,10 +802,13 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     const r = runStep(step(job('map-build'), 'Build the map'), ws, {
       PATH: `${fakeNode()}:${process.env.PATH}`, RUNNER_TEMP: rt, TRACE: opts.trace ?? 'rebuild', MAP_SHA: opts.mapSha ?? '',
       TRACE_MATRIX: '{"include":[{}]}', GITHUB_SHA: 'f'.repeat(40), FAKE_RC: String(rc), NODE_LOG: join(ws, 'node.log'),
-      GITHUB_WORKSPACE: ws, REAL_NODE: process.execPath,
+      GITHUB_WORKSPACE: ws, REAL_NODE: process.execPath, WANT: String(opts.want ?? 1),
     });
+    const flatDir = join(rt, 'flat');
     return {
       ...r,
+      flat: existsSync(flatDir) ? readdirSync(flatDir).sort() : [],
+      read: () => Object.keys(readRecordsDir(flatDir).tests).sort(),
       log: existsSync(join(ws, 'node.log')) ? readFileSync(join(ws, 'node.log'), 'utf8') : '',
       live: existsSync(join(rt, 'live.txt')) ? readFileSync(join(rt, 'live.txt'), 'utf8') : null,
     };
@@ -761,6 +822,37 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     expect(r.status).toBe(0);
     expect(r.live).toBe('server/test/a.test.ts\nserver/test/café.test.ts\n');
     expect(r.log).toMatch(/ --live \S+\/live\.txt /);
+  });
+
+  // D-6740: both layouts, counted exactly against the matrix, never twice.
+  it('one artifact, extracted straight into the path: its records.json is collected and counts as the one shard', () => {
+    const r = build(0, { records: ['records.json'], want: 1 });
+    expect(r).toMatchObject({ status: 0, output: 'rc=0\n' });
+    expect(r.flat).toEqual(['records.json']);
+    expect(r.read(), 'testmap.mjs reads the collected file').toEqual(['server/test/records.json']);
+  });
+
+  it('two artifacts, one directory each: both are collected under their shard names and count as two', () => {
+    const r = build(0, { records: ['records-1/records.json', 'records-2/records.json'], want: 2 });
+    expect(r).toMatchObject({ status: 0, output: 'rc=0\n' });
+    expect(r.flat).toEqual(['records-1.json', 'records-2.json']);
+    expect(r.read()).toEqual(['server/test/records-1/records.json', 'server/test/records-2/records.json']);
+  });
+
+  it('a records.json in the path beside per-artifact directories is not counted a second time', () => {
+    const r = build(0, { records: ['records.json', 'records-1/records.json', 'records-2/records.json'], want: 2 });
+    expect(r).toMatchObject({ status: 0, output: 'rc=0\n' });
+    expect(r.flat).toEqual(['records-1.json', 'records-2.json']);
+  });
+
+  it('the count is still exact in either layout: fewer records than the matrix fails the step, and writes no map', () => {
+    const one = build(0, { records: ['records.json'], want: 2 });
+    expect(one.status).toBe(1);
+    expect(one.stdout).toContain('::error::1 of 2 trace shards left records');
+    expect(one.log, 'testmap.mjs never ran').toBe('');
+    const none = build(0, { records: [], want: 1 });
+    expect(none.status).toBe(1);
+    expect(none.stdout).toContain('::error::0 of 1 trace shards left records');
   });
 
   it('exit 0, 3 or 4 from testmap.mjs: the step succeeds and says which; any other exit fails it', () => {
