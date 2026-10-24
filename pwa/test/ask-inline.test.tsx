@@ -353,6 +353,123 @@ describe('a keyboard engagement ends with its ask (D-6326)', () => {
   });
 });
 
+// R64 F1/F2: ONE engagement per logical ask (`useAskEngagement`, owned by `DialogSheet`). The keyboard stays engaged across
+// question → review, review ← question and question → question of the SAME ask (the hooked envelope's identity), ends on a
+// different ask even in one batch with the clear, and is never reclaimed after a deliberate move out of the card.
+describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
+  const reviewDialog = (): Dialog => askFixture(8).dialog!;
+
+  it('a digit that answers the last question leaves focus on the review\'s highlighted row, and a next key acts', async () => {
+    // Premises: the desk; fixture 1's envelope up; the answer's `next` is the review (review 917 F1's shape).
+    media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: reviewDialog() });
+    const { arrive } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    await act(async () => { key(first, '1'); });
+    await frame();
+    expect(answer).toHaveBeenCalledTimes(1);
+    const submit = opt(card(), /^Submit answers/);
+    expect(submit, 'premise: the review is mounted').toBeInTheDocument();
+    expect(card().contains(document.activeElement), 'focus is back inside the card on the review').toBe(true);
+    expect(document.activeElement, 'on the review\'s highlighted row').toBe(submit);
+    answer.mockReturnValue(new Promise(() => {}));
+    key(document.activeElement!, '1');
+    expect(answer, 'a key on the review acts').toHaveBeenCalledTimes(2);
+    expect(answer).toHaveBeenLastCalledWith(ID, askFixture(8).dialog!.id, 1);
+  });
+
+  it('← from the review back to a question leaves focus inside the card on the question\'s row, and a key acts', async () => {
+    // Premises: the review is up with its envelope; ← inside the card moves the pane's tab, and `next` is question 1.
+    media(true);
+    const tab = vi.spyOn(api, 'answerDialogTab').mockResolvedValueOnce({ ok: true, next: askFixture(1).dialog! });
+    const { arrive } = mount();
+    await frame();
+    arrive(8);
+    const submit = opt(card(), /^Submit answers/);
+    act(() => submit.focus());
+    await act(async () => { key(submit, 'ArrowLeft'); });
+    await frame();
+    expect(tab).toHaveBeenCalledTimes(1);
+    expect(within(card()).getByText(QUESTION), 'premise: the question is back').toBeInTheDocument();
+    expect(card().contains(document.activeElement), 'focus is back inside the card on the question').toBe(true);
+    expect(document.activeElement, 'on the question\'s highlighted row').toBe(opt(card(), /^Redis/));
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    key(document.activeElement!, '2');
+    expect(answer, 'a key on the question acts').toHaveBeenCalledWith(ID, askFixture(1).dialog!.id, 2);
+  });
+
+  it('an ask that replaces an engaged one in the same batch as the clear takes no focus from the page body', async () => {
+    // Premises: the review is engaged by an arrow; focus falls to the body; ONE batch clears the ask and brings a menu
+    // (review 917 F2's shape). The card stays mounted across it (one container), so no unmount ends the engagement.
+    media(true);
+    const { arrive, store } = mount();
+    await frame();
+    arrive(8);
+    const section = card();
+    const submit = opt(section, /^Submit answers/);
+    act(() => submit.focus());
+    key(submit, 'ArrowDown');
+    expect(section.contains(document.activeElement), 'premise: the arrow engaged the keyboard inside the card').toBe(true);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    act(() => {
+      store.getState().apply({ type: 'ask_cleared' });
+      for (const f of askFixture(4).frames) store.getState().apply(f);
+    });
+    await frame();
+    expect(card(), 'premise: the same card node carries the new ask').toBe(section);
+    expect(within(section).getByText('Ready to code?'), 'premise: the menu is up').toBeInTheDocument();
+    expect(card().contains(document.activeElement), 'replacing ask took focus from the body').toBe(false);
+  });
+
+  it.each([
+    ['the page body', (): Element => document.body],
+    ['a transcript row', (): Element => screen.getByText('Running them now.')],
+  ])('after a click on %s, the next screen takes no focus back', async (_where, target) => {
+    // Premises: a key engaged the card; the operator then pressed the page (pointerdown), the focused row blurred to the
+    // body as a click on a non-focusable area does; the next question arrives.
+    media(true);
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, '1');
+    act(() => { fireEvent.pointerDown(target()); });
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    act(() => store.getState().apply({ type: 'dialog', dialog: nextScreen() }));
+    await frame();
+    expect(within(card()).getByText(QUESTION_2), 'premise: question 2 is in the card').toBeInTheDocument();
+    expect(card().contains(document.activeElement), 'the click\'s release held: the screen took no focus back').toBe(false);
+  });
+
+  it('a clear then a later ask with the same content in another batch takes no focus from the page body', async () => {
+    // Premises: engaged on fixture 1's envelope; the ask clears (the card leaves); the SAME envelope comes again later.
+    media(true);
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, '1');
+    act(() => {
+      store.getState().apply({ type: 'ask_cleared' });
+      store.getState().apply({ type: 'dialog_cleared' });
+    });
+    await frame();
+    expect(cards(), 'premise: the card left').toHaveLength(0);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    arrive(1);
+    await frame();
+    expect(cards(), 'premise: the card is back').toHaveLength(1);
+    expect(card().contains(document.activeElement), 'the later ask took no focus').toBe(false);
+  });
+});
+
 describe('the transcript stops repeating the ask the card already shows', () => {
   it('the transcript\'s live ask card shows \'Waiting for you, below\' and no Answer while the inline card is mounted, and Answer below 900', () => {
     const live = (): HTMLElement => document.querySelector<HTMLElement>('.tool-ask .ask-state')!;
