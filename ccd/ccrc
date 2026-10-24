@@ -12230,7 +12230,11 @@ _codex_lane_json_state() {   # <id>
 # `siwc`, each on stdout at rc 0; anything else — no lane.json, not a regular
 # file, not a JSON object, the key absent, or a value that is not exactly one of
 # the two words — is rc 1 with one `lane-mode-unreadable` (or
-# `lane-upstream-unreadable`) line and NOTHING on stdout. Never a default: a
+# `lane-upstream-unreadable`) line and NOTHING on stdout. The file is read as
+# ONE document (`-s`, then exactly one object): `jq -e` alone runs the filter
+# on every document in the file and would answer two words, or the first
+# document's word past a bad second, where the bridge's own reader (a single
+# `json.loads`) refuses the same file. Never a default: a
 # lane.json from before the bridge has no `bridge`, and reading that as
 # `litellm` would let a caller choose tiers for a lane whose file it could not
 # read. A caller captures the word and its rc first (`mode="$(_codex_lane_mode
@@ -12245,8 +12249,8 @@ _codex_lane_word() {   # <id> <key> <refusal code> <words, space-separated>
     return 1
   fi
   lane="$(_codex_lane_dir "$id")/lane.json"
-  if [ -f "$lane" ] && v="$(jq -er --arg k "$key" --arg w "$words" '
-       if type == "object" then .[$k] else empty end
+  if [ -f "$lane" ] && v="$(jq -ers --arg k "$key" --arg w "$words" '
+       if length == 1 and (.[0] | type) == "object" then .[0][$k] else empty end
        | . as $v | if type == "string" and any(($w | split(" "))[]; . == $v) then . else empty end' \
        "$lane" 2>/dev/null)"; then
     printf '%s\n' "$v"
@@ -12255,6 +12259,9 @@ _codex_lane_word() {   # <id> <key> <refusal code> <words, space-separated>
   _codex_say "$code" "$lane names no $key this ccrc knows (${words// / or }), so the lane's tiers cannot be chosen. 'ccrc doctor --fix' re-renders it from the roster."
   return 1
 }
+# The two word lists below are a third spelling of shared/roster.ts's
+# CODEX_BRIDGE_MODES and CODEX_UPSTREAMS; roster-exec-parity.test.ts reads them
+# out of these two lines and pins them equal, in order.
 _codex_lane_mode()     { _codex_lane_word "${1:-}" bridge lane-mode-unreadable "litellm direct"; }
 _codex_lane_upstream() { _codex_lane_word "${1:-}" upstream lane-upstream-unreadable "backend siwc"; }
 

@@ -469,6 +469,9 @@ describe('_codex_lane_json_ensure — lane.json equals the roster, written only 
     ['upstream', (j: Record<string, unknown>): void => { delete j['upstream']; }],
     ['bridgeFiles', (j: Record<string, unknown>): void => { delete j['bridgeFiles']; }],
     ['bridgeFiles.store', (j: Record<string, unknown>): void => { delete (j['bridgeFiles'] as Record<string, unknown>)['store']; }],
+    ['bridgeFiles.stats', (j: Record<string, unknown>): void => { delete (j['bridgeFiles'] as Record<string, unknown>)['stats']; }],
+    ['bridgeFiles.recordings', (j: Record<string, unknown>): void => { delete (j['bridgeFiles'] as Record<string, unknown>)['recordings']; }],
+    ['an empty-string bridgeFiles.store', (j: Record<string, unknown>): void => { (j['bridgeFiles'] as Record<string, unknown>)['store'] = ''; }],
     ['a non-string bridge', (j: Record<string, unknown>): void => { j['bridge'] = 1; }],
     ['a bridgeFiles that is not an object', (j: Record<string, unknown>): void => { j['bridgeFiles'] = 'bridge.stats.json'; }],
   ] as const)('an older lane.json with no bridge reads stale and is re-rendered (%s)', async (_what, edit) => {
@@ -584,10 +587,16 @@ describe('_codex_lane_mode and _codex_lane_upstream — the lane\'s words, read 
     expect(ask(h).stdout).toBe('mode=0|litellm upstream=0|backend\n');
   });
 
-  it('an absent lane.json, a directory in its place, a file that is not JSON and a malformed id each refuse rc 1', async () => {
+  it('an absent lane.json, a directory in its place, a file that is not JSON, two documents and a malformed id each refuse rc 1', async () => {
     const h = await rendered('ccrc-codex-lanemode-shapes-');
     const f = join(laneDir(h, 'codex-a'), 'lane.json');
     fs.writeFileSync(f, 'not json\n');
+    expect(ask(h).stdout).toBe('mode=1| upstream=1|\n');
+    // Two documents: the bridge's single json.loads refuses this file, so the bash reader must too — never two
+    // words, and never the first document's word past a second it cannot read.
+    fs.writeFileSync(f, '{"bridge":"direct","upstream":"siwc"}\n{"bridge":"litellm","upstream":"backend"}\n');
+    expect(ask(h).stdout).toBe('mode=1| upstream=1|\n');
+    fs.writeFileSync(f, '{"bridge":"direct","upstream":"siwc"}\n{"bridge":"nope","upstream":"nope"}\n');
     expect(ask(h).stdout).toBe('mode=1| upstream=1|\n');
     fs.writeFileSync(f, '["litellm"]\n');
     expect(ask(h).stdout).toBe('mode=1| upstream=1|\n');

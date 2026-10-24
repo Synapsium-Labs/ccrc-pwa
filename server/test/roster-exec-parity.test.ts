@@ -134,6 +134,21 @@ describe('CODEX_BRIDGE_MODES and CODEX_UPSTREAMS parity between the parser and i
     }
   });
 
+  // The bash readers of a rendered lane.json (`_codex_lane_mode`, `_codex_lane_upstream` in ccd/ccrc) carry a third
+  // spelling of both sets, as one quoted space-separated list each. A word added to roster.ts alone would render into
+  // lane.json and then read `lane-*-unreadable` in bash for a valid roster, so the two lines are pinned here, in order.
+  it.each([
+    ['_codex_lane_mode', 'CODEX_BRIDGE_MODES'],
+    ['_codex_lane_upstream', 'CODEX_UPSTREAMS'],
+  ] as const)('ccd/ccrc\'s %s carries exactly roster.ts\'s %s, in order', (fn, name) => {
+    const src = readFileSync(path.join(root, 'ccd/ccrc'), 'utf8');
+    const lines = src.split('\n').filter((l) => l.startsWith(`${fn}() `));
+    expect(lines, `one ${fn} definition line in ccd/ccrc`).toHaveLength(1);
+    const m = lines[0]!.match(/^\S+\(\)\s*\{\s*_codex_lane_word\s+"\$\{1:-\}"\s+\S+\s+\S+\s+"([^"]*)";\s*\}$/);
+    if (m === null) throw new Error(`${fn}'s line in ccd/ccrc is not the one-line _codex_lane_word call - re-read it`);
+    expect(m[1]!.split(' ')).toEqual(codexWordsIn('shared/roster.ts', name));
+  });
+
   const rosterWith = (exec: Record<string, unknown>) => ({
     version: 1,
     accounts: [
