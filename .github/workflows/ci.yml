@@ -147,6 +147,7 @@ jobs:
       trace_count: ${{ steps.select.outputs.trace_count }}
       map_sha: ${{ steps.select.outputs.map_sha }}
       fallback: ${{ steps.select.outputs.fallback }}
+      floor: ${{ steps.select.outputs.floor }}
     steps:
       # Full depth: the changed set is `git diff <map-sha> HEAD`, and the map's
       # commit must be present to be diffed against.
@@ -180,6 +181,42 @@ jobs:
           else
             echo "::warning::could not diff this change against $BASE; treating its pipeline as changed"
             echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      # D-6771: does this pull request change what `node floor` runs or runs
+      # on, other than through a file a test reads? Answered here, where the
+      # diff is: the manifests and lockfiles, the Node version files, the
+      # history library and the workflow, the floor's own tests and the
+      # vitest config with its setup files. The Select step adds the other
+      # half: the floor's tests the dependency map selects, which covers
+      # every module and helper they import. Read by that job's leg switch —
+      # a path filter on the trigger would skip a required check; this skips
+      # only the one job that is not required. Every event but a pull request
+      # answers true (a merge-queue group and the daily run check every merge
+      # against the floor), and so does a base it cannot diff.
+      - name: Does this pull request touch the node floor's inputs?
+        id: floor
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ format('origin/{0}', github.base_ref) }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif mb=$(git merge-base "$BASE" HEAD) && changed=$(git diff --name-only "$mb" HEAD -- \
+              ':(glob)**/package.json' ':(glob)**/package-lock.json' ':(glob)**/.nvmrc' \
+              ':(glob)ccd/history/**' ':(glob).github/**' \
+              server/test/node-floor.test.ts ':(glob)server/test/history-*.test.ts' server/test/measure-history.test.ts \
+              server/vitest.config.ts server/vitest.select.config.ts \
+              ':(glob)server/test/*.setup.mjs' ':(glob)server/test/*.globalsetup.mjs'); then
+            if [ -n "$changed" ]; then
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              printf 'the node floor runs; its inputs changed:\n%s\n' "$changed"
+            else
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "the node floor is skipped; none of its inputs changed"
+            fi
+          else
+            echo "::warning::could not diff this change against $BASE; running the node floor"
+            echo "run=true" >> "$GITHUB_OUTPUT"
           fi
       # The newest map and duration table come ONLY from artifacts of trusted
       # ci.yml runs on main (main-artifact.mjs: branch main, this repository,
@@ -242,10 +279,15 @@ jobs:
           INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 * * * *' && 'refresh') || '' }}
           FULL_GREEN: ${{ steps.green.outputs.full_green || 'false' }}
           PIPELINE_CHANGED: ${{ steps.pipeline.outputs.changed }}
+          FLOOR: ${{ steps.floor.outputs.run }}
         run: |
           args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
           if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi
           if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
+          # D-6771: the files the node floor runs, read from its own job so the list has one source; select.mjs
+          # answers `floor` true when its selection holds one of them, or when FLOOR (the static inputs) is true.
+          sed -n '/^  node-floor:$/,/^  [a-z-]*:$/p' .github/workflows/ci.yml | sed -n 's/^ *\(test\/[A-Za-z0-9._-]*\.test\.ts\)$/\1/p' > "$RUNNER_TEMP/floor-list.txt"
+          args+=(--floor-list "$RUNNER_TEMP/floor-list.txt" --floor-static "${FLOOR:-true}")
           node .github/ci/select.mjs "${args[@]}"
       # map-build refreshes against EXACTLY the map this job diffed from, not
       # whatever is newest by the time it runs, and is told which tests this
@@ -928,15 +970,19 @@ jobs:
   # list is exact. Its `node-version` is pinned equal to `engines.node` by
   # server/test/ci-pipeline.test.ts, and so is its name.
   #
-  # Not required BY NAME (making it a required PR check is a branch-protection
-  # setting, the operator's act), but `full-suite` needs it, so it gates a
-  # stable promotion. No job-level `if:` and no `needs:`: it skips by STEP on a
-  # refresh or a rebuild, like the required legs, because a job skipped by
-  # `if:` reads as red in full-suite. Default checkout depth: nothing on its
-  # list reads the commit range.
+  # Not required BY NAME (the required checks are test (server), test (agent),
+  # test (pwa) and build-pwa), but `full-suite` needs it, so it gates a
+  # stable promotion. Its only job-level `if:` is `!cancelled()`, so a failed
+  # `needs:` never skips it: it skips by STEP on a refresh, a rebuild, or a
+  # pull request that changed none of its inputs (D-6771), like the required
+  # legs, because a job skipped by `if:` reads as red in full-suite. Default
+  # checkout depth: nothing on its list reads the commit range.
   node-floor:
     name: node floor (22.16.0)
-    needs: deps
+    # D-6771: `select` only lends its `floor` output — on a pull request it
+    # runs only when `select` found one of its inputs changed; every other
+    # event runs it unless it is a refresh or a rebuild.
+    needs: [select, deps]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # server-deps installs four packages from a cold cache in about three
@@ -944,7 +990,7 @@ jobs:
     # list runs in seconds. 30 is a deadline, not an estimate.
     timeout-minutes: 30
     env:
-      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && needs.select.outputs.floor != 'true')) && 'skip' || 'run' }}
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
