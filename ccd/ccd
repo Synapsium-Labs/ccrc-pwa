@@ -22187,7 +22187,8 @@ _operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the
     sets+=(--set "$field=$want"); kinds+=("$kind:$want")   # collected: the pair is checked ONCE, in one call below
   done <<<"$merged"
   if (( ${#kinds[@]} )); then   # ONE call for the pair: `cmd_route` checks class against effort on the merged sets, so a haiku record that takes /model opus AND /effort high keeps both (a call per field refused the effort first)
-    if ( cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, $reason" ) >/dev/null 2>&1; then
+    # D-6791: the value is an acknowledged /model the operator typed, not the session shell asking, so the fable check (CLAUDECODE) does not apply.
+    if ( unset CLAUDECODE; cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, $reason" ) >/dev/null 2>&1; then
       # A LIVE PROMOTION TYPES NOTHING IT WROTE (D-4319, kept under D-4321). The
       # supervise tick runs the applier right after `_sync_uuid`, and a promoted
       # field pending against `routeapplied` was typed back into the live pane —
