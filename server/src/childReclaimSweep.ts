@@ -733,6 +733,10 @@ export interface ChildStaleIdleInstants {
   readonly mailAt: number | null;
   /** The newest stamp of the session's own status clock the registry row holds. */
   readonly statusAt: number | null;
+  /** The write time of the hold file (`$REG/<id>.hold`), for the `held` word only: writing or renewing a hold is activity,
+   *  so a child a person has just held is never reclaimed until seven days after. `null` when there is no hold to date
+   *  (every other word). A hold whose time cannot be read never reaches this field: the lane keeps the child. */
+  readonly holdAt?: number | null;
 }
 export type ChildStaleIdleRead = ChildStaleIdleInstants | 'unmeasured';
 
@@ -763,11 +767,11 @@ export function childReclaimStaleWordOf(v: ChildReclaimSweepVerdict): ChildStale
   }
 }
 
-/** The newest instant of the three, or `null` when this read cannot say how long the child has been idle: any
+/** The newest instant of the four, or `null` when this read cannot say how long the child has been idle: any
  *  non-finite stamp, or no stamp at all (no evidence is not idleness). */
 function childStaleNewest(idle: ChildStaleIdleRead): number | null {
   if (idle === 'unmeasured') return null;
-  const at = [idle.runAt, idle.mailAt, idle.statusAt];
+  const at = [idle.runAt, idle.mailAt, idle.statusAt, idle.holdAt ?? null];
   if (at.some((x) => x !== null && !Number.isFinite(x))) return null;
   const known = at.filter((x): x is number => x !== null);
   return known.length === 0 ? null : Math.max(...known);

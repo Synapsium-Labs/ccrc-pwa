@@ -9,7 +9,7 @@
 // Fixture HOMEs only. No real ccd runs anywhere in this file.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher, CHILD_RECLAIM_SWEEP_MS } from '../src/watch.js';
@@ -43,7 +43,7 @@ const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
 const NOW = 1_790_000_000_000;
 const SKEW = 120_000;
 /** A held child on every count a stale step reads: idle past the ceiling, nothing open, never coordinated. */
-const idleFor = (ms: number) => ({ runAt: NOW - ms, mailAt: NOW - ms, statusAt: NOW - ms });
+const idleFor = (ms: number) => ({ runAt: NOW - ms, mailAt: NOW - ms, statusAt: NOW - ms, holdAt: NOW - ms });
 const base = (over: Partial<ChildReclaimSweepInput> = {}): ChildReclaimSweepInput => ({
   sessionId: 'demo-a', child: { kind: 'child', runId: 7 }, identityMeasured: true, generation: { kind: 'absent' },
   workspace: 'demo-a', held: { kind: 'none' }, terminal: false,
@@ -122,7 +122,7 @@ describe('childReclaimStaleVerdict: the stale step after the sweep verdict (D-66
   it('any idle input unmeasured keeps the child', () => {
     expect(childReclaimStaleVerdict(base({ ...WORDS[1]![2], idle: 'unmeasured' }))).toEqual({ stale: false });
     // one fresh input among old ones is activity
-    for (const k of ['runAt', 'mailAt', 'statusAt'] as const) {
+    for (const k of ['runAt', 'mailAt', 'statusAt', 'holdAt'] as const) {
       expect(childReclaimStaleVerdict(base({ ...WORDS[1]![2], idle: { ...idleFor(30 * DAY), [k]: NOW - DAY } })), k)
         .toEqual({ stale: false });
     }
@@ -220,6 +220,8 @@ const lane = (opts: LaneOpts = {}) => {
       workspace: id.slice('demo-'.length), branch: `ws/${id}`, base: 'origin/main', started: '1', ...extra,
     };
     for (const [f, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${f}`), v);
+    // the hold's write time is activity: date it on the lane's clock, not the machine's
+    if ('hold' in fields) utimesSync(path.join(reg, `${id}.hold`), clock / 1000, clock / 1000);
     journal(id, 'done', null, 'create');
   };
   let progN = 0;
@@ -244,7 +246,7 @@ const lane = (opts: LaneOpts = {}) => {
   const mailFromOperator = (): number =>
     (coord.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE fromId = 'operator'").get() as { n: number }).n;
   return { reg, coord, watcher, requests, plant, openRun, abandon, journal, pass, passes, advance, next, feedTitles,
-    mailFromOperator, now: () => clock, answerWith: (f: typeof answer) => { answer = f; } };
+    mailFromOperator, io: deps.io, now: () => clock, answerWith: (f: typeof answer) => { answer = f; } };
 };
 
 /** A finished child under a hand hold, abandoned at T0; the clock then moves `days` and a pass is taken. */
@@ -280,6 +282,39 @@ describe('sweepChildReclaim: the stale arm (D-6639)', () => {
     expect(f.requests).toHaveLength(1);
     expect(f.requests[0]!.stale?.word).toBe('held');
     expect(f.requests[0]!.stale?.holdDigest).toBe(sha(bytes));
+  });
+
+  it('armed: a hold written at day 8 on an idle child is not asked until 7 days after the hold (writing a hold is activity)', async () => {
+    const f = lane({ armed: true });
+    const r = f.openRun(); f.abandon(r);
+    f.plant('demo-a', { child: String(r.id) });
+    f.advance(8 * DAY);
+    writeFileSync(path.join(f.reg, 'demo-a.hold'), HAND);
+    utimesSync(path.join(f.reg, 'demo-a.hold'), f.now() / 1000, f.now() / 1000);
+    await f.passes(4);
+    expect(f.requests, 'the hold was just written').toEqual([]);
+    f.advance(6 * DAY); await f.passes(3);
+    expect(f.requests, 'six days after the hold').toEqual([]);
+    f.advance(2 * DAY); await f.passes(3);
+    expect(f.requests.map((q) => q.stale?.word)).toEqual(['held']);
+  });
+
+  it('armed: a hold whose write time cannot be read keeps the child', async () => {
+    const f = lane({ armed: true });
+    heldChild(f);
+    f.advance(30 * DAY);
+    const stat = vi.spyOn(f.io, 'statMeasured').mockResolvedValue({ ok: false, reason: 'unreadable' } as never);
+    await f.passes(4);
+    expect(stat).toHaveBeenCalled();
+    expect(f.requests).toEqual([]);
+  });
+
+  it('a hold is not dated for a child that is not yet past the ceiling', async () => {
+    const f = lane({ armed: true });
+    heldChild(f);
+    const read = vi.spyOn(f.io, 'statMeasured');
+    f.advance(2 * DAY); await f.passes(3);
+    expect(read.mock.calls.filter((c) => String(c[0]).endsWith('.hold'))).toEqual([]);
   });
 
   it('armed: the stale child is asked on the second pass, never the first (twice observed, as every reclaim)', async () => {
