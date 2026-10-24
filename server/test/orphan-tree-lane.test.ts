@@ -14,7 +14,7 @@ const HOUR = ORPHAN_LICENCE_MS;
 const hexOf = (p: string): string => Buffer.from(p).toString('hex');
 const tok = (c: string): string => c.repeat(64);
 
-interface Tree { cls: string; audit: Record<string, unknown> }
+interface Tree { cls: string; audit: Record<string, unknown>; inside?: string | null }
 const clean = (c: string): Record<string, unknown> => ({ verdict: 'token', refusal: null, detail: '', token: tok(c), rescueToken: null });
 const refused = (word: string, detail = ''): Record<string, unknown> => ({ verdict: 'refused', refusal: word, detail, token: null, rescueToken: null });
 const rung9 = (c: string): Record<string, unknown> => ({ verdict: 'refused', refusal: 'head-not-on-remote', detail: 'two commits on no remote', token: null, rescueToken: tok(c) });
@@ -26,6 +26,8 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
   const feed: Array<{ title: string; body: string }> = [];
   let mono = 1_000_000;
   let truncated = false;
+  const coordinators = new Set<string>();
+  let coordsReadable = true;
   const ok = (stdout: string): CcdResult => ({ ran: true, ok: true, stdout, stderr: '', killed: false, signal: null });
   const deps: OrphanSweepDeps = {
     io: { readdirMeasured: async () => ({ ok: true, entries: [...markers] }) } as unknown as OrphanSweepDeps['io'],
@@ -34,7 +36,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
       const a = [...argv];
       calls.push(a);
       if (a[0] === 'ws-audit' && a[1] === '--orphans') {
-        return ok(JSON.stringify({ mode: 'orphans', truncated, rows: [...trees].map(([hex, t]) => ({ pathHex: hex, class: t.cls })) }));
+        return ok(JSON.stringify({ mode: 'orphans', truncated, rows: [...trees].map(([hex, t]) => ({ pathHex: hex, class: t.cls, ...(t.inside === undefined ? {} : { inside: t.inside }) })) }));
       }
       if (a[0] === 'ws-audit' && a[1] === '--orphan-hex') {
         const t = trees.get(a[2]!)!;
@@ -53,6 +55,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
     epochNow: () => 1,
     pressure: () => false,
     record: (title, body) => { feed.push({ title, body }); },
+    coordinators: () => { if (!coordsReadable) throw new Error('store unreadable'); return coordinators; },
   };
   const sweep = new OrphanTreeSweep(deps);
   const acts = (): string[][] => calls.filter((c) => c[0] === 'ws-orphan');
@@ -61,6 +64,8 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
     add: (p: string, cls: string, audit: Record<string, unknown>): string => { const h = hexOf(p); trees.set(h, { cls, audit }); return h; },
     advance: (ms: number): void => { mono += ms; },
     truncate: (v: boolean): void => { truncated = v; },
+    coordinators, unreadable: (v: boolean): void => { coordsReadable = !v; },
+    addInside: (p: string, cls: string, audit: Record<string, unknown>, inside: string): string => { const h = hexOf(p); trees.set(h, { cls, audit, inside }); return h; },
   };
 }
 
@@ -309,5 +314,57 @@ describe('the executor stops on its own, whatever the pass did', () => {
     };
     expect(await collectOrphanTree(deps as never, hex, { token: tok('a'), rescue: false, atMono: 0 }, () => 2 * HOUR, 1)).toEqual({ kind: 'stopped', why: 'epoch' });
     expect(calls.some((c) => c[0] === 'ws-orphan')).toBe(false);
+  });
+});
+
+describe('DR-23: trees nested inside a workspace', () => {
+  const armed = (r: ReturnType<typeof rig>): void => { r.markers.add(ORPHAN_TREE_LIVE_MARKER); };
+  const audits = (r: ReturnType<typeof rig>): string[][] => r.calls.filter((c) => c[1] === '--orphan-hex');
+
+  it('inside a coordinator: a candidate, audited, licensed and removed like any other', async () => {
+    const r = rig(); armed(r); r.coordinators.add('lane-a');
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'lane-a');
+    await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toHaveLength(1);
+  });
+
+  it('inside a worker: reported once as going with its workspace, never audited or removed', async () => {
+    const r = rig(); armed(r);
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'worker-a');
+    await r.sweep.pass(); r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass(); r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(audits(r)).toEqual([]);
+    expect(r.acts()).toEqual([]);
+    expect(r.feed.filter((f) => f.body.includes('goes with its workspace'))).toHaveLength(1);
+  });
+
+  it('the claim read unreadable: not a candidate, and nothing is audited', async () => {
+    const r = rig(); armed(r); r.coordinators.add('lane-a'); r.unreadable(true);
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'lane-a');
+    await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(audits(r)).toEqual([]);
+    expect(r.acts()).toEqual([]);
+  });
+
+  it('a coordinator that ends between the audits stops the act', async () => {
+    const r = rig(); armed(r); r.coordinators.add('lane-a');
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'lane-a');
+    await r.sweep.pass();
+    r.coordinators.delete('lane-a'); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toEqual([]);
+  });
+
+  it('a tree inside nothing is unaffected, and a census row with a malformed inside is unreadable', () => {
+    const row = (inside: unknown): string => JSON.stringify({ mode: 'orphans', truncated: false, rows: [{ pathHex: '61', class: 'claude', inside }] });
+    expect(parseOrphanCensus(row(null))).toMatchObject({ kind: 'census', rows: [{ inside: null }] });
+    expect(parseOrphanCensus(row('lane-a'))).toMatchObject({ kind: 'census', rows: [{ inside: 'lane-a' }] });
+    expect(parseOrphanCensus(row('../x'))).toEqual({ kind: 'unreadable' });
+    expect(parseOrphanCensus(row(7))).toEqual({ kind: 'unreadable' });
+  });
+
+  it('the rescue token stays behind its own marker for a nested tree', async () => {
+    const r = rig(); armed(r); r.coordinators.add('lane-a');
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', rung9('a'), 'lane-a');
+    await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toEqual([]);
   });
 });

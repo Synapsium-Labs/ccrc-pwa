@@ -4934,6 +4934,7 @@ export class FleetWatcher {
       io: this.deps.io, registryDir: this.deps.cfg.registryDir, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
       queue: this.deps.queue, mono: () => this.childReclaimLaneNow().monoMs,
       epochNow: () => (this.deps.fleetIdentity ?? NO_FLEET_IDENTITY).epochNow(), pressure: () => false,
+      coordinators: () => new Set(coord.openCoordinatorIds()),
       record: (title, body) => notify({ notifyLog: this.deps.notifyLog, coord },
         { kind: 'coord', sessionId: '', runId: null, title, body }, 'record-only', { degraded: `orphan-tree lane ${title}, feed archive degraded` }),
     });
