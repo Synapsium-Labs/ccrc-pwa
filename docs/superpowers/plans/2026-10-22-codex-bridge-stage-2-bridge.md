@@ -328,7 +328,7 @@ event, with no `message_stop`. "State" is what the bridge records through `recor
 `classify_http` reads the body's `error.code` (and `error.type`) BEFORE the HTTP status, so a code's row wins over its status's row (`slow_down` and
 `server_is_overloaded` both arrive as 503). `login-failed`, Stage 1's ninth word, is raised only by `sign_in_device`, which the bridge never calls; an
 `AuthError` whose word is in neither set is the 401 row. Every error keeps the upstream request id (`x-request-id`, else `request-id`) in the stats
-file and, with its code, in the status file, except when `record_upstream`'s lock wait times out or no credential is present: then the library answers
+file and, with its code, in the status file, except when `record_upstream`'s lock is not taken or no credential is present: then the library answers
 None and no request id reaches the stats file (D-6827). A prompt-too-long 400 carries no `x-should-retry` header: the measured recovery used none.
 
 **The commit point** (R17). The bridge holds the HTTP status line until the first of: the reducer releases its first
@@ -909,7 +909,7 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
     is a `ValueError`, a programming error); writes `limit-paused`/`ineligible` over `ok`; writes `ok` only over `limit-paused` or
     `ineligible`; never over `needs-signin` or `config-error`; merges `lastErrorCode` and `lastRequestId` (bounded as Stage 1 bounds them)
     into the current status, keeping every refresher field; answers the request id after `_bounded_upstream`, whether or not the status was
-    written (`None` when it is dropped, when the credential is not present, or when the lock times out); never touches the network (D-6839).
+    written (`None` when it is dropped, when the credential is not present, or when the lock is not taken); never touches the network (D-6839).
   - `half_life_s(r: Reading) -> float` — `(exp − iat) / 2` from the access token's claims when both are integers and
     `exp > iat`, else `EXPIRY_SKEW_S`; the designated refresher passes it as `within_s` (spec §2.6, "at about half the
     token lifetime").
@@ -2312,7 +2312,9 @@ further departure found while executing is written `D-TBD-<slug>` and named in t
 - **Why:** The plan asks for a flush failure to be counted but gives it no key. A wrong family must be visible without
   recording anything under it.
 - **Cost if wrong:** Task 17's doctor reads `outcomes` and has to know these two keys, D-6833's `catalogue-unreadable`
-  and D-6835's `client-gone`, the four keys outside the closed list, or it shows them as unknown.
+  and D-6835's `client-gone`, outside Task 5's closed list, and Task 4's `store:*` family (D-6816), or it shows them as
+  unknown.
+
 ### D-6821 — `usageHeaders` and `lastUpstreamRequestId` start null
 
 - **Departs from:** Task 5's stats file shape (plan :861-862), which gives `usageHeaders` as `{"at", "values"}` and says
@@ -2407,6 +2409,7 @@ further departure found while executing is written `D-TBD-<slug>` and named in t
   id and its answer is not written. Bounding a 2xx's id would mean passing it there and writing the answer. A failure
   recorded while the lock wait times out, or with no credential present, gives the stats file no request id (the answer
   is None), so the id standing there is an earlier failure's, or none.
+
 ### D-6828 — an upstream code or request id that echoes a secret is dropped
 
 - **Departs from:** Task 6's `record_upstream` (plan :911): `lastErrorCode` and `lastRequestId` "bounded as Stage 1
@@ -2506,8 +2509,8 @@ further departure found while executing is written `D-TBD-<slug>` and named in t
   (`AnthropicStream.drain_cut`, set in `cut` before `closed`, `ccd/codexbridge/stream.py:72`, :190) adds nothing,
   because the drain counts it `drain-cut` (`server.py:973`). A stream whose client went away (`client_gone`, set by a
   write that failed, `stream.py:87-89`) is counted `client-gone`, `stats.CLIENT_GONE`
-  (`ccd/codexbridge/stats.py:86-89`), a fourth key outside the plan's list, beside D-6820's two and D-6833's
-  `catalogue-unreadable`. Any other failure is `4xx` or `5xx` as before, and the handler's arm for an unexpected
+  (`ccd/codexbridge/stats.py:86-89`), another key outside the plan's list, beside D-6820's two, D-6833's
+  `catalogue-unreadable` and Task 4's `store:*` family. Any other failure is `4xx` or `5xx` as before, and the handler's arm for an unexpected
   exception still counts `5xx`. The cases are at `server/test/codex-bridge-server.test.ts:523-525` (the drain) and
   :727-736 (a client gone mid-reply).
 - **Why:** The 7-day watch compares `outcomes.5xx` over requests with the litellm baseline. Counted as `5xx`, every user
@@ -2570,7 +2573,7 @@ further departure found while executing is written `D-TBD-<slug>` and named in t
   `LockTimeout` → `False`.
 - **What changed:** `record_upstream` answers `Optional[str]`: the request id after `_bounded_upstream` bounds it
   against the lane's tokens and account id (`ccd/ccgpt-auth.py:1526-1541`), whether or not the status was written, and
-  None when that bound drops it, when the credential is not present, or when the lock times out
+  None when that bound drops it, when the credential is not present, or when the lock is not taken
   (`ccd/ccgpt-auth.py:1544-1595`). `_Request.record` writes that answer, and nothing else, as the stats file's
   `lastUpstreamRequestId` (`ccd/codexbridge/server.py:547-561`). Task 6's interface now reads so.
 - **Why:** The stats file's request id is bounded as Stage 1's status file bounds its own (whole-wave finding WS-2).
