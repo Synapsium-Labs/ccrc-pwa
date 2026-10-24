@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=aa3a49d5187fc2d2ef0669f18b82c0d4cbeff705f87278e9dbfc9a854c81df03
+# ccrc:generated 1 sha256=fc875c92362fd129b065b49f69a81f5deb5a250f9c1abe2afa0e11c0ec4538b1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -21793,11 +21793,18 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   done
   rows=$(_route_picker_rows "$picker")
   if [[ "$cls" == default || -z "$cls" ]]; then want="Default"; else want="${cls^}"; fi
-  # D-6793: the picker's Default row follows the lane's saved default, so on an Anthropic lane whose settings.json
-  # defaults to Fable it would switch the live pane to Fable. Operator-only: type the Opus row instead. A named
-  # class (the operator's own fable included) is never touched. Not measured on a live pane here (no ssh); the guard
-  # only ever picks Opus over a possible Fable.
-  [[ "$want" == Default ]] && _is_anthropic_backend "$w" && _lane_default_is_fable "$w" && want="Opus"
+  # D-6793: the picker's Default row follows the lane's saved default, so a Default row that NAMES Fable (its own
+  # words: `Use the default model (currently Fable 5)`, or `Fable 5 · …` on a subscription lane) would switch the live
+  # pane to Fable. Operator-only: type the Opus row instead. Read off the picker itself, so a Fable default that does
+  # not come from settings.json is caught too, and no other context's function is called. A named class (the
+  # operator's own fable included) is never touched. The journal then says what is typed (`model opus`), or the
+  # acknowledgement `Set model to Opus 5` would be promoted as the operator's choice (session-continuity §5.7).
+  if [[ "$want" == Default ]] && _is_anthropic_backend "$w"; then
+    while IFS=$'\t' read -r n cur label desc; do
+      [[ "${label%% *}" == Default && "${desc%% · *}" =~ (^|[^[:alnum:]])Fable([^[:alnum:]]|$) ]] || continue
+      want="Opus"; _typed_note "$id" model opus; break
+    done <<< "$rows"
+  fi
   while IFS=$'\t' read -r n cur label desc; do
     [[ -n "$n" ]] || continue
     [[ "$cur" == 1 ]] && curs="$n"

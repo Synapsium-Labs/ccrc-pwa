@@ -613,24 +613,28 @@ describe('the final review\'s three writer/typer defects, each pinned where it h
     expect(h.reg(ID, 'routeapplied')).toContain('class=default');
   });
 
-  describe('D-6793: the picker\'s Default row on a lane whose saved default is Fable', () => {
-    const setDefault = (model: string): void => {
-      const d = h.sh('_cfg_dir claude').trim();
-      fs.mkdirSync(d, { recursive: true });
-      fs.writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ model }));
-    };
-    const toDefault = (): void => {
+  describe('D-6793: the picker\'s Default row that names Fable', () => {
+    const FABLE_PICKER = (desc: string): string => `${IDLE_PANE}${PICKER(`❯ 1. Default (recommended) ✔  ${desc}\n  2. Sonnet\n  3. Opus\n  4. Haiku`)}`;
+    const toDefault = (pane: string, ackName: string): void => {
       h.sh(`_reg_set ${ID} class default; _reg_set ${ID} routeapplied "class=opus"`);
-      after('model', PICKER_PANE); after('s', ACK_MODEL('Opus 5'));
+      after('model', pane); after('s', ACK_MODEL(ackName));
     };
-    it('class=default types the Opus row (Down, Down), never the Default row', () => {
-      setDefault('fable'); toDefault();
+    for (const [name, desc] of [['the (currently X) form', 'Use the default model (currently Fable 5)'], ['the subscription form', 'Fable 5 · Most capable for complex work']] as const) {
+      it(`class=default types the Opus row (Down, Down) when the Default row says Fable: ${name}`, () => {
+        toDefault(FABLE_PICKER(desc), 'Opus 5');
+        h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
+        expect(keys()).toEqual(['-l /model', 'Enter', 'Down', 'Down', '-l s']);
+      });
+    }
+    it('the journal says what was typed: a `model default` row AND a `model opus` row', () => {
+      toDefault(FABLE_PICKER('Use the default model (currently Fable 5)'), 'Opus 5');
       h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
-      expect(keys()).toEqual(['-l /model', 'Enter', 'Down', 'Down', '-l s']);
+      const rows = (h.reg(ID, 'typed') ?? '').split('\n').filter((l) => / model /.test(l)).map((l) => l.replace(/^\d+ /, ''));
+      expect(rows).toEqual(['model default', 'model opus']);
     });
-    it('class=default on a lane whose default is not Fable still types the Default row', () => {
-      setDefault('opus'); toDefault();
-      after('s', ACK_MODEL('Sonnet 5'));
+    it('a Default row that names Opus still types the Default row', () => {
+      toDefault(FABLE_PICKER('Use the default model (currently Opus 5)'), 'Opus 5');
+      after('s', ACK_MODEL('Opus 5 (default)'));
       h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
       expect(keys()).toEqual(['-l /model', 'Enter', '-l s']);
     });
