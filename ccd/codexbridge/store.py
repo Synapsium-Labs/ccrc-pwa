@@ -27,7 +27,8 @@ ONE CONNECTION PER THREAD. The server is a ThreadingHTTPServer and sqlite3's def
 shared connection raise `ProgrammingError` on the first handler thread; each thread opens its own on first use, after
 checking that the path is still the file this store created (a file swapped in after the start disables the store).
 A thread's connection is not freed when the thread ends (it sits in reference cycles until a garbage collection), so
-the server's handler calls `store.close()` in a `finally` on its own thread, once per request.
+the caller must call `store.close()` in a `finally` on each thread that used the store: the server's request handler,
+once per request, on its own thread. Nothing in this module does it for the caller.
 
 Expiry: `get` never answers a row older than `ttl_s` (default TTL_S), whether or not an eviction has run. Eviction:
 expired rows, then the oldest first until the rows' total `size` is at most `max_bytes` (default MAX_BYTES); run by

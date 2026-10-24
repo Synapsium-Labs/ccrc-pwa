@@ -26,8 +26,11 @@ it('this box has a usable python3', () => {
 type Line = Record<string, any>;
 
 const DAY = 86_400;
-/** A fixed clock for the cases that pass `now`, far from the real one, so a row's age is the case's own. */
-const T0 = 2_000_000_000;
+/** The clock for the cases that pass `now`: the real one when this file loads. `put` and `evict` take the case's
+ *  `now`, so a row's age at an eviction is the case's own; `get` measures a row's age by the real clock (store.py
+ *  `_get`), so a row a case reads back must also be young on that clock. A fixed future T0 would hold that only until
+ *  the real clock passed it. */
+const T0 = Math.floor(Date.now() / 1000);
 
 /** A fixture HOME with a 0700 lane directory; the store file's path inside it. */
 function lane(prefix: string): { home: string; dir: string; db: string } {
@@ -202,6 +205,23 @@ describe.skipIf(!PY)('the reasoning store (codex-bridge spec §2.5, D23)', () =>
     const lines = await run(home, ops, { consts: { 'store.EVICT_EVERY_S': 0 } });
     const dump = lines[5];
     expect(dump.rows.reduce((s: number, r: Line) => s + (r.size as number), 0)).toBeLessThanOrEqual(1200);
+  });
+
+  it('a put evicts at most once a minute', async () => {
+    const { home, db } = lane('cb-store-throttle-');
+    const turn = (n: number): object => ({ items: [{ ...rs(n), encrypted_content: `ENC-${n}-${'x'.repeat(400)}` }], phase: null });
+    // EVICT_EVERY_S stays at its default: the first put evicts (one row, within the cap) and the next three, milliseconds
+    // later on the monotonic clock, do not, so the rows stand past the 1,200-byte cap until an explicit evict.
+    const ops: object[] = [{ op: 'store-open', path: db, max_bytes: 1200 }];
+    for (let n = 1; n <= 4; n += 1) ops.push({ op: 'store-put', call: `call_fx${n}`, turn: turn(n), now: T0 + n * 100 });
+    ops.push({ op: 'store-dump', path: db }, { op: 'store-evict', now: T0 + 500 }, { op: 'store-dump', path: db });
+    const lines = await run(home, ops);
+    const total = (l: Line): number => l.rows.reduce((s: number, r: Line) => s + (r.size as number), 0);
+    expect(lines[5].rows.length).toBe(4);
+    expect(total(lines[5])).toBeGreaterThan(1200);
+    expect(lines[6].evicted).toBe(2);
+    expect(lines[7].rows.map((r: Line) => r.turn)).toEqual([turn(3), turn(4)]);
+    expect(total(lines[7])).toBeLessThanOrEqual(1200);
   });
 
   it('the file is 0600 under a 0277 umask', async () => {
