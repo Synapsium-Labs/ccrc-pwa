@@ -2636,7 +2636,7 @@ EOF
 # ── diagnostic helpers (stderr; the RESULT of a verb goes to stdout) ───────
 # `_upd_redact <text>` — what NO die sentence, report detail, WARN or
 # announcement line may carry verbatim (review 155 C17/C18, fix round 1 items
-# 11 and M1): a URL's userinfo (`scheme://user:pass@host` -> `scheme://host`)
+# 11 and M1): a URL's userinfo (`[scheme://]user:pass@host` -> `[scheme://]host`)
 # and this box's own absolute home directory (-> `~`). TWO CHOKE POINTS, not
 # one — review fix round 1 M1 found a second path that reached `update.json`
 # and the journal unredacted: `UPD_GATE_WHY` (the gate's own failure reason,
@@ -2667,19 +2667,19 @@ _upd_redact() {
   local s="${1:-}" had_extglob=0
   shopt -q extglob && had_extglob=1
   shopt -s extglob
-  # The userinfo strip is bounded to characters a URL authority actually
-  # allows before an '@' — never '/' or whitespace — so an UNRELATED '@'
-  # past the authority (a query string's `?email=a@example.com`) is left alone:
-  # reaching it would need crossing a '/' the pattern refuses to match.
-  # Review fix round 1, N2: `?` and `#` also end the authority (a query
-  # string or a fragment can start right after the host, with no '/' at
-  # all) — measured, `https://h?a@b` and `https://h#a@b` both collapsed the
-  # HOST into the class, giving `https://b`. Excluded here so the class
-  # stops at the first of '/', '?' or '#', exactly where a URL authority
-  # itself ends. (A raw '@' inside a password, `user:pa@ss@host`, still
-  # takes the LAST '@' before the boundary — curl itself refuses that shape
-  # as a bad hostname, so it can never have worked; recorded, not fixed.)
+  # The userinfo strip is bounded to characters a URL authority allows
+  # before an '@' — never '/' or whitespace — so an UNRELATED '@' past the
+  # authority (a query's `?email=a@example.com`) is left alone. Review fix
+  # round 1, N2: `?` and `#` end the authority too (measured, `https://h?a@b`
+  # gave `https://b`), so the class stops at the first of '/', '?' or '#'.
+  # D-6748: a base with NO scheme (`user:pass@host/r`, which curl takes as
+  # http) is masked as doctor's box-settings masks one: every '@'-ended run
+  # from a TOKEN's start (the text's, or after whitespace, '"' or '<', which
+  # no URL holds raw) whose host then ends at '/', '?' or '#', as every URL
+  # built on a base does; prose's `user@host` and a query's email stay.
+  # (A scheme's `user:pa@ss@host`, which curl refuses, is recorded, unfixed.)
   s="${s//:\/\/+([^\/@?#[:space:]])@/:\/\/}"
+  local re='(^|[[:space:]"<])(([^/@?#[:space:]"<]+@)+)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
   [ "$had_extglob" -eq 1 ] || shopt -u extglob
   # Review fix round 1, M6: the OLD blind substring replace was not anchored
   # to a path boundary — HOME=`/home/u` turned `/home/user2/f` into

@@ -4526,6 +4526,12 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     // HOME becomes a LITERAL tilde character, not the redaction's own
     // process $HOME re-expanded back in.
     expect(call(`${home}/.ccrc/floor`)).toBe('~/.ccrc/floor');
+    // D-6748: a base with no scheme loses its userinfo at a token's start, with or without a ':' in it; prose's `user@host`,
+    // an email, a query's email and a scoped package name stay byte for byte.
+    expect(call('fetching user:s3cretTOKEN@127.0.0.1:1/rel/x and "tok@h/r"')).toBe('fetching 127.0.0.1:1/rel/x and "h/r"');
+    for (const kept of ['curl: (6) user@host', 'mail a@example.com today', 'https://h/r?email=a@example.com/y', '@scope/pkg']) {
+      expect(call(kept), kept).toBe(kept);
+    }
   });
 
   // Review fix round 1, M6: the OLD blind substring replace was not
@@ -4664,6 +4670,52 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       // of this run), so a passing test is not vacuously green.
       expect(r.status, `${verb} must actually have refused`).not.toBe(0);
     }
+  });
+
+  // D-6748 (fix round 1, F7): a base in ccrc.env with NO scheme (`user:pass@host/r`, which curl takes as http) is masked by
+  // `_upd_redact` as the scheme form is, on each of the three ways it would leave the box: the fetching line, the die line and
+  // update.json's detail. The poisoned curl (exit 99) fails the first fetch, so `_upd_resolve`'s URL-bearing die fires.
+  const schemeless = (prefix: string): { r: Result; secret: string; home: string } => {
+    const secret = 's3cretTOKEN';
+    const home = mkTmp(prefix);
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=user:${secret}@127.0.0.1:1/rel\n`);
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
+    delete env['CCRC_RELEASE_BASE_URL'];
+    assertNoRealTool(env, home);
+    const p = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--to', 'v0.0.1'], { env, encoding: 'utf8' });
+    const r = { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
+    expect(r.code, `it must refuse: ${r.stderr}`).not.toBe(0);
+    return { r, secret, home };
+  };
+  const SCHEMELESS_URL = '127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS';
+
+  it('a scheme-less credentialed base in ccrc.env: the fetching line names the URL without its userinfo (D-6748)', () => {
+    const { r, secret } = schemeless('ccrc-redact-schemeless-fetch-');
+    expect(r.stdout.split('\n'), r.stdout).toContain(`update: fetching ${SCHEMELESS_URL} …`);
+    expect(r.stdout).not.toContain(secret);
+    expect(r.stdout).not.toContain('user:');
+  });
+
+  it('a scheme-less credentialed base in ccrc.env: the download-failed die names the URL without its userinfo (D-6748)', () => {
+    const { r, secret } = schemeless('ccrc-redact-schemeless-die-');
+    const die = r.stderr.split('\n').filter((l) => l.includes('download failed:'));
+    expect(die, r.stderr).toHaveLength(1);
+    expect(die[0]).toContain(SCHEMELESS_URL);
+    expect(r.stderr).not.toContain(secret);
+    expect(r.stderr).not.toContain('user:');
+  });
+
+  it('a scheme-less credentialed base in ccrc.env: update.json\'s detail names the URL without its userinfo (D-6748)', () => {
+    const { secret, home } = schemeless('ccrc-redact-schemeless-json-');
+    const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+    const detail = String(JSON.parse(raw).detail ?? '');
+    expect(detail, raw).toContain('download failed:');
+    expect(detail).toContain('127.0.0.1:1/rel/download/');
+    expect(raw).not.toContain(secret);
+    expect(raw).not.toContain('user:');
   });
 
   // Fix round 1 item 11 / review 155 C17: the floor death's update.json
