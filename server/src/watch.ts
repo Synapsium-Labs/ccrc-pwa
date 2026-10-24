@@ -7141,10 +7141,11 @@ export class FleetWatcher {
       this.diskEpisodeResumed = true;
       const marked = readDiskEpisode(this.deps.cfg.ccrcDir);
       if (marked !== null) verdict = { ...verdict, episode: marked };
-    } else if (verdict.level === 'ok' && diskClearOfBand(read.measured)) {
-      // The mark's lifetime follows the MEASURED level, not this process's memory: a disk below the clear band has
-      // ended the episode, whether or not this process ever held it. A boot reading inside the band (ok by hysteresis
-      // alone) leaves the mark and the resume window open, so a rise that follows is still the marked episode.
+    } else if (verdict.level === 'ok' && (before?.episode !== undefined || diskClearOfBand(read.measured))) {
+      // The mark ends two ways: this process saw a held episode close (a clear is a clear whatever else sits in the
+      // band), or the MEASURED level is below the clear band on every filesystem, whether or not this process ever
+      // held it. A boot reading inside the band (ok by hysteresis alone) leaves the mark and the resume window open,
+      // so a rise that follows is still the marked episode.
       this.diskEpisodeResumed = true;
       clearDiskEpisode(this.deps.cfg.ccrcDir);
     }

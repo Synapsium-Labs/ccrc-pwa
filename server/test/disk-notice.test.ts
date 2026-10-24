@@ -269,4 +269,20 @@ describe('sweepDisk sends the notice through the funnel', () => {
     for (let i = 0; i < 3; i += 1) { clock += 60_000; await again.sweep(); }
     expect(again.push.notify.mock.calls.length).toBe(0);
   });
+
+  it('a clear of the alarmed filesystem forgets the mark though another filesystem sits inside the band: a later restart at a new rise pushes', async () => {
+    const home = mkTmp('ccrc-dn-');
+    let clock = 5_000_000;
+    const two = (a: number, b: number): MeasuredDisk => ({
+      ok: true, measured: { filesystems: [fsAt(a, '1'), fsAt(b, '2')], expectedMounts: [], missing: [] } satisfies DiskMeasured,
+    });
+    const both = (a: number, b: number): MeasuredDisk[] => [two(a, b), two(a, b)];
+    const p1 = await rig(home, [...both(40, 84), ...both(86, 84), ...both(70, 84)], () => clock);
+    for (let i = 0; i < 6; i += 1) { clock += 60_000; await p1.sweep(); }
+    expect(p1.push.notify.mock.calls.length).toBe(1);
+    clock += 24 * 3_600_000;
+    const p2 = await rig(home, both(86, 84), () => clock);
+    for (let i = 0; i < 2; i += 1) { clock += 60_000; await p2.sweep(); }
+    expect(p2.push.notify.mock.calls.length).toBe(1);
+  });
 });
