@@ -1693,3 +1693,11 @@ The coordinator's review of this round, at `0f3a205ed`, found 0 critical, 0 impo
   With this text: growth 45 (`ccd/ccrc` +26, stop line 39), citations 4, session-hook `-t 'CITATION DEBT'` 1,
   docs-parity 54, topology-clean 60, private-names 47, dtbd 1, and deviation-refs 31 after `git fetch origin main`. Every
   one passed.
+
+- **CI at `44b55be63` was red on one row outside this wave's files**, `single-definition`'s ARCH-06 ratchet ("literal
+  source pins over every other server/src file may only shrink"): main gained that ratchet (#1188) after this branch's
+  base, with `server/src/update/dispatch.ts` at 8, and W24-K6 read `dispatch.ts`'s text for the hard-cap factor, which
+  made it 9 on the merge ref. `3948962b1` takes `UPDATE_DEADLINE_HARD_CAP_FACTOR` by import and builds K6's pattern on
+  it, so a changed factor still reds K6 (measured: the bash's `4 * dl` changed to `5 * dl` reds it). Main's
+  `single-definition` ran 855/855 on the merge of this branch with main, in a scratch clone; nothing of main was
+  absorbed.
