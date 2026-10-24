@@ -54,6 +54,7 @@ import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 // Fix round 1 item 3 / review 155 C31: W2's OWN reader (never a hand copy),
 // the same import pattern `update-intent-cross-side.test.ts` already uses.
 import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
+import { UPDATE_DEADLINE_HARD_CAP_FACTOR } from '../src/update/dispatch.js';
 import { emptyDelegationCheckpoint } from '../src/coord/delegation-model.js';
 import { encodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
 import { buildDelegationJournalRecord, encodeDelegationJournalRecord } from '../src/coord/delegation-journal.js';
@@ -15325,9 +15326,8 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       const fn = (name: string): string => new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src)?.[0] ?? '';
       const until = fn('_bak_gc').split('\n').filter((l) => /^\s+until=\$\(\(/.test(l));
       expect(until, 'one until line in _bak_gc').toHaveLength(1);
-      const term = Number(/hc=\$\(\( 4 \* dl \/ 1000 - ([0-9]+) - margin \)\)/.exec(until[0])?.[1] ?? 'NaN');
-      const dispatch = readFileSync(join(REPO, 'server', 'src', 'update', 'dispatch.ts'), 'utf8');
-      expect(dispatch).toMatch(/^export const UPDATE_DEADLINE_HARD_CAP_FACTOR = 4;$/m);
+      // The control plane's factor by import, never by its source text (ARCH-06's ratchet counts a text pin on server/src).
+      const term = Number(new RegExp(`hc=\\$\\(\\( ${UPDATE_DEADLINE_HARD_CAP_FACTOR} \\* dl \\/ 1000 - ([0-9]+) - margin \\)\\)`).exec(until[0])?.[1] ?? 'NaN');
       const proto = readFileSync(join(REPO, 'shared', 'agent-protocol.ts'), 'utf8');
       const ms = (name: string): number => Number((new RegExp(`^export const ${name} = ([0-9_]+);$`, 'm').exec(proto)?.[1] ?? 'NaN').replace(/_/g, ''));
       // The four sources: the spawn's bound; the release-host probe's validated ceiling, by its name, counted twice (a re-install
