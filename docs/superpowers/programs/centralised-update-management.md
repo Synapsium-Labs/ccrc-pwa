@@ -5978,6 +5978,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   `197090a80`), no anomalies; both boxes still on v0.0.589.** #1228 is fifth in the merge queue.
   `STATUS 2026-10-24T05:27:03Z fleet=v0.0.589 server=v0.0.589 health=v0.0.589 newest=v0.0.608 intent=*:dev/auto=off`
   `backups=fleet:236M/server:7495M disk=fleet:108G/server:23G`
+- **2026-10-24 06:25 UTC — monitoring: both boxes moved to v0.0.608, by the operator's console tap; no anomalies.** The fleet
+  half ran 05:53 to 05:56 and the server half 05:57 to 06:04, each report `done` with `from: pwa`; `/health` answers
+  v0.0.608. The server took one backup (7495M to 7680M, five kept); its snapshot validates. This is the first move
+  onto a release carrying the delegation broker's follow-up 9, so the broker's soak clock can start; its coordinator
+  gets this programme's read-only part-A report once the hour after the move is complete. #1228 is first in the
+  merge queue.
+  `STATUS 2026-10-24T06:25:48Z fleet=v0.0.608 server=v0.0.608 health=v0.0.608 newest=v0.0.608 intent=*:dev/auto=off`
+  `backups=fleet:237M/server:7680M disk=fleet:108G/server:23G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
