@@ -535,8 +535,8 @@ export async function dispatchRun(
     ? await spawnFresh(deps, run, routeFields, childSlug, dispatchDec)
     : await resumeBound(deps, run, run.sessionId, dispatchDec);
   if ('ok' in bound) return bound;
-  // D-6794: the journal says the route was the table's row, not the coordinator's. After the spawn's refusals, so a
-  // dispatch that never ran leaves no row claiming a route it did not apply.
+  // D-6794: the journal says the route was the table's row, not the coordinator's. It records the decision; a box
+  // without `route-argv-v1` drops `--route` and journals `route-omitted` beside it. Written after the spawn's refusals.
   if (routeDefaulted) coord.recordRunEvent(id, 'coordinator', `route-defaulted:${run.kind}`);
   const { sessionId, resumed, liveGate, adopted, adoptedSpawn } = bound;
 
