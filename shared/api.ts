@@ -6028,6 +6028,17 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
 }
 
 /**
+ * D-6790: the ONE predicate every box-token route write asks before it names a class (operator ruling 2026-10-24: Fable
+ * runs only when the operator selects it). `true` when the fields set `class` to `fable`, spelled as ccd's vocabulary
+ * spells it or with the case and padding ccd would have to fold. `POST /api/runs/:id/route` (the manual write and a
+ * ladder result) and a dispatch's route (`coord/dispatchDecide.ts`) refuse on it with `409 fable-operator-only`. The
+ * cookie-session routes the operator's PWA uses never ask it: a human's explicit choice of Fable stays open there.
+ */
+export function routeNamesFable(r: Readonly<Partial<Record<string, string>>>): boolean {
+  return r.class?.trim().toLowerCase() === 'fable';
+}
+
+/**
  * Every TYPED run-refusal code declared for `POST /api/runs`,
  * `POST /api/runs/:id/dispatch`, `POST /api/runs/:id/close` and
  * `POST /api/runs/:id/advance` (`server/src/coord/routes.ts`) THAT IS NOT

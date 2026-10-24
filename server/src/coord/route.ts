@@ -1,6 +1,6 @@
 import {
   FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, RUN_STATES, TERMINAL_RUN_STATES, isRegistryId,
-  parseRouteEventDetail, parseRouteFields,
+  parseRouteEventDetail, parseRouteFields, routeNamesFable,
 } from '../../../shared/api.js';
 import type {
   FailureKind, RouteField, RouteMode, RunRouteRefuseCode, RunState, RunSummary,
@@ -38,6 +38,9 @@ import { CLASSES, type ModelClass } from '../../../shared/models.js';
  * them, so a refusal costs only the reads ahead of it, and a manual write
  * reads neither.
  */
+
+/** D-6790: the sentence both `fable-operator-only` refusals on `POST /api/runs/:id/route` carry. */
+const FABLE_OPERATOR_ONLY_DETAIL = "class fable is the operator's to select";
 
 /** `POST /api/runs/:id/route`'s routable run states (review finding #6, ruling
  *  S5-R4): every `RunState` not in `TERMINAL_RUN_STATES`, derived rather than
@@ -253,6 +256,8 @@ export async function decideRoute(facts: RouteFacts): Promise<RouteDecision> {
 
   const { how } = ask;
   if (how.by === 'manual') {
+    // D-6790: Fable runs only when the operator selects it; this door is a coordinator's, on the box token.
+    if (routeNamesFable({ [how.field]: how.value })) return refused('fable-operator-only', { detail: FABLE_OPERATOR_ONLY_DETAIL });
     return { ok: true, move: { sid, mode: 'manual', field: how.field, from: '?', to: how.value, kind: null, effortReset: null } };
   }
   const rung = await measureRung(facts, sid);
@@ -278,6 +283,9 @@ export async function decideRoute(facts: RouteFacts): Promise<RouteDecision> {
   }
 
   if (target.kind !== 'move') return refused(target.kind, { detail: target.why });
+  // D-6790: the same predicate over a ladder result. The ladders stop at the ceiling, so this is the backstop that
+  // keeps a future rung or a stored trail from carrying a coordinator past it.
+  if (routeNamesFable({ [target.field]: target.to })) return refused('fable-operator-only', { detail: FABLE_OPERATOR_ONLY_DETAIL });
 
   // A degraded session's own record may already intend the class the ladder
   // just computed (the served class escalated, not the intended one): writing

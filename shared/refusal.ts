@@ -85,7 +85,7 @@ export type CollectLaneRouteRefusal = Exclude<CollectLaneRefusal, 'confirm-requi
 export const GENERIC_REFUSALS = [
   'application-failed', 'ask-mismatch', 'ask-unreadable', 'bad-account-id', 'bad-attachment', 'bad-path',
   'bad-pool-name', 'bad-session', 'bad-session-id', 'bad-transition', 'ceiling', 'child-unmeasurable',
-  'claim-conflict', 'claim-terminal', 'claimant-changed', 'clip-unmeasurable', 'fleetFailed',
+  'claim-conflict', 'claim-terminal', 'claimant-changed', 'clip-unmeasurable', 'fable-operator-only', 'fleetFailed',
   'foreign-origin', 'gone', 'hetzner-error', 'incarnation-changed', 'internal', 'no-record',
   'no-session', 'no-such-passkey', 'not-found', 'not-held', 'not-owner', 'not-parent', 'not-ready',
   'not-remote', 'not-seeded', 'pool-mismatch', 'pool-unreadable', 'registry-unreadable', 'run-closed',
@@ -129,7 +129,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'claim-conflict': 409, 'claim-terminal': 409, 'claimant-changed': 409, 'no-record': 409, 'no-session': 409,
   'not-held': 409, 'not-remote': 409, 'not-seeded': 409, 'pool-mismatch': 409, 'run-closed': 409,
   'sweep-stopped': 409, 'floor': 409, 'no-effort-rungs': 409, 'unrouteable-record': 409, 'marker-still-controls': 409, 'conflict': 409,
-  'incarnation-changed': 409,
+  'incarnation-changed': 409, 'fable-operator-only': 409,
   [SWAP_REFUSALS.sessionBusy]: 409, [SWAP_REFUSALS.statusUnknown]: 409, [SWAP_REFUSALS.hibernated]: 409,
   // 413, 415, 429
   'oversize': 413, 'too-large': 413,
