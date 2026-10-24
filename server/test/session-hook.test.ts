@@ -10078,7 +10078,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // RE-MEASURED on the merge of `origin/main` at `77c11245` into docs W1, 35 -> 35, FROM THE SAME RUN as
       // the row-pass set above: stated 35, base 35, tree 35, nothing entered or left. S6-R11, no D-number.
       // RE-MEASURED for `ws-archive --if-no-pane` (D-6642), 38 -> 37, FROM THE SAME RUN as the row-pass set
-      // above: its one leaver mirrors here (`spec:2125 ccd/ccd:13567`) and nothing enters. S6-R11, no D-number.
+      // above: its one leaver mirrors here (the `spec:2125` pair of the row-pass leaver above) and nothing enters. S6-R11, no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
