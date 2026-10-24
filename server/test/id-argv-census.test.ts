@@ -616,7 +616,9 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
         /\bdecideClose\(\{ step: 'abandon'[\s\S]*?if \(act\.kind !== 'go'\) return stopped\(deps, act\);[\s\S]*\bactOnFleet\(/,
       'actOnFleet <- coord/close.ts | closeWorkRun':
         /\bdecideClose\(\{ step: 'close'[\s\S]*?if \(act\.kind !== 'go'\) return stopped\(deps, act\);[\s\S]*\bactOnFleet\(/,
-      'fleetArgv <- coord/close.ts | actOnFleet': /\bdecideClose\(\{ step: 'verb'[\s\S]*\bfleetArgv\(/,
+      // The composer builds the argv and asks `ccdCan` of that same row (closeRun's own order before ARCH-35); nothing in
+      // `actOnFleet` acts before it, and the order test below pins that ccd runs only after the verb step admits it.
+      'fleetArgv <- coord/close.ts | actOnFleet': /\): Promise<CloseHalt \| null> \{\n\s*const verb = fleetArgv\(/,
       'holdAndBindSession <- coord/routes.ts | POST /api/runs':
         /\bconst pre = await openRunPreconditions\(\{[\s\S]*?if \(!pre\.ok\) return sendOpenRunRefusal\(reply, pre\.refusal\);[\s\S]*\bholdAndBindSession\(coord, reply, opened, sessionId\)/,
     };
@@ -670,6 +672,15 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     expect(code).toMatch(
       /\bdecideRoute\(\{[\s\S]*?if \(!decision\.ok\) return refuseRoute\(reply, decision\.refused, [\s\S]*?CCD_ARGV\.route(Set)?\(/,
     );
+  });
+
+  it('actOnFleet runs the composed argv only after decideClose\'s verb step admits the composer\'s own ccdCan', () => {
+    const body = sourceOfSymbol('server/src/coord/close.ts', 'actOnFleet');
+    expect(body).toMatch(new RegExp(
+      String.raw`const verb = fleetArgv\(deps, id, sessionId, act\);\s*`
+      + String.raw`const can = decideClose\(\{ step: 'verb', verb: act\.verb, can: verb\.can \}\);\s*`
+      + String.raw`if \(can\.kind !== 'go'\) return stopped\(deps, can\);[\s\S]*\bdeps\.runCcd\(verb\.argv\)`));
+    expect(body.match(/\bdeps\.runCcd\(/g)).toHaveLength(1);
   });
 
   it('CONTROL: the expiry step-0 pin reads the capability in either form, and not another row or token (D-5866)', () => {

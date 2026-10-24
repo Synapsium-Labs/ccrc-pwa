@@ -242,13 +242,19 @@ function stopped(deps: CloseRunDeps, d: CloseStop, run?: RunRow): CloseHalt {
   }
 }
 
-/** The fleet verb a decision composed, as the argv ccd takes: every close names its actor by the run, `close`. */
-function fleetArgv(deps: CloseRunDeps, id: number, sessionId: string, act: FleetAct): CcdArgv {
+interface FleetVerb { readonly argv: CcdArgv; readonly can: boolean }
+/** The fleet verb a decision composed, as the argv ccd takes (every close names its actor by the run, `close`), and
+ *  D-5866's verb question asked of the very row that argv was built from, beside it: the argv first, then `ccdCan`,
+ *  as the inline code did. */
+function fleetArgv(deps: CloseRunDeps, id: number, sessionId: string, act: FleetAct): FleetVerb {
   const dec = sweepDec(deps.fleetState, `run:${id} close`);
   switch (act.verb) {
-    case 'wsArchive': return CCD_ARGV.wsArchive(sessionId, dec);
-    case 'wsRelease': return CCD_ARGV.wsRelease(sessionId, dec);
-    case 'wsHold': return CCD_ARGV.wsHold(sessionId, act.reason, dec);
+    case 'wsArchive':
+      return { argv: CCD_ARGV.wsArchive(sessionId, dec), can: ccdCan(deps.fleetState, 'wsArchive') };
+    case 'wsRelease':
+      return { argv: CCD_ARGV.wsRelease(sessionId, dec), can: ccdCan(deps.fleetState, 'wsRelease') };
+    case 'wsHold':
+      return { argv: CCD_ARGV.wsHold(sessionId, act.reason, dec), can: ccdCan(deps.fleetState, 'wsHold') };
     default: return act satisfies never;
   }
 }
@@ -259,11 +265,12 @@ async function actOnFleet(
   /** Run between the check and the act: the sweep's gate, which must read the world right before ccd is asked. */
   before: () => Promise<CloseHalt | null> = async () => null,
 ): Promise<CloseHalt | null> {
-  const can = decideClose({ step: 'verb', verb: act.verb, can: ccdCan(deps.fleetState, act.verb) });
+  const verb = fleetArgv(deps, id, sessionId, act);
+  const can = decideClose({ step: 'verb', verb: act.verb, can: verb.can });
   if (can.kind !== 'go') return stopped(deps, can);
   const held = await before();
   if (held !== null) return held;
-  const done = decideClose({ step: 'fleet', res: await deps.runCcd(fleetArgv(deps, id, sessionId, act)) });
+  const done = decideClose({ step: 'fleet', res: await deps.runCcd(verb.argv) });
   return done.kind === 'go' ? null : stopped(deps, done);
 }
 

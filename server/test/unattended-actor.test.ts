@@ -178,13 +178,13 @@ const SITES: readonly Site[] = [
   // ARCH-35 (#556): `closeRun`'s five sites became ONE composer, `fleetArgv`, which `decideClose`'s plan feeds: the
   // verb is the decider's answer and the actor is spelled once, in `dec` (pinned below). Three builders, three sites.
   { file: 'coord/close.ts', what: 'close, the composed archive (`fleetArgv`)',
-    find: /case 'wsArchive': return CCD_ARGV\.wsArchive\(sessionId, (dec)\);/,
+    find: /case 'wsArchive':\n\s+return \{ argv: CCD_ARGV\.wsArchive\(sessionId, (dec)\), can: ccdCan\(deps\.fleetState, 'wsArchive'\) \};/,
     label: 'dec' },
   { file: 'coord/close.ts', what: 'close, the composed release (`fleetArgv`)',
-    find: /case 'wsRelease': return CCD_ARGV\.wsRelease\(sessionId, (dec)\);/,
+    find: /case 'wsRelease':\n\s+return \{ argv: CCD_ARGV\.wsRelease\(sessionId, (dec)\), can: ccdCan\(deps\.fleetState, 'wsRelease'\) \};/,
     label: 'dec' },
   { file: 'coord/close.ts', what: 'close, the composed hold (`fleetArgv`)',
-    find: /case 'wsHold': return CCD_ARGV\.wsHold\(sessionId, act\.reason, (dec)\);/,
+    find: /case 'wsHold':\n\s+return \{ argv: CCD_ARGV\.wsHold\(sessionId, act\.reason, (dec)\), can: ccdCan\(deps\.fleetState, 'wsHold'\) \};/,
     label: 'dec' },
   // Task 7 (D-2796): `closeReviewRun` gets its own fleet act — a review run
   // closes on its own claim (design 2026-09-14 §5), one arm, one function,
@@ -260,7 +260,7 @@ const SITES: readonly Site[] = [
 describe('each unattended label is pinned to its own call site', () => {
   it('coord/close.ts — the close composer declares the run it closes as the actor, once, for all three of its builders', () => {
     const src = readFileSync(path.join(srcRoot, 'coord/close.ts'), 'utf8');
-    const m = /function fleetArgv\(deps: CloseRunDeps, id: number, sessionId: string, act: FleetAct\): CcdArgv \{\n\s+const dec = sweepDec\(deps\.fleetState, (`[^`]*`)\);/.exec(src);
+    const m = /function fleetArgv\(deps: CloseRunDeps, id: number, sessionId: string, act: FleetAct\): FleetVerb \{\n\s+const dec = sweepDec\(deps\.fleetState, (`[^`]*`)\);/.exec(src);
     expect(m, 'fleetArgv moved or was rewritten; update the anchor before trusting this guard again').not.toBeNull();
     expect(m![1]).toBe('`run:${id} close`');
   });
