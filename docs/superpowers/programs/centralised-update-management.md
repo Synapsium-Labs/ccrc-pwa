@@ -6056,6 +6056,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   once about four more taps prune every backup from before the migration. See R46.
   `STATUS 2026-10-24T19:25:47Z fleet=v0.0.638 server=v0.0.638 health=v0.0.638 newest=v0.0.642 intent=*:dev/auto=off`
   `backups=fleet:205M/server:11267M disk=fleet:93G/server:19G`
+- **2026-10-24 20:25 UTC — monitoring: v0.0.643 to v0.0.646 released; boxes stay on v0.0.638, no anomalies.** v0.0.643 changes
+  `ccd/session-hook.sh` (#1330, a deny arm for a fan-out that names no model or effort, after the spool block), so the broker's
+  soak was told before any tap. `STATUS 2026-10-24T20:25:39Z fleet=v0.0.638 server=v0.0.638 health=v0.0.638 newest=v0.0.646`
+  `intent=*:dev/auto=off backups=fleet:205M/server:11267M disk=fleet:100G/server:19G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
