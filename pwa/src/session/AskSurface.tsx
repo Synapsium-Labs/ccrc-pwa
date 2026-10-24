@@ -17,9 +17,10 @@
 // `SessionScreen` can stop the transcript's card pointing at it (`askBelow`), stand the Escape interrupt down and hold
 // the composer's Send while a question is up, all from one fact. `raise` is a nonce (0 inert, as `DialogSheet`'s own):
 // at the desk a change to a non-zero value scrolls the card into view and focuses its first option. PLAINLY: the
-// transcript's Answer button is not rendered while the card is mounted (`askBelow`), so at the desk a raise reaches the
-// card only from a raise made before a crossing to the desk, or from a future caller; the phone is where Answer raises.
-// No control is added for it here.
+// transcript's Answer button is not rendered while the card is mounted (`askBelow`), and a nonce standing when the card
+// mounts (a raise made before a crossing to the desk included) is absorbed by `seen`, so today nothing in the app raises
+// the card at the desk: only a caller that changes the nonce while the card is up would, and none exists (an open
+// question, review 917 F5). The phone is where Answer raises. No control is added for it here.
 import { createContext, useEffect, useId, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { EYEBROW, Sheet, useDesk } from '@ccrc/ui';
 import { escapeHidesOnly, escapeStaysInCard } from './AskParts';
