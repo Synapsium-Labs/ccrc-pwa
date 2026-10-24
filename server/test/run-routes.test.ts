@@ -1882,8 +1882,6 @@ describe('POST /api/runs/:id/dispatch', () => {
       // D-6794: no route passed, so the work row is filled in and journaled; this fixture's fleet advertises no
       // `route-argv-v1`, so the fresh spawn omits `--route` and says so.
       { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
-        detail: 'route-defaulted:work' },
-      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
         detail: 'route-omitted:no-route-argv-cap' },
       // Child-workspace reclamation wave 1: this fixture's fleet advertises no
       // `child-argv-v1`, so the fresh spawn omits `--child` and says so on the
@@ -1891,6 +1889,9 @@ describe('POST /api/runs/:id/dispatch', () => {
       // `planned`, which is why both states read `planned`.
       { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
         detail: 'child-omitted:no-child-argv-cap' },
+      // ...and the default row, journaled once the spawn has not refused.
+      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
+        detail: 'route-defaulted:work' },
       { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator', detail: null },
       // wave 2, F2: every successful dispatch also records its skill preflight,
       // after the commit — so the row rests in the state the transition just
