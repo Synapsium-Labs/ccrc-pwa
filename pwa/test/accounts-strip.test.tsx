@@ -7,6 +7,7 @@ import ts from 'typescript';
 import type { AccountUsage } from '../../shared/api';
 import { CommandLayer } from '../src/command/CommandLayer';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
+import { ACCOUNTS_DOOR_LABEL } from '../src/fleet/laneWords';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { declValue, ruleIn } from './cssRule';
@@ -182,6 +183,16 @@ describe('AccountsStrip', () => {
     expect(group).not.toHaveAttribute('data-action');
     expect(screen.queryByRole('link', { name: 'account usage — open accounts' })).toBeNull();
     expect(container.querySelectorAll('[role="link"]')).toHaveLength(lanes.length);
+    // With none (every lane disabled), the strip is the one go-accounts door: a link, a tab stop, named for where it goes.
+    cleanup();
+    stubAccounts([acct({ wrapper: 'lane-a', disabled: true }), acct({ wrapper: 'lane-b', disabled: true })]);
+    render(<AccountsStrip />);
+    const door = await screen.findByRole('link', { name: ACCOUNTS_DOOR_LABEL });
+    expect(door).toHaveClass('accounts-strip');
+    expect(door).toHaveAttribute('role', 'link');
+    expect(door.tabIndex).toBe(0);
+    expect(door).toHaveAttribute('data-command', 'go-accounts');
+    expect(screen.queryByRole('group')).toBeNull();
   });
 
   it('the cards are one tab stop: arrows, Home and End move focus and the stop, stop at either end, and Tab goes on to All accounts', async () => {
