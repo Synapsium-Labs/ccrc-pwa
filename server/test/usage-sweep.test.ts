@@ -315,4 +315,29 @@ describe('ccd-usage-sweep.py', () => {
     expect(s['perCcdSession']).toEqual({});
     expect(s['perCcdSessionUnmapped']).toMatchObject({ records: 4 });
   });
+
+  it('the ledger drops entries unseen for 30 days and the live map wins over it (D-6799)', () => {
+    const f = fixture();
+    const reg = path.join(f.home, '.cc-sessions');
+    writeFileSync(path.join(reg, 'demo-other.uuid'), 'sess-2');   // the live map names sess-2 as demo-other
+    const ledgerFile = path.join(f.home, 'sweep.json.uuids.json');
+    writeFileSync(ledgerFile, JSON.stringify({
+      'sess-2': { id: 'old-owner', seen: NOW - 10 * 86400 },     // remapped: the live row must win and refresh `seen`
+      'ghost-stale': { id: 'gone', seen: NOW - 30 * 86400 - 60 }, // unseen past LEDGER_KEEP_SECONDS: pruned
+      'ghost-fresh': { id: 'kept', seen: NOW - 29 * 86400 },     // still inside the window: kept
+    }));
+    const s = runSweep(f);
+    const ledger = JSON.parse(readFileSync(ledgerFile, 'utf8')) as Record<string, { id: string; seen: number }>;
+    expect(ledger['ghost-stale']).toBeUndefined();
+    expect(ledger['ghost-fresh']).toEqual({ id: 'kept', seen: NOW - 29 * 86400 });
+    expect(ledger['sess-2']).toEqual({ id: 'demo-other', seen: NOW });
+    const per = s['perCcdSession'] as Record<string, Record<string, unknown>>;
+    expect(per['demo-other']).toMatchObject({ n: 1 });
+    expect(per['old-owner']).toBeUndefined();
+    // a second sweep over the same state keeps the refreshed entry and stays stable
+    runSweep(f);
+    const again = JSON.parse(readFileSync(ledgerFile, 'utf8')) as Record<string, { id: string; seen: number }>;
+    expect(again['sess-2']).toEqual({ id: 'demo-other', seen: NOW });
+    expect(again['ghost-stale']).toBeUndefined();
+  });
 });
