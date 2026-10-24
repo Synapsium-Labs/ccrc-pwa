@@ -6060,6 +6060,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   `ccd/session-hook.sh` (#1330, a deny arm for a fan-out that names no model or effort, after the spool block), so the broker's
   soak was told before any tap. `STATUS 2026-10-24T20:25:39Z fleet=v0.0.638 server=v0.0.638 health=v0.0.638 newest=v0.0.646`
   `intent=*:dev/auto=off backups=fleet:205M/server:11267M disk=fleet:100G/server:19G`
+- **2026-10-24 21:25 UTC — monitoring: both boxes moved to v0.0.646 by the operator's console tap; settled, no anomalies.** The
+  fleet half ran 20:59:20 to `done` at 21:00:34, the agent restarting at 20:59:40; the server half ran from 21:00:44 to `done` at
+  21:10:51, with the service restarted at 21:03:49. The pre-migration keep now holds the next-oldest pre-migration set, so four
+  backups still hold data (11419M) with 19G free. The move carries the two lane changes the broker's soak ruled on beforehand
+  (v0.0.640's census-sweep throttle and v0.0.643's fan-out deny arm). Read from a checkpoint copy, the agent-restart hour
+  (20:00) measured 41 session-hours and none unmeasured, and no census refusal or staleness line was logged.
+  `STATUS 2026-10-24T21:25:47Z fleet=v0.0.646 server=v0.0.646 health=v0.0.646 newest=v0.0.648 intent=*:dev/auto=off`
+  `backups=fleet:206M/server:11419M disk=fleet:101G/server:19G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
