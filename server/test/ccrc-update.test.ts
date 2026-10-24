@@ -13303,6 +13303,11 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
   });
 });
 
+/** `KEY=value` strings as an environment object, a later key winning as it does for `env -i` (wave 24's contained spawns). */
+function envPairs(list: readonly string[]): Record<string, string> {
+  return Object.fromEntries(list.map((kv) => [kv.slice(0, kv.indexOf('=')), kv.slice(kv.indexOf('=') + 1)]));
+}
+
 // ── Delegation broker wave 3, Task 8B: the coordination snapshot's callers ──────────────────────────────────────────────
 // `_upd_backup` runs `deploy/coordination-snapshot.mjs capture` LAST, `_bak_keepset` asks its classifier, and neither the backup
 // set nor arm 3 of the restore ever carries the sidecars. Every case is a fixture HOME; the helper's own rows (capture, classify,
@@ -14729,16 +14734,17 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
         expect(existsSync(lockOf(home)), 'refused before the lock').toBe(false);
       });
 
-      /** `ccrc backup` under `env -i`: HOME, the row's PATH and a TMPDIR inside the box, the two bus paths the row's shims
-       *  need (inside the box), and `extra`; no other variable, so no CCRC_ setting reaches it but what `extra` names. */
+      /** `ccrc backup` with an environment of exactly HOME, the row's PATH and a TMPDIR inside the box, the two bus paths the
+       *  row's shims need (inside the box), and `extra` (as `env -i` would leave it); no other variable, so no CCRC_ setting
+       *  reaches it but what `extra` names. */
       const bareBackup = (home: string, extra: string[] = []): Result => {
         mkdirSync(join(home, 'tmp'), { recursive: true });
         replantDoctorStubs(home);
         const u = updateEnv(home);
-        const list = [`HOME=${home}`, `PATH=${u['PATH'] ?? ''}`, `TMPDIR=${join(home, 'tmp')}`,
-          `XDG_RUNTIME_DIR=${u['XDG_RUNTIME_DIR'] ?? ''}`, `DBUS_SESSION_BUS_ADDRESS=${u['DBUS_SESSION_BUS_ADDRESS'] ?? ''}`, ...extra];
-        assertNoRealTool(Object.fromEntries(list.map((kv) => [kv.slice(0, kv.indexOf('=')), kv.slice(kv.indexOf('=') + 1)])), home);
-        const r = spawnSync('env', ['-i', ...list, BASH, join(REPO, 'ccd', 'ccrc'), 'backup'], { encoding: 'utf8' });
+        const env = { HOME: home, PATH: u['PATH'] ?? '', TMPDIR: join(home, 'tmp'), XDG_RUNTIME_DIR: u['XDG_RUNTIME_DIR'] ?? '',
+          DBUS_SESSION_BUS_ADDRESS: u['DBUS_SESSION_BUS_ADDRESS'] ?? '', ...envPairs(extra) };
+        assertNoRealTool(env, home);
+        const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'backup'], { env, encoding: 'utf8' });
         return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
       };
       /** A box with `n` earlier plain backups and `text` appended to its ccrc.env; `env -i` `ccrc backup`; what is left. */
@@ -14927,9 +14933,8 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       const bin = join(home, 'no-awk-bin');
       mkdirSync(bin, { recursive: true });
       mkdirSync(join(home, 'tmp'), { recursive: true });
-      const r = spawnSync('env', ['-i', `HOME=${home}`, `PATH=${bin}`, `TMPDIR=${join(home, 'tmp')}`, BASH, '-c',
-        `. "$1"; type -P awk || echo 'no awk'; _ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`, 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')],
-      { encoding: 'utf8' });
+      const r = spawnSync(BASH, ['-c', `. "$1"; type -P awk || echo 'no awk'; _ccrc_knob CCRC_BACKUP_KEEP 10; ${ECHO}`,
+        'ccrc-under-test', join(REPO, 'ccd', 'ccrc')], { env: { HOME: home, PATH: bin, TMPDIR: join(home, 'tmp') }, encoding: 'utf8' });
       expect(r.stdout).toBe('no awk\nrc 1 val  from  why CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env could not be scanned\n');
       expect(r.stderr, 'the reader printed').toBe('');
       expect(r.status).toBe(0);
@@ -14975,13 +14980,14 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     const KEEPSET_WARN = (lead: string): string => `${lead}: backups: WARN: this run's time budget ran out before the keep-set found the `
       + 'newest valid coordination snapshot — nothing pruned or thinned; the next update continues';
     const exposureFile = (home: string): string => join(home, '.ccrc', 'exposure.env');
-    /** `script` in the sourced checkout ccrc under `env -i`: HOME, the box's contained PATH, TMPDIR and `extra`, so no CCRC_ name
-     *  reaches it but what `extra` lists; `wrap` is a command the bash runs under (`timeout 5`). */
+    /** `script` in the sourced checkout ccrc with an environment of exactly HOME, the box's contained PATH, TMPDIR and `extra` (as
+     *  `env -i` would leave it), so no CCRC_ name reaches it but what `extra` lists; `wrap` is a command the bash runs under
+     *  (`timeout 5`), reached by an outer bash's `exec`, so its exit status is the wrapper's own. */
     const bareSourced = (home: string, script: string, extra: string[] = [], wrap: string[] = []): Result => {
       mkdirSync(join(home, 'tmp'), { recursive: true });
-      const list = [`HOME=${home}`, `PATH=${updateEnv(home)['PATH'] ?? ''}`, `TMPDIR=${join(home, 'tmp')}`, ...extra];
-      const r = spawnSync('env', ['-i', ...list, ...wrap, BASH, '-c', `. "$1"; ${script}`, 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')],
-        { encoding: 'utf8' });
+      const via = wrap.length === 0 ? [] : ['-c', 'exec "$@"', 'wrap', ...wrap, BASH];
+      const r = spawnSync(BASH, [...via, '-c', `. "$1"; ${script}`, 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')],
+        { env: { HOME: home, PATH: updateEnv(home)['PATH'] ?? '', TMPDIR: join(home, 'tmp'), ...envPairs(extra) }, encoding: 'utf8' });
       return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
     };
     /** `_upd_deadline_ms <mode>` and its rc, as `<stdout> rc <n>`; it never prints on stderr. */
