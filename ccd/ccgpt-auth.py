@@ -1337,69 +1337,79 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
         return r
     if not _from_unsaved(auth_dir, old):
         _raise_if_barred(auth_dir, lane)
-    with held(auth_dir) as p:
+    with held(auth_dir):
         recover_pending(auth_dir)
         retry_unsaved(auth_dir)
         r, old = _read_raw(auth_dir)
         _raise_for(r)
         if not expired(r, within_s):
             return r  # the unsaved record too: a disk that stays full never asks again
-        from_unsaved = _from_unsaved(auth_dir, old)
-        _raise_if_barred(auth_dir, lane, unsaved=from_unsaved)
-        prev = read_status(auth_dir)
-        # A needs-signin another process measured on the file the unsaved record replaces: it stays (that file's
-        # refresh token is dead), so no failure arm below writes a status about that file; only a committed refresh
-        # replaces it.
-        standing = from_unsaved and _bars(prev)
-        # The unsaved record's own lastRefreshAt, never the status on disk's, which may predate the record's refresh
-        # when that refresh's status write failed with its commit.
-        kept = _UNSAVED[key][2] if from_unsaved else None
-        failed = dict(expiresAt=r.expires_at, identity=r.identity, unsaved=key in _UNSAVED,
-                      lastRefreshAt=(kept.get("lastRefreshAt") if kept is not None
-                                     else prev.get("lastRefreshAt") if prev is not None else None))
-        try:
-            answer, rid = token_request(r.refresh_token or "")
-            rec = _merge(r, old, answer, rid)
-        except (NeedsSignin, ConfigError) as e:
-            if e.word == KIND_NEEDS_SIGNIN and from_unsaved:
-                # The record's own refresh token is dead: drop the record (nothing in it can be refreshed again), so
-                # the needs-signin bound to the file on disk bars every later call.
-                del _UNSAVED[key]
-                failed["unsaved"] = False
-                sys.stderr.write("ccgpt-auth: dropped an unsaved credential for " + key + ": the token endpoint "
-                                 "refused its refresh token; the file on disk is kept\n")
-                sys.stderr.flush()
-            if not standing:
-                write_status(auth_dir, state=e.word, lastErrorCode=e.code, lastRequestId=e.request_id, **failed)
-            raise _state_error(e.word, e.code, e.request_id, lane) from None
-        except RefreshFailed as e:
-            if not standing:
-                write_status(auth_dir, state=_unchanged_state(prev), lastErrorCode=e.code,
-                             lastRequestId=e.request_id, **failed)
-            raise
-        refreshed = dict(lastRefreshAt=time.time(), lastRequestId=rid)
-        try:
-            saved = commit_record(auth_dir, rec, refreshed)
-        except (Unreadable, ForeignFamily):
-            # D-6560: the token endpoint has answered, so the refresh token `r` carried is already spent, and the
-            # commit's re-read refused the file (a lock-ignoring writer tore it or swapped another family's file in
-            # during the round trip, or the read failed). The record is kept unsaved, as the OSError arm keeps one,
-            # bound to the identity read under the lock, `r`'s: the file it was to replace. `retry_unsaved` lands
-            # it once that file, still in place, reads again, drops it once another stands there; `read` never serves
-            # it over a file swapped in, whatever that file holds.
-            _UNSAVED[key] = (dict(rec), r.identity, dict(refreshed))
-            raise
-        # The file still on disk when the commit could not write: the identity the unsaved record is bound to.
-        bound = _current_identity(p.credential) if saved else _UNSAVED.get(key, (rec, r.identity, None))[1]
-        if saved or not standing:
-            write_status(auth_dir, state="ok", expiresAt=rec["expires_at"], lastErrorCode=None, identity=bound,
-                         unsaved=not saved, **refreshed)
-        identity = bound if isinstance(bound, tuple) else None  # type: Optional[Identity]
-        out = _reading_of(rec, identity, p.credential)
-        if not saved:
-            out = out._replace(detail="an unsaved credential for " + p.credential + " is held in memory; the next "
-                               "refresh writes it")
-        return out
+        return _refresh_locked(auth_dir, r, old, lane)
+
+
+def _refresh_locked(auth_dir: str, r: Reading, old: object, lane: Optional[str]) -> Reading:
+    """The refresh `ensure_fresh` runs under the lock, once it has settled a checkpoint and an unsaved record and
+    re-read the credential: `r` and `old` are that re-read (`_read_raw`'s pair), `r` present. Checks the bar, makes the
+    one token request, writes the status and commits, exactly as `ensure_fresh`'s docstring describes. The caller holds
+    `held(auth_dir)`. Extracted unchanged so that `refresh_rejected` runs the same body (codex-bridge Stage 2, Task 6)."""
+    key = _key(auth_dir)
+    p = paths_for(auth_dir)
+    from_unsaved = _from_unsaved(auth_dir, old)
+    _raise_if_barred(auth_dir, lane, unsaved=from_unsaved)
+    prev = read_status(auth_dir)
+    # A needs-signin another process measured on the file the unsaved record replaces: it stays (that file's
+    # refresh token is dead), so no failure arm below writes a status about that file; only a committed refresh
+    # replaces it.
+    standing = from_unsaved and _bars(prev)
+    # The unsaved record's own lastRefreshAt, never the status on disk's, which may predate the record's refresh
+    # when that refresh's status write failed with its commit.
+    kept = _UNSAVED[key][2] if from_unsaved else None
+    failed = dict(expiresAt=r.expires_at, identity=r.identity, unsaved=key in _UNSAVED,
+                  lastRefreshAt=(kept.get("lastRefreshAt") if kept is not None
+                                 else prev.get("lastRefreshAt") if prev is not None else None))
+    try:
+        answer, rid = token_request(r.refresh_token or "")
+        rec = _merge(r, old, answer, rid)
+    except (NeedsSignin, ConfigError) as e:
+        if e.word == KIND_NEEDS_SIGNIN and from_unsaved:
+            # The record's own refresh token is dead: drop the record (nothing in it can be refreshed again), so
+            # the needs-signin bound to the file on disk bars every later call.
+            del _UNSAVED[key]
+            failed["unsaved"] = False
+            sys.stderr.write("ccgpt-auth: dropped an unsaved credential for " + key + ": the token endpoint "
+                             "refused its refresh token; the file on disk is kept\n")
+            sys.stderr.flush()
+        if not standing:
+            write_status(auth_dir, state=e.word, lastErrorCode=e.code, lastRequestId=e.request_id, **failed)
+        raise _state_error(e.word, e.code, e.request_id, lane) from None
+    except RefreshFailed as e:
+        if not standing:
+            write_status(auth_dir, state=_unchanged_state(prev), lastErrorCode=e.code,
+                         lastRequestId=e.request_id, **failed)
+        raise
+    refreshed = dict(lastRefreshAt=time.time(), lastRequestId=rid)
+    try:
+        saved = commit_record(auth_dir, rec, refreshed)
+    except (Unreadable, ForeignFamily):
+        # D-6560: the token endpoint has answered, so the refresh token `r` carried is already spent, and the
+        # commit's re-read refused the file (a lock-ignoring writer tore it or swapped another family's file in
+        # during the round trip, or the read failed). The record is kept unsaved, as the OSError arm keeps one,
+        # bound to the identity read under the lock, `r`'s: the file it was to replace. `retry_unsaved` lands
+        # it once that file, still in place, reads again, drops it once another stands there; `read` never serves
+        # it over a file swapped in, whatever that file holds.
+        _UNSAVED[key] = (dict(rec), r.identity, dict(refreshed))
+        raise
+    # The file still on disk when the commit could not write: the identity the unsaved record is bound to.
+    bound = _current_identity(p.credential) if saved else _UNSAVED.get(key, (rec, r.identity, None))[1]
+    if saved or not standing:
+        write_status(auth_dir, state="ok", expiresAt=rec["expires_at"], lastErrorCode=None, identity=bound,
+                     unsaved=not saved, **refreshed)
+    identity = bound if isinstance(bound, tuple) else None  # type: Optional[Identity]
+    out = _reading_of(rec, identity, p.credential)
+    if not saved:
+        out = out._replace(detail="an unsaved credential for " + p.credential + " is held in memory; the next "
+                           "refresh writes it")
+    return out
 
 
 def tier_access_token(auth_dir: str, lane: Optional[str] = None) -> Tuple[str, Optional[str]]:
