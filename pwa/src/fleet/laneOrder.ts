@@ -9,12 +9,15 @@ export function bindingPct(a: Pick<AccountUsage, 'five' | 'seven'>): number | nu
   return known.length === 0 ? null : Math.max(...known);
 }
 
-/** The window that binds: the fuller of the two, the 7d one on a tie (it resets later). `null` when neither is read. */
+/** The window that binds: the fuller of the two, the 7d one on a tie (it resets later). `null` when neither is read.
+ *  `pct` is `bindingPct`'s. A window rolled over (the server zeroed it; the zero is inferred) reads so only when every
+ *  window at the binding percentage rolled over: on a tie, a window that was measured keeps the lane measured. */
 export function bindingWindow(a: AccountUsage): { label: '5h' | '7d'; pct: number | null; resetAt: number | null; rolledOver: boolean } | null {
-  const five = { label: '5h' as const, pct: a.five, resetAt: a.fiveResetAt, rolledOver: a.fiveRolledOver };
-  const seven = { label: '7d' as const, pct: a.seven, resetAt: a.sevenResetAt, rolledOver: a.sevenRolledOver };
-  if (a.five === null && a.seven === null) return null;
-  if (a.five === null) return seven;
-  if (a.seven === null) return five;
-  return a.five > a.seven ? five : seven;
+  const pct = bindingPct(a);
+  if (pct === null) return null;
+  const five = { label: '5h' as const, pct: a.five, resetAt: a.fiveResetAt, rolled: a.fiveRolledOver === true };
+  const seven = { label: '7d' as const, pct: a.seven, resetAt: a.sevenResetAt, rolled: a.sevenRolledOver === true };
+  const atBinding = [five, seven].filter((w) => w.pct === pct);
+  const chosen = a.seven === pct ? seven : five;
+  return { label: chosen.label, pct: chosen.pct, resetAt: chosen.resetAt, rolledOver: atBinding.every((w) => w.rolled) };
 }
