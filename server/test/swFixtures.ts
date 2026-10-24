@@ -1,6 +1,6 @@
 // swFixtures.ts — the ONE fixture text for the PWA bundle's service worker, `server/dist-pwa/sw.js` (native Docs
 // reader W4, spec 2026-10-01 section 7.2). `ccrc doctor`'s `docs-sw` check measures the installed worker, and every
-// fixture that runs the closing doctor plants one: `ccrc-doctor.test.ts`'s `healthy()`, `installTreeFixture.ts`'s
+// fixture that runs the closing doctor plants one: `ccrc-doctorFixture.ts`'s `healthy()`, `installTreeFixture.ts`'s
 // `TREE_STUBS` (the install suites) and `ccrc-update.test.ts`'s staged tree. One text, so the three cannot drift
 // apart or away from what a build emits.
 //

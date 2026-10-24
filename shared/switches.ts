@@ -32,6 +32,11 @@ export const EXPIRE_LANE_LIVE_MARKER = 'expire-lane-live';
 /** `$REG/collect-lane-live`: the LEGACY arm of the collector's switch (Settings is the other arm). Kept: it still
  *  arms the lane while it stands and its latch is unset (spec K12). */
 export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
+/** `$REG/orphan-tree-live`: arms the orphan-worktree lane's act (fleet disk retention spec 2026-10-23 section 2.3). */
+export const ORPHAN_TREE_LIVE_MARKER = 'orphan-tree-live';
+/** `$REG/orphan-tree-rescue-live`: arms the lane's rescue arm, for a tree whose HEAD is on no remote; it means nothing
+ *  unless `orphan-tree-live` also stands. */
+export const ORPHAN_TREE_RESCUE_LIVE_MARKER = 'orphan-tree-rescue-live';
 /** `$REG/dead-coordinator-lane-live`: arms the dead-coordinator lane's act. */
 export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
 /** `$REG/idle-compact-nudge-disabled`: the idle-compaction nudge's kill switch. */
@@ -112,6 +117,16 @@ export const SWITCHES = {
   [COLLECT_LANE_LIVE_MARKER]: {
     storage: { marker: COLLECT_LANE_LIVE_MARKER }, default: 'absent: the Settings arm alone decides', owner: 'C4',
     meaning: 'The legacy arm of the collector: it arms the lane while it stands and its latch is unset.',
+    writer: 'hand-only',
+  },
+  [ORPHAN_TREE_LIVE_MARKER]: {
+    storage: { marker: ORPHAN_TREE_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would remove',
+    owner: 'C4', meaning: 'The orphan-worktree lane acts: a clean tree no registry row names, whose commits are all on a remote, is removed.',
+    writer: 'hand-only',
+  },
+  [ORPHAN_TREE_RESCUE_LIVE_MARKER]: {
+    storage: { marker: ORPHAN_TREE_RESCUE_LIVE_MARKER }, default: 'absent: a tree with commits on no remote is left',
+    owner: 'C4', meaning: 'With the orphan lane live, a tree whose HEAD is on no remote is pinned into the attic and then removed.',
     writer: 'hand-only',
   },
   [DEAD_COORDINATOR_LANE_LIVE_MARKER]: {

@@ -119,7 +119,7 @@ const FLOCK = realPath('flock');
 
 interface Result { code: number; stdout: string; stderr: string }
 
-/** GNU `timeout -k`, probed the same way `ccrc-doctor.test.ts`'s own
+/** GNU `timeout -k`, probed the same way `ccrc-doctorFixture.ts`'s own
  *  `DOCTOR_DEADLINE_BIN` is (fix round 1 items 9 and 23-C21): a FIFO block
  *  happens inside a GRANDCHILD (`jq`'s or `flock`'s own open), which a bare
  *  `spawnSync` `timeout` option cannot reach — only `timeout -k`, which puts
@@ -5652,7 +5652,7 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
   // THE ARMS, SOURCED. `ccrc` recomputes CCD_OS from $OSTYPE at source time
   // (ccd/ccrc:109-114), so the Darwin arms of a whole `ccrc update` run only
   // on the macOS leg — which is non-required and measured unable to finish.
-  // Sourced (the `_check_routing` idiom in ccrc-doctor.test.ts), CCD_OS is
+  // Sourced (the `_check_routing` idiom in ccrc-doctorFixture.ts), CCD_OS is
   // set AFTER the file computed it, and `_ccrc_job_stayed_up` is shadowed to
   // record its argument, so every leg measures which arm ran: the arm's
   // CHOICE is the subject here, the two-sample check is the itDarwin case's.

@@ -210,6 +210,10 @@ describe('growthCheck: the CI job summary (D-6119)', () => {
       git('init', '-q');
       git('config', 'user.name', 'fixture');
       git('config', 'user.email', 'fixture@example.invalid');
+      // A commit can start `git gc --auto` or `git maintenance run --auto` detached; it keeps writing into .git after the
+      // test body ends and races the teardown's rmdir (ENOTEMPTY). Neither is wanted in a throwaway fixture.
+      git('config', 'gc.auto', '0');
+      git('config', 'maintenance.auto', 'false');
       git('commit', '-q', '--allow-empty', '-m', 'empty');
       const empty = git('rev-parse', 'HEAD');
       writeFileSync(path.join(dir, 'w.ts'), 'class W { a() {} }\n');
@@ -222,7 +226,7 @@ describe('growthCheck: the CI job summary (D-6119)', () => {
       expect(methodCounts('w.ts', 'W', one, three, dir)).toEqual({ base: 1, head: 3 });
       expect(methodCounts('w.ts', 'W', empty, one, dir)).toEqual({ base: 0, head: 1 });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -237,7 +241,7 @@ describe('growthCheck: the CI job summary (D-6119)', () => {
       expect(appendJobSummary('## two\n', { GITHUB_STEP_SUMMARY: '' })).toBe(false);
       expect(readFileSync(file, 'utf8')).toBe('earlier step\n## one\n');
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });
@@ -371,6 +375,10 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
       git('init', '-q');
       git('config', 'user.name', 'fixture');
       git('config', 'user.email', 'fixture@example.invalid');
+      // A commit can start `git gc --auto` or `git maintenance run --auto` detached; it keeps writing into .git after the
+      // test body ends and races the teardown's rmdir (ENOTEMPTY). Neither is wanted in a throwaway fixture.
+      git('config', 'gc.auto', '0');
+      git('config', 'maintenance.auto', 'false');
       git('commit', '-q', '--allow-empty', '-m', 'no list');
       git('update-ref', 'refs/remotes/origin/main', 'HEAD');
       // Absent on origin/main: no entries, and nothing wrong.
@@ -396,7 +404,7 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
       expect(bad.entries).toEqual([]);
       expect(bad.problems.length).toBeGreaterThan(0);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -454,6 +462,10 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
       git('init', '-q');
       git('config', 'user.name', 'fixture');
       git('config', 'user.email', 'fixture@example.invalid');
+      // A commit can start `git gc --auto` or `git maintenance run --auto` detached; it keeps writing into .git after the
+      // test body ends and races the teardown's rmdir (ENOTEMPTY). Neither is wanted in a throwaway fixture.
+      git('config', 'gc.auto', '0');
+      git('config', 'maintenance.auto', 'false');
       put('ccd/ccd', lines(10));
       put(GROWTH_EXEMPTIONS_FILE, list());
       git('add', '-A');
@@ -511,7 +523,7 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
       const replaced = ccd(git('rev-parse', 'HEAD'));
       expect({ fails: replaced.fails, exemption: replaced.exemption }).toEqual({ fails: true, exemption: undefined });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -635,6 +647,10 @@ describe('growthCheck: the reviewed waiver ledger (D-6223)', () => {
       git('init', '-q');
       git('config', 'user.name', 'fixture');
       git('config', 'user.email', 'fixture@example.invalid');
+      // A commit can start `git gc --auto` or `git maintenance run --auto` detached; it keeps writing into .git after the
+      // test body ends and races the teardown's rmdir (ENOTEMPTY). Neither is wanted in a throwaway fixture.
+      git('config', 'gc.auto', '0');
+      git('config', 'maintenance.auto', 'false');
       put('ccd/ccd', lines(10));
       put(GROWTH_WAIVERS_FILE, ledger());
       git('add', '-A');
@@ -677,7 +693,7 @@ describe('growthCheck: the reviewed waiver ledger (D-6223)', () => {
       expect(badBase.added).toEqual([]);
       expect(badBase.problems.some((p) => p.startsWith('base: ')), JSON.stringify(badBase.problems)).toBe(true);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
