@@ -2215,6 +2215,63 @@ describe('fleet store', () => {
       store.getState().disconnect();
     });
 
+    it('the window reopens after its timed write', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = createFleetStore(quiet);
+      open(store);
+      lastSocket().message(frameOf('A')); // 0 s: written at once, and opens the window
+      vi.advanceTimersByTime(10_000);
+      lastSocket().message(frameOf('C')); // 10 s: pending
+      vi.advanceTimersByTime(20_000); // 30 s: the window's end writes C, and must open the next window
+      expect(written(spy)).toEqual(['A', 'C']);
+
+      vi.advanceTimersByTime(1_000);
+      lastSocket().message(frameOf('D')); // 31 s: one second after a write, so it waits
+      vi.advanceTimersByTime(28_000); // 59 s
+      expect(written(spy)).toEqual(['A', 'C']);
+      vi.advanceTimersByTime(1_000); // 60 s
+      expect(written(spy)).toEqual(['A', 'C', 'D']);
+      store.getState().disconnect();
+    });
+
+    // A frame `saveFleetSnapshot` refuses (here: a row with an unmeasured field) is never scheduled.
+    const degradedFrameOf = (tag: string): string => JSON.stringify({
+      type: 'fleet',
+      sessions: [
+        { ...fleetSession('ws-a', 'lane-a'), unmeasured: ['workdir'] },
+        { ...fleetSession('ws-b', 'lane-a'), title: tag },
+      ],
+    });
+
+    it('a refused frame opens no window', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = createFleetStore(quiet);
+      open(store);
+      lastSocket().message(degradedFrameOf('X')); // refused: nothing written, and no window opened
+      expect(written(spy)).toEqual([]);
+      vi.advanceTimersByTime(1_000);
+      lastSocket().message(frameOf('A')); // the first good frame is written at once
+      expect(written(spy)).toEqual(['A']);
+      store.getState().disconnect();
+    });
+
+    it('a refused frame does not displace the pending one', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = createFleetStore(quiet);
+      open(store);
+      lastSocket().message(frameOf('A')); // 0 s: written
+      vi.advanceTimersByTime(5_000);
+      lastSocket().message(frameOf('B')); // 5 s: pending
+      vi.advanceTimersByTime(5_000);
+      lastSocket().message(degradedFrameOf('C')); // 10 s: refused, so B stays pending
+      vi.advanceTimersByTime(20_000); // 30 s
+      expect(written(spy)).toEqual(['A', 'B']);
+      store.getState().disconnect();
+    });
+
     it('a hidden page writes the pending snapshot at once', () => {
       vi.useFakeTimers();
       const spy = setItem();

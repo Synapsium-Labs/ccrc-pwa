@@ -3,7 +3,7 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { FLEET_PROTO, isPoolsEnforcement, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
-import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
+import { loadFleetSnapshot, saveFleetSnapshot, snapshotRefused } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
 import { mergeBySeq, reviveNotifyEvents } from '../lib/feed';
 import { requestUpdate } from '../lib/swupdate';
@@ -326,10 +326,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
   // A frame is written at once when no 30 s window is open, and that write opens one; a frame inside an open window
   // only replaces `pending`, and the window's end writes the newest and opens the next, so writes stay at most one
   // per window. `pending` is also flushed when the page is hidden or going away and in `disconnect()`, so a closed
-  // or backgrounded page never loses the newest frame to the window. `saveFleetSnapshot`'s refusals (an empty or
-  // degraded frame) are unchanged. One honest edge: when the newest pending frame is one it refuses, the snapshot
-  // stays at the last frame actually written, which can be up to 30 s older than an accepted frame in between that
-  // the window replaced.
+  // or backgrounded page never loses the newest frame to the window. A frame the snapshot would refuse (an empty or
+  // degraded one, `snapshotRefused`) is never scheduled, so it neither opens a window nor displaces a pending frame.
   let pending: FleetSession[] | null = null;
   let snapshotTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -350,6 +348,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       }, SNAPSHOT_WINDOW_MS);
     };
     const scheduleSnapshot = (sessions: FleetSession[]): void => {
+      if (snapshotRefused(sessions)) return;
       if (snapshotTimer === null) {
         writeSnapshot(sessions);
         openWindow();
