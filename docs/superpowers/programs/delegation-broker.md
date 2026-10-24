@@ -1517,6 +1517,22 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   about 3,780), the journal 221 MB a day, and the checkpoint went from 13.7 to 17.9 MB. With no tap the 10 GB line is
   about 25 days away. With a tap every day it is about 6 days away, inside the soak's seven, because each tap refreshes
   three data sets that grow with the data.
+- **2026-10-24 — the soak's clock starts: T0 = 2026-10-24T09:00:00Z, on `v0.0.608` (8986, 8987).** The operator's
+  console tap moved both boxes to `v0.0.608`: the fleet half 05:53:48-05:56:50Z, with the agent restarted at 05:55:10Z,
+  and the server half 05:57:34-06:04:57Z. `v0.0.608` carries #1162 (first in `v0.0.590`) and #1187, a refactor of the
+  watcher's warn-once latches that changes no delegation-lane line (ruled 8791: any release from `v0.0.590` starts
+  the soak). The soak watcher's part-A report read clean:
+  - doctor on the fleet box: `delegation-hooks` PASS, 17/17 rostered homes, and no running session lacks its spool
+    directory; 0 failed;
+  - every recovery line counted 0 since the server's restart. Six passes from 06:01 to 06:07Z were cut at the 45 s
+    budget while boot recovery ran (R117's shape), and none since;
+  - the move's snapshot validated: v1, data yes, exit 0;
+  - every hour from 03:00 to 08:00Z read 0 unmeasured: 42, 41, 40, 39, 38 and 38 measured. 05:00, the agent-restart
+    hour, read 40 / 0, where the `v0.0.570` tap's hour cost 36. That is follow-up 9's live test.
+  - T0 is the next UTC hour after the report. The gate reads [T0, T0 + 168 h), that is to 2026-10-31T09:00:00Z. It is
+    eligible only when the window is complete and unmeasured/total is under 1%; eligibility activates nothing. The
+    daily report carries the window since T0. A tap that changes a delegation-lane file goes to the coordinator first,
+    who decides whether the clock restarts.
 
 ## Carried constraints
 
@@ -1654,13 +1670,13 @@ change the spec or convert O1–O5 into prior requirements.
 
 ## Next-wave brief
 
-**Wave 3's remaining follow-ups (2026-10-23).** Both runs of the operator's "Split: attempt fix first" have landed: run
+**Wave 3's remaining follow-ups (2026-10-24).** Both runs of the operator's "Split: attempt fix first" have landed: run
 740 (follow-up 7, the attempt key and the collapse) as #1097, `bc231bbcb`, live since `v0.0.555`; and run 762 (follow-up
 7b, "the checkpoint stops growing") as #1115, `bb1a9478d`, prerelease `v0.0.557` (decisions above). Follow-up 8 (run
 768, the spool's hook-cost row as a same-run ratio) landed as #1120, `3fe68e1de`, and #1115 is live since `v0.0.559`.
 Follow-up 9 (run 816, an unreadable incarnation defers its hour) landed as #1162, `0c439bb7d`, after reviews 838, 862
-and 868 (decisions above). No wave-3 run is open. The soak starts on the release that carries #1162: T0 is the first UTC
-hour after the soak watcher's clean report on the first fleet move onto it, and the gate reads [T0, T0 + 168 h).
+and 868 (decisions above). No wave-3 run is open. The soak runs on `v0.0.608` from T0 = 2026-10-24T09:00:00Z,
+and its gate reads [T0, T0 + 168 h), to 2026-10-31T09:00:00Z (decisions above).
 - Added to wave 4's list since #597:
   - the restart verdict effect: after a restart, slice windows carry a null repository (run 627);
   - shape 2, building the index and the held/lost split once per pass in the caller (review 628 F9);
