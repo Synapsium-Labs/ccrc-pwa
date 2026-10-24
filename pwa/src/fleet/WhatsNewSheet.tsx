@@ -32,7 +32,7 @@ import { compareReleaseTags } from '../../../shared/semver';
 import { Button, QC_ACTIONS, RESET_LIST, Sheet } from '@ccrc/ui';
 import { releaseDate } from '../lib/format';
 import { NO_NOTES_TEXT, ReleaseNotes, hasReleaseNotes } from './ReleaseNotes';
-import { behindSince } from './useUpdatesView';
+import { behindSince } from './updatesRead';
 import './fleet.css';
 
 // The one wording for empty notes, defined beside the component (the release rows' summary reads it too, D-5505).

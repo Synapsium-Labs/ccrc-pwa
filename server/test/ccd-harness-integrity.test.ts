@@ -103,6 +103,7 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccd-lifecycle-emit.test.ts': ['_lc_obs_probe'],
   'ccd-limit-banner.test.ts': ['_leaky'],
   'ccd-path-users-esrch.test.ts': ['_fpp'],
+  'ccd-path-users-many.test.ts': ['_fpp'],
   'ccd-path-users.test.ts': ['_fpp'],
   'ccd-route-apply.test.ts': ['_tmux_recording'],
   'ccd-route-tick.test.ts': ['_advance'],

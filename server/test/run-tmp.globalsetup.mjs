@@ -64,8 +64,9 @@
 // ruling that a too-long `TMPDIR` refuses stands: moving out of the tree is what removes the length.
 //
 // WHAT THIS DOES NOT DO. It never signals another process: its arm exits this one. It does not collect
-// vitest's own `TestProject.tmpDir` (a follow-up), loose `ccrc-*` directories from before it existed (proposal
-// 3 of #316, a follow-up), or a TMPDIR no later run visits.
+// loose `ccrc-*` directories from before it existed (proposal 3 of #316, a follow-up) or a TMPDIR no later run
+// visits. Vitest's own `TestProject.tmpDir` is collected on a signal only (D-6623): the arm removes it when it
+// is a real directory this uid owns; a clean run is left to vitest's own close.
 //
 // KNOWN LIMITATION: A LONG-PAUSED RUN ON macOS (D-4499's amendment). A stopped owner never accepts, and each
 // probe's connection stays in its listen queue after the prober hangs up. Once the queue is full, macOS refuses
@@ -236,14 +237,25 @@ export function openRun(base) {
   });
 }
 
+/** Remove `dir` when it is a real directory owned by this uid: `lstat`, so a symbolic link (or anything else) at
+ *  the path is left alone and never followed. Absent is fine. Never throws; vitest's `tmpDir` is a path it may
+ *  not have made yet. @param {string} dir @param {number} [uid] */
+export function removeOwnedDir(dir, uid = process.getuid?.() ?? -1) {
+  try {
+    const st = lstatSync(dir);
+    if (st.isDirectory() && st.uid === uid) rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  } catch { /* absent, foreign or busy: leave it, the signal path must still exit */ }
+}
+
 /** Arm the main process to collect `run` on SIGTERM, SIGINT, SIGHUP and `exit` (D-4498). Persistent `on`, never
  *  `once`: GNU timeout delivers SIGTERM to main twice, and a second delivery after the last listener is gone
  *  takes the default action mid-`rm` (measured). Each signal condemns the run, keeps an exit code already set
  *  (vitest's own listener sets the same one) or sets 128+n, and exits on a 1 ms timer — vitest's own exit,
- *  kept for when its `once` is spent. Returns the disarm, which teardown calls first.
- *  @param {string} run @returns {() => void} */
-export function armSignals(run) {
-  const collect = () => { condemn(run); };
+ *  kept for when its `once` is spent. `extra` are further directories (vitest's own `tmpDir`, D-6623) removed by
+ *  `removeOwnedDir` after the run. Returns the disarm, which teardown calls first.
+ *  @param {string} run @param {string[]} [extra] @returns {() => void} */
+export function armSignals(run, extra = []) {
+  const collect = () => { condemn(run); for (const d of extra) removeOwnedDir(d); };
   const onSignal = (sig) => {
     collect();
     process.exitCode ??= 128 + RUN_SIGNALS[sig];
@@ -364,7 +376,7 @@ function refuse(code, where) {
  *  TMPDIR set here, and everything they and their children make lands in this run's `tmp/`. Reaps the base,
  *  opens the run, arms; the returned teardown disarms, restores TMPDIR, removes the run, and reaps again, so a
  *  dead run that was too fresh at setup is collected by this run on its way out. */
-export default async function setup() {
+export default async function setup(project) {
   let base;
   try { base = realpathSync(os.tmpdir()); } catch (e) { return refuse(`tmpdir-${e.code ?? 'realpath'}`, os.tmpdir()); }
   const placed = runBase(base);
@@ -378,7 +390,8 @@ export default async function setup() {
   delete process.env[RUN_REFUSED_ENV];
   process.env[RUN_DIR_ENV] = opened.run;
   process.env.TMPDIR = path.join(opened.run, RUN_TMP);
-  const disarm = armSignals(opened.run);
+  const vitestTmp = typeof project?.tmpDir === 'string' && path.isAbsolute(project.tmpDir) ? [project.tmpDir] : [];
+  const disarm = armSignals(opened.run, vitestTmp);
   return async () => {
     disarm();
     if (previous === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous;

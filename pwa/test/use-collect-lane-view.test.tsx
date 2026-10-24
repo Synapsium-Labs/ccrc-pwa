@@ -15,8 +15,9 @@ import { COLLECT_LANE_REFUSALS, type CollectLaneConfirmRequired, type CollectLan
 import { ApiError, api, createApi } from '../src/lib/api';
 import { settingsReadFailure } from '../src/lib/notAvailable';
 import {
-  COLLECT_LANE_POLL_MS, asCollectLaneConfirm, asCollectLaneView, collectLanePostRefusal, useCollectLaneView,
+  COLLECT_LANE_POLL_MS, collectLanePostRefusal, useCollectLaneView,
 } from '../src/fleet/useCollectLaneView';
+import { asCollectLaneConfirm, asCollectLaneView } from '../src/fleet/collectLaneRead';
 
 const setVisibility = (v: DocumentVisibilityState): void => {
   Object.defineProperty(document, 'visibilityState', { value: v, configurable: true });

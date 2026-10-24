@@ -1448,6 +1448,75 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     repeats, not a filing's cost, which is mostly the whole-checkpoint clone, build and encode. The soak watcher
     reports the first filing on `v0.0.559`.
   - Disk: after this move's 1,842 MB backup the server had 14,668 MB free, further under the operator's 15 GB line.
+- **2026-10-22 — the operator orders the soak; pre-start checks and two rulings (7917-7926).** At about 10:35Z the
+  operator said "sure, do the soak": seven days on `v0.0.559`, by the wave-3 plan's Rollout steps 3-9, with the soak
+  watcher reporting. /api/fleet/health is behind sign-in, so the watcher computes the window from a copy of the
+  checkpoint with the shipped `delegationHealthWindowOf`, and circuit-breaker periods are unmeasured from a shell. Step
+  6 ("an old fleet and a missing capability show unmeasured") cannot be produced live; its pins are green on `main`
+  (`delegation-health` and `fleet-health`, 92/92).
+  - Disk, ruled "Keep 5 backups, 10 GB line": the server keeps 5 update backups (`CCRC_BACKUP_KEEP=5`), and free space
+    under 10 GB is a stop that goes back to the operator. The keep is a process-environment knob today, so it is set in
+    the server's user manager until the update-management programme's wave 24 reads it from `~/.ccrc/ccrc.env`. The
+    first tap after it pruned 10 backups (16,763 MB) to 5 (9,208 MB).
+  - Pre-start checks (7919) read clean: doctor 0 failed on both boxes; the fleet's `ccd caps` lists
+    `delegation-events-v1`; every recovery line counted 0 over 74 slow passes; the newest snapshot validated (v1, data
+    yes), and a fixture restore of a copy matched every member by size and sha256.
+  - One gate problem: seven sessions started before wave 3 had no spool directory, which only a spawn makes, so 7
+    `directory-absent` rows came every hour, and the gate counts the carve-out as unmeasured. Ruled "Respawn the 7, then
+    start", gate unchanged. Six were restarted on the operator's word, five of them idle for days and the sixth after it
+    consented. The seventh's own coordinator declined a direct restart; its run then closed, and the session is gone
+    from the registry (measured 10-23).
+  - The first attempt filing on `v0.0.559` (7959) came at 11:23:52Z: block 6.8 s, `stallMid` 4.2 s, against 32.7 s and
+    24.1 s on the 81 MB checkpoint. Eight filings to 02:33Z on 10-23 (8371) each added one attempt: block 6.0-6.9 s,
+    `stallMid` 4.2-5.1 s, `projectFull` 0, `retired=0`.
+  - Boots (8155, 8168): with boot recovery running, 3-5 passes per boot are cut at the 45 s pass budget (R117's shape).
+    The first full pass comes 4.7-6.3 min after the start, growing with the journal.
+- **2026-10-22 — soak finding 8159, "Fix first, then soak", and follow-up 9 (run 816).** The 17:00Z hour read 39
+  measured and 37 unmeasured. 36 rows said "the parent's registry incarnation is unreadable", all recorded within about
+  2 s of each other, about 40 s after the fleet agent restarted for a tap. One pass that ran while the agent link came
+  back marked the whole hour unmeasured for every live session it saw. The 10-21 20:00Z tap hour shows 24 such rows. At
+  about 40 live sessions the 1% gate allows about 67 unmeasured session-hours in 168 h, so two such taps fail the soak.
+  The operator ruled "Fix first, then soak": the soak starts on the release that carries the fix.
+  - Run 816 opened with D-6471..D-6474. Its task text was checked three times before dispatch. Dispatch was refused
+    `cap-concurrency` 14/14 until the operator raised the caps, then went to `ccrc-pwa-plain-harbor`.
+  - The change: an `unreadable` census listing no longer writes a sticky stand-in gap when a durable row of the
+    session's prior incarnation P already carries the hour's obligation. The hour waits in lane memory, as a lost
+    window, until one of these ends it: a durable live read of P (a discharge), a census measuring J != P, a
+    `changing`/`absent` or tie listing, or expiry. Each of the last three writes the loss; a discharge writes none. No
+    durable fact, key, port or field is added.
+  - Wave-done 8307: PR #1162 at `209d424e1`, 20 rows, 16 mutants red and one recorded equivalent, `watch.ts` +28 net
+    code lines against a 40-line limit.
+- **2026-10-23 — reviews 838, 862 and 868, and #1162 merged.** Review 838's dispatch waited about 13 h, refused
+  `cap-daily` 64/64, with the worktree volume under the 10 GB a workspace needs.
+  - Review 838 (`ccrc-pwa-keen-harbor`, at `209d424e1`): 33 agents, 0 errors; 10 panel findings, 7 upheld and 3 refuted,
+    0 unexamined. 12 findings, all minor. No hour counts as measured without its evidence being read, and none leaves
+    the gate. M2a, M7, M8, M11 and M12 red exactly their named rows; the reviewer's X2 (a capability-absent read
+    discharges) and X5 (a discharge ignores an R82 refusal) survived.
+  - Ruled FIX ROUND 1 rather than landing, because a guard ships with a red row, the wrong word reached durable rows,
+    and a lane change after the soak's start would restart its seven days. The code fixes: an expired owed hour leaves
+    `owed` with `hours`; its expiry gap says `unreadable`, the reason it was deferred under, not the owner's last listed
+    reason (F3, ruled); rows for X2 and X5; and two rows asserting at the first pass after recovery. Recorded in D-6471:
+    the standing-R82 edge (F4), M3-flush's exact edit, the text's own M9 beside the worker's (now M9b), and three
+    residues. Ask 89: the same word edge on the J != P path is recorded for wave 4, not fixed.
+  - Fix round 1 at `6242f2b00`. Review 862 (`ccrc-pwa-still-river`): 12 agents, 0 errors; every ruled item done as
+    worded; the round's source delta is two in-place line edits, `watch.ts` +0. Two minor findings. A stale "its word as
+    today" phrase. And the "owed until durable" half of the guard had no red row: a mutant dropping `owed` at staging
+    survived, and two probes showed it rewords the hour after one failed flush and loses its gap after two. Ruled FIX
+    ROUND 2, tests and plan text only.
+  - Fix round 2 at `874e7fb82`: the two probes are rows. Review 868 (`ccrc-pwa-swift-harbor`): 15 agents, 0 errors; the
+    probes pin the rule on the fake clock; XOWN1 reds both, XF3 reds R-B (F3) and both, and XOWN3 survives as recorded.
+    Two wording points, carried to wave 4's first PR. delegation-watch was 276/280 on its first run at load 28-80, four
+    20 s timeouts in rows the round does not touch, then 280/280 whole and 4/4 alone; CI ran and passed the file. Ruled
+    LAND NOW.
+  - `gh pr merge 1162 --match-head-commit 874e7fb82…` queued it, and it merged at 18:40:15Z as `0c439bb7d`, its squash
+    patch-id equal to the branch's diff from its merge-base. Run 816 closed `done`. D-6471 is defined; D-6472..D-6474
+    are unused.
+- **2026-10-23 — the soak's disk (8653).** The 16:59Z tap to `v0.0.586` was update-management wave 23's first live
+  thinning: the 5 kept backups hold 7,118 MB, only the newest three carry a data set (about 2.4 GB each), and the server
+  has 23,648 MB free. From 10-22 to 10-23, `delegation_events` grew 284 MB a day (about 5,720 rows an hour, up from
+  about 3,780), the journal 221 MB a day, and the checkpoint went from 13.7 to 17.9 MB. With no tap the 10 GB line is
+  about 25 days away. With a tap every day it is about 6 days away, inside the soak's seven, because each tap refreshes
+  three data sets that grow with the data.
 
 ## Carried constraints
 
@@ -1585,11 +1654,13 @@ change the spec or convert O1–O5 into prior requirements.
 
 ## Next-wave brief
 
-**Wave 3's remaining follow-ups (2026-10-22).** Both runs of the operator's "Split: attempt fix first" have landed:
-run 740 (follow-up 7, the attempt key and the collapse) as #1097, `bc231bbcb`, live since `v0.0.555`; and run 762
-(follow-up 7b, "the checkpoint stops growing") as #1115, `bb1a9478d`, prerelease `v0.0.557` (decisions above).
-Follow-up 8 (run 768, the spool's hook-cost row as a same-run ratio) landed as #1120, `3fe68e1de`. No wave-3 run is
-open, and #1115 is live since `v0.0.559` (decisions above). The soak has not started; its start is the operator's.
+**Wave 3's remaining follow-ups (2026-10-23).** Both runs of the operator's "Split: attempt fix first" have landed: run
+740 (follow-up 7, the attempt key and the collapse) as #1097, `bc231bbcb`, live since `v0.0.555`; and run 762 (follow-up
+7b, "the checkpoint stops growing") as #1115, `bb1a9478d`, prerelease `v0.0.557` (decisions above). Follow-up 8 (run
+768, the spool's hook-cost row as a same-run ratio) landed as #1120, `3fe68e1de`, and #1115 is live since `v0.0.559`.
+Follow-up 9 (run 816, an unreadable incarnation defers its hour) landed as #1162, `0c439bb7d`, after reviews 838, 862
+and 868 (decisions above). No wave-3 run is open. The soak starts on the release that carries #1162: T0 is the first UTC
+hour after the soak watcher's clean report on the first fleet move onto it, and the gate reads [T0, T0 + 168 h).
 - Added to wave 4's list since #597:
   - the restart verdict effect: after a restart, slice windows carry a null repository (run 627);
   - shape 2, building the index and the held/lost split once per pass in the caller (review 628 F9);
@@ -1611,9 +1682,24 @@ open, and #1115 is live since `v0.0.559` (decisions above). The soak has not sta
     near 1.5-1.65 is a signal; F3, "15%" to about 14%;
   - from review 740, recorded with no code: a collapse refused before its write is retried on every ready pass,
     unlatched; a latch is owed if a guard on attempts is ever added.
+  - from review 838 and ask 89: a loss gap written through the `(id, null)` owner takes the owner's last listed reason.
+    Two measured shapes: a non-owed listed hour's expiry, and the J != P path. Only an owed hour's expiry writes
+    `unreadable`;
+  - F4's bound: under a standing R82 refusal of an expired owed hour's gap, the hour stays in lane memory and its lost
+    window keeps holding overlapping rung-4 candidates. That is the safe direction, reachable only through an R82
+    refusal;
+  - from review 868, for wave 4's first PR: D-6471's mutant opening ("every one RED", except XOWN3) and XOWN1's elided
+    arguments;
+  - four delegation-watch rows time out at 20 s under load (R88 through X1, R104, R103, and R89's cut pass): name them
+    with the load-sensitive suites, or lift their bound, beside R111;
+  - the events table's growth (about 5,720 rows an hour on 10-23) as the input to the broker's retention, with journal
+    compaction.
 - Raised with the operator, on no run: the three sibling 150 ms absolute timing rows in `session-hook.test.ts` (the
   base pin and two rows of another plan), which can eject an unrelated PR from the merge queue as the spool's row did
   (7848). They are other plans' rows, and follow-up 8 leaves them as they are.
+- Noted by the worker and the reviewer, and filed nowhere yet: a cross-file CI race. `rings/host-imports.test.ts` can
+  scan `boot.test.ts`'s transient mutant file when both run on one shard; it failed #1162's first CI attempt and passed
+  on re-run.
 - R111 (on wave 4's list since review 578): if it reds again before then, its 20 ms real-time wait becomes a
   condition-based wait, as its own small fix, not run 740's (review 758 F2).
 - Due whenever `projectDelegationCheckpoint` next must change, on no run yet: D-6168's consolidation, where the full

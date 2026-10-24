@@ -34,7 +34,7 @@
 import { compareDispatchOrder, isReleaseTag, rollbackTargetRefusal } from '../../../shared/api';
 import type { ApplyUpdateBody, NodeWire, ReleaseWire, RollbackUpdateBody, UpdatesView } from '../../../shared/api';
 import { isNewerTag } from '../../../shared/semver';
-import { nodeVersion } from './useUpdatesView';
+import { nodeVersion } from './updatesRead';
 
 export type MoveIntent =
   | { scope: 'node'; direction: 'update'; nodeId: string; tag: string }

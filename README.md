@@ -757,12 +757,7 @@ the local tag is dropped, nothing is attested, pushed or published, and one line
 job summary reads `built unchanged: <N> entries identical to vX.Y.Z`. Anything else releases, and the
 line names the first entry that differs, or why it could not compare; a merge that changes
 `release-main.yml` or `release-main.sh` always releases, so the comparer never approves its own change.
-Where it releases, `actions/attest-build-provenance` signs the tarball's digest with the workflow's own
-OIDC identity (keyless — the repo holds no signing secret); and `release-main.sh publish` pushes the tag and
-publishes the tarball, `SHA256SUMS` and the bundle `ccrc-<tag>.tar.gz.sigstore.json` with `gh release
-create --verify-tag --prerelease`, deleting the tag again if the publish never completes (nothing
-reaches origin before that push). A hand-pushed `vX.Y.0`/`vX.0.0` tag rides `release.yml` instead —
-same attest step, its identity at the tag — and the next merge derives past it. The tarball is the
+The run is two jobs, and only the second holds a write credential. Everything above runs in a `build` job whose token can only read, whose checkout keeps no credential and which cannot mint the workflow's signing identity; where compare releases, it checks that the tarball's `build.json` names this tag and this commit, then hands the tarball and `SHA256SUMS` on as an artifact, with the tarball's digest; a decision the build job's step output loses fails the run, while a value dropped at the job boundary skips the `publish` job, an availability effect a hostile build already has. A `publish` job that installs nothing, runs no build script and never opens the tarball (the download action unzips the hand-over, at a major, `actions/download-artifact@v7`, whose extractor confines every entry under its directory, and `verify` refuses any extra entry) then re-derives the tag from its own checkout and refuses unless it matches the build's, the handed-over files are exactly those two, the tarball hashes to the recorded digest, and `SHA256SUMS` is exactly that one line (`release-main.sh receive`). Only then does `actions/attest-build-provenance` sign the tarball's digest with the workflow's own OIDC identity (keyless — the repo holds no signing secret), and `release-main.sh publish` push the tag and publish the tarball, `SHA256SUMS` and the bundle `ccrc-<tag>.tar.gz.sigstore.json` with `gh release create --verify-tag --prerelease`, deleting the tag again if the publish never completes (nothing reaches origin before that push). A merge whose build is unchanged never starts the `publish` job. A hand-pushed `vX.Y.0`/`vX.0.0` tag rides `release.yml` instead — the same two jobs and the same attest step, its identity at the tag — and the next merge derives past it. The tarball is the
 matched set — prebuilt dists, the three `package.json`+lock pairs, `shared/`, `ccd/`, the deploy units
 and helpers, `install.sh` — with a `MANIFEST` of per-file sha256 digests and a shipped `build.json`
 that carries the tag as `version` (`ccrc version` prints it; `/health` emits a sibling `version`;
@@ -1025,7 +1020,7 @@ every later update runs. Whoever controls the environment can substitute the ven
 `CCRC_SIGSTORE_TRUSTED_ROOT` — including a value set in the user manager's environment, which reaches a
 `--detach` unit and the watchdog, though a value exported only in a shell does not. A separate supply-chain fact,
 not a third root: the verifier's own npm dependencies are fetched from the registry, pinned by the attested
-tarball's own lockfile integrity hashes, never installed from the tarball's bytes directly. Doctor's `provenance`
+tarball's own lockfile integrity hashes, never installed from the tarball's bytes directly. Nor is the release build a root: the jobs that install dependencies and build hold a read-only token and cannot mint the signing identity, and the jobs that hold the write token and the signing identity install nothing (`server/test/release-job-boundary.test.ts`). The attested bytes are still the build's — the bundle says which run of which commit made them, not that every dependency was benign. Doctor's `provenance`
 check PASSes, naming the next step, while `~/.ccrc/installed` says `unsigned`, whatever made it so (a checkout
 install, that first install, or `--allow-unsigned`); the next `ccrc update` that installs a release (a newer one, or `--force` on this one) verifies it and clears the mark.
 To narrow the first-install gap by hand, verify the artifact before running `install.sh`: fetch the release's

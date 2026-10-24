@@ -5,6 +5,7 @@
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
+import { isCount, isRecord } from './wire';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
 import type { Dialog, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
@@ -567,10 +568,8 @@ export function moveSkipText(why: MoveSkipWhy | (string & {})): string {
 // word a newer server adds reads as "not reported" rather than as a state this
 // build would have to guess at. Malformed is null; the card says "not reported".
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isWord = <T extends string>(list: readonly T[], v: unknown): v is T =>
   typeof v === 'string' && (list as readonly string[]).includes(v);
-const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 const isInstant = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const orNull = (v: unknown, ok: (x: unknown) => boolean): boolean => v === null || ok(v);
 /** `BoxTokenView['fleetConfirmed']` keyed once, so a word added to the type is a compile error here. */
@@ -1426,7 +1425,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     setStallWatch: (body: StallWatchRequest) =>
       postJsonOr<StallWatchView | 'unreadable'>('/api/coord/stall-watch', 'unreadable', body),
     /** `GET /api/coord/collect-lane` (path-identity spec 2026-10-12 §5.6, §5.7): the Settings page's Temp root
-     *  collector section reads it through `useCollectLaneView`, whose `asCollectLaneView` is the wire guard, so the
+     *  collector section reads it through `useCollectLaneView`, whose `asCollectLaneView` (`fleet/collectLaneRead.ts`) is the wire guard, so the
      *  type here is what the server promises, not what arrived. `getJson`, as `stallWatch` is: a read changes
      *  nothing, so its failure is only a failure, which the hook classifies (404 and 501 through
      *  `settingsReadFailure`, a 503 `state-unmeasurable` as its own kind). Session-gated when armed, open dark; no
