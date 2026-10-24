@@ -570,14 +570,14 @@ describe('NewSessionSheet — success opens the new session', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('a session already running in that project is not the new one', async () => {
+  it('a workspace row alive before the create is not the new session', async () => {
     vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
     const { store, onClose, flush } = await mount();
-    showFrame(store, [NEW_ROW]); // alive BEFORE the create
+    showFrame(store, [NEW_WS_ROW]); // alive BEFORE the create, and not a main checkout
     await pickDemo(flush);
     startUnnamed();
     await flush();
-    showFrame(store, [NEW_ROW, NEW_WS_ROW]); // a workspace row is not a main checkout either
+    showFrame(store, [NEW_WS_ROW, { ...NEW_WS_ROW, id: 'claude-demo-ws-b', workspace: 'ws-b' }]); // nor is a second one
     await flush();
     expect(window.location.pathname).toBe('/');
     expect(onClose).not.toHaveBeenCalled();
