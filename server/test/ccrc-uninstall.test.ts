@@ -146,7 +146,7 @@ function verbEnv(home: string): NodeJS.ProcessEnv {
   plant('journalctl',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/journalctl-argv"\nexit 0\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_RELEASE_BASE_URL',
-    'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_ROLE', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+    'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_UPDATE_HEALTH_S', 'CCRC_UPDATE_DEADLINE_MS', 'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_ROLE', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   // Task 11 review fix round 1 (spec-1/mut-1 CRITICAL): the harness's own
   // final check, after every plant() above — THROWS before this env can be
   // handed to any runVerb/spawn if systemd-run is not the contained front.
@@ -1445,7 +1445,7 @@ describe('ccrc backup: update\'s step 2 standalone, with CCRC_BACKUP_KEEP prunin
 
 describe('ccrc backup: CCRC_BACKUP_KEEP is one bounded number, the same validator as CCRC_VERSIONS_KEEP (F6)', () => {
   const PLANTED = ['20250101-000000', '20250102-000000', '20250103-000000'];
-  const WHY = (v: string): string => `CCRC_BACKUP_KEEP='${v}' is not a whole number from 0 to 9999`;
+  const WHY = (v: string): string => `CCRC_BACKUP_KEEP='${v}' is not a whole number from 0 to 9999, as set in the environment`;   // D-6605
   const box = (prefix: string): string => {
     const home = mkTmp(prefix);
     plantInstalledBox(home);

@@ -2496,11 +2496,11 @@ already running).
             for /health to answer the new version: a failed gate exits 4; a
             doctor FAIL with the gate passed exits 3; --no-gate skips it.
             After a passed gate and a finished sweep, ~/ccrc-backups is pruned
-            to the newest CCRC_BACKUP_KEEP (default 10, read from the process
-            environment only) timestamped backups, never this run's own; then
-            every backup past the newest CCRC_BACKUP_DATA_KEEP (default 3; the
-            environment, else the box's ccrc.env) that carry the coordination
+            to the newest CCRC_BACKUP_KEEP (default 10) timestamped backups,
+            never this run's own; then every backup past the newest
+            CCRC_BACKUP_DATA_KEEP (default 3) that carry the coordination
             data set is thinned to its code and coordination-thinned.json.
+            Each setting here is the environment's, else the box's ccrc.env.
             With no --to the target is the control plane's projection
             (~/.ccrc/update-intent): its desired, or for one run
             [--channel stable|dev]'s desired-stable/desired-dev; a box no
@@ -2582,11 +2582,11 @@ already running).
             (coordination-snapshot.json), dists, ccd and the units to
             ~/ccrc-backups/<ts>/ (never
             ~/.ccrc/collect-lane-generation.log: a restore leaves it in place),
-            then prune to the newest \$CCRC_BACKUP_KEEP (default 10) timestamped
+            then prune to the newest CCRC_BACKUP_KEEP (default 10) timestamped
             backups — never this run's own or one named after it began, nor the
             newest earlier tree backup, valid coordination snapshot and valid one
             that holds data — then thin the data set from each past the newest
-            \$CCRC_BACKUP_DATA_KEEP (default 3) that carry one; skipped while another
+            CCRC_BACKUP_DATA_KEEP (default 3) that carry one; skipped while another
             ccrc run holds ~/.ccrc/update.lock — hand-made siblings are never touched
   coordination-snapshot
             validate --from <timestamp-directory>   classify a backup's coordination
@@ -2636,13 +2636,13 @@ EOF
 # ── diagnostic helpers (stderr; the RESULT of a verb goes to stdout) ───────
 # `_upd_redact <text>` — what NO die sentence, report detail, WARN or
 # announcement line may carry verbatim (review 155 C17/C18, fix round 1 items
-# 11 and M1): a URL's userinfo (`scheme://user:pass@host` -> `scheme://host`)
-# and this box's own absolute home directory (-> `~`). TWO CHOKE POINTS, not
-# one — review fix round 1 M1 found a second path that reached `update.json`
-# and the journal unredacted: `UPD_GATE_WHY` (the gate's own failure reason,
-# which can start with `$BOX_ENV_FILE`, an absolute path) flows into
-# `_upd_phase` details through `$why`/`$gate_fail`/`$reason`, none of which
-# passed through `_ccrc_die`.
+# 11 and M1): a URL's userinfo (`[scheme:/…]user:pass@host` -> `[scheme:/…]host`;
+# a scheme's one or more '/' stay as written, D-6748) and this box's own absolute
+# home directory (-> `~`). TWO CHOKE POINTS, not one — review fix round 1 M1
+# found a second path that reached `update.json` and the journal unredacted:
+# `UPD_GATE_WHY` (the gate's own failure reason, which can start with
+# `$BOX_ENV_FILE`, an absolute path) flows into `_upd_phase` details through
+# `$why`/`$gate_fail`/`$reason`, none of which passed through `_ccrc_die`.
 #   1. `_ccrc_die` — the ONE place a message becomes both the printed
 #      refusal (stderr) and a `failed` report detail. No die site anywhere in
 #      this file, present or future, has to remember to redact its own
@@ -2661,25 +2661,25 @@ EOF
 # `$gate_fail` (`cmd_update`, redacted once at its own local definition, so
 # `_upd_rollback_no_restore` and `_upd_restore` inherit it as `$reason`);
 # `$UPD_GATE_WHY` directly (`_upd_gate`'s two echoes, `cmd_update`'s exit-4
-# echo). `ccd/ccd-update-sync` is a different executable and carries its own
-# copy of the same two rules, at its own choke point (`say`).
+# echo). `ccd/ccd-update-sync`, another executable, redacts at its own `say`
+# with the home rule and the `://` scheme rule alone: it prints no release base.
 _upd_redact() {
-  local s="${1:-}" had_extglob=0
+  local s="${1:-}" had_extglob=0 LC_ALL=C
   shopt -q extglob && had_extglob=1
   shopt -s extglob
-  # The userinfo strip is bounded to characters a URL authority actually
-  # allows before an '@' — never '/' or whitespace — so an UNRELATED '@'
-  # past the authority (a query string's `?email=a@example.com`) is left alone:
-  # reaching it would need crossing a '/' the pattern refuses to match.
-  # Review fix round 1, N2: `?` and `#` also end the authority (a query
-  # string or a fragment can start right after the host, with no '/' at
-  # all) — measured, `https://h?a@b` and `https://h#a@b` both collapsed the
-  # HOST into the class, giving `https://b`. Excluded here so the class
-  # stops at the first of '/', '?' or '#', exactly where a URL authority
-  # itself ends. (A raw '@' inside a password, `user:pa@ss@host`, still
-  # takes the LAST '@' before the boundary — curl itself refuses that shape
-  # as a bad hostname, so it can never have worked; recorded, not fixed.)
-  s="${s//:\/\/+([^\/@?#[:space:]])@/:\/\/}"
+  # The userinfo strip is bounded to characters a URL authority allows
+  # before an '@' — never '/' or whitespace — so an UNRELATED '@' past the
+  # authority (a query's `?email=a@example.com`) is left alone. Review fix
+  # round 1, N2: `?` and `#` end the authority too (measured, `https://h?a@b`
+  # gave `https://b`), so the class stops at the first of '/', '?' or '#'.
+  # D-6748: a base with NO scheme (`user:pass@host/r`, which curl takes as
+  # http) loses every '@'-ended run from a TOKEN's start (the text's, or after
+  # whitespace, '"' or '<') whose host ends at '/', '?' or '#'; prose's
+  # `user@host` stays. Past a run's first character '<' and '"' are the
+  # password's (curl sends both); under LC_ALL=C no invalid UTF-8 byte ends a
+  # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn.
+  local sre=':(/+)[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
+  local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
   [ "$had_extglob" -eq 1 ] || shopt -u extglob
   # Review fix round 1, M6: the OLD blind substring replace was not anchored
   # to a path boundary — HOME=`/home/u` turned `/home/user2/f` into
@@ -11213,11 +11213,11 @@ MODELS_INVOKE_CEILING_S=300
 # A notify hook's own deadline in seconds (`deploy/notify.sh`'s `curl -m 5`), the soft half of its reserve.
 MODELS_HOOK_S=5
 
-# The advance step's time budget for one refresh run, in seconds: `CCRC_MODELS_ADVANCE_BUDGET_S`, 250 when unset or empty; a
-# whole number is itself, base 10 (`0250` is 250), and 3600 at most, capped by its digit count before `$(( ))` could overflow
-# on it; ANYTHING ELSE (`off`, `-1`, `1.5`) is 0, the step off for this run, said on stderr without the value (D-6266).
+# The advance step's time budget for one refresh run, in seconds: `CCRC_MODELS_ADVANCE_BUDGET_S`, the environment, else the
+# box's ccrc.env, else 250 (an empty value too); a ccrc.env `_ccrc_knob` cannot read for it is 0, the step off for this run, said
+# on stderr; a whole number is itself, base 10 (`0250` is 250), 3600 at most; ANYTHING ELSE (`off`, `-1`) is 0 too (D-6266).
 _models_advance_budget_secs() {
-  local s="${CCRC_MODELS_ADVANCE_BUDGET_S:-250}"
+  local s; _ccrc_knob CCRC_MODELS_ADVANCE_BUDGET_S 250 && s="$KNOB" || { echo "$PROG: $KNOB_WHY, so the advance step is off for this run" >&2; s=0; }
   case "$s" in *[!0-9]*) echo "$PROG: CCRC_MODELS_ADVANCE_BUDGET_S is not a whole number of seconds, so the advance step is off for this run" >&2; s=0 ;; esac
   s="${s#"${s%%[!0]*}"}"; [ "${#s}" -le 4 ] || s=3600
   s=$(( 10#${s:-0} )); [ "$s" -le 3600 ] || s=3600
@@ -18908,14 +18908,11 @@ cmd_update() {
   # `restarting`, so the console dispatches nothing here while the prune holds the lock. The prune now also thins the data set of
   # the older backups (wave 23), which takes longer than a prune, and nothing refreshes the report in between while the control plane's
   # deadline and the watchdog's wedged arm both measure from its last write: so it is re-stamped right before the lock is taken
-  # again, only while it is still this run's own, with the same `restarting` phase and a detail (D-6356). The restore child is
-  # excluded by `gate_passed` already; the UPD_FROM test is a belt with no pin claimed (its inherited-lock early return leaves
-  # UPD_BAK_FLOOR empty, which would only WARN). The re-stamp is a write with no lock held, like the final report below, so it
-  # shares that write's m3 window: a newer run's report landing between `_upd_report_is_mine` and `_upd_phase` is overwritten.
-  # UPD_THIN_AT is the instant the control plane's deadline now runs from (D-6464): the re-stamp's `updatedAt`, read back from the
-  # report it wrote when that reads as whole seconds, else the second read just before it, which is never later. `_bak_gc` turns it
-  # into `thin`'s time budget.
-  if [ "$gate_passed" -eq 1 ] && [ "$UPD_FROM" != restore ]; then UPD_THIN_AT="$(date +%s)"; _upd_report_is_mine && _upd_phase restarting "pruning and thinning ~/ccrc-backups" && _upd_report_readable && { local rb=""; rb="$(jq -er '.updatedAt | numbers' -- "$BOX_UPDATE_JSON" 2>/dev/null)" && [[ "$rb" =~ ^[1-9][0-9]{0,10}$ ]] && UPD_THIN_AT="$rb"; }; _bak_gc update || :; fi
+  # again, by `_bak_restamp` (D-6356, D-6601; its header says when it writes, and the m3 window it shares with the final report
+  # below), which also sets UPD_THIN_AT, the instant `_bak_gc` bounds its work from (D-6464). The restore child is excluded by
+  # `gate_passed` already; the UPD_FROM test is a belt with no pin claimed (its inherited-lock early return leaves UPD_BAK_FLOOR
+  # empty, which would only WARN).
+  if [ "$gate_passed" -eq 1 ] && [ "$UPD_FROM" != restore ]; then _bak_restamp "pruning and thinning ~/ccrc-backups"; _bak_gc update || :; fi
   # Everything from HERE is a WRITE, after the lock was released above (or,
   # on the `--from restore` branch, never taken from this run at all) — a
   # second `ccrc update` may already hold ~/.ccrc/update.json for its own
@@ -19345,6 +19342,7 @@ cmd_rollback() {
          [ "$UPD_REPORTING" = 1 ] \
            && _upd_phase failed "rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed"
          exit 2 ;;
+      3) _ccrc_die "rollback: $KNOB_WHY — nothing on this box was changed" ;;
       *) _ccrc_die "rollback: could not ask the release host whether $to exists within ${CCRC_RELEASE_PROBE_MAX_TIME}s (curl failed, timed out, or the host answered neither 200 nor 404) — nothing on this box was changed" ;;
     esac
   fi
@@ -19432,6 +19430,9 @@ cmd_rollback() {
         # passed, the box IS on <to>, and the exit is 3. The terminal `done`
         # report is written either way, as `cmd_update` writes it for 3.
         local doctor_rc="$VER_SPINE_RC"
+        # D-6601: re-stamped like an update before its prune, so the keep-set's full verifications are bounded by the deadline the
+        # console's lease measures from that write, and nothing leaves the report a sweep old while they run.
+        _bak_restamp "pruning ~/ccrc-backups"
         _bak_gc rollback || :
         if _upd_report_is_mine; then
           if [ "$doctor_rc" -ne 0 ]; then
@@ -19530,28 +19531,116 @@ _upd_rerun_hint() {
   esac
 }
 
-# ── _upd_deadline_ms — the one deadline, read the way the server reads it ──
-# (W4a Task 9). W2's server takes `CCRC_UPDATE_DEADLINE_MS` from ccrc.env
-# through `ccrc.service`'s EnvironmentFile (its `updateDeadlineMs`); this
-# node's watchdog runs under a timer whose environment is the user manager's,
-# which never saw that file — so the file is read here by name, after an
-# exported value (a test's, or an operator's one-off). A value that is not a
-# positive integer of at most 15 digits is not read at all: zero would make
-# every live update "stale" the moment it wrote, and 15 digits is a JavaScript
-# safe integer — so W2's `updateDeadlineMs` (`Number.isSafeInteger(n) && n > 0`)
-# reads the same value from the same key — and keeps every product below inside
-# bash's 64-bit arithmetic. MILLISECONDS by name: the one caller divides by
-# 1000 (update.json is seconds, rulings R1/R14). Default: 15 minutes (spec §10).
-_upd_deadline_ms() {
-  local v="${CCRC_UPDATE_DEADLINE_MS:-}"
-  if [[ ! "$v" =~ ^[1-9][0-9]{0,14}$ ]]; then
-    v=""
-    if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
-      v="$(_box_env_value "$BOX_ENV_FILE" CCRC_UPDATE_DEADLINE_MS)"
-    fi
-    [[ "$v" =~ ^[1-9][0-9]{0,14}$ ]] || v=900000
+# ── CCRC_SETTINGS — ccrc's own settings, the one list (wave 24, D-6587, D-6588) ──
+# A setting decides what ccrc keeps or removes, how long it waits before judging an update, where it fetches a release
+# from, or whether a step runs at all: an operator sets it once for the box, and an act run with no operator's shell (a
+# console-driven update, the watchdog, a timer) must honour it, so `_ccrc_knob` reads it from ~/.ccrc/ccrc.env too. Every
+# other CCRC_ name ccrc reads stays environment-only, in a reasoned class. This line is the one list: `_ccrc_knob` reads no
+# name outside it, and the census (ccrc-settings-census.test.ts) derives from it, never from a copy.
+CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S)
+
+# ── _ccrc_knob <KEY> <default> [file] — ONE reader for every setting (D-6587) ──
+# The process environment, else ~/.ccrc/ccrc.env alone, else <default>: wave 23's `_bak_data_keep` read with its knob made
+# an argument, so its logic, ruled correct after five review rounds, is spelled once. A non-empty environment value wins
+# (an exported empty one is unset); `file` mode never reads the environment (the doctor's check and the deadline's
+# reading of the server's files). It reads $BOX_ENV_FILE: a caller that needs another file names it with a prefix
+# assignment (`BOX_ENV_FILE="$f" _ccrc_knob …`), which bash keeps for that call alone. A <KEY> outside CCRC_SETTINGS
+# answers rc 1 before anything is read: ccrc.env's CCRC_ACCOUNTS is the server's roster path, never ccrc's array of that
+# name. It never prints and never dies. rc 0: KNOB is the value as a string, unvalidated (validation is the caller's,
+# `_keep_knob` or the act's own parse), and KNOB_FROM says where it came from — `environment`, `file`, `empty` (the file
+# names the key with an empty value, so KNOB is <default>; for the server a named-empty line is not unset) or `default`.
+# rc 1: KNOB and KNOB_FROM are empty and KNOB_WHY is `<KEY> cannot be measured: <why>`, $HOME written as `~`.
+# Unmeasured is not unset (D-6365): a ccrc.env that is there but cannot be read (a dangling link, a directory or a FIFO
+# there included) or holds a NUL byte refuses EVERY key, before any scan of one (a whole-file fault); a line naming the
+# key that this reader does not take refuses that key only (D-6590), naming the file and never its bytes. The VALUE is
+# read through `_box_unit_env`, the tree's byte-wise model of systemd's `EnvironmentFile=` (D-3979; the coordinator's
+# ruling on review 817, F1, F2 and F8), never the two-argument `_box_env_value`, whose `read` runs in the caller's
+# locale: the model trims the value as systemd does, and what it cannot decide refuses with its own clause (BUE_WHY,
+# which names the file and never its bytes): a value a quote or a backslash carries across lines, a CR inside a line (a
+# CR lead included), a non-ASCII byte in an assignment. The model reads ccrc.env alone, never the exposure file, which on
+# Linux no process that acts on any OTHER setting receives (its one consumer is ccrc.service; the deadline's `min` and
+# `max` read it on purpose, naming it as the file, because the server's deadline can come from it, D-6591, D-6602); on
+# macOS the launchd job sources it, but a console-driven update never runs there (`_upd_detach_os_check`). The model
+# is asked only when a line of ccrc.env but a comment holds the key as a whole token (D-6604): a file that never names
+# the key cannot set it, so it reads <default> whatever the model or systemd makes of the rest of it but a NUL byte,
+# which the scan refuses first (the coordinator's rulings on reviews 839 and 847). That holds on macOS too (D-6587): a
+# ccrc the launchd job did not start never receives the job's bash reading of the file, and one it did start has that
+# reading as its environment, which wins, so for a ccrc read a file that never spells the key cannot set it on either
+# platform, and asking the model regardless would let one knob-less line it rejects (`CCRC_PROJECTS_ROOT=~/code`, a CRLF
+# file) refuse every setting at once. One exception, wave 23's ratified departure, kept for its one knob: on macOS the
+# model is asked for CCRC_BACKUP_DATA_KEEP whatever the scan says, because the job's bash can build that name without
+# spelling it (a backslash-newline inside it, a quoted `declare`), so there a file the model cannot decide still refuses
+# it. The scan before the model refuses what the model does not: ONE positive rule, over bytes (`LC_ALL=C`, as D-3833
+# reads ccrc.env, so the box's locale cannot change an answer), on each line with its leading spaces, tabs and CRs gone
+# (the set `_box_env_value` trims): a comment (`#` or `;`, the set `_box_env_unit_whole` skips) is skipped; so is
+# another key's line, `[export ]NAME=` with NAME an identifier other than the key (as D-3823 reads `export OLD_KEY=…`);
+# a line that begins `<KEY>=` is the one the model reads; any other line that names the key as a whole token (no letter,
+# digit or `_` on either side) refuses, `export <KEY>=` included. The same scan says whether a non-comment line names it
+# (its exit 4 when none does). A line holding a CR past its lead is never skipped, since systemd ends a line at a bare
+# CR and would read what follows as a line of its own (fix round 2's review); a file holding a NUL byte, which bash's
+# `read` drops and systemd cannot read at all (`_box_env_has_nul`, D-3832), and a scan that answers anything but 0, 1 or
+# 4 (an awk that cannot run, or is killed) could not be scanned. Only an absent file, one that never names the key, one
+# the model reads as not naming it, or an empty value there (like an empty environment value) reads <default>.
+_ccrc_knob() {   # <KEY> <default> [file]
+  local key="$1" f="$BOX_ENV_FILE" g=0 why=""
+  KNOB=""; KNOB_FROM=""; KNOB_WHY=""
+  case " ${CCRC_SETTINGS[*]} " in *" $key "*) ;; *) KNOB_WHY="$key is not one of ccrc's settings (CCRC_SETTINGS), so it is never read from a file"; return 1 ;; esac
+  [ "${3:-}" = file ] || KNOB="${!key:-}"
+  if [ -n "$KNOB" ]; then KNOB_FROM=environment
+  elif [ -e "$f" ] || [ -L "$f" ]; then
+    if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f" 2>/dev/null; then g=2; else LC_ALL=C awk -v k="$key" '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t); w = (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]"); n += w && (!/^[#;]/ || /\r./) } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } w { f = 1; exit } END { exit (f ? 0 : (n ? 1 : 4)) }' "$f" 2>/dev/null || g=$?; fi; else g=3; fi
+    case "$g" in 0) why="$f names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 1|4) ;; 3) why="$f is there but cannot be read" ;; *) why="$f could not be scanned" ;; esac
+    # The named file alone: a path that cannot exist stands in for the exposure file, which no process that acts on any other
+    # setting receives (review 839; the deadline's `min` and `max` name it as the file instead, D-6602). Never the empty
+    # spelling, `CCRC_EXPOSURE_FILE=`: the model's own refusal of an undecidable ccrc.env compares its source with that path.
+    if [ "$g" = 1 ] || { [ "$g" = 4 ] && [ "${CCD_OS:-linux}" = darwin ] && [ "$key" = CCRC_BACKUP_DATA_KEEP ]; }; then CCRC_EXPOSURE_FILE="$f/." _box_unit_env "$key" 2>/dev/null; case $? in 0) KNOB="$BUE_VAL"; if [ -n "$KNOB" ]; then KNOB_FROM=file; elif [ "$BUE_NAMED" = 1 ]; then KNOB_FROM=empty; fi ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
+    [ -z "$why" ] || { KNOB=""; KNOB_WHY="$key cannot be measured: ${why/#"$HOME"/\~}"; return 1; }
   fi
-  printf '%s' "$v"
+  [ -n "$KNOB" ] || { KNOB="$2"; KNOB_FROM="${KNOB_FROM:-default}"; }
+}
+
+# ── _keep_knob <KEY> <default> [<lowest>] — the one reader and validator of a keep (D-6589) ──
+# `_ccrc_knob`, then `_keep_ok`, then the lowest bound (default 0): rc 0 sets KEEP (decimal, so 0002 is 2) and KEEP_FROM,
+# the phrase a prune line prints; rc 1 clears KEEP and KEEP_FROM and sets KEEP_WHY, `_ccrc_knob`'s sentence when it could not
+# be measured (so an unmeasured file never reaches `_keep_why` with an empty value, naming neither the file nor the
+# line), else `_keep_why`'s followed by `, as set in <the environment | the box's ccrc.env>`, the source that won (D-6605: the
+# value is the one byte run of the file it prints). CCRC_BACKUP_KEEP, CCRC_BACKUP_DATA_KEEP and CCRC_VERSIONS_KEEP read through it.
+_keep_knob() {   # <KEY> <default> [<lowest>]
+  _ccrc_knob "$1" "$2" || { KEEP=""; KEEP_FROM=""; KEEP_WHY="$KNOB_WHY"; return 1; }
+  case "$KNOB_FROM" in environment) KEEP_FROM="the environment" ;; file) KEEP_FROM="the box's ccrc.env" ;; *) KEEP_FROM="the default" ;; esac
+  _keep_ok "$KNOB" && [ "$((10#$KNOB))" -ge "${3:-0}" ] || { KEEP=""; KEEP_WHY="$(_keep_why "$1" "$KNOB" "${3:-0}"), as set in $KEEP_FROM"; KEEP_FROM=""; return 1; }
+  KEEP=$((10#$KNOB)); KEEP_WHY=""
+}
+
+# ── _upd_deadline_ms [min|max] — the deadline, in every reading the server may hold (W4a Task 9; wave 24, D-6591, D-6602) ──
+# W2's server takes `CCRC_UPDATE_DEADLINE_MS` (its `updateDeadlineMs`) from the first of the exposure file, ccrc.env and its
+# manager's environment that names it, since `ccrc.service` reads the two files in that order over the environment; this node's
+# acts run with whatever environment their starter gave them, and the bash cannot always know which of the three the server
+# took. So the PLAIN reading is `_ccrc_knob`'s, the environment else ccrc.env else 900000 (15 minutes, spec §10), and `min` and
+# `max` add each file alone (`file` mode, the exposure file named for its one call): `min` is the smallest of the three, for
+# `_bak_gc`'s bound on an update and a rollback by flip (D-6601), so the bash never works past a deadline the server may hold;
+# `max` is the largest, for `cmd_watchdog`, which writes a live updater's report over as wedged and so must never judge it
+# sooner than the server would. A reading is DECIDED only as canonical digits, a positive integer of at most 15 digits with no
+# lead zero: the server's `Number(v)` with `isSafeInteger && > 0` reads `6e5`, `+600000` and `600000.0` as 600000, which the
+# bash cannot follow, while canonical digits both sides read alike, and 15 digits keep every product below inside bash's
+# 64-bit arithmetic. A set environment value that is not canonical is undecided, never replaced by the file it outranks. A file
+# that names the key with an empty value is 900000, decided: for the server that line is an assignment of the empty string,
+# which overrides what came before it and leaves its default; a file that never names it adds no reading. Prints
+# MILLISECONDS by name (each caller divides by 1000; update.json is seconds, rulings R1/R14). rc 0 decided; rc 1 when any
+# reading is not, printing 900000 plain, 0 under `min` (so a bound built on it is already past) and the largest it could
+# decide, at least 900000, under `max`. It never dies; each caller says what an rc 1 costs it.
+_upd_deadline_ms() {   # [min|max]
+  local f v lo="" hi=0 rc=0
+  # "" is the plain reading; the two files are read alone only for `min` and `max`.
+  for f in "" ${1:+"$BOX_ENV_FILE" "$CCRC_EXPOSURE_FILE"}; do
+    if [ -z "$f" ]; then _ccrc_knob CCRC_UPDATE_DEADLINE_MS 900000; else BOX_ENV_FILE="$f" _ccrc_knob CCRC_UPDATE_DEADLINE_MS 900000 file; fi && v="$KNOB" || v=""
+    [ -z "$f" ] || [ "$KNOB_FROM" != default ] || continue
+    [[ "$v" =~ ^[1-9][0-9]{0,14}$ ]] || { v=900000; rc=1; }
+    [ "$v" -le "$hi" ] || hi="$v"
+    [ -n "$lo" ] && [ "$lo" -le "$v" ] || lo="$v"
+  done
+  if [ "${1:-}" = min ]; then [ "$rc" -eq 0 ] || lo=0; printf '%s' "$lo"; else printf '%s' "$hi"; fi
+  return "$rc"
 }
 
 # ── _upd_watchdog_probe_gap_s — D-3278's sampling interval ─────────────────
@@ -19739,7 +19828,10 @@ cmd_watchdog() {
   # arithmetic error, not an age — Task 1's `_upd_phase` refuses the same.
   [[ "$now" =~ ^[1-9][0-9]{0,10}$ ]] \
     || _ccrc_die "watchdog: date +%s did not answer with unix seconds — nothing was re-measured or reverted"
-  deadline="$(_upd_deadline_ms)"
+  # The LARGEST reading (D-6602): `lim` feeds both thresholds, and past twice it a live holder's report is written over as wedged,
+  # so it must never be smaller than a deadline the server may hold. One reading for both: a larger in-progress threshold only
+  # delays the probe of a DEAD updater, whose lease the server's own deadline frees meanwhile.
+  deadline="$(_upd_deadline_ms max)" || echo "watchdog: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the server may take it from (the environment, the box's ccrc.env, the exposure file) — using the largest reading ccrc could decide"
   lim=$(( deadline / 1000 ))
   age=$(( 10#$now - 10#$upd ))
   if [ "$age" -le "$lim" ]; then
@@ -20767,8 +20859,16 @@ _upd_marker_unsigned() {
 # (install.sh's own `BASE=` line carries its own copy of this expression — the release
 # source's deliberate cross-file second, argued in the RELEASE SOURCE
 # header above `CCRC_RELEASE_OWNER`: install.sh runs before any ccrc exists.)
+# A mirror, `CCRC_RELEASE_BASE_URL`, is a setting (wave 24, D-6594): the environment, else the box's ccrc.env, else that
+# default, read through `_ccrc_knob`, so a console update, the watchdog and the deploying machine's rollout pin all fetch
+# from the host the operator named. rc 0 prints the base; rc 1, a ccrc.env that cannot be read for it, prints
+# nothing on stdout and one `$PROG:` line on stderr (never `update:`: a rollback and a rollout reach it too), and the
+# caller refuses before anything on the box changes, since fetching from the default host then would read unmeasured as
+# unset. The line names the file, never the value, which can carry `user:pass@`. A caller that reports the cause calls it
+# in its own shell, not `$(…)`, and reads KNOB and KNOB_WHY (`_ccrc_knob`'s), which a subshell would keep (F8).
 _upd_release_base() {
-  printf '%s' "${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
+  _ccrc_knob CCRC_RELEASE_BASE_URL "https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases" || { echo "$PROG: $KNOB_WHY" >&2; return 1; }
+  printf '%s' "$KNOB"
 }
 
 # `_upd_validate_timeout <name> <default> [what] [max]` — ONE validator for
@@ -20838,7 +20938,9 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   _upd_validate_timeout CCRC_RELEASE_SUMS_MAX_TIME 20
   _upd_validate_timeout CCRC_RELEASE_SUMS_MAX_FILESIZE 4096 \
     'a whole number of bytes from 1 to 1048576' 1048576
-  base="$(_upd_release_base)"
+  # Called in this shell, never `$(…)`, so KNOB_WHY reaches the die: the report's detail then says why (the file, the key, the
+  # line, never a value), and its own line is silenced, the die's saying it once. A node fault, never `provenance: ` (F8, F9).
+  _upd_release_base >/dev/null 2>&1 && base="$KNOB" || _ccrc_die "$KNOB_WHY — nothing on this box was changed"
   if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
   UPD_URL_DIR_SAFE="$(_upd_redact "$UPD_URL_DIR")"
   UPD_STAGE="$(_plat_mktemp_d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
@@ -21503,12 +21605,23 @@ _upd_gate_probe() {   # <role> <version> -> 0 pass, 1 fail; UPD_GATE_WHY
 # Probes at once, then every 2 s, for CCRC_UPDATE_HEALTH_S (default 90): a
 # restarted server takes seconds to bind, and the first `/health` after a
 # restart answering nothing is the ordinary case, not a verdict. The ONLY
-# writer of the `checking` phase.
+# writer of the `checking` phase. The window is read through `_ccrc_knob`, the
+# environment else ccrc.env (D-6593), so a console-driven run and the
+# watchdog's rollback wait what the operator set; a line the reader refuses
+# WARNs and waits 90, as a value that is not digits does, and one of more than
+# 18 characters, which past 18 significant digits the shell's integer test
+# cannot compare (D-6747): ruling 6's zero and no range hold for every value of
+# at most 18 characters. A zero-padded value longer than that (19 zeros, or
+# `0000000000000000030`) is comparable but waits 90 too, as ruled. Never a refusal: the
+# gate runs after the install, so refusing cannot undo it, and a rollback's
+# gate must still judge the box. Never a shorter wait: a short window reads a
+# slow but healthy box as failed and restores it.
 _upd_gate() {   # <role> <version> -> 0 at the first pass, 1 when the window ends first
-  local role="${1:-both}" want="$2" limit="${CCRC_UPDATE_HEALTH_S:-90}" start
+  local role="${1:-both}" want="$2" limit start
+  _ccrc_knob CCRC_UPDATE_HEALTH_S 90 && limit="$KNOB" || { echo "update: WARN: $KNOB_WHY — using 90"; limit=90; }
   case "$limit" in
-    ''|*[!0-9]*)
-      echo "update: WARN: CCRC_UPDATE_HEALTH_S='${limit//[![:print:]]/?}' is not a number of seconds — using 90"
+    ''|*[!0-9]*|???????????????????*)
+      echo "update: WARN: CCRC_UPDATE_HEALTH_S='${limit//[![:print:]]/?}' is not a number of seconds (digits only, at most 18) — using 90"
       limit=90 ;;
   esac
   _upd_phase checking
@@ -21826,7 +21939,10 @@ _upd_restore_copy() {
 }
 
 # `_upd_asset_listed <tag> <asset>` — 0 the release carries it; 1 it does not,
-# MEASURED: the host answered 404; 2 unmeasured — anything else. Two callers:
+# MEASURED: the host answered 404; 2 unmeasured — anything else; 3 the release
+# base could not be read (`_upd_release_base`'s own stderr line says why, KNOB_WHY
+# holds it for the caller's report, F8, and no host was asked: a word of its own, since a caller's rc-2 sentence blames
+# curl and the host, wave 24, D-6594). Two callers:
 # arm 2 asks for the previous release's bundle, `rollback` (Task 7) for
 # SHA256SUMS. D-3261: curl -f's exit 22 is ANY status
 # >= 400 (D-3143, `_upd_fetch`), so a 403 rate limit or a 5xx from the release
@@ -21867,9 +21983,11 @@ _upd_asset_listed() {
   # bound that was actually applied.
   _upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME 15 \
     "a whole number of seconds from 1 to 18 (the pre-detach check must answer inside W5's 20-second spawn deadline)" 18
+  # Read before the curl, outside its `2>/dev/null`, so the reader's line reaches the operator.
+  local b; _upd_release_base >/dev/null && b="$KNOB" || return 3   # in this shell, so the caller has KNOB_WHY
   code="$(curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_PROBE_MAX_TIME" \
-    -o /dev/null -w '%{http_code}' "$(_upd_release_base)/download/$1/$2" 2>/dev/null)" || rc=$?
+    -o /dev/null -w '%{http_code}' "$b/download/$1/$2" 2>/dev/null)" || rc=$?
   [ "$rc" -eq 0 ] && return 0
   [ "$rc" -eq 22 ] && [ "$code" = 404 ] && return 1
   return 2
@@ -21980,6 +22098,9 @@ _upd_restore_arm2() {
         echo "update: arm2-refused: $UPD_PREV_TAG ships no bundle — run ccrc update --to $UPD_PREV_TAG --downgrade --allow-unsigned by hand"
         _upd_phase reverted "arm2-refused: $UPD_PREV_TAG ships no bundle; run ccrc update --to $UPD_PREV_TAG --downgrade --allow-unsigned by hand"
         return 1 ;;
+      # F10: the base could not be read (KNOB_WHY, set in this shell, says why), so no host was asked. Like `*)`, the child
+      # decides: it runs the NEW tree, whose reader may take a line this one refused; if that refuses too, arm 3 follows.
+      3) echo "update: arm 2: $KNOB_WHY, so no host was asked whether $UPD_PREV_TAG ships a bundle — the restore child's own resolve decides" ;;
       *)
         echo "update: arm 2: could not ask the release host whether $UPD_PREV_TAG ships a bundle within ${CCRC_RELEASE_PROBE_MAX_TIME}s (curl failed, timed out, or the host answered neither 200 nor 404) — the restore child's own fetch decides" ;;
     esac
@@ -23483,17 +23604,21 @@ cmd_rollout() {
   # So: the remote's stderr goes to ours with this box's own label on it
   # (an operator needs to SEE a host-key warning, not have it swallowed),
   # and the check line is looked for ANYWHERE in stdout, first match wins.
-  # The refusal now fires only when no `check: ` line exists at all.
-  local i out first line state box sha caps floor allcurrent=1
+  # The refusal now fires only when no `check: ` line exists at all. Its cause is the remote exit (F11): a nonzero one is the
+  # box's own refusal (a release base it cannot read, an argument an older ccrc does not know), its lines relayed above, so the
+  # installed/new-enough question is asked only of a box that exited 0 with no check line; 255 is ssh's own failure, and 127
+  # the remote shell's command-not-found, each in its own words.
+  local i out first line state box sha caps floor allcurrent=1 crc cwhy
   local -a states=() capss=() floors=()
   for i in "${!boxes[@]}"; do
     : >"$ROLLOUT_ERRF"
-    out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --check --to $ROLLOUT_VERSION" 2>>"$ROLLOUT_ERRF")" || :
+    crc=0; out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --check --to $ROLLOUT_VERSION" 2>>"$ROLLOUT_ERRF")" || crc=$?
     [ -s "$ROLLOUT_ERRF" ] && sed "s/^/${labels[$i]}: /" "$ROLLOUT_ERRF" >&2
     line="$(printf '%s\n' "$out" | grep -m1 '^check: ')" || line=""
     if [ -z "$line" ]; then
       first="${out%%$'\n'*}"
-      echo "$PROG: rollout: the ${labels[$i]} box's 'ccrc update --check' printed no check line (got: ${first:-nothing}) — is ccrc installed there, and new enough to know --check? nothing was touched" >&2
+      case "$crc" in 0) cwhy="is ccrc installed there, and new enough to know --check?" ;; 255) cwhy="ssh failed (exit 255), so the check may not have run there; the lines above say why —" ;; 127) cwhy="its shell found no ccrc to run (exit 127); is ccrc installed there?" ;; *) cwhy="its check refused (exit $crc); the lines above say why —" ;; esac
+      echo "$PROG: rollout: the ${labels[$i]} box's 'ccrc update --check' printed no check line (got: ${first:-nothing}) — $cwhy nothing was touched" >&2
       exit 2
     fi
     box="${line#*box=}"; box="${box%% *}"
@@ -23699,8 +23824,9 @@ cmd_rollout() {
 # The prune keeps what `_bak_gc` keeps (wave 9 R10g, D-3825), through the one helper `_bak_keepset`: this run's own
 # dir by exact path, every dir named at or after the second this verb began, and the newest earlier tree backup and
 # coord.db snapshot — so at CCRC_BACKUP_KEEP=0 the backup just taken survives, and more than KEEP dirs can. It takes
-# ~/.ccrc/update.lock for the PRUNE only (D-3826) and skips, exit 0, while another holder has it, when flock is absent
-# or when the lock cannot be measured: the backup itself was taken. The COPY is not locked, by ruling (an update's
+# ~/.ccrc/update.lock for the PRUNE only (D-3826) and skips while another holder has it, when flock is absent or when the
+# lock cannot be measured: the backup itself was taken, so the skip exits 0 when the settings read, and 1 after a setting
+# refusal (D-6590). The COPY is not locked, by ruling (an update's
 # `_bak_gc` can still prune a dir of this verb's that is still being copied, if that dir was named before the update
 # took its lock — wave 8's Risk (a), unchanged): holding the lock across a coord.db VACUUM would make a console move
 # answer busy for its whole length.
@@ -23817,7 +23943,7 @@ _bak_list() {
   return 0
 }
 
-# Keep the newest ${CCRC_BACKUP_KEEP:-10} TIMESTAMPED backups —
+# Keep the newest CCRC_BACKUP_KEEP (default 10) TIMESTAMPED backups —
 # `deploy.sh`'s `prune_backups` glob exactly (`[0-9]{8}-[0-9]{6}`, the shape
 # `_upd_backup`'s `date +%Y%m%d-%H%M%S` writes), because the directory also
 # holds hand-made siblings (a real `pre-flip-agent-dist` exists on the fleet
@@ -23827,26 +23953,27 @@ _bak_list() {
 # Wave 9 R10g (D-3825, D-3826): the removal set is cut by `_bak_keepset`, the helper `_bak_gc` shares — this run's own dir,
 # every dir named at or after UPD_BAK_FLOOR (`cmd_backup` sets it before it backs up), the newest earlier tree backup, the newest
 # earlier valid coordination snapshot and the newest earlier one that holds data (D-4641) are never removed — and the prune holds
-# ~/.ccrc/update.lock. Where `_bak_gc` WARNs and returns,
-# this verb says "prune skipped" and returns 0: the backup was taken, and its echo and its invalid-KEEP refusal (the two
-# `_ccrc_die`s) are unchanged. A floor that is not recorded (only a direct call reaches it) prunes nothing.
+# ~/.ccrc/update.lock. Where `_bak_gc` WARNs and returns, this verb says "prune skipped" and returns 0, unless a setting was
+# refused: the backup was taken. Each keep is `_keep_knob`'s (D-6589), and a refused one stops only its own act (D-6590): it is
+# one stderr line in `_ccrc_die`'s form, said before the lock, and the other act runs; both refused return at once. Every
+# return after a refusal is 1, so `ccrc backup` exits 1. A floor that is not recorded (only a direct call reaches it) prunes nothing.
 _bak_prune() {
-  local keep="${CCRC_BACKUP_KEEP:-10}"
-  _keep_ok "$keep" || _ccrc_die "$(_keep_why CCRC_BACKUP_KEEP "$keep") — nothing was pruned"
-  _bak_data_keep || _ccrc_die "$BAK_DATA_KEEP_WHY — nothing was pruned or thinned"
-  keep=$((10#$keep))   # `0002` is two: the loop below is ARITHMETIC, where a leading 0 is octal (or an error)
+  local keep="" kwhy="" dwhy="" r=0   # `_keep_knob` makes KEEP decimal (`0002` is two): the loop below is ARITHMETIC
+  _keep_knob CCRC_BACKUP_KEEP 10 && keep="$KEEP" || { kwhy=1; r=1; echo "$PROG: $KEEP_WHY — nothing was pruned" >&2; }
+  _bak_data_keep || { dwhy=1; r=1; echo "$PROG: $BAK_DATA_KEEP_WHY — nothing was thinned" >&2; }
+  [ -z "$kwhy" ] || [ -z "$dwhy" ] || return 1
   if ! [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
     echo "backup: prune skipped — this run's start time was not recorded, so nothing can say which backups are its own; nothing was pruned"
-    return 0
+    return "$r"
   fi
   local took=0 lrc=0
   [ -n "$UPD_LOCK_FD" ] || took=1
   _ver_lock_try || lrc=$?
   case "$lrc" in
     0) ;;
-    1) echo "backup: prune skipped — another ccrc run holds ~/.ccrc/update.lock; nothing was pruned"; return 0 ;;
-    2) echo "backup: prune skipped — flock is not on PATH, so ~/.ccrc/update.lock cannot be taken; nothing was pruned"; return 0 ;;
-    *) echo "backup: prune skipped — ~/.ccrc/update.lock could not be measured; nothing was pruned"; return 0 ;;
+    1) echo "backup: prune skipped — another ccrc run holds ~/.ccrc/update.lock; nothing was pruned"; return "$r" ;;
+    2) echo "backup: prune skipped — flock is not on PATH, so ~/.ccrc/update.lock cannot be taken; nothing was pruned"; return "$r" ;;
+    *) echo "backup: prune skipped — ~/.ccrc/update.lock could not be measured; nothing was pruned"; return "$r" ;;
   esac
   _bak_list
   local n=${#BAK_DIRS[@]} i d
@@ -23855,18 +23982,18 @@ _bak_prune() {
   if [ "$krc" -ne 0 ]; then
     echo "backup: prune skipped — the coordination snapshot classifier failed (${BAK_SNAP_WHY:-no reason given}), so nothing can say which backup holds the newest valid snapshot; nothing was pruned"
     if [ "$took" -eq 1 ]; then _upd_unlock; fi
-    return 0
+    return "$r"
   fi
-  for ((i = 0; i < n - keep; i++)); do
+  [ -n "$kwhy" ] || for ((i = 0; i < n - keep; i++)); do
     d="${BAK_DIRS[$i]}"
     _bak_removable "$d" || continue
     rm -rf -- "${BAK_DIRS[$i]}" \
       || _ccrc_die "could not prune ${BAK_DIRS[$i]} — the newer backups above it are all intact"
     echo "backup: pruned ${BAK_DIRS[$i]} (keeping the newest $keep timestamped backups; hand-made siblings are never touched)"
   done
-  _bak_thin backup "backup:" || :
+  [ -n "$dwhy" ] || _bak_thin backup "backup:" || :
   if [ "$took" -eq 1 ]; then _upd_unlock; fi
-  return 0
+  return "$r"
 }
 
 # ── _bak_keepset — which three earlier dirs a prune keeps beyond the floor (wave 9 R10g, D-3825) ──
@@ -23887,8 +24014,15 @@ _bak_prune() {
 # own locals: the callers' locals are not its to read. A link is never a backup: `_bak_list` lists none (R10i, D-5319).
 # The own-dir and floor pair it skips over is `_bak_ours` (D-6357), the same call `_bak_removable` and `_bak_thin` make. BAK_KEEP_DATA is
 # also what `_bak_thin` hands the helper as already verified in this run (D-6350), so the thinning counts it without a second read.
+# <until> (D-6592), unix seconds, is the instant past which it starts no more FULL verifications: `_bak_gc` passes the bound its lease
+# allows on an update and a rollback by flip, `_bak_prune` (`ccrc backup`, which holds no lease) none. Before a classifier call, once an
+# earlier call in this walk was heavy (`BAK_SNAP_HEAVY`) and the clock is at or past <until>, it clears its three out-params and
+# answers rc 3, a time stop, never rc 2: so its first full verification is never stopped, the one both the count prune and `thin`
+# (as `--verified`) use and whose cost the 235 s margin already holds unless the re-stamp came late (then that one call may run past
+# <until> and the hard cap, D-6745), and a walk of cheap calls (manifest-only and code-only dirs, which never set BAK_KEEP_DATA) is
+# never stopped at all, so such a box always ends with its count prune.
 _bak_keepset() {
-  local n i d src
+  local n i d src until="${1:-}" heavy=0
   [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
   n=${#BAK_DIRS[@]}
   BAK_KEEP_SNAP=""; BAK_KEEP_DATA=""; BAK_KEEP_TREE=""
@@ -23896,7 +24030,8 @@ _bak_keepset() {
     d="${BAK_DIRS[$i]}"
     _bak_ours "$d" && continue
     if [ -z "$BAK_KEEP_DATA" ]; then
-      src=0; _bak_snap_class "$d" || src=$?
+      [ "$heavy" -eq 0 ] || [ -z "$until" ] || [ "$(date +%s)" -lt "$until" ] || { BAK_KEEP_SNAP=""; BAK_KEEP_DATA=""; BAK_KEEP_TREE=""; return 3; }
+      src=0; _bak_snap_class "$d" || src=$?; [ "$BAK_SNAP_HEAVY" -eq 0 ] || heavy=1
       case "$src" in
         0)
           [ -n "$BAK_KEEP_SNAP" ] || BAK_KEEP_SNAP="$d"
@@ -23940,48 +24075,11 @@ _bak_ours() {
   [ "$1" = "$UPD_BACKUP_DIR" ] || [ "$((10#${name//-/}))" -ge "$((10#${UPD_BAK_FLOOR//-/}))" ]
 }
 
-# `_bak_data_keep` — the ONE validator of CCRC_BACKUP_DATA_KEEP (D-6347, D-6360): how many backups keep their coordination data set.
-# The process environment, else ~/.ccrc/ccrc.env alone (the order `_upd_deadline_ms` reads its knob in: thinning cannot be undone, and a
-# console-driven move or the watchdog runs under an environment that carries none unless it was set there), else 3. A whole number
-# from 2 to 9999, through `_keep_ok`; 0 and 1 are refused, never clamped. rc 0 sets BAK_DATA_KEEP (decimal); rc 1 sets
-# BAK_DATA_KEEP_WHY to the refusal sentence. Unmeasured is not unset (D-6365): a ccrc.env that is there but cannot be read (a
-# dangling link or a directory there included), or that names the knob on a line this reader does not take, refuses like an
-# invalid value, naming the file and never its bytes. The VALUE is read through `_box_unit_env`, the tree's byte-wise model of
-# systemd's `EnvironmentFile=` (D-3979; the coordinator's ruling on review 817, F1, F2 and F8), never the two-argument
-# `_box_env_value`, whose `read` runs in the caller's locale: the model trims the value as systemd does, and what it cannot decide
-# refuses with its own clause (BUE_WHY, which names the file and never its bytes): a value a quote or a backslash carries across
-# lines, a CR inside a line (a CR lead included), a non-ASCII byte in an assignment. The model reads ccrc.env alone, never the exposure
-# file, which on Linux no process that thins receives (its one consumer is ccrc.service; on macOS the launchd job sources it, so a knob
-# there reaches a console-driven update as its environment, a residual), and it is asked only when ccrc.env's bytes hold the knob as a
-# whole token, in a comment too: a file that never names the knob cannot set it, so its keep is 3 whatever the model or systemd
-# makes of the rest of it but a NUL byte, which the scan refuses first (the coordinator's rulings on reviews 839 and 847). That premise is systemd's: on macOS the model is asked whatever the
-# scan says, because the launchd job sources the file with bash, which can build the name without spelling it (a backslash-newline
-# inside it, a quoted `declare`), so there a file the model cannot decide still refuses (the review of fix round 4). The scan before it refuses what the model does not: ONE positive rule, over bytes (`LC_ALL=C`,
-# as D-3833 reads ccrc.env, so the box's locale cannot change an answer), on each line with its leading spaces, tabs and CRs gone
-# (the set `_box_env_value` trims): a comment (`#` or `;`, the set `_box_env_unit_whole` skips) is skipped; so is another key's
-# line, `[export ]NAME=` with NAME an identifier other than the knob (as D-3823 reads `export OLD_KEY=…`); a line that begins
-# `CCRC_BACKUP_DATA_KEEP=` is the one the model reads; any other line that names the knob as a whole token (no letter,
-# digit or `_` on either side) refuses, `export CCRC_BACKUP_DATA_KEEP=` included. The same scan says whether any line names it (its
-# exit 4 when none does). A line holding a CR past its lead is never skipped,
-# since systemd ends a line at a bare CR and would read what follows as a line of its own (fix round 2's review); a file holding a
-# NUL byte, which bash's `read` drops and systemd cannot read at all (`_box_env_has_nul`, D-3832), and a scan that answers anything but
-# 0, 1 or 4 (an awk that cannot run, or is killed) could not be scanned, and refuse too, whether or not the file names the knob. Only an
-# absent file, one that never names the knob, one the model reads as not naming it, or an empty value there (as with an empty
-# environment variable) falls back to 3. The same fallback is harmless in `_upd_deadline_ms`, whose default deletes nothing.
+# `_bak_data_keep` — CCRC_BACKUP_DATA_KEEP (D-6347, D-6360): how many backups keep their coordination data set. `_keep_knob`'s
+# answer for that knob, default 3, lowest 2 (0 and 1 are refused, never clamped); `_ccrc_knob`'s header argues the read. rc 0 sets
+# BAK_DATA_KEEP (decimal); rc 1 sets BAK_DATA_KEEP_WHY to the refusal sentence. `_bak_thin` and wave 23's rows read these two names.
 _bak_data_keep() {
-  local f="$BOX_ENV_FILE" g=0 why=""
-  BAK_DATA_KEEP="${CCRC_BACKUP_DATA_KEEP:-}"; BAK_DATA_KEEP_WHY=""
-  if [ -z "$BAK_DATA_KEEP" ] && { [ -e "$f" ] || [ -L "$f" ]; }; then
-    if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f"; then g=2; else LC_ALL=C awk -v k=CCRC_BACKUP_DATA_KEEP '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t); w = (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]"); n += w } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } w { f = 1; exit } END { exit (f ? 0 : (n ? 1 : 4)) }' "$f" || g=$?; fi; else g=3; fi
-    case "$g" in 0) why="$f names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 1|4) ;; 3) why="$f is there but cannot be read" ;; *) why="$f could not be scanned" ;; esac
-    # ccrc.env alone: a path that cannot exist stands in for the exposure file, which no process that thins receives (review 839). Never
-    # the empty spelling, `CCRC_EXPOSURE_FILE=`: the model's own refusal of an undecidable ccrc.env compares its source with that path.
-    if [ "$g" = 1 ] || { [ "$g" = 4 ] && [ "${CCD_OS:-linux}" = darwin ]; }; then CCRC_EXPOSURE_FILE="$f/." _box_unit_env CCRC_BACKUP_DATA_KEEP; case $? in 0) BAK_DATA_KEEP="$BUE_VAL" ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
-    [ -z "$why" ] || { BAK_DATA_KEEP_WHY="CCRC_BACKUP_DATA_KEEP cannot be measured: ${why/#"$HOME"/\~}"; return 1; }
-  fi
-  BAK_DATA_KEEP="${BAK_DATA_KEEP:-3}"
-  if _keep_ok "$BAK_DATA_KEEP" && [ "$((10#$BAK_DATA_KEEP))" -ge 2 ]; then BAK_DATA_KEEP=$((10#$BAK_DATA_KEEP)); return 0; fi
-  BAK_DATA_KEEP_WHY="$(_keep_why CCRC_BACKUP_DATA_KEEP "$BAK_DATA_KEEP" 2)"; return 1
+  _keep_knob CCRC_BACKUP_DATA_KEEP 3 2; local rc=$?; BAK_DATA_KEEP="$KEEP"; BAK_DATA_KEEP_WHY="$KEEP_WHY"; return "$rc"
 }
 
 # `_bak_thin <update|backup> <line prefix> [<until>]` — thins the coordination data set of the backups past the newest BAK_DATA_KEEP that carry
@@ -24023,11 +24121,15 @@ _bak_thin() {
 # snapshot (the live DB was absent when it was taken): the pre-filter below looks for any of the four names a snapshot is made of,
 # never for coord.db alone. A dir whose data set was thinned (D-6346) holds none of the four names, so the pre-filter answers rc 1 for it
 # without starting node, exactly as for a code-only backup: this function never sees a thinned dir, and its answer table needs no row for one.
+# BAK_SNAP_HEAVY (0|1) is the call's COST (D-6592): 1 when the dir holds any member but the manifest (a coord.db, the journal or the
+# checkpoint), the members a full verification reads; a manifest alone (every fleet-box backup, `data: no`) validates in well under a
+# second. It is set in the pre-filter's own loop, which therefore no longer stops at the first member found: a manifest listed first
+# must not hide a coord.db beside it.
 _bak_snap_class() {
   local d="$1" n any=0 rc=0 out first second helper="$CCRC_HERE/../deploy/coordination-snapshot.mjs"
-  BAK_SNAP_DATA=0; BAK_SNAP_WHY=""
+  BAK_SNAP_DATA=0; BAK_SNAP_WHY=""; BAK_SNAP_HEAVY=0
   for n in coordination-snapshot.json delegation-events.log delegation-checkpoint.json coord.db; do
-    if [ -e "$d/$n" ] || [ -L "$d/$n" ]; then any=1; break; fi
+    if [ -e "$d/$n" ] || [ -L "$d/$n" ]; then any=1; [ "$n" = coordination-snapshot.json ] || BAK_SNAP_HEAVY=1; fi
   done
   [ "$any" -eq 1 ] || return 1
   if ! command -v node >/dev/null 2>&1; then BAK_SNAP_WHY="node is not on PATH"; return 2; fi
@@ -24057,15 +24159,28 @@ _bak_snap_class() {
   case "$rc" in 0) return 0 ;; *) return 1 ;; esac
 }
 
+# ── _bak_restamp <detail> — the one spelling of the pre-prune re-stamp (D-6356, D-6464, D-6601) ──
+# `cmd_update` (after a passed gate, never a restore child) and `cmd_rollback`'s flip arm call it right before `_bak_gc`: the run's report,
+# only while it is still this run's own, is written again as `restarting` with <detail>, so the control plane's deadline and the
+# watchdog's wedged arm, both measured from the report's last write, run from here while the prune holds the lock. It is a write with
+# no lock held, like each caller's final report, so it shares that write's m3 window (a newer run's report landing between
+# `_upd_report_is_mine` and `_upd_phase` is overwritten). It sets UPD_THIN_AT, the instant that deadline now runs from: the re-stamp's
+# `updatedAt` read back from the report when that reads as whole seconds, else the second read just before it, which is never later.
+# It never dies, and its rc is not an answer.
+_bak_restamp() {   # <detail>
+  UPD_THIN_AT="$(date +%s)"; _upd_report_is_mine && _upd_phase restarting "$1" && _upd_report_readable && { local rb=""; rb="$(jq -er '.updatedAt | numbers' -- "$BOX_UPDATE_JSON" 2>/dev/null)" && [[ "$rb" =~ ^[1-9][0-9]{0,10}$ ]] && UPD_THIN_AT="$rb"; }
+}
+
 # ── _bak_gc — update's and rollback's own prune of ~/ccrc-backups (wave 8 item B) ──
 # Reached ONLY after a run that COMPLETED with its gate passed and its sweep finished (exit 0 or 3 follows):
 # cmd_update after `_upd_report` when `gate_passed` and not a restore child, and cmd_rollback's flip arm after its
 # sweep. A failed gate (exit 4, restored), --no-gate, every --from restore child, a sweep that died, and a refused
 # rollback never get here. It NEVER DIES and never writes update.json: a `_ccrc_die` here would turn a completed
-# update into a `failed` report. rc 0 done or nothing to do; rc 1 skipped or a removal failed; every caller writes
-# `|| :`. It keeps the newest $CCRC_BACKUP_KEEP timestamped dirs of any origin (the ONE bounded validator,
+# update into a `failed` report. rc 0 done or nothing to do; rc 1 skipped, a setting was refused (a keep, or a deadline it could
+# not decide), the time bound stopped the keep-set (`_bak_keepset`'s rc 3: nothing pruned or thinned), or a removal failed; every
+# caller writes `|| :`. It keeps the newest CCRC_BACKUP_KEEP timestamped dirs of any origin (the ONE bounded validator,
 # `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them (neither counts a link, D-5319);
-# read from the process env only), and four
+# read by `_keep_knob`, the environment else ccrc.env, D-6589), and four
 # more that can only LEAVE the removal set: this run's own backup by its exact path; every dir named at or after
 # this run's lock second (UPD_BAK_FLOOR) — both D-3593; and, among the dirs neither of those protects, the newest tree backup (D-3594; a
 # `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest VALID coordination
@@ -24073,26 +24188,26 @@ _bak_snap_class() {
 # snapshot with sidecars and no coord.db counts, and an invalid manifest never does) and, beside it, the newest valid snapshot that HOLDS DATA (D-4641:
 # a v1 with a member present, or a legacy one), so an empty-box snapshot never evicts the last one with data. The sets are independent. The lock was released before the sweep (design §10), so it is RE-TAKEN (D-3592) without dying: any other holder
 # means nothing is pruned. An UPDATE (never a rollback by flip: a flip takes no backup, so it adds no data set to thin, and its tree's
-# helper may predate `thin`, D-6355; a rollback by re-install runs `cmd_update` and thins here as an update) then thins the coordination data set of the backups past the newest CCRC_BACKUP_DATA_KEEP (`_bak_thin`,
-# D-6346), under the same lock; an invalid CCRC_BACKUP_DATA_KEEP stops the prune and the thinning alike (D-6347). It still never
-# writes update.json: `cmd_update` re-stamps the report before it calls this (D-6356). An update passes `thin` a time budget (D-6464):
-# `--until`, the re-stamp's instant (UPD_THIN_AT) plus `_upd_deadline_ms`, less a margin of 235 s. The margin is 150 s for one full
+# helper may predate `thin`, D-6355; but a flip's keep-set is bounded like an update's, D-6601; a rollback by re-install runs
+# `cmd_update` and thins here as an update) then thins the coordination data set of the backups past the newest CCRC_BACKUP_DATA_KEEP (`_bak_thin`,
+# D-6346), under the same lock; a refused keep stops only its own act, and a refusal returns 1 (D-6590, amending D-6347). It still never
+# writes update.json: its callers re-stamp the report before they call it (`_bak_restamp`, D-6356, D-6601). Whenever they did, it
+# bounds its work (D-6464, D-6592, D-6601): the keep-set starts no full verification past the bound but its first, and an update
+# passes `thin` the same bound as `--until`. The bound is the re-stamp's instant (UPD_THIN_AT) plus `_upd_deadline_ms min`, or the
+# control plane's hard cap if that comes first (the comment at its computation), less a margin of 235 s. The margin is 150 s for one full
 # verification `thin` starts just before the bound (Step 7's largest per-set figure, the estimate `thin` itself uses until it has timed
 # one); 75 s for the control plane to read the final report, since its deadline runs on what its inventory last read, and that runs once
 # a minute, gated on a 2 s tick and stamped as it starts, and takes up to its 10 s budget (72 s, rounded up); and 10 s for what follows
-# `thin` here (the unlock, and `cmd_update`'s final report). The count prune runs before `thin`, inside the window. On the box that
-# thins, `_upd_deadline_ms` reads the ccrc.env the server reads its deadline from, but by its own parse, which agrees with the
-# server's on canonical digits only: a non-canonical spelling there, or a user-manager value larger than the file's, can put the
-# bound past the server's deadline (review 817 F4, a residual carried to wave 24). No UPD_THIN_AT (a direct call) passes no bound;
-# `ccrc backup` passes none, as it holds no lease.
+# `thin` here (the unlock, and `cmd_update`'s final report). The count prune runs before `thin`, inside the window. The deadline is
+# the SMALLEST reading the server may hold (D-6591): the environment, ccrc.env and the exposure file, each by `_upd_deadline_ms`, which
+# agrees with the server's parse on canonical digits only; any reading it cannot decide WARNs, makes this rc 1 and leaves the bound the
+# re-stamp less the margin, already past, so the keep-set stops after its first full verification and `thin` starts none (it still
+# finishes an interrupted thinning). No UPD_THIN_AT (a direct call) passes no bound; `ccrc backup` passes none, as it holds no lease.
 _bak_gc() {   # <lead word: update|rollback>
-  local lead="$1" keep="${CCRC_BACKUP_KEEP:-10}"
-  if ! _keep_ok "$keep"; then
-    echo "$lead: backups: WARN: $(_keep_why CCRC_BACKUP_KEEP "$keep") — nothing pruned"
-    return 1
-  fi
-  keep=$((10#$keep))
-  _bak_data_keep || { echo "$lead: backups: WARN: $BAK_DATA_KEEP_WHY — nothing pruned or thinned"; return 1; }
+  local lead="$1" keep="" ksrc="" kwhy="" dwhy=""   # KEEP_FROM is taken at once: `_bak_data_keep` calls `_keep_knob` next
+  _keep_knob CCRC_BACKUP_KEEP 10 && { keep="$KEEP"; ksrc="$KEEP_FROM"; } || { kwhy=1; echo "$lead: backups: WARN: $KEEP_WHY — nothing pruned"; }
+  [ "$lead" != update ] || _bak_data_keep || { dwhy=1; echo "$lead: backups: WARN: $BAK_DATA_KEEP_WHY — nothing thinned"; }
+  [ -z "$kwhy" ] || { [ "$lead" = update ] && [ -z "$dwhy" ]; } || return 1
   if ! [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
     echo "$lead: backups: WARN: this run's lock time was not recorded, so nothing can say which backups are its own — nothing pruned"
     return 1
@@ -24108,27 +24223,47 @@ _bak_gc() {   # <lead word: update|rollback>
   esac
   _bak_list
   local n=${#BAK_DIRS[@]} i d shown rc=0
-  local krc=0
-  _bak_keepset || krc=$?   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
+  local krc=0 dl=0 hc=0
+  # The time bound (D-6591, D-6601), for both leads whenever the caller re-stamped (`_bak_restamp`): the smaller of the re-stamp's
+  # term and the hard cap's, each less the margin. The hard cap is the control plane's D-3407 (`deadlineExpired`: the lease ends at
+  # UPDATE_DEADLINE_HARD_CAP_FACTOR deadlines past its start, which no re-stamp pushes out). The bash knows no lease start, but its
+  # own report's startedAt (UPD_REPORT_STARTED) follows it by at most the sum of the start chain's own ceilings, 63 s (D-6744): the
+  # spawn's UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS; the release-host probe of a re-install rollback, twice (the parent's
+  # `_upd_asset_listed` before it detaches, and the detached child's repeat), each at the CCRC_RELEASE_PROBE_MAX_TIME ceiling
+  # `_upd_asset_listed` validates; and `_upd_fleet_warn`'s `_box_health` call before the first `_upd_phase`, at CCRC_HEALTH_TIMEOUT's
+  # default. D-6603's 40 was the spawn and one probe; the 23 added are the child's repeat probe (18) and the health call (5). The
+  # parent's probe runs INSIDE the spawn's 20 s bound (its ceiling is 18 so that it fits), so counting it as ruled over-counts the
+  # chain by up to 18 s: a larger term only stops the thinning earlier, the safe direction (R30 keeps it). W24-K6 derives the
+  # literal from those four and pins it. No literal bounds D-6744's
+  # residuals: the transient unit's start under the service manager, and a lease stamped before its dispatch. The bound holds for
+  # every GATED verification (D-6745): when the re-stamp is already late, the keep-set's first full verification, which
+  # `_bak_keepset` never gates (ruling 4), can run past `until`, and past the hard cap, by one classifier call (W24-K1 measures one).
+  # An undecided reading (`_upd_deadline_ms min` rc 1) leaves no deadline to cap: the bound is the re-stamp less the margin.
+  if [[ "${UPD_THIN_AT:-}" =~ ^[1-9][0-9]{0,10}$ ]]; then
+    dl="$(_upd_deadline_ms min)" || { rc=1; echo "$lead: backups: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the server may take it from (the environment, the box's ccrc.env, the exposure file), so no verification starts this run past the keep-set's first full one — the next update continues"; }
+    until=$(( 10#$UPD_THIN_AT + dl / 1000 - margin )); hc=$(( 4 * dl / 1000 - 63 - margin ))
+    [ "$dl" -eq 0 ] || [[ ! "${UPD_REPORT_STARTED:-}" =~ ^[1-9][0-9]{0,10}$ ]] || [ $(( hc += 10#$UPD_REPORT_STARTED )) -ge "$until" ] || until="$hc"
+  fi
+  _bak_keepset "$until" || krc=$?   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
   if [ "$krc" -ne 0 ]; then
-    echo "$lead: backups: WARN: the coordination snapshot classifier failed (${BAK_SNAP_WHY:-no reason given}), so nothing can say which backup holds the newest valid snapshot — nothing pruned"
+    [ "$krc" -eq 3 ] && echo "$lead: backups: WARN: this run's time budget ran out before the keep-set found the newest valid coordination snapshot — nothing pruned or thinned; the next update continues" || echo "$lead: backups: WARN: the coordination snapshot classifier failed (${BAK_SNAP_WHY:-no reason given}), so nothing can say which backup holds the newest valid snapshot — nothing pruned"
     if [ "$took" -eq 1 ]; then _upd_unlock; fi
     return 1
   fi
-  for ((i = 0; i < n - keep; i++)); do
+  [ -n "$kwhy" ] || for ((i = 0; i < n - keep; i++)); do
     d="${BAK_DIRS[$i]}"
     _bak_removable "$d" || continue   # D-3593's own-dir and floor clauses live there now
     shown="$d"; case "$d" in "$HOME"/*) shown="\$HOME${d#"$HOME"}" ;; esac
     if rm -rf -- "$d" 2>/dev/null; then
-      echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup, the newest earlier valid coordination snapshot and the newest earlier one that holds data; hand-made siblings are never touched)"
+      echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups (CCRC_BACKUP_KEEP from $ksrc), every one named at or after this run took its lock, this run's own, the newest earlier tree backup, the newest earlier valid coordination snapshot and the newest earlier one that holds data; hand-made siblings are never touched)"
     else
       echo "$lead: backups: WARN: could not prune $shown — every newer backup is intact"
       rc=1
     fi
   done
-  [[ "${UPD_THIN_AT:-}" =~ ^[1-9][0-9]{0,10}$ ]] && until=$(( 10#$UPD_THIN_AT + $(_upd_deadline_ms) / 1000 - margin ))
-  [ "$lead" != update ] || _bak_thin update "$lead: backups:" "$until" || rc=1
+  [ "$lead" != update ] || [ -n "$dwhy" ] || _bak_thin update "$lead: backups:" "$until" || rc=1
   if [ "$took" -eq 1 ]; then _upd_unlock; fi
+  [ -z "$kwhy$dwhy" ] || rc=1
   return "$rc"
 }
 
@@ -24393,24 +24528,24 @@ _ver_sweep_leftovers() {   # <lead>
 # or a rollback, whose spine runs under its parent's lock
 # (D-3451); it says nothing unless it removes
 # something or skips. `prune` is `ccrc versions --prune`, which also removes
-# incomplete versions. Both first refuse a KEEP value `_keep_ok` does not
-# accept (WARN and rc 1 for `auto`, which its callers ignore), then read the
+# incomplete versions. Both first refuse a KEEP `_keep_knob` refuses, the
+# knob unmeasured or invalid (WARN and rc 1 for `auto`, which its callers ignore), then read the
 # layout (only `linked`/`migrated` prunes), then sweep a dead process's
 # leftovers ONCE (`_ver_sweep_leftovers`) — all before any return that could
 # end the prune early.
 _ver_gc() {
-  local pfx="$1" mode="$2" keep="${CCRC_VERSIONS_KEEP:-3}" lead n i cur
+  local pfx="$1" mode="$2" keep="" lead n i cur
   local rc=0 lrc=0 prc=0 ncomp=0 npart=0 gone
   lead="$pfx: versions:"; [ "$pfx" = versions ] && lead="versions:"
-  if ! _keep_ok "$keep"; then
+  if ! _keep_knob CCRC_VERSIONS_KEEP 3; then
     if [ "$mode" = auto ]; then
-      echo "$lead WARN: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — nothing pruned"
+      echo "$lead WARN: $KEEP_WHY — nothing pruned"
     else
-      echo "versions: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — nothing was pruned"
+      echo "versions: $KEEP_WHY — nothing was pruned"
     fi
     return 1
   fi
-  keep=$((10#$keep))   # decimal: `0002` is two, whatever a later arithmetic context would make of a leading 0
+  keep="$KEEP"   # decimal (`_keep_knob`): `0002` is two, whatever a later arithmetic context would make of a leading 0
   _ver_layout
   case "$VER_LAYOUT" in
     linked|migrated) ;;
@@ -24504,7 +24639,7 @@ _ver_gc() {
 # lists what is left. Exit 0 listed or pruned; 1 a prune skipped or a
 # removal failed; 2 usage.
 cmd_versions() {
-  local prune=0 keep="${CCRC_VERSIONS_KEEP:-3}" grc=0 lrc=0 prc=0 n mark cpl line
+  local prune=0 keep="" grc=0 lrc=0 prc=0 n mark cpl line
   while [ $# -gt 0 ]; do
     case "$1" in
       --prune) prune=1 ;;
@@ -24518,13 +24653,13 @@ cmd_versions() {
   # reads (final review F8) — so it WARNs, lists, and marks every verdict
   # unmeasured.
   local keep_ok=1
-  if ! _keep_ok "$keep"; then
+  if ! _keep_knob CCRC_VERSIONS_KEEP 3; then
     [ "$prune" -eq 0 ] \
-      || _ccrc_die "versions: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — nothing was pruned"
+      || _ccrc_die "versions: $KEEP_WHY — nothing was pruned"
     keep_ok=0
-    echo "versions: WARN: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — listing only; nothing would be pruned"
+    echo "versions: WARN: $KEEP_WHY — listing only; nothing would be pruned"
   else
-    keep=$((10#$keep))
+    keep="$KEEP"
   fi
   if [ "$prune" -eq 1 ]; then
     _upd_lock
@@ -24555,7 +24690,7 @@ cmd_versions() {
     linked|migrated)
       if [ "$lrc" -eq 0 ]; then _ver_protect || prc=$?; else prc=1; fi
       if [ "$keep_ok" -eq 0 ]; then
-        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999"; done
+        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: CCRC_VERSIONS_KEEP could not be used (the WARN above says why)"; done
       elif [ "$prc" -ne 0 ]; then
         echo "versions: WARN: $VER_WHY — nothing would be pruned"
         for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: unmeasured"; done
@@ -24594,7 +24729,7 @@ cmd_versions() {
     fi
     printf '  %s %s  %s  %s\n' "$mark" "$n" "$cpl" "${VER_VERDICT[$n]}"
   done
-  [ "$keep_ok" -eq 1 ] || keep="(not a whole number from 0 to 9999)"
+  [ "$keep_ok" -eq 1 ] || keep="(could not be used)"
   echo "versions: ${#VER_NAMES[@]} kept tree(s) under \$HOME/ccrc-versions; CCRC_VERSIONS_KEEP=$keep plus the protected set (pointed-at, previous, the projection's desired tags, running units) — 'ccrc versions --prune' removes the prunable ones"
   return "$grc"
 }
