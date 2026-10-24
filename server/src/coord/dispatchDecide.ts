@@ -1,4 +1,4 @@
-import { isRegistryId, spawnVerdict, transitionsFor, parseRouteFields, routeFieldsOrNull, routeParseDetail,
+import { isRegistryId, routeNamesFable, spawnVerdict, transitionsFor, parseRouteFields, routeFieldsOrNull, routeParseDetail,
   MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, WORKSPACE_SLUG_RE,
   type CoordCaps, type CoordCapsUsage, type RouteFields, type SpawnVerdict,
 } from '../../../shared/api.js';
@@ -131,6 +131,8 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
   if (route !== undefined) {
     const parsed = parseRouteFields(route);
     if (!parsed.ok) return refused({ ok: false, kind: 'bad-request', detail: routeParseDetail(parsed) });
+    // D-6790: Fable runs only when the operator selects it; a dispatch is a coordinator's act, never the operator's.
+    if (routeNamesFable(parsed.route)) return refused({ ok: false, kind: 'fable-operator-only' });
     routeFields = routeFieldsOrNull(parsed.route);
   }
   // The coordinator may NAME the child a fresh spawn mints; a slug on a run that resumes its bound session names
