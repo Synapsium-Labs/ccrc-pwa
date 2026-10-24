@@ -6,11 +6,13 @@
 // 0 px, over prose 600 px. jsdom computes no layout and dispatches no wheel, so this file holds what Chrome does with
 // `page.mouse.wheel`: at 1280 and 1920 in both skins and both palettes, with the pointer over the element —
 //   - a block, and a tool card's result well, whose content fits: the wheel moves the transcript and not the box;
-//   - a block taller than `--well-max`: the wheel scrolls the block first, then, with the block at its end, the
-//     transcript, and the block stays at its end. That second half is swept over eight sub-pixel offsets (k/8 px) of the
-//     block's wrapper: with a fractional scroll range Chrome latches the first wheel at a block's end to the block, which
-//     cannot move, at some page offsets, so a single resting offset can pass by luck (`.msg-assist pre` therefore has a
-//     whole-pixel line height). The FIRST wheel must move the transcript at every offset, and a failure names its offset;
+//   - a block, a tool card's result well or an answer chip taller than `--well-max`: the wheel scrolls the box first,
+//     then, with the box at its end, the transcript, and the box stays at its end. That second half is swept over eight
+//     sub-pixel offsets (k/8 px) of the box's wrapper: with a fractional scroll range Chrome latches the first wheel at a
+//     box's end to the box, which cannot move, at some page offsets, so a single resting offset can pass by luck (a
+//     mono box therefore needs a whole-pixel line height: 13px x 1.55 = 20.15px is not one). The FIRST wheel must move
+//     the transcript at every offset, and a failure names its offset;
+//   - an answer chip whose content fits moves the transcript too (the chip is an `overflow-y: auto` box all the same);
 //   - a block with a 300-character line: a sideways wheel moves the block's `scrollLeft` and not the transcript's
 //     `scrollTop` (a regression pin: the x-axis containment is kept);
 //   - control: a wheel over prose moves the transcript, which proves this harness can see a chain at all.
@@ -82,9 +84,33 @@ for (let i = 1; i <= 5; i += 1) prose(`Prose after tall ${i}`);
 EVENTS.push({ kind: 'tool_use', uuid: 'u1', ts: TS, toolId: 't1', name: 'Bash', input: JSON.stringify({ command: 'npm run check' }) });
 EVENTS.push({ kind: 'tool_result', ts: TS, toolId: 't1', text: 'result-line-1 ok\nresult-line-2 ok', isError: false });
 for (let i = 1; i <= 8; i += 1) prose(`Prose after the card ${i}`);
+// A second Bash card whose result is sixty lines (taller than `--well-max`), and two AskUserQuestion cards whose answer
+// chips are a one-line reply that fits and a typed reply of 150 words that wraps well past `--well-max`. The harness
+// parses `"<question>"=(no option selected) notes: <typed reply>` into the chip (`tool-card.tsx`'s `askAnswers`).
+EVENTS.push({ kind: 'tool_use', uuid: 'u2', ts: TS, toolId: 't2', name: 'Bash', input: JSON.stringify({ command: 'npm run tall-check' }) });
+EVENTS.push({
+  kind: 'tool_result', ts: TS, toolId: 't2', isError: false,
+  text: Array.from({ length: 60 }, (_, i) => `tallwell-line-${String(i + 1).padStart(2, '0')} omega`).join('\n'),
+});
+for (let i = 1; i <= 5; i += 1) prose(`Prose after the tall well ${i}`);
+const ask = (id: string, question: string, reply: string): void => {
+  EVENTS.push({
+    kind: 'tool_use', uuid: `u${id}`, ts: TS, toolId: id, name: 'AskUserQuestion',
+    input: JSON.stringify({ questions: [{ question, header: 'Where', multiSelect: false, options: [{ label: 'one', description: 'x' }, { label: 'two', description: 'y' }] }] }),
+  });
+  EVENTS.push({
+    kind: 'tool_result', ts: TS, toolId: id, isError: false,
+    text: `Your questions have been answered: "${question}"=(no option selected) notes: ${reply}. You can now continue with these answers.`,
+  });
+};
+ask('t3', 'Which workspace should the short check run in?', 'chipfit-start project-a');
+for (let i = 1; i <= 5; i += 1) prose(`Prose after the short chip ${i}`);
+ask('t4', 'Which workspace should the long check run in?',
+  `chip-start ${Array.from({ length: 150 }, (_, i) => `reply-word-${String(i + 1).padStart(3, '0')}`).join(' ')}`);
+for (let i = 1; i <= 8; i += 1) prose(`Prose after the tall chip ${i}`);
 
 // ---- the page half: what each wheel is measured on -----------------------------------------------------------------
-type Kind = 'fit' | 'wide' | 'tall' | 'well' | 'prose';
+type Kind = 'fit' | 'wide' | 'tall' | 'well' | 'tallwell' | 'chipfit' | 'chip' | 'prose';
 interface Reading { scroller: number; boxTop: number; boxLeft: number; room: { down: number; up: number } }
 
 /** Runs in the page before the app: finds a target by its text (virtuoso unmounts far rows, so every use re-finds it). */
@@ -97,6 +123,9 @@ function installFinder(): void {
     if (kind === 'wide') return within('.msg-assist pre', 'wide-');
     if (kind === 'tall') return within('.msg-assist pre', 'tall-line-01');
     if (kind === 'well') return within('.toolcard pre.well', 'result-line-1');
+    if (kind === 'tallwell') return within('.toolcard pre.well', 'tallwell-line-01');
+    if (kind === 'chipfit') return within('.tool-ask-a', 'chipfit-start');
+    if (kind === 'chip') return within('.tool-ask-a', 'chip-start');
     return within('.msg-assist p', 'Prose after tall 2');
   };
   w.__c5 = { find };
@@ -158,19 +187,21 @@ async function reveal(page: Page, kind: Kind): Promise<void> {
   if (centred < 3) throw new Error(`the ${kind} target could not be centred in the transcript (harness failure)`);
 }
 
-/** Open the Bash card: Refined first opens the run's group, then the card's own row (Instrument draws it directly). */
-async function openCard(page: Page): Promise<void> {
-  const group = page.locator('.ref-tool-group-row');
-  for (let i = 0; i < 60 && (await page.locator('.toolcard .tool-row').count()) === 0; i += 1) {
-    if ((await group.count()) > 0) {
-      await group.first().scrollIntoViewIfNeeded();
-      if ((await group.first().getAttribute('aria-expanded')) !== 'true') await group.first().click();
+/** Open the Bash card whose summary holds `command`: Refined first opens the run's group, then the card's own row
+ *  (Instrument draws it directly). Every collapsed group in reach is opened until the card is mounted. */
+async function openCard(page: Page, command: string): Promise<void> {
+  const card = page.locator('.toolcard', { has: page.locator('.tool-sum', { hasText: command }) });
+  const groups = page.locator('.ref-tool-group-row[aria-expanded="false"]');
+  for (let i = 0; i < 80 && (await card.count()) === 0; i += 1) {
+    if ((await groups.count()) > 0) {
+      await groups.first().scrollIntoViewIfNeeded();
+      await groups.first().click();
     } else {
       await page.evaluate(() => { const sc = document.querySelector<HTMLElement>('.chat-scroller')!; sc.scrollTop = Math.max(0, sc.scrollTop - 400); });
     }
     await page.waitForTimeout(150);
   }
-  const row = page.locator('.toolcard', { has: page.locator('.tool-name', { hasText: 'Bash' }) }).locator('.tool-row').first();
+  const row = card.locator('.tool-row').first();
   await row.scrollIntoViewIfNeeded();
   if ((await row.getAttribute('aria-expanded')) !== 'true') await row.click();
   await page.waitForTimeout(500);   // the body opens over 0.24 s
@@ -224,7 +255,7 @@ afterAll(async () => {
   removeDist(dist);
 });
 
-/** One view of one case: the page is opened on the fixture, the target revealed (the card opened first for the well). */
+/** One view of one case: the page is opened on the fixture, the target revealed (the card opened first for a well). */
 async function inView(view: AppView, kind: Kind, body: (page: Page) => Promise<void>): Promise<void> {
   const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
   try {
@@ -238,7 +269,8 @@ async function inView(view: AppView, kind: Kind, body: (page: Page) => Promise<v
     await page.goto(`${server!.origin}/s/${SESSION.id}`);
     await page.waitForSelector('.chat-item', { timeout: 20_000 });
     await page.waitForTimeout(500);
-    if (kind === 'well') await openCard(page);
+    if (kind === 'well') await openCard(page, 'npm run check');
+    if (kind === 'tallwell') await openCard(page, 'npm run tall-check');
     await reveal(page, kind);
     await body(page);
     expect(errors).toEqual([]);
@@ -283,46 +315,95 @@ describe('a wheel over a tool card\'s well whose content fits moves .chat-scroll
   }
 });
 
+interface Tall {
+  readonly kind: Kind;
+  /** The box's wrapper, which the sweep nudges (`position: relative; top: k/8 px`, test-only). */
+  readonly wrapper: string;
+  readonly what: string;
+  /** The least scroll range the fixture box must have, past its cap. */
+  readonly range: number;
+  /** A box that wraps its lines never scrolls sideways: its `scrollWidth` must not pass its `clientWidth`. */
+  readonly wraps: boolean;
+}
+
+/** One view of the tall-box case: the box takes the wheel while it has room, and with the box at its end the FIRST wheel
+ *  reaches the transcript at every sub-pixel offset of its wrapper. */
+function tallBox(view: AppView, t: Tall): Promise<void> {
+  return inView(view, t.kind, async (page) => {
+    const start = await settle(page, t.kind);
+    const dims = await page.evaluate(([k]) => {
+      const el = (window as unknown as { __c5: { find: (kind: string) => HTMLElement } }).__c5.find(k);
+      return { sh: el.scrollHeight, ch: el.clientHeight, sw: el.scrollWidth, cw: el.clientWidth };
+    }, [t.kind] as const);
+    expect(dims.sh, `the ${t.what} is taller than its cap`).toBeGreaterThan(dims.ch + t.range);
+    if (t.wraps) expect(dims.sw, `the ${t.what} wraps, so it never scrolls sideways`).toBeLessThanOrEqual(dims.cw);
+    expect(start.boxTop, `the ${t.what} starts at its top`).toBe(0);
+    expect(start.room.down, `the transcript has room below the ${t.what}`).toBeGreaterThan(400);
+
+    // First half: the box has room, so it takes the wheel and the transcript stays.
+    const first = await wheelOver(page, t.kind, 0, 300);
+    expect(first.boxTop, `the ${t.what} moved by ${first.boxTop}px (wanted more than 50)`).toBeGreaterThan(50);
+    expect(Math.abs(first.scroller), `the transcript moved by ${first.scroller}px while the ${t.what} had room`).toBeLessThan(2);
+
+    // Second half: the box at its end, the FIRST wheel reaches the transcript and the box stays at its end. Run at eight
+    // sub-pixel offsets of the box's wrapper: a box whose scroll range is fractional is latched by Chrome at its end for
+    // the wheel at some page offsets (about .06-.44 of a pixel), swallowing it, so one resting offset proves nothing
+    // about the others. Each offset is its own settle.
+    for (let k = 0; k < 8; k += 1) {
+      const at = `at a ${k}/8 px offset of the ${t.what}'s wrapper`;
+      await page.evaluate(([top, sel]) => {
+        let st = document.getElementById('c5-nudge') as HTMLStyleElement | null;
+        if (!st) { st = document.createElement('style'); st.id = 'c5-nudge'; document.head.append(st); }
+        st.textContent = `${sel} { position: relative; top: ${top}px; }`;
+      }, [k / 8, t.wrapper] as const);
+      await reveal(page, t.kind);
+      await page.evaluate(([kind]) => {
+        const el = (window as unknown as { __c5: { find: (kind: string) => HTMLElement } }).__c5.find(kind);
+        el.scrollTop = el.scrollHeight;
+      }, [t.kind] as const);
+      const atEnd = await settle(page, t.kind);
+      expect(atEnd.room.down, `the transcript still has room below the ${t.what} ${at}`).toBeGreaterThan(400);
+      const second = await wheelOver(page, t.kind, 0, 300);
+      expect(Math.abs(second.boxTop), `the ${t.what} stays at its end ${at}`).toBeLessThan(2);
+      expect(second.scroller, `the first wheel moved the transcript by ${second.scroller}px (wanted more than 50) ${at}`).toBeGreaterThan(50);
+    }
+  });
+}
+
 describe('a wheel over a code block taller than --well-max scrolls the block first, then the transcript', () => {
   for (const view of VIEWS) {
-    it(named(view), () => inView(view, 'tall', async (page) => {
-      const start = await settle(page, 'tall');
+    it(named(view), () => tallBox(view, { kind: 'tall', wrapper: '.msg-assist .code-block', what: 'sixty-line block', range: 300, wraps: false }), 120_000);
+  }
+});
+
+describe('a wheel over a tool card\'s well taller than --well-max scrolls the well first, then the transcript', () => {
+  for (const view of VIEWS) {
+    it(named(view), () => tallBox(view, { kind: 'tallwell', wrapper: '.toolcard', what: 'sixty-line well', range: 300, wraps: true }), 120_000);
+  }
+});
+
+describe('a wheel over an answer chip whose content fits moves .chat-scroller', () => {
+  for (const view of VIEWS) {
+    it(named(view), () => inView(view, 'chipfit', async (page) => {
+      const chip = await settle(page, 'chipfit');
       const dims = await page.evaluate(() => {
-        const el = (window as unknown as { __c5: { find: (kind: string) => HTMLElement } }).__c5.find('tall');
-        return { sh: el.scrollHeight, ch: el.clientHeight };
+        const el = (window as unknown as { __c5: { find: (kind: string) => HTMLElement } }).__c5.find('chipfit');
+        return { sh: el.scrollHeight, ch: el.clientHeight, oy: getComputedStyle(el).overflowY };
       });
-      expect(dims.sh, 'the sixty-line block is taller than its cap').toBeGreaterThan(dims.ch + 300);
-      expect(start.boxTop, 'the block starts at its top').toBe(0);
-      expect(start.room.down, 'the transcript has room below the block').toBeGreaterThan(400);
-
-      // First half: the block has room, so it takes the wheel and the transcript stays.
-      const first = await wheelOver(page, 'tall', 0, 300);
-      expect(first.boxTop, `the block moved by ${first.boxTop}px (wanted more than 50)`).toBeGreaterThan(50);
-      expect(Math.abs(first.scroller), `the transcript moved by ${first.scroller}px while the block had room`).toBeLessThan(2);
-
-      // Second half: the block at its end, the FIRST wheel reaches the transcript and the block stays at its end. Run at
-      // eight sub-pixel offsets of the block's wrapper (`position: relative; top: k/8 px`, test-only): a block whose
-      // scroll range is fractional is latched by Chrome at its end for the wheel at some page offsets (about .06-.44 of a
-      // pixel), swallowing it, so one resting offset proves nothing about the others. Each offset is its own settle.
-      for (let k = 0; k < 8; k += 1) {
-        const at = `at a ${k}/8 px offset of the block's wrapper`;
-        await page.evaluate((top) => {
-          let st = document.getElementById('c5-nudge') as HTMLStyleElement | null;
-          if (!st) { st = document.createElement('style'); st.id = 'c5-nudge'; document.head.append(st); }
-          st.textContent = `.msg-assist .code-block { position: relative; top: ${top}px; }`;
-        }, k / 8);
-        await reveal(page, 'tall');
-        await page.evaluate(() => {
-          const el = (window as unknown as { __c5: { find: (kind: string) => HTMLElement } }).__c5.find('tall');
-          el.scrollTop = el.scrollHeight;
-        });
-        const atEnd = await settle(page, 'tall');
-        expect(atEnd.room.down, `the transcript still has room below the block ${at}`).toBeGreaterThan(400);
-        const second = await wheelOver(page, 'tall', 0, 300);
-        expect(Math.abs(second.boxTop), `the block stays at its end ${at}`).toBeLessThan(2);
-        expect(second.scroller, `the first wheel moved the transcript by ${second.scroller}px (wanted more than 50) ${at}`).toBeGreaterThan(50);
-      }
+      expect(dims.oy, 'the chip is a scroll container even when its answer fits').toBe('auto');
+      expect(dims.sh, 'the one-line answer fits').toBeLessThanOrEqual(dims.ch);
+      const dy = direction(chip);
+      const m = await wheelOver(page, 'chipfit', 0, dy);
+      expect(Math.abs(m.boxTop), 'the chip has nothing to scroll').toBeLessThan(2);
+      expect(Math.abs(m.scroller), `the transcript moved by ${m.scroller}px (wanted more than 50)`).toBeGreaterThan(50);
+      expect(Math.sign(m.scroller), 'in the wheel direction').toBe(Math.sign(dy));
     }), 120_000);
+  }
+});
+
+describe('a wheel over an answer chip taller than --well-max scrolls the chip first, then the transcript', () => {
+  for (const view of VIEWS) {
+    it(named(view), () => tallBox(view, { kind: 'chip', wrapper: '.tool-ask', what: 'answer chip', range: 200, wraps: true }), 120_000);
   }
 });
 

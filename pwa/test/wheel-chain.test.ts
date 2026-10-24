@@ -54,3 +54,34 @@ describe('a wheel over a transcript box chains to the transcript (D-6437)', () =
     expect(stripComments(chip), 'no spelling of overscroll-behavior at all').not.toMatch(/overscroll-behavior/);
   });
 });
+
+// A mono box wraps its text in whole pixels: 13px x 1.55 = 20.15px makes a tall box's scroll range fractional, and at
+// some page offsets Chrome then latches the first wheel at the box's end to the box, which cannot move (the browser leg
+// sweeps eight offsets per box). Either the round() form over the two tokens or an integer px, in whatever spacing.
+const WHOLE_PIXEL = /^(round\(down,calc\(var\(--fs-sm\)\*var\(--lh-mono\)\),1px\)|\d+px)$/;
+
+describe('a mono box in the transcript declares a whole-pixel line height (D-6437, R68)', () => {
+  it('WELL declares a whole-pixel line height', () => {
+    // Tailwind spells it as one arbitrary-value class, `leading-[<value>]` (spaces as underscores), or as an arbitrary
+    // property `[line-height:<value>]`. `leading-mono` is the token's unitless 1.55, which is the defect.
+    const lineTokens = WELL.split(/\s+/).filter((t) => /^leading-|^\[line-height:/.test(t));
+    expect(lineTokens, 'WELL carries exactly one line-height class').toHaveLength(1);
+    const m = /^(?:leading-\[(.*)\]|\[line-height:(.*)\])$/.exec(lineTokens[0]!);
+    expect(m, `WELL's line-height class ${lineTokens[0]} is an arbitrary value, not a unitless token`).not.toBeNull();
+    const value = (m![1] ?? m![2] ?? '').replace(/_/g, '').replace(/\s+/g, '');
+    expect(value, 'a whole-pixel line height').toMatch(WHOLE_PIXEL);
+  });
+
+  it('.tool-ask-a declares a whole-pixel line height', () => {
+    // After the `font` shorthand, which resets it.
+    const chip = ruleIn(toolCard, '.tool-ask-a');
+    const names = stripComments(chip).split(';').map((d) => norm(d.slice(0, Math.max(d.indexOf(':'), 0))));
+    const fontAt = names.lastIndexOf('font');
+    const lineAt = names.lastIndexOf('line-height');
+    expect(fontAt, 'the chip sets its font through the shorthand').toBeGreaterThanOrEqual(0);
+    expect(lineAt, 'the chip declares a line-height after the font shorthand').toBeGreaterThan(fontAt);
+    const line = (declValue(chip, 'line-height') ?? '').replace(/\s+/g, '');
+    expect(line, 'a whole-pixel line height').toMatch(WHOLE_PIXEL);
+  });
+});
+
