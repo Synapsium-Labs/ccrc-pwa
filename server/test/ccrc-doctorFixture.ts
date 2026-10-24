@@ -1210,6 +1210,7 @@ export function healthy(prefix: string): string {
   // equally satisfied by the real thing, and `statusBox` below already made
   // this exact swap for the same reader.
   linkReal(home, 'jq');
+  linkReal(home, 'awk');
   // A pane scope with nothing parked: `_check_scopes` PASSes, and returns
   // WITHOUT settling, so the healthy fixture costs no extra second.
   plantScope(home, { procs: [4101, 4102] });
