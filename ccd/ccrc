@@ -2664,7 +2664,7 @@ EOF
 # echo). `ccd/ccd-update-sync` is a different executable and carries its own
 # copy of the same two rules, at its own choke point (`say`).
 _upd_redact() {
-  local s="${1:-}" had_extglob=0
+  local s="${1:-}" had_extglob=0 LC_ALL=C
   shopt -q extglob && had_extglob=1
   shopt -s extglob
   # The userinfo strip is bounded to characters a URL authority allows
@@ -2674,10 +2674,10 @@ _upd_redact() {
   # gave `https://b`), so the class stops at the first of '/', '?' or '#'.
   # D-6748: a base with NO scheme (`user:pass@host/r`, which curl takes as
   # http) loses every '@'-ended run from a TOKEN's start (the text's, or after
-  # whitespace, '"' or '<'), whose host ends at '/', '?' or '#'; past a run's
-  # first character a '<' or '"' is the password's (curl sends both: fix round
-  # 3). Doctor's box-settings mask starts at the value, not a token. Prose's
-  # `user@host` and a query's email stay. (`u:p@x@h`, curl refuses: unfixed.)
+  # whitespace, '"' or '<') whose host ends at '/', '?' or '#'; prose's
+  # `user@host` stays. Past a run's first character '<' and '"' are the
+  # password's (curl sends both); under LC_ALL=C no invalid UTF-8 byte ends a
+  # run. A scheme's `https://u:p@x@h` (curl refuses it) is unfixed.
   s="${s//:\/\/+([^\/@?#[:space:]])@/:\/\/}"
   local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
   [ "$had_extglob" -eq 1 ] || shopt -u extglob

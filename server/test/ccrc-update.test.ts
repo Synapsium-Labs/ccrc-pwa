@@ -4677,19 +4677,23 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
   // D-6748 (fix round 1, F7): a base in ccrc.env with NO scheme (`user:pass@host/r`, which curl takes as http) is masked by
   // `_upd_redact` as the scheme form is, on each of the three ways it would leave the box: the fetching line, the die line and
   // update.json's detail. The poisoned curl (exit 99) fails the first fetch, so `_upd_resolve`'s URL-bearing die fires.
-  const schemeless = (prefix: string, base?: { url: string; from: 'file' | 'env' }): { r: Result; secret: string; home: string } => {
+  const schemeless = (prefix: string, base?: { url: string; from: 'file' | 'env' | 'env-bytes' }): { r: Result; secret: string; home: string } => {
     const secret = 's3cretTOKEN';
     const home = mkTmp(prefix);
     mkdirSync(join(home, '.local', 'bin'), { recursive: true });
     writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     const url = base?.url ?? `user:${secret}@127.0.0.1:1/rel`;
-    if (base?.from !== 'env') writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=${url}\n`);
+    if (base === undefined || base.from === 'file') writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=${url}\n`);
     const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     delete env['CCRC_RELEASE_BASE_URL'];
     if (base?.from === 'env') env['CCRC_RELEASE_BASE_URL'] = url;
     assertNoRealTool(env, home);
-    const p = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--to', 'v0.0.1'], { env, encoding: 'utf8' });
+    // 'env-bytes': node passes an env value as UTF-8, so a raw invalid byte is made by printf's `%b` in a bash that then runs ccrc.
+    const p = base?.from === 'env-bytes'
+      ? spawnSync(BASH, ['-c', 'CCRC_RELEASE_BASE_URL="$(printf %b "$1")"; export CCRC_RELEASE_BASE_URL; exec "$BASH" "$2" update --to v0.0.1',
+        '_', url, join(REPO, 'ccd', 'ccrc')], { env: { ...env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' }, encoding: 'utf8' })
+      : spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--to', 'v0.0.1'], { env, encoding: 'utf8' });
     const r = { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
     expect(r.code, `it must refuse: ${r.stderr}`).not.toBe(0);
     return { r, secret, home };
@@ -4725,8 +4729,11 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
   // D-6748 (fix round 3, item 1): a password may hold a raw '<' or '"' (curl sends both in a scheme-less userinfo), so the mask
   // runs through them past the run's first character. Each row reads all three ways out: the fetching line, the one die line
   // and update.json's detail; no fragment of the userinfo may appear in any of them.
-  for (const [label, from, pass] of [['<', 'file', 'S3cr<etTOKEN'], ['"', 'env', 'S3cr"etTOKEN']] as const) {
-    it(`a scheme-less base whose password holds ${label} (${from === 'file' ? 'ccrc.env' : 'the environment'}): the fetching line, the die line and update.json's detail carry no part of the userinfo (D-6748, fix round 3)`, () => {
+  // The third: an invalid UTF-8 byte (from the environment, as the file reader refuses a non-ASCII line) under a UTF-8 locale,
+  // where bash's `=~` matches characters and an invalid byte ended every run, until `_upd_redact` read bytes (LC_ALL=C).
+  for (const [label, from, pass] of [['<', 'file', 'S3cr<etTOKEN'], ['"', 'env', 'S3cr"etTOKEN'],
+    ['an invalid UTF-8 byte', 'env-bytes', 'S3cr\\377etTOKEN']] as const) {
+    it(`a scheme-less base whose password holds ${label} (${from === 'file' ? 'ccrc.env' : from === 'env' ? 'the environment' : 'the environment, a UTF-8 locale'}): the fetching line, the die line and update.json's detail carry no part of the userinfo (D-6748, fix round 3)`, () => {
       const { r, home } = schemeless(`ccrc-redact-schemeless-${from}-`, { url: `fleetuser:${pass}@mirror.example/rel`, from });
       const url = 'mirror.example/rel/download/v0.0.1/SHA256SUMS';
       expect(r.stdout.split('\n'), r.stdout).toContain(`update: fetching ${url} …`);
