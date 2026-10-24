@@ -1551,7 +1551,62 @@ class _Server(ThreadingHTTPServer):
         self.server_port = port
 
 
+def _run_direct() -> int:
+    """A `direct` lane's entry (codex bridge Stage 2 plan 2026-10-22, Task 9;
+    spec 2026-10-15 §2.1): hand the process to the `codexbridge` package,
+    which serves the lane itself and speaks the backend's Responses route, so
+    nothing here relays to LiteLLM and `litellm` mode (CCGPT_BRIDGE unset)
+    never reaches this function.
+
+    `sys.dont_write_bytecode` is set before the import: a lane's unit runs
+    this file under `python3 -I`, `-I` implies `-E`, so
+    PYTHONDONTWRITEBYTECODE is ignored, and the import would otherwise write
+    `__pycache__` into the installed tree. The package is imported from
+    CCGPT_BRIDGE_DIR's parent, put first on `sys.path` (with `-I`, nothing
+    else of the caller's is on it), and must be the very directory that
+    variable names. The shim's own request hooks are passed in, so none is
+    copied into the package: an encoding this shim does not implement is its
+    415 there too. `_effort_and_output_config` reads `output_config` before
+    `_apply_effort` pops it, and `_apply_effort` itself is unchanged, so
+    `litellm` mode stays byte for byte. A failure before the package serves
+    is one `ccgpt-proxy: direct: <reason>` line (the exception's class, never
+    its text) and exit 1."""
+    sys.dont_write_bytecode = True
+    bridge_dir = os.environ.get("CCGPT_BRIDGE_DIR")
+    if not bridge_dir:
+        sys.exit("ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not set")
+    bridge_dir = os.path.realpath(bridge_dir)
+    sys.path.insert(0, os.path.dirname(bridge_dir))
+    try:
+        import codexbridge
+    except Exception as e:  # its text can carry a path or a line of the package; the class is enough
+        sys.exit("ccgpt-proxy: direct: the codexbridge package did not import from CCGPT_BRIDGE_DIR "
+                 f"({type(e).__name__}); run 'ccrc update'")
+    if os.path.dirname(os.path.realpath(codexbridge.__file__)) != bridge_dir:
+        sys.exit("ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not the directory the codexbridge package "
+                 "imported from; run 'ccrc update'")
+    codexbridge.load_all()
+    bridge = codexbridge.server
+
+    def _effort_and_output_config(data):
+        oc = data.get("output_config")
+        return _apply_effort(data), oc
+
+    return bridge.serve(bridge.config_from_env(os.environ),
+                        bridge.Hooks(_read_request_body, _content_encoding, _decode_body,
+                                     _effort_and_output_config, _Server))
+
+
 if __name__ == "__main__":
+    # CCGPT_BRIDGE picks the mode: unset is `litellm` mode, today's shim
+    # exactly (the lines after this check); `direct` is the bridge; any other
+    # value, the empty one included, is refused rather than read as either.
+    _mode = os.environ.get("CCGPT_BRIDGE")
+    if _mode == "direct":
+        sys.exit(_run_direct())
+    if _mode is not None:
+        sys.stderr.write(f"ccgpt-proxy: unknown CCGPT_BRIDGE '{_mode}'\n")
+        sys.exit(2)
     try:
         server = _Server(("127.0.0.1", PROXY_PORT), Handler)
     except OSError as e:
