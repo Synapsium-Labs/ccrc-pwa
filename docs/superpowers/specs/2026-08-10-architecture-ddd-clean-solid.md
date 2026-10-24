@@ -277,7 +277,7 @@ holds it, or the ARCH ticket that finishes it):
 | 1 | done | the roster is runtime data (`shared/roster.ts`'s `parseRoster`): `roster.test.ts` and single-definition's "the account roster — runtime data, no compile-time copies"; the registry read tells its facts apart through `readRegistryMeasured`: `registry-refused.test.ts` |
 | 2 | done | `install-session-hooks.test.ts`, "install-session-hooks.sh default homes are the roster, behaviourally" |
 | 3 | done | `RunRefuseCode` with its derived `RUN_REFUSE_CODES` (`shared/api.ts`): `mail-routes.test.ts`, "every declared RunRefuseCode (run-route refusals) is emitted somewhere in server/src/coord"; statuses from ARCH-11a's `REFUSAL_STATUS`: `refusal-status.test.ts` |
-| 4 | partly | `openRun`'s preconditions are L1 (`coord/openRun.ts`, ARCH-21, `open-run-preconditions.test.ts`); `dispatchRun` is finished by ARCH-22 (#553), `closeRun` by ARCH-35 (#556) |
+| 4 | partly | `openRun`'s preconditions are L1 (`coord/openRun.ts`, ARCH-21, `open-run-preconditions.test.ts`); `dispatchRun` decides through `decideDispatch` (`coord/dispatchDecide.ts`, ARCH-22 (#553), `dispatch-decide.test.ts`) and acts through its deps, `sendClear` included; `closeRun` is finished by ARCH-35 (#556) |
 | 5 | partly | every writer carries the terminal guard and the pair is spelled once (single-definition's "spells the delivery terminal pair ONCE"); `markDelivered`'s `void` is finished by ARCH-15 (#532) |
 | 6 | done, migrating | `FleetIO`'s `readFileMeasured`, `readdirMeasured`, `statMeasured` and kin (`io.test.ts`); the remaining catch-to-null folds move with ARCH-08b (#534) |
 | 7 | open | the watcher still takes the whole `CoordStore`; consumer-side ports are ARCH-03 (#541) |

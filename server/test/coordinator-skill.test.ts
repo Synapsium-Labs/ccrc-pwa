@@ -2367,10 +2367,11 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
   // frame does not have. HARVESTED from the two refusal frames rather than
   // typed, so renaming a field, or adding a third cap, reds here.
   const capRefusalFields = (code: string): string[] => {
-    const src = readFileSync(path.join(root, 'server/src/coord/dispatch.ts'), 'utf8');
+    // ARCH-22 (#553): the refusal frames moved with the admit step into the decider (`refused({ ... })`).
+    const src = readFileSync(path.join(root, 'server/src/coord/dispatchDecide.ts'), 'utf8');
     const at = src.indexOf(`code: '${code}',`);
-    if (at < 0) throw new Error(`dispatch.ts sends no ${code} refusal — this harvest is stale`);
-    const frame = src.slice(at, src.indexOf('};', at));
+    if (at < 0) throw new Error(`dispatchDecide.ts sends no ${code} refusal — this harvest is stale`);
+    const frame = src.slice(at, src.indexOf('});', at));
     return [...new Set([...frame.matchAll(/(\w+):/g)].map((m) => m[1]!))]
       .filter((f) => f !== 'code').sort();
   };
