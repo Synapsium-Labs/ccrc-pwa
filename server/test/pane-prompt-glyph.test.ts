@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { startsWithPromptGlyph } from '../src/pane/dialog.js';
-import { callsIn, symbolOf } from './scan/symbols.js';
+import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
 
 describe('startsWithPromptGlyph', () => {
   it('is true for a row that starts with the prompt glyph, bare or with text', () => {
@@ -25,5 +25,9 @@ describe('inject/send.ts', () => {
     for (const name of ['draftOfMeasured', 'boxRows', 'stashHeld', 'continuationRows']) {
       expect(callsIn(symbolOf('server/src/inject/send.ts', name)).map((c) => c.name), name).toContain('startsWithPromptGlyph');
     }
+  });
+  it('has no inline startsWith of the prompt glyph left (an added fifth site goes red)', () => {
+    const inline = parsedFile('server/src/inject/send.ts').calls.filter((c) => c.name === 'startsWith' && c.args[0]?.kind === 'string' && c.args[0].text.includes('❯'));
+    expect(inline).toEqual([]);
   });
 });
