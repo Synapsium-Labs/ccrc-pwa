@@ -375,8 +375,9 @@ const RAW_FAILURE_FOLD: Record<Extract<HookStateRawRead, { ok: false }>['reason'
 
 /** The aged door's ONE decision over the raw read (`readHookStateMeasured`): the identity cut, the age cut, and the
  *  fold of `absent`/`malformed` into `no-state` (`RAW_FAILURE_FOLD`). The unaged door that once
- *  shared it is gone (worker stall watch wave 2): the lane reads the raw read and makes its own cut. */
-function foldHookStateRead(raw: HookStateRawRead, now: number): HookStateRead {
+ *  shared it is gone (worker stall watch wave 2): the lane reads the raw read and makes its own cut. The session stream
+ *  folds its own raw read through it too (D-6324), so it can keep the raw read for `keepAgedAsk`. */
+export function foldHookStateRead(raw: HookStateRawRead, now: number): HookStateRead {
   if (!raw.ok) return RAW_FAILURE_FOLD[raw.reason];
   if (raw.identity !== 'current') return NO_STATE;
   // The age cut's clock is the later of the file's `updatedAt` and its `aliveAt` (D-4041): a main-thread wait that a
@@ -388,9 +389,10 @@ function foldHookStateRead(raw: HookStateRawRead, now: number): HookStateRead {
 /**
  * The folded form, unchanged in signature and in every answer it gives: null
  * for all nine conditions the measured read tells apart. Its callers
- * (`watch.ts`'s dialog sweep and mail gate, `sessionws.ts`'s stream,
- * `server.ts`'s ask route) all want the same thing from a `null` — there is
- * no fresh turn to report — and widening them to carry a distinction they do
+ * (`watch.ts`'s dialog sweep and mail gate, `server.ts`'s ask route,
+ * `registry.ts`'s `freshAskAt`, `turnverdict.ts`; the session stream folds its
+ * own raw read through `foldHookStateRead`, D-6324) all want the same thing
+ * from a `null` — there is no fresh turn to report — and widening them to carry a distinction they do
  * not act on is the defect this task removes, one type over.
  *
  * Derived, not duplicated, for the reason `io.ts`'s own `readFile` states

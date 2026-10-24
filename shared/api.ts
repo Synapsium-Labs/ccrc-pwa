@@ -8225,7 +8225,7 @@ export interface LifecycleMeas {
   /** The prompt's exit status on a re-spawn (`cmd_ensure`, `ccd:11240`).
    *  Carried unconverted, like `archivedAt`. */
   readonly rc: number | null;
-  /** The start mode `cmd_start` resolved before spawning. */
+  /** The start mode `cmd_start` resolved; `ws-orphan` reuses it for its orphan class. */
   readonly mode: string | null;
   /** `${CCD_IN_UNIT:-0}` — whether `cmd_ensure` ran inside the supervising
    *  unit or as an outside request for one (`ccd:12035`). */
@@ -8244,8 +8244,8 @@ export interface LifecycleMeas {
   /** `_ws_wt_branch`'s exit status for the worktree being removed — decides
    *  whether there is a git-side record to clean up (`cmd_ws_rm`'s intent). */
   readonly registered: number | null;
-  /** A `ws-gc` sweep's classification of the row it is about to reclaim —
-   *  `dead-reg` or `orphan`, never anything else the encoder has seen. */
+  /** A `ws-gc` sweep's classification of the row it will reclaim — `dead-reg` or
+   *  `orphan`; `ws-orphan` reuses the key for `rescue` or `plain`. */
   readonly state: string | null;
   /** How many bytes `ws-reap` measured before destroying the worktree, or
    *  `null` when `_ws_gc_bytes` did not return a plain integer. */
@@ -11336,7 +11336,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
@@ -12018,3 +12018,17 @@ export const ACCOUNT_DENY_RULES: readonly string[] = [
   ...ACCOUNT_SECRET_PATHS.map((p) => `Read(${p})`),
   ...ACCOUNT_WRITE_DIRS.map((p) => `Edit(${p})`),
 ];
+
+/** `FleetHealth`'s disk block (D-6615), declared HERE at the foot as an interface merge, with its type import beside it,
+ *  so no line above moves and every line citation into this file (the README's, the specs', the compaction card's)
+ *  still holds. TypeScript merges it into `FleetHealth` above: it is one member of that interface. */
+import type { DiskHealth } from './disk.js';
+export interface FleetHealth {
+  /**
+   * The fleet's disk alarm (`DiskHealth`): the level of the worst work filesystem, each filesystem's own level,
+   * the expected mounts and the pressure flag, held by the watcher's `sweepDisk` once a minute. Optional for the same
+   * absence-permits reason as the blocks above: absent until the first sweep. Read it through `readDiskHealth` alone;
+   * absent reads as UNKNOWN, never as a healthy disk.
+   */
+  disk?: DiskHealth;
+}

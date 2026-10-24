@@ -25,7 +25,7 @@ export function timeOf(ts: string): string {
  *  this build's `Date` cannot place — a caller's own `typeof x === 'number'`
  *  guard only rules out a non-number; 1e20 is finite but `new Date(1e20)` is
  *  Invalid Date. Moved here (from SettingsScreen.tsx, which had it
- *  module-private) so the banner's `bannerRelease` can share it: the two
+ *  module-private) so `bannerRelease` (fleet/releaseWaiting.ts) can share it: the two
  *  surfaces disagreeing about what "the catalogue was reached" means was
  *  itself a defect (F13) — the settings screen routed `catalogue.lastOkAt`
  *  through this, the banner did not, and `lastOkAt: 1e20` had one saying

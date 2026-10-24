@@ -22,7 +22,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); root.r
 const radio = (name: RegExp): HTMLInputElement => screen.getByRole('radio', { name }) as HTMLInputElement;
 
 describe('the Layout picker', () => {
-  it('offers Match this device, then every skin, a preview marked as one', () => {
+  it('offers Match this device, then every skin, and neither is marked a preview', () => {
     render(<SkinFieldset />);
     const group = screen.getByRole('group', { name: 'Layout' });
     const names = within(group).getAllByRole('radio').map((r) => (r as HTMLInputElement).value);
@@ -33,6 +33,26 @@ describe('the Layout picker', () => {
       const label = s.preview ? `${s.label} (preview)` : s.label;
       expect(within(group).getByText(label)).toBeInTheDocument();
       expect(within(group).getByText(s.note)).toBeInTheDocument();
+    }
+    // The shipped words, literally (S18, D-5096): Instrument is a row of its own
+    // name, and nothing in the group says it is a preview.
+    expect(within(group).getByText('Instrument')).toBeInTheDocument();
+    expect(within(group).getByText('Refined')).toBeInTheDocument();
+    expect(group.textContent ?? '').not.toContain('(preview)');
+  });
+
+  it('a skin that is a preview is marked as one, by injection', () => {
+    const entry = SKINS.find((s) => s.id === INSTRUMENT) as { preview: boolean } | undefined;
+    expect(entry).toBeDefined();
+    const was = entry!.preview;
+    entry!.preview = true;
+    try {
+      render(<SkinFieldset />);
+      const group = screen.getByRole('group', { name: 'Layout' });
+      expect(within(group).getByText('Instrument (preview)')).toBeInTheDocument();
+      expect(within(group).queryByText('Instrument')).toBeNull();
+    } finally {
+      entry!.preview = was;
     }
   });
 
@@ -86,17 +106,17 @@ describe('the Layout picker', () => {
     expect(radio(/^Match this device/).checked).toBe(true);
   });
 
-  it('the Match this device note is true to the catalogue: preview now, the device rule once Instrument lands', () => {
+  it('the Match this device note is true to the catalogue: the device rule as shipped, and the wait while Instrument is a preview', () => {
     const first = render(<SkinFieldset />);
-    expect(screen.getByText('Refined on every device while Instrument is a preview; Instrument at a desk once it lands.')).toBeInTheDocument();
+    expect(screen.getByText('Instrument at a desk with a mouse; Refined on a phone or a tablet.')).toBeInTheDocument();
     first.unmount();
     const entry = SKINS.find((s) => s.id === INSTRUMENT) as { preview: boolean } | undefined;
     expect(entry).toBeDefined();
     const was = entry!.preview;
-    entry!.preview = false;
+    entry!.preview = true;
     try {
       render(<SkinFieldset />);
-      expect(screen.getByText('Instrument at a desk with a mouse; Refined on a phone or a tablet.')).toBeInTheDocument();
+      expect(screen.getByText('Refined on every device while Instrument is a preview; Instrument at a desk once it lands.')).toBeInTheDocument();
     } finally {
       entry!.preview = was;
     }

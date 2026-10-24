@@ -19,7 +19,10 @@ import './option-row.css';
 export interface OptionRowProps {
   /** The row's first line. */
   label: ReactNode;
-  /** The sub-sentence under it — the fix for choosing options blind. */
+  /** A tag drawn right after the label on the same line (a `Chip` reading `Recommended`, D-6325). Inside the label's
+   *  span, so it wraps with the text and the row's accessible name carries it; the label's own text stays the label. */
+  tag?: ReactNode;
+  /** The sub-sentence under the label, in secondary ink — the fix for choosing options blind. */
   sublabel?: ReactNode;
   /** Anything else that belongs INSIDE the body, under the sublabel, where it
    *  wraps with the text rather than competing with the trailing slot. */
@@ -71,6 +74,7 @@ export interface OptionRowProps {
 
 export function OptionRow({
   label,
+  tag,
   sublabel,
   children,
   selected,
@@ -108,7 +112,12 @@ export function OptionRow({
         </span>
       )}
       <span className="opt-body">
-        <span className="opt-label">{label}</span>
+        <span className="opt-label">
+          {label}
+          {/* A space between them, so the accessible name reads "Fast path Recommended". */}
+          {tag !== undefined && ' '}
+          {tag}
+        </span>
         {sublabel && <span className="opt-desc">{sublabel}</span>}
         {children}
       </span>

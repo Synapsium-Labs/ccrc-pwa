@@ -56,9 +56,17 @@
 // reclamation spec's "a temp root that cannot be made private is not used" is the precedent, and
 // `run-tmp.test.ts`'s T1 is red in such a run.
 //
+// A TEMP ROOT INSIDE A WORK TREE IS NOT USED (D-6636). A `TMPDIR` that sits under a directory holding a `.git`
+// (an agent-authored `TMPDIR=<tree>/.tmp-x`) would strand a run's fixtures in a work tree that a collector must
+// then treat as a repository's own files. `setup` walks up from the physical base for a `.git`; inside a tree it
+// builds the run parent under `CCRC_SESSION_TMPDIR` when that names an existing directory outside every tree,
+// else under `/tmp`, and prints `TMPDIR <…> is inside a work tree; the run's temp moved to <…>`. The 2026-10-08
+// ruling that a too-long `TMPDIR` refuses stands: moving out of the tree is what removes the length.
+//
 // WHAT THIS DOES NOT DO. It never signals another process: its arm exits this one. It does not collect
-// vitest's own `TestProject.tmpDir` (a follow-up), loose `ccrc-*` directories from before it existed (proposal
-// 3 of #316, a follow-up), or a TMPDIR no later run visits.
+// loose `ccrc-*` directories from before it existed (proposal 3 of #316, a follow-up) or a TMPDIR no later run
+// visits. Vitest's own `TestProject.tmpDir` is collected on a signal only (D-6623): the arm removes it when it
+// is a real directory this uid owns; a clean run is left to vitest's own close.
 //
 // KNOWN LIMITATION: A LONG-PAUSED RUN ON macOS (D-4499's amendment). A stopped owner never accepts, and each
 // probe's connection stays in its listen queue after the prober hangs up. Once the queue is full, macOS refuses
@@ -229,14 +237,25 @@ export function openRun(base) {
   });
 }
 
+/** Remove `dir` when it is a real directory owned by this uid: `lstat`, so a symbolic link (or anything else) at
+ *  the path is left alone and never followed. Absent is fine. Never throws; vitest's `tmpDir` is a path it may
+ *  not have made yet. @param {string} dir @param {number} [uid] */
+export function removeOwnedDir(dir, uid = process.getuid?.() ?? -1) {
+  try {
+    const st = lstatSync(dir);
+    if (st.isDirectory() && st.uid === uid) rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  } catch { /* absent, foreign or busy: leave it, the signal path must still exit */ }
+}
+
 /** Arm the main process to collect `run` on SIGTERM, SIGINT, SIGHUP and `exit` (D-4498). Persistent `on`, never
  *  `once`: GNU timeout delivers SIGTERM to main twice, and a second delivery after the last listener is gone
  *  takes the default action mid-`rm` (measured). Each signal condemns the run, keeps an exit code already set
  *  (vitest's own listener sets the same one) or sets 128+n, and exits on a 1 ms timer — vitest's own exit,
- *  kept for when its `once` is spent. Returns the disarm, which teardown calls first.
- *  @param {string} run @returns {() => void} */
-export function armSignals(run) {
-  const collect = () => { condemn(run); };
+ *  kept for when its `once` is spent. `extra` are further directories (vitest's own `tmpDir`, D-6623) removed by
+ *  `removeOwnedDir` after the run. Returns the disarm, which teardown calls first.
+ *  @param {string} run @param {string[]} [extra] @returns {() => void} */
+export function armSignals(run, extra = []) {
+  const collect = () => { condemn(run); for (const d of extra) removeOwnedDir(d); };
   const onSignal = (sig) => {
     collect();
     process.exitCode ??= 128 + RUN_SIGNALS[sig];
@@ -317,6 +336,34 @@ async function reapAndReport(base, quietS) {
   }
 }
 
+/** Whether `dir` or any ancestor holds a `.git` (a directory, or the file a linked worktree has). `dir` is already
+ *  physical; a probe that cannot be answered reads as "not a tree", because the walk only ever MOVES a root. */
+export function insideWorkTree(dir) {
+  let d = dir;
+  for (;;) {
+    try { lstatSync(path.join(d, '.git')); return true; } catch { /* no .git here */ }
+    const up = path.dirname(d);
+    if (up === d) return false;
+    d = up;
+  }
+}
+
+/** The directory the run parent is built in (D-6636): `base` itself unless it is inside a work tree, then
+ *  `CCRC_SESSION_TMPDIR` when set, a real directory and outside every tree, else `/tmp`. `moved` is the line to print. */
+export function runBase(base, env = process.env) {
+  if (!insideWorkTree(base)) return { base };
+  let to = '/tmp';
+  const want = env.CCRC_SESSION_TMPDIR;
+  if (want && path.isAbsolute(want)) {
+    try {
+      const real = realpathSync(want);
+      if (lstatSync(real).isDirectory() && !insideWorkTree(real)) to = real;
+    } catch { /* unusable: the box's own /tmp */ }
+  }
+  try { to = realpathSync(to); } catch { /* /tmp itself unreadable: the open below refuses loudly */ }
+  return { base: to, moved: `TMPDIR ${base} is inside a work tree; the run's temp moved to ${to}` };
+}
+
 /** The refusal (D-4497): today's behaviour, said out loud. */
 function refuse(code, where) {
   delete process.env[RUN_DIR_ENV];
@@ -329,9 +376,12 @@ function refuse(code, where) {
  *  TMPDIR set here, and everything they and their children make lands in this run's `tmp/`. Reaps the base,
  *  opens the run, arms; the returned teardown disarms, restores TMPDIR, removes the run, and reaps again, so a
  *  dead run that was too fresh at setup is collected by this run on its way out. */
-export default async function setup() {
+export default async function setup(project) {
   let base;
   try { base = realpathSync(os.tmpdir()); } catch (e) { return refuse(`tmpdir-${e.code ?? 'realpath'}`, os.tmpdir()); }
+  const placed = runBase(base);
+  if (placed.moved) warn(placed.moved);
+  base = placed.base;
   const quietS = parseQuiet(process.env[RUN_QUIET_ENV]);
   await reapAndReport(base, quietS);
   const opened = await openRun(base);
@@ -340,7 +390,8 @@ export default async function setup() {
   delete process.env[RUN_REFUSED_ENV];
   process.env[RUN_DIR_ENV] = opened.run;
   process.env.TMPDIR = path.join(opened.run, RUN_TMP);
-  const disarm = armSignals(opened.run);
+  const vitestTmp = typeof project?.tmpDir === 'string' && path.isAbsolute(project.tmpDir) ? [project.tmpDir] : [];
+  const disarm = armSignals(opened.run, vitestTmp);
   return async () => {
     disarm();
     if (previous === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous;

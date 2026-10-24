@@ -18,6 +18,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import type { CcdArgv } from '../src/ccdargv.js';
 import { configDirFor } from '../src/config.js';
@@ -89,7 +90,7 @@ const harness = async (cfg: Cfg) => {
     configDir: cfg.unrostered === true
       ? (): string | undefined => undefined
       : (w: string): string | undefined => configDirFor(conf, w),
-    turnVerdict: async () => 'idle' as const,
+    turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
   } as DispatchRunDeps;
 
   return {
@@ -178,7 +179,7 @@ describe('the dispatch preflight measures the worker skill and never refuses', (
         asked.push(w);
         return configDirFor(base.cfg, w);
       },
-      turnVerdict: async () => 'idle' as const,
+      turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
     } as DispatchRunDeps;
 
     // D-5238, D-5273: with no row there is no wrapper to read a live file under, so the live `/clear` gate cannot measure

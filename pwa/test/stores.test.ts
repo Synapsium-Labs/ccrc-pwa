@@ -319,6 +319,22 @@ describe('session store optimistic send', () => {
     expect(store.getState().ask).toBeNull();
   });
 
+  it('disconnect() resets askFrameSeen with the ask it clears', () => {
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() } });
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().askFrameSeen).toBe(true);
+    store.getState().disconnect();
+    expect(store.getState().askFrameSeen).toBe(false);
+  });
+
+  it('the reducer sets askFrameSeen on an ask or ask_cleared frame and leaves it alone otherwise', () => {
+    const base = { ...emptySnap(), askFrameSeen: false };
+    expect(applySessionMsg(base, { type: 'ask', ask: askFixture, key: 'k1' }).askFrameSeen).toBe(true);
+    expect(applySessionMsg(base, { type: 'ask_cleared' }).askFrameSeen).toBe(true);
+    expect(applySessionMsg(base, { type: 'dialog', dialog: dialogFixture }).askFrameSeen).toBe(false);
+    expect(applySessionMsg({ ...base, askFrameSeen: true }, { type: 'dialog_cleared' }).askFrameSeen).toBe(true);
+  });
+
   // Fix round 1, finding 3's named residual: `sessionws.ts`'s own
   // per-connection sentinel now states the mail truth explicitly on every
   // fresh connect (including an empty one), which is the primary fix — this
@@ -1190,6 +1206,106 @@ describe('session store connect()', () => {
 
     lastSocket().message(JSON.stringify({ type: 'status', status: 'busy', statusUpdatedAt: 123 }));
     expect(store.getState().status).toBe('busy');
+    store.getState().disconnect();
+  });
+
+  // D-6325: `askFrameSeen` is per CONNECTION, not per tab. The surface treats a scraped dialog as `none` until THIS
+  // connection's first `ask` or `ask_cleared` frame, because an `ask` the store holds from before a drop is exactly
+  // what a reconnect must not present as current. `ReconnectingSocket`'s automatic reconnects never call
+  // `disconnect()`, so the reset lives in the socket's state (`onState`: down, connecting; every open follows one of
+  // them): a drop and a backoff reconnect, driven here through the socket's own close event and its timer.
+  it('an automatic reconnect resets askFrameSeen until that connection\'s first ask or ask_cleared frame', () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
+    expect(store.getState().askFrameSeen).toBe(false);
+
+    store.getState().connect();
+    lastSocket().open();
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+    expect(store.getState().askFrameSeen).toBe(false);   // a dialog frame says nothing about the envelope
+    store.getState().apply({ type: 'ask', ask: askFixture, key: 'k1' });
+    expect(store.getState().askFrameSeen).toBe(true);
+
+    // The network drops; the socket schedules its own reconnect (no disconnect(), no new store).
+    const first = lastSocket();
+    first.onclose?.(new Event('close') as CloseEvent);
+    vi.advanceTimersByTime(60_000);
+    expect(lastSocket()).not.toBe(first);
+    expect(store.getState().askFrameSeen).toBe(false);   // the drop itself took it down (the-ask-holds-through-a-reconnect)
+    lastSocket().open();
+    expect(store.getState().askFrameSeen).toBe(false);
+    expect(store.getState().ask).toEqual(askFixture);    // the held envelope is untouched; only the flag says it is old
+
+    // A frame that is not an ask or an ask_cleared does not set it; an ask_cleared does.
+    store.getState().apply({ type: 'dialog_cleared' });
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().askFrameSeen).toBe(true);
+    expect(store.getState().ask).toBeNull();
+
+    // A second reconnect resets it again.
+    const second = lastSocket();
+    second.onclose?.(new Event('close') as CloseEvent);
+    vi.advanceTimersByTime(60_000);
+    lastSocket().open();
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().disconnect();
+  });
+
+  // D-6325, `the-ask-holds-through-a-reconnect`: the flag is also what says a surface is LIVE (the sheet holds what it
+  // showed, read-only, while it is false). It therefore falls the moment the socket drops, not only when the next
+  // connection opens: from the drop until that connection's first ask or ask_cleared frame, no answer may go on the old
+  // connection's evidence.
+  it('the socket dropping resets askFrameSeen at once, before the next connection opens', () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
+    store.getState().connect();
+    lastSocket().open();
+    store.getState().apply({ type: 'ask', ask: askFixture, key: 'k1' });
+    expect(store.getState().askFrameSeen).toBe(true);
+
+    lastSocket().onclose?.(new Event('close') as CloseEvent);
+    expect(store.getState().conn).toBe('down');
+    expect(store.getState().askFrameSeen, 'down: nothing is live').toBe(false);
+    expect(store.getState().ask, 'the held envelope itself is untouched').toEqual(askFixture);
+
+    // And through the reconnect's own states: the flag stays down until a frame of the new connection sets it.
+    vi.advanceTimersByTime(60_000);
+    expect(store.getState().conn).toBe('connecting');
+    expect(store.getState().askFrameSeen).toBe(false);
+    lastSocket().open();
+    expect(store.getState().conn).toBe('open');
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().askFrameSeen).toBe(true);
+    store.getState().disconnect();
+  });
+
+  // D-6325 (review 843's F1): a new stream frames the menu it sees, but never the ABSENCE of one (`nextDialogFrame` sends
+  // nothing for a stream that has seen no menu), so a `dialog` kept from before the drop would be read as current once the
+  // new connection's `ask_cleared` arrives. The drop lowers `dialog` with `askFrameSeen`; the sheet's hold keeps what it
+  // showed in its own ref, and the new connection's `dialog` frame, sent before its `ask` frame, brings the menu back.
+  it('the socket dropping lowers dialog with askFrameSeen, and the new connection\'s dialog frame brings it back', () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
+    store.getState().connect();
+    lastSocket().open();
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().dialog).toEqual(dialogFixture);
+
+    lastSocket().onclose?.(new Event('close') as CloseEvent);
+    expect(store.getState().dialog, 'down: the pre-drop menu is not current').toBeNull();
+    expect(store.getState().askFrameSeen).toBe(false);
+
+    vi.advanceTimersByTime(60_000);
+    lastSocket().open();
+    expect(store.getState().dialog).toBeNull();
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().dialog).toEqual(dialogFixture);
+    expect(store.getState().askFrameSeen).toBe(true);
     store.getState().disconnect();
   });
 });

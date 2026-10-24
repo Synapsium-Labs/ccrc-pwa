@@ -42,8 +42,8 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { AccountGateRefusal, ApprovalRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
-import { SWAP_REFUSALS } from './api.js';
+import type { AccountGateRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
 
 /**
  * The named workspace create's own words (named workspaces S5): decided by `planCreate` (`server/src/workspaceCreate.ts`,
@@ -100,7 +100,8 @@ export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
-  | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal;
+  | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal
+  | ArchiveRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -178,6 +179,12 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // an older or newer ccd's sanitiser reaches it; `title-not-saved` is 502, the box could not write its registry fields,
   // which is the box's fault and not the operator's, and the one answer here whose cure is to try again.
   'not-a-workspace': 409, 'bad-title': 400, 'title-not-saved': 502,
+  // The archive door (ARCH-36, #559): every one answered 409 from its own sends (`decideArchive`, `refusedAtStop`,
+  // `archiveOutcome`) before the door answered through `refuseRoute`. `session-busy` and `status-unknown` are the swap
+  // route's rows above (the same two words, D-5242), declared once.
+  [ARCHIVE_REFUSALS.runOpen]: 409, [ARCHIVE_REFUSALS.coordinatorHasOpenRuns]: 409,
+  [ARCHIVE_REFUSALS.programmePartlyEnded]: 409, [ARCHIVE_REFUSALS.worktreeGone]: 409,
+  [ARCHIVE_REFUSALS.manifestUnbuildable]: 409,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */

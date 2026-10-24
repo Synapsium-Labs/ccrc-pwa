@@ -33,6 +33,9 @@ import { mkTmp } from './tmpHelpers.js';
 import { ccgptFile } from './ccgptHarness.js';
 import { codexRoster, freePorts } from './codexLaneFixture.js';
 import { seedAccountsSh } from './ccdWsHelpers.js';
+import {
+  AUTH_LIB, CLOSED_AUTH_BASE, driverLines, fakeAuthServer, plantBackendCredential, runAuthDriver,
+} from './codexAuthFixture.js';
 import { MODEL_ENV_KEYS } from '../../shared/modelenv.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
 
@@ -577,6 +580,47 @@ describe("ccrc-codex — refusals: exit 1, one named line, Claude Code never exe
     expect(r.err).toContain('ccrc codex: not-logged-in: fixture refusal, run ccrc codex login codex-a');
     expect(refusal(r), "ccrc's refusal already names the remedy").toEqual([]);
   });
+
+  // Codex-bridge Stage 1, Task 8: the REAL `ccrc codex start` behind the
+  // launcher, reading the lane's credential through the REAL auth library,
+  // whose status file is the library's own (its refresher ran once against a
+  // fake endpoint that refused the refresh token). This suite does not use
+  // `ghContainedEnv`, so the case names CLOSED_AUTH_BASE in its own env: no
+  // library process it reaches can ask a live endpoint.
+  it('a launch on a needs-signin lane exits with that refusal and execs nothing', async () => {
+    const b = await box(['codex-a'], { plant: false });
+    const m = spawnSync(process.execPath,
+      [MODELS_OP, 'init', '--file', path.join(b.home, '.ccrc', 'accounts.json'), '--id', 'codex-a', '--probe', 'codex'],
+      { cwd: b.home, env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: b.home }, encoding: 'utf8' });
+    expect(m.status, `models-op init: ${m.stdout}${m.stderr}`).toBe(0);
+    // ccrc as a box runs it, from a tree beside its deploy and shared halves,
+    // in place of the recorder stub at the absolute path the launcher execs.
+    const ccd = path.join(b.home, 'ccrc', 'ccd');
+    mkdirSync(ccd, { recursive: true });
+    for (const f of ['ccrc', 'ccrc-wrapper-shape']) symlinkSync(path.join(REPO, 'ccd', f), path.join(ccd, f));
+    symlinkSync(path.join(REPO, 'deploy'), path.join(b.home, 'ccrc', 'deploy'));
+    symlinkSync(path.join(REPO, 'shared'), path.join(b.home, 'ccrc', 'shared'));
+    writeFileSync(path.join(b.bin, 'ccrc'), `#!/usr/bin/env bash\nexec bash "$HOME/ccrc/ccd/ccrc" "$@"\n`, { mode: 0o755 });
+    copyFileSync(AUTH_LIB, path.join(b.bin, 'ccgpt-auth.py'));
+    const dir = path.join(b.home, row(b.home, 'codex-a').exec.authDir!);
+    plantBackendCredential(dir, { expiresIn: -120 });
+    const srv = await fakeAuthServer({ token: [{ status: 400, body: { error: 'invalid_grant' } }] });
+    try {
+      const d = await runAuthDriver(b.home, { authDir: dir, ops: [{ op: 'ensure_fresh', lane: 'codex-a' }] },
+        { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(driverLines(d.stdout)[0]?.['error'], d.stdout + d.stderr).toBe('needs-signin');
+    } finally {
+      await srv.close();
+    }
+    const r = run(b, { env: { CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE }, timeoutMs: 15_000 });
+    expect(r.timedOut, 'the launch hung').toBe(false);
+    expect(r.code, r.err).toBe(1);
+    expect(r.err).toMatch(/^ccrc codex: needs-signin: .*'ccrc codex login codex-a'/m);
+    expect(refusal(r), "ccrc's refusal already names the remedy").toEqual([]);
+    expect(claudeRan(b), "Claude Code was exec'd on a lane that needs a sign-in").toBe(false);
+    expect(poisoned(b)).toEqual([]);
+    expect(existsSync(path.join(laneDir(b, 'codex-a'), '.lock')), 'the lane lock was taken').toBe(false);
+  }, 30_000);
 
   it('a lane with no model class refuses AFTER start, naming ccrc models <id> init codex', async () => {
     const shapes: Array<[string, unknown]> = [

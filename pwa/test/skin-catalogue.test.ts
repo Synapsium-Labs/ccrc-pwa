@@ -20,8 +20,10 @@
 // through the catalogue, so a build made with it runs axe over every story in
 // that skin, and the viewport presets are the widths every PR is checked at.
 // And the per-device default's pure half (D-5096): what `AUTO` resolves to on
-// which device, with the catalogue injected so the case can see the world W2's
-// flag flip makes.
+// which device. Instrument stopped being a preview in S18 (D-6389), so the
+// shipped catalogue is the world in which the device rule decides; the preview
+// world, which `resolveSkin` still honours for a skin whose shell has not
+// landed, is pinned by injecting a catalogue.
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -90,9 +92,9 @@ describe('the skin catalogue is bound to skins.css', () => {
     expect(skinIdsInCss()).toEqual(catalogue);
   });
 
-  it('lists Refined first and Instrument as a labelled preview', () => {
+  it('lists Refined first, and neither skin is a preview', () => {
     expect(SKINS.map((s) => s.id)).toEqual([REFINED, INSTRUMENT]);
-    expect(SKINS.find((s) => s.id === INSTRUMENT)?.preview).toBe(true);
+    expect(SKINS.find((s) => s.id === INSTRUMENT)?.preview).toBe(false);
     expect(SKINS.find((s) => s.id === REFINED)?.preview).toBe(false);
     for (const s of SKINS) {
       expect(s.label.length, s.id).toBeGreaterThan(0);
@@ -128,14 +130,15 @@ describe('resolving and stamping a skin', () => {
   });
 });
 
-/** The catalogue as the W2 PR that lands Instrument's shell will ship it:
- *  Instrument no longer a preview. INJECTED into `resolveSkin`, never
- *  committed — the shipped flag is what keeps `AUTO` on Refined today. */
-const asW2Ships = (): readonly SkinChoice[] =>
-  SKINS.map((s) => (s.id === INSTRUMENT ? { ...s, preview: false } : s));
+/** The catalogue as it stood while Instrument's shell had not landed, and as it
+ *  would stand again for any skin that is selectable before it is ready:
+ *  Instrument a preview. INJECTED into `resolveSkin`, never committed — the
+ *  shipped flag is what lets `AUTO` reach Instrument today. */
+const asPreview = (): readonly SkinChoice[] =>
+  SKINS.map((s) => (s.id === INSTRUMENT ? { ...s, preview: true } : s));
 
 /** Primary-input profiles (Media Queries 4, `hover` and `pointer`), each with
- *  the skin `AUTO` gives it once Instrument is no longer a preview. A tablet's
+ *  the skin `AUTO` gives it in the shipped catalogue. A tablet's
  *  primary pointer is coarse, so it is Refined (spec §12, O1). The rule is a
  *  CONJUNCTION, and each half has a row that only it decides:
  *  - a stylus-first device points finely but cannot hover, so it is a tablet
@@ -173,7 +176,7 @@ describe('the per-device default (D-5096)', () => {
   it('AUTO is a stored value, never a skin: no block, no catalogue entry, never a resolution', () => {
     expect(SKINS.map((s) => s.id)).not.toContain(AUTO);
     expect(skinIdsInCss()).not.toContain(AUTO);
-    for (const catalogue of [SKINS, asW2Ships()]) {
+    for (const catalogue of [SKINS, asPreview()]) {
       for (const desk of [true, false]) {
         expect(resolveSkin(AUTO, desk, catalogue)).not.toBe(AUTO);
       }
@@ -189,24 +192,26 @@ describe('the per-device default (D-5096)', () => {
     }
   });
 
-  it('AUTO on a hover-and-fine device resolves refined while Instrument is a preview, and instrument when it is not', () => {
+  it('AUTO on a hover-and-fine device resolves instrument when it is not a preview, and refined while it is', () => {
     const desk = DEVICES.find((d) => d.name === 'a desktop with a mouse')!;
     expect(matchesDevice(DEVICE_QUERY, desk), 'a desktop is not a desk').toBe(true);
-    // As shipped: Instrument is a preview, so nobody's screen changes (§7).
-    expect(SKINS.find((s) => s.id === INSTRUMENT)?.preview).toBe(true);
-    expect(resolveSkin(AUTO, true)).toBe(REFINED);
-    expect(resolveSkin(AUTO, true, SKINS)).toBe(REFINED);
-    // As W2 ships it: the same desk boots into Instrument.
-    expect(resolveSkin(AUTO, true, asW2Ships())).toBe(INSTRUMENT);
+    // As shipped: Instrument is not a preview, so a desk boots into it (D-5096).
+    expect(SKINS.find((s) => s.id === INSTRUMENT)?.preview).toBe(false);
+    expect(resolveSkin(AUTO, true)).toBe(INSTRUMENT);
+    expect(resolveSkin(AUTO, true, SKINS)).toBe(INSTRUMENT);
+    // As a preview, injected: the same desk stays on Refined, because the
+    // default never chooses a skin whose shell has not landed.
+    expect(resolveSkin(AUTO, true, asPreview())).toBe(REFINED);
     // Nothing stored, an empty value, an unknown one and a stale one all take
     // the device rule — "an unknown value means AUTO" — in both catalogues.
     for (const v of [AUTO, null, undefined, '', 'soft-glass']) {
-      expect(resolveSkin(v, true), String(v)).toBe(REFINED);
-      expect(resolveSkin(v, true, asW2Ships()), String(v)).toBe(INSTRUMENT);
-      expect(resolveSkin(v, false, asW2Ships()), String(v)).toBe(REFINED);
+      expect(resolveSkin(v, true), String(v)).toBe(INSTRUMENT);
+      expect(resolveSkin(v, false), String(v)).toBe(REFINED);
+      expect(resolveSkin(v, true, asPreview()), String(v)).toBe(REFINED);
+      expect(resolveSkin(v, false, asPreview()), String(v)).toBe(REFINED);
     }
     // An explicit choice is itself on every device, in both catalogues.
-    for (const catalogue of [SKINS, asW2Ships()]) {
+    for (const catalogue of [SKINS, asPreview()]) {
       for (const d of [true, false]) {
         for (const s of SKINS) expect(resolveSkin(s.id, d, catalogue), `${s.id} desk=${d}`).toBe(s.id);
       }
@@ -216,11 +221,11 @@ describe('the per-device default (D-5096)', () => {
   it('AUTO on a coarse device resolves refined (tablets, O1)', () => {
     // By primary input, never by width: the profiles carry no width at all.
     // Each is evaluated against DEVICE_QUERY itself, then resolved against the
-    // catalogue W2 ships — the one in which the device rule decides anything.
+    // shipped catalogue — the one in which the device rule decides anything.
     for (const d of DEVICES) {
       const isDesk = matchesDevice(DEVICE_QUERY, d);
-      expect(resolveSkin(AUTO, isDesk, asW2Ships()), d.name).toBe(d.skin);
-      expect(resolveSkin(AUTO, isDesk), `${d.name}, while Instrument is a preview`).toBe(REFINED);
+      expect(resolveSkin(AUTO, isDesk), d.name).toBe(d.skin);
+      expect(resolveSkin(AUTO, isDesk, asPreview()), `${d.name}, while Instrument is a preview`).toBe(REFINED);
     }
   });
 });

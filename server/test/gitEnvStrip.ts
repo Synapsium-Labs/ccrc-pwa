@@ -19,15 +19,12 @@
 // template hooks reach every `git init` here) and GIT_EXEC_PATH (the
 // directory git runs its own subcommands from). A stated harness residual.
 import { execFileSync } from 'node:child_process';
+import { GIT_LOCAL_ENV_FLOOR as FLOOR } from './scrub-git-env.mjs';
 
 /** `git rev-parse --local-env-vars` on git 2.43.0, the fleet box's git: the
- *  floor, so an older git that prints fewer names strips no less. */
-export const GIT_LOCAL_ENV_FLOOR: readonly string[] = [
-  'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CONFIG', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT',
-  'GIT_OBJECT_DIRECTORY', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_IMPLICIT_WORK_TREE', 'GIT_GRAFT_FILE',
-  'GIT_INDEX_FILE', 'GIT_NO_REPLACE_OBJECTS', 'GIT_REPLACE_REF_BASE', 'GIT_PREFIX', 'GIT_SHALLOW_FILE',
-  'GIT_COMMON_DIR',
-];
+ *  floor, so an older git that prints fewer names strips no less. The list
+ *  lives in `scrub-git-env.mjs`, the runner's own scrub, so there is one copy. */
+export const GIT_LOCAL_ENV_FLOOR: readonly string[] = FLOOR;
 
 let live: readonly string[] | undefined;
 /** What THIS box's git calls local — asked once, with PATH alone, so an

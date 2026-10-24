@@ -27,7 +27,7 @@ const README = readFileSync(path.resolve(here, '..', '..', 'README.md'), 'utf8')
 
 /** The Settings paragraph, its wrapped lines joined with single spaces, from its bold lead to the blank line. */
 function settingsParagraph(): string {
-  const start = README.indexOf('**Settings, the update banner and release pushes');
+  const start = README.indexOf('**Settings, the update line and release pushes');
   expect(start, 'the README has no Settings paragraph').toBeGreaterThan(-1);
   const end = README.indexOf('\n\n', start);
   return README.slice(start, end === -1 ? undefined : end).replace(/\s+/g, ' ');

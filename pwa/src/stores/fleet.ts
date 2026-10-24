@@ -8,6 +8,7 @@ import { applyCatchUp, loadMark } from '../lib/notifymark';
 import { mergeBySeq, reviveNotifyEvents } from '../lib/feed';
 import { requestUpdate } from '../lib/swupdate';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
+import { isRecord } from '../lib/wire';
 import { warnNonArrayRoster } from '../lib/accounts';
 import type { DivergenceCensus } from '../fleet/integrityWords';
 import type { AccountsConnect, AccountUsage, LaneWire } from '../../../shared/api';
@@ -338,7 +339,6 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
     // `lanes` and `connect` are taken only as objects and cleared by an answer without them; neither ever reaches
     // `saveFleetSnapshot`, whose roster argument is `get().roster` alone (G15).
     const fetchAccounts = deps.fetchAccounts ?? (() => api.accounts());
-    const isRecord = (v: unknown): boolean => v !== null && typeof v === 'object' && !Array.isArray(v);
     const readAccounts = (): Promise<void> => fetchAccounts().then((r) => {
       set({
         lanes: isRecord(r.lanes) ? r.lanes! : null,

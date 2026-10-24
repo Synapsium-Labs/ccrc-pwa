@@ -18,32 +18,32 @@ pressed in the console") and the slow first open of a new session. One task is o
 
 | # | task | scope | PRs | state |
 |---|---|---|---|---|
-| 1 | T1a (D-6324) | server: the structured ask outlives the 30-minute cut while its menu is up | #1133 | fix round 3 under way (R24); lands before T1b |
-| 2 | T1b (D-6325) | the ask is Claude's own question: who asks, plain words, Recommended tag, Other, one scroller, no pane text | #1150 | fix round 1 under way (R23); lands after T1a |
+| 1 | T1a (D-6324) | server: the structured ask outlives the 30-minute cut while its menu is up | #1133 | **merging**: in the merge queue (R31); lands before T1b |
+| 2 | T1b (D-6325) | the ask is Claude's own question: who asks, plain words, Recommended tag, Other, one scroller, no pane text | #1150 | fix round 2 under way (R34); lands after T1a |
 | 3 | T1c (D-6326) | the ask answered inline in the pane at ≥900; a phone keeps the sheet | — | planned, after T1b |
-| 4 | T2a (D-6327) | the update banner becomes one quiet line, dismissible until a newer release | — | dispatched, run 831, brought forward (R22) |
+| 4 | T2a (D-6327) | the update banner becomes one quiet line, dismissible until a newer release | #1164 | fix round 1 under way (R33) |
 | 5 | T2b (D-6328) | no floating `+` at the desk in Instrument | — | planned, after #1116 |
 | 6 | T2c (D-6329) | gauges most free first in a full-width row; always a number with its window; never an empty bar | — | planned, run 802; waits for T1b's claims; ahead of the step order (Q1 ruled) |
 | 7 | T2d (D-6330) | Inbox and Runs counts show only what waits on the operator | — | planned, after Step 1 and #1116 |
-| 8 | T2e (D-6335) | Instrument's desk: no empty column, no second head in the list column, dense rows | #1153 | fix round 1 under way (R21) |
-| 18 | T2f (D-6371) | Instrument's desk column: no count line, no runs row, the chooser in project mode (Q5) | — | planned, after T2d |
+| 8 | T2e (D-6335) | Instrument's desk: no empty column, no second head in the list column, dense rows | #1153 | **merging**: in the merge queue (R32) |
+| 18 | T2f (D-6371) | Instrument's desk column: no runs row, the chooser in project mode (Q5); its count line is T2g's (R28) | — | planned, after T2d and T2g |
 | 9 | T3a (D-6331) | plain fleet words; one bucket vocabulary; the counts once | — | planned, after Step 2 |
 | 10 | T3b (D-6332) | names whole where they fit; ⋯ revealed under a fine pointer | — | planned, after Step 2 |
 | 11 | T3c (D-6333) | the header names the session; chips never cut at the desk; doors carry words | — | planned, after Step 2 |
 | 12 | T3d (D-6334) | the inspector shows only sections with content and one honest routing line | — | planned, after Step 2 |
-| 13 | B1 (D-6366) | a typed send waits long enough for its echo; a lost Enter reply does not end the proof | #1144 | awaiting review, review run 832 (fix round 2) |
-| 14 | B2 (D-6367) | Retry resumes our own text | — | planned, after B1 |
-| 15 | B3 (D-6368) | the drawer follows its pty; a phone's Return is Enter | — | planned, run 785; waits for B1's claim on `server.ts` |
+| 13 | B1 (D-6366) | a typed send waits long enough for its echo; a lost Enter reply does not end the proof | #1144 | **merged** `aa4d287af`; run 784 closed (R29) |
+| 14 | B2 (D-6367) | Retry resumes our own text | — | dispatched, run 869 (R29) |
+| 15 | B3 (D-6368) | the drawer follows its pty; a phone's Return is Enter | — | dispatched, run 785 (R29) |
 | 16 | B4 (D-6369) | the transcript search runs in parallel | #1136 | **merged** `0c45d7c57`; run 786 closed |
 | 17 | B5 (D-6370) | New session opens at once; an unprompted session says so | — | planned, after B4 and T1a |
 | 19 | S5 (W2, D-5471; D-6443) | Refined's phone header and FAB, landed by a superseding PR for the unowned #1116 | #1139 | **merged** `f0e873c5d`; run 787 closed; #1116 closed |
-| 20 | S18 (W2, D-5479; D-6389) | Instrument on a desk and Refined on a phone by default, brought forward | #1158 | awaiting review; review run 834 waits on the daily cap (R25) |
+| 20 | S18 (W2, D-5479; D-6389) | Instrument on a desk and Refined on a phone by default, brought forward | #1158 | **merging**: in the merge queue (R30) |
 | 21 | T3e (D-6385) | the right-side inspector hides and shows, per device | — | planned, after T3c, T3d, T2e and #1116 |
 | 22 | T3f (D-6386) | Done above Working when grouped by status | — | planned, run 800; waits for T2e's claims |
 | 23 | T4a (D-6387) | colour where the machine speaks: tool boxes, inline code, failed calls | — | planned, after T1c |
-| 24 | C1 (D-6388) | registry reads bounded | — | planned, run 803; waits for B1's claim on `server.ts` |
+| 24 | C1 (D-6388) | registry reads bounded | — | dispatched, run 803 (R29) |
 | 25 | C0 | the console's responsiveness, measured (research, no PR) | — | **done** (R11): its report became C2 to C10 (R14) |
-| 26 | C2 (D-6434) | the commands and PR routes read one row; the commands route reads a bounded tail | — | planned, run 820; waits for B1's claim on `server.ts` |
+| 26 | C2 (D-6434) | the commands and PR routes read one row; the commands route reads a bounded tail | — | dispatched, run 820 (R29) |
 | 27 | C3 (D-6435) | the watcher's tick reads the registry once and captures with bounded concurrency | — | planned, after C1 |
 | 28 | C4 (D-6436) | /api/projects from the watcher's fresh listing; a cached walk | — | planned, after C1 |
 | 29 | C5 (D-6437) | a wheel over a code block scrolls the transcript | — | planned, run 821; waits for T1b's claims |
@@ -51,9 +51,11 @@ pressed in the console") and the slow first open of a new session. One task is o
 | 31 | C7 (D-6439) | the chat's rows memoised; markdown and highlighting cached | — | planned, after C6, C8 and T1c |
 | 32 | C8 (D-6440) | one accounts poll; an equal answer keeps the previous value | — | planned, after C6 |
 | 33 | C9 (D-6441) | the fleet list memoised; its clock a leaf | — | planned, after C6 and C8 |
-| 34 | C10 (D-6442) | the Runs board folds its finished runs | — | planned, run 823; the first work run in the queue, after review run 834 (R20, R25) |
+| 34 | C10 (D-6442) | the Runs board folds its finished runs | — | dispatched, run 823 (R28); PR #1197 |
 | 35 | S5a (D-6466) | a phone shows the full accounts strip again, under S5's header | #1151 | **merged** `7ebdff20c` (v0.0.574); run 814 closed |
 | 36 | S5b (D-6530) | a phone's strip folds to its four freest lanes; "+n more" counts the hidden lanes that need the operator | — | planned, after T2c and T2a (R22) |
+| 37 | T5a (D-6714) | the top search finds sessions by name, workspace, branch, project and a coordinator's programme, after the commands, coordinators first on an equal match | — | planned, after #1158 and this ledger PR (R28) |
+| 38 | T2g (D-6715) | Instrument's desk column draws no count line; the status bar's count is the one | — | planned, after T2e (R28) |
 
 ## Decisions & deviations
 
@@ -197,16 +199,89 @@ pressed in the console") and the slow first open of a new session. One task is o
   daily cap is the operator's setting; they were asked whether to raise it. B1's fix round 2 (`7da5a749a`) was
   verified and review run 832 reads it. #1156 left the merge queue on a runner's package-mirror 403 during setup (no
   test ran) and was re-enqueued.
-- **Open with the operator:** Q2 to Q9 in the plan's §Operator questions (Q1 is ruled), each with a recommended
+- **R26 (2026-10-22)**, B1's fix round 2 review (run 832, at `7da5a749a`): 5 findings, 1 important (a test gap); 25
+  mutation rows reproduce; the hung-tmux bound holds at four captures. Sent back as fix round 3: F1, the all-absent
+  watch is pinned per stash path; F2, ruled (it predates B1): an absent box after the last box read joins R19's
+  condition, so the stash paths press no retry Enter then, giving up the retry when an overlay hides the box, because an
+  unsent send that says so is the lesser harm than a restored draft submitted; "failed" and "absent" stay two facts;
+  F3 to F5, the PR body, a dead arm and the blind deadline's cases. D-6366 says so now.
+- **R27 (2026-10-22)**, T2a's ask (23:33Z), answered by the coordinator from the plan: at 900 Refined's bar has 143 px
+  free with no gauges and the update line needs 178, and T2c frees no more, so Refined's desk indicator sits in a
+  full-width row under the bar, shown only while a release waits and is not dismissed; the bar's first line is
+  unchanged. T2c's gauge row shares that row once both land. Instrument's status bar as planned (D-6717).
+- **R28 (2026-10-23)**, the operator's two asks. Once the worktrees disk had room again (about 14:38Z), the six
+  waiting review runs and C10 (run 823) were dispatched. (1) With a screenshot of Instrument's desk list column (the wordmark,
+  the session count, Docs, Account, Settings, the inbox and the bell): the section is superseded by the new UI. T2e
+  removes the wordmark and the five doors; the count line is split out of T2f as Task T2g (D-6715), to land right after
+  T2e, and T2f keeps the runs row and the class chooser. (2) "Refine the search bar at the top to search across
+  coordinator workspace names and projects": Task T5a (D-6714). The operator ruled Q11 A (every session matches at the
+  palette's first level, on its name, workspace, branch, project and, for a coordinator, its programme; coordinators
+  before workers on an equal match; a project name lists its sessions; an empty query shows the commands) and Q12 A (no
+  project row). The coordinator's defaults for the rest: sessions rank after every matching command, so a query that
+  matches a command keeps what Enter does today; a session needs two or more letters and a contiguous match; the field's
+  words do not change; a phone's search door is S11's.
+- **R29 (2026-10-23)**, B1's fix round 3 review (run 841, at `674e03dd4`): 2 minor findings, no ruling needed; all five
+  of R26's rulings are implemented and pinned; a moving-clock probe found 0 bad sends in 36,000 (530 at `7da5a749a`).
+  Ruled: B1 lands as is (#1144 enqueued). F1, a comment in `send.ts` (≈:346) still calls a failed capture "exactly
+  like an absent box", and F2, the reset of the absent fact on a box read (≈:368) is unpinned (deleting it survives
+  230 of 230), go to B2, which edits `send.ts` next, with review 841's notes for B2. B1 merged as `aa4d287af`, and B3
+  (785), C1 (803), C2 (820) and B2 (a new run, 869) were dispatched.
+- **R30 (2026-10-23)**, S18's review (run 834, at `580a221a0`): 5 minor findings; the 7 mutation rows reproduce; the
+  browser leg is 8 of 8. Ruled: S18 lands as is (#1158 enqueued). F1 accepted: on a desk, a stored skin value this
+  build does not know paints Refined for one frame, then Instrument; it is rare (a hand edit, or a move back from a
+  build with a newer skin), and a fix would need the catalogue in the pre-paint snippet, which single-definition
+  forbids (D-6721). F2: both comment edits outside S18's files are in scope (D-6722, D-6720). F1's two comments, F2's
+  stale tense, F3 (a browser run line), F4 (a README wrap) and F5 (a test comment that states jsdom's name) are text
+  only and go to T5a. S18's three named departures are D-6718 to D-6720.
+- **R31 (2026-10-23)**, T1a's fix round 3 review (run 837, at `e641fd7e0`): 4 findings; all R24 rulings applied;
+  review 830's probe now clears; 25 of 25 mutation rows reproduce; suites and CI green. Ruled: T1a lands as is (#1133
+  enqueued), and the test and doc items go to B5, which edits `sessionws.ts` next: F1, the new `captureHeld` reset on a
+  successful capture (≈:400) is a guard with no red case (deleting it leaves an aged envelope unmatched after one held
+  failure): B5 adds the stream case (an aged envelope, panes MENU, MENU, a failed capture, then an empty pane or
+  another call's review; one `ask` and one `ask_cleared`) and its mutant row; F2, `captureHeld`'s doc says "the last
+  capture this stream judged failed and held"; F3, the parsed arm's "a prefix either way" is pinned by an assertion in
+  the aged-ask case. F4 was PR-body wording only.
+- **R32 (2026-10-23)**, T2e's fix round 1 review (run 840, at `f9ad95190`): 9 minor findings; all six wave lenses and 14
+  of 16 mutation rows reproduce; the browser file is 18 of 18. Ruled: T2e lands as is (#1153 enqueued). F1: T2d's
+  Files gain `Rail.tsx`, so the rail's Inbox door counts and says what Refined's door says ("waiting for you"), and
+  the four copies of the badge's print cap become one constant. F2 (a two-line row with no context is 53 px, the cost of
+  R21's lamp rule) goes to T3b with R21's F2. F3 to F7 and F9 go to T2g, written into its Files: the dense block's two
+  stale comments, the browser file's fixture header, an unread case at the ack's own stamp, the token guard scanning
+  every rule of the dense block, a browser case for the rail badge's placement, and the "rounds 1 and 2" labels. F8,
+  `Rail.tsx`'s comment on who reads `useNavBadges`, goes to T2d, which rewrites that door. D-6716 records the three-line
+  rows.
+- **R33 (2026-10-23)**, T2a's review (run 844, at `003289668`, its wave-done verified): 9 findings, 1 important; all 15
+  mutants reproduce; the full pwa suite, the browser files and the rings are green. Sent back as fix round 1: F1, on a
+  phone the dismiss moved focus to the main landmark, which the phone's fleet view hides, so focus fell to the body
+  (measured at 390 in both skins): focus a landmark that is displayed, pinned by a browser case at 390; F2, a case for the
+  cross-tab `storage` event; F3 accepted (a 0.5 px overhang at the viewport's bottom edge; the 24 px target floor
+  stands); F4, README stops describing the update banner, in this PR; F5, F6 and F8, a test header, the session route's
+  missing renders and the PR's citations; F7 accepted (commit order inside a squashed PR); F9, a log line in
+  `watch.ts` that still says "the banner", goes to C3.
+- **R34 (2026-10-23)**, T1b's fix round 1 review (run 843, at `4ae8b26a2`, its wave-done verified): 7 findings, 2
+  important; all 20 mutation rows reproduce; in Chrome the held sheet keeps its Other text and focus through a drop.
+  Sent back as fix round 2: F1 (it predates T1b), after a reconnect in which the menu went away the new stream sends no
+  dialog frame, so the pre-drop menu was offered live and a tap sent a stale answer: the store lowers `dialog` with
+  `askFrameSeen` when the socket is not open, which the hold survives because it lives in the sheet; F2 accepted, the
+  transcript's card follows the connection, and its comment says so; F3, in the gap the send controls are disabled
+  (not the Other field, not the dismissal) and the status line promises no queue; F4 to F6, test comments and the
+  comments handed over from T1a. F7: the four CodeQL alerts are the same `useStore(selector)` false-positive class main
+  carries; dismissing them is the operator's, at landing.
+- **Open with the operator:** Q2 to Q9 in the plan's §Operator questions (Q1, Q10, Q11 and Q12 are ruled), each with a recommended
   default the tasks build until ruled.
 
 ## Carried constraints
 
 - #1116's content has merged as #1139 (`f0e873c5d`); #1116 is closed. Before T2b, T2d, T2f or T3e dispatches, their
   hunks are re-measured against `main`.
-- B5 carries R12's two items; T2b carries R13's two items.
+- B5 carries R12's two items and R31's F1 to F3; T2b carries R13's two items; B2 carries R29's F1 and F2 and review
+  841's notes for B2 (resume only through `submit` or `submitEnter`, with ownership proven as `resumeIfOwn` proves it,
+  and a second caller of `watchSubmit` consumes `unseenAfterRead`).
+- T2g carries R32's F3 to F7 and F9; T5a carries R30's F1 to F5 (text only); T2d's Files gain `Rail.tsx` and one print
+  cap (R32's F1 and F8); C3 carries R33's F9 (the `watch.ts` log line); B2, B5, T2c, T2d, T2g and T5a carry theirs in
+  the plan's text too; T2c's gauge row shares the row under Refined's bar with T2a's update line (R27).
 - T3b carries R21's F2 (a needs-you row's state word on the context line, or a wrapping name, in Instrument's 340 px
-  column); T2f carries R21's F7 (the `headChrome` and `chrome` docs name Instrument's `ListColumn` too).
+  column), and R32's F2 (a two-line row with no context is 53 px); T2g carries R21's F7, moved from T2f (R28) (the `headChrome` and `chrome` docs name Instrument's `ListColumn` too).
 - Landing order within Step 1: T1a, then T1b (R23's F5), then T1c.
 - T2c carries R18's F1 to F6, S5a's minor findings on the strip it sorts next: the strip's "two columns" comment says
   four from 700 px (F1); `CompactGauges`' `grid` doc and `FleetScreen`'s phone-head comment are corrected or the arm
@@ -219,11 +294,13 @@ pressed in the console") and the slow first open of a new session. One task is o
 
 ## Next-wave brief
 
-As the fleet's caps allow (the concurrency cap and the daily cap, R25), and only once a task's files are free of other
-claims (R20): review run 834 (S18) first, then C10 (823); B3 (785), C1 (803) and C2 (820) when B1 has merged; C5 (821)
-and C6 (822) when T1b has; T3f (800) when T2e has; T2c (802) when T1b has; S5b after T2c and T2a; then C3 and C4 after
-C1, C8 after C6, C9 after C6 and C8, C7 after C6, C8 and T1c. Each brief names the plan path, its task, the number it defines, the
-execution skill (superpowers:subagent-driven-development with superpowers:test-driven-development), the routing row (a
-worker on a spec'd plan), and the branch rule: commit on this workspace's own branch, never a separate feature branch.
-Step 1's T1c dispatches when T1b has merged; T2b, T2d and T2f now that #1139 has merged, once their hunks are
-re-measured (T2a is dispatched, R22); B5 when T1a has merged (B4 has); B2 when B1 has.
+As the fleet's caps allow (the concurrency cap and the daily cap), and only once a task's files are free of other
+claims: T1b (783, R34) and T2a (831, R33) are in fix rounds; C10 (823), B3 (785), C1 (803), C2 (820) and B2 (869) are
+dispatched. When T1a has merged: B5 (a new run, carrying R12 and R31). When T2e has merged: T2g (a new run, carrying
+R32's F3 to F7 and F9) and T3f (800). When #1158 and this ledger PR have merged: T5a (a new run, carrying R30). When
+T1b has merged: T1c, C5 (821), C6 (822) and T2c (802). S5b after T2c and T2a; C3 (carrying R33's F9) and C4 after C1;
+C8 after C6; C9 after C6 and C8; C7 after C6, C8 and T1c; T2b when Step 1 has merged, T2d when Step 1 and T2e have,
+and T2f when T2d and T2g have, each once its hunks are re-measured on `main`. Each brief names the plan path, its
+task, the number it defines, the execution skill (superpowers:subagent-driven-development with
+superpowers:test-driven-development), the routing row (a worker on a spec'd plan), and the branch rule: commit on this
+workspace's own branch, never a separate feature branch.

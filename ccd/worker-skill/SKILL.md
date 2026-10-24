@@ -49,10 +49,10 @@ infer your own id from the brief's text. The pane is the source.
 
 ## The contract
 
-These seventeen clauses are the boundary between "a wave worker" and "an agent with
+These eighteen clauses are the boundary between "a wave worker" and "an agent with
 a shell on the fleet host". They are not advice.
 
-**Editing note (D-104):** these seventeen lines are pinned verbatim by
+**Editing note (D-104):** these eighteen lines are pinned verbatim by
 `server/test/worker-skill.test.ts`, whose clause literals are double-quoted.
 Keep every apostrophe STRAIGHT — a curly one is a different byte and reds the
 pin without looking like an edit — and keep double-quote characters out of a
@@ -76,6 +76,7 @@ clause, where they would have to be escaped on the other side, except the
 15. Your wave-done body opens with two signal lines the server parses, before any prose and before the fingerprint: `suite: green|red|unrun` says whether the whole suite passed on its FIRST full run after this wave's implementation was complete (red stays red however many fix rounds followed; unrun when no full run happened), and, only when a check failed, `failure: shallow|ceiling|unclear` names the kind — shallow for tests missed or a plan half-followed, ceiling for an ambiguity you could not resolve, a design flaw or a debug that survived two attempts, unclear otherwise. The suite line is never omitted.
 16. Absorb `origin/main` into this branch only on one of three triggers, each read after one `git fetch origin`: your own probe `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its first line (the branch conflicts; exit 0 is clean, and any other answer is unmeasured and licenses nothing); a required check on your PR is red while main passes the same tests, measured by re-running its failing test files on a clean checkout of `origin/HEAD` in scratch; or a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository. The first two license at most one absorption per PR — a second occurrence before the first absorption lands is not a second license — and the third arrives on the `merging → working` edge, after which you absorb, re-gate and send a fresh `wave-done`. Absorb with `git merge` only: never a rebase, a force-push or `update-branch` by any route, including `gh api -X PUT`. Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`. Never hand-resolve a generated stamp: on a conflict in a `# ccrc:generated` line such as `ccd/ccd`'s line 2, take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`. A red that main also shows is reported once as `main-red` and left alone. Keep no local `main`: read `origin/HEAD`, fetched once.
 17. End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent or workflow you launched from your main thread yourself that has not yet reported, or a structured ask. A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.
+18. A workflow script, a subagent brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree.
 
 **Clause 2 is the one that decides whether this wave can close at all.** The
 ordinary per-PR convention elsewhere in this codebase — "cut a fresh
