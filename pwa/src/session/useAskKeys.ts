@@ -21,10 +21,13 @@
 //   last question, and a question after ← from the review: the focused row unmounted with its screen, and without this
 //   the keyboard would be dead until a click. The engagement belongs to the ask's identity (`DialogSheet`'s `askIdentity`),
 //   not to a hook instance and not to the card's mount: it ends when the identity changes or goes (even when the card
-//   stays mounted and the clear and the new ask arrive in one batch), and on a deliberate move out of the card (a
-//   pointerdown or a focusin outside it: the composer, the transcript, the fleet column, the body). With it not engaged
-//   (an ask arriving beside the composer, a successor ask, a skin switch, a reconnect) focus moves not at all, and enters
-//   the card only through `raise` (`AskSurface`), a Tab or a click. Two known gaps, kept plain: a surface that is not the
+//   stays mounted and the clear and the new ask arrive in one batch, and for good: the ask that comes back later with
+//   equal content starts unengaged), and on a deliberate move out of the card (a pointerdown or a focusin outside it: the
+//   composer, the transcript, the fleet column, the body). With it not engaged (an ask arriving beside the composer, a
+//   successor ask, a skin switch) focus moves not at all, and enters the card only through `raise` (`AskSurface`), a Tab
+//   or a click. A reconnect does not disengage: the held gap keeps the same `askIdentity`, so the engagement of the SAME
+//   ask stands; it never takes focus from outside the card, and may move focus from the body, or from within the card, to
+//   a repainted screen's highlighted row. Two known gaps, kept plain: a surface that is not the
 //   hook's envelope (a menu, the transcript's copy, an unreadable ask, the terminal) has the pane dialog's id for its
 //   identity, which changes per screen, so a transcript-copy question's own review is a new identity and does not keep
 //   the engagement; and a clear followed by a byte-identical envelope in ONE batch keeps one identity.
@@ -64,19 +67,20 @@ export interface AskEngagement {
 /**
  * The ONE owner of the inline engagement (D-6326, R64). `identity` is the ask's (`DialogSheet`'s `askIdentity`): the hook's
  * envelope for every question and the review of it, else the pane dialog's id; null when nothing is asked. It holds the
- * identity engaged, compared at read time, so a different identity (even one that arrives in the same batch as the
- * clear) is simply not engaged. It lets go when the identity goes (a later ask with equal content starts unengaged) and
- * on deliberate movement out of the card. Focus that falls to the body because the focused row unmounted fires neither
+ * identity engaged and lets go, in one layout effect, as soon as the identity is any other (a replacement, a clear, even
+ * in the same batch), so an ask that comes back later with equal content starts unengaged. It also lets go on deliberate
+ * movement out of the card. Focus that falls to the body because the focused row unmounted fires neither
  * event, so that case stays engaged: it is the one continuation.
  */
 export function useAskEngagement(identity: string | null): AskEngagement {
   const held = useRef<string | null>(null);
   const now = useRef<string | null>(identity);
+  // ONE release: whenever the identity is not the one engaged (a different ask, a replacement, a clear), the engagement is
+  // gone for good, in the commit that shows the new identity and before any focus timer reads it. Comparing at read time
+  // instead would let a replaced ask regain it when byte-identical content came back (A -> B -> A, no clear between).
   useLayoutEffect(() => {
     now.current = identity;
-  });
-  useEffect(() => {
-    if (identity === null) held.current = null;
+    if (held.current !== identity) held.current = null;
   }, [identity]);
   useEffect(() => {
     const away = (e: Event): void => {
@@ -91,7 +95,7 @@ export function useAskEngagement(identity: string | null): AskEngagement {
     };
   }, []);
   const [owner] = useState<AskEngagement>(() => ({
-    engaged: () => held.current !== null && held.current === now.current,
+    engaged: () => held.current !== null,
     engage: () => {
       held.current = now.current;
     },
@@ -169,6 +173,9 @@ export function useAskKeys(opts: AskKeysOptions): AskKeys {
         const at = document.activeElement;
         const lost = at === null || at === document.body || at === document.documentElement;
         if (!latest.current.opts.engagement?.engaged() || !(lost || scope.contains(at))) return;
+      } else if (!finePointer() && !engaged.current) {
+        // The phone path is exactly as it was: the shared (inline) engagement lets the effect run, never a Sheet's row.
+        return;
       }
       els.current.get(key)?.focus({ preventScroll: true });
     }, FOCUS_DELAY_MS);
