@@ -5695,7 +5695,7 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     const home = gateBox('ccrc-update-gate-knob-', 'server');
     const r = runUpdate(home, [], { CCRC_UPDATE_HEALTH_S: 'soon' });
     expect(r.code, r.stdout).toBe(0);
-    expect(r.stdout).toMatch(/^update: WARN: CCRC_UPDATE_HEALTH_S='soon' is not a number of seconds — using 90$/m);
+    expect(r.stdout).toMatch(/^update: WARN: CCRC_UPDATE_HEALTH_S='soon' is not a number of seconds \(digits only, at most 18\) — using 90$/m);
   });
 
   // THE ARMS, SOURCED. `ccrc` recomputes CCD_OS from $OSTYPE at source time
@@ -15300,6 +15300,24 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
         + 'does not take (it reads only a plain KEY=value line) — using 90');
       expect(r.code, 'still waiting at 5 s').toBe(124);
     }, 20_000);
+
+    // D-6747 (fix round 1, F6): digits the shell's integer test cannot compare (more than 18) are an unusable value, from the
+    // file and from the environment alike: the gate WARNs and waits 90, never failing at its first probe. The probe moves the
+    // shell's clock 30 s and `sleep` returns at once, so the window the gate used is the second count it reports.
+    for (const big of ['9223372036854775808', '99999999999999999999']) {
+      for (const from of ['ccrc.env', 'the environment'] as const) {
+        it(`W24-H2: CCRC_UPDATE_HEALTH_S=${big} from ${from} waits 90 and says so (D-6747)`, () => {
+          const home = boxWith('ccrc-fx-w24-h2-', from === 'ccrc.env' ? `CCRC_UPDATE_HEALTH_S=${big}\n` : 'CCRC_ROLE=both\n');
+          const r = bareSourced(home, 'sleep() { :; }; _upd_gate_probe() { SECONDS=$((SECONDS + 30)); UPD_GATE_WHY="fixture: never up"; '
+            + 'return 1; }; _upd_gate server v2.0.0', from === 'ccrc.env' ? [] : [`CCRC_UPDATE_HEALTH_S=${big}`], ['timeout', '10']);
+          expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+          const out = r.stdout.split('\n');
+          expect(out).toContain(`update: WARN: CCRC_UPDATE_HEALTH_S='${big}' is not a number of seconds (digits only, at most 18) — using 90`);
+          expect(out).toContain('update: gate FAILED after 90s — fixture: never up');
+          expect(r.stderr).not.toContain('integer expression expected');
+        });
+      }
+    }
 
     // ── Task 4 (D-6594): the release mirror is a setting. The rollout pin's twin (the deploying machine's base) has no row here:
     // no harness in this file reaches `cmd_rollout`'s pin without a real box, and W24-U2 holds `_upd_resolve`'s refusal it runs.

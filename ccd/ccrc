@@ -21347,7 +21347,9 @@ _upd_gate_probe() {   # <role> <version> -> 0 pass, 1 fail; UPD_GATE_WHY
 # writer of the `checking` phase. The window is read through `_ccrc_knob`, the
 # environment else ccrc.env (D-6593), so a console-driven run and the
 # watchdog's rollback wait what the operator set; a line the reader refuses
-# WARNs and waits 90, as a value that is not digits does. Never a refusal: the
+# WARNs and waits 90, as a value that is not digits does, and one of more than
+# 18 digits, which the shell's integer test cannot compare (D-6747): ruling 6's
+# zero and no range hold for every value it can. Never a refusal: the
 # gate runs after the install, so refusing cannot undo it, and a rollback's
 # gate must still judge the box. Never a shorter wait: a short window reads a
 # slow but healthy box as failed and restores it.
@@ -21355,8 +21357,8 @@ _upd_gate() {   # <role> <version> -> 0 at the first pass, 1 when the window end
   local role="${1:-both}" want="$2" limit start
   _ccrc_knob CCRC_UPDATE_HEALTH_S 90 && limit="$KNOB" || { echo "update: WARN: $KNOB_WHY — using 90"; limit=90; }
   case "$limit" in
-    ''|*[!0-9]*)
-      echo "update: WARN: CCRC_UPDATE_HEALTH_S='${limit//[![:print:]]/?}' is not a number of seconds — using 90"
+    ''|*[!0-9]*|???????????????????*)
+      echo "update: WARN: CCRC_UPDATE_HEALTH_S='${limit//[![:print:]]/?}' is not a number of seconds (digits only, at most 18) — using 90"
       limit=90 ;;
   esac
   _upd_phase checking
