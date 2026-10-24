@@ -512,6 +512,46 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
   });
 });
 
+// R64 (review of Task A): the phone's per-hook `engaged` is the phone's alone. `DialogSheet`'s own hook outlives a crossing
+// below 900 and an ask's end, so an INLINE key must leave it untouched, or a later review in the sheet is focused.
+describe('the phone path is its own after an inline engagement (R64)', () => {
+  it('a key in the inline review at a coarse pointer, the ask ending and a crossing below 900 leave the next review in the Sheet unfocused', async () => {
+    // Premises: the desk width with a COARSE pointer; an arrow in the inline review engages the keyboard; that ask clears;
+    // the window crosses below 900; the next review opens in the Sheet. The phone rule (coarse pointer, no key handled in
+    // THE SHEET) moves no focus onto a row, as it never did before the inline card.
+    let desk = true;
+    const listeners = new Set<() => void>();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      get matches(): boolean { return q.includes('min-width: 900px') ? desk : false; },
+      media: q, onchange: null,
+      addEventListener(_t: string, l: () => void) { listeners.add(l); },
+      removeEventListener(_t: string, l: () => void) { listeners.delete(l); },
+      addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(8);
+    const submit = opt(card(), /^Submit answers/);
+    act(() => submit.focus());
+    key(submit, 'ArrowDown');
+    expect(card().contains(document.activeElement), 'premise: the arrow engaged the keyboard inside the card').toBe(true);
+    act(() => {
+      store.getState().apply({ type: 'ask_cleared' });
+      store.getState().apply({ type: 'dialog_cleared' });
+    });
+    await frame();
+    expect(cards(), 'premise: the card left with its ask').toHaveLength(0);
+    desk = false;
+    act(() => { for (const l of [...listeners]) l(); });
+    arrive(8);
+    await frame();
+    expect(cards(), 'premise: no inline card below 900').toHaveLength(0);
+    const sheet = dialogs()[0]!;
+    const rows = [opt(sheet, /^Submit answers/), opt(sheet, /^Cancel/)];
+    expect(rows.includes(document.activeElement as HTMLElement), 'the Sheet\'s review row took focus from an inline key').toBe(false);
+  });
+});
+
 describe('the transcript stops repeating the ask the card already shows', () => {
   it('the transcript\'s live ask card shows \'Waiting for you, below\' and no Answer while the inline card is mounted, and Answer below 900', () => {
     const live = (): HTMLElement => document.querySelector<HTMLElement>('.tool-ask .ask-state')!;
