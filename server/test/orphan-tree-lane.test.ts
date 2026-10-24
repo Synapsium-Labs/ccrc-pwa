@@ -14,7 +14,7 @@ const HOUR = ORPHAN_LICENCE_MS;
 const hexOf = (p: string): string => Buffer.from(p).toString('hex');
 const tok = (c: string): string => c.repeat(64);
 
-interface Tree { cls: string; audit: Record<string, unknown>; inside?: string | null }
+interface Tree { cls: string; audit: Record<string, unknown>; inside?: string | null; insideMain?: boolean }
 const clean = (c: string): Record<string, unknown> => ({ verdict: 'token', refusal: null, detail: '', token: tok(c), rescueToken: null });
 const refused = (word: string, detail = ''): Record<string, unknown> => ({ verdict: 'refused', refusal: word, detail, token: null, rescueToken: null });
 const rung11 = (c: string): Record<string, unknown> => ({ verdict: 'refused', refusal: 'nested-checkout', detail: 'a loose fixture repository', token: null, rescueToken: tok(c) });
@@ -37,7 +37,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
       const a = [...argv];
       calls.push(a);
       if (a[0] === 'ws-audit' && a[1] === '--orphans') {
-        return ok(JSON.stringify({ mode: 'orphans', truncated, rows: [...trees].map(([hex, t]) => ({ pathHex: hex, class: t.cls, ...(t.inside === undefined ? {} : { inside: t.inside }) })) }));
+        return ok(JSON.stringify({ mode: 'orphans', truncated, rows: [...trees].map(([hex, t]) => ({ pathHex: hex, class: t.cls, ...(t.inside === undefined ? {} : { inside: t.inside }), ...(t.insideMain === undefined ? {} : { insideMain: t.insideMain }) })) }));
       }
       if (a[0] === 'ws-audit' && a[1] === '--orphan-hex') {
         const t = trees.get(a[2]!)!;
@@ -66,7 +66,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
     advance: (ms: number): void => { mono += ms; },
     truncate: (v: boolean): void => { truncated = v; },
     coordinators, unreadable: (v: boolean): void => { coordsReadable = !v; },
-    addInside: (p: string, cls: string, audit: Record<string, unknown>, inside: string): string => { const h = hexOf(p); trees.set(h, { cls, audit, inside }); return h; },
+    addInside: (p: string, cls: string, audit: Record<string, unknown>, inside: string, insideMain?: boolean): string => { const h = hexOf(p); trees.set(h, { cls, audit, inside, ...(insideMain === undefined ? {} : { insideMain }) }); return h; },
   };
 }
 
@@ -329,6 +329,14 @@ describe('DR-23: trees nested inside a workspace', () => {
     expect(r.acts()).toHaveLength(1);
   });
 
+  it('a <main>/.claude/worktrees tree whose only containing row is a non-coordinator plain session in the main checkout is a candidate', async () => {
+    const r = rig(); armed(r);
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'demo-main', true);
+    await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toHaveLength(1);
+    expect(r.feed.filter((f) => f.body.includes('goes with its workspace'))).toHaveLength(0);
+  });
+
   it('inside a worker: reported once as going with its workspace, never audited or removed', async () => {
     const r = rig(); armed(r);
     r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'worker-a');
@@ -405,6 +413,12 @@ describe('DR-23: trees nested inside a workspace', () => {
     expect(parseOrphanCensus(row(null))).toMatchObject({ kind: 'census', rows: [{ inside: null }] });
     expect(parseOrphanCensus(row('lane-a'))).toMatchObject({ kind: 'census', rows: [{ inside: 'lane-a' }] });
     expect(parseOrphanCensus(row('../x'))).toEqual({ kind: 'unreadable' });
+    expect(parseOrphanCensus(row('a'.repeat(200)))).toMatchObject({ kind: 'census', rows: [{ inside: 'a'.repeat(200) }] });
+    expect(parseOrphanCensus(row('-x'))).toEqual({ kind: 'unreadable' });
+    const main = JSON.stringify({ mode: 'orphans', truncated: false, rows: [{ pathHex: '61', class: 'claude', inside: 'demo-main', insideMain: true }] });
+    expect(parseOrphanCensus(main)).toMatchObject({ kind: 'census', rows: [{ inside: null }] });
+    const bad = JSON.stringify({ mode: 'orphans', truncated: false, rows: [{ pathHex: '61', class: 'claude', inside: 'x', insideMain: 'yes' }] });
+    expect(parseOrphanCensus(bad)).toEqual({ kind: 'unreadable' });
     expect(parseOrphanCensus(row(7))).toEqual({ kind: 'unreadable' });
   });
 
