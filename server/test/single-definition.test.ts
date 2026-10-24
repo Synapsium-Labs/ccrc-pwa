@@ -487,6 +487,16 @@ describe('Build 7 nouns', () => {
   // is not here: this case reads `server/src/coord/store.ts` ALONE, never `ALL`
   // and never itself, and `ROOTS` (:33-38) does not include `server/test`. The
   // needles below can therefore be written whole.
+  it('spells the ack guard ONCE — ackableDeliverySql, never a second copy of its clauses (D-6777)', () => {
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    const CLAUSE = "AND ${prefix}rejectCode = 'undeliverable' AND ${prefix}lastError = ?";
+    const BUILDER = 'const ackableDeliverySql = ';
+    const EXCEPTION = "rejectCode = 'undeliverable' AND";
+    expect(store.split(CLAUSE).length - 1, 'the ack guard clause is not written exactly once').toBe(1);
+    expect(store.split(BUILDER).length - 1, 'the builder is not defined once').toBe(1);
+    expect(store.split(EXCEPTION).length - 1, 'a second spelling of the replay-ceiling exception').toBe(1);
+  });
+
   it('spells the abandonment predicate ONCE — the constant, never a second copy of its clauses', () => {
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
 
