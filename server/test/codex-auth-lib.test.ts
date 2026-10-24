@@ -2640,7 +2640,8 @@ describe.skipIf(!PY)('refresh_rejected: a refresh after the upstream refused a v
         '            done.wait(15)',
         'th = threading.Thread(target=holder, daemon=True)',
         'th.start()',
-        'taken.wait(5)',
+        'if not taken.wait(5):',
+        '    sys.exit("the holder never took the locks")',
         'for d in args[:2]:',
         '    t0 = time.monotonic()',
         '    res = call(mod.refresh_rejected, d, args[2], lane="lane-a")',
@@ -2781,7 +2782,8 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
       '        done.wait(10)',
       'th = threading.Thread(target=holder, daemon=True)',
       'th.start()',
-      'taken.wait(5)',
+      'if not taken.wait(5):',
+      '    sys.exit("the holder never took the lock")',
       't0 = time.monotonic()',
       'res = mod.record_upstream(args[0], state="limit-paused", code="usage_limit_reached", request_id=None, wait_s=0.3)',
       'elapsed = time.monotonic() - t0',
@@ -2830,12 +2832,13 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
   it('a committed refresh keeps an upstream state, and the next ok clears it', async () => {
     const home = mkTmp('codex-auth-upstream-refresh-');
     const answer = issuedAnswer();
+    const codes: Record<string, string> = { 'limit-paused': 'usage_limit_reached', ineligible: 'usage_not_included' };
     for (const upstream of ['limit-paused', 'ineligible']) {
       const dir = join(home, `lane-${upstream}`);
       const t = plantBackendCredential(dir);
-      plantStatus(dir, { state: upstream, lastErrorCode: 'usage_limit_reached', lastRequestId: 'req-fixture-up-11' });
+      plantStatus(dir, { state: upstream, lastErrorCode: codes[upstream], lastRequestId: 'req-fixture-up-11' });
       // A token refresh says nothing about the account's quota or eligibility: the state the bridge recorded stays,
-      // and only the refresher's own fields change.
+      // with the upstream answer's code and request id (spec §2.4), and only the refresher's own fields change.
       await withAuth({ token: [{ status: 200, body: answer, headers: { 'x-request-id': 'req-fixture-refresh-3' } }] },
         async (srv) => {
           const lines = await libLines(home, [
@@ -2848,7 +2851,7 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
         });
       const st = statusOf(dir);
       expect(st, upstream).toMatchObject({
-        state: upstream, lastErrorCode: null, lastRequestId: 'req-fixture-refresh-3', unsaved: false,
+        state: upstream, lastErrorCode: codes[upstream], lastRequestId: 'req-fixture-up-11', unsaved: false,
       });
       expect(typeof st.lastRefreshAt, upstream).toBe('number');
       expect(statusIdentity(statusText(dir)), 'bound to the new file').toEqual(fileIdentity(dir));
@@ -2856,6 +2859,51 @@ describe.skipIf(!PY)('record_upstream: the upstream\'s state in the status file 
         'out(mod.record_upstream(args[0], state="ok", code=None, request_id="req-fixture-up-12"))',
       ], { args: [dir] }))[0]).toBe(true);
       expect(statusOf(dir), upstream).toMatchObject({ state: 'ok', lastErrorCode: null, lastRequestId: 'req-fixture-up-12' });
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    }
+  });
+
+  it('a refresh whose commit lands later keeps an upstream state too', async () => {
+    const home = mkTmp('codex-auth-upstream-unsaved-');
+    const codes: Record<string, string> = { 'limit-paused': 'usage_limit_reached', ineligible: 'usage_not_included' };
+    for (const upstream of ['limit-paused', 'ineligible']) {
+      const dir = join(home, `lane-${upstream}`);
+      const t = plantBackendCredential(dir);
+      const old = readFileSync(credPath(dir), 'utf8');
+      plantStatus(dir, { state: upstream, lastErrorCode: codes[upstream], lastRequestId: 'req-fixture-up-13' });
+      const answer = issuedAnswer();
+      const barrier = join(home, `checked-${upstream}`);
+      // The first checkpoint write meets a full disk, so the refresh is held unsaved, bound to the old file; the
+      // driver then waits while the case reads the status, and a held retry (`retry_unsaved`) lands the record.
+      let mid: Record<string, any> = {};
+      let fileMid = '';
+      await withAuth({ token: [{ status: 200, body: answer, headers: { 'x-request-id': 'req-fixture-refresh-4' } }] },
+        async (srv) => {
+          const r = await runFresh(home, dir, srv.base, [
+            { op: 'ensure_fresh', withinS: 7200 }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'held-retry' },
+          ], { faults: ['enospc-writes:1'] }, {
+            onLine: (l) => {
+              if (l.op !== 'ensure_fresh' || existsSync(barrier)) return;
+              mid = statusOf(dir);
+              fileMid = readFileSync(credPath(dir), 'utf8');
+              writeFileSync(barrier, '');
+            },
+          });
+          expect(r.status, r.stderr).toBe(0);
+          expect(r.lines[0], upstream).toMatchObject({ credential: 'present', access_token: (answer.access_token as string).length });
+          expect(r.lines[2], upstream).toMatchObject({ result: 'written' });
+          expect(srv.requests, upstream).toHaveLength(1);
+        });
+      expect(fileMid, 'the commit could not write: the old file stood').toBe(old);
+      expect(mid, upstream).toMatchObject({
+        state: upstream, lastErrorCode: codes[upstream], lastRequestId: 'req-fixture-up-13', unsaved: true,
+      });
+      expect(fileRecord(dir), 'the record landed').toMatchObject({ access_token: answer.access_token });
+      expect(statusOf(dir), upstream).toMatchObject({
+        state: upstream, lastErrorCode: codes[upstream], lastRequestId: 'req-fixture-up-13', unsaved: false,
+      });
+      expect(typeof statusOf(dir).lastRefreshAt, upstream).toBe('number');
+      expect(statusIdentity(statusText(dir)), 'bound to the landed file').toEqual(fileIdentity(dir));
       expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
     }
   });
