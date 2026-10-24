@@ -18,8 +18,11 @@
 #            holds exactly the tarball and SHA256SUMS, each a regular file,
 #            that the tarball hashes to the digest the build job recorded and
 #            that SHA256SUMS is byte-identical to the one line that digest
-#            makes. It never opens the tarball: the write side decodes nothing
-#            it received (D-6657). Only once every check has passed does it
+#            makes. It never opens the tarball: it reads it as opaque bytes,
+#            for the digest and the copy (D-6657). On the write side the only
+#            decoder of what the build sent is the download action's
+#            extractor of the hand-over, whose major confines every entry
+#            under --in (D-6726). Only once every check has passed does it
 #            write into --out — the tarball, copied, and a SHA256SUMS written
 #            from the digest — so a refusal leaves --out as it was.
 #

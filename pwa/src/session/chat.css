@@ -991,6 +991,12 @@ button.metachip:active {
 .dlg-later:active {
   color: var(--ink-primary);
 }
+/* Deny is disabled while the connection is not live (the reconnect gap), and a disabled control looks it: the ink the
+   own-words Send and the tab chips take (`.dlg-reply-send:disabled`, `.ask-tab:disabled`), and no pointer. */
+.dlg-later:disabled {
+  color: var(--ink-tertiary);
+  cursor: default;
+}
 
 /* ------------------------------------------------------------------ *
  *  Dialog sheet — the TUI menu gone native. Option rows carry the     *
@@ -1008,10 +1014,12 @@ button.metachip:active {
  *  through its trailing/body slots (`.opt-inert`, `.opt-degraded`,     *
  *  `.opt-wait` — and `.opt-wait` is also worn by the approval sheet's  *
  *  Allow/Deny buttons, which are not option rows at all).              *
+ *                                                                     *
+ *  `.opts` (the list the rows sit in) draws no rule of its own since   *
+ *  D-6325: each row carries its own bottom rule, so a rule above the   *
+ *  first and another where the `Other` field opens read as ruled      *
+ *  boxes between rows.                                                 *
  * ------------------------------------------------------------------ */
-.opts {
-  border-top: 1px solid var(--edge-subtle);
-}
 /* Which AskUserQuestion this is ("Revised fix") — rides the sheet eyebrow. */
 .dlg-header-chip {
   display: inline-block;
@@ -1023,6 +1031,16 @@ button.metachip:active {
   font: var(--weight-medium) var(--fs-2xs) / 1.4 var(--family-mono);
   letter-spacing: var(--ls-caps);
   text-transform: uppercase;
+}
+/* Who is asking, and the held line, in the sheet eyebrow's slot (AskParts.tsx's `AskHeader`, D-6325): each on a line
+   of its own and in normal case, where the eyebrow's own type is small caps. */
+.ask-who,
+.ask-held {
+  display: block;
+  margin-top: var(--sp-1);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
+  letter-spacing: normal;
+  text-transform: none;
 }
 /* An option's worked example, folded under its row (open on the preselected
    one). The toggle keeps a full touch target — this is a phone. */
@@ -1047,17 +1065,6 @@ button.metachip:active {
   white-space: pre;               /* ASCII art scrolls; it must not reflow */
   overflow-wrap: normal;
   font: var(--weight-regular) var(--fs-2xs) / var(--lh-mono) var(--family-mono);
-}
-/* The full question / preamble above the options. Scrolls if long so the
-   options stay reachable. */
-.dlg-body {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--ink-secondary);
-  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
-  padding: var(--sp-1) var(--sp-1) var(--sp-3);
-  max-height: 38vh;
-  overflow-y: auto;
 }
 /* Routing slice 6, Task 4: the active row on a field ccd's `.inert` names for
    this lane — the intended value still renders, but there is nothing a
@@ -1123,6 +1130,7 @@ button.metachip:active {
   min-width: 0;
   min-height: var(--tap-min);
   padding: var(--sp-2) var(--sp-3);
+  /* The field keeps its own edge (D-6325): "no ruled box between rows" is about the rows; this is a typeable field. */
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   background: var(--bg-well);
@@ -1187,22 +1195,6 @@ button.metachip:active {
 .dlg-reply-send[aria-busy='true'] { color: var(--status-busy-text); }
 .dlg-reply-wait i { background: currentColor; }
 .dlg-reply-send:not(:disabled):hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-.dlg-details-toggle {
-  margin-top: var(--sp-3);
-  width: 100%;
-  min-height: var(--tap-min);
-  border: none;
-  background: none;
-  color: var(--ink-secondary);
-  cursor: pointer;
-  transition: color var(--dur-fast) var(--curve-swift);
-}
-.dlg-details-toggle:hover { color: var(--accent); }
-
-/* Unparsed dialog — the raw pane in a well plus the terminal escape hatch. */
-.dlg-raw {
-  margin-bottom: var(--sp-4);
-}
 .dlg-actions {
   display: grid;
   gap: var(--sp-2);

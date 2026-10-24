@@ -168,6 +168,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the workspace rename verb granted without --session',
     codes: ['TS2322'],
   },
+  // FLEET DISK RETENTION DR-18 (D-6630), g20's shape for the orphan-worktree verb: enrolled on its confirmation token, so
+  // the narrowed grant is a compile error.
+  'g22-ws-orphan-without-expect.ts': {
+    what: 'the orphan-worktree verb granted without its confirmation token',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -390,6 +396,16 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(() => auditExecWhitelist(withCcd([['ws-collect', '--session']])))
       .toThrow(/only grantable with '--expect'/);
     expect(() => auditExecWhitelist(withCcd([['ws-collect', '--expect']]))).not.toThrow();
+  });
+
+  it('throws on a ws-orphan with no confirmation token, and grants the audit modes without one (D-6630)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-orphan']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-orphan', '--tree-hex']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-orphan', '--expect']]))).not.toThrow();
+    expect(() => auditExecWhitelist(withCcd([['ws-audit', '--orphans'], ['ws-audit', '--orphan-hex']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-orphan'), 'one ws-orphan grant, on its token').toEqual([['ws-orphan', '--expect']]);
   });
 
   // NAMED WORKSPACES S9: `ws-title` is enrolled for its ARGUMENT SURFACE (`route`'s reason), so the audit refuses the bare

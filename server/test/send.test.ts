@@ -897,6 +897,88 @@ describe('sendPrompt resumeIfOwn (F3 / bug #21)', () => {
   });
 });
 
+// D-6367: Retry's whole-box resume. A send refused with our own text left in the box (`verify-failed`, `enter-ignored`)
+// used to Retry into `draft-present`, because the server saw a non-empty box. `resumeIfOwn: 'whole'` reads the box WHOLE
+// (every visual row, wrapped lines and blank rows included) and presses Enter only when it renders the composed text:
+// equal up to whitespace, which wrapping moves and a blank row is (no non-space character added or removed, so one Enter
+// sends our own non-space characters and no second copy exists). It never types, and an empty box answers `nothing-to-submit` (a landed send can still have been answered
+// `enter-ignored`, so retyping would be a second copy).
+describe("sendPrompt resumeIfOwn: 'whole' (D-6367, Retry resumes our own text)", () => {
+  const RULE = '─'.repeat(60);
+  /** The box the way Claude Code draws it: the marker on row one, continuation rows indented, blank rows blank. */
+  const boxPane = (rows: string[]): string =>
+    ['earlier turn', RULE, `❯ ${rows[0]}`, ...rows.slice(1).map((r) => (r === '' ? '' : `  ${r}`)), RULE, '  👤 team·max'].join('\n') + '\n';
+  const EMPTY_BOX = boxPane(['']);
+  const deps = (tmux: Tmux) => ({ tmux, queue: new KeyedQueue(), sleep: noSleep });
+  const ENTER = ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'];
+
+  it('a resume over our own text, read whole, sends one Enter and types nothing', async () => {
+    const { tmux, calls } = fakeTmux([boxPane(['hello world']), EMPTY_BOX]);
+    const res = await sendPrompt(deps(tmux), 'x', 'hello world', { resumeIfOwn: 'whole' });
+    expect(res).toEqual({ ok: true });
+    // No `-l` literal send and exactly one Enter: the text was never retyped, only submitted.
+    expect(sendKeysCalls(calls)).toEqual([ENTER]);
+  });
+
+  it('a resume over our own wrapped two-paragraph text sends one Enter', async () => {
+    // The first paragraph wraps across two visual rows (Claude Code breaks at a space), then a blank row, then the
+    // second paragraph. Joined rows would read 'alpha …foxtrot\ngolf …' and differ from the composed text at the wrap.
+    const para1 = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike';
+    const para2 = 'second paragraph, short';
+    const { tmux, calls } = fakeTmux([
+      boxPane(['alpha bravo charlie delta echo foxtrot', 'golf hotel india juliet kilo lima mike', '', para2]),
+      EMPTY_BOX,
+    ]);
+    const res = await sendPrompt(deps(tmux), 'x', `${para1}\n\n${para2}`, { resumeIfOwn: 'whole' });
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([ENTER]);
+  });
+
+  it('a resume over a longer human draft with the same prefix is draft-present', async () => {
+    const ours = 'please review the latest diff of the module';
+    const theirs = `${ours} and also check the tests`;
+    const { tmux, calls } = fakeTmux([boxPane([theirs])]);
+    const res = await sendPrompt(deps(tmux), 'x', ours, { resumeIfOwn: 'whole' });
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: theirs });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('a resume over a draft that continues on later rows is draft-present', async () => {
+    const { tmux, calls } = fakeTmux([boxPane(['hello world', 'and a second line of the human'])]);
+    const res = await sendPrompt(deps(tmux), 'x', 'hello world', { resumeIfOwn: 'whole' });
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: 'hello world\nand a second line of the human' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('a resume over an empty box types nothing and answers nothing-to-submit', async () => {
+    const { tmux, calls } = fakeTmux([EMPTY_BOX]);
+    const res = await sendPrompt(deps(tmux), 'x', 'hello world', { resumeIfOwn: 'whole' });
+    expect(res).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('no resume field behaves as today', async () => {
+    // The pane of the first case, no resume: the box is non-empty, so the ordinary refusal.
+    const held = fakeTmux([boxPane(['hello world'])]);
+    expect(await sendPrompt(deps(held.tmux), 'x', 'hello world'))
+      .toEqual({ ok: false, error: 'draft-present', draft: 'hello world' });
+    expect(sendKeysCalls(held.calls)).toEqual([]);
+    // An empty box without resume types and submits.
+    const { tmux, box } = boxTmux();
+    expect(await sendPrompt(deps(tmux), 'x', 'hello world')).toEqual({ ok: true });
+    expect(box.submitted).toEqual([['hello world']]);
+  });
+
+  it('the prefix mode is still a different mode: `true` resumes a box that merely starts with our text', async () => {
+    // Pins that 'whole' did not widen or narrow `true`: the same longer-draft pane the 'whole' case refuses.
+    const ours = 'please review the latest diff of the module';
+    const { tmux, calls } = fakeTmux([boxPane([`${ours} and also check the tests`]), EMPTY_BOX]);
+    const res = await sendPrompt(deps(tmux), 'x', ours, { resumeIfOwn: true });
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([ENTER]);
+  });
+});
+
 // Blocking review finding (F3): the bespoke single-line fixtures above
 // ('hello world', 'ccrc-mail test payload') each have a distinctive marker
 // row, so they never exercised the shape that actually breaks —

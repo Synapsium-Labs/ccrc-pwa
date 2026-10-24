@@ -757,7 +757,7 @@ the local tag is dropped, nothing is attested, pushed or published, and one line
 job summary reads `built unchanged: <N> entries identical to vX.Y.Z`. Anything else releases, and the
 line names the first entry that differs, or why it could not compare; a merge that changes
 `release-main.yml` or `release-main.sh` always releases, so the comparer never approves its own change.
-The run is two jobs, and only the second holds a write credential. Everything above runs in a `build` job whose token can only read, whose checkout keeps no credential and which cannot mint the workflow's signing identity; where compare releases, it checks that the tarball's `build.json` names this tag and this commit, then hands the tarball and `SHA256SUMS` on as an artifact, with the tarball's digest; a decision the build job's step output loses fails the run, while a value dropped at the job boundary skips the `publish` job, an availability effect a hostile build already has. A `publish` job that installs nothing, runs no build script and never opens the tarball (the download action unzips the hand-over, at a major, `actions/download-artifact@v7`, whose extractor confines every entry under its directory, and `verify` refuses any extra entry) then re-derives the tag from its own checkout and refuses unless it matches the build's, the handed-over files are exactly those two, the tarball hashes to the recorded digest, and `SHA256SUMS` is exactly that one line (`release-main.sh receive`). Only then does `actions/attest-build-provenance` sign the tarball's digest with the workflow's own OIDC identity (keyless — the repo holds no signing secret), and `release-main.sh publish` push the tag and publish the tarball, `SHA256SUMS` and the bundle `ccrc-<tag>.tar.gz.sigstore.json` with `gh release create --verify-tag --prerelease`, deleting the tag again if the publish never completes (nothing reaches origin before that push). A merge whose build is unchanged never starts the `publish` job. A hand-pushed `vX.Y.0`/`vX.0.0` tag rides `release.yml` instead — the same two jobs and the same attest step, its identity at the tag — and the next merge derives past it. The tarball is the
+The run is two jobs, and only the second holds a write credential. Everything above runs in a `build` job whose token can only read, whose checkout keeps no credential and which cannot mint the workflow's signing identity; where compare releases, it checks that the tarball's `build.json` names this tag and this commit, then hands the tarball and `SHA256SUMS` on as an artifact, with the tarball's digest; a decision the build job's step output loses fails the run, while a value dropped at the job boundary skips the `publish` job, an availability effect a hostile build already has. A `publish` job that installs nothing, runs no build script and never opens the tarball (the download action, at a major, `actions/download-artifact@v8`, extracts the hand-over with an extractor that confines every entry under its directory, or writes a hand-over that is not a zip as one file in that directory, and `verify` refuses any extra entry) then re-derives the tag from its own checkout and refuses unless it matches the build's, the handed-over files are exactly those two, the tarball hashes to the recorded digest, and `SHA256SUMS` is exactly that one line (`release-main.sh receive`). Only then does `actions/attest-build-provenance` sign the tarball's digest with the workflow's own OIDC identity (keyless — the repo holds no signing secret), and `release-main.sh publish` push the tag and publish the tarball, `SHA256SUMS` and the bundle `ccrc-<tag>.tar.gz.sigstore.json` with `gh release create --verify-tag --prerelease`, deleting the tag again if the publish never completes (nothing reaches origin before that push). A merge whose build is unchanged never starts the `publish` job. A hand-pushed `vX.Y.0`/`vX.0.0` tag rides `release.yml` instead — the same two jobs and the same attest step, its identity at the tag — and the next merge derives past it. The tarball is the
 matched set — prebuilt dists, the three `package.json`+lock pairs, `shared/`, `ccd/`, the deploy units
 and helpers, `install.sh` — with a `MANIFEST` of per-file sha256 digests and a shipped `build.json`
 that carries the tag as `version` (`ccrc version` prints it; `/health` emits a sibling `version`;
@@ -3562,7 +3562,7 @@ Build 4 dogfood runbook, cross-repo programmes, and workspace holds.
 
 **All four skills ship to every rostered account's config dir.** The
 coordinator's protocol is now a trio: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, seventeen clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, eighteen clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
 `ccrc-reviewer` skill (`ccd/reviewer-skill/SKILL.md`, ten clauses pinned by
 `server/test/reviewer-skill.test.ts`), which reads a finished wave in its own
@@ -4180,10 +4180,10 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its seventeen
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its eighteen
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), seventeen clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), eighteen clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -5255,7 +5255,7 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   `server/test/session-hook-sync-advisory.test.ts`, the merge deny by
   `server/test/session-hook-merge-deny.test.ts`, the role-skill deny by
   `server/test/session-hook-role-skill-deny.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries seventeen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17), pinned verbatim: a
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries eighteen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17, the temp-root clause added 18), pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never

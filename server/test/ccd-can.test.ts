@@ -5,7 +5,7 @@
 // share first argv words across different tokens (`route` and `routeApply`), and a lane asks before any argv exists.
 import { describe, it, expect } from 'vitest';
 import {
-  ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CCD_ARGV, CCD_CAN, CHILD_ARGV_CAP, COLLECT_CAP, EXPIRE_CAP,
+  ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CCD_ARGV, CCD_CAN, CHILD_ARGV_CAP, COLLECT_CAP, EXPIRE_CAP, ORPHAN_CAP,
   HIBERNATE_HOLD_OK_CAP, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, SWAP_BUSY_CAP, ccdCan,
 } from '../src/ccdargv.js';
 import type { FleetState } from '../src/fleetstate.js';
@@ -33,6 +33,15 @@ describe('ccdCan(state, row) answers by the row\'s own token and default (D-5866
     expect(ccdCan(stateOf([EXPIRE_CAP]), 'wsExpire')).toBe(true);
     expect(ccdCan(stateOf([]), 'wsCollect')).toBe(false);
     expect(ccdCan(stateOf([COLLECT_CAP]), 'wsCollect')).toBe(true);
+  });
+
+  it('the orphan lane\'s three rows refuse on no evidence and answer by orphan-v1 alone (D-6630)', () => {
+    for (const row of ['wsOrphanCensus', 'wsOrphanAudit', 'wsOrphan'] as const) {
+      expect(ccdCan(undefined, row), row).toBe(false);
+      expect(ccdCan(stateOf(null), row), row).toBe(false);
+      expect(ccdCan(stateOf(['ws-orphan', 'ws-audit', COLLECT_CAP]), row), `${row}: the bare verb and another cap are not the token`).toBe(false);
+      expect(ccdCan(stateOf([ORPHAN_CAP]), row), row).toBe(true);
+    }
   });
 
   it('a permit row with the list present and the verb absent is false', () => {

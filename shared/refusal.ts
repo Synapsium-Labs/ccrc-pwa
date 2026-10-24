@@ -206,3 +206,16 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
   // words, both 409 as the spec names them, the family's conflict status.
   'attribution-required': 409, 'not-a-child': 409,
 };
+
+/** The `reject.code` words `POST /api/runs/:id/advance` answers (D-6733, audit ticket ARCH-33,
+ *  GitHub #550). They travel in a `reject` object, never an `error` key, so they are neither `RouteRefusal`s nor
+ *  `OpenRunConflict`s. `unknown-run` and `bad-session` are not `RunRefuseCode`s: the route sent them as bare literals. */
+export type AdvanceRejectCode = 'unknown-run' | 'bad-session'
+  | Extract<RunRefuseCode, 'bad-transition' | 'not-dispatched' | 'review-in-flight' | 'cap-concurrency'>;
+
+/** Each one's status, measured from the advance route's inline sends on landing day, never chosen: 404 for the one
+ *  absent run, 409 for every refusal of a run that exists. */
+export const ADVANCE_REJECT_STATUS: Readonly<Record<AdvanceRejectCode, number>> = {
+  'unknown-run': 404, 'bad-transition': 409, 'not-dispatched': 409, 'review-in-flight': 409,
+  'cap-concurrency': 409, 'bad-session': 409,
+};

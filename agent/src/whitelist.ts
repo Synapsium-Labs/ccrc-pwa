@@ -355,6 +355,7 @@ export const REQUIRED_VERB_FLAG = {
   'reclaim-pause': '--state', 'ws-expire': '--expect',
   'docs-index': '--all', 'docs-tree': '--project', 'docs-show': '--project', 'docs-fetch': '--project',
   'ws-collect': '--expect',
+  'ws-orphan': '--expect',
   'ws-title': '--session',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
@@ -621,6 +622,14 @@ export const EXEC_WHITELIST = {
     // confirmation token for ws-reclaim's reason, ENROLLED in `REQUIRED_VERB_FLAG` above (g20), and its audit rides
     // `['ws-audit','--session']`. ccd recomputes the token and compares it inside the reap lock before anything moves.
     ['ws-collect', '--expect'],
+    // THE ORPHAN LANE (fleet disk retention spec 2026-10-23 §2.3, D-6630). `ws-audit --orphans` is the read-only census of
+    // linked worktrees no registry row names; `ws-audit --orphan-hex` answers one tree's ladder and mints the token the act
+    // re-proves. Neither destroys anything, and neither is gated in `REQUIRED_VERB_FLAG` (`ws-audit` is not). `ws-orphan`
+    // IS destructive, so it is ENROLLED there on `--expect` (its confirmation token leads); `--rescue` and the dec trail.
+    // `ws-orphan` is not in `UNGRANTABLE_VERBS`: its only lawful form is the token-led one.
+    ['ws-audit', '--orphans'],
+    ['ws-audit', '--orphan-hex'],
+    ['ws-orphan', '--expect'],
     // RENAME AN EXISTING WORKSPACE (named workspaces S9, design 2026-10-20 §6): `ws-title --session <id> (--title <text>
     // | --clear)` writes a workspace's operator title and its `named` marker, or removes both, and nothing else — no
     // worktree, branch, transcript or session is touched. Granted on `--session` and ENROLLED in `REQUIRED_VERB_FLAG`

@@ -1458,27 +1458,87 @@ describe('release-main.sh: source pins', () => {
     expect(req).toEqual(['node:crypto', 'node:fs', 'node:path']);
     expect(s).toContain('fingerprint() { node -e "$FP_JS" "$1" | LC_ALL=C sort; }');
   });
-  it('W26-P1: receive runs no gh, no token, no builder, no install and no tar, verifies once, and shares compare\'s state writer (D-6656)', () => {
+  // W26-P1 scans each write-job arm's body AND the body of every function of
+  // release-main.sh that the arm calls, transitively, an unquoted `trap`
+  // handler included (review 886's F7): a helper the arm reaches runs in the
+  // write job too. A call is a defined name as a word in a body's code, which is
+  // the body with its comments and quoted text removed, keeping what a `$( … )`
+  // runs inside double quotes: so `trap cleanup EXIT` counts, and a name inside
+  // a message ("re-run prepare") does not. So a quoted handler
+  // (`trap 'cleanup' EXIT`), an `eval` string and a `bash -c` string are not
+  // followed. A one-line function (`die() { …; }`) is a body too. The
+  // assertions read the bodies as written, comments and strings included.
+  const defined = (): string[] => [...src().matchAll(/^([a-z_]+)\(\) \{/gm)].map((m) => m[1]!);
+  const bodyOf = (name: string): string =>
+    fn(name) || (new RegExp(`^${name}\\(\\) \\{ .*\\}$`, 'm').exec(src())?.[0] ?? '');
+  const shellCode = (text: string): string => {
+    let out = '';
+    const frames: { dq: boolean; depth: number }[] = [{ dq: false, depth: 0 }];
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i]!;
+      const top = frames[frames.length - 1]!;
+      if (c === '\\') { i++; continue; }
+      if (c === '$' && text[i + 1] === '(') { frames.push({ dq: false, depth: 0 }); out += ' '; i++; continue; }
+      if (top.dq) {
+        if (c === '"') frames.pop();
+        else if (c === '\n') out += c;
+        continue;
+      }
+      if (c === '"') { frames.push({ dq: true, depth: 0 }); continue; }
+      if (c === "'") { const j = text.indexOf("'", i + 1); i = j < 0 ? text.length : j; continue; }
+      if (c === '#' && (i === 0 || /\s/.test(text[i - 1]!))) { const j = text.indexOf('\n', i); i = j < 0 ? text.length : j - 1; continue; }
+      if (c === '(') top.depth++;
+      if (c === ')') {
+        if (top.depth > 0) top.depth--;
+        else if (frames.length > 1) { frames.pop(); out += ' '; continue; }
+      }
+      out += c;
+    }
+    return out;
+  };
+  const reached = (arm: string): string[] => {
+    const names = defined();
+    const seen = [arm];
+    for (let k = 0; k < seen.length; k++) {
+      const code = shellCode(bodyOf(seen[k]!).replace(/^[a-z_]+\(\) \{/, ''));
+      for (const n of names) if (!seen.includes(n) && new RegExp(`\\b${n}\\b`).test(code)) seen.push(n);
+    }
+    return seen;
+  };
+  it('W26-P1: the call closure reads calls, not words: a name in a message or a comment is not a call', () => {
+    expect(shellCode('a "x $(b "y" | c) z" # d\ne \'f\' "g"')).not.toMatch(/\b[dfgxyz]\b/);
+    expect(shellCode('a "x $(b "y" | c) z" # d\ne \'f\' "g"')).toMatch(/\ba\b[\s\S]*\bb\b[\s\S]*\bc\b[\s\S]*\be\b/);
+    expect(defined().length, 'release-main.sh\'s functions were not found').toBeGreaterThan(10);
+    for (const n of defined()) expect(bodyOf(n).length, `${n}'s body was not found`).toBeGreaterThan(20);
+  });
+  it('W26-P1: receive and every function it calls run no gh, no token, no builder, no install and no tar; receive verifies once, and shares compare\'s state writer (D-6656)', () => {
     const body = fn('receive');
     expect(body.length, 'receive\'s body was not found').toBeGreaterThan(200);
-    expect(body).not.toContain('gh ');
-    expect(body).not.toContain('GH_TOKEN');
-    expect(body).not.toContain('build-release');
-    expect(body).not.toContain('npm');
-    expect(body).not.toContain('tar ');
+    const closure = reached('receive');
+    expect(closure, 'receive\'s closure reaches its helpers').toEqual(expect.arrayContaining(['die', 'derive_tags', 'newest', 'record_release']));
+    const all = closure.map(bodyOf).join('\n');
+    expect(all).not.toContain('gh ');
+    expect(all).not.toContain('GH_TOKEN');
+    expect(all).not.toContain('build-release');
+    expect(all).not.toContain('npm');
+    expect(all).not.toContain('tar ');
     expect(body.match(/release-artifact\.sh" verify/g) ?? []).toHaveLength(1);
     expect(fn('record_release')).toContain("printf 'built true\\ntag %s\\nhead %s\\n'");
     expect(fn('compare')).toContain('record_release "$tag" "$head"');
     expect(body).toContain('record_release "$tag" "$head"');
   });
-  // D-6729 (review 871's F12): publish runs in the write job too, so it
-  // reaches no builder, no install and no tar either.
-  it('W26-P1: publish, the write job\'s other arm, runs no builder, no install and no tar', () => {
+  // D-6729 (review 871's F12): publish runs in the write job too, so neither
+  // it nor anything it calls, its `trap cleanup EXIT` handler included,
+  // reaches a builder, an install or tar.
+  it('W26-P1: publish, the write job\'s other arm, and every function it calls run no builder, no install and no tar', () => {
     const body = fn('publish');
     expect(body.length, 'publish\'s body was not found').toBeGreaterThan(200);
     expect(body).toContain('gh release create "$tag"');
-    expect(body).not.toContain('build-release');
-    expect(body).not.toContain('npm');
-    expect(body).not.toContain('tar ');
+    const closure = reached('publish');
+    expect(closure, 'publish\'s closure reaches its helpers and its trap handler').toEqual(expect.arrayContaining(['die', 'read_state', 'cleanup']));
+    const all = closure.map(bodyOf).join('\n');
+    expect(all).not.toContain('build-release');
+    expect(all).not.toContain('npm');
+    expect(all).not.toContain('tar ');
   });
 });

@@ -22,6 +22,7 @@ import {
 import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE, rosterKindOf } from '../../shared/roster.js';
 import { workspaceId } from '../../shared/slug.js';
+import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -100,7 +101,7 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
 import { noticeBanner, noticeSink, notifyPushOnly } from './notice.js';
@@ -1256,6 +1257,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The ranked held bytes (D-5943), composed by the expiry lane once per pass and read here ONCE. Absent before the
     // lane's first pass: absence reads as UNKNOWN, never as nothing held (`FleetHealth.archivedHeld`).
     const archivedHeld = watcher?.archivedHeld() ?? undefined;
+    // The disk alarm's block (D-6615), held by `sweepDisk`. Absent before its first sweep: absence reads as UNKNOWN.
+    const disk = watcher?.disk() ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       // The two stamps: with a coordination database, the inventory's rows —
       // re-measured every minute by `sweepInventory`, superseded rows excluded
@@ -1279,6 +1282,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         ...(lifecycle ? { lifecycle } : {}),
         ...(delegation ? { delegation } : {}),
         ...(archivedHeld ? { archivedHeld } : {}),
+        ...(disk ? { disk } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1301,6 +1305,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ...(lifecycle ? { lifecycle } : {}),
       ...(delegation ? { delegation } : {}),
       ...(archivedHeld ? { archivedHeld } : {}),
+      ...(disk ? { disk } : {}),
     };
   });
 
@@ -2002,6 +2007,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // ends inside a run that could begin a secret is held back until the next chunk or 6 ms (`DrawerMask`, D-5995).
     const drawerMask = (deps.masker ?? SHAPE_ONLY_MASKER).drawer((text) => socket.send(text));
     const sub = p.onData((data) => drawerMask.push(data));
+    const exitSub = p.onExit?.(() => socket.close(PTY_EXIT_CLOSE, 'pty-exit'));   // a drawer never sits open on a dead pty (D-6368)
     socket.on('message', (raw) => {
       try {
         const m = JSON.parse(String(raw)) as { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
@@ -2016,6 +2022,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
     socket.on('close', () => {
       sub.dispose();
+      exitSub?.dispose();
       drawerMask.dispose();
       p.kill();
       // Restore the canonical size ccd spawned with — a phone-sized drawer must
@@ -2149,7 +2156,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/prompt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown };
+    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown; resume?: unknown };
     const raw = Array.isArray(body.attachments) ? body.attachments : [];
     if (raw.length > MAX_ATTACHMENTS) {
       return reply.code(400).send({ ok: false, error: 'bad-attachment' });
@@ -2174,7 +2181,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.text !== 'string' || (body.text.length === 0 && attachments.length === 0)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const res = await sendPrompt(sendDeps, id, body.text, { onDraft: body.replaceDraft === true ? 'replace' : 'refuse', attachments });
+    // D-6367: Retry over our own left text. `resume === true` is this field's one reader; anything else is today's call.
+    const res = await sendPrompt(sendDeps, id, body.text, {
+      onDraft: body.replaceDraft === true ? 'replace' : 'refuse', attachments,
+      ...(body.resume === true ? { resumeIfOwn: 'whole' as const } : {}),
+    });
     if (!res.ok) console.warn(`ccrc-server: prompt ${id}: ${res.error} ${refusalShape(res)}`); // D-6366: countable, no text
     return res.ok ? res : reply.code(409).send(res);
   });
@@ -2763,7 +2774,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   /** ccd failed in a way no route maps to a refusal word: its stderr, at 502. One send for every caller. */
-  const ccd502 = (reply: FastifyReply, res: { stderr: string }) => reply.code(502).send({ ok: false, stderr: res.stderr });
+  const ccd502 = (reply: FastifyReply, res: { stderr: string }) => reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr) });
   const runCcdOr502 = async (reply: FastifyReply, argv: CcdArgv) => {
     const res = await deps.runCcd(argv);
     return res.ok ? { ok: true } : ccd502(reply, res);
@@ -3084,7 +3095,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     const res = await deps.runCcd(argv);
-    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr) });
     const measured = poolFor(await readProjectPools(
       deps.io,
       deps.cfg,
@@ -3754,7 +3765,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     // Through the per-session queue, so it serialises with every other write.
     const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));
-    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: r.stderr });
+    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(r.stderr) });
   });
 
   /**
@@ -3869,7 +3880,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // judgement. Through the per-session queue like the reap, so a purge
     // cannot interleave with another write to the same session.
     const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));
-    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: r.stderr });
+    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(r.stderr) });
   });
 
   app.post('/api/sessions/:id/hold', async (req, reply) => {
@@ -4027,7 +4038,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const res = await deps.runCcd(argv);
     const audit = parseAudit(res.stdout);
-    if (audit === null) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    if (audit === null) return reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr) });
     return audit;
   });
 
