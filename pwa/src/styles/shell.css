@@ -104,7 +104,10 @@
      so hiding what was then its only door there was the bug, not a feature.
      AccountsStrip now always renders a non-empty `.accounts-strip`, with a quiet
      placeholder body in that state, so this bar is never `:empty` and the old
-     auto-hide rule is gone. */
+     auto-hide rule is gone.
+
+     Both skins mount that strip here, as the lanes row: under the bar's line,
+     inside this header, every lane a card (T2c, D-6329). */
   .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
@@ -112,12 +115,14 @@
     border-bottom: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
   }
-  /* One gauge per account across the width. 260px is all a gauge needs now that
-     the name sits beside its windows rather than above them, so all four stay
-     side by side down to ~1100px of viewport; below that auto-fit drops to fewer
-     columns and the strip grows a row rather than truncating a readout. */
+  /* One card per account across the width, as many to a line as the width holds.
+     A card's floor is only what its name and two windows need now that the name
+     sits beside them rather than above them; below that floor the tracks drop to
+     fewer to a line and the row wraps onto another line rather than truncating a
+     readout. auto-fill, not auto-fit, so the tracks keep a card's width when the
+     last line holds fewer cards than the line. */
   .shell-accounts .accounts-strip {
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: var(--sp-2);
     margin: 0;
   }

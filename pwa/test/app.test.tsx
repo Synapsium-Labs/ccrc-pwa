@@ -438,10 +438,10 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
 
   // ONE ACCOUNTS STRIP PER WIDTH (W2 Global constraints, D-5678): the gate is split between `ShellFrame`'s
   // `desk &&` and `FleetColumn`'s `showAccounts={!desktop}`, so it is counted through App, in both skins.
-  // From W2 Task S4b Refined's bar places the compact gauges (`.accounts-compact`), the same readout in its bar form.
+  // The full strip is the only lane readout (T2c, D-6329): both desk bars mount it under their line, in the header.
   for (const skin of [REFINED, INSTRUMENT]) {
     for (const desk of [true, false]) {
-      it(`${skin}, ${desk ? 'desk' : 'phone'}: exactly one accounts strip, in ${desk ? 'the bar' : 'the fleet column'}`, () => {
+      it(`${skin}, ${desk ? 'desk' : 'phone'}: exactly one accounts strip, in ${desk ? 'the header' : 'the fleet column'}`, () => {
         vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
         vi.stubGlobal('matchMedia', (q: string) => ({
           matches: desk && q.includes('min-width: 900px'), media: q, onchange: null,
@@ -451,9 +451,9 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
           setSkin(skin);
           navigate('/');
           render(<App />);
-          // The full strip, or the compact gauges a bar places (Instrument's LED meters, W2 Task S9): one either way.
-          const strips = document.querySelectorAll('.accounts-strip, .accounts-compact');
+          const strips = document.querySelectorAll('.accounts-strip');
           expect(strips).toHaveLength(1);
+          expect(document.querySelectorAll('.accounts-compact')).toHaveLength(0);
           const bar = document.querySelector('header.shell-accounts');
           const fleet = screen.getByRole('region', { name: 'Fleet' });
           if (desk) {
