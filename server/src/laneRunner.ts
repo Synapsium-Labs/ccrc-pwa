@@ -33,10 +33,11 @@ export class LaneRunner {
       this.rows.set(r.name, r);
       // A lane starts due. A wall-clock lane has always started its stamp at 0; a monotonic clock reads small at
       // boot, so its stamp starts below any reading.
-      this.state.set(r.name, { stamp: r.clock === 'wall' ? 0 : Number.NEGATIVE_INFINITY, flight: null, again: null });
+      this.state.set(r.name, { stamp: this.neverRun(r), flight: null, again: null });
     }
   }
 
+  private neverRun(row: LaneRow): number { return row.clock === 'wall' && row.startsDue !== true ? 0 : Number.NEGATIVE_INFINITY; }
   private at(clock: LaneClock): number { return clock === 'mono' ? this.clocks.mono() : this.clocks.wall(); }
   private rowOf(name: string): LaneRow {
     const row = this.rows.get(name);
@@ -57,7 +58,7 @@ export class LaneRunner {
   stamp(name: string): void { this.stateOf(name).stamp = this.at(this.rowOf(name).clock); }
 
   /** The next `run` is due, whatever the clock says (`childMarkLeftListing` for the lifecycle lane). */
-  kick(name: string): void { this.stateOf(name).stamp = this.rowOf(name).clock === 'wall' ? 0 : Number.NEGATIVE_INFINITY; }
+  kick(name: string): void { this.stateOf(name).stamp = this.neverRun(this.rowOf(name)); }
 
   /** The post-gather re-stamp on the decision clock: a gather slower than the cadence throttles the next beat from
    *  the decision, not from the start. The lane's own pass counter stays the lane's. */
@@ -79,6 +80,19 @@ export class LaneRunner {
   run<T>(name: string, fn: () => Promise<T> | T, active = false): Promise<T | undefined> | null {
     if (!this.due(name, active)) return null;
     return this.start(name, fn, false);
+  }
+
+  /** The beat of a lane that is synchronous and whose caller may hand in the clock reading (`sweepDigest(now)`, the
+   *  claim pair, the daily prune): when the cadence has elapsed at `now` (default: the row's clock), stamps at `now` and
+   *  runs `fn` to its end, returning true; else false. A throw leaves the slot spent and reaches the caller. */
+  runSync(name: string, fn: () => void, now?: number): boolean {
+    const row = this.rowOf(name);
+    const st = this.stateOf(name);
+    const at = now ?? this.at(row.clock);
+    if (!(at - st.stamp >= row.cadenceMs)) return false;
+    st.stamp = at;
+    fn();
+    return true;
   }
 
   /** An on-demand run (no cadence check): joins a run in flight on a `join` or `join-rerun` row, else starts one.

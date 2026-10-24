@@ -33,7 +33,7 @@ import { MAIL_REPLAY_MS, STALL_LEVELS, WAVE_DONE_SUBJECT, type FleetSession } fr
 import { tmuxTarget } from '../../shared/tmux-target.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { callsIn, inlinedSourceOf, symbolOf } from './scan/symbols.js';
+import { callsIn, inlinedSourceOf, parsedFile, symbolOf } from './scan/symbols.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER, mailTurnModeOf } from '../src/turnidle.js';
 
@@ -939,7 +939,7 @@ describe('sweepStalls: wiring', () => {
     expect(lane).toBeGreaterThan(claims);
     expect(primed).toBeGreaterThan(lane);
     expect(src.match(/setInterval\(/g)).toHaveLength(2); expect(callsIn(symbolOf('server/src/watch.ts', 'createDelegationStallSampler')).filter((c) => c.callee === 'LANE_TIMERS.setInterval'), 'the lane sampler, by name').toHaveLength(1);   // D-5832: the tick's, and the delegation lane's stall sampler by name (unref'd; only tests call the lane's close(), so in production it lives for the process)
-    expect(src).toContain('export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;');
+    expect(parsedFile('server/src/laneSchedule.ts').bindings.filter((b) => b.name === 'STALL_SWEEP_MS').map((b) => b.init), 'the cadence now lives in the lane table, by reference (D-5862)').toEqual(['CLAIM_SWEEP_MS']);
   });
 });
 

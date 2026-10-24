@@ -461,7 +461,7 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'stopDoneSweep.ts', scope: 'stopDonePass', builder: 'hibernate', id: 'pop[0]!.id', origin: ['registry'], gate: ['registry-refused'], entry: STOP_DONE_POPULATION },
   { file: 'stopDoneSweep.ts', scope: 'stopDonePass', builder: 'hibernate', id: 'row.id', origin: ['registry'], gate: ['registry-refused', 'readSessionRecord'], entry: /\bconst fresh = await deps\.rowAtAct\(rec\);\s*if \(!fresh\.ok\) return/ },
   // watch.ts: the mail lane wakes a hibernated recipient only through a record the listing built (D-5242).
-  { file: 'watch.ts', scope: 'sweepMail', builder: 'ensure', id: 'd.toId', origin: ['stored', 'registry'], gate: ['registry-refused'], entry: /\bconst rec = records\.find\(\(r\) => r\.id === d\.toId\);[\s\S]*?if \(rec === undefined \|\| identity === null\) \{/ },
+  { file: 'watch.ts', scope: 'mailPass', builder: 'ensure', id: 'd.toId', origin: ['stored', 'registry'], gate: ['registry-refused'], entry: /\bconst rec = records\.find\(\(r\) => r\.id === d\.toId\);[\s\S]*?if \(rec === undefined \|\| identity === null\) \{/ },
   // watch.ts: the naming sweep's rows come from the listing, which never builds a refused name; the `entry` ties the
   // loop's `r` to `readRegistry`'s output.
   { file: 'watch.ts', scope: 'namesPass', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
