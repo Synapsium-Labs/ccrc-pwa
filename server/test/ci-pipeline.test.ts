@@ -1130,7 +1130,7 @@ describe('ci.yml: dependencies are installed once per run, and handed to the job
       expect(needs(job(id)), id).toEqual(['deps', 'select']);
       expect(jobKey(job(id), 'if'), id).toMatch(/^\$\{\{ !cancelled\(\) && /);
     }
-    expect(needs(job('node-floor'))).toEqual(['deps']);
+    expect(needs(job('node-floor'))).toEqual(['deps', 'select']); // select lends only its floor output (D-6771)
     expect(jobKey(job('node-floor'), 'if')).toBe('${{ !cancelled() }}');
     // The required legs stay needs-free (pinned above): they install themselves.
     for (const id of ['test', 'build-pwa', 'browser-pwa']) expect(needs(job(id)), id).toEqual([]);
