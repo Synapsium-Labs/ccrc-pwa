@@ -32,6 +32,8 @@ export const EXPIRE_LANE_LIVE_MARKER = 'expire-lane-live';
 /** `$REG/collect-lane-live`: the LEGACY arm of the collector's switch (Settings is the other arm). Kept: it still
  *  arms the lane while it stands and its latch is unset (spec K12). */
 export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
+/** `$REG/nested-rescue-live`: arms rung 9's rescue of a nested repository (D-6632); the server only shows what the arm would do. */
+export const NESTED_RESCUE_LIVE_MARKER = 'nested-rescue-live';
 /** `$REG/dead-coordinator-lane-live`: arms the dead-coordinator lane's act. */
 export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
 /** `$REG/idle-compact-nudge-disabled`: the idle-compaction nudge's kill switch. */
@@ -117,6 +119,11 @@ export const SWITCHES = {
   [DEAD_COORDINATOR_LANE_LIVE_MARKER]: {
     storage: { marker: DEAD_COORDINATOR_LANE_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would end',
     owner: 'C5', meaning: 'The dead-coordinator lane acts: a programme whose coordinator is gone is ended.',
+    writer: 'hand-only',
+  },
+  [NESTED_RESCUE_LIVE_MARKER]: {
+    storage: { marker: NESTED_RESCUE_LIVE_MARKER }, default: 'absent: shadow, a nested repository is refused and the audit names what the arm would rescue',
+    owner: 'C4', meaning: 'Rung 9 rescues a nested repository into the attic instead of refusing a tree that holds one.',
     writer: 'hand-only',
   },
   [IDLE_NUDGE_DISABLED_MARKER]: {

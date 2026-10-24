@@ -28,6 +28,8 @@ import {
   isChildReclaimKeptWord,
 } from '../../../shared/api.js';
 import { notify } from '../notice.js';
+import { recordNestedRescueShadow } from './nestedRescueShadow.js';
+import { nestedWouldRescueCount } from '../../../shared/nestedRescue.js';
 
 /**
  * CHILD-WORKSPACE RECLAMATION, the server half (spec 2026-09-22 §5.5–§5.7).
@@ -62,7 +64,7 @@ import { notify } from '../notice.js';
 export type ChildReclaimToken =
   | 'no-such-session' | 'not-a-workspace' | 'not-a-child' | 'paused' | 'held' | 'attached' | 'tree-busy'
   | 'branch-elsewhere' | 'tree-unreadable' | 'containment-unproven' | 'no-worktree-record' | 'state-changed'
-  | 'in-progress' | 'reap-in-progress';
+  | 'in-progress' | 'reap-in-progress' | 'nested-rescue-too-large' | 'nested-rescue-failed';
 
 /** What each word means to the server, spelled ONCE:
  *   - `gone`: the child is already not there. Never a feed row, never an
@@ -90,6 +92,8 @@ export const CHILD_RECLAIM_TOKEN_KIND: Readonly<Record<ChildReclaimToken, 'gone'
   'state-changed': 'retry',
   'in-progress': 'retry',
   'reap-in-progress': 'retry',
+  'nested-rescue-too-large': 'terminal',
+  'nested-rescue-failed': 'retry',
 };
 
 export function isChildReclaimToken(v: unknown): v is ChildReclaimToken {
@@ -262,13 +266,14 @@ export function childReclaimHasCoordinated(
 export type ChildReclaimDeferWhy =
   | 'presence' | 'siblings-open' | 'siblings-unreadable' | 'marker-unreadable' | 'marker-mismatch'
   | 'unsupported' | 'paused-at-server' | 'generation-changed'
-  | Extract<ChildReclaimToken, 'paused' | 'held' | 'attached' | 'tree-busy' | 'state-changed' | 'in-progress' | 'reap-in-progress'>;
+  | Extract<ChildReclaimToken, 'paused' | 'held' | 'attached' | 'tree-busy' | 'state-changed' | 'in-progress' | 'reap-in-progress'
+    | 'nested-rescue-failed'>;
 
 const CHILD_RECLAIM_DEFER_WHY: Readonly<Record<ChildReclaimDeferWhy, true>> = {
   presence: true, 'siblings-open': true, 'siblings-unreadable': true, 'marker-unreadable': true,
   'marker-mismatch': true, unsupported: true, 'paused-at-server': true, 'generation-changed': true,
   paused: true, held: true, attached: true, 'tree-busy': true, 'state-changed': true, 'in-progress': true,
-  'reap-in-progress': true,
+  'reap-in-progress': true, 'nested-rescue-failed': true,
 };
 /** The defer words as a runtime list (spec §5.7), derived from the table's keys and never listed again. */
 export const CHILD_RECLAIM_DEFER_WHYS = Object.keys(CHILD_RECLAIM_DEFER_WHY) as readonly ChildReclaimDeferWhy[];
@@ -751,7 +756,9 @@ export type ChildReclaimAuditGeneration =
 export type ChildReclaimAuditRead =
   | { readonly kind: 'token'; readonly token: string; readonly childOf: number;
       readonly generation: ChildReclaimAuditGeneration }
-  | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string }
+  | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string;
+      /** How many nested repositories the audit says the rescue arm would rescue (D-6633); absent when none. */
+      readonly wouldRescue?: number }
   | { readonly kind: 'unreadable'; readonly detail: string };
 
 /** The audit's own `unmeasured` answer, read off an exit-1 document (spec
@@ -816,7 +823,9 @@ export function parseChildReclaimAudit(sessionId: string, stdout: string): Child
     return { kind: 'token', token: v.token, childOf: v.childOf, generation: { kind: 'value', v: v.generation } };
   }
   if (isChildReclaimToken(v.verdict)) {
-    return { kind: 'refused', token: v.verdict, detail: typeof v.detail === 'string' ? v.detail : '' };
+    const wouldRescue = nestedWouldRescueCount(v);
+    return { kind: 'refused', token: v.verdict, detail: typeof v.detail === 'string' ? v.detail : '',
+      ...(wouldRescue > 0 ? { wouldRescue } : {}) };
   }
   return { kind: 'unreadable', detail: `ws-audit --reclaim answered a verdict this build does not know: ${String(v.verdict)}` };
 }
@@ -1192,7 +1201,11 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
     return { kind: 'failed', sessionId, runId, resume: audit.resume, detail: audit.detail,
       token: CHILD_RECLAIM_PROBE_UNMEASURED };
   }
-  if (audit.kind === 'refused') return childReclaimRefusal(req, audit.token, audit.detail);
+  if (audit.kind === 'refused') {
+    recordNestedRescueShadow(deps, { sessionId, runId, key: String(runId), who: `${sessionId}, child of run #${runId}`,
+      count: audit.wouldRescue ?? 0 });
+    return childReclaimRefusal(req, audit.token, audit.detail);
+  }
   if (audit.childOf !== runId) {
     return deferred('marker-mismatch', `ws-audit read the child marker as run ${audit.childOf}, not run ${runId}`);
   }

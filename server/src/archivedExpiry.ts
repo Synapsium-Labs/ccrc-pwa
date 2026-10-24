@@ -12,6 +12,7 @@
 //
 // EVERY UNCERTAIN ANSWER IS "NOT THIS PASS". The path these verdicts feed asks for a deletion with no human in it;
 // the executor re-reads, and ccd re-proves inside its lock at the instant of deletion. This file narrows the window.
+import { nestedWouldRescueCount } from '../../shared/nestedRescue.js';
 import {
   TERMINAL_RUN_STATES, leafKeptWord, type ArchivedHeld, type ArchivedHeldRow, type ChildMark, type ExpiryAttention,
   type LcRefusalToken, type LeafKeptWord, type RunState,
@@ -30,7 +31,8 @@ export { EXPIRE_LANE_LIVE_MARKER } from '../../shared/switches.js';
 export type ExpireToken =
   | 'no-such-session' | 'not-archived' | 'not-a-workspace' | 'branch-elsewhere' | 'tree-unreadable'
   | 'containment-unproven' | 'no-worktree-record' | 'not-expired' | 'child' | 'paused' | 'held' | 'attached'
-  | 'live' | 'in-use' | 'tree-busy' | 'state-changed' | 'in-progress' | 'reap-in-progress' | 'reclaim-in-progress';
+  | 'live' | 'in-use' | 'tree-busy' | 'state-changed' | 'in-progress' | 'reap-in-progress' | 'reclaim-in-progress'
+  | 'nested-rescue-too-large' | 'nested-rescue-failed';
 
 /** What each word means to the lane, spelled ONCE (wave 3's plan, "Wave 3b inherits", the words by kind):
  *   - `gone`: the row left the population — returned, re-archived from scratch, or removed. Drop it, no report.
@@ -58,6 +60,8 @@ export const EXPIRE_TOKEN_KIND: Readonly<Record<ExpireToken, 'gone' | 'terminal'
   'in-progress': 'retry',
   'reap-in-progress': 'retry',
   'reclaim-in-progress': 'retry',
+  'nested-rescue-too-large': 'terminal',
+  'nested-rescue-failed': 'retry',
 };
 
 /** `EXPIRE_TOKEN_KIND` read TOTALLY: the word's kind, or null for one this build was never compiled to know. */
@@ -147,6 +151,8 @@ export type ExpireAuditRead =
   | { readonly kind: 'unreadable'; readonly detail: string }
   | { readonly kind: 'document'; readonly archivedAt: number | null; readonly expiresAt: ExpiresAtRead;
       readonly sensitive: number; readonly inUse: readonly ExpireInUse[];
+      /** How many nested repositories the audit says the rescue arm would rescue (D-6633); absent when none. */
+      readonly nestedWouldRescue?: number;
       readonly verdict:
         | { readonly kind: 'expirable'; readonly token: string }
         | { readonly kind: 'refused'; readonly token: ExpireToken; readonly detail: string } };
@@ -168,8 +174,9 @@ export function parseExpireAudit(sessionId: string, ok: boolean, stdout: string)
   const inUse = Array.isArray(v.inUse) ? v.inUse.flatMap((u): ExpireInUse[] => (isRecord(u)
     && typeof u.pid === 'number' && Number.isSafeInteger(u.pid) && typeof u.comm === 'string' && typeof u.cwd === 'string'
     ? [{ pid: u.pid, comm: u.comm, cwd: u.cwd }] : [])) : [];
+  const wouldRescue = nestedWouldRescueCount(v);
   const base = { kind: 'document' as const, archivedAt: epochOrNull(v.archivedAt), expiresAt: expireAuditExpiresAt(v),
-    sensitive, inUse };
+    sensitive, inUse, ...(wouldRescue > 0 ? { nestedWouldRescue: wouldRescue } : {}) };
   if (v.verdict === 'expirable') {
     if (typeof v.token !== 'string' || !TOKEN_SHAPE.test(v.token)) {
       return { kind: 'unreadable', detail: 'ws-audit --expire said expirable with no 64-hex token' };
