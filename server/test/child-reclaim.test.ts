@@ -1,5 +1,5 @@
 // Child reclamation, wave 3 — the server's half (spec 2026-09-22 §5.5–§5.7,
-// §5.9): the fourteen box words and what each means, the two ccd documents
+// §5.9): the fifteen box words and what each means, the two ccd documents
 // read, the pure close decision, and THE ONE EXECUTOR `reclaimChild`, driven
 // end to end against a fixture registry, a real CoordStore and a scripted ccd.
 //
@@ -124,7 +124,7 @@ const rig = async (over: { mark?: string | null; markSymlink?: 'dangling' | 'liv
 const NESTED_RESCUE_WORDS = ['nested-rescue-failed', 'nested-rescue-too-large'];
 const PIN_WORDS = (region: string): string[] => [...new Set([...region.matchAll(/RECLAIM_PIN_WORD=(nested-rescue-[a-z-]+)/g)].map((m) => m[1]!))];
 
-describe('the fourteen words', () => {
+describe('the fifteen words', () => {
   it('are exactly the words ccd’s RECLAIM region refuses with — harvested, both directions', () => {
     const ccd = readFileSync(CCD, 'utf8');
     const begin = ccd.indexOf('RECLAIM-BEGIN');
