@@ -248,6 +248,45 @@ describe('AccountsStrip', () => {
     }
   });
 
+  it('focus stays on the same lane\'s card through a re-sort, not only its tab stop', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const first = [acct({ wrapper: 'lane-a', five: 10 }), acct({ wrapper: 'lane-b', five: 20 }), acct({ wrapper: 'lane-c', five: 30 })];
+      const reply = (accounts: AccountUsage[]) => ({ accounts, projected: { wrapper: 'lane-a', score: 0 }, roster: TEST_ROSTER });
+      const spy = vi.spyOn(api, 'accounts').mockResolvedValue(reply(first));
+      const { container } = render(<AccountsStrip />);
+      await screen.findByText('lane-a');
+      const byName = (n: string): HTMLElement => cardsOf(container).find((c) => nameOf(c) === n)!;
+      act(() => { byName('lane-b').focus(); });
+      expect(document.activeElement).toBe(byName('lane-b'));
+      // lane-b becomes the fullest on the next poll: it moves from first to last, and focus must go with it.
+      spy.mockResolvedValue(reply([first[0]!, acct({ wrapper: 'lane-b', five: 90 }), first[2]!]));
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_100); });
+      expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c', 'lane-b']);
+      expect(document.activeElement).toBe(byName('lane-b'));
+      expect(byName('lane-b').tabIndex).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('arrow keys pressed on All accounts leave the cards\' tab stop where it was', async () => {
+    stubAccounts(threeLanes());
+    const user = userEvent.setup();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const stops = (): string[] => cardsOf(container).filter((c) => c.tabIndex === 0).map(nameOf);
+    await user.tab();
+    await user.keyboard('{ArrowRight}');          // lane-c holds the stop
+    expect(stops()).toEqual(['lane-c']);
+    await user.tab();                              // on to All accounts
+    const all = screen.getByRole('button', { name: 'All accounts' });
+    expect(document.activeElement).toBe(all);
+    for (const key of ['{ArrowLeft}', '{ArrowRight}', '{ArrowUp}', '{ArrowDown}', '{Home}', '{End}']) await user.keyboard(key);
+    expect(document.activeElement).toBe(all);
+    expect(stops()).toEqual(['lane-c']);
+  });
+
   it('every card shows each window it has, with its meter, percentage and countdown', async () => {
     stubAccounts(threeLanes());
     const { container } = render(<AccountsStrip />);
