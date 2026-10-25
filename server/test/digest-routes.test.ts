@@ -61,6 +61,20 @@ describe('GET /api/digest?day= (spec §10)', () => {
     expect(after.pushed).toBe(true);
   });
 
+  it('carries the drift section, and an answer without it still parses on the old reader (D-5923)', async () => {
+    f = await approvalsFixture();
+    f.coord.recordDriftPass([{ key: 'run-quiet:3', kind: 'run-quiet', subject: '{}', detail: 'quiet', factAt: at(0), runId: 3,
+      sessionId: null }], at(1));
+    const d = (await f.app.inject({ method: 'GET', url: `/api/digest?day=${DAY}` })).json() as DigestAnswer;
+    expect(d.v).toBe(1);
+    expect(d.drift?.lines.map((l) => [l.key, l.runId])).toEqual([['run-quiet:3', 3]]);
+    // The old reader knows no `drift`: the rest of the answer is whole without it.
+    const { drift: _drift, ...old } = d;
+    const reader = (a: { v: 1; day: string; lines: readonly unknown[]; totals: { decisions: number } }): number => a.totals.decisions + a.lines.length;
+    expect(reader(old)).toBe(0);
+    expect(old.day).toBe(DAY);
+  });
+
   it('a day that is not a UTC date is 400 bad-request', async () => {
     f = await approvalsFixture();
     for (const bad of ['2026-13-01', 'yesterday', '2026-10-18%27']) {
